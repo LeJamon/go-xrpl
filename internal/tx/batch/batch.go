@@ -556,14 +556,14 @@ func (b *Batch) Flatten() (map[string]any, error) {
 // direct BatchTxnSignature and as len(Signers) when the entry is a
 // multi-signed batch signer (Batch.cpp:128-134). Inner transactions use the
 // same per-type fee dispatch as standalone transactions.
-func (b *Batch) CalculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+func (b *Batch) CalculateMinimumFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) uint64 {
 	if fee, ok := b.calculateMinimumFee(view, config); ok {
 		return fee
 	}
 	return config.BaseFee
 }
 
-func (b *Batch) calculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) (uint64, bool) {
+func (b *Batch) calculateMinimumFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, bool) {
 	const maxAmount = ^uint64(0) >> 1
 
 	if len(b.RawTransactions) > MaxBatchTransactions || len(b.BatchSigners) > MaxBatchSigners {
@@ -633,7 +633,7 @@ func batchFeeMul(a, b, max uint64) (uint64, bool) {
 	return a * b, true
 }
 
-func (b *Batch) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (b *Batch) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	if _, ok := b.calculateMinimumFee(view, config); !ok {
 		return ter.TecINSUFF_FEE
 	}

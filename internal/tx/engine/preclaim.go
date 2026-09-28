@@ -99,7 +99,7 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 		// Wrap the base view so Rules() reports the engine's rules: the base
 		// ledger returns nil, which would silently disable rules-gated reads
 		// (e.g. accountFunds' frozen-LP-token check) during preclaim.
-		preclaimView := rulesView{LedgerView: e.view, rules: e.config.RequireRules()}
+		preclaimView := rulesView{ReadOnlyLedgerView: e.view, rules: e.config.RequireRules()}
 		if result := preclaimer.Preclaim(preclaimView, e.config); result != ter.TesSUCCESS {
 			return result
 		}
@@ -138,7 +138,7 @@ func (e *Engine) preclaimInner(tx txcore.Transaction, txHash [32]byte) (result t
 		return result
 	}
 	if preclaimer, ok := tx.(txcore.Preclaimer); ok {
-		preclaimView := rulesView{LedgerView: e.view, rules: e.config.RequireRules()}
+		preclaimView := rulesView{ReadOnlyLedgerView: e.view, rules: e.config.RequireRules()}
 		return preclaimer.Preclaim(preclaimView, e.config)
 	}
 	return ter.TesSUCCESS

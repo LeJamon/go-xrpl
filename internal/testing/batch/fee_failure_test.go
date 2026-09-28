@@ -18,7 +18,7 @@ type panicFeePayment struct {
 	*payment.Payment
 }
 
-func (*panicFeePayment) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) (uint64, error) {
+func (*panicFeePayment) CalculateBaseFee(tx.ReadOnlyLedgerView, tx.EngineConfig) (uint64, error) {
 	panic("controlled inner base-fee failure")
 }
 

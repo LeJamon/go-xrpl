@@ -74,7 +74,7 @@ func (a *AMMVote) CheckExtraFeatures(rules *amendment.Rules) error {
 
 // Preclaim requires the AMM to exist, be non-empty, and the voter to hold LP
 // tokens. Reference: rippled AMMVote.cpp preclaim
-func (a *AMMVote) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (a *AMMVote) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	amm, _, result := readAMM(view, a.Asset, a.Asset2)
 	if result != ter.TesSUCCESS {
 		return result

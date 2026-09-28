@@ -109,7 +109,7 @@ func (c *ConfidentialMPTSend) validate(rules *amendment.Rules) error {
 	return credential.CheckFieldsWithRules(c.CredentialIDs, credentialsPresent, "Duplicate credential ID", rules)
 }
 
-func (c *ConfidentialMPTSend) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (c *ConfidentialMPTSend) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	id, _ := parseConfidentialID(c.MPTokenIssuanceID)
 	accountID, err := state.DecodeAccountID(c.Account)
 	if err != nil {

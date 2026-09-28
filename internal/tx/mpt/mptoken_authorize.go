@@ -96,7 +96,7 @@ func (m *MPTokenAuthorize) RequiredAmendments() [][32]byte {
 // cleanup amendment also permits deleting a zero-balance token after its
 // issuance was destroyed, while a still-locked token remains protected when
 // its issuance exists. Pseudo-account holders are never issuer-authorized.
-func (m *MPTokenAuthorize) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (m *MPTokenAuthorize) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	var mptID [24]byte
 	b, err := hex.DecodeString(m.MPTokenIssuanceID)
 	if err != nil || len(b) != 24 {

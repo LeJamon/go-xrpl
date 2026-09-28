@@ -97,7 +97,7 @@ func (c *CredentialAccept) RequiredAmendments() [][32]byte {
 // expired-credential deletion) and the reserve check stay in Apply, mirroring
 // rippled CredentialAccept::doApply — the deletion needs an ApplyView, so a
 // tecEXPIRED never escapes preclaim.
-func (c *CredentialAccept) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (c *CredentialAccept) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	subjectID, err := state.DecodeAccountID(c.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

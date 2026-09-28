@@ -230,7 +230,7 @@ func (v *VaultCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 // be issued by a pseudo-account, must not be frozen for the owner, a private
 // vault's DomainID must exist, and the derived pseudo-account must not collide.
 // Reference: rippled VaultCreate::preclaim.
-func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (v *VaultCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(v.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

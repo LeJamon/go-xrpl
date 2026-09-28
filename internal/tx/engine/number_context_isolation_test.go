@@ -55,7 +55,7 @@ func numberIsolationValue(ctx state.NumberContext) string {
 	return sum.Value()
 }
 
-func (t *numberIsolationTx) Preclaim(_ txcore.LedgerView, config txcore.EngineConfig) ter.Result {
+func (t *numberIsolationTx) Preclaim(_ txcore.ReadOnlyLedgerView, config txcore.EngineConfig) ter.Result {
 	t.preclaimBarrier.wait()
 	t.preclaimValue = numberIsolationValue(config.NumberContext())
 	return ter.TesSUCCESS

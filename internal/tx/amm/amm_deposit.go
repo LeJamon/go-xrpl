@@ -203,7 +203,7 @@ func (a *AMMDeposit) CheckExtraFeatures(rules *amendment.Rules) error {
 // funding (including the LP-token-trustline reserve), and the LPTokenOut issue.
 // The view's source-account balance is already the pre-fee balance.
 // Reference: rippled AMMDeposit.cpp preclaim
-func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

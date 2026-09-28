@@ -71,7 +71,7 @@ func (p *PermissionedDomainDelete) RequiredAmendments() [][32]byte {
 // these from Apply makes them visible to the preclaim-only paths (TxQ admission,
 // simulate), matching rippled where they live in PermissionedDomainDelete::preclaim.
 // Reference: rippled PermissionedDomainDelete.cpp preclaim().
-func (p *PermissionedDomainDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (p *PermissionedDomainDelete) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	domainBytes, decErr := hex.DecodeString(p.DomainID)
 	if decErr != nil || len(domainBytes) != 32 {
 		return ter.TemINVALID

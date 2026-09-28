@@ -61,7 +61,7 @@ func matchesAsset(amt *tx.Amount, asset tx.Asset) bool {
 // fails. The account balance read from the unmodified Preclaim view is already
 // the pre-fee balance, matching rippled's preclaim.
 // Reference: rippled AMMCreate.cpp:145-159, AMMDeposit.cpp:353-362
-func insufficientLPTokenReserve(view tx.LedgerView, account *state.AccountRoot, config tx.EngineConfig) bool {
+func insufficientLPTokenReserve(view tx.ReadOnlyLedgerView, account *state.AccountRoot, config tx.EngineConfig) bool {
 	reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 	if !ok {
 		return true
@@ -183,7 +183,7 @@ func withinRelativeDistance(math numberMath, calc, req tx.Amount, dist state.XRP
 // LPToken line, and the one or two asset trust lines. Any LPToken trust line to
 // a different account means there is a second provider (false). A structurally
 // impossible directory yields tecINTERNAL.
-func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, ter.Result) {
+func isOnlyLiquidityProvider(view tx.ReadOnlyLedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, ter.Result) {
 	ammAccountAddr, err := encodeAccountID(ammAccountID)
 	if err != nil {
 		return false, ter.TecINTERNAL

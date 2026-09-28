@@ -53,7 +53,7 @@ func (o *OracleDelete) RequiredAmendments() [][32]byte {
 // DeleteOracle::preclaim. Ownership is implicit in the oracle keylet (owner ==
 // Account), so no separate owner check is needed.
 // Reference: rippled DeleteOracle.cpp preclaim().
-func (o *OracleDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (o *OracleDelete) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(o.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

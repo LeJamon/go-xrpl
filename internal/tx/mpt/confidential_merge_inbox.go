@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-func (c *ConfidentialMPTMergeInbox) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (c *ConfidentialMPTMergeInbox) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	id, _ := parseConfidentialID(c.MPTokenIssuanceID)
 	issuance, _, accountID, result := readConfidentialIssuance(view, id, c.Account)
 	if result != ter.TesSUCCESS {

@@ -167,7 +167,7 @@ func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
 // Preclaim validates the transaction against ledger state before application.
 // Runs through the engine's Preclaimer dispatch, before fee deduction.
 // Reference: rippled CreateOffer.cpp preclaim() lines 142-225
-func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(o.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -304,7 +304,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	return ter.TesSUCCESS
 }
 
-func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, config tx.EngineConfig) ter.Result {
+func checkAcceptMPT(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, config tx.EngineConfig) ter.Result {
 	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
 	if err != nil {
 		return ter.TefINTERNAL
@@ -331,7 +331,7 @@ func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, co
 
 // checkAcceptAsset validates that an account can receive an asset.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, config tx.EngineConfig) ter.Result {
+func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string, config tx.EngineConfig) ter.Result {
 	// Read issuer account
 	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {

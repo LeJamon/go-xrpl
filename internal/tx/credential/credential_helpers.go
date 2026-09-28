@@ -254,7 +254,7 @@ func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) ter.Res
 
 // ValidCredentials is the view-based form of ValidateCredentialIDs, usable from
 // Preclaim where only a LedgerView (not an ApplyContext) is available.
-func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string, rules *amendment.Rules) ter.Result {
+func ValidCredentials(view tx.ReadOnlyLedgerView, subject [20]byte, credentialIDs []string, rules *amendment.Rules) ter.Result {
 	for _, idHex := range credentialIDs {
 		credID, ok := parseCredentialID(idHex)
 		if !ok {
@@ -290,7 +290,7 @@ func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []stri
 // ValidDomain checks whether subject has an accepted, unexpired credential
 // matching a permissioned domain. It is read-only so callers that suppress
 // tecEXPIRED during preclaim must call VerifyValidDomain during apply.
-func ValidDomain(view state.LedgerView, domainID [32]byte, subject [20]byte, closeTime uint32) ter.Result {
+func ValidDomain(view state.ReadOnlyLedgerView, domainID [32]byte, subject [20]byte, closeTime uint32) ter.Result {
 	domain, result := readPermissionedDomain(view, domainID)
 	if result != ter.TesSUCCESS {
 		return result
@@ -323,7 +323,7 @@ func ValidDomain(view state.LedgerView, domainID [32]byte, subject [20]byte, clo
 	return ter.TecNO_AUTH
 }
 
-func readPermissionedDomain(view state.LedgerView, domainID [32]byte) (*state.PermissionedDomainData, ter.Result) {
+func readPermissionedDomain(view state.ReadOnlyLedgerView, domainID [32]byte) (*state.PermissionedDomainData, ter.Result) {
 	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
 	if err != nil {
 		return nil, ter.TefINTERNAL
@@ -338,7 +338,7 @@ func readPermissionedDomain(view state.LedgerView, domainID [32]byte) (*state.Pe
 	return domain, ter.TesSUCCESS
 }
 
-func domainCredentialIDs(view state.LedgerView, domainID [32]byte, subject [20]byte) ([]string, ter.Result) {
+func domainCredentialIDs(view state.ReadOnlyLedgerView, domainID [32]byte, subject [20]byte) ([]string, ter.Result) {
 	domain, result := readPermissionedDomain(view, domainID)
 	if result != ter.TesSUCCESS {
 		return nil, result
@@ -488,7 +488,7 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 	return ter.TesSUCCESS
 }
 
-func CheckDepositPreauth(view tx.LedgerView, credentialIDs []string, credentialsPresent bool, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
+func CheckDepositPreauth(view tx.ReadOnlyLedgerView, credentialIDs []string, credentialsPresent bool, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
 	if dstAccount == nil || dstAccount.Flags&state.LsfDepositAuth == 0 || src == dst {
 		return ter.TesSUCCESS
 	}
@@ -511,7 +511,7 @@ func CheckDepositPreauth(view tx.LedgerView, credentialIDs []string, credentials
 // credentials that passed preflight and preclaim, since credential IDs are
 // deduplicated there and all credentials share the sender as Subject.
 // Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [20]byte) ter.Result {
+func authorizedDepositPreauth(view tx.ReadOnlyLedgerView, credentialIDs []string, dst [20]byte) ter.Result {
 	pairs := make([]keylet.CredentialPair, 0, len(credentialIDs))
 	seen := make(map[string]bool, len(credentialIDs))
 

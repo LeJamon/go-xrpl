@@ -5,26 +5,13 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// LedgerView is the minimal read/write view the state package's directory
-// helpers (DirInsert/DirRemove/DirForEach) operate on. It is the state-layer
-// view abstraction and cannot import the richer tx.LedgerView (state is a leaf
-// package); tx.LedgerView is a superset and satisfies this interface, so tx-tree
-// callers pass their view directly.
-type LedgerView interface {
+// ReadOnlyLedgerView provides ledger entry reads and amendment rules.
+type ReadOnlyLedgerView interface {
 	// Read reads a ledger entry
 	Read(k keylet.Keylet) ([]byte, error)
 
 	// Exists checks if an entry exists
 	Exists(k keylet.Keylet) (bool, error)
-
-	// Insert adds a new entry
-	Insert(k keylet.Keylet, data []byte) error
-
-	// Update modifies an existing entry
-	Update(k keylet.Keylet, data []byte) error
-
-	// Erase removes an entry
-	Erase(k keylet.Keylet) error
 
 	// Rules returns the amendment rules for this view, or nil when the view has
 	// no rules attached (e.g. a bare *ledger.Ledger). nil has no single global
@@ -34,4 +21,22 @@ type LedgerView interface {
 	// amendment-gated behaviour must pass a non-nil Rules; the nil fallbacks are
 	// only for contexts where the distinction cannot affect the result.
 	Rules() *amendment.Rules
+}
+
+// LedgerView is the minimal read/write view the state package's directory
+// helpers (DirInsert/DirRemove/DirForEach) operate on. It is the state-layer
+// view abstraction and cannot import the richer tx.LedgerView (state is a leaf
+// package); tx.LedgerView is a superset and satisfies this interface, so tx-tree
+// callers pass their view directly.
+type LedgerView interface {
+	ReadOnlyLedgerView
+
+	// Insert adds a new entry
+	Insert(k keylet.Keylet, data []byte) error
+
+	// Update modifies an existing entry
+	Update(k keylet.Keylet, data []byte) error
+
+	// Erase removes an entry
+	Erase(k keylet.Keylet) error
 }

@@ -60,7 +60,7 @@ func (o *OfferCancel) Flatten() (map[string]any, error) {
 // The view holds the pre-transaction sequence — doApply consumes it later — so the
 // comparison reads it directly, without the engine pre-increment undo it needed in
 // Apply. Reference: rippled OfferCancel.cpp preclaim().
-func (o *OfferCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (o *OfferCancel) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(o.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

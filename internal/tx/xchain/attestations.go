@@ -18,7 +18,7 @@ type signerSet struct {
 	quorum  uint32
 }
 
-func loadSignerSet(view tx.LedgerView, bridge *entry.Bridge) (signerSet, ter.Result) {
+func loadSignerSet(view tx.ReadOnlyLedgerView, bridge *entry.Bridge) (signerSet, ter.Result) {
 	doorID, err := state.DecodeAccountID(bridge.Account)
 	if err != nil {
 		return signerSet{}, ter.TecINTERNAL
@@ -45,7 +45,7 @@ func loadSignerSet(view tx.LedgerView, bridge *entry.Bridge) (signerSet, ter.Res
 	return result, ter.TesSUCCESS
 }
 
-func checkAttestationPublicKey(view tx.LedgerView, signers signerSet, signerAccount, publicKey string) ter.Result {
+func checkAttestationPublicKey(view tx.ReadOnlyLedgerView, signers signerSet, signerAccount, publicKey string) ter.Result {
 	if _, ok := signers.weights[signerAccount]; !ok {
 		return ter.TecNO_PERMISSION
 	}
@@ -80,7 +80,7 @@ func checkAttestationPublicKey(view tx.LedgerView, signers signerSet, signerAcco
 }
 
 func attestationPreclaim(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	bridgeSpec XChainBridge,
 	signerAccount, publicKey string,
 ) ter.Result {
@@ -98,11 +98,11 @@ func attestationPreclaim(
 	return checkAttestationPublicKey(view, signers, signerAccount, publicKey)
 }
 
-func (x *XChainAddClaimAttestation) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainAddClaimAttestation) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	return attestationPreclaim(view, x.XChainBridge, x.AttestationSignerAccount, x.PublicKey)
 }
 
-func (x *XChainAddAccountCreateAttestation) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainAddAccountCreateAttestation) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	return attestationPreclaim(view, x.XChainBridge, x.AttestationSignerAccount, x.PublicKey)
 }
 
@@ -249,7 +249,7 @@ func addOrReplaceCreate(values []any, x *XChainAddAccountCreateAttestation) []an
 }
 
 func claimQuorum(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	values []any,
 	signers signerSet,
 	amount tx.Amount,
@@ -279,7 +279,7 @@ func claimQuorum(
 }
 
 func createQuorum(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	values []any,
 	signers signerSet,
 	x *XChainAddAccountCreateAttestation,

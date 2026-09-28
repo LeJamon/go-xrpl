@@ -187,7 +187,7 @@ func (a *AMMWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
 // view: AMM existence and pool sanity, per-amount balance/authorization/freeze,
 // the withdrawer's LP holdings, and the LPTokenIn / EPrice issues.
 // Reference: rippled AMMWithdraw.cpp preclaim
-func (a *AMMWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

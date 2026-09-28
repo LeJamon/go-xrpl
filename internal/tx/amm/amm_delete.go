@@ -58,7 +58,7 @@ func (a *AMMDelete) CheckExtraFeatures(rules *amendment.Rules) error {
 
 // Preclaim requires the AMM to exist and be empty.
 // Reference: rippled AMMDelete.cpp preclaim
-func (a *AMMDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (a *AMMDelete) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	amm, _, result := readAMM(view, a.Asset, a.Asset2)
 	if result != ter.TesSUCCESS {
 		return result

@@ -10,7 +10,7 @@ import (
 
 // readLoanBroker reads and parses the LoanBroker entry at brokerKey, returning
 // (nil, nil) when absent.
-func readLoanBroker(view tx.LedgerView, brokerKey keylet.Keylet) (*loanBrokerData, error) {
+func readLoanBroker(view tx.ReadOnlyLedgerView, brokerKey keylet.Keylet) (*loanBrokerData, error) {
 	data, err := view.Read(brokerKey)
 	if err != nil || len(data) == 0 {
 		return nil, err
@@ -20,7 +20,7 @@ func readLoanBroker(view tx.LedgerView, brokerKey keylet.Keylet) (*loanBrokerDat
 
 // readLoan reads and parses the Loan entry at loanKey, returning (nil, nil) when
 // absent.
-func readLoan(view tx.LedgerView, loanKey keylet.Keylet) (*loanData, error) {
+func readLoan(view tx.ReadOnlyLedgerView, loanKey keylet.Keylet) (*loanData, error) {
 	data, err := view.Read(loanKey)
 	if err != nil || len(data) == 0 {
 		return nil, err

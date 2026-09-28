@@ -152,7 +152,7 @@ func (d *DelegateSet) PreflightRules(rules *amendment.Rules) error {
 // visible to the preclaim-only paths (TxQ admission, simulate), matching rippled
 // where they live in DelegateSet::preclaim.
 // Reference: rippled DelegateSet.cpp preclaim().
-func (d *DelegateSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (d *DelegateSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, acctErr := state.DecodeAccountID(d.Account)
 	if acctErr != nil {
 		return ter.TemBAD_SRC_ACCOUNT

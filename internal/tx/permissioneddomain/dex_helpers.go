@@ -19,7 +19,7 @@ import (
 //     AcceptedCredentials.
 //
 // Reference: rippled app/misc/PermissionedDEXHelpers.cpp accountInDomain()
-func AccountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, parentCloseTime uint32) bool {
+func AccountInDomain(view tx.ReadOnlyLedgerView, accountID [20]byte, domainID [32]byte, parentCloseTime uint32) bool {
 	domKey := keylet.PermissionedDomainByID(domainID)
 	domData, err := view.Read(domKey)
 	if err != nil || domData == nil {
@@ -61,7 +61,7 @@ func AccountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, 
 // OfferInDomain checks if an offer belongs to a permissioned domain and its
 // owner is still in the domain (i.e., still holds the required credential).
 // Reference: rippled app/misc/PermissionedDEXHelpers.cpp offerInDomain()
-func OfferInDomain(view tx.LedgerView, offer *state.LedgerOffer, domainID [32]byte, parentCloseTime uint32) bool {
+func OfferInDomain(view tx.ReadOnlyLedgerView, offer *state.LedgerOffer, domainID [32]byte, parentCloseTime uint32) bool {
 	var zeroDomain [32]byte
 	if offer.DomainID == zeroDomain {
 		return false
@@ -105,7 +105,7 @@ func ParseDomainID(hexStr string) ([32]byte, error) {
 
 // DEXDomainPreclaim permits expired credentials through to application so their
 // deletion can be committed along with tecEXPIRED.
-func DEXDomainPreclaim(view tx.LedgerView, accountID [20]byte, domainID [32]byte, config tx.EngineConfig) bool {
+func DEXDomainPreclaim(view tx.ReadOnlyLedgerView, accountID [20]byte, domainID [32]byte, config tx.EngineConfig) bool {
 	if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) {
 		return AccountInDomain(view, accountID, domainID, config.ParentCloseTime)
 	}
