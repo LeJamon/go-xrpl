@@ -2603,6 +2603,9 @@ func (c *catchupReplayCoordinator) startGenericAcquisition(hash [32]byte, seq ui
 	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.NewGeneric(hash, seq, peerID, c.logger, c.acquisitionOpts()...)
 	})
+	if il == nil {
+		return nil, false
+	}
 	if created {
 		c.logger.Info("starting ledger acquisition (generic, ledger_request)",
 			"seq", seq,

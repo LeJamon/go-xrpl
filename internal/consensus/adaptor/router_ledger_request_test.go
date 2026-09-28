@@ -90,6 +90,20 @@ func TestRouter_RequestLedgerRetryUsesJoinedSequenceOnWire(t *testing.T) {
 	assert.Equal(t, uint32(42), req.LedgerSeq)
 }
 
+func TestStartGenericAcquisitionStoppedTrackerReturnsNoSnapshot(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	r.handleMessage(statusChangeMessage(t, peermanagement.PeerID(7), closed.Sequence(), closed.Hash()))
+	r.catchupReplay.fetchTracker.Stop()
+
+	var target [32]byte
+	target[0] = 0x44
+	snapshot, ok := r.catchupReplay.startGenericAcquisition(target, closed.Sequence())
+	assert.False(t, ok)
+	assert.Nil(t, snapshot)
+}
+
 func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {
 	r, _, rs, _ := makeRouter(t)
 
