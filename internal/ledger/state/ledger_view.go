@@ -5,7 +5,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// ReadOnlyLedgerView provides ledger entry reads and amendment rules.
 type ReadOnlyLedgerView interface {
 	// Read reads a ledger entry
 	Read(k keylet.Keylet) ([]byte, error)

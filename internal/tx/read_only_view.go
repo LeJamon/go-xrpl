@@ -12,7 +12,6 @@ type readOnlyLedgerView struct {
 	ReadOnlyLedgerView
 }
 
-// NewReadOnlyLedgerView adapts a ledger view for read-only callbacks.
 func NewReadOnlyLedgerView(view ReadOnlyLedgerView) ReadOnlyLedgerView {
 	if view == nil {
 		return nil

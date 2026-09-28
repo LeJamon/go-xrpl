@@ -227,7 +227,6 @@ func (c EngineConfig) IsViewOpen() bool {
 	return c.OpenLedger || c.EnforceLoadFee || c.ViewOpen
 }
 
-// ReadOnlyLedgerView provides read-only access to ledger state.
 type ReadOnlyLedgerView interface {
 	state.ReadOnlyLedgerView
 
@@ -251,7 +250,6 @@ type ReadOnlyLedgerView interface {
 	LedgerSeq() uint32
 }
 
-// LedgerView provides read/write access to ledger state.
 type LedgerView interface {
 	ReadOnlyLedgerView
 
