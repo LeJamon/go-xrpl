@@ -10,7 +10,7 @@ import (
 // readAMM reads and parses the AMM ledger entry for the (asset, asset2) pair.
 // It returns terNO_AMM when the entry is absent and tefINTERNAL on a parse
 // failure, matching the inline load that opens every AMM transactor.
-func readAMM(view tx.LedgerView, asset, asset2 tx.Asset) (*AMMData, keylet.Keylet, ter.Result) {
+func readAMM(view tx.ReadOnlyLedgerView, asset, asset2 tx.Asset) (*AMMData, keylet.Keylet, ter.Result) {
 	ammKey := computeAMMKeylet(asset, asset2)
 	ammRawData, err := view.Read(ammKey)
 	if err != nil || ammRawData == nil {
@@ -26,7 +26,7 @@ func readAMM(view tx.LedgerView, asset, asset2 tx.Asset) (*AMMData, keylet.Keyle
 // readAccount reads and parses an AccountRoot by its decoded ID. It returns
 // tefINTERNAL when the entry is missing or unparseable; callers that need a
 // distinct "account absent" code should check existence separately.
-func readAccount(view tx.LedgerView, accountID [20]byte) (*state.AccountRoot, ter.Result) {
+func readAccount(view tx.ReadOnlyLedgerView, accountID [20]byte) (*state.AccountRoot, ter.Result) {
 	data, err := view.Read(keylet.Account(accountID))
 	if err != nil || data == nil {
 		return nil, ter.TefINTERNAL
@@ -58,7 +58,7 @@ type loadedAMM struct {
 // preclaim already confirmed the AMM exists, an absent entry here is an
 // internal inconsistency and returns tecINTERNAL (matching applyGuts); a parse
 // failure returns tefINTERNAL.
-func loadAMM(view tx.LedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, ter.Result) {
+func loadAMM(view tx.ReadOnlyLedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, ter.Result) {
 	amm, ammKey, result := readAMM(view, asset, asset2)
 	if result != ter.TesSUCCESS {
 		if result == TerNO_AMM {

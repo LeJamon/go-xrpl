@@ -46,20 +46,20 @@ type Engine struct {
 	invariantViolationHook func(result ter.Result, table *applystate.ApplyStateTable) *invariants.InvariantViolation
 }
 
-// rulesView wraps a LedgerView so Rules() reports a known rule set. The engine's
+// rulesView wraps a ReadOnlyLedgerView so Rules() reports a known rule set. The engine's
 // base view (e.g. a Ledger) returns nil from Rules(), but rippled's preclaim view
 // always carries the parent ledger's rules. Wrapping the view for the Preclaimer
 // dispatch keeps rules-gated reads (e.g. accountFunds' frozen-LP-token check)
 // working at the preclaim stage, matching the rules visible during apply.
 type rulesView struct {
-	txcore.LedgerView
+	txcore.ReadOnlyLedgerView
 	rules *amendment.Rules
 }
 
 func (v rulesView) Rules() *amendment.Rules { return v.rules }
 
 func (v rulesView) BalanceHookMPT(account [20]byte, id [24]byte, amount int64) int64 {
-	if hook, ok := v.LedgerView.(interface {
+	if hook, ok := v.ReadOnlyLedgerView.(interface {
 		BalanceHookMPT([20]byte, [24]byte, int64) int64
 	}); ok {
 		return hook.BalanceHookMPT(account, id, amount)

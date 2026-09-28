@@ -23,7 +23,7 @@ func parseObjectID(value string) ([32]byte, error) {
 	return id, nil
 }
 
-func readAccount(view tx.LedgerView, accountID [20]byte) (*state.AccountRoot, ter.Result) {
+func readAccount(view tx.ReadOnlyLedgerView, accountID [20]byte) (*state.AccountRoot, ter.Result) {
 	account, err := tx.ReadAccountRoot(view, accountID)
 	if err != nil {
 		return nil, ter.TefINTERNAL
@@ -48,7 +48,7 @@ func writeAccount(ctx *tx.ApplyContext, accountID [20]byte, account *state.Accou
 	return ctx.UpdateAccountRoot(accountID, account)
 }
 
-func loadSponsorship(view tx.LedgerView, sponsorID, sponseeID [20]byte) (*state.SponsorshipData, bool, ter.Result) {
+func loadSponsorship(view tx.ReadOnlyLedgerView, sponsorID, sponseeID [20]byte) (*state.SponsorshipData, bool, ter.Result) {
 	data, err := view.Read(keylet.Sponsorship(sponsorID, sponseeID))
 	if err != nil {
 		return nil, false, ter.TefINTERNAL
@@ -63,7 +63,7 @@ func loadSponsorship(view tx.LedgerView, sponsorID, sponseeID [20]byte) (*state.
 	return sponsorship, true, ter.TesSUCCESS
 }
 
-func commonSponsorPermission(view tx.LedgerView, common *tx.Common) ter.Result {
+func commonSponsorPermission(view tx.ReadOnlyLedgerView, common *tx.Common) ter.Result {
 	if common.Sponsor == "" {
 		return ter.TesSUCCESS
 	}
@@ -198,7 +198,7 @@ type sponsoredTarget struct {
 	ownerCount   uint32
 }
 
-func readSponsoredTarget(view tx.LedgerView, objectID [32]byte, sponseeID [20]byte, sponsee string) (*sponsoredTarget, ter.Result) {
+func readSponsoredTarget(view tx.ReadOnlyLedgerView, objectID [32]byte, sponseeID [20]byte, sponsee string) (*sponsoredTarget, ter.Result) {
 	objectKey := keylet.Keylet{Type: entry.TypeAny, Key: objectID}
 	data, err := view.Read(objectKey)
 	if err != nil {

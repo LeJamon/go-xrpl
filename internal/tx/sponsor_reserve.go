@@ -67,7 +67,7 @@ func checkedAccountReserve(config EngineConfig, ownerCount, accountCount uint32)
 
 // AccountReserveForView returns account's reserve at the supplied raw owner
 // count, using the view's amendment rules.
-func AccountReserveForView(view LedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (uint64, bool) {
+func AccountReserveForView(view ReadOnlyLedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (uint64, bool) {
 	if account == nil {
 		return 0, false
 	}
@@ -112,7 +112,7 @@ func (ctx *ApplyContext) UsesReserveSponsorFor(accountID [20]byte, account *stat
 	return sponsor != nil, result
 }
 
-func readSponsorship(view LedgerView, sponsorID, sponseeID [20]byte) (*state.SponsorshipData, bool, error) {
+func readSponsorship(view ReadOnlyLedgerView, sponsorID, sponseeID [20]byte) (*state.SponsorshipData, bool, error) {
 	data, err := view.Read(keylet.Sponsorship(sponsorID, sponseeID))
 	if err != nil {
 		return nil, false, err
@@ -350,7 +350,7 @@ func LedgerEntrySponsor(data []byte, field string) (string, error) {
 }
 
 // LedgerEntrySponsorFromView reads a ledger entry and returns its sponsor.
-func LedgerEntrySponsorFromView(view LedgerView, object keylet.Keylet, field string) (string, error) {
+func LedgerEntrySponsorFromView(view ReadOnlyLedgerView, object keylet.Keylet, field string) (string, error) {
 	data, err := view.Read(object)
 	if err != nil {
 		return "", err

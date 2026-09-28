@@ -13,7 +13,7 @@ import (
 // which is a problem for AMM. It returns false for XRP, a missing/unparseable
 // issuer, or when DefaultRipple is set.
 // Reference: rippled AMMCreate.cpp lines 126-135
-func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
+func noDefaultRipple(view tx.ReadOnlyLedgerView, asset tx.Asset) bool {
 	if isXRPAsset(asset) || asset.IsMPT() {
 		return false
 	}
@@ -40,7 +40,7 @@ func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
 // XRP it compares against the liquid balance; for IOU it compares held funds
 // (issuers have unlimited supply).
 // Reference: rippled AMMCreate.cpp line 153-163
-func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amount, xrpLiquid int64) (bool, ter.Result) {
+func insufficientBalance(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, xrpLiquid int64) (bool, ter.Result) {
 	if amount.IsNative() {
 		return xrpLiquid < amount.Drops(), ter.TesSUCCESS
 	}
@@ -70,7 +70,7 @@ func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amoun
 
 // isLPToken reports whether the amount is issued by an AMM pseudo-account.
 // Reference: rippled AMMCreate.cpp line 172-177
-func isLPToken(view tx.LedgerView, amount tx.Amount) bool {
+func isLPToken(view tx.ReadOnlyLedgerView, amount tx.Amount) bool {
 	if amount.IsNative() || amount.IsMPT() {
 		return false
 	}
@@ -129,7 +129,7 @@ func setAMMNodeFlag(ammAccountID [20]byte, asset tx.Asset, view tx.LedgerView) e
 // lsfAllowTrustLineClawback set, tecINTERNAL when the issuer cannot be read,
 // and tesSUCCESS otherwise. XRP always passes.
 // Reference: rippled AMMCreate.cpp preclaim lines 201-210
-func clawbackDisabled(view tx.LedgerView, asset tx.Asset) ter.Result {
+func clawbackDisabled(view tx.ReadOnlyLedgerView, asset tx.Asset) ter.Result {
 	if isXRPAsset(asset) {
 		return ter.TesSUCCESS
 	}

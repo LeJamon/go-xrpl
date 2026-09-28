@@ -120,7 +120,7 @@ func (a *AMMBid) CheckExtraFeatures(rules *amendment.Rules) error {
 // Preclaim validates the AMM, the bidder's LP holdings, and the bid bounds.
 // Reference: rippled AMMBid.cpp preclaim (plus the fixAMMv1_3-gated AuthAccounts
 // duplicate/self check that rippled performs in preflight).
-func (a *AMMBid) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (a *AMMBid) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	amm, _, result := readAMM(view, a.Asset, a.Asset2)
 	if result != ter.TesSUCCESS {
 		return result

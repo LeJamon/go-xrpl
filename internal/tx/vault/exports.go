@@ -108,13 +108,13 @@ func ParseLedgerNumberWithNumberContext(s string, numberContext state.NumberCont
 
 // CanAddHolding reports whether accountID could hold asset (issuer/DefaultRipple
 // for IOU, issuance existence + CanTransfer for MPT).
-func CanAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
+func CanAddHolding(view tx.ReadOnlyLedgerView, asset tx.Asset) ter.Result {
 	return canAddHolding(view, asset)
 }
 
 // HoldingExists reports whether accountID already has a holding for asset.
 // Issuers and native XRP always have an implicit holding.
-func HoldingExists(view tx.LedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
+func HoldingExists(view tx.ReadOnlyLedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
 	return holdingExists(view, accountID, asset)
 }
 
@@ -138,13 +138,13 @@ func ApplyAssetHoldingOwnerCount(view tx.LedgerView, accountID [20]byte, delta i
 
 // CanWithdraw validates delivery of amount from → to (destination exists,
 // dest-tag / deposit-auth, IOU trust-limit).
-func CanWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
+func CanWithdraw(view tx.ReadOnlyLedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
 	return canWithdraw(view, from, to, amount, hasDestTag, credentialIDs, numberContext)
 }
 
 // AccountHoldsFull returns how much of asset accountID can spend
 // (accountHolds with shFULL_BALANCE), issuer treated as effectively unbounded.
-func AccountHoldsFull(view tx.LedgerView, config tx.EngineConfig, accountID [20]byte, asset tx.Asset) (state.XRPLNumber, error) {
+func AccountHoldsFull(view tx.ReadOnlyLedgerView, config tx.EngineConfig, accountID [20]byte, asset tx.Asset) (state.XRPLNumber, error) {
 	return spendableAsset(view, config, accountID, asset)
 }
 
@@ -249,7 +249,7 @@ type VaultLending struct {
 }
 
 // ReadVaultLending reads the vault's full lending view, (nil, nil) when absent.
-func ReadVaultLending(view tx.LedgerView, vaultKey keylet.Keylet) (*VaultLending, error) {
+func ReadVaultLending(view tx.ReadOnlyLedgerView, vaultKey keylet.Keylet) (*VaultLending, error) {
 	vd, err := readVault(view, vaultKey)
 	if err != nil || vd == nil {
 		return nil, err

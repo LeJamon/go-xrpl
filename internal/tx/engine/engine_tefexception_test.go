@@ -30,7 +30,7 @@ type panicPreclaimTx struct {
 	*txcore.BaseTx
 }
 
-func (panicPreclaimTx) Preclaim(txcore.LedgerView, txcore.EngineConfig) ter.Result {
+func (panicPreclaimTx) Preclaim(txcore.ReadOnlyLedgerView, txcore.EngineConfig) ter.Result {
 	panic("simulated IOUAmount overflow during preclaim")
 }
 

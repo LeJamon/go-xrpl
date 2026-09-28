@@ -19,7 +19,7 @@ func bridgeOwnerChain(account string, bridge XChainBridge) chainType {
 	return issuingChain
 }
 
-func (x *XChainCreateBridge) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (x *XChainCreateBridge) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	for _, chain := range []chainType{issuingChain, lockingChain} {
 		bridgeKey, err := bridgeKeylet(x.XChainBridge, chain)
 		if err != nil {
@@ -114,7 +114,7 @@ func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (x *XChainModifyBridge) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainModifyBridge) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	chain := bridgeOwnerChain(x.Account, x.XChainBridge)
 	bridgeKey, err := bridgeKeylet(x.XChainBridge, chain)
 	if err != nil {
@@ -163,7 +163,7 @@ func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (x *XChainCreateClaimID) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (x *XChainCreateClaimID) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -258,7 +258,7 @@ func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (x *XChainCommit) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainCommit) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -289,7 +289,7 @@ func (x *XChainCommit) Apply(ctx *tx.ApplyContext) ter.Result {
 	return transferFunds(ctx, x.Account, bridge.Account, nil, "", x.Amount, false, false, true)
 }
 
-func (x *XChainAccountCreateCommit) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainAccountCreateCommit) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL

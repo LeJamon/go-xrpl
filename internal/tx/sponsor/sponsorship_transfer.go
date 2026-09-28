@@ -85,7 +85,7 @@ func (s *SponsorshipTransfer) sponsee() (string, [20]byte, ter.Result) {
 	return account, accountID, ter.TesSUCCESS
 }
 
-func (s *SponsorshipTransfer) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (s *SponsorshipTransfer) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	if result := commonSponsorPermission(view, s.GetCommon()); result != ter.TesSUCCESS {
 		return result
 	}

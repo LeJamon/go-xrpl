@@ -18,7 +18,7 @@ const maxPseudoAccountAttempts = 256
 // PseudoAccountAddress derives an unoccupied pseudo-account ID from ownerKey,
 // trying up to 256 candidates hashed from (i, parentHash, ownerKey) until one is
 // free in view. Returns the zero AccountID when every candidate slot is occupied.
-func PseudoAccountAddress(view LedgerView, parentHash, ownerKey [32]byte) [20]byte {
+func PseudoAccountAddress(view ReadOnlyLedgerView, parentHash, ownerKey [32]byte) [20]byte {
 	for i := range uint16(maxPseudoAccountAttempts) {
 		var iBytes [2]byte
 		binary.BigEndian.PutUint16(iBytes[:], i)
@@ -36,7 +36,7 @@ func PseudoAccountAddress(view LedgerView, parentHash, ownerKey [32]byte) [20]by
 
 // IsPseudoAccountID reports whether id is an existing pseudo-account (an
 // AccountRoot carrying at least one owner-designator field).
-func IsPseudoAccountID(view LedgerView, id [20]byte) bool {
+func IsPseudoAccountID(view ReadOnlyLedgerView, id [20]byte) bool {
 	ar, err := ReadAccountRoot(view, id)
 	if err != nil || ar == nil {
 		return false

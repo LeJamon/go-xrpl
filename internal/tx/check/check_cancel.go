@@ -71,7 +71,7 @@ func (c *CheckCancel) RequiredAmendments() [][32]byte {
 // to the preclaim-only paths (TxQ admission, simulate), matching rippled where
 // they live in CancelCheck::preclaim.
 // Reference: rippled CheckCancel.cpp preclaim().
-func (c *CheckCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (c *CheckCancel) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	checkID, decErr := hex.DecodeString(c.CheckID)
 	if decErr != nil || len(checkID) != 32 {
 		return ter.TemINVALID

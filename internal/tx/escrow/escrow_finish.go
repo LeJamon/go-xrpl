@@ -111,7 +111,7 @@ func (e *EscrowFinish) PreflightSigValidated(rules *amendment.Rules) error {
 // fulfillment.size() is the decoded byte length. The CustomBaseFeeCalculator
 // dispatch in preclaim.go skips the multisig multiplier, so it is applied here.
 // Reference: rippled Escrow.cpp:682-693, Transactor.cpp:229-244
-func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
+func (e *EscrowFinish) CalculateBaseFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	base := config.BaseFee
 	if view != nil {
 		if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
@@ -150,7 +150,7 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 // in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
 // (expiry is handled separately in Apply), so no tecEXPIRED escapes preclaim here.
 // Reference: rippled EscrowFinish.cpp preclaim().
-func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (e *EscrowFinish) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	rules := view.Rules()
 	if rules != nil && rules.Enabled(amendment.FeatureCredentials) && len(e.CredentialIDs) > 0 {
 		accountID, acctErr := state.DecodeAccountID(e.Account)

@@ -227,25 +227,8 @@ func (c EngineConfig) IsViewOpen() bool {
 	return c.OpenLedger || c.EnforceLoadFee || c.ViewOpen
 }
 
-// LedgerView provides read/write access to ledger state
-type LedgerView interface {
-	// Read reads a ledger entry
-	Read(k keylet.Keylet) ([]byte, error)
-
-	// Exists checks if an entry exists
-	Exists(k keylet.Keylet) (bool, error)
-
-	// Insert adds a new entry
-	Insert(k keylet.Keylet, data []byte) error
-
-	// Update modifies an existing entry
-	Update(k keylet.Keylet, data []byte) error
-
-	// Erase removes an entry
-	Erase(k keylet.Keylet) error
-
-	// AdjustDropsDestroyed records destroyed XRP
-	AdjustDropsDestroyed(drops drops.XRPAmount) error
+type ReadOnlyLedgerView interface {
+	state.ReadOnlyLedgerView
 
 	// ForEach iterates over all state entries
 	// If fn returns false, iteration stops early
@@ -262,13 +245,25 @@ type LedgerView interface {
 	// Reference: rippled ReadView::txExists()
 	TxExists(txID [32]byte) (bool, error)
 
-	// Rules returns the amendment rules for this view.
-	// Returns nil if rules are not available.
-	Rules() *amendment.Rules
-
 	// LedgerSeq returns the building ledger's sequence number.
 	// Reference: rippled ReadView::seq().
 	LedgerSeq() uint32
+}
+
+type LedgerView interface {
+	ReadOnlyLedgerView
+
+	// Insert adds a new entry
+	Insert(k keylet.Keylet, data []byte) error
+
+	// Update modifies an existing entry
+	Update(k keylet.Keylet, data []byte) error
+
+	// Erase removes an entry
+	Erase(k keylet.Keylet) error
+
+	// AdjustDropsDestroyed records destroyed XRP
+	AdjustDropsDestroyed(drops drops.XRPAmount) error
 }
 
 // ComputeTransactionHash computes the hash of a transaction.

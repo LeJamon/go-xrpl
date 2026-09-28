@@ -62,7 +62,7 @@ func (e *EscrowCancel) GetFlagsMask(rules *amendment.Rules) uint32 {
 // simulate). The CancelAfter time checks stay in Apply, mirroring rippled which
 // keeps them in EscrowCancel::doApply, not preclaim.
 // Reference: rippled EscrowCancel.cpp preclaim().
-func (e *EscrowCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (e *EscrowCancel) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	rules := view.Rules()
 	if rules == nil || !rules.Enabled(amendment.FeatureTokenEscrow) {
 		return ter.TesSUCCESS

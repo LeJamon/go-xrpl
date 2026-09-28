@@ -25,13 +25,17 @@ func FormatUint64Hex(v uint64) string {
 	return strconv.FormatUint(v, 16)
 }
 
+type ledgerEntryReader interface {
+	Read(keylet.Keylet) ([]byte, error)
+}
+
 // ReadAccountRoot reads and parses the AccountRoot for accountID. It preserves
 // the missing-vs-error distinction: a genuinely absent account returns
 // (nil, nil), while a real storage or parse failure returns (nil, err). Callers
 // that must distinguish the two route err != nil to TefINTERNAL and nil data to
 // their own not-found code; callers that legitimately treat both the same can
 // test (root == nil) after checking err.
-func ReadAccountRoot(view state.LedgerView, accountID [20]byte) (*state.AccountRoot, error) {
+func ReadAccountRoot(view ledgerEntryReader, accountID [20]byte) (*state.AccountRoot, error) {
 	data, err := view.Read(keylet.Account(accountID))
 	if err != nil {
 		return nil, err
@@ -47,7 +51,7 @@ func ReadAccountRoot(view state.LedgerView, accountID [20]byte) (*state.AccountR
 // contract: an absent line returns (nil, nil), while a storage or parse failure
 // returns (nil, err). Callers that treat "absent" and "error" the same can test
 // (rs == nil) after checking err.
-func ReadRippleState(view state.LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, error) {
+func ReadRippleState(view ledgerEntryReader, accountID, issuerID [20]byte, currency string) (*state.RippleState, error) {
 	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
 	if err != nil {
 		return nil, err
@@ -74,7 +78,7 @@ func IsRippleStateFrozenBy(line *state.RippleState, freezerID, counterpartyID [2
 // the trust line with counterparty. A missing line is not frozen; read and
 // parse errors are returned to callers that must preserve ledger-integrity
 // failures.
-func IsTrustlineFrozenBy(view state.LedgerView, freezerID, counterpartyID [20]byte, currency string) (bool, error) {
+func IsTrustlineFrozenBy(view state.ReadOnlyLedgerView, freezerID, counterpartyID [20]byte, currency string) (bool, error) {
 	if currency == "" || currency == "XRP" || freezerID == counterpartyID {
 		return false, nil
 	}
@@ -87,7 +91,7 @@ func IsTrustlineFrozenBy(view state.LedgerView, freezerID, counterpartyID [20]by
 
 // IsTrustlineFrozen reports whether issuer individually froze account's trust
 // line. Read and parse failures retain the historical false result.
-func IsTrustlineFrozen(view state.LedgerView, accountID, issuerID [20]byte, currency string) bool {
+func IsTrustlineFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) bool {
 	frozen, _ := IsTrustlineFrozenBy(view, issuerID, accountID, currency)
 	return frozen
 }
@@ -95,7 +99,7 @@ func IsTrustlineFrozen(view state.LedgerView, accountID, issuerID [20]byte, curr
 // IsIndividualFrozen checks if a specific account is individually frozen for an asset.
 // This checks if the issuer has frozen the account's side of the trustline.
 // Reference: rippled ledger/View.cpp isIndividualFrozen
-func IsIndividualFrozen(view state.LedgerView, accountID [20]byte, asset Asset) bool {
+func IsIndividualFrozen(view state.ReadOnlyLedgerView, accountID [20]byte, asset Asset) bool {
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		return false
 	}
@@ -111,7 +115,7 @@ func IsIndividualFrozen(view state.LedgerView, accountID [20]byte, asset Asset) 
 // IsIOUFrozen reports whether issuer globally froze its currency or
 // individually froze account's trust line. Missing ledger entries are not
 // frozen; read and parse errors are returned.
-func IsIOUFrozen(view state.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
+func IsIOUFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
 	if currency == "" || currency == "XRP" {
 		return false, nil
 	}
@@ -148,7 +152,7 @@ func HasExpiredField(expiration uint32, parentCloseTime uint32) bool {
 // individual freeze); deep freeze is not consulted. XRP is never frozen.
 // Reference: rippled ledger/View.cpp isFrozen(view, account, currency, issuer)
 // and the inline Issue overload in View.h.
-func IsFrozen(view state.LedgerView, accountID [20]byte, asset Asset) bool {
+func IsFrozen(view state.ReadOnlyLedgerView, accountID [20]byte, asset Asset) bool {
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		return false
 	}
@@ -162,7 +166,7 @@ func IsFrozen(view state.LedgerView, accountID [20]byte, asset Asset) bool {
 // flag, and TesSUCCESS otherwise (including XRP, self-issued, or a missing issuer
 // account). Reference: rippled ledger/View.cpp requireAuth(view, Issue, account)
 // with AuthType::Legacy.
-func RequireAuth(view LedgerView, asset Asset, accountID [20]byte) ter.Result {
+func RequireAuth(view ReadOnlyLedgerView, asset Asset, accountID [20]byte) ter.Result {
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		return ter.TesSUCCESS
 	}
@@ -218,7 +222,7 @@ const TransferRateParity uint32 = protocol.QualityOne
 // serializer at internal/ledger/state/account_root.go only writing
 // TransferRate when the value is nonzero, so a zero-value field is
 // indistinguishable from an absent field on disk.
-func GetTransferRate(view LedgerView, issuerAddress string) uint32 {
+func GetTransferRate(view ReadOnlyLedgerView, issuerAddress string) uint32 {
 	if issuerAddress == "" {
 		return TransferRateParity
 	}
@@ -231,7 +235,7 @@ func GetTransferRate(view LedgerView, issuerAddress string) uint32 {
 
 // GetTransferRateByID is GetTransferRate for callers that already hold the
 // issuer's decoded [20]byte account ID, avoiding a re-encode/decode round-trip.
-func GetTransferRateByID(view LedgerView, issuerID [20]byte) uint32 {
+func GetTransferRateByID(view ReadOnlyLedgerView, issuerID [20]byte) uint32 {
 	account, err := ReadAccountRoot(view, issuerID)
 	if err != nil || account == nil {
 		return TransferRateParity
@@ -247,7 +251,7 @@ func GetTransferRateByID(view LedgerView, issuerID [20]byte) uint32 {
 // holder's MPToken carries lsfMPTLocked). Absent or unparseable entries are
 // treated as unlocked. Reference: rippled ledger/View.cpp isFrozen(view, account,
 // MPTIssue).
-func IsMPTLocked(view LedgerView, mptID [24]byte, accountID [20]byte) bool {
+func IsMPTLocked(view ReadOnlyLedgerView, mptID [24]byte, accountID [20]byte) bool {
 	if data, err := view.Read(keylet.MPTIssuance(mptID)); err == nil && data != nil {
 		if iss, err := state.ParseMPTokenIssuance(data); err == nil && iss.Flags&entry.LsfMPTLocked != 0 {
 			return true
@@ -266,7 +270,7 @@ func IsMPTLocked(view LedgerView, mptID [24]byte, accountID [20]byte) bool {
 // tesSUCCESS. XRP is never frozen. This is the asset-kind dispatch over the
 // underlying [20]byte freeze primitives (IsFrozen for an Issue, IsMPTLocked for
 // an MPT). Reference: rippled ledger/View.cpp isFrozen dispatch.
-func AssetFrozen(view LedgerView, accountID [20]byte, asset Asset) ter.Result {
+func AssetFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset Asset) ter.Result {
 	if asset.IsMPT() {
 		if id, ok := decodeAssetMPTID(asset); ok && IsMPTLocked(view, id, accountID) {
 			return ter.TecLOCKED
@@ -292,7 +296,7 @@ func decodeAssetMPTID(a Asset) ([24]byte, bool) {
 
 // IsGlobalFrozen checks if an issuer has globally frozen assets.
 // Reference: rippled ledger/View.h isGlobalFrozen()
-func IsGlobalFrozen(view state.LedgerView, issuerAddress string) bool {
+func IsGlobalFrozen(view state.ReadOnlyLedgerView, issuerAddress string) bool {
 	if issuerAddress == "" {
 		return false
 	}
@@ -315,7 +319,7 @@ func IsGlobalFrozen(view state.LedgerView, issuerAddress string) bool {
 // (which only checks the issuer's side), deep freeze checks both lsfLowDeepFreeze
 // and lsfHighDeepFreeze.
 // Reference: rippled ledger/View.cpp isDeepFrozen()
-func IsDeepFrozen(view LedgerView, accountID, issuerID [20]byte, currency string) bool {
+func IsDeepFrozen(view ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) bool {
 	// XRP cannot be frozen
 	if currency == "" || currency == "XRP" {
 		return false
@@ -346,7 +350,7 @@ func IsDeepFrozen(view LedgerView, accountID, issuerID [20]byte, currency string
 // individual freeze); deep freeze is intentionally not consulted, matching the
 // overload used by isLPTokenFrozen.
 // Reference: rippled ledger/View.cpp isFrozen().
-func isFrozenForLPToken(view LedgerView, accountID [20]byte, asset Asset) bool {
+func isFrozenForLPToken(view ReadOnlyLedgerView, accountID [20]byte, asset Asset) bool {
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		return false
 	}
@@ -367,7 +371,7 @@ func isFrozenForLPToken(view LedgerView, accountID [20]byte, asset Asset) bool {
 // frozen for the holder, in which case the holder's LP tokens must count as zero
 // funds. The caller resolves the pool assets from the LP-token issuer's AMM SLE.
 // Reference: rippled ledger/View.cpp isLPTokenFrozen().
-func IsLPTokenFrozen(view LedgerView, accountID [20]byte, asset, asset2 Asset) bool {
+func IsLPTokenFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset, asset2 Asset) bool {
 	return isFrozenForLPToken(view, accountID, asset) ||
 		isFrozenForLPToken(view, accountID, asset2)
 }
@@ -434,7 +438,7 @@ const (
 // Callers must gate this on the fixFrozenLPTokenTransfer amendment.
 // Reference: rippled ledger/View.cpp accountHolds() / paths StepChecks.h
 // checkFreeze() LP-token arm.
-func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) LPTokenFreezeStatus {
+func LPTokenFrozenForIssuer(view ReadOnlyLedgerView, accountID, issuerID [20]byte) LPTokenFreezeStatus {
 	account, err := ReadAccountRoot(view, issuerID)
 	if err != nil || account == nil || !account.HasAMMID() {
 		return LPTokenIssuerNotAMM
@@ -467,7 +471,7 @@ type ownerCountsReadHookView interface {
 	OwnerCountsHook(account [20]byte, counts OwnerCounts) OwnerCounts
 }
 
-func accountWithOwnerCountHook(view LedgerView, accountID [20]byte, account *state.AccountRoot) state.AccountRoot {
+func accountWithOwnerCountHook(view ReadOnlyLedgerView, accountID [20]byte, account *state.AccountRoot) state.AccountRoot {
 	result := *account
 	if hook, ok := view.(ownerCountsReadHookView); ok {
 		counts := hook.OwnerCountsHook(accountID, ownerCounts(account))
@@ -483,7 +487,7 @@ func accountWithOwnerCountHook(view LedgerView, accountID [20]byte, account *sta
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
 // Reference: rippled ledger/View.cpp xrpLiquid()
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
-func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
+func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
 	account, err := ReadAccountRoot(view, accountID)
 	if err != nil || account == nil {
 		return NewXRPAmount(0)
@@ -515,7 +519,7 @@ func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserve
 // For XRP, returns balance minus reserve (xrpLiquid). reserveBase and reserveIncrement
 // are required for XRP reserve calculation.
 // Reference: rippled ledger/View.h accountFunds()
-func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) Amount {
+func AccountFunds(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) Amount {
 	if amount.IsNative() {
 		return XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
 	}
@@ -588,7 +592,7 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 // AccountFundsNoFreezeStrict returns owner funds without applying freeze
 // rules. Missing account or trust-line entries are a zero balance; storage,
 // decoding, and reserve-arithmetic failures are returned to the caller.
-func AccountFundsNoFreezeStrict(view LedgerView, accountID [20]byte, amount Amount, reserveBase, reserveIncrement uint64) (Amount, error) {
+func AccountFundsNoFreezeStrict(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, reserveBase, reserveIncrement uint64) (Amount, error) {
 	if view == nil {
 		return Amount{}, fmt.Errorf("account funds: nil ledger view")
 	}

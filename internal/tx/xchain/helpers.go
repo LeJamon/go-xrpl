@@ -301,7 +301,7 @@ func claimBridgeKeylet(bridge XChainBridge) (keylet.XChainBridge, error) {
 	}, nil
 }
 
-func readBridge(view tx.LedgerView, bridge XChainBridge) (*entry.Bridge, keylet.Keylet, error) {
+func readBridge(view tx.ReadOnlyLedgerView, bridge XChainBridge) (*entry.Bridge, keylet.Keylet, error) {
 	want := bridgeMap(bridge)
 	for _, chain := range []chainType{lockingChain, issuingChain} {
 		k, err := bridgeKeylet(bridge, chain)

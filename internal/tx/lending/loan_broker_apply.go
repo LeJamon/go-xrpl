@@ -33,7 +33,7 @@ func amountAssetMatches(amount tx.Amount, asset tx.Asset) bool {
 
 // -------------------- LoanBrokerSet --------------------
 
-func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanBrokerSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
@@ -216,7 +216,7 @@ func updateBroker(ctx *tx.ApplyContext, brokerKey keylet.Keylet, b *loanBrokerDa
 
 // -------------------- LoanBrokerDelete --------------------
 
-func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanBrokerDelete) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	rules := config.RequireRules()
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
@@ -337,7 +337,7 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 
 // -------------------- LoanBrokerCoverDeposit --------------------
 
-func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanBrokerCoverDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -430,7 +430,7 @@ func (l *LoanBrokerCoverDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 
 // -------------------- LoanBrokerCoverWithdraw --------------------
 
-func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -586,7 +586,7 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 
 // determineBrokerID resolves the LoanBroker ID either from the field or from the
 // Amount's issuer (a broker pseudo-account).
-func (l *LoanBrokerCoverClawback) determineBrokerID(view tx.LedgerView) ([32]byte, ter.Result) {
+func (l *LoanBrokerCoverClawback) determineBrokerID(view tx.ReadOnlyLedgerView) ([32]byte, ter.Result) {
 	if l.LoanBrokerID != nil {
 		id, ok := hashBytes(*l.LoanBrokerID)
 		if !ok {
@@ -641,7 +641,7 @@ func (l *LoanBrokerCoverClawback) clawAmount(b *loanBrokerData, vinfo *vault.Vau
 	return req, ter.TesSUCCESS
 }
 
-func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanBrokerCoverClawback) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

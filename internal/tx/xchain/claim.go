@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-func (x *XChainClaim) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainClaim) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL

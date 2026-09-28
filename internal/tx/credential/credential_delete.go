@@ -124,7 +124,7 @@ func (c *CredentialDelete) RequiredAmendments() [][32]byte {
 // CredentialDelete::preclaim. Subject and Issuer both default to Account. The
 // subject/issuer/expired permission gate (tecNO_PERMISSION) stays in Apply,
 // mirroring rippled CredentialDelete::doApply.
-func (c *CredentialDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (c *CredentialDelete) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	credTypeBytes, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
 		return ter.TemINVALID

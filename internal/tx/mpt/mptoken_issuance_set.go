@@ -248,7 +248,7 @@ func (m *MPTokenIssuanceSet) RequiredAmendments() [][32]byte {
 // must exist; otherwise the DomainID gate (RequireAuth tecNO_PERMISSION + domain
 // existence tecOBJECT_NOT_FOUND) and the CanMutate permission checks. The
 // lock/unlock, flag, fee, metadata, and DomainID mutations stay in Apply.
-func (m *MPTokenIssuanceSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (m *MPTokenIssuanceSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	rules := view.Rules()
 	txFlags := m.GetFlags()
 

@@ -131,7 +131,7 @@ func (a *AMMClawback) CheckExtraFeatures(rules *amendment.Rules) error {
 // Preclaim requires the holder and AMM to exist and the issuer to permit
 // clawback (lsfAllowTrustLineClawback set, lsfNoFreeze clear).
 // Reference: rippled AMMClawback.cpp preclaim
-func (a *AMMClawback) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (a *AMMClawback) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	issuerData, err := view.Read(keylet.Account(getIssuerBytes(a.Common.Account)))
 	if err != nil || issuerData == nil {
 		return TerNO_ACCOUNT

@@ -173,7 +173,7 @@ func (s *SponsorshipSet) parties() (sponsorID, sponseeID [20]byte, result ter.Re
 	return sponsorID, sponseeID, ter.TesSUCCESS
 }
 
-func (s *SponsorshipSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (s *SponsorshipSet) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	sponsorID, sponseeID, result := s.parties()
 	if result != ter.TesSUCCESS {
 		return result

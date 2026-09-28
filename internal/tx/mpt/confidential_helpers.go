@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-func readConfidentialIssuance(view tx.LedgerView, id [24]byte, account string) (*state.MPTokenIssuanceData, keylet.Keylet, [20]byte, ter.Result) {
+func readConfidentialIssuance(view tx.ReadOnlyLedgerView, id [24]byte, account string) (*state.MPTokenIssuanceData, keylet.Keylet, [20]byte, ter.Result) {
 	issuance, issuanceKey, result := mptutil.ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return nil, issuanceKey, [20]byte{}, result
@@ -21,7 +21,7 @@ func readConfidentialIssuance(view tx.LedgerView, id [24]byte, account string) (
 	return issuance, issuanceKey, accountID, ter.TesSUCCESS
 }
 
-func readConfidentialHolding(view tx.LedgerView, id [24]byte, accountID [20]byte) (*state.MPTokenData, keylet.Keylet, ter.Result) {
+func readConfidentialHolding(view tx.ReadOnlyLedgerView, id [24]byte, accountID [20]byte) (*state.MPTokenData, keylet.Keylet, ter.Result) {
 	token, tokenKey, result := mptutil.ReadHolding(view, id, accountID)
 	if result == ter.TecNO_AUTH {
 		result = ter.TecOBJECT_NOT_FOUND
@@ -29,7 +29,7 @@ func readConfidentialHolding(view tx.LedgerView, id [24]byte, accountID [20]byte
 	return token, tokenKey, result
 }
 
-func readConfidentialState(view tx.LedgerView, id [24]byte, account string) (*state.MPTokenIssuanceData, keylet.Keylet, *state.MPTokenData, keylet.Keylet, [20]byte, ter.Result) {
+func readConfidentialState(view tx.ReadOnlyLedgerView, id [24]byte, account string) (*state.MPTokenIssuanceData, keylet.Keylet, *state.MPTokenData, keylet.Keylet, [20]byte, ter.Result) {
 	issuance, issuanceKey, accountID, result := readConfidentialIssuance(view, id, account)
 	if result != ter.TesSUCCESS {
 		return nil, issuanceKey, nil, keylet.Keylet{}, accountID, result

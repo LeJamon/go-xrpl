@@ -67,7 +67,7 @@ func (t *TicketCreate) Flatten() (map[string]any, error) {
 // stored TicketCount is rippled's pre-consumption curTicketCount and the check
 // uses rippled's exact formula curTicketCount + addedTickets - consumedTickets.
 // Reference: rippled CreateTicket.cpp preclaim().
-func (t *TicketCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (t *TicketCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(t.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
