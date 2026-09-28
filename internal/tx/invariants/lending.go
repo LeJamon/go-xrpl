@@ -286,7 +286,12 @@ func loanFlag(fields decodedLendingEntry, flag uint32) bool {
 }
 
 func loanDueDate(fields decodedLendingEntry) (uint32, bool) {
-	return u32FieldPresent(fields, "NextPaymentDueDate")
+	loan, ok := fields.model.(*entry.Loan)
+	if !ok {
+		return 0, false
+	}
+	value, err := loan.GetNextPaymentDueDate()
+	return value, err == nil
 }
 
 func transactionType(txn Transaction) TxType {

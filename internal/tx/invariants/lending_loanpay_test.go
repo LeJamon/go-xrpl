@@ -220,6 +220,9 @@ func TestValidLoan_LoanPayFullRepaymentKeepsZeroBalancesAndDueDate(t *testing.T)
 		}
 		t.Run(rulesCase.name, func(t *testing.T) {
 			after := loanInvariantMap(0, 0)
+			delete(after, "PrincipalOutstanding")
+			delete(after, "TotalValueOutstanding")
+			delete(after, "NextPaymentDueDate")
 			change := InvariantEntry{
 				EntryType: entry.TypeLoan,
 				Before:    mustEncode(t, before),
@@ -249,6 +252,9 @@ func TestValidLoan_LoanPayFullRepaymentRequiresZeroBalancesAndDueDate(t *testing
 			before["TotalValueOutstanding"] = "100"
 			before["NextPaymentDueDate"] = uint32(1100)
 			after := loanInvariantMap(0, 0)
+			delete(after, "PrincipalOutstanding")
+			delete(after, "TotalValueOutstanding")
+			delete(after, "NextPaymentDueDate")
 			for field, value := range tc.afterOverrides {
 				after[field] = value
 			}
