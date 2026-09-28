@@ -634,15 +634,13 @@ func ValidateTemplateFields(txType Type, values map[string]any) error {
 		if field.style == soeREQUIRED && !fields[field.name] {
 			return errors.New("Field '" + field.name + "' is required but missing.")
 		}
+		if field.style == soeDEFAULT && fields[field.name] && isExplicitDefault(values[field.name]) {
+			return errors.New("Field '" + field.name + "' may not be explicitly set to default.")
+		}
 	}
 	for _, field := range commonFields {
 		if field.style == soeREQUIRED && !fields[field.name] {
 			return errors.New("Field '" + field.name + "' is required but missing.")
-		}
-	}
-	for _, field := range txTemplates[txType] {
-		if field.style == soeDEFAULT && fields[field.name] && isExplicitDefault(values[field.name]) {
-			return errors.New("Field '" + field.name + "' may not be explicitly set to default.")
 		}
 	}
 

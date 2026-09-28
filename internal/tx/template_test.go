@@ -353,6 +353,13 @@ func TestValidateTemplateFieldsErrorPrecedence(t *testing.T) {
 		"SponsorSignature": map[string]any{"Amount": "1"},
 	}
 	for _, name := range []string{"Destination", "Amount", "TransactionType", "Account", "Sequence", "Fee", "SigningPubKey"} {
+		if name == "TransactionType" {
+			want := "Field 'Paths' may not be explicitly set to default."
+			if err := ValidateTemplateFields(TypePayment, values); err == nil || err.Error() != want {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+			delete(values, "Paths")
+		}
 		want := "Field '" + name + "' is required but missing."
 		if err := ValidateTemplateFields(TypePayment, values); err == nil || err.Error() != want {
 			t.Fatalf("error = %v, want %q", err, want)
@@ -363,7 +370,6 @@ func TestValidateTemplateFieldsErrorPrecedence(t *testing.T) {
 		remove string
 		want   string
 	}{
-		{"Paths", "Field 'Paths' may not be explicitly set to default."},
 		{"NFTokenID", "Field 'NFTokenID' found in disallowed location."},
 		{"SponsorSignature", "Field 'SponsorSignature.Amount' found in disallowed location."},
 	} {
@@ -401,5 +407,19 @@ func TestParseFromBinaryRequiredFieldOrder(t *testing.T) {
 				t.Fatalf("error = %v, want temMALFORMED: %s", err, want)
 			}
 		})
+	}
+}
+
+func TestParseFromBinaryDefaultBeforeMissingCommonField(t *testing.T) {
+	fields := baseCommon("Payment")
+	fields["Destination"] = testDestination
+	fields["Amount"] = "1"
+	fields["Paths"] = []any{}
+	delete(fields, "Sequence")
+	_, err := ParseFromBinary(encodeTx(t, fields))
+	want := "temMALFORMED: Field 'Paths' may not be explicitly set to default."
+	result, ok := ter.AsResultError(err)
+	if !ok || result.Code != ter.TemMALFORMED || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
 	}
 }
