@@ -516,7 +516,7 @@ func (n validatedLedgerNotification) notify() {
 
 type transactionResultSource interface {
 	IsValidated() bool
-	ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error
+	ForEachTransactionContext(context.Context, func(txHash [32]byte, txData []byte) bool) error
 }
 
 type stagedTransactionResults struct {
@@ -551,6 +551,13 @@ func (s *Service) collectTransactionResultsLocked(l transactionResultSource, led
 }
 
 func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) (*stagedTransactionResults, error) {
+	return stageTransactionResultsContext(context.Background(), l, ledgerSeq, ledgerHash)
+}
+
+func stageTransactionResultsContext(ctx context.Context, l transactionResultSource, ledgerSeq uint32, ledgerHash [32]byte) (*stagedTransactionResults, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	staged := &stagedTransactionResults{
 		positions: make(map[[32]byte]uint32),
 		ledgerSeq: ledgerSeq,
@@ -558,8 +565,14 @@ func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledger
 	var results []TransactionResultEvent
 	validated := l.IsValidated()
 
-	if err := l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
+	if err := l.ForEachTransactionContext(ctx, func(txHash [32]byte, txData []byte) bool {
+		if err := ctx.Err(); err != nil {
+			return false
+		}
 		accepted := ParseAcceptedTransaction(txData)
+		if err := ctx.Err(); err != nil {
+			return false
+		}
 		result := TransactionResultEvent{
 			TxHash:      txHash,
 			TxData:      accepted.Raw(),
@@ -569,6 +582,9 @@ func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledger
 			LedgerHash:  ledgerHash,
 		}
 		result.AffectedAccounts = accepted.AffectedAccounts()
+		if err := ctx.Err(); err != nil {
+			return false
+		}
 
 		if txIndex, ok := accepted.TransactionIndex(); ok {
 			staged.positions[txHash] = txIndex
@@ -580,6 +596,9 @@ func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledger
 		return true
 	}); err != nil {
 		return nil, fmt.Errorf("walk ledger transactions: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	sort.SliceStable(results, func(i, j int) bool {
 		left, leftOK := staged.positions[results[i].TxHash]
@@ -593,6 +612,9 @@ func stageTransactionResults(l transactionResultSource, ledgerSeq uint32, ledger
 			return false
 		}
 	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	staged.results = results
 	return staged, nil
 }

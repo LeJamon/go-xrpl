@@ -186,7 +186,7 @@ func (s *Service) acceptConsensusResult(
 	closedLedgerHash := closed.Hash()
 	closedTxCount := closed.TxCount()
 	stageStarted := time.Now()
-	stagedResults, err := stageTransactionResults(closed, closedSeq, closedLedgerHash)
+	stagedResults, err := stageTransactionResultsContext(ctx, closed, closedSeq, closedLedgerHash)
 	if err != nil {
 		return 0, fmt.Errorf("collect transaction results: %w", err)
 	}

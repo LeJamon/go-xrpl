@@ -92,7 +92,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	}
 	closedSeq := closed.Sequence()
 	closedLedgerHash := closed.Hash()
-	stagedResults, err := stageTransactionResults(closed, closedSeq, closedLedgerHash)
+	stagedResults, err := stageTransactionResultsContext(ctx, closed, closedSeq, closedLedgerHash)
 	if err != nil {
 		return 0, fmt.Errorf("collect transaction results: %w", err)
 	}
