@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/stretchr/testify/require"
 )
 
 // gatedStore is an in-memory node store whose StoreBatch blocks until release
@@ -21,7 +22,9 @@ import (
 type gatedStore struct {
 	nodestore.Database
 	releaseOnce sync.Once
+	enteredOnce sync.Once
 	release     chan struct{}
+	entered     chan struct{}
 }
 
 func newGatedStore(t *testing.T) *gatedStore {
@@ -29,12 +32,20 @@ func newGatedStore(t *testing.T) *gatedStore {
 	return &gatedStore{
 		Database: newTestNodeStore(t, 10000),
 		release:  make(chan struct{}),
+		entered:  make(chan struct{}),
 	}
 }
 
 func (g *gatedStore) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
+	g.enteredOnce.Do(func() { close(g.entered) })
 	<-g.release
 	return g.Database.StoreBatch(ctx, nodes)
+}
+
+func (g *gatedStore) Store(ctx context.Context, node *nodestore.Node) error {
+	g.enteredOnce.Do(func() { close(g.entered) })
+	<-g.release
+	return g.Database.Store(ctx, node)
 }
 
 func (g *gatedStore) open() { g.releaseOnce.Do(func() { close(g.release) }) }
@@ -151,6 +162,100 @@ func TestService_PersistLedgerWritesHeader(t *testing.T) {
 	if err != nil || node == nil {
 		t.Fatalf("header fetch = %v, %v", node, err)
 	}
+}
+
+func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
+	store := newGatedStore(t)
+	cfg := DefaultConfig()
+	cfg.Standalone = false
+	cfg.NodeStore = store
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(func() {
+		store.open()
+		svc.Stop()
+	})
+
+	parent := svc.GetClosedLedger()
+	blob, _ := startupPaymentBlob(t, "canceled-async-persist", 1)
+	outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
+	require.NoError(t, err)
+	require.True(t, outcome.Applied)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := svc.AcceptConsensusResult(ctx, parent, nil, nil, parent.CloseTime().Add(time.Second), true)
+		accepted <- err
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("accepted ledger was not handed to async persistence")
+	}
+	cancel()
+	select {
+	case err := <-accepted:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("committed acceptance waited for asynchronous persistence")
+	}
+
+	closed := svc.GetClosedLedger()
+	require.Equal(t, parent.Sequence()+1, closed.Sequence())
+	stopDone := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopDone)
+	}()
+	require.Eventually(t, func() bool {
+		svc.lifecycleMu.Lock()
+		defer svc.lifecycleMu.Unlock()
+		return svc.lifecycleState == serviceStopping
+	}, time.Second, time.Millisecond)
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned while async persistence was blocked")
+	default:
+	}
+
+	store.open()
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain async persistence")
+	}
+	persisted, err := store.Fetch(t.Context(), nodestore.Hash256(closed.Hash()))
+	require.NoError(t, err)
+	require.NotNil(t, persisted, "Stop must drain the committed ledger header")
+}
+
+func TestService_StandaloneCommitPersistsAfterCancellation(t *testing.T) {
+	store := newGatedStore(t)
+	store.open()
+	cfg := DefaultConfig()
+	cfg.NodeStore = store
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	blob, _ := startupPaymentBlob(t, "standalone-cancel-commit", 1)
+	outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
+	require.NoError(t, err)
+	require.True(t, outcome.Applied)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	svc.SetTxRelay(func([]byte) { cancel() })
+	seq, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	closed := svc.GetClosedLedger()
+	require.Equal(t, seq, closed.Sequence())
+	persisted, err := store.Fetch(t.Context(), nodestore.Hash256(closed.Hash()))
+	require.NoError(t, err)
+	require.NotNil(t, persisted, "committed ledger header must survive caller cancellation")
 }
 
 func TestService_ValidatedTipDoesNotRegress(t *testing.T) {

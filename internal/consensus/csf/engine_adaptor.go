@@ -85,6 +85,8 @@ type Peer struct {
 	lifecycleMu      sync.Mutex
 	workMu           sync.Mutex
 	engine           *rcl.Engine
+	lifecycleCtx     context.Context
+	lifecycleCancel  context.CancelFunc
 	started          bool
 	stopped          bool
 	ticking          bool
@@ -311,9 +313,15 @@ func (p *Peer) Start() error {
 			Clock:      p.Now,
 			ManualTick: true,
 		}
+		lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+		p.lifecycleCtx = lifecycleCtx
+		p.lifecycleCancel = lifecycleCancel
 		p.engine = rcl.NewEngine(p, cfg)
 		p.engine.SetLedgerAncestryProvider(p)
-		if err := p.engine.Start(context.Background()); err != nil {
+		if err := p.engine.Start(lifecycleCtx); err != nil {
+			lifecycleCancel()
+			p.lifecycleCtx = nil
+			p.lifecycleCancel = nil
 			p.engine = nil
 			p.lifecycleMu.Unlock()
 			return err
@@ -321,7 +329,10 @@ func (p *Peer) Start() error {
 		lcl := p.LastClosedLedger()
 		round := consensus.RoundID{Seq: lcl.Seq() + 1, ParentHash: lcl.ID()}
 		if err := p.engine.StartRound(round, p.IsValidator()); err != nil {
+			lifecycleCancel()
 			_ = p.engine.Stop()
+			p.lifecycleCtx = nil
+			p.lifecycleCancel = nil
 			p.engine = nil
 			p.lifecycleMu.Unlock()
 			return err
@@ -409,7 +420,11 @@ func (p *Peer) Stop() error {
 	clear(p.acquiringTxSets)
 	p.mu.Unlock()
 	engine := p.engine
+	lifecycleCancel := p.lifecycleCancel
 	p.lifecycleMu.Unlock()
+	if lifecycleCancel != nil {
+		lifecycleCancel()
+	}
 
 	for _, other := range p.network.Peers(p.ID) {
 		p.network.Disconnect(p.ID, other)
@@ -420,11 +435,11 @@ func (p *Peer) Stop() error {
 
 	var err error
 	p.runEngineWork(func() {
-		if pendingAccept != nil {
-			pendingAccept.complete()
-		}
 		if engine != nil {
 			err = engine.Stop()
+		}
+		if pendingAccept != nil {
+			pendingAccept.complete()
 		}
 	})
 	return err
@@ -1047,12 +1062,16 @@ func (p *Peer) GetMaxDisallowedLedgerSeq() uint32 {
 }
 
 func (p *Peer) BuildLedger(
+	ctx context.Context,
 	parent consensus.Ledger,
 	txSet consensus.TxSet,
 	closeTime time.Time,
 	closeTimeCorrect bool,
 	_ [][]byte,
 ) (consensus.Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	simParent, ok := parent.(*Ledger)
 	if !ok {
 		return nil, fmt.Errorf("csf: unexpected parent ledger type %T", parent)
@@ -1080,6 +1099,9 @@ func (p *Peer) BuildLedger(
 		closeTimeCorrect,
 		nextLedgerCloseTimeResolution(simParent),
 	)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cumulative := ledger.Transactions()
 	p.mu.Lock()
 	p.ledgers[ledger.ID()] = ledger

@@ -754,14 +754,12 @@ func (a *Adaptor) GetMaxDisallowedLedgerSeq() uint32 {
 	return a.maxDisallowedSeq
 }
 
-func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (consensus.Ledger, error) {
+func (a *Adaptor) BuildLedger(ctx context.Context, parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (consensus.Ledger, error) {
 	var parentLedger *ledger.Ledger
 	if w, ok := parent.(*LedgerWrapper); ok {
 		parentLedger = w.Unwrap()
 	}
-	// context.TODO: BuildLedger's interface has no context, so persistence
-	// here can't be cancelled by the engine (#185).
-	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), disputedTxs, closeTime, closeTimeCorrect)
+	seq, err := a.ledgerService.AcceptConsensusResult(ctx, parentLedger, txSet.Txs(), disputedTxs, closeTime, closeTimeCorrect)
 	if err != nil {
 		return nil, err
 	}

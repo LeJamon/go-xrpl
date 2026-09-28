@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -59,6 +60,7 @@ func (a *blockedBuildAdaptor) BuildTxSet(_ [][]byte) (consensus.TxSet, error) {
 }
 
 func (a *blockedBuildAdaptor) BuildLedger(
+	ctx context.Context,
 	parent consensus.Ledger,
 	txSet consensus.TxSet,
 	closeTime time.Time,
@@ -67,7 +69,7 @@ func (a *blockedBuildAdaptor) BuildLedger(
 ) (consensus.Ledger, error) {
 	a.enteredOnce.Do(func() { close(a.entered) })
 	<-a.release
-	ledger, err := a.Adaptor.BuildLedger(parent, txSet, closeTime, closeTimeCorrect, disputedTxs)
+	ledger, err := a.Adaptor.BuildLedger(ctx, parent, txSet, closeTime, closeTimeCorrect, disputedTxs)
 	a.completedOnce.Do(func() { close(a.completed) })
 	return ledger, err
 }

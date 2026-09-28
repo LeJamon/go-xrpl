@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -12,6 +13,7 @@ import (
 )
 
 type ledgerAcceptWork struct {
+	ctx              context.Context
 	result           consensus.Result
 	prevLedger       consensus.Ledger
 	txSet            consensus.TxSet
@@ -140,7 +142,12 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// concurrent OnProposal/OnValidation/OnTxSet during the unlocked apply then
 	// buffer for the NEXT round instead of mutating this one, and the consensus
 	// goroutine parks its round-driving until the commit tail runs.
+	ctx := e.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	work := ledgerAcceptWork{
+		ctx:              ctx,
 		result:           result,
 		prevLedger:       e.prevLedger,
 		txSet:            txSet,
@@ -182,7 +189,15 @@ func (e *Engine) completeDeferredLedgerAccept(work ledgerAcceptWork) {
 }
 
 func (e *Engine) buildAcceptedLedger(work ledgerAcceptWork) (consensus.Ledger, error) {
+	ctx := work.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	newLedger, err := e.adaptor.BuildLedger(
+		ctx,
 		work.prevLedger,
 		work.txSet,
 		work.closeTime,

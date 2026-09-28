@@ -1,9 +1,11 @@
 package csf
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,7 +62,7 @@ func TestPeerInjectionSequenceNamesParentLedger(t *testing.T) {
 	peer.InjectTx(parent.Seq(), next)
 	peer.InjectTx(parent.Seq()+1, following)
 
-	child, err := peer.BuildLedger(parent, NewTxSet(), parent.CloseTime().Add(time.Second), true, nil)
+	child, err := peer.BuildLedger(context.Background(), parent, NewTxSet(), parent.CloseTime().Add(time.Second), true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger(child): %v", err)
 	}
@@ -72,7 +74,7 @@ func TestPeerInjectionSequenceNamesParentLedger(t *testing.T) {
 		t.Fatal("child-sequence injection was added one ledger too early")
 	}
 
-	grandchild, err := peer.BuildLedger(child, NewTxSet(), child.CloseTime().Add(time.Second), true, nil)
+	grandchild, err := peer.BuildLedger(context.Background(), child, NewTxSet(), child.CloseTime().Add(time.Second), true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger(grandchild): %v", err)
 	}
@@ -91,7 +93,7 @@ func TestPeerAncestryAcquiresOnlyFromLocalNetwork(t *testing.T) {
 	t.Cleanup(func() { _ = sim.Stop() })
 
 	set := NewTxSetFrom([]Tx{{ID: 7}})
-	ledger, err := source.BuildLedger(source.LastClosedLedger(), set, source.Now(), true, nil)
+	ledger, err := source.BuildLedger(context.Background(), source.LastClosedLedger(), set, source.Now(), true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger: %v", err)
 	}
@@ -210,6 +212,7 @@ func TestPeerAcquisitionAcceptsSlowReplyAfterRetryWindow(t *testing.T) {
 	t.Cleanup(func() { _ = sim.Stop() })
 
 	ledger, err := slow.BuildLedger(
+		context.Background(),
 		slow.LastClosedLedger(),
 		NewTxSetFrom([]Tx{{ID: 88}}),
 		slow.Now(),
@@ -797,6 +800,71 @@ func TestPeerDefersLedgerAcceptAndStopCompletesAcceptance(t *testing.T) {
 	}
 }
 
+func TestPeerStopCancelsLifecycleBeforeJoiningEngineWork(t *testing.T) {
+	sim := NewSim()
+	peer := sim.CreateGroup(1).Get(0)
+	if err := peer.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	peer.lifecycleMu.Lock()
+	lifecycleCtx := peer.lifecycleCtx
+	peer.lifecycleMu.Unlock()
+	if lifecycleCtx == nil {
+		t.Fatal("peer lifecycle context is nil after Start")
+	}
+
+	workStarted := make(chan struct{})
+	workReleased := make(chan struct{})
+	workDone := make(chan struct{})
+	var releaseWork sync.Once
+	t.Cleanup(func() {
+		releaseWork.Do(func() { close(workReleased) })
+		_ = peer.Stop()
+	})
+
+	go peer.runEngineWork(func() {
+		close(workStarted)
+		select {
+		case <-lifecycleCtx.Done():
+		case <-workReleased:
+		}
+		close(workDone)
+	})
+	select {
+	case <-workStarted:
+	case <-time.After(time.Second):
+		t.Fatal("engine work did not start")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- peer.Stop() }()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseWork.Do(func() { close(workReleased) })
+		select {
+		case <-stopDone:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("Stop did not join blocked engine work")
+	}
+
+	select {
+	case <-lifecycleCtx.Done():
+	default:
+		t.Fatal("Stop returned without canceling the lifecycle context")
+	}
+	select {
+	case <-workDone:
+	default:
+		t.Fatal("Stop returned before engine work completed")
+	}
+}
+
 func TestPeerNowTruncatesAfterClockSkew(t *testing.T) {
 	sim := NewSim()
 	peer := sim.CreateGroup(1).Get(0)
@@ -813,7 +881,7 @@ func TestPeerSuppressesTransactionAlreadyInLCL(t *testing.T) {
 	sim := NewSim()
 	peer := sim.CreateGroup(1).Get(0)
 	tx := Tx{ID: 73}
-	ledger, err := peer.BuildLedger(peer.LastClosedLedger(), NewTxSetFrom([]Tx{tx}), peer.Now(), true, nil)
+	ledger, err := peer.BuildLedger(context.Background(), peer.LastClosedLedger(), NewTxSetFrom([]Tx{tx}), peer.Now(), true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger: %v", err)
 	}
@@ -838,11 +906,11 @@ func TestPeerBuildLedgerUsesCumulativeTxSetIdentity(t *testing.T) {
 	)
 	closeTime := parent.CloseTime().Add(time.Second)
 
-	first, err := peer.BuildLedger(parent, NewTxSet(), closeTime, true, nil)
+	first, err := peer.BuildLedger(context.Background(), parent, NewTxSet(), closeTime, true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger(empty): %v", err)
 	}
-	second, err := peer.BuildLedger(parent, NewTxSetFrom([]Tx{tx}), closeTime, true, nil)
+	second, err := peer.BuildLedger(context.Background(), parent, NewTxSetFrom([]Tx{tx}), closeTime, true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger(duplicate): %v", err)
 	}
@@ -920,7 +988,7 @@ func TestPeerBuildLedgerUsesExplicitParentResolution(t *testing.T) {
 		resolution: 20 * time.Second,
 	}
 
-	built, err := peer.BuildLedger(parent, NewTxSet(), parent.CloseTime().Add(time.Second), true, nil)
+	built, err := peer.BuildLedger(context.Background(), parent, NewTxSet(), parent.CloseTime().Add(time.Second), true, nil)
 	if err != nil {
 		t.Fatalf("BuildLedger: %v", err)
 	}

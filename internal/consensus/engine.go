@@ -299,10 +299,11 @@ type ledgerProvider interface {
 	// across restarts). Immutable after startup.
 	GetMaxDisallowedLedgerSeq() uint32
 
-	// BuildLedger closes a ledger from the agreed tx set on parent.
+	// BuildLedger closes a ledger from the agreed tx set on parent. ctx is the
+	// engine lifecycle context and is canceled when the engine shuts down.
 	// disputedTxs are the raw blobs of the round's disputed txs we voted NO
 	// on; they are replayed into the next open ledger ahead of the queue.
-	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (Ledger, error)
+	BuildLedger(ctx context.Context, parent Ledger, txSet TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (Ledger, error)
 
 	ValidateLedger(ledger Ledger) error
 

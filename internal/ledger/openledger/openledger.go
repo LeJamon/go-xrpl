@@ -2,6 +2,7 @@ package openledger
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -33,12 +34,46 @@ type Config struct {
 type OpenLedger struct {
 	cfg       Config
 	logger    xrpllog.Logger
-	modifyMu  sync.Mutex
+	modifyMu  contextMutex
 	currentMu sync.RWMutex
 	current   *ledger.Ledger
 	// cachedTxs memoises CurrentTxs for the published view; nil'd at every
 	// publish point. Guarded by currentMu.
 	cachedTxs [][]byte
+}
+
+// contextMutex is a one-token semaphore whose acquisition can be canceled.
+// Open-ledger rebuilds use it to stop waiting for another writer when the
+// owning consensus operation is canceled. The zero value is ready to use.
+type contextMutex struct {
+	once sync.Once
+	gate chan struct{}
+}
+
+func (m *contextMutex) init() {
+	m.once.Do(func() {
+		m.gate = make(chan struct{}, 1)
+		m.gate <- struct{}{}
+	})
+}
+
+func (m *contextMutex) Lock() {
+	_ = m.LockContext(context.Background())
+}
+
+func (m *contextMutex) LockContext(ctx context.Context) error {
+	m.init()
+	select {
+	case <-m.gate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *contextMutex) Unlock() {
+	m.init()
+	m.gate <- struct{}{}
 }
 
 // New creates a fresh OpenLedger anchored on closed; the initial Current() view is
@@ -141,7 +176,7 @@ func (o *OpenLedger) Accept(
 	modifier func(*ledger.Ledger),
 	relay func(hash [32]byte, blob []byte),
 ) error {
-	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay, nil)
+	return o.accept(context.Background(), newLCL, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay, nil)
 }
 
 // AcceptWithPrecommit runs precommit after every fallible rebuild step has
@@ -160,10 +195,15 @@ func (o *OpenLedger) AcceptWithPrecommit(
 	relay func(hash [32]byte, blob []byte),
 	publication func(publish func()),
 ) error {
-	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
+	return o.AcceptWithPrecommitContext(context.Background(), newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
 }
 
-func (o *OpenLedger) accept(
+// AcceptWithPrecommitContext runs the cancellable preparation phase and then
+// invokes precommit exactly once at the commit boundary. The callbacks after
+// precommit are deliberately uninterruptible: they mutate TxQ/open-ledger
+// ownership and must either all finish or be drained by the service owner.
+func (o *OpenLedger) AcceptWithPrecommitContext(
+	ctx context.Context,
 	newLCL *ledger.Ledger,
 	locals []PendingTx,
 	retriesFirst bool,
@@ -175,6 +215,25 @@ func (o *OpenLedger) accept(
 	relay func(hash [32]byte, blob []byte),
 	publication func(publish func()),
 ) error {
+	return o.accept(ctx, newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
+}
+
+func (o *OpenLedger) accept(
+	ctx context.Context,
+	newLCL *ledger.Ledger,
+	locals []PendingTx,
+	retriesFirst bool,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+	queue *txq.TxQ,
+	precommit func(),
+	modifier func(*ledger.Ledger),
+	relay func(hash [32]byte, blob []byte),
+	publication func(publish func()),
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if newLCL == nil {
 		return errors.New("openledger.Accept: newLCL is nil")
 	}
@@ -203,31 +262,45 @@ func (o *OpenLedger) accept(
 	// Pass an empty initial range so the seeded retries enter the shared retry
 	// loop directly, matching rippled OpenLedger::apply.
 	if retriesFirst && retryTarget != nil && len(*retryTarget) > 0 {
-		if err := ApplyTxs(next, nil, retryTarget, applyCfg); err != nil {
+		if err := ApplyTxsContext(ctx, next, nil, retryTarget, applyCfg); err != nil {
 			return err
 		}
 	}
 
 	// Block concurrent Submits while we replay, modify, relay, and publish.
-	o.modifyMu.Lock()
+	if err := o.modifyMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer o.modifyMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// 2. Replay prior current's txs.
 	o.currentMu.RLock()
-	curTxs, err := collectTxs(o.current)
+	curTxs, err := collectTxsContext(ctx, o.current)
 	o.currentMu.RUnlock()
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(curTxs) > 0 {
-		if err := ApplyTxs(next, curTxs, retryTarget, applyCfg); err != nil {
+		if err := ApplyTxsContext(ctx, next, curTxs, retryTarget, applyCfg); err != nil {
 			return err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	eligibleLocals := locals
 	if len(locals) > 0 {
 		eligibleLocals = make([]PendingTx, 0, len(locals))
 		for _, lt := range locals {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			exists, err := next.TxExists(lt.Hash)
 			if err != nil {
 				return err
@@ -245,6 +318,9 @@ func (o *OpenLedger) accept(
 	if queue != nil && len(eligibleLocals) > 0 {
 		parsedLocals = make([]parsedLocal, 0, len(eligibleLocals))
 		for _, local := range eligibleLocals {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			prepared, parseErr := ParsePendingTx(local.Blob)
 			if parseErr != nil {
 				return fmt.Errorf("openledger.Accept: parse local transaction %x: %w", local.Hash, parseErr)
@@ -255,11 +331,17 @@ func (o *OpenLedger) accept(
 			parsedLocals = append(parsedLocals, parsedLocal{pending: prepared, parsed: prepared.Parsed})
 		}
 	} else if len(eligibleLocals) > 0 {
-		if err := applyTxs(next, eligibleLocals, retryTarget, applyCfg, false, false); err != nil {
+		if err := applyTxs(ctx, next, eligibleLocals, retryTarget, applyCfg, false, false); err != nil {
 			return err
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// From this point forward processClosed, modifier, queue replay, relay, and
+	// publication mutate shared ownership. Cancellation is no longer observed;
+	// the caller's lifecycle owner must drain this commit to completion.
 	if precommit != nil {
 		precommit()
 	}
@@ -369,13 +451,16 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 	return out
 }
 
-func collectTxs(v *ledger.Ledger) ([]PendingTx, error) {
+func collectTxsContext(ctx context.Context, v *ledger.Ledger) ([]PendingTx, error) {
 	if v == nil {
 		return nil, nil
 	}
 	var out []PendingTx
 	var visitErr error
-	err := v.ForEachTransaction(func(itemKey [32]byte, data []byte) bool {
+	err := v.ForEachTransactionContext(ctx, func(itemKey [32]byte, data []byte) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		raw, _, splitErr := tx.SplitTxWithMetaBlobStrict(data)
 		if splitErr != nil {
 			raw = data
@@ -408,6 +493,9 @@ func collectTxs(v *ledger.Ledger) ([]PendingTx, error) {
 		return true
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if visitErr != nil {
