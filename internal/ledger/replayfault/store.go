@@ -128,6 +128,8 @@ var (
 	// ErrBlocked is returned when a caller tries to validate or publish while
 	// an unresolved fault is present.
 	ErrBlocked = errors.New("replay fault store is blocked")
+	// ErrReplayInProgress is returned when another transition owns the durable intent.
+	ErrReplayInProgress = errors.New("replay transition is already in progress")
 	// ErrNoFault is returned when revalidation is requested without a fault.
 	ErrNoFault = errors.New("replay fault store has no fault")
 	// ErrFaultIDMismatch identifies a stale or unknown fault ID.
@@ -135,7 +137,7 @@ var (
 	// ErrRevalidationInProgress prevents multiple recovery callbacks from
 	// racing to clear one fault.
 	ErrRevalidationInProgress = errors.New("replay fault revalidation is already in progress")
-	// ErrStaleRevalidation means a Record or Update intervened in recovery.
+	// ErrStaleRevalidation means a fault update intervened in recovery.
 	ErrStaleRevalidation = errors.New("replay fault revalidation is stale")
 	// ErrVerifierRequired prevents callers from clearing a fault without an
 	// independent verification callback.
@@ -156,6 +158,7 @@ type Store struct {
 	operation      sync.RWMutex
 	path           string
 	fault          *Fault
+	pending        *Fault
 	blocked        bool
 	generation     uint64
 	recovery       recoveryState
@@ -207,39 +210,98 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Record gates immediately on the first unresolved fault. Later records do
-// not replace that fault; Update is the explicit enrichment operation.
-func (s *Store) Record(fault Fault) error {
+// BeginReplay persists the transition before execution. An interrupted replay
+// loads as an unresolved fault; a failed write prevents execution from starting.
+func (s *Store) BeginReplay(fault Fault) (string, error) {
 	if s == nil {
-		return ErrNoFault
+		return "", ErrBlocked
 	}
 	s.operation.Lock()
 	defer s.operation.Unlock()
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.generation++
-	if s.fault != nil {
-		if s.persistenceErr == nil {
-			return nil
-		}
-		err := s.persistLocked(s.fault)
-		s.persistenceErr = err
-		return err
+	if s.blocked {
+		return "", ErrBlocked
 	}
-
+	if s.pending != nil {
+		return "", ErrReplayInProgress
+	}
 	normalized, err := normalizeFault(fault)
-	s.fault = cloneFault(&normalized)
-	s.blocked = true
 	if err != nil {
+		return "", err
+	}
+	normalized.Class = Unclassified
+	normalized.Message = "replay transition interrupted before verification completed"
+	if err := s.persistLocked(&normalized); err != nil {
+		s.fault = &normalized
+		s.blocked = true
 		s.persistenceErr = err
+		s.generation++
+		return "", err
+	}
+	s.pending = &normalized
+	s.generation++
+	return normalized.ID, nil
+}
+
+// FailReplay latches the gate before enriching an already durable intent.
+func (s *Store) FailReplay(id string, fault Fault) error {
+	if s == nil {
+		return ErrBlocked
+	}
+	s.operation.Lock()
+	defer s.operation.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending == nil || id == "" || s.pending.ID != id {
+		return ErrFaultIDMismatch
+	}
+	intent := s.pending
+	fault.ID = intent.ID
+	fault.ParentHash = intent.ParentHash
+	fault.TargetHash = intent.TargetHash
+	fault.Sequence = intent.Sequence
+	fault.CreatedAt = intent.CreatedAt
+	fault.Revision = intent.Revision
+	if fault.Class == "" {
+		fault.Class = Unclassified
+	}
+	if fault.Evidence == nil {
+		fault.Evidence = intent.Evidence
+	}
+	s.fault = cloneFault(&fault)
+	s.pending = nil
+	s.blocked = true
+	s.generation++
+	s.persistenceErr = s.persistLocked(s.fault)
+	return s.persistenceErr
+}
+
+// CompleteReplay clears an intent only after its transition was verified.
+func (s *Store) CompleteReplay(id string) error {
+	if s == nil {
+		return ErrBlocked
+	}
+	s.operation.Lock()
+	defer s.operation.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blocked {
+		return ErrBlocked
+	}
+	if s.pending == nil || id == "" || s.pending.ID != id {
+		return ErrFaultIDMismatch
+	}
+	if err := clearDurable(s.path, *s.pending); err != nil {
+		s.fault = s.pending
+		s.pending = nil
+		s.blocked = true
+		s.persistenceErr = err
+		s.generation++
 		return err
 	}
-	if err := s.persistLocked(s.fault); err != nil {
-		s.persistenceErr = err
-		return err
-	}
-	s.persistenceErr = nil
+	s.pending = nil
+	s.generation++
 	return nil
 }
 
@@ -351,7 +413,7 @@ func (s *Store) Status() Status {
 	}
 }
 
-// WithValidator runs fn while preventing Record, Update, and a successful
+// WithValidator runs fn while preventing replay transitions, Update, and a successful
 // revalidation clear from overlapping it. A blocked store rejects fn.
 func (s *Store) WithValidator(fn func() error) error {
 	if s == nil {
@@ -374,7 +436,7 @@ func (s *Store) WithValidator(fn func() error) error {
 
 // Revalidate runs one explicit verification attempt. The callback is always
 // required and runs without either store mutex held. A successful callback
-// only clears the gate when no Record or Update intervened and the durable
+// only clears the gate when no fault update intervened and the durable
 // clear completed.
 func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.Context, Fault) error) error {
 	if s == nil {

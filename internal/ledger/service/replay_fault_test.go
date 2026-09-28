@@ -101,7 +101,7 @@ func TestReplayFaultExplicitRevalidationUsesSavedTransition(t *testing.T) {
 	evidence := replayEvidence{Parent: parent.Header(), Target: target.Header(), Fees: parent.Fees(), Authenticated: true, ParentSnapshot: true}
 	raw, err := json.Marshal(evidence)
 	require.NoError(t, err)
-	require.NoError(t, svc.replayFaults.Record(replayfault.Fault{Class: replayfault.ExecutionDisagreement, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Message: "previous engine disagreed", Evidence: raw}))
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{Class: replayfault.ExecutionDisagreement, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Message: "previous engine disagreed", Evidence: raw}))
 	fault := svc.replayFaults.Snapshot()
 	_, err = svc.captureReplayParent(context.Background(), fault.ID, parent)
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestReplayFaultAcquisitionBudgetPersists(t *testing.T) {
 	evidence := replayEvidence{Parent: parent.Header(), Target: target.Header(), Authenticated: true}
 	raw, err := json.Marshal(evidence)
 	require.NoError(t, err)
-	require.NoError(t, svc.replayFaults.Record(replayfault.Fault{Class: replayfault.MissingState, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw}))
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{Class: replayfault.MissingState, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw}))
 	calls := 0
 	svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
 		require.Equal(t, parent.Sequence(), seq)
@@ -165,7 +165,7 @@ func TestReplayFaultCannotClearUnauthenticatedTransition(t *testing.T) {
 	target := replayFaultTarget(t, parent, false)
 	raw, err := json.Marshal(replayEvidence{Parent: parent.Header(), Target: target.Header()})
 	require.NoError(t, err)
-	require.NoError(t, svc.replayFaults.Record(replayfault.Fault{Class: replayfault.Unclassified, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw}))
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{Class: replayfault.Unclassified, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw}))
 	require.ErrorContains(t, svc.RevalidateReplayFault(context.Background(), svc.replayFaults.Snapshot().ID), "authentication")
 	require.True(t, svc.ReplayBlocked())
 }
@@ -223,7 +223,7 @@ func TestReplayFaultRestoresNonemptyParentTransactionsAfterRestart(t *testing.T)
 	evidence := replayEvidence{Parent: h, Target: target.Header(), Fees: parent.Fees(), Authenticated: true, ParentSnapshot: true}
 	raw, err := json.Marshal(evidence)
 	require.NoError(t, err)
-	require.NoError(t, svc.replayFaults.Record(replayfault.Fault{Class: replayfault.CorruptState, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw}))
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{Class: replayfault.CorruptState, ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw}))
 	fault := svc.replayFaults.Snapshot()
 	_, err = svc.captureReplayParent(context.Background(), fault.ID, parent)
 	require.NoError(t, err)
@@ -350,4 +350,12 @@ func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {
 	require.Same(t, closed, svc.GetClosedLedger())
 	require.Error(t, svc.RevalidateReplayFault(context.Background(), fault.ID))
 	require.True(t, svc.ReplayBlocked())
+}
+
+func recordTestReplayFault(store *replayfault.Store, fault replayfault.Fault) error {
+	id, err := store.BeginReplay(fault)
+	if err != nil {
+		return err
+	}
+	return store.FailReplay(id, fault)
 }

@@ -27,7 +27,7 @@ func TestRecordPersistsAndRestarts(t *testing.T) {
 		Message:    "state diverged",
 		Evidence:   json.RawMessage(`{"ledger":"target"}`),
 	}
-	if err := store.Record(want); err != nil {
+	if err := recordTestFault(store, want); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	got := store.Snapshot()
@@ -92,7 +92,7 @@ func TestRecordWriteFailureRemainsBlocked(t *testing.T) {
 	if err := os.WriteFile(parent, []byte("directory replaced"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{Class: CorruptState}); err == nil {
+	if err := recordTestFault(store, Fault{Class: CorruptState}); err == nil {
 		t.Fatal("Record unexpectedly persisted through a file parent")
 	}
 	if !store.Blocked() || store.Snapshot() == nil {
@@ -121,7 +121,7 @@ func TestWithValidatorSerializesRecord(t *testing.T) {
 	<-entered
 
 	recordDone := make(chan error, 1)
-	go func() { recordDone <- store.Record(Fault{ID: "first", Class: MissingState}) }()
+	go func() { recordDone <- recordTestFault(store, Fault{ID: "first", Class: MissingState}) }()
 	select {
 	case err := <-recordDone:
 		t.Fatalf("Record completed while validator was running: %v", err)
@@ -144,7 +144,7 @@ func TestRevalidateStaleClearAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{ID: "fault", Class: MissingState}); err != nil {
+	if err := recordTestFault(store, Fault{ID: "fault", Class: MissingState}); err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
@@ -161,7 +161,7 @@ func TestRevalidateStaleClearAndRecovery(t *testing.T) {
 	if status := store.Status(); !status.Recovery.InFlight || status.Recovery.ID != "fault" {
 		t.Fatalf("recovery status = %+v, want in-flight fault", status.Recovery)
 	}
-	if err := store.Record(Fault{ID: "new-fault", Class: CorruptState}); err != nil {
+	if err := store.Update("fault", Fault{Class: CorruptState}); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -179,7 +179,7 @@ func TestRevalidateFailureThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{ID: "fault", Class: ExecutionDisagreement}); err != nil {
+	if err := recordTestFault(store, Fault{ID: "fault", Class: ExecutionDisagreement}); err != nil {
 		t.Fatal(err)
 	}
 	wantErr := errors.New("verification failed")
@@ -215,7 +215,7 @@ func TestRevalidateArchivesResolvedFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{ID: "fault", Class: ExecutionDisagreement, Evidence: json.RawMessage(`{"target":true}`)}); err != nil {
+	if err := recordTestFault(store, Fault{ID: "fault", Class: ExecutionDisagreement, Evidence: json.RawMessage(`{"target":true}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Revalidate(context.Background(), "fault", func(context.Context, Fault) error { return nil }); err != nil {
@@ -254,7 +254,7 @@ func TestRevalidateClearFailureRestoresFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{ID: "fault", Class: MissingState}); err != nil {
+	if err := recordTestFault(store, Fault{ID: "fault", Class: MissingState}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -297,7 +297,7 @@ func TestRevalidateRequiresCallbackAndOnlyOneInflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{ID: "fault"}); err != nil {
+	if err := recordTestFault(store, Fault{ID: "fault"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Revalidate(context.Background(), "fault", nil); !errors.Is(err, ErrVerifierRequired) {
@@ -329,7 +329,7 @@ func TestUpdatePreservesIdentityAndAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := time.Unix(10, 20).UTC()
-	if err := store.Record(Fault{ID: "fault", Class: Unclassified, CreatedAt: created}); err != nil {
+	if err := recordTestFault(store, Fault{ID: "fault", Class: Unclassified, CreatedAt: created}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Revalidate(context.Background(), "fault", func(context.Context, Fault) error { return errors.New("retry") }); err == nil {
@@ -350,7 +350,7 @@ func TestRevalidationPanicRemainsBlockedAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(Fault{Class: ExecutionDisagreement, Message: "fixture"}); err != nil {
+	if err := recordTestFault(store, Fault{Class: ExecutionDisagreement, Message: "fixture"}); err != nil {
 		t.Fatal(err)
 	}
 	id := store.Snapshot().ID
@@ -374,7 +374,7 @@ func TestAcquisitionBudgetCannotBeRolledBack(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	store, err := Open(path)
 	require.NoError(t, err)
-	require.NoError(t, store.Record(Fault{Class: MissingState}))
+	require.NoError(t, recordTestFault(store, Fault{Class: MissingState}))
 	stale := store.Snapshot()
 	for range 3 {
 		require.NoError(t, store.ReserveAcquisition(stale.ID, 3))
@@ -385,4 +385,12 @@ func TestAcquisitionBudgetCannotBeRolledBack(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, reopened.Snapshot().AcquisitionAttempts)
 	require.Error(t, reopened.ReserveAcquisition(stale.ID, 3))
+}
+
+func recordTestFault(store *Store, fault Fault) error {
+	id, err := store.BeginReplay(fault)
+	if err != nil {
+		return err
+	}
+	return store.FailReplay(id, fault)
 }

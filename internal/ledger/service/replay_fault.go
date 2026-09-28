@@ -78,57 +78,76 @@ func (s *Service) WithValidatorDuty(fn func() error) error {
 
 // ApplyReplay keeps failures out of the canonical ledger and latches the duty
 // gate before returning control to an acquisition fallback.
-func (s *Service) ApplyReplay(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated bool) (derived *ledger.Ledger, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			derived = nil
-			err = fmt.Errorf("replay panic: %v", recovered)
-			s.recordReplayFailure(ctx, replay, cfg, authenticated, err, false)
-		}
-	}()
-	if s.ReplayBlocked() {
-		return nil, replayfault.ErrBlocked
-	}
-	derived, err = replay.Apply(cfg)
-	if err == nil {
-		s.mu.Lock()
-		s.replayVerifiedHash = derived.Hash()
-		s.mu.Unlock()
-		return derived, nil
-	}
-	s.recordReplayFailure(ctx, replay, cfg, authenticated, err, false)
-	return nil, err
+func (s *Service) ApplyReplay(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated bool) (*ledger.Ledger, error) {
+	return s.applyReplay(ctx, replay, cfg, authenticated, false)
 }
 
-func (s *Service) recordReplayFailure(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated bool, cause error, lockHeld bool) {
-	parent := replay.Parent()
-	h := replay.TargetHeader()
-	evidence := replayEvidence{Target: h, Transactions: replay.OrderedTxs(), NetworkID: cfg.NetworkID, Authenticated: authenticated}
-	if parent != nil {
+func replayEvidenceFor(replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated bool) replayEvidence {
+	evidence := replayEvidence{Target: replay.TargetHeader(), Transactions: replay.OrderedTxs(), NetworkID: cfg.NetworkID, Authenticated: authenticated}
+	if parent := replay.Parent(); parent != nil {
 		evidence.Parent = parent.Header()
 		evidence.Fees = parent.Fees()
 	}
 	if cfg.Rules != nil {
 		evidence.Amendments = cfg.Rules.EnabledIDs()
 	}
+	return evidence
+}
+
+func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated, lockHeld bool) (derived *ledger.Ledger, err error) {
+	if replay == nil {
+		return nil, errors.New("replay transition is required")
+	}
+	evidence := replayEvidenceFor(replay, cfg, authenticated)
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		return nil, err
+	}
+	h := evidence.Target
+	id, err := s.replayFaults.BeginReplay(replayfault.Fault{ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Evidence: raw})
+	if err != nil {
+		return nil, fmt.Errorf("persist replay intent: %w", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			derived = nil
+			err = fmt.Errorf("replay panic: %v", recovered)
+			s.recordReplayFailure(ctx, id, replay, cfg, evidence, err, lockHeld)
+		}
+	}()
+	derived, err = replay.Apply(cfg)
+	if err != nil {
+		s.recordReplayFailure(ctx, id, replay, cfg, evidence, err, lockHeld)
+		return nil, err
+	}
+	if err := s.replayFaults.CompleteReplay(id); err != nil {
+		return nil, fmt.Errorf("commit verified replay: %w", err)
+	}
+	if !lockHeld {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	}
+	s.replayVerifiedHash = derived.Hash()
+	return derived, nil
+}
+
+func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *inbound.ReplayDelta, cfg tx.EngineConfig, evidence replayEvidence, cause error, lockHeld bool) {
+	parent := replay.Parent()
+	h := evidence.Target
 	evidence.Detail, _ = json.Marshal(replay.Evidence().Failure)
 	raw, _ := json.Marshal(evidence)
 	if !lockHeld {
 		s.mu.Lock()
 	}
-	existed := s.ReplayBlocked()
-	err := s.replayFaults.Record(replayfault.Fault{Class: replayfault.Unclassified, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: cause.Error(), Evidence: raw})
+	err := s.replayFaults.FailReplay(id, replayfault.Fault{Class: replayfault.Unclassified, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: cause.Error(), Evidence: raw})
 	if !lockHeld {
 		s.mu.Unlock()
 	}
 	if err != nil {
 		s.logger.Error("persist replay fault", "error", err)
 	}
-	if existed {
-		return
-	}
 	fault := s.replayFaults.Snapshot()
-	if fault == nil {
+	if fault == nil || fault.ID != id {
 		return
 	}
 	// Evidence capture and independent reproduction must not hold the router or
@@ -551,7 +570,32 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 		evidence.Parent = parent.Header()
 		evidence.Fees = parent.Fees()
 	}
+	evidence.TransactionMapIncomplete = h.TxHash != ([32]byte{})
+	if parent == nil || evidence.TransactionMapIncomplete {
+		evidence.RepairClass = replayfault.MissingState
+	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		s.logger.Error("encode replay preparation intent", "error", err)
+		return
+	}
+	id, err := s.replayFaults.BeginReplay(replayfault.Fault{ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Evidence: raw})
+	if err != nil {
+		s.logger.Error("persist replay preparation intent", "error", err)
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.mu.Lock()
+			err := s.replayFaults.FailReplay(id, replayfault.Fault{Class: replayfault.Unclassified, Message: fmt.Sprintf("replay preparation panic: %v", recovered)})
+			s.mu.Unlock()
+			if err != nil {
+				s.logger.Error("persist replay preparation panic", "error", err)
+			}
+		}
+	}()
 	if txMap != nil {
+		evidence.TransactionMapIncomplete = false
 		if err := txMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
 			evidence.TransactionLeaves = append(evidence.TransactionLeaves, replayStateItem{item.Key(), item.Data()})
 			return true
@@ -563,13 +607,9 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 		class = replayfault.MissingState
 		evidence.TransactionMapIncomplete = true
 	}
-	raw, _ := json.Marshal(evidence)
+	raw, _ = json.Marshal(evidence)
 	s.mu.Lock()
-	if s.ReplayBlocked() {
-		s.mu.Unlock()
-		return
-	}
-	err := s.replayFaults.Record(replayfault.Fault{Class: class, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: cause.Error(), Evidence: raw})
+	err = s.replayFaults.FailReplay(id, replayfault.Fault{Class: class, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: cause.Error(), Evidence: raw})
 	s.mu.Unlock()
 	if err != nil {
 		s.logger.Error("persist replay preparation fault", "error", err)
