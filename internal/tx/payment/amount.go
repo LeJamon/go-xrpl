@@ -2,10 +2,12 @@ package payment
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // EitherAmount holds either an XRP, IOU, or MPT amount, allowing
@@ -85,7 +87,7 @@ func (e EitherAmount) IsNegative() bool {
 	return e.IOU.IsNegative()
 }
 
-// Add adds two EitherAmounts (must be same type - both XRP or both IOU)
+// Add adds amounts of the same asset, failing the strand on integral overflow.
 func (e EitherAmount) Add(other EitherAmount) EitherAmount {
 	return e.AddWithNumberContext(
 		other,
@@ -97,18 +99,32 @@ func (e EitherAmount) AddWithNumberContext(
 	other EitherAmount,
 	numberContext state.NumberContext,
 ) EitherAmount {
-	if e.IsNative {
-		return NewXRPEitherAmount(e.XRP + other.XRP)
+	result, ok := e.checkedAddWithNumberContext(other, numberContext)
+	if !ok {
+		throwFlowError(ter.TecPATH_DRY)
 	}
-	if e.IsMPT {
-		result := new(big.Int).Add(big.NewInt(e.MPT), big.NewInt(other.MPT))
-		if !result.IsInt64() {
-			panic("MPT addition overflow")
+	return result
+}
+
+func (e EitherAmount) checkedAddWithNumberContext(
+	other EitherAmount,
+	numberContext state.NumberContext,
+) (EitherAmount, bool) {
+	if e.IsNative || e.IsMPT {
+		a, b := e.XRP, other.XRP
+		if e.IsMPT {
+			a, b = e.MPT, other.MPT
 		}
-		return NewMPTEitherAmount(result.Int64(), e.MPTID)
+		if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+			return EitherAmount{}, false
+		}
+		if e.IsNative {
+			return NewXRPEitherAmount(a + b), true
+		}
+		return NewMPTEitherAmount(a+b, e.MPTID), true
 	}
 	result, _ := e.IOU.AddWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
-	return NewIOUEitherAmount(result)
+	return NewIOUEitherAmount(result), true
 }
 
 // Sub subtracts other from e (must be same type)

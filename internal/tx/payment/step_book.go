@@ -742,9 +742,7 @@ func (s *BookStep) Rev(
 		}
 		if e.stpOut.Compare(remainingOut) <= 0 {
 			// Full take
-			// Stage both accumulation sets. MPT sums are integral and can overflow;
-			// the enclosing offer callback removes the offending offer while these
-			// local sets leave the committed totals untouched.
+			// Stage both accumulation sets until the offer is consumed.
 			savedInsAdj := savedIns.clone()
 			savedOutsAdj := savedOuts.clone()
 			savedInsAdj.insert(e.stpIn)
@@ -873,7 +871,7 @@ func (s *BookStep) Fwd(
 	fwdCallback := func(e offerExec) bool {
 		// Keep the accumulator state transactional while amount limits and
 		// reconciliation are evaluated. The outer forEachOffer handler removes a
-		// malformed MPT offer after an arithmetic overflow; none of this offer's
+		// malformed MPT offer after a transfer arithmetic overflow; none of this offer's
 		// provisional totals may survive that removal.
 		savedInsBefore := savedIns.clone()
 		savedOutsBefore := savedOuts.clone()

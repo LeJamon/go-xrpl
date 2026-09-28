@@ -1,0 +1,29 @@
+{
+  "oracle": "XRPLF/xrpld-private",
+  "commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+  "cases": [
+    {"name": "empty", "values": [], "sum": "0"},
+    {"name": "singleton_max", "values": ["9223372036854775807"], "sum": "9223372036854775807"},
+    {"name": "singleton_min", "values": ["-9223372036854775808"], "sum": "-9223372036854775808"},
+    {"name": "zero", "values": ["0", "0"], "sum": "0"},
+    {"name": "cancel", "values": ["1", "-1"], "sum": "0"},
+    {"name": "negative", "values": ["-5", "2"], "sum": "-3"},
+    {"name": "positive_overflow", "values": ["9223372036854775807", "1"], "sum": null},
+    {"name": "negative_overflow", "values": ["-9223372036854775808", "-1"], "sum": null},
+    {"name": "maximum", "values": ["9223372036854775806", "1"], "sum": "9223372036854775807"},
+    {"name": "minimum", "values": ["-9223372036854775807", "-1"], "sum": "-9223372036854775808"},
+    {"name": "opposite_extrema", "values": ["-9223372036854775808", "9223372036854775807"], "sum": "-1"},
+    {"name": "reversed_extrema", "values": ["9223372036854775807", "-9223372036854775808"], "sum": "-1"},
+    {"name": "twice_maximum", "values": ["9223372036854775807", "9223372036854775807"], "sum": null},
+    {"name": "twice_minimum", "values": ["-9223372036854775808", "-9223372036854775808"], "sum": null},
+    {"name": "maximum_plus_zero", "values": ["9223372036854775807", "0"], "sum": "9223372036854775807"},
+    {"name": "minimum_plus_zero", "values": ["-9223372036854775808", "0"], "sum": "-9223372036854775808"},
+    {"name": "multiple_maximum", "values": ["9223372036854775805", "1", "1"], "sum": "9223372036854775807"},
+    {"name": "multiple_minimum", "values": ["-9223372036854775806", "-1", "-1"], "sum": "-9223372036854775808"},
+    {"name": "multiple_positive_overflow", "values": ["9223372036854775806", "1", "1"], "sum": null},
+    {"name": "multiple_negative_overflow", "values": ["-9223372036854775807", "-1", "-1"], "sum": null},
+    {"name": "sorted_cancellation", "values": ["9223372036854775807", "1", "-1"], "sum": "9223372036854775807"},
+    {"name": "sorted_intermediate_overflow", "values": ["9223372036854775807", "-9223372036854775808", "-1"], "sum": null},
+    {"name": "book_input", "values": ["7500000000000000000", "7500000000000000000"], "sum": null}
+  ]
+}
