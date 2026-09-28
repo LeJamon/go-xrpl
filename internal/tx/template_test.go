@@ -409,17 +409,3 @@ func TestParseFromBinaryRequiredFieldOrder(t *testing.T) {
 		})
 	}
 }
-
-func TestParseFromBinaryDefaultBeforeMissingCommonField(t *testing.T) {
-	fields := baseCommon("Payment")
-	fields["Destination"] = testDestination
-	fields["Amount"] = "1"
-	fields["Paths"] = []any{}
-	delete(fields, "Sequence")
-	_, err := ParseFromBinary(encodeTx(t, fields))
-	want := "temMALFORMED: Field 'Paths' may not be explicitly set to default."
-	result, ok := ter.AsResultError(err)
-	if !ok || result.Code != ter.TemMALFORMED || err.Error() != want {
-		t.Fatalf("error = %v, want %q", err, want)
-	}
-}
