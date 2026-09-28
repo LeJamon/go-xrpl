@@ -1,0 +1,178 @@
+[
+  {
+    "name": "positive_9223372036854775807",
+    "positive": "9223372036854775807",
+    "negative": "0",
+    "fee": "0",
+    "net": "9223372036854775807",
+    "accepted": false
+  },
+  {
+    "name": "negative_9223372036854775807",
+    "positive": "0",
+    "negative": "9223372036854775807",
+    "fee": "0",
+    "net": "-9223372036854775807",
+    "accepted": false
+  },
+  {
+    "name": "positive_9223372036854775808",
+    "positive": "9223372036854775808",
+    "negative": "0",
+    "fee": "0",
+    "net": "9223372036854775808",
+    "accepted": false
+  },
+  {
+    "name": "negative_9223372036854775808",
+    "positive": "0",
+    "negative": "9223372036854775808",
+    "fee": "0",
+    "net": "-9223372036854775808",
+    "accepted": false
+  },
+  {
+    "name": "positive_9223372036854775809",
+    "positive": "9223372036854775809",
+    "negative": "0",
+    "fee": "0",
+    "net": "9223372036854775809",
+    "accepted": false
+  },
+  {
+    "name": "negative_9223372036854775809",
+    "positive": "0",
+    "negative": "9223372036854775809",
+    "fee": "0",
+    "net": "-9223372036854775809",
+    "accepted": false
+  },
+  {
+    "name": "issue_2012",
+    "positive": "18400000000000000000",
+    "negative": "0",
+    "fee": "46744073709551616",
+    "net": "18400000000000000000",
+    "accepted": false
+  },
+  {
+    "name": "wrap_to_zero",
+    "positive": "18446744073709551616",
+    "negative": "0",
+    "fee": "0",
+    "net": "18446744073709551616",
+    "accepted": false
+  },
+  {
+    "name": "wrap_to_fee",
+    "positive": "18446744073709551606",
+    "negative": "0",
+    "fee": "10",
+    "net": "18446744073709551606",
+    "accepted": false
+  },
+  {
+    "name": "destroy_wrap_to_zero",
+    "positive": "0",
+    "negative": "18446744073709551616",
+    "fee": "0",
+    "net": "-18446744073709551616",
+    "accepted": false
+  },
+  {
+    "name": "destroy_wrap_to_fee",
+    "positive": "0",
+    "negative": "18446744073709551626",
+    "fee": "10",
+    "net": "-18446744073709551626",
+    "accepted": false
+  },
+  {
+    "name": "zero",
+    "positive": "0",
+    "negative": "0",
+    "fee": "0",
+    "net": "0",
+    "accepted": true
+  },
+  {
+    "name": "fee",
+    "positive": "0",
+    "negative": "10",
+    "fee": "10",
+    "net": "-10",
+    "accepted": true
+  },
+  {
+    "name": "excess_burn",
+    "positive": "0",
+    "negative": "11",
+    "fee": "10",
+    "net": "-11",
+    "accepted": false
+  },
+  {
+    "name": "missing_burn",
+    "positive": "0",
+    "negative": "9",
+    "fee": "10",
+    "net": "-9",
+    "accepted": false
+  },
+  {
+    "name": "cancel_signed_overflow",
+    "positive": "9223372036854775809",
+    "negative": "9223372036854775809",
+    "fee": "0",
+    "net": "0",
+    "accepted": true
+  },
+  {
+    "name": "cancel_unsigned_overflow",
+    "positive": "18446744073709551636",
+    "negative": "18446744073709551636",
+    "fee": "0",
+    "net": "0",
+    "accepted": true
+  },
+  {
+    "name": "cancel_to_fee",
+    "positive": "18446744073709551636",
+    "negative": "18446744073709551646",
+    "fee": "10",
+    "net": "-10",
+    "accepted": true
+  },
+  {
+    "name": "cancel_to_created",
+    "positive": "18446744073709551637",
+    "negative": "18446744073709551636",
+    "fee": "0",
+    "net": "1",
+    "accepted": false
+  },
+  {
+    "name": "signed_max_fee",
+    "positive": "0",
+    "negative": "9223372036854775807",
+    "fee": "9223372036854775807",
+    "net": "-9223372036854775807",
+    "accepted": true
+  },
+  {
+    "name": "go_unsigned_fee",
+    "positive": "0",
+    "negative": "9223372036854775808",
+    "fee": "9223372036854775808",
+    "net": "-9223372036854775808",
+    "accepted": true
+  },
+  {
+    "name": "go_max_fee",
+    "positive": "0",
+    "negative": "18446744073709551615",
+    "fee": "18446744073709551615",
+    "net": "-18446744073709551615",
+    "accepted": true
+  }
+]
