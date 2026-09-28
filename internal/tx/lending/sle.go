@@ -105,11 +105,8 @@ func serializeLoanBrokerForRules(b *loanBrokerData, rules *amendment.Rules) ([]b
 	}
 	entry.SetCoverRateMinimum(b.CoverRateMinimum)
 	entry.SetCoverRateLiquidation(b.CoverRateLiquidation)
-	var zeroHash [32]byte
-	if b.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnIDValue(b.PreviousTxnID)
-		entry.SetPreviousTxnLgrSeq(b.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(b.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(b.PreviousTxnLgrSeq)
 	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("encode loan broker: %w", err)
@@ -311,11 +308,8 @@ func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) 
 		return nil, fmt.Errorf("encode ManagementFeeOutstanding: %w", err)
 	}
 	entry.SetLoanScale(l.LoanScale)
-	var zeroHash [32]byte
-	if l.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnIDValue(l.PreviousTxnID)
-		entry.SetPreviousTxnLgrSeq(l.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(l.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(l.PreviousTxnLgrSeq)
 	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("encode loan: %w", err)
