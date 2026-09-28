@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -20,7 +21,7 @@ type failingTransactionResultSource struct{}
 
 func (failingTransactionResultSource) IsValidated() bool { return true }
 
-func (failingTransactionResultSource) ForEachTransaction(fn func([32]byte, []byte) bool) error {
+func (failingTransactionResultSource) ForEachTransactionContext(_ context.Context, fn func([32]byte, []byte) bool) error {
 	fn([32]byte{1}, []byte("partial"))
 	return errors.New("traversal failed")
 }
@@ -44,10 +45,13 @@ func TestCollectTransactionResultsDoesNotIndexPartialTraversal(t *testing.T) {
 	require.Empty(t, svc.txPositionIndex)
 }
 
-func (p *transactionResultOrderProbe) ForEachTransaction(fn func([32]byte, []byte) bool) error {
+func (p *transactionResultOrderProbe) ForEachTransactionContext(ctx context.Context, fn func([32]byte, []byte) bool) error {
 	p.walkingTransactions = true
 	defer func() { p.walkingTransactions = false }()
 	for _, txHash := range p.transactionIdentifiers {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !fn(txHash, []byte("transaction-data")) {
 			break
 		}
@@ -81,8 +85,11 @@ type indexedTransactionResultSource struct {
 
 func (s indexedTransactionResultSource) IsValidated() bool { return true }
 
-func (s indexedTransactionResultSource) ForEachTransaction(fn func([32]byte, []byte) bool) error {
+func (s indexedTransactionResultSource) ForEachTransactionContext(ctx context.Context, fn func([32]byte, []byte) bool) error {
 	for _, entry := range s.entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !fn(entry.hash, entry.data) {
 			break
 		}

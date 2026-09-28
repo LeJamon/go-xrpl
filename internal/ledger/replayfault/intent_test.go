@@ -89,3 +89,41 @@ func TestReplayIntentClearFailureStaysBlocked(t *testing.T) {
 	require.True(t, restarted.Blocked())
 	require.Equal(t, id, restarted.Snapshot().ID)
 }
+
+func TestCanceledReplayIntentCanBeRetriedAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	id, err := store.BeginReplay(Fault{TargetHash: [32]byte{1}})
+	require.NoError(t, err)
+	require.ErrorIs(t, store.CancelReplay("stale"), ErrFaultIDMismatch)
+	require.NoError(t, store.CancelReplay(id))
+	require.ErrorIs(t, store.CancelReplay(id), ErrFaultIDMismatch)
+	restarted, err := Open(path)
+	require.NoError(t, err)
+	require.False(t, restarted.Blocked())
+	id, err = restarted.BeginReplay(Fault{TargetHash: [32]byte{1}})
+	require.NoError(t, err)
+	require.NoError(t, restarted.CompleteReplay(id))
+}
+
+func TestCanceledReplayIntentClearFailureStaysBlocked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires filesystem permission enforcement")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fault.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	id, err := store.BeginReplay(Fault{TargetHash: [32]byte{1}})
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	require.Error(t, store.CancelReplay(id))
+	require.True(t, store.Blocked())
+	require.NoError(t, os.Chmod(dir, 0700))
+	restarted, err := Open(path)
+	require.NoError(t, err)
+	require.True(t, restarted.Blocked())
+	require.Equal(t, id, restarted.Snapshot().ID)
+}

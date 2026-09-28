@@ -26,7 +26,7 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
 func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
-	if err := s.lockOpenLedgerIfRunning(openLedgerConsensus); err != nil {
+	if _, err := s.lockOpenLedgerIfRunningTimed(ctx, openLedgerConsensus); err != nil {
 		return 0, err
 	}
 	defer s.openLedgerMu.Unlock()
@@ -57,7 +57,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 
 	// Re-apply pending in canonical order on a fresh ledger built from the LCL.
 	var retriableTxs []openledger.PendingTx
-	closed, replayed, err := s.applyStartupReplayLocked()
+	closed, replayed, err := s.applyStartupReplayLocked(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -72,7 +72,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			return 0, err
 		}
 	} else {
-		closed, retriableTxs, err = s.buildClosedLedgerLocked(s.pendingTxs, closeTime, s.config.Standalone)
+		closed, retriableTxs, err = s.buildClosedLedgerLocked(ctx, s.pendingTxs, closeTime, s.config.Standalone)
 		if err != nil {
 			return 0, err
 		}
@@ -92,11 +92,11 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	}
 	closedSeq := closed.Sequence()
 	closedLedgerHash := closed.Hash()
-	stagedResults, err := stageTransactionResults(closed, closedSeq, closedLedgerHash)
+	stagedResults, err := stageTransactionResultsContext(ctx, closed, closedSeq, closedLedgerHash)
 	if err != nil {
 		return 0, fmt.Errorf("collect transaction results: %w", err)
 	}
-	newOpen, err := s.prepareNewOpenLedgerLocked(closed, retriableTxs)
+	newOpen, err := s.prepareNewOpenLedgerLocked(ctx, closed, retriableTxs)
 	if err != nil {
 		return 0, err
 	}
@@ -107,7 +107,8 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 
 	// Persist best-effort: a persistence failure must not be fatal — treating it
 	// so would diverge from rippled and risk forks on transient DB issues.
-	if err := s.persistLedger(ctx, closed); err != nil {
+	// The open-view commit has begun; retain ownership through durability.
+	if err := s.persistLedger(context.WithoutCancel(ctx), closed); err != nil {
 		s.logger.Error("failed to persist closed ledger; chain advance continues",
 			"seq", closed.Sequence(), "err", err)
 	}
@@ -157,15 +158,18 @@ func (s *Service) applyFlagLedgerNegativeUNL(l *ledger.Ledger) error {
 	return nil
 }
 
-func (s *Service) buildClosedLedgerLocked(pending []openledger.PendingTx, closeTime time.Time, skipSigVerify bool) (*ledger.Ledger, []openledger.PendingTx, error) {
+func (s *Service) buildClosedLedgerLocked(ctx context.Context, pending []openledger.PendingTx, closeTime time.Time, skipSigVerify bool) (*ledger.Ledger, []openledger.PendingTx, error) {
 	salt, err := openledger.ComputeSalt(pending)
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.buildClosedLedger(s.closedLedger, pending, salt, closeTime, skipSigVerify, nil)
+	return s.buildClosedLedger(ctx, s.closedLedger, pending, salt, closeTime, skipSigVerify, nil)
 }
 
-func (s *Service) buildClosedLedger(parent *ledger.Ledger, pending []openledger.PendingTx, salt [32]byte, closeTime time.Time, skipSigVerify bool, applyDuration *time.Duration) (*ledger.Ledger, []openledger.PendingTx, error) {
+func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, pending []openledger.PendingTx, salt [32]byte, closeTime time.Time, skipSigVerify bool, applyDuration *time.Duration) (*ledger.Ledger, []openledger.PendingTx, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	openledger.CanonicalSort(pending, salt)
 
 	freshLedger, err := ledger.NewOpenForBuild(parent, closeTime)
@@ -201,18 +205,24 @@ func (s *Service) buildClosedLedger(parent *ledger.Ledger, pending []openledger.
 		defer func() { *applyDuration = time.Since(applyStarted) }()
 	}
 	var retriableTxs []openledger.PendingTx
-	if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
+	if err := openledger.ApplyTxsContext(ctx, freshLedger, pending, &retriableTxs, applyCfg); err != nil {
 		return nil, nil, fmt.Errorf("openledger.ApplyTxs: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 	return freshLedger, retriableTxs, nil
 }
 
-func (s *Service) prepareNewOpenLedgerLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx) (*ledger.Ledger, error) {
+func (s *Service) prepareNewOpenLedgerLocked(ctx context.Context, closed *ledger.Ledger, retriableTxs []openledger.PendingTx) (*ledger.Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	newOpen, err := ledger.NewOpen(closed, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
-	if err := s.acceptStandaloneOpenLedgerLocked(closed, retriableTxs); err != nil {
+	if err := s.acceptStandaloneOpenLedgerLocked(ctx, closed, retriableTxs); err != nil {
 		return nil, err
 	}
 	return newOpen, nil

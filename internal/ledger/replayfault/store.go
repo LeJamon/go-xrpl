@@ -279,6 +279,16 @@ func (s *Store) FailReplay(id string, fault Fault) error {
 
 // CompleteReplay clears an intent only after its transition was verified.
 func (s *Store) CompleteReplay(id string) error {
+	return s.clearReplayIntent(id)
+}
+
+// CancelReplay clears an intent after its owner has discarded the private
+// replay without publishing it. A failed durable clear keeps validation blocked.
+func (s *Store) CancelReplay(id string) error {
+	return s.clearReplayIntent(id)
+}
+
+func (s *Store) clearReplayIntent(id string) error {
 	if s == nil {
 		return ErrBlocked
 	}

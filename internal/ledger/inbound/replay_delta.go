@@ -780,8 +780,21 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 //   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:225-248
 //   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:38-86
 func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, err error) {
+	return r.ApplyContext(context.Background(), engineCfg)
+}
+
+// ApplyContext discards a canceled private replay without marking it failed,
+// allowing a later caller to retry. Individual transaction execution is not
+// interrupted.
+func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfig) (derived *ledger.Ledger, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if r.state == StateComplete {
 		if r.derived == nil {
@@ -798,7 +811,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 			err = newReplayFailure(ErrReplayApplyPanic, "apply_panic",
 				"recovered panic while applying replay delta: %v", recovered)
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			r.state = StateFailed
 			r.err = err
 		}
@@ -897,6 +910,9 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 	// need to feed an index per tx.
 	var expectedBatchInners []tx.AppliedInnerTransaction
 	for _, dtx := range r.txs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		txn, parseErr := tx.ParseFromBinary(dtx.TxBytes)
 		if parseErr != nil {
 			return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayTxParse, dtx.Hash[:8], parseErr)
@@ -1026,6 +1042,10 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		return nil, fmt.Errorf("%w: replay ended before all batch inner transactions", ErrReplayTxDiverged)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Close the ledger. This freezes both maps, computes AccountHash and
 	// TxHash from their roots, deducts dropsDestroyed from totalCoins,
 	// updates the LedgerHashes skip list, and computes the final hash.
@@ -1083,6 +1103,9 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		return nil, failure
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.logger.Info("replay delta applied",
 		"seq", hdr.LedgerIndex,
 		"hash", hex.EncodeToString(hdr.Hash[:8]),

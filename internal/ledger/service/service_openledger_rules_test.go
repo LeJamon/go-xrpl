@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestOpenLedgerAcceptanceUsesLastValidatedRules(t *testing.T) {
 
 	svc.openLedgerMu.Lock()
 	svc.mu.Lock()
-	accept := svc.openLedgerAcceptanceLocked(nil, nil)
+	accept := svc.openLedgerAcceptanceLocked(context.Background(), nil, nil)
 	svc.mu.Unlock()
 	err = accept(localClosed, nil, false, nil)
 	svc.openLedgerMu.Unlock()

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -66,6 +67,37 @@ func TestPriorityGateRecordsWaitAndHold(t *testing.T) {
 	require.True(t, snapshot.Held)
 	require.Positive(t, wait.Wait)
 	require.Positive(t, snapshot.HeldFor)
+	gate.Unlock()
+	require.False(t, gate.Snapshot().Held)
+}
+
+func TestPriorityGateCancellationRemovesQueuedWaiter(t *testing.T) {
+	var gate priorityGate
+	gate.LockRole(openLedgerTransition)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, err := gate.LockRoleContext(ctx, openLedgerConsensus)
+		result <- err
+	}()
+	require.Eventually(t, func() bool {
+		return gate.Snapshot().QueuedPriority == 1
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled gate waiter did not return")
+	}
+	snapshot := gate.Snapshot()
+	require.Equal(t, 0, snapshot.QueuedPriority)
+	require.Equal(t, 0, snapshot.QueuedIngress)
+	require.True(t, snapshot.Held)
+	require.Equal(t, openLedgerTransition, snapshot.Owner)
+
 	gate.Unlock()
 	require.False(t, gate.Snapshot().Held)
 }

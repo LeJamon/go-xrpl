@@ -101,6 +101,66 @@ func TestConsensusAcceptanceDetachedBuildRejectsReplacedParent(t *testing.T) {
 	require.Equal(t, preferred.Hash(), svc.openLedgerView.Current().ParentHash())
 }
 
+func TestConsensusAcceptanceCancellationDuringDetachedBuildDoesNotPublish(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	require.NoError(t, svc.SwitchToPreferredLedger(cold))
+	blob, _ := startupPaymentBlob(t, "canceled-detached-build", 1)
+	family.armed.Store(true)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := svc.AcceptConsensusResult(ctx, cold, [][]byte{blob}, nil, cold.CloseTime().Add(10*time.Second), true)
+		accepted <- err
+	}()
+	select {
+	case <-family.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("acceptance did not reach a cold read")
+	}
+	cancel()
+	family.unblock()
+
+	require.ErrorIs(t, <-accepted, context.Canceled)
+	require.Same(t, cold, svc.GetClosedLedger())
+	require.Equal(t, cold.Hash(), svc.openLedgerView.Current().ParentHash())
+}
+
+func TestConsensusAcceptanceCancellationWhileWaitingForGate(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	parent := svc.GetClosedLedger()
+	open := svc.openLedgerView.Current()
+	svc.openLedgerMu.Lock()
+	defer svc.openLedgerMu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.AcceptConsensusResult(ctx, parent, nil, nil, parent.CloseTime().Add(time.Second), true)
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		return svc.openLedgerMu.Snapshot().QueuedPriority == 1
+	}, time.Second, time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("acceptance did not cancel while the gate remained held")
+	}
+	require.Zero(t, svc.openLedgerMu.Snapshot().QueuedPriority)
+	require.Same(t, parent, svc.GetClosedLedger())
+	require.Same(t, open, svc.openLedgerView.Current())
+}
+
 func TestConsensusAcceptanceStopDrainsDetachedBuild(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
