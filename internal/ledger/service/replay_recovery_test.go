@@ -100,3 +100,27 @@ func TestReplayRecoveryWorkerCancellationIsDrainedByStop(t *testing.T) {
 		t.Fatal("service stop did not drain replay recovery worker")
 	}
 }
+
+func TestStartReplayFaultRecoveryClearsVerifiedTransition(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	svc := replayFaultService(t, path)
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	raw, err := json.Marshal(replayEvidence{
+		Parent: parent.Header(), Target: target.Header(), Fees: parent.Fees(),
+		Authenticated: true, ParentSnapshot: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{
+		ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence(), Evidence: raw,
+	}))
+	fault := svc.replayFaults.Snapshot()
+	_, err = svc.captureReplayParent(context.Background(), fault.ID, parent)
+	require.NoError(t, err)
+	require.NoError(t, svc.StartReplayFaultRecovery(fault.ID))
+	require.Eventually(t, func() bool { return !svc.ReplayBlocked() }, time.Second, time.Millisecond)
+	require.NoError(t, svc.WithValidatorDuty(func() error { return nil }))
+	reopened, err := replayfault.Open(path)
+	require.NoError(t, err)
+	require.False(t, reopened.Blocked())
+}

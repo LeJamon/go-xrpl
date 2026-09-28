@@ -413,8 +413,8 @@ func (s *Store) Status() Status {
 	}
 }
 
-// WithValidator runs fn while preventing replay transitions, Update, and a successful
-// revalidation clear from overlapping it. A blocked store rejects fn.
+// WithValidator serializes fn with fault-journal mutations. A blocked store
+// rejects fn; a pending replay has not established a fault yet.
 func (s *Store) WithValidator(fn func() error) error {
 	if s == nil {
 		return ErrBlocked

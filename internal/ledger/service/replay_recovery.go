@@ -87,9 +87,11 @@ func (s *Service) StartReplayFaultRecovery(id string) error {
 	case <-started:
 		return nil
 	case err := <-done:
-		// A very short verification can close both channels before select
-		// chooses a case. A nil result means the exact transition was already
-		// verified successfully, so admission still succeeded.
-		return err
+		select {
+		case <-started:
+			return nil
+		default:
+			return err
+		}
 	}
 }

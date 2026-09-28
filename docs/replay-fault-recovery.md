@@ -35,16 +35,18 @@ admin-only `replay_recover` method with the exact fault ID from the status:
 
 The service first persists and fsyncs the exact transition intent before it
 executes the replay. If the intent cannot be written, execution does not
-start. It then replays and verifies the transition, including the network and
-trusted-validation context. A verified success archives the journal as
-`replay-fault.json.<fault-id>.resolved` and clears the active fault. If the
+start. A successful replay clears the intent. If the
 node crashes or a detailed-fault write fails after the intent is recorded, the
 intent remains durable and blocks validator duties on restart until an
 explicitly verified recovery completes. The journal is an exact transition
-record; it is not a generic whole-run dirty marker.
+record. While replay is pending, validator duties remain governed by the
+last verified frontier; a failed replay latches the duty gate.
 
 `replay_recover` admits a service-owned recovery worker and returns an accepted
-response while the worker is in flight. `recovery.in_flight` and
+response after admission. The worker verifies the saved transition, including
+the network and trusted-validation context. Successful recovery archives the
+journal as `replay-fault.json.<fault-id>.resolved` and clears the active fault.
+`recovery.in_flight` and
 `recovery.last_error` report explicit revalidation progress. Canceling or
 timing out the RPC request after admission does not cancel the worker; stopping
 the service cancels and drains it. A failed or canceled worker leaves the fault
