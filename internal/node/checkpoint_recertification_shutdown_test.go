@@ -77,8 +77,8 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 		return runtime.services.AdvisoryDeleteState.GetLastRotated() == validatedSeq
 	}, 10*time.Second, 10*time.Millisecond)
 
-	store.blockHash = nodestore.Hash256(runtime.ledger.GetValidatedLedger().Header().AccountHash)
-	store.armed.Store(true)
+	blockHash := nodestore.Hash256(runtime.ledger.GetValidatedLedger().Header().AccountHash)
+	store.blockHash.Store(&blockHash)
 	runtime.ledger.InvalidateFastLoadCheckpointEligibility()
 	runtime.ledger.RequestStateBaseRecertification()
 	select {
@@ -121,9 +121,8 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 type shutdownRecertificationStore struct {
 	*nodestore.RotatingKVDatabase
 
-	armed     atomic.Bool
 	closed    atomic.Bool
-	blockHash nodestore.Hash256
+	blockHash atomic.Pointer[nodestore.Hash256]
 
 	readStarted    chan struct{}
 	readFinished   chan struct{}
@@ -147,7 +146,8 @@ func newShutdownRecertificationStore(base *nodestore.RotatingKVDatabase) *shutdo
 }
 
 func (s *shutdownRecertificationStore) blockFirstRead(ctx context.Context, hash nodestore.Hash256) error {
-	if hash != s.blockHash || !s.armed.CompareAndSwap(true, false) {
+	blocked := s.blockHash.Load()
+	if blocked == nil || hash != *blocked || !s.blockHash.CompareAndSwap(blocked, nil) {
 		return nil
 	}
 	s.readStartedOnce.Do(func() { close(s.readStarted) })
