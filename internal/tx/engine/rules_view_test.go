@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -120,6 +122,83 @@ func TestPreclaimWithReadOnlyFakePreservesReadErrors(t *testing.T) {
 			wrapped := rulesView{ReadOnlyLedgerView: view, rules: amendment.AllSupportedRules()}
 			if got := txn.Preclaim(wrapped, txcore.EngineConfig{}); got != tc.want {
 				t.Fatalf("Preclaim() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPreclaimReadOnlyAdapterDoesNotAliasTrackedEntries(t *testing.T) {
+	for _, inner := range []bool{false, true} {
+		name := "normal"
+		if inner {
+			name = "batch inner"
+		}
+		t.Run(name, func(t *testing.T) {
+			base := newRecordingBaseView()
+			key := fundRecoveryAccount(t, base, 1_000_000, 1)
+			table := applystate.NewApplyStateTable(
+				base,
+				[32]byte{2},
+				100,
+				amendment.AllSupportedRules(),
+			)
+			original, err := table.Read(key)
+			if err != nil {
+				t.Fatalf("seed Read() error = %v", err)
+			}
+			original = bytes.Clone(original)
+
+			txn := boundaryPreclaimTx{
+				BaseTx: recoveryTx(10, 1),
+				check: func(view txcore.ReadOnlyLedgerView) {
+					data, err := view.Read(key)
+					if err != nil {
+						t.Fatalf("preclaim Read() error = %v", err)
+					}
+					data[0]++
+
+					if err := view.ForEach(func(_ [32]byte, data []byte) bool {
+						data[0]++
+						return true
+					}); err != nil {
+						t.Fatalf("preclaim ForEach() error = %v", err)
+					}
+
+					_, data, found, err := view.Succ([32]byte{})
+					if err != nil {
+						t.Fatalf("preclaim Succ() error = %v", err)
+					}
+					if !found || len(data) == 0 {
+						t.Fatal("preclaim Succ() did not return the tracked entry")
+					}
+					data[0]++
+				},
+			}
+
+			e := recoveryEngine(table, txcore.TapNONE)
+			var result ter.Result
+			if inner {
+				result = e.preclaimInner(txn, [32]byte{3})
+			} else {
+				result = e.preclaim(txn, [32]byte{3})
+			}
+			if result != ter.TecUNFUNDED_PAYMENT {
+				t.Fatalf("preclaim result = %s, want tecUNFUNDED_PAYMENT", result)
+			}
+
+			got, err := table.Read(key)
+			if err != nil {
+				t.Fatalf("post-preclaim Read() error = %v", err)
+			}
+			if !bytes.Equal(got, original) {
+				t.Fatal("preclaim mutated tracked ApplyStateTable data")
+			}
+			baseData, err := base.Read(key)
+			if err != nil {
+				t.Fatalf("base Read() error = %v", err)
+			}
+			if !bytes.Equal(baseData, original) {
+				t.Fatal("preclaim mutated base ledger data through an alias")
 			}
 		})
 	}

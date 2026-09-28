@@ -895,6 +895,7 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.ReadOnlyLedger
 			err = ter.Errorf(ter.TefEXCEPTION, "base fee calculation panicked: %v", recovered)
 		}
 	}()
+	view = txcore.NewReadOnlyLedgerView(view)
 
 	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil &&
 		transaction.GetCommon().GetFlags()&txcore.TfInnerBatchTxn == 0 &&
