@@ -32,12 +32,11 @@ type FlowCrossParams struct {
 	ReserveIncrement uint64
 
 	// Amendment flags governing offer-quality and AMM behavior.
-	FixReducedOffersV2  bool
-	FixFillOrKill       bool
-	FixAMMv1_1          bool
-	FixAMMv1_2          bool
-	FixAMMOverflowOffer bool
-	NumberContext       *state.NumberContext
+	FixReducedOffersV2 bool
+	FixFillOrKill      bool
+	FixAMMv1_1         bool
+	FixAMMv1_2         bool
+	NumberContext      *state.NumberContext
 
 	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
 	DomainID *[32]byte
@@ -264,7 +263,7 @@ func FlowCross(
 	// Initialize AMM liquidity on BookSteps.
 	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
 	configureAMMOnBookSteps(sandbox, strands, ammCtx, params.ParentCloseTime,
-		params.FixAMMv1_1, params.FixAMMv1_2, params.FixAMMOverflowOffer)
+		params.FixAMMv1_1, params.FixAMMv1_2)
 
 	// Set multiPath after strands are built
 	ammCtx.SetMultiPath(len(strands) > 1)

@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -111,15 +112,21 @@ func (a vvAsset) makeDelta(before, after state.XRPLNumber) vvDelta {
 
 // vvVault is the checker's view of a Vault ledger entry.
 type vvVault struct {
-	key             [32]byte
-	asset           vvAsset
-	pseudoID        [20]byte
-	owner           [20]byte
-	shareMPTID      [24]byte
-	assetsTotal     state.XRPLNumber
-	assetsAvailable state.XRPLNumber
-	assetsMaximum   state.XRPLNumber
-	lossUnrealized  state.XRPLNumber
+	key                 [32]byte
+	asset               vvAsset
+	pseudoID            [20]byte
+	owner               [20]byte
+	shareMPTID          [24]byte
+	assetsTotal         state.XRPLNumber
+	assetsAvailable     state.XRPLNumber
+	assetsMaximum       state.XRPLNumber
+	lossUnrealized      state.XRPLNumber
+	vaultKind           uint8
+	hasVaultKind        bool
+	subscriptionDate    uint32
+	hasSubscriptionDate bool
+	redemptionDate      uint32
+	hasRedemptionDate   bool
 }
 
 func (v vvVault) holdsNoAssets() bool {
@@ -156,11 +163,18 @@ func checkValidVault(tx Transaction, result Result, fee uint64, entries []Invari
 		txType:      tx.TxType(),
 		rules:       rules,
 		numberScale: numberContext.Scale(),
+		hasTxField:  tx.TxHasField,
 	}
 	if flat, err := tx.Flatten(); err == nil {
 		c.flat = flat
 	}
 	c.txAccountID, _ = state.DecodeAccountID(tx.TxAccount())
+	if provider, ok := tx.(FeePayerProvider); ok {
+		c.feePayerID, c.feePayerPreFunded, c.feePayerKnown = provider.FeePayer()
+	}
+	if provider, ok := tx.(CurrentCloseTimeProvider); ok {
+		c.currentCloseTime, c.currentCloseTimeKnown = provider.CurrentCloseTime()
+	}
 	c.visit(entries)
 
 	msg := c.finalize()
@@ -181,13 +195,19 @@ type vvChecker struct {
 	afterShares  []vvShares
 	deltas       map[[32]byte]vvDelta
 
-	view        ReadView
-	fee         uint64
-	txType      TxType
-	flat        map[string]any
-	txAccountID [20]byte
-	rules       *amendment.Rules
-	numberScale state.MantissaScale
+	view                  ReadView
+	fee                   uint64
+	txType                TxType
+	flat                  map[string]any
+	txAccountID           [20]byte
+	rules                 *amendment.Rules
+	numberScale           state.MantissaScale
+	hasTxField            func(string) bool
+	feePayerID            [20]byte
+	feePayerKnown         bool
+	feePayerPreFunded     bool
+	currentCloseTime      uint32
+	currentCloseTimeKnown bool
 }
 
 // vaultMinScale is the decimal scale that balance deltas round to before the
@@ -294,21 +314,64 @@ func (c *vvChecker) deltaAssets(vaultAsset vvAsset, id [20]byte) (vvDelta, bool)
 	return d, true
 }
 
-// deltaAssetsTxAccount returns the tx account's asset delta, adding the fee back
-// for a native asset (the fee left the balance but is not a vault movement).
-func (c *vvChecker) deltaAssetsTxAccount(vaultAsset vvAsset) (vvDelta, bool) {
-	ret, ok := c.deltaAssets(vaultAsset, c.txAccountID)
+// Without resolved context, prefunded sponsorship cannot be distinguished
+// from cosigned sponsorship; engine callers always supply that context.
+func (c *vvChecker) feePayerForCorrection() ([20]byte, bool) {
+	if c.feePayerKnown {
+		return c.feePayerID, c.feePayerPreFunded
+	}
+	if c.flat != nil {
+		if u32Field(c.flat, "SponsorFlags")&txcore.SpfSponsorFee != 0 {
+			if sponsor, ok := c.flat["Sponsor"].(string); ok {
+				if id, err := state.DecodeAccountID(sponsor); err == nil {
+					return id, false
+				}
+			}
+		}
+		if delegate, ok := c.flat["Delegate"].(string); ok {
+			if id, err := state.DecodeAccountID(delegate); err == nil {
+				return id, false
+			}
+		}
+	}
+	return c.txAccountID, false
+}
+
+// Remove the actual fee payer's fee from economic XRP deltas. A prefunded
+// fee changes the Sponsorship object, so no AccountRoot needs correction.
+func (c *vvChecker) deltaAssetsForParty(vaultAsset vvAsset, id [20]byte) (vvDelta, bool) {
+	ret, ok := c.deltaAssets(vaultAsset, id)
 	if !ok || !vaultAsset.isXRP {
 		return ret, ok
 	}
-	if d, present := c.flatAccountID("Delegate"); present && d != c.txAccountID {
-		return ret, ok
+
+	feePayerID, feePayerPreFunded := c.feePayerForCorrection()
+	fix340 := c.rules != nil && c.fixCleanup3_4_0Enabled()
+	if !fix340 {
+		// Legacy correction applies only when Account also pays the fee.
+		if id != c.txAccountID || feePayerID != id {
+			return ret, ok
+		}
+		ret.delta = ret.delta.Add(vvNumFromI64(int64(c.fee), c.numberScale))
+		if ret.delta.IsZero() {
+			return vvDelta{}, false
+		}
+		return ret, true
 	}
-	ret.delta = ret.delta.Add(vvNumFromI64(int64(c.fee), c.numberScale))
+
+	if !feePayerPreFunded && feePayerID == id {
+		ret.delta = ret.delta.Add(vvNumFromI64(int64(c.fee), c.numberScale))
+	}
+	// Normalize an economically zero AccountRoot delta so a touched sender cannot
+	// be mistaken for a second payout recipient.
 	if ret.delta.IsZero() {
 		return vvDelta{}, false
 	}
 	return ret, true
+}
+
+func (c *vvChecker) deltaAssetsTxAccount(vaultAsset vvAsset) (vvDelta, bool) {
+	return c.deltaAssetsForParty(vaultAsset, c.txAccountID)
 }
 
 // deltaShares returns the change in id's share holding for the vault, reading the
@@ -360,6 +423,53 @@ func (c *vvChecker) flatAmount(key string) (state.Amount, bool) {
 		return state.Amount{}, false
 	}
 	return amt, true
+}
+
+func (c *vvChecker) txHasField(name string) bool {
+	if c.hasTxField != nil && c.hasTxField(name) {
+		return true
+	}
+	_, ok := c.flat[name]
+	return ok
+}
+
+func (c *vvChecker) fixCleanup3_4_0Enabled() bool {
+	return c.rules != nil && c.rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+}
+
+func (c *vvChecker) vaultPhase(v vvVault) vault.VaultPhase {
+	kind := vault.VaultKindOpenEnded
+	if v.hasVaultKind {
+		kind = v.vaultKind
+	}
+	var subscription, redemption *uint32
+	if v.hasSubscriptionDate && c.currentCloseTimeKnown {
+		subscription = &v.subscriptionDate
+	}
+	if v.hasRedemptionDate {
+		redemption = &v.redemptionDate
+	}
+	return vault.GetVaultPhase(kind, subscription, redemption, c.currentCloseTime)
+}
+
+func (c *vvChecker) agreesWithinOneUnit(lhs, rhs state.XRPLNumber, asset vvAsset, scale int) bool {
+	if asset.integral() {
+		return lhs.Cmp(rhs) == 0
+	}
+	diff := lhs.Sub(rhs)
+	if diff.Signum() < 0 {
+		diff = diff.Negate()
+	}
+	tolerance := state.NewXRPLNumberScaled(1, scale, c.numberScale, state.RoundToNearest)
+	return diff.Cmp(tolerance) <= 0
+}
+
+func (c *vvChecker) lessOrEqualPlusOneUnit(lhs, rhs state.XRPLNumber, asset vvAsset, scale int) bool {
+	if asset.integral() {
+		return lhs.Cmp(rhs) <= 0
+	}
+	tolerance := state.NewXRPLNumberScaled(1, scale, c.numberScale, state.RoundToNearest)
+	return lhs.Cmp(rhs.Add(tolerance)) <= 0
 }
 
 // finalize is the finalize phase; it returns "" when every invariant holds, or
@@ -422,8 +532,11 @@ func (c *vvChecker) finalizeUpdate() string {
 		}
 	}
 
-	// Universal checks.
-	if len(c.beforeVault) != 0 {
+	// Before LendingProtocolV1_1, these three fields are enforced here. The
+	// amendment moves all Vault structural immutability into
+	// NoModifiedUnmodifiableFields so it is checked uniformly with Loan and
+	// LoanBroker entries.
+	if len(c.beforeVault) != 0 && (c.rules == nil || !c.rules.Enabled(amendment.FeatureLendingProtocolV1_1)) {
 		bv := c.beforeVault[0]
 		if !afterVault.asset.equal(bv.asset) || afterVault.pseudoID != bv.pseudoID ||
 			afterVault.shareMPTID != bv.shareMPTID {
@@ -451,8 +564,23 @@ func (c *vvChecker) finalizeUpdate() string {
 	}
 	if afterVault.assetsAvailable.Cmp(afterVault.assetsTotal) > 0 {
 		return "assets available must not be greater than assets outstanding"
-	} else if afterVault.lossUnrealized.Cmp(afterVault.assetsTotal.Sub(afterVault.assetsAvailable)) > 0 {
-		return "loss unrealized must not exceed the difference between assets outstanding and available"
+	} else {
+		gapExceeded := afterVault.lossUnrealized.Cmp(afterVault.assetsTotal.Sub(afterVault.assetsAvailable)) > 0
+		if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+			scale := afterVault.asset.scaleOf(afterVault.assetsTotal)
+			gapExceeded = !c.lessOrEqualPlusOneUnit(
+				afterVault.lossUnrealized,
+				afterVault.assetsTotal.Sub(afterVault.assetsAvailable),
+				afterVault.asset,
+				scale,
+			)
+		}
+		if gapExceeded {
+			return "loss unrealized must not exceed the difference between assets outstanding and available"
+		}
+	}
+	if c.rules != nil && c.fixCleanup3_4_0Enabled() && afterVault.lossUnrealized.Signum() < 0 {
+		return "loss unrealized must not be negative"
 	}
 	if afterVault.assetsTotal.Signum() < 0 {
 		return "assets outstanding must be positive"
@@ -494,8 +622,13 @@ func (c *vvChecker) finalizeUpdate() string {
 		return c.finalizeWithdraw(afterVault)
 	case protocol.TxTypeVaultClawback:
 		return c.finalizeClawback(afterVault, beforeShares)
-	case ttLoanSet, ttLoanManage, ttLoanPay:
-		return "" // reconciliation TBD in rippled
+	case ttLoanSet:
+		if c.vaultPhase(afterVault) != vault.VaultPhaseNoPhase && c.vaultPhase(afterVault) != vault.VaultPhaseInvestment {
+			return "loan origination only allowed in Investment phase"
+		}
+		return ""
+	case ttLoanManage, ttLoanPay:
+		return ""
 	default:
 		return ""
 	}
@@ -527,6 +660,14 @@ func (c *vvChecker) finalizeCreate(afterVault vvVault, updatedShares vvShares) s
 	if !ar.HasVaultID() || ar.VaultID != afterVault.key {
 		return "shares issuer pseudo-account must point back to the vault"
 	}
+	if afterVault.hasVaultKind && afterVault.vaultKind == vault.VaultKindClosedEnded {
+		if !afterVault.hasSubscriptionDate || !afterVault.hasRedemptionDate {
+			return "closed-ended vault must have SubscriptionDate and RedemptionDate"
+		}
+		if !vault.IsValidClosedEndedGap(afterVault.subscriptionDate, afterVault.redemptionDate) {
+			return "closed-ended vault RedemptionDate - SubscriptionDate must be within [MIN_INVESTMENT_PERIOD, MAX_INVESTMENT_PERIOD)"
+		}
+	}
 	return ""
 }
 
@@ -541,7 +682,11 @@ func (c *vvChecker) finalizeSet(afterVault vvVault, updatedShares vvShares, befo
 		return "set must not change assets outstanding"
 	}
 	if afterVault.assetsMaximum.Signum() > 0 && afterVault.assetsTotal.Cmp(afterVault.assetsMaximum) > 0 {
-		return "set assets outstanding must not exceed assets maximum"
+		fix340 := c.rules != nil && c.fixCleanup3_4_0Enabled()
+		if !fix340 || c.txHasField("AssetsMaximum") ||
+			beforeVault.assetsMaximum.Cmp(afterVault.assetsMaximum) != 0 {
+			return "set assets outstanding must not exceed assets maximum"
+		}
 	}
 	if beforeVault.assetsAvailable.Cmp(afterVault.assetsAvailable) != 0 {
 		return "set must not change assets available"
@@ -555,6 +700,10 @@ func (c *vvChecker) finalizeSet(afterVault vvVault, updatedShares vvShares, befo
 func (c *vvChecker) finalizeDeposit(afterVault vvVault, updatedShares vvShares) string {
 	beforeVault := c.beforeVault[0]
 	vaultAsset := afterVault.asset
+	phase := c.vaultPhase(afterVault)
+	if phase != vault.VaultPhaseNoPhase && phase != vault.VaultPhaseSubscription {
+		return "deposit only allowed in Subscription or NoPhase"
+	}
 
 	if msg := c.reconcileDepositAssets(beforeVault, afterVault, vaultAsset); msg != "" {
 		return msg
@@ -615,17 +764,30 @@ func (c *vvChecker) reconcileDepositAssets(beforeVault, afterVault vvVault, vaul
 		if accountDeltaAssets.Signum() >= 0 {
 			return "deposit must decrease depositor balance"
 		}
-		if localVaultDeltaAssets.Negate().Cmp(accountDeltaAssets) != 0 {
+		addsUp := localVaultDeltaAssets.Negate().Cmp(accountDeltaAssets) == 0
+		if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+			addsUp = c.agreesWithinOneUnit(
+				localVaultDeltaAssets.Negate(), accountDeltaAssets, vaultAsset, localMinScale)
+		}
+		if !addsUp {
 			return "deposit must change vault and depositor balance by equal amount"
 		}
 	}
 
 	assetTotalDelta := vaultAsset.round(afterVault.assetsTotal.Sub(beforeVault.assetsTotal), minScale)
-	if assetTotalDelta.Cmp(vaultDeltaAssets) != 0 {
+	addsUp := assetTotalDelta.Cmp(vaultDeltaAssets) == 0
+	if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+		addsUp = c.agreesWithinOneUnit(assetTotalDelta, vaultDeltaAssets, vaultAsset, minScale)
+	}
+	if !addsUp {
 		return "deposit and assets outstanding must add up"
 	}
 	assetAvailableDelta := vaultAsset.round(afterVault.assetsAvailable.Sub(beforeVault.assetsAvailable), minScale)
-	if assetAvailableDelta.Cmp(vaultDeltaAssets) != 0 {
+	addsUp = assetAvailableDelta.Cmp(vaultDeltaAssets) == 0
+	if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+		addsUp = c.agreesWithinOneUnit(assetAvailableDelta, vaultDeltaAssets, vaultAsset, minScale)
+	}
+	if !addsUp {
 		return "deposit and assets available must add up"
 	}
 	return ""
@@ -659,17 +821,28 @@ func (c *vvChecker) finalizeWithdraw(afterVault vvVault) string {
 
 func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vaultAsset vvAsset) string {
 	maybeVaultDeltaAssets, ok := c.deltaAssets(vaultAsset, afterVault.pseudoID)
-	if !ok {
+	zeroDeltaIsLegitimate := c.rules != nil && c.fixCleanup3_4_0Enabled() &&
+		!ok && beforeVault.assetsTotal.Cmp(beforeVault.lossUnrealized) == 0
+	if !ok && !zeroDeltaIsLegitimate {
 		return "withdrawal must change vault balance"
 	}
 
+	zeroDelta := vvDelta{delta: vvZero(c.numberScale), scale: 0}
+	if !ok {
+		maybeVaultDeltaAssets = zeroDelta
+	}
 	totalDelta := vaultAsset.makeDelta(beforeVault.assetsTotal, afterVault.assetsTotal)
 	availableDelta := vaultAsset.makeDelta(beforeVault.assetsAvailable, afterVault.assetsAvailable)
 	minScale := c.vaultMinScale(vaultAsset, afterVault, maybeVaultDeltaAssets, totalDelta, availableDelta)
 
 	vaultPseudoDeltaAssets := vaultAsset.round(maybeVaultDeltaAssets.delta, minScale)
-	if vaultPseudoDeltaAssets.Signum() >= 0 {
+	if !zeroDeltaIsLegitimate && vaultPseudoDeltaAssets.Signum() >= 0 {
 		return "withdrawal must decrease vault balance"
+	}
+
+	phase := c.vaultPhase(afterVault)
+	if phase == vault.VaultPhaseInvestment {
+		return "withdrawal not allowed during Investment phase"
 	}
 
 	dest := c.txAccountID
@@ -680,44 +853,59 @@ func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vau
 	issuerWithdrawal := !vaultAsset.isXRP && dest == vaultAsset.issuerID()
 
 	if !issuerWithdrawal {
-		maybeAccDelta, accOK := c.deltaAssetsTxAccount(vaultAsset)
-		var maybeOther vvDelta
-		otherOK := false
-		if hasDest && destOverride != c.txAccountID {
-			maybeOther, otherOK = c.deltaAssets(vaultAsset, destOverride)
+		destinationID := c.txAccountID
+		if hasDest {
+			destinationID = destOverride
 		}
-		if accOK == otherOK {
+		distinctDestination := hasDest && destOverride != c.txAccountID
+		_, senderOK := c.deltaAssetsForParty(vaultAsset, c.txAccountID)
+		if distinctDestination && senderOK {
 			return "withdrawal must change one destination balance"
 		}
-		destinationDelta := maybeAccDelta
-		if !accOK {
-			destinationDelta = maybeOther
-		}
-		localMinScale := max(minScale, vvCoarsestScale(destinationDelta))
-		roundedDestinationDelta := vaultAsset.round(destinationDelta.delta, localMinScale)
-		tolerateZeroDelta := c.rules != nil && c.rules.FixCleanup3_2_0Enabled() && !vaultAsset.integral()
-		invalidDestinationDelta := roundedDestinationDelta.Signum() <= 0
-		if tolerateZeroDelta {
-			invalidDestinationDelta = roundedDestinationDelta.Signum() < 0
-		}
-		if invalidDestinationDelta {
-			return "withdrawal must increase destination balance"
-		}
-		localPseudoDeltaAssets := vaultAsset.round(vaultPseudoDeltaAssets, localMinScale)
-		destroyedAssets := maybeVaultDeltaAssets.delta.Negate().Sub(destinationDelta.delta)
-		destroyedIsSubULP := tolerateZeroDelta &&
-			vaultAsset.roundMode(destroyedAssets, destinationDelta.scale, state.RoundDownward).IsZero()
-		if !destroyedIsSubULP && localPseudoDeltaAssets.Negate().Cmp(roundedDestinationDelta) != 0 {
-			return "withdrawal must change vault and destination balance by equal amount"
+		destinationDelta, destinationOK := c.deltaAssetsForParty(vaultAsset, destinationID)
+		if !destinationOK {
+			if !zeroDeltaIsLegitimate {
+				return "withdrawal must change one destination balance"
+			}
+		} else {
+			localMinScale := max(minScale, vvCoarsestScale(destinationDelta))
+			roundedDestinationDelta := vaultAsset.round(destinationDelta.delta, localMinScale)
+			tolerateZeroDelta := c.rules != nil && c.rules.FixCleanup3_2_0Enabled() && !vaultAsset.integral()
+			invalidDestinationDelta := roundedDestinationDelta.Signum() <= 0
+			if tolerateZeroDelta {
+				invalidDestinationDelta = roundedDestinationDelta.Signum() < 0
+			}
+			if invalidDestinationDelta {
+				return "withdrawal must increase destination balance"
+			}
+			localPseudoDeltaAssets := vaultAsset.round(vaultPseudoDeltaAssets, localMinScale)
+			destroyedAssets := maybeVaultDeltaAssets.delta.Negate().Sub(destinationDelta.delta)
+			destroyedIsSubULP := tolerateZeroDelta &&
+				vaultAsset.roundMode(destroyedAssets, destinationDelta.scale, state.RoundDownward).IsZero()
+			addsUp := localPseudoDeltaAssets.Negate().Cmp(roundedDestinationDelta) == 0
+			if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+				addsUp = c.agreesWithinOneUnit(localPseudoDeltaAssets.Negate(), roundedDestinationDelta, vaultAsset, localMinScale)
+			}
+			if !destroyedIsSubULP && !addsUp {
+				return "withdrawal must change vault and destination balance by equal amount"
+			}
 		}
 	}
 
 	assetTotalDelta := vaultAsset.round(afterVault.assetsTotal.Sub(beforeVault.assetsTotal), minScale)
-	if assetTotalDelta.Cmp(vaultPseudoDeltaAssets) != 0 {
+	addsUp := assetTotalDelta.Cmp(vaultPseudoDeltaAssets) == 0
+	if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+		addsUp = c.agreesWithinOneUnit(assetTotalDelta, vaultPseudoDeltaAssets, vaultAsset, minScale)
+	}
+	if !addsUp {
 		return "withdrawal and assets outstanding must add up"
 	}
 	assetAvailableDelta := vaultAsset.round(afterVault.assetsAvailable.Sub(beforeVault.assetsAvailable), minScale)
-	if assetAvailableDelta.Cmp(vaultPseudoDeltaAssets) != 0 {
+	addsUp = assetAvailableDelta.Cmp(vaultPseudoDeltaAssets) == 0
+	if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+		addsUp = c.agreesWithinOneUnit(assetAvailableDelta, vaultPseudoDeltaAssets, vaultAsset, minScale)
+	}
+	if !addsUp {
 		return "withdrawal and assets available must add up"
 	}
 	return ""
@@ -769,11 +957,19 @@ func (c *vvChecker) reconcileClawbackAssets(beforeVault, afterVault vvVault, vau
 			return "clawback must decrease vault balance"
 		}
 		assetsTotalDelta := vaultAsset.round(afterVault.assetsTotal.Sub(beforeVault.assetsTotal), minScale)
-		if assetsTotalDelta.Cmp(vaultDeltaAssets) != 0 {
+		addsUp := assetsTotalDelta.Cmp(vaultDeltaAssets) == 0
+		if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+			addsUp = c.agreesWithinOneUnit(assetsTotalDelta, vaultDeltaAssets, vaultAsset, minScale)
+		}
+		if !addsUp {
 			return "clawback and assets outstanding must add up"
 		}
 		assetAvailableDelta := vaultAsset.round(afterVault.assetsAvailable.Sub(beforeVault.assetsAvailable), minScale)
-		if assetAvailableDelta.Cmp(vaultDeltaAssets) != 0 {
+		addsUp = assetAvailableDelta.Cmp(vaultDeltaAssets) == 0
+		if c.rules != nil && c.fixCleanup3_4_0Enabled() {
+			addsUp = c.agreesWithinOneUnit(assetAvailableDelta, vaultDeltaAssets, vaultAsset, minScale)
+		}
+		if !addsUp {
 			return "clawback and assets available must add up"
 		}
 	} else if !beforeVault.holdsNoAssets() {
@@ -858,6 +1054,18 @@ func vvMakeVault(m map[string]any, key [32]byte, scale state.MantissaScale) (vvV
 	v.assetsAvailable = vvNumber(m, "AssetsAvailable", scale)
 	v.assetsMaximum = vvNumber(m, "AssetsMaximum", scale)
 	v.lossUnrealized = vvNumber(m, "LossUnrealized", scale)
+	if kind, ok := vvU64Present(m, "VaultKind"); ok {
+		v.vaultKind = uint8(kind)
+		v.hasVaultKind = true
+	}
+	if date, ok := vvU64Present(m, "SubscriptionDate"); ok {
+		v.subscriptionDate = uint32(date)
+		v.hasSubscriptionDate = true
+	}
+	if date, ok := vvU64Present(m, "RedemptionDate"); ok {
+		v.redemptionDate = uint32(date)
+		v.hasRedemptionDate = true
+	}
 	return v, true
 }
 
@@ -939,7 +1147,33 @@ func vvU64Present(m map[string]any, key string) (uint64, bool) {
 		return uint64(v), true
 	case uint64:
 		return v, true
+	case uint32:
+		return uint64(v), true
+	case uint16:
+		return uint64(v), true
+	case uint8:
+		return uint64(v), true
 	case int:
+		return uint64(v), true
+	case int64:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case int32:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case int16:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case int8:
+		if v < 0 {
+			return 0, false
+		}
 		return uint64(v), true
 	}
 	return 0, false

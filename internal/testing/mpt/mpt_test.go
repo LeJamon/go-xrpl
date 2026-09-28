@@ -864,6 +864,7 @@ func TestMPT_SetEnabled(t *testing.T) {
 		// Reference: rippled lines 787-851
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("SingleAssetVault")
+		env.DisableFeature("fixCleanup3_4_0")
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
 		env.Fund(alice)

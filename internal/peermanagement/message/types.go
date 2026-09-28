@@ -23,7 +23,6 @@ const (
 	TypeHaveSet                 MessageType = MessageType(proto.MessageType_mtHAVE_SET)
 	TypeValidation              MessageType = MessageType(proto.MessageType_mtVALIDATION)
 	TypeGetObjects              MessageType = MessageType(proto.MessageType_mtGET_OBJECTS)
-	TypeValidatorList           MessageType = MessageType(proto.MessageType_mtVALIDATOR_LIST)
 	TypeSquelch                 MessageType = MessageType(proto.MessageType_mtSQUELCH)
 	TypeValidatorListCollection MessageType = MessageType(proto.MessageType_mtVALIDATOR_LIST_COLLECTION)
 	TypeProofPathReq            MessageType = MessageType(proto.MessageType_mtPROOF_PATH_REQ)

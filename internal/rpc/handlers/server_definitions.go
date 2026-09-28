@@ -36,17 +36,37 @@ func buildServerDefinitions() {
 	defs := definitions.Get()
 	defsFields := defs.Fields()
 
-	// Collect field names for deterministic ordering.
-	fieldNames := make([]string, 0, len(defsFields))
-	for name := range defsFields {
-		fieldNames = append(fieldNames, name)
+	// Sentinel entries precede fields ordered by their serialization code.
+	sentinelNames := [...]string{
+		"Invalid",
+		"ObjectEndMarker",
+		"ArrayEndMarker",
+		"taker_gets_funded",
+		"taker_pays_funded",
 	}
-	sort.Strings(fieldNames)
+	fieldNames := make([]string, 0, len(defsFields))
+	seen := make(map[string]struct{}, len(sentinelNames))
+	for _, name := range sentinelNames {
+		if _, ok := defsFields[name]; !ok {
+			panic("server_definitions: missing field sentinel " + name)
+		}
+		seen[name] = struct{}{}
+	}
+	for name := range defsFields {
+		if _, ok := seen[name]; !ok {
+			fieldNames = append(fieldNames, name)
+		}
+	}
+	sort.Slice(fieldNames, func(i, j int) bool {
+		left, right := defsFields[fieldNames[i]], defsFields[fieldNames[j]]
+		if left.Ordinal != right.Ordinal {
+			return left.Ordinal < right.Ordinal
+		}
+		return fieldNames[i] < fieldNames[j]
+	})
 
-	// Build FIELDS array matching rippled format:
-	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}]
 	fields := make([]any, 0, len(defsFields))
-	for _, name := range fieldNames {
+	appendField := func(name string) {
 		fi := defsFields[name]
 		fields = append(fields, []any{
 			name,
@@ -59,13 +79,24 @@ func buildServerDefinitions() {
 			},
 		})
 	}
+	for _, name := range sentinelNames {
+		appendField(name)
+	}
+	for _, name := range fieldNames {
+		appendField(name)
+	}
+
+	// These legacy enum values are absent from the RPC result-token table.
+	transactionResults := defs.TransactionResults()
+	delete(transactionResults, "tecHOOK_REJECTED")
+	delete(transactionResults, "tecNO_DELEGATE_PERMISSION")
 
 	serverDefsBase = map[string]any{
 		"TYPES":               defs.Types(),
 		"FIELDS":              fields,
 		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes(),
 		"TRANSACTION_TYPES":   defs.TransactionTypes(),
-		"TRANSACTION_RESULTS": defs.TransactionResults(),
+		"TRANSACTION_RESULTS": transactionResults,
 	}
 
 	// 3.2.0 (#6321): per-type field templates (with optionality) and flag maps.
@@ -76,14 +107,11 @@ func buildServerDefinitions() {
 	serverDefsBase["LEDGER_ENTRY_FLAGS"] = ledgerFlagsTable
 	serverDefsBase["ACCOUNT_SET_FLAGS"] = accountSetFlagsTable
 
-	// Hash follows rippled's approach (ServerInfo.cpp:288-293) — sha512Half over
-	// the serialized definitions document, emitted as the response `hash` field
-	// so clients can cache it and short-circuit on subsequent calls. encoding/json
-	// sorts map keys, so the serialization is deterministic across calls. The
-	// value is a per-server cache token (the client echoes back the hash this
-	// server gave it), not a cross-implementation constant: it intentionally
-	// need not equal rippled's, whose Json::FastWriter serializes differently.
-	encoded, _ := json.Marshal(serverDefsBase)
+	// The hash covers compact JSON without a trailing newline.
+	encoded, err := json.Marshal(serverDefsBase)
+	if err != nil {
+		panic("server_definitions: encode definitions: " + err.Error())
+	}
 	sum := sha512half.Sum(encoded)
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
@@ -155,9 +183,11 @@ func ledgerFormatFieldsToJSON(fields []schema.FormatField) []any {
 	return arr
 }
 
-// isValidDefinitionsHash reports whether s is a 256-bit hash in hex form,
-// matching rippled's uint256::parseHex requirement (ServerInfo.cpp:307).
+// The literal "0" is also a valid representation of the zero hash.
 func isValidDefinitionsHash(s string) bool {
+	if s == "0" {
+		return true
+	}
 	if len(s) != 64 {
 		return false
 	}

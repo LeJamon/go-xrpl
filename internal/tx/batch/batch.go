@@ -474,7 +474,7 @@ func (b *Batch) Validate() error {
 
 // PreflightSigValidated checks exact signer coverage only after all cryptographic
 // signatures have passed, matching Batch::preflightSigValidated.
-func (b *Batch) PreflightSigValidated() error {
+func (b *Batch) PreflightSigValidated(rules *amendment.Rules) error {
 	return b.validateBatchSigners(b.requiredBatchSigners())
 }
 
@@ -586,7 +586,10 @@ func (b *Batch) calculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) 
 		if inner == nil || inner.TxType() == tx.TypeBatch {
 			return 0, false
 		}
-		innerFee := sign.CalculateBaseFee(inner, view, config)
+		innerFee, err := sign.CalculateBaseFee(inner, view, config)
+		if err != nil {
+			return 0, false
+		}
 		txnFees, ok = batchFeeAdd(txnFees, innerFee, maxAmount)
 		if !ok {
 			return 0, false

@@ -28,9 +28,10 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureFixCleanup3_4_0               = registerFix("fixCleanup3_4_0", SupportedYes, VoteDefaultNo)
 	FeatureSponsor                       = registerFeature("Sponsor", SupportedYes, VoteDefaultNo)
 	FeatureBatchV1_1                     = registerFeature("BatchV1_1", SupportedYes, VoteDefaultNo)
-	FeatureLendingProtocolV1_1           = registerFeature("LendingProtocolV1_1", SupportedNo, VoteDefaultNo)
+	FeatureLendingProtocolV1_1           = registerFeature("LendingProtocolV1_1", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_3_0               = registerFix("fixCleanup3_3_0", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_2_0               = registerFix("fixCleanup3_2_0", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_1_3               = registerFix("fixCleanup3_1_3", SupportedYes, VoteDefaultYes)
@@ -71,7 +72,7 @@ var (
 	FeatureFixXChainRewardRounding       = registerFix("fixXChainRewardRounding", SupportedYes, VoteDefaultNo)
 	FeatureFixEmptyDID                   = registerFix("fixEmptyDID", SupportedYes, VoteDefaultNo)
 	FeaturePriceOracle                   = registerFeature("PriceOracle", SupportedYes, VoteDefaultNo)
-	FeatureFixAMMOverflowOffer           = registerFix("fixAMMOverflowOffer", SupportedYes, VoteDefaultYes)
+	FeatureFixAMMOverflowOffer           = registerRetired("fixAMMOverflowOffer")
 	FeatureFixFillOrKill                 = registerFix("fixFillOrKill", SupportedYes, VoteDefaultNo)
 	FeatureDID                           = registerFeature("DID", SupportedYes, VoteDefaultNo)
 	FeatureXChainBridge                  = registerFeature("XChainBridge", SupportedYes, VoteDefaultNo)

@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -27,18 +28,44 @@ func TestMessageChargeSelectsOneFeeAndFinishesOnce(t *testing.T) {
 	require.Equal(t, int64(resource.FeeInvalidData().Cost()), consumer.Balance())
 }
 
+func TestInboundMessageChargePeerAddsToCloseCharge(t *testing.T) {
+	identity, err := NewIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(1, Endpoint{Host: "192.0.2.5", Port: 51235}, false, identity, nil)
+	now := time.Now()
+	manager := resource.NewManager(func() time.Time { return now }, nil)
+	consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+	peer.attachUsage(consumer, nil)
+	t.Cleanup(peer.releaseUsage)
+
+	for range resource.DecayWindowSeconds {
+		msg := &InboundMessage{
+			charge: newMessageCharge(peer, "mtGET_LEDGER"),
+		}
+		require.True(t, msg.ChargePeer(resource.FeeModerateBurdenPeer(), "oversized node list"))
+		require.True(t, msg.ChargePeer(resource.FeeModerateBurdenPeer(), "uncookied request"))
+		require.NoError(t, msg.Close())
+		require.False(t, msg.ChargePeer(resource.FeeInvalidData(), "after close"))
+		require.NoError(t, msg.Close())
+	}
+
+	require.Equal(t,
+		int64(2*resource.FeeModerateBurdenPeer().Cost()+resource.FeeTrivialPeer().Cost()),
+		consumer.Balance(),
+		"worker charges must be additive to the message's final trivial charge")
+}
+
 func TestMessageChargePreservesBaseAndSelectedContexts(t *testing.T) {
 	charge := newMessageCharge(nil, "mtPING")
 	charge.update(resource.FeeModerateBurdenPeer(), "request")
 	charge.update(resource.FeeInvalidData(), "malformed")
-	latest := resource.NewCharge(resource.FeeInvalidData().Cost(), "latest")
-	charge.update(latest, "duplicate evidence")
+	charge.update(resource.FeeInvalidData(), "duplicate evidence")
 	charge.update(resource.FeeUselessData(), "ignored lower tier")
 
 	charge.mu.Lock()
 	defer charge.mu.Unlock()
-	require.Equal(t, latest, charge.fee)
-	require.Equal(t, "mtPING request malformed duplicate evidence", charge.context)
+	require.Equal(t, resource.FeeInvalidData(), charge.fee)
+	require.Equal(t, "mtPING request malformed", charge.context)
 }
 
 func TestInboundPingChargesModerateAndPongChargesTrivial(t *testing.T) {

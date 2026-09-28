@@ -83,7 +83,7 @@ func TestNumberContextToIOUAmountUsesExplicitRounding(t *testing.T) {
 	require.Equal(t, int64(1_234_567_890_123_457), upward.Mantissa())
 }
 
-func TestNumberContextExplicitAssetRoundingOnlyAppliesToXRP(t *testing.T) {
+func TestNumberContextExplicitAssetRoundingAppliesToIntegralAssets(t *testing.T) {
 	t.Parallel()
 
 	ctx := NewNumberContext(MantissaScaleLarge, true)
@@ -99,12 +99,29 @@ func TestNumberContextExplicitAssetRoundingOnlyAppliesToXRP(t *testing.T) {
 
 	mptPrototype := NewMPTAmountWithIssuanceID(0, "rIssuer", "0123456789abcdef0123456789abcdef0123456789abcdef")
 	mpt := ctx.ToAmountWithNativeRounding(fractional, mptPrototype, RoundUpward, RoundToNearest)
-	require.Equal(t, int64(1), contextMPTRaw(t, mpt))
+	require.Equal(t, int64(2), contextMPTRaw(t, mpt))
 
 	iouPrototype := NewIssuedAmountFromValue(0, 0, "USD", "rIssuer")
 	iouNumber := ctx.Number(1_234_567_890_123_456_500, 0, RoundToNearest)
 	iou := ctx.ToAmountWithNativeRounding(iouNumber, iouPrototype, RoundUpward, RoundToNearest)
 	require.Equal(t, int64(1_234_567_890_123_456), iou.Mantissa())
+}
+
+func TestNumberContextToNativeAmountEnforcesProtocolRange(t *testing.T) {
+	t.Parallel()
+
+	ctx := NewNumberContext(MantissaScaleLarge, true)
+	prototype := NewXRPAmountFromInt(0)
+	max := int64(MaxNativeDrops)
+
+	require.Equal(t, max, ctx.ToAmount(ctx.Int(max), prototype, RoundToNearest).Drops())
+	require.Equal(t, -max, ctx.ToAmount(ctx.Int(-max), prototype, RoundToNearest).Drops())
+
+	for _, value := range []int64{max + 1, -max - 1} {
+		require.PanicsWithValue(t, "Native currency amount out of range", func() {
+			ctx.ToAmount(ctx.Int(value), prototype, RoundToNearest)
+		})
+	}
 }
 
 func TestNumberContextsAreIndependentUnderConcurrency(t *testing.T) {

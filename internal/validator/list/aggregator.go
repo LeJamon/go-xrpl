@@ -100,7 +100,7 @@ type publisherState struct {
 	Validators [][33]byte
 
 	// SiteURI is where this list came from — a publisher URL, or "peer"
-	// when ingested from TMValidatorList gossip.
+	// when ingested from validator-list collection gossip.
 	SiteURI string
 
 	// LastUpdate is when we accepted this publisher's most recent list.

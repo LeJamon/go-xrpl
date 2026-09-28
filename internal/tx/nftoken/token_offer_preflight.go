@@ -12,7 +12,7 @@ import (
 // (via PreflightRules), so its tem* rejections happen before any ledger read and
 // before signature verification.
 //
-// The check order is identical to rippled: negative → OnlyXRP/zero → buy-zero →
+// The check order is identical to rippled: negative → currency → OnlyXRP/zero → buy-zero →
 // expiration → owner presence → owner==account → destination. Keeping this order
 // matters because the negative-amount temBAD_AMOUNT must win over a later
 // temBAD_EXPIRATION/temMALFORMED on the same transaction.
@@ -28,10 +28,12 @@ func tokenOfferCreatePreflight(
 	owner string,
 	isSellOffer bool,
 ) error {
-	// An offer for a negative amount makes no sense (gated on fixNFTokenNegOffer,
-	// which the original implementation lacked).
-	if amount.IsNegative() && rules.Enabled(amendment.FeatureFixNFTokenNegOffer) {
+	if amount.IsNegative() {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "offer amount cannot be negative")
+	}
+
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && isFakeXRP(amount) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "issued currency cannot use XRP")
 	}
 
 	if !amount.IsNative() {
@@ -62,15 +64,14 @@ func tokenOfferCreatePreflight(
 	}
 
 	if dest != "" {
-		// A Destination on a buy offer (used to pin a specific broker) was
-		// malformed before fixNFTokenNegOffer, which piggy-backed the relaxation.
-		if !isSellOffer && !rules.Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return ter.Errorf(ter.TemMALFORMED, "Destination not allowed on buy offer")
-		}
 		if dest == account {
 			return ter.Errorf(ter.TemMALFORMED, "Destination cannot be the same as Account")
 		}
 	}
 
 	return nil
+}
+
+func isFakeXRP(amount tx.Amount) bool {
+	return !amount.IsNative() && !amount.IsMPT() && (amount.Currency == "XRP" || amount.Currency == "0000000000000000000000005852500000000000")
 }

@@ -866,7 +866,7 @@ func decodeBinaryObject(data []byte) (map[string]any, error) {
 //  2. JSON-marshaled StoredTransaction: {"tx_json":{...},"meta":{...}}
 //     (produced by the submit handler)
 //
-// It tries VL binary decode first, then falls back to JSON unmarshal.
+// It recognizes valid JSON first and otherwise tries the VL binary format.
 func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	return decodeTxBlobWithMetadataMode(data, false, true, false)
 }
@@ -903,7 +903,20 @@ func decodeTxBlobForTransactionEntry(data []byte) (StoredTransaction, error) {
 }
 
 func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEmptyMetadata, requireBinaryMetadata bool) (StoredTransaction, error) {
-	// Try VL-encoded binary format first
+	// JSON-marshaled transactions can begin with bytes that happen to form a
+	// valid variable-length binary prefix. Identify JSON first so those rows do
+	// not get partially decoded as binary and fail on unrelated metadata fields.
+	if json.Valid(data) {
+		var st StoredTransaction
+		if jsonErr := json.Unmarshal(data, &st); jsonErr != nil {
+			return StoredTransaction{}, jsonErr
+		}
+		if err := validateStoredTransaction(&st, requireMetadataFields); err != nil {
+			return StoredTransaction{}, err
+		}
+		return st, nil
+	}
+
 	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
 	if err == nil {
 		if requireBinaryMetadata && metaBytes == nil {
@@ -928,7 +941,8 @@ func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEm
 		}
 	}
 
-	// Fall back to JSON format
+	// Fall back to JSON format for malformed or non-standard JSON rows so the
+	// caller receives the same decoding error as before.
 	var st StoredTransaction
 	if jsonErr := json.Unmarshal(data, &st); jsonErr != nil {
 		return StoredTransaction{}, jsonErr

@@ -13,9 +13,10 @@ A regression gate for goxrpl ↔ rippled interop. Two phases:
    genesis-onwards ledger sequence and agree on `ledger_hash` and
    `account_hash`. Catches handshake, peering, and consensus-message wire-
    format regressions.
-2. **Tx-execution determinism** — after a small burst of Payments, all
-   three nodes must still agree on the ledger that *contains* the first
-   payment. Catches transaction-engine and metadata regressions.
+2. **Tx-execution determinism** — after a small burst of Payments, every
+   submission must be accepted and later validate with `tesSUCCESS`; all
+   three nodes must still agree on every ledger that contains one of them.
+   Catches transaction-engine and metadata regressions.
 
 Quorum = ceil(0.8 * 3) = 3, so all three nodes must agree on every
 validated ledger — any divergence wedges the network and times out the
@@ -53,8 +54,10 @@ containers up after a failure for inspection.
 | `TX_TIMEOUT`     | `180`                              | seconds to wait for a payment to validate     |
 | `KEEP_RUNNING`   | `0`                                | `1` = keep containers up after exit (debug)   |
 
-`RIPPLED_IMAGE` overrides must use the official image's `/config/xrpld.cfg`
-and `/config/validators.txt` entrypoint contract.
+`RIPPLED_IMAGE` overrides must expose `/usr/bin/xrpld`. The compose file mounts
+each rippled config and validator file at both the official image's `/config`
+paths and the pinned final image's `/etc/xrpld` paths, so either entrypoint
+contract reads the same topology configuration.
 
 ## Files
 
@@ -63,9 +66,11 @@ and `/config/validators.txt` entrypoint contract.
 - `configs/goxrpl-0.toml` — goxrpl config (full validator, same UNL).
 - `configs/validators.txt` — UNL in rippled's INI format.
 - `configs/validators.toml` — same UNL in goxrpl's TOML format.
+- `xrpld-healthcheck.sh` — dependency-free HTTP readiness probe used by both
+  official and checksum-pinned rippled images.
 - `smoke.sh` — driver: brings up the topology, waits for validation,
-  asserts cross-node hash equality, submits payments, asserts again on the
-  seq that contains the first payment, then tears down.
+  asserts cross-node hash equality, submits payments, verifies every payment,
+  and asserts every transaction-containing ledger before tearing down.
 
 Configs were rendered statically from the `xrpl-confluence` topology
 templates (`xrpl-confluence/src/topology.star`). The validator seeds are

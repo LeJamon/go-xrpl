@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -19,6 +20,11 @@ const lsfHybrid = entry.LsfHybrid
 // and placement.
 // Reference: rippled CreateOffer.cpp doApply()
 func (o *OfferCreate) Apply(ctx *tx.ApplyContext) ter.Result {
+	if o.DomainID != nil {
+		if result := permissioneddomain.DEXDomainApply(ctx, *o.DomainID, ctx.AccountID); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 	ctx.Log.Trace("offer create apply",
 		"account", o.Account,
 		"takerPays", o.TakerPays,
@@ -174,6 +180,17 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			return ter.TecKILLED, false // No crossing - apply cancel sandbox
 		}
 		return ter.TesSUCCESS, true // Crossing happened - apply main sandbox
+	}
+
+	// An MPT offer whose quality is zero cannot be represented by a book
+	// directory. It may still cross existing liquidity, but leaving a remainder
+	// at the zero-quality base key would make that remainder permanently
+	// unreachable.
+	if rules := ctx.Rules(); rules != nil && rules.MPTokensV2Enabled() && uRate == 0 {
+		if !crossed {
+			return ter.TecKILLED, false
+		}
+		return ter.TesSUCCESS, true
 	}
 
 	// Reference: rippled CreateOffer.cpp lines 811-834

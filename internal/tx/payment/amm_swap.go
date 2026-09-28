@@ -253,23 +253,26 @@ func solveQuadraticEqSmallest(m numberMath, a, b, c state.XRPLNumber) *state.XRP
 // equals the LOB quality.
 //
 // When ok is false, blocked distinguishes the two failure modes that rippled
-// signals via different control flow: blocked=false is a plain calc failure
-// (rippled returns std::nullopt, allowing a maxOffer fallback), while
-// blocked=true means the generated offer's quality is worse than the LOB tip
-// (rippled Throws, which suppresses the AMM offer entirely). blocked is only
-// ever set on the pre-fixAMMv1_1 path; post-fix never throws.
+// signals via different control flow: blocked=false is a plain calc failure,
+// while blocked=true means the generated offer's quality is worse than the LOB
+// tip. Integral assets use the economically coarser side as the starting point
+// after fixAMMv1_1; outIsIntegral is true for XRP and MPT output.
 // Reference: rippled AMMHelpers.h changeSpotPriceQuality()
-func ChangeSpotPriceQuality(poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsXRP bool) (in, out tx.Amount, ok, blocked bool) {
-	return changeSpotPriceQuality(legacyNumberMath(), poolIn, poolOut, quality, tfee, fixAMMv1_1, outIsXRP)
+func ChangeSpotPriceQuality(poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsIntegral bool) (in, out tx.Amount, ok, blocked bool) {
+	return changeSpotPriceQuality(legacyNumberMath(), poolIn, poolOut, quality, tfee, fixAMMv1_1, outIsIntegral)
 }
 
-func changeSpotPriceQuality(m numberMath, poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsXRP bool) (in, out tx.Amount, ok, blocked bool) {
+func changeSpotPriceQuality(m numberMath, poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsIntegral bool) (in, out tx.Amount, ok, blocked bool) {
 	if !fixAMMv1_1 {
 		return changeSpotPriceQualityPreFix(m, poolIn, poolOut, quality, tfee)
 	}
 
-	// Post-fixAMMv1_1: start with the XRP side for better rounding
-	if outIsXRP {
+	// Post-fixAMMv1_1: start with the economically coarser integral side. If
+	// both sides are integral, the direction depends on whether the requested
+	// rate is at least parity: takerGets for rate >= 1, takerPays otherwise.
+	inIsIntegral := poolIn.IsNative() || poolIn.IsMPT()
+	qRate := qualityToRate(m, quality)
+	if outIsIntegral && (!inIsIntegral || qRate.Cmp(m.one()) >= 0) {
 		in, out, ok = getAMMOfferStartWithTakerGets(m, poolIn, poolOut, quality, tfee)
 	} else {
 		in, out, ok = getAMMOfferStartWithTakerPays(m, poolIn, poolOut, quality, tfee)
@@ -550,7 +553,6 @@ func zeroLikeAmount(amt tx.Amount) tx.Amount {
 
 // maxAmountLike returns the maximum amount for the type of the input, using
 // cMaxValue/2 to match rippled's maxAmount<IOUAmount>() / maxAmount<STAmount>().
-// Used by maxOffer() in AMMLiquidity for pre-fixAMMOverflowOffer fallback.
 // Reference: rippled AMMLiquidity.cpp lines 99-109: maxAmount<T>()
 func maxAmountLike(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {

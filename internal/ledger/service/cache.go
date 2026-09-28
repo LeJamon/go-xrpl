@@ -234,6 +234,15 @@ func (s *Service) HasCompleteLedger(seq uint32) bool {
 	return s.completedLedgers != nil && s.completedLedgers.contains(seq)
 }
 
+// HasCompleteLedgerHash requires the exact verified ledger, not just a cached
+// header or a different fork at the same sequence. Backfill uses it to skip work.
+func (s *Service) HasCompleteLedgerHash(seq uint32, hash [32]byte) bool {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	completeHash, ok := s.completeLedgerHashes[seq]
+	return ok && completeHash == hash && s.completedLedgers != nil && s.completedLedgers.contains(seq)
+}
+
 func (s *Service) completeLedgersString() string {
 	s.completeMu.RLock()
 	defer s.completeMu.RUnlock()

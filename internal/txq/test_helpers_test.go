@@ -22,7 +22,7 @@ type Snapshot = feeMetricsSnapshot
 func NewFeeMetrics(cfg Config) *feeMetrics          { return newFeeMetrics(cfg) }
 func (fm *feeMetrics) Snapshot() feeMetricsSnapshot { return fm.snapshot() }
 func (fm *feeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) uint64 {
-	return fm.update(feeLevels, timeLeap, cfg)
+	return fm.update(feeLevels, uint64(len(feeLevels)), timeLeap, cfg)
 }
 func ScaleFeeLevel(snapshot feeMetricsSnapshot, txInLedger uint32) FeeLevel {
 	return scaleFeeLevel(snapshot, txInLedger)

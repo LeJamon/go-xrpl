@@ -521,6 +521,7 @@ func TestVaultWithdraw_AssetWithdrawalRoundsSharesToNearest(t *testing.T) {
 		shareTotal,
 		assets,
 		false,
+		false,
 	)
 	if got := shares.ToInt64WithMode(state.RoundTowardsZero); got != 750_018_750 {
 		t.Fatalf("shares = %d, want 750018750", got)

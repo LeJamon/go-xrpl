@@ -32,9 +32,14 @@ type vaultData struct {
 	AssetIsMPT       bool
 	AssetMPTID       [24]byte
 	WithdrawalPolicy uint8
+	LEVersion        uint8
+	VaultKind        uint8
+	SubscriptionDate *uint32
+	RedemptionDate   *uint32
 	Scale            uint8
 	Flags            uint32
 	Data             string // hex-encoded Blob
+	DataPresent      bool   // distinguishes an absent field from a present empty Blob
 	AssetsTotal      string
 	AssetsAvailable  string
 	AssetsMaximum    string
@@ -56,8 +61,6 @@ func (v *vaultData) assetToIssueMap() map[string]any {
 }
 
 // serializeVault encodes a vault ledger entry to its canonical binary form.
-// soeDEFAULT fields (the NUMBER totals, Scale, Data) are omitted when zero to
-// match rippled's STObject serialization.
 func serializeVault(v *vaultData) ([]byte, error) {
 	return serializeVaultForRules(v, nil)
 }
@@ -86,7 +89,15 @@ func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error
 	entry.SetShareMPTID(strings.ToUpper(hex.EncodeToString(v.ShareMPTID[:])))
 	entry.SetWithdrawalPolicy(v.WithdrawalPolicy)
 	entry.SetScale(v.Scale)
-	if v.Data != "" {
+	entry.SetLEVersion(v.LEVersion)
+	entry.SetVaultKind(v.VaultKind)
+	if v.SubscriptionDate != nil {
+		entry.SetSubscriptionDate(*v.SubscriptionDate)
+	}
+	if v.RedemptionDate != nil {
+		entry.SetRedemptionDate(*v.RedemptionDate)
+	}
+	if v.DataPresent || v.Data != "" {
 		entry.SetData(strings.ToUpper(v.Data))
 	}
 
@@ -182,6 +193,8 @@ func parseVault(data []byte) (*vaultData, error) {
 
 	vd := &vaultData{
 		Sequence:         lv.Sequence,
+		LEVersion:        uint8(lv.LEVersion),
+		VaultKind:        uint8(lv.VaultKind),
 		WithdrawalPolicy: uint8(lv.WithdrawalPolicy),
 		Scale:            uint8(lv.Scale),
 		Flags:            lv.Flags,
@@ -190,6 +203,17 @@ func parseVault(data []byte) (*vaultData, error) {
 		AssetsAvailable:  numberFields["AssetsAvailable"],
 		AssetsMaximum:    numberFields["AssetsMaximum"],
 		LossUnrealized:   numberFields["LossUnrealized"],
+	}
+
+	fields := lv.ToMap()
+	if _, ok := fields["Data"]; ok {
+		vd.DataPresent = true
+	}
+	if _, ok := fields["SubscriptionDate"]; ok {
+		vd.SubscriptionDate = &lv.SubscriptionDate
+	}
+	if _, ok := fields["RedemptionDate"]; ok {
+		vd.RedemptionDate = &lv.RedemptionDate
 	}
 
 	if id, err := state.DecodeAccountID(lv.Owner); err == nil {

@@ -317,13 +317,30 @@ func (s *Service) verifyStoredSHAMapMeasured(
 	root [32]byte,
 	mapType shamap.Type,
 ) (storedSHAMapVerificationMetrics, error) {
+	return s.verifyStoredSHAMapMeasuredWithPolicy(ctx, root, mapType, storedSHAMapVerificationPolicy{})
+}
+
+// The zero policy preserves startup verification behavior. Background
+// re-certification supplies an independent CPU/I/O budget.
+type storedSHAMapVerificationPolicy struct {
+	workers int
+	pause   func(context.Context, time.Duration) error
+}
+
+func (s *Service) verifyStoredSHAMapMeasuredWithPolicy(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+	policy storedSHAMapVerificationPolicy,
+) (storedSHAMapVerificationMetrics, error) {
 	startedAt := time.Now()
 	ticker := time.NewTicker(storedSHAMapVerificationLogInterval)
 	defer ticker.Stop()
 	var metrics storedSHAMapVerificationMetrics
-	err := s.verifyStoredSHAMapWithTicksReport(
+	err := s.verifyStoredSHAMapWithTicksReportPolicy(
 		ctx, root, mapType, startedAt, time.Now, ticker.C,
 		func(result storedSHAMapVerificationMetrics) { metrics = result },
+		policy,
 	)
 	return metrics, err
 }
@@ -347,6 +364,19 @@ func (s *Service) verifyStoredSHAMapWithTicksReport(
 	now func() time.Time,
 	ticks <-chan time.Time,
 	report func(storedSHAMapVerificationMetrics),
+) (err error) {
+	return s.verifyStoredSHAMapWithTicksReportPolicy(ctx, root, mapType, startedAt, now, ticks, report, storedSHAMapVerificationPolicy{})
+}
+
+func (s *Service) verifyStoredSHAMapWithTicksReportPolicy(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+	startedAt time.Time,
+	now func() time.Time,
+	ticks <-chan time.Time,
+	report func(storedSHAMapVerificationMetrics),
+	policy storedSHAMapVerificationPolicy,
 ) (err error) {
 	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore, root, mapType, startedAt)
 	defer func() {
@@ -375,12 +405,44 @@ func (s *Service) verifyStoredSHAMapWithTicksReport(
 		control.batchNodes = storedSHAMapVerificationBatchNodes
 		control.batchBytes = storedSHAMapVerificationBatchBytes
 	}
+	fetch := s.storedSHAMapVerificationFetch()
+	if policy.pause != nil {
+		read := fetch
+		fetch = func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+			if err := policy.pause(ctx, 0); err != nil {
+				return nil, err
+			}
+			started := time.Now()
+			node, err := read(ctx, hash)
+			if err == nil {
+				err = policy.pause(ctx, time.Since(started))
+			}
+			return node, err
+		}
+		if readBatch := control.batchFetch; readBatch != nil {
+			control.batchFetch = func(ctx context.Context, hashes []nodestore.Hash256, maxBytes int) ([]*nodestore.Node, kvstore.PromotionStats, error) {
+				if err := policy.pause(ctx, 0); err != nil {
+					return nil, kvstore.PromotionStats{}, err
+				}
+				started := time.Now()
+				nodes, stats, err := readBatch(ctx, hashes, maxBytes)
+				if err == nil {
+					err = policy.pause(ctx, time.Since(started))
+				}
+				return nodes, stats, err
+			}
+		}
+	}
+	workers := policy.workers
+	if workers <= 0 {
+		workers = resolveStoredSHAMapWorkers(s.config.FastLoadWorkers)
+	}
 	err = s.walkStoredSHAMapConcurrentWithFetch(
 		ctx,
 		root,
 		mapType,
-		s.storedSHAMapVerificationFetch(),
-		resolveStoredSHAMapWorkers(s.config.FastLoadWorkers),
+		fetch,
+		workers,
 		control,
 		proofs.record,
 	)

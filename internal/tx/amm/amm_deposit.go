@@ -389,7 +389,18 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 }
 
 // Reference: rippled AMMDeposit.cpp applyGuts
-func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
+func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	calculationComplete := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
+				result = ter.TecAMM_FAILED
+				return
+			}
+			panic(recovered)
+		}
+	}()
+
 	ctx.Log.Trace("amm deposit apply",
 		"account", a.Account,
 		"asset", a.Asset,
@@ -999,7 +1010,27 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Transfer assets from depositor to AMM
+	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset1, err := addAMMPoolAmount(assetBalance1, depositAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := addAMMPoolAmount(assetBalance2, depositAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
+	// Transfer assets from depositor to AMM after all amount conversions have
+	// succeeded, so cleanup can turn an arithmetic overflow into a TER result.
+	calculationComplete = true
 	if isXRP1 && !depositAmount1.IsZero() {
 		drops := uint64(depositAmount1.Drops())
 		ctx.Account.Balance -= drops
@@ -1056,23 +1087,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	postAsset1, err := addAMMPoolAmount(assetBalance1, depositAmount1, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	postAsset2, err := addAMMPoolAmount(assetBalance2, depositAmount2, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
-		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
-			return result
-		}
-	}
 	amm.LPTokenBalance = newLPBalance
 
 	// NOTE: Asset balances are NOT stored in AMM entry

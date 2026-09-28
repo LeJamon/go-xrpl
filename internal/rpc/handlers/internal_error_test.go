@@ -448,6 +448,8 @@ func fixedInternalConstructorMessage(name string) (string, bool) {
 		return "Internal error.", true
 	case "RpcErrorTransactionSubmission":
 		return "Exception occurred during transaction submission.", true
+	case "RpcErrorSigningInvalidSignature":
+		return "Invalid signature.", true
 	default:
 		return "", false
 	}

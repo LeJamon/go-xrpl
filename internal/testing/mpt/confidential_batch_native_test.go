@@ -376,7 +376,9 @@ func TestConfidentialMPTSendDelegatedExecution(t *testing.T) {
 		holding := readBatchHolding(t, fixture.env, fixture.senderKey)
 		send := fixture.send(t, fixture.env.Seq(fixture.sender), holding.ConfidentialBalanceVersion, balance, holding.ConfidentialBalanceSpending, balanceBlind, amount, amountBlind)
 		send.Flags = nil
-		send.Fee = strconv.FormatUint(sign.CalculateBaseFee(send, fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()}), 10)
+		fee, err := sign.CalculateBaseFee(send, fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()})
+		require.NoError(t, err)
+		send.Fee = strconv.FormatUint(fee, 10)
 		send.Delegate = delegate.Address
 		return send
 	}
@@ -417,7 +419,9 @@ func TestConfidentialMPTSendExpiredCredentialCleanupPersists(t *testing.T) {
 	initial := readBatchHolding(t, fixture.env, fixture.senderKey)
 	send := fixture.send(t, fixture.env.Seq(fixture.sender), initial.ConfidentialBalanceVersion, 100, initial.ConfidentialBalanceSpending, fixture.balanceBlind, 40, batchBlind(t))
 	send.Flags = nil
-	send.Fee = strconv.FormatUint(sign.CalculateBaseFee(send, fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()}), 10)
+	fee, err := sign.CalculateBaseFee(send, fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()})
+	require.NoError(t, err)
+	send.Fee = strconv.FormatUint(fee, 10)
 	credentialKey := jtx.CredentialKeylet(fixture.sender, credentialIssuer, credentialType)
 	send.CredentialIDs = []string{hex.EncodeToString(credentialKey.Key[:])}
 	jtx.RequireTxClaimed(t, fixture.env.Submit(send), jtx.TecEXPIRED)
@@ -503,7 +507,9 @@ func TestConfidentialMPTClawbackDelegatedExecution(t *testing.T) {
 		clawback := &mpttx.ConfidentialMPTClawback{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTClawback, fixture.issuer.Address), MPTokenIssuanceID: hex.EncodeToString(fixture.id[:]), Holder: fixture.sender.Address, MPTAmount: 75, ZKProof: hex.EncodeToString(proof)}
 		clawback.SetSequence(sequence)
 		clawback.Delegate = delegate.Address
-		clawback.Fee = strconv.FormatUint(sign.CalculateBaseFee(clawback, fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()}), 10)
+		fee, err := sign.CalculateBaseFee(clawback, fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()})
+		require.NoError(t, err)
+		clawback.Fee = strconv.FormatUint(fee, 10)
 		return clawback
 	}
 	require.Equal(t, "terNO_DELEGATE_PERMISSION", fixture.env.SubmitSignedWith(makeClawback(), delegate).Code)

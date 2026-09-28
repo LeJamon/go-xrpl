@@ -474,7 +474,6 @@ func TestReadFrameCaps(t *testing.T) {
 		{"transactions_20mib_ok", TypeTransactions, 20 * mib, false},
 		{"vlcollection_20mib_ok", TypeValidatorListCollection, 20 * mib, false},
 		{"manifests_20mib_ok", TypeManifests, 20 * mib, false},
-		{"validatorlist_20mib_ok", TypeValidatorList, 20 * mib, false},
 		{"proofpath_20mib_ok", TypeProofPathResponse, 20 * mib, false},
 		{"unknown_20mib_ok", MessageType(9999), 20 * mib, false},
 		// Request-shaped types keep their stricter hardening caps.

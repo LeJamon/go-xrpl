@@ -518,7 +518,7 @@ func TestVerifyPeerHandshake_InvalidSignature(t *testing.T) {
 // TestNegotiateProtocolVersion ports rippled's ProtocolVersion_test
 // "Protocol version negotiation" cases (rippled/src/test/overlay/
 // ProtocolVersion_test.cpp:80-97) plus a handful of go-xrpl-specific
-// shapes. supportedProtocols is [{2,1},{2,2}] — the negotiated version
+// shapes. supportedProtocols is [{2,2},{2,3}] — the negotiated version
 // is the max of the intersection with the peer's offered list.
 func TestNegotiateProtocolVersion(t *testing.T) {
 	tests := []struct {
@@ -528,14 +528,14 @@ func TestNegotiateProtocolVersion(t *testing.T) {
 	}{
 		{"empty", "", ""},
 		{"single_supported_max", "XRPL/2.2", "XRPL/2.2"},
-		{"single_supported_older", "XRPL/2.1", "XRPL/2.1"},
+		{"single_removed_2_1", "XRPL/2.1", ""},
 		{"rtxp_only_rejected", "RTXP/1.2", ""},
 		{"rtxp_filtered_out", "XRPL/2.2, RTXP/1.2", "XRPL/2.2"},
 		// rippled fixture: pick max of intersection (2.0 unsupported,
-		// 2.1 supported).
-		{"max_of_intersection_2_1", "RTXP/1.2, XRPL/2.0, XRPL/2.1", "XRPL/2.1"},
+		// 2.1 is no longer supported).
+		{"max_of_intersection_removed_2_1", "RTXP/1.2, XRPL/2.0, XRPL/2.1", ""},
 		// rippled fixture: peer offers a future version we don't speak.
-		{"max_of_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.2"},
+		{"max_of_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.3"},
 		// Original Finding 1 case: first-token parser would have picked
 		// XRPL/2.1; rippled negotiation picks XRPL/2.2.
 		{"unordered_picks_max", "XRPL/2.1, XRPL/2.2", "XRPL/2.2"},
@@ -568,7 +568,7 @@ func TestVerifyOutboundProtocolVersion(t *testing.T) {
 		want  string
 	}{
 		{"single_supported_2_2", "XRPL/2.2", "XRPL/2.2"},
-		{"single_supported_2_1", "XRPL/2.1", "XRPL/2.1"},
+		{"single_removed_2_1", "XRPL/2.1", ""},
 		{"single_unsupported", "XRPL/3.0", ""},
 		{"multiple_rejected", "XRPL/2.1, XRPL/2.2", ""},
 		{"rtxp_rejected", "RTXP/1.2", ""},
@@ -586,7 +586,7 @@ func TestVerifyOutboundProtocolVersion(t *testing.T) {
 // downstream interop assertions catch accidental edits to the supported
 // set.
 func TestSupportedProtocolVersions(t *testing.T) {
-	assert.Equal(t, "XRPL/2.1, XRPL/2.2", SupportedProtocolVersions())
+	assert.Equal(t, "XRPL/2.2, XRPL/2.3", SupportedProtocolVersions())
 }
 
 // TestSupportedProtocolsStrictlyAscending mirrors rippled's static_assert
@@ -687,7 +687,6 @@ func TestFeatureString(t *testing.T) {
 		feature  Feature
 		expected string
 	}{
-		{FeatureValidatorListPropagation, "validatorListPropagation"},
 		{FeatureLedgerReplay, "ledgerReplay"},
 		{FeatureCompression, "compression"},
 		{FeatureVpReduceRelay, "vpReduceRelay"},
@@ -710,7 +709,6 @@ func TestParseFeature(t *testing.T) {
 		expected Feature
 		ok       bool
 	}{
-		{"validatorlistpropagation", FeatureValidatorListPropagation, true},
 		{"compression", FeatureCompression, true},
 		{"reducerelay", FeatureReduceRelay, true},
 		{"unknown_feature", 0, false},
@@ -768,7 +766,6 @@ func TestDefaultFeatureSet(t *testing.T) {
 
 	assert.True(t, fs.Has(FeatureCompression))
 	assert.True(t, fs.Has(FeatureReduceRelay))
-	assert.True(t, fs.Has(FeatureValidatorListPropagation))
 }
 
 // TestPeerCapabilities tests peer capabilities

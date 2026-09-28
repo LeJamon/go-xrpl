@@ -568,6 +568,12 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 	return caps.HasFeature(f)
 }
 
+// PeerSupportsNodeDepth reports support negotiated through the peer protocol version.
+func (o *Overlay) PeerSupportsNodeDepth(peerID PeerID) bool {
+	peer, ok := o.getPeer(peerID)
+	return ok && peer.ProtocolVersion() == "XRPL/2.3"
+}
+
 // PeerClosedLedger returns the closed-ledger hash advertised during the
 // handshake or in the peer's latest status message.
 func (o *Overlay) PeerClosedLedger(peerID PeerID) ([32]byte, bool) {
@@ -613,34 +619,6 @@ func (o *Overlay) PeerRemoteAddr(peerID PeerID) string {
 		return ""
 	}
 	return peer.Endpoint().String()
-}
-
-// PeerProtocolAtLeast reports whether the peer's negotiated
-// peer-protocol version is at least the given (major, minor). Used to
-// gate version-implicit features such as ValidatorList2Propagation.
-//
-// Returns false when the peer is unknown or has not completed the
-// handshake.
-func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
-	peer, ok := o.getPeer(peerID)
-	if !ok {
-		return false
-	}
-	got := peer.ProtocolVersion()
-	if got == "" {
-		return false
-	}
-	pvs := parseProtocolVersions(got)
-	if len(pvs) == 0 {
-		return false
-	}
-	want := protocolVersion{major: major, minor: minor}
-	for _, v := range pvs {
-		if !v.less(want) {
-			return true
-		}
-	}
-	return false
 }
 
 // ListenAddr returns the resolved address the overlay is accepting

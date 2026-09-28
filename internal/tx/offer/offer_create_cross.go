@@ -64,19 +64,18 @@ func (o *OfferCreate) invokeFlowCross(
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 		payment.FlowCrossParams{
-			Passive:             bPassive,    // For passive offers, only cross against strictly better quality
-			Sell:                bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
-			FillOrKill:          bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
-			ParentCloseTime:     ctx.Config.ParentCloseTime,
-			ReserveBase:         ctx.Config.ReserveBase,
-			ReserveIncrement:    ctx.Config.ReserveIncrement,
-			FixReducedOffersV2:  rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			FixFillOrKill:       rules.Enabled(amendment.FeatureFixFillOrKill),
-			FixAMMv1_1:          rules.Enabled(amendment.FeatureFixAMMv1_1),
-			FixAMMv1_2:          rules.Enabled(amendment.FeatureFixAMMv1_2),
-			FixAMMOverflowOffer: rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
-			NumberContext:       &numberContext,
-			DomainID:            o.DomainID,
+			Passive:            bPassive,    // For passive offers, only cross against strictly better quality
+			Sell:               bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
+			FillOrKill:         bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
+			ParentCloseTime:    ctx.Config.ParentCloseTime,
+			ReserveBase:        ctx.Config.ReserveBase,
+			ReserveIncrement:   ctx.Config.ReserveIncrement,
+			FixReducedOffersV2: rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			FixFillOrKill:      rules.Enabled(amendment.FeatureFixFillOrKill),
+			FixAMMv1_1:         rules.Enabled(amendment.FeatureFixAMMv1_1),
+			FixAMMv1_2:         rules.Enabled(amendment.FeatureFixAMMv1_2),
+			NumberContext:      &numberContext,
+			DomainID:           o.DomainID,
 		},
 	)
 }
@@ -99,16 +98,21 @@ func (o *OfferCreate) takerCross(
 ) crossOutcome {
 	rules := ctx.Rules()
 
-	// Apply tick size rounding if applicable
-	// Reference: lines 643-685
-	saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
-	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
-		// Offer rounded to zero
-		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
-	}
+	// Apply tick size rounding if applicable. An unrepresentable MPT quality is
+	// zero; rounding it can attempt to divide by zero and turn a cross into a
+	// tefEXCEPTION. Keep the original integral amounts and quality in that case.
+	unrepresentableRate := rules.MPTokensV2Enabled() && uRate == 0
+	if !unrepresentableRate {
+		// Reference: lines 643-685
+		saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
+		if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
+			// Offer rounded to zero
+			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
+		}
 
-	// Recalculate rate after tick size
-	uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
+		// Recalculate rate after tick size
+		uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
+	}
 
 	// If the taker is unfunded before crossing, return tecUNFUNDED_OFFER. This
 	// is checked in preclaim too, but preclaim runs before the fee is charged;

@@ -117,7 +117,7 @@ func CategorizeMessage(msgType message.MessageType) TrafficCategory {
 		return CategoryProposal
 	case message.TypeValidation:
 		return CategoryValidation
-	case message.TypeValidatorList, message.TypeValidatorListCollection:
+	case message.TypeValidatorListCollection:
 		return CategoryValidatorList
 	case message.TypeSquelch:
 		return CategorySquelch

@@ -14,8 +14,22 @@ import (
 
 // Guarded by validatedStateBaseMu; tentative successors are never public proofs.
 type stateBaseRecertification struct {
-	tip   header.LedgerHeader
-	epoch uint64
+	tip    header.LedgerHeader
+	epoch  uint64
+	cancel context.CancelCauseFunc
+}
+
+var errStateBaseRecertificationSuperseded = errors.New("state base re-certification superseded")
+
+// Caller holds validatedStateBaseMu. Cancel, but never join a disk walk under
+// the publication lock: the worker releases its snapshot before retrying.
+func (s *Service) cancelStateBaseRecertificationLocked(reason string) {
+	if pending := s.stateBaseRecertification; pending != nil {
+		if pending.cancel != nil {
+			pending.cancel(fmt.Errorf("%w: %s", errStateBaseRecertificationSuperseded, reason))
+		}
+		s.stateBaseRecertification = nil
+	}
 }
 
 // BeginStateBaseRetentionChange fences retention-source updates against
@@ -85,8 +99,12 @@ func (s *Service) runStateBaseRecertification(ctx context.Context, wake <-chan s
 		}
 		retry = nil
 		if err := s.recertifyValidatedStateBase(ctx); err != nil {
-			s.logger.Warn("Validated state base re-certification unavailable",
-				"reason", err, "required_verification", "complete uncached durable state and transaction trees")
+			if errors.Is(err, errStateBaseRecertificationSuperseded) {
+				s.logger.Info("Obsolete validated state base re-certification canceled", "reason", err)
+			} else {
+				s.logger.Warn("Validated state base re-certification unavailable",
+					"reason", err, "required_verification", "complete uncached durable state and transaction trees")
+			}
 			if ctx.Err() != nil {
 				return
 			}
@@ -114,10 +132,17 @@ func (s *Service) lockStateBasePersistence(ctx context.Context) error {
 	}
 }
 
-func (s *Service) recertifyValidatedStateBase(ctx context.Context) error {
+func (s *Service) recertifyValidatedStateBase(ctx context.Context) (retErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer func() {
+		if cause := context.Cause(ctx); cause != nil && retErr != nil {
+			retErr = errors.Join(retErr, cause)
+		}
+		cancel(nil)
+	}()
 	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
 	if !ok {
 		return errors.New("NodeStore cannot pin a durable generation for re-certification")
@@ -178,7 +203,7 @@ func (s *Service) recertifyValidatedStateBase(ctx context.Context) error {
 		s.canonicalPersistMu.Unlock()
 		return errors.New("state base re-certification is already running")
 	}
-	pending := &stateBaseRecertification{tip: h, epoch: s.stateBaseMutationEpoch}
+	pending := &stateBaseRecertification{tip: h, epoch: s.stateBaseMutationEpoch, cancel: cancel}
 	s.stateBaseRecertification = pending
 	s.validatedStateBaseMu.Unlock()
 	s.canonicalPersistMu.Unlock()
@@ -189,15 +214,29 @@ func (s *Service) recertifyValidatedStateBase(ctx context.Context) error {
 		}
 		s.validatedStateBaseMu.Unlock()
 	}()
+	policy := s.backgroundStateVerificationPolicy()
+	s.lifecycleMu.Lock()
+	stopped := s.lifecycleState == serviceStopped
+	s.lifecycleMu.Unlock()
+	if stopped {
+		// Shutdown has no live consensus to protect. Do not throttle the
+		// final proof needed to safely prepare the restart checkpoint.
+		policy = storedSHAMapVerificationPolicy{workers: resolveStoredSHAMapWorkers(s.config.FastLoadWorkers)}
+	}
+	scheduling := "background paced"
+	if stopped {
+		scheduling = "shutdown"
+	}
 	s.logger.Info("Validated state base re-certification started",
 		"sequence", h.LedgerIndex, "state_root", fmt.Sprintf("%x", h.AccountHash),
-		"fingerprint", fmt.Sprintf("%x", fingerprint), "provenance", "full durable traversal")
-	metrics, err := s.verifyStoredSHAMapMeasured(ctx, h.AccountHash, shamap.TypeState)
+		"fingerprint", fmt.Sprintf("%x", fingerprint), "provenance", "full durable traversal",
+		"workers", policy.workers, "scheduling", scheduling)
+	metrics, err := s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.AccountHash, shamap.TypeState, policy)
 	if err != nil {
 		return fmt.Errorf("re-certify durable state tree: %w", err)
 	}
 	if h.TxHash != ([32]byte{}) {
-		txMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.TxHash, shamap.TypeTransaction)
+		txMetrics, err := s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.TxHash, shamap.TypeTransaction, policy)
 		if err != nil {
 			return fmt.Errorf("re-certify durable transaction tree: %w", err)
 		}
@@ -346,7 +385,7 @@ func (s *Service) advanceStateBaseRecertification(ctx context.Context, l *ledger
 	s.validatedStateBaseMu.Lock()
 	if s.stateBaseRecertification == pending {
 		if err != nil {
-			s.stateBaseRecertification = nil
+			s.cancelStateBaseRecertificationLocked(err.Error())
 		} else {
 			pending.tip = h
 		}

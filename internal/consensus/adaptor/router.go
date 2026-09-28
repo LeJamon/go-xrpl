@@ -151,6 +151,9 @@ type Router struct {
 	// buffered prevents a ready replay window from monopolising the same loop
 	// that must drain consensus, control, and acquisition traffic.
 	standardReplayDrainWake chan struct{}
+	// Protected by acquisitionMu. Unlike the pipeline's scheduled/applying
+	// flag, a running drain survives cancellation until its owner returns.
+	standardReplayDrainOwner *standardReplayDrainOwner
 
 	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
 	// keyed by target ledger hash, under a configurable concurrency cap, so a
@@ -215,8 +218,8 @@ type Router struct {
 	// validatorList is the publisher-trust subsystem. Wired by the
 	// Components bootstrap when validator_list_keys is configured. Nil
 	// in standalone-mode or when no publisher trust is configured —
-	// the dispatch switch silently drops TMValidatorList /
-	// TMValidatorListCollection frames in that case.
+	// the dispatch switch silently drops validator-list collection frames in
+	// that case.
 	validatorList *validatorlist.Aggregator
 
 	// overrideManifestSender, when non-nil, replaces r.overlay for the
@@ -275,6 +278,9 @@ type Router struct {
 	// Run message loop, mirroring rippled's jtTRANSACTION job queue. It is nil
 	// before Run and after shutdown.
 	txJobs chan *peermanagement.InboundMessage
+	// txSetLearnJobs shares the transaction workers, but never makes delivery
+	// of an acquired consensus set wait for open-ledger membership or apply.
+	txSetLearnJobs chan txSetLearnJob
 
 	// droppedTxJobs counts inbound transactions shed because the worker pool
 	// was saturated — the originating peer resends and reduce-relay covers
@@ -330,6 +336,7 @@ type Router struct {
 	// acquisition registries below.
 	acquisitionMu             sync.Mutex
 	replayAvailabilityRetries map[[32]byte]replayAvailabilityRetryState
+	replayFallbackRequired    map[[32]byte]uint32
 	replayCommitMu            sync.Mutex
 	consensusRecovery         consensusRecovery
 	lastHandoffSeq            uint32
@@ -340,9 +347,14 @@ type Router struct {
 	// serial (each header names its parent) and tick-driven. historyFloor bounds
 	// it to the jump gap; below it history is already contiguous, so descending
 	// further would re-fetch persisted ledgers evicted from the in-memory window.
-	historyMu    sync.Mutex
-	history      catchupTarget
-	historyFloor uint32
+	historyMu     sync.Mutex
+	history       catchupTarget
+	historyFloor  uint32
+	historySeeded bool
+	// Immutable after startup; historyDepth is the maximum sequence distance
+	// from the validated tip accepted for historical backfill.
+	historyBackfill bool
+	historyDepth    uint32
 
 	// seqHashMu guards the seqHash table: the network's hash (and, when known,
 	// parent hash) per ledger sequence, from trusted validations and peer
@@ -519,6 +531,8 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
 		seqHash:                make(map[uint32]ledgerHashEntry),
 		lifecycleCtx:           context.Background(),
+		historyBackfill:        true,
+		historyDepth:           256,
 	}
 	if adaptor != nil {
 		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
@@ -686,8 +700,8 @@ func (r *Router) setPeerSessionView(view peerSessionView) {
 }
 
 // SetValidatorListAggregator installs the publisher-trust subsystem.
-// Calling with a nil aggregator disables the TMValidatorList /
-// TMValidatorListCollection paths — the dispatch switch silently
+// Calling with a nil aggregator disables the validator-list collection path —
+// the dispatch switch silently
 // drops inbound frames in that case. Safe to call before Run.
 func (r *Router) SetValidatorListAggregator(agg *validatorlist.Aggregator) {
 	r.validatorList = agg
@@ -1040,8 +1054,8 @@ func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
 	r.lifecycleMu.RUnlock()
 }
 
-// DroppedTxJobs returns the cumulative count of inbound transactions shed
-// because the worker pool was saturated.
+// DroppedTxJobs returns the cumulative count of inbound transactions and
+// acquired transaction learning jobs shed at saturation or shutdown.
 func (r *Router) DroppedTxJobs() uint64 {
 	return r.droppedTxJobs.Load()
 }
@@ -1235,7 +1249,10 @@ func (r *Router) maintenanceTick() {
 			"hash", fmt.Sprintf("%x", entry.Hash[:8]),
 			"peer", entry.PeerID,
 		)
+		r.acquisitionMu.Lock()
+		r.requireReplayFullStateLocked(entry.Seq, entry.Hash)
 		r.replayer.Abandon(entry.Hash)
+		r.acquisitionMu.Unlock()
 		r.fallbackReplayAcquisition(entry.Seq, entry.Hash, entry.PeerID)
 	}
 
@@ -1250,8 +1267,8 @@ func (r *Router) maintenanceTick() {
 
 	r.fetchTracker.Sweep()
 	r.retryInboundLedgerAcquisitions(now)
-	r.rebootstrapFrozenPivotIfStalled(now)
 	r.tickHeaderDiscovery(now)
+	r.rebootstrapFrozenPivotIfStalled(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
 	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next

@@ -36,6 +36,10 @@ type Vault struct {
 	ShareMPTID        string
 	WithdrawalPolicy  int
 	Scale             int
+	LEVersion         int
+	VaultKind         int
+	SubscriptionDate  uint32
+	RedemptionDate    uint32
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -61,6 +65,10 @@ const (
 	vaultBitShareMPTID
 	vaultBitWithdrawalPolicy
 	vaultBitScale
+	vaultBitLEVersion
+	vaultBitVaultKind
+	vaultBitSubscriptionDate
+	vaultBitRedemptionDate
 	vaultBitFlags
 	vaultBitPreviousTxnID
 	vaultBitPreviousTxnLgrSeq
@@ -178,6 +186,42 @@ func (v *Vault) SetScale(value uint8) {
 	v.present |= vaultBitScale
 }
 
+// SetLEVersion assigns LEVersion and updates its serialized presence.
+func (v *Vault) SetLEVersion(value uint8) {
+	v.LEVersion = int(value)
+	v.dirty = true
+	if value == 0 {
+		v.present &^= vaultBitLEVersion
+		return
+	}
+	v.present |= vaultBitLEVersion
+}
+
+// SetVaultKind assigns VaultKind and updates its serialized presence.
+func (v *Vault) SetVaultKind(value uint8) {
+	v.VaultKind = int(value)
+	v.dirty = true
+	if value == 0 {
+		v.present &^= vaultBitVaultKind
+		return
+	}
+	v.present |= vaultBitVaultKind
+}
+
+// SetSubscriptionDate assigns SubscriptionDate and updates its serialized presence.
+func (v *Vault) SetSubscriptionDate(value uint32) {
+	v.SubscriptionDate = value
+	v.dirty = true
+	v.present |= vaultBitSubscriptionDate
+}
+
+// SetRedemptionDate assigns RedemptionDate and updates its serialized presence.
+func (v *Vault) SetRedemptionDate(value uint32) {
+	v.RedemptionDate = value
+	v.dirty = true
+	v.present |= vaultBitRedemptionDate
+}
+
 // SetFlags assigns Flags and updates its serialized presence.
 func (v *Vault) SetFlags(value uint32) {
 	v.Flags = value
@@ -274,6 +318,12 @@ func (v *Vault) validateDecoded() error {
 	if v.present&vaultBitScale != 0 && v.Scale == 0 {
 		return errors.New("ledgerfields: Vault: default field Scale is explicitly set")
 	}
+	if v.present&vaultBitLEVersion != 0 && v.LEVersion == 0 {
+		return errors.New("ledgerfields: Vault: default field LEVersion is explicitly set")
+	}
+	if v.present&vaultBitVaultKind != 0 && v.VaultKind == 0 {
+		return errors.New("ledgerfields: Vault: default field VaultKind is explicitly set")
+	}
 	if v.present&vaultBitFlags == 0 {
 		return errors.New("ledgerfields: Vault: required field Flags is missing")
 	}
@@ -342,6 +392,12 @@ func (v *Vault) decode(data []byte, legacy bool) error {
 			case 5:
 				v.PreviousTxnLgrSeq = val
 				v.present |= vaultBitPreviousTxnLgrSeq
+			case 75:
+				v.SubscriptionDate = val
+				v.present |= vaultBitSubscriptionDate
+			case 76:
+				v.RedemptionDate = val
+				v.present |= vaultBitRedemptionDate
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -430,9 +486,15 @@ func (v *Vault) decode(data []byte, legacy bool) error {
 			case 4:
 				v.Scale = val
 				v.present |= vaultBitScale
+			case 6:
+				v.LEVersion = val
+				v.present |= vaultBitLEVersion
 			case 20:
 				v.WithdrawalPolicy = val
 				v.present |= vaultBitWithdrawalPolicy
+			case 22:
+				v.VaultKind = val
+				v.present |= vaultBitVaultKind
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -517,6 +579,18 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitScale != 0 && !(skipDefault && v.Scale == 0) {
 		out["Scale"] = v.Scale
 	}
+	if v.present&vaultBitLEVersion != 0 && !(skipDefault && v.LEVersion == 0) {
+		out["LEVersion"] = v.LEVersion
+	}
+	if v.present&vaultBitVaultKind != 0 && !(skipDefault && v.VaultKind == 0) {
+		out["VaultKind"] = v.VaultKind
+	}
+	if v.present&vaultBitSubscriptionDate != 0 && !(skipDefault && v.SubscriptionDate == 0) {
+		out["SubscriptionDate"] = v.SubscriptionDate
+	}
+	if v.present&vaultBitRedemptionDate != 0 && !(skipDefault && v.RedemptionDate == 0) {
+		out["RedemptionDate"] = v.RedemptionDate
+	}
 	if v.present&vaultBitFlags != 0 && !(skipDefault && v.Flags == 0) {
 		out["Flags"] = v.Flags
 	}
@@ -557,6 +631,10 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "ShareMPTID", prv.ShareMPTID, v.ShareMPTID, prv.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
 	emitIfChangedInt(out, "WithdrawalPolicy", prv.WithdrawalPolicy, v.WithdrawalPolicy, prv.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
 	emitIfChangedInt(out, "Scale", prv.Scale, v.Scale, prv.present&vaultBitScale, v.present&vaultBitScale)
+	emitIfChangedInt(out, "LEVersion", prv.LEVersion, v.LEVersion, prv.present&vaultBitLEVersion, v.present&vaultBitLEVersion)
+	emitIfChangedInt(out, "VaultKind", prv.VaultKind, v.VaultKind, prv.present&vaultBitVaultKind, v.present&vaultBitVaultKind)
+	emitIfChangedUint32(out, "SubscriptionDate", prv.SubscriptionDate, v.SubscriptionDate, prv.present&vaultBitSubscriptionDate, v.present&vaultBitSubscriptionDate)
+	emitIfChangedUint32(out, "RedemptionDate", prv.RedemptionDate, v.RedemptionDate, prv.present&vaultBitRedemptionDate, v.present&vaultBitRedemptionDate)
 	emitIfChangedUint32(out, "Flags", prv.Flags, v.Flags, prv.present&vaultBitFlags, v.present&vaultBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, v.Sponsor, prv.present&vaultBitSponsor, v.present&vaultBitSponsor)
 }
@@ -605,6 +683,18 @@ func (v *Vault) EmitChangeOrigFields(out map[string]any) {
 	}
 	if v.present&vaultBitScale != 0 {
 		out["Scale"] = v.Scale
+	}
+	if v.present&vaultBitLEVersion != 0 {
+		out["LEVersion"] = v.LEVersion
+	}
+	if v.present&vaultBitVaultKind != 0 {
+		out["VaultKind"] = v.VaultKind
+	}
+	if v.present&vaultBitSubscriptionDate != 0 {
+		out["SubscriptionDate"] = v.SubscriptionDate
+	}
+	if v.present&vaultBitRedemptionDate != 0 {
+		out["RedemptionDate"] = v.RedemptionDate
 	}
 	if v.present&vaultBitFlags != 0 {
 		out["Flags"] = v.Flags
@@ -691,6 +781,18 @@ func (v *Vault) ToMap() map[string]any {
 	}
 	if v.present&vaultBitScale != 0 {
 		out["Scale"] = v.Scale
+	}
+	if v.present&vaultBitLEVersion != 0 {
+		out["LEVersion"] = v.LEVersion
+	}
+	if v.present&vaultBitVaultKind != 0 {
+		out["VaultKind"] = v.VaultKind
+	}
+	if v.present&vaultBitSubscriptionDate != 0 {
+		out["SubscriptionDate"] = v.SubscriptionDate
+	}
+	if v.present&vaultBitRedemptionDate != 0 {
+		out["RedemptionDate"] = v.RedemptionDate
 	}
 	if v.present&vaultBitFlags != 0 {
 		out["Flags"] = v.Flags

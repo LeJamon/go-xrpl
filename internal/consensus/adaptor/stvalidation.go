@@ -18,7 +18,7 @@ func CanonicalSTValidation(v *consensus.Validation) ([]byte, error) {
 		return nil, errors.New("nil validation")
 	}
 	if len(v.Raw) == 0 {
-		return serializeSTValidation(v), nil
+		return serializeSTValidationChecked(v)
 	}
 	fields, err := binarycodec.DecodeBytes(v.Raw)
 	if err != nil {
@@ -115,6 +115,7 @@ var (
 	errUnexpectedField     = errors.New("stvalidation: unexpected field")
 	errNonCanonicalFieldID = errors.New("stvalidation: non-canonical field id")
 	errInvalidFieldValue   = errors.New("stvalidation: invalid field value")
+	errVLEncodedTooLong    = errors.New("stvalidation: variable length exceeds 918744 bytes")
 )
 
 type validationFieldSpec struct {
@@ -370,7 +371,25 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 //
 // Optional supplementary fields are emitted when present; fields without
 // explicit presence tracking use a non-zero value as their proxy.
-func serializeSTValidation(v *consensus.Validation) []byte {
+func serializeSTValidationChecked(v *consensus.Validation) ([]byte, error) {
+	return serializeSTValidationModeChecked(v, true)
+}
+
+func serializeSTValidationWithoutSignatureChecked(v *consensus.Validation) ([]byte, error) {
+	return serializeSTValidationModeChecked(v, false)
+}
+
+func serializeSTValidationModeChecked(v *consensus.Validation, includeSignature bool) ([]byte, error) {
+	if v == nil {
+		return nil, errors.New("nil validation")
+	}
+	if includeSignature && len(v.Signature) > maxVLEncodedLength {
+		return nil, fmt.Errorf("signature length %d exceeds VL maximum %d", len(v.Signature), maxVLEncodedLength)
+	}
+	if len(v.Amendments) > maxVLEncodedLength/32 {
+		return nil, fmt.Errorf("amendments length %d exceeds VL maximum %d", len(v.Amendments)*32, maxVLEncodedLength)
+	}
+
 	var buf []byte
 
 	// --- UINT32 fields (type 2) ---
@@ -485,12 +504,19 @@ func serializeSTValidation(v *consensus.Validation) []byte {
 	// state (calcNodeID(masterKey)); the wire field carries the
 	// ephemeral signing key the validator actually signed with.
 	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
-	buf = appendVL(buf, v.SigningPubKey[:])
+	var err error
+	buf, err = appendVLChecked(buf, v.SigningPubKey[:])
+	if err != nil {
+		return nil, fmt.Errorf("signing public key: %w", err)
+	}
 
 	// sfSignature (field 6)
-	if len(v.Signature) > 0 {
+	if includeSignature && len(v.Signature) > 0 {
 		buf = appendFieldHeader(buf, typeBlob, fieldSignature)
-		buf = appendVL(buf, v.Signature)
+		buf, err = appendVLChecked(buf, v.Signature)
+		if err != nil {
+			return nil, fmt.Errorf("signature: %w", err)
+		}
 	}
 
 	// --- Vector256 fields (type 19) ---
@@ -506,10 +532,13 @@ func serializeSTValidation(v *consensus.Validation) []byte {
 		for _, id := range v.Amendments {
 			blob = append(blob, id[:]...)
 		}
-		buf = appendVL(buf, blob)
+		buf, err = appendVLChecked(buf, blob)
+		if err != nil {
+			return nil, fmt.Errorf("amendments: %w", err)
+		}
 	}
 
-	return buf
+	return buf, nil
 }
 
 // readFieldHeader reads the XRPL field ID at data[*pos] and advances *pos.
@@ -614,7 +643,7 @@ func skipAmount(data []byte, pos *int) (int, error) {
 	if length == 8 && raw == 0 {
 		return 0, fmt.Errorf("%w: negative zero is not canonical", errInvalidFieldValue)
 	}
-	if *pos+length > len(data) {
+	if length > len(data)-*pos {
 		return 0, errShortData
 	}
 	*pos += length
@@ -722,7 +751,11 @@ func readVLLength(data []byte, pos *int) (int, error) {
 		b2 := int(data[*pos])
 		b3 := int(data[*pos+1])
 		*pos += 2
-		return 12481 + ((b1 - 241) * 65536) + (b2 * 256) + b3, nil
+		length := 12481 + ((b1 - 241) * 65536) + (b2 * 256) + b3
+		if length > maxVLEncodedLength {
+			return 0, errVLEncodedTooLong
+		}
+		return length, nil
 	}
 	return 0, errInvalidVL
 }
@@ -792,11 +825,28 @@ func appendXRPAmount(buf []byte, amount drops.XRPAmount) []byte {
 	return append(buf, encoded[:]...)
 }
 
-// appendVL appends a variable-length encoded blob (length prefix + data).
-// The length prefix is produced by appendVLPrefix — the single VL-prefix
-// encoder, shared with the proposal suppression-hash path in
-// router_dedup.go.
-func appendVL(buf []byte, data []byte) []byte {
-	buf = appendVLPrefix(buf, len(data))
-	return append(buf, data...)
+const maxVLEncodedLength = 918744
+
+func appendVLChecked(buf []byte, data []byte) ([]byte, error) {
+	prefix, err := encodeVLPrefix(len(data))
+	if err != nil {
+		return nil, err
+	}
+	buf = append(buf, prefix...)
+	return append(buf, data...), nil
+}
+
+func encodeVLPrefix(length int) ([]byte, error) {
+	if length < 0 || length > maxVLEncodedLength {
+		return nil, errVLEncodedTooLong
+	}
+	if length <= 192 {
+		return []byte{byte(length)}, nil
+	}
+	if length <= 12480 {
+		offset := length - 193
+		return []byte{byte(193 + offset/256), byte(offset % 256)}, nil
+	}
+	offset := length - 12481
+	return []byte{byte(241 + offset/65536), byte((offset / 256) % 256), byte(offset % 256)}, nil
 }

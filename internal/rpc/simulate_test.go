@@ -1518,6 +1518,65 @@ func TestSimulateMethod_MetaSyntheticFields(t *testing.T) {
 		"a Payment's simulated meta must carry delivered_amount")
 }
 
+func TestSimulateMethod_MetaSyntheticNFTFields(t *testing.T) {
+	const tokenID = "000800001234567890ABCDEF1234567890ABCDEF1234567890ABCDEF00000001"
+
+	metadata := map[string]any{
+		"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "NFTokenPage",
+			"NewFields": map[string]any{
+				"NFTokens": []any{map[string]any{"NFToken": map[string]any{"NFTokenID": tokenID}}},
+			},
+		}}},
+		"TransactionIndex":  uint32(0),
+		"TransactionResult": "tesSUCCESS",
+	}
+	mock := newMockLedgerServiceSimulate()
+	mock.simulateResult = &types.SubmitResult{
+		EngineResult:     "tesSUCCESS",
+		EngineResultCode: 0,
+		Applied:          false,
+		CurrentLedger:    4_594_095,
+		Metadata:         &types.SubmitMetadata{JSON: metadata, Blob: []byte{0xAB}},
+	}
+	ctx := &types.RpcContext{
+		Context:  context.Background(),
+		Role:     types.RoleUser,
+		Services: newSimulateTestServices(mock),
+	}
+	for _, apiVersion := range []int{types.ApiVersion2, types.ApiVersion3} {
+		ctx.ApiVersion = apiVersion
+		paramsJSON, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+			"TransactionType": "NFTokenMint",
+			"Account":         validAccountAddress,
+			"NFTokenTaxon":    0,
+		}})
+		require.NoError(t, err)
+
+		result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		response := result.(map[string]any)
+		meta := response["meta"].(map[string]any)
+		assert.Equal(t, tokenID, meta["nftoken_id"])
+	}
+
+	ctx.ApiVersion = types.ApiVersion1
+	paramsJSON, err := json.Marshal(map[string]any{
+		"binary": true,
+		"tx_json": map[string]any{
+			"TransactionType": "NFTokenMint",
+			"Account":         validAccountAddress,
+			"NFTokenTaxon":    0,
+		},
+	})
+	require.NoError(t, err)
+	result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	response := result.(map[string]any)
+	assert.Contains(t, response, "meta_blob")
+	assert.NotContains(t, response, "meta")
+}
+
 // Simulate_test.cpp:300-312. A Payment without Destination must surface
 // as `error: "invalidTransaction"` + `error_exception: <reason>`, the
 // envelope and exact exception rippled emits when STTx construction throws

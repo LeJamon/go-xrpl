@@ -300,7 +300,8 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 
 			// Check if the minting account is frozen for this IOU
 			// Reference: rippled tokenOfferCreatePreclaim line 941
-			if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency) {
+			if !(ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == iouIssuerID) &&
+				(tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency)) {
 				return ter.TecFROZEN
 			}
 

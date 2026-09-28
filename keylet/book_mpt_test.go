@@ -29,10 +29,9 @@ func TestBookBaseIssueMatchesBookDir(t *testing.T) {
 }
 
 // TestBookBaseMPTFieldLayout pins the hashed-field layout for each Issue/MPT
-// combination to rippled getBookBase (Indexes.cpp): the two asset fields first
-// (currency for an Issue side, the 192-bit id for an MPT side), then the issuer
-// of any Issue side, then the optional domain. It reconstructs the expected key
-// directly from indexHash so a future field-order regression is caught.
+// combination to rippled getBookBase (Indexes.cpp). Mixed MPT/Issue books carry
+// a one-byte type tag before the asset fields so their serialized inputs cannot
+// collide with a legacy Issue/Issue layout.
 func TestBookBaseMPTFieldLayout(t *testing.T) {
 	paysCur := [20]byte{12: 'U', 13: 'S', 14: 'D'}
 	paysIss := [20]byte{1, 2, 3}
@@ -57,19 +56,19 @@ func TestBookBaseMPTFieldLayout(t *testing.T) {
 			name: "Issue pays / MPT gets",
 			pays: IssueSide(paysCur, paysIss),
 			gets: MPTSide(getsMPT),
-			want: expect(paysCur[:], getsMPT[:], paysIss[:]),
+			want: expect([]byte{1}, paysCur[:], getsMPT[:], paysIss[:]),
 		},
 		{
 			name: "MPT pays / Issue gets",
 			pays: MPTSide(paysMPT),
 			gets: IssueSide(getsCur, getsIss),
-			want: expect(paysMPT[:], getsCur[:], getsIss[:]),
+			want: expect([]byte{2}, paysMPT[:], getsCur[:], getsIss[:]),
 		},
 		{
 			name: "MPT pays / MPT gets",
 			pays: MPTSide(paysMPT),
 			gets: MPTSide(getsMPT),
-			want: expect(paysMPT[:], getsMPT[:]),
+			want: expect([]byte{3}, paysMPT[:], getsMPT[:]),
 		},
 	}
 
@@ -84,7 +83,7 @@ func TestBookBaseMPTFieldLayout(t *testing.T) {
 }
 
 // TestBookBaseMPTDomainAppends confirms the domain id is appended last, after
-// the MPT/issuer fields.
+// the MPT fields and type tag.
 func TestBookBaseMPTDomainAppends(t *testing.T) {
 	paysMPT := MakeMPTID(7, [20]byte{7, 7, 7})
 	getsMPT := MakeMPTID(8, [20]byte{8, 8, 8})
@@ -94,7 +93,7 @@ func TestBookBaseMPTDomainAppends(t *testing.T) {
 	var spaceBytes [2]byte
 	spaceBytes[0] = byte(spaceBookDir >> 8)
 	spaceBytes[1] = byte(spaceBookDir)
-	want := sha512half.Sum(spaceBytes[:], paysMPT[:], getsMPT[:], domain[:])
+	want := sha512half.Sum(spaceBytes[:], []byte{3}, paysMPT[:], getsMPT[:], domain[:])
 	clear(want[24:])
 	if got.Key != want {
 		t.Fatalf("key mismatch:\n want %x\n got  %x", want, got.Key)

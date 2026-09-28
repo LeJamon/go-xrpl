@@ -138,9 +138,7 @@ func (fm *feeMetrics) snapshot() feeMetricsSnapshot {
 
 // Update updates fee metrics based on the closed ledger and returns
 // the number of transactions in that ledger.
-func (fm *feeMetrics) update(feeLevels []FeeLevel, timeLeap bool, cfg Config) uint64 {
-	size := uint64(len(feeLevels))
-
+func (fm *feeMetrics) update(feeLevels []FeeLevel, size uint64, timeLeap bool, cfg Config) uint64 {
 	// Sort fee levels to compute median
 	sorted := make([]FeeLevel, len(feeLevels))
 	copy(sorted, feeLevels)
@@ -182,13 +180,13 @@ func (fm *feeMetrics) update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 	}
 
 	// Update escalation multiplier based on median fee level
-	if size == 0 {
+	count := len(sorted)
+	if count == 0 {
 		fm.escalationMultiplier = cfg.MinimumEscalationMultiplier
 	} else {
-		// Median fee level. The single expression matches rippled (TxQ.cpp:160-162):
-		// for odd sizes size/2 == (size-1)/2, so it reduces to the middle
-		// element; for even sizes it averages the two middle elements.
-		median := (uint64(sorted[size/2]) + uint64(sorted[(size-1)/2]) + 1) / 2
+		// For odd sample counts both indices select the middle element;
+		// for even counts average the two middle elements, rounding up.
+		median := (uint64(sorted[count/2]) + uint64(sorted[(count-1)/2]) + 1) / 2
 		fm.escalationMultiplier = max(median, cfg.MinimumEscalationMultiplier)
 	}
 

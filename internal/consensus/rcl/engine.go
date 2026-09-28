@@ -85,8 +85,13 @@ type Engine struct {
 	// (rippled's jtACCEPT job window). While set, round-driving parks so no
 	// second goroutine starts a round before the commit
 	// tail runs. Mutated under e.mu.
-	buildInProgress   bool
+	buildInProgress bool
+	// Lock-free acquisition guard for the actual accept job, not the whole
+	// establish phase. A parked/abandoned round must not reserve its successor.
 	buildingLedgerSeq atomic.Uint32
+	// Rate-limit diagnostics for a replay result retained while its live
+	// proposing round finishes. Unlike buildingLedgerSeq, this owns no work.
+	lastDeferredRecovery consensus.LedgerID
 
 	ourTxSet consensus.TxSet
 
@@ -1136,8 +1141,8 @@ func (e *Engine) CurrentRound() (consensus.RoundID, bool) {
 	return e.state.Round, true
 }
 
-// BuildingLedgerSeq returns the ledger sequence being built after the open
-// phase, or zero when no ledger build is active.
+// BuildingLedgerSeq returns the sequence owned by an actual ledger accept job,
+// including a queued deferred job, or zero when no build is active.
 func (e *Engine) BuildingLedgerSeq() uint32 {
 	return e.buildingLedgerSeq.Load()
 }
@@ -1637,8 +1642,6 @@ func (e *Engine) closeLedger() {
 			)
 		}
 	}
-
-	e.buildingLedgerSeq.Store(e.state.Round.Seq)
 
 	// Filter pending txs through the open-ledger gate when proposing;
 	// non-proposing modes skip the per-round apply cost (position isn't broadcast).

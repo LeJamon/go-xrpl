@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // FuzzDecompressLZ4 feeds arbitrary compressed data and claimed sizes to DecompressLZ4.

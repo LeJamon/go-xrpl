@@ -3,9 +3,12 @@ package adaptor
 import (
 	"container/list"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -31,7 +34,10 @@ import (
 // same proposal would compute different keys, breaking suppression parity
 // across mixed-implementation peer sets and desynchronizing reduce-relay
 // slot feeding.
-func hashProposalSuppression(p *consensus.Proposal) [32]byte {
+func hashProposalSuppressionChecked(p *consensus.Proposal) ([32]byte, error) {
+	if p == nil {
+		return [32]byte{}, errors.New("nil proposal")
+	}
 	// Preallocate enough for the fixed-size segments plus VL-encoded
 	// pubkey and signature: one allocation, no resizing on the common path.
 	buf := make([]byte, 0, 180)
@@ -44,12 +50,19 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 	buf = binary.BigEndian.AppendUint32(buf, closeTimeSec)
 	// Hash the wire signing pubkey, NOT the master-derived NodeID: using
 	// NodeID would break suppression-hash parity with other peers.
-	buf = appendVLPrefix(buf, len(p.SigningPubKey))
+	var err error
+	buf, err = appendVLPrefixChecked(buf, len(p.SigningPubKey))
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("encode proposal signing pubkey length: %w", err)
+	}
 	buf = append(buf, p.SigningPubKey[:]...)
-	buf = appendVLPrefix(buf, len(p.Signature))
+	buf, err = appendVLPrefixChecked(buf, len(p.Signature))
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("encode proposal signature length: %w", err)
+	}
 	buf = append(buf, p.Signature...)
 
-	return sha512half.Sum(buf)
+	return sha512half.Sum(buf), nil
 }
 
 // hashValidationSuppression returns the suppression key for a
@@ -70,22 +83,12 @@ func hashValidationSuppression(serializedSTValidation []byte) [32]byte {
 // signatures (64-72 B) always fit in the single-byte range — but keeping
 // the full encoder ensures we can't silently desync if a future caller
 // passes a larger slice.
-func appendVLPrefix(buf []byte, n int) []byte {
-	switch {
-	case n <= 192:
-		return append(buf, byte(n))
-	case n <= 12480:
-		v := n - 193
-		return append(buf, byte(193+(v>>8)), byte(v&0xff))
-	case n <= 918744:
-		v := n - 12481
-		return append(buf, byte(241+(v>>16)), byte((v>>8)&0xff), byte(v&0xff))
+func appendVLPrefixChecked(buf []byte, n int) ([]byte, error) {
+	prefix, err := encodeVLPrefix(n)
+	if err != nil {
+		return nil, err
 	}
-	// Caller error: emit a sentinel prefix so the resulting hash can never
-	// match a peer's. This is loud failure by design — a suppression hash
-	// for a 900KB+ field cannot exist in any real proposal/validation, so
-	// any mismatch downstream will surface the misuse immediately.
-	return append(buf, 0xFF, 0xFF, 0xFF, 0xFF)
+	return append(buf, prefix...), nil
 }
 
 // messageSuppression tracks recently-seen proposal/validation message
@@ -119,12 +122,20 @@ type transactionSuppression struct {
 	now     func() time.Time
 }
 
+const (
+	legacySignatureSlot = iota
+	cleanupSignatureSlot
+	signatureSlotCount
+	signatureContextCount = 1 << signatureSlotCount
+)
+
 type transactionSuppressionEntry struct {
-	processedAt time.Time
-	touchedAt   time.Time
-	bad         bool
-	peers       map[uint64]struct{}
-	order       *list.Element
+	processedAt  [signatureContextCount]time.Time
+	touchedAt    time.Time
+	bad          bool
+	badSignature [signatureSlotCount]bool
+	peers        map[uint64]struct{}
+	order        *list.Element
 }
 
 func newTransactionSuppression(ttl time.Duration, maxSize int) *transactionSuppression {
@@ -146,24 +157,90 @@ func (s *transactionSuppression) claim(hash [32]byte, peerID uint64) (shouldProc
 	defer s.mu.Unlock()
 	now := s.now()
 	s.evictExpiredLocked(now)
+	entry := s.entryLocked(hash, peerID, now)
+	return s.claimContextLocked(entry, now, 0, entry.bad)
+}
+
+// Role signatures use separate suppression contexts across prefix changes.
+func (s *transactionSuppression) claimWithSignatureContexts(
+	hash [32]byte,
+	peerID uint64,
+	roleBearing bool,
+	validatedRules, openRules *amendment.Rules,
+	validatedAdmission bool,
+) (shouldProcess, bad bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.evictExpiredLocked(now)
+	entry := s.entryLocked(hash, peerID, now)
+	if !roleBearing {
+		return s.claimContextLocked(entry, now, 0, entry.bad)
+	}
+	if entry.bad {
+		return s.claimContextLocked(entry, now, 0, true)
+	}
+
+	contextMask := 1 << signatureSlotForRules(openRules)
+	if validatedAdmission {
+		contextMask |= 1 << signatureSlotForRules(validatedRules)
+	}
+	badSignature := false
+	for slot, bit := range []int{1, 2} {
+		if contextMask&bit != 0 && entry.badSignature[slot] {
+			badSignature = true
+			break
+		}
+	}
+	shouldProcess, bad = s.claimContextLocked(entry, now, contextMask, badSignature)
+	if !shouldProcess {
+		// Legacy role failures do not carry the public BAD charge.
+		bad = contextMask&(1<<cleanupSignatureSlot) != 0 && entry.badSignature[cleanupSignatureSlot]
+	}
+	return shouldProcess, bad
+}
+
+func signatureCleanupEra(rules *amendment.Rules) bool {
+	return rules != nil && rules.FixCleanup3_4_0Enabled()
+}
+
+func signatureSlotForRules(rules *amendment.Rules) int {
+	if signatureCleanupEra(rules) {
+		return cleanupSignatureSlot
+	}
+	return legacySignatureSlot
+}
+
+func (s *transactionSuppression) entryLocked(hash [32]byte, peerID uint64, now time.Time) *transactionSuppressionEntry {
 	if entry, ok := s.entries[hash]; ok {
 		addTransactionPeer(entry, peerID)
 		entry.touchedAt = now
 		s.order.MoveToBack(entry.order)
-		if now.Sub(entry.processedAt) < transactionProcessInterval {
-			return false, entry.bad
-		}
-		entry.processedAt = now
-		return true, entry.bad
+		return entry
 	}
-	entry := &transactionSuppressionEntry{processedAt: now, touchedAt: now}
+	entry := &transactionSuppressionEntry{
+		touchedAt: now,
+	}
 	addTransactionPeer(entry, peerID)
 	entry.order = s.order.PushBack(hash)
 	s.entries[hash] = entry
 	for len(s.entries) > s.maxSize {
 		s.removeOldestLocked()
 	}
-	return true, false
+	return entry
+}
+
+func (s *transactionSuppression) claimContextLocked(
+	entry *transactionSuppressionEntry,
+	now time.Time,
+	contextMask int,
+	bad bool,
+) (shouldProcess, knownBad bool) {
+	if now.Sub(entry.processedAt[contextMask]) < transactionProcessInterval {
+		return false, bad
+	}
+	entry.processedAt[contextMask] = now
+	return true, bad
 }
 
 func addTransactionPeer(entry *transactionSuppressionEntry, peerID uint64) {
@@ -192,6 +269,17 @@ func (s *transactionSuppression) markBad(hash [32]byte) {
 	s.mu.Lock()
 	if entry := s.entries[hash]; entry != nil {
 		entry.bad = true
+		entry.processedAt[0] = s.now()
+	}
+	s.mu.Unlock()
+}
+
+// markBadSignature records a signature failure in the namespace that produced
+// it. It does not set the shared BAD verdict used by ordinary transactions.
+func (s *transactionSuppression) markBadSignature(hash [32]byte, rules *amendment.Rules) {
+	s.mu.Lock()
+	if entry := s.entries[hash]; entry != nil {
+		entry.badSignature[signatureSlotForRules(rules)] = true
 	}
 	s.mu.Unlock()
 }

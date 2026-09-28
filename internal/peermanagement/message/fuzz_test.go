@@ -20,7 +20,6 @@ var allMessageTypes = []MessageType{
 	TypeHaveSet,
 	TypeValidation,
 	TypeGetObjects,
-	TypeValidatorList,
 	TypeSquelch,
 	TypeValidatorListCollection,
 	TypeProofPathReq,

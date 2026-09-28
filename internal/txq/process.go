@@ -7,7 +7,9 @@ type ClosedLedgerContext interface {
 	// GetLedgerSequence returns the closed ledger's sequence number.
 	GetLedgerSequence() uint32
 
-	// GetTransactionFeeLevels returns the fee levels of all transactions in the closed ledger.
+	GetTransactionCount() uint32
+
+	// GetTransactionFeeLevels returns successfully computed fee levels in the closed ledger.
 	// This is used to compute the median fee level for fee escalation.
 	GetTransactionFeeLevels() []FeeLevel
 }
@@ -27,10 +29,11 @@ func (q *TxQ) ProcessClosedLedger(ctx ClosedLedgerContext, timeLeap bool) uint64
 
 	ledgerSeq := ctx.GetLedgerSequence()
 	feeLevels := ctx.GetTransactionFeeLevels()
+	transactionCount := ctx.GetTransactionCount()
 	q.stateMu.Lock()
 	defer q.stateMu.Unlock()
 
-	txCount := q.feeMetrics.update(feeLevels, timeLeap, q.config)
+	txCount := q.feeMetrics.update(feeLevels, uint64(transactionCount), timeLeap, q.config)
 
 	// Reference: rippled sets maxSize_ = max(txnsExpected * ledgersInQueue, queueSizeMin)
 	if !timeLeap {

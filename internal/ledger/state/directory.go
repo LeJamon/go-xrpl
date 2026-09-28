@@ -158,13 +158,13 @@ func GetRateWithNumberContext(
 	if r.IsZero() {
 		return 0
 	}
-	iou := r.IOU()
-	return uint64(iou.Exponent()+100)<<56 | uint64(iou.Mantissa())
+	// Quality stores the magnitude even when quotient canonicalization changes the sign.
+	mantissa, exponent := rateMantissa(r)
+	return uint64(exponent+100)<<56 | mantissa
 }
 
-// rateMantissa returns the unsigned mantissa and exponent of a (non-zero)
-// amount for use in GetRateWithNumberContext, lifting an integral amount into the IOU
-// mantissa band [10^15, 10^16) exactly as rippled's divide() does.
+// rateMantissa returns a nonzero amount's unsigned mantissa and exponent,
+// scaling integral amounts up to at least 10^15 for division.
 func rateMantissa(a Amount) (uint64, int) {
 	if a.IsNative() || a.IsMPT() {
 		m := a.Mantissa()

@@ -414,6 +414,16 @@ func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitc
 	if e.buildInProgress {
 		return consensus.LedgerSwitchBusy, nil
 	}
+	if e.deferAcquiredChildLocked(l) {
+		if e.lastDeferredRecovery != id {
+			e.lastDeferredRecovery = id
+			slog.Info("Deferring acquired ledger handoff for active consensus round",
+				"t", "consensus", "seq", l.Seq(), "phase", e.phase.String(),
+				"round_age", e.now().Sub(e.roundStartTime),
+				"grace", e.recoveryHandoffGraceLocked())
+		}
+		return consensus.LedgerSwitchBusy, nil
+	}
 	if !e.switchToLedgerLocked(id, l) {
 		return consensus.LedgerSwitchRejected, nil
 	}
@@ -428,7 +438,10 @@ func (e *Engine) CanAcceptLedger(id consensus.LedgerID) (bool, error) {
 	if err != nil || l == nil {
 		return false, err
 	}
-	return e.canBeCurrentLocked(l), nil
+	// Promotion must use the same policy as the later switch: advancing the
+	// validated service frontier first can invalidate the round we are giving
+	// time to finish. The router retains the verified candidate for retry.
+	return !e.deferAcquiredChildLocked(l) && e.canBeCurrentLocked(l), nil
 }
 
 // isQuorumValidatedCandidateLocked rechecks the live trusted-validation set

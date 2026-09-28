@@ -62,6 +62,9 @@ func (s *BinarySerializer) WriteFieldAndValue(fi definitions.FieldInstance, valu
 }
 
 func encodeVariableLength(length int) ([]byte, error) {
+	if length < 0 {
+		return nil, ErrLengthPrefixTooLong
+	}
 	if length <= 192 {
 		return []byte{byte(length)}, nil
 	}

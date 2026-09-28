@@ -101,7 +101,11 @@ func (e EitherAmount) AddWithNumberContext(
 		return NewXRPEitherAmount(e.XRP + other.XRP)
 	}
 	if e.IsMPT {
-		return NewMPTEitherAmount(e.MPT+other.MPT, e.MPTID)
+		result := new(big.Int).Add(big.NewInt(e.MPT), big.NewInt(other.MPT))
+		if !result.IsInt64() {
+			panic("MPT addition overflow")
+		}
+		return NewMPTEitherAmount(result.Int64(), e.MPTID)
 	}
 	result, _ := e.IOU.AddWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
 	return NewIOUEitherAmount(result)
@@ -123,7 +127,11 @@ func (e EitherAmount) SubWithNumberContext(
 		return NewXRPEitherAmount(e.XRP - other.XRP)
 	}
 	if e.IsMPT {
-		return NewMPTEitherAmount(e.MPT-other.MPT, e.MPTID)
+		result := new(big.Int).Sub(big.NewInt(e.MPT), big.NewInt(other.MPT))
+		if !result.IsInt64() {
+			panic("MPT subtraction overflow")
+		}
+		return NewMPTEitherAmount(result.Int64(), e.MPTID)
 	}
 	result, _ := e.IOU.SubWithNumberContext(other.IOU, numberContext, state.RoundToNearest)
 	return NewIOUEitherAmount(result)
@@ -242,8 +250,19 @@ func mptMulRatio(amount int64, num, den uint32, roundUp bool) int64 {
 	if den == 0 {
 		panic("division by zero")
 	}
+	result, ok := tryMPTMulRatio(amount, num, den, roundUp)
+	if !ok {
+		panic("MPT mulRatio overflow")
+	}
+	return result
+}
+
+func tryMPTMulRatio(amount int64, num, den uint32, roundUp bool) (int64, bool) {
+	if den == 0 {
+		return 0, false
+	}
 	if amount == 0 {
-		return amount
+		return amount, true
 	}
 
 	numerator := new(big.Int).Mul(big.NewInt(amount), new(big.Int).SetUint64(uint64(num)))
@@ -259,9 +278,9 @@ func mptMulRatio(amount int64, num, den uint32, roundUp bool) int64 {
 		}
 	}
 	if !quotient.IsInt64() {
-		panic("MPT mulRatio overflow")
+		return 0, false
 	}
-	return quotient.Int64()
+	return quotient.Int64(), true
 }
 
 func toNumberAmount(amt EitherAmount) tx.Amount {

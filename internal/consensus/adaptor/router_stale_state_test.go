@@ -102,7 +102,7 @@ func TestRouter_RejectsInvalidLedgerDataNodeCountsBeforeCaching(t *testing.T) {
 	assert.Equal(t, "ledger-data-decode", calls[1].reason)
 }
 
-func TestRouter_LateAccountStateNodeRequiresNodeID(t *testing.T) {
+func TestRouter_LateAccountStateNodeWithoutReferenceIsIgnored(t *testing.T) {
 	r, sender := makeRouterWithBadDataRecorder(t)
 	closed := r.adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, closed)
@@ -130,6 +130,19 @@ func TestRouter_LateAccountStateNodeRequiresNodeID(t *testing.T) {
 	_, ok := r.fetchPacks.get(entry.Hash, time.Now())
 	assert.False(t, ok)
 	calls := sender.getBadDataCalls()
-	require.Len(t, calls, 1)
-	assert.Equal(t, "ledger-data-node", calls[0].reason)
+	assert.Empty(t, calls, "an orphan state-node reply is not charged synchronously")
+
+	txHash := [32]byte{0xB4}
+	txReply := &message.LedgerData{
+		LedgerHash: txHash[:],
+		LedgerSeq:  closed.Sequence(),
+		InfoType:   message.LedgerInfoTxNode,
+		Nodes:      []message.LedgerNode{{NodeData: wire[0].Data}},
+	}
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  31,
+		Type:    message.TypeLedgerData,
+		Payload: encodePayload(t, txReply),
+	})
+	assert.Empty(t, sender.getBadDataCalls(), "an orphan transaction-node reply is not charged synchronously")
 }

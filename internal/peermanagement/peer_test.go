@@ -261,6 +261,9 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	unknownFrame, err := message.BuildWireMessage(message.MessageType(9998), unknownPayload)
 	require.NoError(t, err)
 	frames.Write(unknownFrame)
+	legacyFrame, err := message.BuildWireMessage(message.MessageType(54), []byte{0x08, 0x01})
+	require.NoError(t, err)
+	frames.Write(legacyFrame)
 	knownPayload := []byte{0x08, 0x00}
 	knownFrame, err := message.BuildWireMessage(message.TypePing, knownPayload)
 	require.NoError(t, err)
@@ -283,6 +286,7 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	assert.Equal(t, uint64(1), peer.traffic.TotalStats().MessagesIn)
 	wantWireBytes := message.HeaderSizeCompressed + len(malformedCompressed) +
 		message.HeaderSizeUncompressed + len(unknownPayload) +
+		len(legacyFrame) +
 		message.HeaderSizeUncompressed + len(knownPayload)
 	assert.Equal(t, uint64(wantWireBytes), peer.metrics.recv.totalBytesSnapshot())
 }

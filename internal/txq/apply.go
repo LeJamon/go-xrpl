@@ -43,7 +43,7 @@ type ApplyContext interface {
 
 	// GetBaseFees returns the contextual minimum fee and the ordinary fee used
 	// to normalize a contextually free transaction's fee level.
-	GetBaseFees(txn tx.Transaction) (baseFee, defaultBaseFee uint64)
+	GetBaseFees(txn tx.Transaction) (baseFee, defaultBaseFee uint64, err error)
 
 	// GetReferenceFee returns the ledger's base reference fee.
 	GetReferenceFee() uint64
@@ -134,22 +134,19 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		return ApplyResult{Result: preflightResult, Applied: false}
 	}
 
-	// Compute fee level
 	common := txn.GetCommon()
 	if common == nil {
 		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
 
-	// Preflight every submission before deciding apply-vs-queue, so a
-	// structurally invalid or badly-signed transaction is rejected with its
-	// preflight TER instead of being silently held as terQUEUED.
-	// Reference: rippled TxQ.cpp:743-745.
-	baseFee, defaultBaseFee := ctx.GetBaseFees(txn)
-	feePaid, err := strconv.ParseUint(common.Fee, 10, 64)
+	// Missing accounts take precedence over fee-calculation errors.
+	accountExists, err := ctx.AccountExists(account)
 	if err != nil {
-		return ApplyResult{Result: ter.TemBAD_FEE, Applied: false}
+		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
-	feeLevel := ToFeeLevelWithDefaultBaseFee(feePaid, baseFee, defaultBaseFee)
+	if !accountExists {
+		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}
+	}
 
 	acctSeq, err := ctx.GetAccountSequence(account)
 	if err != nil {
@@ -179,11 +176,39 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 
 	snapshot := q.feeMetrics.snapshot()
 	requiredFeeLevel := scaleFeeLevel(snapshot, txInLedger)
+	var feeLevel FeeLevel
+	computeFeeLevel := func() (FeeLevel, *ApplyResult) {
+		// Fee callbacks may query queue metrics and must run without stateMu.
+		var baseFee, defaultBaseFee uint64
+		var feeErr error
+		q.withStateUnlocked(func() {
+			baseFee, defaultBaseFee, feeErr = ctx.GetBaseFees(txn)
+		})
+		if feeErr != nil {
+			if result, ok := ter.AsResultError(feeErr); ok {
+				return 0, &ApplyResult{Result: result.Code}
+			}
+			return 0, &ApplyResult{Result: ter.TefEXCEPTION}
+		}
+		feePaid, parseErr := strconv.ParseUint(common.Fee, 10, 64)
+		if parseErr != nil {
+			return 0, &ApplyResult{Result: ter.TemBAD_FEE, Applied: false}
+		}
+		return ToFeeLevelWithDefaultBaseFee(feePaid, baseFee, defaultBaseFee), nil
+	}
 
 	// Only attempt direct apply if sequence matches or is a ticket.
 	// For future-sequence transactions, skip straight to queuing.
 	// Reference: rippled TxQ::tryDirectApply(), TxQ.cpp:1696-1699
 	canDirectApply := seqProxy.IsTicket || seqProxy.Value == acctSeq
+
+	if canDirectApply {
+		var feeResult *ApplyResult
+		feeLevel, feeResult = computeFeeLevel()
+		if feeResult != nil {
+			return *feeResult
+		}
+	}
 
 	if canDirectApply && feeLevel >= requiredFeeLevel {
 		var result ter.Result
@@ -203,18 +228,6 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// result. rippled's tryDirectApply never falls through to queueing once
 		// apply has run (TxQ.cpp:1711-1745).
 		return ApplyResult{Result: result, Applied: false}
-	}
-
-	var accountExists bool
-	var accountExistsErr error
-	q.withStateUnlocked(func() {
-		accountExists, accountExistsErr = ctx.AccountExists(account)
-	})
-	if accountExistsErr != nil {
-		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
-	}
-	if !accountExists {
-		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}
 	}
 
 	if seqProxy.IsTicket {
@@ -273,6 +286,13 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if c, exists := aq.Transactions[seqProxy]; exists {
 			replacingCandidate = c
 		}
+	}
+
+	// Queue admission recalculates the fee after the incoming-blocker gate.
+	var feeResult *ApplyResult
+	feeLevel, feeResult = computeFeeLevel()
+	if feeResult != nil {
+		return *feeResult
 	}
 
 	// Is there a blocker already in the account's queue? If so, don't

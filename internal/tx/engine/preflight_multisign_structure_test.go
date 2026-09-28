@@ -5,6 +5,7 @@ import (
 
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -26,16 +27,22 @@ func TestPreflightMultiSignStructureUsesDelegateIdentity(t *testing.T) {
 		{name: "ordinary self signer", signer: account, want: ter.TemINVALID},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			privateKey, publicKey, _ := cacheMutationKeypair(t, "preflight-delegate-identity")
 			transaction := payment.NewPayment(account, destination, txcore.NewXRPAmount(100_000))
 			transaction.Fee = "30"
 			transaction.SetSequence(1)
 			transaction.SigningPubKey = ""
 			transaction.Delegate = test.delegate
 			transaction.Signers = []txcore.SignerWrapper{{
-				Signer: txcore.Signer{Account: test.signer},
+				Signer: txcore.Signer{Account: test.signer, SigningPubKey: publicKey},
 			}}
+			signature, err := sign.SignTransactionForMultiSign(transaction, test.signer, privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			transaction.Signers[0].Signer.TxnSignature = signature
 
-			if got := preflightEngine(allRules()).preflight(transaction); got != test.want {
+			if got := verifyingEngine(allRules()).preflight(transaction); got != test.want {
 				t.Fatalf("preflight = %v, want %v", got, test.want)
 			}
 		})

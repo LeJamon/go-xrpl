@@ -270,7 +270,7 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 	}
 
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
-	if err := credential.CheckFields(p.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+	if err := credential.CheckFieldsWithRules(p.CredentialIDs, present, "Duplicate credential ID", rules); err != nil {
 		return err
 	}
 
@@ -382,7 +382,7 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		// exist, have the sender as its Subject, and be accepted. Expiry is not
 		// checked here (deferred to Apply).
 		// Reference: rippled Payment.cpp:362-365 / credentials::valid()
-		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs); result != ter.TesSUCCESS {
+		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs, config.RequireRules()); result != ter.TesSUCCESS {
 			return result
 		}
 
@@ -394,15 +394,14 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 			if err != nil {
 				return ter.TemMALFORMED
 			}
-			closeTime := config.ParentCloseTime
-			if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
+			if !permissioneddomain.DEXDomainPreclaim(view, senderID, domainID, config) {
 				return ter.TecNO_PERMISSION
 			}
 			destID, err := state.DecodeAccountID(p.Destination)
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
+			if !permissioneddomain.DEXDomainPreclaim(view, destID, domainID, config) {
 				return ter.TecNO_PERMISSION
 			}
 		}
@@ -481,6 +480,19 @@ func (p *Payment) SetNoDirectRipple() {
 }
 
 func (p *Payment) Apply(ctx *tx.ApplyContext) ter.Result {
+	if p.DomainID != nil {
+		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+		if err != nil {
+			return ter.TemMALFORMED
+		}
+		destination, err := state.DecodeAccountID(p.Destination)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if result := permissioneddomain.DEXDomainApply(ctx, domainID, ctx.AccountID, destination); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 	isDstMPT := p.Amount.IsMPT()
 	mpTokensV2 := ctx.Rules().MPTokensV2Enabled()
 

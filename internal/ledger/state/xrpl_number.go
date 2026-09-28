@@ -168,7 +168,11 @@ func (c NumberContext) FromAmount(amount Amount, mode RoundingMode) XRPLNumber {
 // normalizing to the STAmount mantissa range.
 func (c NumberContext) ToAmount(number XRPLNumber, prototype Amount, mode RoundingMode) Amount {
 	if prototype.IsNative() {
-		return NewXRPAmountFromInt(number.ToInt64WithMode(mode))
+		drops := number.ToInt64WithMode(mode)
+		if drops > maxNativeDrops || drops < -maxNativeDrops {
+			panic("Native currency amount out of range")
+		}
+		return NewXRPAmountFromInt(drops)
 	}
 	if _, ok := prototype.MPTRaw(); ok {
 		value := number.ToInt64WithMode(mode)
@@ -186,14 +190,16 @@ func (c NumberContext) ToAmount(number XRPLNumber, prototype Amount, mode Roundi
 }
 
 // ToAmountWithNativeRounding mirrors rippled's toAmount(asset, number, mode):
-// the explicit mode applies only to XRP, while IOU and MPT conversion uses the
-// rounding mode already active for the surrounding Number expression.
+// the explicit mode applies to integral assets (XRP and MPT), while IOU
+// conversion uses the rounding mode already active for the surrounding Number
+// expression.
 func (c NumberContext) ToAmountWithNativeRounding(
 	number XRPLNumber,
 	prototype Amount,
 	nativeMode, ambientMode RoundingMode,
 ) Amount {
-	if prototype.IsNative() {
+	_, isIntegralToken := prototype.MPTRaw()
+	if prototype.IsNative() || isIntegralToken {
 		return c.ToAmount(number, prototype, nativeMode)
 	}
 	return c.ToAmount(number, prototype, ambientMode)

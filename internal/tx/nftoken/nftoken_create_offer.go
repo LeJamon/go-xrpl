@@ -223,7 +223,8 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled tokenOfferCreatePreclaim line 941
 	if !n.Amount.IsNative() {
 		iouIssuerID, _ := state.DecodeAccountID(n.Amount.Issuer)
-		if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency) {
+		if !(ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == iouIssuerID) &&
+			(tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency)) {
 			return ter.TecFROZEN
 		}
 	}

@@ -611,6 +611,10 @@ var Specs = []Entry{
 			{Name: "ShareMPTID", Style: StyleRequired},
 			{Name: "WithdrawalPolicy", Style: StyleRequired},
 			{Name: "Scale", Style: StyleDefault},
+			{Name: "LEVersion", Style: StyleDefault},
+			{Name: "VaultKind", Style: StyleDefault},
+			{Name: "SubscriptionDate", Style: StyleOptional},
+			{Name: "RedemptionDate", Style: StyleOptional},
 			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
 			// on every Vault; the typed decoder must accept it.
 			{Name: "Flags", Style: StyleRequired},

@@ -36,21 +36,27 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if fieldsErr != nil {
 		return nil, fieldsErr
 	}
-	account := ""
-	if accountRaw, ok := rawFields["account"]; ok {
-		var valid bool
-		account, valid = jsonCppStringRaw(accountRaw)
-		if !valid {
-			return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
-		}
-	} else if identRaw, ok := rawFields["ident"]; ok {
-		var valid bool
-		account, valid = jsonCppStringRaw(identRaw)
-		if !valid {
-			return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
-		}
-	} else {
+	accountValue, hasAccount := rawFields["account"]
+	identValue, hasIdent := rawFields["ident"]
+	if !hasAccount && !hasIdent {
 		return nil, rpcerrors.RpcErrorMissingField("account")
+	}
+	account := ""
+	if hasAccount {
+		var valid bool
+		account, valid = rawJSONString(accountValue)
+		if !valid {
+			return nil, rpcerrors.RpcErrorInvalidField("account")
+		}
+	}
+	if hasIdent {
+		ident, valid := rawJSONString(identValue)
+		if !valid {
+			return nil, rpcerrors.RpcErrorInvalidField("ident")
+		}
+		if !hasAccount {
+			account = ident
+		}
 	}
 
 	var request struct {

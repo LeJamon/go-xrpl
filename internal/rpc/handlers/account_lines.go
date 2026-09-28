@@ -31,9 +31,9 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	var peer string
 	if peerRaw, ok := fields["peer"]; ok {
 		var valid bool
-		peer, valid = jsonCppStringRaw(peerRaw)
+		peer, valid = rawJSONString(peerRaw)
 		if !valid {
-			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidField("peer")
 		}
 	}
 	if peer != "" && !types.IsValidClassicAddress(peer) {

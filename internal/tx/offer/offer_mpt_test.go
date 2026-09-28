@@ -1,6 +1,8 @@
 package offer
 
 import (
+	"context"
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -8,9 +10,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -247,6 +251,49 @@ func TestOfferMPTIssuerMayPlaceUnfundedOffer(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(100), value)
 	require.Equal(t, int64(500), remainingPays.Drops())
+}
+
+func TestOfferCreateMPTZeroRateCannotPlaceRemainder(t *testing.T) {
+	var issuer [20]byte
+	copy(issuer[:], []byte("issuer12345678901234"))
+	id := keylet.MakeMPTID(1, issuer)
+
+	view := newOfferMPTLedgerView()
+	view.rules = amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureMPTokensV2).Build()
+	putOfferMPTAccount(t, view, issuer)
+	putOfferMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, 0, math.MaxInt64)
+
+	offer := NewOfferCreate(
+		state.EncodeAccountIDSafe(issuer),
+		tx.NewXRPAmount(1),
+		offerMPTAmount(id, math.MaxInt64),
+	)
+	offer.SetSequence(1)
+	require.Zero(t, state.GetRateWithNumberContext(offer.TakerGets, offer.TakerPays, tx.NumberContextForRules(view.rules)))
+	ctx := &tx.ApplyContext{
+		View:      view,
+		Account:   &state.AccountRoot{Account: offer.Account, Balance: 100_000_000, Sequence: 1},
+		AccountID: issuer,
+		Common:    offer.GetCommon(),
+		Config: tx.EngineConfig{
+			ReserveBase:      10_000_000,
+			ReserveIncrement: 2_000_000,
+			LedgerSequence:   2,
+			Rules:            view.rules,
+		},
+		Log: xrpllog.Discard(),
+		Ctx: context.Background(),
+	}
+
+	sb := payment.NewPaymentSandbox(view)
+	sbCancel := payment.NewPaymentSandbox(view)
+	result, applyMain := offer.applyGuts(ctx, sb, sbCancel)
+	require.Equal(t, ter.TecKILLED, result)
+	require.False(t, applyMain)
+	exists, err := sb.Exists(keylet.Offer(issuer, 1))
+	require.NoError(t, err)
+	require.False(t, exists)
 }
 
 func TestOfferMPTPreclaimPermissionsAndFunding(t *testing.T) {

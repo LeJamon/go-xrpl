@@ -36,9 +36,16 @@ type acquisitionStoreScope struct {
 
 func (s *acquisitionStoreScope) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	s.mu.Lock()
-	durableOnly := s.promoted || s.retired
+	promoted, retired := s.promoted, s.retired
 	s.mu.Unlock()
-	if durableOnly {
+	if promoted {
+		// Promotion has drained this scope's writes. Descendant live ledgers
+		// retain this Family, so ordinary reads must use the normal NodeStore
+		// cache, not the acquisition verifier's uncached read path. Placement
+		// and explicit durability reads keep their separate rules below.
+		return s.lane.base.Fetch(ctx, hash)
+	}
+	if retired {
 		return s.lane.FetchDurable(ctx, hash)
 	}
 	if data, ok := s.lane.fetchPending(s.id, hash); ok {

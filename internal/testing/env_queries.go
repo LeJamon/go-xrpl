@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/txq"
@@ -214,6 +215,12 @@ func (e *TestEnv) Seq(acc *Account) uint32 {
 // Ledger returns the current open ledger.
 func (e *TestEnv) Ledger() *ledger.Ledger {
 	return e.ledger
+}
+
+// Rules returns the amendment rules committed for the current ledger view.
+// Staged EnableFeature and DisableFeature changes take effect after Close.
+func (e *TestEnv) Rules() *amendment.Rules {
+	return e.rulesBuilder.Build()
 }
 
 // LastClosedLedger returns the most recently closed ledger (LCL), the

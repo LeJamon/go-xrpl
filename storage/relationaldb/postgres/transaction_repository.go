@@ -46,7 +46,7 @@ func (r *transactionRepository) GetTransactionsMinLedgerSeq(ctx context.Context)
 // range was searched (matching rippled's "searched all/some" semantics).
 func (r *transactionRepository) GetTransaction(ctx context.Context, hash relationaldb.Hash, ledgerRange *relationaldb.LedgerRange) (*relationaldb.TransactionInfo, relationaldb.TxSearchResult, error) {
 	if ledgerRange != nil && ledgerRange.Min > ledgerRange.Max {
-		return nil, relationaldb.TxSearchUnknown, relationaldb.NewDataError("get_transaction", "ledger range minimum exceeds maximum", nil)
+		return nil, relationaldb.TxSearchUnknown, relationaldb.NewDataError("get_transaction", "minimum ledger exceeds maximum", nil)
 	}
 
 	query := `SELECT trans_id, ledger_seq, status, raw_txn, txn_meta

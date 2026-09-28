@@ -73,6 +73,10 @@ func (l *loadAdmissionLedger) GetServerInfo() types.LedgerServerInfo {
 	return types.LedgerServerInfo{Standalone: true}
 }
 
+func (l *loadAdmissionLedger) IsStandalone() bool {
+	return l.GetServerInfo().Standalone
+}
+
 func signingLoadParams(offline bool) json.RawMessage {
 	offlineField := ""
 	if offline {

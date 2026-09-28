@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -60,6 +61,10 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 	case message.TypeStatusChange:
 		r.handleStatusChange(msg)
 	case message.TypeGetLedger:
+		if reason := r.validateGetLedgerMessage(msg); reason != "" {
+			r.chargeGetLedgerAdmission(msg, reason)
+			return false
+		}
 		// Offload the serve to the bounded worker pool so building a large
 		// reply (notably the 15k-tx tx-set in serveTxSet) can't stall
 		// proposal / validation / acquisition-reply handling on this
@@ -78,8 +83,6 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 		r.handleReplayDeltaResponse(msg)
 	case message.TypeManifests:
 		r.submitManifestJob(msg)
-	case message.TypeValidatorList:
-		r.handleValidatorList(msg)
 	case message.TypeValidatorListCollection:
 		r.handleValidatorListCollection(msg)
 	default:
@@ -230,7 +233,12 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	//
 	// Stash the hash on the Proposal so the downstream relay path
 	// can thread it to Overlay's reverse index without recomputing.
-	suppressionHash := hashProposalSuppression(proposal)
+	suppressionHash, err := hashProposalSuppressionChecked(proposal)
+	if err != nil {
+		r.logger.Debug("dropping malformed proposal", "error", err, "peer", msg.PeerID)
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-vl-length")
+		return
+	}
 	proposal.SuppressionHash = suppressionHash
 	r.gossip.RecordMessageSource(suppressionHash, originPeer)
 	// Drop duplicates before the engine path (re-running OnProposal
@@ -293,7 +301,9 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID,
 			"seq", validation.LedgerSeq,
 			"sign_time", validation.SignTime)
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
+		if !msg.SelectPeerCharge(resource.FeeUselessData(), "validation-not-current") {
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
+		}
 		return
 	}
 
@@ -618,7 +628,9 @@ type transactionDispatchResult struct {
 }
 
 func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch transactionDispatchResult) {
-	defer r.recoverFrame(msg, "transaction")
+	jobPhase := false
+	var jobHash [32]byte
+	defer r.recoverTransactionFrame(msg, &jobPhase, &jobHash)
 
 	// Frames fanned out from a TMTransactions batch arrive already
 	// decoded in Tx; only wire-sourced frames need decoding from Payload.
@@ -627,6 +639,11 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		decoded, err := message.Decode(message.TypeTransaction, msg.Payload)
 		if err != nil {
 			r.logger.Warn("failed to decode transaction", "error", err, "peer", msg.PeerID)
+			dispatch.submitResult = openledger.ResultFailure
+			dispatch.submitError = err
+			dispatch.charge = resource.FeeInvalidData()
+			dispatch.chargeContext = "transaction-decode"
+			msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 			return dispatch
 		}
 		var ok bool
@@ -635,6 +652,11 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 			r.logger.Warn("decoded transaction has unexpected type",
 				"peer", msg.PeerID,
 				"got", fmt.Sprintf("%T", decoded))
+			dispatch.submitResult = openledger.ResultFailure
+			dispatch.submitError = fmt.Errorf("decoded transaction has unexpected type %T", decoded)
+			dispatch.charge = resource.FeeInvalidData()
+			dispatch.chargeContext = "transaction-type"
+			msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 			return dispatch
 		}
 	}
@@ -644,22 +666,46 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		r.logger.Warn("inbound transaction has empty blob",
 			"peer", msg.PeerID,
 			"status", txMsg.Status)
+		dispatch.submitResult = openledger.ResultFailure
+		dispatch.submitError = errors.New("inbound transaction has empty blob")
+		dispatch.charge = resource.FeeInvalidData()
+		dispatch.chargeContext = "transaction-empty"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
 	pending, pendingErr := openledger.ParsePendingTx(blob)
-	canonicalBlob := blob
-	if pendingErr == nil {
-		canonicalBlob = pending.Blob
+	if pendingErr != nil {
+		dispatch.submitResult = openledger.ResultFailure
+		dispatch.submitError = pendingErr
+		dispatch.charge = resource.FeeInvalidData()
+		dispatch.chargeContext = "transaction-invalid-data"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		return dispatch
 	}
-	if pendingErr == nil && pending.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+	canonicalBlob := pending.Blob
+	jobHash = pending.Hash
+	if pending.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
 		dispatch.charge = resource.FeeModerateBurdenPeer()
 		dispatch.chargeContext = "inner batch txn"
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
+	var validatedRules, openRules *amendment.Rules
+	validatedAdmission := false
+	if r.adaptor != nil {
+		validatedRules, openRules, validatedAdmission = r.adaptor.peerSignatureSnapshot()
+	}
+	roleBearing := transactionHasRoleSignature(pending.Parsed)
 	admittedBad := false
-	if pendingErr == nil && r.txSeen != nil {
-		shouldProcess, bad := r.txSeen.claim(pending.Hash, uint64(msg.PeerID))
+	if r.txSeen != nil {
+		shouldProcess, bad := r.txSeen.claimWithSignatureContexts(
+			pending.Hash,
+			uint64(msg.PeerID),
+			roleBearing,
+			validatedRules,
+			openRules,
+			validatedAdmission,
+		)
 		if !shouldProcess {
 			if bad {
 				dispatch.charge = resource.FeeUselessData()
@@ -670,7 +716,8 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		}
 		admittedBad = bad
 	}
-	if pendingErr == nil && pending.Parsed.GetCommon().LastLedgerSequence != nil &&
+	jobPhase = true
+	if pending.Parsed.GetCommon().LastLedgerSequence != nil &&
 		r.adaptor != nil && r.adaptor.ledgerService != nil &&
 		*pending.Parsed.GetCommon().LastLedgerSequence < r.adaptor.ledgerService.GetValidatedLedgerIndex() {
 		if r.txSeen != nil {
@@ -678,14 +725,44 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		}
 		dispatch.charge = resource.FeeUselessData()
 		dispatch.chargeContext = "transaction-expired"
-		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
 	if admittedBad {
 		dispatch.charge = resource.FeeInvalidSignature()
 		dispatch.chargeContext = "transaction-known-bad-signature"
-		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
 		return dispatch
+	}
+	if validatedAdmission {
+		if err := r.adaptor.validatePeerSignature(pending, validatedRules); err != nil {
+			dispatch.submitResult = openledger.ResultFailure
+			dispatch.submitError = err
+			if r.txSeen != nil {
+				if errors.Is(err, txengine.ErrInvalidSignature) {
+					if roleBearing {
+						r.txSeen.markBadSignature(pending.Hash, validatedRules)
+					} else {
+						r.txSeen.markBad(pending.Hash)
+					}
+				}
+			}
+			dispatch.charge = resource.FeeInvalidSignature()
+			dispatch.chargeContext = "transaction-invalid-signature"
+			msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
+			return dispatch
+		}
+		if reason := tx.TransactionLocalChecksFailureReason(pending.Parsed); reason != "" {
+			dispatch.submitResult = openledger.ResultFailure
+			dispatch.submitError = fmt.Errorf("%w: %s", ledgerservice.ErrInvalidLocalTransaction, reason)
+			if r.txSeen != nil && (!roleBearing || signatureCleanupEra(validatedRules)) {
+				r.txSeen.markBad(pending.Hash)
+			}
+			dispatch.charge = resource.FeeInvalidSignature()
+			dispatch.chargeContext = "transaction-local-checks"
+			msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
+			return dispatch
+		}
 	}
 
 	// Peer-relay path — the originating peer manages its own resends,
@@ -695,19 +772,27 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	dispatch.submitError = err
 	dispatch.deferred = outcome.Queued
 	if errors.Is(err, txengine.ErrInvalidSignature) {
-		if pendingErr == nil && r.txSeen != nil {
-			r.txSeen.markBad(pending.Hash)
+		if r.txSeen != nil {
+			if roleBearing {
+				var verificationErr *ledgerservice.SignatureVerificationError
+				if errors.As(err, &verificationErr) {
+					r.txSeen.markBadSignature(pending.Hash, verificationErr.Rules)
+				}
+			} else {
+				r.txSeen.markBad(pending.Hash)
+			}
 		}
 		dispatch.charge = resource.FeeInvalidSignature()
 		dispatch.chargeContext = "transaction-invalid-signature"
-		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
 	} else if errors.Is(err, ledgerservice.ErrInvalidLocalTransaction) {
-		if pendingErr == nil && r.txSeen != nil {
+		if r.txSeen != nil &&
+			(!roleBearing || signatureCleanupEra(validatedRules)) {
 			r.txSeen.markBad(pending.Hash)
 		}
 		dispatch.charge = resource.FeeInvalidSignature()
 		dispatch.chargeContext = "transaction-local-checks"
-		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
 	}
 	// Relay immediately on the inbound job, not one ledger later via
 	// OpenLedger.Accept's once-per-LCL callback; that one-ledger lag is a
@@ -741,6 +826,15 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		)
 	}
 	return dispatch
+}
+
+func transactionHasRoleSignature(transaction tx.Transaction) bool {
+	if transaction == nil || transaction.GetCommon() == nil {
+		return false
+	}
+	common := transaction.GetCommon()
+	return common.FieldPresent("CounterpartySignature", common.CounterpartySignature != nil) ||
+		common.FieldPresent("SponsorSignature", common.SponsorSignature != nil)
 }
 
 func (r *Router) transactionRelaySkip(

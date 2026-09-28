@@ -17,6 +17,9 @@ var (
 	// ErrInvalidVLPrefix is returned when a variable-length prefix starts with
 	// the reserved byte 0xFF, which rippled rejects (Serializer.cpp, "b1>254").
 	ErrInvalidVLPrefix = errors.New("invalid variable length prefix")
+	// ErrVariableLengthTooLong is returned when a variable-length prefix
+	// decodes to a payload length the encoder cannot emit.
+	ErrVariableLengthTooLong = errors.New("variable length exceeds 918744 bytes")
 )
 
 // BinaryParser parses binary-encoded XRPL data into field instances based on definitions.
@@ -167,7 +170,11 @@ func (p *BinaryParser) ReadVariableLength() (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		return 12481 + ((int(b1) - 241) * 65536) + (int(b2) * 256) + int(b3), nil
+		length := 12481 + ((int(b1) - 241) * 65536) + (int(b2) * 256) + int(b3)
+		if length > 918744 {
+			return 0, ErrVariableLengthTooLong
+		}
+		return length, nil
 	default:
 		return 0, ErrInvalidVLPrefix
 	}

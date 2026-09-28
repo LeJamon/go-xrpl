@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -10,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/stretchr/testify/require"
 )
 
 type signingAuthorizationLedger struct {
@@ -28,6 +30,10 @@ func (l *signingAuthorizationLedger) GetAccountInfo(_ context.Context, account, 
 
 func (l *signingAuthorizationLedger) GetServerInfo() types.LedgerServerInfo {
 	return types.LedgerServerInfo{Standalone: true}
+}
+
+func (l *signingAuthorizationLedger) IsStandalone() bool {
+	return false
 }
 
 func signingAuthorizationContext(ledger types.LedgerService) *types.RpcContext {
@@ -289,5 +295,154 @@ func TestSignForSigningKeyAuthorization(t *testing.T) {
 			}
 			requireSigningDeprecation(t, rpcErr)
 		})
+	}
+}
+
+type signForSourceLedger struct {
+	*signingAuthorizationLedger
+	sourceError error
+}
+
+func (l *signForSourceLedger) GetAccountInfo(ctx context.Context, account, ledger string) (*types.AccountInfo, error) {
+	if account == loadAdmissionAccount && l.sourceError != nil {
+		return nil, l.sourceError
+	}
+	return l.signingAuthorizationLedger.GetAccountInfo(ctx, account, ledger)
+}
+
+func TestSignForSourceAccountPrecedesFeeValidation(t *testing.T) {
+	for _, target := range []string{"", "CounterpartySignature", "SponsorSignature"} {
+		for _, test := range []struct {
+			name        string
+			offline     bool
+			sourceError error
+			wantCode    int
+			wantToken   string
+			wantMessage string
+		}{
+			{"missing source", false, svcerr.ErrAccountNotFound, rpcerrors.RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "Source account not found."},
+			{"backend error", false, errors.New("source lookup failed"), rpcerrors.RpcINTERNAL, "internal", "Internal error."},
+			{"offline", true, svcerr.ErrAccountNotFound, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Missing field 'tx_json.Fee'."},
+			{"source exists", false, nil, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Missing field 'tx_json.Fee'."},
+		} {
+			t.Run(target+"/"+test.name, func(t *testing.T) {
+				ledger := &signForSourceLedger{
+					signingAuthorizationLedger: &signingAuthorizationLedger{accounts: map[string]*types.AccountInfo{
+						loadAdmissionAccount: {}, loadAdmissionSigningAccount: {},
+					}},
+					sourceError: test.sourceError,
+				}
+				request := map[string]any{
+					"account": loadAdmissionSigningAccount, "seed_hex": loadAdmissionSeedHex,
+					"key_type": "ed25519", "offline": test.offline,
+					"tx_json": map[string]any{
+						"TransactionType": "LoanSet", "Account": loadAdmissionAccount,
+						"Sequence": 1, "SigningPubKey": "",
+					},
+				}
+				if target != "" {
+					request["signature_target"] = target
+				}
+				params, err := json.Marshal(request)
+				require.NoError(t, err)
+				result, rpcErr := (&SignForMethod{}).Handle(signingAuthorizationContext(ledger), params)
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				require.Equal(t, map[string]any{
+					"error_code": test.wantCode, "error": test.wantToken, "error_message": test.wantMessage,
+				}, rpcErr.ErrorObject())
+				requireSigningDeprecation(t, rpcErr)
+			})
+		}
+	}
+}
+
+func TestSigningOfflineJSONTruthValues(t *testing.T) {
+	for _, method := range []struct {
+		name   string
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
+	}{
+		{"sign", (&SignMethod{}).Handle},
+		{"sign_for", (&SignForMethod{}).Handle},
+		{"submit", (&SubmitMethod{}).Handle},
+	} {
+		for _, target := range []string{"", "CounterpartySignature", "SponsorSignature"} {
+			for _, test := range []struct {
+				raw     string
+				offline bool
+			}{
+				{"null", false}, {"false", false}, {"0", false}, {"0.0", false},
+				{`""`, false}, {`"\u0000"`, false}, {`"\u0000yes"`, false}, {"[]", false}, {"{}", false},
+				{"true", true}, {"1", true}, {"-1", true}, {"0.5", true},
+				{`"false"`, true}, {`"yes\u0000"`, true}, {"[false]", true}, {`{"value":false}`, true},
+			} {
+				t.Run(method.name+"/"+target+"/"+test.raw, func(t *testing.T) {
+					ledger := &signForSourceLedger{
+						signingAuthorizationLedger: &signingAuthorizationLedger{},
+						sourceError:                svcerr.ErrAccountNotFound,
+					}
+					request := map[string]any{
+						"account": loadAdmissionSigningAccount, "seed_hex": loadAdmissionSeedHex,
+						"key_type": "ed25519", "offline": json.RawMessage(test.raw),
+						"tx_json": map[string]any{
+							"TransactionType": "LoanSet", "Account": loadAdmissionAccount,
+							"Sequence": 1, "SigningPubKey": "",
+						},
+					}
+					if target != "" {
+						request["signature_target"] = target
+					}
+					params, err := json.Marshal(request)
+					require.NoError(t, err)
+					result, rpcErr := method.handle(signingAuthorizationContext(ledger), params)
+					require.Nil(t, result)
+					require.NotNil(t, rpcErr)
+					want := rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
+					if test.offline {
+						want = rpcerrors.RpcErrorMissingField("tx_json.Fee")
+					}
+					require.Equal(t, want.ErrorObject(), rpcErr.ErrorObject())
+					deprecation := signingDeprecation
+					if method.name == "submit" {
+						deprecation = submitSigningDeprecation
+					}
+					require.Equal(t, deprecation, rpcErr.Extra["deprecated"])
+				})
+			}
+		}
+	}
+}
+
+func TestSigningBuildPathUsesFieldPresence(t *testing.T) {
+	for _, method := range []struct {
+		name   string
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
+	}{
+		{"sign", (&SignMethod{}).Handle},
+		{"sign_for", (&SignForMethod{}).Handle},
+		{"submit", (&SubmitMethod{}).Handle},
+	} {
+		for _, raw := range []string{"null", "false", "true", "0", "1", `""`, `"path"`, "[]", "{}", "[1]", `{"value":1}`} {
+			t.Run(method.name+"/"+raw, func(t *testing.T) {
+				request := map[string]any{
+					"account": loadAdmissionSigningAccount, "seed_hex": loadAdmissionSeedHex,
+					"key_type": "ed25519", "offline": true, "build_path": json.RawMessage(raw),
+					"tx_json": map[string]any{
+						"TransactionType": "Payment", "Account": loadAdmissionAccount,
+						"Destination": loadAdmissionSigningAccount, "Amount": "1",
+						"Sequence": 1, "Fee": "10", "SigningPubKey": "",
+					},
+				}
+				params, err := json.Marshal(request)
+				require.NoError(t, err)
+				result, rpcErr := method.handle(signingAuthorizationContext(&signingAuthorizationLedger{}), params)
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				require.Equal(t, map[string]any{
+					"error_code": rpcerrors.RpcINVALID_PARAMS, "error": "invalidParams",
+					"error_message": "Field 'build_path' not allowed in this context.",
+				}, rpcErr.ErrorObject())
+			})
+		}
 	}
 }

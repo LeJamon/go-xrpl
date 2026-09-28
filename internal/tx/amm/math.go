@@ -10,6 +10,37 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+func isAMMAmountOverflowPanic(value any) bool {
+	message, ok := value.(string)
+	if !ok {
+		err, isError := value.(error)
+		if !isError {
+			return false
+		}
+		message = err.Error()
+	}
+
+	switch message {
+	case "IOUAmount overflow",
+		"MPT amount out of range",
+		"MPT mulRatio overflow",
+		"MPT value overflow",
+		"MPT negate overflow",
+		"Native currency amount out of range",
+		"Native value overflow",
+		"overflow in muldiv",
+		"XRP mulRatio overflow",
+		"XRPLNumber→IOUAmountValue overflow",
+		"XRPLNumber::normalize overflow",
+		"XRPLNumber::operator rep() overflow",
+		"XRPLNumber::operator rep() rounding overflow",
+		"XRPLNumber::shiftExponent overflow":
+		return true
+	default:
+		return false
+	}
+}
+
 // numberMath is the immutable Number environment for one transaction. All AMM
 // arithmetic stays in XRPLNumber space until a ledger Amount boundary.
 type numberMath struct {

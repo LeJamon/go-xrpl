@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -320,6 +321,94 @@ func TestTransactionSuppressionValidDuplicateIsSilent(t *testing.T) {
 
 	shouldProcess, bad = cache.claim(hash, 0)
 	require.False(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionSignatureVerdictTracksCleanupEra(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	cache.now = func() time.Time { return now }
+	legacy := amendment.EmptyRules()
+	cleanup := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	hash := [32]byte{1}
+
+	shouldProcess, bad := cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBadSignature(hash, legacy)
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBadSignature(hash, cleanup)
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+	now = now.Add(transactionProcessInterval)
+	for _, rules := range []*amendment.Rules{legacy, cleanup} {
+		shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, rules, rules, true)
+		require.True(t, shouldProcess)
+		require.True(t, bad)
+	}
+}
+
+func TestTransactionSuppressionValidVerdictRechecksOnCleanupEraChange(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	legacy := amendment.EmptyRules()
+	cleanup := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	var hash [32]byte
+	hash[0] = 2
+
+	shouldProcess, bad := cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+
+	// Returning to the old context remains suppressed within the process interval.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionValidatedBadDoesNotPoisonOpenNamespace(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	cache.now = func() time.Time { return now }
+	legacy := amendment.EmptyRules()
+	cleanup := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	var hash [32]byte
+	hash[0] = 3
+
+	shouldProcess, bad := cache.claimWithSignatureContexts(hash, 0, true, legacy, cleanup, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBadSignature(hash, legacy)
+
+	// Duplicate suppression does not expose a legacy signature failure as public BAD.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, cleanup, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+	now = now.Add(transactionProcessInterval)
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, cleanup, true)
+	require.True(t, shouldProcess)
+	require.True(t, bad)
+
+	// Once validation catches up, the cleanup slot is fresh and may be checked.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.True(t, shouldProcess)
 	require.False(t, bad)
 }
 

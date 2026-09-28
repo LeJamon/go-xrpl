@@ -3,6 +3,7 @@ package permissioneddomain
 import (
 	"encoding/hex"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -100,4 +101,53 @@ func ParseDomainID(hexStr string) ([32]byte, error) {
 	}
 	copy(domainID[:], b)
 	return domainID, nil
+}
+
+// DEXDomainPreclaim permits expired credentials through to application so their
+// deletion can be committed along with tecEXPIRED.
+func DEXDomainPreclaim(view tx.LedgerView, accountID [20]byte, domainID [32]byte, config tx.EngineConfig) bool {
+	if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+		return AccountInDomain(view, accountID, domainID, config.ParentCloseTime)
+	}
+	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
+	if err != nil || raw == nil {
+		return false
+	}
+	domain, err := state.ParsePermissionedDomain(raw)
+	if err != nil {
+		return false
+	}
+	if domain.Owner == accountID {
+		return true
+	}
+	result := credential.ValidDomain(view, domainID, accountID, config.ParentCloseTime)
+	return result == ter.TesSUCCESS || result == ter.TecEXPIRED
+}
+
+// DEXDomainApply cleans every participant's expired credentials before returning
+// the first failure; a failed sender must not prevent destination cleanup.
+func DEXDomainApply(ctx *tx.ApplyContext, domainID [32]byte, accounts ...[20]byte) ter.Result {
+	if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+		return ter.TesSUCCESS
+	}
+	raw, err := ctx.View.Read(keylet.PermissionedDomainByID(domainID))
+	if err != nil || raw == nil {
+		return ter.TecINTERNAL
+	}
+	domain, err := state.ParsePermissionedDomain(raw)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	result := ter.TesSUCCESS
+	seen := make(map[[20]byte]bool, len(accounts))
+	for _, account := range accounts {
+		if account == domain.Owner || seen[account] {
+			continue
+		}
+		seen[account] = true
+		if r := credential.VerifyValidDomain(ctx, account, domainID); result == ter.TesSUCCESS {
+			result = r
+		}
+	}
+	return result
 }

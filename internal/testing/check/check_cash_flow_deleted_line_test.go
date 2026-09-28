@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	checkbuilder "github.com/LeJamon/go-xrpl/internal/testing/check"
@@ -40,6 +43,9 @@ func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) 
 
 func TestCheckCashToIssuerRestoresSourceTrustLine(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("fixCleanup3_4_0")
+	env.Close()
+	require.False(t, env.Rules().FixCleanup3_4_0Enabled())
 	issuer := jtx.NewAccount("check-cash-line-issuer")
 	source := jtx.NewAccount("check-cash-line-casher")
 	require.Greater(t, state.CompareAccountIDs(source.ID, issuer.ID), 0)
@@ -94,7 +100,12 @@ func TestCheckCashToIssuerRestoresSourceTrustLine(t *testing.T) {
 
 func testCheckCashFlowDeletedLine(t *testing.T, issuerSeed, casherSeed, limitField, metadataSHA, expectedStateRoot, txRoot string) {
 	t.Helper()
-	env := jtx.NewTestEnv(t)
+	cfg := genesis.DefaultConfig()
+	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
+	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
+	// These state-root vectors include the retired amendment in their genesis ledger.
+	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
+	env := jtx.NewTestEnvWithConfig(t, cfg)
 	issuer := jtx.NewAccount(issuerSeed)
 	casher := jtx.NewAccount(casherSeed)
 	env.Fund(issuer, casher)

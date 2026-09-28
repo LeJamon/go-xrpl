@@ -81,7 +81,7 @@ func (e *TestEnv) close(timeLeap bool) {
 		if feeErr != nil {
 			e.t.Fatalf("read closed-ledger fee levels: %v", feeErr)
 		}
-		e.txQueue.ProcessClosedLedger(&testClosedLedgerContext{ledgerSeq: closed.Sequence(), feeLevels: feeLevels}, timeLeap)
+		e.txQueue.ProcessClosedLedger(&testClosedLedgerContext{ledgerSeq: closed.Sequence(), txCount: closed.TxCount(), feeLevels: feeLevels}, timeLeap)
 	}
 	e.applyPendingAmendments()
 
@@ -156,7 +156,10 @@ func (e *TestEnv) transactionFeeLevels(view *ledger.Ledger) ([]txq.FeeLevel, err
 			return false
 		}
 		config := e.engineConfig(view, engineConfigOpts{})
-		baseFee := sign.CalculateBaseFee(transaction, view, config)
+		baseFee, err := sign.CalculateBaseFee(transaction, view, config)
+		if err != nil {
+			return true
+		}
 		defaultBaseFee := sign.CalculateDefaultBaseFee(transaction, config)
 		levels = append(levels, txq.ToFeeLevelWithDefaultBaseFee(fee, baseFee, defaultBaseFee))
 		return true
@@ -618,9 +621,12 @@ func sortHeldBySequence(txns []tx.Transaction) {
 
 // testClosedLedgerContext implements txq.ClosedLedgerContext for the test environment.
 type testClosedLedgerContext struct {
+	txCount   uint32
 	ledgerSeq uint32
 	feeLevels []txq.FeeLevel
 }
+
+func (c *testClosedLedgerContext) GetTransactionCount() uint32 { return c.txCount }
 
 func (c *testClosedLedgerContext) GetLedgerSequence() uint32               { return c.ledgerSeq }
 func (c *testClosedLedgerContext) GetTransactionFeeLevels() []txq.FeeLevel { return c.feeLevels }

@@ -275,3 +275,5 @@ func TestSndOverlaySender_RequestTransactionNodes_UnknownPeer(t *testing.T) {
 	err := s.RequestTransactionNodes(999, hash, [][]byte{make([]byte, 33)}, 1, false)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }
+
+func (f *snd_fakeOverlay) PeerSupportsNodeDepth(uint64) bool { return false }

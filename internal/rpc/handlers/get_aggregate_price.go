@@ -31,6 +31,11 @@ type aggregatePricePoint struct {
 	lastUpdateTime uint32
 }
 
+type aggregatePriceOracleKey struct {
+	account    [20]byte
+	documentID uint32
+}
+
 func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
@@ -114,6 +119,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	lookupFields := ledgerEntryResponseFields(targetLedger, lookupValidated)
 
 	prices := make([]aggregatePricePoint, 0, len(oracles))
+	seen := make(map[aggregatePriceOracleKey]struct{}, len(oracles))
 	for _, oracleRaw := range oracles {
 		var oracleSpec map[string]json.RawMessage
 		if err := json.Unmarshal(oracleRaw, &oracleSpec); err != nil {
@@ -142,6 +148,11 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		if accountID == ([20]byte{}) {
 			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
+		oracleKey := aggregatePriceOracleKey{account: accountID, documentID: documentID}
+		if _, alreadySeen := seen[oracleKey]; alreadySeen {
+			continue
+		}
+		seen[oracleKey] = struct{}{}
 
 		entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
 		if err != nil {
@@ -266,8 +277,14 @@ func parseUintParam(raw json.RawMessage) (uint32, error) {
 
 func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	var value string
-	if err := json.Unmarshal(raw, &value); err != nil || value == "" || !keylet.IsValidCurrencyCode(value) {
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
 		return "", fmt.Errorf("invalid currency")
+	}
+	if value == "0" {
+		return value, nil
+	}
+	if _, err := keylet.ParseCurrency(value); err != nil {
+		return "", err
 	}
 	return value, nil
 }

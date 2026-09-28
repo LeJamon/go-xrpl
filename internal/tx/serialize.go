@@ -137,6 +137,9 @@ var (
 // - 193-12480 bytes: 2 byte prefix
 // - 12481-918744 bytes: 3 byte prefix
 func EncodeVL(length int) ([]byte, error) {
+	if length < 0 {
+		return nil, ErrLengthPrefixTooLong
+	}
 	if length <= 192 {
 		return []byte{byte(length)}, nil
 	}

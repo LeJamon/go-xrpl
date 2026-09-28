@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 110 amendments.
+Total: 111 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -40,7 +40,7 @@ Total: 110 amendments.
 | `ImmediateOfferKilled` | yes | no |
 | `InvariantsV1_1` | no | no |
 | `LendingProtocol` | yes | no |
-| `LendingProtocolV1_1` | no | no |
+| `LendingProtocolV1_1` | yes | no |
 | `MPTokensV1` | yes | no |
 | `MPTokensV2` | no | no |
 | `MultiSign` | yes | no |
@@ -78,7 +78,7 @@ Total: 110 amendments.
 | `fix1623` | yes | no |
 | `fix1781` | yes | no |
 | `fixAMMClawbackRounding` | yes | no |
-| `fixAMMOverflowOffer` | yes | yes |
+| `fixAMMOverflowOffer` | yes | no |
 | `fixAMMv1_1` | yes | no |
 | `fixAMMv1_2` | yes | no |
 | `fixAMMv1_3` | yes | no |
@@ -87,6 +87,7 @@ Total: 110 amendments.
 | `fixCleanup3_1_3` | yes | yes |
 | `fixCleanup3_2_0` | yes | no |
 | `fixCleanup3_3_0` | yes | no |
+| `fixCleanup3_4_0` | yes | no |
 | `fixDirectoryLimit` | yes | no |
 | `fixDisallowIncomingV1` | yes | no |
 | `fixEmptyDID` | yes | no |

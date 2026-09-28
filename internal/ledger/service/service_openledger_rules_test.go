@@ -24,9 +24,9 @@ func (t *observingAutofillRulesTx) Flatten() (map[string]any, error) { return ni
 func (t *observingAutofillRulesTx) GetRawBytes() []byte              { return nil }
 func (t *observingAutofillRulesTx) SetRawBytes([]byte)               {}
 func (t *observingAutofillRulesTx) RequiredAmendments() [][32]byte   { return nil }
-func (t *observingAutofillRulesTx) CalculateBaseFee(_ tx.LedgerView, cfg tx.EngineConfig) uint64 {
+func (t *observingAutofillRulesTx) CalculateBaseFee(_ tx.LedgerView, cfg tx.EngineConfig) (uint64, error) {
 	t.rules = cfg.Rules
-	return cfg.BaseFee
+	return cfg.BaseFee, nil
 }
 
 type amendmentRequiredSimulationTx struct {

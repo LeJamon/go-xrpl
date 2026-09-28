@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +65,34 @@ func mptSyntheticRPCFixture(t *testing.T) (map[string]any, map[string]any, []byt
 	want := strings.ToUpper(hex.EncodeToString(mptID[:]))
 
 	return txJSON, meta, txBlob, metaBlob, want
+}
+
+func nftSyntheticRPCFixture(t *testing.T) (map[string]any, map[string]any, []byte, []byte, string) {
+	t.Helper()
+
+	const tokenID = "000800001234567890ABCDEF1234567890ABCDEF1234567890ABCDEF00000001"
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	txJSON := map[string]any{
+		"Account":         account,
+		"Fee":             "10",
+		"NFTokenTaxon":    uint32(0),
+		"Sequence":        uint32(42),
+		"SigningPubKey":   "",
+		"TransactionType": "NFTokenMint",
+	}
+	meta := map[string]any{
+		"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "NFTokenPage",
+			"NewFields": map[string]any{
+				"NFTokens": []any{map[string]any{"NFToken": map[string]any{"NFTokenID": tokenID}}},
+			},
+		}}},
+		"TransactionIndex":  uint32(0),
+		"TransactionResult": "tesSUCCESS",
+	}
+	txBlob := encodeSyntheticRPCObject(t, txJSON)
+	metaBlob := encodeSyntheticRPCObject(t, meta)
+	return txJSON, meta, txBlob, metaBlob, tokenID
 }
 
 func TestTxSyntheticMetadata(t *testing.T) {
@@ -172,6 +201,62 @@ func TestAccountTxSyntheticMetadata(t *testing.T) {
 			transactions := response["transactions"].([]map[string]any)
 			responseMeta := transactions[0]["meta"].(map[string]any)
 			require.Equal(t, want, responseMeta["mpt_issuance_id"])
+		})
+	}
+}
+
+func TestTxAndAccountTxSyntheticNFTMetadata(t *testing.T) {
+	txJSON, meta, txBlob, metaBlob, want := nftSyntheticRPCFixture(t)
+	const txHash = "F2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	stored, err := json.Marshal(handlers.StoredTransaction{TxJSON: txJSON, Meta: meta})
+	require.NoError(t, err)
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		t.Run("tx/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			mock := newMockLedgerServiceTx()
+			mock.transactions[txHash] = &types.TransactionInfo{
+				TxData:      stored,
+				LedgerIndex: 2,
+				Validated:   true,
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   servicesForTx(mock),
+			}
+			result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, json.RawMessage(`{"transaction":"`+txHash+`"}`))
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			assert.Equal(t, want, response["meta"].(map[string]any)["nftoken_id"])
+		})
+
+		t.Run("account_tx/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			mock := newAccountTxMock()
+			mock.getAccountTransactionsFn = func(context.Context, string, int64, int64, uint32, *types.AccountTxMarker, bool) (*types.AccountTxResult, error) {
+				return &types.AccountTxResult{
+					Account: account,
+					Transactions: []types.AccountTransaction{{
+						Hash:        [32]byte{1},
+						LedgerIndex: 2,
+						TxBlob:      txBlob,
+						Meta:        metaBlob,
+					}},
+					Validated: true,
+				}, nil
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   newTestServicesAccountTx(mock),
+			}
+			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`"}`))
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			transactions := response["transactions"].([]map[string]any)
+			assert.Equal(t, want, transactions[0]["meta"].(map[string]any)["nftoken_id"])
 		})
 	}
 }

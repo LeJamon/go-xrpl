@@ -1,14 +1,13 @@
 package adaptor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
-	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -83,7 +82,10 @@ func txSetReplyBytes(ld *message.LedgerData) (int64, bool) {
 	}
 	var total int64
 	for _, node := range ld.Nodes {
-		nodeBytes := int64(len(node.NodeID)) + int64(len(node.NodeData))
+		nodeBytes := int64(len(node.NodeID)) + int64(len(node.ID)) + int64(len(node.NodeData))
+		if node.Depth != nil {
+			nodeBytes += 4
+		}
 		if nodeBytes > txSetAcquireMaxReplyBytes-total {
 			return 0, false
 		}
@@ -272,13 +274,14 @@ func (r *Router) setTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
 	r.txSetRetryKnobs = knobs
 }
 
-// learnTxFromLeaf submits the transaction carried by an acquired tx-set
-// leaf into the open-ledger pool and, on acceptance, actively relays it.
+// learnTxFromLeaf queues the transaction carried by an acquired tx-set
+// leaf for open-ledger admission and, on acceptance, active relay.
 // A tx-set leaf is a tnTRANSACTION_NM node whose wire form is
 // `tx_blob || WireTypeTransaction`; inner nodes and malformed data are
-// skipped by the trailing-type-byte check, and a tx the open ledger already
-// holds is not resubmitted. The submit is peer-sourced and the relay reuses
-// relayTransaction exactly as handleTransaction does for an inbound
+// skipped by the trailing-type-byte check. Membership and execution happen
+// on a transaction worker, never on the consensus router. A tx the open
+// ledger already holds is not resubmitted. The submit is peer-sourced and
+// the relay reuses relayTransaction exactly as handleTransaction does for an inbound
 // TMTransaction (see handleTransaction), excluding originPeer and every other
 // recorded source — so a set the node only holds transiently still pushes its
 // novel txs to peers instead of relying on the slower TMHaveTransactions announce.
@@ -299,17 +302,11 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 	if item == nil {
 		return
 	}
-	exists, err := r.adaptor.HasTx(consensus.TxID(item.Key()))
-	if err != nil || exists {
-		return
-	}
-	if outcome, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && outcome.Class == openledger.ResultSuccess {
-		r.relayTransaction(
-			r.transactionRelaySkip(item.Key(), peermanagement.PeerID(originPeer)),
-			item.Data(),
-			outcome.Queued,
-		)
-	}
+	r.submitTxSetLearnJob(txSetLearnJob{
+		peer: originPeer,
+		id:   item.Key(),
+		blob: bytes.Clone(item.Data()),
+	})
 }
 
 // txLeafWire frames a raw transaction blob as a SHAMap transaction-leaf
@@ -400,21 +397,26 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		}
 		return
 	}
-	for _, node := range ld.Nodes {
-		if len(node.NodeID) == 0 || len(node.NodeData) == 0 {
+	for i := range ld.Nodes {
+		node := &ld.Nodes[i]
+		if len(node.NodeData) == 0 {
 			r.txSetAcquireMu.Unlock()
 			if originPeer != 0 {
 				r.gossip.IncPeerBadData(originPeer, "ledger-data-decode")
 			}
 			return
 		}
-		if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
+		id, err := node.SHAMapNodeID()
+		if err != nil {
 			r.txSetAcquireMu.Unlock()
 			if originPeer != 0 {
 				r.gossip.IncPeerBadData(originPeer, "txset-baddata-nodeid")
 			}
 			return
 		}
+		node.NodeID = id.Bytes()
+		node.ID = nil
+		node.Depth = nil
 	}
 
 	if state.txMap == nil {

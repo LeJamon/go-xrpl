@@ -93,9 +93,9 @@ func (m *MPTokenAuthorize) RequiredAmendments() [][32]byte {
 // MPToken (tecDUPLICATE). Issuer path (Holder present): holder account
 // (tecNO_DST), issuance (tecOBJECT_NOT_FOUND), issuer match (tecNO_PERMISSION),
 // RequireAuth (tecNO_AUTH), and the holder MPToken (tecOBJECT_NOT_FOUND). The
-// reserve check and the create/delete/toggle mutations stay in Apply. (The
-// pre-existing gap where rippled additionally rejects a pseudo-account holder on
-// the issuer path is left unchanged — that is a separate behaviour fix.)
+// cleanup amendment also permits deleting a zero-balance token after its
+// issuance was destroyed, while a still-locked token remains protected when
+// its issuance exists. Pseudo-account holders are never issuer-authorized.
 func (m *MPTokenAuthorize) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	var mptID [24]byte
 	b, err := hex.DecodeString(m.MPTokenIssuanceID)
@@ -122,25 +122,44 @@ func (m *MPTokenAuthorize) Preclaim(view tx.LedgerView, config tx.EngineConfig) 
 				return ter.TefINTERNAL
 			}
 			if token.MPTAmount != 0 {
+				if issuanceRaw, readErr := view.Read(issuanceKey); readErr != nil {
+					return ter.TefINTERNAL
+				} else if issuanceRaw == nil {
+					return ter.TefINTERNAL
+				}
 				return ter.TecHAS_OBLIGATIONS
 			}
 			if token.LockedAmount != nil && *token.LockedAmount != 0 {
+				if issuanceRaw, readErr := view.Read(issuanceKey); readErr != nil {
+					return ter.TefINTERNAL
+				} else if issuanceRaw == nil {
+					return ter.TefINTERNAL
+				}
 				return ter.TecHAS_OBLIGATIONS
 			}
-			if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) &&
-				token.Flags&entry.LsfMPTLocked != 0 {
-				return ter.TecNO_PERMISSION
+			issuanceRaw, readErr := view.Read(issuanceKey)
+			if readErr != nil {
+				return ter.TefINTERNAL
 			}
-			if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureConfidentialTransfer) {
-				issuanceRaw, readErr := view.Read(issuanceKey)
+			var issuance *state.MPTokenIssuanceData
+			if issuanceRaw != nil {
+				issuance, readErr = state.ParseMPTokenIssuance(issuanceRaw)
 				if readErr != nil {
 					return ter.TefINTERNAL
 				}
-				if issuanceRaw != nil {
-					issuance, parseErr := state.ParseMPTokenIssuance(issuanceRaw)
-					if parseErr != nil {
-						return ter.TefINTERNAL
+			}
+			if token.Flags&entry.LsfMPTLocked != 0 {
+				rules := view.Rules()
+				if rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+					if issuance != nil {
+						return ter.TecNO_PERMISSION
 					}
+				} else if rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) {
+					return ter.TecNO_PERMISSION
+				}
+			}
+			if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureConfidentialTransfer) {
+				if issuance != nil {
 					if issuance.ConfidentialOutstandingAmount != 0 &&
 						(len(token.ConfidentialBalanceInbox) != 0 || len(token.ConfidentialBalanceSpending) != 0) {
 						return ter.TecHAS_OBLIGATIONS
@@ -189,6 +208,19 @@ func (m *MPTokenAuthorize) Preclaim(view tx.LedgerView, config tx.EngineConfig) 
 	}
 	if exists, _ := view.Exists(keylet.MPToken(issuanceKey.Key, holderID)); !exists {
 		return ter.TecOBJECT_NOT_FOUND
+	}
+	holderRaw, holderReadErr := view.Read(keylet.Account(holderID))
+	if holderReadErr != nil {
+		return ter.TefINTERNAL
+	}
+	if holderRaw != nil {
+		holder, parseErr := state.ParseAccountRoot(holderRaw)
+		if parseErr != nil {
+			return ter.TefINTERNAL
+		}
+		if holder.IsPseudoAccount() {
+			return ter.TecNO_PERMISSION
+		}
 	}
 	return ter.TesSUCCESS
 }

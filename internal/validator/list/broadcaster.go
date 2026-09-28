@@ -11,45 +11,19 @@ import (
 // connected peers. Implemented by the router so that validator/list
 // stays free of any peermanagement / message-codec dependency.
 //
-// Two send entry points distinguish the rippled wire shapes:
-//   - SendList: TMValidatorList (v1) carrying a single accepted blob.
-//     Used for peers that did not negotiate ValidatorList2Propagation.
-//   - SendCollection: TMValidatorListCollection (v2) carrying current
-//     plus any Remaining blobs. Used for any peer that negotiated v2,
-//     even when the publisher has no Remaining blobs (in which case
-//     the collection has a single entry — current).
-//
-// The aggregator picks the entry point per peer via PeerSupportsV2,
-// matching rippled's sendValidatorList at
-// rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:752-757 which
-// selects messageVersion based on the peer feature alone.
+// Validator-list propagation uses TMValidatorListCollection for every
+// handshake-complete peer. Each collection carries the current list and any
+// verified future lists that are newer than the peer's recorded sequence.
 type PeerBroadcaster interface {
 	// ActivePeers returns the IDs of every connected, handshake-
 	// complete peer. The aggregator iterates this set on each
 	// BroadcastLatest call; order is unspecified.
 	ActivePeers() []uint64
 
-	// PeerSupportsVL reports whether `peerID` negotiated
-	// ValidatorListPropagation at handshake. Mirrors rippled's
-	// peer->supportsFeature(ProtocolFeature::ValidatorListPropagation)
-	// gate in PeerImp.cpp:2252-2260.
-	PeerSupportsVL(peerID uint64) bool
-
-	// PeerSupportsV2 reports whether `peerID` negotiated
-	// ValidatorList2Propagation (implicitly at peer-protocol >= 2.2).
-	// Mirrors rippled PeerImp.cpp:511-514.
-	PeerSupportsV2(peerID uint64) bool
-
-	// SendList delivers a TMValidatorList (v1) frame to peerID carrying
-	// the supplied wire bytes verbatim. blobVersion is recorded on the
-	// frame's `version` field. Returns any send error; the aggregator
-	// logs and continues with the remaining peers.
-	SendList(peerID uint64, manifest, blob, signature []byte, blobVersion uint32) error
-
-	// SendCollection delivers a TMValidatorListCollection (v2) frame
+	// SendCollection delivers a TMValidatorListCollection frame
 	// carrying the publisher manifest plus an ordered slice of
 	// (per-blob optional manifest, blob, signature) tuples. Used for
-	// every v2-capable recipient (the slice has a single current entry
+	// every handshake-complete recipient (the slice has a single current entry
 	// when the publisher has no Remaining blobs). Returns any send
 	// error.
 	SendCollection(peerID uint64, manifest []byte, blobs []BroadcastBlob, version uint32) error
@@ -109,26 +83,67 @@ func (a *Aggregator) PeerSequence(peerID uint64, pubKey PublisherKey) uint32 {
 }
 
 // BroadcastLatest pushes the most recently accepted list for pubKey to every
-// connected peer that negotiated validator-list propagation and is behind the
-// publisher's current sequence. v2 peers receive only collection entries
-// newer than their recorded sequence, while per-blob manifests and the
-// collection-level manifest retain their distinct wire roles.
+// connected peer that is behind the publisher's current sequence. Each peer
+// receives only collection entries newer than its recorded sequence, while
+// per-blob manifests and the collection-level manifest retain their distinct
+// wire roles.
 func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 	a.broadcastLatest(pubKey, exceptPeer, 0)
 }
 
+// SendCachedToPeer sends every available publisher collection to peerID.
+func (a *Aggregator) SendCachedToPeer(peerID uint64) {
+	if peerID == 0 {
+		return
+	}
+	a.mu.Lock()
+	publishers := make([]PublisherKey, 0, len(a.state))
+	for pubKey := range a.state {
+		publishers = append(publishers, pubKey)
+	}
+	a.mu.Unlock()
+
+	for _, pubKey := range publishers {
+		snapshot, ok := a.snapshotBroadcast(pubKey, 0, true)
+		if !ok {
+			continue
+		}
+		a.sendBroadcastEntries(snapshot, []uint64{peerID}, 0)
+	}
+}
+
 func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, targetSequence uint32) {
+	snapshot, ok := a.snapshotBroadcast(pubKey, targetSequence, false)
+	if !ok {
+		return
+	}
+	a.sendBroadcastEntries(snapshot, snapshot.bcaster.ActivePeers(), exceptPeer)
+}
+
+type broadcastSnapshot struct {
+	pubKey        PublisherKey
+	bcaster       PeerBroadcaster
+	rawManifest   []byte
+	entries       []broadcastEntry
+	collVersion   uint32
+	relaySequence uint32
+	maxSequence   uint32
+	sequence      uint32
+}
+
+func (a *Aggregator) snapshotBroadcast(pubKey PublisherKey, targetSequence uint32, requireAvailable bool) (broadcastSnapshot, bool) {
 	a.mu.Lock()
 	bcaster := a.bcaster
 	if bcaster == nil {
 		a.mu.Unlock()
-		return
+		return broadcastSnapshot{}, false
 	}
 	s, ok := a.state[pubKey]
 	if !ok || s.Sequence == 0 || s.Status == StatusRevoked ||
+		(requireAvailable && s.Status != StatusAvailable) ||
 		len(s.RawManifest) == 0 || len(s.RawBlob) == 0 || len(s.RawSignature) == 0 {
 		a.mu.Unlock()
-		return
+		return broadcastSnapshot{}, false
 	}
 	sequence := s.Sequence
 	blobVersion := s.Version
@@ -136,12 +151,6 @@ func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, tar
 		blobVersion = 1
 	}
 	rawManifest := cloneWireBytes(s.RawManifest)
-	listManifest := rawManifest
-	if s.RawLocalManifestSet {
-		listManifest = cloneOptionalWireBytes(s.RawLocalManifest, true)
-	}
-	rawBlob := cloneWireBytes(s.RawBlob)
-	rawSignature := cloneWireBytes(s.RawSignature)
 	entries := make([]broadcastEntry, 0, len(s.Remaining)+1)
 	entries = append(entries, broadcastEntry{
 		sequence: sequence,
@@ -178,64 +187,59 @@ func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, tar
 	if relaySequence == 0 {
 		relaySequence = maxSeq
 	}
-	logger := a.logger
 	a.mu.Unlock()
+	return broadcastSnapshot{
+		pubKey:        pubKey,
+		bcaster:       bcaster,
+		rawManifest:   rawManifest,
+		entries:       entries,
+		collVersion:   collVersion,
+		relaySequence: relaySequence,
+		maxSequence:   maxSeq,
+		sequence:      sequence,
+	}, true
+}
 
-	active := bcaster.ActivePeers()
+func (a *Aggregator) sendBroadcastEntries(
+	snapshot broadcastSnapshot,
+	active []uint64,
+	exceptPeer uint64,
+) {
 	sent := 0
 	for _, peerID := range active {
 		if peerID == exceptPeer {
 			continue
 		}
-		if bcaster.PeerSupportsV2(peerID) {
-			peerSequence := a.PeerSequence(peerID, pubKey)
-			if peerSequence >= relaySequence {
-				continue
-			}
-			peerBlobs := make([]BroadcastBlob, 0, len(entries))
-			for _, entry := range entries {
-				if peerSequence == 0 || entry.sequence > peerSequence {
-					peerBlobs = append(peerBlobs, entry.blob)
-				}
-			}
-			if len(peerBlobs) == 0 {
-				continue
-			}
-			if err := bcaster.SendCollection(peerID, rawManifest, peerBlobs, collVersion); err != nil {
-				logger.Debug("validator list collection broadcast: send failed",
-					"peer", peerID,
-					"publisher", hex.EncodeToString(pubKey[:]),
-					"max_sequence", maxSeq,
-					"error", err)
-				continue
-			}
-			a.RecordPeerSequence(peerID, pubKey, relaySequence)
-			sent++
+		peerSequence := a.PeerSequence(peerID, snapshot.pubKey)
+		if peerSequence >= snapshot.relaySequence {
 			continue
 		}
-		if !bcaster.PeerSupportsVL(peerID) {
+		peerBlobs := make([]BroadcastBlob, 0, len(snapshot.entries))
+		for _, entry := range snapshot.entries {
+			if peerSequence == 0 || entry.sequence > peerSequence {
+				peerBlobs = append(peerBlobs, entry.blob)
+			}
+		}
+		if len(peerBlobs) == 0 {
 			continue
 		}
-		if a.PeerSequence(peerID, pubKey) >= sequence {
-			continue
-		}
-		if err := bcaster.SendList(peerID, listManifest, rawBlob, rawSignature, supportedVersionV1); err != nil {
-			logger.Debug("validator list broadcast: send failed",
+		if err := snapshot.bcaster.SendCollection(peerID, snapshot.rawManifest, peerBlobs, snapshot.collVersion); err != nil {
+			a.logger.Debug("validator list collection broadcast: send failed",
 				"peer", peerID,
-				"publisher", hex.EncodeToString(pubKey[:]),
-				"sequence", sequence,
+				"publisher", hex.EncodeToString(snapshot.pubKey[:]),
+				"max_sequence", snapshot.maxSequence,
 				"error", err)
 			continue
 		}
-		a.RecordPeerSequence(peerID, pubKey, sequence)
+		a.RecordPeerSequence(peerID, snapshot.pubKey, snapshot.relaySequence)
 		sent++
 	}
 
 	if sent > 0 {
-		logger.Debug("validator list broadcast",
-			"publisher", hex.EncodeToString(pubKey[:]),
-			"sequence", sequence,
-			"remaining", len(entries)-1,
+		a.logger.Debug("validator list broadcast",
+			"publisher", hex.EncodeToString(snapshot.pubKey[:]),
+			"sequence", snapshot.sequence,
+			"remaining", len(snapshot.entries)-1,
 			"peers_sent", sent)
 	}
 }

@@ -470,6 +470,10 @@ func RpcErrorTransactionSubmission() *RpcError {
 	return NewRpcError(RpcINTERNAL, "internal", "internal", "Exception occurred during transaction submission.")
 }
 
+func RpcErrorSigningInvalidSignature() *RpcError {
+	return NewRpcError(RpcINTERNAL, "internal", "internal", "Invalid signature.")
+}
+
 // RpcErrorInvalidTransactionType returns rippled's internal serialization
 // error for an unknown numeric transaction type.
 func RpcErrorInvalidTransactionType(transactionType uint16) *RpcError {

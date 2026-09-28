@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -192,6 +193,25 @@ func TestWalkFields_UnsupportedType(t *testing.T) {
 	err := WalkFields(data, func(Field) error { return nil })
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported serialized type 18")
+}
+
+func TestWalkFieldsVariableLengthBounds(t *testing.T) {
+	makeField := func(prefix []byte, payloadLength int) []byte {
+		data := append([]byte{0x71}, prefix...)
+		return append(data, make([]byte, payloadLength)...)
+	}
+
+	maxData := makeField([]byte{0xFE, 0xD4, 0x17}, 918744)
+	require.NoError(t, WalkFields(maxData, func(Field) error { return nil }))
+
+	for _, prefix := range [][]byte{{0xFE, 0xD4, 0x18}, {0xFE, 0xFF, 0xFF}} {
+		data := makeField(prefix, 918745)
+		assert.ErrorIs(t, WalkFields(data, func(Field) error { return nil }), serdes.ErrVariableLengthTooLong)
+	}
+
+	err := WalkFields([]byte{0x71, 0xFE, 0xD4}, func(Field) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "truncated 3-byte length prefix")
 }
 
 // TestWalkFields_Truncated ensures a truncated value is reported as an error.

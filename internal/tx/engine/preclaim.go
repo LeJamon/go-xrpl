@@ -240,7 +240,13 @@ func (e *Engine) checkPriorTxAndLastLedger(common *txcore.Common, account *state
 // Reference: rippled Transactor::checkFee in Transactor.cpp.
 func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) ter.Result {
 	fee := e.calculateFee(tx)
-	baseFeeForTx := e.preclaimBaseFee(tx)
+	baseFeeForTx, err := e.preclaimBaseFee(tx)
+	if err != nil {
+		if resultErr, ok := ter.AsResultError(err); ok {
+			return resultErr.Code
+		}
+		return ter.TefEXCEPTION
+	}
 
 	// Fee adequacy floor. rippled enforces feePaid >= minimumFee whenever the
 	// apply view is open (Transactor::checkFee, Transactor.cpp:278-290), with
@@ -308,7 +314,7 @@ func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (e *Engine) preclaimBaseFee(tx txcore.Transaction) uint64 {
+func (e *Engine) preclaimBaseFee(tx txcore.Transaction) (uint64, error) {
 	return sign.CalculateBaseFee(tx, e.view, e.config)
 }
 

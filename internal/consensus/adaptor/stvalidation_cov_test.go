@@ -287,6 +287,14 @@ func TestStvReadVLLength_ThreeByte(t *testing.T) {
 	assert.Equal(t, 12481, n)
 }
 
+func TestStvReadVLLength_RejectsUnencodableThreeByteRange(t *testing.T) {
+	for _, prefix := range [][]byte{{0xFE, 0xD4, 0x18}, {0xFE, 0xFF, 0xFF}} {
+		pos := 0
+		_, err := readVLLength(append(prefix, make([]byte, 918745)...), &pos)
+		assert.ErrorIs(t, err, errVLEncodedTooLong)
+	}
+}
+
 func TestStvReadVLLength_ThreeByte_Truncated(t *testing.T) {
 	data := []byte{241, 0} // need 2 more bytes
 	pos := 0
@@ -416,6 +424,30 @@ func TestStvAppendVL_ThreeBytes(t *testing.T) {
 	buf := appendVL(nil, data)
 	require.Len(t, buf, 12484)
 	assert.Equal(t, byte(241), buf[0]) // 241 + 0 = 241
+}
+
+func TestStvEncodeVLPrefix_Bounds(t *testing.T) {
+	tests := []struct {
+		length int
+		prefix []byte
+	}{
+		{length: 0, prefix: []byte{0x00}},
+		{length: 192, prefix: []byte{0xC0}},
+		{length: 193, prefix: []byte{0xC1, 0x00}},
+		{length: 12480, prefix: []byte{0xF0, 0xFF}},
+		{length: 12481, prefix: []byte{0xF1, 0x00, 0x00}},
+		{length: 918744, prefix: []byte{0xFE, 0xD4, 0x17}},
+	}
+	for _, test := range tests {
+		prefix, err := encodeVLPrefix(test.length)
+		require.NoError(t, err)
+		assert.Equal(t, test.prefix, prefix)
+	}
+	for _, length := range []int{-1, 918745} {
+		prefix, err := encodeVLPrefix(length)
+		assert.ErrorIs(t, err, errVLEncodedTooLong)
+		assert.Nil(t, prefix)
+	}
 }
 
 func TestStvAppendVL_RoundTrip_TwoByte(t *testing.T) {

@@ -9,6 +9,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
@@ -1159,11 +1161,7 @@ func TestAMMBookStep_Malformed(t *testing.T) {
 	t.Log("testMalformed cases are in TestInvalidWithdraw/Malformed_* in amm_withdraw_test.go")
 }
 
-// TestAMMBookStep_FixOverflowOffer tests overflow offer fix.
-// Reference: rippled AMM_test.cpp testFixOverflowOffer (line 6682)
-// Tests multi-hop payment through AMM pool + CLOB offers with precise balance checking.
-// Our env has all amendments on (fixAMMOverflowOffer, fixAMMv1_1, fixAMMv1_3), so we
-// only verify the "goodr" expected values and lpTokenBalanceAlt where applicable.
+// These vectors omit the retired overflow amendment while preserving each active AMM fix.
 func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 	type inputSet struct {
 		name       string
@@ -1171,14 +1169,19 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 		poolUsdGH  float64
 		sendMax    float64 // usdBIT
 		sendUsdGH  float64 // desired amount
-		// Expected AMM balances after payment (with fixAMMOverflowOffer + fixAMMv1_1)
+		// Expected AMM balances after payment with fixAMMv1_1 enabled.
 		goodUsdGHMant  int64
 		goodUsdGHExp   int
 		goodUsdBITMant int64
 		goodUsdBITExp  int
-		// Expected LP token balance (with fixAMMv1_3 alt where applicable)
-		lptMant int64
-		lptExp  int
+		// Expected AMM balances with the legacy fixAMMv1_1 arithmetic.
+		legacyUsdGHMant  int64
+		legacyUsdGHExp   int
+		legacyUsdBITMant int64
+		legacyUsdBITExp  int
+		lptMant          int64
+		lptAltMant       int64
+		lptExp           int
 		// CLOB offer parameters
 		offer1BtcGH float64
 		offer2BtcGH float64
@@ -1188,18 +1191,18 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 		rateGH  float64
 	}
 
-	// Test vectors from rippled AMM_test.cpp testFixOverflowOffer (lines 6723-6913)
-	// Using "goodr" values (fixAMMv1_1 rounding) and lpTokenBalanceAlt (fixAMMv1_3) where available.
-	// Values are normalized to [10^15, 10^16-1] mantissa range to match Go Amount normalization.
-	// Rippled source values may have shorter mantissas that normalize differently.
+	// Values are selected by fixAMMv1_1 below and normalized to the Go Amount
+	// mantissa range.
 	tests := []inputSet{
 		{
 			name: "Test Fix Overflow Offer", poolUsdBIT: 3, poolUsdGH: 273,
 			sendMax: 50, sendUsdGH: 272.455089820359,
-			// rippled: {967543114222965, -13} → normalized: {9675431142229650, -14}
+			// rippled goodr: {967543114222965, -13} → normalized: {9675431142229650, -14}
 			goodUsdGHMant: 9675431142229650, goodUsdGHExp: -14,
 			goodUsdBITMant: 8464739069098152, goodUsdBITExp: -15,
-			lptMant: 2861817604250836, lptExp: -14, // lpTokenBalanceAlt
+			legacyUsdGHMant: 9675431142203820, legacyUsdGHExp: -14,
+			legacyUsdBITMant: 8464739069120721, legacyUsdBITExp: -15,
+			lptMant: 2861817604250837, lptAltMant: 2861817604250836, lptExp: -14,
 			offer1BtcGH: 0.1, offer2BtcGH: 0.1, offer2UsdGH: 1,
 			rateBIT: 1.15, rateGH: 1.2,
 		},
@@ -1207,18 +1210,52 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 			name: "Overflow test {1, 100, 1.00}", poolUsdBIT: 1, poolUsdGH: 100,
 			sendMax: 1.00, sendUsdGH: 100,
 			goodUsdGHMant: 5294379354424135, goodUsdGHExp: -14,
+			legacyUsdGHMant: 5294379354424079, legacyUsdGHExp: -14,
 			// rippled: {2, 0} → normalized: {2000000000000000, -15}
 			goodUsdBITMant: 2000000000000000, goodUsdBITExp: -15,
-			lptMant: 10, lptExp: 0,
+			legacyUsdBITMant: 2000000000000000, legacyUsdBITExp: -15,
+			lptMant: 1000000000000000, lptExp: -14,
 			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
 			rateBIT: 0, rateGH: 0,
+		},
+		{
+			name: "Overflow test {1, 100, 0.111}", poolUsdBIT: 1, poolUsdGH: 100,
+			sendMax: 0.111, sendUsdGH: 100,
+			goodUsdGHMant: 9004347888284201, goodUsdGHExp: -14,
+			legacyUsdGHMant: 9004347888284115, legacyUsdGHExp: -14,
+			goodUsdBITMant: 1111000000000000, goodUsdBITExp: -15,
+			legacyUsdBITMant: 1111000000000000, legacyUsdBITExp: -15,
+			lptMant: 1000000000000000, lptExp: -14,
+			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
+		},
+		{
+			name: "Overflow test {1, 100, 4.6432}", poolUsdBIT: 1, poolUsdGH: 100,
+			sendMax: 4.6432, sendUsdGH: 100,
+			goodUsdGHMant: 3544113971506987, goodUsdGHExp: -14,
+			legacyUsdGHMant: 3544113971506987, legacyUsdGHExp: -14,
+			goodUsdBITMant: 2821579689703954, goodUsdBITExp: -15,
+			legacyUsdBITMant: 2821579689703915, legacyUsdBITExp: -15,
+			lptMant: 1000000000000000, lptExp: -14,
+			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
+		},
+		{
+			name: "Overflow test {1, 100, 10}", poolUsdBIT: 1, poolUsdGH: 100,
+			sendMax: 10, sendUsdGH: 100,
+			goodUsdGHMant: 3544113971506987, goodUsdGHExp: -14,
+			legacyUsdGHMant: 3544113971506987, legacyUsdGHExp: -14,
+			goodUsdBITMant: 2821579689703954, goodUsdBITExp: -15,
+			legacyUsdBITMant: 2821579689703915, legacyUsdBITExp: -15,
+			lptMant: 1000000000000000, lptExp: -14,
+			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
 		},
 		{
 			name: "Overflow test {50, 100, 50.00}", poolUsdBIT: 50, poolUsdGH: 100,
 			sendMax: 50.00, sendUsdGH: 100,
 			goodUsdGHMant: 5294379354424092, goodUsdGHExp: -14,
+			legacyUsdGHMant: 5294379354424081, legacyUsdGHExp: -14,
 			// rippled: {100, 0} → normalized: {1000000000000000, -13}
 			goodUsdBITMant: 1000000000000000, goodUsdBITExp: -13,
+			legacyUsdBITMant: 1000000000000000, legacyUsdBITExp: -13,
 			lptMant: 7071067811865475, lptExp: -14,
 			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
 			rateBIT: 0, rateGH: 0,
@@ -1226,133 +1263,200 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 		{
 			name: "Overflow test {50, 100, 5.55}", poolUsdBIT: 50, poolUsdGH: 100,
 			sendMax: 5.55, sendUsdGH: 100,
-			// rippled: {900434788828413, -13} → normalized: {9004347888284130, -14}
+			// rippled goodr: {900434788828413, -13} → normalized: {9004347888284130, -14}
 			goodUsdGHMant: 9004347888284130, goodUsdGHExp: -14,
+			legacyUsdGHMant: 9004347888284113, legacyUsdGHExp: -14,
 			// rippled: {5555, -2} → normalized: {5555000000000000, -14}
 			goodUsdBITMant: 5555000000000000, goodUsdBITExp: -14,
+			legacyUsdBITMant: 5555000000000000, legacyUsdBITExp: -14,
 			lptMant: 7071067811865475, lptExp: -14,
 			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
 			rateBIT: 0, rateGH: 0,
 		},
+		{
+			name: "Overflow test {50, 100, 232.16}", poolUsdBIT: 50, poolUsdGH: 100,
+			sendMax: 232.16, sendUsdGH: 100,
+			goodUsdGHMant: 3544113971506987, goodUsdGHExp: -14,
+			legacyUsdGHMant: 3544113971506987, legacyUsdGHExp: -14,
+			goodUsdBITMant: 1410789844851962, goodUsdBITExp: -13,
+			legacyUsdBITMant: 1410789844851958, legacyUsdBITExp: -13,
+			lptMant: 7071067811865475, lptExp: -14,
+			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
+		},
+		{
+			name: "Overflow test {50, 100, 500}", poolUsdBIT: 50, poolUsdGH: 100,
+			sendMax: 500, sendUsdGH: 100,
+			goodUsdGHMant: 3544113971506987, goodUsdGHExp: -14,
+			legacyUsdGHMant: 3544113971506987, legacyUsdGHExp: -14,
+			goodUsdBITMant: 1410789844851962, goodUsdBITExp: -13,
+			legacyUsdBITMant: 1410789844851958, legacyUsdBITExp: -13,
+			lptMant: 7071067811865475, lptExp: -14,
+			offer1BtcGH: 1e-5, offer2BtcGH: 1, offer2UsdGH: 1e-5,
+		},
 	}
 
+	fixes := []struct{ rounding, lpTokens bool }{{false, false}, {false, true}, {true, false}, {true, true}}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			env := amm.NewAMMTestEnv(t)
-			env.DisableFeature("SingleAssetVault")
-			env.DisableFeature("LendingProtocol")
-			gatehub := jtx.NewAccount("gatehub")
-			bitstamp := jtx.NewAccount("bitstamp")
-			trader := jtx.NewAccount("trader")
+		for _, fix := range fixes {
+			t.Run(fmt.Sprintf("%s/fixAMMv1_1=%t/fixAMMv1_3=%t", tc.name, fix.rounding, fix.lpTokens), func(t *testing.T) {
+				env := amm.NewAMMTestEnv(t)
+				env.DisableFeature("fixAMMOverflowOffer")
+				env.DisableFeature("SingleAssetVault")
+				env.DisableFeature("LendingProtocol")
+				if !fix.rounding {
+					env.DisableFeature("fixAMMv1_1")
+				}
+				if !fix.lpTokens {
+					env.DisableFeature("fixAMMv1_3")
+				}
+				env.Close()
+				if env.FeatureEnabled("fixAMMOverflowOffer") {
+					t.Fatal("retired overflow amendment must be absent from these rules")
+				}
+				gatehub := jtx.NewAccount("gatehub")
+				bitstamp := jtx.NewAccount("bitstamp")
+				trader := jtx.NewAccount("trader")
 
-			// Fund accounts with 5000 XRP each
-			for _, acc := range []*jtx.Account{gatehub, bitstamp, trader} {
-				env.TestEnv.FundAmount(acc, uint64(jtx.XRP(5000)))
-			}
-			env.Close()
+				// Fund accounts with 5000 XRP each
+				for _, acc := range []*jtx.Account{gatehub, bitstamp, trader} {
+					env.TestEnv.FundAmount(acc, uint64(jtx.XRP(5000)))
+				}
+				env.Close()
 
-			// Set transfer rates if specified
-			if tc.rateGH != 0 {
-				rateUint := uint32(tc.rateGH * 1e9) // e.g., 1.2 → 1200000000
-				env.TestEnv.SetTransferRate(gatehub, rateUint)
-			}
-			if tc.rateBIT != 0 {
-				rateUint := uint32(tc.rateBIT * 1e9)
-				env.TestEnv.SetTransferRate(bitstamp, rateUint)
-			}
+				// Set transfer rates if specified
+				if tc.rateGH != 0 {
+					rateUint := uint32(tc.rateGH * 1e9) // e.g., 1.2 → 1200000000
+					env.TestEnv.SetTransferRate(gatehub, rateUint)
+				}
+				if tc.rateBIT != 0 {
+					rateUint := uint32(tc.rateBIT * 1e9)
+					env.TestEnv.SetTransferRate(bitstamp, rateUint)
+				}
 
-			// Trust lines: trader trusts all 3 currencies at 10M
-			env.Trust(trader, gatehub, "USD", 10000000)
-			env.Trust(trader, bitstamp, "USD", 10000000)
-			env.Trust(trader, gatehub, "BTC", 10000000)
-			env.Close()
+				// Trust lines: trader trusts all 3 currencies at 10M
+				env.Trust(trader, gatehub, "USD", 10000000)
+				env.Trust(trader, bitstamp, "USD", 10000000)
+				env.Trust(trader, gatehub, "BTC", 10000000)
+				env.Close()
 
-			// Fund trader with 100K of each currency
-			env.PayIOU(gatehub, trader, "USD", 100000)
-			env.PayIOU(gatehub, trader, "BTC", 100000)
-			env.PayIOU(bitstamp, trader, "USD", 100000)
-			env.Close()
+				// Fund trader with 100K of each currency
+				env.PayIOU(gatehub, trader, "USD", 100000)
+				env.PayIOU(gatehub, trader, "BTC", 100000)
+				env.PayIOU(bitstamp, trader, "USD", 100000)
+				env.Close()
 
-			// Create AMM: usdGH / usdBIT
-			ammCreateTx := amm.AMMCreate(trader,
-				amm.IOUAmount(gatehub, "USD", tc.poolUsdGH),
-				amm.IOUAmount(bitstamp, "USD", tc.poolUsdBIT)).
-				TradingFee(0).Build()
-			jtx.RequireTxSuccess(t, env.Submit(ammCreateTx))
-			env.Close()
+				// Create AMM: usdGH / usdBIT
+				ammCreateTx := amm.AMMCreate(trader,
+					amm.IOUAmount(gatehub, "USD", tc.poolUsdGH),
+					amm.IOUAmount(bitstamp, "USD", tc.poolUsdBIT)).
+					TradingFee(0).Build()
+				jtx.RequireTxSuccess(t, env.Submit(ammCreateTx))
+				env.Close()
 
-			// Get AMM account
-			usdGHAsset := tx.Asset{Currency: "USD", Issuer: gatehub.Address}
-			usdBITAsset := tx.Asset{Currency: "USD", Issuer: bitstamp.Address}
-			ammAcc := amm.AMMAccount(t, env, usdGHAsset, usdBITAsset)
+				// Get AMM account
+				usdGHAsset := tx.Asset{Currency: "USD", Issuer: gatehub.Address}
+				usdBITAsset := tx.Asset{Currency: "USD", Issuer: bitstamp.Address}
+				ammAcc := amm.AMMAccount(t, env, usdGHAsset, usdBITAsset)
+				ammDataBefore := env.ReadAMMData(usdGHAsset, usdBITAsset)
+				if ammDataBefore == nil {
+					t.Fatal("AMM data is nil before payment")
+				}
 
-			// Create CLOB offers for the alternative path
-			// offer1: trader wants usdBIT(1) for btcGH(offer1BtcGH)
-			offer1Tx := offerbuild.OfferCreate(trader,
-				amm.IOUAmount(bitstamp, "USD", 1),
-				amm.IOUAmount(gatehub, "BTC", tc.offer1BtcGH)).Build()
-			jtx.RequireTxSuccess(t, env.Submit(offer1Tx))
+				// Create CLOB offers for the alternative path
+				// offer1: trader wants usdBIT(1) for btcGH(offer1BtcGH)
+				offer1Tx := offerbuild.OfferCreate(trader,
+					amm.IOUAmount(bitstamp, "USD", 1),
+					amm.IOUAmount(gatehub, "BTC", tc.offer1BtcGH)).Build()
+				jtx.RequireTxSuccess(t, env.Submit(offer1Tx))
 
-			// offer2: trader wants btcGH(offer2BtcGH) for usdGH(offer2UsdGH)
-			offer2Tx := offerbuild.OfferCreate(trader,
-				amm.IOUAmount(gatehub, "BTC", tc.offer2BtcGH),
-				amm.IOUAmount(gatehub, "USD", tc.offer2UsdGH)).Build()
-			jtx.RequireTxSuccess(t, env.Submit(offer2Tx))
-			env.Close()
+				// offer2: trader wants btcGH(offer2BtcGH) for usdGH(offer2UsdGH)
+				offer2Tx := offerbuild.OfferCreate(trader,
+					amm.IOUAmount(gatehub, "BTC", tc.offer2BtcGH),
+					amm.IOUAmount(gatehub, "USD", tc.offer2UsdGH)).Build()
+				jtx.RequireTxSuccess(t, env.Submit(offer2Tx))
+				env.Close()
 
-			// Self-payment: trader → trader
-			// send usdGH, sendmax usdBIT, paths: ~usdGH and ~btcGH,~usdGH
-			// partial payment
-			sendAmt := amm.IOUAmount(gatehub, "USD", tc.sendUsdGH)
-			sendMaxAmt := amm.IOUAmount(bitstamp, "USD", tc.sendMax)
+				// Self-payment: trader → trader
+				// send usdGH, sendmax usdBIT, paths: ~usdGH and ~btcGH,~usdGH
+				// partial payment
+				sendAmt := amm.IOUAmount(gatehub, "USD", tc.sendUsdGH)
+				sendMaxAmt := amm.IOUAmount(bitstamp, "USD", tc.sendMax)
 
-			payTx := payment.PayIssued(trader, trader, sendAmt).
-				SendMax(sendMaxAmt).
-				Paths([][]paymenttx.PathStep{
-					// path(~usdGH): through AMM
-					{{Currency: "USD", Issuer: gatehub.Address}},
-					// path(~btcGH, ~usdGH): through CLOB offers
-					{
-						{Currency: "BTC", Issuer: gatehub.Address},
-						{Currency: "USD", Issuer: gatehub.Address},
-					},
-				}).
-				PartialPayment().Build()
-			jtx.RequireTxSuccess(t, env.Submit(payTx))
-			env.Close()
+				payTx := payment.PayIssued(trader, trader, sendAmt).
+					SendMax(sendMaxAmt).
+					Paths([][]paymenttx.PathStep{
+						// path(~usdGH): through AMM
+						{{Currency: "USD", Issuer: gatehub.Address}},
+						// path(~btcGH, ~usdGH): through CLOB offers
+						{
+							{Currency: "BTC", Issuer: gatehub.Address},
+							{Currency: "USD", Issuer: gatehub.Address},
+						},
+					}).
+					PartialPayment().Build()
+				balanceBefore, sequenceBefore := env.Balance(trader), env.Seq(trader)
+				jtx.RequireTxSuccess(t, env.Submit(payTx))
+				env.Close()
+				if got := balanceBefore - env.Balance(trader); got != env.BaseFee() {
+					t.Errorf("trader fee = %d drops, want %d", got, env.BaseFee())
+				}
+				if got := env.Seq(trader); got != sequenceBefore+1 {
+					t.Errorf("trader sequence = %d, want %d", got, sequenceBefore+1)
+				}
 
-			// Check AMM balances (precise mantissa/exponent comparison)
-			ammUsdGH := env.TestEnv.IOUBalance(ammAcc, gatehub, "USD")
-			ammUsdBIT := env.TestEnv.IOUBalance(ammAcc, bitstamp, "USD")
+				// Check AMM balances (precise mantissa/exponent comparison)
+				ammUsdGH := env.TestEnv.IOUBalance(ammAcc, gatehub, "USD")
+				ammUsdBIT := env.TestEnv.IOUBalance(ammAcc, bitstamp, "USD")
 
-			if ammUsdGH == nil {
-				t.Fatal("AMM usdGH balance is nil")
-			}
-			if ammUsdBIT == nil {
-				t.Fatal("AMM usdBIT balance is nil")
-			}
+				if ammUsdGH == nil {
+					t.Fatal("AMM usdGH balance is nil")
+				}
+				if ammUsdBIT == nil {
+					t.Fatal("AMM usdBIT balance is nil")
+				}
 
-			// Compare with expected values.
-			// Allow small mantissa tolerance (±200) for accumulated rounding in
-			// 16+ Fibonacci iterations. Exponent must match exactly.
-			const mantissaTol int64 = 200
-			ghMantDiff := ammUsdGH.Mantissa() - tc.goodUsdGHMant
-			if ghMantDiff < 0 {
-				ghMantDiff = -ghMantDiff
-			}
-			if ghMantDiff > mantissaTol || ammUsdGH.Exponent() != tc.goodUsdGHExp {
-				t.Errorf("AMM usdGH balance mismatch: got {%d, %d}, expected {%d, %d} (got %g, diff=%d)",
-					ammUsdGH.Mantissa(), ammUsdGH.Exponent(), tc.goodUsdGHMant, tc.goodUsdGHExp, ammUsdGH.Float64(), ammUsdGH.Mantissa()-tc.goodUsdGHMant)
-			}
-			bitMantDiff := ammUsdBIT.Mantissa() - tc.goodUsdBITMant
-			if bitMantDiff < 0 {
-				bitMantDiff = -bitMantDiff
-			}
-			if bitMantDiff > mantissaTol || ammUsdBIT.Exponent() != tc.goodUsdBITExp {
-				t.Errorf("AMM usdBIT balance mismatch: got {%d, %d}, expected {%d, %d} (got %g, diff=%d)",
-					ammUsdBIT.Mantissa(), ammUsdBIT.Exponent(), tc.goodUsdBITMant, tc.goodUsdBITExp, ammUsdBIT.Float64(), ammUsdBIT.Mantissa()-tc.goodUsdBITMant)
-			}
-		})
+				wantGHMant, wantGHExp := tc.goodUsdGHMant, tc.goodUsdGHExp
+				wantBITMant, wantBITExp := tc.goodUsdBITMant, tc.goodUsdBITExp
+				if !fix.rounding {
+					wantGHMant, wantGHExp = tc.legacyUsdGHMant, tc.legacyUsdGHExp
+					wantBITMant, wantBITExp = tc.legacyUsdBITMant, tc.legacyUsdBITExp
+				}
+
+				if ammUsdGH.Mantissa() != wantGHMant || ammUsdGH.Exponent() != wantGHExp {
+					t.Errorf("AMM usdGH balance mismatch: got {%d, %d}, expected {%d, %d} (got %g, diff=%d)",
+						ammUsdGH.Mantissa(), ammUsdGH.Exponent(), wantGHMant, wantGHExp, ammUsdGH.Float64(), ammUsdGH.Mantissa()-wantGHMant)
+				}
+				if ammUsdBIT.Mantissa() != wantBITMant || ammUsdBIT.Exponent() != wantBITExp {
+					t.Errorf("AMM usdBIT balance mismatch: got {%d, %d}, expected {%d, %d} (got %g, diff=%d)",
+						ammUsdBIT.Mantissa(), ammUsdBIT.Exponent(), wantBITMant, wantBITExp, ammUsdBIT.Float64(), ammUsdBIT.Mantissa()-wantBITMant)
+				}
+
+				ammDataAfter := env.ReadAMMData(usdGHAsset, usdBITAsset)
+				if ammDataAfter == nil {
+					t.Fatal("AMM data is nil after payment")
+				}
+				if got, want := ammDataAfter.LPTokenBalance, ammDataBefore.LPTokenBalance; got.Mantissa() != want.Mantissa() || got.Exponent() != want.Exponent() {
+					t.Errorf("AMM LP token balance changed: got {%d, %d}, want {%d, %d}",
+						got.Mantissa(), got.Exponent(), want.Mantissa(), want.Exponent())
+				}
+				wantLPTMant := tc.lptMant
+				if fix.lpTokens && tc.lptAltMant != 0 {
+					wantLPTMant = tc.lptAltMant
+				}
+				if got := ammDataAfter.LPTokenBalance; got.Mantissa() != wantLPTMant || got.Exponent() != tc.lptExp {
+					t.Errorf("AMM LP token balance = {%d, %d}, want {%d, %d}",
+						got.Mantissa(), got.Exponent(), wantLPTMant, tc.lptExp)
+				}
+				numbers := state.NewNumberContext(state.MantissaScaleSmall, true)
+				product := numbers.FromAmount(*ammUsdGH, state.RoundToNearest).
+					Mul(numbers.FromAmount(*ammUsdBIT, state.RoundToNearest))
+				// The pool-product bound allows 1e-14 of representation error.
+				bound := product.Root2().Add(numbers.Number(1, -14, state.RoundToNearest))
+				if bound.Cmp(numbers.Number(tc.lptMant, tc.lptExp, state.RoundToNearest)) < 0 {
+					t.Fatalf("pool product no longer backs the LP token balance: %s", product.String())
+				}
+			})
+		}
 	}
 }
 
@@ -1415,113 +1519,113 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 // Reference: rippled AMM_test.cpp testFixAMMOfferBlockedByLOB (line 7050)
 // A low-quality CLOB offer should not block AMM from being consumed.
 func TestAMMBookStep_FixAMMOfferBlockedByLOB(t *testing.T) {
-	// Scenario 2: No blocking offer — AMM consumed regardless of amendment.
-	// This tests the base case that AMM liquidity is accessible.
-	t.Run("NoBlockingOffer", func(t *testing.T) {
-		env := amm.NewAMMTestEnv(t)
-		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000000)))
-		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000000)))
-		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(1000000)))
-		env.Close()
+	for _, receiveXRP := range []bool{false, true} {
+		for _, blockingOffer := range []bool{false, true} {
+			for _, fixAMMv1_1 := range []bool{false, true} {
+				for _, mptTokensV2 := range []bool{false, true} {
+					name := fmt.Sprintf("receiveXRP=%t/blocker=%t/fixAMMv1_1=%t/MPTokensV2=%t", receiveXRP, blockingOffer, fixAMMv1_1, mptTokensV2)
+					t.Run(name, func(t *testing.T) {
+						env := amm.NewAMMTestEnv(t)
+						env.DisableFeature("fixAMMOverflowOffer")
+						if fixAMMv1_1 {
+							env.EnableFeature("fixAMMv1_1")
+						} else {
+							env.DisableFeature("fixAMMv1_1")
+						}
+						if mptTokensV2 {
+							env.EnableFeature("MPTokensV2")
+						} else {
+							env.DisableFeature("MPTokensV2")
+						}
+						env.Close()
+						require.False(t, env.FeatureEnabled("fixAMMOverflowOffer"))
+						require.Equal(t, fixAMMv1_1, env.FeatureEnabled("fixAMMv1_1"))
+						require.Equal(t, mptTokensV2, env.FeatureEnabled("MPTokensV2"))
 
-		env.Trust(env.Alice, env.GW, "USD", 1000000)
-		env.Trust(env.Carol, env.GW, "USD", 1000000)
-		env.Close()
+						usd := func(mantissa int64, exponent int) tx.Amount {
+							return state.NewIssuedAmountFromValue(mantissa, exponent, "USD", env.GW.Address)
+						}
+						checkAmount := func(want, got tx.Amount) {
+							t.Helper()
+							require.Equal(t, want.IsNative(), got.IsNative())
+							require.Equal(t, want.Value(), got.Value())
+							if !want.IsNative() {
+								require.Equal(t, want.Currency, got.Currency)
+								require.Equal(t, want.Issuer, got.Issuer)
+							}
+						}
+						checkOffer := func(account *jtx.Account, pays, gets tx.Amount) {
+							t.Helper()
+							offers := env.AccountOffers(account)
+							require.Len(t, offers, 1)
+							checkAmount(pays, offers[0].TakerPays)
+							checkAmount(gets, offers[0].TakerGets)
+						}
 
-		env.PayIOU(env.GW, env.Alice, "USD", 1000000)
-		env.PayIOU(env.GW, env.Carol, "USD", 1000000)
-		env.Close()
+						fundXRP, fundUSD := int64(1_000_000), float64(1_000_000)
+						creator, blocker := env.GW, env.Alice
+						poolXRP, poolUSD := uint64(200_000_000_000), usd(100_000, 0)
+						blockerPays, blockerGets := tx.NewXRPAmount(1_000_000), usd(1, -2)
+						carolPays, carolGets := usd(49, -2), tx.NewXRPAmount(1_000_000)
+						if receiveXRP {
+							fundXRP, fundUSD = 10_000, 1_000
+							creator, blocker = env.Alice, env.Bob
+							poolXRP, poolUSD = 1_000_000_000, usd(500, 0)
+							blockerPays, blockerGets = usd(1, 0), tx.NewXRPAmount(500)
+							carolPays, carolGets = tx.NewXRPAmount(100_000_000), usd(55, 0)
+						}
+						for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol, env.Bob} {
+							env.TestEnv.FundAmount(account, uint64(fundXRP*1_000_000))
+						}
+						env.Close()
+						for _, account := range []*jtx.Account{env.Alice, env.Carol, env.Bob} {
+							env.Trust(account, env.GW, "USD", fundUSD)
+						}
+						env.Close()
+						for _, account := range []*jtx.Account{env.Alice, env.Carol, env.Bob} {
+							env.PayIOU(env.GW, account, "USD", fundUSD)
+						}
+						env.Close()
+						if blockingOffer {
+							jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(blocker, blockerPays, blockerGets).Build()))
+							env.Close()
+						}
+						jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(creator, tx.NewXRPAmount(int64(poolXRP)), poolUSD).TradingFee(0).Build()))
+						env.Close()
+						ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+						lpBefore := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
+						carolXRPBefore, carolSeqBefore := env.Balance(env.Carol), env.Seq(env.Carol)
+						jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(env.Carol, carolPays, carolGets).Build()))
+						env.Close()
 
-		// No blocking offer
-		// GW creates AMM: XRP(200000)/USD(100000)
-		createTx := amm.AMMCreate(env.GW,
-			tx.NewXRPAmount(200_000*1_000_000),
-			amm.IOUAmount(env.GW, "USD", 100000)).
-			TradingFee(0).Build()
-		jtx.RequireTxSuccess(t, env.Submit(createTx))
-		env.Close()
-
-		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
-
-		// Carol creates offer: buy USD(0.49) sell XRP(1)
-		offerTx := offerbuild.OfferCreate(env.Carol,
-			amm.IOUAmount(env.GW, "USD", 0.49),
-			tx.NewXRPAmount(1*1_000_000)).Build()
-		jtx.RequireTxSuccess(t, env.Submit(offerTx))
-		env.Close()
-
-		// AMM should be consumed
-		// rippled expects: XRP(200000980005), USD(99999.51)
-		ammXRP := env.AMMPoolXRP(ammAcc)
-		ammUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-
-		if ammXRP <= 200_000*1_000_000 {
-			t.Errorf("AMM XRP should increase after offer crossing: got %d", ammXRP)
+						wantXRP, wantUSD := poolXRP, poolUSD
+						if blockingOffer && !fixAMMv1_1 {
+							checkOffer(env.Carol, carolPays, carolGets)
+						} else if !receiveXRP {
+							wantXRP, wantUSD = 200_000_980_005, usd(9_999_951, -2)
+							require.Empty(t, env.AccountOffers(env.Carol))
+						} else if !mptTokensV2 {
+							wantXRP, wantUSD = 909_090_909, usd(550_000_000_055, -9)
+							checkOffer(env.Carol, tx.NewXRPAmount(9_090_909), usd(499_999_995, -8))
+						} else {
+							wantXRP, wantUSD = 909_090_910, usd(54_999_999_945, -8)
+							checkOffer(env.Carol, tx.NewXRPAmount(9_090_910), usd(50_000_005, -7))
+						}
+						if blockingOffer {
+							checkOffer(blocker, blockerPays, blockerGets)
+						} else {
+							require.Empty(t, env.AccountOffers(blocker))
+						}
+						require.Equal(t, wantXRP, env.AMMPoolXRP(ammAcc))
+						checkAmount(wantUSD, env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD"))
+						checkAmount(lpBefore, env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance)
+						require.Equal(t, carolXRPBefore+poolXRP-wantXRP-env.BaseFee(), env.Balance(env.Carol))
+						require.Equal(t, carolSeqBefore+1, env.Seq(env.Carol))
+					})
+				}
+			}
 		}
-		if ammUSD >= 100000 {
-			t.Errorf("AMM USD should decrease after offer crossing: got %f", ammUSD)
-		}
-
-		// Carol's offer should be consumed
-		carolOffers := env.AccountOffers(env.Carol)
-		if len(carolOffers) != 0 {
-			t.Errorf("Carol should have 0 offers (consumed), got %d", len(carolOffers))
-		}
-	})
-
-	// Scenario 3: XRP/USD direction, no blocking offer
-	t.Run("XRPUSDNoBlockingOffer", func(t *testing.T) {
-		env := amm.NewAMMTestEnv(t)
-		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30000)))
-		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(10000)))
-		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(10000)))
-		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		env.Trust(env.Alice, env.GW, "USD", 100000)
-		env.Trust(env.Carol, env.GW, "USD", 100000)
-		env.Trust(env.Bob, env.GW, "USD", 100000)
-		env.Close()
-
-		env.PayIOU(env.GW, env.Alice, "USD", 1000)
-		env.PayIOU(env.GW, env.Carol, "USD", 1000)
-		env.PayIOU(env.GW, env.Bob, "USD", 1000)
-		env.Close()
-
-		// Alice creates AMM: XRP(1000)/USD(500)
-		createTx := amm.AMMCreate(env.Alice,
-			tx.NewXRPAmount(1000*1_000_000),
-			amm.IOUAmount(env.GW, "USD", 500)).
-			TradingFee(0).Build()
-		jtx.RequireTxSuccess(t, env.Submit(createTx))
-		env.Close()
-
-		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
-
-		// Carol creates offer: buy XRP(100) sell USD(55)
-		offerTx := offerbuild.OfferCreate(env.Carol,
-			tx.NewXRPAmount(100*1_000_000),
-			amm.IOUAmount(env.GW, "USD", 55)).Build()
-		jtx.RequireTxSuccess(t, env.Submit(offerTx))
-		env.Close()
-
-		// AMM should be consumed: XRP ~909090909 drops, USD ~550.00000005
-		ammXRP := env.AMMPoolXRP(ammAcc)
-		ammUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-
-		if ammXRP >= 1000*1_000_000 {
-			t.Errorf("AMM XRP should decrease: got %d", ammXRP)
-		}
-		if ammUSD <= 500 {
-			t.Errorf("AMM USD should increase: got %f", ammUSD)
-		}
-
-		// Carol should have remaining offer (partially filled)
-		carolOffers := env.AccountOffers(env.Carol)
-		if len(carolOffers) != 1 {
-			t.Errorf("Carol should have 1 remaining offer, got %d", len(carolOffers))
-		}
-	})
+	}
 }
 
 // TestAMMBookStep_LPTokenBalance tests LP token balance tracking after deposits/withdrawals.
