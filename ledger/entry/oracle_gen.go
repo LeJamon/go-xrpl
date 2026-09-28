@@ -217,10 +217,7 @@ func (o *Oracle) HasPriceDataSeries() bool {
 
 // GetPriceDataSeries returns typed nested objects.
 func (o *Oracle) GetPriceDataSeries() ([]PriceDataValue, error) {
-	if o == nil {
-		return nil, nil
-	}
-	if !o.HasPriceDataSeries() {
+	if o == nil || o.PriceDataSeries == nil {
 		return nil, nil
 	}
 	return priceDataValueSliceFromAny(o.PriceDataSeries, "Oracle.PriceDataSeries")

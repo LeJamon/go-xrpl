@@ -477,10 +477,7 @@ func (l *Loan) ClearLoanOriginationFee() {
 
 // GetLoanOriginationFee returns the exact decoded Number text.
 func (l *Loan) GetLoanOriginationFee() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasLoanOriginationFee() {
+	if l == nil || l.LoanOriginationFee == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.LoanOriginationFee, "Loan.LoanOriginationFee")
@@ -513,10 +510,7 @@ func (l *Loan) ClearLoanServiceFee() {
 
 // GetLoanServiceFee returns the exact decoded Number text.
 func (l *Loan) GetLoanServiceFee() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasLoanServiceFee() {
+	if l == nil || l.LoanServiceFee == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.LoanServiceFee, "Loan.LoanServiceFee")
@@ -549,10 +543,7 @@ func (l *Loan) ClearLatePaymentFee() {
 
 // GetLatePaymentFee returns the exact decoded Number text.
 func (l *Loan) GetLatePaymentFee() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasLatePaymentFee() {
+	if l == nil || l.LatePaymentFee == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.LatePaymentFee, "Loan.LatePaymentFee")
@@ -585,10 +576,7 @@ func (l *Loan) ClearClosePaymentFee() {
 
 // GetClosePaymentFee returns the exact decoded Number text.
 func (l *Loan) GetClosePaymentFee() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasClosePaymentFee() {
+	if l == nil || l.ClosePaymentFee == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.ClosePaymentFee, "Loan.ClosePaymentFee")
@@ -899,10 +887,7 @@ func (l *Loan) HasPeriodicPayment() bool {
 
 // GetPeriodicPayment returns the exact decoded Number text.
 func (l *Loan) GetPeriodicPayment() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasPeriodicPayment() {
+	if l == nil || l.PeriodicPayment == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.PeriodicPayment, "Loan.PeriodicPayment")
@@ -935,10 +920,7 @@ func (l *Loan) ClearPrincipalOutstanding() {
 
 // GetPrincipalOutstanding returns the exact decoded Number text.
 func (l *Loan) GetPrincipalOutstanding() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasPrincipalOutstanding() {
+	if l == nil || l.PrincipalOutstanding == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.PrincipalOutstanding, "Loan.PrincipalOutstanding")
@@ -971,10 +953,7 @@ func (l *Loan) ClearTotalValueOutstanding() {
 
 // GetTotalValueOutstanding returns the exact decoded Number text.
 func (l *Loan) GetTotalValueOutstanding() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasTotalValueOutstanding() {
+	if l == nil || l.TotalValueOutstanding == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.TotalValueOutstanding, "Loan.TotalValueOutstanding")
@@ -1007,10 +986,7 @@ func (l *Loan) ClearManagementFeeOutstanding() {
 
 // GetManagementFeeOutstanding returns the exact decoded Number text.
 func (l *Loan) GetManagementFeeOutstanding() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasManagementFeeOutstanding() {
+	if l == nil || l.ManagementFeeOutstanding == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.ManagementFeeOutstanding, "Loan.ManagementFeeOutstanding")

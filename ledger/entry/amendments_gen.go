@@ -122,10 +122,7 @@ func (a *Amendments) ClearAmendments() {
 
 // GetAmendments returns the typed Vector256 values.
 func (a *Amendments) GetAmendments() (Vector256Value, error) {
-	if a == nil {
-		return nil, nil
-	}
-	if !a.HasAmendments() {
+	if a == nil || a.Amendments == nil {
 		return nil, nil
 	}
 	return vector256ValueFromStrings(a.Amendments, "Amendments.Amendments")
@@ -153,10 +150,7 @@ func (a *Amendments) ClearMajorities() {
 
 // GetMajorities returns typed nested objects.
 func (a *Amendments) GetMajorities() ([]MajorityValue, error) {
-	if a == nil {
-		return nil, nil
-	}
-	if !a.HasMajorities() {
+	if a == nil || a.Majorities == nil {
 		return nil, nil
 	}
 	return majorityValueSliceFromAny(a.Majorities, "Amendments.Majorities")

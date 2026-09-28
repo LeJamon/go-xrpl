@@ -131,10 +131,7 @@ func (n *NegativeUNL) ClearDisabledValidators() {
 
 // GetDisabledValidators returns typed nested objects.
 func (n *NegativeUNL) GetDisabledValidators() ([]DisabledValidatorValue, error) {
-	if n == nil {
-		return nil, nil
-	}
-	if !n.HasDisabledValidators() {
+	if n == nil || n.DisabledValidators == nil {
 		return nil, nil
 	}
 	return disabledValidatorValueSliceFromAny(n.DisabledValidators, "NegativeUNL.DisabledValidators")

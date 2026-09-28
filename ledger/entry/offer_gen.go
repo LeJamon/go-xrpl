@@ -397,10 +397,7 @@ func (o *Offer) ClearAdditionalBooks() {
 
 // GetAdditionalBooks returns typed nested objects.
 func (o *Offer) GetAdditionalBooks() ([]BookValue, error) {
-	if o == nil {
-		return nil, nil
-	}
-	if !o.HasAdditionalBooks() {
+	if o == nil || o.AdditionalBooks == nil {
 		return nil, nil
 	}
 	return bookValueSliceFromAny(o.AdditionalBooks, "Offer.AdditionalBooks")

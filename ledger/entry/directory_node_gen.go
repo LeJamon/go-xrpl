@@ -241,10 +241,7 @@ func (d *DirectoryNode) HasIndexes() bool {
 
 // GetIndexes returns the typed Vector256 values.
 func (d *DirectoryNode) GetIndexes() (Vector256Value, error) {
-	if d == nil {
-		return nil, nil
-	}
-	if !d.HasIndexes() {
+	if d == nil || d.Indexes == nil {
 		return nil, nil
 	}
 	return vector256ValueFromStrings(d.Indexes, "DirectoryNode.Indexes")

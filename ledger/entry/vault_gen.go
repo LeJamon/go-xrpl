@@ -367,10 +367,7 @@ func (v *Vault) HasAsset() bool {
 
 // GetAsset returns the typed Issue value.
 func (v *Vault) GetAsset() (IssueValue, error) {
-	if v == nil {
-		return IssueValue{}, nil
-	}
-	if !v.HasAsset() {
+	if v == nil || v.Asset == nil {
 		return IssueValue{}, nil
 	}
 	return issueValueFromAny(v.Asset, "Vault.Asset")
@@ -403,10 +400,7 @@ func (v *Vault) ClearAssetsTotal() {
 
 // GetAssetsTotal returns the exact decoded Number text.
 func (v *Vault) GetAssetsTotal() (NumberValue, error) {
-	if v == nil {
-		return "0", nil
-	}
-	if !v.HasAssetsTotal() {
+	if v == nil || v.AssetsTotal == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(v.AssetsTotal, "Vault.AssetsTotal")
@@ -439,10 +433,7 @@ func (v *Vault) ClearAssetsAvailable() {
 
 // GetAssetsAvailable returns the exact decoded Number text.
 func (v *Vault) GetAssetsAvailable() (NumberValue, error) {
-	if v == nil {
-		return "0", nil
-	}
-	if !v.HasAssetsAvailable() {
+	if v == nil || v.AssetsAvailable == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(v.AssetsAvailable, "Vault.AssetsAvailable")
@@ -475,10 +466,7 @@ func (v *Vault) ClearAssetsMaximum() {
 
 // GetAssetsMaximum returns the exact decoded Number text.
 func (v *Vault) GetAssetsMaximum() (NumberValue, error) {
-	if v == nil {
-		return "0", nil
-	}
-	if !v.HasAssetsMaximum() {
+	if v == nil || v.AssetsMaximum == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(v.AssetsMaximum, "Vault.AssetsMaximum")
@@ -511,10 +499,7 @@ func (v *Vault) ClearLossUnrealized() {
 
 // GetLossUnrealized returns the exact decoded Number text.
 func (v *Vault) GetLossUnrealized() (NumberValue, error) {
-	if v == nil {
-		return "0", nil
-	}
-	if !v.HasLossUnrealized() {
+	if v == nil || v.LossUnrealized == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(v.LossUnrealized, "Vault.LossUnrealized")

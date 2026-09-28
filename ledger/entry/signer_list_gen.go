@@ -190,10 +190,7 @@ func (s *SignerList) HasSignerEntries() bool {
 
 // GetSignerEntries returns typed nested objects.
 func (s *SignerList) GetSignerEntries() ([]SignerEntryValue, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if !s.HasSignerEntries() {
+	if s == nil || s.SignerEntries == nil {
 		return nil, nil
 	}
 	return signerEntryValueSliceFromAny(s.SignerEntries, "SignerList.SignerEntries")

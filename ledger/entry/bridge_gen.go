@@ -227,10 +227,7 @@ func (b *Bridge) HasXChainBridge() bool {
 
 // GetXChainBridge returns the typed XChainBridge value.
 func (b *Bridge) GetXChainBridge() (XChainBridgeValue, error) {
-	if b == nil {
-		return XChainBridgeValue{}, nil
-	}
-	if !b.HasXChainBridge() {
+	if b == nil || b.XChainBridge == nil {
 		return XChainBridgeValue{}, nil
 	}
 	return xchainBridgeValueFromAny(b.XChainBridge, "Bridge.XChainBridge")

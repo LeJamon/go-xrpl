@@ -196,10 +196,7 @@ func (d *DepositPreauth) ClearAuthorizeCredentials() {
 
 // GetAuthorizeCredentials returns typed nested objects.
 func (d *DepositPreauth) GetAuthorizeCredentials() ([]CredentialValue, error) {
-	if d == nil {
-		return nil, nil
-	}
-	if !d.HasAuthorizeCredentials() {
+	if d == nil || d.AuthorizeCredentials == nil {
 		return nil, nil
 	}
 	return credentialValueSliceFromAny(d.AuthorizeCredentials, "DepositPreauth.AuthorizeCredentials")

@@ -162,10 +162,7 @@ func (x *XChainOwnedClaimID) HasXChainBridge() bool {
 
 // GetXChainBridge returns the typed XChainBridge value.
 func (x *XChainOwnedClaimID) GetXChainBridge() (XChainBridgeValue, error) {
-	if x == nil {
-		return XChainBridgeValue{}, nil
-	}
-	if !x.HasXChainBridge() {
+	if x == nil || x.XChainBridge == nil {
 		return XChainBridgeValue{}, nil
 	}
 	return xchainBridgeValueFromAny(x.XChainBridge, "XChainOwnedClaimID.XChainBridge")
@@ -229,10 +226,7 @@ func (x *XChainOwnedClaimID) HasXChainClaimAttestations() bool {
 
 // GetXChainClaimAttestations returns typed nested objects.
 func (x *XChainOwnedClaimID) GetXChainClaimAttestations() ([]XChainClaimProofSigValue, error) {
-	if x == nil {
-		return nil, nil
-	}
-	if !x.HasXChainClaimAttestations() {
+	if x == nil || x.XChainClaimAttestations == nil {
 		return nil, nil
 	}
 	return xChainClaimProofSigValueSliceFromAny(x.XChainClaimAttestations, "XChainOwnedClaimID.XChainClaimAttestations")

@@ -159,10 +159,7 @@ func (l *LedgerHashes) HasHashes() bool {
 
 // GetHashes returns the typed Vector256 values.
 func (l *LedgerHashes) GetHashes() (Vector256Value, error) {
-	if l == nil {
-		return nil, nil
-	}
-	if !l.HasHashes() {
+	if l == nil || l.Hashes == nil {
 		return nil, nil
 	}
 	return vector256ValueFromStrings(l.Hashes, "LedgerHashes.Hashes")

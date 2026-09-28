@@ -167,10 +167,7 @@ func (d *Delegate) HasPermissions() bool {
 
 // GetPermissions returns typed nested objects.
 func (d *Delegate) GetPermissions() ([]PermissionValue, error) {
-	if d == nil {
-		return nil, nil
-	}
-	if !d.HasPermissions() {
+	if d == nil || d.Permissions == nil {
 		return nil, nil
 	}
 	return permissionValueSliceFromAny(d.Permissions, "Delegate.Permissions")

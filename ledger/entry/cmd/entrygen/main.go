@@ -758,10 +758,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value AmountV
 
 {{ else if eq .XRPLType "Vector256" }}// Get{{ .GoField }} returns the typed Vector256 values.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (Vector256Value, error) {
-	if {{ $.Receiver }} == nil {
-		return nil, nil
-	}
-	if !{{ $.Receiver }}.Has{{ .GoField }}() {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
 		return nil, nil
 	}
 	return vector256ValueFromStrings({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
@@ -774,10 +771,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value Vector2
 
 {{ else if eq .XRPLType "Issue" }}// Get{{ .GoField }} returns the typed Issue value.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (IssueValue, error) {
-	if {{ $.Receiver }} == nil {
-		return IssueValue{}, nil
-	}
-	if !{{ $.Receiver }}.Has{{ .GoField }}() {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
 		return IssueValue{}, nil
 	}
 	return issueValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
@@ -795,10 +789,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value IssueVa
 
 {{ else if eq .XRPLType "XChainBridge" }}// Get{{ .GoField }} returns the typed XChainBridge value.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (XChainBridgeValue, error) {
-	if {{ $.Receiver }} == nil {
-		return XChainBridgeValue{}, nil
-	}
-	if !{{ $.Receiver }}.Has{{ .GoField }}() {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
 		return XChainBridgeValue{}, nil
 	}
 	return xchainBridgeValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
@@ -816,10 +807,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value XChainB
 
 {{ else if eq .XRPLType "Number" }}// Get{{ .GoField }} returns the exact decoded Number text.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (NumberValue, error) {
-	if {{ $.Receiver }} == nil {
-		return "0", nil
-	}
-	if !{{ $.Receiver }}.Has{{ .GoField }}() {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
 		return "0", nil
 	}
 	return numberValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
@@ -837,10 +825,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value NumberV
 
 {{ else if and (eq .XRPLType "STObject") .Compound }}// Get{{ .GoField }} returns the typed nested object.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ({{ .Compound.Type }}, error) {
-	if {{ $.Receiver }} == nil {
-		return {{ .Compound.Type }}{}, nil
-	}
-	if !{{ $.Receiver }}.Has{{ .GoField }}() {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
 		return {{ .Compound.Type }}{}, nil
 	}
 	return {{ lowerFirst .Compound.Type }}FromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
@@ -858,10 +843,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value {{ .Com
 
 {{ else if and (eq .XRPLType "STArray") .Compound }}// Get{{ .GoField }} returns typed nested objects.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([]{{ .Compound.Type }}, error) {
-	if {{ $.Receiver }} == nil {
-		return nil, nil
-	}
-	if !{{ $.Receiver }}.Has{{ .GoField }}() {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
 		return nil, nil
 	}
 	return {{ lowerFirst .Compound.Type }}SliceFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
@@ -1820,7 +1802,9 @@ const (
 {{ range .Fields }}func (v {{ $inner.Type }}) Has{{ .GoField }}() bool { return v.present&{{ .BitConst }} != 0 }
 {{ if isOptional .Style }}func (v *{{ $inner.Type }}) Clear{{ .GoField }}() { if v == nil { return }; v.{{ .GoField }} = {{ if eq .GoType "[]byte" }}nil{{ else if hasPrefix .GoType "[]" }}nil{{ else if eq .GoType "string" }}""{{ else }}{{ zeroValue .GoType }}{{ end }}; v.present &^= {{ .BitConst }} }
 {{ end }}func (v {{ $inner.Type }}) Get{{ .GoField }}() ({{ .GoType }}, error) { return {{ cloneExpr .GoType .NestedType (printf "v.%s" .GoField) }}, nil }
-{{ if .SetterError }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }; {{ end }}return nil }
+{{ if eq .XRPLType "AccountID" }}func (v {{ $inner.Type }}) Get{{ .GoField }}Address() (string, error) { if v.emptyAccounts&{{ .BitConst }} != 0 && v.{{ .GoField }} == [20]byte{} { return "", nil }; return accountIDValueToString(v.{{ .GoField }}) }
+func (v *{{ $inner.Type }}) Set{{ .GoField }}Address(value string) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; decoded, err := accountIDValueFromString(value, "{{ $inner.Type }}.{{ .Name }}"); if err != nil { return err }; v.{{ .GoField }} = decoded; v.present |= {{ .BitConst }}; if value == "" { v.emptyAccounts |= {{ .BitConst }} } else { v.emptyAccounts &^= {{ .BitConst }} }; return nil }
+{{ end }}{{ if .SetterError }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }; {{ end }}return nil }
 func (v *{{ $inner.Type }}) Set{{ .GoField }}Value(value {{ .GoType }}) error { return v.Set{{ .GoField }}(value) }
 {{ else }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) { v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }{{ end }} }
 func (v *{{ $inner.Type }}) Set{{ .GoField }}Value(value {{ .GoType }}) { v.Set{{ .GoField }}(value) }

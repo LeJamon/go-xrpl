@@ -437,3 +437,31 @@ func TestNestedWrapperPresenceAndCopySemantics(t *testing.T) {
 		t.Fatalf("BookDirectory round-trip = %X, %v", gotBookDirectory, err)
 	}
 }
+
+func TestNestedAccountAddressAccessorsPreserveEmptyValues(t *testing.T) {
+	var signer SignerEntryValue
+	const account = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+	if err := signer.SetAccountAddress(account); err != nil {
+		t.Fatalf("SetAccountAddress: %v", err)
+	}
+	got, err := signer.GetAccountAddress()
+	if err != nil || got != account {
+		t.Fatalf("GetAccountAddress = %q, %v; want %q", got, err, account)
+	}
+
+	var empty AuctionSlotValue
+	if err := empty.SetAccountAddress(""); err != nil {
+		t.Fatalf("SetAccountAddress(empty): %v", err)
+	}
+	got, err = empty.GetAccountAddress()
+	if err != nil || got != "" {
+		t.Fatalf("GetAccountAddress(empty) = %q, %v; want empty address", got, err)
+	}
+	mapped, err := empty.ToMap()
+	if err != nil {
+		t.Fatalf("empty account ToMap: %v", err)
+	}
+	if mapped["Account"] != "" {
+		t.Fatalf("empty account ToMap = %#v; want empty Account", mapped["Account"])
+	}
+}

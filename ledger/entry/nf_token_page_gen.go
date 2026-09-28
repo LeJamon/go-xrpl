@@ -165,10 +165,7 @@ func (n *NFTokenPage) HasNFTokens() bool {
 
 // GetNFTokens returns typed nested objects.
 func (n *NFTokenPage) GetNFTokens() ([]NFTokenValue, error) {
-	if n == nil {
-		return nil, nil
-	}
-	if !n.HasNFTokens() {
+	if n == nil || n.NFTokens == nil {
 		return nil, nil
 	}
 	return nFTokenValueSliceFromAny(n.NFTokens, "NFTokenPage.NFTokens")

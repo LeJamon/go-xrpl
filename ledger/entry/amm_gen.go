@@ -216,10 +216,7 @@ func (a *AMM) ClearVoteSlots() {
 
 // GetVoteSlots returns typed nested objects.
 func (a *AMM) GetVoteSlots() ([]VoteEntryValue, error) {
-	if a == nil {
-		return nil, nil
-	}
-	if !a.HasVoteSlots() {
+	if a == nil || a.VoteSlots == nil {
 		return nil, nil
 	}
 	return voteEntryValueSliceFromAny(a.VoteSlots, "AMM.VoteSlots")
@@ -252,10 +249,7 @@ func (a *AMM) ClearAuctionSlot() {
 
 // GetAuctionSlot returns the typed nested object.
 func (a *AMM) GetAuctionSlot() (AuctionSlotValue, error) {
-	if a == nil {
-		return AuctionSlotValue{}, nil
-	}
-	if !a.HasAuctionSlot() {
+	if a == nil || a.AuctionSlot == nil {
 		return AuctionSlotValue{}, nil
 	}
 	return auctionSlotValueFromAny(a.AuctionSlot, "AMM.AuctionSlot")
@@ -301,10 +295,7 @@ func (a *AMM) HasAsset() bool {
 
 // GetAsset returns the typed Issue value.
 func (a *AMM) GetAsset() (IssueValue, error) {
-	if a == nil {
-		return IssueValue{}, nil
-	}
-	if !a.HasAsset() {
+	if a == nil || a.Asset == nil {
 		return IssueValue{}, nil
 	}
 	return issueValueFromAny(a.Asset, "AMM.Asset")
@@ -327,10 +318,7 @@ func (a *AMM) HasAsset2() bool {
 
 // GetAsset2 returns the typed Issue value.
 func (a *AMM) GetAsset2() (IssueValue, error) {
-	if a == nil {
-		return IssueValue{}, nil
-	}
-	if !a.HasAsset2() {
+	if a == nil || a.Asset2 == nil {
 		return IssueValue{}, nil
 	}
 	return issueValueFromAny(a.Asset2, "AMM.Asset2")

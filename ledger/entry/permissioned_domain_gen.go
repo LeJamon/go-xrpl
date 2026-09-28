@@ -153,10 +153,7 @@ func (p *PermissionedDomain) HasAcceptedCredentials() bool {
 
 // GetAcceptedCredentials returns typed nested objects.
 func (p *PermissionedDomain) GetAcceptedCredentials() ([]CredentialValue, error) {
-	if p == nil {
-		return nil, nil
-	}
-	if !p.HasAcceptedCredentials() {
+	if p == nil || p.AcceptedCredentials == nil {
 		return nil, nil
 	}
 	return credentialValueSliceFromAny(p.AcceptedCredentials, "PermissionedDomain.AcceptedCredentials")

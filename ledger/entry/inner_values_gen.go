@@ -757,6 +757,29 @@ const (
 
 func (v AuctionSlotValue) HasAccount() bool              { return v.present&innerAuctionSlotValueBitAccount != 0 }
 func (v AuctionSlotValue) GetAccount() ([20]byte, error) { return v.Account, nil }
+func (v AuctionSlotValue) GetAccountAddress() (string, error) {
+	if v.emptyAccounts&innerAuctionSlotValueBitAccount != 0 && v.Account == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Account)
+}
+func (v *AuctionSlotValue) SetAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil AuctionSlotValue")
+	}
+	decoded, err := accountIDValueFromString(value, "AuctionSlotValue.Account")
+	if err != nil {
+		return err
+	}
+	v.Account = decoded
+	v.present |= innerAuctionSlotValueBitAccount
+	if value == "" {
+		v.emptyAccounts |= innerAuctionSlotValueBitAccount
+	} else {
+		v.emptyAccounts &^= innerAuctionSlotValueBitAccount
+	}
+	return nil
+}
 func (v *AuctionSlotValue) SetAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil AuctionSlotValue")
@@ -1032,6 +1055,29 @@ const (
 
 func (v AuthAccountValue) HasAccount() bool              { return v.present&innerAuthAccountValueBitAccount != 0 }
 func (v AuthAccountValue) GetAccount() ([20]byte, error) { return v.Account, nil }
+func (v AuthAccountValue) GetAccountAddress() (string, error) {
+	if v.emptyAccounts&innerAuthAccountValueBitAccount != 0 && v.Account == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Account)
+}
+func (v *AuthAccountValue) SetAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil AuthAccountValue")
+	}
+	decoded, err := accountIDValueFromString(value, "AuthAccountValue.Account")
+	if err != nil {
+		return err
+	}
+	v.Account = decoded
+	v.present |= innerAuthAccountValueBitAccount
+	if value == "" {
+		v.emptyAccounts |= innerAuthAccountValueBitAccount
+	} else {
+		v.emptyAccounts &^= innerAuthAccountValueBitAccount
+	}
+	return nil
+}
 func (v *AuthAccountValue) SetAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil AuthAccountValue")
@@ -1292,6 +1338,29 @@ const (
 
 func (v CredentialValue) HasIssuer() bool              { return v.present&innerCredentialValueBitIssuer != 0 }
 func (v CredentialValue) GetIssuer() ([20]byte, error) { return v.Issuer, nil }
+func (v CredentialValue) GetIssuerAddress() (string, error) {
+	if v.emptyAccounts&innerCredentialValueBitIssuer != 0 && v.Issuer == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Issuer)
+}
+func (v *CredentialValue) SetIssuerAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil CredentialValue")
+	}
+	decoded, err := accountIDValueFromString(value, "CredentialValue.Issuer")
+	if err != nil {
+		return err
+	}
+	v.Issuer = decoded
+	v.present |= innerCredentialValueBitIssuer
+	if value == "" {
+		v.emptyAccounts |= innerCredentialValueBitIssuer
+	} else {
+		v.emptyAccounts &^= innerCredentialValueBitIssuer
+	}
+	return nil
+}
 func (v *CredentialValue) SetIssuer(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil CredentialValue")
@@ -2224,6 +2293,29 @@ const (
 
 func (v SignerEntryValue) HasAccount() bool              { return v.present&innerSignerEntryValueBitAccount != 0 }
 func (v SignerEntryValue) GetAccount() ([20]byte, error) { return v.Account, nil }
+func (v SignerEntryValue) GetAccountAddress() (string, error) {
+	if v.emptyAccounts&innerSignerEntryValueBitAccount != 0 && v.Account == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Account)
+}
+func (v *SignerEntryValue) SetAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil SignerEntryValue")
+	}
+	decoded, err := accountIDValueFromString(value, "SignerEntryValue.Account")
+	if err != nil {
+		return err
+	}
+	v.Account = decoded
+	v.present |= innerSignerEntryValueBitAccount
+	if value == "" {
+		v.emptyAccounts |= innerSignerEntryValueBitAccount
+	} else {
+		v.emptyAccounts &^= innerSignerEntryValueBitAccount
+	}
+	return nil
+}
 func (v *SignerEntryValue) SetAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil SignerEntryValue")
@@ -2419,6 +2511,29 @@ const (
 
 func (v VoteEntryValue) HasAccount() bool              { return v.present&innerVoteEntryValueBitAccount != 0 }
 func (v VoteEntryValue) GetAccount() ([20]byte, error) { return v.Account, nil }
+func (v VoteEntryValue) GetAccountAddress() (string, error) {
+	if v.emptyAccounts&innerVoteEntryValueBitAccount != 0 && v.Account == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Account)
+}
+func (v *VoteEntryValue) SetAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil VoteEntryValue")
+	}
+	decoded, err := accountIDValueFromString(value, "VoteEntryValue.Account")
+	if err != nil {
+		return err
+	}
+	v.Account = decoded
+	v.present |= innerVoteEntryValueBitAccount
+	if value == "" {
+		v.emptyAccounts |= innerVoteEntryValueBitAccount
+	} else {
+		v.emptyAccounts &^= innerVoteEntryValueBitAccount
+	}
+	return nil
+}
 func (v *VoteEntryValue) SetAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil VoteEntryValue")
@@ -2599,8 +2714,8 @@ type XChainClaimAttestationCollectionElementValue struct {
 	present                  uint64
 	emptyAccounts            uint64
 	PublicKey                []byte
-	Account                  [20]byte
 	Amount                   AmountValue
+	Account                  [20]byte
 	Destination              [20]byte
 	Signature                []byte
 	WasLockingChainSend      uint8
@@ -2611,8 +2726,8 @@ type XChainClaimAttestationCollectionElementValue struct {
 
 const (
 	innerXChainClaimAttestationCollectionElementValueBitPublicKey uint64 = 1 << iota
-	innerXChainClaimAttestationCollectionElementValueBitAccount
 	innerXChainClaimAttestationCollectionElementValueBitAmount
+	innerXChainClaimAttestationCollectionElementValueBitAccount
 	innerXChainClaimAttestationCollectionElementValueBitDestination
 	innerXChainClaimAttestationCollectionElementValueBitSignature
 	innerXChainClaimAttestationCollectionElementValueBitWasLockingChainSend
@@ -2635,25 +2750,6 @@ func (v *XChainClaimAttestationCollectionElementValue) SetPublicKeyValue(value [
 	v.SetPublicKey(value)
 }
 
-func (v XChainClaimAttestationCollectionElementValue) HasAccount() bool {
-	return v.present&innerXChainClaimAttestationCollectionElementValueBitAccount != 0
-}
-func (v XChainClaimAttestationCollectionElementValue) GetAccount() ([20]byte, error) {
-	return v.Account, nil
-}
-func (v *XChainClaimAttestationCollectionElementValue) SetAccount(value [20]byte) error {
-	if v == nil {
-		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
-	}
-	v.Account = value
-	v.present |= innerXChainClaimAttestationCollectionElementValueBitAccount
-	v.emptyAccounts &^= innerXChainClaimAttestationCollectionElementValueBitAccount
-	return nil
-}
-func (v *XChainClaimAttestationCollectionElementValue) SetAccountValue(value [20]byte) error {
-	return v.SetAccount(value)
-}
-
 func (v XChainClaimAttestationCollectionElementValue) HasAmount() bool {
 	return v.present&innerXChainClaimAttestationCollectionElementValueBitAmount != 0
 }
@@ -2672,6 +2768,48 @@ func (v *XChainClaimAttestationCollectionElementValue) SetAmountValue(value Amou
 	return v.SetAmount(value)
 }
 
+func (v XChainClaimAttestationCollectionElementValue) HasAccount() bool {
+	return v.present&innerXChainClaimAttestationCollectionElementValueBitAccount != 0
+}
+func (v XChainClaimAttestationCollectionElementValue) GetAccount() ([20]byte, error) {
+	return v.Account, nil
+}
+func (v XChainClaimAttestationCollectionElementValue) GetAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimAttestationCollectionElementValueBitAccount != 0 && v.Account == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Account)
+}
+func (v *XChainClaimAttestationCollectionElementValue) SetAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimAttestationCollectionElementValue.Account")
+	if err != nil {
+		return err
+	}
+	v.Account = decoded
+	v.present |= innerXChainClaimAttestationCollectionElementValueBitAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimAttestationCollectionElementValueBitAccount
+	} else {
+		v.emptyAccounts &^= innerXChainClaimAttestationCollectionElementValueBitAccount
+	}
+	return nil
+}
+func (v *XChainClaimAttestationCollectionElementValue) SetAccount(value [20]byte) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
+	}
+	v.Account = value
+	v.present |= innerXChainClaimAttestationCollectionElementValueBitAccount
+	v.emptyAccounts &^= innerXChainClaimAttestationCollectionElementValueBitAccount
+	return nil
+}
+func (v *XChainClaimAttestationCollectionElementValue) SetAccountValue(value [20]byte) error {
+	return v.SetAccount(value)
+}
+
 func (v XChainClaimAttestationCollectionElementValue) HasDestination() bool {
 	return v.present&innerXChainClaimAttestationCollectionElementValueBitDestination != 0
 }
@@ -2684,6 +2822,29 @@ func (v *XChainClaimAttestationCollectionElementValue) ClearDestination() {
 }
 func (v XChainClaimAttestationCollectionElementValue) GetDestination() ([20]byte, error) {
 	return v.Destination, nil
+}
+func (v XChainClaimAttestationCollectionElementValue) GetDestinationAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimAttestationCollectionElementValueBitDestination != 0 && v.Destination == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Destination)
+}
+func (v *XChainClaimAttestationCollectionElementValue) SetDestinationAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimAttestationCollectionElementValue.Destination")
+	if err != nil {
+		return err
+	}
+	v.Destination = decoded
+	v.present |= innerXChainClaimAttestationCollectionElementValueBitDestination
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimAttestationCollectionElementValueBitDestination
+	} else {
+		v.emptyAccounts &^= innerXChainClaimAttestationCollectionElementValueBitDestination
+	}
+	return nil
 }
 func (v *XChainClaimAttestationCollectionElementValue) SetDestination(value [20]byte) error {
 	if v == nil {
@@ -2732,6 +2893,29 @@ func (v XChainClaimAttestationCollectionElementValue) HasAttestationSignerAccoun
 func (v XChainClaimAttestationCollectionElementValue) GetAttestationSignerAccount() ([20]byte, error) {
 	return v.AttestationSignerAccount, nil
 }
+func (v XChainClaimAttestationCollectionElementValue) GetAttestationSignerAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimAttestationCollectionElementValueBitAttestationSignerAccount != 0 && v.AttestationSignerAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationSignerAccount)
+}
+func (v *XChainClaimAttestationCollectionElementValue) SetAttestationSignerAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimAttestationCollectionElementValue.AttestationSignerAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationSignerAccount = decoded
+	v.present |= innerXChainClaimAttestationCollectionElementValueBitAttestationSignerAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimAttestationCollectionElementValueBitAttestationSignerAccount
+	} else {
+		v.emptyAccounts &^= innerXChainClaimAttestationCollectionElementValueBitAttestationSignerAccount
+	}
+	return nil
+}
 func (v *XChainClaimAttestationCollectionElementValue) SetAttestationSignerAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
@@ -2765,6 +2949,29 @@ func (v XChainClaimAttestationCollectionElementValue) HasAttestationRewardAccoun
 func (v XChainClaimAttestationCollectionElementValue) GetAttestationRewardAccount() ([20]byte, error) {
 	return v.AttestationRewardAccount, nil
 }
+func (v XChainClaimAttestationCollectionElementValue) GetAttestationRewardAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimAttestationCollectionElementValueBitAttestationRewardAccount != 0 && v.AttestationRewardAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationRewardAccount)
+}
+func (v *XChainClaimAttestationCollectionElementValue) SetAttestationRewardAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimAttestationCollectionElementValue.AttestationRewardAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationRewardAccount = decoded
+	v.present |= innerXChainClaimAttestationCollectionElementValueBitAttestationRewardAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimAttestationCollectionElementValueBitAttestationRewardAccount
+	} else {
+		v.emptyAccounts &^= innerXChainClaimAttestationCollectionElementValueBitAttestationRewardAccount
+	}
+	return nil
+}
 func (v *XChainClaimAttestationCollectionElementValue) SetAttestationRewardAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainClaimAttestationCollectionElementValue")
@@ -2787,8 +2994,8 @@ func xChainClaimAttestationCollectionElementValueFromAny(value any, field string
 	for key := range object {
 		switch key {
 		case "PublicKey":
-		case "Account":
 		case "Amount":
+		case "Account":
 		case "Destination":
 		case "Signature":
 		case "WasLockingChainSend":
@@ -2814,6 +3021,21 @@ func xChainClaimAttestationCollectionElementValueFromAny(value any, field string
 	} else {
 		return result, fmt.Errorf("ledgerfields: %s: required field PublicKey is missing", field)
 	}
+	if raw, ok := object["Amount"]; ok {
+		decoded, err := innerValueFromAny(raw, field+".Amount", "Amount", false)
+		if err != nil {
+			return result, err
+		}
+		value, ok := decoded.(AmountValue)
+		if !ok {
+			return result, fmt.Errorf("ledgerfields: %s.Amount: decoded value has type %T", field, decoded)
+		}
+		result.Amount = value
+
+		result.present |= innerXChainClaimAttestationCollectionElementValueBitAmount
+	} else {
+		return result, fmt.Errorf("ledgerfields: %s: required field Amount is missing", field)
+	}
 	if raw, ok := object["Account"]; ok {
 		decoded, err := innerValueFromAny(raw, field+".Account", "AccountID", false)
 		if err != nil {
@@ -2831,21 +3053,6 @@ func xChainClaimAttestationCollectionElementValueFromAny(value any, field string
 		result.present |= innerXChainClaimAttestationCollectionElementValueBitAccount
 	} else {
 		return result, fmt.Errorf("ledgerfields: %s: required field Account is missing", field)
-	}
-	if raw, ok := object["Amount"]; ok {
-		decoded, err := innerValueFromAny(raw, field+".Amount", "Amount", false)
-		if err != nil {
-			return result, err
-		}
-		value, ok := decoded.(AmountValue)
-		if !ok {
-			return result, fmt.Errorf("ledgerfields: %s.Amount: decoded value has type %T", field, decoded)
-		}
-		result.Amount = value
-
-		result.present |= innerXChainClaimAttestationCollectionElementValueBitAmount
-	} else {
-		return result, fmt.Errorf("ledgerfields: %s: required field Amount is missing", field)
 	}
 	if raw, ok := object["Destination"]; ok {
 		decoded, err := innerValueFromAny(raw, field+".Destination", "AccountID", false)
@@ -2959,16 +3166,6 @@ func xChainClaimAttestationCollectionElementValueToAny(value XChainClaimAttestat
 		}
 		result["PublicKey"] = raw
 	}
-	if value.present&innerXChainClaimAttestationCollectionElementValueBitAccount == 0 {
-		return nil, fmt.Errorf("ledgerfields: %s: required field Account is not set", field)
-	} else {
-
-		raw, err := innerAccountValueToAny(value.Account, value.emptyAccounts&innerXChainClaimAttestationCollectionElementValueBitAccount != 0, field+".Account")
-		if err != nil {
-			return nil, err
-		}
-		result["Account"] = raw
-	}
 	if value.present&innerXChainClaimAttestationCollectionElementValueBitAmount == 0 {
 		return nil, fmt.Errorf("ledgerfields: %s: required field Amount is not set", field)
 	} else {
@@ -2978,6 +3175,16 @@ func xChainClaimAttestationCollectionElementValueToAny(value XChainClaimAttestat
 			return nil, err
 		}
 		result["Amount"] = raw
+	}
+	if value.present&innerXChainClaimAttestationCollectionElementValueBitAccount == 0 {
+		return nil, fmt.Errorf("ledgerfields: %s: required field Account is not set", field)
+	} else {
+
+		raw, err := innerAccountValueToAny(value.Account, value.emptyAccounts&innerXChainClaimAttestationCollectionElementValueBitAccount != 0, field+".Account")
+		if err != nil {
+			return nil, err
+		}
+		result["Account"] = raw
 	}
 	if value.present&innerXChainClaimAttestationCollectionElementValueBitDestination != 0 {
 
@@ -3141,6 +3348,29 @@ func (v *XChainClaimProofSigValue) ClearDestination() {
 	v.present &^= innerXChainClaimProofSigValueBitDestination
 }
 func (v XChainClaimProofSigValue) GetDestination() ([20]byte, error) { return v.Destination, nil }
+func (v XChainClaimProofSigValue) GetDestinationAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimProofSigValueBitDestination != 0 && v.Destination == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Destination)
+}
+func (v *XChainClaimProofSigValue) SetDestinationAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimProofSigValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimProofSigValue.Destination")
+	if err != nil {
+		return err
+	}
+	v.Destination = decoded
+	v.present |= innerXChainClaimProofSigValueBitDestination
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimProofSigValueBitDestination
+	} else {
+		v.emptyAccounts &^= innerXChainClaimProofSigValueBitDestination
+	}
+	return nil
+}
 func (v *XChainClaimProofSigValue) SetDestination(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainClaimProofSigValue")
@@ -3174,6 +3404,29 @@ func (v XChainClaimProofSigValue) HasAttestationSignerAccount() bool {
 func (v XChainClaimProofSigValue) GetAttestationSignerAccount() ([20]byte, error) {
 	return v.AttestationSignerAccount, nil
 }
+func (v XChainClaimProofSigValue) GetAttestationSignerAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimProofSigValueBitAttestationSignerAccount != 0 && v.AttestationSignerAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationSignerAccount)
+}
+func (v *XChainClaimProofSigValue) SetAttestationSignerAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimProofSigValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimProofSigValue.AttestationSignerAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationSignerAccount = decoded
+	v.present |= innerXChainClaimProofSigValueBitAttestationSignerAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimProofSigValueBitAttestationSignerAccount
+	} else {
+		v.emptyAccounts &^= innerXChainClaimProofSigValueBitAttestationSignerAccount
+	}
+	return nil
+}
 func (v *XChainClaimProofSigValue) SetAttestationSignerAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainClaimProofSigValue")
@@ -3192,6 +3445,29 @@ func (v XChainClaimProofSigValue) HasAttestationRewardAccount() bool {
 }
 func (v XChainClaimProofSigValue) GetAttestationRewardAccount() ([20]byte, error) {
 	return v.AttestationRewardAccount, nil
+}
+func (v XChainClaimProofSigValue) GetAttestationRewardAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainClaimProofSigValueBitAttestationRewardAccount != 0 && v.AttestationRewardAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationRewardAccount)
+}
+func (v *XChainClaimProofSigValue) SetAttestationRewardAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainClaimProofSigValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainClaimProofSigValue.AttestationRewardAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationRewardAccount = decoded
+	v.present |= innerXChainClaimProofSigValueBitAttestationRewardAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainClaimProofSigValueBitAttestationRewardAccount
+	} else {
+		v.emptyAccounts &^= innerXChainClaimProofSigValueBitAttestationRewardAccount
+	}
+	return nil
 }
 func (v *XChainClaimProofSigValue) SetAttestationRewardAccount(value [20]byte) error {
 	if v == nil {
@@ -3435,8 +3711,8 @@ type XChainCreateAccountAttestationCollectionElementValue struct {
 	present                  uint64
 	emptyAccounts            uint64
 	Account                  [20]byte
-	Amount                   AmountValue
 	PublicKey                []byte
+	Amount                   AmountValue
 	Destination              [20]byte
 	Signature                []byte
 	WasLockingChainSend      uint8
@@ -3448,8 +3724,8 @@ type XChainCreateAccountAttestationCollectionElementValue struct {
 
 const (
 	innerXChainCreateAccountAttestationCollectionElementValueBitAccount uint64 = 1 << iota
-	innerXChainCreateAccountAttestationCollectionElementValueBitAmount
 	innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey
+	innerXChainCreateAccountAttestationCollectionElementValueBitAmount
 	innerXChainCreateAccountAttestationCollectionElementValueBitDestination
 	innerXChainCreateAccountAttestationCollectionElementValueBitSignature
 	innerXChainCreateAccountAttestationCollectionElementValueBitWasLockingChainSend
@@ -3465,6 +3741,29 @@ func (v XChainCreateAccountAttestationCollectionElementValue) HasAccount() bool 
 func (v XChainCreateAccountAttestationCollectionElementValue) GetAccount() ([20]byte, error) {
 	return v.Account, nil
 }
+func (v XChainCreateAccountAttestationCollectionElementValue) GetAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountAttestationCollectionElementValueBitAccount != 0 && v.Account == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Account)
+}
+func (v *XChainCreateAccountAttestationCollectionElementValue) SetAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountAttestationCollectionElementValue.Account")
+	if err != nil {
+		return err
+	}
+	v.Account = decoded
+	v.present |= innerXChainCreateAccountAttestationCollectionElementValueBitAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountAttestationCollectionElementValueBitAccount
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountAttestationCollectionElementValueBitAccount
+	}
+	return nil
+}
 func (v *XChainCreateAccountAttestationCollectionElementValue) SetAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainCreateAccountAttestationCollectionElementValue")
@@ -3476,6 +3775,20 @@ func (v *XChainCreateAccountAttestationCollectionElementValue) SetAccount(value 
 }
 func (v *XChainCreateAccountAttestationCollectionElementValue) SetAccountValue(value [20]byte) error {
 	return v.SetAccount(value)
+}
+
+func (v XChainCreateAccountAttestationCollectionElementValue) HasPublicKey() bool {
+	return v.present&innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey != 0
+}
+func (v XChainCreateAccountAttestationCollectionElementValue) GetPublicKey() ([]byte, error) {
+	return innerCloneBytes(v.PublicKey), nil
+}
+func (v *XChainCreateAccountAttestationCollectionElementValue) SetPublicKey(value []byte) {
+	v.PublicKey = innerCloneBytes(value)
+	v.present |= innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey
+}
+func (v *XChainCreateAccountAttestationCollectionElementValue) SetPublicKeyValue(value []byte) {
+	v.SetPublicKey(value)
 }
 
 func (v XChainCreateAccountAttestationCollectionElementValue) HasAmount() bool {
@@ -3496,25 +3809,34 @@ func (v *XChainCreateAccountAttestationCollectionElementValue) SetAmountValue(va
 	return v.SetAmount(value)
 }
 
-func (v XChainCreateAccountAttestationCollectionElementValue) HasPublicKey() bool {
-	return v.present&innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey != 0
-}
-func (v XChainCreateAccountAttestationCollectionElementValue) GetPublicKey() ([]byte, error) {
-	return innerCloneBytes(v.PublicKey), nil
-}
-func (v *XChainCreateAccountAttestationCollectionElementValue) SetPublicKey(value []byte) {
-	v.PublicKey = innerCloneBytes(value)
-	v.present |= innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey
-}
-func (v *XChainCreateAccountAttestationCollectionElementValue) SetPublicKeyValue(value []byte) {
-	v.SetPublicKey(value)
-}
-
 func (v XChainCreateAccountAttestationCollectionElementValue) HasDestination() bool {
 	return v.present&innerXChainCreateAccountAttestationCollectionElementValueBitDestination != 0
 }
 func (v XChainCreateAccountAttestationCollectionElementValue) GetDestination() ([20]byte, error) {
 	return v.Destination, nil
+}
+func (v XChainCreateAccountAttestationCollectionElementValue) GetDestinationAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountAttestationCollectionElementValueBitDestination != 0 && v.Destination == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Destination)
+}
+func (v *XChainCreateAccountAttestationCollectionElementValue) SetDestinationAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountAttestationCollectionElementValue.Destination")
+	if err != nil {
+		return err
+	}
+	v.Destination = decoded
+	v.present |= innerXChainCreateAccountAttestationCollectionElementValueBitDestination
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountAttestationCollectionElementValueBitDestination
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountAttestationCollectionElementValueBitDestination
+	}
+	return nil
 }
 func (v *XChainCreateAccountAttestationCollectionElementValue) SetDestination(value [20]byte) error {
 	if v == nil {
@@ -3563,6 +3885,29 @@ func (v XChainCreateAccountAttestationCollectionElementValue) HasAttestationSign
 func (v XChainCreateAccountAttestationCollectionElementValue) GetAttestationSignerAccount() ([20]byte, error) {
 	return v.AttestationSignerAccount, nil
 }
+func (v XChainCreateAccountAttestationCollectionElementValue) GetAttestationSignerAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountAttestationCollectionElementValueBitAttestationSignerAccount != 0 && v.AttestationSignerAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationSignerAccount)
+}
+func (v *XChainCreateAccountAttestationCollectionElementValue) SetAttestationSignerAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountAttestationCollectionElementValue.AttestationSignerAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationSignerAccount = decoded
+	v.present |= innerXChainCreateAccountAttestationCollectionElementValueBitAttestationSignerAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountAttestationCollectionElementValueBitAttestationSignerAccount
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountAttestationCollectionElementValueBitAttestationSignerAccount
+	}
+	return nil
+}
 func (v *XChainCreateAccountAttestationCollectionElementValue) SetAttestationSignerAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainCreateAccountAttestationCollectionElementValue")
@@ -3581,6 +3926,29 @@ func (v XChainCreateAccountAttestationCollectionElementValue) HasAttestationRewa
 }
 func (v XChainCreateAccountAttestationCollectionElementValue) GetAttestationRewardAccount() ([20]byte, error) {
 	return v.AttestationRewardAccount, nil
+}
+func (v XChainCreateAccountAttestationCollectionElementValue) GetAttestationRewardAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountAttestationCollectionElementValueBitAttestationRewardAccount != 0 && v.AttestationRewardAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationRewardAccount)
+}
+func (v *XChainCreateAccountAttestationCollectionElementValue) SetAttestationRewardAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountAttestationCollectionElementValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountAttestationCollectionElementValue.AttestationRewardAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationRewardAccount = decoded
+	v.present |= innerXChainCreateAccountAttestationCollectionElementValueBitAttestationRewardAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountAttestationCollectionElementValueBitAttestationRewardAccount
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountAttestationCollectionElementValueBitAttestationRewardAccount
+	}
+	return nil
 }
 func (v *XChainCreateAccountAttestationCollectionElementValue) SetAttestationRewardAccount(value [20]byte) error {
 	if v == nil {
@@ -3636,8 +4004,8 @@ func xChainCreateAccountAttestationCollectionElementValueFromAny(value any, fiel
 	for key := range object {
 		switch key {
 		case "Account":
-		case "Amount":
 		case "PublicKey":
+		case "Amount":
 		case "Destination":
 		case "Signature":
 		case "WasLockingChainSend":
@@ -3667,21 +4035,6 @@ func xChainCreateAccountAttestationCollectionElementValueFromAny(value any, fiel
 	} else {
 		return result, fmt.Errorf("ledgerfields: %s: required field Account is missing", field)
 	}
-	if raw, ok := object["Amount"]; ok {
-		decoded, err := innerValueFromAny(raw, field+".Amount", "Amount", false)
-		if err != nil {
-			return result, err
-		}
-		value, ok := decoded.(AmountValue)
-		if !ok {
-			return result, fmt.Errorf("ledgerfields: %s.Amount: decoded value has type %T", field, decoded)
-		}
-		result.Amount = value
-
-		result.present |= innerXChainCreateAccountAttestationCollectionElementValueBitAmount
-	} else {
-		return result, fmt.Errorf("ledgerfields: %s: required field Amount is missing", field)
-	}
 	if raw, ok := object["PublicKey"]; ok {
 		decoded, err := innerValueFromAny(raw, field+".PublicKey", "Blob", false)
 		if err != nil {
@@ -3696,6 +4049,21 @@ func xChainCreateAccountAttestationCollectionElementValueFromAny(value any, fiel
 		result.present |= innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey
 	} else {
 		return result, fmt.Errorf("ledgerfields: %s: required field PublicKey is missing", field)
+	}
+	if raw, ok := object["Amount"]; ok {
+		decoded, err := innerValueFromAny(raw, field+".Amount", "Amount", false)
+		if err != nil {
+			return result, err
+		}
+		value, ok := decoded.(AmountValue)
+		if !ok {
+			return result, fmt.Errorf("ledgerfields: %s.Amount: decoded value has type %T", field, decoded)
+		}
+		result.Amount = value
+
+		result.present |= innerXChainCreateAccountAttestationCollectionElementValueBitAmount
+	} else {
+		return result, fmt.Errorf("ledgerfields: %s: required field Amount is missing", field)
 	}
 	if raw, ok := object["Destination"]; ok {
 		decoded, err := innerValueFromAny(raw, field+".Destination", "AccountID", false)
@@ -3826,16 +4194,6 @@ func xChainCreateAccountAttestationCollectionElementValueToAny(value XChainCreat
 		}
 		result["Account"] = raw
 	}
-	if value.present&innerXChainCreateAccountAttestationCollectionElementValueBitAmount == 0 {
-		return nil, fmt.Errorf("ledgerfields: %s: required field Amount is not set", field)
-	} else {
-
-		raw, err := innerValueToAny(value.Amount, field+".Amount", "Amount", false)
-		if err != nil {
-			return nil, err
-		}
-		result["Amount"] = raw
-	}
 	if value.present&innerXChainCreateAccountAttestationCollectionElementValueBitPublicKey == 0 {
 		return nil, fmt.Errorf("ledgerfields: %s: required field PublicKey is not set", field)
 	} else {
@@ -3845,6 +4203,16 @@ func xChainCreateAccountAttestationCollectionElementValueToAny(value XChainCreat
 			return nil, err
 		}
 		result["PublicKey"] = raw
+	}
+	if value.present&innerXChainCreateAccountAttestationCollectionElementValueBitAmount == 0 {
+		return nil, fmt.Errorf("ledgerfields: %s: required field Amount is not set", field)
+	} else {
+
+		raw, err := innerValueToAny(value.Amount, field+".Amount", "Amount", false)
+		if err != nil {
+			return nil, err
+		}
+		result["Amount"] = raw
 	}
 	if value.present&innerXChainCreateAccountAttestationCollectionElementValueBitDestination == 0 {
 		return nil, fmt.Errorf("ledgerfields: %s: required field Destination is not set", field)
@@ -4019,6 +4387,29 @@ func (v XChainCreateAccountProofSigValue) HasDestination() bool {
 func (v XChainCreateAccountProofSigValue) GetDestination() ([20]byte, error) {
 	return v.Destination, nil
 }
+func (v XChainCreateAccountProofSigValue) GetDestinationAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountProofSigValueBitDestination != 0 && v.Destination == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.Destination)
+}
+func (v *XChainCreateAccountProofSigValue) SetDestinationAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountProofSigValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountProofSigValue.Destination")
+	if err != nil {
+		return err
+	}
+	v.Destination = decoded
+	v.present |= innerXChainCreateAccountProofSigValueBitDestination
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountProofSigValueBitDestination
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountProofSigValueBitDestination
+	}
+	return nil
+}
 func (v *XChainCreateAccountProofSigValue) SetDestination(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainCreateAccountProofSigValue")
@@ -4052,6 +4443,29 @@ func (v XChainCreateAccountProofSigValue) HasAttestationSignerAccount() bool {
 func (v XChainCreateAccountProofSigValue) GetAttestationSignerAccount() ([20]byte, error) {
 	return v.AttestationSignerAccount, nil
 }
+func (v XChainCreateAccountProofSigValue) GetAttestationSignerAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountProofSigValueBitAttestationSignerAccount != 0 && v.AttestationSignerAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationSignerAccount)
+}
+func (v *XChainCreateAccountProofSigValue) SetAttestationSignerAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountProofSigValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountProofSigValue.AttestationSignerAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationSignerAccount = decoded
+	v.present |= innerXChainCreateAccountProofSigValueBitAttestationSignerAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountProofSigValueBitAttestationSignerAccount
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountProofSigValueBitAttestationSignerAccount
+	}
+	return nil
+}
 func (v *XChainCreateAccountProofSigValue) SetAttestationSignerAccount(value [20]byte) error {
 	if v == nil {
 		return fmt.Errorf("ledgerfields: nil XChainCreateAccountProofSigValue")
@@ -4070,6 +4484,29 @@ func (v XChainCreateAccountProofSigValue) HasAttestationRewardAccount() bool {
 }
 func (v XChainCreateAccountProofSigValue) GetAttestationRewardAccount() ([20]byte, error) {
 	return v.AttestationRewardAccount, nil
+}
+func (v XChainCreateAccountProofSigValue) GetAttestationRewardAccountAddress() (string, error) {
+	if v.emptyAccounts&innerXChainCreateAccountProofSigValueBitAttestationRewardAccount != 0 && v.AttestationRewardAccount == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(v.AttestationRewardAccount)
+}
+func (v *XChainCreateAccountProofSigValue) SetAttestationRewardAccountAddress(value string) error {
+	if v == nil {
+		return fmt.Errorf("ledgerfields: nil XChainCreateAccountProofSigValue")
+	}
+	decoded, err := accountIDValueFromString(value, "XChainCreateAccountProofSigValue.AttestationRewardAccount")
+	if err != nil {
+		return err
+	}
+	v.AttestationRewardAccount = decoded
+	v.present |= innerXChainCreateAccountProofSigValueBitAttestationRewardAccount
+	if value == "" {
+		v.emptyAccounts |= innerXChainCreateAccountProofSigValueBitAttestationRewardAccount
+	} else {
+		v.emptyAccounts &^= innerXChainCreateAccountProofSigValueBitAttestationRewardAccount
+	}
+	return nil
 }
 func (v *XChainCreateAccountProofSigValue) SetAttestationRewardAccount(value [20]byte) error {
 	if v == nil {

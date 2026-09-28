@@ -144,10 +144,7 @@ func (x *XChainOwnedCreateAccountClaimID) HasXChainBridge() bool {
 
 // GetXChainBridge returns the typed XChainBridge value.
 func (x *XChainOwnedCreateAccountClaimID) GetXChainBridge() (XChainBridgeValue, error) {
-	if x == nil {
-		return XChainBridgeValue{}, nil
-	}
-	if !x.HasXChainBridge() {
+	if x == nil || x.XChainBridge == nil {
 		return XChainBridgeValue{}, nil
 	}
 	return xchainBridgeValueFromAny(x.XChainBridge, "XChainOwnedCreateAccountClaimID.XChainBridge")
@@ -188,10 +185,7 @@ func (x *XChainOwnedCreateAccountClaimID) HasXChainCreateAccountAttestations() b
 
 // GetXChainCreateAccountAttestations returns typed nested objects.
 func (x *XChainOwnedCreateAccountClaimID) GetXChainCreateAccountAttestations() ([]XChainCreateAccountProofSigValue, error) {
-	if x == nil {
-		return nil, nil
-	}
-	if !x.HasXChainCreateAccountAttestations() {
+	if x == nil || x.XChainCreateAccountAttestations == nil {
 		return nil, nil
 	}
 	return xChainCreateAccountProofSigValueSliceFromAny(x.XChainCreateAccountAttestations, "XChainOwnedCreateAccountClaimID.XChainCreateAccountAttestations")

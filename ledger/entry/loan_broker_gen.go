@@ -479,10 +479,7 @@ func (l *LoanBroker) ClearDebtTotal() {
 
 // GetDebtTotal returns the exact decoded Number text.
 func (l *LoanBroker) GetDebtTotal() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasDebtTotal() {
+	if l == nil || l.DebtTotal == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.DebtTotal, "LoanBroker.DebtTotal")
@@ -515,10 +512,7 @@ func (l *LoanBroker) ClearDebtMaximum() {
 
 // GetDebtMaximum returns the exact decoded Number text.
 func (l *LoanBroker) GetDebtMaximum() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasDebtMaximum() {
+	if l == nil || l.DebtMaximum == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.DebtMaximum, "LoanBroker.DebtMaximum")
@@ -551,10 +545,7 @@ func (l *LoanBroker) ClearCoverAvailable() {
 
 // GetCoverAvailable returns the exact decoded Number text.
 func (l *LoanBroker) GetCoverAvailable() (NumberValue, error) {
-	if l == nil {
-		return "0", nil
-	}
-	if !l.HasCoverAvailable() {
+	if l == nil || l.CoverAvailable == nil {
 		return "0", nil
 	}
 	return numberValueFromAny(l.CoverAvailable, "LoanBroker.CoverAvailable")
