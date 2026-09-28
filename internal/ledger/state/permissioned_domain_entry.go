@@ -1,9 +1,7 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
-	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -19,6 +17,7 @@ type PermissionedDomainData struct {
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+	decoded           ledgerfields.PermissionedDomain
 }
 
 // PermissionedDomainCredential is a single accepted credential entry within a PermissionedDomain.
@@ -30,33 +29,26 @@ type PermissionedDomainCredential struct {
 // SerializePermissionedDomain serializes a PermissionedDomain ledger entry using the binary codec.
 // Reference: rippled PermissionedDomainSet.cpp doApply()
 func SerializePermissionedDomain(pd *PermissionedDomainData, ownerAddress string) ([]byte, error) {
-	creds := make([]any, 0, len(pd.AcceptedCredentials))
-	for _, c := range pd.AcceptedCredentials {
-		issuerStr, err := EncodeAccountID(c.Issuer)
-		if err != nil {
-			return nil, err
+	credentials := make([]ledgerfields.CredentialValue, len(pd.AcceptedCredentials))
+	for i, value := range pd.AcceptedCredentials {
+		if err := credentials[i].SetIssuerValue(value.Issuer); err != nil {
+			return nil, fmt.Errorf("failed to encode PermissionedDomain.AcceptedCredentials[%d].Issuer: %w", i, err)
 		}
-		creds = append(creds, map[string]any{
-			"Credential": map[string]any{
-				"Issuer":         issuerStr,
-				"CredentialType": hex.EncodeToString(c.CredentialType),
-			},
-		})
+		credentials[i].SetCredentialTypeValue(value.CredentialType)
 	}
 
-	entry := &ledgerfields.PermissionedDomain{}
+	entry := pd.decoded
 	entry.SetOwner(ownerAddress)
-	entry.SetSequence(pd.Sequence)
-	entry.SetOwnerNode(fmt.Sprintf("%X", pd.OwnerNode))
-	entry.SetFlags(0)
-	entry.SetAcceptedCredentials(creds)
-
-	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
-	var emptyHash [32]byte
-	if pd.PreviousTxnID != emptyHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(pd.PreviousTxnID[:])))
-		entry.SetPreviousTxnLgrSeq(pd.PreviousTxnLgrSeq)
+	entry.SetSequenceValue(pd.Sequence)
+	entry.SetOwnerNodeValue(pd.OwnerNode)
+	if !entry.HasFlags() {
+		entry.SetFlagsValue(0)
 	}
+	if err := entry.SetAcceptedCredentialsValue(credentials); err != nil {
+		return nil, fmt.Errorf("failed to encode PermissionedDomain.AcceptedCredentials: %w", err)
+	}
+	entry.SetPreviousTxnIDValue(pd.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(pd.PreviousTxnLgrSeq)
 
 	return entry.Encode()
 }
@@ -67,70 +59,55 @@ func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode PermissionedDomain: %w", err)
 	}
-	fields := decoded.ToMap()
-	pd := &PermissionedDomainData{
-		Sequence:          decoded.Sequence,
-		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
-	}
+	pd := &PermissionedDomainData{decoded: decoded}
 
 	var err error
-	if _, ok := fields["Owner"]; ok {
-		pd.Owner, err = decodeLedgerAccount("PermissionedDomain.Owner", decoded.Owner)
+	if decoded.HasOwner() {
+		pd.Owner, err = decoded.GetOwner()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["OwnerNode"]; ok {
-		pd.OwnerNode, err = parseLedgerUint64("PermissionedDomain.OwnerNode", decoded.OwnerNode)
+	if decoded.HasSequence() {
+		pd.Sequence, err = decoded.GetSequence()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["PreviousTxnID"]; ok {
-		if err := decodeLedgerHex("PermissionedDomain.PreviousTxnID", decoded.PreviousTxnID, pd.PreviousTxnID[:]); err != nil {
+	if decoded.HasOwnerNode() {
+		pd.OwnerNode, err = decoded.GetOwnerNode()
+		if err != nil {
 			return nil, err
 		}
 	}
-	pd.AcceptedCredentials, err = decodeAcceptedCredentials(decoded.AcceptedCredentials)
+	if decoded.HasPreviousTxnID() {
+		pd.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if decoded.HasPreviousTxnLgrSeq() {
+		pd.PreviousTxnLgrSeq, err = decoded.GetPreviousTxnLgrSeq()
+		if err != nil {
+			return nil, err
+		}
+	}
+	values, err := decoded.GetAcceptedCredentials()
 	if err != nil {
 		return nil, err
 	}
+	pd.AcceptedCredentials = make([]PermissionedDomainCredential, len(values))
+	for i, value := range values {
+		pd.AcceptedCredentials[i].Issuer, err = value.GetIssuer()
+		if err != nil {
+			return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d].Issuer: %w", i, err)
+		}
+		credentialType, err := value.GetCredentialType()
+		if err != nil {
+			return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d].CredentialType: %w", i, err)
+		}
+		pd.AcceptedCredentials[i].CredentialType = append([]byte(nil), credentialType...)
+	}
 
 	return pd, nil
-}
-
-func decodeAcceptedCredentials(values []any) ([]PermissionedDomainCredential, error) {
-	var creds []PermissionedDomainCredential
-	for i, value := range values {
-		wrapper, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d]: expected object, got %T", i, value)
-		}
-		value, ok = wrapper["Credential"]
-		if !ok {
-			continue
-		}
-		fields, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d].Credential: expected object, got %T", i, value)
-		}
-
-		var credential PermissionedDomainCredential
-		if issuer, ok := fields["Issuer"].(string); ok {
-			decodedIssuer, err := decodeLedgerAccount(fmt.Sprintf("PermissionedDomain.AcceptedCredentials[%d].Credential.Issuer", i), issuer)
-			if err != nil {
-				return nil, err
-			}
-			credential.Issuer = decodedIssuer
-		}
-		if credentialType, ok := fields["CredentialType"].(string); ok {
-			decodedType, err := hex.DecodeString(credentialType)
-			if err != nil {
-				return nil, fmt.Errorf("PermissionedDomain.AcceptedCredentials[%d].Credential.CredentialType: invalid hex: %w", i, err)
-			}
-			credential.CredentialType = decodedType
-		}
-		creds = append(creds, credential)
-	}
-	return creds, nil
 }
