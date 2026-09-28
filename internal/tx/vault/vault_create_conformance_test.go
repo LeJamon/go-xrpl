@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"testing"
@@ -10,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func TestVaultCreateRejectsPresentEmptyBlobs(t *testing.T) {
@@ -315,12 +315,28 @@ func TestSerializeVaultPreservesLargeAssetsMaximum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serializeVault: %v", err)
 	}
-	fields, err := readVaultNumberFields(encoded)
+	parsed, err := parseVault(encoded)
 	if err != nil {
-		t.Fatalf("readVaultNumberFields: %v", err)
+		t.Fatalf("parseVault: %v", err)
 	}
-	if got := fields["AssetsMaximum"]; got != data.AssetsMaximum {
-		t.Fatalf("AssetsMaximum = %q, want %q", got, data.AssetsMaximum)
+	want, err := vaultNumberForRules(data.AssetsMaximum, nil)
+	if err != nil {
+		t.Fatalf("parse expected AssetsMaximum: %v", err)
+	}
+	got, err := vaultNumberForRules(parsed.AssetsMaximum, nil)
+	if err != nil {
+		t.Fatalf("parse decoded AssetsMaximum: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("decoded AssetsMaximum = %q (%d, e%d), want value of %q (%d, e%d)",
+			parsed.AssetsMaximum, got.Mantissa(), got.Exponent(), data.AssetsMaximum, want.Mantissa(), want.Exponent())
+	}
+	reencoded, err := serializeVault(parsed)
+	if err != nil {
+		t.Fatalf("re-serialize vault: %v", err)
+	}
+	if !bytes.Equal(reencoded, encoded) {
+		t.Fatal("re-serialized vault differs from its canonical wire encoding")
 	}
 }
 
@@ -351,45 +367,41 @@ func TestSerializeVaultPreservesNineteenDigitNumberAcrossLendingModes(t *testing
 			if err != nil {
 				t.Fatalf("serializeVaultForRules: %v", err)
 			}
-			fields, err := readVaultNumberFields(encoded)
+			parsed, err := parseVault(encoded)
 			if err != nil {
-				t.Fatalf("readVaultNumberFields: %v", err)
+				t.Fatalf("parseVault: %v", err)
 			}
-			for _, name := range []string{"AssetsTotal", "AssetsAvailable", "AssetsMaximum"} {
-				if got := fields[name]; got != data.AssetsMaximum {
-					t.Fatalf("%s = %q, want %q", name, got, data.AssetsMaximum)
+			for _, field := range []struct {
+				name string
+				want string
+				got  string
+			}{
+				{name: "AssetsTotal", want: data.AssetsTotal, got: parsed.AssetsTotal},
+				{name: "AssetsAvailable", want: data.AssetsAvailable, got: parsed.AssetsAvailable},
+				{name: "AssetsMaximum", want: data.AssetsMaximum, got: parsed.AssetsMaximum},
+			} {
+				want, err := vaultNumberForRules(field.want, test.rules)
+				if err != nil {
+					t.Fatalf("parse expected %s: %v", field.name, err)
 				}
+				got, err := vaultNumberForRules(field.got, test.rules)
+				if err != nil {
+					t.Fatalf("parse decoded %s: %v", field.name, err)
+				}
+				if !got.Equal(want) {
+					t.Fatalf("decoded %s = %q (%d, e%d), want value of %q (%d, e%d)",
+						field.got, got.Mantissa(), got.Exponent(), field.want, want.Mantissa(), want.Exponent())
+				}
+			}
+			reencoded, err := serializeVaultForRules(parsed, test.rules)
+			if err != nil {
+				t.Fatalf("re-serialize vault: %v", err)
+			}
+			if !bytes.Equal(reencoded, encoded) {
+				t.Fatal("re-serialized vault differs from its canonical wire encoding")
 			}
 		})
 	}
-}
-
-func readVaultNumberFields(data []byte) (map[string]string, error) {
-	model := &ledgerfields.Vault{}
-	if err := model.Decode(data); err != nil {
-		return nil, err
-	}
-	fields := make(map[string]string)
-	for _, field := range []struct {
-		name string
-		has  func() bool
-		get  func() (ledgerfields.NumberValue, error)
-	}{
-		{"AssetsTotal", model.HasAssetsTotal, model.GetAssetsTotal},
-		{"AssetsAvailable", model.HasAssetsAvailable, model.GetAssetsAvailable},
-		{"AssetsMaximum", model.HasAssetsMaximum, model.GetAssetsMaximum},
-		{"LossUnrealized", model.HasLossUnrealized, model.GetLossUnrealized},
-	} {
-		if !field.has() {
-			continue
-		}
-		value, err := field.get()
-		if err != nil {
-			return nil, err
-		}
-		fields[field.name] = string(value)
-	}
-	return fields, nil
 }
 
 func vaultResultCode(t *testing.T, err error) ter.Result {
