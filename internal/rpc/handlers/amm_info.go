@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"

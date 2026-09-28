@@ -4,40 +4,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
-
-func decodeLedgerHex(field, value string, dst []byte) error {
-	decoded, err := hex.DecodeString(value)
-	if err != nil {
-		return fmt.Errorf("%s: invalid hex: %w", field, err)
-	}
-	if len(decoded) != len(dst) {
-		return fmt.Errorf("%s: decoded length %d, want %d", field, len(decoded), len(dst))
-	}
-	copy(dst, decoded)
-	return nil
-}
-
-func parseLedgerUint64(field, value string) (uint64, error) {
-	parsed, err := strconv.ParseUint(value, 16, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s: invalid UInt64 %q: %w", field, value, err)
-	}
-	return parsed, nil
-}
-
-func decodeLedgerAccount(field, value string) ([20]byte, error) {
-	account, err := DecodeAccountID(value)
-	if err != nil {
-		return [20]byte{}, fmt.Errorf("%s: invalid account: %w", field, err)
-	}
-	return account, nil
-}
 
 func decodeLedgerAmount(field string, value ledgerfields.AmountValue) (Amount, error) {
 	amount, err := AmountFromLedgerValue(value)
@@ -151,9 +122,4 @@ func decodeNativeLedgerBalance(field string, value ledgerfields.AmountValue) (ui
 		return 0, fmt.Errorf("%s: invalid XRP drops %q: %w", field, drops, err)
 	}
 	return balance, nil
-}
-
-func decodedFieldUnchanged(fields map[string]any, field string, value any) bool {
-	decoded, ok := fields[field]
-	return ok && reflect.DeepEqual(decoded, value)
 }

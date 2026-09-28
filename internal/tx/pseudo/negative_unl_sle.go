@@ -80,7 +80,6 @@ func ParseNegativeUNLSLE(data []byte) (*NegativeUNLSLE, error) {
 		})
 	}
 
-	var err error
 	if decoded.HasValidatorToDisable() {
 		sle.ValidatorToDisable, err = decoded.GetValidatorToDisable()
 		if err != nil {

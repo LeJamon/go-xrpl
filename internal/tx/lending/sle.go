@@ -1,7 +1,6 @@
 package lending
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
