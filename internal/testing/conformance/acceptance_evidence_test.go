@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -173,6 +174,14 @@ func TestProducerEvidenceTracksCorpusAndExcludesReferenceCheckouts(t *testing.T)
 	}
 	for _, dirty := range []string{"clean", "untracked", "corpus"} {
 		t.Run("dirty_"+dirty, func(t *testing.T) {
+			t.Cleanup(func() {
+				if err := os.Remove(filepath.Join(repo, "unexpected.txt")); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("remove untracked fixture: %v", err)
+				}
+				if err := os.WriteFile(corpusFile, []byte("reference"), 0o600); err != nil {
+					t.Errorf("restore corpus fixture: %v", err)
+				}
+			})
 			switch dirty {
 			case "untracked":
 				if err := os.WriteFile(filepath.Join(repo, "unexpected.txt"), []byte("changed"), 0o600); err != nil {
