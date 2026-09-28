@@ -81,7 +81,7 @@ func (d decodedLendingEntry) number(key string) (string, bool) {
 		if !present {
 			return "", true
 		}
-		return string(value), true
+		return value, true
 	}
 	switch model := d.model.(type) {
 	case *entry.Loan:

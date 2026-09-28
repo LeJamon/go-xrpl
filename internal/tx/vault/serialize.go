@@ -309,7 +309,7 @@ func parseVault(data []byte) (*vaultData, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode %s: %w", field.name, err)
 		}
-		*field.dst = string(value)
+		*field.dst = value
 	}
 
 	return vd, nil

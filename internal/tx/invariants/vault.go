@@ -1173,7 +1173,7 @@ func vvNumberValue(has func() bool, get func() (entry.NumberValue, error), scale
 	if err != nil {
 		return vvZero(scale)
 	}
-	return vvParseNumber(string(value), scale)
+	return vvParseNumber(value, scale)
 }
 
 func vvParseNumber(s string, scale state.MantissaScale) state.XRPLNumber {

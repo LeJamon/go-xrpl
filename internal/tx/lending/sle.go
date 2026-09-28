@@ -457,7 +457,7 @@ func parseLoan(data []byte) (*loanData, error) {
 // --- small encoding helpers ---
 
 func normNum(v ledgerfields.NumberValue) string {
-	s := string(v)
+	s := v
 	if s == "" || s == "0" {
 		return ""
 	}
