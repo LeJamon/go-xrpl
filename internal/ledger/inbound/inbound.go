@@ -198,7 +198,8 @@ type Ledger struct {
 	// transactions against the held parent and verifies AccountHash before
 	// adoption. In this mode the peer's account-state SHAMap is deliberately
 	// ignored, avoiding a full-state download for every child ledger.
-	transactionOnly bool
+	transactionOnly   bool
+	fullStateRequired atomic.Bool
 }
 
 // Option configures an acquisition at construction.
@@ -354,6 +355,16 @@ func (l *Ledger) Reason() Reason {
 // header and transaction SHAMap for local replay.
 func (l *Ledger) TransactionOnly() bool {
 	return l.transactionOnly
+}
+
+// RequireFullState retains a replay fallback requirement for this acquisition.
+func (l *Ledger) RequireFullState() {
+	l.fullStateRequired.Store(true)
+}
+
+// FullStateRequired reports whether replay fallback must preserve this acquisition.
+func (l *Ledger) FullStateRequired() bool {
+	return l.fullStateRequired.Load()
 }
 
 // State returns the current acquisition state.

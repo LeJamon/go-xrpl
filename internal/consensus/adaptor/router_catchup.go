@@ -2490,6 +2490,7 @@ func (c *catchupReplayCoordinator) ClearFetchInfo() {
 
 func (c *catchupReplayCoordinator) retireLegacyAcquisitions(ledgers []*inbound.Ledger) {
 	for _, ledger := range ledgers {
+		c.restoreReplayFallback(ledger)
 		if lane := c.currentAcquisitionWork(); lane != nil {
 			lane.cancelLedger(ledger)
 		}
@@ -3995,6 +3996,9 @@ func (c *catchupReplayCoordinator) removeInboundAcquisitionWithSession(
 	} else {
 		removed = c.fetchTracker.RemoveExpectedWithSnapshot(il, snapshot, false)
 	}
+	if removed && il.FullStateRequired() {
+		c.requireReplayFullStateLocked(il.Seq(), il.Hash())
+	}
 	retirement := standardReplayRetirement{}
 	if removed && owned {
 		retirement = c.cancelStandardReplayPipelineLocked("pivot_acquisition_failed")
@@ -4237,6 +4241,9 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		handoff, pivotHandoff = c.claimStandardReplayPivotHandoffLocked(il)
 	}
 	removed := c.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true)
+	if removed && il.FullStateRequired() {
+		c.requireReplayFullStateLocked(il.Seq(), il.Hash())
+	}
 	if !removed && pivotHandoff {
 		c.clearStandardReplayPivotHandoffLocked(handoff)
 	}
