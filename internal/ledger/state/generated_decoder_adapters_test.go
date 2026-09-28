@@ -297,20 +297,4 @@ func TestGeneratedDecoderAdaptersRejectMalformedConversions(t *testing.T) {
 		t.Fatalf("ParseRippleState error = %v, want issued-currency conversion error", err)
 	}
 
-	badBooks := []struct {
-		name  string
-		value []any
-	}{
-		{"wrong element", []any{"bad"}},
-		{"missing Book", []any{map[string]any{}}},
-		{"wrong Book", []any{map[string]any{"Book": "bad"}}},
-		{"wrong BookNode", []any{map[string]any{"Book": map[string]any{"BookDirectory": zeroHash256, "BookNode": uint64(0)}}}},
-	}
-	for _, test := range badBooks {
-		t.Run(test.name, func(t *testing.T) {
-			if err := decodeAdditionalBook(test.value, &LedgerOffer{}); err == nil {
-				t.Fatal("decodeAdditionalBook accepted malformed decoded value")
-			}
-		})
-	}
 }

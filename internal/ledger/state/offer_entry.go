@@ -1,9 +1,7 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
-	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -18,6 +16,7 @@ type LedgerOffer struct {
 	BookNode          uint64
 	OwnerNode         uint64
 	Expiration        uint32
+	HasExpiration     bool
 	Flags             uint32
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
@@ -30,7 +29,9 @@ type LedgerOffer struct {
 	// that are placed in both domain and open books
 	AdditionalBookDirectory [32]byte
 	AdditionalBookNode      uint64
-	decodedOptionals        map[string]any
+	HasDomainID             bool
+	HasSponsor              bool
+	decoded                 ledgerfields.Offer
 }
 
 type offerBookLink struct {
@@ -40,60 +41,52 @@ type offerBookLink struct {
 
 // SerializeLedgerOffer serializes a LedgerOffer to binary for storage
 func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
-	amountValue := func(amt Amount) any {
-		if amt.IsNative() {
-			return amt.Value()
-		}
-		if amt.IsMPT() {
-			return map[string]any{
-				"value":           amt.Value(),
-				"mpt_issuance_id": amt.MPTIssuanceID(),
-			}
-		}
-		return map[string]any{
-			"value":    amt.Value(),
-			"currency": amt.Currency,
-			"issuer":   amt.Issuer,
-		}
+	entry := offer.decoded
+	account, err := DecodeAccountID(offer.Account)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Offer.Account: %w", err)
 	}
-
-	entry := &ledgerfields.Offer{}
-	entry.SetAccount(offer.Account)
+	if err := entry.SetAccountValue(account); err != nil {
+		return nil, fmt.Errorf("failed to encode Offer.Account: %w", err)
+	}
 	entry.SetFlags(offer.Flags)
 	entry.SetSequence(offer.Sequence)
-	entry.SetTakerPays(amountValue(offer.TakerPays))
-	entry.SetTakerGets(amountValue(offer.TakerGets))
-	entry.SetBookDirectory(strings.ToUpper(hex.EncodeToString(offer.BookDirectory[:])))
-	entry.SetBookNode(fmt.Sprintf("%x", offer.BookNode))
-	entry.SetOwnerNode(fmt.Sprintf("%x", offer.OwnerNode))
-	entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(offer.PreviousTxnID[:])))
+	if err := entry.SetTakerPaysValue(offer.TakerPays.LedgerValue()); err != nil {
+		return nil, err
+	}
+	if err := entry.SetTakerGetsValue(offer.TakerGets.LedgerValue()); err != nil {
+		return nil, err
+	}
+	entry.SetBookDirectoryValue(offer.BookDirectory)
+	entry.SetBookNodeValue(offer.BookNode)
+	entry.SetOwnerNodeValue(offer.OwnerNode)
+	entry.SetPreviousTxnIDValue(offer.PreviousTxnID)
 	entry.SetPreviousTxnLgrSeq(offer.PreviousTxnLgrSeq)
-	if offer.Sponsor != "" || decodedFieldUnchanged(offer.decodedOptionals, "Sponsor", offer.Sponsor) {
-		entry.SetSponsor(offer.Sponsor)
+	if offer.HasSponsor || offer.Sponsor != "" {
+		sponsor, err := DecodeAccountID(offer.Sponsor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode Offer.Sponsor: %w", err)
+		}
+		if err := entry.SetSponsorValue(sponsor); err != nil {
+			return nil, fmt.Errorf("failed to encode Offer.Sponsor: %w", err)
+		}
+	} else {
+		entry.ClearSponsor()
 	}
 
-	if offer.Expiration > 0 || decodedFieldUnchanged(offer.decodedOptionals, "Expiration", offer.Expiration) {
+	if offer.HasExpiration || offer.Expiration > 0 {
 		entry.SetExpiration(offer.Expiration)
+	} else {
+		entry.ClearExpiration()
 	}
-	var zeroDomainID [32]byte
-	if offer.DomainID != zeroDomainID || decodedFieldUnchanged(offer.decodedOptionals, "DomainID", offer.DomainID) {
-		entry.SetDomainID(strings.ToUpper(hex.EncodeToString(offer.DomainID[:])))
+	if offer.HasDomainID || offer.DomainID != [32]byte{} {
+		entry.SetDomainIDValue(offer.DomainID)
+	} else {
+		entry.ClearDomainID()
 	}
 
-	var zeroBookDir [32]byte
-	additionalBookUnchanged := decodedFieldUnchanged(offer.decodedOptionals, "AdditionalBookDirectory", offer.AdditionalBookDirectory) &&
-		decodedFieldUnchanged(offer.decodedOptionals, "AdditionalBookNode", offer.AdditionalBookNode)
-	if raw, ok := offer.decodedOptionals["AdditionalBooks"].([]any); ok && additionalBookUnchanged {
-		entry.SetAdditionalBooks(raw)
-	} else if offer.AdditionalBookDirectory != zeroBookDir {
-		entry.SetAdditionalBooks([]any{
-			map[string]any{
-				"Book": map[string]any{
-					"BookDirectory": strings.ToUpper(hex.EncodeToString(offer.AdditionalBookDirectory[:])),
-					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
-				},
-			},
-		})
+	if err := setOfferAdditionalBooks(&entry, offer); err != nil {
+		return nil, err
 	}
 
 	return entry.Encode()
@@ -105,74 +98,124 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Offer: %w", err)
 	}
-	takerPays, err := decodeLedgerAmount("Offer.TakerPays", decoded.TakerPays)
+	takerPaysValue, err := decoded.GetTakerPays()
 	if err != nil {
 		return nil, err
 	}
-	takerGets, err := decodeLedgerAmount("Offer.TakerGets", decoded.TakerGets)
+	takerPays, err := decodeLedgerAmount("Offer.TakerPays", takerPaysValue)
 	if err != nil {
 		return nil, err
 	}
-	bookNode, err := parseLedgerUint64("Offer.BookNode", decoded.BookNode)
+	takerGetsValue, err := decoded.GetTakerGets()
 	if err != nil {
 		return nil, err
 	}
-	ownerNode, err := parseLedgerUint64("Offer.OwnerNode", decoded.OwnerNode)
+	takerGets, err := decodeLedgerAmount("Offer.TakerGets", takerGetsValue)
 	if err != nil {
 		return nil, err
 	}
-
-	fields := decoded.ToMap()
+	bookNode, err := decoded.GetBookNode()
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := decoded.GetOwnerNode()
+	if err != nil {
+		return nil, err
+	}
+	bookDirectory, err := decoded.GetBookDirectory()
+	if err != nil {
+		return nil, err
+	}
 	offer := &LedgerOffer{
-		Account:           decoded.Account,
 		Sequence:          decoded.Sequence,
 		TakerPays:         takerPays,
 		TakerGets:         takerGets,
+		BookDirectory:     bookDirectory,
 		BookNode:          bookNode,
 		OwnerNode:         ownerNode,
 		Expiration:        decoded.Expiration,
+		HasExpiration:     decoded.HasExpiration(),
 		Flags:             decoded.Flags,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
-		Sponsor:           decoded.Sponsor,
-		decodedOptionals:  make(map[string]any),
+		HasDomainID:       decoded.HasDomainID(),
+		HasSponsor:        decoded.HasSponsor(),
+		decoded:           decoded,
 	}
-	for _, hash := range []struct {
-		field string
-		value string
-		dst   []byte
-	}{
-		{"BookDirectory", decoded.BookDirectory, offer.BookDirectory[:]},
-		{"PreviousTxnID", decoded.PreviousTxnID, offer.PreviousTxnID[:]},
-		{"DomainID", decoded.DomainID, offer.DomainID[:]},
-	} {
-		if _, ok := fields[hash.field]; !ok {
-			continue
+	if decoded.HasAccount() {
+		account, err := decoded.GetAccount()
+		if err != nil {
+			return nil, err
 		}
-		if err := decodeLedgerHex("Offer."+hash.field, hash.value, hash.dst); err != nil {
+		offer.Account, err = EncodeAccountID(account)
+		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["Expiration"]; ok {
-		offer.decodedOptionals["Expiration"] = offer.Expiration
-	}
-	if _, ok := fields["DomainID"]; ok {
-		offer.decodedOptionals["DomainID"] = offer.DomainID
-	}
-	if _, ok := fields["Sponsor"]; ok {
-		offer.decodedOptionals["Sponsor"] = offer.Sponsor
-	}
-	if _, ok := fields["AdditionalBooks"]; ok {
-		if err := decodeAdditionalBook(decoded.AdditionalBooks, offer); err != nil {
+	if decoded.HasPreviousTxnID() {
+		offer.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
 			return nil, err
 		}
-		offer.decodedOptionals["AdditionalBooks"] = decoded.AdditionalBooks
-		offer.decodedOptionals["AdditionalBookDirectory"] = offer.AdditionalBookDirectory
-		offer.decodedOptionals["AdditionalBookNode"] = offer.AdditionalBookNode
+	}
+	if decoded.HasDomainID() {
+		offer.DomainID, err = decoded.GetDomainID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if decoded.HasSponsor() {
+		sponsor, err := decoded.GetSponsor()
+		if err != nil {
+			return nil, err
+		}
+		offer.Sponsor, err = EncodeAccountID(sponsor)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if decoded.HasAdditionalBooks() {
+		books, err := decoded.GetAdditionalBooks()
+		if err != nil {
+			return nil, err
+		}
+		if err := decodeAdditionalBook(books, offer); err != nil {
+			return nil, err
+		}
 	}
 	return offer, nil
 }
 
-func decodeAdditionalBook(books []any, offer *LedgerOffer) error {
+func setOfferAdditionalBooks(entry *ledgerfields.Offer, offer *LedgerOffer) error {
+	if entry.HasAdditionalBooks() {
+		books, err := entry.GetAdditionalBooks()
+		if err != nil {
+			return err
+		}
+		if len(books) > 0 {
+			directory, directoryErr := books[0].GetBookDirectory()
+			node, nodeErr := books[0].GetBookNode()
+			if directoryErr != nil {
+				return directoryErr
+			}
+			if nodeErr != nil {
+				return nodeErr
+			}
+			if directory == offer.AdditionalBookDirectory && node == offer.AdditionalBookNode {
+				return nil
+			}
+		}
+	}
+	if offer.AdditionalBookDirectory == [32]byte{} {
+		entry.ClearAdditionalBooks()
+		return nil
+	}
+	book := ledgerfields.BookValue{}
+	book.SetBookDirectoryValue(offer.AdditionalBookDirectory)
+	book.SetBookNodeValue(offer.AdditionalBookNode)
+	return entry.SetAdditionalBooksValue([]ledgerfields.BookValue{book})
+}
+
+func decodeAdditionalBook(books []ledgerfields.BookValue, offer *LedgerOffer) error {
 	links, err := decodeAdditionalBooks(books)
 	if err != nil || len(links) == 0 {
 		return err
@@ -182,7 +225,7 @@ func decodeAdditionalBook(books []any, offer *LedgerOffer) error {
 	return nil
 }
 
-func decodeAdditionalBooks(books []any) ([]offerBookLink, error) {
+func decodeAdditionalBooks(books []ledgerfields.BookValue) ([]offerBookLink, error) {
 	links := make([]offerBookLink, 0, len(books))
 	for i, value := range books {
 		link, err := decodeAdditionalBookEntry(value, i)
@@ -194,34 +237,19 @@ func decodeAdditionalBooks(books []any) ([]offerBookLink, error) {
 	return links, nil
 }
 
-func decodeAdditionalBookEntry(value any, index int) (offerBookLink, error) {
+func decodeAdditionalBookEntry(value ledgerfields.BookValue, index int) (offerBookLink, error) {
 	var link offerBookLink
-	element, ok := value.(map[string]any)
-	if !ok {
-		return link, fmt.Errorf("Offer.AdditionalBooks[%d]: decoded element has type %T", index, value)
+	directory, err := value.GetBookDirectory()
+	if err != nil {
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d].BookDirectory: %w", index, err)
 	}
-	bookValue, ok := element["Book"]
-	if !ok {
-		return link, fmt.Errorf("Offer.AdditionalBooks[%d]: missing Book", index)
+	link.directory = directory
+	node, err := value.GetBookNode()
+	if err != nil {
+		return link, fmt.Errorf("Offer.AdditionalBooks[%d].BookNode: %w", index, err)
 	}
-	book, ok := bookValue.(map[string]any)
-	if !ok {
-		return link, fmt.Errorf("Offer.AdditionalBooks[%d].Book: decoded value has type %T", index, bookValue)
-	}
-	directory, ok := book["BookDirectory"].(string)
-	if !ok {
-		return link, fmt.Errorf("Offer.AdditionalBooks[%d].BookDirectory: decoded value has type %T", index, book["BookDirectory"])
-	}
-	if err := decodeLedgerHex(fmt.Sprintf("Offer.AdditionalBooks[%d].BookDirectory", index), directory, link.directory[:]); err != nil {
-		return link, err
-	}
-	node, ok := book["BookNode"].(string)
-	if !ok {
-		return link, fmt.Errorf("Offer.AdditionalBooks[%d].BookNode: decoded value has type %T", index, book["BookNode"])
-	}
-	var err error
-	link.node, err = parseLedgerUint64(fmt.Sprintf("Offer.AdditionalBooks[%d].BookNode", index), node)
-	return link, err
+	link.node = node
+	return link, nil
 }
 
 // ParseLedgerOffer parses a LedgerOffer from binary data.

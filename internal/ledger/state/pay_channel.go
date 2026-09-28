@@ -1,10 +1,10 @@
 package state
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -20,12 +20,15 @@ type PayChannelData struct {
 	CancelAfter     uint32
 	SourceTag       uint32
 	DestinationTag  uint32
+	HasExpiration   bool
+	HasCancelAfter  bool
 	HasSourceTag    bool
 	HasDestTag      bool
 	OwnerNode       uint64
 	DestinationNode uint64
 	HasDestNode     bool
 	Sponsor         string
+	HasSponsor      bool
 
 	// Sequence records the creating tx/ticket sequence (a keylet input),
 	// stored once fixIncludeKeyletFields is active.
@@ -42,55 +45,88 @@ type PayChannelData struct {
 	// DirectoryNode fix in this package.
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+	decoded           ledgerfields.PayChannel
 }
 
 // SerializePayChannelFromData serializes a PayChannel ledger entry from data
 func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(channel.Account[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+	entry := channel.decoded
+	if !entry.HasAccount() {
+		if err := entry.SetAccountValue(channel.Account); err != nil {
+			return nil, fmt.Errorf("failed to encode owner address: %w", err)
+		}
+	} else if account, err := entry.GetAccount(); err != nil || account != channel.Account {
+		if err := entry.SetAccountValue(channel.Account); err != nil {
+			return nil, fmt.Errorf("failed to encode owner address: %w", err)
+		}
 	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(channel.DestinationID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode destination address: %w", err)
+	if !entry.HasDestination() {
+		if err := entry.SetDestinationValue(channel.DestinationID); err != nil {
+			return nil, fmt.Errorf("failed to encode destination address: %w", err)
+		}
+	} else if destination, err := entry.GetDestination(); err != nil || destination != channel.DestinationID {
+		if err := entry.SetDestinationValue(channel.DestinationID); err != nil {
+			return nil, fmt.Errorf("failed to encode destination address: %w", err)
+		}
 	}
-
-	entry := &ledgerfields.PayChannel{}
-	entry.SetAccount(ownerAddress)
-	entry.SetDestination(destAddress)
-	entry.SetAmount(fmt.Sprintf("%d", channel.Amount))
-	entry.SetBalance(fmt.Sprintf("%d", channel.Balance))
+	if err := entry.SetAmountValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", channel.Amount)}); err != nil {
+		return nil, err
+	}
+	if err := entry.SetBalanceValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", channel.Balance)}); err != nil {
+		return nil, err
+	}
 	entry.SetSettleDelay(channel.SettleDelay)
-	entry.SetOwnerNode(fmt.Sprintf("%x", channel.OwnerNode))
+	entry.SetOwnerNodeValue(channel.OwnerNode)
 	entry.SetFlags(0)
-	entry.SetPublicKey(channel.PublicKey)
-	if channel.Sponsor != "" {
-		entry.SetSponsor(channel.Sponsor)
+	publicKey, err := hex.DecodeString(channel.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode public key: %w", err)
+	}
+	entry.SetPublicKeyValue(publicKey)
+	if channel.HasSponsor || channel.Sponsor != "" {
+		sponsor, err := DecodeAccountID(channel.Sponsor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode sponsor: %w", err)
+		}
+		if err := entry.SetSponsorValue(sponsor); err != nil {
+			return nil, fmt.Errorf("failed to encode sponsor: %w", err)
+		}
+	} else {
+		entry.ClearSponsor()
 	}
 
-	if channel.CancelAfter > 0 {
+	if channel.HasCancelAfter || channel.CancelAfter > 0 {
 		entry.SetCancelAfter(channel.CancelAfter)
+	} else {
+		entry.ClearCancelAfter()
 	}
-	if channel.Expiration > 0 {
+	if channel.HasExpiration || channel.Expiration > 0 {
 		entry.SetExpiration(channel.Expiration)
+	} else {
+		entry.ClearExpiration()
 	}
 	if channel.HasSourceTag {
 		entry.SetSourceTag(channel.SourceTag)
+	} else {
+		entry.ClearSourceTag()
 	}
 	if channel.HasDestTag {
 		entry.SetDestinationTag(channel.DestinationTag)
+	} else {
+		entry.ClearDestinationTag()
 	}
 	if channel.HasDestNode {
-		entry.SetDestinationNode(fmt.Sprintf("%x", channel.DestinationNode))
+		entry.SetDestinationNodeValue(channel.DestinationNode)
+	} else {
+		entry.ClearDestinationNode()
 	}
 	if channel.HasSequence {
 		entry.SetSequence(channel.Sequence)
+	} else {
+		entry.ClearSequence()
 	}
-	if channel.PreviousTxnID != ([32]byte{}) {
-		entry.SetPreviousTxnID(fmt.Sprintf("%X", channel.PreviousTxnID[:]))
-		entry.SetPreviousTxnLgrSeq(channel.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(channel.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeq(channel.PreviousTxnLgrSeq)
 
 	return entry.Encode()
 }
@@ -101,55 +137,73 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
-	fields := entry.ToMap()
+	publicKey, err := entry.GetPublicKey()
+	if err != nil {
+		return nil, err
+	}
 	channel := &PayChannelData{
 		SettleDelay:       entry.SettleDelay,
-		PublicKey:         strings.ToLower(entry.PublicKey),
+		PublicKey:         strings.ToLower(hex.EncodeToString(publicKey)),
 		Expiration:        entry.Expiration,
 		CancelAfter:       entry.CancelAfter,
-		SourceTag:         entry.SourceTag,
-		DestinationTag:    entry.DestinationTag,
-		HasSourceTag:      fields["SourceTag"] != nil,
-		HasDestTag:        fields["DestinationTag"] != nil,
-		HasDestNode:       fields["DestinationNode"] != nil,
-		Sponsor:           entry.Sponsor,
 		Sequence:          entry.Sequence,
-		HasSequence:       fields["Sequence"] != nil,
 		PreviousTxnLgrSeq: entry.PreviousTxnLgrSeq,
+		HasExpiration:     entry.HasExpiration(),
+		HasCancelAfter:    entry.HasCancelAfter(),
+		HasSourceTag:      entry.HasSourceTag(),
+		HasDestTag:        entry.HasDestinationTag(),
+		HasDestNode:       entry.HasDestinationNode(),
+		HasSequence:       entry.HasSequence(),
+		HasSponsor:        entry.HasSponsor(),
+		decoded:           *entry,
+	}
+	if channel.HasSponsor {
+		sponsor, err := entry.GetSponsor()
+		if err != nil {
+			return nil, err
+		}
+		channel.Sponsor, err = EncodeAccountID(sponsor)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	var err error
-	if fields["Account"] != nil {
-		channel.Account, err = decodeLedgerAccount("PayChannel.Account", entry.Account)
+	if entry.HasAccount() {
+		channel.Account, err = entry.GetAccount()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["Destination"] != nil {
-		channel.DestinationID, err = decodeLedgerAccount("PayChannel.Destination", entry.Destination)
+	if entry.HasDestination() {
+		channel.DestinationID, err = entry.GetDestination()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["OwnerNode"] != nil {
-		channel.OwnerNode, err = parseLedgerUint64("PayChannel.OwnerNode", entry.OwnerNode)
+	if entry.HasOwnerNode() {
+		channel.OwnerNode, err = entry.GetOwnerNode()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if channel.HasDestNode {
-		channel.DestinationNode, err = parseLedgerUint64("PayChannel.DestinationNode", entry.DestinationNode)
+		channel.DestinationNode, err = entry.GetDestinationNode()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["PreviousTxnID"] != nil {
-		if err := decodeLedgerHex("PayChannel.PreviousTxnID", entry.PreviousTxnID, channel.PreviousTxnID[:]); err != nil {
+	if entry.HasPreviousTxnID() {
+		channel.PreviousTxnID, err = entry.GetPreviousTxnID()
+		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["Amount"] != nil {
-		amount, err := decodeLedgerAmount("PayChannel.Amount", entry.Amount)
+	if entry.HasAmount() {
+		amountValue, err := entry.GetAmount()
+		if err != nil {
+			return nil, err
+		}
+		amount, err := decodeLedgerAmount("PayChannel.Amount", amountValue)
 		if err != nil {
 			return nil, err
 		}
@@ -158,8 +212,12 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			return nil, err
 		}
 	}
-	if fields["Balance"] != nil {
-		balance, err := decodeLedgerAmount("PayChannel.Balance", entry.Balance)
+	if entry.HasBalance() {
+		balanceValue, err := entry.GetBalance()
+		if err != nil {
+			return nil, err
+		}
+		balance, err := decodeLedgerAmount("PayChannel.Balance", balanceValue)
 		if err != nil {
 			return nil, err
 		}

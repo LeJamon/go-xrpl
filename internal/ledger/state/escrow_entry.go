@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -19,50 +18,24 @@ func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint3
 	ownerNode, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool,
 	finishAfter, cancelAfter *uint32, condition string,
 	sourceTag, destinationTag *uint32, sequence *uint32) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
+	entry := &ledgerfields.Escrow{}
+	if err := entry.SetAccountValue(ownerID); err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
 	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(destID[:])
-	if err != nil {
+	if err := entry.SetDestinationValue(destID); err != nil {
 		return nil, fmt.Errorf("failed to encode destination address: %w", err)
 	}
-
-	var amountVal any
-	if amount.IsNative() {
-		amountVal = fmt.Sprintf("%d", amount.Drops())
-	} else if amount.IsMPT() {
-		// MPT amounts are whole numbers — use MPTRaw() to avoid IOU
-		// normalization which loses precision for large values (>16 digits).
-		mptValue := amount.Value()
-		if raw, ok := amount.MPTRaw(); ok {
-			mptValue = fmt.Sprintf("%d", raw)
-		}
-		amountVal = map[string]any{
-			"value":           mptValue,
-			"mpt_issuance_id": amount.MPTIssuanceID(),
-		}
-	} else {
-		amountVal = map[string]any{
-			"value":    amount.Value(),
-			"currency": amount.Currency,
-			"issuer":   amount.Issuer,
-		}
+	if err := entry.SetAmountValue(amount.LedgerValue()); err != nil {
+		return nil, err
 	}
-
-	entry := &ledgerfields.Escrow{}
-	entry.SetAccount(ownerAddress)
-	entry.SetDestination(destAddress)
-	entry.SetAmount(amountVal)
-	entry.SetOwnerNode(fmt.Sprintf("%x", ownerNode))
+	entry.SetOwnerNodeValue(ownerNode)
 	entry.SetFlags(0)
 
 	if hasDestNode {
-		entry.SetDestinationNode(fmt.Sprintf("%x", destNode))
+		entry.SetDestinationNodeValue(destNode)
 	}
 	if hasIssuerNode {
-		entry.SetIssuerNode(fmt.Sprintf("%x", issuerNode))
+		entry.SetIssuerNodeValue(issuerNode)
 	}
 	if finishAfter != nil {
 		entry.SetFinishAfter(*finishAfter)
@@ -121,55 +94,61 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
-	fields := entry.ToMap()
+	condition, err := entry.GetCondition()
+	if err != nil {
+		return nil, err
+	}
 	escrow := &EscrowData{
-		Condition:       strings.ToLower(entry.Condition),
+		Condition:       strings.ToLower(fmt.Sprintf("%X", condition)),
 		CancelAfter:     entry.CancelAfter,
 		FinishAfter:     entry.FinishAfter,
 		SourceTag:       entry.SourceTag,
-		HasSourceTag:    fields["SourceTag"] != nil,
+		HasSourceTag:    entry.HasSourceTag(),
 		DestinationTag:  entry.DestinationTag,
-		HasDestTag:      fields["DestinationTag"] != nil,
-		HasDestNode:     fields["DestinationNode"] != nil,
-		HasIssuerNode:   fields["IssuerNode"] != nil,
+		HasDestTag:      entry.HasDestinationTag(),
+		HasDestNode:     entry.HasDestinationNode(),
+		HasIssuerNode:   entry.HasIssuerNode(),
 		TransferRate:    entry.TransferRate,
-		HasTransferRate: fields["TransferRate"] != nil,
+		HasTransferRate: entry.HasTransferRate(),
 		Flags:           entry.Flags,
 	}
 
-	var err error
-	if fields["Account"] != nil {
-		escrow.Account, err = decodeLedgerAccount("Escrow.Account", entry.Account)
+	if entry.HasAccount() {
+		escrow.Account, err = entry.GetAccount()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["Destination"] != nil {
-		escrow.DestinationID, err = decodeLedgerAccount("Escrow.Destination", entry.Destination)
+	if entry.HasDestination() {
+		escrow.DestinationID, err = entry.GetDestination()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["OwnerNode"] != nil {
-		escrow.OwnerNode, err = parseLedgerUint64("Escrow.OwnerNode", entry.OwnerNode)
+	if entry.HasOwnerNode() {
+		escrow.OwnerNode, err = entry.GetOwnerNode()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if escrow.HasDestNode {
-		escrow.DestinationNode, err = parseLedgerUint64("Escrow.DestinationNode", entry.DestinationNode)
+		escrow.DestinationNode, err = entry.GetDestinationNode()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if escrow.HasIssuerNode {
-		escrow.IssuerNode, err = parseLedgerUint64("Escrow.IssuerNode", entry.IssuerNode)
+		escrow.IssuerNode, err = entry.GetIssuerNode()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["Amount"] != nil {
-		amount, err := decodeLedgerAmount("Escrow.Amount", entry.Amount)
+	if entry.HasAmount() {
+		amountValue, err := entry.GetAmount()
+		if err != nil {
+			return nil, err
+		}
+		amount, err := decodeLedgerAmount("Escrow.Amount", amountValue)
 		if err != nil {
 			return nil, err
 		}
