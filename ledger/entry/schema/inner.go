@@ -7,8 +7,11 @@ import "sort"
 type InnerFieldStyle uint8
 
 const (
+	// InnerRequired marks a field that must be present in every nested object.
 	InnerRequired InnerFieldStyle = iota
+	// InnerOptional marks a field whose absence has no implicit value.
 	InnerOptional
+	// InnerDefault marks a field that may be omitted when it has its type default.
 	InnerDefault
 )
 
@@ -18,22 +21,35 @@ const (
 type InnerValueKind uint8
 
 const (
+	// InnerAny accepts the field's native JSON representation.
 	InnerAny InnerValueKind = iota
+	// InnerString accepts a JSON string.
 	InnerString
+	// InnerUInt8 accepts an unsigned 8-bit integer representation.
 	InnerUInt8
+	// InnerUInt16 accepts an unsigned 16-bit integer representation.
 	InnerUInt16
+	// InnerUInt32 accepts an unsigned 32-bit integer representation.
 	InnerUInt32
+	// InnerUInt64 accepts an unsigned 64-bit integer representation.
 	InnerUInt64
+	// InnerPermissionValue accepts a permission bitmask representation.
 	InnerPermissionValue
+	// InnerArray accepts a nested array representation.
 	InnerArray
 )
 
+// InnerFieldTemplate describes one nested object's presence rule and value kind.
 type InnerFieldTemplate struct {
+	// Style controls whether omission is required, optional, or defaultable.
 	Style InnerFieldStyle
-	Kind  InnerValueKind
+	// Kind identifies the JSON representation accepted by the field.
+	Kind InnerValueKind
 }
 
+// InnerObjectTemplate describes the fields accepted by one nested object.
 type InnerObjectTemplate struct {
+	// Fields maps XRPL field names to their nested serialization templates.
 	Fields map[string]InnerFieldTemplate
 }
 
@@ -175,11 +191,13 @@ var innerObjectTemplates = map[string]InnerObjectTemplate{
 	},
 }
 
+// InnerObjectTemplateByName returns the canonical template for a nested object.
 func InnerObjectTemplateByName(name string) (InnerObjectTemplate, bool) {
 	template, ok := innerObjectTemplates[name]
 	return template, ok
 }
 
+// InnerObjectTemplateNames returns all canonical nested object names sorted.
 func InnerObjectTemplateNames() []string {
 	names := make([]string, 0, len(innerObjectTemplates))
 	for name := range innerObjectTemplates {
@@ -189,11 +207,13 @@ func InnerObjectTemplateNames() []string {
 	return names
 }
 
+// ArrayElementTemplate returns the nested object type carried by an STArray field.
 func ArrayElementTemplate(fieldName string) (string, bool) {
 	template, ok := arrayElementTemplates[fieldName]
 	return template, ok
 }
 
+// ArrayElementTemplates returns a copy of the canonical STArray element map.
 func ArrayElementTemplates() map[string]string {
 	result := make(map[string]string, len(arrayElementTemplates))
 	for fieldName, template := range arrayElementTemplates {
@@ -202,6 +222,7 @@ func ArrayElementTemplates() map[string]string {
 	return result
 }
 
+// String returns the protocol-oriented name of an inner value kind.
 func (k InnerValueKind) String() string {
 	switch k {
 	case InnerAny:
