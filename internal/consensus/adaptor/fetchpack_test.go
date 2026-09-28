@@ -678,10 +678,7 @@ func TestHandleFetchPackReply_ProcessesAllWireValidObjects(t *testing.T) {
 		"an over-cap reply from an honest peer must not be charged")
 }
 
-// TestHandleFetchPackReply_PoisonCharged confirms a blob that does not hash to
-// its claimed key is dropped and the sender is charged, while the verifiable
-// nodes in the same reply are still cached.
-func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
+func TestHandleFetchPackReply_InvalidNodeDroppedWithoutCharge(t *testing.T) {
 	t.Parallel()
 	nodes := validFetchPackNodes(t)
 	objects := nodesToObjects(nodes)
@@ -690,6 +687,11 @@ func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
 	tampered[len(tampered)-1] ^= 0xFF
 	objects = append(objects, message.IndexedObject{
 		Hash: append([]byte(nil), nodes[len(nodes)-1].Hash[:]...),
+		Data: tampered,
+	})
+	invalidHash := [32]byte{0xFF}
+	objects = append(objects, message.IndexedObject{
+		Hash: invalidHash[:],
 		Data: tampered,
 	})
 	payload := encodeFetchPack(t, objects)
@@ -703,10 +705,12 @@ func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
 	})
 
 	assert.Equal(t, len(nodes), r.catchupReplay.fetchPacks.Size(), "verifiable nodes must still be cached")
-	calls := rs.getBadDataCalls()
-	require.Len(t, calls, 1)
-	assert.Equal(t, uint64(11), calls[0].peerID)
-	assert.Equal(t, "fetch-pack-poison", calls[0].reason)
+	assert.Empty(t, rs.getBadDataCalls(), "invalid cache objects must not add a peer charge")
+	for _, node := range nodes {
+		cached, ok := r.catchupReplay.fetchPacks.get(node.Hash, time.Now())
+		require.True(t, ok)
+		assert.Equal(t, node.Data, cached, "invalid data must not replace a verified node")
+	}
 }
 
 // TestHandleFetchPackReply_HeaderObjectNotCharged confirms the pack's leading

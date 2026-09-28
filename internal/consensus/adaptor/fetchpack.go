@@ -225,10 +225,9 @@ func (c *fetchPackCache) effectiveMaxAge(size int) time.Duration {
 //
 // The handler runs on the consensus router goroutine. Replies are ignored
 // unless an acquisition is in flight (an unsolicited pack can complete
-// nothing), and a peer that ships poisoned blobs is charged. The wire decoder
-// already bounds a reply by message.MaxMessageSize, so every object in a
-// valid frame is processed; the sender's serving cap applies only to locally
-// built packs and must not truncate a legal inbound pack.
+// nothing). The wire decoder already bounds a reply by message.MaxMessageSize,
+// so every object in a valid frame is processed. The sender's serving cap applies
+// only to locally built packs and must not truncate a legal inbound pack.
 func (c *catchupReplayCoordinator) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	if c.stoppedForShutdown() {
 		return
@@ -261,7 +260,6 @@ func (c *catchupReplayCoordinator) handleFetchPackReply(msg *peermanagement.Inbo
 
 	now := time.Now()
 	stored := 0
-	poisoned := 0
 	// Per-ledgerseq "late pack" short-circuit: skip caching nodes for a
 	// ledger we already hold. go-xrpl packs are single-ledger, but track
 	// per-object so a multi-seq pack is handled too.
@@ -287,18 +285,12 @@ func (c *catchupReplayCoordinator) handleFetchPackReply(msg *peermanagement.Inbo
 		}
 		var hash [32]byte
 		copy(hash[:], obj.Hash)
-		// A blob that does not hash to its claimed key is poisoned; an honest
-		// pack contains none, so a non-header verify failure is bad data.
 		if !shamap.VerifyFetchPackNode(hash, obj.Data) {
-			poisoned++
 			continue
 		}
 		if c.fetchPacks.add(hash, obj.Data, now) {
 			stored++
 		}
-	}
-	if poisoned > 0 {
-		c.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-poison")
 	}
 	if stored == 0 {
 		return
