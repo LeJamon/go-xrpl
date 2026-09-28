@@ -29,6 +29,10 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def run(
     command: list[str],
     *,
@@ -182,7 +186,7 @@ def clean_source(oracle: Path, destination: Path, recorder_source: Path) -> None
 
 def clean_build(
     *, oracle: Path, build_root: Path, recorder_source: Path
-) -> tuple[Path, str, str, dict[str, str]]:
+) -> tuple[Path, str | None, str | None, dict[str, object]]:
     """Build xrpld from an archived exact commit and the recorder source."""
     clean_root = build_root / "clean"
     source = clean_root / "source"
@@ -193,6 +197,11 @@ def clean_build(
     conan_home.mkdir(parents=True, exist_ok=True)
     conan_env = os.environ.copy()
     conan_env["CONAN_HOME"] = str(conan_home)
+    run(
+        ["conan", "profile", "detect", "--force"],
+        log=clean_root / "conan-profile-detect.log",
+        env=conan_env,
+    )
     conan = [
         "conan",
         "install",
@@ -204,7 +213,7 @@ def clean_build(
         "--profile:host=default",
         "--profile:build=default",
         "--settings:host=build_type=Release",
-        "--settings:build=Release",
+        "--settings:build=build_type=Release",
         "--options:host=xrpl/*:xrpld=True",
         "--options:host=xrpl/*:tests=True",
         "--conf:host=tools.build:jobs=4",
@@ -227,20 +236,33 @@ def clean_build(
         "-Dtests=ON",
     ]
     run(cmake, log=clean_root / "cmake-configure.log")
-    run(
-        ["cmake", "--build", str(build), "--parallel", "4", "--target", "xrpld"],
-        log=clean_root / "cmake-build.log",
-    )
+    build_command = [
+        "cmake",
+        "--build",
+        str(build),
+        "--parallel",
+        "4",
+        "--target",
+        "xrpld",
+    ]
+    run(build_command, log=clean_root / "cmake-build.log")
     binary = build / "xrpld"
     return (
         binary,
-        sha256(recorder_source),
-        sha256(oracle / "conan.lock"),
+        None,
+        None,
         {
             "source": str(source),
             "install": str(install),
             "build": str(build),
             "conan_lock_sha256": sha256(oracle / "conan.lock"),
+            "conan_profile_detect_command_sha256": sha256_text(
+                "conan profile detect --force"
+            ),
+            "configure_command": cmake,
+            "configure_command_sha256": sha256_text(shlex.join(cmake)),
+            "build_command": build_command,
+            "build_command_sha256": sha256_text(shlex.join(build_command)),
         },
     )
 
