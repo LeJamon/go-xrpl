@@ -15,11 +15,11 @@ the spec, so the correctness bar for any change is **"does this behave the way
 rippled behaves?"** — same field ordering, same TER result codes, same state
 mutations, same edge cases. When in doubt about expected behavior, check rippled.
 
-The local `rippled-worktrees/v3.4.0-oracle/` tree at commit
-`4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17` is the working reference. Do not
-fetch from the web — use the local copy:
+The local `rippled-worktrees/v3.4.1-oracle/` tree at commit
+`d147fccf54a500fce586522f28d6044c37fd8d29` from private `XRPLF/xrpld-private`
+is the working reference. Do not fetch from the web — use the local copy:
 
-| What you need | Where it lives in `rippled-worktrees/v3.4.0-oracle/` |
+| What you need | Where it lives in `rippled-worktrees/v3.4.1-oracle/` |
 |---------------|------------------------------|
 | Transaction logic | `src/libxrpl/tx/transactors/` |
 | Transaction headers | `include/xrpl/tx/transactors/` |

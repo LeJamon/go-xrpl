@@ -15,9 +15,9 @@ func TestCorpusResolverAcceptsPinnedCorpus(t *testing.T) {
 	root := writeContractCorpus(t, "app/AccountSet", 1)
 	t.Setenv("GOXRPL_FIXTURES_DIR", root)
 
-	corpus, err := resolveCorpus(true)
+	corpus, err := resolveLegacyCorpus(true)
 	if err != nil {
-		t.Fatalf("resolveCorpus: %v", err)
+		t.Fatalf("resolveLegacyCorpus: %v", err)
 	}
 	if len(corpus.Fixtures) != 1 || len(corpus.InScope) != 1 {
 		t.Fatalf("fixture counts = %d total/%d in scope, want 1/1", len(corpus.Fixtures), len(corpus.InScope))
@@ -69,7 +69,7 @@ func TestCorpusResolverFailsClosed(t *testing.T) {
 			name: "wrong oracle commit",
 			modify: func(t *testing.T, root string) {
 				corpus := writeContractCorpus(t, "app/AccountSet", 1)
-				manifest := strings.Replace(contractManifest(1, 1, 0, "{}"), expectedRippledCommit, strings.Repeat("0", 40), 1)
+				manifest := strings.Replace(contractManifest(1, 1, 0, "{}"), legacyRippledCommit, strings.Repeat("0", 40), 1)
 				if err := os.WriteFile(filepath.Join(corpus, corpusManifestName), []byte(manifest), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -127,9 +127,9 @@ func TestCorpusResolverFailsClosed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			test.modify(t, root)
-			_, err := resolveCorpus(true)
+			_, err := resolveLegacyCorpus(true)
 			if err == nil {
-				t.Fatal("resolveCorpus unexpectedly succeeded")
+				t.Fatal("resolveLegacyCorpus unexpectedly succeeded")
 			}
 			if test.want != nil && !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
@@ -187,7 +187,7 @@ func TestCorpusManifestRequiresAuditableProvenanceAndMatrix(t *testing.T) {
 func TestFixtureValidationRejectsMalformedTransactions(t *testing.T) {
 	base := func(step Step) Fixture {
 		return Fixture{
-			RippledVersion: expectedRippledTag,
+			RippledVersion: legacyRippledTag,
 			Suite:          "app/AccountSet",
 			Testcase:       "case",
 			Steps:          []Step{step},

@@ -11,10 +11,12 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -144,6 +146,9 @@ func decodeSnapshotFixture(data []byte) (snapshotFixture, error) {
 	if err := validateSnapshotFixture(&fixture); err != nil {
 		return snapshotFixture{}, err
 	}
+	if err := validateSnapshotSemanticInputs(&fixture); err != nil {
+		return snapshotFixture{}, err
+	}
 	return fixture, nil
 }
 
@@ -204,9 +209,6 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 	if fixture.Submit.Queued != (ter.Result(fixture.Submit.EngineResultCode) == ter.TerQUEUED) {
 		return fmt.Errorf("submit.queued does not match TER %q", fixture.Submit.EngineResult)
 	}
-	if !fixture.Submit.Applied && len(fixture.Submit.PostSubmitSLE) != 0 {
-		return errors.New("rejected or queued submit cannot carry post_submit_sle")
-	}
 	if fixture.CloseInput.CloseTimeResolution < 2 || fixture.CloseInput.CloseTimeResolution > 120 {
 		return fmt.Errorf("close_input.close_time_resolution=%d is outside XRPL range", fixture.CloseInput.CloseTimeResolution)
 	}
@@ -220,6 +222,51 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 		return err
 	}
 	if err := validateSnapshotLedgerShape("closed", fixture.Closed); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSnapshotSemanticInputs validates every input needed to execute a
+// fixture before corpus selection can exclude it. Expected output comparison
+// still happens in runSnapshotFixture, but malformed snapshots must never be
+// hidden behind an exclusion or an unsupported profile.
+func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
+	if fixture == nil {
+		return errors.New("snapshot fixture is nil")
+	}
+	all.RegisterAll()
+	parent, err := loadSnapshotLedger(fixture.Parent)
+	if err != nil {
+		return fmt.Errorf("parent snapshot: %w", err)
+	}
+	closed, err := loadSnapshotLedger(fixture.Closed)
+	if err != nil {
+		return fmt.Errorf("closed snapshot: %w", err)
+	}
+	if err := validateSnapshotLineage(parent, closed, fixture.CloseInput); err != nil {
+		return fmt.Errorf("snapshot lineage: %w", err)
+	}
+
+	txBlob, err := decodeSnapshotBytes("tx_blob", fixture.TxBlob)
+	if err != nil {
+		return err
+	}
+	pending, err := parseSnapshotPending("tx_blob", txBlob)
+	if err != nil {
+		return err
+	}
+	if got := pending.Parsed.TxType().String(); fixture.Family != got {
+		return fmt.Errorf("family=%q does not match tx_blob type %q", fixture.Family, got)
+	}
+	closePending, err := parseSnapshotCloseSet(fixture.CloseInput.TxBlobs)
+	if err != nil {
+		return err
+	}
+	if fixture.Submit.Applied && !snapshotPendingContains(closePending, pending) {
+		return errors.New("applied tx_blob is absent from close_input.tx_blobs")
+	}
+	if err := validateSnapshotEntriesBytes("submit.post_submit_sle", fixture.Submit.PostSubmitSLE); err != nil {
 		return err
 	}
 	return nil
@@ -301,11 +348,37 @@ func validateSnapshotEntries(name string, entries []snapshotEntry) error {
 	return nil
 }
 
+func validateSnapshotEntriesBytes(name string, entries []snapshotEntry) error {
+	for i, entry := range entries {
+		data, err := decodeSnapshotBytes(fmt.Sprintf("%s[%d].data", name, i), entry.Data)
+		if err != nil {
+			return err
+		}
+		if err := validateSnapshotSLEBytes(fmt.Sprintf("%s[%d].data", name, i), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSnapshotSLEBytes(name string, data []byte) error {
+	if _, err := ledgerstate.DecodeType(data); err != nil {
+		return fmt.Errorf("%s is not a valid ledger entry: %w", name, err)
+	}
+	if _, err := binarycodec.DecodeBytes(data); err != nil {
+		return fmt.Errorf("decode %s: %w", name, err)
+	}
+	return nil
+}
+
 // runSnapshotFixture executes one fixture exactly once. It does not construct
 // setup state, repair sequences, rewrite blobs, infer close inputs, or retry a
 // submission based on its result.
 func runSnapshotFixture(fixture snapshotFixture) error {
 	if err := validateSnapshotFixture(&fixture); err != nil {
+		return err
+	}
+	if err := validateSnapshotSemanticInputs(&fixture); err != nil {
 		return err
 	}
 	all.RegisterAll()
@@ -338,24 +411,24 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		return errors.New("applied tx_blob is absent from close_input.tx_blobs")
 	}
 
-	beforeState, err := parent.StateMapHash()
-	if err != nil {
-		return fmt.Errorf("hash parent state before submit: %w", err)
-	}
-	beforeTxs, err := parent.TxMapHash()
-	if err != nil {
-		return fmt.Errorf("hash parent transactions before submit: %w", err)
-	}
 	view, err := openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
 	if err != nil {
 		return fmt.Errorf("create open ledger: %w", err)
 	}
+	beforeState, err := view.Current().StateMapHash()
+	if err != nil {
+		return fmt.Errorf("hash open state before submit: %w", err)
+	}
+	beforeTxs, err := view.Current().TxMapHash()
+	if err != nil {
+		return fmt.Errorf("hash open transactions before submit: %w", err)
+	}
+	submitApply := snapshotApplyConfig(parent, fixture.NetworkID, tx.ApplyFlags(fixture.ApplyFlags))
 	queue, err := txq.New(fixture.TxQConfig.toConfig())
 	if err != nil {
 		return fmt.Errorf("create transaction queue: %w", err)
 	}
-	apply := snapshotApplyConfig(parent, fixture.NetworkID, tx.ApplyFlags(fixture.ApplyFlags))
-	out := view.SubmitDetailed(pending, apply, queue)
+	out := view.SubmitDetailed(pending, submitApply, queue)
 	if err := assertSnapshotSubmit(out, fixture.Submit); err != nil {
 		return err
 	}
@@ -375,14 +448,15 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		if beforeState != afterState || beforeTxs != afterTxs {
 			return errors.New("rejected or queued snapshot submission mutated ledger state")
 		}
-	} else if err := assertSnapshotPostSubmitState(parent.Ledger, view.Current(), fixture.Submit.PostSubmitSLE); err != nil {
+	}
+	if err := assertSnapshotPostSubmitState(view.Current(), fixture.Submit.PostSubmitSLE); err != nil {
 		return err
 	}
 
 	built, err := openledger.BuildClosedLedger(parent.Ledger, closePending, openledger.BuildConfig{
 		CloseTime:  protocol.FromRippleTime(fixture.CloseInput.CloseTime),
 		CloseFlags: fixture.CloseInput.CloseFlags,
-		Apply:      apply,
+		Apply:      snapshotApplyConfig(parent, fixture.NetworkID, tx.ApplyFlags(fixture.ApplyFlags)),
 	})
 	if err != nil {
 		return fmt.Errorf("build closed ledger from close_input: %w", err)
@@ -441,7 +515,7 @@ func snapshotApplyConfig(parent loadedSnapshotLedger, networkID uint32, flags tx
 
 func assertSnapshotSubmit(out openledger.SubmitOutcome, want snapshotSubmit) error {
 	if out.Result.String() != want.EngineResult {
-		return fmt.Errorf("engine_result=%q, want %q", out.Result.String(), want.EngineResult)
+		return fmt.Errorf("engine_result=%q, want %q (%s)", out.Result.String(), want.EngineResult, out.Message)
 	}
 	if int(out.Result) != want.EngineResultCode {
 		return fmt.Errorf("engine_result_code=%d, want %d", out.Result, want.EngineResultCode)
@@ -458,13 +532,9 @@ func assertSnapshotSubmit(out openledger.SubmitOutcome, want snapshotSubmit) err
 	return nil
 }
 
-func assertSnapshotPostSubmitState(parent, got *ledger.Ledger, want []snapshotEntry) error {
-	if parent == nil || got == nil {
+func assertSnapshotPostSubmitState(got *ledger.Ledger, want []snapshotEntry) error {
+	if got == nil {
 		return errors.New("post-submit state comparison received nil ledger")
-	}
-	before, err := parent.StateMapSnapshot()
-	if err != nil {
-		return fmt.Errorf("snapshot parent state: %w", err)
 	}
 	after, err := got.StateMapSnapshot()
 	if err != nil {
@@ -474,13 +544,12 @@ func assertSnapshotPostSubmitState(parent, got *ledger.Ledger, want []snapshotEn
 	if err != nil {
 		return fmt.Errorf("post_submit_sle: %w", err)
 	}
-	beforeItems, err := snapshotMapItems(before)
-	if err != nil {
-		return fmt.Errorf("read parent state: %w", err)
-	}
 	afterItems, err := snapshotMapItems(after)
 	if err != nil {
 		return fmt.Errorf("read post-submit state: %w", err)
+	}
+	if len(wantItems) != len(afterItems) {
+		return fmt.Errorf("post_submit_sle item count=%d, want %d", len(wantItems), len(afterItems))
 	}
 	for index, data := range wantItems {
 		actual, found := afterItems[index]
@@ -488,18 +557,7 @@ func assertSnapshotPostSubmitState(parent, got *ledger.Ledger, want []snapshotEn
 			return fmt.Errorf("post_submit_sle missing state item %x", index)
 		}
 		if !bytes.Equal(data, actual) {
-			return fmt.Errorf("post_submit_sle item %x differs", index)
-		}
-	}
-	for index, afterData := range afterItems {
-		beforeData, wasPresent := beforeItems[index]
-		if wasPresent && bytes.Equal(beforeData, afterData) {
-			continue
-		}
-		if !wasPresent || !bytes.Equal(beforeData, afterData) {
-			if _, recorded := wantItems[index]; !recorded {
-				return fmt.Errorf("post_submit_sle omits changed state item %x", index)
-			}
+			return fmt.Errorf("post_submit_sle item %x differs: got %X want %X", index, actual, data)
 		}
 	}
 	return nil
@@ -535,6 +593,9 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		seenState[index] = struct{}{}
 		data, err := decodeSnapshotBytes(fmt.Sprintf("state[%d].data", i), entry.Data)
 		if err != nil {
+			return loadedSnapshotLedger{}, err
+		}
+		if err := validateSnapshotSLEBytes(fmt.Sprintf("state[%d].data", i), data); err != nil {
 			return loadedSnapshotLedger{}, err
 		}
 		if err := state.Put(index, data); err != nil {
@@ -577,6 +638,9 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		}
 		if _, ok := tx.TransactionIndexFromMetadata(metaBlob); !ok {
 			return loadedSnapshotLedger{}, fmt.Errorf("transactions[%d].meta_blob lacks TransactionIndex", i)
+		}
+		if _, err := binarycodec.DecodeBytes(metaBlob); err != nil {
+			return loadedSnapshotLedger{}, fmt.Errorf("decode transactions[%d].meta_blob: %w", i, err)
 		}
 		leaf, err := snapshotTxLeaf(txBlob, metaBlob)
 		if err != nil {
@@ -626,10 +690,12 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		return loadedSnapshotLedger{}, fmt.Errorf("construct ledger: %w", err)
 	}
 	loadedRules := l.Rules()
-	if !sameSnapshotRules(explicitRules, loadedRules) {
-		return loadedSnapshotLedger{}, errors.New("rules do not match the Amendments ledger entry")
+	for _, id := range loadedRules.EnabledIDs() {
+		if !explicitRules.Enabled(id) {
+			return loadedSnapshotLedger{}, fmt.Errorf("ledger amendment %x is absent from explicit rules", id)
+		}
 	}
-	return loadedSnapshotLedger{Ledger: l, Header: *hdr, EffectiveRules: loadedRules, Fees: fees, State: state, Txs: txs}, nil
+	return loadedSnapshotLedger{Ledger: l, Header: *hdr, EffectiveRules: explicitRules, Fees: fees, State: state, Txs: txs}, nil
 }
 
 func assertSnapshotLedger(got *ledger.Ledger, want loadedSnapshotLedger) error {
@@ -787,29 +853,6 @@ func snapshotMapItems(shamapValue *shamap.SHAMap) (map[[32]byte][]byte, error) {
 	return result, err
 }
 
-func sameSnapshotRules(want, got *amendment.Rules) bool {
-	if want == nil || got == nil {
-		return want == got
-	}
-	wantIDs := make(map[[32]byte]struct{}, want.EnabledCount())
-	for _, id := range want.EnabledIDs() {
-		wantIDs[id] = struct{}{}
-	}
-	gotIDs := make(map[[32]byte]struct{}, got.EnabledCount())
-	for _, id := range got.EnabledIDs() {
-		gotIDs[id] = struct{}{}
-	}
-	if len(wantIDs) != len(gotIDs) {
-		return false
-	}
-	for id := range wantIDs {
-		if _, ok := gotIDs[id]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
 func parseSnapshotFees(fees snapshotFees) (drops.Fees, error) {
 	base, err := parseSnapshotUint("fees.base", fees.Base)
 	if err != nil {
@@ -933,6 +976,19 @@ func validateSnapshotLedgerJSON(name string, raw json.RawMessage) error {
 	if err := requireSnapshotKeys(name, object, "header", "rules", "fees", "state", "transactions"); err != nil {
 		return err
 	}
+	var rules []json.RawMessage
+	if err := json.Unmarshal(object["rules"], &rules); err != nil {
+		return fmt.Errorf("%s.rules must be an array: %w", name, err)
+	}
+	for i, rawRule := range rules {
+		if len(rawRule) == 0 || bytes.Equal(bytes.TrimSpace(rawRule), []byte("null")) {
+			return fmt.Errorf("%s.rules[%d] must not be null", name, i)
+		}
+		var rule string
+		if err := json.Unmarshal(rawRule, &rule); err != nil || rule == "" {
+			return fmt.Errorf("%s.rules[%d] must be a non-empty string", name, i)
+		}
+	}
 	var fees map[string]json.RawMessage
 	if err := decodeSnapshotObject(name+".fees", object["fees"], &fees); err != nil {
 		return err
@@ -988,9 +1044,22 @@ func decodeSnapshotObject(name string, raw json.RawMessage, target any) error {
 }
 
 func requireSnapshotKeys(name string, object map[string]json.RawMessage, keys ...string) error {
+	allowed := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
-		if _, ok := object[key]; !ok {
+		allowed[key] = struct{}{}
+	}
+	for key := range object {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("%s.%s is an unknown field", name, key)
+		}
+	}
+	for _, key := range keys {
+		raw, ok := object[key]
+		if !ok {
 			return fmt.Errorf("%s.%s is missing", name, key)
+		}
+		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("%s.%s must not be null", name, key)
 		}
 	}
 	return nil
