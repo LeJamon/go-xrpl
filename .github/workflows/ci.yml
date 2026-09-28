@@ -414,11 +414,11 @@ jobs:
     env:
       GOXRPL_FIXTURES_DIR: internal/testing/conformance/testdata/rippled-3.4.1-v4
       GOXRPL_CONFORMANCE_REQUIRED: "1"
-      GOXRPL_CONFORMANCE_REPORT: ${{ runner.temp }}/issue-2015-conformance-final/conformance-report.json
+      GOXRPL_CONFORMANCE_REPORT: /tmp/issue-2015-conformance-final/conformance-report.json
       ORACLE_REPOSITORY: XRPLF/xrpld-private
       ORACLE_TAG: 3.4.1
       ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
-      EVIDENCE_DIR: ${{ runner.temp }}/issue-2015-conformance-final
+      EVIDENCE_DIR: /tmp/issue-2015-conformance-final
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
@@ -457,7 +457,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-2015-conformance-final-${{ github.sha }}
-          path: ${{ runner.temp }}/issue-2015-conformance-final
+          path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: error
 
   peer-interop:
