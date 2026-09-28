@@ -46,10 +46,15 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	require.NotNil(t, il, "the acquisition must be registered")
 	assert.Equal(t, inbound.ReasonGeneric, il.Reason())
 
-	// A second request joins the in-flight acquisition; no duplicate fetch.
-	_, started2, _ := r.RequestLedger(target, 0)
+	// A later sequence-addressed request joins the hash-only acquisition; it
+	// updates the sequence without issuing a duplicate fetch.
+	_, started2, _ := r.RequestLedger(target, 42)
 	assert.True(t, started2)
 	assert.Len(t, rs.legacyCalls(), 1, "repeat request must not re-issue the fetch")
+	il = r.catchupReplay.fetchTracker.Find(target)
+	require.NotNil(t, il)
+	assert.Equal(t, uint32(42), il.Seq())
+	assert.Contains(t, r.catchupReplay.FetchInfo(), "42")
 }
 
 func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {

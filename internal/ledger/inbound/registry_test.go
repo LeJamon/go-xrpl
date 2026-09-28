@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"fmt"
 	"log/slog"
 	"testing"
 )
@@ -31,6 +32,36 @@ func TestTracker_GetOrCreateDedupesByHash(t *testing.T) {
 	}
 	if got := tr.Find(h); got != first {
 		t.Fatalf("Find returned %v, want %v", got, first)
+	}
+}
+
+func TestTracker_GetOrCreateWithSequenceUpdatesHashOnlyJoin(t *testing.T) {
+	tr := NewTracker()
+	h := hashN(5)
+	first := New(h, 0, 7, slog.Default())
+	tr.Track(first)
+
+	joined, created := tr.GetOrCreateWithSequence(h, 42, func() *Ledger {
+		t.Fatal("sequence join must not create a replacement acquisition")
+		return nil
+	})
+	if created || joined != first {
+		t.Fatalf("sequence join returned (%p,%v), want (%p,false)", joined, created, first)
+	}
+	if got := joined.Seq(); got != 42 {
+		t.Fatalf("sequence join retained seq %d, want 42", got)
+	}
+	if !joined.SequenceInitiallyUnknown() {
+		t.Fatal("sequence join changed hash-only origin")
+	}
+
+	tr.Remove(h, false)
+	info := tr.Info()
+	if _, ok := info["42"]; !ok {
+		t.Fatalf("failed sequence join must retain decimal fetch_info key, got %v", info)
+	}
+	if _, ok := info[fmt.Sprintf("%X", h)]; ok {
+		t.Fatalf("failed sequence join retained hash fetch_info key, got %v", info)
 	}
 }
 

@@ -1526,7 +1526,7 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 	}
 
 	opts := append(c.acquisitionOpts(), inbound.WithTransactionOnly())
-	il, created := c.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, c.logger, opts...)
 	})
 	if !created {
@@ -1589,7 +1589,7 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(seq ui
 		return
 	}
 
-	il, created := c.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, c.logger, c.acquisitionOpts()...)
 	})
 	if !created {
@@ -2356,7 +2356,7 @@ func (c *catchupReplayCoordinator) prepareHistoryAcquisition(seq uint32, hash [3
 	if !c.historySequenceAllowed(seq) || c.replayer.Has(hash) {
 		return nil
 	}
-	il, created := c.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.NewHistory(hash, seq, peerID, c.logger, c.acquisitionOpts()...)
 	})
 	if !created {
@@ -2591,7 +2591,7 @@ func (c *catchupReplayCoordinator) startGenericAcquisition(hash [32]byte, seq ui
 			return nil, false
 		}
 	}
-	if il := c.fetchTracker.Find(hash); il != nil {
+	if il, _ := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger { return nil }); il != nil {
 		return inbound.AcquisitionJSON(il.Snapshot()), true
 	}
 
@@ -2600,7 +2600,7 @@ func (c *catchupReplayCoordinator) startGenericAcquisition(hash [32]byte, seq ui
 		return nil, false
 	}
 
-	il, created := c.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.NewGeneric(hash, seq, peerID, c.logger, c.acquisitionOpts()...)
 	})
 	if created {

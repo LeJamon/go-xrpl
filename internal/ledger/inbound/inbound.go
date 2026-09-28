@@ -661,6 +661,22 @@ func (l *Ledger) Seq() uint32 {
 	return l.seq
 }
 
+// updateSequence fills a sequence learned after a hash-only acquisition was
+// registered. The acquisition's origin remains hash-only so recovery can
+// distinguish it from an index-addressed request.
+func (l *Ledger) updateSequence(seq uint32) {
+	if l == nil || seq == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.seq != 0 {
+		return
+	}
+	l.seq = seq
+	l.publishSnapshotLocked()
+}
+
 // SequenceInitiallyUnknown reports whether the acquisition was created by
 // hash before its ledger sequence was available. It is immutable after New.
 func (l *Ledger) SequenceInitiallyUnknown() bool {
