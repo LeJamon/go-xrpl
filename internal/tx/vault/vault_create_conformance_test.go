@@ -390,7 +390,7 @@ func TestSerializeVaultPreservesNineteenDigitNumberAcrossLendingModes(t *testing
 				}
 				if !got.Equal(want) {
 					t.Fatalf("decoded %s = %q (%d, e%d), want value of %q (%d, e%d)",
-						field.got, got.Mantissa(), got.Exponent(), field.want, want.Mantissa(), want.Exponent())
+						field.name, field.got, got.Mantissa(), got.Exponent(), field.want, want.Mantissa(), want.Exponent())
 				}
 			}
 			reencoded, err := serializeVaultForRules(parsed, test.rules)
