@@ -994,6 +994,22 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value uint32)
 	{{ $.Receiver }}.Set{{ .GoField }}(value)
 }
 
+{{ else if eq .XRPLType "Int32" }}// Get{{ .GoField }} returns the typed Int32 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (int32, error) {
+	if {{ $.Receiver }} == nil {
+		return 0, nil
+	}
+	if {{ $.Receiver }}.{{ .GoField }} < -2147483648 || {{ $.Receiver }}.{{ .GoField }} > 2147483647 {
+		return 0, fmt.Errorf("ledgerfields: {{ $.Name }}.{{ .Name }}: value %d is out of range for Int32", {{ $.Receiver }}.{{ .GoField }})
+	}
+	return int32({{ $.Receiver }}.{{ .GoField }}), nil
+}
+
+// Set{{ .GoField }}Value assigns a typed Int32 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value int32) {
+	{{ $.Receiver }}.Set{{ .GoField }}(value)
+}
+
 {{ else if eq .XRPLType "UInt64" }}// Get{{ .GoField }} returns the typed UInt64 value.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (uint64, error) {
 	if {{ $.Receiver }} == nil {

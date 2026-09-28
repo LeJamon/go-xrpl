@@ -391,6 +391,10 @@ func parseLoan(data []byte) (*loanData, error) {
 	if err != nil {
 		return nil, err
 	}
+	loanScale, err := ll.GetLoanScale()
+	if err != nil {
+		return nil, err
+	}
 	flags, err := ll.GetFlags()
 	if err != nil {
 		return nil, err
@@ -442,7 +446,7 @@ func parseLoan(data []byte) (*loanData, error) {
 		PrincipalOutstanding:     numbers[5],
 		TotalValueOutstanding:    numbers[6],
 		ManagementFeeOutstanding: numbers[7],
-		LoanScale:                int32(ll.LoanScale),
+		LoanScale:                loanScale,
 		Flags:                    flags,
 		PreviousTxnID:            previousTxnID,
 		PreviousTxnLgrSeq:        previousTxnLgrSeq,

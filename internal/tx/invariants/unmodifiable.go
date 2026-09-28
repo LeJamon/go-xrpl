@@ -160,10 +160,7 @@ func lendingFieldValue(decoded decodedLendingEntry, name string) (any, bool) {
 		case "GracePeriod":
 			return typedLendingField(model.HasGracePeriod, model.GetGracePeriod)
 		case "LoanScale":
-			if !model.HasLoanScale() {
-				return nil, false
-			}
-			return model.LoanScale, true
+			return typedLendingField(model.HasLoanScale, model.GetLoanScale)
 		}
 	case *entry.Vault:
 		switch name {

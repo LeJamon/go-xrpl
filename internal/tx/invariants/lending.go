@@ -208,7 +208,8 @@ func (d decodedLendingEntry) int32(key string) (int32, bool) {
 	if !ok || key != "LoanScale" {
 		return 0, false
 	}
-	return int32(model.LoanScale), model.HasLoanScale()
+	value, err := model.GetLoanScale()
+	return value, err == nil && model.HasLoanScale()
 }
 
 func (d decodedLendingEntry) hash32(key string) ([32]byte, bool) {

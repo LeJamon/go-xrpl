@@ -1017,6 +1017,22 @@ func (l *Loan) ClearLoanScale() {
 	l.dirty = true
 }
 
+// GetLoanScale returns the typed Int32 value.
+func (l *Loan) GetLoanScale() (int32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	if l.LoanScale < -2147483648 || l.LoanScale > 2147483647 {
+		return 0, fmt.Errorf("ledgerfields: Loan.LoanScale: value %d is out of range for Int32", l.LoanScale)
+	}
+	return int32(l.LoanScale), nil
+}
+
+// SetLoanScaleValue assigns a typed Int32 value.
+func (l *Loan) SetLoanScaleValue(value int32) {
+	l.SetLoanScale(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (l *Loan) HasFlags() bool {
 	return l != nil && l.present&loanBitFlags != 0

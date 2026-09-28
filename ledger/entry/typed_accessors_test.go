@@ -3,6 +3,7 @@ package entry
 import (
 	"bytes"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -525,5 +526,24 @@ func TestNestedAccountClearResetsEmptyEncoding(t *testing.T) {
 				t.Fatalf("cleared destination = %q, want absent value %q", cleared, absent)
 			}
 		})
+	}
+}
+
+func TestLoanScaleTypedRange(t *testing.T) {
+	for _, scale := range []int32{-2147483648, -1, 0, 1, 2147483647} {
+		var loan Loan
+		loan.SetLoanScaleValue(scale)
+		got, err := loan.GetLoanScale()
+		if err != nil || got != scale || loan.HasLoanScale() != (scale != 0) {
+			t.Fatalf("LoanScale(%d) = %d, %v, present=%v", scale, got, err, loan.HasLoanScale())
+		}
+	}
+	if strconv.IntSize > 32 {
+		for _, scale := range []int64{-2147483649, 2147483648} {
+			loan := Loan{LoanScale: int(scale)}
+			if _, err := loan.GetLoanScale(); err == nil {
+				t.Fatalf("GetLoanScale accepted out-of-range value %d", scale)
+			}
+		}
 	}
 }
