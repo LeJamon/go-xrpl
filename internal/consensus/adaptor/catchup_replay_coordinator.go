@@ -45,8 +45,6 @@ type catchupReplayCoordinator struct {
 	historyBackfill bool
 	historyDepth    uint32
 
-	// Peer ledger hints and header discovery are part of target selection and
-	// therefore share this coordinator's lifecycle and ownership boundary.
 	peersMu                   sync.RWMutex
 	peerStates                map[peermanagement.PeerID]*peerLedgerState
 	peerStatusCandidates      map[peermanagement.PeerID]peerStatusCandidate
@@ -61,9 +59,7 @@ type catchupReplayCoordinator struct {
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
 	lifecycleWG     sync.WaitGroup
-	// Acquisition registries belong to the same lifecycle as transition state.
-	// Router dispatches replies into them, while the coordinator owns their
-	// shutdown boundary and the decisions that start or retire acquisitions.
+
 	replayer     *inbound.Replayer
 	fetchTracker *inbound.Tracker
 	fetchPacks   *fetchPackCache

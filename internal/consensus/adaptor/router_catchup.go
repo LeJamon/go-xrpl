@@ -4422,8 +4422,6 @@ func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
 	}
 }
 
-// Router forwards catch-up/replay transitions to the coordinator.
-
 func (r *Router) FetchInfo() map[string]any {
 	return r.catchupReplay.FetchInfo()
 }
