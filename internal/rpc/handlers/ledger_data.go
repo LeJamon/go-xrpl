@@ -99,8 +99,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
 
-		decoded, decodeErr := deserializeLedgerEntry(item.Data)
-		decodedMap, _ := decoded.(map[string]any)
+		decodedMap, decodeErr := deserializeLedgerEntry(item.Data)
 
 		if binaryMode {
 			// Binary format: data as uppercase hex and index
@@ -118,7 +117,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 				})
 			} else {
 				if decodedMap != nil {
-					addLedgerEntryJSONFields(decodedMap, upperIndex)
+					addLedgerEntryJSONFields(decodedMap, upperIndex, item.Data)
 					state = append(state, decodedMap)
 				} else {
 					state = append(state, map[string]any{
@@ -211,7 +210,7 @@ func ledgerDataEntryType(params map[string]json.RawMessage) (entry.Type, *rpcerr
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format
-func deserializeLedgerEntry(data []byte) (any, error) {
+func deserializeLedgerEntry(data []byte) (map[string]any, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty data")
 	}

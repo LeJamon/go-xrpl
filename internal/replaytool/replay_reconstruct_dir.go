@@ -278,16 +278,13 @@ func loanBrokerAccount(state *shamap.SHAMap, brokerID [32]byte, brokerAccounts m
 	if !found || item == nil {
 		return [20]byte{}, fmt.Errorf("LoanBroker %X not found", brokerID)
 	}
-	broker, err := binarycodec.Decode(hex.EncodeToString(item.Data()))
-	if err != nil {
+	var broker ledgerentry.LoanBroker
+	if err := broker.Decode(item.Data()); err != nil {
 		return [20]byte{}, fmt.Errorf("decoding LoanBroker %X: %w", brokerID, err)
 	}
-	if broker["LedgerEntryType"] != "LoanBroker" {
-		return [20]byte{}, fmt.Errorf("LoanBroker %X resolved to %v", brokerID, broker["LedgerEntryType"])
-	}
-	account, ok := metaAccountID(broker, "Account")
-	if !ok {
-		return [20]byte{}, fmt.Errorf("LoanBroker %X has invalid Account", brokerID)
+	account, err := broker.GetAccount()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("LoanBroker %X has invalid Account: %w", brokerID, err)
 	}
 	return account, nil
 }
@@ -301,16 +298,13 @@ func vaultDirectoryAccount(state *shamap.SHAMap, vaultID [32]byte) ([20]byte, er
 	if !found || item == nil {
 		return [20]byte{}, fmt.Errorf("Vault %X not found", vaultID)
 	}
-	vault, err := binarycodec.Decode(hex.EncodeToString(item.Data()))
-	if err != nil {
+	var vault ledgerentry.Vault
+	if err := vault.Decode(item.Data()); err != nil {
 		return [20]byte{}, fmt.Errorf("decoding Vault %X: %w", vaultID, err)
 	}
-	if vault["LedgerEntryType"] != "Vault" {
-		return [20]byte{}, fmt.Errorf("Vault %X resolved to %v", vaultID, vault["LedgerEntryType"])
-	}
-	account, ok := metaAccountID(vault, "Account")
-	if !ok {
-		return [20]byte{}, fmt.Errorf("Vault %X has invalid Account", vaultID)
+	account, err := vault.GetAccount()
+	if err != nil {
+		return [20]byte{}, fmt.Errorf("Vault %X has invalid Account: %w", vaultID, err)
 	}
 	return account, nil
 }

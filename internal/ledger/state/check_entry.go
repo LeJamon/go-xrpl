@@ -1,10 +1,8 @@
 package state
 
 import (
-	"fmt"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -110,22 +108,16 @@ func ParseCheck(data []byte) (*CheckData, error) {
 
 // SerializeCheckFromData serializes a Check ledger entry from CheckData.
 func SerializeCheckFromData(check *CheckData) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(check.Account[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
-	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(check.DestinationID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode destination address: %w", err)
-	}
-
 	entry := check.decoded
 	if !entry.HasAccount() || entry.Account != "" || check.Account != [20]byte{} {
-		entry.SetAccount(ownerAddress)
+		if err := entry.SetAccountValue(check.Account); err != nil {
+			return nil, err
+		}
 	}
 	if !entry.HasDestination() || entry.Destination != "" || check.DestinationID != [20]byte{} {
-		entry.SetDestination(destAddress)
+		if err := entry.SetDestinationValue(check.DestinationID); err != nil {
+			return nil, err
+		}
 	}
 	entry.SetSequence(check.Sequence)
 	entry.SetOwnerNodeValue(check.OwnerNode)
@@ -134,14 +126,9 @@ func SerializeCheckFromData(check *CheckData) ([]byte, error) {
 		entry.SetFlags(0)
 	}
 
-	amount := ledgerfields.AmountValue{Value: check.SendMaxAmount.Value()}
+	amount := check.SendMaxAmount.LedgerValue()
 	if check.IsNativeSendMax {
-		amount.Value = strconv.FormatUint(check.SendMax, 10)
-	} else if check.SendMaxAmount.IsMPT() {
-		amount.MPTIssuanceID = check.SendMaxAmount.MPTIssuanceID()
-	} else {
-		amount.Currency = check.SendMaxAmount.Currency
-		amount.Issuer = check.SendMaxAmount.Issuer
+		amount = ledgerfields.AmountValue{Value: strconv.FormatUint(check.SendMax, 10)}
 	}
 	if err := entry.SetSendMaxValue(amount); err != nil {
 		return nil, err

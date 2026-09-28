@@ -180,13 +180,15 @@ func TestAccountInfoLookupResultConformance(t *testing.T) {
 func TestAccountInfoInvalidSignerListsPartialResult(t *testing.T) {
 	const designator = "AE0A97F385FFE42E3096BB352C7A2AA5B0E82C90D80E4DFD0EAABD5B2E4B6E1F"
 	encoded, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Account":         accountInfoConformanceAccount,
-		"Balance":         "100000000",
-		"Flags":           uint32(0),
-		"OwnerCount":      uint32(0),
-		"Sequence":        uint32(1),
-		"VaultID":         designator,
+		"LedgerEntryType":   "AccountRoot",
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(0),
+		"Account":           accountInfoConformanceAccount,
+		"Balance":           "100000000",
+		"Flags":             uint32(0),
+		"OwnerCount":        uint32(0),
+		"Sequence":          uint32(1),
+		"VaultID":           designator,
 	})
 	require.NoError(t, err)
 	raw, err := hex.DecodeString(encoded)

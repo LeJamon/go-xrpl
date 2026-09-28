@@ -12,7 +12,7 @@ import (
 func TestDecodeLedgerAmountTypedValues(t *testing.T) {
 	cases := []struct {
 		name       string
-		value      any
+		value      ledgerfields.AmountValue
 		wantValue  string
 		wantCurr   string
 		wantIssuer string
@@ -33,7 +33,7 @@ func TestDecodeLedgerAmountTypedValues(t *testing.T) {
 		},
 		{
 			name:       "no currency sentinel",
-			value:      map[string]any{"value": "1.25", "currency": "1", "issuer": testIssuer},
+			value:      ledgerfields.AmountValue{Value: "1.25", Currency: "1", Issuer: testIssuer},
 			wantValue:  "1.25",
 			wantCurr:   "1",
 			wantIssuer: testIssuer,
@@ -80,11 +80,7 @@ func TestDecodeLedgerAmountTypedValues(t *testing.T) {
 }
 
 func TestDecodeLedgerAmountPreservesDecodedIOURounding(t *testing.T) {
-	value := map[string]any{
-		"value":    "18446744073709551615",
-		"currency": "USD",
-		"issuer":   testIssuer,
-	}
+	value := ledgerfields.AmountValue{Value: "18446744073709551615", Currency: "USD", Issuer: testIssuer}
 	got, err := decodeLedgerAmount("Offer.TakerPays", value)
 	if err != nil {
 		t.Fatalf("decodeLedgerAmount: %v", err)
@@ -97,7 +93,7 @@ func TestDecodeLedgerAmountPreservesDecodedIOURounding(t *testing.T) {
 func TestDecodeLedgerAmountRejectsMalformedTypedValues(t *testing.T) {
 	cases := []struct {
 		name  string
-		value any
+		value ledgerfields.AmountValue
 		want  string
 	}{
 		{
@@ -112,29 +108,20 @@ func TestDecodeLedgerAmountRejectsMalformedTypedValues(t *testing.T) {
 		},
 		{
 			name:  "mpt overflow",
-			value: map[string]any{"value": "9223372036854775808", "mpt_issuance_id": testMPTID},
+			value: ledgerfields.AmountValue{Value: "9223372036854775808", MPTIssuanceID: testMPTID},
 			want:  "MPT amount out of range",
-		},
-		{
-			name:  "empty mpt issuance ID",
-			value: map[string]any{"value": "1", "mpt_issuance_id": ""},
-			want:  "MPT issuance ID is empty",
 		},
 		{
 			name:  "issued amount missing issuer",
 			value: ledgerfields.AmountValue{Value: "1", Currency: "USD"},
 			want:  "Invalid Asset's Json specification",
 		},
-		{
-			name:  "unsupported decoded type",
-			value: uint32(1),
-			want:  "amount has unsupported type uint32",
-		},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := decodeLedgerAmount("Check.SendMax", tt.value); err == nil || !strings.Contains(err.Error(), tt.want) {
+			_, err := decodeLedgerAmount("Check.SendMax", tt.value)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
 			}
 		})
@@ -172,7 +159,11 @@ func TestDecodeLedgerAmountMatchesExistingArithmetic(t *testing.T) {
 				t.Fatal(err)
 			}
 			want, wantErr := AmountFromJSON(raw)
-			got, gotErr := decodeLedgerAmount("Amount", value)
+			decoded, err := ledgerfields.ParseAmountValue(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, gotErr := AmountFromLedgerValue(decoded)
 			if (wantErr == nil) != (gotErr == nil) {
 				t.Fatalf("errors differ: prior %v, direct %v", wantErr, gotErr)
 			}

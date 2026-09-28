@@ -1,7 +1,7 @@
 package state
 
 import (
-	"encoding/hex"
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -156,9 +156,9 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	if err != nil {
 		return nil, err
 	}
-	balance, err := strconv.ParseUint(balanceValue.Value, 10, 64)
+	balance, err := decodeNativeLedgerBalance("AccountRoot.Balance", balanceValue)
 	if err != nil {
-		return nil, fmt.Errorf("AccountRoot.Balance: invalid XRP drops %q: %w", balanceValue.Value, err)
+		return nil, err
 	}
 	domain, err := decoded.GetDomain()
 	if err != nil {
@@ -241,6 +241,22 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	if account.Account == "" {
 		return nil, errors.New("failed to encode AccountRoot: required field Account is not set")
 	}
+	decodedDomain, err := account.decoded.GetDomain()
+	if err != nil {
+		return nil, err
+	}
+	decodedAMMID, err := account.decoded.GetAMMID()
+	if err != nil {
+		return nil, err
+	}
+	decodedVaultID, err := account.decoded.GetVaultID()
+	if err != nil {
+		return nil, err
+	}
+	decodedLoanBrokerID, err := account.decoded.GetLoanBrokerID()
+	if err != nil {
+		return nil, err
+	}
 	sle := account.decoded
 	if err := sle.SetBalanceValue(entry.AmountValue{Value: strconv.FormatUint(account.Balance, 10)}); err != nil {
 		return nil, err
@@ -269,7 +285,7 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	} else {
 		sle.ClearRegularKey()
 	}
-	if account.Domain != "" || (account.decoded.HasDomain() && account.decoded.Domain == strings.ToUpper(hex.EncodeToString([]byte(account.Domain)))) {
+	if account.Domain != "" || (account.decoded.HasDomain() && bytes.Equal(decodedDomain, []byte(account.Domain))) {
 		sle.SetDomainValue([]byte(account.Domain))
 	} else {
 		sle.ClearDomain()
@@ -314,17 +330,17 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	} else {
 		sle.ClearWalletSize()
 	}
-	if account.AMMID != [32]byte{} || (account.decoded.HasAMMID() && account.decoded.AMMID == strings.ToUpper(hex.EncodeToString(account.AMMID[:]))) {
+	if account.AMMID != [32]byte{} || (account.decoded.HasAMMID() && decodedAMMID == account.AMMID) {
 		sle.SetAMMIDValue(account.AMMID)
 	} else {
 		sle.ClearAMMID()
 	}
-	if account.VaultID != [32]byte{} || (account.decoded.HasVaultID() && account.decoded.VaultID == strings.ToUpper(hex.EncodeToString(account.VaultID[:]))) {
+	if account.VaultID != [32]byte{} || (account.decoded.HasVaultID() && decodedVaultID == account.VaultID) {
 		sle.SetVaultIDValue(account.VaultID)
 	} else {
 		sle.ClearVaultID()
 	}
-	if account.LoanBrokerID != [32]byte{} || (account.decoded.HasLoanBrokerID() && account.decoded.LoanBrokerID == strings.ToUpper(hex.EncodeToString(account.LoanBrokerID[:]))) {
+	if account.LoanBrokerID != [32]byte{} || (account.decoded.HasLoanBrokerID() && decodedLoanBrokerID == account.LoanBrokerID) {
 		sle.SetLoanBrokerIDValue(account.LoanBrokerID)
 	} else {
 		sle.ClearLoanBrokerID()

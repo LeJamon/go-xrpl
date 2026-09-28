@@ -496,7 +496,7 @@ func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expan
 				return fmt.Errorf("decode ledger entry %s: %w", upperIndex, err)
 			}
 			decoded["index"] = upperIndex
-			addLedgerEntryJSONFields(decoded, upperIndex)
+			addLedgerEntryJSONFields(decoded, upperIndex, data)
 			state = append(state, decoded)
 		default:
 			state = append(state, upperIndex)

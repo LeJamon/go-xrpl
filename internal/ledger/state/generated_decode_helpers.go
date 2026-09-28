@@ -39,31 +39,35 @@ func decodeLedgerAccount(field, value string) ([20]byte, error) {
 	return account, nil
 }
 
-func decodeLedgerAmount(field string, value any) (amount Amount, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			amount = Amount{}
-			err = fmt.Errorf("%s: invalid amount: %v", field, recovered)
-		}
-	}()
-
-	amount, err = decodeLedgerAmountValue(value)
+func decodeLedgerAmount(field string, value ledgerfields.AmountValue) (Amount, error) {
+	amount, err := AmountFromLedgerValue(value)
 	if err != nil {
 		return Amount{}, fmt.Errorf("%s: invalid amount: %w", field, err)
 	}
 	return amount, nil
 }
 
-func decodeLedgerAmountValue(value any) (Amount, error) {
-	decoded, ok := value.(ledgerfields.AmountValue)
-	if !ok {
-		var err error
-		decoded, err = ledgerfields.ParseAmountValue(value)
-		if err != nil {
-			return Amount{}, err
+// AmountFromLedgerValue converts a typed ledger amount to the execution amount representation.
+func AmountFromLedgerValue(value ledgerfields.AmountValue) (amount Amount, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			amount = Amount{}
+			err = fmt.Errorf("invalid amount: %v", recovered)
 		}
+	}()
+	return decodeLedgerAmountTyped(value.Value, value.Currency, value.Issuer, value.MPTIssuanceID)
+}
+
+// LedgerValue returns the typed ledger representation of an execution amount.
+func (a Amount) LedgerValue() ledgerfields.AmountValue {
+	value := ledgerfields.AmountValue{Value: a.Value()}
+	if a.IsMPT() {
+		value.MPTIssuanceID = a.MPTIssuanceID()
+	} else if !a.IsNative() {
+		value.Currency = a.Currency
+		value.Issuer = a.Issuer
 	}
-	return decodeLedgerAmountTyped(decoded.Value, decoded.Currency, decoded.Issuer, decoded.MPTIssuanceID)
+	return value
 }
 
 func decodeLedgerAmountTyped(value, currency, issuer, mptID string) (Amount, error) {
@@ -137,11 +141,11 @@ func nonNegativeNativeDrops(field string, amount Amount) (uint64, error) {
 	return uint64(drops), nil
 }
 
-func decodeNativeLedgerBalance(field string, value any) (uint64, error) {
-	drops, ok := value.(string)
-	if !ok {
-		return 0, fmt.Errorf("%s: decoded XRP amount has type %T", field, value)
+func decodeNativeLedgerBalance(field string, value ledgerfields.AmountValue) (uint64, error) {
+	if value.Currency != "" || value.Issuer != "" || value.MPTIssuanceID != "" {
+		return 0, fmt.Errorf("%s: expected native XRP amount", field)
 	}
+	drops := value.Value
 	balance, err := strconv.ParseUint(drops, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s: invalid XRP drops %q: %w", field, drops, err)

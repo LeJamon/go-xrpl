@@ -7,8 +7,10 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // VaultInfoMethod handles the vault_info RPC method
@@ -49,21 +51,21 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
 
-	vaultDecoded, decodeErr := decodeLedgerEntryNode(vaultEntry.Node)
+	vaultType, decodeErr := state.DecodeType(vaultEntry.Node)
 	if decodeErr != nil {
 		return nil, rpcInternalError("vault_info: vault decoding failed", decodeErr)
 	}
-	if vaultDecoded["LedgerEntryType"] != "Vault" {
+	if vaultType != ledgerfields.TypeVault {
 		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
-
-	shareMPTIDHex, ok := vaultDecoded["ShareMPTID"].(string)
-	shareMPTIDBytes, shareErr := hex.DecodeString(shareMPTIDHex)
-	if !ok || shareErr != nil || len(shareMPTIDBytes) != 24 {
-		return nil, rpcInternalInvariantError("vault_info: vault has invalid ShareMPTID").WithExtra(response)
+	var vault ledgerfields.Vault
+	if decodeErr := vault.Decode(vaultEntry.Node); decodeErr != nil {
+		return nil, rpcInternalError("vault_info: vault decoding failed", decodeErr)
 	}
-	var shareMPTID [24]byte
-	copy(shareMPTID[:], shareMPTIDBytes)
+	shareMPTID, shareErr := vault.GetShareMPTID()
+	if shareErr != nil {
+		return nil, rpcInternalError("vault_info: vault has invalid ShareMPTID", shareErr).WithExtra(response)
+	}
 	mptIssuanceKey := keylet.MPTIssuance(shareMPTID).Key
 
 	mptIssuanceEntry, mptErr := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, mptIssuanceKey, ledgerIndex)
@@ -73,16 +75,27 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
-	mptIssuanceDecoded, mptDecodeErr := decodeLedgerEntryNode(mptIssuanceEntry.Node)
+	issuanceType, mptDecodeErr := state.DecodeType(mptIssuanceEntry.Node)
 	if mptDecodeErr != nil {
 		return nil, rpcInternalError("vault_info: MPTokenIssuance decoding failed", mptDecodeErr).WithExtra(response)
 	}
-	if mptIssuanceDecoded["LedgerEntryType"] != "MPTokenIssuance" {
+	if issuanceType != ledgerfields.TypeMPTokenIssuance {
 		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
-
-	addLedgerEntryJSONFields(vaultDecoded, strings.ToUpper(hex.EncodeToString(vaultKey[:])))
-	addLedgerEntryJSONFields(mptIssuanceDecoded, strings.ToUpper(hex.EncodeToString(mptIssuanceKey[:])))
+	var issuance ledgerfields.MPTokenIssuance
+	if mptDecodeErr := issuance.Decode(mptIssuanceEntry.Node); mptDecodeErr != nil {
+		return nil, rpcInternalError("vault_info: MPTokenIssuance decoding failed", mptDecodeErr).WithExtra(response)
+	}
+	issuer, issuerErr := issuance.GetIssuer()
+	if issuerErr != nil {
+		return nil, rpcInternalError("vault_info: issuer decoding failed", issuerErr).WithExtra(response)
+	}
+	issuanceID := keylet.MakeMPTID(issuance.Sequence, issuer)
+	vaultDecoded := vault.ToMap()
+	mptIssuanceDecoded := issuance.ToMap()
+	vaultDecoded["index"] = strings.ToUpper(hex.EncodeToString(vaultKey[:]))
+	mptIssuanceDecoded["index"] = strings.ToUpper(hex.EncodeToString(mptIssuanceKey[:]))
+	mptIssuanceDecoded["mpt_issuance_id"] = strings.ToUpper(hex.EncodeToString(issuanceID[:]))
 	vaultDecoded["shares"] = mptIssuanceDecoded
 	response["vault"] = vaultDecoded
 	return response, nil
