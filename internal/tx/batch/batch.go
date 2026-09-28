@@ -8,6 +8,8 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
@@ -26,9 +28,72 @@ type Batch struct {
 }
 
 // RawTransaction wraps an inner transaction object.
-// Matches rippled's sfRawTransaction (OBJECT, field 34) structure.
 type RawTransaction struct {
+	// An empty Wrapper uses the canonical RawTransaction field.
+	Wrapper        string             `json:"-"`
 	RawTransaction RawTransactionData `json:"RawTransaction"`
+}
+
+func (r RawTransaction) wrapperName() string {
+	if r.Wrapper == "" {
+		return "RawTransaction"
+	}
+	return r.Wrapper
+}
+
+func (r *RawTransaction) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if len(fields) != 1 {
+		return ter.Errorf(ter.TemMALFORMED, "inner transaction must have one object wrapper")
+	}
+	for name, value := range fields {
+		field, err := definitions.Get().FieldInstanceByName(name)
+		if err != nil || field.Type != "STObject" || name == "ObjectEndMarker" {
+			return ter.Errorf(ter.TemMALFORMED, "invalid inner transaction wrapper %q", name)
+		}
+		var innerFields map[string]any
+		if err := json.Unmarshal(value, &innerFields); err != nil {
+			return err
+		}
+		if !binarytypes.MeetsInnerObjectTemplate(name, innerFields) {
+			return ter.Errorf(ter.TemMALFORMED, "invalid inner object template for %s", name)
+		}
+		var inner RawTransactionData
+		if err := json.Unmarshal(value, &inner); err != nil {
+			return err
+		}
+		*r = RawTransaction{Wrapper: name, RawTransaction: inner}
+	}
+	return nil
+}
+
+func (r RawTransaction) MarshalJSON() ([]byte, error) {
+	fields, err := r.flatten()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(fields)
+}
+
+func (r RawTransaction) flatten() (map[string]any, error) {
+	inner := r.RawTransaction.InnerTx
+	if inner == nil {
+		return nil, ErrBatchNilInnerTx
+	}
+	if inner.TxType() == tx.TypeClawback {
+		if err := tx.ValidateTransactionTemplateAllowlist(inner); err != nil {
+			return nil, ter.Errorf(ter.TemMALFORMED, "invalid inner transaction: %v", err)
+		}
+	}
+	fields, err := inner.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	tx.PopulateRequiredWireFields(fields, inner.GetCommon())
+	return map[string]any{r.wrapperName(): fields}, nil
 }
 
 // RawTransactionData contains the inner transaction as a full object (STObject).
@@ -242,12 +307,15 @@ func checkInnerSignatureFields(signingPubKey string, hasTxnSignature, hasSigners
 
 // PreflightInnerTransactions validates and preflights each inner transaction in
 // protocol order before advancing to the next one.
-func (b *Batch) PreflightInnerTransactions(preflight func(tx.Transaction) ter.Result) error {
+func (b *Batch) PreflightInnerTransactions(rules *amendment.Rules, preflight func(tx.Transaction) ter.Result) error {
 	flags := b.GetFlags()
 	enforceUnique := flags&(BatchFlagAllOrNothing|BatchFlagUntilFailure) != 0
 	uniqueHashes := make(map[[32]byte]struct{}, len(b.RawTransactions))
 	accountSeqTicket := make(map[string]map[uint32]struct{})
 	for _, rt := range b.RawTransactions {
+		if rules != nil && rules.Enabled(amendment.FeatureFixBatchV1_2) && rt.wrapperName() != "RawTransaction" {
+			return ter.Errorf(ter.TemMALFORMED, "inner transaction wrapper must be RawTransaction")
+		}
 		inner := rt.RawTransaction.InnerTx
 		if inner == nil {
 			return ErrBatchNilInnerTx
@@ -467,7 +535,7 @@ func (b *Batch) Validate() error {
 	if err := b.ValidateBatchOuter(); err != nil {
 		return err
 	}
-	return b.PreflightInnerTransactions(func(tx.Transaction) ter.Result {
+	return b.PreflightInnerTransactions(nil, func(tx.Transaction) ter.Result {
 		return ter.TesSUCCESS
 	})
 }
@@ -487,22 +555,11 @@ func (b *Batch) Flatten() (map[string]any, error) {
 	// Build RawTransactions array with inner tx objects flattened to maps
 	rawTxns := make([]map[string]any, len(b.RawTransactions))
 	for i, rt := range b.RawTransactions {
-		if rt.RawTransaction.InnerTx == nil {
-			return nil, fmt.Errorf("inner transaction %d is nil", i)
-		}
-		if rt.RawTransaction.InnerTx.TxType() == tx.TypeClawback {
-			if err := tx.ValidateTransactionTemplateAllowlist(rt.RawTransaction.InnerTx); err != nil {
-				return nil, ter.Errorf(ter.TemMALFORMED, "invalid inner transaction %d: %v", i, err)
-			}
-		}
-		innerMap, err := rt.RawTransaction.InnerTx.Flatten()
+		fields, err := rt.flatten()
 		if err != nil {
 			return nil, fmt.Errorf("failed to flatten inner tx %d: %w", i, err)
 		}
-		tx.PopulateRequiredWireFields(innerMap, rt.RawTransaction.InnerTx.GetCommon())
-		rawTxns[i] = map[string]any{
-			"RawTransaction": innerMap,
-		}
+		rawTxns[i] = fields
 	}
 	m["RawTransactions"] = rawTxns
 

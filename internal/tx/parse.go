@@ -223,6 +223,16 @@ func cloneFields(fields map[string]any) map[string]any {
 	return cloned
 }
 
+func batchInnerObject(wrapper map[string]any) (string, map[string]any) {
+	if len(wrapper) == 1 {
+		for name, value := range wrapper {
+			inner, _ := value.(map[string]any)
+			return name, inner
+		}
+	}
+	return "", nil
+}
+
 func binaryBatchJSONFields(fields map[string]any) map[string]any {
 	rawTransactions, ok := fields["RawTransactions"].([]any)
 	if !ok {
@@ -236,8 +246,8 @@ func binaryBatchJSONFields(fields map[string]any) map[string]any {
 		if !ok {
 			continue
 		}
-		innerFields, ok := wrapper["RawTransaction"].(map[string]any)
-		if !ok {
+		name, innerFields := batchInnerObject(wrapper)
+		if innerFields == nil {
 			continue
 		}
 		typeName, _ := innerFields["TransactionType"].(string)
@@ -254,7 +264,7 @@ func binaryBatchJSONFields(fields map[string]any) map[string]any {
 		for name, value := range wrapper {
 			adjustedWrapper[name] = value
 		}
-		adjustedWrapper["RawTransaction"] = adjustedInner
+		adjustedWrapper[name] = adjustedInner
 		adjustedTransactions[i] = adjustedWrapper
 		changed = true
 	}

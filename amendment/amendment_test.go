@@ -74,6 +74,31 @@ func TestFixCleanup340Registration(t *testing.T) {
 	}
 }
 
+func TestFixBatchV12Registration(t *testing.T) {
+	feature := FeatureByName("fixBatchV1_2")
+	if feature == nil {
+		t.Fatal("fixBatchV1_2 is not registered")
+	}
+
+	const amendmentID = "14A2B45E48A4A124D1BBA657AC7B0DC3D5EA8C256C89E8F0D8142D32960A7944"
+	want, err := hex.DecodeString(amendmentID)
+	if err != nil {
+		t.Fatalf("decode fixBatchV1_2 amendment ID: %v", err)
+	}
+	if got := feature.ID[:]; !bytes.Equal(got, want) {
+		t.Fatalf("fixBatchV1_2 ID = %X, want %s", got, amendmentID)
+	}
+	if feature.Supported != SupportedYes || feature.Vote != VoteDefaultYes {
+		t.Fatalf("fixBatchV1_2 status = (%v, %v), want (SupportedYes, VoteDefaultYes)", feature.Supported, feature.Vote)
+	}
+	if !AllSupportedRules().Enabled(feature.ID) {
+		t.Fatal("supported fixBatchV1_2 must be enabled by all-supported rules")
+	}
+	if !GenesisRules().Enabled(feature.ID) {
+		t.Fatal("default-yes fixBatchV1_2 must be enabled by genesis rules")
+	}
+}
+
 func TestFeatureRegistry(t *testing.T) {
 	count := len(AllFeatures())
 	if count < 80 {
