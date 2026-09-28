@@ -238,6 +238,7 @@ func issueValue(asset tx.Asset) entry.IssueValue {
 	if asset.IsMPT() {
 		return entry.IssueValue{MPTIssuanceID: asset.MPTIssuanceID}
 	}
+	asset = normalizedAsset(asset)
 	if bridgeAssetIsNative(asset) {
 		return entry.IssueValue{Currency: "XRP"}
 	}
