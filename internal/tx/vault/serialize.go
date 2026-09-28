@@ -78,16 +78,16 @@ func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error
 	if err := entry.SetAssetValue(v.assetToIssueValue()); err != nil {
 		return nil, fmt.Errorf("encode asset: %w", err)
 	}
-	if err := entry.SetAssetsTotalValue(ledgerfields.NumberValue(vaultWireNumber(v.AssetsTotal))); err != nil {
+	if err := entry.SetAssetsTotalValue(vaultWireNumber(v.AssetsTotal)); err != nil {
 		return nil, fmt.Errorf("encode assets total: %w", err)
 	}
-	if err := entry.SetAssetsAvailableValue(ledgerfields.NumberValue(vaultWireNumber(v.AssetsAvailable))); err != nil {
+	if err := entry.SetAssetsAvailableValue(vaultWireNumber(v.AssetsAvailable)); err != nil {
 		return nil, fmt.Errorf("encode assets available: %w", err)
 	}
-	if err := entry.SetAssetsMaximumValue(ledgerfields.NumberValue(vaultWireNumber(v.AssetsMaximum))); err != nil {
+	if err := entry.SetAssetsMaximumValue(vaultWireNumber(v.AssetsMaximum)); err != nil {
 		return nil, fmt.Errorf("encode assets maximum: %w", err)
 	}
-	if err := entry.SetLossUnrealizedValue(ledgerfields.NumberValue(vaultWireNumber(v.LossUnrealized))); err != nil {
+	if err := entry.SetLossUnrealizedValue(vaultWireNumber(v.LossUnrealized)); err != nil {
 		return nil, fmt.Errorf("encode unrealized loss: %w", err)
 	}
 	entry.SetShareMPTIDValue(v.ShareMPTID)

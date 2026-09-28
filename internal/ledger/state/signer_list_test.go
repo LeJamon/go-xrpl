@@ -99,7 +99,7 @@ func TestSignerListTypedNestedWireValues(t *testing.T) {
 				inner["WalletLocator"] = tc.locator
 			}
 			expected, err := binarycodec.Encode(map[string]any{
-				"LedgerEntryType": "SignerList", "Flags": uint32(LsfOneOwnerCount),
+				"LedgerEntryType": "SignerList", "Flags": LsfOneOwnerCount,
 				"SignerQuorum": uint32(1), "SignerListID": uint32(0),
 				"OwnerNode": "FFFFFFFFFFFFFFFF", "Owner": EncodeAccountIDSafe(owner),
 				"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),

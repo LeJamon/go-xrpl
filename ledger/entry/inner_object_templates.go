@@ -10,17 +10,13 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
 
-type innerFieldStyle = schema.InnerFieldStyle
-
 const (
 	innerRequired = schema.InnerRequired
 	innerOptional = schema.InnerOptional
 	innerDefault  = schema.InnerDefault
 )
 
-type innerFieldTemplate = schema.InnerFieldTemplate
 type innerValueKind = schema.InnerValueKind
-type innerObjectTemplate = schema.InnerObjectTemplate
 
 const (
 	innerAny             = schema.InnerAny

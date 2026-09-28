@@ -94,13 +94,13 @@ func serializeLoanBrokerForRules(b *loanBrokerData, rules *amendment.Rules) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("encode loan broker Number: %w", err)
 	}
-	if err := entry.SetDebtTotalValue(ledgerfields.NumberValue(numbers[0])); err != nil {
+	if err := entry.SetDebtTotalValue(numbers[0]); err != nil {
 		return nil, fmt.Errorf("encode DebtTotal: %w", err)
 	}
-	if err := entry.SetDebtMaximumValue(ledgerfields.NumberValue(numbers[1])); err != nil {
+	if err := entry.SetDebtMaximumValue(numbers[1]); err != nil {
 		return nil, fmt.Errorf("encode DebtMaximum: %w", err)
 	}
-	if err := entry.SetCoverAvailableValue(ledgerfields.NumberValue(numbers[2])); err != nil {
+	if err := entry.SetCoverAvailableValue(numbers[2]); err != nil {
 		return nil, fmt.Errorf("encode CoverAvailable: %w", err)
 	}
 	entry.SetCoverRateMinimum(b.CoverRateMinimum)
@@ -272,16 +272,16 @@ func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("encode loan Number: %w", err)
 	}
-	if err := entry.SetLoanOriginationFeeValue(ledgerfields.NumberValue(numbers[0])); err != nil {
+	if err := entry.SetLoanOriginationFeeValue(numbers[0]); err != nil {
 		return nil, fmt.Errorf("encode LoanOriginationFee: %w", err)
 	}
-	if err := entry.SetLoanServiceFeeValue(ledgerfields.NumberValue(numbers[1])); err != nil {
+	if err := entry.SetLoanServiceFeeValue(numbers[1]); err != nil {
 		return nil, fmt.Errorf("encode LoanServiceFee: %w", err)
 	}
-	if err := entry.SetLatePaymentFeeValue(ledgerfields.NumberValue(numbers[2])); err != nil {
+	if err := entry.SetLatePaymentFeeValue(numbers[2]); err != nil {
 		return nil, fmt.Errorf("encode LatePaymentFee: %w", err)
 	}
-	if err := entry.SetClosePaymentFeeValue(ledgerfields.NumberValue(numbers[3])); err != nil {
+	if err := entry.SetClosePaymentFeeValue(numbers[3]); err != nil {
 		return nil, fmt.Errorf("encode ClosePaymentFee: %w", err)
 	}
 	entry.SetOverpaymentFee(l.OverpaymentFee)
@@ -295,16 +295,16 @@ func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) 
 	entry.SetPreviousPaymentDueDate(l.PreviousPaymentDueDate)
 	entry.SetNextPaymentDueDate(l.NextPaymentDueDate)
 	entry.SetPaymentRemaining(l.PaymentRemaining)
-	if err := entry.SetPeriodicPaymentValue(ledgerfields.NumberValue(numbers[4])); err != nil {
+	if err := entry.SetPeriodicPaymentValue(numbers[4]); err != nil {
 		return nil, fmt.Errorf("encode PeriodicPayment: %w", err)
 	}
-	if err := entry.SetPrincipalOutstandingValue(ledgerfields.NumberValue(numbers[5])); err != nil {
+	if err := entry.SetPrincipalOutstandingValue(numbers[5]); err != nil {
 		return nil, fmt.Errorf("encode PrincipalOutstanding: %w", err)
 	}
-	if err := entry.SetTotalValueOutstandingValue(ledgerfields.NumberValue(numbers[6])); err != nil {
+	if err := entry.SetTotalValueOutstandingValue(numbers[6]); err != nil {
 		return nil, fmt.Errorf("encode TotalValueOutstanding: %w", err)
 	}
-	if err := entry.SetManagementFeeOutstandingValue(ledgerfields.NumberValue(numbers[7])); err != nil {
+	if err := entry.SetManagementFeeOutstandingValue(numbers[7]); err != nil {
 		return nil, fmt.Errorf("encode ManagementFeeOutstanding: %w", err)
 	}
 	entry.SetLoanScale(l.LoanScale)

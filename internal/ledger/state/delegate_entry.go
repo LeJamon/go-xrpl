@@ -26,7 +26,6 @@ type DelegateData struct {
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
-	decoded           ledgerfields.Delegate
 }
 
 // ParseDelegate parses a Delegate ledger entry from binary data.
@@ -40,7 +39,6 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 	entry := &DelegateData{
 		HasDestinationNode: decoded.HasDestinationNode(),
 		Sponsor:            decoded.Sponsor,
-		decoded:            decoded,
 	}
 
 	var err error

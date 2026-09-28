@@ -141,11 +141,6 @@ const (
 	LsfAllowTrustLineClawback       = entry.LsfAllowTrustLineClawback
 )
 
-// encodeAccountID encodes a 20-byte account ID to an XRPL address
-func encodeAccountID(accountID [20]byte) (string, error) {
-	return addresscodec.EncodeAccountIDToClassicAddress(accountID[:])
-}
-
 // ParseAccountRoot parses account data from binary format
 func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	var decoded entry.AccountRoot
