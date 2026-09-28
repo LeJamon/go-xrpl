@@ -125,6 +125,29 @@ func TestTypedAmountAccessors(t *testing.T) {
 	}); err == nil {
 		t.Fatal("SetTakerPaysValue accepted conflicting MPT identity")
 	}
+	for name, malformed := range map[string]any{
+		"empty MPT ID": map[string]any{
+			"value":           "1",
+			"mpt_issuance_id": "",
+		},
+		"empty IOU currency": map[string]any{
+			"value":    "1",
+			"currency": "",
+			"issuer":   iou.Issuer,
+		},
+		"empty IOU issuer": map[string]any{
+			"value":    "1",
+			"currency": iou.Currency,
+			"issuer":   "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			offer.TakerPays = malformed
+			if _, err := offer.GetTakerPays(); err == nil {
+				t.Fatal("GetTakerPays accepted an empty asset identity")
+			}
+		})
+	}
 }
 
 func TestTypedUInt64Accessors(t *testing.T) {
@@ -152,5 +175,53 @@ func TestTypedGettersReturnConversionErrors(t *testing.T) {
 	account.TickSize = 256
 	if _, err := account.GetTickSize(); err == nil {
 		t.Fatal("GetTickSize accepted out-of-range value")
+	}
+}
+
+func TestPresenceClearAndMetadataSemantics(t *testing.T) {
+	var current AccountRoot
+	current.SetTickSize(0)
+	if !current.HasTickSize() {
+		t.Fatal("SetTickSize(0) did not preserve optional-field presence")
+	}
+	newFields := make(map[string]any)
+	current.EmitNewFields(newFields)
+	if _, ok := newFields["TickSize"]; ok {
+		t.Fatal("NewFields emitted an optional default value")
+	}
+	finalFields := make(map[string]any)
+	current.EmitFinalFields(finalFields)
+	if value, ok := finalFields["TickSize"]; !ok || value != 0 {
+		t.Fatalf("FinalFields TickSize = %#v, want present zero", value)
+	}
+
+	var previous AccountRoot
+	previous.SetTickSize(7)
+	current.ClearTickSize()
+	if current.HasTickSize() {
+		t.Fatal("ClearTickSize left the field present")
+	}
+	previousFields := make(map[string]any)
+	current.EmitPreviousFields(&previous, previousFields)
+	if value, ok := previousFields["TickSize"]; !ok || value != 7 {
+		t.Fatalf("PreviousFields TickSize = %#v, want 7 after clear", value)
+	}
+
+	var defaultValue AccountRoot
+	defaultValue.SetSponsoredOwnerCount(0)
+	if defaultValue.HasSponsoredOwnerCount() {
+		t.Fatal("SetSponsoredOwnerCount(0) preserved a StyleDefault field")
+	}
+
+	var directory DirectoryNode
+	directory.SetRootIndex("1")
+	directory.SetIndexes([]string{"00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"})
+	metadata := make(map[string]any)
+	directory.EmitFinalFields(metadata)
+	if _, ok := metadata["RootIndex"]; !ok {
+		t.Fatal("MetaAlways RootIndex was omitted from FinalFields")
+	}
+	if _, ok := metadata["Indexes"]; ok {
+		t.Fatal("MetaNever Indexes was emitted in FinalFields")
 	}
 }

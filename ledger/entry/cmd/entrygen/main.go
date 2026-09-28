@@ -657,11 +657,6 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value []byte)
 	{{ $.Receiver }}.Set{{ .GoField }}(blobValueToString(value))
 }
 
-// Set{{ .GoField }}Bytes is an alias for Set{{ .GoField }}Value.
-func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Bytes(value []byte) {
-	{{ $.Receiver }}.Set{{ .GoField }}Value(value)
-}
-
 {{ else if eq .XRPLType "AccountID" }}// Get{{ .GoField }} returns the 20-byte AccountID.
 func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([20]byte, error) {
 	if {{ $.Receiver }} == nil {
@@ -689,11 +684,6 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (uint8, error) {
 		return 0, fmt.Errorf("ledgerfields: {{ $.Name }}.{{ .Name }}: value %d is out of range for UInt8", {{ $.Receiver }}.{{ .GoField }})
 	}
 	return uint8({{ $.Receiver }}.{{ .GoField }}), nil
-}
-
-// Set{{ .GoField }}Value assigns a typed UInt8 value.
-func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value uint8) {
-	{{ $.Receiver }}.Set{{ .GoField }}(value)
 }
 
 {{ else if eq .XRPLType "UInt64" }}// Get{{ .GoField }} returns the typed UInt64 value.

@@ -46,6 +46,9 @@ func amountValueFromAny(value any, field string, xrpOnly bool) (AmountValue, err
 			if !ok {
 				return result, fmt.Errorf("ledgerfields: %s: MPT issuance ID has type %T, want string", field, rawID)
 			}
+			if id == "" {
+				return result, fmt.Errorf("ledgerfields: %s: MPT issuance ID is empty", field)
+			}
 			if _, hasCurrency := v["currency"]; hasCurrency {
 				return result, fmt.Errorf("ledgerfields: %s: MPT amount cannot carry currency", field)
 			}
@@ -77,6 +80,9 @@ func amountValueFromAny(value any, field string, xrpOnly bool) (AmountValue, err
 		issuer, ok := rawIssuer.(string)
 		if !ok {
 			return result, fmt.Errorf("ledgerfields: %s: issuer has type %T, want string", field, rawIssuer)
+		}
+		if currency == "" || issuer == "" {
+			return result, fmt.Errorf("ledgerfields: %s: issued amount requires non-empty currency and issuer", field)
 		}
 		result.Currency = currency
 		result.Issuer = issuer

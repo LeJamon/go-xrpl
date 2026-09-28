@@ -197,11 +197,6 @@ func (o *Oracle) SetProviderValue(value []byte) {
 	o.SetProvider(blobValueToString(value))
 }
 
-// SetProviderBytes is an alias for SetProviderValue.
-func (o *Oracle) SetProviderBytes(value []byte) {
-	o.SetProviderValue(value)
-}
-
 // HasPriceDataSeries reports whether PriceDataSeries was present in the serialized entry.
 func (o *Oracle) HasPriceDataSeries() bool {
 	return o != nil && o.present&oracleBitPriceDataSeries != 0
@@ -223,11 +218,6 @@ func (o *Oracle) GetAssetClass() ([]byte, error) {
 // SetAssetClassValue assigns a Blob from raw bytes.
 func (o *Oracle) SetAssetClassValue(value []byte) {
 	o.SetAssetClass(blobValueToString(value))
-}
-
-// SetAssetClassBytes is an alias for SetAssetClassValue.
-func (o *Oracle) SetAssetClassBytes(value []byte) {
-	o.SetAssetClassValue(value)
 }
 
 // HasLastUpdateTime reports whether LastUpdateTime was present in the serialized entry.
@@ -261,11 +251,6 @@ func (o *Oracle) GetURI() ([]byte, error) {
 // SetURIValue assigns a Blob from raw bytes.
 func (o *Oracle) SetURIValue(value []byte) {
 	o.SetURI(blobValueToString(value))
-}
-
-// SetURIBytes is an alias for SetURIValue.
-func (o *Oracle) SetURIBytes(value []byte) {
-	o.SetURIValue(value)
 }
 
 // HasOwnerNode reports whether OwnerNode was present in the serialized entry.

@@ -311,11 +311,6 @@ func (p *PayChannel) SetPublicKeyValue(value []byte) {
 	p.SetPublicKey(blobValueToString(value))
 }
 
-// SetPublicKeyBytes is an alias for SetPublicKeyValue.
-func (p *PayChannel) SetPublicKeyBytes(value []byte) {
-	p.SetPublicKeyValue(value)
-}
-
 // HasSettleDelay reports whether SettleDelay was present in the serialized entry.
 func (p *PayChannel) HasSettleDelay() bool {
 	return p != nil && p.present&paychannelBitSettleDelay != 0

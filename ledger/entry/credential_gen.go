@@ -196,11 +196,6 @@ func (c *Credential) SetCredentialTypeValue(value []byte) {
 	c.SetCredentialType(blobValueToString(value))
 }
 
-// SetCredentialTypeBytes is an alias for SetCredentialTypeValue.
-func (c *Credential) SetCredentialTypeBytes(value []byte) {
-	c.SetCredentialTypeValue(value)
-}
-
 // HasExpiration reports whether Expiration was present in the serialized entry.
 func (c *Credential) HasExpiration() bool {
 	return c != nil && c.present&credentialBitExpiration != 0
@@ -242,11 +237,6 @@ func (c *Credential) GetURI() ([]byte, error) {
 // SetURIValue assigns a Blob from raw bytes.
 func (c *Credential) SetURIValue(value []byte) {
 	c.SetURI(blobValueToString(value))
-}
-
-// SetURIBytes is an alias for SetURIValue.
-func (c *Credential) SetURIBytes(value []byte) {
-	c.SetURIValue(value)
 }
 
 // HasIssuerNode reports whether IssuerNode was present in the serialized entry.

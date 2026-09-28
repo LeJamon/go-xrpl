@@ -307,11 +307,6 @@ func (m *MPTokenIssuance) GetAssetScale() (uint8, error) {
 	return uint8(m.AssetScale), nil
 }
 
-// SetAssetScaleValue assigns a typed UInt8 value.
-func (m *MPTokenIssuance) SetAssetScaleValue(value uint8) {
-	m.SetAssetScale(value)
-}
-
 // HasMaximumAmount reports whether MaximumAmount was present in the serialized entry.
 func (m *MPTokenIssuance) HasMaximumAmount() bool {
 	return m != nil && m.present&mptokenissuanceBitMaximumAmount != 0
@@ -412,11 +407,6 @@ func (m *MPTokenIssuance) GetMPTokenMetadata() ([]byte, error) {
 // SetMPTokenMetadataValue assigns a Blob from raw bytes.
 func (m *MPTokenIssuance) SetMPTokenMetadataValue(value []byte) {
 	m.SetMPTokenMetadata(blobValueToString(value))
-}
-
-// SetMPTokenMetadataBytes is an alias for SetMPTokenMetadataValue.
-func (m *MPTokenIssuance) SetMPTokenMetadataBytes(value []byte) {
-	m.SetMPTokenMetadataValue(value)
 }
 
 // HasDomainID reports whether DomainID was present in the serialized entry.
@@ -524,11 +514,6 @@ func (m *MPTokenIssuance) SetIssuerEncryptionKeyValue(value []byte) {
 	m.SetIssuerEncryptionKey(blobValueToString(value))
 }
 
-// SetIssuerEncryptionKeyBytes is an alias for SetIssuerEncryptionKeyValue.
-func (m *MPTokenIssuance) SetIssuerEncryptionKeyBytes(value []byte) {
-	m.SetIssuerEncryptionKeyValue(value)
-}
-
 // HasAuditorEncryptionKey reports whether AuditorEncryptionKey was present in the serialized entry.
 func (m *MPTokenIssuance) HasAuditorEncryptionKey() bool {
 	return m != nil && m.present&mptokenissuanceBitAuditorEncryptionKey != 0
@@ -555,11 +540,6 @@ func (m *MPTokenIssuance) GetAuditorEncryptionKey() ([]byte, error) {
 // SetAuditorEncryptionKeyValue assigns a Blob from raw bytes.
 func (m *MPTokenIssuance) SetAuditorEncryptionKeyValue(value []byte) {
 	m.SetAuditorEncryptionKey(blobValueToString(value))
-}
-
-// SetAuditorEncryptionKeyBytes is an alias for SetAuditorEncryptionKeyValue.
-func (m *MPTokenIssuance) SetAuditorEncryptionKeyBytes(value []byte) {
-	m.SetAuditorEncryptionKeyValue(value)
 }
 
 // HasConfidentialOutstandingAmount reports whether ConfidentialOutstandingAmount was present in the serialized entry.

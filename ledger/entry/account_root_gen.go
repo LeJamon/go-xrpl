@@ -472,11 +472,6 @@ func (a *AccountRoot) SetDomainValue(value []byte) {
 	a.SetDomain(blobValueToString(value))
 }
 
-// SetDomainBytes is an alias for SetDomainValue.
-func (a *AccountRoot) SetDomainBytes(value []byte) {
-	a.SetDomainValue(value)
-}
-
 // HasEmailHash reports whether EmailHash was present in the serialized entry.
 func (a *AccountRoot) HasEmailHash() bool {
 	return a != nil && a.present&accountrootBitEmailHash != 0
@@ -536,11 +531,6 @@ func (a *AccountRoot) SetMessageKeyValue(value []byte) {
 	a.SetMessageKey(blobValueToString(value))
 }
 
-// SetMessageKeyBytes is an alias for SetMessageKeyValue.
-func (a *AccountRoot) SetMessageKeyBytes(value []byte) {
-	a.SetMessageKeyValue(value)
-}
-
 // HasTransferRate reports whether TransferRate was present in the serialized entry.
 func (a *AccountRoot) HasTransferRate() bool {
 	return a != nil && a.present&accountrootBitTransferRate != 0
@@ -580,11 +570,6 @@ func (a *AccountRoot) GetTickSize() (uint8, error) {
 		return 0, fmt.Errorf("ledgerfields: AccountRoot.TickSize: value %d is out of range for UInt8", a.TickSize)
 	}
 	return uint8(a.TickSize), nil
-}
-
-// SetTickSizeValue assigns a typed UInt8 value.
-func (a *AccountRoot) SetTickSizeValue(value uint8) {
-	a.SetTickSize(value)
 }
 
 // HasNFTokenMinter reports whether NFTokenMinter was present in the serialized entry.

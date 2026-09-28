@@ -353,11 +353,6 @@ func (m *MPToken) SetConfidentialBalanceInboxValue(value []byte) {
 	m.SetConfidentialBalanceInbox(blobValueToString(value))
 }
 
-// SetConfidentialBalanceInboxBytes is an alias for SetConfidentialBalanceInboxValue.
-func (m *MPToken) SetConfidentialBalanceInboxBytes(value []byte) {
-	m.SetConfidentialBalanceInboxValue(value)
-}
-
 // HasConfidentialBalanceSpending reports whether ConfidentialBalanceSpending was present in the serialized entry.
 func (m *MPToken) HasConfidentialBalanceSpending() bool {
 	return m != nil && m.present&mptokenBitConfidentialBalanceSpending != 0
@@ -384,11 +379,6 @@ func (m *MPToken) GetConfidentialBalanceSpending() ([]byte, error) {
 // SetConfidentialBalanceSpendingValue assigns a Blob from raw bytes.
 func (m *MPToken) SetConfidentialBalanceSpendingValue(value []byte) {
 	m.SetConfidentialBalanceSpending(blobValueToString(value))
-}
-
-// SetConfidentialBalanceSpendingBytes is an alias for SetConfidentialBalanceSpendingValue.
-func (m *MPToken) SetConfidentialBalanceSpendingBytes(value []byte) {
-	m.SetConfidentialBalanceSpendingValue(value)
 }
 
 // HasConfidentialBalanceVersion reports whether ConfidentialBalanceVersion was present in the serialized entry.
@@ -434,11 +424,6 @@ func (m *MPToken) SetIssuerEncryptedBalanceValue(value []byte) {
 	m.SetIssuerEncryptedBalance(blobValueToString(value))
 }
 
-// SetIssuerEncryptedBalanceBytes is an alias for SetIssuerEncryptedBalanceValue.
-func (m *MPToken) SetIssuerEncryptedBalanceBytes(value []byte) {
-	m.SetIssuerEncryptedBalanceValue(value)
-}
-
 // HasAuditorEncryptedBalance reports whether AuditorEncryptedBalance was present in the serialized entry.
 func (m *MPToken) HasAuditorEncryptedBalance() bool {
 	return m != nil && m.present&mptokenBitAuditorEncryptedBalance != 0
@@ -467,11 +452,6 @@ func (m *MPToken) SetAuditorEncryptedBalanceValue(value []byte) {
 	m.SetAuditorEncryptedBalance(blobValueToString(value))
 }
 
-// SetAuditorEncryptedBalanceBytes is an alias for SetAuditorEncryptedBalanceValue.
-func (m *MPToken) SetAuditorEncryptedBalanceBytes(value []byte) {
-	m.SetAuditorEncryptedBalanceValue(value)
-}
-
 // HasHolderEncryptionKey reports whether HolderEncryptionKey was present in the serialized entry.
 func (m *MPToken) HasHolderEncryptionKey() bool {
 	return m != nil && m.present&mptokenBitHolderEncryptionKey != 0
@@ -498,11 +478,6 @@ func (m *MPToken) GetHolderEncryptionKey() ([]byte, error) {
 // SetHolderEncryptionKeyValue assigns a Blob from raw bytes.
 func (m *MPToken) SetHolderEncryptionKeyValue(value []byte) {
 	m.SetHolderEncryptionKey(blobValueToString(value))
-}
-
-// SetHolderEncryptionKeyBytes is an alias for SetHolderEncryptionKeyValue.
-func (m *MPToken) SetHolderEncryptionKeyBytes(value []byte) {
-	m.SetHolderEncryptionKeyValue(value)
 }
 
 // HasSponsor reports whether Sponsor was present in the serialized entry.

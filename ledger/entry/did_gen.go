@@ -165,11 +165,6 @@ func (d *DID) SetDIDDocumentValue(value []byte) {
 	d.SetDIDDocument(blobValueToString(value))
 }
 
-// SetDIDDocumentBytes is an alias for SetDIDDocumentValue.
-func (d *DID) SetDIDDocumentBytes(value []byte) {
-	d.SetDIDDocumentValue(value)
-}
-
 // HasURI reports whether URI was present in the serialized entry.
 func (d *DID) HasURI() bool {
 	return d != nil && d.present&didBitURI != 0
@@ -198,11 +193,6 @@ func (d *DID) SetURIValue(value []byte) {
 	d.SetURI(blobValueToString(value))
 }
 
-// SetURIBytes is an alias for SetURIValue.
-func (d *DID) SetURIBytes(value []byte) {
-	d.SetURIValue(value)
-}
-
 // HasData reports whether Data was present in the serialized entry.
 func (d *DID) HasData() bool {
 	return d != nil && d.present&didBitData != 0
@@ -229,11 +219,6 @@ func (d *DID) GetData() ([]byte, error) {
 // SetDataValue assigns a Blob from raw bytes.
 func (d *DID) SetDataValue(value []byte) {
 	d.SetData(blobValueToString(value))
-}
-
-// SetDataBytes is an alias for SetDataValue.
-func (d *DID) SetDataBytes(value []byte) {
-	d.SetDataValue(value)
 }
 
 // HasOwnerNode reports whether OwnerNode was present in the serialized entry.

@@ -347,11 +347,6 @@ func (v *Vault) SetDataValue(value []byte) {
 	v.SetData(blobValueToString(value))
 }
 
-// SetDataBytes is an alias for SetDataValue.
-func (v *Vault) SetDataBytes(value []byte) {
-	v.SetDataValue(value)
-}
-
 // HasAsset reports whether Asset was present in the serialized entry.
 func (v *Vault) HasAsset() bool {
 	return v != nil && v.present&vaultBitAsset != 0
@@ -454,11 +449,6 @@ func (v *Vault) GetWithdrawalPolicy() (uint8, error) {
 	return uint8(v.WithdrawalPolicy), nil
 }
 
-// SetWithdrawalPolicyValue assigns a typed UInt8 value.
-func (v *Vault) SetWithdrawalPolicyValue(value uint8) {
-	v.SetWithdrawalPolicy(value)
-}
-
 // HasScale reports whether Scale was present in the serialized entry.
 func (v *Vault) HasScale() bool {
 	return v != nil && v.present&vaultBitScale != 0
@@ -483,11 +473,6 @@ func (v *Vault) GetScale() (uint8, error) {
 		return 0, fmt.Errorf("ledgerfields: Vault.Scale: value %d is out of range for UInt8", v.Scale)
 	}
 	return uint8(v.Scale), nil
-}
-
-// SetScaleValue assigns a typed UInt8 value.
-func (v *Vault) SetScaleValue(value uint8) {
-	v.SetScale(value)
 }
 
 // HasLEVersion reports whether LEVersion was present in the serialized entry.
@@ -516,11 +501,6 @@ func (v *Vault) GetLEVersion() (uint8, error) {
 	return uint8(v.LEVersion), nil
 }
 
-// SetLEVersionValue assigns a typed UInt8 value.
-func (v *Vault) SetLEVersionValue(value uint8) {
-	v.SetLEVersion(value)
-}
-
 // HasVaultKind reports whether VaultKind was present in the serialized entry.
 func (v *Vault) HasVaultKind() bool {
 	return v != nil && v.present&vaultBitVaultKind != 0
@@ -545,11 +525,6 @@ func (v *Vault) GetVaultKind() (uint8, error) {
 		return 0, fmt.Errorf("ledgerfields: Vault.VaultKind: value %d is out of range for UInt8", v.VaultKind)
 	}
 	return uint8(v.VaultKind), nil
-}
-
-// SetVaultKindValue assigns a typed UInt8 value.
-func (v *Vault) SetVaultKindValue(value uint8) {
-	v.SetVaultKind(value)
 }
 
 // HasSubscriptionDate reports whether SubscriptionDate was present in the serialized entry.

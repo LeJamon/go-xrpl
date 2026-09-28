@@ -377,11 +377,6 @@ func (l *LoanBroker) SetDataValue(value []byte) {
 	l.SetData(blobValueToString(value))
 }
 
-// SetDataBytes is an alias for SetDataValue.
-func (l *LoanBroker) SetDataBytes(value []byte) {
-	l.SetDataValue(value)
-}
-
 // HasManagementFeeRate reports whether ManagementFeeRate was present in the serialized entry.
 func (l *LoanBroker) HasManagementFeeRate() bool {
 	return l != nil && l.present&loanbrokerBitManagementFeeRate != 0

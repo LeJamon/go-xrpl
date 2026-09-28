@@ -144,11 +144,6 @@ func (n *NegativeUNL) SetValidatorToDisableValue(value []byte) {
 	n.SetValidatorToDisable(blobValueToString(value))
 }
 
-// SetValidatorToDisableBytes is an alias for SetValidatorToDisableValue.
-func (n *NegativeUNL) SetValidatorToDisableBytes(value []byte) {
-	n.SetValidatorToDisableValue(value)
-}
-
 // HasValidatorToReEnable reports whether ValidatorToReEnable was present in the serialized entry.
 func (n *NegativeUNL) HasValidatorToReEnable() bool {
 	return n != nil && n.present&negativeunlBitValidatorToReEnable != 0
@@ -175,11 +170,6 @@ func (n *NegativeUNL) GetValidatorToReEnable() ([]byte, error) {
 // SetValidatorToReEnableValue assigns a Blob from raw bytes.
 func (n *NegativeUNL) SetValidatorToReEnableValue(value []byte) {
 	n.SetValidatorToReEnable(blobValueToString(value))
-}
-
-// SetValidatorToReEnableBytes is an alias for SetValidatorToReEnableValue.
-func (n *NegativeUNL) SetValidatorToReEnableBytes(value []byte) {
-	n.SetValidatorToReEnableValue(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.

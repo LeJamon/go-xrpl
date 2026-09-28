@@ -298,11 +298,6 @@ func (e *Escrow) SetConditionValue(value []byte) {
 	e.SetCondition(blobValueToString(value))
 }
 
-// SetConditionBytes is an alias for SetConditionValue.
-func (e *Escrow) SetConditionBytes(value []byte) {
-	e.SetConditionValue(value)
-}
-
 // HasCancelAfter reports whether CancelAfter was present in the serialized entry.
 func (e *Escrow) HasCancelAfter() bool {
 	return e != nil && e.present&escrowBitCancelAfter != 0
