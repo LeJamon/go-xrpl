@@ -38,6 +38,8 @@ func testSetValidInitial(t *testing.T, fixEmptyDID bool) {
 	}
 	env.Fund(accounts...)
 	env.Close()
+	// PreviousTxnID and PreviousTxnLgrSeq are closed-ledger metadata fields.
+	env.SetOpenLedger(false)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
