@@ -465,3 +465,27 @@ func TestNestedAccountAddressAccessorsPreserveEmptyValues(t *testing.T) {
 		t.Fatalf("empty account ToMap = %#v; want empty Account", mapped["Account"])
 	}
 }
+
+func TestNestedHexAccessorsCanonicalizeAndValidate(t *testing.T) {
+	var signer SignerEntryValue
+	walletLocator := "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+	if err := signer.SetWalletLocatorHex(walletLocator); err != nil {
+		t.Fatalf("SetWalletLocatorHex: %v", err)
+	}
+	got, err := signer.GetWalletLocatorHex()
+	if err != nil || got != walletLocator {
+		t.Fatalf("GetWalletLocatorHex = %q, %v; want %q", got, err, walletLocator)
+	}
+	if err := signer.SetWalletLocatorHex("not-a-hash"); err == nil {
+		t.Fatal("SetWalletLocatorHex accepted malformed hash")
+	}
+
+	var credential CredentialValue
+	if err := credential.SetCredentialTypeHex("0abc"); err != nil {
+		t.Fatalf("SetCredentialTypeHex: %v", err)
+	}
+	got, err = credential.GetCredentialTypeHex()
+	if err != nil || got != "0ABC" {
+		t.Fatalf("GetCredentialTypeHex = %q, %v; want 0ABC", got, err)
+	}
+}

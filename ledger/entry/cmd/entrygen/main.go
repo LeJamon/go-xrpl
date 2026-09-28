@@ -1804,6 +1804,21 @@ const (
 {{ end }}func (v {{ $inner.Type }}) Get{{ .GoField }}() ({{ .GoType }}, error) { return {{ cloneExpr .GoType .NestedType (printf "v.%s" .GoField) }}, nil }
 {{ if eq .XRPLType "AccountID" }}func (v {{ $inner.Type }}) Get{{ .GoField }}Address() (string, error) { if v.emptyAccounts&{{ .BitConst }} != 0 && v.{{ .GoField }} == [20]byte{} { return "", nil }; return accountIDValueToString(v.{{ .GoField }}) }
 func (v *{{ $inner.Type }}) Set{{ .GoField }}Address(value string) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; decoded, err := accountIDValueFromString(value, "{{ $inner.Type }}.{{ .Name }}"); if err != nil { return err }; v.{{ .GoField }} = decoded; v.present |= {{ .BitConst }}; if value == "" { v.emptyAccounts |= {{ .BitConst }} } else { v.emptyAccounts &^= {{ .BitConst }} }; return nil }
+{{ end }}{{ if or (eq .XRPLType "Hash128") (eq .XRPLType "Hash160") (eq .XRPLType "Hash192") (eq .XRPLType "Hash256") (eq .XRPLType "Blob") }}func (v {{ $inner.Type }}) Get{{ .GoField }}Hex() (string, error) {
+{{ if eq .XRPLType "Blob" }}	return blobValueToString(v.{{ .GoField }}), nil
+{{ else }}	return hashValueToString(v.{{ .GoField }}[:]), nil
+{{ end }}}
+func (v *{{ $inner.Type }}) Set{{ .GoField }}Hex(value string) error {
+	if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }
+{{ if eq .XRPLType "Blob" }}	decoded, err := blobValueFromString(value, "{{ $inner.Type }}.{{ .Name }}")
+	if err != nil { return err }
+	v.{{ .GoField }} = innerCloneBytes(decoded)
+{{ else }}	decoded, err := hashValueFromString(value, "{{ $inner.Type }}.{{ .Name }}", {{ if eq .XRPLType "Hash128" }}16{{ else if eq .XRPLType "Hash160" }}20{{ else if eq .XRPLType "Hash192" }}24{{ else }}32{{ end }})
+	if err != nil { return err }
+	copy(v.{{ .GoField }}[:], decoded)
+{{ end }}	v.present |= {{ .BitConst }}
+	return nil
+}
 {{ end }}{{ if .SetterError }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }; {{ end }}return nil }
 func (v *{{ $inner.Type }}) Set{{ .GoField }}Value(value {{ .GoType }}) error { return v.Set{{ .GoField }}(value) }
 {{ else }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) { v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }{{ end }} }
