@@ -75,7 +75,7 @@ func incompleteStateAcquisitionFixture(t *testing.T) (*Ledger, []message.LedgerN
 	return il, nodes
 }
 
-func TestLedger_OnTimer_FailsAfterSevenConsecutiveQuietIntervals(t *testing.T) {
+func TestLedger_OnTimer_FailsAfterSevenCumulativeQuietIntervals(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0xAB}, 42, 1, discardLogger())
 	il.state = StateWantState
@@ -99,8 +99,8 @@ func TestLedger_OnTimer_FailsAfterSevenConsecutiveQuietIntervals(t *testing.T) {
 	if il.State() != StateFailed {
 		t.Fatalf("state = %v, want StateFailed", il.State())
 	}
-	if err := il.Err(); err == nil || !strings.Contains(err.Error(), "7 consecutive timeouts") {
-		t.Fatalf("terminal error = %v, want seven consecutive timeouts", err)
+	if err := il.Err(); err == nil || !strings.Contains(err.Error(), "7 timeouts") {
+		t.Fatalf("terminal error = %v, want seven cumulative timeouts", err)
 	}
 }
 
@@ -132,7 +132,7 @@ func TestLedger_OnTimer_ReportsIntervalStallWithLifetimeTotals(t *testing.T) {
 	}
 }
 
-func TestLedger_OnTimer_AlternatingProgressAndQuietPreservesCumulativeTimeouts(t *testing.T) {
+func TestLedger_OnTimer_AlternatingProgressAndQuietHitsCumulativeBudget(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0x01}, 7, 1, discardLogger())
 	il.state = StateWantState
@@ -140,8 +140,7 @@ func TestLedger_OnTimer_AlternatingProgressAndQuietPreservesCumulativeTimeouts(t
 	il.lastTimer = base
 
 	now := base
-	quietIntervals := ledgerTimeoutRetriesMax + 2
-	for i := 1; i <= quietIntervals; i++ {
+	for i := 1; i <= ledgerTimeoutRetriesMax; i++ {
 		now = now.Add(acquireTimerInterval)
 		if got := il.OnTimer(now); got != TimerEscalate {
 			t.Fatalf("quiet interval %d: got %v, want TimerEscalate", i, got)
@@ -155,19 +154,27 @@ func TestLedger_OnTimer_AlternatingProgressAndQuietPreservesCumulativeTimeouts(t
 		if got := il.OnTimer(now); got != TimerRefresh {
 			t.Fatalf("progress interval %d: got %v, want TimerRefresh", i, got)
 		}
-		if il.State() == StateFailed {
-			t.Fatalf("alternating progress failed after %d cumulative quiet intervals", i)
+		if got := il.Timeouts(); got != i {
+			t.Fatalf("timeouts after progress interval %d = %d, want %d", i, got, i)
+		}
+		if got := il.ConsecutiveTimeouts(); got != 0 {
+			t.Fatalf("consecutive timeouts after progress interval %d = %d, want 0", i, got)
 		}
 	}
-	if got := il.Timeouts(); got != quietIntervals {
-		t.Fatalf("timeouts = %d, want cumulative total %d", got, quietIntervals)
+
+	now = now.Add(acquireTimerInterval)
+	if got := il.OnTimer(now); got != TimerFailed {
+		t.Fatalf("quiet interval after intermittent progress: got %v, want TimerFailed", got)
+	}
+	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax+1 {
+		t.Fatalf("timeouts after terminal interval = %d, want %d", got, ledgerTimeoutRetriesMax+1)
 	}
 }
 
-func TestLedger_OnTimer_UsefulProgressAfterRepeatedStallsCompletes(t *testing.T) {
+func TestLedger_OnTimer_UsefulProgressBeforeCumulativeBudgetCompletes(t *testing.T) {
 	t.Parallel()
 	il, nodes := incompleteStateAcquisitionFixture(t)
-	progressIntervals := ledgerTimeoutRetriesMax + 2
+	progressIntervals := ledgerTimeoutRetriesMax
 	if len(nodes) <= progressIntervals {
 		t.Fatalf("fixture has %d nodes, need more than %d", len(nodes), progressIntervals)
 	}
@@ -210,7 +217,7 @@ func TestLedger_OnTimer_UsefulProgressAfterRepeatedStallsCompletes(t *testing.T)
 	}
 }
 
-func TestLedger_OnTimer_ProgressResetsOnlyConsecutiveFailureBudget(t *testing.T) {
+func TestLedger_OnTimer_ProgressDoesNotResetCumulativeFailureBudget(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0xAD}, 44, 1, discardLogger())
 	il.state = StateWantState
@@ -234,16 +241,20 @@ func TestLedger_OnTimer_ProgressResetsOnlyConsecutiveFailureBudget(t *testing.T)
 	il.mu.Unlock()
 	now = now.Add(acquireTimerInterval)
 	if got := il.OnTimer(now); got != TimerRefresh {
-		t.Fatalf("progress reset: got %v, want TimerRefresh", got)
+		t.Fatalf("progress interval: got %v, want TimerRefresh", got)
 	}
-	fireQuiet(ledgerTimeoutRetriesMax)
-
+	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax {
+		t.Fatalf("progress interval counted as timeout: got %d, want %d", got, ledgerTimeoutRetriesMax)
+	}
+	if got := il.ConsecutiveTimeouts(); got != 0 {
+		t.Fatalf("progress interval streak = %d, want 0", got)
+	}
 	now = now.Add(acquireTimerInterval)
 	if got := il.OnTimer(now); got != TimerFailed {
-		t.Fatalf("seventh consecutive timeout: got %v, want TimerFailed", got)
+		t.Fatalf("quiet interval after progress: got %v, want TimerFailed", got)
 	}
-	if got := il.Timeouts(); got != 2*ledgerTimeoutRetriesMax+1 {
-		t.Fatalf("cumulative timeouts = %d, want %d", got, 2*ledgerTimeoutRetriesMax+1)
+	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax+1 {
+		t.Fatalf("cumulative timeouts = %d, want %d", got, ledgerTimeoutRetriesMax+1)
 	}
 }
 

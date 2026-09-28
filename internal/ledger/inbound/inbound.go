@@ -152,7 +152,8 @@ type Ledger struct {
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
 	// since then; timeouts is the cumulative no-progress count used for
-	// diagnostics and escalation; consecutiveTimeouts bounds terminal stalls.
+	// diagnostics, escalation, and terminal failure; consecutiveTimeouts tracks
+	// the current no-progress streak for diagnostics and victim ranking.
 	// byHash latches eligibility for a by-hash escalation on the next aggressive
 	// request. All guarded by mu.
 	lastTimer           time.Time
@@ -500,10 +501,10 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	l.lastTimer = now
 	l.timeouts++
 	l.consecutiveTimeouts++
-	if l.consecutiveTimeouts > ledgerTimeoutRetriesMax {
+	if l.timeouts > ledgerTimeoutRetriesMax {
 		l.state = StateFailed
-		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d consecutive timeouts (%d total; have_state=%t have_tx=%t last_reject=%q)",
-			l.seq, l.consecutiveTimeouts, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
+		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d timeouts (%d consecutive; have_state=%t have_tx=%t last_reject=%q)",
+			l.seq, l.timeouts, l.consecutiveTimeouts, l.haveState, l.haveTx, l.lastRejectErr)
 		l.logger.Warn("inbound ledger: acquisition failed, retry budget exhausted",
 			"seq", l.seq,
 			"hash", fmt.Sprintf("%x", l.hash[:8]),
@@ -564,7 +565,9 @@ func (l *Ledger) RearmTimer(now time.Time) {
 
 // markProgressLocked records that a fresh node was attached this interval, so
 // the next OnTimer fire treats the acquisition as progressing rather than
-// timing out (rippled sets progress_ on a useful received node). Caller holds mu.
+// timing out (rippled sets progress_ on a useful received node). The
+// cumulative timeout budget remains unchanged; only the current streak used
+// for diagnostics and victim ranking is reset. Caller holds mu.
 func (l *Ledger) markProgressLocked() {
 	l.progress = true
 	l.consecutiveTimeouts = 0

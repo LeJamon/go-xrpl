@@ -163,7 +163,7 @@ func TestAdaptorRequestLedgerKeepsActiveStepAndQueuesLatestTarget(t *testing.T) 
 	assert.Equal(t, queuedHash, sender.legacyCalls()[1].hash)
 }
 
-func TestConsensusRecoveryKeepsProgressingStepAcrossIntermittentStalls(t *testing.T) {
+func TestConsensusRecoveryHonorsCumulativeTimeoutBudgetAcrossIntermittentStalls(t *testing.T) {
 	r, a, sender, _ := makeRouter(t)
 	source := newWideWorkSource(t, 4)
 	ledger, baseNodes := newWantBaseWorkLedger(t, source, []uint64{7})
@@ -201,7 +201,8 @@ func TestConsensusRecoveryKeepsProgressingStepAcrossIntermittentStalls(t *testin
 	require.Equal(t, inbound.TimerRefresh, ledger.OnTimer(now.Add(time.Minute)))
 	now = now.Add(time.Minute)
 
-	for i, reply := range replies {
+	const quietIntervals = 6 // rippled's kLedgerTimeoutRetriesMax
+	for i, reply := range replies[:quietIntervals] {
 		now = now.Add(time.Minute)
 		require.Equal(t, inbound.TimerEscalate, ledger.OnTimer(now), "stall %d", i+1)
 		ledger.RearmTimer(now)
@@ -218,8 +219,10 @@ func TestConsensusRecoveryKeepsProgressingStepAcrossIntermittentStalls(t *testin
 		assert.Equal(t, activeHash, r.catchupReplay.consensusRecovery.stepHash)
 	}
 
-	assert.Equal(t, 7, ledger.Timeouts())
-	assert.Equal(t, inbound.StateWantState, ledger.State())
+	now = now.Add(time.Minute)
+	require.Equal(t, inbound.TimerFailed, ledger.OnTimer(now), "quiet interval after cumulative budget")
+	assert.Equal(t, quietIntervals+1, ledger.Timeouts())
+	assert.Equal(t, inbound.StateFailed, ledger.State())
 	assert.Empty(t, sender.legacyCalls())
 }
 
