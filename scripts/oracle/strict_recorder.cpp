@@ -56,6 +56,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace xrpl::test {
 
@@ -206,6 +207,17 @@ txqConfig()
     return result;
 }
 
+json::Value
+smallQueueTxqConfig()
+{
+    auto result = txqConfig();
+    result["ledgers_in_queue"] = 2;
+    result["queue_size_min"] = 2;
+    result["minimum_txn_in_ledger_standalone"] = 2;
+    result["normal_consensus_increase_percent"] = 0;
+    return result;
+}
+
 std::unique_ptr<Config>
 recorderConfig()
 {
@@ -224,6 +236,20 @@ recorderConfig()
         section.set(Keys::kMinimumLastLedgerBuffer, "2");
         return config;
     });
+}
+
+std::unique_ptr<Config>
+smallQueueRecorderConfig()
+{
+    auto config = recorderConfig();
+    auto& section = config->section(Sections::kTransactionQueue);
+    section.set(Keys::kLedgersInQueue, "2");
+    section.set(Keys::kMinimumQueueSize, "2");
+    section.set(Keys::kMinLedgersToComputeSizeLimit, "3");
+    section.set(Keys::kMaxLedgerCountsToStore, "100");
+    section.set(Keys::kMinimumTxnInLedgerStandalone, "2");
+    section.set(Keys::kNormalConsensusIncreasePercent, "0");
+    return config;
 }
 
 std::unique_ptr<Config>
@@ -314,13 +340,18 @@ public:
         std::filesystem::create_directories(directory_);
     }
 
+private:
+    template <class PreBuilder, class Builder>
     void
-    record(Profile const& profile,
-           std::string const& family,
-           std::string const& testcase,
-           Env& env,
-           JTx const& transaction,
-           std::optional<Expected> expected = std::nullopt)
+    recordImpl(Profile const& profile,
+               std::string const& family,
+               std::string const& testcase,
+               Env& env,
+               PreBuilder&& preBuilder,
+               Builder&& builder,
+               Expected expected,
+               json::Value txqConfigValue,
+               bool includePreSubmit)
     {
         auto const parent = env.closed();
         json::Value fixture;
@@ -335,9 +366,50 @@ public:
         fixture["network_id"] = env.app().getNetworkIDService().getNetworkID();
         fixture["apply_flags"] = 0;
         fixture["skip_signature_verification"] = false;
-        fixture["txq_config"] = txqConfig();
+        fixture["txq_config"] = std::move(txqConfigValue);
         fixture["parent"] = snapshot(*parent);
 
+        if (includePreSubmit)
+        {
+            fixture["pre_submit"] = json::Value{json::ValueType::Array};
+            for (auto const& preTransaction : preBuilder(env))
+            {
+                if (!suite_.expect(
+                        preTransaction.stx != nullptr,
+                        testcase + " pre-submit did not produce a signed STTx",
+                        __FILE__,
+                        __LINE__))
+                    return;
+
+                auto const txBlob = serialize(*preTransaction.stx);
+                auto const response = env.rpc("submit", txBlob);
+                auto const postSubmitView = env.current();
+                json::Value entry;
+                entry["tx_blob"] = txBlob;
+                entry["submit"] =
+                    submitBoundary(response, preTransaction, *postSubmitView);
+                fixture["pre_submit"].append(entry);
+
+                auto const parsed = Env::parseResult(response);
+                suite_.expect(
+                    parsed.ter && *parsed.ter == tesSUCCESS,
+                    testcase + " pre-submit returned an unexpected TER",
+                    __FILE__,
+                    __LINE__);
+                suite_.expect(
+                    response["result"]["applied"].asBool(),
+                    testcase + " pre-submit was not applied",
+                    __FILE__,
+                    __LINE__);
+                suite_.expect(
+                    !response["result"]["queued"].asBool(),
+                    testcase + " pre-submit unexpectedly entered the transaction queue",
+                    __FILE__,
+                    __LINE__);
+            }
+        }
+
+        auto const transaction = builder(env);
         if (!suite_.expect(
                 transaction.stx != nullptr,
                 testcase + " did not produce a signed STTx",
@@ -352,31 +424,18 @@ public:
         auto const postSubmitView = env.current();
         fixture["submit"] = submitBoundary(response, transaction, *postSubmitView);
         auto const parsed = Env::parseResult(response);
-
-        Expected expectedResult = expected.value_or(Expected{});
-        if (!expected)
-        {
-            expectedResult = {
-                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
-                    ? TER{temMALFORMED}
-                    : TER{tesSUCCESS},
-                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
-                    ? false
-                    : true,
-                false};
-        }
         suite_.expect(
-            parsed.ter && *parsed.ter == expectedResult.ter,
+            parsed.ter && *parsed.ter == expected.ter,
             testcase + " returned an unexpected TER",
             __FILE__,
             __LINE__);
         suite_.expect(
-            response["result"]["applied"].asBool() == expectedResult.applied,
+            response["result"]["applied"].asBool() == expected.applied,
             testcase + " returned an unexpected applied flag",
             __FILE__,
             __LINE__);
         suite_.expect(
-            response["result"]["queued"].asBool() == expectedResult.queued,
+            response["result"]["queued"].asBool() == expected.queued,
             testcase + " unexpectedly entered the transaction queue",
             __FILE__,
             __LINE__);
@@ -389,7 +448,8 @@ public:
             getCloseAgree(openHeader),
             openHeader.seq);
         auto const agreedCloseTime = openHeader.parentCloseTime + closeResolution;
-        fixture["close_input"]["parent_close_time"] = networkSeconds(openHeader.parentCloseTime);
+        fixture["close_input"]["parent_close_time"] =
+            networkSeconds(openHeader.parentCloseTime);
         fixture["close_input"]["close_time"] = networkSeconds(agreedCloseTime);
         fixture["close_input"]["ledger_sequence"] = openBeforeClose->header().seq;
         fixture["close_input"]["close_time_resolution"] = closeResolution.count();
@@ -409,12 +469,101 @@ public:
         output << to_string(fixture) << '\n';
         suite_.expect(output.good(), "unable to write " + filename, __FILE__, __LINE__);
     }
+
+public:
+    void
+    record(Profile const& profile,
+           std::string const& family,
+           std::string const& testcase,
+           Env& env,
+           JTx const& transaction,
+           std::optional<Expected> expected = std::nullopt)
+    {
+        Expected expectedResult = expected.value_or(Expected{});
+        if (!expected)
+        {
+            expectedResult = {
+                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
+                    ? TER{temMALFORMED}
+                    : TER{tesSUCCESS},
+                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
+                    ? false
+                    : true,
+                false};
+        }
+        auto noPreSubmit = [](Env&) { return std::vector<JTx>{}; };
+        auto existingTransaction = [&transaction](Env&) { return transaction; };
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            noPreSubmit,
+            existingTransaction,
+            expectedResult,
+            txqConfig(),
+            false);
+    }
+
+    template <class PreBuilder, class Builder>
+    void
+    recordWithHistory(Profile const& profile,
+                      std::string const& family,
+                      std::string const& testcase,
+                      Env& env,
+                      PreBuilder&& preBuilder,
+                      Builder&& builder,
+                      Expected expected)
+    {
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            std::forward<PreBuilder>(preBuilder),
+            std::forward<Builder>(builder),
+            expected,
+            smallQueueTxqConfig(),
+            true);
+    }
 };
 
 JTx
 makePayment(Env& env)
 {
     return env.jt(jtx::pay(Account{"alice"}, Account{"bob"}, jtx::XRP(1)));
+}
+
+std::vector<JTx>
+makeQueuePrefill(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const aliceSequence = env.seq(alice);
+    auto const bobSequence = env.seq(bob);
+    std::vector<JTx> result;
+    result.reserve(3);
+    result.push_back(env.jt(
+        jtx::pay(alice, bob, jtx::XRP(1000)),
+        jtx::Seq(aliceSequence),
+        jtx::Fee(10)));
+    result.push_back(env.jt(
+        jtx::pay(bob, alice, jtx::XRP(1)),
+        jtx::Seq(bobSequence),
+        jtx::Fee(10)));
+    result.push_back(env.jt(
+        jtx::pay(alice, bob, jtx::XRP(1)),
+        jtx::Seq(aliceSequence + 1),
+        jtx::Fee(10)));
+    return result;
+}
+
+JTx
+makeQueuedLowFee(Env& env)
+{
+    return env.jt(
+        jtx::fset(Account{"alice"}, asfRequireDest),
+        jtx::Fee(10));
 }
 
 JTx
@@ -909,6 +1058,27 @@ recordScenario(FixtureRecorder& recorder,
     recorder.record(profile, family, testcase, env, builder(env), expected);
 }
 
+void
+recordQueueScenario(FixtureRecorder& recorder,
+                    beast::unit_test::Suite& suite,
+                    Profile const& profile)
+{
+    Env env{suite, smallQueueRecorderConfig(), profile.features()};
+    env.app().checkSigs(true);
+    env.fund(jtx::XRP(10000), jtx::noripple(Account{"alice"}));
+    env.fund(jtx::XRP(200), jtx::noripple(Account{"bob"}));
+    env.close();
+    assertFreshRuntime(env, suite);
+    recorder.recordWithHistory(
+        profile,
+        "AccountSet",
+        "queued-low-fee",
+        env,
+        makeQueuePrefill,
+        makeQueuedLowFee,
+        Expected{TER{terQUEUED}, false, true});
+}
+
 template <class Builder>
 void
 recordServiceScenario(
@@ -1302,6 +1472,7 @@ public:
             "AccountSet",
             "service-boundary-amendments",
             makeAccountSet);
+        recordQueueScenario(recorder, *this, representative);
     }
 };
 

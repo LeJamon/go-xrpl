@@ -134,7 +134,28 @@ def verify_config(config: Path) -> dict:
         "network_id": {
             "AccountSet/network-id-missing": 1025,
             "AccountSet/network-id-wrong": 1025,
-        }
+        },
+        "queue_history": {
+            "AccountSet/queued-low-fee": {
+                "txq_config": {
+                    "ledgers_in_queue": 2,
+                    "queue_size_min": 2,
+                    "minimum_txn_in_ledger_standalone": 2,
+                    "normal_consensus_increase_percent": 0,
+                },
+                "internal_config": {
+                    "min_ledgers_to_compute_size_limit": 3,
+                    "max_ledger_counts_to_store": 100,
+                },
+                "pre_submit_count": 3,
+                "pre_submit_order": "alice->bob, bob->alice, alice->bob",
+                "primary": {
+                    "engine_result": "terQUEUED",
+                    "applied": False,
+                    "queued": True,
+                },
+            }
+        },
     }
     if values.get("scenario_overrides") != expected_overrides:
         raise SystemExit(
