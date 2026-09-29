@@ -19,20 +19,20 @@ func TestRecoveryHeaderDiscoveryAndAvailabilityPreservePreparedSuccessors(t *tes
 	svc.PromoteStoredValidatedLedgerAt(links[0].seq, links[0].hash, links[0].ledger.CloseTime())
 	require.Equal(t, links[0].hash, svc.GetValidatedLedger().Hash())
 
-	generation := r.standardReplay.generation
-	prepared := r.standardReplay.entries[links[2].seq]
+	generation := r.catchupReplay.standardReplay.generation
+	prepared := r.catchupReplay.standardReplay.entries[links[2].seq]
 	require.NotNil(t, prepared)
 	require.False(t, prepared.readyAt.IsZero())
 	requests := len(sender.legacyCalls())
-	r.recordValidationCatchupTarget(links[2].seq, links[2].hash, 7, catchupSourceQuorum)
-	require.True(t, r.startHeaderParentDiscovery(links[0].ledger, links[2].seq, links[2].hash, 7, catchupSourceQuorum))
+	r.catchupReplay.recordValidationCatchupTarget(links[2].seq, links[2].hash, 7, catchupSourceQuorum)
+	require.True(t, r.catchupReplay.startHeaderParentDiscovery(links[0].ledger, links[2].seq, links[2].hash, 7, catchupSourceQuorum))
 	for i := 2; i >= 1; i-- {
 		sendTestHeaderReply(t, r, 7, links[i])
 	}
-	require.Equal(t, generation, r.standardReplay.generation)
-	require.Same(t, prepared, r.standardReplay.entries[links[2].seq])
+	require.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+	require.Same(t, prepared, r.catchupReplay.standardReplay.entries[links[2].seq])
 
-	_, err = r.replayer.Acquire(links[1].hash, 7, links[0].ledger)
+	_, err = r.catchupReplay.replayer.Acquire(links[1].hash, 7, links[0].ledger)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID: 7,
@@ -42,9 +42,9 @@ func TestRecoveryHeaderDiscoveryAndAvailabilityPreservePreparedSuccessors(t *tes
 			Error:      message.ReplyErrorNoNode,
 		}),
 	})
-	require.Zero(t, r.replayer.Count())
+	require.Zero(t, r.catchupReplay.replayer.Count())
 	require.Len(t, sender.legacyCalls(), requests)
-	acquisition := r.fetchTracker.Find(links[1].hash)
+	acquisition := r.catchupReplay.fetchTracker.Find(links[1].hash)
 	require.NotNil(t, acquisition)
 	require.True(t, acquisition.TransactionOnly())
 	completeStandardReplayTestLink(t, r, links[1])

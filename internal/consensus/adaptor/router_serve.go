@@ -220,8 +220,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	// window may still hold it). The liTS_CANDIDATE tx-set path returned
 	// above is exempt — consensus liveness depends on it always serving.
 	if r.belowFloor(l.Sequence()) {
+		floor := uint32(0)
+		if r.catchupReplay != nil {
+			floor = r.catchupReplay.minimumOnline()
+		}
 		r.logger.Debug("get_ledger declined: below online-delete floor",
-			"peer", msg.PeerID, "seq", l.Sequence(), "floor", r.floor.MinimumOnline())
+			"peer", msg.PeerID, "seq", l.Sequence(), "floor", floor)
 		return
 	}
 

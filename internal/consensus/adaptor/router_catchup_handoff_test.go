@@ -16,6 +16,7 @@ func newCatchupHandoffRouter(t *testing.T) (*Router, *Adaptor, *mockEngine) {
 	r, a, _, _ := makeRouter(t)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
+	r.catchupReplay.engine = r.engine
 	a.SetOperatingMode(consensus.OpModeConnected)
 	return r, a, engine
 }
@@ -26,105 +27,105 @@ func recordPreferredPeerCatchupTarget(
 	seq uint32,
 	hash [32]byte,
 ) {
-	r.peersMu.Lock()
-	r.peerStates[peerID] = &peerLedgerState{LedgerSeq: seq, LedgerHash: hash}
-	r.peersMu.Unlock()
+	r.catchupReplay.peersMu.Lock()
+	r.catchupReplay.peerStates[peerID] = &peerLedgerState{LedgerSeq: seq, LedgerHash: hash}
+	r.catchupReplay.peersMu.Unlock()
 	r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID(hash))
-	r.recordCatchupTarget(seq, hash, uint64(peerID))
+	r.catchupReplay.recordCatchupTarget(seq, hash, uint64(peerID))
 }
 
 func TestFarCatchupCompletionRemainsStoreOnly(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
 	recordPreferredPeerCatchupTarget(r, 7, 105, [32]byte{0xA5})
 
-	r.completeStoredConsensusRecovery(100, [32]byte{0xA0}, [32]byte{0x9F}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(100, [32]byte{0xA0}, [32]byte{0x9F}, false)
 
 	assert.Empty(t, engine.getLedgers())
 	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
-	assert.Equal(t, uint32(0), r.lastHandoffSeq)
+	assert.Equal(t, uint32(0), r.catchupReplay.lastHandoffSeq)
 }
 
 func TestCatchupCompletionAtFrontierNotifiesOnce(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
 	hash := [32]byte{0xB0}
-	r.recordCatchupTarget(101, [32]byte{0xB1}, 7)
+	r.catchupReplay.recordCatchupTarget(101, [32]byte{0xB1}, 7)
 
-	r.completeStoredConsensusRecovery(100, hash, [32]byte{0xAF}, false)
-	r.completeStoredConsensusRecovery(100, hash, [32]byte{0xAF}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(100, hash, [32]byte{0xAF}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(100, hash, [32]byte{0xAF}, false)
 
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash)}, engine.getLedgers())
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-	assert.Equal(t, uint32(100), r.lastHandoffSeq)
+	assert.Equal(t, uint32(100), r.catchupReplay.lastHandoffSeq)
 }
 
 func TestExactConsensusRecoveryBypassesFrontierAndHandoffGuard(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
 	target := [32]byte{0xC0}
-	r.recordCatchupTarget(300, [32]byte{0xC3}, 7)
-	r.lastHandoffSeq = 200
-	r.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
+	r.catchupReplay.recordCatchupTarget(300, [32]byte{0xC3}, 7)
+	r.catchupReplay.lastHandoffSeq = 200
+	r.catchupReplay.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
 
-	r.completeStoredConsensusRecovery(100, target, [32]byte{0xBF}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(100, target, [32]byte{0xBF}, false)
 
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(target)}, engine.getLedgers())
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-	assert.Equal(t, uint32(200), r.lastHandoffSeq)
-	assert.Equal(t, consensusRecovery{anchorHash: target, anchorSeq: 100}, r.consensusRecovery)
+	assert.Equal(t, uint32(200), r.catchupReplay.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{anchorHash: target, anchorSeq: 100}, r.catchupReplay.consensusRecovery)
 }
 
 func TestOlderCatchupCompletionDoesNotRegressConsensus(t *testing.T) {
 	r, _, engine := newCatchupHandoffRouter(t)
 	newer := [32]byte{0xD0}
 	older := [32]byte{0xCF}
-	r.recordCatchupTarget(100, newer, 7)
+	r.catchupReplay.recordCatchupTarget(100, newer, 7)
 
-	r.completeStoredConsensusRecovery(100, newer, [32]byte{0xCF}, false)
-	r.completeStoredConsensusRecovery(99, older, [32]byte{0xCE}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(100, newer, [32]byte{0xCF}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(99, older, [32]byte{0xCE}, false)
 
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(newer)}, engine.getLedgers())
-	assert.Equal(t, uint32(100), r.lastHandoffSeq)
+	assert.Equal(t, uint32(100), r.catchupReplay.lastHandoffSeq)
 }
 
 func TestMovingCatchupFrontierEventuallyNotifies(t *testing.T) {
 	r, _, engine := newCatchupHandoffRouter(t)
 	recordPreferredPeerCatchupTarget(r, 7, 105, [32]byte{0xE5})
 
-	r.completeStoredConsensusRecovery(100, [32]byte{0xE0}, [32]byte{0xDF}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(100, [32]byte{0xE0}, [32]byte{0xDF}, false)
 	assert.Empty(t, engine.getLedgers())
 
 	hash := [32]byte{0xE4}
-	r.completeStoredConsensusRecovery(104, hash, [32]byte{0xE3}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(104, hash, [32]byte{0xE3}, false)
 
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash)}, engine.getLedgers())
-	assert.Equal(t, uint32(104), r.lastHandoffSeq)
+	assert.Equal(t, uint32(104), r.catchupReplay.lastHandoffSeq)
 }
 
 func TestInitialBootstrapNotifiesBehindFrontier(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
 	engine.switchResult = consensus.LedgerSwitchAccepted
 	hash := [32]byte{0xF0}
-	r.recordCatchupTarget(200, [32]byte{0xF2}, 7)
+	r.catchupReplay.recordCatchupTarget(200, [32]byte{0xF2}, 7)
 
-	r.completeStoredConsensusRecovery(100, hash, [32]byte{0xEF}, true)
+	r.catchupReplay.completeStoredConsensusRecovery(100, hash, [32]byte{0xEF}, true)
 
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash)}, engine.getLedgers())
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-	assert.Equal(t, uint32(100), r.lastHandoffSeq)
+	assert.Equal(t, uint32(100), r.catchupReplay.lastHandoffSeq)
 }
 
 func TestRejectedInitialCandidateRemainsStoreOnlyAnchor(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
 	engine.switchResult = consensus.LedgerSwitchRejected
 	hash := [32]byte{0xF1}
-	r.consensusRecovery = consensusRecovery{targetHash: hash, stepHash: hash}
+	r.catchupReplay.consensusRecovery = consensusRecovery{targetHash: hash, stepHash: hash}
 
-	switched := r.completeStoredConsensusRecovery(100, hash, [32]byte{0xF0}, true)
+	switched := r.catchupReplay.completeStoredConsensusRecovery(100, hash, [32]byte{0xF0}, true)
 
 	assert.False(t, switched)
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash)}, engine.getLedgers())
 	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
-	assert.Equal(t, uint32(0), r.lastHandoffSeq)
-	assert.Equal(t, consensusRecovery{anchorHash: hash, anchorSeq: 100}, r.consensusRecovery)
+	assert.Equal(t, uint32(0), r.catchupReplay.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{anchorHash: hash, anchorSeq: 100}, r.catchupReplay.consensusRecovery)
 }
 
 func TestBusyInitialCandidateRetainsTargetForRetry(t *testing.T) {
@@ -155,7 +156,7 @@ func TestBusyInitialCandidateRetainsTargetForRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, initialCandidate)
 
-	switched := r.completeStoredConsensusRecovery(
+	switched := r.catchupReplay.completeStoredConsensusRecovery(
 		hdr.LedgerIndex,
 		hdr.Hash,
 		hdr.ParentHash,
@@ -164,27 +165,27 @@ func TestBusyInitialCandidateRetainsTargetForRetry(t *testing.T) {
 
 	assert.False(t, switched)
 	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
-	assert.Equal(t, uint32(0), r.lastHandoffSeq)
-	assert.Equal(t, consensusRecovery{targetHash: hdr.Hash}, r.consensusRecovery)
+	assert.Equal(t, uint32(0), r.catchupReplay.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{targetHash: hdr.Hash}, r.catchupReplay.consensusRecovery)
 
 	engine.switchResult = consensus.LedgerSwitchAccepted
 	r.maintenanceTick()
 
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-	assert.Equal(t, hdr.LedgerIndex, r.lastHandoffSeq)
-	assert.Equal(t, consensusRecovery{anchorHash: hdr.Hash, anchorSeq: hdr.LedgerIndex}, r.consensusRecovery)
+	assert.Equal(t, hdr.LedgerIndex, r.catchupReplay.lastHandoffSeq)
+	assert.Equal(t, consensusRecovery{anchorHash: hdr.Hash, anchorSeq: hdr.LedgerIndex}, r.catchupReplay.consensusRecovery)
 	assert.Equal(t, []consensus.LedgerID{
 		consensus.LedgerID(hdr.Hash),
 		consensus.LedgerID(hdr.Hash),
 	}, engine.getLedgers())
 
-	r.historyMu.Lock()
+	r.catchupReplay.historyMu.Lock()
 	assert.Equal(t, catchupTarget{
 		seq:  hdr.LedgerIndex - 1,
 		hash: hdr.ParentHash,
-	}, r.history)
-	assert.Zero(t, r.historyFloor)
-	r.historyMu.Unlock()
+	}, r.catchupReplay.history)
+	assert.Zero(t, r.catchupReplay.historyFloor)
+	r.catchupReplay.historyMu.Unlock()
 }
 
 func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
@@ -229,31 +230,31 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, initialCandidate)
 
-			r.onLedgerFullyValidated(hdr.LedgerIndex, hdr.Hash)
+			r.catchupReplay.onLedgerFullyValidated(hdr.LedgerIndex, hdr.Hash)
 			require.Eventually(t, func() bool {
 				if len(engine.getLedgers()) != 1 {
 					return false
 				}
-				r.acquisitionMu.Lock()
-				defer r.acquisitionMu.Unlock()
-				return r.consensusRecovery.targetHash == hdr.Hash
+				r.catchupReplay.acquisitionMu.Lock()
+				defer r.catchupReplay.acquisitionMu.Unlock()
+				return r.catchupReplay.consensusRecovery.targetHash == hdr.Hash
 			}, time.Second, time.Millisecond)
 
 			assert.Equal(t, local.Hash(), svc.GetClosedLedger().Hash())
 			assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
-			assert.Equal(t, uint32(0), r.lastHandoffSeq)
-			assert.Equal(t, hdr.Hash, r.consensusRecovery.targetHash)
+			assert.Equal(t, uint32(0), r.catchupReplay.lastHandoffSeq)
+			assert.Equal(t, hdr.Hash, r.catchupReplay.consensusRecovery.targetHash)
 
 			engine.switchResult = consensus.LedgerSwitchAccepted
 			r.maintenanceTick()
 
 			assert.Equal(t, hdr.Hash, svc.GetClosedLedger().Hash())
 			assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-			assert.Equal(t, hdr.LedgerIndex, r.lastHandoffSeq)
+			assert.Equal(t, hdr.LedgerIndex, r.catchupReplay.lastHandoffSeq)
 			assert.Equal(t, consensusRecovery{
 				anchorHash: hdr.Hash,
 				anchorSeq:  hdr.LedgerIndex,
-			}, r.consensusRecovery)
+			}, r.catchupReplay.consensusRecovery)
 			assert.Equal(t, []consensus.LedgerID{
 				consensus.LedgerID(hdr.Hash),
 				consensus.LedgerID(hdr.Hash),

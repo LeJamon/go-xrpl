@@ -58,7 +58,7 @@ func TestFullyValidatedHeldLedgerDoesNotReenterEngineLock(t *testing.T) {
 	engine.mu.Lock()
 	returned := make(chan struct{})
 	go func() {
-		r.onLedgerFullyValidated(h.LedgerIndex, h.Hash)
+		r.catchupReplay.onLedgerFullyValidated(h.LedgerIndex, h.Hash)
 		close(returned)
 	}()
 	select {
@@ -95,7 +95,7 @@ func TestFastSyncFinalityMoreThan256TargetsUseLiveEvidence(t *testing.T) {
 	tracker.SetTrustedAndQuorum(nodes, 2)
 	a.SetValidationHistorian(tracker)
 	tracker.SetFullyValidatedCallback(func(id consensus.LedgerID, seq uint32) {
-		r.onLedgerFullyValidated(seq, [32]byte(id))
+		r.catchupReplay.onLedgerFullyValidated(seq, [32]byte(id))
 	})
 
 	base := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
@@ -132,21 +132,21 @@ func TestFastSyncFinalityMoreThan256TargetsUseLiveEvidence(t *testing.T) {
 		}
 	}
 
-	seq, hash, _ := r.bestCatchupTarget()
+	seq, hash, _ := r.catchupReplay.bestCatchupTarget()
 	require.Equal(t, finalSeq, seq)
 	require.Equal(t, hashes[targets-1], hash)
 	require.Equal(t, uint64(targets-1), r.FastSyncMetrics().TargetSuperseded)
 
-	r.completeStoredConsensusRecovery(10_000, hashes[0], [32]byte{}, false)
+	r.catchupReplay.completeStoredConsensusRecovery(10_000, hashes[0], [32]byte{}, false)
 	require.Equal(t, hash, func() [32]byte {
-		_, current, _ := r.bestCatchupTarget()
+		_, current, _ := r.catchupReplay.bestCatchupTarget()
 		return current
 	}())
 	require.Equal(t, uint64(1), r.FastSyncMetrics().ObsoleteAcquisitionCompleted)
 	require.Equal(t, 2, tracker.rechecks[consensus.LedgerID(hashes[0])])
 
-	r.fetchTracker.Track(final)
-	r.completeInboundLedger(final)
+	r.catchupReplay.fetchTracker.Track(final)
+	r.catchupReplay.completeInboundLedger(final)
 	require.Equal(t, final.Hash(), a.ledgerService.GetClosedLedger().Hash())
 	require.Equal(t, final.Hash(), a.ledgerService.GetValidatedLedger().Hash())
 	require.Equal(t, uint64(2), r.FastSyncMetrics().CompletionRecheckAccepted)
@@ -183,8 +183,8 @@ func TestFastSyncCompletionPromotesValidatedLedgerWhenWorkingSwitchIsRejected(t 
 	}
 
 	closed := a.ledgerService.GetClosedLedger()
-	r.fetchTracker.Track(completed)
-	r.completeInboundLedger(completed)
+	r.catchupReplay.fetchTracker.Track(completed)
+	r.catchupReplay.completeInboundLedger(completed)
 
 	require.Equal(t, closed.Hash(), a.ledgerService.GetClosedLedger().Hash())
 	require.Equal(t, completed.Hash(), a.ledgerService.GetValidatedLedger().Hash())
@@ -233,7 +233,7 @@ func TestFastSyncCompletionRecheckUsesCurrentTrustAndExpiry(t *testing.T) {
 			}
 			a.SetValidationHistorian(historian)
 			tracker.SetFullyValidatedCallback(func(id consensus.LedgerID, seq uint32) {
-				r.onLedgerFullyValidated(seq, [32]byte(id))
+				r.catchupReplay.onLedgerFullyValidated(seq, [32]byte(id))
 			})
 
 			now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
@@ -258,8 +258,8 @@ func TestFastSyncCompletionRecheckUsesCurrentTrustAndExpiry(t *testing.T) {
 			}
 
 			test.mutate(tracker, &now, nodes, seq)
-			r.fetchTracker.Track(completed)
-			r.completeInboundLedger(completed)
+			r.catchupReplay.fetchTracker.Track(completed)
+			r.catchupReplay.completeInboundLedger(completed)
 			metrics := r.FastSyncMetrics()
 			switch test.wantResult {
 			case validationRecheckBelowQuorum:

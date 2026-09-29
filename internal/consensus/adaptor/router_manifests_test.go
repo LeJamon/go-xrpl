@@ -484,9 +484,9 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	ledgerHash[0] = 0xAB
 	inbox <- statusChangeMessage(t, 9, 1, ledgerHash)
 	require.Eventually(t, func() bool {
-		router.peersMu.RLock()
-		state := router.peerStates[9]
-		router.peersMu.RUnlock()
+		router.catchupReplay.peersMu.RLock()
+		state := router.catchupReplay.peerStates[9]
+		router.catchupReplay.peersMu.RUnlock()
 		return state != nil && state.LedgerSeq == 1 && state.LedgerHash == ledgerHash
 	}, time.Second, 5*time.Millisecond)
 
@@ -559,9 +559,9 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	ledgerHash[0] = 0xCD
 	inbox <- statusChangeMessage(t, 3, 1, ledgerHash)
 	require.Eventually(t, func() bool {
-		router.peersMu.RLock()
-		state := router.peerStates[3]
-		router.peersMu.RUnlock()
+		router.catchupReplay.peersMu.RLock()
+		state := router.catchupReplay.peerStates[3]
+		router.catchupReplay.peersMu.RUnlock()
 		return state != nil && state.LedgerHash == ledgerHash
 	}, time.Second, 5*time.Millisecond)
 

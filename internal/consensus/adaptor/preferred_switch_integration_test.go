@@ -85,13 +85,13 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 		CloseTime:           now.Add(-7*time.Minute + time.Second),
 		CloseTimeResolution: 10,
 	})
-	router.fetchTracker.Track(stale)
+	router.catchupReplay.fetchTracker.Track(stale)
 	a.UpdatePeerLCL(1, consensus.LedgerID(stale.Hash()))
 	a.UpdatePeerLCL(2, consensus.LedgerID(stale.Hash()))
 	engine.TimerEntry()
 	require.Equal(t, consensus.ModeWrongLedger, engine.Mode())
 
-	router.completeInboundLedger(stale)
+	router.catchupReplay.completeInboundLedger(stale)
 
 	storedStale, err := svc.GetLedgerByHash(stale.Hash())
 	require.NoError(t, err)
@@ -109,13 +109,13 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 		CloseTime:           now,
 		CloseTimeResolution: 10,
 	})
-	router.fetchTracker.Track(fresh)
+	router.catchupReplay.fetchTracker.Track(fresh)
 	a.UpdatePeerLCL(1, consensus.LedgerID(fresh.Hash()))
 	a.UpdatePeerLCL(2, consensus.LedgerID(fresh.Hash()))
 	engine.TimerEntry()
 	require.Equal(t, consensus.ModeWrongLedger, engine.Mode())
 
-	router.completeInboundLedger(fresh)
+	router.catchupReplay.completeInboundLedger(fresh)
 
 	require.False(t, svc.NeedsInitialSync())
 	require.Equal(t, fresh.Hash(), svc.GetClosedLedger().Hash())
@@ -183,11 +183,11 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	}, false))
 
 	router := newTestRouter(engine, a, nil)
-	router.consensusRecovery = consensusRecovery{
+	router.catchupReplay.consensusRecovery = consensusRecovery{
 		targetHash: targetHeader.Hash,
 		stepHash:   targetHeader.Hash,
 	}
-	require.True(t, router.completeStoredConsensusRecovery(
+	require.True(t, router.catchupReplay.completeStoredConsensusRecovery(
 		targetHeader.LedgerIndex,
 		targetHeader.Hash,
 		targetHeader.ParentHash,
@@ -254,11 +254,11 @@ func TestSupersededValidatedCompletionDoesNotOverrideRecoveryTarget(t *testing.T
 
 	newerPreferred := [32]byte{0xB8}
 	router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
-	router.consensusRecovery = consensusRecovery{
+	router.catchupReplay.consensusRecovery = consensusRecovery{
 		targetHash: newerPreferred,
 		stepHash:   newerPreferred,
 	}
-	router.completeStoredConsensusRecovery(
+	router.catchupReplay.completeStoredConsensusRecovery(
 		targetHeader.LedgerIndex,
 		targetHeader.Hash,
 		targetHeader.ParentHash,
@@ -269,9 +269,9 @@ func TestSupersededValidatedCompletionDoesNotOverrideRecoveryTarget(t *testing.T
 	require.Equal(t, stale.Sequence()+1, svc.GetCurrentLedgerIndex())
 	require.NotEqual(t, consensus.ModeSwitchedLedger, engine.Mode())
 	require.Equal(t, uint64(1), router.FastSyncMetrics().ObsoleteAcquisitionCompleted)
-	router.acquisitionMu.Lock()
-	require.Equal(t, newerPreferred, router.consensusRecovery.targetHash)
-	router.acquisitionMu.Unlock()
+	router.catchupReplay.acquisitionMu.Lock()
+	require.Equal(t, newerPreferred, router.catchupReplay.consensusRecovery.targetHash)
+	router.catchupReplay.acquisitionMu.Unlock()
 	stored, err := svc.GetLedgerByHash(targetHeader.Hash)
 	require.NoError(t, err)
 	require.Equal(t, targetHeader.Hash, stored.Hash())

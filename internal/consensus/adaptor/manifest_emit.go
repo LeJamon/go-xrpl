@@ -210,22 +210,31 @@ func (r *Router) handlePeerConnect(peerID peermanagement.PeerID) {
 	r.SendLocalManifestTo(peerID)
 }
 
-func (r *Router) addPeerToActiveAcquisitions(peerID uint64) {
-	if r.fetchTracker == nil || peerID == 0 {
+func (c *catchupReplayCoordinator) addPeerToActiveAcquisitions(peerID uint64) {
+	if c.stoppedForShutdown() {
 		return
 	}
-	for _, ledger := range r.fetchTracker.Active() {
+	if c.fetchTracker == nil || peerID == 0 {
+		return
+	}
+	for _, ledger := range c.fetchTracker.Active() {
 		if !ledger.AddPeerBounded(peerID, acquisitionPeerStart) {
 			continue
 		}
 		if ledger.State() == inbound.StateWantBase {
-			r.requestLedgerBaseFromPeer(ledger, peerID, "failed to request ledger base from added peer")
+			c.requestLedgerBaseFromPeer(ledger, peerID, "failed to request ledger base from added peer")
 			continue
 		}
-		if r.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkAdded, peerID: peerID}) {
+		if c.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkAdded, peerID: peerID}) {
 			continue
 		}
 		ledger.RemovePeer(peerID)
+	}
+}
+
+func (r *Router) addPeerToActiveAcquisitions(peerID uint64) {
+	if r.catchupReplay != nil {
+		r.catchupReplay.addPeerToActiveAcquisitions(peerID)
 	}
 }
 

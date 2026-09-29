@@ -1,35 +1,64 @@
 package adaptor
 
+import "github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+
 const replayFallbackHistoryLimit = 64
 
 // acquisitionMu protects these markers across pipeline cancellation and fetch
 // retries. A child hash commits to its parent, so retries cannot repair the same
 // replay by selecting a different parent.
-func (r *Router) replayNeedsFullStateLocked(hash [32]byte) bool {
-	_, required := r.replayFallbackRequired[hash]
-	return required
+func (c *catchupReplayCoordinator) replayNeedsFullStateLocked(hash [32]byte) bool {
+	if _, required := c.replayFallbackRequired[hash]; required {
+		return true
+	}
+	il := c.fetchTracker.Find(hash)
+	return il != nil && il.FullStateRequired()
 }
 
-func (r *Router) requireReplayFullStateLocked(seq uint32, hash [32]byte) {
-	if r.replayFallbackRequired == nil {
-		r.replayFallbackRequired = make(map[[32]byte]uint32)
+func (c *catchupReplayCoordinator) requireReplayFullStateLocked(seq uint32, hash [32]byte) {
+	if c.replayFallbackRequired == nil {
+		c.replayFallbackRequired = make(map[[32]byte]uint32)
 	}
-	if r.replayNeedsFullStateLocked(hash) {
+	if _, required := c.replayFallbackRequired[hash]; required {
 		return
 	}
-	if len(r.replayFallbackRequired) >= replayFallbackHistoryLimit {
+	if len(c.replayFallbackRequired) >= replayFallbackHistoryLimit {
 		var oldest [32]byte
 		oldestSeq := ^uint32(0)
-		for candidate, candidateSeq := range r.replayFallbackRequired {
-			if candidate == r.consensusRecovery.targetHash || candidate == r.consensusRecovery.stepHash ||
-				r.isAcquiringLocked(candidate) {
+		found := false
+		for candidate, candidateSeq := range c.replayFallbackRequired {
+			if candidate == c.consensusRecovery.targetHash || candidate == c.consensusRecovery.stepHash ||
+				c.replayer.Has(candidate) ||
+				(c.standardReplay.pivotHandoff != nil && c.standardReplay.pivotHandoff.acquisition.Hash() == candidate) {
 				continue
 			}
-			if oldest == ([32]byte{}) || candidateSeq < oldestSeq {
+			if !found || candidateSeq < oldestSeq {
 				oldest, oldestSeq = candidate, candidateSeq
+				found = true
 			}
 		}
-		delete(r.replayFallbackRequired, oldest)
+		// Active acquisitions retain the requirement after its history entry expires.
+		if il := c.fetchTracker.Find(oldest); il != nil {
+			il.RequireFullState()
+		}
+		delete(c.replayFallbackRequired, oldest)
 	}
-	r.replayFallbackRequired[hash] = seq
+	c.replayFallbackRequired[hash] = seq
+}
+
+// Caller holds acquisitionMu.
+func (c *catchupReplayCoordinator) restoreReplayFallbackLocked(il *inbound.Ledger) {
+	if !il.FullStateRequired() || c.stoppedForShutdown() {
+		return
+	}
+	c.requireReplayFullStateLocked(il.Seq(), il.Hash())
+}
+
+// Caller holds acquisitionMu.
+func (c *catchupReplayCoordinator) discardInboundAcquisitionLocked(il *inbound.Ledger) bool {
+	if !c.fetchTracker.DiscardExpected(il) {
+		return false
+	}
+	c.restoreReplayFallbackLocked(il)
+	return true
 }

@@ -80,9 +80,9 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	engineConfig.ManualTick = true
 	engine := rcl.NewEngine(adaptor, engineConfig)
 	router := newTestRouter(engine, adaptor, nil)
-	router.fetchTracker.Track(candidate)
+	router.catchupReplay.fetchTracker.Track(candidate)
 	baseReleased := make(chan struct{})
-	router.standardReplay = standardReplayPipeline{
+	router.catchupReplay.standardReplay = standardReplayPipeline{
 		active:      true,
 		pivotSeq:    seq,
 		pivotHash:   candidateHash,
@@ -132,7 +132,7 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("trusted validation waited for the inbound completeness walk")
 	}
-	require.Nil(t, router.fetchTracker.Find(candidateHash))
+	require.Nil(t, router.catchupReplay.fetchTracker.Find(candidateHash))
 	select {
 	case <-baseReleased:
 		t.Fatal("checkpoint base released while discovery still used it")

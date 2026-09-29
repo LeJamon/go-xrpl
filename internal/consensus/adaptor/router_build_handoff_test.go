@@ -42,14 +42,14 @@ func TestRouter_DemotedEngineDoesNotBlockSuccessorAcquisition(t *testing.T) {
 			engine.TimerEntry()
 			require.Equal(t, consensus.ModeObserving, engine.Mode())
 			link := buildAlternativeReplaySuccessor(t, base, time.Second)
-			r.recordSeqHash(link.seq, link.hash, base.Hash(), true)
+			r.catchupReplay.recordSeqHash(link.seq, link.hash, base.Hash(), true)
 			trackCatchupPeer(r, 7, link.seq, link.hash)
-			r.armValidatedLedgerAcquisition(link.seq, link.hash)
+			r.catchupReplay.armValidatedLedgerAcquisition(link.seq, link.hash)
 			if supportsReplay {
-				require.True(t, r.replayer.Has(link.hash), "parked establish must not reserve the replay successor")
+				require.True(t, r.catchupReplay.replayer.Has(link.hash), "parked establish must not reserve the replay successor")
 				require.Len(t, sender.replayCalls(), 1)
 			} else {
-				acquisition := r.fetchTracker.Find(link.hash)
+				acquisition := r.catchupReplay.fetchTracker.Find(link.hash)
 				require.NotNil(t, acquisition, "classic peers must also start recovery immediately")
 				require.True(t, acquisition.TransactionOnly(), "reuse the local parent instead of acquiring full state")
 				require.Len(t, sender.legacyCalls(), 1)

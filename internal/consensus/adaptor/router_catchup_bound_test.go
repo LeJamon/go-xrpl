@@ -35,15 +35,15 @@ func TestRouter_CatchupFanoutBoundedByCap(t *testing.T) {
 			LedgerSeq: seq,
 			LedgerID:  consensus.LedgerID(hash),
 		}
-		r.maybeAcquireFromValidation(v, uint64(7))
+		r.catchupReplay.maybeAcquireFromValidation(v, uint64(7))
 	}
 
 	assert.LessOrEqual(t, acquireCount(rs), maxConcurrentCatchup,
 		"feeding %d ever-higher trusted tips must arm at most maxConcurrentCatchup acquisitions, not one per event", n)
-	assert.Equal(t, 1, r.catchupInFlight(),
+	assert.Equal(t, 1, r.catchupReplay.catchupInFlight(),
 		"moving trusted tips must keep one frozen full-state pivot")
 
-	tSeq, _, _ := r.bestCatchupTarget()
+	tSeq, _, _ := r.catchupReplay.bestCatchupTarget()
 	assert.Equal(t, highest, tSeq,
 		"the recorded catch-up target must be the highest tip seen")
 }
@@ -62,8 +62,8 @@ func TestRouter_FarCompletionStoresAndRetargets(t *testing.T) {
 
 	// Completion stores the fetched ledger without moving the service frontier.
 	il := completedCatchUpAcquisition(t, closedSeq+10)
-	r.fetchTracker.Track(il)
-	r.completeInboundLedger(il)
+	r.catchupReplay.fetchTracker.Track(il)
+	r.catchupReplay.completeInboundLedger(il)
 
 	require.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
 	stored, err := svc.GetLedgerByHash(il.Hash())
@@ -81,11 +81,11 @@ func TestRouter_NoRetargetWhenCaughtUp(t *testing.T) {
 	closedSeq := svc.GetClosedLedgerIndex()
 
 	tipSeq := closedSeq + 10
-	r.recordCatchupTarget(tipSeq, [32]byte{0x9A}, 7)
+	r.catchupReplay.recordCatchupTarget(tipSeq, [32]byte{0x9A}, 7)
 
 	il := completedCatchUpAcquisition(t, tipSeq)
-	r.fetchTracker.Track(il)
-	r.completeInboundLedger(il)
+	r.catchupReplay.fetchTracker.Track(il)
+	r.catchupReplay.completeInboundLedger(il)
 
 	require.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
 	_, err := svc.GetLedgerByHash(il.Hash())
@@ -108,10 +108,10 @@ func TestRouter_CatchupEligibilityGate_RejectsAtOrBelowValidated(t *testing.T) {
 		LedgerSeq: svc.GetValidatedLedgerIndex(),
 		LedgerID:  consensus.LedgerID([32]byte{0x33}),
 	}
-	r.maybeAcquireFromValidation(v, 7)
+	r.catchupReplay.maybeAcquireFromValidation(v, 7)
 
 	assert.Zero(t, acquireCount(rs), "a tip at/below the validated index must not arm")
-	tSeq, _, _ := r.bestCatchupTarget()
+	tSeq, _, _ := r.catchupReplay.bestCatchupTarget()
 	assert.Zero(t, tSeq, "an ineligible tip must not be recorded as a catch-up target")
 }
 
@@ -143,9 +143,9 @@ func TestRouter_InitialConsensusAcquisitionStagesClosedLedger(t *testing.T) {
 	require.NotNil(t, closed)
 	tipSeq := svc.GetClosedLedgerIndex() + 1
 	il := completedCatchUpAcquisition(t, tipSeq)
-	r.fetchTracker.Track(il)
+	r.catchupReplay.fetchTracker.Track(il)
 
-	r.completeInboundLedger(il)
+	r.catchupReplay.completeInboundLedger(il)
 
 	require.True(t, svc.NeedsInitialSync())
 	require.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())

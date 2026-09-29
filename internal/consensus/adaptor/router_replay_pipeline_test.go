@@ -30,7 +30,7 @@ func buildStandardReplayTestChain(t *testing.T, r *Router, parent *ledger.Ledger
 	links := make([]standardReplayTestLink, 0, count)
 	for range count {
 		response, child, hash, seq := buildSuccessorAgainstParent(t, parent)
-		r.recordSeqHash(seq, hash, parent.Hash(), true)
+		r.catchupReplay.recordSeqHash(seq, hash, parent.Hash(), true)
 		links = append(links, standardReplayTestLink{response: response, ledger: child, hash: hash, seq: seq})
 		parent = child
 	}
@@ -59,7 +59,7 @@ func buildAlternativeReplaySuccessor(t *testing.T, parent *ledger.Ledger, salt t
 
 func completeStandardReplayTestLink(t *testing.T, r *Router, link standardReplayTestLink) {
 	t.Helper()
-	il := r.fetchTracker.Find(link.hash)
+	il := r.catchupReplay.fetchTracker.Find(link.hash)
 	require.NotNil(t, il)
 	require.True(t, il.TransactionOnly())
 	require.NoError(t, il.GotBase([]message.LedgerNode{
@@ -67,17 +67,17 @@ func completeStandardReplayTestLink(t *testing.T, r *Router, link standardReplay
 		{NodeData: []byte{1}},
 	}))
 	require.True(t, il.IsComplete())
-	r.completeInboundLedger(il)
+	r.catchupReplay.completeInboundLedger(il)
 }
 
 func drainStandardReplayTestPipeline(t *testing.T, r *Router) {
 	t.Helper()
-	maxDrains := len(r.standardReplay.entries) + 1
-	for drains := 0; r.standardReplay.applying; drains++ {
+	maxDrains := len(r.catchupReplay.standardReplay.entries) + 1
+	for drains := 0; r.catchupReplay.standardReplay.applying; drains++ {
 		require.Less(t, drains, maxDrains, "replay drain did not finish")
 		select {
-		case <-r.standardReplayDrainWake:
-			r.drainStandardReplayPipeline()
+		case <-r.catchupReplay.standardReplayDrainWake:
+			r.catchupReplay.drainStandardReplayPipeline()
 		default:
 			require.FailNow(t, "replay apply batch did not reschedule through the router loop")
 		}
@@ -108,7 +108,7 @@ func TestStandardReplayPipelineAppliesReadySuccessorsInOrder(t *testing.T) {
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 	require.Len(t, sender.legacyCalls(), 3)
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[len(links)-1].hash)))
-	assert.Equal(t, links[0].hash, r.consensusRecovery.stepHash)
+	assert.Equal(t, links[0].hash, r.catchupReplay.consensusRecovery.stepHash)
 
 	completeStandardReplayTestLink(t, r, links[2])
 	completeStandardReplayTestLink(t, r, links[1])
@@ -119,7 +119,7 @@ func TestStandardReplayPipelineAppliesReadySuccessorsInOrder(t *testing.T) {
 	metrics := r.FastSyncMetrics()
 	assert.Equal(t, uint32(2), metrics.ReplayPipelineReadyDepth)
 	assert.Equal(t, links[0].seq, metrics.ReplayPipelineHeadSeq)
-	assert.False(t, r.standardReplay.headBlockedAt.IsZero())
+	assert.False(t, r.catchupReplay.standardReplay.headBlockedAt.IsZero())
 
 	completeStandardReplayTestLink(t, r, links[0])
 	drainStandardReplayTestPipeline(t, r)
@@ -141,23 +141,23 @@ func TestStandardReplayReplacesFullStateSuccessor(t *testing.T) {
 	_, err := svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
-	old, created := r.fetchTracker.GetOrCreate(links[0].hash, func() *inbound.Ledger {
-		return inbound.New(links[0].hash, links[0].seq, 7, r.logger, r.acquisitionOpts()...)
+	old, created := r.catchupReplay.fetchTracker.GetOrCreate(links[0].hash, func() *inbound.Ledger {
+		return inbound.New(links[0].hash, links[0].seq, 7, r.logger, r.catchupReplay.acquisitionOpts()...)
 	})
 	require.True(t, created)
 	require.False(t, old.TransactionOnly())
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	replacement := r.fetchTracker.Find(links[0].hash)
+	replacement := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, replacement)
 	require.NotSame(t, old, replacement)
 	require.True(t, replacement.TransactionOnly())
 	// A late completion/removal from the retired walker cannot erase replay.
-	require.False(t, r.fetchTracker.DiscardExpected(old))
+	require.False(t, r.catchupReplay.fetchTracker.DiscardExpected(old))
 	for _, link := range links {
 		completeStandardReplayTestLink(t, r, link)
 	}
 	require.Eventually(t, func() bool {
-		return r.replayPipelineApplied.Load() == 3
+		return r.catchupReplay.replayPipelineApplied.Load() == 3
 	}, 5*time.Second, 10*time.Millisecond)
 }
 
@@ -180,11 +180,11 @@ func TestStandardReplayPipelineYieldsAfterBoundedApplyBatch(t *testing.T) {
 	// The time budget may yield before the count limit on a busy runner.
 	require.Positive(t, metrics.ReplayPipelineApplied)
 	require.LessOrEqual(t, metrics.ReplayPipelineApplied, uint64(standardReplayApplyBatch))
-	require.True(t, r.standardReplay.active)
-	require.True(t, r.standardReplay.applying)
-	require.Len(t, r.standardReplayDrainWake, 1,
+	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.applying)
+	require.Len(t, r.catchupReplay.standardReplayDrainWake, 1,
 		"a ready replay batch must reschedule through the router loop before continuing")
-	require.NotNil(t, r.fetchTracker.Find(links[standardReplayApplyBatch].hash),
+	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[standardReplayApplyBatch].hash),
 		"collector refill must continue while the applier yields")
 }
 
@@ -196,14 +196,14 @@ func TestStandardReplayPipelineBoundsAndRefillsWindow(t *testing.T) {
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
 	require.Len(t, sender.legacyCalls(), standardReplayPipelineWindow)
-	assert.Nil(t, r.fetchTracker.Find(links[standardReplayPipelineWindow].hash))
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(links[standardReplayPipelineWindow].hash))
 	metrics := r.FastSyncMetrics()
 	assert.Equal(t, uint32(standardReplayPipelineWindow), metrics.ReplayPipelineDepth)
 	assert.Equal(t, uint32(standardReplayPipelineWindow), metrics.ReplayPipelineWindow)
 
 	completeStandardReplayTestLink(t, r, links[0])
 	require.Len(t, sender.legacyCalls(), standardReplayPipelineWindow+1)
-	require.NotNil(t, r.fetchTracker.Find(links[standardReplayPipelineWindow].hash))
+	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[standardReplayPipelineWindow].hash))
 	metrics = r.FastSyncMetrics()
 	assert.Equal(t, uint64(standardReplayPipelineWindow+1), metrics.ReplayPipelineRequested)
 	assert.Equal(t, uint32(standardReplayPipelineWindow), metrics.ReplayPipelineDepth)
@@ -221,8 +221,8 @@ func TestStandardReplayPipelineAdvancesPastHeldSuccessor(t *testing.T) {
 		{peerID: 7, hash: links[1].hash, seq: links[1].seq},
 		{peerID: 7, hash: links[2].hash, seq: links[2].seq},
 	}, sender.legacyCalls())
-	assert.Equal(t, links[0].seq, r.standardReplay.anchorSeq)
-	assert.Nil(t, r.fetchTracker.Find(links[0].hash))
+	assert.Equal(t, links[0].seq, r.catchupReplay.standardReplay.anchorSeq)
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(links[0].hash))
 }
 
 func TestStandardReplayPipelineCompletesAllLocalTargetWithoutNetwork(t *testing.T) {
@@ -235,11 +235,12 @@ func TestStandardReplayPipelineCompletesAllLocalTargetWithoutNetwork(t *testing.
 	}
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
+	r.catchupReplay.engine = r.engine
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
 	assert.Empty(t, sender.legacyCalls())
-	assert.False(t, r.standardReplay.active)
-	assert.Equal(t, [32]byte{}, r.consensusRecovery.targetHash)
+	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.Equal(t, [32]byte{}, r.catchupReplay.consensusRecovery.targetHash)
 	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(links[2].hash)}, engine.getLedgers())
 }
 
@@ -249,11 +250,12 @@ func TestStandardReplayPipelineAcquiresRecoveryHashAtBuildingSequence(t *testing
 	require.NoError(t, err)
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
 	r.engine = &mockEngine{buildingSeq: links[0].seq}
+	r.catchupReplay.engine = r.engine
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
 	require.Len(t, sender.legacyCalls(), len(links))
-	assert.True(t, r.standardReplay.active)
-	assert.Equal(t, links[0].hash, r.consensusRecovery.stepHash)
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.Equal(t, links[0].hash, r.catchupReplay.consensusRecovery.stepHash)
 }
 
 func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {
@@ -263,14 +265,14 @@ func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {
 	closed := svc.GetClosedLedger()
 	oldLinks := buildStandardReplayTestChain(t, r, closed, 3)
 	armStandardReplayTestPipeline(t, r, a, sender, oldLinks)
-	stale := r.fetchTracker.Find(oldLinks[0].hash)
+	stale := r.catchupReplay.fetchTracker.Find(oldLinks[0].hash)
 	require.NotNil(t, stale)
 
 	newLinks := make([]standardReplayTestLink, 0, 3)
 	parent := closed
 	for i := 1; i <= 3; i++ {
 		link := buildAlternativeReplaySuccessor(t, parent, time.Duration(i)*time.Minute)
-		r.recordSeqHash(link.seq, link.hash, parent.Hash(), true)
+		r.catchupReplay.recordSeqHash(link.seq, link.hash, parent.Hash(), true)
 		newLinks = append(newLinks, link)
 		parent = link.ledger
 	}
@@ -278,16 +280,16 @@ func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(newLinks[len(newLinks)-1].hash)))
 
 	for _, link := range oldLinks {
-		assert.Nil(t, r.fetchTracker.Find(link.hash))
+		assert.Nil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
 	for _, link := range newLinks {
-		require.NotNil(t, r.fetchTracker.Find(link.hash))
+		require.NotNil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
 	require.NoError(t, stale.GotBase([]message.LedgerNode{
 		{NodeData: oldLinks[0].response.LedgerHeader},
 		{NodeData: []byte{1}},
 	}))
-	r.completeInboundLedger(stale)
+	r.catchupReplay.completeInboundLedger(stale)
 	stored, _ := svc.GetLedgerByHash(oldLinks[0].hash)
 	assert.Nil(t, stored)
 	assert.GreaterOrEqual(t, r.FastSyncMetrics().ReplayPipelineDiscarded, uint64(len(oldLinks)))
@@ -301,11 +303,11 @@ func TestStandardReplayPipelineLeavesFullStateSlotAvailable(t *testing.T) {
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
 	fullStateHash := [32]byte{0xfa, 0x57}
-	r.acquisitionMu.Lock()
-	require.True(t, r.canAdmitCatchupLocked(fullStateHash, maxConcurrentCatchup))
-	r.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+1, fullStateHash, 7)
-	r.acquisitionMu.Unlock()
-	fullState := r.fetchTracker.Find(fullStateHash)
+	r.catchupReplay.acquisitionMu.Lock()
+	require.True(t, r.catchupReplay.canAdmitCatchupLocked(fullStateHash, maxConcurrentCatchup))
+	r.catchupReplay.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+1, fullStateHash, 7)
+	r.catchupReplay.acquisitionMu.Unlock()
+	fullState := r.catchupReplay.fetchTracker.Find(fullStateHash)
 	require.NotNil(t, fullState)
 	assert.False(t, fullState.TransactionOnly())
 }
@@ -320,18 +322,18 @@ func TestStandardReplayPipelineReplacesRedundantFullStateAcquisition(t *testing.
 	sender.mu.Unlock()
 	trackCatchupPeer(r, 7, links[len(links)-1].seq)
 
-	r.acquisitionMu.Lock()
-	r.startLedgerAcquisitionLegacyLocked(links[0].seq, links[0].hash, 7)
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.startLedgerAcquisitionLegacyLocked(links[0].seq, links[0].hash, 7)
+	r.catchupReplay.acquisitionMu.Unlock()
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[len(links)-1].hash)))
 
-	head := r.fetchTracker.Find(links[0].hash)
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
 	assert.True(t, head.TransactionOnly())
-	assert.True(t, r.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.active)
 	for _, link := range links[1:] {
-		require.NotNil(t, r.fetchTracker.Find(link.hash))
-		assert.True(t, r.fetchTracker.Find(link.hash).TransactionOnly())
+		require.NotNil(t, r.catchupReplay.fetchTracker.Find(link.hash))
+		assert.True(t, r.catchupReplay.fetchTracker.Find(link.hash).TransactionOnly())
 	}
 }
 
@@ -342,49 +344,49 @@ func TestStandardReplayPipelineFallsBackWhenHeadFails(t *testing.T) {
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
-	head := r.fetchTracker.Find(links[0].hash)
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
 	now := time.Now()
 	for range 6 {
 		now = now.Add(4 * time.Second)
 		require.Equal(t, inbound.TimerEscalate, head.OnTimer(now))
-		r.escalateAcquisition(head, now)
+		r.catchupReplay.escalateAcquisition(head, now)
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, head.OnTimer(now))
-	r.failInboundAcquisition(head)
+	r.catchupReplay.failInboundAcquisition(head)
 
-	fallback := r.fetchTracker.Find(links[0].hash)
+	fallback := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, fallback)
 	assert.False(t, fallback.TransactionOnly())
 	for _, link := range links[1:] {
-		assert.Nil(t, r.fetchTracker.Find(link.hash))
+		assert.Nil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
 	metrics := r.FastSyncMetrics()
 	assert.Equal(t, uint64(1), metrics.ReplayPipelineFallbacks)
 	assert.Equal(t, uint64(7), metrics.ReplayPipelineRetried)
 	assert.GreaterOrEqual(t, metrics.ReplayPipelineDiscarded, uint64(len(links)))
 	for range 3 {
-		r.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
-		require.Same(t, fallback, r.fetchTracker.Find(links[0].hash))
+		r.catchupReplay.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
+		require.Same(t, fallback, r.catchupReplay.fetchTracker.Find(links[0].hash))
 		require.False(t, fallback.TransactionOnly())
 	}
 	for range 6 {
 		now = now.Add(4 * time.Second)
 		require.Equal(t, inbound.TimerEscalate, fallback.OnTimer(now))
-		r.escalateAcquisition(fallback, now)
+		r.catchupReplay.escalateAcquisition(fallback, now)
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, fallback.OnTimer(now))
-	r.failInboundAcquisition(fallback)
-	r.catchupMu.Lock()
-	r.catchupFailures[links[0].hash] = time.Now().Add(-time.Second)
-	r.catchupMu.Unlock()
+	r.catchupReplay.failInboundAcquisition(fallback)
+	r.catchupReplay.catchupMu.Lock()
+	r.catchupReplay.catchupFailures[links[0].hash] = time.Now().Add(-time.Second)
+	r.catchupReplay.catchupMu.Unlock()
 	sender.mu.Lock()
 	sender.peerSupportsReplay = true
 	sender.mu.Unlock()
-	r.armConsensusCatchup()
-	retried := r.fetchTracker.Find(links[0].hash)
+	r.catchupReplay.armConsensusCatchup()
+	retried := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, retried)
 	require.NotSame(t, fallback, retried)
 	require.False(t, retried.TransactionOnly())
@@ -415,7 +417,7 @@ func TestReplayFaultBlocksMismatchFallback(t *testing.T) {
 				response: &message.ReplayDeltaResponse{LedgerHash: h.Hash[:], LedgerHeader: header.AddRaw(h, false)},
 				ledger:   child, hash: h.Hash, seq: h.LedgerIndex,
 			}
-			r.recordSeqHash(first.seq, first.hash, parent.Hash(), true)
+			r.catchupReplay.recordSeqHash(first.seq, first.hash, parent.Hash(), true)
 			links := append([]standardReplayTestLink{first}, buildStandardReplayTestChain(t, r, child, 2)...)
 			var pipelineFallbacks uint64
 			switch mode {
@@ -441,12 +443,12 @@ func TestReplayFaultBlocksMismatchFallback(t *testing.T) {
 			trackCatchupPeer(r, 7, links[2].seq, links[2].hash)
 			require.NoError(t, a.RequestLedger(consensus.LedgerID(links[2].hash)))
 			require.True(t, svc.ReplayBlocked())
-			require.Nil(t, r.fetchTracker.Find(first.hash))
+			require.Nil(t, r.catchupReplay.fetchTracker.Find(first.hash))
 			require.Equal(t, pipelineFallbacks, r.FastSyncMetrics().ReplayPipelineFallbacks)
 			for range 3 {
-				r.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
-				r.armConsensusCatchup()
-				require.Nil(t, r.fetchTracker.Find(first.hash))
+				r.catchupReplay.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
+				r.catchupReplay.armConsensusCatchup()
+				require.Nil(t, r.catchupReplay.fetchTracker.Find(first.hash))
 				require.True(t, svc.ReplayBlocked())
 			}
 			require.Same(t, parent, svc.GetClosedLedger())
@@ -464,42 +466,42 @@ func TestStandardReplayPipelineDefersFailedEntryUntilFrozenPivotReady(t *testing
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
-	r.acquisitionMu.Lock()
-	r.standardReplay.pivotReady = false
-	r.standardReplay.applying = false
-	generation := r.standardReplay.generation
-	pivotSeq := r.standardReplay.anchorSeq
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.standardReplay.pivotReady = false
+	r.catchupReplay.standardReplay.applying = false
+	generation := r.catchupReplay.standardReplay.generation
+	pivotSeq := r.catchupReplay.standardReplay.anchorSeq
+	r.catchupReplay.acquisitionMu.Unlock()
 
 	// The first successor may be ready while the full-state pivot is still
 	// being verified. A failure farther ahead must not wake the drain yet.
 	completeStandardReplayTestLink(t, r, links[0])
-	failed := r.fetchTracker.Find(links[2].hash)
+	failed := r.catchupReplay.fetchTracker.Find(links[2].hash)
 	require.NotNil(t, failed)
-	r.failInboundAcquisition(failed)
+	r.catchupReplay.failInboundAcquisition(failed)
 
-	r.acquisitionMu.Lock()
-	require.True(t, r.standardReplay.active)
-	assert.Equal(t, generation, r.standardReplay.generation)
-	assert.Equal(t, pivotSeq, r.standardReplay.anchorSeq)
-	assert.False(t, r.standardReplay.applying)
-	assert.False(t, r.standardReplay.entries[links[0].seq].readyAt.IsZero())
-	assert.True(t, r.standardReplay.entries[links[2].seq].failed)
-	identity := r.standardReplayIdentityLocked()
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	require.True(t, r.catchupReplay.standardReplay.active)
+	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.anchorSeq)
+	assert.False(t, r.catchupReplay.standardReplay.applying)
+	assert.False(t, r.catchupReplay.standardReplay.entries[links[0].seq].readyAt.IsZero())
+	assert.True(t, r.catchupReplay.standardReplay.entries[links[2].seq].failed)
+	identity := r.catchupReplay.standardReplayIdentityLocked()
+	r.catchupReplay.acquisitionMu.Unlock()
 
 	assert.Zero(t, r.FastSyncMetrics().ReplayPipelineApplied)
 	assert.Zero(t, r.FastSyncMetrics().ReplayPipelineFallbacks)
-	_, canceled := r.cancelStandardReplayPipelineIdentity(identity, "test_retarget")
+	_, canceled := r.catchupReplay.cancelStandardReplayPipelineIdentity(identity, "test_retarget")
 	require.True(t, canceled)
-	r.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
-	fallback := r.fetchTracker.Find(links[2].hash)
+	r.catchupReplay.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
+	fallback := r.catchupReplay.fetchTracker.Find(links[2].hash)
 	require.NotNil(t, fallback)
 	require.False(t, fallback.TransactionOnly())
 	for _, link := range links[:2] {
 		completeStandardReplayTestLink(t, r, link)
 	}
-	require.Same(t, fallback, r.fetchTracker.Find(links[2].hash))
+	require.Same(t, fallback, r.catchupReplay.fetchTracker.Find(links[2].hash))
 }
 
 func TestStandardReplayPipelineFallsBackWhenPersistenceFails(t *testing.T) {
@@ -509,17 +511,17 @@ func TestStandardReplayPipelineFallsBackWhenPersistenceFails(t *testing.T) {
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
-	head := r.fetchTracker.Find(links[0].hash)
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
-	r.handleAcquisitionWorkResult(acquisitionWorkResult{
+	r.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger: head, complete: true, persistenceErr: errors.New("persistence failed"),
 	})
 
-	fallback := r.fetchTracker.Find(links[0].hash)
+	fallback := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, fallback)
 	assert.False(t, fallback.TransactionOnly())
 	for _, link := range links[1:] {
-		assert.Nil(t, r.fetchTracker.Find(link.hash))
+		assert.Nil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
 	metrics := r.FastSyncMetrics()
 	assert.Equal(t, uint64(1), metrics.ReplayPipelineFallbacks)
@@ -533,18 +535,18 @@ func TestStandardReplayPipelineFallsBackWhenAcquisitionDataIsRejected(t *testing
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
-	head := r.fetchTracker.Find(links[0].hash)
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
-	r.handleAcquisitionWorkResult(acquisitionWorkResult{
+	r.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger: head, remove: true, haveSnapshot: true, snapshot: head.Snapshot(),
 		err: errors.New("invalid SHAMap node"),
 	})
 
-	fallback := r.fetchTracker.Find(links[0].hash)
+	fallback := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, fallback)
 	assert.False(t, fallback.TransactionOnly())
 	for _, link := range links[1:] {
-		assert.Nil(t, r.fetchTracker.Find(link.hash))
+		assert.Nil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
 	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineFallbacks)
 }
@@ -556,15 +558,15 @@ func TestStandardReplayPipelineFallbackRespectsProtectedLimit(t *testing.T) {
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
-	r.acquisitionMu.Lock()
+	r.catchupReplay.acquisitionMu.Lock()
 	for i := range maxConcurrentCatchup {
 		hash := [32]byte{0xf0, byte(i + 1)}
-		r.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+uint32(i)+1, hash, 7)
+		r.catchupReplay.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+uint32(i)+1, hash, 7)
 	}
-	r.acquisitionMu.Unlock()
-	require.Equal(t, maxConcurrentCatchup, r.protectedCatchupInFlight())
+	r.catchupReplay.acquisitionMu.Unlock()
+	require.Equal(t, maxConcurrentCatchup, r.catchupReplay.protectedCatchupInFlight())
 
-	head := r.fetchTracker.Find(links[0].hash)
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
 	now := time.Now()
 	for range 6 {
@@ -573,10 +575,10 @@ func TestStandardReplayPipelineFallbackRespectsProtectedLimit(t *testing.T) {
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, head.OnTimer(now))
-	r.failInboundAcquisition(head)
+	r.catchupReplay.failInboundAcquisition(head)
 
-	assert.Nil(t, r.fetchTracker.Find(links[0].hash))
-	assert.Equal(t, maxConcurrentCatchup, r.protectedCatchupInFlight())
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(links[0].hash))
+	assert.Equal(t, maxConcurrentCatchup, r.catchupReplay.protectedCatchupInFlight())
 }
 
 func TestStandardReplayPipelineDoesNotFallbackAfterGossipTargetAdvances(t *testing.T) {
@@ -588,14 +590,14 @@ func TestStandardReplayPipelineDoesNotFallbackAfterGossipTargetAdvances(t *testi
 	sender.peerSupportsReplay = false
 	sender.mu.Unlock()
 	trackCatchupPeer(r, 7, links[len(links)-1].seq, links[len(links)-1].hash)
-	r.recordCatchupTarget(links[len(links)-1].seq, links[len(links)-1].hash, 7)
-	r.armCatchupTowardTarget()
-	require.True(t, r.standardReplay.active)
-	require.Equal(t, [32]byte{}, r.consensusRecovery.targetHash)
+	r.catchupReplay.recordCatchupTarget(links[len(links)-1].seq, links[len(links)-1].hash, 7)
+	r.catchupReplay.armCatchupTowardTarget()
+	require.True(t, r.catchupReplay.standardReplay.active)
+	require.Equal(t, [32]byte{}, r.catchupReplay.consensusRecovery.targetHash)
 
-	head := r.fetchTracker.Find(links[0].hash)
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
-	r.recordCatchupTarget(links[len(links)-1].seq+1, [32]byte{0xee}, 8)
+	r.catchupReplay.recordCatchupTarget(links[len(links)-1].seq+1, [32]byte{0xee}, 8)
 	now := time.Now()
 	for range 6 {
 		now = now.Add(4 * time.Second)
@@ -603,16 +605,16 @@ func TestStandardReplayPipelineDoesNotFallbackAfterGossipTargetAdvances(t *testi
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, head.OnTimer(now))
-	r.failInboundAcquisition(head)
+	r.catchupReplay.failInboundAcquisition(head)
 
-	assert.Nil(t, r.fetchTracker.Find(links[0].hash))
-	assert.Zero(t, r.protectedCatchupInFlight())
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(links[0].hash))
+	assert.Zero(t, r.catchupReplay.protectedCatchupInFlight())
 }
 
 func TestStandardReplayPipelineStaleFailureKeepsReplacementDrain(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	replacement := &standardReplayEntry{generation: 2, seq: 11, hash: [32]byte{0x11}}
-	r.standardReplay = standardReplayPipeline{
+	r.catchupReplay.standardReplay = standardReplayPipeline{
 		generation: 2,
 		active:     true,
 		applying:   true,
@@ -621,21 +623,21 @@ func TestStandardReplayPipelineStaleFailureKeepsReplacementDrain(t *testing.T) {
 	}
 	stale := &standardReplayEntry{generation: 1, seq: 10, hash: [32]byte{0x10}}
 
-	r.acquisitionMu.Lock()
-	retired, _, current := r.discardStandardReplayHeadLocked(stale, stale.generation)
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	retired, _, current := r.catchupReplay.discardStandardReplayHeadLocked(stale, stale.generation)
+	r.catchupReplay.acquisitionMu.Unlock()
 
 	assert.Empty(t, retired)
 	assert.False(t, current)
-	assert.True(t, r.standardReplay.active)
-	assert.True(t, r.standardReplay.applying)
-	assert.Same(t, replacement, r.standardReplay.entries[replacement.seq])
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.applying)
+	assert.Same(t, replacement, r.catchupReplay.standardReplay.entries[replacement.seq])
 }
 
 func TestStandardReplayPipelineStaleCancellationKeepsReplacement(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	replacement := &standardReplayEntry{generation: 2, seq: 11, hash: [32]byte{0x11}}
-	r.standardReplay = standardReplayPipeline{
+	r.catchupReplay.standardReplay = standardReplayPipeline{
 		generation: 2,
 		active:     true,
 		anchorSeq:  10,
@@ -651,22 +653,22 @@ func TestStandardReplayPipelineStaleCancellationKeepsReplacement(t *testing.T) {
 		targetHash: replacement.hash,
 	}
 
-	_, current := r.cancelStandardReplayPipelineIdentity(stale, "test_stale_identity")
+	_, current := r.catchupReplay.cancelStandardReplayPipelineIdentity(stale, "test_stale_identity")
 
 	assert.False(t, current)
-	assert.True(t, r.standardReplay.active)
-	assert.Same(t, replacement, r.standardReplay.entries[replacement.seq])
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.Same(t, replacement, r.catchupReplay.standardReplay.entries[replacement.seq])
 }
 
 func TestStandardReplayCancellationWaitsBeforeInvalidatingGeneration(t *testing.T) {
 	r := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
-	r.standardReplay = standardReplayPipeline{
+	r.catchupReplay.standardReplay = standardReplayPipeline{
 		generation: 7,
 		active:     true,
 		entries:    make(map[uint32]*standardReplayEntry),
 	}
 
-	r.replayCommitMu.Lock()
+	r.catchupReplay.replayCommitMu.Lock()
 	done := make(chan struct{})
 	go func() {
 		r.StopAcquisitions()
@@ -677,10 +679,10 @@ func TestStandardReplayCancellationWaitsBeforeInvalidatingGeneration(t *testing.
 		t.Fatal("cancellation passed an active replay commit")
 	case <-time.After(25 * time.Millisecond):
 	}
-	require.True(t, r.standardReplay.active)
-	require.Equal(t, uint64(7), r.standardReplay.generation)
+	require.True(t, r.catchupReplay.standardReplay.active)
+	require.Equal(t, uint64(7), r.catchupReplay.standardReplay.generation)
 
-	r.replayCommitMu.Unlock()
+	r.catchupReplay.replayCommitMu.Unlock()
 	require.Eventually(t, func() bool {
 		select {
 		case <-done:
@@ -689,8 +691,8 @@ func TestStandardReplayCancellationWaitsBeforeInvalidatingGeneration(t *testing.
 			return false
 		}
 	}, time.Second, time.Millisecond)
-	require.False(t, r.standardReplay.active)
-	require.Equal(t, uint64(8), r.standardReplay.generation)
+	require.False(t, r.catchupReplay.standardReplay.active)
+	require.Equal(t, uint64(8), r.catchupReplay.standardReplay.generation)
 }
 
 func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
@@ -711,13 +713,14 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 			})
 		},
 	}
+	r.catchupReplay.engine = r.engine
 	armStandardReplayTestPipeline(t, r, a, sender, links[:2])
-	generation := r.standardReplay.generation
-	pivotHash := r.standardReplay.pivotHash
+	generation := r.catchupReplay.standardReplay.generation
+	pivotHash := r.catchupReplay.standardReplay.pivotHash
 	completeStandardReplayTestLink(t, r, links[0])
 	drainStandardReplayTestPipeline(t, r)
 
-	final := r.fetchTracker.Find(links[1].hash)
+	final := r.catchupReplay.fetchTracker.Find(links[1].hash)
 	require.NotNil(t, final)
 	require.NoError(t, final.GotBase([]message.LedgerNode{
 		{NodeData: links[1].response.LedgerHeader},
@@ -726,7 +729,7 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	require.True(t, final.IsComplete())
 	done := make(chan struct{})
 	go func() {
-		r.completeInboundLedger(final)
+		r.catchupReplay.completeInboundLedger(final)
 		close(done)
 	}()
 
@@ -737,14 +740,14 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	}
 	trackCatchupPeer(r, 7, links[2].seq, links[2].hash)
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[2].hash)))
-	assert.True(t, r.standardReplay.active)
-	assert.Equal(t, generation, r.standardReplay.generation)
-	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
-	assert.Equal(t, links[2].seq, r.standardReplay.targetSeq)
-	next := r.fetchTracker.Find(links[2].hash)
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
+	assert.Equal(t, links[2].seq, r.catchupReplay.standardReplay.targetSeq)
+	next := r.catchupReplay.fetchTracker.Find(links[2].hash)
 	require.NotNil(t, next)
 	assert.True(t, next.TransactionOnly())
-	for _, acquisition := range r.fetchTracker.Active() {
+	for _, acquisition := range r.catchupReplay.fetchTracker.Active() {
 		assert.True(t, acquisition.TransactionOnly())
 	}
 

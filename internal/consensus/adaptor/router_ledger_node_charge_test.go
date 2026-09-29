@@ -64,7 +64,7 @@ func newLedgerNodeChargeAcquisition(t *testing.T, r *Router, transaction bool) (
 		valid = append(valid, message.LedgerNode{NodeID: node.NodeID, NodeData: node.Data})
 	}
 	require.NotEmpty(t, valid)
-	r.fetchTracker.Track(ledger)
+	r.catchupReplay.fetchTracker.Track(ledger)
 	return ledger, valid
 }
 
@@ -118,7 +118,7 @@ func TestRouter_HandleLedgerData_InvalidNodeReference_ChargesOnceAndRecovers(t *
 			require.False(t, afterMalformed.Failed)
 			require.Equal(t, before.StateUseful, afterMalformed.StateUseful)
 			require.Equal(t, before.TxUseful, afterMalformed.TxUseful)
-			require.Same(t, ledger, r.fetchTracker.Find(ledger.Hash()))
+			require.Same(t, ledger, r.catchupReplay.fetchTracker.Find(ledger.Hash()))
 
 			r.handleMessage(&peermanagement.InboundMessage{
 				PeerID: 7,

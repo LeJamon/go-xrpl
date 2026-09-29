@@ -94,11 +94,16 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		defer engine.mu.Unlock()
 		return len(engine.txSets) == 1 && engine.txSets[0] == consensus.TxSetID(setID)
 	}, time.Second, 10*time.Millisecond,
-		"tx-set acquisition must finish before checking transaction relay bookkeeping")
+		"tx-set acquisition must deliver the complete set to consensus")
+	require.Eventually(t, func() bool {
+		router.txSeen.mu.Lock()
+		defer router.txSeen.mu.Unlock()
+		entry := router.txSeen.entries[txHash]
+		return entry != nil && len(entry.peers) == 0
+	}, time.Second, 10*time.Millisecond,
+		"acquired relay must consume peers already known to hold the transaction")
 	require.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"tx-set acquisition must learn the carried transaction into the open ledger")
-	require.Empty(t, router.txSeen.releasePeers(txHash),
-		"acquired relay must consume peers already known to hold the transaction")
 }
 
 func TestRouterLearnTxFromLeafStopsOnMembershipError(t *testing.T) {

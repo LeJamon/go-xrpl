@@ -108,8 +108,20 @@ func (t *Tracker) Find(hash [32]byte) *Ledger {
 // a new one produced by factory (which must not block — peer I/O belongs to the
 // caller, issued only when created is true). Mirrors rippled
 // InboundLedgers::acquire's findCreate step. factory returning nil yields
-// (nil,false).
+// (nil,false). Call GetOrCreateWithSequence when the caller has a sequence
+// learned after a hash-only acquisition may already be active.
 func (t *Tracker) GetOrCreate(hash [32]byte, factory func() *Ledger) (l *Ledger, created bool) {
+	return t.getOrCreate(hash, 0, factory)
+}
+
+// GetOrCreateWithSequence is GetOrCreate with the sequence supplied by the
+// caller. An existing hash-only acquisition adopts the sequence before its
+// snapshot is returned, matching rippled's InboundLedgers::acquire join path.
+func (t *Tracker) GetOrCreateWithSequence(hash [32]byte, seq uint32, factory func() *Ledger) (l *Ledger, created bool) {
+	return t.getOrCreate(hash, seq, factory)
+}
+
+func (t *Tracker) getOrCreate(hash [32]byte, seq uint32, factory func() *Ledger) (l *Ledger, created bool) {
 	if t == nil {
 		return nil, false
 	}
@@ -119,6 +131,7 @@ func (t *Tracker) GetOrCreate(hash [32]byte, factory func() *Ledger) (l *Ledger,
 		return nil, false
 	}
 	if existing := t.active[hash]; existing != nil {
+		existing.updateSequence(seq)
 		return existing, false
 	}
 	l = factory()

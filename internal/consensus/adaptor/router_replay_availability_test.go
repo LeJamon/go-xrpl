@@ -35,7 +35,7 @@ func TestRouter_ReplayDeltaAvailabilityRetriesSuitablePeer(t *testing.T) {
 
 	target := [32]byte{0xA1}
 	seq := parent.Sequence() + 1
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
 	sendReplayAvailabilityResponse(t, r, 7, target, message.ReplyErrorNoLedger)
 
 	assert.Equal(t, []replayDeltaCall{
@@ -43,17 +43,17 @@ func TestRouter_ReplayDeltaAvailabilityRetriesSuitablePeer(t *testing.T) {
 		{peerID: 8, hash: target},
 	}, sender.replayCalls())
 	assert.Empty(t, sender.legacyCalls(), "a suitable replay peer should be retried before standard replay")
-	assert.True(t, r.replayer.Has(target), "the alternative peer should own the replay acquisition")
-	r.acquisitionMu.Lock()
-	_, retained := r.replayAvailabilityRetries[target]
-	r.acquisitionMu.Unlock()
+	assert.True(t, r.catchupReplay.replayer.Has(target), "the alternative peer should own the replay acquisition")
+	r.catchupReplay.acquisitionMu.Lock()
+	_, retained := r.catchupReplay.replayAvailabilityRetries[target]
+	r.catchupReplay.acquisitionMu.Unlock()
 	assert.True(t, retained, "bounded retry state should survive while the alternative is in flight")
 
-	r.replayer.Abandon(target)
-	r.expireReplayAvailabilityRetries()
-	r.acquisitionMu.Lock()
-	_, retained = r.replayAvailabilityRetries[target]
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.replayer.Abandon(target)
+	r.catchupReplay.expireReplayAvailabilityRetries()
+	r.catchupReplay.acquisitionMu.Lock()
+	_, retained = r.catchupReplay.replayAvailabilityRetries[target]
+	r.catchupReplay.acquisitionMu.Unlock()
 	assert.False(t, retained, "retry state should be reaped after the replay is abandoned")
 }
 
@@ -69,7 +69,7 @@ func TestRouter_ReplayDeltaAvailabilitySkipsPeerWithoutReplaySupport(t *testing.
 
 	target := [32]byte{0xA5}
 	seq := parent.Sequence() + 1
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
 	sendReplayAvailabilityResponse(t, r, 7, target, message.ReplyErrorNoLedger)
 
 	assert.Equal(t, []replayDeltaCall{
@@ -89,7 +89,7 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 	sender.mu.Lock()
 	sender.acquisitionPeers = []uint64{8}
 	sender.mu.Unlock()
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
 	sendReplayAvailabilityResponse(t, r, 7, target, message.ReplyErrorNoLedger)
 
 	assert.Equal(t, []replayDeltaCall{
@@ -104,7 +104,7 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 		{peerID: 7, hash: target},
 		{peerID: 8, hash: target},
 	}, sender.replayCalls())
-	assert.True(t, r.replayer.Has(target))
+	assert.True(t, r.catchupReplay.replayer.Has(target))
 	charges := []badDataCall{
 		{peerID: 7, reason: "replay-delta-verify"},
 		{peerID: 7, reason: "replay-delta-verify"},
@@ -119,7 +119,7 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Zero(t, r.replayer.Count(), "the replacement peer's valid response must remain usable")
+	assert.Zero(t, r.catchupReplay.replayer.Count(), "the replacement peer's valid response must remain usable")
 	stored, err := svc.GetLedgerByHash(target)
 	require.NoError(t, err)
 	assert.NotNil(t, stored)
@@ -137,7 +137,7 @@ func TestRouter_ReplayDeltaAvailabilityFallsBackToTransactionReplayAfterBound(t 
 
 	target := [32]byte{0xA2}
 	seq := parent.Sequence() + 1
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
 	for _, peerID := range []uint64{7, 8, 9, 10} {
 		sendReplayAvailabilityResponse(t, r, peerID, target, message.ReplyErrorNoNode)
 	}
@@ -154,13 +154,13 @@ func TestRouter_ReplayDeltaAvailabilityFallsBackToTransactionReplayAfterBound(t 
 		assert.Equal(t, target, call.hash)
 		assert.Equal(t, seq, call.seq)
 	}
-	il := r.fetchTracker.Find(target)
+	il := r.catchupReplay.fetchTracker.Find(target)
 	require.NotNil(t, il)
 	assert.True(t, il.TransactionOnly(), "a verified parent permits tx-only replay")
-	assert.Zero(t, r.replayer.Count())
-	r.acquisitionMu.Lock()
-	_, retained := r.replayAvailabilityRetries[target]
-	r.acquisitionMu.Unlock()
+	assert.Zero(t, r.catchupReplay.replayer.Count())
+	r.catchupReplay.acquisitionMu.Lock()
+	_, retained := r.catchupReplay.replayAvailabilityRetries[target]
+	r.catchupReplay.acquisitionMu.Unlock()
 	assert.False(t, retained, "retry state must be cleared after bounded fallback")
 }
 
@@ -175,23 +175,23 @@ func TestRouter_ReplayDeltaAvailabilityExpiredBudgetDoesNotRestart(t *testing.T)
 
 	target := [32]byte{0xA4}
 	seq := parent.Sequence() + 1
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
-	r.acquisitionMu.Lock()
-	r.replayAvailabilityRetries = map[[32]byte]replayAvailabilityRetryState{
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.replayAvailabilityRetries = map[[32]byte]replayAvailabilityRetryState{
 		target: {
 			peers:     []uint64{7},
 			retries:   1,
 			expiresAt: time.Now().Add(-time.Second),
 		},
 	}
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Unlock()
 
 	// An active replacement keeps its expired marker until the response
 	// arrives, preventing maintenance from opening a fresh retry budget.
-	r.expireReplayAvailabilityRetries()
-	r.acquisitionMu.Lock()
-	_, retained := r.replayAvailabilityRetries[target]
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.expireReplayAvailabilityRetries()
+	r.catchupReplay.acquisitionMu.Lock()
+	_, retained := r.catchupReplay.replayAvailabilityRetries[target]
+	r.catchupReplay.acquisitionMu.Unlock()
 	require.True(t, retained)
 
 	sendReplayAvailabilityResponse(t, r, 7, target, message.ReplyErrorNoLedger)
@@ -199,12 +199,12 @@ func TestRouter_ReplayDeltaAvailabilityExpiredBudgetDoesNotRestart(t *testing.T)
 	assert.Equal(t, []replayDeltaCall{{peerID: 7, hash: target}}, sender.replayCalls(), "an expired budget must not issue another replay request")
 	legacy := sender.legacyCalls()
 	require.NotEmpty(t, legacy)
-	il := r.fetchTracker.Find(target)
+	il := r.catchupReplay.fetchTracker.Find(target)
 	require.NotNil(t, il)
 	assert.True(t, il.TransactionOnly())
-	r.acquisitionMu.Lock()
-	_, retained = r.replayAvailabilityRetries[target]
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	_, retained = r.catchupReplay.replayAvailabilityRetries[target]
+	r.catchupReplay.acquisitionMu.Unlock()
 	assert.False(t, retained)
 }
 
@@ -224,13 +224,13 @@ func TestRouter_ReplayDeltaAvailabilityChargesPeerAndPreservesRecovery(t *testin
 
 			target := [32]byte{0xA3}
 			seq := parent.Sequence() + 1
-			require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
+			require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
 			sendReplayAvailabilityResponse(t, r, 7, target, tc.reply)
 
 			assert.Equal(t, []badDataCall{{peerID: 7, reason: "replay-delta-verify"}}, sender.getBadDataCalls())
 			legacy := sender.legacyCalls()
 			require.Len(t, legacy, 1)
-			il := r.fetchTracker.Find(target)
+			il := r.catchupReplay.fetchTracker.Find(target)
 			require.NotNil(t, il)
 			assert.True(t, il.TransactionOnly())
 		})

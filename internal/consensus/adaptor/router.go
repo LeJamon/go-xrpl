@@ -3,7 +3,6 @@ package adaptor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"runtime"
 	"sync"
@@ -133,12 +132,7 @@ type Router struct {
 	// manifest worker without passing through the consensus router loop.
 	manifestInbox <-chan *peermanagement.InboundMessage
 	logger        *slog.Logger
-
-	// Peer ledger tracking for catch-up detection
-	peerSessions         peerSessionView
-	peersMu              sync.RWMutex
-	peerStates           map[peermanagement.PeerID]*peerLedgerState
-	peerStatusCandidates map[peermanagement.PeerID]peerStatusCandidate
+	peerSessions  peerSessionView
 
 	// The overlay callback only records disconnects; a router-owned worker performs
 	// cleanup so acquisition scans never block the overlay event loop.
@@ -146,42 +140,7 @@ type Router struct {
 	peerDisconnectWake     chan struct{}
 	pendingPeerConnects    sync.Map
 	peerConnectWake        chan struct{}
-	// standardReplayDrainWake resumes a replay apply batch on the router loop
-	// after the preceding batch yielded. Keeping the wake edge-triggered and
-	// buffered prevents a ready replay window from monopolising the same loop
-	// that must drain consensus, control, and acquisition traffic.
-	standardReplayDrainWake chan struct{}
-	// Protected by acquisitionMu. Unlike the pipeline's scheduled/applying
-	// flag, a running drain survives cancellation until its owner returns.
-	standardReplayDrainOwner *standardReplayDrainOwner
-
-	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
-	// keyed by target ledger hash, under a configurable concurrency cap, so a
-	// catchup burst across many ledgers can parallelize instead of
-	// serializing.
-	replayer *inbound.Replayer
-
-	// fetchTracker is the registry of classic header+state+tx ledger
-	// acquisitions, keyed by ledger hash. It is both the active in-flight set
-	// (the router routes inbound TMLedgerData to the matching acquisition via
-	// Find, and starts new ones via GetOrCreate) and the source of the
-	// fetch_info snapshot. Consensus catch-up drives it from the single inbox
-	// goroutine; the RPC-driven ledger_request path (RequestLedger) starts
-	// ReasonGeneric acquisitions from RPC goroutines. Both go through the
-	// tracker's own mutex, and each acquisition guards its own state, so
-	// concurrent access is safe. Orthogonal to replayer — legacy and
-	// replay-delta acquisitions can coexist.
-	fetchTracker *inbound.Tracker
-	// acquisitionWorkMu guards the lane pointer across Run startup/shutdown and
-	// RPC calls such as fetch_info clear.
-	acquisitionWorkMu sync.RWMutex
-
-	// fetchPacks caches inbound fetch-pack SHAMap nodes keyed by node hash so
-	// a stalled acquisition can complete locally (inbound.Ledger.CheckLocal)
-	// instead of node-by-node over the network. Driven from the single inbox
-	// goroutine (handleFetchPackReply / maintenanceTick) and guarded by its
-	// own mutex.
-	fetchPacks *fetchPackCache
+	catchupReplay          *catchupReplayCoordinator
 
 	// messageSeen dedups inbound proposal / validation payloads so the
 	// reduce-relay slot only feeds on DUPLICATE arrivals. Counting first-seen
@@ -258,13 +217,6 @@ type Router struct {
 	// txSetRetryKnobs for the meaning of each field.
 	txSetRetryKnobs txSetRetryKnobs
 
-	// floor is the online-delete retention floor. When set, the router
-	// refuses to acquire or serve ledgers below it — rippled gates the same
-	// in LedgerMaster::shouldAcquire (acquisition) and gives the serving
-	// guarantee implicitly because online-delete physically removed the data.
-	// Nil when online-delete is off, leaving acquisition/serving unrestricted.
-	floor MinimumOnlineFloor
-
 	lifecycleMu     sync.RWMutex
 	lifecycleState  routerLifecycleState
 	lifecycleCtx    context.Context
@@ -297,82 +249,6 @@ type Router struct {
 	// serve pool was saturated — the requesting peer retries elsewhere, so a
 	// dropped request is recoverable load-shedding.
 	droppedServeJobs atomic.Uint64
-
-	// acquisitionFamily backs new inbound acquisitions with the persistent node
-	// store (see SetAcquisitionFamily); nil leaves them unbacked. Set once at
-	// startup, before Run.
-	acquisitionFamily shamap.Family
-	acquisitionStore  *acquisitionStoreLane
-	acquisitionWork   *acquisitionWorkLane
-
-	// catchupMu guards the single consensus catch-up target and recent failures.
-	// The router drives at most maxConcurrentCatchup acquisitions toward the
-	// highest trusted (seq,hash), matching rippled's single needed ledger.
-	catchupMu                            sync.Mutex
-	catchup                              catchupTarget
-	catchupFailures                      map[[32]byte]time.Time
-	linkageWait                          catchupLinkageWait
-	peerStatusEvidence                   bool
-	completionRecheckAccepted            atomic.Uint64
-	completionRecheckRejectedNoEvidence  atomic.Uint64
-	completionRecheckRejectedBelowQuorum atomic.Uint64
-	completionRecheckRejectedUnavailable atomic.Uint64
-	targetSuperseded                     atomic.Uint64
-	obsoleteAcquisitionCompleted         atomic.Uint64
-	replayPipelineRequested              atomic.Uint64
-	replayPipelineReady                  atomic.Uint64
-	replayPipelineApplied                atomic.Uint64
-	replayPipelineDiscarded              atomic.Uint64
-	replayPipelineRetried                atomic.Uint64
-	replayPipelineFallbacks              atomic.Uint64
-	replayPipelineBackpressureEvents     atomic.Uint64
-	replayPipelineRetargetFailures       atomic.Uint64
-	replayPipelineAcquireUs              atomic.Uint64
-	replayPipelineReadyWaitUs            atomic.Uint64
-	replayPipelineApplyUs                atomic.Uint64
-	replayPipelinePersistUs              atomic.Uint64
-
-	// acquisitionMu protects replayAvailabilityRetries along with the
-	// acquisition registries below.
-	acquisitionMu             sync.Mutex
-	replayAvailabilityRetries map[[32]byte]replayAvailabilityRetryState
-	replayFallbackRequired    map[[32]byte]uint32
-	replayCommitMu            sync.Mutex
-	consensusRecovery         consensusRecovery
-	lastHandoffSeq            uint32
-	standardReplay            standardReplayPipeline
-
-	// historyMu guards history, the single backward history-backfill target: the
-	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
-	// serial (each header names its parent) and tick-driven. historyFloor bounds
-	// it to the jump gap; below it history is already contiguous, so descending
-	// further would re-fetch persisted ledgers evicted from the in-memory window.
-	historyMu     sync.Mutex
-	history       catchupTarget
-	historyFloor  uint32
-	historySeeded bool
-	// Immutable after startup; historyDepth is the maximum sequence distance
-	// from the validated tip accepted for historical backfill.
-	historyBackfill bool
-	historyDepth    uint32
-
-	// seqHashMu guards the seqHash table: the network's hash (and, when known,
-	// parent hash) per ledger sequence, from trusted validations and peer
-	// status_change gossip. Supplies the hash of closed+1 (the forward-delta
-	// catch-up target) and the parent linkage proving closed+1 descends from our
-	// closed ledger. Only local or trusted evidence advances seqHashAnchor.
-	seqHashMu     sync.Mutex
-	seqHash       map[uint32]ledgerHashEntry
-	seqHashAnchor uint32
-
-	// headerDiscoveryMu guards the one bounded target-to-anchor header walk.
-	// Header discovery is deliberately separate from full-state acquisitions:
-	// a header reply only establishes ancestry and must not become a pivot until
-	// the complete chain reaches the locally validated ledger.
-	headerDiscoveryMu         sync.Mutex
-	headerDiscovery           *headerDiscoverySession
-	headerDiscoveryGeneration uint64
-	retiredHeaderRequests     map[[32]byte]time.Time
 }
 
 type routerNetworkConfig struct {
@@ -504,36 +380,27 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 	if network.serve == nil {
 		network.serve = noop
 	}
+	coord := newCatchupReplayCoordinator(engine, adaptor, network, logger)
 	r := &Router{
-		engine:                  engine,
-		adaptor:                 adaptor,
-		gossip:                  network.gossip,
-		txSetNet:                network.txSet,
-		acquisition:             network.acquisition,
-		serve:                   network.serve,
-		inbox:                   inbox,
-		logger:                  logger,
-		peerStates:              make(map[peermanagement.PeerID]*peerLedgerState),
-		peerStatusCandidates:    make(map[peermanagement.PeerID]peerStatusCandidate),
-		peerDisconnectWake:      make(chan struct{}, 1),
-		peerConnectWake:         make(chan struct{}, 1),
-		standardReplayDrainWake: make(chan struct{}, 1),
-		replayer:                inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		fetchTracker: inbound.NewTrackerWithClockAndSweepInterval(
-			network.inboundClock,
-			network.inboundSweepInterval,
-		),
-		fetchPacks:             newFetchPackCache(),
+		engine:                 engine,
+		adaptor:                adaptor,
+		gossip:                 network.gossip,
+		txSetNet:               network.txSet,
+		acquisition:            network.acquisition,
+		serve:                  network.serve,
+		inbox:                  inbox,
+		logger:                 logger,
+		peerDisconnectWake:     make(chan struct{}, 1),
+		peerConnectWake:        make(chan struct{}, 1),
+		catchupReplay:          coord,
 		messageSeen:            newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		manifestUntrustedLimit: manifest.DefaultMaxUntrustedCount,
 		txSeen:                 newTransactionSuppression(5*time.Minute, 1<<17),
 		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
-		seqHash:                make(map[uint32]ledgerHashEntry),
 		lifecycleCtx:           context.Background(),
-		historyBackfill:        true,
-		historyDepth:           256,
 	}
+	coord.onPeerDisconnect = r.HandlePeerDisconnect
 	if adaptor != nil {
 		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
 			r.validationWork = newValidationWorkLane(
@@ -551,22 +418,14 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		// in-flight tx-set clears the per-acquisition throttle and
 		// attempt-cap state.
 		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
-		adaptor.SetOnLedgerRequested(r.requestConsensusLedger)
-		adaptor.setOnLedgerSwitched(r.onLedgerSwitched)
-		adaptor.setOnLedgerFullyValidated(r.onLedgerFullyValidated)
-		adaptor.setOnLedgerBuilt(r.onLedgerBuilt)
+		adaptor.SetOnLedgerRequested(r.catchupReplay.requestConsensusLedger)
+		adaptor.setOnLedgerSwitched(r.catchupReplay.onLedgerSwitched)
+		adaptor.setOnLedgerFullyValidated(r.catchupReplay.onLedgerFullyValidated)
+		adaptor.setOnLedgerBuilt(r.catchupReplay.onLedgerBuilt)
 	}
 	if adaptor != nil && adaptor.LedgerService() != nil {
-		adaptor.LedgerService().SetReplayTargetAuthenticator(r.replayTargetAuthenticated)
-		adaptor.LedgerService().SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
-			r.acquisitionMu.Lock()
-			defer r.acquisitionMu.Unlock()
-			r.startLedgerAcquisitionLegacyModeLocked(seq, hash, 0, true)
-			if !r.isAcquiringLocked(hash) {
-				return fmt.Errorf("could not acquire replay parent %x", hash)
-			}
-			return nil
-		})
+		adaptor.LedgerService().SetReplayTargetAuthenticator(r.catchupReplay.replayTargetAuthenticated)
+		adaptor.LedgerService().SetReplayParentAcquirer(coord.acquireReplayParent)
 	}
 	return r
 }
@@ -609,60 +468,18 @@ func (r *Router) SetManifestInbox(manifestInbox <-chan *peermanagement.InboundMe
 // acquisitions unbacked, preserving the fetch-everything path for storeless
 // deployments. Call before Run.
 func (r *Router) SetAcquisitionFamily(family shamap.Family) {
-	if family == nil {
-		r.acquisitionFamily = nil
-		r.acquisitionStore = nil
-		return
+	if r.catchupReplay != nil {
+		r.catchupReplay.setAcquisitionFamily(family)
 	}
-	r.acquisitionStore = newAcquisitionStoreLane(family, r.logger, acquisitionStoreQueueDepth)
-	r.acquisitionFamily = r.acquisitionStore
-}
-
-func (r *Router) flushAcquisitionStore(ctx context.Context, ledger *inbound.Ledger) error {
-	if r.acquisitionStore == nil || ledger == nil {
-		return nil
-	}
-	return ledger.FlushPersistence(ctx)
-}
-
-func (r *Router) retireAcquisitionStore(ctx context.Context, ledger *inbound.Ledger) {
-	if ledger == nil {
-		return
-	}
-	if err := ledger.RetirePersistence(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		r.logger.Warn("inbound ledger: failed to retire persistence scope", "error", err, "seq", ledger.Seq())
-	}
-}
-
-func (r *Router) promoteAcquisitionStore(ctx context.Context, ledger *inbound.Ledger) error {
-	if ledger == nil {
-		return nil
-	}
-	return ledger.PromotePersistence(ctx)
-}
-
-// acquisitionOpts returns the inbound.Option set applied to every new
-// acquisition.
-func (r *Router) acquisitionOpts() []inbound.Option {
-	opts := []inbound.Option{inbound.WithHeaderAdmission(r.admitInboundHeader)}
-	if r.acquisitionStore != nil {
-		opts = append(opts, inbound.WithFamily(r.acquisitionStore.scope()))
-	}
-	return opts
-}
-
-func (r *Router) admitInboundHeader(seq uint32) error {
-	if !r.belowFloor(seq) {
-		return nil
-	}
-	return fmt.Errorf("ledger %d is below the minimum online floor", seq)
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
 // the router refuses to acquire or serve ledgers below it. A nil floor leaves
 // both paths unrestricted, so the disabled / standalone case is unchanged.
 func (r *Router) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
-	r.floor = floor
+	if r.catchupReplay != nil {
+		r.catchupReplay.setFloor(floor)
+	}
 }
 
 // belowFloor reports whether seq sits below the online-delete retention floor.
@@ -670,11 +487,10 @@ func (r *Router) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
 // mirroring rippled where shouldAcquire treats an unset minimumOnline as no
 // lower bound.
 func (r *Router) belowFloor(seq uint32) bool {
-	if r.floor == nil {
-		return false
+	if r.catchupReplay != nil {
+		return r.catchupReplay.belowFloor(seq)
 	}
-	floor := r.floor.MinimumOnline()
-	return floor != 0 && seq < floor
+	return false
 }
 
 // SetManifestCache installs the validator-manifest cache and the
@@ -709,6 +525,9 @@ func (r *Router) SetManifestUntrustedLimit(limit int) {
 
 func (r *Router) setPeerSessionView(view peerSessionView) {
 	r.peerSessions = view
+	if r.catchupReplay != nil {
+		r.catchupReplay.setPeerSessionView(view)
+	}
 }
 
 // SetValidatorListAggregator installs the publisher-trust subsystem.
@@ -717,6 +536,13 @@ func (r *Router) setPeerSessionView(view peerSessionView) {
 // drops inbound frames in that case. Safe to call before Run.
 func (r *Router) SetValidatorListAggregator(agg *validatorlist.Aggregator) {
 	r.validatorList = agg
+	if r.catchupReplay != nil {
+		if agg == nil {
+			r.catchupReplay.setValidatorPeerForget(nil)
+		} else {
+			r.catchupReplay.setValidatorPeerForget(agg.ForgetPeer)
+		}
+	}
 }
 
 // StopAcquisitions terminally drains both inbound-ledger acquisition paths.
@@ -725,31 +551,10 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	if r == nil {
 		return 0, 0
 	}
-	r.replayCommitMu.Lock()
-	r.acquisitionMu.Lock()
-	legacyLedgers := r.fetchTracker.Stop()
-	legacy = len(legacyLedgers)
-	if r.replayer != nil {
-		replay = r.replayer.Stop()
+	if r.catchupReplay == nil {
+		return 0, 0
 	}
-	retirement := r.cancelStandardReplayPipelineLocked("shutdown")
-	r.consensusRecovery = consensusRecovery{}
-	r.lastHandoffSeq = 0
-	r.acquisitionMu.Unlock()
-	r.replayCommitMu.Unlock()
-
-	r.catchupMu.Lock()
-	r.catchup = catchupTarget{}
-	r.catchupFailures = nil
-	r.linkageWait = catchupLinkageWait{}
-	r.peerStatusEvidence = false
-	r.catchupMu.Unlock()
-	r.cancelHeaderDiscovery()
-	r.retireLegacyAcquisitions(legacyLedgers)
-	if releaseDone := r.retireStandardReplay(retirement); releaseDone != nil {
-		<-releaseDone
-	}
-	return legacy, replay
+	return r.catchupReplay.stopAcquisitions()
 }
 
 // HandlePeerDisconnect drops all per-peer state the router holds for
@@ -760,26 +565,14 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 // instead of lingering until the next ledger adoption happens to
 // overwrite it.
 func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
-	r.pendingPeerConnects.Delete(peerID)
-	r.peersMu.Lock()
-	delete(r.peerStates, peerID)
-	delete(r.peerStatusCandidates, peerID)
-	r.peersMu.Unlock()
-	r.invalidateCatchupPeer(uint64(peerID))
-	r.headerDiscoveryPeerDisconnected(uint64(peerID))
-	r.invalidateHistoryPeer(uint64(peerID))
-	r.removePeerFromAcquisitions(uint64(peerID))
-
-	// Clear the peer's LCL vote so getNetworkLedger stops counting its
-	// stale hash. The adaptor uses the zero LedgerID as a delete key.
-	r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID{})
-
-	// Drop the peer's per-publisher sequence record so the publisher-
-	// trust aggregator's peerSeq map doesn't grow unbounded across the
-	// lifetime of the process.
-	if r.validatorList != nil {
-		r.validatorList.ForgetPeer(uint64(peerID))
+	if r.catchupReplay != nil && r.catchupReplay.stoppedForShutdown() {
+		return
 	}
+	r.pendingPeerConnects.Delete(peerID)
+	if r.catchupReplay != nil {
+		r.catchupReplay.handlePeerDisconnect(peerID)
+	}
+
 	r.reconcilePeerAvailability()
 }
 
@@ -835,14 +628,6 @@ func (r *Router) runPeerDisconnectCleanup(ctx context.Context) {
 	}
 }
 
-func (r *Router) removePeerFromAcquisitions(peerID uint64) {
-	if r.fetchTracker != nil {
-		for _, il := range r.fetchTracker.Active() {
-			il.RemovePeer(peerID)
-		}
-	}
-}
-
 // Run reads messages from the overlay and dispatches them.
 // It blocks until the context is cancelled. A periodic maintenance tick
 // also runs in this loop to time out stuck inbound replay-delta
@@ -852,27 +637,12 @@ func (r *Router) Run(ctx context.Context) {
 	if !ok {
 		return
 	}
-	if r.acquisitionStore != nil {
-		r.acquisitionStore.start(runCtx)
-		defer r.acquisitionStore.stopDrain()
+	var workLane *acquisitionWorkLane
+	stopAcquisitionWork := func() {}
+	if r.catchupReplay != nil {
+		workLane, stopAcquisitionWork = r.catchupReplay.startAcquisitionWork(runCtx)
 	}
-	r.acquisitionWorkMu.Lock()
-	workLane := r.acquisitionWork
-	if workLane == nil {
-		workLane = newAcquisitionWorkLane(acquisitionWorkQueueDepth)
-		r.acquisitionWork = workLane
-	}
-	r.acquisitionWorkMu.Unlock()
-	workLane.flush = r.flushAcquisitionStore
-	workLane.start(runCtx)
-	defer func() {
-		workLane.stop()
-		r.acquisitionWorkMu.Lock()
-		if r.acquisitionWork == workLane {
-			r.acquisitionWork = nil
-		}
-		r.acquisitionWorkMu.Unlock()
-	}()
+	defer stopAcquisitionWork()
 
 	disconnectCtx, stopDisconnectCleanup := context.WithCancel(runCtx)
 	disconnectCleanupDone := make(chan struct{})
@@ -908,6 +678,8 @@ func (r *Router) Run(ctx context.Context) {
 		}
 		select {
 		case <-runCtx.Done():
+			return
+		case <-r.catchupReplay.lifecycleContext().Done():
 			return
 		case msg, ok := <-r.inbox:
 			if !ok {
@@ -949,15 +721,15 @@ func (r *Router) Run(ctx context.Context) {
 			}
 			r.submitTxJob(msg)
 		case result := <-workLane.results():
-			r.handleAcquisitionWorkResult(result)
+			r.catchupReplay.handleAcquisitionWorkResult(result)
 		case result := <-r.trustedValidationWorkResults():
 			r.handleValidationWorkResult(result)
 		case result := <-r.untrustedValidationWorkResults():
 			if !r.handleUntrustedValidationWorkResult(runCtx, result) {
 				return
 			}
-		case <-r.standardReplayDrainWake:
-			r.drainStandardReplayPipeline()
+		case <-r.catchupReplay.standardReplayDrainWakeChannel():
+			r.catchupReplay.drainStandardReplayPipeline()
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:
@@ -1206,124 +978,8 @@ func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
 // timeout fallback for the same hash).
 func (r *Router) maintenanceTick() {
 	r.reconcilePeerAvailability()
-	r.expireReplayAvailabilityRetries()
-
-	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
-	// the outer budget kicks in (250ms × 10 rotations inside a larger
-	// outer budget). Without rotation, a single silent peer burns the
-	// full 10s before the legacy fallback fires.
-	for _, rd := range r.replayer.SubTaskTimedOut() {
-		tried := rd.TriedPeers()
-		// Ask the overlay for a fresh replay-capable peer, excluding
-		// every peer we've already tried for this hash.
-		candidates := r.acquisition.ReplayCapablePeersExcluding(tried, 1)
-		if len(candidates) == 0 {
-			// No fresh peer available — can't rotate; the outer
-			// budget below will eventually time this out and fall
-			// back to the legacy path. Log so operators can see
-			// replay-capacity exhaustion in diagnostics.
-			r.logger.Debug("replay-delta sub-task timed out but no fresh peer available",
-				"seq", rd.Seq(),
-				"hash", fmt.Sprintf("%x", rd.Hash()),
-				"retry_count", rd.RetryCount(),
-			)
-			continue
-		}
-		newPeer := candidates[0]
-		rd.NoteSubTaskRetry(newPeer)
-		// Dispatch the actual network send in a goroutine so a slow or
-		// back-pressured overlay write doesn't block r.inbox ingest.
-		// Replayer-state mutation (NoteSubTaskRetry above) already
-		// happened on the loop goroutine, preserving the single-writer
-		// invariant against handleMessage; on send failure the next
-		// tick will rotate to another peer (the per-hash timeout
-		// continues to run).
-		seq := rd.Seq()
-		hash := rd.Hash()
-		r.runLifecycleTask(func(context.Context) {
-			if err := r.acquisition.RequestReplayDelta(newPeer, hash); err != nil {
-				r.logger.Debug("replay-delta retry request failed",
-					"seq", seq,
-					"hash", fmt.Sprintf("%x", hash),
-					"peer", newPeer,
-					"err", err,
-				)
-			}
-		})
-	}
-
-	// Reap acquisitions that exceeded the OUTER budget. At this point
-	// either the sub-task loop exhausted retries or the overall
-	// replayDeltaTimeout fired — either way, abandon and fall back.
-	for _, entry := range r.replayer.TimedOut() {
-		r.logger.Warn("replay delta acquisition timed out, falling back to legacy",
-			"seq", entry.Seq,
-			"hash", fmt.Sprintf("%x", entry.Hash[:8]),
-			"peer", entry.PeerID,
-		)
-		r.acquisitionMu.Lock()
-		r.requireReplayFullStateLocked(entry.Seq, entry.Hash)
-		r.replayer.Abandon(entry.Hash)
-		r.acquisitionMu.Unlock()
-		r.fallbackReplayAcquisition(entry.Seq, entry.Hash, entry.PeerID)
-	}
-
-	// Drive the timer-based retry loop over every in-flight legacy acquisition,
-	// porting rippled's TimeoutCounter/InboundLedger::onTimer. A no-progress
-	// interval escalates (broaden peers, re-request, fetch-pack, and once
-	// aggressive ask for the missing nodes by content hash); an exhausted retry
-	// budget fails the acquisition cleanly instead of re-arming the same stall
-	// forever. Reaping here also unblocks startLedgerAcquisitionLegacy and the
-	// replay-delta path, both of which refuse to arm while the hash is in flight.
-	now := time.Now()
-
-	r.fetchTracker.Sweep()
-	r.retryInboundLedgerAcquisitions(now)
-	r.tickHeaderDiscovery(now)
-	r.rebootstrapFrozenPivotIfStalled(now)
-
-	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
-	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next
-	// gossip event. No-ops while an acquisition is in flight or the target is
-	// reached; startLedgerAcquisition dedups the in-flight hash.
-	r.armConsensusCatchup()
-
-	// Backward history backfill of jump-adopt gaps (rippled fetchForHistory
-	// from doAdvance), off the consensus catch-up slot.
-	r.armHistoryBackfill()
-
-	// Expire stale fetch-pack nodes so the cache doesn't retain a stalled
-	// acquisition's nodes past their usefulness.
-	r.fetchPacks.sweep(time.Now())
-
-	// Timer-driven tx-set acquisition re-trigger. The inbound retry
-	// (handleTxSetData) only advances when a TMLedgerData arrives; if a peer
-	// falls silent mid-acquire nothing re-requests the remaining nodes and
-	// the node stalls into wrongLedger.
+	r.catchupReplay.maintenanceTick()
 	r.retryStalledTxSetAcquires()
-}
-
-func (r *Router) retryInboundLedgerAcquisitions(now time.Time) {
-	workLane := r.currentAcquisitionWork()
-	for _, il := range r.fetchTracker.Active() {
-		if workLane != nil && !workLane.has(il) && !workLane.canAcceptNew() {
-			il.RearmTimer(now)
-			continue
-		}
-		if il.State() == inbound.StateFailed {
-			if !r.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkFailure}) {
-				r.logger.Warn("inbound ledger: failure snapshot deferred; acquisition worker saturated", "seq", il.Seq())
-			}
-			continue
-		}
-		if !il.TimerDue(now) {
-			continue
-		}
-		if !r.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkTimerCheck, at: now}) {
-			il.RearmTimer(now)
-			r.logger.Warn("inbound ledger: timer check deferred; acquisition worker saturated", "seq", il.Seq())
-		}
-	}
 }
 
 // Bounds used to reject malformed TMProposeSet / TMValidation frames

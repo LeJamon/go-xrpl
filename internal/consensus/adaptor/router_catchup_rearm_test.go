@@ -19,8 +19,8 @@ func TestRouter_MaintenanceTickReArmsCatchupTarget(t *testing.T) {
 	var targetHash [32]byte
 	targetHash[0] = 0xD9
 	trackCatchupPeer(r, 7, targetSeq, targetHash)
-	r.recordCatchupTarget(targetSeq, targetHash, 7)
-	require.Zero(t, r.catchupInFlight(), "setup: nothing in flight")
+	r.catchupReplay.recordCatchupTarget(targetSeq, targetHash, 7)
+	require.Zero(t, r.catchupReplay.catchupInFlight(), "setup: nothing in flight")
 
 	r.maintenanceTick()
 
@@ -41,7 +41,7 @@ func TestRouter_MaintenanceTickReArmsCatchupTarget(t *testing.T) {
 // caught up.
 func TestRouter_MaintenanceTickNoArmWhenCaughtUp(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
-	r.recordCatchupTarget(svc.GetClosedLedgerIndex(), [32]byte{0x5D}, 7)
+	r.catchupReplay.recordCatchupTarget(svc.GetClosedLedgerIndex(), [32]byte{0x5D}, 7)
 
 	r.maintenanceTick()
 

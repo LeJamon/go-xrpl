@@ -87,6 +87,7 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r := newTestRouter(engine, a, nil)
 	r.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	r.catchupReplay.logger = r.logger
 	engine.switchHook = func(id consensus.LedgerID) {
 		selected, err := a.GetLedger(id)
 		require.NoError(t, err)
@@ -111,20 +112,20 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 			t, 9, outlierBase+offset, [32]byte{0xee}, [32]byte{0xed}, true,
 		))
 	}
-	entry, ok := r.lookupSeqHash(closed.Sequence() + 1)
+	entry, ok := r.catchupReplay.lookupSeqHash(closed.Sequence() + 1)
 	require.True(t, ok)
 	require.Equal(t, nextHash, entry.hash)
 	require.Equal(t, closed.Hash(), entry.parentHash)
-	r.fetchTracker.Remove(nextHash, false)
-	r.fetchTracker.Remove(next2Hash, false)
-	r.replayer.Abandon(nextHash)
-	r.replayer.Abandon(next2Hash)
+	r.catchupReplay.fetchTracker.Remove(nextHash, false)
+	r.catchupReplay.fetchTracker.Remove(next2Hash, false)
+	r.catchupReplay.replayer.Abandon(nextHash)
+	r.catchupReplay.replayer.Abandon(next2Hash)
 
 	stale1 := newIssue1663BackedAcquisition(t, closed.Sequence()+1, 7)
 	stale2 := newIssue1663BackedAcquisition(t, closed.Sequence()+2, 7)
-	r.fetchTracker.Track(stale1)
-	r.fetchTracker.Track(stale2)
-	require.Equal(t, maxConcurrentSpeculativeCatchup, r.protectedCatchupInFlight())
+	r.catchupReplay.fetchTracker.Track(stale1)
+	r.catchupReplay.fetchTracker.Track(stale2)
+	require.Equal(t, maxConcurrentSpeculativeCatchup, r.catchupReplay.protectedCatchupInFlight())
 
 	base := time.Unix(1_700_000_000, 0)
 	stale1.RearmTimer(base)
@@ -139,7 +140,7 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 		cancel()
 		lane.stop()
 	}()
-	r.acquisitionWork = lane
+	r.catchupReplay.acquisitionWork = lane
 
 	now := base.Add(3900 * time.Millisecond)
 	for range 2 {
@@ -203,12 +204,12 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 		}))
 	}
 
-	r.onLedgerFullyValidated(targetSeq, targetHash)
-	require.Nil(t, r.fetchTracker.Find(stale1.Hash()))
-	require.Same(t, stale2, r.fetchTracker.Find(stale2.Hash()))
-	target := r.fetchTracker.Find(targetHash)
+	r.catchupReplay.onLedgerFullyValidated(targetSeq, targetHash)
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(stale1.Hash()))
+	require.Same(t, stale2, r.catchupReplay.fetchTracker.Find(stale2.Hash()))
+	target := r.catchupReplay.fetchTracker.Find(targetHash)
 	require.NotNil(t, target)
-	require.LessOrEqual(t, r.protectedCatchupInFlight(), maxConcurrentSpeculativeCatchup)
+	require.LessOrEqual(t, r.catchupReplay.protectedCatchupInFlight(), maxConcurrentSpeculativeCatchup)
 	require.GreaterOrEqual(t, acquireCount(sender), 1)
 
 	require.NoError(t, target.GotBase([]message.LedgerNode{
@@ -218,15 +219,15 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 	require.NoError(t, target.GotStateNodes(wire))
 	target.CollectMissingRequest(false)
 	require.True(t, target.IsComplete())
-	r.completeInboundLedger(target)
+	r.catchupReplay.completeInboundLedger(target)
 
 	require.Eventually(t, func() bool {
 		return svc.GetClosedLedgerIndex() == targetSeq && svc.GetValidatedLedgerIndex() == targetSeq
 	}, time.Second, time.Millisecond)
-	r.checkBehind(targetSeq, targetHash, 8)
+	r.catchupReplay.checkBehind(targetSeq, targetHash, 8)
 	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 	assert.Equal(t, "proposing", consensusServerState(a.GetOperatingMode(), consensus.ModeProposing, true))
-	assert.LessOrEqual(t, r.protectedCatchupInFlight(), maxConcurrentSpeculativeCatchup)
+	assert.LessOrEqual(t, r.catchupReplay.protectedCatchupInFlight(), maxConcurrentSpeculativeCatchup)
 }
 
 func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
@@ -237,7 +238,7 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 	require.NotNil(t, closed)
 
 	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, closed)
-	r.recordSeqHash(pivotSeq, pivotHash, [32]byte{}, false)
+	r.catchupReplay.recordSeqHash(pivotSeq, pivotHash, [32]byte{}, false)
 	links := buildStandardReplayTestChain(t, r, pivot, maxForwardDeltaGap+16)
 	sender.mu.Lock()
 	sender.peerSupportsReplay = false
@@ -245,16 +246,16 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 
 	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(pivotHash)))
-	pivotAcquisition := r.fetchTracker.Find(pivotHash)
+	pivotAcquisition := r.catchupReplay.fetchTracker.Find(pivotHash)
 	require.NotNil(t, pivotAcquisition)
 	require.False(t, pivotAcquisition.TransactionOnly())
-	generation := r.standardReplay.generation
+	generation := r.catchupReplay.standardReplay.generation
 
 	initialHead := links[11]
 	trackCatchupPeer(r, 7, initialHead.seq, initialHead.hash)
-	r.onLedgerFullyValidated(initialHead.seq, initialHead.hash)
-	require.Equal(t, initialHead.seq, r.standardReplay.targetSeq)
-	require.Equal(t, standardReplayPipelineWindow, r.standardReplayResidentCountLocked())
+	r.catchupReplay.onLedgerFullyValidated(initialHead.seq, initialHead.hash)
+	require.Equal(t, initialHead.seq, r.catchupReplay.standardReplay.targetSeq)
+	require.Equal(t, standardReplayPipelineWindow, r.catchupReplay.standardReplayResidentCountLocked())
 	for i := range standardReplayPipelineWindow {
 		completeStandardReplayTestLink(t, r, links[i])
 	}
@@ -264,13 +265,13 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 	}
 
 	storeRecoveryLedger(t, svc, pivot)
-	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(
+	require.True(t, r.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(
 		pivotAcquisition, pivotAcquisition.Snapshot(), true,
 	))
 	pivotHeader := pivot.Header()
 	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, true))
-	require.True(t, r.standardReplay.initialCandidate)
-	require.True(t, r.standardReplay.applying)
+	require.True(t, r.catchupReplay.standardReplay.initialCandidate)
+	require.True(t, r.catchupReplay.standardReplay.applying)
 	// A busy runner may exhaust the time budget before the full window is stored.
 	drainStandardReplayTestPipeline(t, r)
 	for i := range standardReplayPipelineWindow {
@@ -282,17 +283,17 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 	completeStandardReplayTestLink(t, r, links[8])
 	completeStandardReplayTestLink(t, r, links[9])
 	drainStandardReplayTestPipeline(t, r)
-	require.Equal(t, links[9].seq, r.standardReplay.anchorSeq)
+	require.Equal(t, links[9].seq, r.catchupReplay.standardReplay.anchorSeq)
 
 	movedHead := links[maxForwardDeltaGap+8]
 	trackCatchupPeer(r, 7, movedHead.seq, movedHead.hash)
-	r.onLedgerFullyValidated(movedHead.seq, movedHead.hash)
-	assert.Equal(t, generation, r.standardReplay.generation)
-	assert.Equal(t, pivotSeq, r.standardReplay.pivotSeq)
-	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
-	assert.Equal(t, movedHead.seq, r.standardReplay.targetSeq)
-	assert.Equal(t, movedHead.hash, r.standardReplay.targetHash)
-	assert.NotNil(t, r.fetchTracker.Find(links[10].hash))
+	r.catchupReplay.onLedgerFullyValidated(movedHead.seq, movedHead.hash)
+	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
+	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
+	assert.Equal(t, movedHead.seq, r.catchupReplay.standardReplay.targetSeq)
+	assert.Equal(t, movedHead.hash, r.catchupReplay.standardReplay.targetHash)
+	assert.NotNil(t, r.catchupReplay.fetchTracker.Find(links[10].hash))
 
 	pivotRequests := 0
 	for _, call := range sender.legacyCalls() {
@@ -338,11 +339,11 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 	built := make(chan builtTarget, 1)
 	onLedgerBuilt := a.onLedgerBuilt
 	a.setOnLedgerBuilt(func(seq uint32, hash [32]byte) {
-		r.catchupMu.Lock()
-		r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
-		r.catchupMu.Unlock()
-		r.acquisitionMu.Lock()
-		r.standardReplay = standardReplayPipeline{
+		r.catchupReplay.catchupMu.Lock()
+		r.catchupReplay.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
+		r.catchupReplay.catchupMu.Unlock()
+		r.catchupReplay.acquisitionMu.Lock()
+		r.catchupReplay.standardReplay = standardReplayPipeline{
 			active:     true,
 			pivotReady: true,
 			pivotSeq:   seq,
@@ -353,7 +354,7 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 			targetHash: hash,
 			entries:    make(map[uint32]*standardReplayEntry),
 		}
-		r.acquisitionMu.Unlock()
+		r.catchupReplay.acquisitionMu.Unlock()
 		built <- builtTarget{seq: seq, hash: hash}
 		onLedgerBuilt(seq, hash)
 	})
@@ -407,10 +408,10 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 
 	require.Equal(t, consensus.PhaseOpen, engine.Phase())
 	require.Equal(t, consensus.ModeProposing, engine.Mode())
-	r.acquisitionMu.Lock()
-	retryTarget := r.consensusRecovery.targetHash
-	replayActive := r.standardReplay.active
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	retryTarget := r.catchupReplay.consensusRecovery.targetHash
+	replayActive := r.catchupReplay.standardReplay.active
+	r.catchupReplay.acquisitionMu.Unlock()
 	assert.Equal(t, target.hash, retryTarget)
 	assert.False(t, replayActive)
 	assert.Equal(t, 3, historian.calls)

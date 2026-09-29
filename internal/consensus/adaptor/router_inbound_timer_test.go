@@ -18,18 +18,18 @@ func TestRetryInboundLedgerAcquisitionsDoesNotDeferForUnrelatedQueuedReply(t *te
 			t.Fatalf("fire %d: got %v, want TimerEscalate", i, got)
 		}
 	}
-	r.fetchTracker.Track(il)
+	r.catchupReplay.fetchTracker.Track(il)
 
 	replies := make(chan *peermanagement.InboundMessage, 1)
 	replies <- nil
 	r.SetAcqInbox(replies)
 	deferredAt := base.Add(time.Minute)
-	r.retryInboundLedgerAcquisitions(deferredAt)
+	r.catchupReplay.retryInboundLedgerAcquisitions(deferredAt)
 
 	if got := il.Timeouts(); got != 7 {
 		t.Fatalf("timeouts after retry = %d, want 7", got)
 	}
-	if got := r.fetchTracker.Find(il.Hash()); got != nil {
+	if got := r.catchupReplay.fetchTracker.Find(il.Hash()); got != nil {
 		t.Fatalf("failed acquisition still tracked: %p", got)
 	}
 }

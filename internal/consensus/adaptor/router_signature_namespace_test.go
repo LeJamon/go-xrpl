@@ -240,6 +240,7 @@ func TestRouterSignatureSuppressionRetriesAfterCleanupTransition(t *testing.T) {
 			// The changed validated snapshot selects a new namespace immediately;
 			// the old scoped failure must not become a rules-independent BAD.
 			router.adaptor = nextAdaptor
+			router.catchupReplay.adaptor = router.adaptor
 			retried := router.handleTransaction(routerTransactionMessage(t, blob, 2))
 			require.NoError(t, retried.submitError)
 			require.Equal(t, openledger.ResultSuccess, retried.submitResult)
@@ -307,6 +308,7 @@ func TestRouterSignatureSuppressionRechecksGoodSignatureAfterCleanupTransition(t
 			require.True(t, good.relayed)
 
 			router.adaptor = nextAdaptor
+			router.catchupReplay.adaptor = router.adaptor
 			bad := router.handleTransaction(routerTransactionMessage(t, blob, 2))
 			require.Error(t, bad.submitError)
 			require.ErrorIs(t, bad.submitError, txengine.ErrInvalidSignature)
@@ -346,6 +348,7 @@ func TestRouterLegacyRoleLocalFailureDoesNotPoisonCleanupTransition(t *testing.T
 
 	cleanupAdaptor, _ := newRouterRuleService(t, true)
 	router.adaptor = cleanupAdaptor
+	router.catchupReplay.adaptor = router.adaptor
 	retry := router.handleTransaction(routerFetchedTransactionMessage(blob, 2))
 	require.ErrorIs(t, retry.submitError, txengine.ErrInvalidSignature)
 	require.Equal(t, resource.FeeInvalidSignature(), retry.charge)

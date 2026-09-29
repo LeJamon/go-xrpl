@@ -14,10 +14,10 @@ func (s *headerDiscoverySession) markUnavailable(now time.Time) {
 
 // Header repair has its own bounded deadline/backoff budget. Do not discard a
 // verified replay base while that budget is still doing useful recovery work.
-func (r *Router) headerDiscoveryRepairPending(now time.Time) bool {
-	r.headerDiscoveryMu.Lock()
-	defer r.headerDiscoveryMu.Unlock()
-	s := r.headerDiscovery
+func (c *catchupReplayCoordinator) headerDiscoveryRepairPending(now time.Time) bool {
+	c.headerDiscoveryMu.Lock()
+	defer c.headerDiscoveryMu.Unlock()
+	s := c.headerDiscovery
 	if s == nil {
 		return false
 	}

@@ -489,16 +489,16 @@ func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(valid), r.fetchPacks.Size(), "only verifiable SHAMap nodes should be cached")
+	assert.Equal(t, len(valid), r.catchupReplay.fetchPacks.Size(), "only verifiable SHAMap nodes should be cached")
 	assert.Equal(t, uint32(len(valid)), r.FetchPackCacheSize())
 	for _, n := range valid {
-		if _, ok := r.fetchPacks.get(n.Hash, time.Now()); !ok {
+		if _, ok := r.catchupReplay.fetchPacks.get(n.Hash, time.Now()); !ok {
 			t.Errorf("valid node %x not cached", n.Hash[:8])
 		}
 	}
 	var headerHash [32]byte
 	copy(headerHash[:], bytes.Repeat([]byte{0xEE}, 32))
-	if _, ok := r.fetchPacks.get(headerHash, time.Now()); ok {
+	if _, ok := r.catchupReplay.fetchPacks.get(headerHash, time.Now()); ok {
 		t.Error("non-SHAMap header object was cached")
 	}
 }
@@ -509,7 +509,7 @@ func TestHaveLedgerSeqRequiresCompleteLedger(t *testing.T) {
 	open := adaptor.LedgerService().GetOpenLedger()
 	require.NotNil(t, open)
 
-	assert.False(t, r.haveLedgerSeq(open.Sequence()))
+	assert.False(t, r.catchupReplay.haveLedgerSeq(open.Sequence()))
 }
 
 // TestTryFetchPackEscalation_NoChildIsNoOp confirms the escalation is a no-op
@@ -519,7 +519,7 @@ func TestTryFetchPackEscalation_NoChildIsNoOp(t *testing.T) {
 	t.Parallel()
 	r := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	il := inbound.New([32]byte{0x7A, 0x7B}, 999999, 3, serveTestLogger())
-	if r.tryFetchPackEscalation(il) {
+	if r.catchupReplay.tryFetchPackEscalation(il) {
 		t.Fatal("escalation reported a request sent without a known child ledger")
 	}
 	if il.FetchPackRequested() {
@@ -557,7 +557,7 @@ func TestTryFetchPackEscalationUsesAcquisitionLane(t *testing.T) {
 	r := newTestRouter(nil, adaptor, make(chan *peermanagement.InboundMessage, 1))
 	il := inbound.New(parent.Hash(), parent.Sequence(), 3, serveTestLogger())
 
-	require.True(t, r.tryFetchPackEscalation(il))
+	require.True(t, r.catchupReplay.tryFetchPackEscalation(il))
 	assert.Equal(t, 1, sender.priority)
 	assert.Zero(t, sender.ordinary)
 }
@@ -565,7 +565,7 @@ func TestTryFetchPackEscalationUsesAcquisitionLane(t *testing.T) {
 // armFetchAcquisition registers one in-flight acquisition so the fetch-pack
 // reply handler's solicitation gate lets a pack through.
 func armFetchAcquisition(r *Router) {
-	r.fetchTracker.GetOrCreate([32]byte{0xAC}, func() *inbound.Ledger {
+	r.catchupReplay.fetchTracker.GetOrCreate([32]byte{0xAC}, func() *inbound.Ledger {
 		return inbound.New([32]byte{0xAC}, 1, 0, serveTestLogger())
 	})
 }
@@ -651,7 +651,7 @@ func TestHandleFetchPackReply_NoActiveAcquisitionDropped(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, 0, r.fetchPacks.Size(), "unsolicited pack must not be cached")
+	assert.Equal(t, 0, r.catchupReplay.fetchPacks.Size(), "unsolicited pack must not be cached")
 	assert.Empty(t, rs.getBadDataCalls(), "an unsolicited pack is benign, not a charge")
 }
 
@@ -672,16 +672,13 @@ func TestHandleFetchPackReply_ProcessesAllWireValidObjects(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(nodes), r.fetchPacks.Size(),
+	assert.Equal(t, len(nodes), r.catchupReplay.fetchPacks.Size(),
 		"every wire-valid object must be cached")
 	assert.Empty(t, rs.getBadDataCalls(),
 		"an over-cap reply from an honest peer must not be charged")
 }
 
-// TestHandleFetchPackReply_PoisonCharged confirms a blob that does not hash to
-// its claimed key is dropped and the sender is charged, while the verifiable
-// nodes in the same reply are still cached.
-func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
+func TestHandleFetchPackReply_InvalidNodeDroppedWithoutCharge(t *testing.T) {
 	t.Parallel()
 	nodes := validFetchPackNodes(t)
 	objects := nodesToObjects(nodes)
@@ -690,6 +687,11 @@ func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
 	tampered[len(tampered)-1] ^= 0xFF
 	objects = append(objects, message.IndexedObject{
 		Hash: append([]byte(nil), nodes[len(nodes)-1].Hash[:]...),
+		Data: tampered,
+	})
+	invalidHash := [32]byte{0xFF}
+	objects = append(objects, message.IndexedObject{
+		Hash: invalidHash[:],
 		Data: tampered,
 	})
 	payload := encodeFetchPack(t, objects)
@@ -702,11 +704,13 @@ func TestHandleFetchPackReply_PoisonCharged(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(nodes), r.fetchPacks.Size(), "verifiable nodes must still be cached")
-	calls := rs.getBadDataCalls()
-	require.Len(t, calls, 1)
-	assert.Equal(t, uint64(11), calls[0].peerID)
-	assert.Equal(t, "fetch-pack-poison", calls[0].reason)
+	assert.Equal(t, len(nodes), r.catchupReplay.fetchPacks.Size(), "verifiable nodes must still be cached")
+	assert.Empty(t, rs.getBadDataCalls(), "invalid cache objects must not add a peer charge")
+	for _, node := range nodes {
+		cached, ok := r.catchupReplay.fetchPacks.get(node.Hash, time.Now())
+		require.True(t, ok)
+		assert.Equal(t, node.Data, cached, "invalid data must not replace a verified node")
+	}
 }
 
 // TestHandleFetchPackReply_HeaderObjectNotCharged confirms the pack's leading
@@ -730,10 +734,10 @@ func TestHandleFetchPackReply_HeaderObjectNotCharged(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(nodes), r.fetchPacks.Size(), "valid nodes cached; header dropped")
+	assert.Equal(t, len(nodes), r.catchupReplay.fetchPacks.Size(), "valid nodes cached; header dropped")
 	var headerHash [32]byte
 	copy(headerHash[:], bytes.Repeat([]byte{0xEE}, 32))
-	if _, ok := r.fetchPacks.get(headerHash, time.Now()); ok {
+	if _, ok := r.catchupReplay.fetchPacks.get(headerHash, time.Now()); ok {
 		t.Error("ledger-header object was cached")
 	}
 	assert.Empty(t, rs.getBadDataCalls(), "a well-formed header is expected to fail verification, not poison")

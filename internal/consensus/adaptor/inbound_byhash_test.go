@@ -54,9 +54,9 @@ func TestHandleNodeReply_AcceptsByHashStateNodes(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, len(valid), r.fetchPacks.Size(), "by-hash state-node reply nodes must be cached")
+	assert.Equal(t, len(valid), r.catchupReplay.fetchPacks.Size(), "by-hash state-node reply nodes must be cached")
 	for _, n := range valid {
-		if _, ok := r.fetchPacks.get(n.Hash, time.Now()); !ok {
+		if _, ok := r.catchupReplay.fetchPacks.get(n.Hash, time.Now()); !ok {
 			t.Errorf("by-hash node %x not cached", n.Hash[:8])
 		}
 	}
@@ -72,14 +72,14 @@ func TestFailInboundAcquisition_NotifiesEngineForConsensus(t *testing.T) {
 	r := newTestRouter(eng, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	hash := [32]byte{0xDE, 0xAD, 0xBE, 0xEF}
 	il := inbound.New(hash, 50, 7, serveTestLogger())
-	r.fetchTracker.Track(il)
+	r.catchupReplay.fetchTracker.Track(il)
 
-	r.failInboundAcquisition(il)
+	r.catchupReplay.failInboundAcquisition(il)
 
 	got := eng.getAcquireFailed()
 	require.Len(t, got, 1, "engine must be notified of the failed consensus acquisition")
 	assert.Equal(t, consensus.LedgerID(hash), got[0])
-	assert.Nil(t, r.fetchTracker.Find(hash), "failed acquisition must be removed from the tracker")
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(hash), "failed acquisition must be removed from the tracker")
 }
 
 // TestFailInboundAcquisition_SkipsEngineForGeneric confirms an RPC-driven
@@ -90,10 +90,10 @@ func TestFailInboundAcquisition_SkipsEngineForGeneric(t *testing.T) {
 	r := newTestRouter(eng, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	hash := [32]byte{0x0B, 0x0E}
 	il := inbound.NewGeneric(hash, 50, 7, serveTestLogger())
-	r.fetchTracker.Track(il)
+	r.catchupReplay.fetchTracker.Track(il)
 
-	r.failInboundAcquisition(il)
+	r.catchupReplay.failInboundAcquisition(il)
 
 	assert.Empty(t, eng.getAcquireFailed(), "a generic acquisition must not notify consensus")
-	assert.Nil(t, r.fetchTracker.Find(hash), "failed acquisition must be removed from the tracker")
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(hash), "failed acquisition must be removed from the tracker")
 }
