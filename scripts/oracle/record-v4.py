@@ -108,7 +108,7 @@ def verify_config(config: Path) -> dict:
             "owner_reserve_increment_drops": 50_000_000,
         },
         "close_policy": {
-            "setup": "fund named accounts, then close before recording parent",
+            "setup": "Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent",
             "request_seconds_after_now": 5,
             "capture": "effective agreed close time computed from the pre-close header and resolution",
         },
@@ -127,6 +127,9 @@ def verify_config(config: Path) -> dict:
         "Batch",
         "VaultCreate",
         "LoanBrokerSet",
+        "NFTokenAcceptOffer",
+        "OfferCreate",
+        "EscrowCancel",
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
@@ -134,12 +137,75 @@ def verify_config(config: Path) -> dict:
         "network_id": {
             "AccountSet/network-id-missing": 1025,
             "AccountSet/network-id-wrong": 1025,
-        }
+        },
+        "queue_history": {
+            "AccountSet/queued-low-fee": {
+                "txq_config": {
+                    "ledgers_in_queue": 2,
+                    "queue_size_min": 2,
+                    "minimum_txn_in_ledger_standalone": 2,
+                    "normal_consensus_increase_percent": 0,
+                },
+                "internal_config": {
+                    "min_ledgers_to_compute_size_limit": 3,
+                    "max_ledger_counts_to_store": 100,
+                },
+                "pre_submit_count": 3,
+                "pre_submit_order": "alice->bob, bob->alice, alice->bob",
+                "primary": {
+                    "engine_result": "terQUEUED",
+                    "applied": False,
+                    "queued": True,
+                },
+            }
+        },
+        "persistent_cleanup": {
+            "NFTokenAcceptOffer/expired-sell-offer-cleanup": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecEXPIRED",
+                "applied": True,
+                "queued": False,
+                "expected_deleted_object": "NFTokenOffer",
+            },
+            "OfferCreate/expired-offer-cleanup": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecKILLED",
+                "applied": True,
+                "queued": False,
+                "expected_deleted_object": "Offer",
+                "expected_retained_object": "Offer",
+            },
+        },
+        "invariant_recovery": {
+            "EscrowCancel/malformed-escrow-cancel-refund": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecINVARIANT_FAILED",
+                "applied": True,
+                "queued": False,
+                "coverage": "malformed parent escrow refund reaches fee-only recovery and records invariant failure",
+            },
+        },
+        "seeded_payments": {
+            "seed": 2016,
+            "profile": "c1-l1-b1-f1",
+            "samples": [
+                "Payment/seed2016-payment-0-valid-base-fee",
+                "Payment/seed2016-payment-1-insufficient-balance",
+                "Payment/seed2016-payment-2-valid-fee-edge",
+                "Payment/seed2016-payment-3-future-sequence",
+            ],
+            "coverage": "deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence",
+        },
     }
     if values.get("scenario_overrides") != expected_overrides:
         raise SystemExit(
             "strict-corpus-config.json scenario overrides do not match recorder scenarios"
         )
+    if values.get("submission_policy") != (
+        "one direct submit RPC per signed tx_blob; optional pre_submit history uses the same "
+        "open ledger and queue; no retries or output-derived setup"
+    ):
+        raise SystemExit("strict-corpus-config.json submission policy does not match recorder")
     return values
 
 

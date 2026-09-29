@@ -6,17 +6,20 @@
 #include <test/jtx/amount.h>
 #include <test/jtx/batch.h>
 #include <test/jtx/envconfig.h>
+#include <test/jtx/escrow.h>
 #include <test/jtx/fee.h>
 #include <test/jtx/flags.h>
 #include <test/jtx/last_ledger_sequence.h>
 #include <test/jtx/multisign.h>
 #include <test/jtx/noop.h>
+#include <test/jtx/offer.h>
 #include <test/jtx/pay.h>
 #include <test/jtx/regkey.h>
 #include <test/jtx/seq.h>
 #include <test/jtx/sig.h>
 #include <test/jtx/sponsor.h>
 #include <test/jtx/ticket.h>
+#include <test/jtx/token.h>
 #include <test/jtx/txflags.h>
 #include <test/jtx/trust.h>
 #include <test/jtx/vault.h>
@@ -28,6 +31,7 @@
 #include <xrpl/json/to_string.h>
 #include <xrpl/ledger/AmendmentTable.h>
 #include <xrpl/ledger/ApplyView.h>
+#include <xrpl/ledger/Ledger.h>
 #include <xrpl/ledger/LedgerTiming.h>
 #include <xrpl/ledger/OpenView.h>
 #include <xrpl/ledger/ReadView.h>
@@ -36,15 +40,20 @@
 #include <xrpl/protocol/LedgerHeader.h>
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/SeqProxy.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
+#include <xrpl/protocol/SystemParameters.h>
 #include <xrpl/protocol/TER.h>
 #include <xrpl/protocol/TxFormats.h>
 #include <xrpl/protocol/TxFlags.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/tx/apply.h>
+#include <xrpld/app/ledger/LedgerMaster.h>
+#include <xrpld/app/ledger/OpenLedger.h>
 #include <xrpld/app/misc/TxQ.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -53,9 +62,11 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace xrpl::test {
 
@@ -142,6 +153,30 @@ sleEntries(ReadView const& view)
     return state;
 }
 
+std::optional<Keylet>
+expiredOfferKey(ReadView const& view, Account const& owner)
+{
+    for (auto const& sle : view.sles)
+    {
+        if (sle && sle->getType() == ltOFFER &&
+            sle->getAccountID(sfAccount) == owner.id() && sle->isFieldPresent(sfExpiration))
+            return Keylet{ltOFFER, sle->key()};
+    }
+    return std::nullopt;
+}
+
+std::size_t
+offerCount(ReadView const& view, Account const& owner)
+{
+    std::size_t count = 0;
+    for (auto const& sle : view.sles)
+    {
+        if (sle && sle->getType() == ltOFFER && sle->getAccountID(sfAccount) == owner.id())
+            ++count;
+    }
+    return count;
+}
+
 json::Value
 snapshot(ReadView const& view)
 {
@@ -206,6 +241,17 @@ txqConfig()
     return result;
 }
 
+json::Value
+smallQueueTxqConfig()
+{
+    auto result = txqConfig();
+    result["ledgers_in_queue"] = 2;
+    result["queue_size_min"] = 2;
+    result["minimum_txn_in_ledger_standalone"] = 2;
+    result["normal_consensus_increase_percent"] = 0;
+    return result;
+}
+
 std::unique_ptr<Config>
 recorderConfig()
 {
@@ -224,6 +270,91 @@ recorderConfig()
         section.set(Keys::kMinimumLastLedgerBuffer, "2");
         return config;
     });
+}
+
+std::unique_ptr<Config>
+smallQueueRecorderConfig()
+{
+    auto config = recorderConfig();
+    auto& section = config->section(Sections::kTransactionQueue);
+    section.set(Keys::kLedgersInQueue, "2");
+    section.set(Keys::kMinimumQueueSize, "2");
+    section.set(Keys::kMinLedgersToComputeSizeLimit, "3");
+    section.set(Keys::kMaxLedgerCountsToStore, "100");
+    section.set(Keys::kMinimumTxnInLedgerStandalone, "2");
+    section.set(Keys::kNormalConsensusIncreasePercent, "0");
+    return config;
+}
+
+void
+configureServiceConfig(Config& config, Profile const& profile)
+{
+    config.startUp = StartUpType::Fresh;
+
+    FeatureBitset forced;
+    auto const profileFeatures = profile.features();
+    foreachFeature(test::jtx::testableAmendments(), [&](uint256 const& feature) {
+        auto const name = featureToName(feature);
+        auto const amendment = allAmendments().find(name);
+        if (amendment == allAmendments().end())
+            return;
+
+        if (amendment->second == AmendmentSupport::Retired)
+        {
+            if (profileFeatures[feature])
+                forced.set(feature);
+            return;
+        }
+
+        if (amendment->second != AmendmentSupport::Supported)
+            return;
+
+        auto& section = profileFeatures[feature]
+            ? config.section(Sections::kAmendments)
+            : config.section(Sections::kVetoAmendments);
+        section.append(to_string(feature) + " " + name);
+    });
+    foreachFeature(forced, [&](uint256 const& feature) {
+        config.features.insert(feature);
+    });
+}
+
+void
+assertPersistedAmendments(
+    Env& env,
+    Profile const& profile,
+    beast::unit_test::Suite& suite)
+{
+    auto const amendments = env.closed()->read(keylet::amendments());
+    if (!suite.expect(
+            amendments != nullptr,
+            "fresh parent did not persist Amendments singleton",
+            __FILE__,
+            __LINE__))
+        return;
+
+    std::vector<uint256> expected;
+    foreachFeature(profile.features(), [&](uint256 const& feature) {
+        auto const name = featureToName(feature);
+        auto const amendment = allAmendments().find(name);
+        if (amendment != allAmendments().end() &&
+            amendment->second == AmendmentSupport::Supported)
+            expected.push_back(feature);
+    });
+    std::ranges::sort(expected);
+
+    auto actual = std::vector<uint256>{};
+    if (amendments->isFieldPresent(sfAmendments))
+    {
+        auto const& persisted = amendments->getFieldV256(sfAmendments);
+        actual.assign(persisted.begin(), persisted.end());
+    }
+    std::ranges::sort(actual);
+    suite.expect(
+        actual == expected,
+        "persisted Amendments singleton did not match configured supported profile",
+        __FILE__,
+        __LINE__);
 }
 
 std::unique_ptr<Config>
@@ -314,15 +445,44 @@ public:
         std::filesystem::create_directories(directory_);
     }
 
+private:
+    template <class PreBuilder, class Builder>
     void
-    record(Profile const& profile,
-           std::string const& family,
-           std::string const& testcase,
-           Env& env,
-           JTx const& transaction,
-           std::optional<Expected> expected = std::nullopt)
+    recordImpl(Profile const& profile,
+               std::string const& family,
+               std::string const& testcase,
+               Env& env,
+               PreBuilder&& preBuilder,
+               Builder&& builder,
+               Expected expected,
+               json::Value txqConfigValue,
+               bool includePreSubmit)
     {
         auto const parent = env.closed();
+        auto cleanupKey = std::optional<Keylet>{};
+        auto const isOfferCleanup =
+            family == "OfferCreate" && testcase == "expired-offer-cleanup";
+        if (family == "NFTokenAcceptOffer" && testcase == "expired-sell-offer-cleanup")
+            cleanupKey = keylet::nftokenOffer(
+                             Account{"minter"},
+                             SeqProxy::rawSequence(env.seq(Account{"minter"}) - 1));
+        else if (isOfferCleanup)
+        {
+            cleanupKey = expiredOfferKey(*parent, Account{"bob"});
+            suite_.expect(
+                cleanupKey.has_value(),
+                testcase + " setup did not leave an expiring Offer",
+                __FILE__,
+                __LINE__);
+        }
+
+        if (cleanupKey)
+            suite_.expect(
+                parent->read(*cleanupKey) != nullptr,
+                testcase + " cleanup target was not present in the captured parent",
+                __FILE__,
+                __LINE__);
+
         json::Value fixture;
         fixture["fixture_version"] = kFixtureVersion;
         fixture["oracle_repository"] = kOracleRepository;
@@ -335,9 +495,50 @@ public:
         fixture["network_id"] = env.app().getNetworkIDService().getNetworkID();
         fixture["apply_flags"] = 0;
         fixture["skip_signature_verification"] = false;
-        fixture["txq_config"] = txqConfig();
+        fixture["txq_config"] = std::move(txqConfigValue);
         fixture["parent"] = snapshot(*parent);
 
+        if (includePreSubmit)
+        {
+            fixture["pre_submit"] = json::Value{json::ValueType::Array};
+            for (auto const& preTransaction : preBuilder(env))
+            {
+                if (!suite_.expect(
+                        preTransaction.stx != nullptr,
+                        testcase + " pre-submit did not produce a signed STTx",
+                        __FILE__,
+                        __LINE__))
+                    return;
+
+                auto const txBlob = serialize(*preTransaction.stx);
+                auto const response = env.rpc("submit", txBlob);
+                auto const postSubmitView = env.current();
+                json::Value entry;
+                entry["tx_blob"] = txBlob;
+                entry["submit"] =
+                    submitBoundary(response, preTransaction, *postSubmitView);
+                fixture["pre_submit"].append(entry);
+
+                auto const parsed = Env::parseResult(response);
+                suite_.expect(
+                    parsed.ter && *parsed.ter == tesSUCCESS,
+                    testcase + " pre-submit returned an unexpected TER",
+                    __FILE__,
+                    __LINE__);
+                suite_.expect(
+                    response["result"]["applied"].asBool(),
+                    testcase + " pre-submit was not applied",
+                    __FILE__,
+                    __LINE__);
+                suite_.expect(
+                    !response["result"]["queued"].asBool(),
+                    testcase + " pre-submit unexpectedly entered the transaction queue",
+                    __FILE__,
+                    __LINE__);
+            }
+        }
+
+        auto const transaction = builder(env);
         if (!suite_.expect(
                 transaction.stx != nullptr,
                 testcase + " did not produce a signed STTx",
@@ -351,32 +552,31 @@ public:
         auto const response = env.rpc("submit", txBlob);
         auto const postSubmitView = env.current();
         fixture["submit"] = submitBoundary(response, transaction, *postSubmitView);
+        if (cleanupKey)
+            suite_.expect(
+                postSubmitView->read(*cleanupKey) == nullptr,
+                testcase + " cleanup target remained in the open ledger after submit",
+                __FILE__,
+                __LINE__);
+        if (isOfferCleanup)
+            suite_.expect(
+                offerCount(*postSubmitView, Account{"bob"}) == 1,
+                testcase + " did not retain the unexpired Offer after cleanup",
+                __FILE__,
+                __LINE__);
         auto const parsed = Env::parseResult(response);
-
-        Expected expectedResult = expected.value_or(Expected{});
-        if (!expected)
-        {
-            expectedResult = {
-                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
-                    ? TER{temMALFORMED}
-                    : TER{tesSUCCESS},
-                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
-                    ? false
-                    : true,
-                false};
-        }
         suite_.expect(
-            parsed.ter && *parsed.ter == expectedResult.ter,
+            parsed.ter && *parsed.ter == expected.ter,
             testcase + " returned an unexpected TER",
             __FILE__,
             __LINE__);
         suite_.expect(
-            response["result"]["applied"].asBool() == expectedResult.applied,
+            response["result"]["applied"].asBool() == expected.applied,
             testcase + " returned an unexpected applied flag",
             __FILE__,
             __LINE__);
         suite_.expect(
-            response["result"]["queued"].asBool() == expectedResult.queued,
+            response["result"]["queued"].asBool() == expected.queued,
             testcase + " unexpectedly entered the transaction queue",
             __FILE__,
             __LINE__);
@@ -389,7 +589,8 @@ public:
             getCloseAgree(openHeader),
             openHeader.seq);
         auto const agreedCloseTime = openHeader.parentCloseTime + closeResolution;
-        fixture["close_input"]["parent_close_time"] = networkSeconds(openHeader.parentCloseTime);
+        fixture["close_input"]["parent_close_time"] =
+            networkSeconds(openHeader.parentCloseTime);
         fixture["close_input"]["close_time"] = networkSeconds(agreedCloseTime);
         fixture["close_input"]["ledger_sequence"] = openBeforeClose->header().seq;
         fixture["close_input"]["close_time_resolution"] = closeResolution.count();
@@ -402,6 +603,18 @@ public:
             testcase + " close time was not independently reproducible",
             __FILE__,
             __LINE__);
+        if (cleanupKey)
+            suite_.expect(
+                env.closed()->read(*cleanupKey) == nullptr,
+                testcase + " cleanup target remained in the closed ledger",
+                __FILE__,
+                __LINE__);
+        if (isOfferCleanup)
+            suite_.expect(
+                offerCount(*env.closed(), Account{"bob"}) == 1,
+                testcase + " did not retain the unexpired Offer in the closed ledger",
+                __FILE__,
+                __LINE__);
         fixture["closed"] = snapshot(*env.closed());
 
         auto const filename = profile.name() + "-" + family + "-" + testcase + ".json";
@@ -409,12 +622,155 @@ public:
         output << to_string(fixture) << '\n';
         suite_.expect(output.good(), "unable to write " + filename, __FILE__, __LINE__);
     }
+
+public:
+    void
+    record(Profile const& profile,
+           std::string const& family,
+           std::string const& testcase,
+           Env& env,
+           JTx const& transaction,
+           std::optional<Expected> expected = std::nullopt)
+    {
+        Expected expectedResult = expected.value_or(Expected{});
+        if (!expected)
+        {
+            expectedResult = {
+                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
+                    ? TER{temMALFORMED}
+                    : TER{tesSUCCESS},
+                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
+                    ? false
+                    : true,
+                false};
+        }
+        auto noPreSubmit = [](Env&) { return std::vector<JTx>{}; };
+        auto existingTransaction = [&transaction](Env&) { return transaction; };
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            noPreSubmit,
+            existingTransaction,
+            expectedResult,
+            txqConfig(),
+            false);
+    }
+
+    template <class PreBuilder, class Builder>
+    void
+    recordWithHistory(Profile const& profile,
+                      std::string const& family,
+                      std::string const& testcase,
+                      Env& env,
+                      PreBuilder&& preBuilder,
+                      Builder&& builder,
+                      Expected expected)
+    {
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            std::forward<PreBuilder>(preBuilder),
+            std::forward<Builder>(builder),
+            expected,
+            smallQueueTxqConfig(),
+            true);
+    }
 };
 
 JTx
 makePayment(Env& env)
 {
     return env.jt(jtx::pay(Account{"alice"}, Account{"bob"}, jtx::XRP(1)));
+}
+
+struct SeededPaymentSample
+{
+    std::uint32_t amount;
+    std::uint32_t fee;
+    std::uint32_t sequenceOffset;
+    Expected expected;
+    char const* label;
+};
+
+SeededPaymentSample
+seededPaymentSample(std::uint32_t sample)
+{
+    std::mt19937 generator{2016};
+    std::uint32_t amount = 1;
+    for (std::uint32_t index = 0; index <= sample; ++index)
+        amount = 1 + generator() % 8;
+
+    switch (sample)
+    {
+        case 0:
+            return {amount, 10, 0, Expected{TER{tesSUCCESS}, true, false}, "valid-base-fee"};
+        case 1:
+            return {
+                9999,
+                10,
+                0,
+                Expected{TER{tecUNFUNDED_PAYMENT}, true, false},
+                "insufficient-balance"};
+        case 2:
+            return {amount, 11, 0, Expected{TER{tesSUCCESS}, true, false}, "valid-fee-edge"};
+        case 3:
+            return {
+                amount,
+                10,
+                1,
+                Expected{TER{terPRE_SEQ}, false, false},
+                "future-sequence"};
+        default:
+            break;
+    }
+
+    return {amount, 10, 0, Expected{}, "invalid-sample"};
+}
+
+JTx
+makeSeededPayment(Env& env, SeededPaymentSample const& sample)
+{
+    auto const alice = Account{"alice"};
+    auto result = jtx::pay(alice, Account{"bob"}, jtx::XRP(sample.amount));
+    if (sample.sequenceOffset != 0)
+        result[jss::Sequence] = env.seq(alice) + sample.sequenceOffset;
+    return env.jt(result, jtx::Fee(sample.fee));
+}
+
+std::vector<JTx>
+makeQueuePrefill(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const aliceSequence = env.seq(alice);
+    auto const bobSequence = env.seq(bob);
+    std::vector<JTx> result;
+    result.reserve(3);
+    result.push_back(env.jt(
+        jtx::pay(alice, bob, jtx::XRP(1000)),
+        jtx::Seq(aliceSequence),
+        jtx::Fee(10)));
+    result.push_back(env.jt(
+        jtx::pay(bob, alice, jtx::XRP(1)),
+        jtx::Seq(bobSequence),
+        jtx::Fee(10)));
+    result.push_back(env.jt(
+        jtx::pay(alice, bob, jtx::XRP(1)),
+        jtx::Seq(aliceSequence + 1),
+        jtx::Fee(10)));
+    return result;
+}
+
+JTx
+makeQueuedLowFee(Env& env)
+{
+    return env.jt(
+        jtx::fset(Account{"alice"}, asfRequireDest),
+        jtx::Fee(10));
 }
 
 JTx
@@ -602,6 +958,34 @@ makeTicketCreate(Env& env)
     return env.jt(jtx::ticket::create(Account{"alice"}, 1));
 }
 
+std::uint32_t
+parentCloseTime(Env& env)
+{
+    return env.current()->header().parentCloseTime.time_since_epoch().count();
+}
+
+JTx
+makeExpiredNFTokenAccept(Env& env)
+{
+    auto const minter = Account{"minter"};
+    auto const buyer = Account{"buyer"};
+    auto const offer = keylet::nftokenOffer(
+                           minter,
+                           SeqProxy::rawSequence(env.seq(minter) - 1))
+                           .key;
+    return env.jt(jtx::token::acceptSellOffer(buyer, offer));
+}
+
+JTx
+makeExpiredOfferFillOrKill(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const gateway = Account{"gateway"};
+    return env.jt(
+        jtx::offer(alice, jtx::XRP(1000), gateway["USD"](1000)),
+        jtx::Txflags(tfFillOrKill));
+}
+
 JTx
 makeBatch(Env& env)
 {
@@ -737,30 +1121,7 @@ std::unique_ptr<Config>
 serviceConfig(Profile const& profile)
 {
     auto config = recorderConfig();
-    config->startUp = StartUpType::Fresh;
-
-    FeatureBitset forced;
-    foreachFeature(profile.features(), [&](uint256 const& feature) {
-        auto const name = featureToName(feature);
-        auto const amendment = allAmendments().find(name);
-        if (amendment == allAmendments().end())
-            return;
-
-        if (amendment->second == AmendmentSupport::Retired)
-        {
-            forced.set(feature);
-            return;
-        }
-
-        if (amendment->second == AmendmentSupport::Unsupported)
-            return;
-
-        config->section(Sections::kAmendments).append(
-            to_string(feature) + " " + name);
-    });
-    foreachFeature(forced, [&](uint256 const& feature) {
-        config->features.insert(feature);
-    });
+    configureServiceConfig(*config, profile);
     return config;
 }
 
@@ -785,6 +1146,61 @@ setupPriorConstraint(Env& env)
     auto const alice = Account{"alice"};
     fundAndClose(env, {alice});
     env(jtx::fset(alice, asfAccountTxnID));
+    env.close();
+}
+
+void
+setupExpiredNFTokenOffer(Env& env)
+{
+    auto const issuer = Account{"issuer"};
+    auto const minter = Account{"minter"};
+    auto const buyer = Account{"buyer"};
+    fundAndClose(env, {issuer, minter, buyer});
+    env(jtx::token::setMinter(issuer, minter));
+    env.close();
+
+    auto const nft = jtx::token::getNextID(env, issuer, 0, tfTransferable);
+    env(
+        jtx::token::mint(minter, 0),
+        jtx::token::Issuer(issuer),
+        jtx::Txflags(tfTransferable));
+    env.close();
+
+    auto const expiration = parentCloseTime(env) + 25;
+    env(
+        jtx::token::createOffer(minter, nft, jtx::drops(1)),
+        jtx::token::Expiration(expiration),
+        jtx::Txflags(tfSellNFToken));
+    env.close();
+    while (parentCloseTime(env) < expiration)
+        env.close();
+}
+
+void
+setupExpiredOffer(Env& env)
+{
+    auto const gateway = Account{"gateway"};
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    fundAndClose(env, {gateway, alice, bob});
+
+    auto expired = jtx::offer(bob, gateway["USD"](500), jtx::XRP(500));
+    expired[sfExpiration.jsonName] = parentCloseTime(env) + 1;
+    env(expired);
+    env.close();
+
+    auto const expiredKey = expiredOfferKey(*env.current(), bob);
+    env.test.expect(
+        expiredKey.has_value(),
+        "expired Offer setup did not create an Offer entry",
+        __FILE__,
+        __LINE__);
+
+    env(jtx::offer(bob, gateway["USD"](500), jtx::XRP(500)));
+    env.close();
+    env(jtx::trust(alice, gateway["USD"](1000)));
+    env.close();
+    env(jtx::pay(gateway, alice, gateway["USD"](1000)));
     env.close();
 }
 
@@ -872,6 +1288,96 @@ setupDelegateSponsor(Env& env)
     env.close();
 }
 
+template <class Mutator>
+void
+installMalformedParent(Env& env, Mutator&& mutator)
+{
+    auto const base = std::dynamic_pointer_cast<Ledger const>(env.closed());
+    env.test.expect(
+        base != nullptr,
+        "closed ledger was not a Ledger",
+        __FILE__,
+        __LINE__);
+    if (!base)
+        return;
+
+    auto malformed = std::make_shared<Ledger>(
+        *base, base->header().closeTime + base->header().closeTimeResolution);
+    {
+        OpenView view(malformed.get());
+        if (!mutator(view))
+        {
+            env.test.expect(false, "failed to locate malformed parent entry", __FILE__, __LINE__);
+            return;
+        }
+        view.apply(*malformed);
+    }
+    malformed->updateSkipList();
+    malformed->setAccepted(
+        malformed->header().closeTime,
+        malformed->header().closeTimeResolution,
+        true);
+
+    auto retries = OrderedTxs({});
+    env.app().getOpenLedger().accept(
+        env.app(),
+        malformed->rules(),
+        malformed,
+        OrderedTxs({}),
+        false,
+        retries,
+        TapNone);
+    env.app().getLedgerMaster().switchLCL(malformed);
+    env.timeKeeper().set(malformed->header().closeTime);
+}
+
+void
+setupMalformedEscrow(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    fundAndClose(env, {alice, bob});
+
+    auto const escrowSequence = env.seq(alice);
+    env(
+        jtx::escrow::create(alice, bob, jtx::XRP(1)),
+        jtx::escrow::kFinishTime(env.now() + std::chrono::seconds{1}),
+        jtx::escrow::kCancelTime(env.now() + std::chrono::seconds{2}));
+    env.test.expect(env.close(), "escrow setup ledger close failed", __FILE__, __LINE__);
+
+    auto const escrowKey =
+        keylet::escrow(alice.id(), SeqProxy::rawSequence(escrowSequence));
+    auto const malformedAmount = kInitialXrp;
+    auto const fee = env.closed()->fees().base;
+    installMalformedParent(env, [&](OpenView& view) {
+        auto const escrow = view.read(escrowKey);
+        auto const owner = view.read(keylet::account(alice.id()));
+        if (!escrow || !owner)
+            return false;
+        auto replacement = std::make_shared<SLE>(*escrow);
+        replacement->setFieldAmount(sfAmount, malformedAmount);
+        view.rawReplace(replacement);
+        auto ownerReplacement = std::make_shared<SLE>(*owner);
+        ownerReplacement->setFieldAmount(sfBalance, fee);
+        view.rawReplace(ownerReplacement);
+        return true;
+    });
+
+    auto const escrow = env.le(escrowKey);
+    env.test.expect(
+        escrow && escrow->getFieldAmount(sfAmount) == malformedAmount,
+        "malformed escrow amount was not preserved in the parent ledger",
+        __FILE__,
+        __LINE__);
+}
+
+JTx
+makeExpiredEscrowCancel(Env& env)
+{
+    auto const alice = Account{"alice"};
+    return env.jt(jtx::escrow::cancel(alice, alice, env.seq(alice) - 1));
+}
+
 template <class Builder>
 void
 recordWithSetup(FixtureRecorder& recorder,
@@ -883,9 +1389,12 @@ recordWithSetup(FixtureRecorder& recorder,
                  Builder&& builder,
                  std::optional<Expected> expected = std::nullopt)
 {
-    Env env{suite, recorderConfig(), profile.features()};
+    auto config = recorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
     env.app().checkSigs(true);
     fundAndClose(env, accounts);
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env), expected);
 }
@@ -902,11 +1411,37 @@ recordScenario(FixtureRecorder& recorder,
                Builder&& builder,
                Expected expected)
 {
-    Env env{suite, std::move(config), profile.features()};
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
     env.app().checkSigs(true);
     setup(env);
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env), expected);
+}
+
+void
+recordQueueScenario(FixtureRecorder& recorder,
+                    beast::unit_test::Suite& suite,
+                    Profile const& profile)
+{
+    auto config = smallQueueRecorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
+    env.app().checkSigs(true);
+    env.fund(jtx::XRP(10000), jtx::noripple(Account{"alice"}));
+    env.fund(jtx::XRP(200), jtx::noripple(Account{"bob"}));
+    env.close();
+    assertPersistedAmendments(env, profile, suite);
+    assertFreshRuntime(env, suite);
+    recorder.recordWithHistory(
+        profile,
+        "AccountSet",
+        "queued-low-fee",
+        env,
+        makeQueuePrefill,
+        makeQueuedLowFee,
+        Expected{TER{terQUEUED}, false, true});
 }
 
 template <class Builder>
@@ -922,12 +1457,7 @@ recordServiceScenario(
     Env env{suite, serviceConfig(profile), FeatureBitset{}};
     env.app().checkSigs(true);
     fundAndClose(env, {Account{"alice"}, Account{"bob"}});
-    auto const parent = env.closed();
-    suite.expect(
-        parent->read(keylet::amendments()) != nullptr,
-        "fresh service parent did not persist Amendments singleton",
-        __FILE__,
-        __LINE__);
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env));
 }
@@ -1113,6 +1643,16 @@ public:
             {Account{"alice"}},
             makeFirstError,
             Expected{TER{temBAD_FEE}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "EscrowCancel",
+            "malformed-escrow-cancel-refund",
+            recorderConfig(),
+            setupMalformedEscrow,
+            makeExpiredEscrowCancel,
+            Expected{TER{tecINVARIANT_FAILED}, true, false});
 
         recordScenario(
             recorder,
@@ -1302,6 +1842,41 @@ public:
             "AccountSet",
             "service-boundary-amendments",
             makeAccountSet);
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "NFTokenAcceptOffer",
+            "expired-sell-offer-cleanup",
+            recorderConfig(),
+            setupExpiredNFTokenOffer,
+            makeExpiredNFTokenAccept,
+            Expected{TER{tecEXPIRED}, true, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "OfferCreate",
+            "expired-offer-cleanup",
+            recorderConfig(),
+            setupExpiredOffer,
+            makeExpiredOfferFillOrKill,
+            Expected{TER{tecKILLED}, true, false});
+        recordQueueScenario(recorder, *this, representative);
+        for (std::uint32_t sample = 0; sample < 4; ++sample)
+        {
+            auto const seeded = seededPaymentSample(sample);
+            recordScenario(
+                recorder,
+                *this,
+                representative,
+                "Payment",
+                "seed2016-payment-" + std::to_string(sample) + "-" + seeded.label,
+                recorderConfig(),
+                [](Env& env) { fundAndClose(env, {Account{"alice"}, Account{"bob"}}); },
+                [seeded](Env& env) { return makeSeededPayment(env, seeded); },
+                seeded.expected);
+        }
     }
 };
 
