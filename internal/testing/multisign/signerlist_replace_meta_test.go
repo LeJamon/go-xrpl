@@ -42,6 +42,9 @@ func TestSignerListReplace_Meta_NoDirectoryNode_AndSignerListID(t *testing.T) {
 	env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: b1, Weight: 1}})
 	env.Close()
 
+	// Metadata assertions below cover the closed-ledger Apply path.
+	env.SetOpenLedger(false)
+
 	res := env.Submit(jtx.NewSignerListSetTx(alice, 2, []jtx.TestSigner{
 		{Account: b1, Weight: 1},
 		{Account: b2, Weight: 1},
