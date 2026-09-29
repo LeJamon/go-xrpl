@@ -11,9 +11,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -267,6 +269,55 @@ func TestSnapshotRejectsChangedClosedRules(t *testing.T) {
 			}
 			if err := runSnapshotFixture(fixture); err == nil || !strings.Contains(err.Error(), "rules") {
 				t.Fatalf("changed closed rules were not rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestSnapshotRejectsFeesContradictingLedgerState(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c0-l0-b0-f0-Payment-valid.json")
+	fixture.Parent.Fees.Reserve = "1"
+	fixture.Closed.Fees.Reserve = "1"
+	if err := runSnapshotFixture(fixture); err == nil || !strings.Contains(err.Error(), "fees.reserve disagrees with FeeSettings") {
+		t.Fatalf("contradictory fee snapshots were not rejected: %v", err)
+	}
+}
+
+func TestSnapshotFeeSettingsPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		fields map[string]any
+		rules  *amendment.Rules
+		fees   drops.Fees
+		bad    bool
+	}{
+		{name: "absent", fees: drops.Fees{Base: 12, Reserve: 34, Increment: 56}},
+		{name: "partial legacy", fields: map[string]any{"BaseFee": "A"}, fees: drops.Fees{Base: 10, Reserve: 34, Increment: 56}},
+		{name: "legacy mismatch", fields: map[string]any{"ReserveBase": uint32(34)}, fees: drops.Fees{Reserve: 35}, bad: true},
+		{name: "explicit zero", fields: map[string]any{"BaseFee": "0"}, fees: drops.Fees{Base: 10}, bad: true},
+		{name: "partial modern", fields: map[string]any{"ReserveIncrementDrops": "56"}, rules: amendment.NewRules([][32]byte{amendment.FeatureXRPFees}), fees: drops.Fees{Base: 12, Reserve: 34, Increment: 56}},
+		{name: "modern mismatch", fields: map[string]any{"BaseFeeDrops": "12"}, rules: amendment.NewRules([][32]byte{amendment.FeatureXRPFees}), fees: drops.Fees{Base: 10}, bad: true},
+		{name: "modern before amendment", fields: map[string]any{"BaseFeeDrops": "12"}, fees: drops.Fees{Base: 12}, bad: true},
+		{name: "mixed fields", fields: map[string]any{"BaseFee": "C", "BaseFeeDrops": "12"}, rules: amendment.NewRules([][32]byte{amendment.FeatureXRPFees}), fees: drops.Fees{Base: 12}, bad: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stateMap := shamap.New(shamap.TypeState)
+			if tc.fields != nil {
+				tc.fields["LedgerEntryType"] = "FeeSettings"
+				tc.fields["Flags"] = uint32(0)
+				data, err := binarycodec.EncodeBytes(tc.fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := stateMap.Put(keylet.Fees().Key, data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.rules == nil {
+				tc.rules = amendment.EmptyRules()
+			}
+			if err := validateSnapshotFees(stateMap, tc.rules, tc.fees); (err != nil) != tc.bad {
+				t.Fatalf("fee validation error = %v, want error %t", err, tc.bad)
 			}
 		})
 	}
