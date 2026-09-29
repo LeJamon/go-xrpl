@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"testing"
@@ -314,12 +315,92 @@ func TestSerializeVaultPreservesLargeAssetsMaximum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serializeVault: %v", err)
 	}
-	fields, err := readVaultNumberFields(encoded)
+	parsed, err := parseVault(encoded)
 	if err != nil {
-		t.Fatalf("readVaultNumberFields: %v", err)
+		t.Fatalf("parseVault: %v", err)
 	}
-	if got := fields["AssetsMaximum"]; got != data.AssetsMaximum {
-		t.Fatalf("AssetsMaximum = %q, want %q", got, data.AssetsMaximum)
+	want, err := vaultNumberForRules(data.AssetsMaximum, nil)
+	if err != nil {
+		t.Fatalf("parse expected AssetsMaximum: %v", err)
+	}
+	got, err := vaultNumberForRules(parsed.AssetsMaximum, nil)
+	if err != nil {
+		t.Fatalf("parse decoded AssetsMaximum: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("decoded AssetsMaximum = %q (%d, e%d), want value of %q (%d, e%d)",
+			parsed.AssetsMaximum, got.Mantissa(), got.Exponent(), data.AssetsMaximum, want.Mantissa(), want.Exponent())
+	}
+	reencoded, err := serializeVault(parsed)
+	if err != nil {
+		t.Fatalf("re-serialize vault: %v", err)
+	}
+	if !bytes.Equal(reencoded, encoded) {
+		t.Fatal("re-serialized vault differs from its canonical wire encoding")
+	}
+}
+
+func TestSerializeVaultPreservesNineteenDigitNumberAcrossLendingModes(t *testing.T) {
+	rules := []struct {
+		name  string
+		rules *amendment.Rules
+	}{
+		{name: "legacy", rules: amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})},
+		{name: "cleanup320", rules: amendment.NewRules([][32]byte{
+			amendment.FeatureSingleAssetVault,
+			amendment.FeatureFixCleanup3_2_0,
+		})},
+	}
+	for _, test := range rules {
+		t.Run(test.name, func(t *testing.T) {
+			data := &vaultData{
+				Owner:           [20]byte{1},
+				Account:         [20]byte{2},
+				Sequence:        1,
+				ShareMPTID:      [24]byte{3},
+				Asset:           tx.Asset{Currency: "XRP"},
+				AssetsMaximum:   "9223372036854775807e0",
+				AssetsTotal:     "9223372036854775807e0",
+				AssetsAvailable: "9223372036854775807e0",
+			}
+			encoded, err := serializeVaultForRules(data, test.rules)
+			if err != nil {
+				t.Fatalf("serializeVaultForRules: %v", err)
+			}
+			parsed, err := parseVault(encoded)
+			if err != nil {
+				t.Fatalf("parseVault: %v", err)
+			}
+			for _, field := range []struct {
+				name string
+				want string
+				got  string
+			}{
+				{name: "AssetsTotal", want: data.AssetsTotal, got: parsed.AssetsTotal},
+				{name: "AssetsAvailable", want: data.AssetsAvailable, got: parsed.AssetsAvailable},
+				{name: "AssetsMaximum", want: data.AssetsMaximum, got: parsed.AssetsMaximum},
+			} {
+				want, err := vaultNumberForRules(field.want, test.rules)
+				if err != nil {
+					t.Fatalf("parse expected %s: %v", field.name, err)
+				}
+				got, err := vaultNumberForRules(field.got, test.rules)
+				if err != nil {
+					t.Fatalf("parse decoded %s: %v", field.name, err)
+				}
+				if !got.Equal(want) {
+					t.Fatalf("decoded %s = %q (%d, e%d), want value of %q (%d, e%d)",
+						field.name, field.got, got.Mantissa(), got.Exponent(), field.want, want.Mantissa(), want.Exponent())
+				}
+			}
+			reencoded, err := serializeVaultForRules(parsed, test.rules)
+			if err != nil {
+				t.Fatalf("re-serialize vault: %v", err)
+			}
+			if !bytes.Equal(reencoded, encoded) {
+				t.Fatal("re-serialized vault differs from its canonical wire encoding")
+			}
+		})
 	}
 }
 

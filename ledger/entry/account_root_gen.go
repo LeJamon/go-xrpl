@@ -305,6 +305,764 @@ func (a *AccountRoot) SetSponsor(value string) {
 	a.present |= accountrootBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (a *AccountRoot) HasAccount() bool {
+	return a != nil && a.present&accountrootBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (a *AccountRoot) GetAccount() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.Account, "AccountRoot.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (a *AccountRoot) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetAccount(address)
+	return nil
+}
+
+// HasBalance reports whether Balance is present.
+func (a *AccountRoot) HasBalance() bool {
+	return a != nil && a.present&accountrootBitBalance != 0
+}
+
+// GetBalance returns the typed Amount value.
+func (a *AccountRoot) GetBalance() (AmountValue, error) {
+	if a == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(a.Balance, "AccountRoot.Balance", true)
+}
+
+// SetBalanceValue assigns a typed Amount value.
+func (a *AccountRoot) SetBalanceValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "AccountRoot.Balance", true)
+	if err != nil {
+		return err
+	}
+	a.SetBalance(encoded)
+	return nil
+}
+
+// HasSequence reports whether Sequence is present.
+func (a *AccountRoot) HasSequence() bool {
+	return a != nil && a.present&accountrootBitSequence != 0
+}
+
+// GetSequence returns the typed UInt32 value.
+func (a *AccountRoot) GetSequence() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSequenceValue(value uint32) {
+	a.SetSequence(value)
+}
+
+// HasOwnerCount reports whether OwnerCount is present.
+func (a *AccountRoot) HasOwnerCount() bool {
+	return a != nil && a.present&accountrootBitOwnerCount != 0
+}
+
+// GetOwnerCount returns the typed UInt32 value.
+func (a *AccountRoot) GetOwnerCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.OwnerCount, nil
+}
+
+// SetOwnerCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetOwnerCountValue(value uint32) {
+	a.SetOwnerCount(value)
+}
+
+// HasSponsoredOwnerCount reports whether SponsoredOwnerCount is present.
+func (a *AccountRoot) HasSponsoredOwnerCount() bool {
+	return a != nil && a.present&accountrootBitSponsoredOwnerCount != 0
+}
+
+// ClearSponsoredOwnerCount removes SponsoredOwnerCount from the serialized entry.
+func (a *AccountRoot) ClearSponsoredOwnerCount() {
+	if a == nil {
+		return
+	}
+	a.SponsoredOwnerCount = 0
+	a.present &^= accountrootBitSponsoredOwnerCount
+	a.dirty = true
+}
+
+// GetSponsoredOwnerCount returns the typed UInt32 value.
+func (a *AccountRoot) GetSponsoredOwnerCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.SponsoredOwnerCount, nil
+}
+
+// SetSponsoredOwnerCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSponsoredOwnerCountValue(value uint32) {
+	a.SetSponsoredOwnerCount(value)
+}
+
+// HasSponsoringOwnerCount reports whether SponsoringOwnerCount is present.
+func (a *AccountRoot) HasSponsoringOwnerCount() bool {
+	return a != nil && a.present&accountrootBitSponsoringOwnerCount != 0
+}
+
+// ClearSponsoringOwnerCount removes SponsoringOwnerCount from the serialized entry.
+func (a *AccountRoot) ClearSponsoringOwnerCount() {
+	if a == nil {
+		return
+	}
+	a.SponsoringOwnerCount = 0
+	a.present &^= accountrootBitSponsoringOwnerCount
+	a.dirty = true
+}
+
+// GetSponsoringOwnerCount returns the typed UInt32 value.
+func (a *AccountRoot) GetSponsoringOwnerCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.SponsoringOwnerCount, nil
+}
+
+// SetSponsoringOwnerCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSponsoringOwnerCountValue(value uint32) {
+	a.SetSponsoringOwnerCount(value)
+}
+
+// HasSponsoringAccountCount reports whether SponsoringAccountCount is present.
+func (a *AccountRoot) HasSponsoringAccountCount() bool {
+	return a != nil && a.present&accountrootBitSponsoringAccountCount != 0
+}
+
+// ClearSponsoringAccountCount removes SponsoringAccountCount from the serialized entry.
+func (a *AccountRoot) ClearSponsoringAccountCount() {
+	if a == nil {
+		return
+	}
+	a.SponsoringAccountCount = 0
+	a.present &^= accountrootBitSponsoringAccountCount
+	a.dirty = true
+}
+
+// GetSponsoringAccountCount returns the typed UInt32 value.
+func (a *AccountRoot) GetSponsoringAccountCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.SponsoringAccountCount, nil
+}
+
+// SetSponsoringAccountCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSponsoringAccountCountValue(value uint32) {
+	a.SetSponsoringAccountCount(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (a *AccountRoot) HasFlags() bool {
+	return a != nil && a.present&accountrootBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (a *AccountRoot) GetFlags() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetFlagsValue(value uint32) {
+	a.SetFlags(value)
+}
+
+// HasRegularKey reports whether RegularKey is present.
+func (a *AccountRoot) HasRegularKey() bool {
+	return a != nil && a.present&accountrootBitRegularKey != 0
+}
+
+// ClearRegularKey removes RegularKey from the serialized entry.
+func (a *AccountRoot) ClearRegularKey() {
+	if a == nil {
+		return
+	}
+	a.RegularKey = ""
+	a.present &^= accountrootBitRegularKey
+	a.dirty = true
+}
+
+// GetRegularKey returns the 20-byte AccountID.
+func (a *AccountRoot) GetRegularKey() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.RegularKey, "AccountRoot.RegularKey")
+}
+
+// SetRegularKeyValue assigns a 20-byte AccountID.
+func (a *AccountRoot) SetRegularKeyValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetRegularKey(address)
+	return nil
+}
+
+// HasDomain reports whether Domain is present.
+func (a *AccountRoot) HasDomain() bool {
+	return a != nil && a.present&accountrootBitDomain != 0
+}
+
+// ClearDomain removes Domain from the serialized entry.
+func (a *AccountRoot) ClearDomain() {
+	if a == nil {
+		return
+	}
+	a.Domain = ""
+	a.present &^= accountrootBitDomain
+	a.dirty = true
+}
+
+// GetDomain returns the raw bytes of the Blob field.
+func (a *AccountRoot) GetDomain() ([]byte, error) {
+	if a == nil {
+		return nil, nil
+	}
+	return blobValueFromString(a.Domain, "AccountRoot.Domain")
+}
+
+// SetDomainValue assigns a Blob from raw bytes.
+func (a *AccountRoot) SetDomainValue(value []byte) {
+	a.SetDomain(blobValueToString(value))
+}
+
+// HasEmailHash reports whether EmailHash is present.
+func (a *AccountRoot) HasEmailHash() bool {
+	return a != nil && a.present&accountrootBitEmailHash != 0
+}
+
+// ClearEmailHash removes EmailHash from the serialized entry.
+func (a *AccountRoot) ClearEmailHash() {
+	if a == nil {
+		return
+	}
+	a.EmailHash = ""
+	a.present &^= accountrootBitEmailHash
+	a.dirty = true
+}
+
+// GetEmailHash returns the typed 128-bit hash.
+func (a *AccountRoot) GetEmailHash() ([16]byte, error) {
+	var result [16]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.EmailHash, "AccountRoot.EmailHash", 16)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetEmailHashValue assigns a typed 128-bit hash.
+func (a *AccountRoot) SetEmailHashValue(value [16]byte) {
+	a.SetEmailHash(hashValueToString(value[:]))
+}
+
+// HasMessageKey reports whether MessageKey is present.
+func (a *AccountRoot) HasMessageKey() bool {
+	return a != nil && a.present&accountrootBitMessageKey != 0
+}
+
+// ClearMessageKey removes MessageKey from the serialized entry.
+func (a *AccountRoot) ClearMessageKey() {
+	if a == nil {
+		return
+	}
+	a.MessageKey = ""
+	a.present &^= accountrootBitMessageKey
+	a.dirty = true
+}
+
+// GetMessageKey returns the raw bytes of the Blob field.
+func (a *AccountRoot) GetMessageKey() ([]byte, error) {
+	if a == nil {
+		return nil, nil
+	}
+	return blobValueFromString(a.MessageKey, "AccountRoot.MessageKey")
+}
+
+// SetMessageKeyValue assigns a Blob from raw bytes.
+func (a *AccountRoot) SetMessageKeyValue(value []byte) {
+	a.SetMessageKey(blobValueToString(value))
+}
+
+// HasTransferRate reports whether TransferRate is present.
+func (a *AccountRoot) HasTransferRate() bool {
+	return a != nil && a.present&accountrootBitTransferRate != 0
+}
+
+// ClearTransferRate removes TransferRate from the serialized entry.
+func (a *AccountRoot) ClearTransferRate() {
+	if a == nil {
+		return
+	}
+	a.TransferRate = 0
+	a.present &^= accountrootBitTransferRate
+	a.dirty = true
+}
+
+// GetTransferRate returns the typed UInt32 value.
+func (a *AccountRoot) GetTransferRate() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.TransferRate, nil
+}
+
+// SetTransferRateValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetTransferRateValue(value uint32) {
+	a.SetTransferRate(value)
+}
+
+// HasTickSize reports whether TickSize is present.
+func (a *AccountRoot) HasTickSize() bool {
+	return a != nil && a.present&accountrootBitTickSize != 0
+}
+
+// ClearTickSize removes TickSize from the serialized entry.
+func (a *AccountRoot) ClearTickSize() {
+	if a == nil {
+		return
+	}
+	a.TickSize = 0
+	a.present &^= accountrootBitTickSize
+	a.dirty = true
+}
+
+// GetTickSize returns the typed UInt8 value.
+func (a *AccountRoot) GetTickSize() (uint8, error) {
+	if a == nil {
+		return 0, nil
+	}
+	if a.TickSize < 0 || a.TickSize > 255 {
+		return 0, fmt.Errorf("ledgerfields: AccountRoot.TickSize: value %d is out of range for UInt8", a.TickSize)
+	}
+	return uint8(a.TickSize), nil
+}
+
+// HasNFTokenMinter reports whether NFTokenMinter is present.
+func (a *AccountRoot) HasNFTokenMinter() bool {
+	return a != nil && a.present&accountrootBitNFTokenMinter != 0
+}
+
+// ClearNFTokenMinter removes NFTokenMinter from the serialized entry.
+func (a *AccountRoot) ClearNFTokenMinter() {
+	if a == nil {
+		return
+	}
+	a.NFTokenMinter = ""
+	a.present &^= accountrootBitNFTokenMinter
+	a.dirty = true
+}
+
+// GetNFTokenMinter returns the 20-byte AccountID.
+func (a *AccountRoot) GetNFTokenMinter() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.NFTokenMinter, "AccountRoot.NFTokenMinter")
+}
+
+// SetNFTokenMinterValue assigns a 20-byte AccountID.
+func (a *AccountRoot) SetNFTokenMinterValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetNFTokenMinter(address)
+	return nil
+}
+
+// HasMintedNFTokens reports whether MintedNFTokens is present.
+func (a *AccountRoot) HasMintedNFTokens() bool {
+	return a != nil && a.present&accountrootBitMintedNFTokens != 0
+}
+
+// ClearMintedNFTokens removes MintedNFTokens from the serialized entry.
+func (a *AccountRoot) ClearMintedNFTokens() {
+	if a == nil {
+		return
+	}
+	a.MintedNFTokens = 0
+	a.present &^= accountrootBitMintedNFTokens
+	a.dirty = true
+}
+
+// GetMintedNFTokens returns the typed UInt32 value.
+func (a *AccountRoot) GetMintedNFTokens() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.MintedNFTokens, nil
+}
+
+// SetMintedNFTokensValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetMintedNFTokensValue(value uint32) {
+	a.SetMintedNFTokens(value)
+}
+
+// HasBurnedNFTokens reports whether BurnedNFTokens is present.
+func (a *AccountRoot) HasBurnedNFTokens() bool {
+	return a != nil && a.present&accountrootBitBurnedNFTokens != 0
+}
+
+// ClearBurnedNFTokens removes BurnedNFTokens from the serialized entry.
+func (a *AccountRoot) ClearBurnedNFTokens() {
+	if a == nil {
+		return
+	}
+	a.BurnedNFTokens = 0
+	a.present &^= accountrootBitBurnedNFTokens
+	a.dirty = true
+}
+
+// GetBurnedNFTokens returns the typed UInt32 value.
+func (a *AccountRoot) GetBurnedNFTokens() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.BurnedNFTokens, nil
+}
+
+// SetBurnedNFTokensValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetBurnedNFTokensValue(value uint32) {
+	a.SetBurnedNFTokens(value)
+}
+
+// HasFirstNFTokenSequence reports whether FirstNFTokenSequence is present.
+func (a *AccountRoot) HasFirstNFTokenSequence() bool {
+	return a != nil && a.present&accountrootBitFirstNFTokenSequence != 0
+}
+
+// ClearFirstNFTokenSequence removes FirstNFTokenSequence from the serialized entry.
+func (a *AccountRoot) ClearFirstNFTokenSequence() {
+	if a == nil {
+		return
+	}
+	a.FirstNFTokenSequence = 0
+	a.present &^= accountrootBitFirstNFTokenSequence
+	a.dirty = true
+}
+
+// GetFirstNFTokenSequence returns the typed UInt32 value.
+func (a *AccountRoot) GetFirstNFTokenSequence() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.FirstNFTokenSequence, nil
+}
+
+// SetFirstNFTokenSequenceValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetFirstNFTokenSequenceValue(value uint32) {
+	a.SetFirstNFTokenSequence(value)
+}
+
+// HasAccountTxnID reports whether AccountTxnID is present.
+func (a *AccountRoot) HasAccountTxnID() bool {
+	return a != nil && a.present&accountrootBitAccountTxnID != 0
+}
+
+// ClearAccountTxnID removes AccountTxnID from the serialized entry.
+func (a *AccountRoot) ClearAccountTxnID() {
+	if a == nil {
+		return
+	}
+	a.AccountTxnID = ""
+	a.present &^= accountrootBitAccountTxnID
+	a.dirty = true
+}
+
+// GetAccountTxnID returns the typed 256-bit hash.
+func (a *AccountRoot) GetAccountTxnID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.AccountTxnID, "AccountRoot.AccountTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetAccountTxnIDValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetAccountTxnIDValue(value [32]byte) {
+	a.SetAccountTxnID(hashValueToString(value[:]))
+}
+
+// HasWalletLocator reports whether WalletLocator is present.
+func (a *AccountRoot) HasWalletLocator() bool {
+	return a != nil && a.present&accountrootBitWalletLocator != 0
+}
+
+// ClearWalletLocator removes WalletLocator from the serialized entry.
+func (a *AccountRoot) ClearWalletLocator() {
+	if a == nil {
+		return
+	}
+	a.WalletLocator = ""
+	a.present &^= accountrootBitWalletLocator
+	a.dirty = true
+}
+
+// GetWalletLocator returns the typed 256-bit hash.
+func (a *AccountRoot) GetWalletLocator() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.WalletLocator, "AccountRoot.WalletLocator", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetWalletLocatorValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetWalletLocatorValue(value [32]byte) {
+	a.SetWalletLocator(hashValueToString(value[:]))
+}
+
+// HasTicketCount reports whether TicketCount is present.
+func (a *AccountRoot) HasTicketCount() bool {
+	return a != nil && a.present&accountrootBitTicketCount != 0
+}
+
+// ClearTicketCount removes TicketCount from the serialized entry.
+func (a *AccountRoot) ClearTicketCount() {
+	if a == nil {
+		return
+	}
+	a.TicketCount = 0
+	a.present &^= accountrootBitTicketCount
+	a.dirty = true
+}
+
+// GetTicketCount returns the typed UInt32 value.
+func (a *AccountRoot) GetTicketCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.TicketCount, nil
+}
+
+// SetTicketCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetTicketCountValue(value uint32) {
+	a.SetTicketCount(value)
+}
+
+// HasAMMID reports whether AMMID is present.
+func (a *AccountRoot) HasAMMID() bool {
+	return a != nil && a.present&accountrootBitAMMID != 0
+}
+
+// ClearAMMID removes AMMID from the serialized entry.
+func (a *AccountRoot) ClearAMMID() {
+	if a == nil {
+		return
+	}
+	a.AMMID = ""
+	a.present &^= accountrootBitAMMID
+	a.dirty = true
+}
+
+// GetAMMID returns the typed 256-bit hash.
+func (a *AccountRoot) GetAMMID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.AMMID, "AccountRoot.AMMID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetAMMIDValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetAMMIDValue(value [32]byte) {
+	a.SetAMMID(hashValueToString(value[:]))
+}
+
+// HasVaultID reports whether VaultID is present.
+func (a *AccountRoot) HasVaultID() bool {
+	return a != nil && a.present&accountrootBitVaultID != 0
+}
+
+// ClearVaultID removes VaultID from the serialized entry.
+func (a *AccountRoot) ClearVaultID() {
+	if a == nil {
+		return
+	}
+	a.VaultID = ""
+	a.present &^= accountrootBitVaultID
+	a.dirty = true
+}
+
+// GetVaultID returns the typed 256-bit hash.
+func (a *AccountRoot) GetVaultID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.VaultID, "AccountRoot.VaultID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetVaultIDValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetVaultIDValue(value [32]byte) {
+	a.SetVaultID(hashValueToString(value[:]))
+}
+
+// HasLoanBrokerID reports whether LoanBrokerID is present.
+func (a *AccountRoot) HasLoanBrokerID() bool {
+	return a != nil && a.present&accountrootBitLoanBrokerID != 0
+}
+
+// ClearLoanBrokerID removes LoanBrokerID from the serialized entry.
+func (a *AccountRoot) ClearLoanBrokerID() {
+	if a == nil {
+		return
+	}
+	a.LoanBrokerID = ""
+	a.present &^= accountrootBitLoanBrokerID
+	a.dirty = true
+}
+
+// GetLoanBrokerID returns the typed 256-bit hash.
+func (a *AccountRoot) GetLoanBrokerID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.LoanBrokerID, "AccountRoot.LoanBrokerID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLoanBrokerIDValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetLoanBrokerIDValue(value [32]byte) {
+	a.SetLoanBrokerID(hashValueToString(value[:]))
+}
+
+// HasWalletSize reports whether WalletSize is present.
+func (a *AccountRoot) HasWalletSize() bool {
+	return a != nil && a.present&accountrootBitWalletSize != 0
+}
+
+// ClearWalletSize removes WalletSize from the serialized entry.
+func (a *AccountRoot) ClearWalletSize() {
+	if a == nil {
+		return
+	}
+	a.WalletSize = 0
+	a.present &^= accountrootBitWalletSize
+	a.dirty = true
+}
+
+// GetWalletSize returns the typed UInt32 value.
+func (a *AccountRoot) GetWalletSize() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.WalletSize, nil
+}
+
+// SetWalletSizeValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetWalletSizeValue(value uint32) {
+	a.SetWalletSize(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (a *AccountRoot) HasPreviousTxnID() bool {
+	return a != nil && a.present&accountrootBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (a *AccountRoot) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.PreviousTxnID, "AccountRoot.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetPreviousTxnIDValue(value [32]byte) {
+	a.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (a *AccountRoot) HasPreviousTxnLgrSeq() bool {
+	return a != nil && a.present&accountrootBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (a *AccountRoot) GetPreviousTxnLgrSeq() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetPreviousTxnLgrSeqValue(value uint32) {
+	a.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (a *AccountRoot) HasSponsor() bool {
+	return a != nil && a.present&accountrootBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (a *AccountRoot) ClearSponsor() {
+	if a == nil {
+		return
+	}
+	a.Sponsor = ""
+	a.present &^= accountrootBitSponsor
+	a.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (a *AccountRoot) GetSponsor() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.Sponsor, "AccountRoot.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (a *AccountRoot) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetSponsor(address)
+	return nil
+}
+
 func (a *AccountRoot) validateRequired() error {
 	if a.decoded && !a.dirty {
 		return nil

@@ -127,6 +127,9 @@ func TestAMMInfo_LPAccountParam(t *testing.T) {
 			if !ok {
 				t.Fatalf("amm_info: missing amm field: %#v", result)
 			}
+			if fee, ok := ammResult["trading_fee"]; !ok || fee != 0 {
+				t.Errorf("amm.trading_fee = %#v, want explicit zero", fee)
+			}
 			tok, ok := ammResult["lp_token"].(map[string]any)
 			if !ok {
 				t.Fatalf("amm_info: lp_token is %#v, want map", ammResult["lp_token"])

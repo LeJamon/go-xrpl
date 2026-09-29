@@ -96,6 +96,155 @@ func (t *Ticket) SetSponsor(value string) {
 	t.present |= ticketBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (t *Ticket) HasAccount() bool {
+	return t != nil && t.present&ticketBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (t *Ticket) GetAccount() ([20]byte, error) {
+	if t == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(t.Account, "Ticket.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (t *Ticket) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	t.SetAccount(address)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (t *Ticket) HasOwnerNode() bool {
+	return t != nil && t.present&ticketBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (t *Ticket) GetOwnerNode() (uint64, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(t.OwnerNode, "Ticket.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (t *Ticket) SetOwnerNodeValue(value uint64) {
+	t.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasTicketSequence reports whether TicketSequence is present.
+func (t *Ticket) HasTicketSequence() bool {
+	return t != nil && t.present&ticketBitTicketSequence != 0
+}
+
+// GetTicketSequence returns the typed UInt32 value.
+func (t *Ticket) GetTicketSequence() (uint32, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return t.TicketSequence, nil
+}
+
+// SetTicketSequenceValue assigns a typed UInt32 value.
+func (t *Ticket) SetTicketSequenceValue(value uint32) {
+	t.SetTicketSequence(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (t *Ticket) HasFlags() bool {
+	return t != nil && t.present&ticketBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (t *Ticket) GetFlags() (uint32, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return t.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (t *Ticket) SetFlagsValue(value uint32) {
+	t.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (t *Ticket) HasPreviousTxnID() bool {
+	return t != nil && t.present&ticketBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (t *Ticket) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if t == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(t.PreviousTxnID, "Ticket.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (t *Ticket) SetPreviousTxnIDValue(value [32]byte) {
+	t.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (t *Ticket) HasPreviousTxnLgrSeq() bool {
+	return t != nil && t.present&ticketBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (t *Ticket) GetPreviousTxnLgrSeq() (uint32, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return t.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (t *Ticket) SetPreviousTxnLgrSeqValue(value uint32) {
+	t.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (t *Ticket) HasSponsor() bool {
+	return t != nil && t.present&ticketBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (t *Ticket) ClearSponsor() {
+	if t == nil {
+		return
+	}
+	t.Sponsor = ""
+	t.present &^= ticketBitSponsor
+	t.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (t *Ticket) GetSponsor() ([20]byte, error) {
+	if t == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(t.Sponsor, "Ticket.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (t *Ticket) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	t.SetSponsor(address)
+	return nil
+}
+
 func (t *Ticket) validateRequired() error {
 	if t.decoded && !t.dirty {
 		return nil

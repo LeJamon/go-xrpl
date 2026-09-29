@@ -1,12 +1,10 @@
 package state
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
+	"strconv"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -14,20 +12,23 @@ import (
 // relationship. FeeAmount and MaxFee are native XRP drops; their Has* bits
 // preserve the distinction between an absent optional field and present zero.
 type SponsorshipData struct {
-	Owner               [20]byte
-	Sponsee             [20]byte
-	FeeAmount           uint64
-	HasFeeAmount        bool
-	MaxFee              uint64
-	HasMaxFee           bool
-	RemainingOwnerCount uint32
-	OwnerNode           uint64
-	SponseeNode         uint64
-	Flags               uint32
-	Sponsor             [20]byte
-	HasSponsor          bool
-	PreviousTxnID       [32]byte
-	PreviousTxnLgrSeq   uint32
+	Owner                [20]byte
+	Sponsee              [20]byte
+	FeeAmount            uint64
+	HasFeeAmount         bool
+	MaxFee               uint64
+	HasMaxFee            bool
+	RemainingOwnerCount  uint32
+	OwnerNode            uint64
+	SponseeNode          uint64
+	Flags                uint32
+	Sponsor              [20]byte
+	HasSponsor           bool
+	PreviousTxnID        [32]byte
+	PreviousTxnLgrSeq    uint32
+	preserveEmptyOwner   bool
+	preserveEmptySponsee bool
+	preserveEmptySponsor bool
 }
 
 func ParseSponsorship(data []byte) (*SponsorshipData, error) {
@@ -35,52 +36,74 @@ func ParseSponsorship(data []byte) (*SponsorshipData, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Sponsorship: %w", err)
 	}
-	fields := decoded.ToMap()
 	entry := &SponsorshipData{
-		RemainingOwnerCount: decoded.RemainingOwnerCount,
-		Flags:               decoded.Flags,
-		PreviousTxnLgrSeq:   decoded.PreviousTxnLgrSeq,
-		HasFeeAmount:        fields["FeeAmount"] != nil,
-		HasMaxFee:           fields["MaxFee"] != nil,
-		HasSponsor:          fields["Sponsor"] != nil,
+		HasFeeAmount:         decoded.HasFeeAmount(),
+		HasMaxFee:            decoded.HasMaxFee(),
+		HasSponsor:           decoded.HasSponsor(),
+		preserveEmptyOwner:   decoded.Owner == "",
+		preserveEmptySponsee: decoded.Sponsee == "",
+		preserveEmptySponsor: decoded.Sponsor == "",
 	}
 
 	var err error
-	entry.Owner, err = decodeLedgerAccount("Sponsorship.Owner", decoded.Owner)
+	entry.Owner, err = decoded.GetOwner()
 	if err != nil {
 		return nil, err
 	}
-	entry.Sponsee, err = decodeLedgerAccount("Sponsorship.Sponsee", decoded.Sponsee)
+	entry.Sponsee, err = decoded.GetSponsee()
 	if err != nil {
 		return nil, err
 	}
-	entry.OwnerNode, err = parseLedgerUint64("Sponsorship.OwnerNode", decoded.OwnerNode)
+	entry.OwnerNode, err = decoded.GetOwnerNode()
 	if err != nil {
 		return nil, err
 	}
-	entry.SponseeNode, err = parseLedgerUint64("Sponsorship.SponseeNode", decoded.SponseeNode)
+	entry.SponseeNode, err = decoded.GetSponseeNode()
+	if err != nil {
+		return nil, err
+	}
+	entry.Flags, err = decoded.GetFlags()
 	if err != nil {
 		return nil, err
 	}
 	if entry.HasFeeAmount {
-		entry.FeeAmount, err = decodeNativeLedgerBalance("Sponsorship.FeeAmount", decoded.FeeAmount)
+		value, err := decoded.GetFeeAmount()
+		if err != nil {
+			return nil, err
+		}
+		entry.FeeAmount, err = decodeNativeLedgerBalance("Sponsorship.FeeAmount", value)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if entry.HasMaxFee {
-		entry.MaxFee, err = decodeNativeLedgerBalance("Sponsorship.MaxFee", decoded.MaxFee)
+		value, err := decoded.GetMaxFee()
+		if err != nil {
+			return nil, err
+		}
+		entry.MaxFee, err = decodeNativeLedgerBalance("Sponsorship.MaxFee", value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if decoded.HasRemainingOwnerCount() {
+		entry.RemainingOwnerCount, err = decoded.GetRemainingOwnerCount()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if entry.HasSponsor {
-		entry.Sponsor, err = decodeLedgerAccount("Sponsorship.Sponsor", decoded.Sponsor)
+		entry.Sponsor, err = decoded.GetSponsor()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if err := decodeLedgerHex("Sponsorship.PreviousTxnID", decoded.PreviousTxnID, entry.PreviousTxnID[:]); err != nil {
+	entry.PreviousTxnID, err = decoded.GetPreviousTxnID()
+	if err != nil {
+		return nil, err
+	}
+	entry.PreviousTxnLgrSeq, err = decoded.GetPreviousTxnLgrSeq()
+	if err != nil {
 		return nil, err
 	}
 	return entry, nil
@@ -90,38 +113,50 @@ func SerializeSponsorship(entry *SponsorshipData) ([]byte, error) {
 	if entry == nil {
 		return nil, errors.New("failed to encode Sponsorship: nil entry")
 	}
-	owner, err := addresscodec.EncodeAccountIDToClassicAddress(entry.Owner[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode Sponsorship owner: %w", err)
-	}
-	sponsee, err := addresscodec.EncodeAccountIDToClassicAddress(entry.Sponsee[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode Sponsorship sponsee: %w", err)
-	}
 
 	encoded := &ledgerfields.Sponsorship{}
-	encoded.SetOwner(owner)
-	encoded.SetSponsee(sponsee)
-	encoded.SetOwnerNode(fmt.Sprintf("%x", entry.OwnerNode))
-	encoded.SetSponseeNode(fmt.Sprintf("%x", entry.SponseeNode))
-	encoded.SetFlags(entry.Flags)
-	encoded.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(entry.PreviousTxnID[:])))
-	encoded.SetPreviousTxnLgrSeq(entry.PreviousTxnLgrSeq)
+	if entry.preserveEmptyOwner && entry.Owner == [20]byte{} {
+		encoded.SetOwner("")
+	} else if err := encoded.SetOwnerValue(entry.Owner); err != nil {
+		return nil, fmt.Errorf("failed to encode Sponsorship.Owner: %w", err)
+	}
+	if entry.preserveEmptySponsee && entry.Sponsee == [20]byte{} {
+		encoded.SetSponsee("")
+	} else if err := encoded.SetSponseeValue(entry.Sponsee); err != nil {
+		return nil, fmt.Errorf("failed to encode Sponsorship.Sponsee: %w", err)
+	}
+	encoded.SetOwnerNodeValue(entry.OwnerNode)
+	encoded.SetSponseeNodeValue(entry.SponseeNode)
+	encoded.SetFlagsValue(entry.Flags)
+	encoded.SetPreviousTxnIDValue(entry.PreviousTxnID)
+	encoded.SetPreviousTxnLgrSeqValue(entry.PreviousTxnLgrSeq)
 	if entry.HasFeeAmount {
-		encoded.SetFeeAmount(fmt.Sprintf("%d", entry.FeeAmount))
+		if err := encoded.SetFeeAmountValue(ledgerfields.AmountValue{Value: strconv.FormatUint(entry.FeeAmount, 10)}); err != nil {
+			return nil, fmt.Errorf("failed to encode Sponsorship.FeeAmount: %w", err)
+		}
+	} else {
+		encoded.ClearFeeAmount()
 	}
 	if entry.HasMaxFee {
-		encoded.SetMaxFee(fmt.Sprintf("%d", entry.MaxFee))
+		if err := encoded.SetMaxFeeValue(ledgerfields.AmountValue{Value: strconv.FormatUint(entry.MaxFee, 10)}); err != nil {
+			return nil, fmt.Errorf("failed to encode Sponsorship.MaxFee: %w", err)
+		}
+	} else {
+		encoded.ClearMaxFee()
 	}
 	if entry.RemainingOwnerCount != 0 {
-		encoded.SetRemainingOwnerCount(entry.RemainingOwnerCount)
+		encoded.SetRemainingOwnerCountValue(entry.RemainingOwnerCount)
+	} else {
+		encoded.ClearRemainingOwnerCount()
 	}
 	if entry.HasSponsor {
-		sponsor, err := addresscodec.EncodeAccountIDToClassicAddress(entry.Sponsor[:])
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode Sponsorship reserve sponsor: %w", err)
+		if entry.preserveEmptySponsor && entry.Sponsor == [20]byte{} {
+			encoded.SetSponsor("")
+		} else if err := encoded.SetSponsorValue(entry.Sponsor); err != nil {
+			return nil, fmt.Errorf("failed to encode Sponsorship.Sponsor: %w", err)
 		}
-		encoded.SetSponsor(sponsor)
+	} else {
+		encoded.ClearSponsor()
 	}
 
 	data, err := encoded.Encode()

@@ -78,6 +78,131 @@ func (l *LedgerHashes) SetSponsor(value string) {
 	l.present |= ledgerhashesBitSponsor
 }
 
+// HasFlags reports whether Flags is present.
+func (l *LedgerHashes) HasFlags() bool {
+	return l != nil && l.present&ledgerhashesBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (l *LedgerHashes) GetFlags() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (l *LedgerHashes) SetFlagsValue(value uint32) {
+	l.SetFlags(value)
+}
+
+// HasFirstLedgerSequence reports whether FirstLedgerSequence is present.
+func (l *LedgerHashes) HasFirstLedgerSequence() bool {
+	return l != nil && l.present&ledgerhashesBitFirstLedgerSequence != 0
+}
+
+// ClearFirstLedgerSequence removes FirstLedgerSequence from the serialized entry.
+func (l *LedgerHashes) ClearFirstLedgerSequence() {
+	if l == nil {
+		return
+	}
+	l.FirstLedgerSequence = 0
+	l.present &^= ledgerhashesBitFirstLedgerSequence
+	l.dirty = true
+}
+
+// GetFirstLedgerSequence returns the typed UInt32 value.
+func (l *LedgerHashes) GetFirstLedgerSequence() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.FirstLedgerSequence, nil
+}
+
+// SetFirstLedgerSequenceValue assigns a typed UInt32 value.
+func (l *LedgerHashes) SetFirstLedgerSequenceValue(value uint32) {
+	l.SetFirstLedgerSequence(value)
+}
+
+// HasLastLedgerSequence reports whether LastLedgerSequence is present.
+func (l *LedgerHashes) HasLastLedgerSequence() bool {
+	return l != nil && l.present&ledgerhashesBitLastLedgerSequence != 0
+}
+
+// ClearLastLedgerSequence removes LastLedgerSequence from the serialized entry.
+func (l *LedgerHashes) ClearLastLedgerSequence() {
+	if l == nil {
+		return
+	}
+	l.LastLedgerSequence = 0
+	l.present &^= ledgerhashesBitLastLedgerSequence
+	l.dirty = true
+}
+
+// GetLastLedgerSequence returns the typed UInt32 value.
+func (l *LedgerHashes) GetLastLedgerSequence() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.LastLedgerSequence, nil
+}
+
+// SetLastLedgerSequenceValue assigns a typed UInt32 value.
+func (l *LedgerHashes) SetLastLedgerSequenceValue(value uint32) {
+	l.SetLastLedgerSequence(value)
+}
+
+// HasHashes reports whether Hashes is present.
+func (l *LedgerHashes) HasHashes() bool {
+	return l != nil && l.present&ledgerhashesBitHashes != 0
+}
+
+// GetHashes returns the typed Vector256 values.
+func (l *LedgerHashes) GetHashes() (Vector256Value, error) {
+	if l == nil || l.Hashes == nil {
+		return nil, nil
+	}
+	return vector256ValueFromStrings(l.Hashes, "LedgerHashes.Hashes")
+}
+
+// SetHashesValue assigns typed Vector256 values.
+func (l *LedgerHashes) SetHashesValue(value Vector256Value) {
+	l.SetHashes(vector256ValueToStrings(value))
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (l *LedgerHashes) HasSponsor() bool {
+	return l != nil && l.present&ledgerhashesBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (l *LedgerHashes) ClearSponsor() {
+	if l == nil {
+		return
+	}
+	l.Sponsor = ""
+	l.present &^= ledgerhashesBitSponsor
+	l.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (l *LedgerHashes) GetSponsor() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Sponsor, "LedgerHashes.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (l *LedgerHashes) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetSponsor(address)
+	return nil
+}
+
 func (l *LedgerHashes) validateRequired() error {
 	if l.decoded && !l.dirty {
 		return nil

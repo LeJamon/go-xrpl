@@ -3,8 +3,6 @@ package xchain
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"reflect"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -211,6 +209,42 @@ func bridgeMap(bridge XChainBridge) map[string]any {
 	}
 }
 
+func bridgeAccount(bridge *entry.Bridge) (string, error) {
+	account, err := bridge.GetAccount()
+	if err != nil {
+		return "", err
+	}
+	return state.EncodeAccountID(account)
+}
+
+func bridgeValue(bridge XChainBridge) (entry.XChainBridgeValue, error) {
+	lockingDoor, err := state.DecodeAccountID(bridge.LockingChainDoor)
+	if err != nil {
+		return entry.XChainBridgeValue{}, err
+	}
+	issuingDoor, err := state.DecodeAccountID(bridge.IssuingChainDoor)
+	if err != nil {
+		return entry.XChainBridgeValue{}, err
+	}
+	return entry.XChainBridgeValue{
+		LockingChainDoor:  lockingDoor,
+		LockingChainIssue: issueValue(bridge.LockingChainIssue),
+		IssuingChainDoor:  issuingDoor,
+		IssuingChainIssue: issueValue(bridge.IssuingChainIssue),
+	}, nil
+}
+
+func issueValue(asset tx.Asset) entry.IssueValue {
+	if asset.IsMPT() {
+		return entry.IssueValue{MPTIssuanceID: asset.MPTIssuanceID}
+	}
+	asset = normalizedAsset(asset)
+	if bridgeAssetIsNative(asset) {
+		return entry.IssueValue{Currency: "XRP"}
+	}
+	return entry.IssueValue{Currency: asset.Currency, Issuer: asset.Issuer}
+}
+
 func flattenXChain(transaction tx.Transaction, bridge XChainBridge) (map[string]any, error) {
 	fields, err := tx.ReflectFlatten(transaction)
 	if err != nil {
@@ -239,18 +273,6 @@ func amountAny(amount tx.Amount) (any, error) {
 		return nil, err
 	}
 	return value, nil
-}
-
-func amountFromAny(value any) (tx.Amount, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return tx.Amount{}, err
-	}
-	var amount tx.Amount
-	if err := json.Unmarshal(raw, &amount); err != nil {
-		return tx.Amount{}, err
-	}
-	return amount, nil
 }
 
 func bridgeKeylet(bridge XChainBridge, chain chainType) (keylet.Keylet, error) {
@@ -302,7 +324,10 @@ func claimBridgeKeylet(bridge XChainBridge) (keylet.XChainBridge, error) {
 }
 
 func readBridge(view tx.ReadOnlyLedgerView, bridge XChainBridge) (*entry.Bridge, keylet.Keylet, error) {
-	want := bridgeMap(bridge)
+	want, err := bridgeValue(bridge)
+	if err != nil {
+		return nil, keylet.Keylet{}, err
+	}
 	for _, chain := range []chainType{lockingChain, issuingChain} {
 		k, err := bridgeKeylet(bridge, chain)
 		if err != nil {
@@ -319,18 +344,15 @@ func readBridge(view tx.ReadOnlyLedgerView, bridge XChainBridge) (*entry.Bridge,
 		if err := sle.Decode(data); err != nil {
 			return nil, keylet.Keylet{}, err
 		}
-		if reflect.DeepEqual(sle.XChainBridge, want) {
+		got, err := sle.GetXChainBridge()
+		if err != nil {
+			return nil, keylet.Keylet{}, err
+		}
+		if got == want {
 			return &sle, k, nil
 		}
 	}
 	return nil, keylet.Keylet{}, nil
-}
-
-func parseHexUint(value string) (uint64, error) {
-	if value == "" {
-		return 0, nil
-	}
-	return strconv.ParseUint(value, 16, 64)
 }
 
 func encodeEntry(value interface{ Encode() ([]byte, error) }) ([]byte, ter.Result) {
@@ -448,12 +470,4 @@ func publicKeyAccount(publicKeyHex string) (string, error) {
 		return "", err
 	}
 	return addresscodec.EncodeClassicAddressFromPublicKey(publicKey)
-}
-
-func mustAmountAny(amount tx.Amount) any {
-	value, err := amountAny(amount)
-	if err != nil {
-		panic(fmt.Sprintf("xchain amount serialization failed: %v", err))
-	}
-	return value
 }

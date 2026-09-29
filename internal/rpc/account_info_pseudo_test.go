@@ -37,12 +37,14 @@ func TestAccountInfoPseudoAccount(t *testing.T) {
 	// the binary codec, matching what the service supplies in RawData.
 	buildRaw := func(designator string) []byte {
 		obj := map[string]any{
-			"LedgerEntryType": "AccountRoot",
-			"Account":         validAccount,
-			"Balance":         "100000000000",
-			"Flags":           uint32(0),
-			"OwnerCount":      uint32(0),
-			"Sequence":        uint32(1),
+			"LedgerEntryType":   "AccountRoot",
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(0),
+			"Account":           validAccount,
+			"Balance":           "100000000000",
+			"Flags":             uint32(0),
+			"OwnerCount":        uint32(0),
+			"Sequence":          uint32(1),
 		}
 		if designator != "" {
 			obj[designator] = designatorHash

@@ -1,12 +1,12 @@
 package state
 
 import (
-	"encoding/hex"
+	"bytes"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -64,7 +64,7 @@ type AccountRoot struct {
 	LoanBrokerID           [32]byte // Links LoanBroker pseudo-account to its LoanBroker ledger entry (sfLoanBrokerID, fieldCode 37)
 	PreviousTxnID          [32]byte
 	PreviousTxnLgrSeq      uint32
-	decodedOptionals       map[string]any
+	decoded                entry.AccountRoot
 }
 
 // HasAMMID reports whether the sfAMMID field is present, the faithful equivalent
@@ -140,28 +140,27 @@ const (
 	LsfAllowTrustLineClawback       = entry.LsfAllowTrustLineClawback
 )
 
-// encodeAccountID encodes a 20-byte account ID to an XRPL address
-func encodeAccountID(accountID [20]byte) (string, error) {
-	return addresscodec.EncodeAccountIDToClassicAddress(accountID[:])
-}
-
 // ParseAccountRoot parses account data from binary format
 func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	var decoded entry.AccountRoot
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode AccountRoot: %w", err)
 	}
-	fields := decoded.ToMap()
-	balance, err := decodeNativeLedgerBalance("AccountRoot.Balance", decoded.Balance)
+	balanceValue, err := decoded.GetBalance()
 	if err != nil {
 		return nil, err
 	}
-	domain, err := hex.DecodeString(decoded.Domain)
+	balance, err := decodeNativeLedgerBalance("AccountRoot.Balance", balanceValue)
+	if err != nil {
+		return nil, err
+	}
+	domain, err := decoded.GetDomain()
 	if err != nil {
 		return nil, fmt.Errorf("AccountRoot.Domain: invalid hex: %w", err)
 	}
-	if decoded.TickSize < 0 || decoded.TickSize > 255 {
-		return nil, fmt.Errorf("AccountRoot.TickSize: decoded value %d is out of range", decoded.TickSize)
+	tickSize, err := decoded.GetTickSize()
+	if err != nil {
+		return nil, err
 	}
 
 	account := &AccountRoot{
@@ -173,67 +172,56 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 		SponsoringOwnerCount:   decoded.SponsoringOwnerCount,
 		SponsoringAccountCount: decoded.SponsoringAccountCount,
 		Sponsor:                decoded.Sponsor,
-		HasSponsor:             fields["Sponsor"] != nil,
+		HasSponsor:             decoded.HasSponsor(),
 		Flags:                  decoded.Flags,
 		RegularKey:             decoded.RegularKey,
 		Domain:                 string(domain),
 		EmailHash:              strings.ToLower(decoded.EmailHash),
 		MessageKey:             strings.ToLower(decoded.MessageKey),
 		TransferRate:           decoded.TransferRate,
-		TickSize:               uint8(decoded.TickSize),
+		TickSize:               tickSize,
 		NFTokenMinter:          decoded.NFTokenMinter,
 		MintedNFTokens:         decoded.MintedNFTokens,
 		BurnedNFTokens:         decoded.BurnedNFTokens,
 		FirstNFTokenSequence:   decoded.FirstNFTokenSequence,
-		HasFirstNFTSeq:         fields["FirstNFTokenSequence"] != nil,
-		HasAccountTxnID:        fields["AccountTxnID"] != nil,
+		HasFirstNFTSeq:         decoded.HasFirstNFTokenSequence(),
+		HasAccountTxnID:        decoded.HasAccountTxnID(),
 		WalletLocator:          strings.ToLower(decoded.WalletLocator),
 		WalletSize:             decoded.WalletSize,
-		HasWalletSize:          fields["WalletSize"] != nil,
+		HasWalletSize:          decoded.HasWalletSize(),
 		TicketCount:            decoded.TicketCount,
 		PreviousTxnLgrSeq:      decoded.PreviousTxnLgrSeq,
-		decodedOptionals: map[string]any{
-			"Domain":       string(domain),
-			"MessageKey":   strings.ToLower(decoded.MessageKey),
-			"TransferRate": decoded.TransferRate,
-			"TickSize":     uint8(decoded.TickSize),
-			"TicketCount":  decoded.TicketCount,
-			"AMMID":        [32]byte{},
-			"VaultID":      [32]byte{},
-			"LoanBrokerID": [32]byte{},
-		},
+		decoded:                decoded,
 	}
-	for _, field := range []string{"Domain", "MessageKey", "TransferRate", "TickSize", "TicketCount", "AMMID", "VaultID", "LoanBrokerID"} {
-		if _, ok := fields[field]; !ok {
-			delete(account.decodedOptionals, field)
-		}
-	}
-	for _, hash := range []struct {
-		field string
-		value string
-		dst   []byte
-	}{
-		{"AccountTxnID", decoded.AccountTxnID, account.AccountTxnID[:]},
-		{"AMMID", decoded.AMMID, account.AMMID[:]},
-		{"VaultID", decoded.VaultID, account.VaultID[:]},
-		{"LoanBrokerID", decoded.LoanBrokerID, account.LoanBrokerID[:]},
-		{"PreviousTxnID", decoded.PreviousTxnID, account.PreviousTxnID[:]},
-	} {
-		if _, ok := fields[hash.field]; !ok {
-			continue
-		}
-		if err := decodeLedgerHex("AccountRoot."+hash.field, hash.value, hash.dst); err != nil {
+	if decoded.HasAccountTxnID() {
+		account.AccountTxnID, err = decoded.GetAccountTxnID()
+		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["AMMID"]; ok {
-		account.decodedOptionals["AMMID"] = account.AMMID
+	if decoded.HasAMMID() {
+		account.AMMID, err = decoded.GetAMMID()
+		if err != nil {
+			return nil, err
+		}
 	}
-	if _, ok := fields["VaultID"]; ok {
-		account.decodedOptionals["VaultID"] = account.VaultID
+	if decoded.HasVaultID() {
+		account.VaultID, err = decoded.GetVaultID()
+		if err != nil {
+			return nil, err
+		}
 	}
-	if _, ok := fields["LoanBrokerID"]; ok {
-		account.decodedOptionals["LoanBrokerID"] = account.LoanBrokerID
+	if decoded.HasLoanBrokerID() {
+		account.LoanBrokerID, err = decoded.GetLoanBrokerID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if decoded.HasPreviousTxnID() {
+		account.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return account, nil
 }
@@ -244,97 +232,120 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		return nil, errors.New("failed to encode AccountRoot: nil entry")
 	}
 
-	var sle entry.AccountRoot
-	sle.SetBalance(fmt.Sprintf("%d", account.Balance))
+	if account.Account == "" {
+		return nil, errors.New("failed to encode AccountRoot: required field Account is not set")
+	}
+	decodedDomain, err := account.decoded.GetDomain()
+	if err != nil {
+		return nil, err
+	}
+	decodedAMMID, err := account.decoded.GetAMMID()
+	if err != nil {
+		return nil, err
+	}
+	decodedVaultID, err := account.decoded.GetVaultID()
+	if err != nil {
+		return nil, err
+	}
+	decodedLoanBrokerID, err := account.decoded.GetLoanBrokerID()
+	if err != nil {
+		return nil, err
+	}
+	sle := account.decoded
+	if err := sle.SetBalanceValue(entry.AmountValue{Value: strconv.FormatUint(account.Balance, 10)}); err != nil {
+		return nil, err
+	}
 	sle.SetSequence(account.Sequence)
 	sle.SetOwnerCount(account.OwnerCount)
-	if account.SponsoredOwnerCount > 0 {
-		sle.SetSponsoredOwnerCount(account.SponsoredOwnerCount)
-	}
-	if account.SponsoringOwnerCount > 0 {
-		sle.SetSponsoringOwnerCount(account.SponsoringOwnerCount)
-	}
-	if account.SponsoringAccountCount > 0 {
-		sle.SetSponsoringAccountCount(account.SponsoringAccountCount)
-	}
+	sle.SetSponsoredOwnerCount(account.SponsoredOwnerCount)
+	sle.SetSponsoringOwnerCount(account.SponsoringOwnerCount)
+	sle.SetSponsoringAccountCount(account.SponsoringAccountCount)
+	sle.SetFlags(account.Flags)
+	sle.SetMintedNFTokens(account.MintedNFTokens)
+	sle.SetBurnedNFTokens(account.BurnedNFTokens)
+	sle.SetAccount(account.Account)
 	if account.HasSponsor || account.Sponsor != "" {
 		sle.SetSponsor(account.Sponsor)
+	} else {
+		sle.ClearSponsor()
 	}
-	sle.SetFlags(account.Flags)
-
-	if account.Account != "" {
-		sle.SetAccount(account.Account)
-	}
-
-	if account.TransferRate > 0 || decodedFieldUnchanged(account.decodedOptionals, "TransferRate", account.TransferRate) {
+	if account.TransferRate != 0 || (account.decoded.HasTransferRate() && account.decoded.TransferRate == account.TransferRate) {
 		sle.SetTransferRate(account.TransferRate)
+	} else {
+		sle.ClearTransferRate()
 	}
-
-	if account.RegularKey != "" {
+	if account.RegularKey != "" || (account.decoded.HasRegularKey() && account.decoded.RegularKey == account.RegularKey) {
 		sle.SetRegularKey(account.RegularKey)
+	} else {
+		sle.ClearRegularKey()
 	}
-
-	if account.Domain != "" || decodedFieldUnchanged(account.decodedOptionals, "Domain", account.Domain) {
-		sle.SetDomain(strings.ToUpper(hex.EncodeToString([]byte(account.Domain))))
+	if account.Domain != "" || (account.decoded.HasDomain() && bytes.Equal(decodedDomain, []byte(account.Domain))) {
+		sle.SetDomainValue([]byte(account.Domain))
+	} else {
+		sle.ClearDomain()
 	}
-
-	if account.EmailHash != "" {
+	if account.EmailHash != "" || (account.decoded.HasEmailHash() && account.decoded.EmailHash == strings.ToUpper(account.EmailHash)) {
 		sle.SetEmailHash(strings.ToUpper(account.EmailHash))
+	} else {
+		sle.ClearEmailHash()
 	}
-
-	if account.MessageKey != "" || decodedFieldUnchanged(account.decodedOptionals, "MessageKey", account.MessageKey) {
+	if account.MessageKey != "" || (account.decoded.HasMessageKey() && account.decoded.MessageKey == strings.ToUpper(account.MessageKey)) {
 		sle.SetMessageKey(strings.ToUpper(account.MessageKey))
+	} else {
+		sle.ClearMessageKey()
 	}
-
-	if account.NFTokenMinter != "" {
+	if account.NFTokenMinter != "" || (account.decoded.HasNFTokenMinter() && account.decoded.NFTokenMinter == account.NFTokenMinter) {
 		sle.SetNFTokenMinter(account.NFTokenMinter)
+	} else {
+		sle.ClearNFTokenMinter()
 	}
-
-	if account.MintedNFTokens > 0 {
-		sle.SetMintedNFTokens(account.MintedNFTokens)
-	}
-
-	if account.BurnedNFTokens > 0 {
-		sle.SetBurnedNFTokens(account.BurnedNFTokens)
-	}
-
 	if account.HasFirstNFTSeq {
 		sle.SetFirstNFTokenSequence(account.FirstNFTokenSequence)
+	} else {
+		sle.ClearFirstNFTokenSequence()
 	}
-
-	if account.TicketCount > 0 || decodedFieldUnchanged(account.decodedOptionals, "TicketCount", account.TicketCount) {
+	if account.TicketCount != 0 || (account.decoded.HasTicketCount() && account.decoded.TicketCount == account.TicketCount) {
 		sle.SetTicketCount(account.TicketCount)
+	} else {
+		sle.ClearTicketCount()
 	}
-
-	var zeroHash [32]byte
 	if account.HasAccountTxnID {
-		sle.SetAccountTxnID(strings.ToUpper(hex.EncodeToString(account.AccountTxnID[:])))
+		sle.SetAccountTxnIDValue(account.AccountTxnID)
+	} else {
+		sle.ClearAccountTxnID()
 	}
-
-	if account.WalletLocator != "" {
+	if account.WalletLocator != "" || (account.decoded.HasWalletLocator() && account.decoded.WalletLocator == strings.ToUpper(account.WalletLocator)) {
 		sle.SetWalletLocator(strings.ToUpper(account.WalletLocator))
+	} else {
+		sle.ClearWalletLocator()
 	}
 	if account.HasWalletSize {
 		sle.SetWalletSize(account.WalletSize)
+	} else {
+		sle.ClearWalletSize()
 	}
-
-	if account.AMMID != zeroHash || decodedFieldUnchanged(account.decodedOptionals, "AMMID", account.AMMID) {
-		sle.SetAMMID(strings.ToUpper(hex.EncodeToString(account.AMMID[:])))
+	if account.AMMID != [32]byte{} || (account.decoded.HasAMMID() && decodedAMMID == account.AMMID) {
+		sle.SetAMMIDValue(account.AMMID)
+	} else {
+		sle.ClearAMMID()
 	}
-
-	if account.VaultID != zeroHash || decodedFieldUnchanged(account.decodedOptionals, "VaultID", account.VaultID) {
-		sle.SetVaultID(strings.ToUpper(hex.EncodeToString(account.VaultID[:])))
+	if account.VaultID != [32]byte{} || (account.decoded.HasVaultID() && decodedVaultID == account.VaultID) {
+		sle.SetVaultIDValue(account.VaultID)
+	} else {
+		sle.ClearVaultID()
 	}
-	if account.LoanBrokerID != zeroHash || decodedFieldUnchanged(account.decodedOptionals, "LoanBrokerID", account.LoanBrokerID) {
-		sle.SetLoanBrokerID(strings.ToUpper(hex.EncodeToString(account.LoanBrokerID[:])))
+	if account.LoanBrokerID != [32]byte{} || (account.decoded.HasLoanBrokerID() && decodedLoanBrokerID == account.LoanBrokerID) {
+		sle.SetLoanBrokerIDValue(account.LoanBrokerID)
+	} else {
+		sle.ClearLoanBrokerID()
 	}
-
-	sle.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(account.PreviousTxnID[:])))
-	sle.SetPreviousTxnLgrSeq(account.PreviousTxnLgrSeq)
-
-	if account.TickSize > 0 || decodedFieldUnchanged(account.decodedOptionals, "TickSize", account.TickSize) {
+	if account.TickSize != 0 || (account.decoded.HasTickSize() && account.decoded.TickSize == int(account.TickSize)) {
 		sle.SetTickSize(account.TickSize)
+	} else {
+		sle.ClearTickSize()
 	}
+	sle.SetPreviousTxnIDValue(account.PreviousTxnID)
+	sle.SetPreviousTxnLgrSeq(account.PreviousTxnLgrSeq)
 
 	data, err := sle.Encode()
 	if err != nil {

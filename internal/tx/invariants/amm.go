@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -42,13 +41,18 @@ type ammInvariantFields struct {
 }
 
 // parseAMMInvariantFields extracts the Account ID and LPTokenBalance from
-// binary AMM SLE data. AMM data is stored in the standard binary codec format,
-// so we decode it via binarycodec.Decode.
+// binary AMM SLE data.
 func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
-	hexStr := hex.EncodeToString(data)
-	fields, err := binarycodec.Decode(hexStr)
-	if err != nil {
+	var decoded entry.AMM
+	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode AMM binary: %w", err)
+	}
+	if !decoded.HasAccount() {
+		return nil, fmt.Errorf("AMM SLE missing required Account field")
+	}
+	accountID, err := decoded.GetAccount()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AMM Account ID: %w", err)
 	}
 
 	result := &ammInvariantFields{}
@@ -59,24 +63,15 @@ func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
 	// when the field is absent — ApplyContext's catch-all converts that to
 	// tecINVARIANT_FAILED. A successful decode missing either field is a
 	// serialization round-trip bug, so fail rather than default to zero.
-	acctStr, ok := fields["Account"].(string)
-	if !ok {
-		return nil, fmt.Errorf("AMM SLE missing required Account field")
-	}
-	id, err := state.DecodeAccountID(acctStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode AMM Account ID: %w", err)
-	}
-	result.accountID = id
-
-	lptObj, ok := fields["LPTokenBalance"].(map[string]any)
-	if !ok {
+	result.accountID = accountID
+	if !decoded.HasLPTokenBalance() {
 		return nil, fmt.Errorf("AMM SLE missing required LPTokenBalance field")
 	}
-	valueStr, _ := lptObj["value"].(string)
-	currency, _ := lptObj["currency"].(string)
-	issuer, _ := lptObj["issuer"].(string)
-	lptBalance, err := state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
+	lptValue, err := decoded.GetLPTokenBalance()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM LPTokenBalance: %w", err)
+	}
+	lptBalance, err := state.AmountFromLedgerValue(lptValue)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse AMM LPTokenBalance: %w", err)
 	}

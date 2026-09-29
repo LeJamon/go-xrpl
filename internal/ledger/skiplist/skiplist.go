@@ -182,11 +182,6 @@ func Write(stateMap *shamap.SHAMap, key [32]byte, fields *LedgerHashesFields, ha
 }
 
 func encode(fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) ([]byte, error) {
-	hashHexes := make([]string, len(hashes))
-	for i, h := range hashes {
-		hashHexes[i] = fmt.Sprintf("%064X", h)
-	}
-
 	entry := &ledgerfields.LedgerHashes{}
 	if fields == nil {
 		entry.SetFlags(0)
@@ -199,7 +194,7 @@ func encode(fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) ([]by
 			entry.SetSponsor(fields.Sponsor)
 		}
 	}
-	entry.SetHashes(hashHexes)
+	entry.SetHashesValue(hashes)
 	entry.SetLastLedgerSequence(lastSeq)
 
 	data, err := entry.Encode()

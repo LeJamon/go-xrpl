@@ -42,7 +42,7 @@ func TestLoadAmendmentsMatchesTypedDecoder(t *testing.T) {
 		if err := decoded.Decode(data); err != nil {
 			t.Fatalf("typed decode: %v", err)
 		}
-		decodedIDs, err := decodeAmendmentIDs(decoded.Amendments)
+		decodedIDs, err := decoded.GetAmendments()
 		if err != nil {
 			t.Fatalf("decode typed amendment IDs: %v", err)
 		}
@@ -116,14 +116,15 @@ func TestLoadAmendmentsFromLedgerEntryRejectsMalformedData(t *testing.T) {
 	}
 }
 
-func TestDecodeAmendmentIDsStrict(t *testing.T) {
+func TestAmendmentsTypedIDsStrict(t *testing.T) {
 	canonical := strings.Repeat("AB", 32)
-	ids, err := decodeAmendmentIDs([]string{canonical})
+	decoded := ledgerentry.Amendments{Amendments: []string{canonical}}
+	ids, err := decoded.GetAmendments()
 	if err != nil {
-		t.Fatalf("decodeAmendmentIDs: %v", err)
+		t.Fatalf("GetAmendments: %v", err)
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0][:], bytes.Repeat([]byte{0xAB}, 32)) {
-		t.Fatalf("decodeAmendmentIDs returned %X", ids)
+		t.Fatalf("GetAmendments returned %X", ids)
 	}
 
 	for _, value := range []string{
@@ -131,8 +132,9 @@ func TestDecodeAmendmentIDsStrict(t *testing.T) {
 		strings.Repeat("AB", 33),
 		strings.Repeat("AB", 31) + "AZ",
 	} {
-		if _, err := decodeAmendmentIDs([]string{value}); err == nil {
-			t.Fatalf("decodeAmendmentIDs accepted %q", value)
+		decoded.SetAmendments([]string{value})
+		if _, err := decoded.GetAmendments(); err == nil {
+			t.Fatalf("GetAmendments accepted %q", value)
 		}
 	}
 }

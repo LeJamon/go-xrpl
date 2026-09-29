@@ -87,6 +87,177 @@ func (a *Amendments) SetSponsor(value string) {
 	a.present |= amendmentsBitSponsor
 }
 
+// HasFlags reports whether Flags is present.
+func (a *Amendments) HasFlags() bool {
+	return a != nil && a.present&amendmentsBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (a *Amendments) GetFlags() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (a *Amendments) SetFlagsValue(value uint32) {
+	a.SetFlags(value)
+}
+
+// HasAmendments reports whether Amendments is present.
+func (a *Amendments) HasAmendments() bool {
+	return a != nil && a.present&amendmentsBitAmendments != 0
+}
+
+// ClearAmendments removes Amendments from the serialized entry.
+func (a *Amendments) ClearAmendments() {
+	if a == nil {
+		return
+	}
+	a.Amendments = nil
+	a.present &^= amendmentsBitAmendments
+	a.dirty = true
+}
+
+// GetAmendments returns the typed Vector256 values.
+func (a *Amendments) GetAmendments() (Vector256Value, error) {
+	if a == nil || a.Amendments == nil {
+		return nil, nil
+	}
+	return vector256ValueFromStrings(a.Amendments, "Amendments.Amendments")
+}
+
+// SetAmendmentsValue assigns typed Vector256 values.
+func (a *Amendments) SetAmendmentsValue(value Vector256Value) {
+	a.SetAmendments(vector256ValueToStrings(value))
+}
+
+// HasMajorities reports whether Majorities is present.
+func (a *Amendments) HasMajorities() bool {
+	return a != nil && a.present&amendmentsBitMajorities != 0
+}
+
+// ClearMajorities removes Majorities from the serialized entry.
+func (a *Amendments) ClearMajorities() {
+	if a == nil {
+		return
+	}
+	a.Majorities = nil
+	a.present &^= amendmentsBitMajorities
+	a.dirty = true
+}
+
+// GetMajorities returns typed nested objects.
+func (a *Amendments) GetMajorities() ([]MajorityValue, error) {
+	if a == nil || a.Majorities == nil {
+		return nil, nil
+	}
+	return majorityValueSliceFromAny(a.Majorities, "Amendments.Majorities")
+}
+
+// SetMajoritiesValue assigns typed nested objects.
+func (a *Amendments) SetMajoritiesValue(value []MajorityValue) error {
+	encoded, err := majorityValueSliceToAny(value, "Amendments.Majorities")
+	if err != nil {
+		return err
+	}
+	a.SetMajorities(encoded)
+	return nil
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (a *Amendments) HasPreviousTxnID() bool {
+	return a != nil && a.present&amendmentsBitPreviousTxnID != 0
+}
+
+// ClearPreviousTxnID removes PreviousTxnID from the serialized entry.
+func (a *Amendments) ClearPreviousTxnID() {
+	if a == nil {
+		return
+	}
+	a.PreviousTxnID = ""
+	a.present &^= amendmentsBitPreviousTxnID
+	a.dirty = true
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (a *Amendments) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.PreviousTxnID, "Amendments.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (a *Amendments) SetPreviousTxnIDValue(value [32]byte) {
+	a.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (a *Amendments) HasPreviousTxnLgrSeq() bool {
+	return a != nil && a.present&amendmentsBitPreviousTxnLgrSeq != 0
+}
+
+// ClearPreviousTxnLgrSeq removes PreviousTxnLgrSeq from the serialized entry.
+func (a *Amendments) ClearPreviousTxnLgrSeq() {
+	if a == nil {
+		return
+	}
+	a.PreviousTxnLgrSeq = 0
+	a.present &^= amendmentsBitPreviousTxnLgrSeq
+	a.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (a *Amendments) GetPreviousTxnLgrSeq() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (a *Amendments) SetPreviousTxnLgrSeqValue(value uint32) {
+	a.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (a *Amendments) HasSponsor() bool {
+	return a != nil && a.present&amendmentsBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (a *Amendments) ClearSponsor() {
+	if a == nil {
+		return
+	}
+	a.Sponsor = ""
+	a.present &^= amendmentsBitSponsor
+	a.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (a *Amendments) GetSponsor() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.Sponsor, "Amendments.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (a *Amendments) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetSponsor(address)
+	return nil
+}
+
 func (a *Amendments) validateRequired() error {
 	if a.decoded && !a.dirty {
 		return nil

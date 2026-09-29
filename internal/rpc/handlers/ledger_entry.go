@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // LedgerEntryMethod handles the ledger_entry RPC method
@@ -501,7 +501,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if binary {
 		response["node_binary"] = result.NodeBinary
 	} else if decodeErr == nil {
-		addLedgerEntryJSONFields(decoded, computedIndex)
+		addLedgerEntryJSONFields(decoded, computedIndex, result.Node)
 		response["node"] = decoded
 	} else {
 		response["node"] = strings.ToUpper(hex.EncodeToString(result.Node))
@@ -510,7 +510,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	return response, nil
 }
 
-func addLedgerEntryJSONFields(node map[string]any, index string) {
+func addLedgerEntryJSONFields(node map[string]any, index string, data []byte) {
 	node["index"] = index
 	if node["LedgerEntryType"] != "MPTokenIssuance" {
 		return
@@ -518,27 +518,23 @@ func addLedgerEntryJSONFields(node map[string]any, index string) {
 	if _, ok := node["mpt_issuance_id"]; ok {
 		return
 	}
-
-	sequenceJSON, err := json.Marshal(node["Sequence"])
+	var issuance ledgerfields.MPTokenIssuance
+	if err := issuance.Decode(data); err != nil {
+		var fields struct {
+			Sequence *uint32
+			Issuer   string
+		}
+		if err := json.Unmarshal(data, &fields); err != nil || fields.Sequence == nil || fields.Issuer == "" {
+			return
+		}
+		issuance.SetSequence(*fields.Sequence)
+		issuance.SetIssuer(fields.Issuer)
+	}
+	issuer, err := issuance.GetIssuer()
 	if err != nil {
 		return
 	}
-	sequence, ok := parseJSONUInt32(sequenceJSON)
-	if !ok {
-		return
-	}
-	issuer, ok := node["Issuer"].(string)
-	if !ok {
-		return
-	}
-	issuerID, err := decodeAccountID(issuer)
-	if err != nil {
-		return
-	}
-
-	var issuanceID [24]byte
-	binary.BigEndian.PutUint32(issuanceID[:4], sequence)
-	copy(issuanceID[4:], issuerID[:])
+	issuanceID := keylet.MakeMPTID(issuance.Sequence, issuer)
 	node["mpt_issuance_id"] = strings.ToUpper(hex.EncodeToString(issuanceID[:]))
 }
 

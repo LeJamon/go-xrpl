@@ -133,7 +133,7 @@ func TestVaultInfoRequiresShareIssuance(t *testing.T) {
 	require.NoError(t, err)
 	copy(vaultKey[:], vaultKeyBytes)
 	mock.entries[vaultKey] = &types.LedgerEntryResult{
-		Node: []byte(`{"LedgerEntryType":"Vault","ShareMPTID":"` + vaultShareMPTID + `"}`),
+		Node: encodeVaultInfoEntry(t, map[string]any{"LedgerEntryType": "Vault", "ShareMPTID": vaultShareMPTID}),
 	}
 
 	result, rpcErr := method.Handle(ctx, []byte(`{"ledger_index":"validated","vault_id":"`+vaultInfoID+`"}`))
@@ -158,7 +158,7 @@ func TestVaultInfoProjectsSharesFromResolvedLedger(t *testing.T) {
 		LedgerIndex: 99,
 		LedgerHash:  [32]byte{0xAA},
 		Validated:   true,
-		Node: encodeSyntheticRPCObject(t, map[string]any{
+		Node: encodeVaultInfoEntry(t, map[string]any{
 			"LedgerEntryType": "Vault",
 			"Owner":           vaultInfoAccount,
 			"ShareMPTID":      vaultShareMPTID,
@@ -168,7 +168,7 @@ func TestVaultInfoProjectsSharesFromResolvedLedger(t *testing.T) {
 		LedgerIndex: 99,
 		LedgerHash:  [32]byte{0xAA},
 		Validated:   true,
-		Node: encodeSyntheticRPCObject(t, map[string]any{
+		Node: encodeVaultInfoEntry(t, map[string]any{
 			"LedgerEntryType":   "MPTokenIssuance",
 			"Sequence":          uint32(1),
 			"Issuer":            vaultInfoAccount,
@@ -210,7 +210,7 @@ func TestVaultInfoRejectsWrongLedgerEntryTypes(t *testing.T) {
 				vaultKey := keylet.Vault(ownerID, 1).Key
 				issuanceKey := keylet.MPTIssuance(vaultInfoShareID(t)).Key
 				mock.entries[vaultKey] = &types.LedgerEntryResult{
-					Node: encodeSyntheticRPCObject(t, map[string]any{
+					Node: encodeVaultInfoEntry(t, map[string]any{
 						"LedgerEntryType": "Vault",
 						"ShareMPTID":      vaultShareMPTID,
 					}),
@@ -223,7 +223,7 @@ func TestVaultInfoRejectsWrongLedgerEntryTypes(t *testing.T) {
 					wantLookups = 1
 				}
 				mock.entries[wrongKey] = &types.LedgerEntryResult{
-					Node: encodeSyntheticRPCObject(t, map[string]any{
+					Node: encodeVaultInfoEntry(t, map[string]any{
 						"LedgerEntryType": "AccountRoot",
 						"Account":         vaultInfoAccount,
 					}),
@@ -240,4 +240,33 @@ func TestVaultInfoRejectsWrongLedgerEntryTypes(t *testing.T) {
 			})
 		}
 	}
+}
+
+func encodeVaultInfoEntry(t *testing.T, fields map[string]any) []byte {
+	t.Helper()
+	defaults := map[string]any{
+		"Flags": uint32(0), "OwnerNode": "0", "Sequence": uint32(1),
+		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
+	}
+	switch fields["LedgerEntryType"] {
+	case "Vault":
+		defaults["Owner"] = vaultInfoAccount
+		defaults["Account"] = vaultInfoAccount
+		defaults["Asset"] = map[string]any{"currency": "XRP"}
+		defaults["WithdrawalPolicy"] = uint8(0)
+	case "MPTokenIssuance":
+		defaults["Issuer"] = vaultInfoAccount
+		defaults["OutstandingAmount"] = "0"
+	case "AccountRoot":
+		delete(defaults, "OwnerNode")
+		defaults["Account"] = vaultInfoAccount
+		defaults["Balance"] = "0"
+		defaults["OwnerCount"] = uint32(0)
+	}
+	for field, value := range defaults {
+		if _, present := fields[field]; !present {
+			fields[field] = value
+		}
+	}
+	return encodeSyntheticRPCObject(t, fields)
 }

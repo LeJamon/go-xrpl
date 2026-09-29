@@ -315,12 +315,14 @@ func TestGetAggregatePriceThresholdIncludesBoundary(t *testing.T) {
 func TestGetAggregatePriceWalksExactlyThreePriorOracleVersions(t *testing.T) {
 	const owner = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	for _, test := range []struct {
-		name       string
-		matchDepth int
-		wantFound  bool
+		name                string
+		matchDepth          int
+		wantFound           bool
+		partialIntermediate bool
 	}{
 		{name: "third prior version is included", matchDepth: 3, wantFound: true},
 		{name: "fourth prior version is excluded", matchDepth: 4, wantFound: false},
+		{name: "partial intermediate metadata retains history", matchDepth: 3, wantFound: true, partialIntermediate: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := newAggregatePriceLedgerService()
@@ -343,6 +345,10 @@ func TestGetAggregatePriceWalksExactlyThreePriorOracleVersions(t *testing.T) {
 					quote = "USD"
 				}
 				fields := aggregateHistoricalOracleFields(100-uint32(depth), base, quote, 740, 1)
+				if test.partialIntermediate && depth < test.matchDepth {
+					delete(fields, "PriceDataSeries")
+					delete(fields, "LastUpdateTime")
+				}
 				nextHash := ""
 				nextSequence := uint32(0)
 				if depth < test.matchDepth {

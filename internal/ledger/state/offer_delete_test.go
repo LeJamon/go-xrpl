@@ -1,11 +1,10 @@
 package state
 
 import (
-	"encoding/hex"
-	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,15 +40,13 @@ func TestDeleteOfferRemovesEveryBookDirectory(t *testing.T) {
 		_, err = DirInsert(view, dir, offerKey.Key, true, nil)
 		require.NoError(t, err)
 	}
-	books := make([]any, 0, len(additional))
-	for _, dir := range additional {
-		books = append(books, map[string]any{
-			"Book": map[string]any{
-				"BookDirectory": strings.ToUpper(hex.EncodeToString(dir.Key[:])),
-				"BookNode":      "0",
-			},
-		})
+	books := make([]ledgerfields.BookValue, len(additional))
+	for i, dir := range additional {
+		books[i].SetBookDirectoryValue(dir.Key)
+		books[i].SetBookNodeValue(0)
 	}
+	decoded := ledgerfields.Offer{}
+	require.NoError(t, decoded.SetAdditionalBooksValue(books))
 	offer := &LedgerOffer{
 		Account:                 EncodeAccountIDSafe(owner),
 		Sequence:                7,
@@ -57,11 +54,7 @@ func TestDeleteOfferRemovesEveryBookDirectory(t *testing.T) {
 		TakerGets:               NewXRPAmountFromInt(1_000_000),
 		BookDirectory:           primary.Key,
 		AdditionalBookDirectory: additional[0].Key,
-		decodedOptionals: map[string]any{
-			"AdditionalBooks":         books,
-			"AdditionalBookDirectory": additional[0].Key,
-			"AdditionalBookNode":      uint64(0),
-		},
+		decoded:                 decoded,
 	}
 	data, err := SerializeLedgerOffer(offer)
 	require.NoError(t, err)

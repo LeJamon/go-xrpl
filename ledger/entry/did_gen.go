@@ -114,6 +114,221 @@ func (d *DID) SetSponsor(value string) {
 	d.present |= didBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (d *DID) HasAccount() bool {
+	return d != nil && d.present&didBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (d *DID) GetAccount() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Account, "DID.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (d *DID) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetAccount(address)
+	return nil
+}
+
+// HasDIDDocument reports whether DIDDocument is present.
+func (d *DID) HasDIDDocument() bool {
+	return d != nil && d.present&didBitDIDDocument != 0
+}
+
+// ClearDIDDocument removes DIDDocument from the serialized entry.
+func (d *DID) ClearDIDDocument() {
+	if d == nil {
+		return
+	}
+	d.DIDDocument = ""
+	d.present &^= didBitDIDDocument
+	d.dirty = true
+}
+
+// GetDIDDocument returns the raw bytes of the Blob field.
+func (d *DID) GetDIDDocument() ([]byte, error) {
+	if d == nil {
+		return nil, nil
+	}
+	return blobValueFromString(d.DIDDocument, "DID.DIDDocument")
+}
+
+// SetDIDDocumentValue assigns a Blob from raw bytes.
+func (d *DID) SetDIDDocumentValue(value []byte) {
+	d.SetDIDDocument(blobValueToString(value))
+}
+
+// HasURI reports whether URI is present.
+func (d *DID) HasURI() bool {
+	return d != nil && d.present&didBitURI != 0
+}
+
+// ClearURI removes URI from the serialized entry.
+func (d *DID) ClearURI() {
+	if d == nil {
+		return
+	}
+	d.URI = ""
+	d.present &^= didBitURI
+	d.dirty = true
+}
+
+// GetURI returns the raw bytes of the Blob field.
+func (d *DID) GetURI() ([]byte, error) {
+	if d == nil {
+		return nil, nil
+	}
+	return blobValueFromString(d.URI, "DID.URI")
+}
+
+// SetURIValue assigns a Blob from raw bytes.
+func (d *DID) SetURIValue(value []byte) {
+	d.SetURI(blobValueToString(value))
+}
+
+// HasData reports whether Data is present.
+func (d *DID) HasData() bool {
+	return d != nil && d.present&didBitData != 0
+}
+
+// ClearData removes Data from the serialized entry.
+func (d *DID) ClearData() {
+	if d == nil {
+		return
+	}
+	d.Data = ""
+	d.present &^= didBitData
+	d.dirty = true
+}
+
+// GetData returns the raw bytes of the Blob field.
+func (d *DID) GetData() ([]byte, error) {
+	if d == nil {
+		return nil, nil
+	}
+	return blobValueFromString(d.Data, "DID.Data")
+}
+
+// SetDataValue assigns a Blob from raw bytes.
+func (d *DID) SetDataValue(value []byte) {
+	d.SetData(blobValueToString(value))
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (d *DID) HasOwnerNode() bool {
+	return d != nil && d.present&didBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (d *DID) GetOwnerNode() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.OwnerNode, "DID.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (d *DID) SetOwnerNodeValue(value uint64) {
+	d.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags is present.
+func (d *DID) HasFlags() bool {
+	return d != nil && d.present&didBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (d *DID) GetFlags() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (d *DID) SetFlagsValue(value uint32) {
+	d.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (d *DID) HasPreviousTxnID() bool {
+	return d != nil && d.present&didBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (d *DID) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.PreviousTxnID, "DID.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (d *DID) SetPreviousTxnIDValue(value [32]byte) {
+	d.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (d *DID) HasPreviousTxnLgrSeq() bool {
+	return d != nil && d.present&didBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (d *DID) GetPreviousTxnLgrSeq() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (d *DID) SetPreviousTxnLgrSeqValue(value uint32) {
+	d.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (d *DID) HasSponsor() bool {
+	return d != nil && d.present&didBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (d *DID) ClearSponsor() {
+	if d == nil {
+		return
+	}
+	d.Sponsor = ""
+	d.present &^= didBitSponsor
+	d.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (d *DID) GetSponsor() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Sponsor, "DID.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (d *DID) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetSponsor(address)
+	return nil
+}
+
 func (d *DID) validateRequired() error {
 	if d.decoded && !d.dirty {
 		return nil

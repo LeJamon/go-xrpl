@@ -1,11 +1,9 @@
 package invariants
 
 import (
-	"encoding/hex"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -60,13 +58,23 @@ func isPseudoObjectType(t entry.Type) bool {
 
 func pseudoObjectAccountID(data []byte) ([20]byte, error) {
 	var zero [20]byte
-	fields, err := binarycodec.Decode(hex.EncodeToString(data))
+	typ, err := state.DecodeType(data)
 	if err != nil {
 		return zero, err
 	}
-	account, ok := fields["Account"].(string)
-	if !ok || account == "" {
+	decoded := entry.New(typ)
+	if decoded == nil {
+		return zero, fmt.Errorf("no generated decoder for %s", typ)
+	}
+	if err := decoded.Decode(data); err != nil {
+		return zero, err
+	}
+	accountField, ok := decoded.(interface {
+		HasAccount() bool
+		GetAccount() ([20]byte, error)
+	})
+	if !ok || !accountField.HasAccount() {
 		return zero, fmt.Errorf("missing Account")
 	}
-	return state.DecodeAccountID(account)
+	return accountField.GetAccount()
 }

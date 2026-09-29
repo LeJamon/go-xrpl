@@ -1,10 +1,6 @@
 package applystate
 
 import (
-	"encoding/hex"
-	"strings"
-
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -46,44 +42,42 @@ func isThreadedType(entryType entry.Type, fixPreviousTxnIDEnabled bool) bool {
 // Returns the previous values for metadata inclusion
 // The entry data is modified in place
 func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]byte, prevLgrSeq uint32, newData []byte, changed bool) {
-	// Decode the current entry to get existing values
-	hexStr := hex.EncodeToString(data)
-	fields, err := binarycodec.Decode(hexStr)
+	typ, err := state.DecodeType(data)
 	if err != nil {
+		return prevTxnID, prevLgrSeq, data, false
+	}
+	decoded := entry.New(typ)
+	setter, ok := decoded.(interface {
+		Encode() ([]byte, error)
+		HasPreviousTxnID() bool
+		GetPreviousTxnID() ([32]byte, error)
+		SetPreviousTxnIDValue([32]byte)
+		SetPreviousTxnLgrSeq(uint32)
+	})
+	if !ok {
+		return prevTxnID, prevLgrSeq, data, false
+	}
+	if err := decoded.Decode(data); err != nil {
 		return prevTxnID, prevLgrSeq, data, false
 	}
 
 	// Get current PreviousTxnID and PreviousTxnLgrSeq
-	if v, ok := fields["PreviousTxnID"].(string); ok {
-		decoded, _ := hex.DecodeString(v)
-		if len(decoded) == 32 {
-			copy(prevTxnID[:], decoded)
+	if setter.HasPreviousTxnID() {
+		prevTxnID, err = setter.GetPreviousTxnID()
+		if err != nil {
+			return [32]byte{}, 0, data, false
 		}
 	}
-	if v, ok := fields["PreviousTxnLgrSeq"].(uint32); ok {
-		prevLgrSeq = v
-	} else if v, ok := fields["PreviousTxnLgrSeq"].(float64); ok {
-		prevLgrSeq = uint32(v)
-	} else if v, ok := fields["PreviousTxnLgrSeq"].(int); ok {
-		prevLgrSeq = uint32(v)
-	}
+	_, prevLgrSeq = decoded.PreviousTxn()
 
 	// Check if already threaded to this transaction
 	if prevTxnID == txHash {
 		return prevTxnID, prevLgrSeq, data, false
 	}
 
-	// Update with new transaction info
-	fields["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(txHash[:]))
-	fields["PreviousTxnLgrSeq"] = ledgerSeq
-
-	// Re-encode the entry
-	newHex, err := binarycodec.Encode(fields)
-	if err != nil {
-		return prevTxnID, prevLgrSeq, data, false
-	}
-
-	newData, err = hex.DecodeString(newHex)
+	setter.SetPreviousTxnIDValue(txHash)
+	setter.SetPreviousTxnLgrSeq(ledgerSeq)
+	newData, err = setter.Encode()
 	if err != nil {
 		return prevTxnID, prevLgrSeq, data, false
 	}
@@ -97,55 +91,59 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 func getOwnerAccounts(data []byte, entryType entry.Type) [][20]byte {
 	var owners [][20]byte
 
-	// Decode the entry
-	hexStr := hex.EncodeToString(data)
-	fields, err := binarycodec.Decode(hexStr)
-	if err != nil {
+	decoded := entry.New(entryType)
+	if decoded == nil {
 		return owners
 	}
-
-	switch entryType {
-	case entry.TypeAccountRoot:
-		// AccountRoot is the owner itself, no additional owners to thread
+	if err := decoded.Decode(data); err != nil {
 		return owners
-
-	case entry.TypeRippleState:
-		// Thread to both accounts in the trust line
-		// LowLimit and HighLimit contain issuer (account) info
-		if lowLimit, ok := fields["LowLimit"].(map[string]any); ok {
-			if issuer, ok := lowLimit["issuer"].(string); ok {
-				if id := decodeAccountAddress(issuer); id != nil {
+	}
+	if entryType == entry.TypeAccountRoot {
+		return owners
+	}
+	addAccount := func(id [20]byte, err error) {
+		if err == nil {
+			owners = append(owners, id)
+		}
+	}
+	accountField, hasAccount := decoded.(interface {
+		HasAccount() bool
+		GetAccount() ([20]byte, error)
+	})
+	destinationField, hasDestination := decoded.(interface {
+		HasDestination() bool
+		GetDestination() ([20]byte, error)
+	})
+	if entryType == entry.TypeRippleState {
+		line, ok := decoded.(*entry.RippleState)
+		if !ok {
+			return owners
+		}
+		if line.HasLowLimit() {
+			limit, err := line.GetLowLimit()
+			if err == nil && limit.Issuer != "" {
+				if id := decodeAccountAddress(limit.Issuer); id != nil {
 					owners = append(owners, *id)
 				}
 			}
 		}
-		if highLimit, ok := fields["HighLimit"].(map[string]any); ok {
-			if issuer, ok := highLimit["issuer"].(string); ok {
-				if id := decodeAccountAddress(issuer); id != nil {
+		if line.HasHighLimit() {
+			limit, err := line.GetHighLimit()
+			if err == nil && limit.Issuer != "" {
+				if id := decodeAccountAddress(limit.Issuer); id != nil {
 					owners = append(owners, *id)
 				}
 			}
 		}
 		return owners
-
-	default:
-		// For most types: Account field (primary owner)
-		if account, ok := fields["Account"].(string); ok {
-			if id := decodeAccountAddress(account); id != nil {
-				owners = append(owners, *id)
-			}
-		}
-
-		// Destination field (secondary owner) for types that have it
-		// Check (with amendment), Escrow, PayChannel, etc.
-		if dest, ok := fields["Destination"].(string); ok {
-			if id := decodeAccountAddress(dest); id != nil {
-				owners = append(owners, *id)
-			}
-		}
-
-		return owners
 	}
+	if hasAccount && accountField.HasAccount() {
+		addAccount(accountField.GetAccount())
+	}
+	if hasDestination && destinationField.HasDestination() {
+		addAccount(destinationField.GetDestination())
+	}
+	return owners
 }
 
 // decodeAccountAddress decodes an XRPL classic address to a 20-byte account ID,

@@ -105,6 +105,203 @@ func (d *DepositPreauth) SetSponsor(value string) {
 	d.present |= depositpreauthBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (d *DepositPreauth) HasAccount() bool {
+	return d != nil && d.present&depositpreauthBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (d *DepositPreauth) GetAccount() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Account, "DepositPreauth.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (d *DepositPreauth) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetAccount(address)
+	return nil
+}
+
+// HasAuthorize reports whether Authorize is present.
+func (d *DepositPreauth) HasAuthorize() bool {
+	return d != nil && d.present&depositpreauthBitAuthorize != 0
+}
+
+// ClearAuthorize removes Authorize from the serialized entry.
+func (d *DepositPreauth) ClearAuthorize() {
+	if d == nil {
+		return
+	}
+	d.Authorize = ""
+	d.present &^= depositpreauthBitAuthorize
+	d.dirty = true
+}
+
+// GetAuthorize returns the 20-byte AccountID.
+func (d *DepositPreauth) GetAuthorize() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Authorize, "DepositPreauth.Authorize")
+}
+
+// SetAuthorizeValue assigns a 20-byte AccountID.
+func (d *DepositPreauth) SetAuthorizeValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetAuthorize(address)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (d *DepositPreauth) HasOwnerNode() bool {
+	return d != nil && d.present&depositpreauthBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (d *DepositPreauth) GetOwnerNode() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.OwnerNode, "DepositPreauth.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (d *DepositPreauth) SetOwnerNodeValue(value uint64) {
+	d.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasAuthorizeCredentials reports whether AuthorizeCredentials is present.
+func (d *DepositPreauth) HasAuthorizeCredentials() bool {
+	return d != nil && d.present&depositpreauthBitAuthorizeCredentials != 0
+}
+
+// ClearAuthorizeCredentials removes AuthorizeCredentials from the serialized entry.
+func (d *DepositPreauth) ClearAuthorizeCredentials() {
+	if d == nil {
+		return
+	}
+	d.AuthorizeCredentials = nil
+	d.present &^= depositpreauthBitAuthorizeCredentials
+	d.dirty = true
+}
+
+// GetAuthorizeCredentials returns typed nested objects.
+func (d *DepositPreauth) GetAuthorizeCredentials() ([]CredentialValue, error) {
+	if d == nil || d.AuthorizeCredentials == nil {
+		return nil, nil
+	}
+	return credentialValueSliceFromAny(d.AuthorizeCredentials, "DepositPreauth.AuthorizeCredentials")
+}
+
+// SetAuthorizeCredentialsValue assigns typed nested objects.
+func (d *DepositPreauth) SetAuthorizeCredentialsValue(value []CredentialValue) error {
+	encoded, err := credentialValueSliceToAny(value, "DepositPreauth.AuthorizeCredentials")
+	if err != nil {
+		return err
+	}
+	d.SetAuthorizeCredentials(encoded)
+	return nil
+}
+
+// HasFlags reports whether Flags is present.
+func (d *DepositPreauth) HasFlags() bool {
+	return d != nil && d.present&depositpreauthBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (d *DepositPreauth) GetFlags() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (d *DepositPreauth) SetFlagsValue(value uint32) {
+	d.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (d *DepositPreauth) HasPreviousTxnID() bool {
+	return d != nil && d.present&depositpreauthBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (d *DepositPreauth) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.PreviousTxnID, "DepositPreauth.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (d *DepositPreauth) SetPreviousTxnIDValue(value [32]byte) {
+	d.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (d *DepositPreauth) HasPreviousTxnLgrSeq() bool {
+	return d != nil && d.present&depositpreauthBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (d *DepositPreauth) GetPreviousTxnLgrSeq() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (d *DepositPreauth) SetPreviousTxnLgrSeqValue(value uint32) {
+	d.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (d *DepositPreauth) HasSponsor() bool {
+	return d != nil && d.present&depositpreauthBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (d *DepositPreauth) ClearSponsor() {
+	if d == nil {
+		return
+	}
+	d.Sponsor = ""
+	d.present &^= depositpreauthBitSponsor
+	d.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (d *DepositPreauth) GetSponsor() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Sponsor, "DepositPreauth.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (d *DepositPreauth) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetSponsor(address)
+	return nil
+}
+
 func (d *DepositPreauth) validateRequired() error {
 	if d.decoded && !d.dirty {
 		return nil

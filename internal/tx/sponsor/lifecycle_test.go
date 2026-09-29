@@ -194,33 +194,99 @@ func TestSponsorshipTransferPreflightMatrix(t *testing.T) {
 
 func TestSponsoredTargetOwnershipMatrix(t *testing.T) {
 	owner, ownerID := sponsorTestAccount(t, 1)
-	other, _ := sponsorTestAccount(t, 2)
+	_, otherID := sponsorTestAccount(t, 2)
 
 	tests := []struct {
 		name      string
-		target    sponsoredTarget
+		make      func() sponsoredTarget
 		wantOwner bool
 		wantField string
 		wantCount uint32
 	}{
-		{"check", sponsoredTarget{entryType: entry.TypeCheck, fields: map[string]any{"Account": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"check wrong owner", sponsoredTarget{entryType: entry.TypeCheck, fields: map[string]any{"Account": other}, ownerCount: 1, sponsorField: "Sponsor"}, false, "Sponsor", 1},
-		{"escrow", sponsoredTarget{entryType: entry.TypeEscrow, fields: map[string]any{"Account": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"payment channel", sponsoredTarget{entryType: entry.TypePayChannel, fields: map[string]any{"Account": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"mptoken", sponsoredTarget{entryType: entry.TypeMPToken, fields: map[string]any{"Account": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"delegate", sponsoredTarget{entryType: entry.TypeDelegate, fields: map[string]any{"Account": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"deposit preauth", sponsoredTarget{entryType: entry.TypeDepositPreauth, fields: map[string]any{"Account": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"issuance", sponsoredTarget{entryType: entry.TypeMPTokenIssuance, fields: map[string]any{"Issuer": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"accepted credential", sponsoredTarget{entryType: entry.TypeCredential, fields: map[string]any{"Flags": entry.LsfAccepted, "Subject": owner, "Issuer": other}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"unaccepted credential", sponsoredTarget{entryType: entry.TypeCredential, fields: map[string]any{"Flags": uint32(0), "Subject": other, "Issuer": owner}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"modern signer list", sponsoredTarget{key: keylet.SignerList(ownerID), entryType: entry.TypeSignerList, fields: map[string]any{"Flags": entry.LsfOneOwnerCount}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 1},
-		{"legacy signer list", sponsoredTarget{key: keylet.SignerList(ownerID), entryType: entry.TypeSignerList, fields: map[string]any{"SignerEntries": []any{1, 2, 3}}, ownerCount: 1, sponsorField: "Sponsor"}, true, "Sponsor", 5},
-		{"high trust line", sponsoredTarget{entryType: entry.TypeRippleState, fields: map[string]any{"Flags": entry.LsfHighReserve, "HighLimit": map[string]any{"issuer": owner}}, ownerCount: 1, sponsorField: "Sponsor"}, true, "HighSponsor", 1},
-		{"low trust line", sponsoredTarget{entryType: entry.TypeRippleState, fields: map[string]any{"Flags": entry.LsfLowReserve, "LowLimit": map[string]any{"issuer": owner}}, ownerCount: 1, sponsorField: "Sponsor"}, true, "LowSponsor", 1},
+		{"check", func() sponsoredTarget {
+			model := &entry.Check{}
+			mustNoError(t, model.SetAccountValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeCheck, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"check wrong owner", func() sponsoredTarget {
+			model := &entry.Check{}
+			mustNoError(t, model.SetAccountValue(otherID))
+			return sponsoredTarget{model: model, entryType: entry.TypeCheck, ownerCount: 1, sponsorField: "Sponsor"}
+		}, false, "Sponsor", 1},
+		{"escrow", func() sponsoredTarget {
+			model := &entry.Escrow{}
+			mustNoError(t, model.SetAccountValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeEscrow, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"payment channel", func() sponsoredTarget {
+			model := &entry.PayChannel{}
+			mustNoError(t, model.SetAccountValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypePayChannel, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"mptoken", func() sponsoredTarget {
+			model := &entry.MPToken{}
+			mustNoError(t, model.SetAccountValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeMPToken, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"delegate", func() sponsoredTarget {
+			model := &entry.Delegate{}
+			mustNoError(t, model.SetAccountValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeDelegate, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"deposit preauth", func() sponsoredTarget {
+			model := &entry.DepositPreauth{}
+			mustNoError(t, model.SetAccountValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeDepositPreauth, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"issuance", func() sponsoredTarget {
+			model := &entry.MPTokenIssuance{}
+			mustNoError(t, model.SetIssuerValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeMPTokenIssuance, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"accepted credential", func() sponsoredTarget {
+			model := &entry.Credential{}
+			mustNoError(t, model.SetSubjectValue(ownerID))
+			mustNoError(t, model.SetIssuerValue(otherID))
+			model.SetFlags(entry.LsfAccepted)
+			return sponsoredTarget{model: model, entryType: entry.TypeCredential, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"unaccepted credential", func() sponsoredTarget {
+			model := &entry.Credential{}
+			mustNoError(t, model.SetSubjectValue(otherID))
+			mustNoError(t, model.SetIssuerValue(ownerID))
+			return sponsoredTarget{model: model, entryType: entry.TypeCredential, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"modern signer list", func() sponsoredTarget {
+			model := &entry.SignerList{}
+			model.SetFlags(entry.LsfOneOwnerCount)
+			return sponsoredTarget{key: keylet.SignerList(ownerID), model: model, entryType: entry.TypeSignerList, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 1},
+		{"legacy signer list", func() sponsoredTarget {
+			model := &entry.SignerList{}
+			entries := make([]entry.SignerEntryValue, 3)
+			for i := range entries {
+				mustNoError(t, entries[i].SetAccountValue(ownerID))
+				entries[i].SetSignerWeight(1)
+			}
+			mustNoError(t, model.SetSignerEntriesValue(entries))
+			return sponsoredTarget{key: keylet.SignerList(ownerID), model: model, entryType: entry.TypeSignerList, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "Sponsor", 5},
+		{"high trust line", func() sponsoredTarget {
+			model := &entry.RippleState{}
+			model.SetFlags(entry.LsfHighReserve)
+			mustNoError(t, model.SetHighLimitValue(entry.AmountValue{Value: "0", Currency: "USD", Issuer: owner}))
+			return sponsoredTarget{model: model, entryType: entry.TypeRippleState, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "HighSponsor", 1},
+		{"low trust line", func() sponsoredTarget {
+			model := &entry.RippleState{}
+			model.SetFlags(entry.LsfLowReserve)
+			mustNoError(t, model.SetLowLimitValue(entry.AmountValue{Value: "0", Currency: "USD", Issuer: owner}))
+			return sponsoredTarget{model: model, entryType: entry.TypeRippleState, ownerCount: 1, sponsorField: "Sponsor"}
+		}, true, "LowSponsor", 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			target := test.target
+			target := test.make()
 			if got := target.resolveOwner(ownerID, owner); got != test.wantOwner {
 				t.Fatalf("resolveOwner = %t, want %t", got, test.wantOwner)
 			}
@@ -231,6 +297,13 @@ func TestSponsoredTargetOwnershipMatrix(t *testing.T) {
 				t.Fatalf("owner count = %d, want %d", target.ownerCount, test.wantCount)
 			}
 		})
+	}
+}
+
+func mustNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

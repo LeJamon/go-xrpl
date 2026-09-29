@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,8 +135,8 @@ func TestNativeAmountLegalNetPreflightParity(t *testing.T) {
 }
 
 func TestMaxStoredAttestations(t *testing.T) {
-	assert.True(t, attestationsWithinLimit(make([]any, maxStoredAttestations)))
-	assert.False(t, attestationsWithinLimit(make([]any, maxStoredAttestations+1)))
+	assert.True(t, attestationsWithinLimit(make([]entry.XChainClaimProofSigValue, maxStoredAttestations)))
+	assert.False(t, attestationsWithinLimit(make([]entry.XChainClaimProofSigValue, maxStoredAttestations+1)))
 }
 
 func TestAllXChainTransactionsRejectMalformedBridge(t *testing.T) {

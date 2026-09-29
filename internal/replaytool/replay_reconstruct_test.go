@@ -2102,7 +2102,7 @@ func TestReconstructFromMeta_LoanBrokerVaultResolutionErrors(t *testing.T) {
 				"LedgerEntryType": "AccountRoot", "Account": testAccount,
 				"Balance": "0", "Flags": 0, "OwnerCount": 0, "Sequence": 0,
 			})},
-			want: "resolved to AccountRoot",
+			want: "LedgerEntryType is 97, want 132",
 		},
 		{
 			name: "missing account",
@@ -2110,7 +2110,7 @@ func TestReconstructFromMeta_LoanBrokerVaultResolutionErrors(t *testing.T) {
 				"LedgerEntryType": "Vault", "Flags": 0, "Sequence": uint32(1),
 				"OwnerNode": "0", "Owner": testAccount,
 			})},
-			want: "invalid Account",
+			want: "required field Account is missing",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

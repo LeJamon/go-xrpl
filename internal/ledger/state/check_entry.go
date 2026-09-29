@@ -1,9 +1,8 @@
 package state
 
 import (
-	"fmt"
+	"strconv"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -27,6 +26,7 @@ type CheckData struct {
 	HasDestNode       bool
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+	decoded           ledgerfields.Check
 }
 
 // ParseCheck parses a Check ledger entry from binary data
@@ -35,56 +35,62 @@ func ParseCheck(data []byte) (*CheckData, error) {
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
-	fields := entry.ToMap()
 	check := &CheckData{
 		Sequence:          entry.Sequence,
 		Expiration:        entry.Expiration,
 		SourceTag:         entry.SourceTag,
 		DestinationTag:    entry.DestinationTag,
 		PreviousTxnLgrSeq: entry.PreviousTxnLgrSeq,
-		HasSourceTag:      fields["SourceTag"] != nil,
-		HasDestTag:        fields["DestinationTag"] != nil,
-		HasDestNode:       fields["DestinationNode"] != nil,
-		HasInvoiceID:      fields["InvoiceID"] != nil,
+		decoded:           *entry,
+		HasSourceTag:      entry.HasSourceTag(),
+		HasDestTag:        entry.HasDestinationTag(),
+		HasDestNode:       entry.HasDestinationNode(),
+		HasInvoiceID:      entry.HasInvoiceID(),
 	}
 
 	var err error
-	if fields["Account"] != nil {
-		check.Account, err = decodeLedgerAccount("Check.Account", entry.Account)
+	if entry.HasAccount() {
+		check.Account, err = entry.GetAccount()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["Destination"] != nil {
-		check.DestinationID, err = decodeLedgerAccount("Check.Destination", entry.Destination)
+	if entry.HasDestination() {
+		check.DestinationID, err = entry.GetDestination()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["OwnerNode"] != nil {
-		check.OwnerNode, err = parseLedgerUint64("Check.OwnerNode", entry.OwnerNode)
+	if entry.HasOwnerNode() {
+		check.OwnerNode, err = entry.GetOwnerNode()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if check.HasDestNode {
-		check.DestinationNode, err = parseLedgerUint64("Check.DestinationNode", entry.DestinationNode)
+		check.DestinationNode, err = entry.GetDestinationNode()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if check.HasInvoiceID {
-		if err := decodeLedgerHex("Check.InvoiceID", entry.InvoiceID, check.InvoiceID[:]); err != nil {
+		check.InvoiceID, err = entry.GetInvoiceID()
+		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["PreviousTxnID"] != nil {
-		if err := decodeLedgerHex("Check.PreviousTxnID", entry.PreviousTxnID, check.PreviousTxnID[:]); err != nil {
+	if entry.HasPreviousTxnID() {
+		check.PreviousTxnID, err = entry.GetPreviousTxnID()
+		if err != nil {
 			return nil, err
 		}
 	}
-	if fields["SendMax"] != nil {
-		check.SendMaxAmount, err = decodeLedgerAmount("Check.SendMax", entry.SendMax)
+	if entry.HasSendMax() {
+		value, err := entry.GetSendMax()
+		if err != nil {
+			return nil, err
+		}
+		check.SendMaxAmount, err = decodeLedgerAmount("Check.SendMax", value)
 		if err != nil {
 			return nil, err
 		}
@@ -102,57 +108,58 @@ func ParseCheck(data []byte) (*CheckData, error) {
 
 // SerializeCheckFromData serializes a Check ledger entry from CheckData.
 func SerializeCheckFromData(check *CheckData) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(check.Account[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+	entry := check.decoded
+	if !entry.HasAccount() || entry.Account != "" || check.Account != [20]byte{} {
+		if err := entry.SetAccountValue(check.Account); err != nil {
+			return nil, err
+		}
 	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(check.DestinationID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode destination address: %w", err)
+	if !entry.HasDestination() || entry.Destination != "" || check.DestinationID != [20]byte{} {
+		if err := entry.SetDestinationValue(check.DestinationID); err != nil {
+			return nil, err
+		}
 	}
-
-	entry := &ledgerfields.Check{}
-	entry.SetAccount(ownerAddress)
-	entry.SetDestination(destAddress)
 	entry.SetSequence(check.Sequence)
-	entry.SetOwnerNode(fmt.Sprintf("%x", check.OwnerNode))
-	entry.SetDestinationNode(fmt.Sprintf("%x", check.DestinationNode))
-	entry.SetFlags(0)
-
-	if check.IsNativeSendMax {
-		entry.SetSendMax(fmt.Sprintf("%d", check.SendMax))
-	} else if check.SendMaxAmount.IsMPT() {
-		entry.SetSendMax(map[string]any{
-			"value":           check.SendMaxAmount.Value(),
-			"mpt_issuance_id": check.SendMaxAmount.MPTIssuanceID(),
-		})
-	} else {
-		entry.SetSendMax(map[string]any{
-			"value":    check.SendMaxAmount.Value(),
-			"currency": check.SendMaxAmount.Currency,
-			"issuer":   check.SendMaxAmount.Issuer,
-		})
+	entry.SetOwnerNodeValue(check.OwnerNode)
+	entry.SetDestinationNodeValue(check.DestinationNode)
+	if !entry.HasFlags() {
+		entry.SetFlags(0)
 	}
 
-	if check.Expiration > 0 {
+	amount := check.SendMaxAmount.LedgerValue()
+	if check.IsNativeSendMax {
+		amount = ledgerfields.AmountValue{Value: strconv.FormatUint(check.SendMax, 10)}
+	}
+	if err := entry.SetSendMaxValue(amount); err != nil {
+		return nil, err
+	}
+
+	if check.Expiration > 0 || (check.decoded.HasExpiration() && check.Expiration == check.decoded.Expiration) {
 		entry.SetExpiration(check.Expiration)
+	} else {
+		entry.ClearExpiration()
 	}
 
 	if check.HasDestTag {
 		entry.SetDestinationTag(check.DestinationTag)
+	} else {
+		entry.ClearDestinationTag()
 	}
 
 	if check.HasSourceTag {
 		entry.SetSourceTag(check.SourceTag)
+	} else {
+		entry.ClearSourceTag()
 	}
 
 	if check.HasInvoiceID {
-		entry.SetInvoiceID(fmt.Sprintf("%X", check.InvoiceID[:]))
+		entry.SetInvoiceIDValue(check.InvoiceID)
+	} else {
+		entry.ClearInvoiceID()
 	}
 
-	if check.PreviousTxnID != ([32]byte{}) {
-		entry.SetPreviousTxnID(fmt.Sprintf("%X", check.PreviousTxnID[:]))
+	if check.PreviousTxnID != ([32]byte{}) || check.decoded.HasPreviousTxnID() {
+		entry.SetPreviousTxnIDValue(check.PreviousTxnID)
 		entry.SetPreviousTxnLgrSeq(check.PreviousTxnLgrSeq)
 	}
 

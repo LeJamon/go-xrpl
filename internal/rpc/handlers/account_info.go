@@ -108,12 +108,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		signerLists = jsonCppBoolRaw(signerListsRaw)
 	}
 
-	// Build account_data by decoding the full SLE binary via binarycodec,
-	// matching rippled's injectSLE which serializes all fields from the SLE.
-	accountData := m.buildAccountData(info)
-	if emailHash, ok := accountData["EmailHash"].(string); ok {
-		accountData["urlgravatar"] = "https://www.gravatar.com/avatar/" + strings.ToLower(emailHash)
-	}
+	accountData, accountRoot := m.buildAccountData(info)
 
 	// Build account_flags from Flags bitmask
 	flags := info.Flags
@@ -149,7 +144,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		"account_data":  accountData,
 		"account_flags": accountFlags,
 	}
-	addPseudoAccount(response, accountData)
+	addPseudoAccount(response, accountRoot)
 	for key, value := range lookupFields {
 		response[key] = value
 	}
@@ -185,35 +180,37 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	return response, nil
 }
 
-// pseudoAccountFields are the AccountRoot designator fields, in the SOTemplate
-// order rippled iterates (getPseudoAccountFields). A pseudo-account carries
-// exactly one; the RPC reports its type by stripping the trailing "ID".
-var pseudoAccountFields = [...]string{"AMMID", "VaultID", "LoanBrokerID"}
-
-// addPseudoAccount sets response["pseudo_account"] = {"type": <name>} when the
-// account root carries a pseudo-account designator, matching rippled
-// doAccountInfo. The designator's own hash stays in account_data; only the
-// derived type name (field name minus "ID") is surfaced here.
-func addPseudoAccount(response, accountData map[string]any) {
-	for _, field := range pseudoAccountFields {
-		if _, present := accountData[field]; present {
-			response["pseudo_account"] = map[string]any{"type": strings.TrimSuffix(field, "ID")}
-			return
-		}
+func addPseudoAccount(response map[string]any, account *entry.AccountRoot) {
+	if account == nil {
+		return
 	}
+	var kind string
+	switch {
+	case account.HasAMMID():
+		kind = "AMM"
+	case account.HasVaultID():
+		kind = "Vault"
+	case account.HasLoanBrokerID():
+		kind = "LoanBroker"
+	default:
+		return
+	}
+	response["pseudo_account"] = map[string]any{"type": kind}
 }
 
 // buildAccountData constructs account_data from the full SLE binary.
-// When RawData is available, uses binarycodec.Decode to get all fields
-// (matching rippled's injectSLE → sle.getJson). Falls back to manual
-// construction from the AccountInfo struct fields if RawData is absent.
-func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string]any {
+// Falls back to AccountInfo fields if RawData cannot be decoded.
+func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) (map[string]any, *entry.AccountRoot) {
 	// Try full SLE decode from raw binary data
 	if len(info.RawData) > 0 {
-		hexData := hex.EncodeToString(info.RawData)
-		decoded, err := binarycodec.Decode(hexData)
+		var decoded entry.AccountRoot
+		err := decoded.Decode(info.RawData)
 		if err == nil {
-			return decoded
+			fields := decoded.ToMap()
+			if decoded.HasEmailHash() {
+				fields["urlgravatar"] = "https://www.gravatar.com/avatar/" + strings.ToLower(decoded.EmailHash)
+			}
+			return fields, &decoded
 		}
 		// Fall through to manual construction on decode error, but log
 		// at debug — a silent fallback hid genuine codec bugs in the past.
@@ -239,6 +236,7 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 	}
 	if info.EmailHash != "" {
 		accountData["EmailHash"] = info.EmailHash
+		accountData["urlgravatar"] = "https://www.gravatar.com/avatar/" + strings.ToLower(info.EmailHash)
 	}
 	if info.TransferRate > 0 {
 		accountData["TransferRate"] = info.TransferRate
@@ -254,7 +252,7 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 		accountData["PreviousTxnLgrSeq"] = info.PreviousTxnLgrSeq
 	}
 
-	return accountData
+	return accountData, nil
 }
 
 // buildAccountQueueData assembles the queue_data block for account_info from

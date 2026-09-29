@@ -6,19 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -69,17 +71,17 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	var issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte
+	var requestAsset1, requestAsset2 ammIssue
 	if hasAsset {
 		var parseErr error
-		issue1Issuer, issue1Currency, parseErr = parseIssue(request.Asset)
+		requestAsset1, parseErr = parseAMMAsset(request.Asset)
 		if parseErr != nil {
 			return nil, rpcerrors.RpcErrorIssueMalformed()
 		}
 	}
 	if hasAsset2 {
 		var parseErr error
-		issue2Issuer, issue2Currency, parseErr = parseIssue(request.Asset2)
+		requestAsset2, parseErr = parseAMMAsset(request.Asset2)
 		if parseErr != nil {
 			return nil, rpcerrors.RpcErrorIssueMalformed()
 		}
@@ -99,25 +101,18 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 			return nil, rpcErr
 		}
 
-		// Decode the account to get AMMID
-		decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(accountEntry.Node))
-		if decodeErr != nil {
+		var decoded ledgerfields.AccountRoot
+		if decodeErr := decoded.Decode(accountEntry.Node); decodeErr != nil {
 			return nil, rpcInternalError("amm_info: account decoding failed", decodeErr)
 		}
-
-		ammIDHex, ok := decoded["AMMID"].(string)
-		if !ok || ammIDHex == "" {
+		if !decoded.HasAMMID() {
 			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
-
-		ammIDBytes, hexErr := hex.DecodeString(ammIDHex)
-		if hexErr != nil {
-			return nil, rpcInternalError("amm_info: AMMID decoding failed", hexErr)
+		var decodeErr error
+		ammKey, decodeErr = decoded.GetAMMID()
+		if decodeErr != nil {
+			return nil, rpcInternalError("amm_info: AMMID decoding failed", decodeErr)
 		}
-		if len(ammIDBytes) != 32 {
-			return nil, rpcInternalInvariantError("amm_info: AMMID has invalid length")
-		}
-		copy(ammKey[:], ammIDBytes)
 		if ammKey == ([32]byte{}) {
 			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
@@ -141,7 +136,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 
 	if !hasAMMAccount {
-		ammKey = keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key
+		ammKey = keylet.AMMAsset(requestAsset1.bookSide(), requestAsset2.bookSide()).Key
 	}
 
 	ammEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
@@ -152,86 +147,91 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 	}
 
-	decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(ammEntry.Node))
-	if decodeErr != nil {
+	var decoded ledgerfields.AMM
+	if decodeErr := decoded.Decode(ammEntry.Node); decodeErr != nil {
 		return nil, rpcInternalError("amm_info: AMM decoding failed", decodeErr)
 	}
+	ammAccountID, decodeErr := decoded.GetAccount()
+	if decodeErr != nil {
+		return nil, rpcInternalError("amm_info: AMM account decoding failed", decodeErr)
+	}
+	lpToken, decodeErr := decoded.GetLPTokenBalance()
+	if decodeErr != nil {
+		return nil, rpcInternalError("amm_info: LP token decoding failed", decodeErr)
+	}
+	ammResult := map[string]any{
+		"account":  decoded.Account,
+		"lp_token": decoded.LPTokenBalance,
+	}
+	if hasLPAccount {
+		ammResult["lp_token"] = ammLPHoldsJSON(ctx, ledgerIndex, ammAccountID, lpAccountID, lpToken)
+	}
+	ammResult["trading_fee"] = decoded.TradingFee
 
-	// Build the response
-	ammResult := make(map[string]any)
-
-	// Copy relevant fields
-	var ammAccountID [20]byte
-	var haveAMMAccountID bool
-	if account, ok := decoded["Account"].(string); ok {
-		ammResult["account"] = account
-		if _, accID, decErr := addresscodec.DecodeClassicAddressToAccountID(account); decErr == nil {
-			copy(ammAccountID[:], accID)
-			haveAMMAccountID = true
+	asset1Issue, asset2Issue := requestAsset1, requestAsset2
+	if hasAMMAccount {
+		asset1, err := decoded.GetAsset()
+		if err != nil {
+			return nil, rpcInternalError("amm_info: asset decoding failed", err)
+		}
+		asset2, err := decoded.GetAsset2()
+		if err != nil {
+			return nil, rpcInternalError("amm_info: asset2 decoding failed", err)
+		}
+		var asset1OK, asset2OK bool
+		asset1Issue, asset1OK = extractIssue(asset1)
+		asset2Issue, asset2OK = extractIssue(asset2)
+		if !asset1OK || !asset2OK {
+			return nil, rpcInternalInvariantError("amm_info: invalid pool asset")
 		}
 	}
-	if lpToken, ok := decoded["LPTokenBalance"]; ok {
-		ammResult["lp_token"] = lpToken
-		// With the account param, lp_token reports that account's LP token
-		// balance instead of the pool total (rippled AMMInfo.cpp:195-197).
-		if hasLPAccount && haveAMMAccountID {
-			if total, ok := lpToken.(map[string]any); ok {
-				ammResult["lp_token"] = ammLPHoldsJSON(ctx, ledgerIndex, ammAccountID, lpAccountID, total)
-			}
+	var assetView types.LedgerStateView
+	if asset1Issue.MPTID != nil || asset2Issue.MPTID != nil {
+		var err error
+		assetView, err = resolvedLedgerStateView(ctx, resolvedLedger.Value)
+		if err != nil {
+			return nil, rpcInternalError("amm_info: asset state lookup failed", err)
 		}
 	}
-	if tradingFee, ok := decoded["TradingFee"]; ok {
-		ammResult["trading_fee"] = tradingFee
-	}
-
-	// amount/amount2 mirror rippled's ammPoolHolds(): the AMM account's actual
-	// trust-line (or XRP) balance for each issue, not the sfAsset/sfAsset2 issue
-	// definitions. asset_frozen/asset2_frozen surface isFrozen() on the same
-	// trust lines (non-XRP only). See rippled AMMInfo.cpp:188-262.
-	asset1Issue, asset1OK := extractIssue(decoded["Asset"])
-	asset2Issue, asset2OK := extractIssue(decoded["Asset2"])
-
-	if haveAMMAccountID && asset1OK {
-		ammResult["amount"] = ammPoolBalanceJSON(ctx, ledgerIndex, ammAccountID, asset1Issue)
-		if !asset1Issue.IsXRP() {
-			ammResult["asset_frozen"] = ammIssueFrozen(ctx, ledgerIndex, ammAccountID, asset1Issue)
+	for _, field := range []struct {
+		amount, frozen string
+		issue          ammIssue
+	}{
+		{"amount", "asset_frozen", asset1Issue},
+		{"amount2", "asset2_frozen", asset2Issue},
+	} {
+		ammResult[field.amount] = ammPoolBalanceJSON(ctx, ledgerIndex, ammAccountID, field.issue)
+		if field.issue.MPTID != nil {
+			ammResult[field.frozen] = mptutil.IsFrozen(assetView, *field.issue.MPTID, ammAccountID)
+		} else if !field.issue.IsXRP() {
+			ammResult[field.frozen] = ammIssueFrozen(ctx, ledgerIndex, ammAccountID, field.issue)
 		}
-	} else if asset, ok := decoded["Asset"]; ok {
-		ammResult["amount"] = asset
 	}
 
-	if haveAMMAccountID && asset2OK {
-		ammResult["amount2"] = ammPoolBalanceJSON(ctx, ledgerIndex, ammAccountID, asset2Issue)
-		if !asset2Issue.IsXRP() {
-			ammResult["asset2_frozen"] = ammIssueFrozen(ctx, ledgerIndex, ammAccountID, asset2Issue)
-		}
-	} else if asset2, ok := decoded["Asset2"]; ok {
-		ammResult["amount2"] = asset2
+	voteSlots, decodeErr := decoded.GetVoteSlots()
+	if decodeErr != nil {
+		return nil, rpcInternalError("amm_info: vote slots decoding failed", decodeErr)
 	}
-
-	// Handle vote slots
-	if voteSlots, ok := decoded["VoteSlots"].([]any); ok && len(voteSlots) > 0 {
+	if len(voteSlots) > 0 {
 		votes := make([]map[string]any, 0, len(voteSlots))
-		for _, vs := range voteSlots {
-			if voteEntry, ok := vs.(map[string]any); ok {
-				if voteSlot, ok := voteEntry["VoteEntry"].(map[string]any); ok {
-					vote := make(map[string]any)
-					if account, ok := voteSlot["Account"].(string); ok {
-						vote["account"] = account
-					}
-					if tradingFee, ok := voteSlot["TradingFee"]; ok {
-						vote["trading_fee"] = tradingFee
-					}
-					if voteWeight, ok := voteSlot["VoteWeight"]; ok {
-						vote["vote_weight"] = voteWeight
-					}
-					votes = append(votes, vote)
-				}
+		for _, slot := range voteSlots {
+			account, err := slot.GetAccount()
+			if err != nil {
+				return nil, rpcInternalError("amm_info: vote account decoding failed", err)
 			}
+			weight, err := slot.GetVoteWeight()
+			if err != nil {
+				return nil, rpcInternalError("amm_info: vote weight decoding failed", err)
+			}
+			vote := map[string]any{"account": state.EncodeAccountIDSafe(account), "vote_weight": weight}
+			fee, err := slot.GetTradingFee()
+			if err != nil {
+				return nil, rpcInternalError("amm_info: vote fee decoding failed", err)
+			}
+			vote["trading_fee"] = fee
+			votes = append(votes, vote)
 		}
-		if len(votes) > 0 {
-			ammResult["vote_slots"] = votes
-		}
+		ammResult["vote_slots"] = votes
 	}
 
 	// Resolve parentCloseTime from the ledger for auction slot time_interval computation.
@@ -241,9 +241,15 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		parentCloseTime = uint64(closeTime)
 	}
 
-	// Handle auction slot
-	if auctionSlot, ok := decoded["AuctionSlot"].(map[string]any); ok {
-		auction := buildAuctionSlot(auctionSlot, parentCloseTime)
+	if decoded.HasAuctionSlot() {
+		slot, err := decoded.GetAuctionSlot()
+		if err != nil {
+			return nil, rpcInternalError("amm_info: auction decoding failed", err)
+		}
+		auction, err := buildAuctionSlot(slot, parentCloseTime)
+		if err != nil {
+			return nil, rpcInternalError("amm_info: auction decoding failed", err)
+		}
 		if auction != nil {
 			ammResult["auction_slot"] = auction
 		}
@@ -291,89 +297,84 @@ func ammAuctionTimeSlot(currentParentCloseTime uint64, expiration uint32) uint32
 
 // buildAuctionSlot constructs the auction_slot response object from decoded AMM SLE fields.
 // Only includes the slot if it has an Account (rippled checks isFieldPresent(sfAccount)).
-func buildAuctionSlot(auctionSlot map[string]any, parentCloseTime uint64) map[string]any {
-	account, ok := auctionSlot["Account"].(string)
-	if !ok || account == "" {
-		// rippled: only includes auction_slot if auctionSlot.isFieldPresent(sfAccount)
-		return nil
+func buildAuctionSlot(slot ledgerfields.AuctionSlotValue, parentCloseTime uint64) (map[string]any, error) {
+	if !slot.HasAccount() {
+		return nil, nil
 	}
-
-	auction := make(map[string]any)
-	auction["account"] = account
-
-	if price, ok := auctionSlot["Price"]; ok {
-		auction["price"] = price
+	account, err := slot.GetAccount()
+	if err != nil {
+		return nil, err
 	}
-	if discountedFee, ok := auctionSlot["DiscountedFee"]; ok {
-		auction["discounted_fee"] = discountedFee
+	auction := map[string]any{"account": state.EncodeAccountIDSafe(account)}
+	if slot.HasPrice() {
+		fields, err := slot.ToMap()
+		if err != nil {
+			return nil, err
+		}
+		auction["price"] = fields["Price"]
 	}
-
-	// Convert expiration from Ripple epoch uint32 to ISO 8601 string.
-	// rippled: auction[jss::expiration] = to_iso8601(NetClock::time_point{...})
-	var expirationUint32 uint32
-	if exp, ok := auctionSlot["Expiration"]; ok {
-		expirationUint32 = toUint32(exp)
-		auction["expiration"] = rippleEpochToISO8601(expirationUint32)
+	fee, err := slot.GetDiscountedFee()
+	if err != nil {
+		return nil, err
 	}
-
-	// Compute time_interval.
-	// rippled: ammAuctionTimeSlot(parentCloseTime, auctionSlot) → interval or AUCTION_SLOT_TIME_INTERVALS
-	auction["time_interval"] = ammAuctionTimeSlot(parentCloseTime, expirationUint32)
-
-	// Handle auth_accounts — each element is wrapped in an AuthAccount inner object:
-	// decoded: [{"AuthAccount": {"Account": "rXXX"}}, ...]
-	// rippled output: [{"account": "rXXX"}, ...]
-	if authAccounts, ok := auctionSlot["AuthAccounts"].([]any); ok {
-		auth := make([]map[string]any, 0, len(authAccounts))
-		for _, aa := range authAccounts {
-			if wrapper, ok := aa.(map[string]any); ok {
-				// Unwrap the AuthAccount inner object
-				inner, ok := wrapper["AuthAccount"].(map[string]any)
-				if !ok {
-					// Fallback: try direct Account field (in case codec doesn't wrap)
-					inner = wrapper
-				}
-				if acct, ok := inner["Account"].(string); ok {
-					auth = append(auth, map[string]any{"account": acct})
-				}
+	auction["discounted_fee"] = fee
+	expiration, err := slot.GetExpiration()
+	if err != nil {
+		return nil, err
+	}
+	if slot.HasExpiration() {
+		auction["expiration"] = rippleEpochToISO8601(expiration)
+	}
+	auction["time_interval"] = ammAuctionTimeSlot(parentCloseTime, expiration)
+	authAccounts, err := slot.GetAuthAccounts()
+	if err != nil {
+		return nil, err
+	}
+	if slot.HasAuthAccounts() {
+		var auth []map[string]any
+		for _, account := range authAccounts {
+			id, err := account.GetAccount()
+			if err != nil {
+				return nil, err
 			}
+			auth = append(auth, map[string]any{"account": state.EncodeAccountIDSafe(id)})
 		}
-		if len(auth) > 0 {
-			auction["auth_accounts"] = auth
-		}
+		auction["auth_accounts"] = auth
 	}
-
-	return auction
+	return auction, nil
 }
 
-// toUint32 extracts a uint32 from a JSON-decoded numeric value.
-// The binary codec may return float64 or json.Number depending on decode mode.
-func toUint32(v any) uint32 {
-	switch n := v.(type) {
-	case float64:
-		if n >= 0 && n <= math.MaxUint32 {
-			return uint32(n)
-		}
-	case json.Number:
-		if i, err := n.Int64(); err == nil && i >= 0 && i <= math.MaxUint32 {
-			return uint32(i)
-		}
-	case int:
-		if n >= 0 {
-			return uint32(n)
-		}
-	case int64:
-		if n >= 0 && n <= math.MaxUint32 {
-			return uint32(n)
-		}
-	case uint32:
-		return n
-	case uint64:
-		if n <= math.MaxUint32 {
-			return uint32(n)
-		}
+func parseAMMAsset(raw json.RawMessage) (ammIssue, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ammIssue{}, err
 	}
-	return 0
+	if _, hasCurrency := fields["currency"]; hasCurrency {
+		issuer, currency, err := parseIssue(raw)
+		if err != nil {
+			return ammIssue{}, err
+		}
+		if currency == [20]byte{} {
+			return ammIssue{Currency: "XRP"}, nil
+		}
+		code, err := binarycodectypes.DecodeCurrencyCode(currency[:])
+		if err != nil {
+			return ammIssue{}, err
+		}
+		return ammIssue{Currency: code, Issuer: issuer, IssuerR: state.EncodeAccountIDSafe(issuer)}, nil
+	}
+	if _, hasIssuer := fields["issuer"]; hasIssuer {
+		return ammIssue{}, errors.New("MPT asset cannot carry issuer")
+	}
+	var text string
+	if err := json.Unmarshal(fields["mpt_issuance_id"], &text); err != nil {
+		return ammIssue{}, err
+	}
+	id, ok := parseBookMPTID(text)
+	if !ok {
+		return ammIssue{}, errors.New("invalid MPT issuance ID")
+	}
+	return ammIssue{MPTID: &id}, nil
 }
 
 // parseIssue parses an asset/issue object, enforcing rippled's issueFromJson
@@ -438,11 +439,9 @@ func currencyFromString(code string) ([20]byte, error) {
 	return keylet.ParseCurrency(code)
 }
 
-// ammIssue carries the asset definition decoded from the AMM SLE's
-// sfAsset/sfAsset2 fields. Currency stays in its codec form (3-char ISO or
-// 40-char hex) so it can be passed straight to keylet.Line and re-emitted
-// in the response unchanged.
+// ammIssue uses canonical currency text for both ledger lookups and responses.
 type ammIssue struct {
+	MPTID    *[24]byte
 	Currency string
 	Issuer   [20]byte
 	IssuerR  string // r-address form of Issuer; empty for XRP
@@ -450,35 +449,33 @@ type ammIssue struct {
 
 // IsXRP reports whether this issue is native XRP.
 func (i ammIssue) IsXRP() bool {
-	return i.Currency == "XRP" || i.Currency == ""
+	return i.MPTID == nil && (i.Currency == "XRP" || i.Currency == "")
 }
 
-// extractIssue pulls an ammIssue out of a decoded sfAsset/sfAsset2 field.
-// Matches the {"currency": "XRP"} / {"currency": ..., "issuer": ...} shape
-// produced by binarycodec.types.Issue.ToJSON.
-func extractIssue(raw any) (ammIssue, bool) {
-	m, ok := raw.(map[string]any)
-	if !ok {
+func (i ammIssue) bookSide() keylet.BookSide {
+	if i.MPTID != nil {
+		return keylet.MPTSide(*i.MPTID)
+	}
+	return keylet.IssueSide(keylet.CurrencyBytes(i.Currency), i.Issuer)
+}
+
+func extractIssue(value ledgerfields.IssueValue) (ammIssue, bool) {
+	if value.MPTIssuanceID != "" {
+		id, ok := parseBookMPTID(value.MPTIssuanceID)
+		return ammIssue{MPTID: &id}, ok
+	}
+	if value.Currency == "" {
 		return ammIssue{}, false
 	}
-	currencyStr, ok := m["currency"].(string)
-	if !ok {
-		return ammIssue{}, false
-	}
-	issue := ammIssue{Currency: currencyStr}
+	issue := ammIssue{Currency: value.Currency, IssuerR: value.Issuer}
 	if issue.IsXRP() {
 		return issue, true
 	}
-	issuerStr, ok := m["issuer"].(string)
-	if !ok {
+	issuer, err := state.DecodeAccountID(value.Issuer)
+	if err != nil {
 		return ammIssue{}, false
 	}
-	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
-	if err != nil || len(issuerBytes) != 20 {
-		return ammIssue{}, false
-	}
-	copy(issue.Issuer[:], issuerBytes)
-	issue.IssuerR = issuerStr
+	issue.Issuer = issuer
 	return issue, true
 }
 
@@ -524,9 +521,9 @@ func readAccountRoot(ctx *types.RpcContext, ledgerIndex, ident string) ([20]byte
 // an STAmount-style JSON value: the balance of the LP's trust line with the
 // AMM account, zero when the line is missing or frozen. total supplies the
 // LP token currency and issuer from the AMM SLE's LPTokenBalance.
-func ammLPHoldsJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID, lpAccountID [20]byte, total map[string]any) map[string]any {
-	currency, _ := total["currency"].(string)
-	issuer, _ := total["issuer"].(string)
+func ammLPHoldsJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID, lpAccountID [20]byte, total ledgerfields.AmountValue) map[string]any {
+	currency := total.Currency
+	issuer := total.Issuer
 	issue := ammIssue{Currency: currency, Issuer: ammAccountID, IssuerR: issuer}
 
 	value := "0"
@@ -544,6 +541,17 @@ func ammLPHoldsJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID, lpA
 // calls accountHolds with fhIGNORE_FREEZE — i.e. the balance is reported even
 // when the trust line is frozen).
 func ammPoolBalanceJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]byte, issue ammIssue) any {
+	if issue.MPTID != nil {
+		var amount uint64
+		result, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.MPTokenByID(*issue.MPTID, ammAccountID).Key, ledgerIndex)
+		if err == nil && result != nil {
+			var holding ledgerfields.MPToken
+			if err := holding.Decode(result.Node); err == nil {
+				amount, _ = holding.GetMPTAmount()
+			}
+		}
+		return map[string]any{"mpt_issuance_id": strings.ToUpper(hex.EncodeToString(issue.MPTID[:])), "value": strconv.FormatUint(amount, 10)}
+	}
 	if issue.IsXRP() {
 		drops := readAMMXRPBalance(ctx, ledgerIndex, ammAccountID)
 		return strconv.FormatUint(drops, 10)

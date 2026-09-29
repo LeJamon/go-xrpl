@@ -16,7 +16,7 @@ func DeleteOffer(view LedgerView, offerKey keylet.Keylet, offer *LedgerOffer) (b
 		return false, nil
 	}
 
-	owner, err := DecodeAccountID(offer.Account)
+	owner, err := offerOwnerAccount(offer)
 	if err != nil {
 		return false, fmt.Errorf("decode offer owner: %w", err)
 	}
@@ -54,11 +54,32 @@ func DeleteOffer(view LedgerView, offerKey keylet.Keylet, offer *LedgerOffer) (b
 	return true, nil
 }
 
+func offerOwnerAccount(offer *LedgerOffer) ([20]byte, error) {
+	if offer.decoded.HasAccount() {
+		return offer.decoded.GetAccount()
+	}
+	return DecodeAccountID(offer.Account)
+}
+
 func offerAdditionalBookLinks(offer *LedgerOffer) ([]offerBookLink, error) {
-	additionalBookUnchanged := decodedFieldUnchanged(offer.decodedOptionals, "AdditionalBookDirectory", offer.AdditionalBookDirectory) &&
-		decodedFieldUnchanged(offer.decodedOptionals, "AdditionalBookNode", offer.AdditionalBookNode)
-	if raw, ok := offer.decodedOptionals["AdditionalBooks"].([]any); ok && additionalBookUnchanged {
-		return decodeAdditionalBooks(raw)
+	if offer.decoded.HasAdditionalBooks() {
+		books, err := offer.decoded.GetAdditionalBooks()
+		if err != nil {
+			return nil, err
+		}
+		if len(books) > 0 {
+			directory, directoryErr := books[0].GetBookDirectory()
+			node, nodeErr := books[0].GetBookNode()
+			if directoryErr != nil {
+				return nil, directoryErr
+			}
+			if nodeErr != nil {
+				return nil, nodeErr
+			}
+			if directory == offer.AdditionalBookDirectory && node == offer.AdditionalBookNode {
+				return decodeAdditionalBooks(books)
+			}
+		}
 	}
 	if offer.AdditionalBookDirectory != ([32]byte{}) {
 		return []offerBookLink{{

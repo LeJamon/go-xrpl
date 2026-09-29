@@ -236,6 +236,477 @@ func (l *LoanBroker) SetSponsor(value string) {
 	l.present |= loanbrokerBitSponsor
 }
 
+// HasSequence reports whether Sequence is present.
+func (l *LoanBroker) HasSequence() bool {
+	return l != nil && l.present&loanbrokerBitSequence != 0
+}
+
+// GetSequence returns the typed UInt32 value.
+func (l *LoanBroker) GetSequence() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetSequenceValue(value uint32) {
+	l.SetSequence(value)
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (l *LoanBroker) HasOwnerNode() bool {
+	return l != nil && l.present&loanbrokerBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (l *LoanBroker) GetOwnerNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.OwnerNode, "LoanBroker.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (l *LoanBroker) SetOwnerNodeValue(value uint64) {
+	l.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasVaultNode reports whether VaultNode is present.
+func (l *LoanBroker) HasVaultNode() bool {
+	return l != nil && l.present&loanbrokerBitVaultNode != 0
+}
+
+// GetVaultNode returns the typed UInt64 value.
+func (l *LoanBroker) GetVaultNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.VaultNode, "LoanBroker.VaultNode", false)
+}
+
+// SetVaultNodeValue assigns a typed UInt64 value.
+func (l *LoanBroker) SetVaultNodeValue(value uint64) {
+	l.SetVaultNode(uint64ValueToString(value, false))
+}
+
+// HasVaultID reports whether VaultID is present.
+func (l *LoanBroker) HasVaultID() bool {
+	return l != nil && l.present&loanbrokerBitVaultID != 0
+}
+
+// GetVaultID returns the typed 256-bit hash.
+func (l *LoanBroker) GetVaultID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.VaultID, "LoanBroker.VaultID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetVaultIDValue assigns a typed 256-bit hash.
+func (l *LoanBroker) SetVaultIDValue(value [32]byte) {
+	l.SetVaultID(hashValueToString(value[:]))
+}
+
+// HasAccount reports whether Account is present.
+func (l *LoanBroker) HasAccount() bool {
+	return l != nil && l.present&loanbrokerBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (l *LoanBroker) GetAccount() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Account, "LoanBroker.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (l *LoanBroker) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetAccount(address)
+	return nil
+}
+
+// HasOwner reports whether Owner is present.
+func (l *LoanBroker) HasOwner() bool {
+	return l != nil && l.present&loanbrokerBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (l *LoanBroker) GetOwner() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Owner, "LoanBroker.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (l *LoanBroker) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetOwner(address)
+	return nil
+}
+
+// HasLoanSequence reports whether LoanSequence is present.
+func (l *LoanBroker) HasLoanSequence() bool {
+	return l != nil && l.present&loanbrokerBitLoanSequence != 0
+}
+
+// GetLoanSequence returns the typed UInt32 value.
+func (l *LoanBroker) GetLoanSequence() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.LoanSequence, nil
+}
+
+// SetLoanSequenceValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetLoanSequenceValue(value uint32) {
+	l.SetLoanSequence(value)
+}
+
+// HasData reports whether Data is present.
+func (l *LoanBroker) HasData() bool {
+	return l != nil && l.present&loanbrokerBitData != 0
+}
+
+// ClearData removes Data from the serialized entry.
+func (l *LoanBroker) ClearData() {
+	if l == nil {
+		return
+	}
+	l.Data = ""
+	l.present &^= loanbrokerBitData
+	l.dirty = true
+}
+
+// GetData returns the raw bytes of the Blob field.
+func (l *LoanBroker) GetData() ([]byte, error) {
+	if l == nil {
+		return nil, nil
+	}
+	return blobValueFromString(l.Data, "LoanBroker.Data")
+}
+
+// SetDataValue assigns a Blob from raw bytes.
+func (l *LoanBroker) SetDataValue(value []byte) {
+	l.SetData(blobValueToString(value))
+}
+
+// HasManagementFeeRate reports whether ManagementFeeRate is present.
+func (l *LoanBroker) HasManagementFeeRate() bool {
+	return l != nil && l.present&loanbrokerBitManagementFeeRate != 0
+}
+
+// ClearManagementFeeRate removes ManagementFeeRate from the serialized entry.
+func (l *LoanBroker) ClearManagementFeeRate() {
+	if l == nil {
+		return
+	}
+	l.ManagementFeeRate = 0
+	l.present &^= loanbrokerBitManagementFeeRate
+	l.dirty = true
+}
+
+// GetManagementFeeRate returns the typed UInt16 value.
+func (l *LoanBroker) GetManagementFeeRate() (uint16, error) {
+	if l == nil {
+		return 0, nil
+	}
+	if l.ManagementFeeRate < 0 || l.ManagementFeeRate > 65535 {
+		return 0, fmt.Errorf("ledgerfields: LoanBroker.ManagementFeeRate: value %d is out of range for UInt16", l.ManagementFeeRate)
+	}
+	return uint16(l.ManagementFeeRate), nil
+}
+
+// SetManagementFeeRateValue assigns a typed UInt16 value.
+func (l *LoanBroker) SetManagementFeeRateValue(value uint16) {
+	l.SetManagementFeeRate(value)
+}
+
+// HasOwnerCount reports whether OwnerCount is present.
+func (l *LoanBroker) HasOwnerCount() bool {
+	return l != nil && l.present&loanbrokerBitOwnerCount != 0
+}
+
+// ClearOwnerCount removes OwnerCount from the serialized entry.
+func (l *LoanBroker) ClearOwnerCount() {
+	if l == nil {
+		return
+	}
+	l.OwnerCount = 0
+	l.present &^= loanbrokerBitOwnerCount
+	l.dirty = true
+}
+
+// GetOwnerCount returns the typed UInt32 value.
+func (l *LoanBroker) GetOwnerCount() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.OwnerCount, nil
+}
+
+// SetOwnerCountValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetOwnerCountValue(value uint32) {
+	l.SetOwnerCount(value)
+}
+
+// HasDebtTotal reports whether DebtTotal is present.
+func (l *LoanBroker) HasDebtTotal() bool {
+	return l != nil && l.present&loanbrokerBitDebtTotal != 0
+}
+
+// ClearDebtTotal removes DebtTotal from the serialized entry.
+func (l *LoanBroker) ClearDebtTotal() {
+	if l == nil {
+		return
+	}
+	l.DebtTotal = nil
+	l.present &^= loanbrokerBitDebtTotal
+	l.dirty = true
+}
+
+// GetDebtTotal returns the exact decoded Number text.
+func (l *LoanBroker) GetDebtTotal() (NumberValue, error) {
+	if l == nil || l.DebtTotal == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.DebtTotal, "LoanBroker.DebtTotal")
+}
+
+// SetDebtTotalValue assigns an exact Number text value.
+func (l *LoanBroker) SetDebtTotalValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "LoanBroker.DebtTotal")
+	if err != nil {
+		return err
+	}
+	l.SetDebtTotal(encoded)
+	return nil
+}
+
+// HasDebtMaximum reports whether DebtMaximum is present.
+func (l *LoanBroker) HasDebtMaximum() bool {
+	return l != nil && l.present&loanbrokerBitDebtMaximum != 0
+}
+
+// ClearDebtMaximum removes DebtMaximum from the serialized entry.
+func (l *LoanBroker) ClearDebtMaximum() {
+	if l == nil {
+		return
+	}
+	l.DebtMaximum = nil
+	l.present &^= loanbrokerBitDebtMaximum
+	l.dirty = true
+}
+
+// GetDebtMaximum returns the exact decoded Number text.
+func (l *LoanBroker) GetDebtMaximum() (NumberValue, error) {
+	if l == nil || l.DebtMaximum == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.DebtMaximum, "LoanBroker.DebtMaximum")
+}
+
+// SetDebtMaximumValue assigns an exact Number text value.
+func (l *LoanBroker) SetDebtMaximumValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "LoanBroker.DebtMaximum")
+	if err != nil {
+		return err
+	}
+	l.SetDebtMaximum(encoded)
+	return nil
+}
+
+// HasCoverAvailable reports whether CoverAvailable is present.
+func (l *LoanBroker) HasCoverAvailable() bool {
+	return l != nil && l.present&loanbrokerBitCoverAvailable != 0
+}
+
+// ClearCoverAvailable removes CoverAvailable from the serialized entry.
+func (l *LoanBroker) ClearCoverAvailable() {
+	if l == nil {
+		return
+	}
+	l.CoverAvailable = nil
+	l.present &^= loanbrokerBitCoverAvailable
+	l.dirty = true
+}
+
+// GetCoverAvailable returns the exact decoded Number text.
+func (l *LoanBroker) GetCoverAvailable() (NumberValue, error) {
+	if l == nil || l.CoverAvailable == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.CoverAvailable, "LoanBroker.CoverAvailable")
+}
+
+// SetCoverAvailableValue assigns an exact Number text value.
+func (l *LoanBroker) SetCoverAvailableValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "LoanBroker.CoverAvailable")
+	if err != nil {
+		return err
+	}
+	l.SetCoverAvailable(encoded)
+	return nil
+}
+
+// HasCoverRateMinimum reports whether CoverRateMinimum is present.
+func (l *LoanBroker) HasCoverRateMinimum() bool {
+	return l != nil && l.present&loanbrokerBitCoverRateMinimum != 0
+}
+
+// ClearCoverRateMinimum removes CoverRateMinimum from the serialized entry.
+func (l *LoanBroker) ClearCoverRateMinimum() {
+	if l == nil {
+		return
+	}
+	l.CoverRateMinimum = 0
+	l.present &^= loanbrokerBitCoverRateMinimum
+	l.dirty = true
+}
+
+// GetCoverRateMinimum returns the typed UInt32 value.
+func (l *LoanBroker) GetCoverRateMinimum() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.CoverRateMinimum, nil
+}
+
+// SetCoverRateMinimumValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetCoverRateMinimumValue(value uint32) {
+	l.SetCoverRateMinimum(value)
+}
+
+// HasCoverRateLiquidation reports whether CoverRateLiquidation is present.
+func (l *LoanBroker) HasCoverRateLiquidation() bool {
+	return l != nil && l.present&loanbrokerBitCoverRateLiquidation != 0
+}
+
+// ClearCoverRateLiquidation removes CoverRateLiquidation from the serialized entry.
+func (l *LoanBroker) ClearCoverRateLiquidation() {
+	if l == nil {
+		return
+	}
+	l.CoverRateLiquidation = 0
+	l.present &^= loanbrokerBitCoverRateLiquidation
+	l.dirty = true
+}
+
+// GetCoverRateLiquidation returns the typed UInt32 value.
+func (l *LoanBroker) GetCoverRateLiquidation() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.CoverRateLiquidation, nil
+}
+
+// SetCoverRateLiquidationValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetCoverRateLiquidationValue(value uint32) {
+	l.SetCoverRateLiquidation(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (l *LoanBroker) HasFlags() bool {
+	return l != nil && l.present&loanbrokerBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (l *LoanBroker) GetFlags() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetFlagsValue(value uint32) {
+	l.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (l *LoanBroker) HasPreviousTxnID() bool {
+	return l != nil && l.present&loanbrokerBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (l *LoanBroker) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.PreviousTxnID, "LoanBroker.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (l *LoanBroker) SetPreviousTxnIDValue(value [32]byte) {
+	l.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (l *LoanBroker) HasPreviousTxnLgrSeq() bool {
+	return l != nil && l.present&loanbrokerBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (l *LoanBroker) GetPreviousTxnLgrSeq() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (l *LoanBroker) SetPreviousTxnLgrSeqValue(value uint32) {
+	l.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (l *LoanBroker) HasSponsor() bool {
+	return l != nil && l.present&loanbrokerBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (l *LoanBroker) ClearSponsor() {
+	if l == nil {
+		return
+	}
+	l.Sponsor = ""
+	l.present &^= loanbrokerBitSponsor
+	l.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (l *LoanBroker) GetSponsor() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Sponsor, "LoanBroker.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (l *LoanBroker) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetSponsor(address)
+	return nil
+}
+
 func (l *LoanBroker) validateRequired() error {
 	if l.decoded && !l.dirty {
 		return nil
