@@ -1,6 +1,6 @@
 # Engine coverage inventory
 
-`[inventory.json](../scripts/engine-coverage/inventory.json)` is a checked-in
+[inventory.json](../scripts/engine-coverage/inventory.json) is a checked-in
 source and registry audit for issue #2016. It is pinned to
 `XRPLF/xrpld-private` tag `3.4.1`, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`, and records hashes for the oracle
@@ -13,8 +13,8 @@ snapshot's `source_sha256` entries, while the runtime `HEAD` belongs in a
 separate execution report.
 
 Generate or check the snapshot from the Go repository root. With no argument,
-the generator resolves the sibling `../rippled-worktrees/v3.4.1-oracle`
-checkout and rejects a checkout whose `HEAD` is not the pinned commit.
+the generator resolves `rippled-worktrees/v3.4.1-oracle` beside the checkout
+or its worktree directory and rejects a checkout whose `HEAD` is not the pinned commit.
 
 ```sh
 python3 scripts/engine-coverage/generate.py

@@ -485,9 +485,7 @@ func TestService_SubmitTransaction_QueuedSnapshotUsesEscalatedFee(t *testing.T) 
 
 // TestService_SubmitTransaction_FailHardNotQueued verifies tapFAIL_HARD
 // blocks queue admission: a base-fee tx that would otherwise be held below the
-// escalated open-ledger fee is rejected (telCAN_NOT_QUEUE) when fail_hard is set,
-// mirroring
-// rippled TxQ::canBeHeld (TxQ.cpp:393-399).
+// escalated open-ledger fee is rejected (telCAN_NOT_QUEUE) when fail_hard is set.
 func TestService_SubmitTransaction_FailHardNotQueued(t *testing.T) {
 	svc, env, master := newServiceForEscalatedQueueTest(t)
 	alice := jtx.NewAccount("alice")

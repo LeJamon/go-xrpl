@@ -53,7 +53,6 @@ func TestServiceSnapshotExecutionFromDurableParent(t *testing.T) {
 	}
 
 	for _, c := range compatible {
-		c := c
 		t.Run(c.Name, func(t *testing.T) {
 			runServiceConsensusSnapshot(t, c)
 			switch {
@@ -86,13 +85,13 @@ func runServiceConsensusSnapshot(t *testing.T, c conformance.SnapshotCase) {
 	if seq != c.Closed.Header.LedgerIndex {
 		t.Fatalf("accepted sequence=%d, want %d", seq, c.Closed.Header.LedgerIndex)
 	}
-	// Consensus acceptance leaves the candidate unvalidated; promote the exact
-	// expected hash before checking durable transaction history.
-	svc.SetValidatedLedger(seq, c.Closed.Header.Hash)
-	svc.FlushPersists()
-	if err := assertServiceLedger("consensus closed", svc.GetClosedLedger(), c.Closed); err != nil {
+	closed := svc.GetClosedLedger()
+	if err := assertServiceLedger("consensus closed", closed, c.Closed); err != nil {
 		t.Fatal(err)
 	}
+	// Consensus acceptance requires validation before persisting history.
+	svc.SetValidatedLedger(seq, closed.Hash())
+	svc.FlushPersists()
 	bySequence, err := svc.GetLedgerBySequence(c.Closed.Header.LedgerIndex)
 	if err != nil {
 		t.Fatalf("GetLedgerBySequence: %v", err)

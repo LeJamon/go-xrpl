@@ -430,6 +430,11 @@ jobs:
           set -o pipefail
           mkdir -p "$EVIDENCE_DIR"
           GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 GOXRPL_CONFORMANCE_REQUIRED=1 go test -race -count=1 -v ./internal/testing/conformance 2>&1 | tee "$EVIDENCE_DIR/conformance.log"
+      - name: Run pinned ledger service boundaries
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v ./internal/ledger/service -run '^TestServiceSnapshotExecutionFromDurableParent$' 2>&1 | tee "$EVIDENCE_DIR/service-execution.log"
       - name: Validate conformance accounting
         shell: bash
         run: |
@@ -458,6 +463,16 @@ jobs:
             (.completed_cases | length) == .discovered and
             ([.completed_cases[]] | add) == .executed and
             .completed_submissions >= .executed and
+            (.executed_profiles | length) == 16 and
+            ([.executed_profiles[]] | add) == .executed and
+            (.executed_families | length) > 0 and
+            ([.executed_families[]] | add) == .executed and
+            .completed_submission_common_fields_present.TransactionType == .completed_submissions and
+            .completed_submission_common_fields_present.Account == .completed_submissions and
+            .completed_submission_common_fields_present.Fee == .completed_submissions and
+            .completed_submission_common_fields_present.SigningPubKey == .completed_submissions and
+            (.completed_parent_rules_enabled | length) > 0 and
+            ([.completed_parent_rules_enabled[]] | all(. > 0)) and
             ([.completed_submission_types[]] | add) == .completed_submissions and
             ([.completed_submission_results[]] | add) == .completed_submissions and
             ([.completed_closed_transaction_types[]] | add) == .completed_replay_leaves and

@@ -505,6 +505,15 @@ func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, a
 		return err
 	}
 
+	queuedBlob, queued := queue.GetTxBlob(pending.Hash)
+	if queued != out.Queued || (queued && !bytes.Equal(queuedBlob, pending.Blob)) {
+		return errors.New("submission queue membership or signed bytes differ")
+	}
+	if out.Applied {
+		if err := assertSnapshotAppliedTransaction(view.Current(), pending, out.Metadata); err != nil {
+			return err
+		}
+	}
 	if !out.Applied {
 		if out.Changed {
 			return errors.New("rejected or queued snapshot submission changed the open ledger")
@@ -523,6 +532,34 @@ func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, a
 	}
 	if err := assertSnapshotPostSubmitState(view.Current(), expected.PostSubmitSLE); err != nil {
 		return err
+	}
+	return nil
+}
+
+func assertSnapshotAppliedTransaction(current *ledger.Ledger, pending openledger.PendingTx, metadata *tx.Metadata) error {
+	leaf, found, err := current.GetTransaction(pending.Hash)
+	if err != nil {
+		return fmt.Errorf("read applied transaction: %w", err)
+	}
+	if !found {
+		return errors.New("applied submission is absent from the open transaction map")
+	}
+	blob, storedMetadata, err := tx.SplitTxWithMetaBlob(leaf)
+	if err != nil {
+		return fmt.Errorf("decode applied transaction leaf: %w", err)
+	}
+	if !bytes.Equal(blob, pending.Blob) {
+		return errors.New("open transaction bytes differ from the signed submission")
+	}
+	if metadata == nil {
+		return errors.New("applied submission returned no metadata")
+	}
+	returnedMetadata, err := tx.SerializeMetadata(metadata)
+	if err != nil {
+		return fmt.Errorf("serialize submission metadata: %w", err)
+	}
+	if !bytes.Equal(storedMetadata, returnedMetadata) {
+		return errors.New("open transaction metadata differs from the submission result")
 	}
 	return nil
 }
@@ -747,6 +784,9 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		return loadedSnapshotLedger{}, fmt.Errorf("construct ledger: %w", err)
 	}
 	loadedRules := l.Rules()
+	if loadedRules.EnabledCount() != explicitRules.EnabledCount() {
+		return loadedSnapshotLedger{}, errors.New("explicit rules differ from ledger amendments")
+	}
 	for _, id := range loadedRules.EnabledIDs() {
 		if !explicitRules.Enabled(id) {
 			return loadedSnapshotLedger{}, fmt.Errorf("ledger amendment %x is absent from explicit rules", id)

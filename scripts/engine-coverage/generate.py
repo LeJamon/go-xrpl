@@ -1196,7 +1196,10 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="fail if the checked-in snapshot is stale")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
-    oracle = args.oracle or repo.parents[1] / "rippled-worktrees/v3.4.1-oracle"
+    oracle = args.oracle
+    if oracle is None:
+        candidates = [parent / "rippled-worktrees/v3.4.1-oracle" for parent in (repo.parent, repo.parent.parent)]
+        oracle = next((path for path in candidates if path.is_dir()), candidates[0])
     output = args.output or repo / "scripts/engine-coverage/inventory.json"
     if not oracle.is_dir():
         raise SystemExit(f"engine coverage: oracle checkout not found: {oracle}")

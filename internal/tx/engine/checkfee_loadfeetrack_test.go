@@ -108,6 +108,7 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 		{name: "enforce, normal load, fee below base", fee: "5", feeTrack: feetrack.New(), enforce: true, want: ter.TelINSUF_FEE_P},
 		{name: "enforce, nil tracker, fee below base", fee: "5", feeTrack: nil, enforce: true, want: ter.TelINSUF_FEE_P},
 		{name: "open view, fee below base", fee: "5", viewOpen: true, want: ter.TelINSUF_FEE_P},
+		{name: "closed view, fee below base", fee: "1", want: ter.TesSUCCESS},
 		{name: "no enforce, elevated load (closed apply): never scales", fee: "10", feeTrack: loaded, enforce: false, want: ter.TesSUCCESS},
 	}
 	for _, tt := range tests {
