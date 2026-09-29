@@ -325,8 +325,16 @@ func (m *TxMethod) buildResponseV2(
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
 func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *rpcerrors.RpcError) {
+	// CTID resolution is limited to the published validated frontier. The
+	// ledger service also resolves a matching sequence to the open ledger, but
+	// rippled's LedgerMaster::txnIdFromIndex only searches its validated range.
+	serverInfo := ctx.Services.Ledger().GetServerInfo()
+	if !serverInfo.HavePublished || serverInfo.PublishedLedgerSeq < ledgerSeq {
+		return nil, rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
+	}
+
 	ledger, err := ctx.Services.Ledger().GetLedgerBySequence(ledgerSeq)
-	if err != nil {
+	if err != nil || ledger == nil || !ledger.IsClosed() || !ledger.IsValidated() {
 		return nil, rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
 	}
 
