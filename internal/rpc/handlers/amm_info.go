@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -356,7 +357,11 @@ func parseAMMAsset(raw json.RawMessage) (ammIssue, error) {
 		if currency == [20]byte{} {
 			return ammIssue{Currency: "XRP"}, nil
 		}
-		return ammIssue{Currency: stringField(fields["currency"]), Issuer: issuer, IssuerR: state.EncodeAccountIDSafe(issuer)}, nil
+		code, err := binarycodectypes.DecodeCurrencyCode(currency[:])
+		if err != nil {
+			return ammIssue{}, err
+		}
+		return ammIssue{Currency: code, Issuer: issuer, IssuerR: state.EncodeAccountIDSafe(issuer)}, nil
 	}
 	if _, hasIssuer := fields["issuer"]; hasIssuer {
 		return ammIssue{}, errors.New("MPT asset cannot carry issuer")
@@ -434,10 +439,7 @@ func currencyFromString(code string) ([20]byte, error) {
 	return keylet.ParseCurrency(code)
 }
 
-// ammIssue carries the asset definition decoded from the AMM SLE's
-// sfAsset/sfAsset2 fields. Currency stays in its codec form (3-char ISO or
-// 40-char hex) so it can be passed straight to keylet.Line and re-emitted
-// in the response unchanged.
+// ammIssue uses canonical currency text for both ledger lookups and responses.
 type ammIssue struct {
 	MPTID    *[24]byte
 	Currency string
