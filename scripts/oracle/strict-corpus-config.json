@@ -4,6 +4,12 @@
   "oracle_tag": "3.4.1",
   "oracle_commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
   "network_id": 0,
+  "scenario_overrides": {
+    "network_id": {
+      "AccountSet/network-id-missing": 1025,
+      "AccountSet/network-id-wrong": 1025
+    }
+  },
   "apply_flags": 0,
   "skip_signature_verification": false,
   "profile_encoding": "c<cleanup>-l<lending>-b<BatchV1_1>-f<fixBatchV1_2>",
