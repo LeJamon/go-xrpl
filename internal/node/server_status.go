@@ -36,7 +36,7 @@ type serverStatusPublisher struct {
 	haveLast  bool
 	last      serverStatusSnapshot
 	// mode tracks delivery so fee signals cannot observe later queued transitions.
-	mode      string
+	mode string
 }
 
 func newServerStatusPublisher(services *types.ServiceGraph, publisher serverStatusEventPublisher) *serverStatusPublisher {
