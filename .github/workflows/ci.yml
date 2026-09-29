@@ -424,6 +424,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
+      - name: Verify oracle tooling provenance guards
+        run: |
+          python3 -B scripts/engine-coverage/generate_test.py
+          python3 -B scripts/oracle/record-v4_test.py
       - name: Run pinned final conformance corpus
         shell: bash
         run: |

@@ -21,7 +21,7 @@ const (
 	pinnedOracleTag        = "3.4.1"
 	pinnedOracleCommit     = "d147fccf54a500fce586522f28d6044c37fd8d29"
 	pinnedFixtureVersion   = "v4"
-	pinnedManifestSchema   = 3
+	pinnedManifestSchema   = 4
 )
 
 var pinnedRecorderSources = []string{
@@ -38,6 +38,7 @@ type pinnedManifest struct {
 	RippledTag       string                      `json:"rippled_tag"`
 	RippledCommit    string                      `json:"rippled_commit"`
 	RecorderCommit   string                      `json:"recorder_commit"`
+	RecorderArchive  string                      `json:"recorder_source_archive"`
 	RecorderSources  map[string]string           `json:"recorder_sources"`
 	BinarySHA256     string                      `json:"binary_sha256"`
 	BuildIdentity    string                      `json:"build_identity"`
@@ -201,7 +202,7 @@ func readRegularCorpusFile(root *os.Root, path string) ([]byte, error) {
 }
 
 func validatePinnedManifestKeys(data []byte) error {
-	object, err := exactJSONKeys(data, "manifest", "schema", "fixture_version", "oracle_repository", "rippled_tag", "rippled_commit", "recorder_commit", "recorder_sources", "binary_sha256", "build_identity", "config_identity", "config_source", "amendment_matrix", "fixture_count", "fixtures", "coverage_limits")
+	object, err := exactJSONKeys(data, "manifest", "schema", "fixture_version", "oracle_repository", "rippled_tag", "rippled_commit", "recorder_commit", "recorder_source_archive", "recorder_sources", "binary_sha256", "build_identity", "config_identity", "config_source", "amendment_matrix", "fixture_count", "fixtures", "coverage_limits")
 	if err != nil {
 		return err
 	}
@@ -256,6 +257,9 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 	if !validGitCommit(manifest.RecorderCommit) || strings.Trim(manifest.RecorderCommit, "0") == "" {
 		return nil, errors.New("recorder_commit must identify the recorder source commit")
 	}
+	if manifest.RecorderArchive != "scripts/oracle/recorded/"+manifest.RecorderCommit {
+		return nil, errors.New("recorder_source_archive must identify the recorded source commit archive")
+	}
 	if !validSHA256(manifest.BinarySHA256) || strings.TrimSpace(manifest.BuildIdentity) == "" || !validSHA256(manifest.ConfigIdentity) {
 		return nil, errors.New("binary_sha256, build_identity, and SHA-256 config_identity are required")
 	}
@@ -279,7 +283,7 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 		if !fs.ValidPath(name) || !validSHA256(checksum) {
 			return nil, fmt.Errorf("invalid recorder source %q", name)
 		}
-		data, err := readRegularCorpusFile(repo, name)
+		data, err := readRegularCorpusFile(repo, manifest.RecorderArchive+"/"+name)
 		if err != nil {
 			return nil, fmt.Errorf("recorder source %s: %w", name, err)
 		}

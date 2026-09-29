@@ -6,6 +6,12 @@ These files were emitted by an executed C++ recorder linked against
 `manifest.json` pins every fixture, all four recorder source files, the recorder
 commit, binary, build identity, configuration and amendment matrix.
 
+Manifest schema 4 validates the historical recorder sources in
+`scripts/oracle/recorded/<recorder_commit>/`, using their original paths and
+checksums. These snapshots preserve the exact recording sources as the current
+tooling evolves. The schema migration changed no fixture, recorded source hash,
+recorder commit or binary identity.
+
 The final recorder at `33836340bb531f260c7bad897e54e5483bacd479` produced **108 fixtures**,
 **3,542 assertions and zero failures**. The 108 primary observations contain
 80 `tesSUCCESS`, five applied `tec` results, one `terQUEUED`, and 22 other
@@ -74,6 +80,11 @@ against the clean oracle, allowing only the existing test-only Batch recorder
 instrumentation. It compiled the new recorder object and linked a separate
 binary. The clean oracle and original binary were not modified.
 
+The current recorder additionally requires reused production objects to relink
+to the pinned production binary before compiling the recorder. The historical
+recording predates that guard; its retained build logs and matching object files
+were inspected independently during review.
+
 | Identity | SHA-256 |
 | --- | --- |
 | Original exact-commit binary | `f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3d6113` |
@@ -128,6 +139,8 @@ binary, build identity, configuration and coverage limits. List each full path
 `scripts/oracle/strict-corpus-config.json` and `scripts/oracle/strict_recorder.cpp`
 with a separate `--recorder-source` argument. Manifest generation checks source
 bytes against that commit and never rewrites fixture inputs or observations.
+It also saves the four sources under `scripts/oracle/recorded/<recorder_commit>/`
+and rejects any conflicting archived bytes.
 
 Replay needs no private checkout or C++ build:
 

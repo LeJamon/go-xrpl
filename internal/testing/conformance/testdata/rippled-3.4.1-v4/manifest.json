@@ -795,6 +795,7 @@
   },
   "oracle_repository": "XRPLF/xrpld-private",
   "recorder_commit": "33836340bb531f260c7bad897e54e5483bacd479",
+  "recorder_source_archive": "scripts/oracle/recorded/33836340bb531f260c7bad897e54e5483bacd479",
   "recorder_sources": {
     "scripts/oracle/record-v4.py": "3fa8252f02a8eca1d69b0a88b53b240d4ae81b565783aa140efc8d5870e5b0a0",
     "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
@@ -803,5 +804,5 @@
   },
   "rippled_commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
   "rippled_tag": "3.4.1",
-  "schema": 3
+  "schema": 4
 }

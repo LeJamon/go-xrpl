@@ -390,6 +390,7 @@ def compile_recorder(
         raise RuntimeError("could not specialize the pinned test compile command")
     compile_text = shlex.join(args)
     compile_hash = hashlib.sha256(compile_text.encode()).hexdigest()
+    run(args, cwd=build)
 
     commands = subprocess.check_output(
         ["ninja", "-C", str(old_build), "-t", "commands", "xrpld"], text=True
@@ -408,19 +409,12 @@ def compile_recorder(
         output_index = link_args.index("-o")
     except ValueError as error:
         raise RuntimeError("pinned xrpld link command has no output argument") from error
-    output = build / "xrpld"
-    output.unlink(missing_ok=True)
-    run(link_args, cwd=build)
-    if sha256(output) != OLD_BINARY_SHA256:
-        raise SystemExit(
-            "reused build objects do not reproduce the verified production binary; "
-            "use --clean-build"
-        )
-    run(args, cwd=build)
     link_args.insert(output_index, str(strict_relative))
     link_text = shlex.join(link_args)
     link_hash = hashlib.sha256(link_text.encode()).hexdigest()
-    output.unlink()
+    output = build / "xrpld"
+    if output.exists():
+        output.unlink()
     run(link_args, cwd=build)
     return output, compile_hash, link_hash
 
@@ -487,7 +481,7 @@ def main() -> None:
             old_build=old_build / "build", build=build, recorder_source=recorder_source
         )
         clean_identity = {}
-        build_method = "production objects verified by exact binary relink; newly compiled recorder object; relinked xrpld"
+        build_method = "hardlinked exact-commit production build objects; newly compiled recorder object; relinked xrpld"
         version_output = subprocess.check_output([str(strict_binary), "--version"], text=True)
         version = version_output.splitlines()[0].strip()
     if args.clean_build:

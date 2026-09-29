@@ -497,10 +497,16 @@ func TestService_SubmitTransaction_FailHardNotQueued(t *testing.T) {
 	if res.Applied {
 		t.Errorf("Applied = true, want false")
 	}
-	if res.Result == ter.TerQUEUED {
-		t.Errorf("Result = terQUEUED, want a rejection under fail_hard")
+	if res.Result != ter.TelCAN_NOT_QUEUE {
+		t.Errorf("Result = %s, want telCAN_NOT_QUEUE under fail_hard", res.Result)
 	}
 	if openLedgerHasTx(t, svc, hash) {
 		t.Errorf("fail_hard rejected tx must not be in the open view")
+	}
+	if queued := svc.QueueAllTxs(); len(queued) != 0 {
+		t.Errorf("fail_hard rejected tx must not enter the queue: %v", queued)
+	}
+	if blob, included, deferred, ok := svc.TransactionForRelay(hash); ok || len(blob) != 0 || included || deferred {
+		t.Errorf("fail_hard rejected tx must not be retained for relay: (%x, %v, %v, %v)", blob, included, deferred, ok)
 	}
 }

@@ -79,8 +79,24 @@ def oracle_head(oracle: Path) -> str:
             capture_output=True,
             text=True,
         )
+        status = subprocess.run(
+            ["git", "-C", str(oracle), "status", "--porcelain", "--untracked-files=all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        tag = subprocess.run(
+            ["git", "-C", str(oracle), "rev-parse", f"refs/tags/{ORACLE_TAG}^{{commit}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise SystemExit(f"engine coverage: cannot resolve oracle commit: {exc}") from exc
+    if status.stdout.strip():
+        raise SystemExit("engine coverage: oracle worktree must be clean")
+    if tag.stdout.strip() != result.stdout.strip():
+        raise SystemExit(f"engine coverage: oracle HEAD must match tag {ORACLE_TAG}")
     return result.stdout.strip()
 
 
@@ -529,12 +545,29 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         manifest = json.loads(read(manifest_path))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid v4 conformance manifest: {exc}") from exc
-    if manifest.get("schema") != 3 or manifest.get("fixture_version") != "v4":
+    if manifest.get("schema") != 4 or manifest.get("fixture_version") != "v4":
         raise ValueError("unexpected v4 conformance manifest schema or fixture version")
     if manifest.get("oracle_repository") != ORACLE_REPOSITORY:
         raise ValueError("v4 conformance manifest repository differs from pinned oracle")
     if manifest.get("rippled_tag") != ORACLE_TAG or manifest.get("rippled_commit") != ORACLE_COMMIT:
         raise ValueError("v4 conformance manifest oracle differs from pinned oracle")
+    recorder_commit = manifest.get("recorder_commit", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", recorder_commit):
+        raise ValueError("v4 conformance manifest recorder commit is invalid")
+    archive = manifest.get("recorder_source_archive")
+    if archive != f"scripts/oracle/recorded/{recorder_commit}":
+        raise ValueError("v4 conformance manifest recorder source archive is invalid")
+    sources = manifest.get("recorder_sources", {})
+    expected_sources = {
+        "scripts/oracle/record-v4.py", "scripts/oracle/record-v4.sh",
+        "scripts/oracle/strict-corpus-config.json", "scripts/oracle/strict_recorder.cpp",
+    }
+    if set(sources) != expected_sources:
+        raise ValueError("v4 conformance manifest recorder source inventory is incomplete")
+    for name, checksum in sources.items():
+        source = repo / archive / name
+        if source.is_symlink() or not source.is_file() or sha256(source) != checksum:
+            raise ValueError(f"v4 conformance recorder source checksum mismatch: {name}")
 
     fixtures = manifest.get("fixtures")
     if not isinstance(fixtures, dict) or manifest.get("fixture_count") != len(fixtures):
@@ -552,8 +585,11 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         fixture_path = fixture_path.parent / fixture_name
         if not fixture_path.is_file():
             raise ValueError(f"v4 conformance fixture is missing: {fixture_name}")
+        fixture_bytes = fixture_path.read_bytes()
+        if hashlib.sha256(fixture_bytes).hexdigest() != fixture.get("sha256"):
+            raise ValueError(f"v4 conformance fixture checksum mismatch: {fixture_name}")
         try:
-            fixture_data = json.loads(read(fixture_path))
+            fixture_data = json.loads(fixture_bytes)
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid v4 conformance fixture {fixture_name!r}: {exc}") from exc
         for key, expected in (
@@ -599,6 +635,7 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         "oracle_binary_sha256": manifest.get("binary_sha256"),
         "recorder_commit": manifest.get("recorder_commit"),
         "recorder_source_sha256": manifest.get("recorder_sources", {}),
+        "recorder_source_archive": archive,
         "config_identity": manifest.get("config_identity"),
         "fixture_observations": {
             "source": "raw fixture submit.engine_result and submit.engine_result_code",

@@ -65,6 +65,16 @@ def main():
         sources[relative] = sha256(data)
     if set(sources) != RECORDER_SOURCES:
         parser.error(f"recorder source inventory must be exactly {sorted(RECORDER_SOURCES)}")
+    archive = Path("scripts/oracle/recorded") / recorder_commit
+    for name, checksum in sources.items():
+        snapshot = repo / archive / name
+        data = git_blob(repo, recorder_commit, name)
+        if sha256(data) != checksum:
+            parser.error(f"recorded source checksum changed: {name}")
+        if snapshot.exists() and (snapshot.is_symlink() or snapshot.read_bytes() != data):
+            parser.error(f"recorded source archive differs: {snapshot}")
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(data)
     config = args.config.resolve()
     if config != repo / "scripts/oracle/strict-corpus-config.json":
         parser.error("--config must select scripts/oracle/strict-corpus-config.json")
@@ -116,12 +126,13 @@ def main():
     if unknown:
         parser.error(f"unknown profile IDs: {unknown}")
     manifest = {
-        "schema": 3,
+        "schema": 4,
         "fixture_version": "v4",
         "oracle_repository": ORACLE_REPOSITORY,
         "rippled_tag": ORACLE_TAG,
         "rippled_commit": ORACLE_COMMIT,
         "recorder_commit": recorder_commit,
+        "recorder_source_archive": archive.as_posix(),
         "recorder_sources": sources,
         "binary_sha256": sha256(args.binary.read_bytes()),
         "build_identity": args.build_identity,
