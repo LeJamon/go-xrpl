@@ -65,7 +65,7 @@ def check_oracle(oracle: Path) -> dict[str, str]:
         text=True,
     ).strip()
     status = subprocess.check_output(
-        ["git", "-C", str(oracle), "status", "--porcelain"], text=True
+        ["git", "-C", str(oracle), "status", "--porcelain", "--untracked-files=all"], text=True
     )
     if commit != ORACLE_COMMIT or describe != ORACLE_TAG or status:
         raise SystemExit(

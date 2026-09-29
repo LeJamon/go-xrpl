@@ -50,7 +50,7 @@ def main():
     remote = git(oracle, "remote", "get-url", "origin").decode()
     if remote not in (f"git@github.com:{ORACLE_REPOSITORY}.git", f"https://github.com/{ORACLE_REPOSITORY}.git", f"https://github.com/{ORACLE_REPOSITORY}"):
         parser.error("oracle origin must identify XRPLF/xrpld-private")
-    if git(oracle, "status", "--porcelain", "--untracked-files=normal"):
+    if git(oracle, "status", "--porcelain", "--untracked-files=all"):
         parser.error("oracle checkout must be clean")
     recorder_commit = git(repo, "rev-parse", f"{args.recorder_commit}^{{commit}}").decode()
     sources = {}
@@ -71,7 +71,9 @@ def main():
         data = git_blob(repo, recorder_commit, name)
         if sha256(data) != checksum:
             parser.error(f"recorded source checksum changed: {name}")
-        if snapshot.exists() and (snapshot.is_symlink() or snapshot.read_bytes() != data):
+        if snapshot.is_symlink() or not snapshot.resolve().is_relative_to(repo):
+            parser.error(f"recorded source archive must be a regular repository file: {snapshot}")
+        if snapshot.exists() and snapshot.read_bytes() != data:
             parser.error(f"recorded source archive differs: {snapshot}")
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         snapshot.write_bytes(data)
