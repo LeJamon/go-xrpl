@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -83,5 +84,58 @@ func TestTxqAdapterGetBaseFeeWaivesEligibleSetRegularKey(t *testing.T) {
 	inner.GetCommon().SigningPubKey = ""
 	if got, err := adapter.GetBaseFee(inner); got != 10 || err != nil {
 		t.Fatalf("inner SetRegularKey base fee = %d, want 10", got)
+	}
+}
+
+func TestSubmitQueueEnforcesContextualBaseFee(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		fee        string
+		regularKey bool
+		want       ter.Result
+	}{
+		{name: "zero", fee: "0", want: ter.TelINSUF_FEE_P},
+		{name: "one drop", fee: "1", want: ter.TelINSUF_FEE_P},
+		{name: "below base", fee: "9", want: ter.TelINSUF_FEE_P},
+		{name: "base", fee: "10", want: ter.TesSUCCESS},
+		{name: "free regular key", fee: "0", regularKey: true, want: ter.TesSUCCESS},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			env.SetVerifySignatures(true)
+			alice := jtx.NewAccount("alice")
+			env.Fund(alice)
+			parent := closedParent(t, env)
+			rules := amendment.AllSupportedRules()
+			view, err := openledger.New(parent, openledger.Config{Rules: rules})
+			require.NoError(t, err)
+			queue, err := txq.New(txq.DefaultConfig())
+			require.NoError(t, err)
+			var transaction tx.Transaction = account.NewAccountSet(alice.Address)
+			if test.regularKey {
+				transaction = jtx.NewSetRegularKeyTx(alice, jtx.NewAccount("regular-key"))
+			}
+			transaction.GetCommon().SetSequence(env.Seq(alice))
+			transaction.GetCommon().Fee = test.fee
+			pending, err := openledger.ParsePendingTx(buildSignedBlobOL(t, env, transaction, alice))
+			require.NoError(t, err)
+			before := view.Current()
+			out := view.SubmitDetailed(pending, openledger.ApplyConfig{
+				BaseFee: 10, ReserveBase: 200_000_000, ReserveIncrement: 50_000_000,
+				LedgerSequence: before.Sequence(), Rules: rules,
+			}, queue)
+			require.Equal(t, test.want, out.Result)
+			require.False(t, out.Queued)
+			require.Zero(t, queue.Size())
+			if test.want == ter.TesSUCCESS {
+				require.True(t, out.Applied)
+				require.True(t, ledgerTxExists(t, view.Current(), pending.Hash))
+			} else {
+				require.False(t, out.Applied)
+				require.False(t, out.Changed)
+				require.Zero(t, out.Fee)
+				require.Same(t, before, view.Current())
+			}
+		})
 	}
 }

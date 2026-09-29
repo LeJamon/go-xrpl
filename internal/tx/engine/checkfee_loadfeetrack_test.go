@@ -87,10 +87,6 @@ func TestCheckFee_UnlimitedCarveOut(t *testing.T) {
 	}
 }
 
-// TestCheckFee_EnforceLoadFee covers the EnforceLoadFee gate used by the TxQ
-// direct-apply / clear-queue / accept paths (OpenLedger=false). The floor must
-// fire only while load is elevated, mirroring rippled's open-view floor under
-// load, and stay inert at normal load and on genuinely closed-ledger applies.
 func TestCheckFee_EnforceLoadFee(t *testing.T) {
 	const baseFee = 10
 	account := &state.AccountRoot{Balance: 1_000_000}
@@ -104,12 +100,14 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 		fee      string
 		feeTrack *feetrack.LoadFeeTrack
 		enforce  bool
+		viewOpen bool
 		want     ter.Result
 	}{
 		{name: "enforce, elevated load, fee below scaled floor", fee: "10", feeTrack: loaded, enforce: true, want: ter.TelINSUF_FEE_P},
 		{name: "enforce, elevated load, fee meets scaled floor", fee: "20", feeTrack: loaded, enforce: true, want: ter.TesSUCCESS},
-		{name: "enforce, normal load: floor inert (admission covers base)", fee: "5", feeTrack: feetrack.New(), enforce: true, want: ter.TesSUCCESS},
-		{name: "enforce, nil tracker: floor inert", fee: "5", feeTrack: nil, enforce: true, want: ter.TesSUCCESS},
+		{name: "enforce, normal load, fee below base", fee: "5", feeTrack: feetrack.New(), enforce: true, want: ter.TelINSUF_FEE_P},
+		{name: "enforce, nil tracker, fee below base", fee: "5", feeTrack: nil, enforce: true, want: ter.TelINSUF_FEE_P},
+		{name: "open view, fee below base", fee: "5", viewOpen: true, want: ter.TelINSUF_FEE_P},
 		{name: "no enforce, elevated load (closed apply): never scales", fee: "10", feeTrack: loaded, enforce: false, want: ter.TesSUCCESS},
 	}
 	for _, tt := range tests {
@@ -118,6 +116,7 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 				BaseFee:        baseFee,
 				OpenLedger:     false,
 				EnforceLoadFee: tt.enforce,
+				ViewOpen:       tt.viewOpen,
 				FeeTrack:       tt.feeTrack,
 			}}
 			txn := newFeeTestTx(tt.fee)
