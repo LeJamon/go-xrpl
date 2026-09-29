@@ -52,7 +52,7 @@ test-tx:
 
 # CI group: ledger / txq / rpc / consensus / peermanagement / manifest.
 test-core:
-    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
+    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
 
 # CI group: codec / crypto / shamap / storage / etc.
 test-libs:
