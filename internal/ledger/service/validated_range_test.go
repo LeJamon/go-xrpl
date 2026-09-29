@@ -125,10 +125,12 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	}, 5*time.Second, time.Millisecond)
 	info := svc.GetServerInfo()
 	require.True(t, info.HaveValidatedRange)
-	_, availableMax, ok := svc.AvailableLedgerRange()
+	availableMin, availableMax, ok := svc.AvailableLedgerRange()
 	require.True(t, ok)
+	require.Equal(t, closed.Sequence(), availableMin)
 	require.Equal(t, closed.Sequence(), availableMax)
-	require.Equal(t, closed.Sequence()-1, info.ValidatedRangeMax)
+	require.Zero(t, info.ValidatedRangeMin)
+	require.Zero(t, info.ValidatedRangeMax)
 
 	unblock()
 	require.Eventually(t, func() bool {
