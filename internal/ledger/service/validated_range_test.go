@@ -73,8 +73,8 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 		Database: base,
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
-		blockSeq: 2,
 	}
+	db.blockSeq.Store(^uint32(0))
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(db.release) }) }
 	defer unblock()
@@ -86,9 +86,10 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	svc.FlushPersists()
 
 	parent := svc.GetClosedLedger()
-	require.Equal(t, uint32(1), parent.Sequence())
+	db.blockSeq.Store(parent.Sequence() + 1)
 	blob, txID := startupPaymentBlob(t, "ctid-pending-save", 1)
 	_, err = svc.AcceptConsensusResult(
 		t.Context(),
@@ -101,7 +102,7 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	require.NoError(t, err)
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
-	require.Equal(t, db.blockSeq, closed.Sequence())
+	require.Equal(t, db.blockSeq.Load(), closed.Sequence())
 
 	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
 	select {
