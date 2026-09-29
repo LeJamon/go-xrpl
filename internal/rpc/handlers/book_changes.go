@@ -168,6 +168,9 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if lerr != nil {
 		return nil, lerr
 	}
+	if !targetLedger.IsClosed() {
+		return formatBookChanges(targetLedger, nil), nil
+	}
 
 	result, err := computeBookChangesContext(ctx.Context, targetLedger)
 	if err != nil {
