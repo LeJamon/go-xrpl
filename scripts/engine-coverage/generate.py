@@ -32,14 +32,13 @@ ORACLE_REPOSITORY = "XRPLF/xrpld-private"
 ORACLE_TAG = "3.4.1"
 ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
 GO_BASE_COMMIT = "02f4f17c7d1c1b5676b112ddfa669655bcff4415"
-GO_INVENTORY_SOURCE_COMMIT = "b002da57fb415b40a1150f0e0dc82f764a340556"
+GO_PREREQUISITE_BASELINE = "b002da57fb415b40a1150f0e0dc82f764a340556"
 SCHEMA = 1
 
 TRANSACTION_MACRO = "include/xrpl/protocol/detail/transactions.macro"
 TX_FORMATS = "src/libxrpl/protocol/TxFormats.cpp"
 FEATURE_MACRO = "include/xrpl/protocol/detail/features.macro"
 V4_MANIFEST = "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json"
-V4_README = "internal/testing/conformance/testdata/rippled-3.4.1-v4/README.md"
 
 GO_TRANSACTION_TYPES = "protocol/transaction_type.go"
 GO_TEMPLATE = "internal/tx/template.go"
@@ -524,9 +523,8 @@ def common_field_stage_mapping() -> list[dict[str, Any]]:
 
 def parse_v4_corpus(repo: Path) -> dict[str, Any]:
     manifest_path = repo / V4_MANIFEST
-    readme_path = repo / V4_README
-    if not manifest_path.is_file() or not readme_path.is_file():
-        raise ValueError("checked-in v4 conformance manifest/README is missing")
+    if not manifest_path.is_file():
+        raise ValueError("checked-in v4 conformance manifest is missing")
     try:
         manifest = json.loads(read(manifest_path))
     except json.JSONDecodeError as exc:
@@ -542,51 +540,72 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
     if not isinstance(fixtures, dict) or manifest.get("fixture_count") != len(fixtures):
         raise ValueError("v4 conformance fixture count does not match manifest rows")
     family_counts = Counter()
+    submit_results = Counter()
+    submit_result_codes = Counter()
+    applied_counts = Counter()
+    queued_counts = Counter()
+    suites: set[str] = set()
     for fixture_name, fixture in fixtures.items():
         if not isinstance(fixture, dict) or not fixture.get("family"):
             raise ValueError(f"v4 conformance fixture {fixture_name!r} has no family")
-        family_counts[fixture["family"]] += 1
+        fixture_path = repo / V4_MANIFEST
+        fixture_path = fixture_path.parent / fixture_name
+        if not fixture_path.is_file():
+            raise ValueError(f"v4 conformance fixture is missing: {fixture_name}")
+        try:
+            fixture_data = json.loads(read(fixture_path))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid v4 conformance fixture {fixture_name!r}: {exc}") from exc
+        for key, expected in (
+            ("fixture_version", "v4"),
+            ("oracle_repository", ORACLE_REPOSITORY),
+            ("oracle_tag", ORACLE_TAG),
+            ("oracle_commit", ORACLE_COMMIT),
+        ):
+            if fixture_data.get(key) != expected:
+                raise ValueError(f"v4 fixture {fixture_name!r} has invalid {key}")
+        if fixture_data.get("family") != fixture["family"] or fixture_data.get("profile") != fixture["profile"]:
+            raise ValueError(f"v4 fixture {fixture_name!r} disagrees with manifest metadata")
+        suite = fixture_data.get("suite")
+        if not isinstance(suite, str) or not suite:
+            raise ValueError(f"v4 fixture {fixture_name!r} has no suite")
+        suites.add(suite)
+        submit = fixture_data.get("submit")
+        if not isinstance(submit, dict):
+            raise ValueError(f"v4 fixture {fixture_name!r} has no submit observation")
+        result = submit.get("engine_result")
+        result_code = submit.get("engine_result_code")
+        if not isinstance(result, str) or not result or not isinstance(result_code, int):
+            raise ValueError(f"v4 fixture {fixture_name!r} has an invalid submit TER")
+        family_counts[fixture_data["family"]] += 1
+        submit_results[result] += 1
+        submit_result_codes[str(result_code)] += 1
+        applied_counts[str(bool(submit.get("applied"))).lower()] += 1
+        queued_counts[str(bool(submit.get("queued"))).lower()] += 1
     matrix = manifest.get("amendment_matrix", [])
     if not isinstance(matrix, list) or not matrix or any(row.get("supported") is not True for row in matrix):
         raise ValueError("v4 conformance amendment matrix is missing or has unsupported profiles")
 
-    readme_text = read(readme_path)
-    recording = re.search(
-        r"\*\*(\d+) fixtures\*\* with \*\*([\d,]+) assertions and zero failures\*\*",
-        readme_text,
-    )
-    if not recording:
-        raise ValueError("v4 conformance README has no C++ recording summary")
-    malformed_word = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
-    observations = re.search(
-        r"observations are (\d+) `tesSUCCESS` and ([a-z]+) `temMALFORMED`", readme_text
-    )
-    malformed = malformed_word.get(observations.group(2), -1) if observations else -1
-    if int(recording.group(1)) != manifest["fixture_count"]:
-        raise ValueError("v4 README fixture count differs from manifest")
-
     return {
+        "corpus_role": "initial prerequisite corpus; source evidence only",
         "manifest_path": V4_MANIFEST,
         "manifest_sha256": sha256(manifest_path),
-        "readme_path": V4_README,
-        "readme_sha256": sha256(readme_path),
         "manifest_schema": manifest["schema"],
         "fixture_version": manifest["fixture_version"],
         "fixture_count": manifest["fixture_count"],
         "family_counts": dict(sorted(family_counts.items())),
+        "suite_names": sorted(suites),
         "amendment_profile_count": len(matrix),
         "oracle_binary_sha256": manifest.get("binary_sha256"),
         "recorder_commit": manifest.get("recorder_commit"),
         "recorder_source_sha256": manifest.get("recorder_sources", {}),
         "config_identity": manifest.get("config_identity"),
-        "oracle_recording": {
-            "suite": "app/StrictOracleRecorder",
-            "fixtures": int(recording.group(1)),
-            "assertions": int(recording.group(2).replace(",", "")),
-            "failures": 0,
-            "tesSUCCESS": int(observations.group(1)) if observations else None,
-            "temMALFORMED": malformed if observations else None,
-            "comparison_side": "C++ oracle recorder only",
+        "fixture_observations": {
+            "source": "raw fixture submit.engine_result and submit.engine_result_code",
+            "submit_result_counts": dict(sorted(submit_results.items())),
+            "submit_result_code_counts": dict(sorted(submit_result_codes.items())),
+            "applied_counts": dict(sorted(applied_counts.items())),
+            "queued_counts": dict(sorted(queued_counts.items())),
         },
         "go_replay_report": {
             "status": "separate runtime report required",
@@ -1113,11 +1132,12 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
                 FEATURE_MACRO: sha256(oracle / FEATURE_MACRO),
             },
         },
-        "go_base_commit": GO_INVENTORY_SOURCE_COMMIT,
+        "go_base_commit": GO_BASE_COMMIT,
         "go_base_commit_provenance": {
-            "revision": GO_INVENTORY_SOURCE_COMMIT,
             "protocol_base": GO_BASE_COMMIT,
-            "description": "Go source revision after the prerequisite #2021/#2022 merge; execution evidence remains separate.",
+            "prerequisite_baseline": GO_PREREQUISITE_BASELINE,
+            "prerequisite_baseline_role": "merged #2021/#2022 input used to refresh this snapshot; not asserted as the current working-tree HEAD",
+            "current_source_identity": "source_sha256 entries below; runtime HEAD belongs to a separate report",
         },
         "counts": {
             "oracle_transactions": len(oracle_transactions),

@@ -4,10 +4,13 @@
 source and registry audit for issue #2016. It is pinned to
 `XRPLF/xrpld-private` tag `3.4.1`, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`, and records hashes for the oracle
-registry sources. The Go source revision represented by this snapshot is
-`b002da57fb415b40a1150f0e0dc82f764a340556`, the merged #2021/#2022 prerequisite
-revision; the protocol base parent remains
-`02f4f17c7d1c1b5676b112ddfa669655bcff4415`.
+registry sources. The protocol base parent is
+`02f4f17c7d1c1b5676b112ddfa669655bcff4415`. The merged #2021/#2022 revision
+`b002da57fb415b40a1150f0e0dc82f764a340556` is recorded only as the prerequisite
+baseline used while refreshing this snapshot; it is not asserted to be the
+current working-tree `HEAD`. Current Go source bytes are identified by the
+snapshot's `source_sha256` entries, while the runtime `HEAD` belongs in a
+separate execution report.
 
 Generate or check the snapshot from the Go repository root. With no argument,
 the generator resolves the sibling `../rippled-worktrees/v3.4.1-oracle`
@@ -99,17 +102,15 @@ parity alone does not cover these behaviors.
 
 ## Execution evidence and exclusions
 
-The checked-in v4 corpus is pinned by
-`internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json` and
-contains 45 fixtures from the executed C++ `app/StrictOracleRecorder`: Payment
-(12), Batch (16), AccountSet (4), TrustSet (4), TicketCreate (4), VaultCreate
-(4), and LoanBrokerSet (1). The recorder reported 1,354 C++ assertions with
-zero failures (41 `tesSUCCESS`, four `temMALFORMED`) across all 16
-cleanup/lending/Batch/fix profiles. These are C++ recorder observations; they
-are not Go parity results. The inventory also carries the manifest's recorder
-commit, source hashes, configuration identity, and recorder-binary SHA-256 so
-this run remains distinguishable from a named test or a later regenerated
-corpus.
+The initial prerequisite corpus is pinned by
+`internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json`. The
+generator validates every manifest fixture and records its raw
+`submit.engine_result` and `submit.engine_result_code` distributions. These
+are C++ fixture observations; they are not Go parity results. The inventory
+also carries the manifest's recorder commit, source hashes, configuration
+identity, and recorder-binary SHA-256 so this input remains distinguishable
+from a named test or a later regenerated corpus. C++ assertion totals and
+expanded runtime case results belong in the separate engine execution report.
 
 Go replay is produced separately by `TestConformance` and the mandatory
 conformance command, with an optional JSON path supplied through
@@ -125,8 +126,8 @@ therefore use `legacy_conformance_excluded` and an explicit reason. Those keys
 describe the legacy suite only; they do not exclude the v4 Batch and VaultCreate
 fixtures, and they do not claim Delegate execution.
 
-The v4 corpus covers signed open-ledger submit/close behavior under its recorded
-profiles. It does not cover historical transaction-queue contents,
+The prerequisite corpus records signed open-ledger submit/close behavior under
+its manifest profiles. It does not cover historical transaction-queue contents,
 load/escalation/retry transitions, RPC/parser rejection boundaries, every Batch
 wrapper, every lending operation, or all transaction families. The inventory
 also does not individually prove every amendment branch or transactor handler.

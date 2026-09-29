@@ -10,11 +10,12 @@
       "include/xrpl/protocol/detail/features.macro": "1708df2ea0150a3105f13f7f39c42c798ac5addae9833c073fe6df9e9e17208b"
     }
   },
-  "go_base_commit": "b002da57fb415b40a1150f0e0dc82f764a340556",
+  "go_base_commit": "02f4f17c7d1c1b5676b112ddfa669655bcff4415",
   "go_base_commit_provenance": {
-    "revision": "b002da57fb415b40a1150f0e0dc82f764a340556",
     "protocol_base": "02f4f17c7d1c1b5676b112ddfa669655bcff4415",
-    "description": "Go source revision after the prerequisite #2021/#2022 merge; execution evidence remains separate."
+    "prerequisite_baseline": "b002da57fb415b40a1150f0e0dc82f764a340556",
+    "prerequisite_baseline_role": "merged #2021/#2022 input used to refresh this snapshot; not asserted as the current working-tree HEAD",
+    "current_source_identity": "source_sha256 entries below; runtime HEAD belongs to a separate report"
   },
   "counts": {
     "oracle_transactions": 82,
@@ -16233,10 +16234,9 @@
   "evidence": {
     "execution_semantics": "Rows are source/registry coverage. A row is executed only when a checked-in or explicitly supplied fixture record says so; named tests alone never set executed=true.",
     "checked_in_v4_corpus": {
+      "corpus_role": "initial prerequisite corpus; source evidence only",
       "manifest_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json",
       "manifest_sha256": "1769e6fd56fdcbec28e355ee1bc136f68f54ddd4af20878acfe2cac244592925",
-      "readme_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/README.md",
-      "readme_sha256": "f5d1b3240f05f11cb65a219507096670d96bc27bba6c01319eb5e444032801dd",
       "manifest_schema": 3,
       "fixture_version": "v4",
       "fixture_count": 45,
@@ -16249,6 +16249,9 @@
         "TrustSet": 4,
         "VaultCreate": 4
       },
+      "suite_names": [
+        "app/StrictOracleRecorder"
+      ],
       "amendment_profile_count": 16,
       "oracle_binary_sha256": "164d20cd3247b82fa89f24330fce365ce5d19acef3d2b7657e9bb87cd7a35f24",
       "recorder_commit": "3a61cca73b9e4eda88bc8444793c1c2e52576aab",
@@ -16259,14 +16262,23 @@
         "scripts/oracle/strict_recorder.cpp": "5451931911f0c45b788f0f249d694ac94fec7f77863a0bbc7dd5e23a86f9fea6"
       },
       "config_identity": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
-      "oracle_recording": {
-        "suite": "app/StrictOracleRecorder",
-        "fixtures": 45,
-        "assertions": 1354,
-        "failures": 0,
-        "tesSUCCESS": 41,
-        "temMALFORMED": 4,
-        "comparison_side": "C++ oracle recorder only"
+      "fixture_observations": {
+        "source": "raw fixture submit.engine_result and submit.engine_result_code",
+        "submit_result_counts": {
+          "temMALFORMED": 4,
+          "tesSUCCESS": 41
+        },
+        "submit_result_code_counts": {
+          "-299": 4,
+          "0": 41
+        },
+        "applied_counts": {
+          "false": 4,
+          "true": 41
+        },
+        "queued_counts": {
+          "false": 45
+        }
       },
       "go_replay_report": {
         "status": "separate runtime report required",
