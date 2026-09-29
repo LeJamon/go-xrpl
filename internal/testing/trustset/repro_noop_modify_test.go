@@ -31,6 +31,7 @@ import (
 // mirrors this by skipping threading when entry.Original == entry.Current.
 func TestReproNoOpModify_NoGhostModifiedNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	disableAllAmendmentsBD(env)
 
 	const senderSeed = "shutW9X6jm9Uo3eTPkhweAcv8cYeP"

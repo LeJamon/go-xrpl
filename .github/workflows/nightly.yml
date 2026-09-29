@@ -50,7 +50,7 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out historical rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
@@ -84,7 +84,7 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out historical rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
@@ -159,7 +159,7 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out historical rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled

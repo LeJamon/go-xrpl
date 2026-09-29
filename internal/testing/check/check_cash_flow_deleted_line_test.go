@@ -110,6 +110,9 @@ func testCheckCashFlowDeletedLine(t *testing.T, issuerSeed, casherSeed, limitFie
 		amendment.FeatureFixAMMOverflowOffer,
 	}
 	env := jtx.NewTestEnvWithConfig(t, cfg)
+	// These historical metadata and root vectors represent closed-ledger
+	// application, where transaction threading is committed immediately.
+	env.SetOpenLedger(false)
 	issuer := jtx.NewAccount(issuerSeed)
 	casher := jtx.NewAccount(casherSeed)
 	env.Fund(issuer, casher)

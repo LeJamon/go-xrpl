@@ -144,12 +144,13 @@ just lint
 To inspect the conformance suite:
 
 ```shell
-just conformance --corpus /path/to/rippled-3.4.0-v3
-just conformance --corpus /path/to/rippled-3.4.0-v3 --failing
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4 --failing
 ```
 
-The required corpus is external and must carry final rippled 3.4.0 provenance;
-missing, stale, empty, or zero-executed corpora fail closed.
+The committed signed corpus pins private rippled 3.4.1 source and recorder
+provenance. Missing, stale, mixed, empty, or zero-executed corpora fail closed.
+See the corpus coverage limits before interpreting a pass as a release claim.
 
 ## Documentation
 

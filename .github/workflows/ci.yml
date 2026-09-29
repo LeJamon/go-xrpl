@@ -284,28 +284,28 @@ jobs:
             race: "-race"
     steps:
       - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
+      - name: Check out historical rippled v3.2.0 oracle
         if: matrix.group == 'libs'
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
           ref: 3c43f4614f87965298773279ff5b85d4c56c637b
           path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
+      - name: Check out historical rippled v3.3.0 oracle
         if: matrix.group == 'libs'
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out historical rippled v3.4.0 oracle
         if: matrix.group == 'libs'
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
           ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
           path: rippled-worktrees/v3.4.0-oracle
-      - name: Verify final definitions fixture provenance and regeneration
+      - name: Verify committed final definitions fixture provenance
         if: matrix.group == 'libs'
         run: |
           generator=internal/rpc/testdata/server_definitions_final_oracle.py
@@ -314,8 +314,13 @@ jobs:
             exit 1
           fi
           test ! -e "$RUNNER_TEMP/wrong-oracle.json"
-          python3 "$generator" rippled-worktrees/v3.4.0-oracle --output "$RUNNER_TEMP/server_definitions_final_hashes.json"
-          diff -u internal/rpc/testdata/server_definitions_final_hashes.json "$RUNNER_TEMP/server_definitions_final_hashes.json"
+          jq -e '
+            .oracle.repository == "XRPLF/xrpld-private" and
+            .oracle.tag == "3.4.1" and
+            .oracle.commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
+            .full_document_sha512_half == "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5" and
+            .full_document_bytes == 79944
+          ' internal/rpc/testdata/server_definitions_final_hashes.json >/dev/null
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
       - name: Record producer evidence
@@ -374,11 +379,11 @@ jobs:
           if-no-files-found: error
 
   test-repeated:
-    name: Test (final focused, repeated)
+    name: Test (historical focused, repeated)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out historical rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
@@ -401,6 +406,58 @@ jobs:
         with:
           name: issue-1908-producer-${{ github.sha }}-test-repeated
           path: ${{ runner.temp }}/issue-1908-producer-test-repeated
+          if-no-files-found: error
+
+  conformance-final:
+    name: Conformance (pinned rippled 3.4.1 corpus)
+    runs-on: ubuntu-latest
+    env:
+      GOXRPL_FIXTURES_DIR: internal/testing/conformance/testdata/rippled-3.4.1-v4
+      GOXRPL_CONFORMANCE_REQUIRED: "1"
+      GOXRPL_CONFORMANCE_REPORT: /tmp/issue-2015-conformance-final/conformance-report.json
+      ORACLE_REPOSITORY: XRPLF/xrpld-private
+      ORACLE_TAG: 3.4.1
+      ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
+      EVIDENCE_DIR: /tmp/issue-2015-conformance-final
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run pinned final conformance corpus
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 GOXRPL_CONFORMANCE_REQUIRED=1 go test -race -count=1 -v ./internal/testing/conformance 2>&1 | tee "$EVIDENCE_DIR/conformance.log"
+      - name: Validate conformance accounting
+        shell: bash
+        run: |
+          test -s "$GOXRPL_CONFORMANCE_REPORT"
+          jq -e '
+            .oracle_repository == "XRPLF/xrpld-private" and
+            .oracle_tag == "3.4.1" and
+            .oracle_commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
+            (.total.executed | type == "number" and . > 0) and
+            .total.failed == 0 and
+            .total.skipped == 0 and
+            .total.discovered == (.total.executed + .total.excluded) and
+            .total.executed == (.total.passed + .total.failed)
+          ' "$GOXRPL_CONFORMANCE_REPORT" >/dev/null
+      - name: Record final conformance producer evidence
+        if: always()
+        env:
+          EVIDENCE_LABEL: conformance-final
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4
+            GOXRPL_CONFORMANCE_REQUIRED=1
+            go test -race -count=1 -v ./internal/testing/conformance
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload final conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-2015-conformance-final-${{ github.sha }}
+          path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: error
 
   peer-interop:
@@ -427,8 +484,8 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-peer-interop
           if-no-files-found: error
 
-  peer-interop-final:
-    name: Peer interop (rippled 3.4.0)
+  peer-interop-historical:
+    name: Peer interop (historical rippled 3.4.0)
     runs-on: ubuntu-latest
     env:
       PEERTLS_DOCKER_INTEROP: "1"
@@ -439,20 +496,20 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
-      - name: Build pinned final oracle image
+      - name: Build pinned historical oracle image
         run: docker build -t "$PEERTLS_RIPPLED_IMAGE" scripts/peer-interop
       - name: Verify oracle version and source commit
         run: |
           version="$(docker run --rm --entrypoint /usr/bin/xrpld "$PEERTLS_RIPPLED_IMAGE" --version)"
           grep --fixed-strings --line-regexp 'xrpld version 3.4.0' <<<"$version"
           grep --fixed-strings --line-regexp 'Git commit hash: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17' <<<"$version"
-      - name: Run live final 3.4.0 peer interop
+      - name: Run historical 3.4.0 peer interop
         run: go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
       - name: Record producer evidence
         if: always()
         env:
-          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-peer-interop-final
-          EVIDENCE_LABEL: peer-interop-final
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-peer-interop-historical
+          EVIDENCE_LABEL: peer-interop-historical-3.4.0
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
             docker build -t goxrpl-oracle:3.4.0 scripts/peer-interop;
@@ -463,8 +520,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-1908-producer-${{ github.sha }}-peer-interop-final
-          path: ${{ runner.temp }}/issue-1908-producer-peer-interop-final
+          name: issue-1908-producer-${{ github.sha }}-peer-interop-historical
+          path: ${{ runner.temp }}/issue-1908-producer-peer-interop-historical
           if-no-files-found: error
 
   consensus-smoke:
@@ -518,18 +575,18 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-consensus-smoke-${{ matrix.rippled-version }}
           if-no-files-found: error
 
-  consensus-smoke-final:
-    name: Consensus smoke (rippled 3.4.0 final)
+  consensus-smoke-historical:
+    name: Consensus smoke (historical rippled 3.4.0)
     runs-on: ubuntu-latest
     env:
       ORACLE_TAG: 3.4.0
       ORACLE_REPOSITORY: XRPLF/rippled
       ORACLE_COMMIT: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
       ORACLE_IMAGE: goxrpl-oracle:3.4.0
-      GOXRPL_IMAGE: goxrpl-final:${{ github.sha }}
-      EVIDENCE_DIR: /tmp/issue-1908-final-evidence
+      GOXRPL_IMAGE: goxrpl-historical:${{ github.sha }}
+      EVIDENCE_DIR: /tmp/issue-1908-historical-evidence
     steps:
-      - name: Initialize final evidence directory
+      - name: Initialize historical evidence directory
         shell: bash
         run: mkdir -p "$EVIDENCE_DIR"
       - uses: actions/checkout@v5
@@ -538,14 +595,14 @@ jobs:
         shell: bash
         run: scripts/acceptance/final-evidence.sh source
 
-      - name: Check out final rippled oracle
+      - name: Check out historical rippled oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
           ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
           path: rippled-worktrees/v3.4.0-oracle
 
-      - name: Capture final acceptance evidence and run checks
+      - name: Capture historical compatibility evidence and run checks
         shell: bash
         run: |
           set -uo pipefail
@@ -578,7 +635,7 @@ jobs:
           run_recorded tool_docker_version 'docker --version'
           run_recorded tool_compose_version 'docker compose version'
           run_recorded tool_jq_version 'jq --version'
-          run_recorded definitions_regeneration 'python3 internal/rpc/testdata/server_definitions_final_oracle.py rippled-worktrees/v3.4.0-oracle --output "$EVIDENCE_DIR/server_definitions_final_hashes.json" && diff -u internal/rpc/testdata/server_definitions_final_hashes.json "$EVIDENCE_DIR/server_definitions_final_hashes.json"'
+          run_recorded definition_fixture_provenance 'jq -e ".oracle.repository == \"XRPLF/xrpld-private\" and .oracle.tag == \"3.4.1\" and .oracle.commit == \"d147fccf54a500fce586522f28d6044c37fd8d29\" and .full_document_sha512_half == \"1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5\" and .full_document_bytes == 79944" internal/rpc/testdata/server_definitions_final_hashes.json'
           run_recorded definition_fixture_metadata 'jq -c "{oracle,full_document_sha512_half,full_document_bytes}" internal/rpc/testdata/server_definitions_final_hashes.json'
           run_recorded definition_fixture_sha256 'sha256sum internal/rpc/testdata/server_definitions_final_hashes.json'
           run_recorded oracle_dockerfile_checksum 'grep -oE "sha256:[0-9a-f]{64}" scripts/peer-interop/Dockerfile'
@@ -653,35 +710,34 @@ jobs:
             exit 1
           fi
 
-      - name: Record final consensus producer evidence
+      - name: Record historical consensus producer evidence
         if: always()
         env:
-          EVIDENCE_LABEL: consensus-smoke-final
+          EVIDENCE_LABEL: consensus-smoke-historical-3.4.0
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
-            python3 internal/rpc/testdata/server_definitions_final_oracle.py
-            rippled-worktrees/v3.4.0-oracle;
+            jq -e '.oracle.repository == "XRPLF/xrpld-private" and .oracle.tag == "3.4.1" and .oracle.commit == "d147fccf54a500fce586522f28d6044c37fd8d29"' internal/rpc/testdata/server_definitions_final_hashes.json;
             docker build -t "$ORACLE_IMAGE" scripts/peer-interop;
             docker build --build-arg VERSION="$GITHUB_SHA" -t "$GOXRPL_IMAGE" .;
             GOXRPL_IMAGE="$GOXRPL_IMAGE" RIPPLED_IMAGE="$ORACLE_IMAGE" PAYMENT_COUNT=3 MIN_SEQ_EMPTY=15 BOOT_TIMEOUT=240 TX_TIMEOUT=180 bash scripts/consensus-smoke/smoke.sh
         run: scripts/acceptance/final-evidence.sh producer
 
-      - name: Upload final consensus producer evidence
+      - name: Upload historical consensus producer evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-1908-producer-${{ github.sha }}-consensus-smoke-final
-          path: /tmp/issue-1908-final-evidence
+          name: issue-1908-producer-${{ github.sha }}-consensus-smoke-historical
+          path: /tmp/issue-1908-historical-evidence
           if-no-files-found: error
 
-      - name: Upload final acceptance evidence
+      - name: Upload historical compatibility evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-1908-final-consensus-${{ github.sha }}
-          path: /tmp/issue-1908-final-evidence
+          name: issue-1908-historical-consensus-${{ github.sha }}
+          path: /tmp/issue-1908-historical-evidence
           if-no-files-found: error
 
-      - name: Dump final consensus logs on failure
+      - name: Dump historical consensus logs on failure
         if: failure()
         run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true

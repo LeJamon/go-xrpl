@@ -14,9 +14,10 @@ maintaining behavioral parity with the XRPL protocol.
 
 - **Rippled is the source of behavioural truth.** There is no formal XRPL
   specification, so the C++ rippled implementation (kept locally at
-  `../rippled-worktrees/v3.4.0-oracle`, read-only, commit
-  `4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17`) is the de facto spec for *protocol
-  behaviour* — validation logic, error/TER codes, and ledger effects. Check it
+  `../rippled-worktrees/v3.4.1-oracle`, read-only, commit
+  `d147fccf54a500fce586522f28d6044c37fd8d29`) from private `XRPLF/xrpld-private`
+  is the de facto spec for *protocol behaviour* — validation logic, error/TER
+  codes, and ledger effects. Check it
   before changing protocol behaviour.
   It is **not** a template for code shape: go-xrpl is an idiomatic Go implementation
   of XRPL, not a transliteration of rippled's C++.
@@ -142,7 +143,7 @@ transactions to ledger state. Transaction types self-register via `init()` +
 
 ## Rippled reference locations
 
-Use the pinned local `rippled-worktrees/v3.4.0-oracle` tree (do not fetch from
+Use the pinned local `rippled-worktrees/v3.4.1-oracle` tree (do not fetch from
 the web):
 
 - Transaction implementations: `src/libxrpl/tx/transactors/`

@@ -159,6 +159,7 @@ func TestSponsorshipAccountEndReserve(t *testing.T) {
 func accountEndFixture(t *testing.T, cleanupEnabled bool) (*jtx.TestEnv, *jtx.Account, *jtx.Account, keylet.Keylet) {
 	t.Helper()
 	env, sponsee, destination, sponsor, _ := sponsorEnv(t)
+	env.SetOpenLedger(false)
 	if cleanupEnabled {
 		env.EnableFeature("fixCleanup3_4_0")
 	} else {

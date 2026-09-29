@@ -165,7 +165,6 @@ func transferXRPOnView(
 		}
 		destinationAccount = &state.AccountRoot{
 			Account: destination, Sequence: ctx.Config.LedgerSequence,
-			PreviousTxnID: ctx.TxHash, PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
 		}
 		destinationAccount.Balance = uint64(drops)
 		data, err := state.SerializeAccountRoot(destinationAccount)
@@ -180,8 +179,6 @@ func transferXRPOnView(
 			return result
 		}
 		sourceAdjusted = true
-		destinationAccount.PreviousTxnID = ctx.TxHash
-		destinationAccount.PreviousTxnLgrSeq = ctx.Config.LedgerSequence
 		data, err := state.SerializeAccountRoot(destinationAccount)
 		if err != nil {
 			return ter.TecINTERNAL

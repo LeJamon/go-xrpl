@@ -25,6 +25,7 @@ import (
 
 func TestSignerListReplace_Meta_NoDirectoryNode_AndSignerListID(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	b1 := jtx.NewAccount("b1")
 	b2 := jtx.NewAccount("b2")
