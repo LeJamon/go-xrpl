@@ -70,7 +70,6 @@ func TestSignerListReplace_MetaBlob_NoAccount_SortedEntries_NoPrevTxn(t *testing
 	env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: b1, Weight: 1}})
 	env.Close()
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	// Submit the entries deliberately in reverse-of-sorted order so a correct

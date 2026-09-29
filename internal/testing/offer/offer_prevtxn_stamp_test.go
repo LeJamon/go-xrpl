@@ -67,7 +67,6 @@ func TestOffer_PartialConsumeRoundsBack_NoGhostModifiedNode(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(OfferCreate(mm, maxEUR, maxUSD).Build()))
 	env.Close()
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	// taker crosses, taking 100 USD for 100 EUR — a tiny slice of the huge offer.

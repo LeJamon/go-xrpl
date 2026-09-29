@@ -271,8 +271,6 @@ func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.Transacti
 		if e != nil {
 			return false
 		}
-		// Open-view metadata is provisional internally; rippled only sets
-		// metadata_blob when the transaction has closed-ledger metadata.
 		if !l.IsClosed() {
 			metaBlob = nil
 		}

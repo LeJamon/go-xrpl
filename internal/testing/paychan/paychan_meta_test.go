@@ -65,7 +65,6 @@ func TestPayChanCreate_Meta_NewFields(t *testing.T) {
 	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	pk := alice.PublicKeyHex()
@@ -123,7 +122,6 @@ func TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
@@ -165,7 +163,6 @@ func TestPayChanFund_Meta_PreviousAmount(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
@@ -205,7 +202,6 @@ func TestPayChanClaim_Meta_PreviousBalance(t *testing.T) {
 	env.Close()
 	require.Equal(t, uint64(xrp(100)), chanBalance(env, chanK))
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	sig2 := signClaimAuth(alice, chanIDHex, uint64(xrp(250)))
@@ -258,7 +254,6 @@ func TestPayChanClaim_Meta_ImmediateCloseUsesClaimedBalance(t *testing.T) {
 			jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, drops(10000), 100, pk).Build()))
 			env.Close()
 
-			// Metadata assertions below cover the closed-ledger Apply path.
 			env.SetOpenLedger(false)
 
 			chanIDHex := hex.EncodeToString(chanK.Key[:])

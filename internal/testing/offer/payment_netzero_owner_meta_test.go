@@ -60,7 +60,6 @@ func TestPayment_NetZeroOwnerCount_EmitsBareThreadedNode(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(OfferCreate(mm, jtx.USD(gw, 100), jtx.EUR(gw, 100)).Build()))
 	env.Close()
 
-	// Metadata assertions below cover the closed-ledger Apply path.
 	env.SetOpenLedger(false)
 
 	mmAcctKL := keylet.Account(mm.ID)
