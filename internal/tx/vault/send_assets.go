@@ -101,6 +101,8 @@ func sendIOUAssets(ctx *tx.ApplyContext, from [20]byte, asset tx.Asset, payments
 		return ter.TefINTERNAL
 	}
 	debit := state.NewIssuedAmountFromValue(0, 0, asset.Currency, asset.Issuer)
+	// Direct sends also count toward the total's overflow boundary.
+	actual := debit
 	for _, payment := range payments {
 		amount := ctx.NumberContext().ToAmount(payment.Amount, debit, state.RoundToNearest)
 		if amount.IsZero() || from == payment.Account {
@@ -110,7 +112,15 @@ func sendIOUAssets(ctx *tx.ApplyContext, from [20]byte, asset tx.Asset, payments
 			if r := tx.RippleCreditWithNumberContext(ctx.View, from, payment.Account, amount, ctx.NumberContext()); r != ter.TesSUCCESS {
 				return r
 			}
+			actual, err = actual.AddWithNumberContext(amount, ctx.NumberContext(), state.RoundToNearest)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
 			continue
+		}
+		actual, err = actual.AddWithNumberContext(amount, ctx.NumberContext(), state.RoundToNearest)
+		if err != nil {
+			return ter.TefINTERNAL
 		}
 		debit, err = debit.AddWithNumberContext(amount, ctx.NumberContext(), state.RoundToNearest)
 		if err != nil {

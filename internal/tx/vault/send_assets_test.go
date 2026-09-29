@@ -69,3 +69,76 @@ func TestSendAssetsIOUNoAccountIssuer(t *testing.T) {
 		})
 	}
 }
+
+func TestSendAssetsIOUDirectCostOverflow(t *testing.T) {
+	for _, directOnly := range []bool{true, false} {
+		name := "issuer-sends"
+		if !directOnly {
+			name = "redemption-then-transit"
+		}
+		t.Run(name, func(t *testing.T) {
+			issuer := [20]byte{0: 0x22}
+			sender := issuer
+			if !directOnly {
+				sender = [20]byte{0: 0x11}
+			}
+			receivers := [][20]byte{{0: 0x33}, {0: 0x44}}
+			view := newMPTArmsView()
+			ctx := buildArmsCtx(t, view, sender, rulesWithFix(true))
+			issuerAddress, err := state.EncodeAccountID(issuer)
+			require.NoError(t, err)
+			maximum := state.NewIssuedAmountFromValue(9_999_999_999_999_999, 80, "USD", issuerAddress)
+			zero := state.NewIssuedAmountFromValue(0, 0, "USD", issuerAddress)
+			seedLine := func(holder [20]byte, balance state.Amount) {
+				holderAddress, err := state.EncodeAccountID(holder)
+				require.NoError(t, err)
+				low, high := holderAddress, issuerAddress
+				if state.CompareAccountIDs(holder, issuer) > 0 {
+					low, high = high, low
+					balance = balance.Negate()
+				}
+				line, err := state.SerializeRippleState(&state.RippleState{
+					Balance:   balance,
+					LowLimit:  state.NewIssuedAmountFromValue(0, 0, "USD", low),
+					HighLimit: state.NewIssuedAmountFromValue(0, 0, "USD", high),
+				})
+				require.NoError(t, err)
+				require.NoError(t, view.Insert(keylet.Line(holder, issuer, "USD"), line))
+			}
+			for _, receiver := range receivers {
+				seedLine(receiver, zero)
+			}
+			if !directOnly {
+				seedLine(sender, maximum)
+			}
+			amount := ctx.NumberContext().FromAmount(maximum, state.RoundToNearest)
+			payments := []AssetPayment{
+				{Account: receivers[0], Amount: amount},
+				{Account: receivers[1], Amount: amount},
+			}
+			if !directOnly {
+				payments[0].Account = issuer
+			}
+			require.Panics(t, func() {
+				SendAssets(ctx, sender, tx.Asset{Currency: "USD", Issuer: issuerAddress}, payments)
+			})
+			for _, holder := range append(receivers, sender) {
+				if holder == issuer {
+					continue
+				}
+				line, err := tx.ReadRippleState(view, holder, issuer, "USD")
+				require.NoError(t, err)
+				require.NotNil(t, line)
+				balance := line.Balance
+				if state.CompareAccountIDs(holder, issuer) > 0 {
+					balance = balance.Negate()
+				}
+				want := zero
+				if directOnly {
+					want = maximum
+				}
+				require.Equal(t, 0, balance.Compare(want))
+			}
+		})
+	}
+}
