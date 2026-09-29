@@ -112,7 +112,14 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		visit := func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
 			if request.Expand {
-				txEntry, err := expandTransaction(txData, hashStr, request.Binary, apiVersion, syntheticContext)
+				txEntry, err := expandTransaction(
+					txData,
+					hashStr,
+					request.Binary,
+					apiVersion,
+					syntheticContext,
+					targetLedger.IsClosed(),
+				)
 				if err != nil {
 					decodeErr = err
 					return false
@@ -658,6 +665,7 @@ func buildQueueTxBody(qtx types.QueuedTxInfo, binary, expanded bool, apiVersion 
 //   - API v2+: "tx_json" key + "meta" key + "hash"
 //
 // For binary mode, tx_blob and meta_blob/meta are returned as hex strings.
+// includeMetadata is false for open ledgers, where metadata is provisional.
 // Reference: rippled LedgerToJson.cpp fillJsonTx()
 func expandTransaction(
 	txData []byte,
@@ -665,10 +673,14 @@ func expandTransaction(
 	binary bool,
 	apiVersion int,
 	ctx SyntheticMetadataContext,
+	includeMetadata bool,
 ) (map[string]any, error) {
 	storedTx, err := decodeTxBlob(txData)
 	if err != nil {
 		return nil, err
+	}
+	if !includeMetadata {
+		storedTx.Meta = nil
 	}
 	if storedTx.TxJSON != nil {
 		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
