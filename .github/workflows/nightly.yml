@@ -50,7 +50,7 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out equivalent inventory sources (rippled v3.4.0)
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
@@ -84,7 +84,7 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out equivalent inventory sources (rippled v3.4.0)
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
@@ -113,8 +113,11 @@ jobs:
           ./internal/observability/...
 
   consensus-soak:
-    name: Consensus soak (longer)
+    name: Consensus soak (private rippled 3.4.1)
     runs-on: ubuntu-latest
+    env:
+      ORACLE_IMAGE: goxrpl-oracle:3.4.1
+      EVIDENCE_DIR: /tmp/issue-2017-nightly-oracle
     steps:
       - uses: actions/checkout@v5
 
@@ -128,11 +131,17 @@ jobs:
           grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}" <<<"$output"
           grep --fixed-strings --line-regexp "Confidential MPT crypto: available" <<<"$output"
 
+      - name: Build and verify pinned private oracle
+        run: |
+          docker build --platform linux/amd64 -t "$ORACLE_IMAGE" scripts/peer-interop
+          scripts/acceptance/oracle-image.sh
+          read -r image_id < "$EVIDENCE_DIR/oracle-image-id.txt"
+          printf 'RIPPLED_IMAGE=%s\n' "$image_id" >> "$GITHUB_ENV"
+
       - name: Run extended consensus soak
         run: bash scripts/consensus-smoke/smoke.sh
         env:
           GOXRPL_IMAGE: goxrpl:latest
-          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.3.0
           PAYMENT_COUNT: "25"
           MIN_SEQ_EMPTY: "40"
           BOOT_TIMEOUT: "360"
@@ -141,6 +150,14 @@ jobs:
       - name: Dump container logs on failure
         if: failure()
         run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=300 || true
+
+      - name: Upload oracle provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-oracle-${{ github.sha }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
 
   coverage:
     name: Coverage (informational)
@@ -159,7 +176,7 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0 oracle
+      - name: Check out equivalent inventory sources (rippled v3.4.0)
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled

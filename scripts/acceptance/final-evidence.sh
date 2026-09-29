@@ -34,6 +34,22 @@ expected_sha="${EXPECTED_SHA:-${GITHUB_SHA:-}}"
 go_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 [[ -n "$go_sha" ]] || die 'could not determine the tested Go SHA'
 
+expected_oracle_repository='XRPLF/xrpld-private'
+expected_oracle_tag='3.4.1'
+expected_oracle_commit='d147fccf54a500fce586522f28d6044c37fd8d29'
+
+validate_oracle_identity() {
+  local repository="$1"
+  local tag="$2"
+  local commit="$3"
+  [[ "$repository" == "$expected_oracle_repository" ]] ||
+    die "oracle repository must be $expected_oracle_repository (got $repository)"
+  [[ "$tag" == "$expected_oracle_tag" ]] ||
+    die "oracle tag must be $expected_oracle_tag (got $tag)"
+  [[ "$commit" == "$expected_oracle_commit" ]] ||
+    die "oracle commit must be $expected_oracle_commit (got $commit)"
+}
+
 worktree_status() {
   # Reference checkouts are separate from the Go source. Final-oracle
   # provenance is recorded independently by the consensus producer.
@@ -41,7 +57,7 @@ worktree_status() {
     ':(exclude)rippled-worktrees/v3.2.0-oracle' \
     ':(exclude)rippled-worktrees/v3.3.0-oracle' \
     ':(exclude)rippled-worktrees/v3.4.0-oracle' \
-    ':(exclude)fixtures/rippled-3.4.0-v3' 2>/dev/null || true
+    ':(exclude)rippled-worktrees/v3.4.1-oracle' 2>/dev/null || true
 }
 
 write_common_metadata() {
@@ -79,6 +95,14 @@ case "$mode" in
       printf 'producer=%s\n' "$label"
       printf 'status=%s\n' "$status"
       printf 'command=%s\n' "$command"
+      if [[ "$label" == peer-interop-final ||
+        "$label" == consensus-smoke-final ||
+        "$label" == conformance-final ]]; then
+        validate_oracle_identity "${ORACLE_REPOSITORY:-}" "${ORACLE_TAG:-}" "${ORACLE_COMMIT:-}"
+        printf 'oracle_repository=%s\n' "$ORACLE_REPOSITORY"
+        printf 'oracle_tag=%s\n' "$ORACLE_TAG"
+        printf 'oracle_commit=%s\n' "$ORACLE_COMMIT"
+      fi
     } >> "$output"
     ;;
 
@@ -96,7 +120,7 @@ case "$mode" in
     source_repository="${FINAL_CONFORMANCE_REPOSITORY:-}"
     source_commit="${FINAL_CONFORMANCE_COMMIT:-}"
     source_manifest="${FINAL_CONFORMANCE_MANIFEST:-}"
-    oracle_repository="${ORACLE_REPOSITORY:-XRPLF/rippled}"
+    oracle_repository="${ORACLE_REPOSITORY:-$expected_oracle_repository}"
     oracle_tag="${ORACLE_TAG:-}"
     oracle_commit="${ORACLE_COMMIT:-}"
     output="$evidence_dir/conformance-source.txt"
@@ -117,9 +141,7 @@ case "$mode" in
       die 'FINAL_CONFORMANCE_CORPUS must name the checkout target'
     [[ -n "$source_manifest" ]] ||
       die 'FINAL_CONFORMANCE_MANIFEST must identify corpus provenance'
-    [[ "$oracle_tag" == 3.4.0 ]] || die 'ORACLE_TAG must be 3.4.0'
-    [[ "$oracle_commit" =~ ^[0-9a-fA-F]{40}$ ]] ||
-      die 'ORACLE_COMMIT must be a full 40-character SHA'
+    validate_oracle_identity "$oracle_repository" "$oracle_tag" "$oracle_commit"
     ;;
 
   conformance)
@@ -127,7 +149,7 @@ case "$mode" in
     source_repository="${FINAL_CONFORMANCE_REPOSITORY:-}"
     source_commit="${FINAL_CONFORMANCE_COMMIT:-}"
     source_manifest="${FINAL_CONFORMANCE_MANIFEST:-}"
-    oracle_repository="${ORACLE_REPOSITORY:-XRPLF/rippled}"
+    oracle_repository="${ORACLE_REPOSITORY:-$expected_oracle_repository}"
     oracle_tag="${ORACLE_TAG:-}"
     oracle_commit="${ORACLE_COMMIT:-}"
     output="$evidence_dir/conformance-provenance.txt"
@@ -146,9 +168,7 @@ case "$mode" in
       die 'FINAL_CONFORMANCE_REPOSITORY is not configured; refusing to run an unpinned corpus'
     [[ "$source_commit" =~ ^[0-9a-fA-F]{40}$ ]] ||
       die 'FINAL_CONFORMANCE_COMMIT is not a full 40-character SHA'
-    [[ "$oracle_tag" == 3.4.0 ]] || die 'ORACLE_TAG must be 3.4.0'
-    [[ "$oracle_commit" =~ ^[0-9a-fA-F]{40}$ ]] ||
-      die 'ORACLE_COMMIT must be a full 40-character SHA'
+    validate_oracle_identity "$oracle_repository" "$oracle_tag" "$oracle_commit"
     [[ -n "$corpus" ]] || die 'FINAL_CONFORMANCE_CORPUS is not configured; refusing to run a non-final corpus'
     [[ -d "$corpus" ]] || die "final conformance corpus is not a directory: $corpus"
     [[ -s "$source_manifest" ]] || die "final conformance provenance manifest is missing: $source_manifest"
@@ -156,6 +176,10 @@ case "$mode" in
     printf 'corpus_commit=%s\n' "$corpus_commit" >> "$output"
     [[ "$corpus_commit" == "$source_commit" ]] ||
       die "checked-out corpus commit $corpus_commit does not match configured commit $source_commit"
+    corpus_status="$(git -C "$corpus" status --porcelain=v1 --untracked-files=all --ignored -- .)" ||
+      die 'could not verify corpus worktree status'
+    [[ -z "$corpus_status" ]] || die 'final conformance corpus must be clean'
+    printf 'corpus_dirty=false\n' >> "$output"
     command -v jq >/dev/null 2>&1 || die 'jq is required to validate conformance results'
     jq -e \
       --arg oracle_repository "$oracle_repository" \
@@ -254,6 +278,19 @@ case "$mode" in
           printf 'producer_dirty=%s\n' "$producer_file" >> "$output"
           status_failed=1
         fi
+        case "${producer_file##*/}" in
+          producer-peer-interop-final.txt|producer-consensus-smoke-final.txt|producer-conformance-final.txt)
+            for identity in \
+              "oracle_repository=$expected_oracle_repository" \
+              "oracle_tag=$expected_oracle_tag" \
+              "oracle_commit=$expected_oracle_commit"; do
+              if ! grep --fixed-strings --line-regexp "$identity" "$producer_file" >/dev/null; then
+                printf 'producer_oracle_mismatch=%s:%s\n' "$producer_file" "$identity" >> "$output"
+                status_failed=1
+              fi
+            done
+            ;;
+        esac
       done
       required_producers=(
         lint.txt generate.txt build.txt build-386.txt postgres.txt test-integration-offer.txt test-integration.txt

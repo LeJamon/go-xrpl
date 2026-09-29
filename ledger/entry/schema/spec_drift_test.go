@@ -3,13 +3,12 @@ package schema
 import (
 	"bufio"
 	"os"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -19,7 +18,7 @@ import (
 // existing amendment) and ships on the wire without a matching arm on the
 // typed Decode path — which would surface as runtime ErrUnknownField.
 func TestSpecCoversRippledMacro(t *testing.T) {
-	macroPath := requireRippledMacro(t)
+	macroPath := rippled.File(t, "include/xrpl/protocol/detail/ledger_entries.macro")
 
 	rippled, err := parseRippledMacro(macroPath)
 	if err != nil {
@@ -27,7 +26,7 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 	}
 
 	if len(rippled) != len(Specs) {
-		t.Fatalf("rippled v3.4.0 has %d ledger templates, schema has %d", len(rippled), len(Specs))
+		t.Fatalf("rippled v3.4.1 has %d ledger templates, schema has %d", len(rippled), len(Specs))
 	}
 	haveEntries := make(map[string]bool, len(Specs))
 	for _, entry := range Specs {
@@ -81,30 +80,8 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 		}
 	}
 	if canonical != len(rippled) {
-		t.Errorf("registry has %d canonical entries, rippled v3.4.0 has %d", canonical, len(rippled))
+		t.Errorf("registry has %d canonical entries, rippled v3.4.1 has %d", canonical, len(rippled))
 	}
-}
-
-func requireRippledMacro(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve schema test source path")
-	}
-	dir := filepath.Dir(file)
-	for range 12 {
-		candidate := filepath.Join(dir, "rippled-worktrees", "v3.4.0-oracle", "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	t.Fatalf("required rippled v3.4.0 oracle not found from %s", file)
-	return ""
 }
 
 var (

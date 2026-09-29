@@ -460,6 +460,12 @@ func (s *Service) SetServerStatusCallback(fn ServerStatusCallback) {
 	s.eventPublisher.setServerStatusCallback(fn)
 }
 
+// SignalServerStatus samples status on the publication worker, so callers may
+// signal while holding ledger locks. Pending signals coalesce.
+func (s *Service) SignalServerStatus() bool {
+	return s.eventPublisher.dispatchServerStatusEvent()
+}
+
 // SignalServerStatusPublication queues a captured status snapshot. Captured
 // publications do not coalesce because subscribers must observe state changes
 // in trigger order.

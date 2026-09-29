@@ -1,11 +1,12 @@
 {
   "oracle": {
-    "tag": "3.4.0",
-    "commit": "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
+    "repository": "XRPLF/xrpld-private",
+    "tag": "3.4.1",
+    "commit": "d147fccf54a500fce586522f28d6044c37fd8d29"
   },
   "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
   "regeneration": {
-    "source": "python3 server_definitions_final_oracle.py <rippled-3.4.0> --output server_definitions_final_hashes.json",
+    "source": "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
     "runtime": "xrpld --definitions"
   },
   "transaction_results": {
