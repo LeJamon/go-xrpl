@@ -14,6 +14,24 @@ spec.loader.exec_module(recorder)
 
 
 class RecorderProvenanceTest(unittest.TestCase):
+    def test_build_must_not_alias_production_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            production = Path(directory) / "production"
+            production.mkdir()
+            binary = production / "xrpld"
+            binary.write_bytes(b"verified production")
+            alias = Path(directory) / "alias"
+            alias.symlink_to(production, target_is_directory=True)
+            for build in [production, alias]:
+                with self.subTest(build=build), patch.object(recorder, "run") as run:
+                    with self.assertRaisesRegex(SystemExit, "must not alias"):
+                        recorder.compile_recorder(
+                            old_build=production, build=build,
+                            recorder_source=Path(directory) / "recorder.cpp",
+                        )
+                    run.assert_not_called()
+                    self.assertEqual(binary.read_bytes(), b"verified production")
+
     def test_reused_objects_must_reproduce_pinned_binary(self):
         for object_bytes in [b"pinned production", b"stale production"]:
             with self.subTest(object_bytes=object_bytes), tempfile.TemporaryDirectory() as directory:

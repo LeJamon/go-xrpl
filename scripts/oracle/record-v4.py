@@ -363,6 +363,8 @@ def copy_build(old_build: Path, build: Path) -> None:
 def compile_recorder(
     *, old_build: Path, build: Path, recorder_source: Path
 ) -> tuple[Path, str, str]:
+    if build.resolve() == old_build.resolve():
+        raise SystemExit("recorder build must not alias the verified production build")
     compile_commands = json.loads((old_build / "compile_commands.json").read_text())
     selected = next(
         entry
