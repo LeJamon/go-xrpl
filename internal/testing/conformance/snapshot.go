@@ -464,7 +464,7 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	if len(built.Retries) != 0 {
 		return fmt.Errorf("closed ledger left %d retriable transactions", len(built.Retries))
 	}
-	if err := assertSnapshotLedger(built.Ledger, closed); err != nil {
+	if err := assertSnapshotLedger(built.Ledger, closed, parent); err != nil {
 		return fmt.Errorf("closed ledger mismatch: %w", err)
 	}
 	return nil
@@ -698,7 +698,7 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 	return loadedSnapshotLedger{Ledger: l, Header: *hdr, EffectiveRules: explicitRules, Fees: fees, State: state, Txs: txs}, nil
 }
 
-func assertSnapshotLedger(got *ledger.Ledger, want loadedSnapshotLedger) error {
+func assertSnapshotLedger(got *ledger.Ledger, want, parent loadedSnapshotLedger) error {
 	if got == nil {
 		return errors.New("got nil ledger")
 	}
@@ -717,6 +717,15 @@ func assertSnapshotLedger(got *ledger.Ledger, want loadedSnapshotLedger) error {
 	}
 	if got.Fees() != want.Fees {
 		return errors.New("ledger fees differ")
+	}
+	gotRules := got.Rules()
+	parentLedgerRules := parent.Ledger.Rules()
+	for _, feature := range amendment.AllFeatures() {
+		preset := parent.EffectiveRules.Enabled(feature.ID) && !parentLedgerRules.Enabled(feature.ID)
+		enabled := preset || gotRules.Enabled(feature.ID)
+		if enabled != want.EffectiveRules.Enabled(feature.ID) {
+			return fmt.Errorf("ledger rules differ for %s: enabled=%t, want %t", feature.Name, enabled, want.EffectiveRules.Enabled(feature.ID))
+		}
 	}
 	stateRoot, err := got.StateMapHash()
 	if err != nil {
