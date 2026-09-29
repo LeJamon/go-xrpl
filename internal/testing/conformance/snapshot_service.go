@@ -38,7 +38,6 @@ type SnapshotTxQConfig = snapshotTxQConfig
 type SnapshotLedger = loadedSnapshotLedger
 type SnapshotEntry = snapshotEntry
 
-// PinnedFixturePin is the manifest identity recorded for one fixture.
 type PinnedFixturePin = pinnedFixturePin
 
 // LoadSnapshotCases resolves and validates the required pinned corpus, then
@@ -125,7 +124,6 @@ func AssertSnapshotSubmit(got openledger.SubmitOutcome, want SnapshotSubmit) err
 	return assertSnapshotSubmit(got, want)
 }
 
-// AssertSnapshotPostSubmitState compares the complete post-submit state map.
 func AssertSnapshotPostSubmitState(got *ledger.Ledger, want []SnapshotEntry) error {
 	return assertSnapshotPostSubmitState(got, want)
 }
