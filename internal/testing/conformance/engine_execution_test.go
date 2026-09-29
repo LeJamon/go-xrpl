@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -111,14 +112,21 @@ func TestEngineExecutionOrder(t *testing.T) {
 		return fields
 	}
 	execute := func(c pinnedCase, seed uint64) {
-		report.Executed++
-		report.Profiles[c.Fixture.Profile]++
-		report.Families[c.Fixture.Family]++
-		if t.Run(fmt.Sprintf("%s/seed-%d", c.Name, seed), func(t *testing.T) {
+		completed := false
+		passed := t.Run(fmt.Sprintf("%s/seed-%d", c.Name, seed), func(t *testing.T) {
+			report.Executed++
+			report.Profiles[c.Fixture.Profile]++
+			report.Families[c.Fixture.Family]++
 			if err := runSnapshotFixture(shuffledSnapshot(c.Fixture, seed)); err != nil {
 				t.Fatal(err)
 			}
-		}) {
+			completed = true
+		})
+		if passed && !completed {
+			t.Errorf("required engine case %s seed=%d did not execute completely", c.Name, seed)
+			return
+		}
+		if passed {
 			report.Passed++
 			report.CompletedCases[c.Name]++
 			submissions := append(slices.Clone(c.Fixture.PreSubmit), snapshotSubmission{TxBlob: c.Fixture.TxBlob, Submit: c.Fixture.Submit})
@@ -161,12 +169,13 @@ func TestEngineExecutionOrder(t *testing.T) {
 			execute(c, seed)
 		}
 	}
-	if report.SoakSeconds > 0 && len(runnable) > 0 && report.Failed == 0 {
+	if report.SoakSeconds > 0 && len(runnable) > 0 && !t.Failed() {
 		random := rand.New(rand.NewPCG(report.SoakSeed, 0x5852504c))
 		deadline := time.Now().Add(time.Duration(report.SoakSeconds) * time.Second)
-		for time.Now().Before(deadline) && report.Failed == 0 {
+		for time.Now().Before(deadline) && !t.Failed() {
+			before := report.Executed
 			execute(runnable[random.IntN(len(runnable))], random.Uint64())
-			report.SoakExecuted++
+			report.SoakExecuted += report.Executed - before
 		}
 	}
 	report.DurationSeconds = time.Since(started).Seconds()
@@ -207,4 +216,38 @@ func FuzzEngineDifferentialOrder(f *testing.F) {
 			t.Fatalf("%s/%s seed=%d: %v", fixture.Profile, fixture.Testcase, seed, err)
 		}
 	})
+}
+
+func TestEngineExecutionOrderRejectsFilteredCases(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "engine-report.json")
+	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestEngineExecutionOrder$/^does-not-exist$")
+	cmd.Env = append(os.Environ(),
+		"GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4",
+		"GOXRPL_CONFORMANCE_REQUIRED=1", "GOXRPL_ENGINE_SOAK_SECONDS=",
+		"GOXRPL_ENGINE_EVIDENCE_REPORT="+path)
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "did not execute completely") {
+		t.Fatalf("filtered engine cases accepted: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Discovered      int            `json:"discovered"`
+		Executed        int            `json:"executed"`
+		Passed          int            `json:"passed"`
+		CompletedStages map[string]int `json:"completed_stages"`
+		CompletedCases  map[string]int `json:"completed_cases"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Discovered == 0 || report.Executed != 0 || report.Passed != 0 || len(report.CompletedStages) != 0 || len(report.CompletedCases) != 0 {
+		t.Fatalf("filtered run reported completed engine execution: %+v", report)
+	}
 }
