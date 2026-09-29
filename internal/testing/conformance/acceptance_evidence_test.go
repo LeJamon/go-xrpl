@@ -147,6 +147,63 @@ func isFinalOracleProducer(name string) bool {
 	}
 }
 
+func TestAcceptanceEvidenceRejectsDirtyCorpus(t *testing.T) {
+	for _, state := range []string{"clean", "modified", "untracked"} {
+		t.Run(state, func(t *testing.T) {
+			script, repo, _ := acceptanceEvidenceRepo(t)
+			fixture := filepath.Join(repo, "fixture.json")
+			if err := os.WriteFile(fixture, []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, args := range [][]string{
+				{"add", "fixture.json"},
+				{"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "corpus"},
+			} {
+				cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", repo}, args...)...)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, output)
+				}
+			}
+			cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "rev-parse", "HEAD")
+			sha, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state != "clean" {
+				path := fixture
+				if state == "untracked" {
+					path = filepath.Join(repo, "extra.json")
+				}
+				if err := os.WriteFile(path, []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "jq"), []byte("#!/bin/sh\necho manifest-validation-reached >&2\nexit 1\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cmd = exec.CommandContext(t.Context(), "bash", script, "conformance")
+			cmd.Dir = repo
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"EVIDENCE_DIR="+t.TempDir(), "FINAL_CONFORMANCE_CORPUS="+repo,
+				"FINAL_CONFORMANCE_REPOSITORY=fixture/corpus", "FINAL_CONFORMANCE_COMMIT="+strings.TrimSpace(string(sha)),
+				"FINAL_CONFORMANCE_MANIFEST="+fixture, "ORACLE_REPOSITORY=XRPLF/xrpld-private", "ORACLE_TAG=3.4.1",
+				"ORACLE_COMMIT=d147fccf54a500fce586522f28d6044c37fd8d29")
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatal("incomplete corpus unexpectedly accepted")
+			}
+			want := "final conformance corpus must be clean"
+			if state == "clean" {
+				want = "manifest-validation-reached"
+			}
+			if !strings.Contains(string(output), want) {
+				t.Fatalf("want %q in output: %v\n%s", want, err, output)
+			}
+		})
+	}
+}
+
 func TestProducerEvidenceTracksCorpusAndExcludesReferenceCheckouts(t *testing.T) {
 	script, repo, sha := acceptanceEvidenceRepo(t)
 	for _, path := range []string{
