@@ -2,7 +2,7 @@
 package version
 
 // SemanticVersion is the canonical go-xrpl software version advertised in
-// protocol messages.
+// protocol messages. Its release cycle is independent of the rippled oracle.
 const SemanticVersion = "3.4.0"
 
 // Version is set at build time via:

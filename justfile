@@ -56,15 +56,25 @@ test-core:
 
 # CI group: codec / crypto / shamap / storage / etc.
 test-libs:
-    go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/...
+    go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./internal/testutil/...
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:
     go test -v {{pkg}}
 
-# Production handshake and manifest interop against rippled 3.4.0 on network_id=1.
+# Build and verify the private 3.4.1 oracle, then exercise the production peer path.
 test-docker:
-    PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ORACLE_IMAGE=goxrpl-oracle:3.4.1
+    export EVIDENCE_DIR="${EVIDENCE_DIR:-$(mktemp -d)}"
+    docker build --platform linux/amd64 -t "$ORACLE_IMAGE" scripts/peer-interop
+    scripts/acceptance/oracle-image.sh
+    read -r image_id < "$EVIDENCE_DIR/oracle-image-id.txt"
+    PEERTLS_DOCKER_INTEROP=1 PEERTLS_LEDGER_NODE_DEPTH_INTEROP=1 PEERTLS_VALIDATOR_LIST_INTEROP=1 \
+      PEERTLS_RIPPLED_VERSION=3.4.1 PEERTLS_RIPPLED_IMAGE="$image_id" \
+      go test -race -tags docker -count=1 -timeout 10m -v \
+      -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
 
 # PostgreSQL backend integration tests. Needs a reachable server; the DSN
 # points at a throwaway database (its tables are truncated between tests).

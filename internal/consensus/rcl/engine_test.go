@@ -2059,7 +2059,9 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.checkLedger()
 		gotMode := engine.mode
 		gotWrongID := engine.wrongLedgerID
+		pending := engine.takePendingPostUnlockLocked()
 		engine.mu.Unlock()
+		runPostUnlock(pending)
 
 		adaptor.mu.RLock()
 		reqs := len(adaptor.ledgersRequested)

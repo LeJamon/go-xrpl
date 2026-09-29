@@ -2,12 +2,12 @@ package entry
 
 import (
 	"os"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 // TestLedgerSpecificFlags pins every Lsf* constant against rippled. These flags
@@ -134,35 +134,22 @@ var (
 
 func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve flags test source path")
+	path := rippled.File(t, "include/xrpl/protocol/LedgerFormats.h")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	dir := filepath.Dir(file)
-	for range 12 {
-		path := filepath.Join(dir, "rippled-worktrees", "v3.4.0-oracle", "include", "xrpl", "protocol", "LedgerFormats.h")
-		data, err := os.ReadFile(path)
-		if err == nil {
-			flags := make(map[string]uint32)
-			for _, pattern := range []*regexp.Regexp{oracleLedgerFlag, oracleImmutableFlag} {
-				for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
-					value, err := strconv.ParseUint(match[2], 0, 32)
-					if err != nil {
-						t.Fatalf("parse %s: %v", match[0], err)
-					}
-					flags[match[1]] = uint32(value)
-				}
+	flags := make(map[string]uint32)
+	for _, pattern := range []*regexp.Regexp{oracleLedgerFlag, oracleImmutableFlag} {
+		for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+			value, err := strconv.ParseUint(match[2], 0, 32)
+			if err != nil {
+				t.Fatalf("parse %s: %v", match[0], err)
 			}
-			return flags
+			flags[match[1]] = uint32(value)
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
-	t.Fatalf("required rippled v3.4.0 LedgerFormats.h not found from %s", file)
-	return nil
+	return flags
 }
 
 func TestMPTokenProtocolLimits(t *testing.T) {

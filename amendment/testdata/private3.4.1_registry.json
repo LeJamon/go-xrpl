@@ -1,0 +1,986 @@
+{
+  "oracle": {
+    "repository": "XRPLF/xrpld-private",
+    "tag": "3.4.1",
+    "commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+    "source": "include/xrpl/protocol/detail/features.macro",
+    "sha256": "1708df2ea0150a3105f13f7f39c42c798ac5addae9833c073fe6df9e9e17208b",
+    "entry_count": 108,
+    "active_count": 50,
+    "retired_count": 58
+  },
+  "registrations": [
+    {
+      "name": "fixBatchV1_2",
+      "source_name": "BatchV1_2",
+      "id": "14A2B45E48A4A124D1BBA657AC7B0DC3D5EA8C256C89E8F0D8142D32960A7944",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_yes",
+      "retired": false
+    },
+    {
+      "name": "fixCleanup3_4_0",
+      "source_name": "Cleanup3_4_0",
+      "id": "98433DD001A5737F773D74F8CA2A25A065089C73B2E611C760BAF369E4FECA76",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "Sponsor",
+      "source_name": "Sponsor",
+      "id": "BE1F90581635DBCEBFC4678C4B54FEDDC1A17B50FD02CFE765A4132A342126AC",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "BatchV1_1",
+      "source_name": "BatchV1_1",
+      "id": "9F287AED3CDB50A7BD1ACEC24296A30C9B5230CCD136219317AC790E3B884377",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "LendingProtocolV1_1",
+      "source_name": "LendingProtocolV1_1",
+      "id": "A360E2BFD775A5B0DCE1C36C16DF31B72735A57584FD163655D2F9564F8E7AC8",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "ConfidentialTransfer",
+      "source_name": "ConfidentialTransfer",
+      "id": "2110E4A19966E2EF517C0A8C56A5F35099D7665B0BB89D7B126B30D50B86AAD5",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixCleanup3_3_0",
+      "source_name": "Cleanup3_3_0",
+      "id": "3298D47E1F3A8A24FECAA30F699B8FE1DD234E072834BA099AD8180FFCE0FEC4",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixCleanup3_2_0",
+      "source_name": "Cleanup3_2_0",
+      "id": "21B8D2F76F68E11E9C077A43BBBC394136E9987E99DDB73966DD68419467E431",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "MPTokensV2",
+      "source_name": "MPTokensV2",
+      "id": "BE2D87DF21B690ED1497B593FDC013CC04276302380B1BD50A033DCF8DEFB2EB",
+      "kind": "feature",
+      "supported": "no",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixCleanup3_1_3",
+      "source_name": "Cleanup3_1_3",
+      "id": "303ACB16CF8DBD3B5C34F131A9D19A7DE01AE05F480A8A682B869D1B4AAC8CFC",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_yes",
+      "retired": false
+    },
+    {
+      "name": "LendingProtocol",
+      "source_name": "LendingProtocol",
+      "id": "565B90CA1AB2B9D42208ED10884188C64F9E19083DECB9634AAF06EB03299509",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "PermissionDelegationV1_1",
+      "source_name": "PermissionDelegationV1_1",
+      "id": "0F48FF561C709540328F31F1C97FD512ACC8B4E42138A161CB0E21ECA292540B",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixDirectoryLimit",
+      "source_name": "DirectoryLimit",
+      "id": "41765F664A8D67FF03DDB1C1A893DE6273690BA340A6C2B07C8D29D0DD013D3A",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixIncludeKeyletFields",
+      "source_name": "IncludeKeyletFields",
+      "id": "6143A27B71F7DAF9330ECA7C5EC3D54C8083A4FDEF7016737EEC06AB61E82EE0",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "DynamicMPT",
+      "source_name": "DynamicMPT",
+      "id": "58E92F338758479C06084E1B6BA366BAD8F75E5329A7F0EEAFFFDA51E5106B7F",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixTokenEscrowV1",
+      "source_name": "TokenEscrowV1",
+      "id": "32B8614321F7E070419115ABEAB1742EA20F3E3AF34432B5E2F474F8083260DC",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixPriceOracleOrder",
+      "source_name": "PriceOracleOrder",
+      "id": "FF2D1E13CF6D22427111B967BD504917F63A900CECD320D6FD3AC9FA90344631",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixMPTDeliveredAmount",
+      "source_name": "MPTDeliveredAmount",
+      "id": "AB8D932A5F338903FE5BCBD80B611FFED70839ABA3170E9CE01D947C0EDEDCF2",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixAMMClawbackRounding",
+      "source_name": "AMMClawbackRounding",
+      "id": "5E9586DB3D765B4C5794658FB6BB385071E9838DF4016027E6E26820C8526724",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "TokenEscrow",
+      "source_name": "TokenEscrow",
+      "id": "138B968F25822EFBF54C00F97031221C47B1EAB8321D93C7C2AEAF85F04EC5DF",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixEnforceNFTokenTrustlineV2",
+      "source_name": "EnforceNFTokenTrustlineV2",
+      "id": "B32752F7DCC41FB86534118FC4EEC8F56E7BD0A7DB60FD73F93F257233C08E3A",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixAMMv1_3",
+      "source_name": "AMMv1_3",
+      "id": "7CA70A7674A26FA517412858659EBC7EDEEF7D2D608824464E6FDEFD06854E14",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "PermissionedDEX",
+      "source_name": "PermissionedDEX",
+      "id": "677E401A423E3708363A36BA8B3A7D019D21AC5ABD00387BDBEA6BDE4C91247E",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "SingleAssetVault",
+      "source_name": "SingleAssetVault",
+      "id": "81BD2619B6B3C8625AC5D0BC01DE17F06C3F0AB95C7C87C93715B87A4FD240D8",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixPayChanCancelAfter",
+      "source_name": "PayChanCancelAfter",
+      "id": "D3456A862DC07E382827981CA02E21946E641877F19B8889031CC57FDCAC83E2",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixInvalidTxFlags",
+      "source_name": "InvalidTxFlags",
+      "id": "8EC4304A06AF03BE953EA6EDA494864F6F3F30AA002BABA35869FBB8C6AE5D52",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixFrozenLPTokenTransfer",
+      "source_name": "FrozenLPTokenTransfer",
+      "id": "83FD6594FF83C1D105BD2B41D7E242D86ECB4A8220BD9AF4DA35CB0F69E39B2A",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "DeepFreeze",
+      "source_name": "DeepFreeze",
+      "id": "DAF3A6EB04FA5DC51E8E4F23E9B7022B693EFA636F23F22664746C77B5786B23",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "PermissionedDomains",
+      "source_name": "PermissionedDomains",
+      "id": "A730EB18A9D4BB52502C898589558B4CCEB4BE10044500EE5581137A2E80E849",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "DynamicNFT",
+      "source_name": "DynamicNFT",
+      "id": "C1CE18F2A268E6A849C27B3DE485006771B4C01B2FCEC4F18356FE92ECD6BB74",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "Credentials",
+      "source_name": "Credentials",
+      "id": "1CB67D082CF7D9102412D34258CEDB400E659352D3B207348889297A6D90F5EF",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "AMMClawback",
+      "source_name": "AMMClawback",
+      "id": "726F944886BCDF7433203787E93DD9AA87FAB74DFE3AF4785BA03BEFC97ADA1F",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixAMMv1_2",
+      "source_name": "AMMv1_2",
+      "id": "1E7ED950F2F13C4F8E2A54103B74D57D5D298FFDBD005936164EE9E6484C438C",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "MPTokensV1",
+      "source_name": "MPTokensV1",
+      "id": "950AE2EA4654E47F04AA8739C0B214E242097E802FD372D24047A89AB1F5EC38",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixNFTokenPageLinks",
+      "source_name": "NFTokenPageLinks",
+      "id": "C7981B764EC4439123A86CC7CCBA436E9B3FF73B3F10A0AE51882E404522FC41",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixInnerObjTemplate2",
+      "source_name": "InnerObjTemplate2",
+      "id": "9196110C23EA879B4229E51C286180C7D02166DA712559F634372F5264D0EC59",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixEnforceNFTokenTrustline",
+      "source_name": "EnforceNFTokenTrustline",
+      "id": "763C37B352BE8C7A04E810F8E462644C45AFEAD624BF3894A08E5C917CF9FF39",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixReducedOffersV2",
+      "source_name": "ReducedOffersV2",
+      "id": "31E0DA76FB8FB527CADCDF0E61CB9C94120966328EFA9DCA202135BAF319C0BA",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "NFTokenMintOffer",
+      "source_name": "NFTokenMintOffer",
+      "id": "EE3CF852F0506782D05E65D49E5DCC3D16D50898CD1B646BAE274863401CC3CE",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixAMMv1_1",
+      "source_name": "AMMv1_1",
+      "id": "35291ADD2D79EB6991343BDA0912269C817D0F094B02226C1C14AD2858962ED4",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixPreviousTxnID",
+      "source_name": "PreviousTxnID",
+      "id": "7BB62DC13EC72B775091E9C71BF8CF97E122647693B50C5E87A80DFD6FCFAC50",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixXChainRewardRounding",
+      "source_name": "XChainRewardRounding",
+      "id": "2BF037D90E1B676B17592A8AF55E88DB465398B4B597AE46EECEE1399AB05699",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixEmptyDID",
+      "source_name": "EmptyDID",
+      "id": "755C971C29971C9F20C6F080F2ED96F87884E40AD19554A5EBECDCEC8A1F77FE",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "PriceOracle",
+      "source_name": "PriceOracle",
+      "id": "96FD2F293A519AE1DB6F8BED23E4AD9119342DA7CB6BAFD00953D16C54205D8B",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixFillOrKill",
+      "source_name": "FillOrKill",
+      "id": "3318EA0CF0755AF15DAC19F2B5C5BCBFF4B78BDD57609ACCAABE2C41309B051A",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "DID",
+      "source_name": "DID",
+      "id": "DB432C3A09D9D5DFC7859F39AE5FF767ABC59AED0A9FB441E83B814D8946C109",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "XChainBridge",
+      "source_name": "XChainBridge",
+      "id": "C98D98EE9616ACD36E81FDEB8D41D349BF5F1B41DD64A0ABC1FE9AA5EA267E9C",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "AMM",
+      "source_name": "AMM",
+      "id": "8CC0774A3BF66D1D22E76BBDA8E8A232E6B6313834301B3B23E8601196AE6455",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "XRPFees",
+      "source_name": "XRPFees",
+      "id": "93E516234E35E08CA689FA33A6D38E103881F8DCB53023F728C307AA89D515A7",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "default_no",
+      "retired": false
+    },
+    {
+      "name": "fixRemoveNFTokenAutoTrustLine",
+      "source_name": "RemoveNFTokenAutoTrustLine",
+      "id": "DF8B4536989BDACE3F934F29423848B9F1D76D09BE6A1FCFE7E7F06AA26ABEAD",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "default_yes",
+      "retired": false
+    },
+    {
+      "name": "fix1201",
+      "source_name": "1201",
+      "id": "B4D44CC3111ADD964E846FC57760C8B50FFCD5A82C86A72756F6B058DDDF96AD",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1368",
+      "source_name": "1368",
+      "id": "E2E6F2866106419B88C50045ACE96368558C345566AC8F2BDF5A5B5587F0E6FA",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1373",
+      "source_name": "1373",
+      "id": "42EEA5E28A97824821D4EF97081FE36A54E9593C6E4F20CBAE098C69D2E072DC",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1512",
+      "source_name": "1512",
+      "id": "6C92211186613F9647A89DFFBAB8F94C99D4C7E956D495270789128569177DA1",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1513",
+      "source_name": "1513",
+      "id": "67A34F2CF55BFC0F93AACD5B281413176FEE195269FA6D95219A2DF738671172",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1515",
+      "source_name": "1515",
+      "id": "5D08145F0A4983F23AFFFF514E83FAD355C5ABFBB6CAB76FB5BC8519FF5F33BE",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1523",
+      "source_name": "1523",
+      "id": "B9E739B8296B4A1BB29BE990B17D66E21B62A300A909F25AC55C22D6C72E1F9D",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1528",
+      "source_name": "1528",
+      "id": "1D3463A5891F9E589C5AE839FFAC4A917CE96197098A1EF22304E1BC5B98A454",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1543",
+      "source_name": "1543",
+      "id": "CA7C02118BA27599528543DFE77BA6838D1B0F43B447D4D7F53523CE6A0E9AC2",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1571",
+      "source_name": "1571",
+      "id": "7117E2EC2DBF119CA55181D69819F1999ECEE1A0225A7FD2B9ED47940968479C",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1578",
+      "source_name": "1578",
+      "id": "FBD513F1B893AC765B78F250E6FFA6A11B573209D1842ADC787C850696741288",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1623",
+      "source_name": "1623",
+      "id": "58BE9B5968C4DA7C59BA900961828B113E5490699B21877DEF9A31E9D0FE5D5F",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fix1781",
+      "source_name": "1781",
+      "id": "25BA44241B3BD880770BFA4DA21C7180576831855368CBEC6A3154FDE4A7676E",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixAmendmentMajorityCalc",
+      "source_name": "AmendmentMajorityCalc",
+      "id": "4F46DF03559967AC60F2EB272FEFE3928A7594A45FF774B87A7E540DB0F8F068",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixAMMOverflowOffer",
+      "source_name": "AMMOverflowOffer",
+      "id": "12523DF04B553A0B1AD74F42DDB741DE8DC06A03FC089A0EF197E2A87F1D8107",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixCheckThreading",
+      "source_name": "CheckThreading",
+      "id": "8F81B066ED20DAECA20DF57187767685EEF3980B228E0667A650BAF24426D3B4",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixDisallowIncomingV1",
+      "source_name": "DisallowIncomingV1",
+      "id": "15D61F0C6DB6A2F86BCF96F1E2444FEC54E705923339EC175BD3E517C8B3FF91",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixInnerObjTemplate",
+      "source_name": "InnerObjTemplate",
+      "id": "C393B3AEEBF575E475F0C60D5E4241B2070CC4D0EB6C4846B1A07508FAEFC485",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixMasterKeyAsRegularKey",
+      "source_name": "MasterKeyAsRegularKey",
+      "id": "C4483A1896170C66C098DEA5B0E024309C60DC960DE5F01CD7AF986AA3D9AD37",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixNonFungibleTokensV1_2",
+      "source_name": "NonFungibleTokensV1_2",
+      "id": "73761231F7F3D94EC3D8C63D91BDD0D89045C6F71B917D1925C01253515A6669",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixNFTokenRemint",
+      "source_name": "NFTokenRemint",
+      "id": "AE35ABDEFBDE520372B31C957020B34A7A4A9DC3115A69803A44016477C84D6E",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixNFTokenReserve",
+      "source_name": "NFTokenReserve",
+      "id": "03BDC0099C4E14163ADA272C1B6F6FABB448CC3E51F522F978041E4B57D9158C",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixPayChanRecipientOwnerDir",
+      "source_name": "PayChanRecipientOwnerDir",
+      "id": "621A0B264970359869E3C0363A899909AAB7A887C8B73519E4ECF952D33258A8",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixQualityUpperBound",
+      "source_name": "QualityUpperBound",
+      "id": "89308AF3B8B10B7192C4E613E1D2E4D9BA64B2EE2D5232402AE82A6A7220D953",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixReducedOffersV1",
+      "source_name": "ReducedOffersV1",
+      "id": "27CD95EE8E1E5A537FF2F89B6CEB7C622E78E9374EBD7DCBEDFAE21CD6F16E0A",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixRmSmallIncreasedQOffers",
+      "source_name": "RmSmallIncreasedQOffers",
+      "id": "B6B3EEDC0267AB50491FDC450A398AF30DBCD977CECED8BEF2499CAB5DAC19E2",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixSTAmountCanonicalize",
+      "source_name": "STAmountCanonicalize",
+      "id": "452F5906C46D46F407883344BFDD90E672B672C5E9943DB4891E3A34FEEEB9DB",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixTakerDryOfferRemoval",
+      "source_name": "TakerDryOfferRemoval",
+      "id": "2CD5286D8D687E98B41102BDD797198E81EA41DF7BD104E6561FEB104EFF2561",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixTrustLinesToSelf",
+      "source_name": "TrustLinesToSelf",
+      "id": "F1ED6B4A411D8B872E65B9DCB4C8B100375B0DD3D62D07192E011D6D7F339013",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "fixUniversalNumber",
+      "source_name": "UniversalNumber",
+      "id": "2E2FB9CF8A44EB80F4694D38AADAE9B8B7ADAFD2F092E10068E61C98C4F092B0",
+      "kind": "fix",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "Checks",
+      "source_name": "Checks",
+      "id": "157D2D480E006395B76F948E3E07A45A05FE10230D88A7993C71F97AE4B1F2D1",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "CheckCashMakesTrustLine",
+      "source_name": "CheckCashMakesTrustLine",
+      "id": "98DECF327BF79997AEC178323AD51A830E457BFC6D454DAF3E46E5EC42DC619F",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "Clawback",
+      "source_name": "Clawback",
+      "id": "56B241D7A43D40354D02A9DC4C8DF5C7A1F930D92A9035C4E12291B3CA3E1C2B",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "CryptoConditions",
+      "source_name": "CryptoConditions",
+      "id": "1562511F573A19AE9BD103B5D6B9E01B3B46805AEC5D3C4805C902B514399146",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "CryptoConditionsSuite",
+      "source_name": "CryptoConditionsSuite",
+      "id": "86E83A7D2ECE3AD5FA87AB2195AE015C950469ABF0B72EAACED318F74886AE90",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "DeletableAccounts",
+      "source_name": "DeletableAccounts",
+      "id": "30CD365592B8EE40489BA01AE2F7555CAC9C983145871DC82A42A31CF5BAE7D9",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "DepositAuth",
+      "source_name": "DepositAuth",
+      "id": "F64E1EABBE79D55B3BB82020516CEC2C582A98A6BFE20FBE9BB6A0D233418064",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "DepositPreauth",
+      "source_name": "DepositPreauth",
+      "id": "3CBC5C4E630A1B82380295CDA84B32B49DD066602E74E39B85EF64137FA65194",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "DisallowIncoming",
+      "source_name": "DisallowIncoming",
+      "id": "47C3002ABA31628447E8E9A8B315FAA935CE30183F9A9B86845E469CA2CDC3DF",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "Escrow",
+      "source_name": "Escrow",
+      "id": "07D43DCE529B15A10827E5E04943B496762F9A88E3268269D69C44BE49E21104",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "EnforceInvariants",
+      "source_name": "EnforceInvariants",
+      "id": "DC9CA96AEA1DCF83E527D1AFC916EFAF5D27388ECA4060A88817C1238CAEE0BF",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "ExpandedSignerList",
+      "source_name": "ExpandedSignerList",
+      "id": "B2A4DB846F0891BF2C76AB2F2ACC8F5B4EC64437135C6E56F3F859DE5FFD5856",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "FeeEscalation",
+      "source_name": "FeeEscalation",
+      "id": "42426C4D4F1009EE67080A9B7965B44656D7714D104A72F9B4369F97ABF044EE",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "Flow",
+      "source_name": "Flow",
+      "id": "740352F2412A9909880C23A559FCECEDA3BE2126FED62FC7660D628A06927F11",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "FlowCross",
+      "source_name": "FlowCross",
+      "id": "3012E8230864E95A58C60FD61430D7E1B4D3353195F2981DC12B0C7C0950FFAC",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "FlowSortStrands",
+      "source_name": "FlowSortStrands",
+      "id": "AF8DF7465C338AE64B1E937D6C8DA138C0D63AD5134A68792BBBE1F63356C422",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "HardenedValidations",
+      "source_name": "HardenedValidations",
+      "id": "1F4AFA8FA1BC8827AD4C0F682C03A8B671DCDF6B5C4DE36D44243A684103EF88",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "ImmediateOfferKilled",
+      "source_name": "ImmediateOfferKilled",
+      "id": "75A7E01C505DD5A179DFE3E000A9B6F1EDDEB55A12F95579A23E15B15DC8BE5A",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "MultiSign",
+      "source_name": "MultiSign",
+      "id": "4C97EBA926031A7CF7D7B36FDE3ED66DDA5421192D63DE53FFB46E43B9DC8373",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "MultiSignReserve",
+      "source_name": "MultiSignReserve",
+      "id": "586480873651E106F1D6339B0C4A8945BA705A777F3F4524626FF1FC07EFE41D",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "NegativeUNL",
+      "source_name": "NegativeUNL",
+      "id": "B4E4F5D2D6FB84DF7399960A732309C9FD530EAE5941838160042833625A6076",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "NonFungibleTokensV1_1",
+      "source_name": "NonFungibleTokensV1_1",
+      "id": "32A122F1352A4C7B3A6D790362CC34749C5E57FCE896377BFDC6CCD14F6CD627",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "PayChan",
+      "source_name": "PayChan",
+      "id": "08DE7D96082187F6E6578530258C77FAABABE4C20474BDB82F04B021F1A68647",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "RequireFullyCanonicalSig",
+      "source_name": "RequireFullyCanonicalSig",
+      "id": "00C1FC4A53E60AB02C864641002B3172F38677E29C26C5406685179B37E1EDAC",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "SortedDirectories",
+      "source_name": "SortedDirectories",
+      "id": "CC5ABAE4F3EC92E94A59B1908C2BE82D2228B6485C00AFF8F22DF930D89C194E",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "TicketBatch",
+      "source_name": "TicketBatch",
+      "id": "955DF3FA5891195A9DAEFA1DDC6BB244B545DDE1BAA84CBB25D5F12A8DA68A0C",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "TickSize",
+      "source_name": "TickSize",
+      "id": "532651B4FD58DF8922A49BA101AB3E996E5BFBF95A913B3E392504863E63B164",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    },
+    {
+      "name": "TrustSetAuth",
+      "source_name": "TrustSetAuth",
+      "id": "6781F8368C4771B83E8B821D88F580202BCB4228075297B19E4FDC5233F1EFDC",
+      "kind": "feature",
+      "supported": "yes",
+      "vote": "obsolete",
+      "retired": true
+    }
+  ]
+}

@@ -141,22 +141,7 @@ wait_validated_at_least() {
 
 SERVICES=(rippled-0 rippled-1 goxrpl-0)
 
-# Each node's ledger snapshot is reported as "seq ledger_hash account_hash
-# transaction_hash". ledger_hash is the canonical agreement signal: it's a
-# hash *of* account_hash + transaction_hash + parent + close info, so if
-# ledger_hash matches across nodes the underlying tree contents agree by
-# definition — even if a node's RPC happens to report transaction_hash as
-# all zeros (a known goxrpl RPC quirk that's NOT a real consensus divergence).
-#
-# So we assert strict equality on ledger_hash, and log the other hashes
-# for diagnostic context. account_hash equality is also checked because
-# it's reported reliably by both implementations.
-
-# Compare ledger_hash + account_hash across all three nodes at the lowest
-# common validated seq.
-#
-# Uses parallel arrays rather than declare -A so the script runs on macOS's
-# default bash 3.2 in addition to Linux bash 4/5.
+# Compare all three ledger roots at the lowest common validated sequence.
 assert_hashes_agree() {
     local label="$1"
     local min_seq=""
@@ -176,9 +161,6 @@ assert_hashes_agree() {
     compare_ledger_at_seq "$label" "$min_seq"
 }
 
-# Re-fetch each node's view of the given seq and assert ledger_hash +
-# account_hash agree. Logs all four fields (seq / ledger_hash / account_hash
-# / transaction_hash) for diagnostic context.
 compare_ledger_at_seq() {
     local label="$1"
     local seq="$2"
@@ -187,7 +169,16 @@ compare_ledger_at_seq() {
     for i in "${!SERVICES[@]}"; do
         url="$(rpc_url "${SERVICES[i]}")"
         resp="$(rpc_call "$url" "{\"method\":\"ledger\",\"params\":[{\"ledger_index\":$seq,\"transactions\":false,\"expand\":false}]}")"
-        row="$(echo "$resp" | jq -r '.result.ledger | "\(.ledger_index) \(.ledger_hash) \(.account_hash) \(.transaction_hash)"')"
+        if ! row="$(echo "$resp" | jq -er --arg seq "$seq" '
+            .result.ledger
+            | select((.ledger_index | tostring) == $seq)
+            | select([.ledger_hash, .account_hash, .transaction_hash]
+                | all(type == "string" and test("^[0-9A-Fa-f]{64}$")))
+            | "\(.ledger_index) \(.ledger_hash) \(.account_hash) \(.transaction_hash)"
+        ')"; then
+            log "[$label] ${SERVICES[i]} returned no valid ledger roots for seq=$seq"
+            return 1
+        fi
         common_info[i]="$row"
     done
 
@@ -196,14 +187,16 @@ compare_ledger_at_seq() {
         log "    ${SERVICES[i]}: ${common_info[i]}"
     done
 
-    local ref_ledger ref_account
+    local ref_ledger ref_account ref_tx
     ref_ledger="$(awk '{print $2}' <<<"${common_info[0]}")"
     ref_account="$(awk '{print $3}' <<<"${common_info[0]}")"
+    ref_tx="$(awk '{print $4}' <<<"${common_info[0]}")"
     local fail=0
     for i in "${!SERVICES[@]}"; do
-        local lh ah
+        local lh ah th
         lh="$(awk '{print $2}' <<<"${common_info[i]}")"
         ah="$(awk '{print $3}' <<<"${common_info[i]}")"
+        th="$(awk '{print $4}' <<<"${common_info[i]}")"
         if [[ "$lh" != "$ref_ledger" ]]; then
             log "[$label] DIVERGENCE: ${SERVICES[i]} ledger_hash $lh != $ref_ledger"
             fail=1
@@ -212,12 +205,16 @@ compare_ledger_at_seq() {
             log "[$label] DIVERGENCE: ${SERVICES[i]} account_hash $ah != $ref_account"
             fail=1
         fi
+        if [[ "$th" != "$ref_tx" ]]; then
+            log "[$label] DIVERGENCE: ${SERVICES[i]} transaction_hash $th != $ref_tx"
+            fail=1
+        fi
     done
 
     if (( fail )); then
         return 1
     fi
-    log "[$label] all three nodes agree on seq=$seq (ledger_hash + account_hash)"
+    log "[$label] all three nodes agree on seq=$seq (ledger_hash + account_hash + transaction_hash)"
     return 0
 }
 
@@ -326,9 +323,6 @@ wait_for_all_txs_in_ledger() {
 assert_hashes_at_seq() {
     local label="$1"
     local seq="$2"
-    # Pre-flight: confirm rippled-0 sees a tx in this ledger before we
-    # assert. (goxrpl's transaction_hash RPC reporting is currently buggy
-    # — see #419 — so we read this off rippled.)
     local resp tx_hash url
     url="$(rpc_url rippled-0)"
     resp="$(rpc_call "$url" "{\"method\":\"ledger\",\"params\":[{\"ledger_index\":$seq,\"transactions\":false,\"expand\":false}]}")"
@@ -340,7 +334,9 @@ assert_hashes_at_seq() {
     compare_ledger_at_seq "$label" "$seq"
 }
 
-# --- main ---------------------------------------------------------------
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
 
 require docker jq curl awk
 if ! [[ "$PAYMENT_COUNT" =~ ^[1-9][0-9]*$ ]]; then
@@ -387,7 +383,7 @@ fi
 TX_ASSERTED_SEQS=()
 for TX_LEDGER_SEQ in "${TX_LEDGER_SEQS[@]}"; do
     TX_ALREADY_ASSERTED=0
-    for TX_ASSERTED_SEQ in "${TX_ASSERTED_SEQS[@]}"; do
+    for TX_ASSERTED_SEQ in "${TX_ASSERTED_SEQS[@]:-}"; do
         if [[ "$TX_ASSERTED_SEQ" == "$TX_LEDGER_SEQ" ]]; then
             TX_ALREADY_ASSERTED=1
             break

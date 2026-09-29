@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 var taggedStyleField = regexp.MustCompile(`^\s*\{\s*sf(\w+)\s*,\s*(?:soe|Soe)(REQUIRED|OPTIONAL|DEFAULT|Required|Optional|Default)\s*\}`)
@@ -31,12 +32,10 @@ func TestSponsorCommonFieldAppliedToEveryEntry(t *testing.T) {
 }
 
 func TestSerializationStylesMatchRippledTag(t *testing.T) {
-	macroPath := requireRippledMacro(t)
-	rippledDir := filepath.Clean(filepath.Join(filepath.Dir(macroPath), "..", "..", "..", ".."))
-	macro := readRippledFile(t, rippledDir, "include/xrpl/protocol/detail/ledger_entries.macro")
+	macro := readRippledFile(t, "include/xrpl/protocol/detail/ledger_entries.macro")
 	tagged := parseTaggedStyles(t, macro)
 	if len(tagged) != len(Specs) {
-		t.Fatalf("rippled v3.4.0 has %d ledger templates, schema has %d", len(tagged), len(Specs))
+		t.Fatalf("rippled v3.4.1 has %d ledger templates, schema has %d", len(tagged), len(Specs))
 	}
 
 	byEntry := make(map[string]Entry, len(Specs))
@@ -46,7 +45,7 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	for entryName, fields := range tagged {
 		entry, ok := byEntry[entryName]
 		if !ok {
-			t.Errorf("rippled v3.4.0 template %s is missing from schema", entryName)
+			t.Errorf("rippled v3.4.1 template %s is missing from schema", entryName)
 			continue
 		}
 		specFields := make(map[string]Field, len(entry.Fields))
@@ -72,12 +71,12 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 				continue
 			}
 			if _, ok := fields[field.Name]; !ok {
-				t.Errorf("schema field %s.%s is absent from rippled v3.4.0", entryName, field.Name)
+				t.Errorf("schema field %s.%s is absent from rippled v3.4.1", entryName, field.Name)
 			}
 		}
 	}
 
-	common := readRippledFile(t, rippledDir, "src/libxrpl/protocol/LedgerFormats.cpp")
+	common := readRippledFile(t, "src/libxrpl/protocol/LedgerFormats.cpp")
 	if !regexp.MustCompile(`\{sfLedgerEntryType,\s*(?:soeREQUIRED|SoeRequired)\}`).Match(common) {
 		t.Fatal("rippled common LedgerEntryType field is not required")
 	}
@@ -100,11 +99,11 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	}
 }
 
-func readRippledFile(t *testing.T, repo, path string) []byte {
+func readRippledFile(t *testing.T, path string) []byte {
 	t.Helper()
-	out, err := os.ReadFile(filepath.Join(repo, path))
+	out, err := os.ReadFile(rippled.File(t, path))
 	if err != nil {
-		t.Fatalf("read rippled v3.4.0 %s: %v", path, err)
+		t.Fatalf("read rippled v3.4.1 %s: %v", path, err)
 	}
 	return out
 }

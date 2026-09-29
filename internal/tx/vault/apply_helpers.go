@@ -185,14 +185,6 @@ func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amoun
 	issuerID := mptIDIssuer(mptID)
 
 	if from == issuerID {
-		// The issuer is putting tokens into circulation: the new outstanding
-		// supply must not exceed MaximumAmount (default 2^63-1). Callers that
-		// disburse to several destinations issue one sendMPTAsset per leg and
-		// commit OutstandingAmount between them, so this per-leg cap on the
-		// freshly read supply enforces the aggregate cap across the whole
-		// disbursement (rippled's rippleSendMultiMPT aggregate check; the
-		// fixCleanup3_1_3 gate there only refines multi-leg precision, and the
-		// single-leg cap in rippleSendMPT is unconditional).
 		maxAmount := maxMPTokenAmount
 		if issuance.MaximumAmount != nil {
 			maxAmount = *issuance.MaximumAmount

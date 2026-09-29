@@ -176,6 +176,10 @@ case "$mode" in
     printf 'corpus_commit=%s\n' "$corpus_commit" >> "$output"
     [[ "$corpus_commit" == "$source_commit" ]] ||
       die "checked-out corpus commit $corpus_commit does not match configured commit $source_commit"
+    corpus_status="$(git -C "$corpus" status --porcelain=v1 --untracked-files=all --ignored -- .)" ||
+      die 'could not verify corpus worktree status'
+    [[ -z "$corpus_status" ]] || die 'final conformance corpus must be clean'
+    printf 'corpus_dirty=false\n' >> "$output"
     command -v jq >/dev/null 2>&1 || die 'jq is required to validate conformance results'
     jq -e \
       --arg oracle_repository "$oracle_repository" \
