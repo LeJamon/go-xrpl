@@ -289,6 +289,36 @@ func TestSnapshotRejectsIncompletePriorSubmissionEvidence(t *testing.T) {
 	}
 }
 
+func TestSnapshotRejectsChangedClosedRules(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		feature [32]byte
+		enable  bool
+	}{
+		{name: "unexpected amendment", feature: amendment.FeatureFixBatchV1_2, enable: true},
+		{name: "missing amendment", feature: amendment.FeatureBatchV1_1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
+			id := strings.ToUpper(hex.EncodeToString(tc.feature[:]))
+			if tc.enable {
+				fixture.Closed.Rules = append(fixture.Closed.Rules, id)
+			} else {
+				rules := make([]string, 0, len(fixture.Closed.Rules))
+				for _, rule := range fixture.Closed.Rules {
+					if !strings.EqualFold(rule, id) {
+						rules = append(rules, rule)
+					}
+				}
+				fixture.Closed.Rules = rules
+			}
+			if err := runSnapshotFixture(fixture); err == nil || !strings.Contains(err.Error(), "rules") {
+				t.Fatalf("changed closed rules were not rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestSnapshotRejectsModifiedSignatureAndExpectedBytes(t *testing.T) {
 	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
 	invalidSignature := fixture

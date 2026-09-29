@@ -815,6 +815,13 @@ func assertSnapshotLedger(got *ledger.Ledger, want loadedSnapshotLedger) error {
 	if got.Fees() != want.Fees {
 		return errors.New("ledger fees differ")
 	}
+	gotRules := got.Rules()
+	for _, feature := range amendment.AllFeatures() {
+		enabled := gotRules.Enabled(feature.ID)
+		if enabled != want.EffectiveRules.Enabled(feature.ID) {
+			return fmt.Errorf("ledger rules differ for %s: enabled=%t, want %t", feature.Name, enabled, want.EffectiveRules.Enabled(feature.ID))
+		}
+	}
 	stateRoot, err := got.StateMapHash()
 	if err != nil {
 		return fmt.Errorf("hash got state map: %w", err)
