@@ -467,6 +467,9 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	if err := assertSnapshotLedger(built.Ledger, closed); err != nil {
 		return fmt.Errorf("closed ledger mismatch: %w", err)
 	}
+	if err := runSnapshotReplay(fixture, parent, closed); err != nil {
+		return fmt.Errorf("inbound replay mismatch: %w", err)
+	}
 	return nil
 }
 

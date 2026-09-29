@@ -415,6 +415,8 @@ jobs:
       GOXRPL_FIXTURES_DIR: internal/testing/conformance/testdata/rippled-3.4.1-v4
       GOXRPL_CONFORMANCE_REQUIRED: "1"
       GOXRPL_CONFORMANCE_REPORT: /tmp/issue-2015-conformance-final/conformance-report.json
+      GOXRPL_ENGINE_EVIDENCE_REPORT: /tmp/issue-2015-conformance-final/engine-execution-report.json
+      GOXRPL_ENGINE_SOAK_SECONDS: "10"
       ORACLE_REPOSITORY: XRPLF/xrpld-private
       ORACLE_TAG: 3.4.1
       ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
@@ -442,6 +444,24 @@ jobs:
             .total.discovered == (.total.executed + .total.excluded) and
             .total.executed == (.total.passed + .total.failed)
           ' "$GOXRPL_CONFORMANCE_REPORT" >/dev/null
+          test -s "$GOXRPL_ENGINE_EVIDENCE_REPORT"
+          jq -e --arg sha "$(git rev-parse HEAD)" '
+            .tested_sha == $sha and .dirty == false and
+            .oracle_commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
+            .discovered > 0 and .excluded == 0 and .failed == 0 and
+            .requested_soak_seconds == 10 and .soak_executed > 0 and
+            .executed == (.discovered * (.seeds | length) + .soak_executed) and
+            .passed == .executed and
+            .completed_stages.signed_submission == .executed and
+            .completed_stages.closed_ledger == .executed and
+            .completed_stages.inbound_replay == .executed and
+            (.completed_cases | length) == .discovered and
+            ([.completed_cases[]] | add) == .executed and
+            ([.completed_submission_types[]] | add) == .executed and
+            ([.completed_submission_results[]] | add) == .executed and
+            ([.completed_closed_transaction_types[]] | add) == .completed_replay_leaves and
+            .completed_close_inputs > 0 and .completed_replay_leaves > 0
+          ' "$GOXRPL_ENGINE_EVIDENCE_REPORT" >/dev/null
       - name: Record final conformance producer evidence
         if: always()
         env:
