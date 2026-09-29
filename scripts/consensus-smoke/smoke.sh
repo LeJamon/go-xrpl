@@ -323,7 +323,6 @@ wait_for_all_txs_in_ledger() {
 assert_hashes_at_seq() {
     local label="$1"
     local seq="$2"
-    # Confirm the selected ledger contains the submitted transactions.
     local resp tx_hash url
     url="$(rpc_url rippled-0)"
     resp="$(rpc_call "$url" "{\"method\":\"ledger\",\"params\":[{\"ledger_index\":$seq,\"transactions\":false,\"expand\":false}]}")"
