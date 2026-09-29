@@ -108,7 +108,7 @@ def verify_config(config: Path) -> dict:
             "owner_reserve_increment_drops": 50_000_000,
         },
         "close_policy": {
-            "setup": "fund named accounts, then close before recording parent",
+            "setup": "Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent",
             "request_seconds_after_now": 5,
             "capture": "effective agreed close time computed from the pre-close header and resolution",
         },
@@ -128,6 +128,7 @@ def verify_config(config: Path) -> dict:
         "VaultCreate",
         "LoanBrokerSet",
         "NFTokenAcceptOffer",
+        "OfferCreate",
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
@@ -164,6 +165,14 @@ def verify_config(config: Path) -> dict:
                 "applied": True,
                 "queued": False,
                 "expected_deleted_object": "NFTokenOffer",
+            },
+            "OfferCreate/expired-offer-cleanup": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecKILLED",
+                "applied": True,
+                "queued": False,
+                "expected_deleted_object": "Offer",
+                "expected_retained_object": "Offer",
             }
         },
         "seeded_payments": {
@@ -182,6 +191,11 @@ def verify_config(config: Path) -> dict:
         raise SystemExit(
             "strict-corpus-config.json scenario overrides do not match recorder scenarios"
         )
+    if values.get("submission_policy") != (
+        "one direct submit RPC per signed tx_blob; optional pre_submit history uses the same "
+        "open ledger and queue; no retries or output-derived setup"
+    ):
+        raise SystemExit("strict-corpus-config.json submission policy does not match recorder")
     return values
 
 

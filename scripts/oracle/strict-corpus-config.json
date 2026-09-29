@@ -37,6 +37,14 @@
         "applied": true,
         "queued": false,
         "expected_deleted_object": "NFTokenOffer"
+      },
+      "OfferCreate/expired-offer-cleanup": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tecKILLED",
+        "applied": true,
+        "queued": false,
+        "expected_deleted_object": "Offer",
+        "expected_retained_object": "Offer"
       }
     },
     "seeded_payments": {
@@ -77,9 +85,9 @@
     "owner_reserve_increment_drops": 50000000
   },
   "signature_policy": "real canonical signatures with Application::checkSigs(true)",
-  "submission_policy": "one direct submit RPC per signed tx_blob; no retries or output-derived setup",
+  "submission_policy": "one direct submit RPC per signed tx_blob; optional pre_submit history uses the same open ledger and queue; no retries or output-derived setup",
   "close_policy": {
-    "setup": "fund named accounts, then close before recording parent",
+    "setup": "Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent",
     "request_seconds_after_now": 5,
     "capture": "effective agreed close time computed from the pre-close header and resolution"
   },
@@ -92,7 +100,8 @@
     "Batch",
     "VaultCreate",
     "LoanBrokerSet",
-    "NFTokenAcceptOffer"
+    "NFTokenAcceptOffer",
+    "OfferCreate"
   ],
   "batch_wrapper_policy": "canonical RawTransaction and poisoned CreatedNode wrapper, on both fix sides where BatchV1_1 is enabled",
   "submit_policy": "open_ledger boundary, engine_result token and numeric TER, applied/queued flags, uint64 fee, complete current open-ledger SLE bytes"

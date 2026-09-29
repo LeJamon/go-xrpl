@@ -11,6 +11,7 @@
 #include <test/jtx/last_ledger_sequence.h>
 #include <test/jtx/multisign.h>
 #include <test/jtx/noop.h>
+#include <test/jtx/offer.h>
 #include <test/jtx/pay.h>
 #include <test/jtx/regkey.h>
 #include <test/jtx/seq.h>
@@ -145,6 +146,30 @@ sleEntries(ReadView const& view)
         state.append(entry);
     }
     return state;
+}
+
+std::optional<Keylet>
+expiredOfferKey(ReadView const& view, Account const& owner)
+{
+    for (auto const& sle : view.sles)
+    {
+        if (sle && sle->getType() == ltOFFER &&
+            sle->getAccountID(sfAccount) == owner.id() && sle->isFieldPresent(sfExpiration))
+            return Keylet{ltOFFER, sle->key()};
+    }
+    return std::nullopt;
+}
+
+std::size_t
+offerCount(ReadView const& view, Account const& owner)
+{
+    std::size_t count = 0;
+    for (auto const& sle : view.sles)
+    {
+        if (sle && sle->getType() == ltOFFER && sle->getAccountID(sfAccount) == owner.id())
+            ++count;
+    }
+    return count;
 }
 
 json::Value
@@ -429,6 +454,30 @@ private:
                bool includePreSubmit)
     {
         auto const parent = env.closed();
+        auto cleanupKey = std::optional<Keylet>{};
+        auto const isOfferCleanup =
+            family == "OfferCreate" && testcase == "expired-offer-cleanup";
+        if (family == "NFTokenAcceptOffer" && testcase == "expired-sell-offer-cleanup")
+            cleanupKey = keylet::nftokenOffer(
+                             Account{"minter"},
+                             SeqProxy::rawSequence(env.seq(Account{"minter"}) - 1));
+        else if (isOfferCleanup)
+        {
+            cleanupKey = expiredOfferKey(*parent, Account{"bob"});
+            suite_.expect(
+                cleanupKey.has_value(),
+                testcase + " setup did not leave an expiring Offer",
+                __FILE__,
+                __LINE__);
+        }
+
+        if (cleanupKey)
+            suite_.expect(
+                parent->read(*cleanupKey) != nullptr,
+                testcase + " cleanup target was not present in the captured parent",
+                __FILE__,
+                __LINE__);
+
         json::Value fixture;
         fixture["fixture_version"] = kFixtureVersion;
         fixture["oracle_repository"] = kOracleRepository;
@@ -498,6 +547,18 @@ private:
         auto const response = env.rpc("submit", txBlob);
         auto const postSubmitView = env.current();
         fixture["submit"] = submitBoundary(response, transaction, *postSubmitView);
+        if (cleanupKey)
+            suite_.expect(
+                postSubmitView->read(*cleanupKey) == nullptr,
+                testcase + " cleanup target remained in the open ledger after submit",
+                __FILE__,
+                __LINE__);
+        if (isOfferCleanup)
+            suite_.expect(
+                offerCount(*postSubmitView, Account{"bob"}) == 1,
+                testcase + " did not retain the unexpired Offer after cleanup",
+                __FILE__,
+                __LINE__);
         auto const parsed = Env::parseResult(response);
         suite_.expect(
             parsed.ter && *parsed.ter == expected.ter,
@@ -537,6 +598,18 @@ private:
             testcase + " close time was not independently reproducible",
             __FILE__,
             __LINE__);
+        if (cleanupKey)
+            suite_.expect(
+                env.closed()->read(*cleanupKey) == nullptr,
+                testcase + " cleanup target remained in the closed ledger",
+                __FILE__,
+                __LINE__);
+        if (isOfferCleanup)
+            suite_.expect(
+                offerCount(*env.closed(), Account{"bob"}) == 1,
+                testcase + " did not retain the unexpired Offer in the closed ledger",
+                __FILE__,
+                __LINE__);
         fixture["closed"] = snapshot(*env.closed());
 
         auto const filename = profile.name() + "-" + family + "-" + testcase + ".json";
@@ -899,6 +972,16 @@ makeExpiredNFTokenAccept(Env& env)
 }
 
 JTx
+makeExpiredOfferFillOrKill(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const gateway = Account{"gateway"};
+    return env.jt(
+        jtx::offer(alice, jtx::XRP(1000), gateway["USD"](1000)),
+        jtx::Txflags(tfFillOrKill));
+}
+
+JTx
 makeBatch(Env& env)
 {
     auto const alice = Account{"alice"};
@@ -1086,6 +1169,34 @@ setupExpiredNFTokenOffer(Env& env)
     env.close();
     while (parentCloseTime(env) < expiration)
         env.close();
+}
+
+void
+setupExpiredOffer(Env& env)
+{
+    auto const gateway = Account{"gateway"};
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    fundAndClose(env, {gateway, alice, bob});
+
+    auto expired = jtx::offer(bob, gateway["USD"](500), jtx::XRP(500));
+    expired[sfExpiration.jsonName] = parentCloseTime(env) + 1;
+    env(expired);
+    env.close();
+
+    auto const expiredKey = expiredOfferKey(*env.current(), bob);
+    env.test.expect(
+        expiredKey.has_value(),
+        "expired Offer setup did not create an Offer entry",
+        __FILE__,
+        __LINE__);
+
+    env(jtx::offer(bob, gateway["USD"](500), jtx::XRP(500)));
+    env.close();
+    env(jtx::trust(alice, gateway["USD"](1000)));
+    env.close();
+    env(jtx::pay(gateway, alice, gateway["USD"](1000)));
+    env.close();
 }
 
 void
@@ -1635,6 +1746,16 @@ public:
             setupExpiredNFTokenOffer,
             makeExpiredNFTokenAccept,
             Expected{TER{tecEXPIRED}, true, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "OfferCreate",
+            "expired-offer-cleanup",
+            recorderConfig(),
+            setupExpiredOffer,
+            makeExpiredOfferFillOrKill,
+            Expected{TER{tecKILLED}, true, false});
         recordQueueScenario(recorder, *this, representative);
         for (std::uint32_t sample = 0; sample < 4; ++sample)
         {
