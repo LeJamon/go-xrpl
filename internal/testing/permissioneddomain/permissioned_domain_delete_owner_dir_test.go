@@ -28,6 +28,7 @@ func readOwnerDirectory(t *testing.T, env *jtx.TestEnv, owner *jtx.Account) *sta
 
 func TestPermissionedDomainDeleteKeepsEmptyOwnerDirectory(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.SetOpenLedger(false)
 	alice := jtx.NewAccount("alice")
 	issuer := jtx.NewAccount("issuer")
 	env.Fund(alice, issuer)
@@ -79,6 +80,7 @@ func TestPermissionedDomainDeleteKeepsEmptyOwnerDirectory(t *testing.T) {
 
 func TestPermissionedDomainDeleteKeepsRemainingOwnerDirectoryEntries(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.SetOpenLedger(false)
 	alice := jtx.NewAccount("alice")
 	issuer := jtx.NewAccount("issuer")
 	env.Fund(alice, issuer)
@@ -112,6 +114,7 @@ func TestPermissionedDomainDeleteKeepsRemainingOwnerDirectoryEntries(t *testing.
 
 func TestPermissionedDomainDeleteUsesRecordedOwnerDirectoryPage(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.SetOpenLedger(false)
 	alice := jtx.NewAccount("alice")
 	issuer := jtx.NewAccount("issuer")
 	env.FundAmount(alice, uint64(jtx.XRP(100_000)))
@@ -194,6 +197,7 @@ func TestPermissionedDomainDeleteRejectsCorruptOwnerDirectory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
+			env.SetOpenLedger(false)
 			alice := jtx.NewAccount("alice")
 			issuer := jtx.NewAccount("issuer")
 			env.Fund(alice, issuer)

@@ -1,0 +1,426 @@
+{
+  "amendment_matrix": [
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l0-b0-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l0-b0-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l0-b1-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l0-b1-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l1-b0-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l1-b0-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l1-b1-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": false,
+      "id": "c0-l1-b1-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l0-b0-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l0-b0-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l0-b1-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": false,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l0-b1-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l1-b0-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": false,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l1-b0-f1",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": false,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l1-b1-f0",
+      "supported": true
+    },
+    {
+      "BatchV1_1": true,
+      "LendingProtocolV1_1": true,
+      "fixBatchV1_2": true,
+      "fixCleanup3_4_0": true,
+      "id": "c1-l1-b1-f1",
+      "supported": true
+    }
+  ],
+  "binary_sha256": "164d20cd3247b82fa89f24330fce365ce5d19acef3d2b7657e9bb87cd7a35f24",
+  "build_identity": "macOS arm64; Apple Clang 17.0.0; Conan 2.18.1; CMake 4.1.2; Ninja 1.13.0; Release xrpld with tests; exact d147fcc production objects plus separately compiled recorder; compile SHA256 4c17f299a3b36fd40d95bdacc1b30e9049e5eb95e4e38d1721dd2cb0bbdf1032; link SHA256 3e3923ceba096fff03058cc9c69636a4d48f8f7af07a998bed40d5176d221985",
+  "config_identity": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
+  "config_source": "scripts/oracle/strict-corpus-config.json",
+  "coverage_limits": [
+    "45 signed open-ledger submit/close cases in 7 transaction families, all 16 cleanup/lending/Batch/fix profiles; no excluded cases.",
+    "Empty initial TxQ at minimum fee metrics only; historical queue contents, load/escalation transitions and retries are not recorded.",
+    "No RPC/parser rejection boundary cases, exhaustive Batch wrappers, all lending operations or other transaction families; whole-release parity remains #2017."
+  ],
+  "fixture_count": 45,
+  "fixture_version": "v4",
+  "fixtures": {
+    "c0-l0-b0-f0-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c0-l0-b0-f0",
+      "sha256": "f33750ee820a75a882e72df63ddbf975e586446bdc6079bf830591125a228251",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b0-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c0-l0-b0-f1",
+      "sha256": "58de33718c24ec32b6ab7643416969c3ed333b362016ddb169fd31d3e2a3cc2f",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f0-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f0",
+      "sha256": "02c176c7c9440ee0fbcd1d6298ba17ac38bc9930abf7e645ab7d6ea19abaf317",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f0-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f0",
+      "sha256": "c08f201a63a9537de017f89f18f8d44798f483eacee4dc15a72399e764a5424a",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-AccountSet-require-destination.json": {
+      "family": "AccountSet",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "c04fb79de7a48a6cd787f02ddd87b5f970f0e87128737f39dad430c05c50b94e",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "bfba1b7a428823b1cff6b748917c1b31b6a6539d690e1650322a742e4859ed59",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "c815351e78fb69120e29c163a6b8f0cf9f9e071474cd5b7c3626caa4abe6fb27",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "f84b1175598a070b5818519bb04756b9c64ce3ae2cea8b3b72c84392c20025c8",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-TicketCreate-one-ticket.json": {
+      "family": "TicketCreate",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "74ba718a9149d7989b0a3103858dd9a345b426d3fca1eaf8bb3c85d9ae601027",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-TrustSet-gateway-usd-limit.json": {
+      "family": "TrustSet",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "ec1d841b3836f603f436de8a42421b71db1ac0f198d8644fe1a4eebb33921a20",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-VaultCreate-xrp-vault-create.json": {
+      "family": "VaultCreate",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "9da93236a3607b133ccd4a42f3c6c4a28e565d30a14d4111919a0bde1047297d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b0-f0-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c0-l1-b0-f0",
+      "sha256": "86aed68a97c39b68a4f817b1effe65f30267952a126f435b092d2bc69474bef0",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b0-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c0-l1-b0-f1",
+      "sha256": "2686c0872ff6b499c2b4e7b7b30e522dffc4a6df55bcc452302b6f78db87dd70",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f0-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f0",
+      "sha256": "4376c6bda18f5a1658df4de230ba3930243ff7417ff10c57e1dcd25b9e08cc96",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f0-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f0",
+      "sha256": "a1df23fb5ba0b6cb478a036c60a69cbf0e0e300a20099221ebc58562e8d9c8ae",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-AccountSet-require-destination.json": {
+      "family": "AccountSet",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "0d6604d9715b969b11a38148b1a560897cf9f4afc99c489b1e047532519c112c",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "785b75e1454a3251578c4c2afc557949dde433690799c008b3e54642b840e721",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "ee797cc61c3763a93debb5ae946c408f9b92769dfeef4db742f5683d567919d5",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "90f7d0d51f8b498032068ae2f5d320f9dcb0cf5c90b38b102c05c72743aa907b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-TicketCreate-one-ticket.json": {
+      "family": "TicketCreate",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "750764734bec9a511e22796353238f4da0e0ce134fd94c263446c83cf79cac2d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-TrustSet-gateway-usd-limit.json": {
+      "family": "TrustSet",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "acfc9c51e96c3969d0302883445d42b3738517ae9f99b8d5673f9a7858f71617",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-VaultCreate-xrp-vault-create.json": {
+      "family": "VaultCreate",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "7028120103bb1660a58a850c5c1e63523e500aac8f67334d89a3ed5981546de6",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b0-f0-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c1-l0-b0-f0",
+      "sha256": "0ca3e03e68ee0d1000e2af629fa81779ea4688ff54bb14d8e76980e844d3b6eb",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b0-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c1-l0-b0-f1",
+      "sha256": "36a2d993eaf7bc15ce766c11af8c7d316f2993c92b3fa87e27ea313ea48df2b3",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f0-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f0",
+      "sha256": "22275519dd55c90a9ecee8b953edb95b574c6e99d11b5caf6aadb300741dc8fd",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f0-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f0",
+      "sha256": "dedb595df46d3c1c894919e8689e4252a7ef7cc7716d7850c9cbe9747a648c72",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-AccountSet-require-destination.json": {
+      "family": "AccountSet",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "03a3cac65c1816fb3957eebd34c989533b37e574ee19e1a0c15fec45a447af07",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "8c8f52034d90017db5d76c69417fa39325a97a08966c33c5a9e6f724fabe78ff",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "f12cde6825e68cd8fc1be408f6f4581b3cff10c02cfb5e88f71f39ea11714dc7",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "5bba5bcbdd76a60f10545494cee42e7866e1840004be567f03595861c6b6267a",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-TicketCreate-one-ticket.json": {
+      "family": "TicketCreate",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "07efa9b6584f3ee0efaaf86add2fa5eb3d7e4af5de0c3e5d2f9cfad0ca8ba7ae",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-TrustSet-gateway-usd-limit.json": {
+      "family": "TrustSet",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "ea378b9bef5d1850631926249d15ccd110ab587bd589c77847a6b16124939a24",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-VaultCreate-xrp-vault-create.json": {
+      "family": "VaultCreate",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "341db712045c653c1070f60b5c274dc4c3996580a48566a6603be9da5635536c",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b0-f0-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b0-f0",
+      "sha256": "1b71cf71b4a6a13f867fef9d25df8642b7935eb7b8805737db70268522d9278a",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b0-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b0-f1",
+      "sha256": "01549e722bc27fca5481c28c354865023d56a6800b2bbae3a61e606b115603b6",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f0-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f0",
+      "sha256": "b3aae62cc26ad8dbfb7c6d2f3d51e186ee7b850ef6f09456de6ef004e5fd6e83",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f0-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f0",
+      "sha256": "0403e6369f4c6c3914049dae438d9d94949614df1455317bee89063e63f2332f",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-require-destination.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "93ad247ab343219230093463dae0b36509a3877d74ae1c7c60f52fb9a1362963",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Batch-canonical.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "8f708962f1c11ec4efda071be926fe789035e47783df7f5aa0c9d0c60ce5356b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Batch-poisoned-created-node-wrapper.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "09040e667906b0d1bae59e99e46878bff72500fbfc6713535dde8bb7e3610626",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-LoanBrokerSet-closed-ended-vault.json": {
+      "family": "LoanBrokerSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "c7187652715be970fb97f2eecacdb6f6b1abb851ea83d81bcec1abe413a9020b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-valid.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "4b53bdea5bef1da85f2390b2691a0afa08ffd70aad2c80906d6b8bfc1a03b4fa",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-TicketCreate-one-ticket.json": {
+      "family": "TicketCreate",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "4d4f89ff43a293075b8400972635805e0e29e236b537c2fb101127b48da4ab7a",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-TrustSet-gateway-usd-limit.json": {
+      "family": "TrustSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "ff08b3544a6058085bab5ca193eea24f726f76ca5d2ea810128d69ffc8980adf",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-VaultCreate-xrp-vault-create.json": {
+      "family": "VaultCreate",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "2cabe1551d28117a6d6f25518cce9494d1500dc841944312e0062e780db58fbc",
+      "suite": "app/StrictOracleRecorder"
+    }
+  },
+  "oracle_repository": "XRPLF/xrpld-private",
+  "recorder_commit": "3a61cca73b9e4eda88bc8444793c1c2e52576aab",
+  "recorder_sources": {
+    "scripts/oracle/record-v4.py": "83d2e25eb7fe9acc92988ea82ccc1f71dde31b272fe04dd5d98c10d9d67d8bbf",
+    "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
+    "scripts/oracle/strict-corpus-config.json": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
+    "scripts/oracle/strict_recorder.cpp": "5451931911f0c45b788f0f249d694ac94fec7f77863a0bbc7dd5e23a86f9fea6"
+  },
+  "rippled_commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+  "rippled_tag": "3.4.1",
+  "schema": 3
+}

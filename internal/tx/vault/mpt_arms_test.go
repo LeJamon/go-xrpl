@@ -138,9 +138,7 @@ func TestRemoveEmptyShareMPToken_LockedGate(t *testing.T) {
 }
 
 // TestSendMPTAsset_MaximumAmountCap covers the issuer-as-sender MaximumAmount cap.
-// The cap mirrors rippled's unconditional single-send rippleSendMPT check, so it
-// fires in both amendment states; the fixCleanup3_1_3 gate only refines the
-// multi-destination aggregate, which go-xrpl reaches via committed per-leg sends.
+// The single-send cap applies in both amendment states.
 func TestSendMPTAsset_MaximumAmountCap(t *testing.T) {
 	var issuerID [20]byte
 	for i := range issuerID {

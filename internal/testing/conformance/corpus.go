@@ -21,15 +21,14 @@ import (
 )
 
 const (
-	// The release gate is deliberately pinned to the final rippled source. A
-	// corpus from an RC or an older release is useful for debugging, but cannot
-	// prove final-release conformance.
-	expectedRippledTag     = "3.4.0"
-	expectedRippledCommit  = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
-	expectedRippledRepo    = "XRPLF/rippled"
-	expectedFixtureVersion = "v3"
-	expectedManifestSchema = 2
-	corpusManifestName     = "manifest.json"
+	// Legacy v3 recordings are retained for diagnostic contract tests only.
+	// Required conformance uses the signed v4 snapshot corpus.
+	legacyRippledTag     = "3.4.0"
+	legacyRippledCommit  = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
+	legacyRippledRepo    = "XRPLF/rippled"
+	legacyFixtureVersion = "v3"
+	legacyManifestSchema = 2
+	corpusManifestName   = "manifest.json"
 )
 
 var (
@@ -76,11 +75,8 @@ func conformanceCorpusRequired() bool {
 	return os.Getenv("GOXRPL_CONFORMANCE_REQUIRED") != "" || strings.TrimSpace(os.Getenv("GOXRPL_FIXTURES_DIR")) != ""
 }
 
-// resolveCorpus is shared by TestConformance and FuzzEngineDifferential. An
-// unset path is the one optional case: ordinary package tests may run without
-// the large external corpus. Once a path is supplied, every validation error
-// is fatal to the caller, including a missing path.
-func resolveCorpus(required bool) (*corpus, error) {
+// resolveLegacyCorpus is used only by legacy harness contract tests.
+func resolveLegacyCorpus(required bool) (*corpus, error) {
 	configured := strings.TrimSpace(os.Getenv("GOXRPL_FIXTURES_DIR"))
 	if configured == "" {
 		if required {
@@ -93,10 +89,10 @@ func resolveCorpus(required bool) (*corpus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve GOXRPL_FIXTURES_DIR %q: %w", configured, err)
 	}
-	return resolveCorpusPath(root)
+	return resolveLegacyCorpusPath(root)
 }
 
-func resolveCorpusPath(root string) (*corpus, error) {
+func resolveLegacyCorpusPath(root string) (*corpus, error) {
 	corpusRoot, err := os.OpenRoot(root)
 	if err != nil {
 		return nil, fmt.Errorf("open conformance corpus %q: %w", root, err)
@@ -278,20 +274,20 @@ func decodeCorpusManifest(data []byte) (corpusManifest, error) {
 }
 
 func validateCorpusManifest(manifest corpusManifest) error {
-	if manifest.Schema != expectedManifestSchema {
-		return fmt.Errorf("schema=%d, want %d", manifest.Schema, expectedManifestSchema)
+	if manifest.Schema != legacyManifestSchema {
+		return fmt.Errorf("schema=%d, want %d", manifest.Schema, legacyManifestSchema)
 	}
-	if normalizeFixtureVersion(manifest.FixtureVersion) != expectedFixtureVersion {
-		return fmt.Errorf("fixture_version=%q, want %q", manifest.FixtureVersion, expectedFixtureVersion)
+	if normalizeFixtureVersion(manifest.FixtureVersion) != legacyFixtureVersion {
+		return fmt.Errorf("fixture_version=%q, want %q", manifest.FixtureVersion, legacyFixtureVersion)
 	}
-	if normalizeOracleRepository(manifest.OracleRepository) != strings.ToLower(expectedRippledRepo) {
-		return fmt.Errorf("oracle_repository=%q, want %q", manifest.OracleRepository, expectedRippledRepo)
+	if normalizeOracleRepository(manifest.OracleRepository) != strings.ToLower(legacyRippledRepo) {
+		return fmt.Errorf("oracle_repository=%q, want %q", manifest.OracleRepository, legacyRippledRepo)
 	}
-	if normalizeRippledVersion(manifest.RippledTag) != expectedRippledTag {
-		return fmt.Errorf("rippled_tag=%q, want %q", manifest.RippledTag, expectedRippledTag)
+	if normalizeRippledVersion(manifest.RippledTag) != legacyRippledTag {
+		return fmt.Errorf("rippled_tag=%q, want %q", manifest.RippledTag, legacyRippledTag)
 	}
-	if !strings.EqualFold(manifest.RippledCommit, expectedRippledCommit) {
-		return fmt.Errorf("rippled_commit=%q, want %q", manifest.RippledCommit, expectedRippledCommit)
+	if !strings.EqualFold(manifest.RippledCommit, legacyRippledCommit) {
+		return fmt.Errorf("rippled_commit=%q, want %q", manifest.RippledCommit, legacyRippledCommit)
 	}
 	if !validGitCommit(manifest.RecorderCommit) {
 		return fmt.Errorf("recorder_commit=%q is not a full git commit", manifest.RecorderCommit)
@@ -389,6 +385,11 @@ func normalizeFixtureVersion(version string) string {
 }
 
 func decodeStrictJSON(data []byte, value any) error {
+	keys := json.NewDecoder(bytes.NewReader(data))
+	keys.UseNumber()
+	if err := checkJSONKeys(keys); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
@@ -404,6 +405,39 @@ func decodeStrictJSON(data []byte, value any) error {
 	return nil
 }
 
+func checkJSONKeys(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		if delimiter == '{' {
+			key, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok {
+				return errors.New("JSON object key must be a string")
+			}
+			if seen[name] {
+				return fmt.Errorf("duplicate JSON field %q", name)
+			}
+			seen[name] = true
+		}
+		if err := checkJSONKeys(decoder); err != nil {
+			return err
+		}
+	}
+	_, err = decoder.Token()
+	return err
+}
+
 func decodeFixture(data []byte) (Fixture, error) {
 	var fixture Fixture
 	if err := decodeStrictJSON(data, &fixture); err != nil {
@@ -416,8 +450,8 @@ func validateFixture(fixture *Fixture, fixturePath string) error {
 	if fixture.RippledVersion == "" {
 		return fmt.Errorf("fixture %q: missing rippled_version", fixturePath)
 	}
-	if normalizeRippledVersion(fixture.RippledVersion) != expectedRippledTag {
-		return fmt.Errorf("fixture %q: rippled_version=%q, want %q", fixturePath, fixture.RippledVersion, expectedRippledTag)
+	if normalizeRippledVersion(fixture.RippledVersion) != legacyRippledTag {
+		return fmt.Errorf("fixture %q: rippled_version=%q, want %q", fixturePath, fixture.RippledVersion, legacyRippledTag)
 	}
 	if strings.TrimSpace(fixture.Suite) == "" {
 		return fmt.Errorf("fixture %q: missing suite", fixturePath)
@@ -593,7 +627,7 @@ func validateStep(step *Step, fixturePath string, index int) error {
 
 func validateResultExpectation(expected *ResultExpectation, terName, context string) error {
 	if expected == nil {
-		return fmt.Errorf("%s: expected_result is required by fixture version %s", context, expectedFixtureVersion)
+		return fmt.Errorf("%s: expected_result is required by fixture version %s", context, legacyFixtureVersion)
 	}
 	if expected.Boundary == nil || strings.TrimSpace(*expected.Boundary) == "" {
 		return fmt.Errorf("%s: expected_result.boundary is required", context)

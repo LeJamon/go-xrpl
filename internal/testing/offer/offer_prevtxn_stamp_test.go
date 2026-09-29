@@ -34,6 +34,7 @@ import (
 // near-maximum magnitude. This test constructs exactly that case.
 func TestOffer_PartialConsumeRoundsBack_NoGhostModifiedNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 
 	gw := jtx.NewAccount("gateway")
 	mm := jtx.NewAccount("marketmaker")

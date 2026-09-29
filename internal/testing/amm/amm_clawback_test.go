@@ -502,6 +502,9 @@ func setupAMMClawbackHolderExhaustionPool(t *testing.T, fixAMMv1_3, largeMantiss
 	t.Helper()
 
 	env := newPinnedAMMTestEnv(t)
+	// The expected serialized line vectors are closed-ledger state. Apply every
+	// setup and clawback transaction with closed-view threading enabled.
+	env.SetOpenLedger(false)
 	if !largeMantissa {
 		env.DisableFeature("SingleAssetVault")
 		env.DisableFeature("LendingProtocol")

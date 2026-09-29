@@ -37,6 +37,7 @@ func TestPaymentFeeSponsorDestinationNetZero(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			env, source, _, sponsor, _ := sponsorEnv(t)
+			env.SetOpenLedger(false)
 			sourceKey := keylet.Account(source.ID)
 			sponsorKey := keylet.Account(sponsor.ID)
 
@@ -118,6 +119,7 @@ func TestPaymentFeeSponsorDestinationNetZero(t *testing.T) {
 
 func TestPaymentDelegateDestinationNetZero(t *testing.T) {
 	env, source, _, _, delegate := sponsorEnv(t)
+	env.SetOpenLedger(false)
 	grantDelegatePermission(t, env, source, delegate, "Payment")
 
 	sourceKey := keylet.Account(source.ID)
@@ -166,6 +168,7 @@ func TestPaymentDelegateDestinationNetZero(t *testing.T) {
 
 func TestPaymentFeeSponsorDestinationNetZeroClearsPasswordSpent(t *testing.T) {
 	env, source, _, sponsor, _ := sponsorEnv(t)
+	env.SetOpenLedger(false)
 	sourceKey := keylet.Account(source.ID)
 	sponsorKey := keylet.Account(sponsor.ID)
 
