@@ -50,6 +50,8 @@ func TestReproNoOpModify_NoGhostModifiedNode(t *testing.T) {
 	jtx.RequireTxSuccess(t, first)
 	env.Close()
 
+	env.SetOpenLedger(false)
+
 	// 2nd TrustSet — same limit, same issuer. This is the no-op modify.
 	// The RippleState's binary state is unchanged; only the sender's
 	// AccountRoot (Sequence/Balance) should appear in meta.

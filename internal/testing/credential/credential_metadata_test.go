@@ -16,7 +16,6 @@ func TestCredentialLifecycleMetadata(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.Fund(issuer, subject)
 	env.Close()
-	// Metadata threading is emitted by closed-ledger applies.
 	env.SetOpenLedger(false)
 
 	const credentialType = "meta"

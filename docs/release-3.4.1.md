@@ -43,7 +43,7 @@ in the private oracle repository.
 | `src/test/app/Batch_test.cpp` | Wrapper regression coverage; signed oracle fixtures in `internal/testing/batch/testdata/wrapper-oracle`. |
 | `include/xrpl/tx/invariants/InvariantCheck.h` | Wide XRP accumulator; #2012 / PR #2019, merged; Go uses `math/big.Int`. |
 | `src/libxrpl/tx/invariants/InvariantCheck.cpp` | Comment-only companion change; no separate behavior. |
-| `src/libxrpl/ledger/helpers/TokenHelpers.cpp` | Aggregate XRP/MPT transfer checks; #2014 / PR #2021, integration pending. |
+| `src/libxrpl/ledger/helpers/TokenHelpers.cpp` | Aggregate XRP/MPT transfer checks; #2014 / PR #2021, merged. |
 | `src/libxrpl/protocol/BuildInfo.cpp` | rippled release string only; no Go product-version change. |
 | `.github/workflows/reusable-package.yml` | Nexus upload endpoint; no protocol effect and no Go build-system port required. |
 
@@ -97,11 +97,11 @@ just test-pkg './amendment ./internal/testutil/rippled ./codec/binarycodec/defin
 | `codec/binarycodec/definitions/final_inventory_test.go` | Private 3.4.1 file hashes and clean pinned source selection. |
 | `ledger/entry/flags_test.go`, schema drift/style tests | Same verified 3.4.1 source-input contract. |
 | `internal/rpc/server_definitions_test.go`, fixture and generator | Generated content unchanged; private provenance verified against source and the package runtime. |
-| `scripts/acceptance/final-evidence.sh` | Private identities are pinned, and historical producers are rejected as final evidence. Strict corpus execution still depends on #2015. |
+| `scripts/acceptance/final-evidence.sh` | Private identities are pinned, and historical producers are rejected as final evidence. The required `conformance-final` job executes the committed signed v4 corpus and records reconciled counts. |
 | `scripts/peer-interop/Dockerfile` | Pin the official 3.4.1 package and extracted binary SHA-256; require an amd64 image. `scripts/acceptance/oracle-image.sh` checks binary/version/commit and records the immutable image ID used by live tests. |
-| `justfile` | `test-docker` builds/verifies the pinned private 3.4.1 image and runs peer/manifest, ledger-node and validator-list interop against its immutable ID. #2015 supplies the strict 3.4.1 corpus recipes. |
+| `justfile` | `test-docker` builds/verifies the pinned private 3.4.1 image and runs peer/manifest, ledger-node and validator-list interop against its immutable ID. `conformance` and `fuzz-differential` use the strict signed 3.4.1 corpus. |
 | `CLAUDE.md`, `CONTRIBUTING.md` | Private pinned source is the working reference. |
-| `README.md`, `docs/conformance.md` | State the release target and bounded evidence; #2015 supplies the committed corpus documentation. |
+| `README.md`, `docs/conformance.md` | State the release target, committed corpus contract and bounded evidence. |
 | `version/version.go` | Independent Go software version; preserve it. |
 | Historical fixtures, release records, market/native-backend notes | Keep original producer identities; inherited evidence needs an explicit current check before contributing to sign-off. |
 
@@ -140,7 +140,7 @@ replace testing the actual shipped daemon/image.
 
 ## Final closure checklist
 
-- [ ] Integrate #2014, #2015 and #2016 into `v3.4.1`; recheck all sibling and
+- [ ] Integrate #2015 and #2016 into `v3.4.1`; recheck all sibling and
   historical blockers against that refreshed candidate.
 - [ ] Run peer/manifest interop and RPC/submission/consensus smoke against a
   binary or image proven to come from the pinned private oracle.

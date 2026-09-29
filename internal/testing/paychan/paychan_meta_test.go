@@ -65,6 +65,8 @@ func TestPayChanCreate_Meta_NewFields(t *testing.T) {
 	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
+	env.SetOpenLedger(false)
+
 	pk := alice.PublicKeyHex()
 	res := env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build())
 	jtx.RequireTxSuccess(t, res)
@@ -120,6 +122,8 @@ func TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
 
+	env.SetOpenLedger(false)
+
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
 
 	// Owner submits a claim with no Balance, no Amount, no flags: a no-op on
@@ -159,6 +163,8 @@ func TestPayChanFund_Meta_PreviousAmount(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
 
+	env.SetOpenLedger(false)
+
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
 	res := env.Submit(ChannelFund(alice, chanIDHex, xrp(1000)).Build())
 	jtx.RequireTxSuccess(t, res)
@@ -195,6 +201,8 @@ func TestPayChanClaim_Meta_PreviousBalance(t *testing.T) {
 		ChannelClaim(bob, chanIDHex).Balance(xrp(100)).Amount(xrp(100)).Signature(sig1).PublicKey(pk).Build()))
 	env.Close()
 	require.Equal(t, uint64(xrp(100)), chanBalance(env, chanK))
+
+	env.SetOpenLedger(false)
 
 	sig2 := signClaimAuth(alice, chanIDHex, uint64(xrp(250)))
 	res := env.Submit(
@@ -245,6 +253,8 @@ func TestPayChanClaim_Meta_ImmediateCloseUsesClaimedBalance(t *testing.T) {
 			chanK := chanKeylet(alice, bob, createSeq)
 			jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, drops(10000), 100, pk).Build()))
 			env.Close()
+
+			env.SetOpenLedger(false)
 
 			chanIDHex := hex.EncodeToString(chanK.Key[:])
 			claim := ChannelClaim(alice, chanIDHex).Balance(drops(tc.balance)).Close()

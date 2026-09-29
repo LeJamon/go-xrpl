@@ -38,7 +38,6 @@ func testSetValidInitial(t *testing.T, fixEmptyDID bool) {
 	}
 	env.Fund(accounts...)
 	env.Close()
-	// Transaction threading is committed during closed-ledger application.
 	env.SetOpenLedger(false)
 
 	for _, tc := range tests {

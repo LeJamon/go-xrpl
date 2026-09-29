@@ -60,6 +60,8 @@ func TestPayment_NetZeroOwnerCount_EmitsBareThreadedNode(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(OfferCreate(mm, jtx.USD(gw, 100), jtx.EUR(gw, 100)).Build()))
 	env.Close()
 
+	env.SetOpenLedger(false)
+
 	mmAcctKL := keylet.Account(mm.ID)
 	offerKey := keylet.Offer(mm.ID, mmOfferSeq).Key
 	lineKey := keylet.Line(mm.ID, gw.ID, "USD").Key
