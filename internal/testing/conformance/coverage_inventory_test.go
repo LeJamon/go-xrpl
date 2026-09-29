@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 )
@@ -41,9 +43,23 @@ type coverageField struct {
 }
 
 type coverageCommonFields struct {
-	Oracle []coverageField `json:"oracle"`
-	Go     []coverageField `json:"go"`
-	Match  bool            `json:"match"`
+	Oracle       []coverageField            `json:"oracle"`
+	Go           []coverageField            `json:"go"`
+	StageMapping []coverageCommonFieldStage `json:"stage_mapping"`
+}
+
+type coverageCommonFieldStage struct {
+	Name            string              `json:"name"`
+	Classification  string              `json:"classification"`
+	Stages          []string            `json:"stages"`
+	Go              []coverageSourceRef `json:"go"`
+	Oracle          []coverageSourceRef `json:"oracle"`
+	UnexecutedEdges string              `json:"unexecuted_edges"`
+}
+
+type coverageSourceRef struct {
+	Path    string   `json:"path"`
+	Symbols []string `json:"symbols"`
 }
 
 type coverageAmendment struct {
@@ -54,17 +70,18 @@ type coverageAmendment struct {
 }
 
 type coverageAmendmentSide struct {
-	Name      string  `json:"name"`
-	Kind      string  `json:"kind"`
-	Supported *string `json:"supported"`
+	Name             string  `json:"name"`
+	Kind             string  `json:"kind"`
+	Supported        *string `json:"supported"`
+	SupportCondition string  `json:"support_condition"`
 }
 
 type coverageTransaction struct {
-	Name       string                     `json:"name"`
-	Code       uint16                     `json:"code"`
-	GoFields   []coverageField            `json:"go_fields"`
-	FieldMatch bool                       `json:"field_templates_match"`
-	Status     map[string]json.RawMessage `json:"status"`
+	Name         string                     `json:"name"`
+	Code         uint16                     `json:"code"`
+	OracleFields []coverageField            `json:"oracle_fields"`
+	GoFields     []coverageField            `json:"go_fields"`
+	Status       map[string]json.RawMessage `json:"status"`
 }
 
 func readCoverageInventory(t *testing.T) coverageInventory {
@@ -126,9 +143,6 @@ func checkInventoryCounts(t *testing.T, inventory coverageInventory) {
 
 func checkCommonFields(t *testing.T, fields coverageCommonFields) {
 	t.Helper()
-	if !fields.Match {
-		t.Fatal("inventory marks Go/oracle common fields as different")
-	}
 	if len(fields.Oracle) != 20 || len(fields.Go) != 20 {
 		t.Fatalf("common field counts = oracle %d/Go %d, want 20/20", len(fields.Oracle), len(fields.Go))
 	}
@@ -143,6 +157,30 @@ func checkCommonFields(t *testing.T, fields coverageCommonFields) {
 	}
 	if !equalCoverageFields(actual, fields.Go) {
 		t.Fatalf("runtime common fields differ from inventory: got %v, want %v", actual, fields.Go)
+	}
+
+	if len(fields.StageMapping) != len(fields.Oracle) {
+		t.Fatalf("common field stage mapping rows = %d, want %d", len(fields.StageMapping), len(fields.Oracle))
+	}
+	wantNames := make(map[string]bool, len(fields.Oracle))
+	for _, field := range fields.Oracle {
+		wantNames[field.Name] = true
+	}
+	seenNames := make(map[string]bool, len(fields.StageMapping))
+	for _, row := range fields.StageMapping {
+		if row.Name == "" || seenNames[row.Name] || !wantNames[row.Name] {
+			t.Errorf("invalid or duplicate common field stage mapping %q", row.Name)
+		}
+		seenNames[row.Name] = true
+		if row.Classification == "" || len(row.Stages) == 0 || row.UnexecutedEdges == "" {
+			t.Errorf("common field %q has incomplete stage mapping", row.Name)
+		}
+		if len(row.Go) == 0 || len(row.Oracle) == 0 {
+			t.Errorf("common field %q has incomplete source mapping", row.Name)
+		}
+	}
+	if len(seenNames) != len(wantNames) {
+		t.Errorf("common field stage mapping names = %d, want %d", len(seenNames), len(wantNames))
 	}
 }
 
@@ -206,7 +244,11 @@ func checkAmendmentRegistry(t *testing.T, rows []coverageAmendment) {
 			t.Errorf("amendment %q has no support status", feature.Name)
 			continue
 		}
-		if *row.Go.Supported != "conditional" {
+		if *row.Go.Supported != "conditional" && row.Go.SupportCondition != "" {
+			t.Errorf("amendment %q has a condition for support state %q: %q", feature.Name, *row.Go.Supported, row.Go.SupportCondition)
+		}
+		switch *row.Go.Supported {
+		case "yes", "no":
 			want := "no"
 			if feature.IsSupported() {
 				want = "yes"
@@ -214,6 +256,16 @@ func checkAmendmentRegistry(t *testing.T, rows []coverageAmendment) {
 			if *row.Go.Supported != want {
 				t.Errorf("amendment %q support = %q, runtime is %q", feature.Name, *row.Go.Supported, want)
 			}
+		case "conditional":
+			if feature.Name != "ConfidentialTransfer" || row.Go.SupportCondition != "mptcrypto.Available()" {
+				t.Errorf("amendment %q has unknown conditional support %q", feature.Name, row.Go.SupportCondition)
+				continue
+			}
+			if feature.IsSupported() != mptcrypto.Available() {
+				t.Errorf("amendment %q support does not match mptcrypto.Available()", feature.Name)
+			}
+		default:
+			t.Errorf("amendment %q has unknown support state %q", feature.Name, *row.Go.Supported)
 		}
 	}
 }
@@ -281,7 +333,10 @@ func checkTransactionRegistry(t *testing.T, rows []coverageTransaction) {
 		for _, field := range fields {
 			actual = append(actual, coverageField{Name: field.Name, Style: coverageStyle(field.Style)})
 		}
-		if !equalCoverageFields(actual, row.GoFields) || !row.FieldMatch {
+		if !equalCoverageFields(row.OracleFields, row.GoFields) {
+			t.Errorf("transaction %s oracle and Go fields differ", name)
+		}
+		if !equalCoverageFields(actual, row.GoFields) {
 			t.Errorf("transaction %s template differs from inventory", name)
 		}
 	}
@@ -294,7 +349,7 @@ func checkTransactionStatus(t *testing.T, row coverageTransaction) {
 		"go_registered",
 		"go_supported",
 		"pseudo",
-		"conformance_excluded",
+		"legacy_conformance_excluded",
 		"executed_in_checked_in_corpus",
 		"oracle_comparison_executed",
 	} {
@@ -312,15 +367,15 @@ func checkTransactionStatus(t *testing.T, row coverageTransaction) {
 		t.Errorf("base inventory transaction %s claims execution evidence", row.Name)
 	}
 	var exclusionReason *string
-	raw, ok := row.Status["conformance_exclusion_reason"]
+	raw, ok := row.Status["legacy_conformance_exclusion_reason"]
 	if !ok {
-		t.Errorf("transaction %s is missing status %q", row.Name, "conformance_exclusion_reason")
+		t.Errorf("transaction %s is missing status %q", row.Name, "legacy_conformance_exclusion_reason")
 	} else if string(raw) != "null" {
 		if err := json.Unmarshal(raw, &exclusionReason); err != nil {
 			t.Errorf("transaction %s exclusion reason is not nullable string: %v", row.Name, err)
 		}
 	}
-	if coverageStatusBool(t, row, "conformance_excluded") != (exclusionReason != nil && *exclusionReason != "") {
+	if coverageStatusBool(t, row, "legacy_conformance_excluded") != (exclusionReason != nil && *exclusionReason != "") {
 		t.Errorf("transaction %s exclusion status/reason disagree", row.Name)
 	}
 }
@@ -352,12 +407,5 @@ func coverageStyle(style int) string {
 }
 
 func equalCoverageFields(left, right []coverageField) bool {
-	return len(left) == len(right) && func() bool {
-		for index := range left {
-			if left[index] != right[index] {
-				return false
-			}
-		}
-		return true
-	}()
+	return slices.Equal(left, right)
 }

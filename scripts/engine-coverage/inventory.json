@@ -10,7 +10,12 @@
       "include/xrpl/protocol/detail/features.macro": "1708df2ea0150a3105f13f7f39c42c798ac5addae9833c073fe6df9e9e17208b"
     }
   },
-  "go_base_commit": "02f4f17c7d1c1b5676b112ddfa669655bcff4415",
+  "go_base_commit": "b002da57fb415b40a1150f0e0dc82f764a340556",
+  "go_base_commit_provenance": {
+    "revision": "b002da57fb415b40a1150f0e0dc82f764a340556",
+    "protocol_base": "02f4f17c7d1c1b5676b112ddfa669655bcff4415",
+    "description": "Go source revision after the prerequisite #2021/#2022 merge; execution evidence remains separate."
+  },
   "counts": {
     "oracle_transactions": 82,
     "go_runtime_transaction_rows": 82,
@@ -327,7 +332,825 @@
         "style": "optional"
       }
     ],
-    "match": true
+    "stage_mapping": [
+      {
+        "name": "TransactionType",
+        "classification": "wire + dispatch/template",
+        "stages": [
+          "decode",
+          "dispatch",
+          "preflight"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/registry.go",
+            "symbols": [
+              "FromJSON",
+              "NewFromType"
+            ]
+          },
+          {
+            "path": "internal/tx/template.go",
+            "symbols": [
+              "commonFields",
+              "FormatCommonFields"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::STTx",
+              "getTxFormat"
+            ]
+          },
+          {
+            "path": "src/libxrpl/protocol/TxFormats.cpp",
+            "symbols": [
+              "TxFormats::getCommonFields"
+            ]
+          }
+        ],
+        "behavior": "Selects the registered type and its merged serialization template.",
+        "unexecuted_edges": "Unknown-type parsing, every format rejection, and every type dispatch branch require runtime evidence."
+      },
+      {
+        "name": "Flags",
+        "classification": "preflight flag mask",
+        "stages": [
+          "preflight0",
+          "type-specific preflight",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.preflight0",
+              "checkFlagsMask"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "preflight0"
+            ]
+          }
+        ],
+        "behavior": "The engine checks the universal/type flag mask before type-specific work; handlers may then interpret permitted bits.",
+        "unexecuted_edges": "Invalid-mask precedence and each type's permitted flag behavior are not established by registry rows."
+      },
+      {
+        "name": "SourceTag",
+        "classification": "wire + type-specific ledger effect",
+        "stages": [
+          "serialization",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/transaction.go",
+            "symbols": [
+              "Common.ToMap"
+            ]
+          },
+          {
+            "path": "internal/tx/paychan/helpers.go",
+            "symbols": [
+              "newPayChannelData"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/transactors/check/CheckCreate.cpp",
+            "symbols": [
+              "CheckCreate::doApply"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/transactors/escrow/EscrowCreate.cpp",
+            "symbols": [
+              "EscrowCreate::doApply"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/transactors/payment_channel/PaymentChannelCreate.cpp",
+            "symbols": [
+              "PaymentChannelCreate::doApply"
+            ]
+          }
+        ],
+        "behavior": "The common template carries the value; selected handlers copy it to created ledger objects.",
+        "unexecuted_edges": "Only the listed handler families consume it; registry/codec evidence does not cover absent/present apply outcomes."
+      },
+      {
+        "name": "Account",
+        "classification": "identity + preflight/preclaim gate",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "signature",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "checkAccountPresent"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.preclaimLoadAccount",
+              "Engine.checkSign"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::preflight1",
+              "Transactor::checkSign"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/applySteps.cpp",
+            "symbols": [
+              "invokePreclaim"
+            ]
+          }
+        ],
+        "behavior": "Supplies the source identity used to load state, authorize the signature, charge fees, and apply changes.",
+        "unexecuted_edges": "Zero-account, missing-account, delegated-account, and pseudo-account paths need explicit cases."
+      },
+      {
+        "name": "Sequence",
+        "classification": "sequence proxy + account mutation",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.preflightSequence"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkSeqProxy"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/do_apply.go",
+            "symbols": [
+              "Engine.applyPreApplyAccountChanges"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::getSeqProxy"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::checkSeqProxy",
+              "Transactor::consumeSeqProxy"
+            ]
+          }
+        ],
+        "behavior": "A nonzero sequence selects the normal proxy and is consumed before the handler runs.",
+        "unexecuted_edges": "Sequence mismatch, zero sequence, ticket conflict, retry, and sequence increment need execution evidence."
+      },
+      {
+        "name": "PreviousTxnID",
+        "classification": "wire + ledger-state metadata",
+        "stages": [
+          "serialization",
+          "ledger metadata"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/transaction.go",
+            "symbols": [
+              "Common.ToMap"
+            ]
+          },
+          {
+            "path": "internal/tx/metadata.go",
+            "symbols": [
+              "buildAffectedNodeInner"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STLedgerEntry.cpp",
+            "symbols": [
+              "STLedgerEntry::thread"
+            ]
+          },
+          {
+            "path": "src/libxrpl/ledger/ApplyStateTable.cpp",
+            "symbols": [
+              "ApplyStateTable::apply"
+            ]
+          }
+        ],
+        "behavior": "It is a common transaction field and also participates in ledger-entry metadata threading; it is not a common transaction engine gate.",
+        "unexecuted_edges": "Transaction presence, ledger-object stamping, and zero-hash omission are separate cases and are not inferred from format parity."
+      },
+      {
+        "name": "LastLedgerSequence",
+        "classification": "preclaim expiry gate",
+        "stages": [
+          "preclaim"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkPriorTxAndLastLedger"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::checkPriorTxAndLastLedger"
+            ]
+          }
+        ],
+        "behavior": "Preclaim rejects a transaction once the current ledger is past the declared limit.",
+        "unexecuted_edges": "Boundary equality, expired transactions, and interaction with AccountTxnID need runtime cases."
+      },
+      {
+        "name": "AccountTxnID",
+        "classification": "preclaim guard + apply account tracking",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.preflightSequence"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkPriorTxAndLastLedger"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/do_apply.go",
+            "symbols": [
+              "Engine.applyPreApplyAccountChanges"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::preflight1",
+              "Transactor::checkPriorTxAndLastLedger",
+              "Transactor::apply"
+            ]
+          }
+        ],
+        "behavior": "A supplied prior hash is checked in preclaim; enabled account tracking is updated during apply.",
+        "unexecuted_edges": "Mismatch, ticket prohibition, enabled tracking, and successful hash update need separate execution evidence."
+      },
+      {
+        "name": "Fee",
+        "classification": "fee validation + account mutation",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "apply",
+          "invariants"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.validateFee"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkFee"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/do_apply.go",
+            "symbols": [
+              "Engine.applyPreApplyAccountChanges"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::preflight1",
+              "Transactor::checkFee",
+              "Transactor::payFee",
+              "Transactor::apply"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/applySteps.cpp",
+            "symbols": [
+              "calculateBaseFee",
+              "doApply"
+            ]
+          }
+        ],
+        "behavior": "The fee is structurally validated, compared with the base fee, charged to the selected payer, and checked by invariants.",
+        "unexecuted_edges": "Malformed, below-floor, sponsored, retry, tec, and invariant fee outcomes are not implied by success fixtures."
+      },
+      {
+        "name": "OperationLimit",
+        "classification": "wire/template only in this oracle",
+        "stages": [
+          "serialization",
+          "template"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/template.go",
+            "symbols": [
+              "commonFields",
+              "FormatCommonFields"
+            ]
+          },
+          {
+            "path": "internal/tx/transaction.go",
+            "symbols": [
+              "Common.ToMap"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/TxFormats.cpp",
+            "symbols": [
+              "TxFormats::getCommonFields"
+            ]
+          }
+        ],
+        "behavior": "The field is accepted as a common wire/template field; no v3.4.1 common engine check or mutation was found.",
+        "unexecuted_edges": "Presence, value bounds, signing, and any type-specific interpretation remain unexecuted; do not call it behaviorally covered."
+      },
+      {
+        "name": "Memos",
+        "classification": "local submission check",
+        "stages": [
+          "serialization",
+          "local checks"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/local_checks.go",
+            "symbols": [
+              "PassesTransactionLocalChecks",
+              "LocalChecksFailureReason",
+              "serializedMemosLength"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "passesLocalChecks",
+              "isMemoOkay"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/apply.cpp",
+            "symbols": [
+              "checkValidity"
+            ]
+          }
+        ],
+        "behavior": "Memo shape, hex, URL-character, and serialized-size checks occur at local submission validation before the consensus engine.",
+        "unexecuted_edges": "Oversize, malformed child fields, parser boundaries, and local-check cache behavior require direct submission tests."
+      },
+      {
+        "name": "SigningPubKey",
+        "classification": "signature shape + verification",
+        "stages": [
+          "preflight1",
+          "preflight2",
+          "preclaim"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "checkSigningKeyShape",
+              "Engine.verifySignatures"
+            ]
+          },
+          {
+            "path": "internal/tx/sign/signature.go",
+            "symbols": [
+              "VerifySignature"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "preflightCheckSigningKey",
+              "Transactor::preflight2",
+              "Transactor::checkSign"
+            ]
+          }
+        ],
+        "behavior": "The key shape is checked before cryptographic validity; account authorization is checked after ledger state is available.",
+        "unexecuted_edges": "Empty key, malformed key, master/regular key, delegated signer, and dry-run cases need explicit evidence."
+      },
+      {
+        "name": "TicketSequence",
+        "classification": "ticket sequence proxy + consumption",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.preflightSequence"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkSeqProxy"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/do_apply.go",
+            "symbols": [
+              "Engine.consumeTicket"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::getSeqProxy"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::checkSeqProxy",
+              "Transactor::consumeSeqProxy"
+            ]
+          }
+        ],
+        "behavior": "TicketSequence selects and consumes a ticket instead of incrementing the account sequence.",
+        "unexecuted_edges": "Missing ticket, wrong owner, simultaneous Sequence, recovery, and retry paths need runtime cases."
+      },
+      {
+        "name": "TxnSignature",
+        "classification": "single-signature verification",
+        "stages": [
+          "preflight2",
+          "preclaim"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.verifySignatures"
+            ]
+          },
+          {
+            "path": "internal/tx/sign/signature.go",
+            "symbols": [
+              "VerifySignature"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::checkSign",
+              "STTx::checkSingleSign"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::preflight2",
+              "Transactor::checkSign"
+            ]
+          }
+        ],
+        "behavior": "The signature is checked in the crypto preflight stage and account authorization is checked in preclaim.",
+        "unexecuted_edges": "Bad signature, canonicality, missing signature, delegated role, and role-prefix amendment paths remain distinct."
+      },
+      {
+        "name": "Signers",
+        "classification": "multi-signature verification",
+        "stages": [
+          "preflight2",
+          "preclaim"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkMultiSign",
+              "Engine.checkMultiSignForAccount"
+            ]
+          },
+          {
+            "path": "internal/tx/sign/signature.go",
+            "symbols": [
+              "VerifyMultiSignatureCrypto",
+              "VerifyMultiSignature"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::checkSign",
+              "STTx::checkMultiSign"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::checkSign",
+              "Transactor::checkMultiSign"
+            ]
+          },
+          {
+            "path": "src/libxrpl/protocol/Sign.cpp",
+            "symbols": [
+              "buildMultiSigningData",
+              "startMultiSigningData"
+            ]
+          }
+        ],
+        "behavior": "Crypto checks run before the ledger signer-list/quorum checks; signer data also changes the signing payload.",
+        "unexecuted_edges": "Ordering, quorum, unauthorized signer, duplicate signer, delegated signer, and sponsor multisign cases need execution evidence."
+      },
+      {
+        "name": "NetworkID",
+        "classification": "network preflight gate",
+        "stages": [
+          "preflight0"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "Engine.validateNetworkID"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "preflight0"
+            ]
+          }
+        ],
+        "behavior": "Legacy networks reject a supplied ID; nonlegacy networks require the matching ID.",
+        "unexecuted_edges": "Legacy, missing, wrong, matching, and pseudo-transaction exceptions require separate engine runs."
+      },
+      {
+        "name": "Delegate",
+        "classification": "delegated identity + authorization",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "signature",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "checkDelegate"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkPermission",
+              "Engine.checkSign"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/sponsor_fee.go",
+            "symbols": [
+              "Engine.getFeePayer"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::preflight1",
+              "Transactor::checkSign",
+              "Transactor::getFeePayer"
+            ]
+          },
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::getInitiator",
+              "STTx::getFeePayerID"
+            ]
+          }
+        ],
+        "behavior": "Delegate changes the signing identity and fee payer after preflight validates the relationship.",
+        "unexecuted_edges": "Disabled amendment, self-delegate, missing permission, delegate signer, and fee-payer failures need runtime cases."
+      },
+      {
+        "name": "Sponsor",
+        "classification": "sponsorship identity + fee/reserve paths",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "apply",
+          "invariants"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "checkSponsorFields"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkSponsor"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/sponsor_fee.go",
+            "symbols": [
+              "Engine.getFeePayer"
+            ]
+          },
+          {
+            "path": "internal/tx/sponsor_reserve.go",
+            "symbols": [
+              "readSponsorship"
+            ]
+          },
+          {
+            "path": "internal/tx/invariants/sponsorship.go",
+            "symbols": [
+              "checkSponsorship"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "preflight1Sponsor",
+              "Transactor::checkSponsor",
+              "Transactor::getFeePayer"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/invariants/InvariantCheck.cpp",
+            "symbols": [
+              "InvariantCheck"
+            ]
+          }
+        ],
+        "behavior": "Sponsor fields select preflight, sponsorship-object checks, fee payer selection, reserve mutation, and invariant accounting.",
+        "unexecuted_edges": "Feature-disabled, malformed combinations, co-signed, pre-funded, reserve, and invariant failure cases need direct evidence."
+      },
+      {
+        "name": "SponsorFlags",
+        "classification": "sponsorship mode gate",
+        "stages": [
+          "preflight1",
+          "preclaim",
+          "apply"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preflight.go",
+            "symbols": [
+              "checkSponsorFields"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkSponsor"
+            ]
+          },
+          {
+            "path": "internal/tx/engine/sponsor_fee.go",
+            "symbols": [
+              "Engine.getFeePayer"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "preflight1Sponsor",
+              "Transactor::checkSponsor",
+              "Transactor::getFeePayer"
+            ]
+          }
+        ],
+        "behavior": "The mode bits choose fee or reserve sponsorship and are validated with Sponsor presence and allow-lists.",
+        "unexecuted_edges": "Zero, masked, unsupported-type, fee, reserve, and changing-sponsorship modes need runtime evidence."
+      },
+      {
+        "name": "SponsorSignature",
+        "classification": "nested sponsorship signature",
+        "stages": [
+          "preflight2",
+          "preclaim"
+        ],
+        "go": [
+          {
+            "path": "internal/tx/engine/preclaim.go",
+            "symbols": [
+              "Engine.checkSign"
+            ]
+          },
+          {
+            "path": "internal/tx/sign/signature.go",
+            "symbols": [
+              "VerifySponsorSignatureWithRules",
+              "VerifyMultiSignatureCrypto"
+            ]
+          }
+        ],
+        "oracle": [
+          {
+            "path": "src/libxrpl/protocol/STTx.cpp",
+            "symbols": [
+              "STTx::checkSign"
+            ]
+          },
+          {
+            "path": "src/libxrpl/protocol/Sign.cpp",
+            "symbols": [
+              "signatureField",
+              "signingPrefix"
+            ]
+          },
+          {
+            "path": "src/libxrpl/tx/Transactor.cpp",
+            "symbols": [
+              "Transactor::checkSign"
+            ]
+          }
+        ],
+        "behavior": "The nested sponsor signature has a role-specific signing prefix and is checked alongside the transaction signature.",
+        "unexecuted_edges": "Missing sponsor, wrong role prefix, single/multisign, canonicality, and feature-era cases need direct comparisons."
+      }
+    ]
   },
   "legacy_go_transaction_enums": [
     {
@@ -357,7 +1180,8 @@
       "go": {
         "name": "AMM",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "AMM",
@@ -371,7 +1195,8 @@
       "go": {
         "name": "AMMClawback",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "AMMClawback",
@@ -385,7 +1210,8 @@
       "go": {
         "name": "BatchV1_1",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "BatchV1_1",
@@ -399,7 +1225,8 @@
       "go": {
         "name": "CheckCashMakesTrustLine",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "CheckCashMakesTrustLine",
@@ -413,7 +1240,8 @@
       "go": {
         "name": "Checks",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "Checks",
@@ -427,7 +1255,8 @@
       "go": {
         "name": "Clawback",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "Clawback",
@@ -441,7 +1270,8 @@
       "go": {
         "name": "ConfidentialTransfer",
         "kind": "feature",
-        "supported": "conditional"
+        "supported": "conditional",
+        "support_condition": "mptcrypto.Available()"
       },
       "oracle": {
         "name": "ConfidentialTransfer",
@@ -455,7 +1285,8 @@
       "go": {
         "name": "Credentials",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "Credentials",
@@ -469,7 +1300,8 @@
       "go": {
         "name": "CryptoConditions",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "CryptoConditions",
@@ -483,7 +1315,8 @@
       "go": {
         "name": "CryptoConditionsSuite",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "CryptoConditionsSuite",
@@ -497,7 +1330,8 @@
       "go": {
         "name": "DID",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DID",
@@ -511,7 +1345,8 @@
       "go": {
         "name": "DeepFreeze",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DeepFreeze",
@@ -525,7 +1360,8 @@
       "go": {
         "name": "DeletableAccounts",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DeletableAccounts",
@@ -539,7 +1375,8 @@
       "go": {
         "name": "DepositAuth",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DepositAuth",
@@ -553,7 +1390,8 @@
       "go": {
         "name": "DepositPreauth",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DepositPreauth",
@@ -567,7 +1405,8 @@
       "go": {
         "name": "DisallowIncoming",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DisallowIncoming",
@@ -581,7 +1420,8 @@
       "go": {
         "name": "DynamicMPT",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DynamicMPT",
@@ -595,7 +1435,8 @@
       "go": {
         "name": "DynamicNFT",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "DynamicNFT",
@@ -609,7 +1450,8 @@
       "go": {
         "name": "EnforceInvariants",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "EnforceInvariants",
@@ -623,7 +1465,8 @@
       "go": {
         "name": "Escrow",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "Escrow",
@@ -637,7 +1480,8 @@
       "go": {
         "name": "ExpandedSignerList",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "ExpandedSignerList",
@@ -651,7 +1495,8 @@
       "go": {
         "name": "FeeEscalation",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "FeeEscalation",
@@ -665,7 +1510,8 @@
       "go": {
         "name": "Flow",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "Flow",
@@ -679,7 +1525,8 @@
       "go": {
         "name": "FlowCross",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "FlowCross",
@@ -693,7 +1540,8 @@
       "go": {
         "name": "FlowSortStrands",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "FlowSortStrands",
@@ -707,7 +1555,8 @@
       "go": {
         "name": "HardenedValidations",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "HardenedValidations",
@@ -721,7 +1570,8 @@
       "go": {
         "name": "ImmediateOfferKilled",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "ImmediateOfferKilled",
@@ -735,7 +1585,8 @@
       "go": {
         "name": "InvariantsV1_1",
         "kind": "feature",
-        "supported": "no"
+        "supported": "no",
+        "support_condition": null
       },
       "oracle": null,
       "status": "go_only"
@@ -745,7 +1596,8 @@
       "go": {
         "name": "LendingProtocol",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "LendingProtocol",
@@ -759,7 +1611,8 @@
       "go": {
         "name": "LendingProtocolV1_1",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "LendingProtocolV1_1",
@@ -773,7 +1626,8 @@
       "go": {
         "name": "MPTokensV1",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "MPTokensV1",
@@ -787,7 +1641,8 @@
       "go": {
         "name": "MPTokensV2",
         "kind": "feature",
-        "supported": "no"
+        "supported": "no",
+        "support_condition": null
       },
       "oracle": {
         "name": "MPTokensV2",
@@ -801,7 +1656,8 @@
       "go": {
         "name": "MultiSign",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "MultiSign",
@@ -815,7 +1671,8 @@
       "go": {
         "name": "MultiSignReserve",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "MultiSignReserve",
@@ -829,7 +1686,8 @@
       "go": {
         "name": "NFTokenMintOffer",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "NFTokenMintOffer",
@@ -843,7 +1701,8 @@
       "go": {
         "name": "NegativeUNL",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "NegativeUNL",
@@ -857,7 +1716,8 @@
       "go": {
         "name": "NonFungibleTokensV1",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": null,
       "status": "go_only"
@@ -867,7 +1727,8 @@
       "go": {
         "name": "NonFungibleTokensV1_1",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "NonFungibleTokensV1_1",
@@ -881,7 +1742,8 @@
       "go": {
         "name": "PayChan",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "PayChan",
@@ -895,7 +1757,8 @@
       "go": {
         "name": "PermissionDelegationV1_1",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "PermissionDelegationV1_1",
@@ -909,7 +1772,8 @@
       "go": {
         "name": "PermissionedDEX",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "PermissionedDEX",
@@ -923,7 +1787,8 @@
       "go": {
         "name": "PermissionedDomains",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "PermissionedDomains",
@@ -937,7 +1802,8 @@
       "go": {
         "name": "PriceOracle",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "PriceOracle",
@@ -951,7 +1817,8 @@
       "go": {
         "name": "RequireFullyCanonicalSig",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "RequireFullyCanonicalSig",
@@ -965,7 +1832,8 @@
       "go": {
         "name": "SingleAssetVault",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "SingleAssetVault",
@@ -979,7 +1847,8 @@
       "go": {
         "name": "SortedDirectories",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "SortedDirectories",
@@ -993,7 +1862,8 @@
       "go": {
         "name": "Sponsor",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "Sponsor",
@@ -1007,7 +1877,8 @@
       "go": {
         "name": "TickSize",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "TickSize",
@@ -1021,7 +1892,8 @@
       "go": {
         "name": "TicketBatch",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "TicketBatch",
@@ -1035,7 +1907,8 @@
       "go": {
         "name": "TokenEscrow",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "TokenEscrow",
@@ -1049,7 +1922,8 @@
       "go": {
         "name": "TrustSetAuth",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "TrustSetAuth",
@@ -1063,7 +1937,8 @@
       "go": {
         "name": "XChainBridge",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "XChainBridge",
@@ -1077,7 +1952,8 @@
       "go": {
         "name": "XRPFees",
         "kind": "feature",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "XRPFees",
@@ -1091,7 +1967,8 @@
       "go": {
         "name": "fix1201",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1201",
@@ -1105,7 +1982,8 @@
       "go": {
         "name": "fix1368",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1368",
@@ -1119,7 +1997,8 @@
       "go": {
         "name": "fix1373",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1373",
@@ -1133,7 +2012,8 @@
       "go": {
         "name": "fix1512",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1512",
@@ -1147,7 +2027,8 @@
       "go": {
         "name": "fix1513",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1513",
@@ -1161,7 +2042,8 @@
       "go": {
         "name": "fix1515",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1515",
@@ -1175,7 +2057,8 @@
       "go": {
         "name": "fix1523",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1523",
@@ -1189,7 +2072,8 @@
       "go": {
         "name": "fix1528",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1528",
@@ -1203,7 +2087,8 @@
       "go": {
         "name": "fix1543",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1543",
@@ -1217,7 +2102,8 @@
       "go": {
         "name": "fix1571",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1571",
@@ -1231,7 +2117,8 @@
       "go": {
         "name": "fix1578",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1578",
@@ -1245,7 +2132,8 @@
       "go": {
         "name": "fix1623",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1623",
@@ -1259,7 +2147,8 @@
       "go": {
         "name": "fix1781",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fix1781",
@@ -1273,7 +2162,8 @@
       "go": {
         "name": "fixAMMClawbackRounding",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixAMMClawbackRounding",
@@ -1287,7 +2177,8 @@
       "go": {
         "name": "fixAMMOverflowOffer",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixAMMOverflowOffer",
@@ -1301,7 +2192,8 @@
       "go": {
         "name": "fixAMMv1_1",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixAMMv1_1",
@@ -1315,7 +2207,8 @@
       "go": {
         "name": "fixAMMv1_2",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixAMMv1_2",
@@ -1329,7 +2222,8 @@
       "go": {
         "name": "fixAMMv1_3",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixAMMv1_3",
@@ -1343,7 +2237,8 @@
       "go": {
         "name": "fixAmendmentMajorityCalc",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixAmendmentMajorityCalc",
@@ -1357,7 +2252,8 @@
       "go": {
         "name": "fixBatchV1_2",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixBatchV1_2",
@@ -1371,7 +2267,8 @@
       "go": {
         "name": "fixCheckThreading",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixCheckThreading",
@@ -1385,7 +2282,8 @@
       "go": {
         "name": "fixCleanup3_1_3",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixCleanup3_1_3",
@@ -1399,7 +2297,8 @@
       "go": {
         "name": "fixCleanup3_2_0",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixCleanup3_2_0",
@@ -1413,7 +2312,8 @@
       "go": {
         "name": "fixCleanup3_3_0",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixCleanup3_3_0",
@@ -1427,7 +2327,8 @@
       "go": {
         "name": "fixCleanup3_4_0",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixCleanup3_4_0",
@@ -1441,7 +2342,8 @@
       "go": {
         "name": "fixDirectoryLimit",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixDirectoryLimit",
@@ -1455,7 +2357,8 @@
       "go": {
         "name": "fixDisallowIncomingV1",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixDisallowIncomingV1",
@@ -1469,7 +2372,8 @@
       "go": {
         "name": "fixEmptyDID",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixEmptyDID",
@@ -1483,7 +2387,8 @@
       "go": {
         "name": "fixEnforceNFTokenTrustline",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixEnforceNFTokenTrustline",
@@ -1497,7 +2402,8 @@
       "go": {
         "name": "fixEnforceNFTokenTrustlineV2",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixEnforceNFTokenTrustlineV2",
@@ -1511,7 +2417,8 @@
       "go": {
         "name": "fixFillOrKill",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixFillOrKill",
@@ -1525,7 +2432,8 @@
       "go": {
         "name": "fixFrozenLPTokenTransfer",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixFrozenLPTokenTransfer",
@@ -1539,7 +2447,8 @@
       "go": {
         "name": "fixIncludeKeyletFields",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixIncludeKeyletFields",
@@ -1553,7 +2462,8 @@
       "go": {
         "name": "fixInnerObjTemplate",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixInnerObjTemplate",
@@ -1567,7 +2477,8 @@
       "go": {
         "name": "fixInnerObjTemplate2",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixInnerObjTemplate2",
@@ -1581,7 +2492,8 @@
       "go": {
         "name": "fixInvalidTxFlags",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixInvalidTxFlags",
@@ -1595,7 +2507,8 @@
       "go": {
         "name": "fixMPTDeliveredAmount",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixMPTDeliveredAmount",
@@ -1609,7 +2522,8 @@
       "go": {
         "name": "fixMasterKeyAsRegularKey",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixMasterKeyAsRegularKey",
@@ -1623,7 +2537,8 @@
       "go": {
         "name": "fixNFTokenDirV1",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": null,
       "status": "go_only"
@@ -1633,7 +2548,8 @@
       "go": {
         "name": "fixNFTokenNegOffer",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": null,
       "status": "go_only"
@@ -1643,7 +2559,8 @@
       "go": {
         "name": "fixNFTokenPageLinks",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixNFTokenPageLinks",
@@ -1657,7 +2574,8 @@
       "go": {
         "name": "fixNFTokenRemint",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixNFTokenRemint",
@@ -1671,7 +2589,8 @@
       "go": {
         "name": "fixNFTokenReserve",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixNFTokenReserve",
@@ -1685,7 +2604,8 @@
       "go": {
         "name": "fixNonFungibleTokensV1_2",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixNonFungibleTokensV1_2",
@@ -1699,7 +2619,8 @@
       "go": {
         "name": "fixPayChanCancelAfter",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixPayChanCancelAfter",
@@ -1713,7 +2634,8 @@
       "go": {
         "name": "fixPayChanRecipientOwnerDir",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixPayChanRecipientOwnerDir",
@@ -1727,7 +2649,8 @@
       "go": {
         "name": "fixPreviousTxnID",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixPreviousTxnID",
@@ -1741,7 +2664,8 @@
       "go": {
         "name": "fixPriceOracleOrder",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixPriceOracleOrder",
@@ -1755,7 +2679,8 @@
       "go": {
         "name": "fixQualityUpperBound",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixQualityUpperBound",
@@ -1769,7 +2694,8 @@
       "go": {
         "name": "fixReducedOffersV1",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixReducedOffersV1",
@@ -1783,7 +2709,8 @@
       "go": {
         "name": "fixReducedOffersV2",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixReducedOffersV2",
@@ -1797,7 +2724,8 @@
       "go": {
         "name": "fixRemoveNFTokenAutoTrustLine",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixRemoveNFTokenAutoTrustLine",
@@ -1811,7 +2739,8 @@
       "go": {
         "name": "fixRmSmallIncreasedQOffers",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixRmSmallIncreasedQOffers",
@@ -1825,7 +2754,8 @@
       "go": {
         "name": "fixSTAmountCanonicalize",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixSTAmountCanonicalize",
@@ -1839,7 +2769,8 @@
       "go": {
         "name": "fixTakerDryOfferRemoval",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixTakerDryOfferRemoval",
@@ -1853,7 +2784,8 @@
       "go": {
         "name": "fixTokenEscrowV1",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixTokenEscrowV1",
@@ -1867,7 +2799,8 @@
       "go": {
         "name": "fixTrustLinesToSelf",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixTrustLinesToSelf",
@@ -1881,7 +2814,8 @@
       "go": {
         "name": "fixUniversalNumber",
         "kind": "retired",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixUniversalNumber",
@@ -1895,7 +2829,8 @@
       "go": {
         "name": "fixXChainRewardRounding",
         "kind": "fix",
-        "supported": "yes"
+        "supported": "yes",
+        "support_condition": null
       },
       "oracle": {
         "name": "fixXChainRewardRounding",
@@ -1920,7 +2855,7 @@
         "internal/tx/payment/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Credentials",
         "PermissionedDEX"
       ],
@@ -2000,7 +2935,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -2070,8 +3004,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -2364,7 +3298,7 @@
         "internal/tx/escrow/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Destination",
@@ -2417,7 +3351,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -2488,8 +3421,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -2558,7 +3491,7 @@
         "internal/tx/escrow/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Owner",
@@ -2603,7 +3536,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -2674,8 +3606,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -2758,7 +3690,7 @@
         "internal/tx/account/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "EmailHash",
@@ -2843,7 +3775,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -2905,8 +3836,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -3039,10 +3970,6 @@
             {
               "name": "TestPreflightPrecedence_TicketAccountTxnID",
               "line": 311
-            },
-            {
-              "name": "TestSponsorFieldsPreflight",
-              "line": 203
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3127,7 +4054,7 @@
         "internal/tx/escrow/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Owner",
@@ -3148,7 +4075,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -3200,8 +4126,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -3250,7 +4176,7 @@
         "internal/tx/signerlist/signer_list_set.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "RegularKey",
@@ -3263,7 +4189,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -3317,8 +4242,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -3388,7 +4313,7 @@
         "internal/tx/offer/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "TakerPays",
@@ -3433,7 +4358,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -3504,8 +4428,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -3656,7 +4580,7 @@
         "internal/tx/offer/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "OfferSequence",
@@ -3669,7 +4593,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -3721,8 +4644,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -3767,7 +4690,7 @@
         "internal/tx/ticket/ticket_create.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "TicketCount",
@@ -3780,7 +4703,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -3840,8 +4762,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -3872,7 +4794,7 @@
         "internal/tx/signerlist/signer_list_set.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "SignerQuorum",
@@ -3893,7 +4815,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -3947,8 +4868,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4007,7 +4928,7 @@
         "internal/tx/paychan/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PayChan"
       ],
       "oracle_fields": [
@@ -4062,7 +4983,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -4114,8 +5034,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4178,7 +5098,7 @@
         "internal/tx/paychan/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PayChan"
       ],
       "oracle_fields": [
@@ -4209,7 +5129,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -4271,8 +5190,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4325,7 +5244,7 @@
         "internal/tx/paychan/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PayChan"
       ],
       "oracle_fields": [
@@ -4380,7 +5299,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -4451,8 +5369,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4523,7 +5441,7 @@
         "internal/tx/check/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Destination",
@@ -4568,7 +5486,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -4630,8 +5547,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4694,7 +5611,7 @@
         "internal/tx/check/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "CheckID",
@@ -4723,7 +5640,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -4794,8 +5710,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4844,7 +5760,7 @@
         "internal/tx/check/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "CheckID",
@@ -4857,7 +5773,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -4927,8 +5842,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -4977,7 +5892,7 @@
         "internal/tx/depositpreauth/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Authorize",
@@ -5014,7 +5929,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -5084,8 +5998,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5126,7 +6040,7 @@
         "internal/tx/trustset/trustset.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "LimitAmount",
@@ -5155,7 +6069,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -5209,8 +6122,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5289,7 +6202,7 @@
         "internal/tx/account/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Destination",
@@ -5318,7 +6231,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -5389,8 +6301,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5441,7 +6353,7 @@
         "internal/tx/nftoken/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "NFTokenMintOffer"
       ],
       "oracle_fields": [
@@ -5504,7 +6416,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -5566,8 +6477,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5598,7 +6509,7 @@
         "internal/tx/nftoken/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "NFTokenID",
@@ -5619,7 +6530,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -5671,8 +6581,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5703,7 +6613,7 @@
         "internal/tx/nftoken/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "NFTokenID",
@@ -5748,7 +6658,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -5810,8 +6719,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5842,7 +6751,7 @@
         "internal/tx/nftoken/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "NFTokenOffers",
@@ -5855,7 +6764,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -5917,8 +6825,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -5949,7 +6857,7 @@
         "internal/tx/nftoken/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "NFTokenBuyOffer",
@@ -5978,7 +6886,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -6040,8 +6947,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -6072,7 +6979,7 @@
         "internal/tx/clawback/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Amount",
@@ -6093,7 +7000,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -6155,8 +7061,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -6201,10 +7107,6 @@
           "path": "internal/tx/invariants/highrisk_test.go",
           "tests": [
             {
-              "name": "TestValidAMM_LastWithdrawDeletionBeforeCleanup",
-              "line": 267
-            },
-            {
               "name": "TestValidClawback_ChangesOnFailure",
               "line": 326
             },
@@ -6243,7 +7145,7 @@
       "oracle_amendments": [
         "AMMClawback"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMMClawback"
       ],
       "oracle_fields": [
@@ -6282,7 +7184,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -6352,8 +7253,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -6396,7 +7297,7 @@
       "oracle_amendments": [
         "AMM"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMM"
       ],
       "oracle_fields": [
@@ -6427,7 +7328,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -6497,8 +7397,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -6551,7 +7451,7 @@
       "oracle_amendments": [
         "AMM"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMM"
       ],
       "oracle_fields": [
@@ -6614,7 +7514,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -6693,8 +7592,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -6741,7 +7640,7 @@
       "oracle_amendments": [
         "AMM"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMM"
       ],
       "oracle_fields": [
@@ -6796,7 +7695,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -6866,8 +7764,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -6910,7 +7808,7 @@
       "oracle_amendments": [
         "AMM"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMM"
       ],
       "oracle_fields": [
@@ -6941,7 +7839,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -7011,8 +7908,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7063,7 +7960,7 @@
       "oracle_amendments": [
         "AMM"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMM"
       ],
       "oracle_fields": [
@@ -7110,7 +8007,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -7189,8 +8085,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7223,7 +8119,7 @@
       "oracle_amendments": [
         "AMM"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "AMM"
       ],
       "oracle_fields": [
@@ -7246,7 +8142,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -7316,8 +8211,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7365,7 +8260,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -7396,7 +8291,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -7456,8 +8350,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7505,7 +8399,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -7544,7 +8438,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -7604,8 +8497,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7667,7 +8560,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -7714,7 +8607,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -7774,8 +8666,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7835,7 +8727,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -7874,7 +8766,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -7934,8 +8825,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -7983,7 +8874,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -8070,7 +8961,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8130,8 +9020,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -8185,7 +9075,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -8280,7 +9170,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8340,8 +9229,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -8395,7 +9284,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -8426,7 +9315,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8486,8 +9374,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -8531,7 +9419,7 @@
       "oracle_amendments": [
         "XChainBridge"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "XChainBridge"
       ],
       "oracle_fields": [
@@ -8562,7 +9450,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8622,8 +9509,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -8666,7 +9553,7 @@
       "oracle_amendments": [
         "DID"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "DID"
       ],
       "oracle_fields": [
@@ -8697,7 +9584,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8749,8 +9635,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -8783,12 +9669,11 @@
       "oracle_amendments": [
         "DID"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "DID"
       ],
       "oracle_fields": [],
       "go_fields": [],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8840,8 +9725,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -8874,7 +9759,7 @@
       "oracle_amendments": [
         "PriceOracle"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PriceOracle"
       ],
       "oracle_fields": [
@@ -8929,7 +9814,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -8981,8 +9865,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9015,7 +9899,7 @@
       "oracle_amendments": [
         "PriceOracle"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PriceOracle"
       ],
       "oracle_fields": [
@@ -9030,7 +9914,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -9090,8 +9973,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9124,7 +10007,7 @@
       "oracle_amendments": [
         "fixNFTokenPageLinks"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "fixNFTokenPageLinks"
       ],
       "oracle_fields": [
@@ -9155,7 +10038,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -9225,8 +10107,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9269,7 +10151,7 @@
       "oracle_amendments": [
         "MPTokensV1"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "ConfidentialTransfer",
         "DynamicMPT",
         "MPTokensV1",
@@ -9328,7 +10210,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -9380,8 +10261,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9438,7 +10319,7 @@
       "oracle_amendments": [
         "MPTokensV1"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "MPTokensV1"
       ],
       "oracle_fields": [
@@ -9453,7 +10334,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -9513,8 +10393,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9567,7 +10447,7 @@
       "oracle_amendments": [
         "MPTokensV1"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "MPTokensV1",
         "PermissionedDomains",
         "SingleAssetVault"
@@ -9640,7 +10520,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -9710,8 +10589,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9764,7 +10643,7 @@
       "oracle_amendments": [
         "MPTokensV1"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "MPTokensV1"
       ],
       "oracle_fields": [
@@ -9787,7 +10666,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -9847,8 +10725,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -9919,7 +10797,7 @@
       "oracle_amendments": [
         "Credentials"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Credentials"
       ],
       "oracle_fields": [
@@ -9958,7 +10836,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10018,8 +10895,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10052,7 +10929,7 @@
       "oracle_amendments": [
         "Credentials"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Credentials"
       ],
       "oracle_fields": [
@@ -10075,7 +10952,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10135,8 +11011,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10169,7 +11045,7 @@
       "oracle_amendments": [
         "Credentials"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Credentials"
       ],
       "oracle_fields": [
@@ -10200,7 +11076,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10260,8 +11135,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10294,7 +11169,7 @@
       "oracle_amendments": [
         "DynamicNFT"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "DynamicNFT"
       ],
       "oracle_fields": [
@@ -10325,7 +11200,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10377,8 +11251,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10411,7 +11285,7 @@
       "oracle_amendments": [
         "PermissionedDomains"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Credentials",
         "PermissionedDomains"
       ],
@@ -10435,7 +11309,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10495,8 +11368,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10563,7 +11436,7 @@
       "oracle_amendments": [
         "PermissionedDomains"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PermissionedDomains"
       ],
       "oracle_fields": [
@@ -10578,7 +11451,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10638,8 +11510,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10692,7 +11564,7 @@
       "oracle_amendments": [
         "PermissionDelegationV1_1"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "PermissionDelegationV1_1"
       ],
       "oracle_fields": [
@@ -10715,7 +11587,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -10785,8 +11656,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Delegate is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Delegate; this source inventory does not infer v4 execution",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -10833,7 +11704,7 @@
       "oracle_amendments": [
         "SingleAssetVault"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "MPTokensV1",
         "PermissionedDomains",
         "SingleAssetVault"
@@ -10922,7 +11793,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -10992,8 +11862,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Vault is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Vault; checked-in v4 StrictOracleRecorder covers VaultCreate cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -11056,7 +11926,7 @@
       "oracle_amendments": [
         "SingleAssetVault"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "SingleAssetVault"
       ],
       "oracle_fields": [
@@ -11095,7 +11965,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -11165,8 +12034,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Vault is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Vault; checked-in v4 StrictOracleRecorder covers VaultCreate cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -11219,7 +12088,7 @@
       "oracle_amendments": [
         "SingleAssetVault"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "SingleAssetVault"
       ],
       "oracle_fields": [
@@ -11242,7 +12111,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -11312,8 +12180,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Vault is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Vault; checked-in v4 StrictOracleRecorder covers VaultCreate cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -11366,7 +12234,7 @@
       "oracle_amendments": [
         "SingleAssetVault"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "SingleAssetVault"
       ],
       "oracle_fields": [
@@ -11389,7 +12257,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -11449,8 +12316,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Vault is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Vault; checked-in v4 StrictOracleRecorder covers VaultCreate cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -11503,7 +12370,7 @@
       "oracle_amendments": [
         "SingleAssetVault"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "SingleAssetVault"
       ],
       "oracle_fields": [
@@ -11550,7 +12417,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -11629,8 +12495,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Vault is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Vault; checked-in v4 StrictOracleRecorder covers VaultCreate cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -11673,7 +12539,7 @@
       "oracle_amendments": [
         "SingleAssetVault"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "SingleAssetVault"
       ],
       "oracle_fields": [
@@ -11704,7 +12570,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -11764,8 +12629,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Vault is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Vault; checked-in v4 StrictOracleRecorder covers VaultCreate cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -11808,7 +12673,7 @@
       "oracle_amendments": [
         "BatchV1_1"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "BatchV1_1"
       ],
       "oracle_fields": [
@@ -11831,7 +12696,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "ApplyInnerTransactions",
@@ -11925,8 +12789,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": true,
-        "conformance_exclusion_reason": "current legacy conformance suite app/Batch is out of scope",
+        "legacy_conformance_excluded": true,
+        "legacy_conformance_exclusion_reason": "legacy out-of-scope list includes app/Batch; checked-in v4 StrictOracleRecorder covers Batch cases separately",
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -12018,7 +12882,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -12083,7 +12947,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -12143,8 +13006,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -12192,7 +13055,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -12209,7 +13072,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -12269,8 +13131,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -12318,7 +13180,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -12343,7 +13205,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -12403,8 +13264,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -12448,7 +13309,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -12497,7 +13358,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "CheckExtraFeatures",
@@ -12576,8 +13436,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -12621,7 +13481,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -12646,7 +13506,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -12706,8 +13565,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -12751,7 +13610,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -12896,7 +13755,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -12956,8 +13814,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -13015,7 +13873,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -13032,7 +13890,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -13092,8 +13949,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -13141,7 +13998,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -13158,7 +14015,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -13218,8 +14074,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -13277,7 +14133,7 @@
       "oracle_amendments": [
         "LendingProtocol"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "LendingProtocol",
         "MPTokensV1",
         "SingleAssetVault"
@@ -13302,7 +14158,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -13362,8 +14217,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -13407,7 +14262,7 @@
       "oracle_amendments": [
         "ConfidentialTransfer"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "ConfidentialTransfer"
       ],
       "oracle_fields": [
@@ -13478,7 +14333,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -13538,8 +14392,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -13683,7 +14537,7 @@
       "oracle_amendments": [
         "ConfidentialTransfer"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "ConfidentialTransfer"
       ],
       "oracle_fields": [
@@ -13698,7 +14552,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -13758,8 +14611,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -13893,7 +14746,7 @@
       "oracle_amendments": [
         "ConfidentialTransfer"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "ConfidentialTransfer"
       ],
       "oracle_fields": [
@@ -13964,7 +14817,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -14024,8 +14876,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -14158,7 +15010,7 @@
       "oracle_amendments": [
         "ConfidentialTransfer"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "ConfidentialTransfer",
         "Credentials"
       ],
@@ -14254,7 +15106,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -14324,22 +15175,12 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
       "test_references": [
-        {
-          "path": "internal/testing/mpt/confidential_batch_native_test.go",
-          "tests": [
-            {
-              "name": "TestConfidentialMPTBatchAllOrNothingRollsBackStaleProof",
-              "line": 254
-            }
-          ],
-          "kind": "Go source reference; execution is tracked separately"
-        },
         {
           "path": "internal/tx/batch/confidential_fee_test.go",
           "tests": [
@@ -14446,7 +15287,7 @@
       "oracle_amendments": [
         "ConfidentialTransfer"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "ConfidentialTransfer"
       ],
       "oracle_fields": [
@@ -14485,7 +15326,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -14545,8 +15385,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -14675,7 +15515,7 @@
       "oracle_amendments": [
         "Sponsor"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Sponsor"
       ],
       "oracle_fields": [
@@ -14698,7 +15538,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -14758,8 +15597,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -14812,7 +15651,7 @@
       "oracle_amendments": [
         "Sponsor"
       ],
-      "go_required_amendments": [
+      "go_required_amendment_references": [
         "Sponsor"
       ],
       "oracle_fields": [
@@ -14859,7 +15698,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "GetFlagsMask",
@@ -14919,8 +15757,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": false,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -14971,7 +15809,7 @@
         "internal/tx/pseudo/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "LedgerSequence",
@@ -14992,7 +15830,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "Validate"
@@ -15028,8 +15865,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": true,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -15074,10 +15911,6 @@
             {
               "name": "TestApplyPseudoPanicReturnsTefExceptionWithoutMutatingState",
               "line": 144
-            },
-            {
-              "name": "TestApplyPseudoStateCommitErrorDoesNotMutateLedger",
-              "line": 350
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -15106,7 +15939,7 @@
         "internal/tx/pseudo/setfee.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "LedgerSequence",
@@ -15175,7 +16008,6 @@
           "style": "optional"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "PreclaimPseudo",
@@ -15219,8 +16051,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": true,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -15281,7 +16113,7 @@
         "internal/tx/pseudo/unl_modify.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendments": [],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "UNLModifyDisabling",
@@ -15310,7 +16142,6 @@
           "style": "required"
         }
       ],
-      "field_templates_match": true,
       "methods": [
         "Apply",
         "Validate"
@@ -15346,8 +16177,8 @@
         "go_registered": true,
         "go_supported": true,
         "pseudo": true,
-        "conformance_excluded": false,
-        "conformance_exclusion_reason": null,
+        "legacy_conformance_excluded": false,
+        "legacy_conformance_exclusion_reason": null,
         "executed_in_checked_in_corpus": false,
         "oracle_comparison_executed": false
       },
@@ -15401,20 +16232,65 @@
   ],
   "evidence": {
     "execution_semantics": "Rows are source/registry coverage. A row is executed only when a checked-in or explicitly supplied fixture record says so; named tests alone never set executed=true.",
-    "conformance_runner": {
-      "runner_path": "internal/testing/conformance",
-      "manifest_path": "internal/testing/conformance/testdata/manifest.json",
-      "manifest_present_at_base": false,
-      "oracle_comparison_executed_at_base": false,
-      "reason": "The base tree has no checked-in fixture corpus; the v3 runner requires an external GOXRPL_FIXTURES_DIR corpus pinned to rippled 3.4.0.",
-      "status_snapshot_path": "docs/conformance-status.md",
-      "status_snapshot_is_execution_record": false,
+    "checked_in_v4_corpus": {
+      "manifest_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json",
+      "manifest_sha256": "1769e6fd56fdcbec28e355ee1bc136f68f54ddd4af20878acfe2cac244592925",
+      "readme_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/README.md",
+      "readme_sha256": "f5d1b3240f05f11cb65a219507096670d96bc27bba6c01319eb5e444032801dd",
+      "manifest_schema": 3,
+      "fixture_version": "v4",
+      "fixture_count": 45,
+      "family_counts": {
+        "AccountSet": 4,
+        "Batch": 16,
+        "LoanBrokerSet": 1,
+        "Payment": 12,
+        "TicketCreate": 4,
+        "TrustSet": 4,
+        "VaultCreate": 4
+      },
+      "amendment_profile_count": 16,
+      "oracle_binary_sha256": "164d20cd3247b82fa89f24330fce365ce5d19acef3d2b7657e9bb87cd7a35f24",
+      "recorder_commit": "3a61cca73b9e4eda88bc8444793c1c2e52576aab",
+      "recorder_source_sha256": {
+        "scripts/oracle/record-v4.py": "83d2e25eb7fe9acc92988ea82ccc1f71dde31b272fe04dd5d98c10d9d67d8bbf",
+        "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
+        "scripts/oracle/strict-corpus-config.json": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
+        "scripts/oracle/strict_recorder.cpp": "5451931911f0c45b788f0f249d694ac94fec7f77863a0bbc7dd5e23a86f9fea6"
+      },
+      "config_identity": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
+      "oracle_recording": {
+        "suite": "app/StrictOracleRecorder",
+        "fixtures": 45,
+        "assertions": 1354,
+        "failures": 0,
+        "tesSUCCESS": 41,
+        "temMALFORMED": 4,
+        "comparison_side": "C++ oracle recorder only"
+      },
+      "go_replay_report": {
+        "status": "separate runtime report required",
+        "runner_path": "internal/testing/conformance/conformance_test.go",
+        "report_environment": "GOXRPL_CONFORMANCE_REPORT",
+        "executed_by_generator": false,
+        "per_transaction_flags_written_here": false
+      },
+      "coverage_limits": [
+        "45 signed open-ledger submit/close cases in 7 transaction families, all 16 cleanup/lending/Batch/fix profiles; no excluded cases.",
+        "Empty initial TxQ at minimum fee metrics only; historical queue contents, load/escalation transitions and retries are not recorded.",
+        "No RPC/parser rejection boundary cases, exhaustive Batch wrappers, all lending operations or other transaction families; whole-release parity remains #2017."
+      ]
+    },
+    "legacy_runner": {
+      "runner_path": "internal/testing/conformance/corpus.go",
+      "fixture_contract": "rippled 3.4.0 legacy external corpus",
       "out_of_scope_path": "scripts/conformance-out-of-scope.txt",
       "out_of_scope_suites": [
         "app/Batch",
         "app/Delegate",
         "app/Vault"
-      ]
+      ],
+      "status_is_execution_record": false
     },
     "go_only_contracts": [
       {
