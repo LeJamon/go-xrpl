@@ -127,6 +127,7 @@ def verify_config(config: Path) -> dict:
         "Batch",
         "VaultCreate",
         "LoanBrokerSet",
+        "NFTokenAcceptOffer",
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
@@ -155,6 +156,26 @@ def verify_config(config: Path) -> dict:
                     "queued": True,
                 },
             }
+        },
+        "persistent_cleanup": {
+            "NFTokenAcceptOffer/expired-sell-offer-cleanup": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecEXPIRED",
+                "applied": True,
+                "queued": False,
+                "expected_deleted_object": "NFTokenOffer",
+            }
+        },
+        "seeded_payments": {
+            "seed": 2016,
+            "profile": "c1-l1-b1-f1",
+            "samples": [
+                "Payment/seed2016-payment-0-valid-base-fee",
+                "Payment/seed2016-payment-1-insufficient-balance",
+                "Payment/seed2016-payment-2-valid-fee-edge",
+                "Payment/seed2016-payment-3-future-sequence",
+            ],
+            "coverage": "deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence",
         },
     }
     if values.get("scenario_overrides") != expected_overrides:

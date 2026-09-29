@@ -17,6 +17,7 @@
 #include <test/jtx/sig.h>
 #include <test/jtx/sponsor.h>
 #include <test/jtx/ticket.h>
+#include <test/jtx/token.h>
 #include <test/jtx/txflags.h>
 #include <test/jtx/trust.h>
 #include <test/jtx/vault.h>
@@ -36,6 +37,7 @@
 #include <xrpl/protocol/LedgerHeader.h>
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/SeqProxy.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
 #include <xrpl/protocol/TER.h>
@@ -45,6 +47,7 @@
 #include <xrpl/tx/apply.h>
 #include <xrpld/app/misc/TxQ.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -53,6 +56,7 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -250,6 +254,77 @@ smallQueueRecorderConfig()
     section.set(Keys::kMinimumTxnInLedgerStandalone, "2");
     section.set(Keys::kNormalConsensusIncreasePercent, "0");
     return config;
+}
+
+void
+configureServiceConfig(Config& config, Profile const& profile)
+{
+    config.startUp = StartUpType::Fresh;
+
+    FeatureBitset forced;
+    auto const profileFeatures = profile.features();
+    foreachFeature(test::jtx::testableAmendments(), [&](uint256 const& feature) {
+        auto const name = featureToName(feature);
+        auto const amendment = allAmendments().find(name);
+        if (amendment == allAmendments().end())
+            return;
+
+        if (amendment->second == AmendmentSupport::Retired)
+        {
+            if (profileFeatures[feature])
+                forced.set(feature);
+            return;
+        }
+
+        if (amendment->second != AmendmentSupport::Supported)
+            return;
+
+        auto& section = profileFeatures[feature]
+            ? config.section(Sections::kAmendments)
+            : config.section(Sections::kVetoAmendments);
+        section.append(to_string(feature) + " " + name);
+    });
+    foreachFeature(forced, [&](uint256 const& feature) {
+        config.features.insert(feature);
+    });
+}
+
+void
+assertPersistedAmendments(
+    Env& env,
+    Profile const& profile,
+    beast::unit_test::Suite& suite)
+{
+    auto const amendments = env.closed()->read(keylet::amendments());
+    if (!suite.expect(
+            amendments != nullptr,
+            "fresh parent did not persist Amendments singleton",
+            __FILE__,
+            __LINE__))
+        return;
+
+    std::vector<uint256> expected;
+    foreachFeature(profile.features(), [&](uint256 const& feature) {
+        auto const name = featureToName(feature);
+        auto const amendment = allAmendments().find(name);
+        if (amendment != allAmendments().end() &&
+            amendment->second == AmendmentSupport::Supported)
+            expected.push_back(feature);
+    });
+    std::ranges::sort(expected);
+
+    auto actual = std::vector<uint256>{};
+    if (amendments->isFieldPresent(sfAmendments))
+    {
+        auto const& persisted = amendments->getFieldV256(sfAmendments);
+        actual.assign(persisted.begin(), persisted.end());
+    }
+    std::ranges::sort(actual);
+    suite.expect(
+        actual == expected,
+        "persisted Amendments singleton did not match configured supported profile",
+        __FILE__,
+        __LINE__);
 }
 
 std::unique_ptr<Config>
@@ -534,6 +609,60 @@ makePayment(Env& env)
     return env.jt(jtx::pay(Account{"alice"}, Account{"bob"}, jtx::XRP(1)));
 }
 
+struct SeededPaymentSample
+{
+    std::uint32_t amount;
+    std::uint32_t fee;
+    std::uint32_t sequenceOffset;
+    Expected expected;
+    char const* label;
+};
+
+SeededPaymentSample
+seededPaymentSample(std::uint32_t sample)
+{
+    std::mt19937 generator{2016};
+    std::uint32_t amount = 1;
+    for (std::uint32_t index = 0; index <= sample; ++index)
+        amount = 1 + generator() % 8;
+
+    switch (sample)
+    {
+        case 0:
+            return {amount, 10, 0, Expected{TER{tesSUCCESS}, true, false}, "valid-base-fee"};
+        case 1:
+            return {
+                9999,
+                10,
+                0,
+                Expected{TER{tecUNFUNDED_PAYMENT}, true, false},
+                "insufficient-balance"};
+        case 2:
+            return {amount, 11, 0, Expected{TER{tesSUCCESS}, true, false}, "valid-fee-edge"};
+        case 3:
+            return {
+                amount,
+                10,
+                1,
+                Expected{TER{terPRE_SEQ}, false, false},
+                "future-sequence"};
+        default:
+            break;
+    }
+
+    return {amount, 10, 0, Expected{}, "invalid-sample"};
+}
+
+JTx
+makeSeededPayment(Env& env, SeededPaymentSample const& sample)
+{
+    auto const alice = Account{"alice"};
+    auto result = jtx::pay(alice, Account{"bob"}, jtx::XRP(sample.amount));
+    if (sample.sequenceOffset != 0)
+        result[jss::Sequence] = env.seq(alice) + sample.sequenceOffset;
+    return env.jt(result, jtx::Fee(sample.fee));
+}
+
 std::vector<JTx>
 makeQueuePrefill(Env& env)
 {
@@ -751,6 +880,24 @@ makeTicketCreate(Env& env)
     return env.jt(jtx::ticket::create(Account{"alice"}, 1));
 }
 
+std::uint32_t
+parentCloseTime(Env& env)
+{
+    return env.current()->header().parentCloseTime.time_since_epoch().count();
+}
+
+JTx
+makeExpiredNFTokenAccept(Env& env)
+{
+    auto const minter = Account{"minter"};
+    auto const buyer = Account{"buyer"};
+    auto const offer = keylet::nftokenOffer(
+                           minter,
+                           SeqProxy::rawSequence(env.seq(minter) - 1))
+                           .key;
+    return env.jt(jtx::token::acceptSellOffer(buyer, offer));
+}
+
 JTx
 makeBatch(Env& env)
 {
@@ -886,30 +1033,7 @@ std::unique_ptr<Config>
 serviceConfig(Profile const& profile)
 {
     auto config = recorderConfig();
-    config->startUp = StartUpType::Fresh;
-
-    FeatureBitset forced;
-    foreachFeature(profile.features(), [&](uint256 const& feature) {
-        auto const name = featureToName(feature);
-        auto const amendment = allAmendments().find(name);
-        if (amendment == allAmendments().end())
-            return;
-
-        if (amendment->second == AmendmentSupport::Retired)
-        {
-            forced.set(feature);
-            return;
-        }
-
-        if (amendment->second == AmendmentSupport::Unsupported)
-            return;
-
-        config->section(Sections::kAmendments).append(
-            to_string(feature) + " " + name);
-    });
-    foreachFeature(forced, [&](uint256 const& feature) {
-        config->features.insert(feature);
-    });
+    configureServiceConfig(*config, profile);
     return config;
 }
 
@@ -935,6 +1059,33 @@ setupPriorConstraint(Env& env)
     fundAndClose(env, {alice});
     env(jtx::fset(alice, asfAccountTxnID));
     env.close();
+}
+
+void
+setupExpiredNFTokenOffer(Env& env)
+{
+    auto const issuer = Account{"issuer"};
+    auto const minter = Account{"minter"};
+    auto const buyer = Account{"buyer"};
+    fundAndClose(env, {issuer, minter, buyer});
+    env(jtx::token::setMinter(issuer, minter));
+    env.close();
+
+    auto const nft = jtx::token::getNextID(env, issuer, 0, tfTransferable);
+    env(
+        jtx::token::mint(minter, 0),
+        jtx::token::Issuer(issuer),
+        jtx::Txflags(tfTransferable));
+    env.close();
+
+    auto const expiration = parentCloseTime(env) + 25;
+    env(
+        jtx::token::createOffer(minter, nft, jtx::drops(1)),
+        jtx::token::Expiration(expiration),
+        jtx::Txflags(tfSellNFToken));
+    env.close();
+    while (parentCloseTime(env) < expiration)
+        env.close();
 }
 
 void
@@ -1032,9 +1183,12 @@ recordWithSetup(FixtureRecorder& recorder,
                  Builder&& builder,
                  std::optional<Expected> expected = std::nullopt)
 {
-    Env env{suite, recorderConfig(), profile.features()};
+    auto config = recorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
     env.app().checkSigs(true);
     fundAndClose(env, accounts);
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env), expected);
 }
@@ -1051,9 +1205,11 @@ recordScenario(FixtureRecorder& recorder,
                Builder&& builder,
                Expected expected)
 {
-    Env env{suite, std::move(config), profile.features()};
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
     env.app().checkSigs(true);
     setup(env);
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env), expected);
 }
@@ -1063,11 +1219,14 @@ recordQueueScenario(FixtureRecorder& recorder,
                     beast::unit_test::Suite& suite,
                     Profile const& profile)
 {
-    Env env{suite, smallQueueRecorderConfig(), profile.features()};
+    auto config = smallQueueRecorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
     env.app().checkSigs(true);
     env.fund(jtx::XRP(10000), jtx::noripple(Account{"alice"}));
     env.fund(jtx::XRP(200), jtx::noripple(Account{"bob"}));
     env.close();
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.recordWithHistory(
         profile,
@@ -1092,12 +1251,7 @@ recordServiceScenario(
     Env env{suite, serviceConfig(profile), FeatureBitset{}};
     env.app().checkSigs(true);
     fundAndClose(env, {Account{"alice"}, Account{"bob"}});
-    auto const parent = env.closed();
-    suite.expect(
-        parent->read(keylet::amendments()) != nullptr,
-        "fresh service parent did not persist Amendments singleton",
-        __FILE__,
-        __LINE__);
+    assertPersistedAmendments(env, profile, suite);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env));
 }
@@ -1283,7 +1437,6 @@ public:
             {Account{"alice"}},
             makeFirstError,
             Expected{TER{temBAD_FEE}, false, false});
-
         recordScenario(
             recorder,
             *this,
@@ -1472,7 +1625,31 @@ public:
             "AccountSet",
             "service-boundary-amendments",
             makeAccountSet);
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "NFTokenAcceptOffer",
+            "expired-sell-offer-cleanup",
+            recorderConfig(),
+            setupExpiredNFTokenOffer,
+            makeExpiredNFTokenAccept,
+            Expected{TER{tecEXPIRED}, true, false});
         recordQueueScenario(recorder, *this, representative);
+        for (std::uint32_t sample = 0; sample < 4; ++sample)
+        {
+            auto const seeded = seededPaymentSample(sample);
+            recordScenario(
+                recorder,
+                *this,
+                representative,
+                "Payment",
+                "seed2016-payment-" + std::to_string(sample) + "-" + seeded.label,
+                recorderConfig(),
+                [](Env& env) { fundAndClose(env, {Account{"alice"}, Account{"bob"}}); },
+                [seeded](Env& env) { return makeSeededPayment(env, seeded); },
+                seeded.expected);
+        }
     }
 };
 

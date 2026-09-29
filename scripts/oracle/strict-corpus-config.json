@@ -29,6 +29,26 @@
           "queued": true
         }
       }
+    },
+    "persistent_cleanup": {
+      "NFTokenAcceptOffer/expired-sell-offer-cleanup": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tecEXPIRED",
+        "applied": true,
+        "queued": false,
+        "expected_deleted_object": "NFTokenOffer"
+      }
+    },
+    "seeded_payments": {
+      "seed": 2016,
+      "profile": "c1-l1-b1-f1",
+      "samples": [
+        "Payment/seed2016-payment-0-valid-base-fee",
+        "Payment/seed2016-payment-1-insufficient-balance",
+        "Payment/seed2016-payment-2-valid-fee-edge",
+        "Payment/seed2016-payment-3-future-sequence"
+      ],
+      "coverage": "deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence"
     }
   },
   "apply_flags": 0,
@@ -71,7 +91,8 @@
     "TicketCreate",
     "Batch",
     "VaultCreate",
-    "LoanBrokerSet"
+    "LoanBrokerSet",
+    "NFTokenAcceptOffer"
   ],
   "batch_wrapper_policy": "canonical RawTransaction and poisoned CreatedNode wrapper, on both fix sides where BatchV1_1 is enabled",
   "submit_policy": "open_ledger boundary, engine_result token and numeric TER, applied/queued flags, uint64 fee, complete current open-ledger SLE bytes"
