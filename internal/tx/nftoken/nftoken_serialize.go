@@ -21,9 +21,6 @@ func serializeNFTokenPage(page *state.NFTokenPageData) ([]byte, error) {
 	return state.SerializeNFTokenPage(page)
 }
 
-// serializeNFTokenOfferRaw serializes an NFToken offer ledger entry from
-// primitive parameters. The serialization logic lives in internal/ledger/state
-// alongside ParseNFTokenOffer.
 func serializeNFTokenOfferRaw(
 	ownerID [20]byte, tokenID [32]byte,
 	amount entry.AmountValue, flags uint32,
