@@ -189,12 +189,7 @@ func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.Appl
 		return ter.TefINTERNAL, false
 	}
 
-	// TxQ.Apply / TxQ.Accept target the open ledger but run with
-	// OpenLedger=false (rippled's tapNONE). EnforceLoadFee makes checkFee honour
-	// the load-scaled fee floor on those paths while server load is elevated,
-	// matching rippled where the floor fires because view.open() is true; it is
-	// a no-op at normal load. Reference: rippled Transactor::checkFee
-	// (Transactor.cpp:278-290), TxQ::accept on an open OpenView.
+	// Queue application targets an open view even with OpenLedger unset.
 	engineCfg := tx.EngineConfig{
 		BaseFee:                   a.cfg.BaseFee,
 		ReserveBase:               a.cfg.ReserveBase,
@@ -327,13 +322,8 @@ func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID 
 		return ter.TefINTERNAL
 	}
 
-	// Run preclaim with OpenLedger=false + EnforceLoadFee=true, mirroring
-	// ApplyTransaction. The open-ledger fee ESCALATION (txnsExpected-based) is
-	// the TxQ's own feeLevel-vs-requiredFeeLevel decision, not a preclaim
-	// rejection; checkFee here must only enforce the load-scaled base fee
-	// (a no-op at normal load), matching rippled Transactor::checkFee against
-	// the TxQ open view. Using OpenLedger=true would reject every below-escalation
-	// submission with telINSUF_FEE_P instead of letting it queue.
+	// Queue admission enforces the load-scaled base fee. Ledger-size fee
+	// escalation is handled separately by the queue's admission policy.
 	engineCfg := tx.EngineConfig{
 		BaseFee:                   a.cfg.BaseFee,
 		ReserveBase:               a.cfg.ReserveBase,

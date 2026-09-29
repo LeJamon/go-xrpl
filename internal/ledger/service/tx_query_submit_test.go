@@ -50,6 +50,34 @@ func signedPaymentWithFee(t *testing.T, env *jtx.TestEnv, sender, receiver *jtx.
 	return blob, hash
 }
 
+func newServiceForEscalatedQueueTest(t *testing.T) (*service.Service, *jtx.TestEnv, *jtx.Account) {
+	t.Helper()
+	cfg := defaultServiceConfig()
+	queueCfg := txq.StandaloneConfig()
+	queueCfg.MinimumTxnInLedgerStandalone = 1
+	queueCfg.TargetTxnInLedger = 1
+	cfg.TxQ = &queueCfg
+	svc, err := service.New(cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	for sequence, name := range []string{"queue-primer-a", "queue-primer-b"} {
+		blob, _ := signedPaymentWithFee(t, env, master, jtx.NewAccount(name), 100_000_000, 10, uint32(sequence+1))
+		result := submitBlob(t, svc, blob, false)
+		if result.Result != ter.TesSUCCESS || !result.Applied {
+			t.Fatalf("queue primer %d result = %s/applied=%t, want tesSUCCESS/applied", sequence+1, result.Result, result.Applied)
+		}
+	}
+	return svc, env, master
+}
+
 func innerBatchPaymentBlob(t *testing.T, sender, receiver *jtx.Account) ([]byte, [32]byte) {
 	t.Helper()
 	txn := payment.Pay(sender, receiver, 1).Fee(10).Sequence(1).Build()
@@ -388,18 +416,15 @@ func TestService_SubmitTransaction_BatchSignerFailureIsNotHeld(t *testing.T) {
 }
 
 // TestService_SubmitTransaction_QueuesBelowFeeLevel verifies that a tx
-// paying below the open-ledger fee level is held by TxQ and surfaces
+// paying the base fee below the escalated open-ledger fee is held by TxQ and surfaces
 // terQUEUED through SubmitTransaction (Applied=false) instead of applying.
 // Before the convergence the RPC path bypassed TxQ entirely and could
 // never produce terQUEUED. The queued tx must NOT appear in the open view.
 func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
-	svc := newServiceForOpenLedgerTest(t)
-
-	env := jtx.NewTestEnv(t)
-	master := jtx.MasterAccount()
+	svc, env, master := newServiceForEscalatedQueueTest(t)
 	alice := jtx.NewAccount("alice")
 
-	blob, hash := signedPaymentWithFee(t, env, master, alice, 100_000_000, 1, 1)
+	blob, hash := signedPaymentWithFee(t, env, master, alice, 100_000_000, 10, 3)
 
 	res := submitBlob(t, svc, blob, false)
 
@@ -429,43 +454,17 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 	if res.CurrentLedgerState == nil {
 		t.Fatal("queued submit must include current-ledger state")
 	}
-	if got := res.CurrentLedgerState.AccountSequenceNext; got != 1 {
-		t.Errorf("queued account_sequence_next = %d, want unchanged sequence 1", got)
+	if got := res.CurrentLedgerState.AccountSequenceNext; got != 3 {
+		t.Errorf("queued account_sequence_next = %d, want unchanged sequence 3", got)
 	}
-	if got := res.CurrentLedgerState.AccountSequenceAvailable; got != 2 {
-		t.Errorf("queued account_sequence_available = %d, want just-admitted sequence 2", got)
+	if got := res.CurrentLedgerState.AccountSequenceAvailable; got != 4 {
+		t.Errorf("queued account_sequence_available = %d, want just-admitted sequence 4", got)
 	}
 }
 
 func TestService_SubmitTransaction_QueuedSnapshotUsesEscalatedFee(t *testing.T) {
-	cfg := service.DefaultConfig()
-	cfg.Standalone = true
-	queueCfg := txq.StandaloneConfig()
-	queueCfg.MinimumTxnInLedgerStandalone = 1
-	queueCfg.TargetTxnInLedger = 1
-	cfg.TxQ = &queueCfg
-	svc, err := service.New(cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	if err := svc.Start(); err != nil {
-		t.Fatalf("service.Start: %v", err)
-	}
-	t.Cleanup(svc.Stop)
-
-	env := jtx.NewTestEnv(t)
-	master := jtx.MasterAccount()
-	alice := jtx.NewAccount("alice")
-	bob := jtx.NewAccount("bob")
-	firstBlob, _ := signedPaymentWithFee(t, env, master, alice, 100_000_000, 10, 1)
-	if first := submitBlob(t, svc, firstBlob, false); first.Result != ter.TesSUCCESS {
-		t.Fatalf("first payment result = %s, want tesSUCCESS", first.Result)
-	}
-	secondBlob, _ := signedPaymentWithFee(t, env, master, bob, 100_000_000, 10, 2)
-	if second := submitBlob(t, svc, secondBlob, false); second.Result != ter.TesSUCCESS {
-		t.Fatalf("second payment result = %s, want tesSUCCESS", second.Result)
-	}
-	queuedBlob, _ := signedPaymentWithFee(t, env, master, jtx.NewAccount("carol"), 100_000_000, 1, 3)
+	svc, env, master := newServiceForEscalatedQueueTest(t)
+	queuedBlob, _ := signedPaymentWithFee(t, env, master, jtx.NewAccount("carol"), 100_000_000, 10, 3)
 	queued := submitBlob(t, svc, queuedBlob, false)
 	if queued.Result != ter.TerQUEUED {
 		t.Fatalf("queued payment result = %s, want terQUEUED", queued.Result)
@@ -485,27 +484,29 @@ func TestService_SubmitTransaction_QueuedSnapshotUsesEscalatedFee(t *testing.T) 
 }
 
 // TestService_SubmitTransaction_FailHardNotQueued verifies tapFAIL_HARD
-// blocks queue admission: a below-fee-level tx that would otherwise be
-// queued is rejected (telCAN_NOT_QUEUE) when fail_hard is set, mirroring
-// rippled TxQ::canBeHeld (TxQ.cpp:393-399).
+// blocks queue admission: a base-fee tx that would otherwise be held below the
+// escalated open-ledger fee is rejected (telCAN_NOT_QUEUE) when fail_hard is set.
 func TestService_SubmitTransaction_FailHardNotQueued(t *testing.T) {
-	svc := newServiceForOpenLedgerTest(t)
-
-	env := jtx.NewTestEnv(t)
-	master := jtx.MasterAccount()
+	svc, env, master := newServiceForEscalatedQueueTest(t)
 	alice := jtx.NewAccount("alice")
 
-	blob, hash := signedPaymentWithFee(t, env, master, alice, 100_000_000, 1, 1)
+	blob, hash := signedPaymentWithFee(t, env, master, alice, 100_000_000, 10, 3)
 
 	res := submitBlob(t, svc, blob, true)
 
 	if res.Applied {
 		t.Errorf("Applied = true, want false")
 	}
-	if res.Result == ter.TerQUEUED {
-		t.Errorf("Result = terQUEUED, want a rejection under fail_hard")
+	if res.Result != ter.TelCAN_NOT_QUEUE {
+		t.Errorf("Result = %s, want telCAN_NOT_QUEUE under fail_hard", res.Result)
 	}
 	if openLedgerHasTx(t, svc, hash) {
 		t.Errorf("fail_hard rejected tx must not be in the open view")
+	}
+	if queued := svc.QueueAllTxs(); len(queued) != 0 {
+		t.Errorf("fail_hard rejected tx must not enter the queue: %v", queued)
+	}
+	if blob, included, deferred, ok := svc.TransactionForRelay(hash); ok || len(blob) != 0 || included || deferred {
+		t.Errorf("fail_hard rejected tx must not be retained for relay: (%x, %v, %v, %v)", blob, included, deferred, ok)
 	}
 }

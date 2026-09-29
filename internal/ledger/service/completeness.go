@@ -115,3 +115,45 @@ func (c *completeLedgerSet) String() string {
 	}
 	return strings.Join(parts, ",")
 }
+
+// trimPendingValidatedRange removes ledgers whose persistence is still in
+// progress from a complete validated range. The range keeps its widest
+// contiguous tip first, then chooses the larger remaining side for interior
+// gaps, matching rippled's validated-range lookup behavior.
+func trimPendingValidatedRange(minVal, maxVal uint32, pending []uint32) (uint32, uint32) {
+	if len(pending) == 0 || (minVal == 0 && maxVal == 0) {
+		return minVal, maxVal
+	}
+
+	sort.Slice(pending, func(i, j int) bool { return pending[i] < pending[j] })
+	isPending := func(seq uint32) bool {
+		index := sort.Search(len(pending), func(i int) bool { return pending[i] >= seq })
+		return index < len(pending) && pending[index] == seq
+	}
+
+	for maxVal > 0 && isPending(maxVal) {
+		maxVal--
+	}
+	for minVal <= maxVal && isPending(minVal) {
+		minVal++
+	}
+	if minVal > maxVal {
+		return 0, 0
+	}
+
+	for _, seq := range pending {
+		if seq < minVal || seq > maxVal {
+			continue
+		}
+		if seq > minVal+(maxVal-minVal)/2 {
+			maxVal = seq - 1
+		} else {
+			minVal = seq + 1
+		}
+		if minVal > maxVal {
+			return 0, 0
+		}
+	}
+
+	return minVal, maxVal
+}

@@ -1774,6 +1774,28 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 	return min, max, true
 }
 
+// validatedLedgerRange returns the complete range currently safe for indexed
+// transaction lookup. Pending persistence is excluded from the full range
+// used by ledger availability and cleanup.
+func (s *Service) validatedLedgerRange() (min, max uint32, ok bool) {
+	min, max, ok = s.AvailableLedgerRange()
+	if !ok {
+		return 0, 0, false
+	}
+
+	var pending []uint32
+	s.completeMu.RLock()
+	if len(s.completeLedgerTokens) != 0 {
+		pending = make([]uint32, 0, len(s.completeLedgerTokens))
+		for seq := range s.completeLedgerTokens {
+			pending = append(pending, seq)
+		}
+	}
+	s.completeMu.RUnlock()
+	min, max = trimPendingValidatedRange(min, max, pending)
+	return min, max, true
+}
+
 func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {
 	s.historyComponent.mu.RLock()
 	defer s.historyComponent.mu.RUnlock()
@@ -1962,6 +1984,11 @@ func (s *Service) GetServerInfo() ServerInfo {
 		s.clampCompleteLedgers(minimumOnlineFunc())
 	}
 	info.CompleteLedgers = s.completeLedgersString()
+	if min, max, ok := s.validatedLedgerRange(); ok {
+		info.HaveValidatedRange = true
+		info.ValidatedRangeMin = min
+		info.ValidatedRangeMax = max
+	}
 
 	return info
 }
@@ -1982,6 +2009,9 @@ type ServerInfo struct {
 	CompleteLedgers          string
 	HavePublished            bool
 	PublishedLedgerSeq       uint32
+	HaveValidatedRange       bool
+	ValidatedRangeMin        uint32
+	ValidatedRangeMax        uint32
 	NetworkID                uint32
 }
 

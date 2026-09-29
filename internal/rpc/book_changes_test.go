@@ -317,6 +317,55 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 	assert.Empty(t, changes, "changes should be empty when no offers modified")
 }
 
+func TestBookChangesIgnoresOpenMetadata(t *testing.T) {
+	mock := newMockLedgerServiceBC()
+	for _, seq := range []uint32{2, 3} {
+		ledger := newMockLedgerReaderBC(seq)
+		ledger.closed = seq == 2
+		ledger.validated = false
+		addBookChangesTransaction(t, ledger, []any{
+			bookChangesOfferNode("USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", ""),
+		})
+		mock.addLedger(ledger)
+	}
+	for _, test := range []struct {
+		name        string
+		params      string
+		wantChanges int
+	}{
+		{name: "default", params: `{}`},
+		{name: "current", params: `{"ledger_index":"current"}`},
+		{name: "legacy current", params: `{"ledger":"current"}`},
+		{name: "open sequence", params: `{"ledger_index":3}`},
+		{name: "closed", params: `{"ledger_index":"closed"}`, wantChanges: 1},
+		{name: "closed sequence", params: `{"ledger_index":2}`, wantChanges: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   newTestServicesBC(mock),
+			}
+			result, rpcErr := (&handlers.BookChangesMethod{}).Handle(ctx, json.RawMessage(test.params))
+			require.Nil(t, rpcErr)
+			encoded, err := json.Marshal(result)
+			require.NoError(t, err)
+			var response map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &response))
+			changes, ok := response["changes"].([]any)
+			require.True(t, ok, "changes must remain an array")
+			require.Len(t, changes, test.wantChanges)
+			assert.Equal(t, false, response["validated"])
+			if test.wantChanges != 0 {
+				change := changes[0].(map[string]any)
+				assert.Equal(t, "10", change["volume_a"])
+				assert.Equal(t, "10", change["volume_b"])
+			}
+		})
+	}
+}
+
 func TestBookChangesContextReadError(t *testing.T) {
 	mock := newMockLedgerServiceBC()
 	ledger := &contextErrorLedgerReaderBC{mockLedgerReaderBC: newMockLedgerReaderBC(2)}

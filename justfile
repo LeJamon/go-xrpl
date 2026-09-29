@@ -50,7 +50,7 @@ test-integration:
 test-tx:
     go test ./internal/tx/...
 
-# CI group: ledger / txq / rpc / consensus / peermanagement / manifest.
+# CI group: ledger / txq / rpc / grpc / consensus / peermanagement / manifest.
 test-core:
     go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
 

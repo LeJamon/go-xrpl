@@ -24,12 +24,17 @@ GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 \
 
 Each case starts from the C++ recorder's complete parent ledger, captured before
 the tested submission: header, state entries, transaction/metadata leaves,
-effective rules and fees. The signed transaction bytes and close inputs are
-recorded separately from expectations. Go verifies the parent roots, submits
+effective rules and fees. Explicit rules must equal the rules loaded from the
+authenticated Amendments SLE, including permanent rules. The signed transaction
+bytes, optional `pre_submit` history and close inputs are recorded separately
+from expectations. Prior submissions execute in order through the same queue. Go verifies the parent roots, submits
 those unchanged bytes with signature checks enabled, and compares the first
 observed boundary, symbolic/numeric TER, applied/queued flags, fees and state.
 Closing the recorded transaction set must reproduce every state and
 transaction/metadata byte, AccountHash, TxHash, full header and ledger hash.
+The same closed leaves also execute through production inbound replay. Applied
+submissions must retain their signed bytes and returned diagnostic metadata in
+the open transaction map; queued submissions must remain in the actual queue.
 Rejected transactions must preserve state. Inputs are never autofunded,
 renumbered, re-signed, rewritten, or retried to fit an expected result.
 
@@ -61,7 +66,10 @@ close, preserving their original byte and hash expectations.
 
 ## Reading the evidence
 
-The required CI job retains the test log and JSON report. Reports reconcile
+The required CI job retains the corpus and engine JSON reports, deterministic
+order/soak execution logs, and durable ledger service execution logs. See
+[engine evidence](engine-execution-evidence.md) for the execution stages and
+limits. Corpus reports reconcile
 `discovered = executed + skipped + excluded` and
 `executed = passed + failed`, both overall and by suite, transaction family
 and amendment profile. Every exclusion or skipped case has a reason. Zero

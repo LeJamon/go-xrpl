@@ -65,7 +65,7 @@ def check_oracle(oracle: Path) -> dict[str, str]:
         text=True,
     ).strip()
     status = subprocess.check_output(
-        ["git", "-C", str(oracle), "status", "--porcelain"], text=True
+        ["git", "-C", str(oracle), "status", "--porcelain", "--untracked-files=all"], text=True
     )
     if commit != ORACLE_COMMIT or describe != ORACLE_TAG or status:
         raise SystemExit(
@@ -108,7 +108,7 @@ def verify_config(config: Path) -> dict:
             "owner_reserve_increment_drops": 50_000_000,
         },
         "close_policy": {
-            "setup": "fund named accounts, then close before recording parent",
+            "setup": "Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent",
             "request_seconds_after_now": 5,
             "capture": "effective agreed close time computed from the pre-close header and resolution",
         },
@@ -127,9 +127,85 @@ def verify_config(config: Path) -> dict:
         "Batch",
         "VaultCreate",
         "LoanBrokerSet",
+        "NFTokenAcceptOffer",
+        "OfferCreate",
+        "EscrowCancel",
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
+    expected_overrides = {
+        "network_id": {
+            "AccountSet/network-id-missing": 1025,
+            "AccountSet/network-id-wrong": 1025,
+        },
+        "queue_history": {
+            "AccountSet/queued-low-fee": {
+                "txq_config": {
+                    "ledgers_in_queue": 2,
+                    "queue_size_min": 2,
+                    "minimum_txn_in_ledger_standalone": 2,
+                    "normal_consensus_increase_percent": 0,
+                },
+                "internal_config": {
+                    "min_ledgers_to_compute_size_limit": 3,
+                    "max_ledger_counts_to_store": 100,
+                },
+                "pre_submit_count": 3,
+                "pre_submit_order": "alice->bob, bob->alice, alice->bob",
+                "primary": {
+                    "engine_result": "terQUEUED",
+                    "applied": False,
+                    "queued": True,
+                },
+            }
+        },
+        "persistent_cleanup": {
+            "NFTokenAcceptOffer/expired-sell-offer-cleanup": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecEXPIRED",
+                "applied": True,
+                "queued": False,
+                "expected_deleted_object": "NFTokenOffer",
+            },
+            "OfferCreate/expired-offer-cleanup": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecKILLED",
+                "applied": True,
+                "queued": False,
+                "expected_deleted_object": "Offer",
+                "expected_retained_object": "Offer",
+            },
+        },
+        "invariant_recovery": {
+            "EscrowCancel/malformed-escrow-cancel-refund": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecINVARIANT_FAILED",
+                "applied": True,
+                "queued": False,
+                "coverage": "malformed parent escrow refund reaches fee-only recovery and records invariant failure",
+            },
+        },
+        "seeded_payments": {
+            "seed": 2016,
+            "profile": "c1-l1-b1-f1",
+            "samples": [
+                "Payment/seed2016-payment-0-valid-base-fee",
+                "Payment/seed2016-payment-1-insufficient-balance",
+                "Payment/seed2016-payment-2-valid-fee-edge",
+                "Payment/seed2016-payment-3-future-sequence",
+            ],
+            "coverage": "deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence",
+        },
+    }
+    if values.get("scenario_overrides") != expected_overrides:
+        raise SystemExit(
+            "strict-corpus-config.json scenario overrides do not match recorder scenarios"
+        )
+    if values.get("submission_policy") != (
+        "one direct submit RPC per signed tx_blob; optional pre_submit history uses the same "
+        "open ledger and queue; no retries or output-derived setup"
+    ):
+        raise SystemExit("strict-corpus-config.json submission policy does not match recorder")
     return values
 
 
@@ -287,6 +363,8 @@ def copy_build(old_build: Path, build: Path) -> None:
 def compile_recorder(
     *, old_build: Path, build: Path, recorder_source: Path
 ) -> tuple[Path, str, str]:
+    if build.resolve() == old_build.resolve():
+        raise SystemExit("recorder build must not alias the verified production build")
     compile_commands = json.loads((old_build / "compile_commands.json").read_text())
     selected = next(
         entry
@@ -314,7 +392,6 @@ def compile_recorder(
         raise RuntimeError("could not specialize the pinned test compile command")
     compile_text = shlex.join(args)
     compile_hash = hashlib.sha256(compile_text.encode()).hexdigest()
-    run(args, cwd=build)
 
     commands = subprocess.check_output(
         ["ninja", "-C", str(old_build), "-t", "commands", "xrpld"], text=True
@@ -333,12 +410,19 @@ def compile_recorder(
         output_index = link_args.index("-o")
     except ValueError as error:
         raise RuntimeError("pinned xrpld link command has no output argument") from error
+    output = build / "xrpld"
+    output.unlink(missing_ok=True)
+    run(link_args, cwd=build)
+    if sha256(output) != OLD_BINARY_SHA256:
+        raise SystemExit(
+            "reused build objects do not reproduce the verified production binary; "
+            "use --clean-build"
+        )
+    run(args, cwd=build)
     link_args.insert(output_index, str(strict_relative))
     link_text = shlex.join(link_args)
     link_hash = hashlib.sha256(link_text.encode()).hexdigest()
-    output = build / "xrpld"
-    if output.exists():
-        output.unlink()
+    output.unlink()
     run(link_args, cwd=build)
     return output, compile_hash, link_hash
 
@@ -405,7 +489,7 @@ def main() -> None:
             old_build=old_build / "build", build=build, recorder_source=recorder_source
         )
         clean_identity = {}
-        build_method = "hardlinked exact-commit production build objects; newly compiled recorder object; relinked xrpld"
+        build_method = "production objects verified by exact binary relink; newly compiled recorder object; relinked xrpld"
         version_output = subprocess.check_output([str(strict_binary), "--version"], text=True)
         version = version_output.splitlines()[0].strip()
     if args.clean_build:

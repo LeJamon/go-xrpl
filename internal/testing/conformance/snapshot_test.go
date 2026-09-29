@@ -12,7 +12,10 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -244,6 +247,51 @@ func TestSnapshotRejectsFamilyMismatch(t *testing.T) {
 	}
 }
 
+func TestSnapshotExecutesAndComparesPriorSubmissions(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-require-destination.json")
+	fixture.PreSubmit = []snapshotSubmission{{TxBlob: fixture.TxBlob, Submit: fixture.Submit}}
+	if err := runSnapshotFixture(fixture); err == nil || !strings.HasPrefix(err.Error(), "engine_result=") {
+		t.Fatalf("duplicate primary submission did not fail after pre_submit consumed its sequence: %v", err)
+	}
+	fixture.PreSubmit[0].Submit.EngineResult = ter.TemMALFORMED.String()
+	fixture.PreSubmit[0].Submit.EngineResultCode = int(ter.TemMALFORMED)
+	fixture.PreSubmit[0].Submit.Applied = false
+	fixture.PreSubmit[0].Submit.Fee = 0
+	if err := runSnapshotFixture(fixture); err == nil || !strings.HasPrefix(err.Error(), "pre_submit[0]: engine_result=") {
+		t.Fatalf("prior submission result was not compared: %v", err)
+	}
+}
+
+func TestSnapshotRejectsIncompletePriorSubmissionEvidence(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-require-destination.json")
+	fixture.PreSubmit = []snapshotSubmission{{TxBlob: fixture.TxBlob, Submit: fixture.Submit}}
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"tx_blob", "engine_result_code", "post_submit_sle"} {
+		t.Run(field, func(t *testing.T) {
+			var object map[string]any
+			if err := json.Unmarshal(data, &object); err != nil {
+				t.Fatal(err)
+			}
+			prior := object["pre_submit"].([]any)[0].(map[string]any)
+			if field == "tx_blob" {
+				delete(prior, field)
+			} else {
+				delete(prior["submit"].(map[string]any), field)
+			}
+			modified, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeSnapshotFixture(modified); err == nil || !strings.Contains(err.Error(), field+" is missing") {
+				t.Fatalf("missing prior submission evidence accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestSnapshotRejectsChangedClosedRules(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -406,4 +454,71 @@ func mutateSnapshotTestHex(t *testing.T, value string) string {
 	}
 	decoded[0] ^= 1
 	return strings.ToUpper(hex.EncodeToString(decoded))
+}
+
+func TestSnapshotRequiresLedgerRuleEquality(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
+	parent, err := loadSnapshotLedger(fixture.Parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, feature := range amendment.AllFeatures() {
+		if parent.EffectiveRules.Enabled(feature.ID) {
+			continue
+		}
+		fixture.Parent.Rules = append(fixture.Parent.Rules, strings.ToUpper(hex.EncodeToString(feature.ID[:])))
+		if _, err := loadSnapshotLedger(fixture.Parent); err == nil || !strings.Contains(err.Error(), "explicit rules differ") {
+			t.Fatalf("accepted rule absent from authenticated parent: %v", err)
+		}
+		return
+	}
+	t.Fatal("fixture has no disabled amendment for the negative control")
+}
+
+func TestSnapshotAppliedTransactionRequiresStoredBytes(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f1-AccountSet-require-destination.json")
+	parent, err := loadSnapshotLedger(fixture.Parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := ledger.NewOpen(parent.Ledger, parent.Header.CloseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all.RegisterAll()
+	blob, err := hex.DecodeString(fixture.TxBlob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := parseSnapshotPending("tx_blob", blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := &tx.Metadata{TransactionResult: ter.TesSUCCESS}
+	if err := assertSnapshotAppliedTransaction(current, pending, metadata); err == nil || !strings.Contains(err.Error(), "absent") {
+		t.Fatalf("accepted missing applied transaction: %v", err)
+	}
+	metaBlob, err := tx.SerializeMetadata(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := snapshotTxLeaf(blob, metaBlob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := current.AddTransactionWithMeta(pending.Hash, leaf); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertSnapshotAppliedTransaction(current, pending, metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata.TransactionResult = ter.TecNO_PERMISSION
+	if err := assertSnapshotAppliedTransaction(current, pending, metadata); err == nil || !strings.Contains(err.Error(), "metadata differs") {
+		t.Fatalf("accepted different returned metadata: %v", err)
+	}
+	pending.Blob = append([]byte(nil), pending.Blob...)
+	pending.Blob[len(pending.Blob)-1] ^= 1
+	if err := assertSnapshotAppliedTransaction(current, pending, metadata); err == nil || !strings.Contains(err.Error(), "bytes differ") {
+		t.Fatalf("accepted different submitted bytes: %v", err)
+	}
 }
