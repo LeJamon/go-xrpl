@@ -148,7 +148,7 @@ func isFinalOracleProducer(name string) bool {
 }
 
 func TestAcceptanceEvidenceRejectsDirtyCorpus(t *testing.T) {
-	for _, state := range []string{"clean", "modified", "untracked"} {
+	for _, state := range []string{"clean", "modified", "untracked", "ignored"} {
 		t.Run(state, func(t *testing.T) {
 			script, repo, _ := acceptanceEvidenceRepo(t)
 			fixture := filepath.Join(repo, "fixture.json")
@@ -171,8 +171,13 @@ func TestAcceptanceEvidenceRejectsDirtyCorpus(t *testing.T) {
 			}
 			if state != "clean" {
 				path := fixture
-				if state == "untracked" {
+				if state == "untracked" || state == "ignored" {
 					path = filepath.Join(repo, "extra.json")
+				}
+				if state == "ignored" {
+					if err := os.WriteFile(filepath.Join(repo, ".git", "info", "exclude"), []byte("extra.json\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if err := os.WriteFile(path, []byte("changed"), 0o600); err != nil {
 					t.Fatal(err)
