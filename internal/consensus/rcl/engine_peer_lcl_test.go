@@ -197,7 +197,9 @@ func TestEngine_CheckLedger_ValidationMajorityBreaksConsensusIsland(t *testing.T
 
 	engine.checkLedger()
 	gotMode := engine.mode
+	pending := engine.takePendingPostUnlockLocked()
 	engine.mu.Unlock()
+	runPostUnlock(pending)
 
 	adaptor.mu.RLock()
 	requested := append([]consensus.LedgerID{}, adaptor.ledgersRequested...)

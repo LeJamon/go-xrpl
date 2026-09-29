@@ -3,7 +3,8 @@
 The release oracle is private **XRPLF/xrpld-private**, tag **3.4.1**, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`. The clean local checkout is
 `rippled-worktrees/v3.4.1-oracle`. A public 3.4.0 corpus or a version string
-alone cannot establish parity with that source.
+alone cannot establish parity with that source. [Release sign-off](release-3.4.1.md)
+remains a separate gate.
 
 ## Required signed snapshot corpus
 
@@ -78,9 +79,10 @@ the complete corpus still executes. `CONFORMANCE_TIMEOUT` defaults to 300s.
 
 A successful run proves the recorded cases under their recorded profiles.
 The manifest's `coverage_limits` and the corpus README describe unrecorded
-surfaces. This evidence does not close the full release parity sign-off in
-#2017. Historical public-oracle checks remain historical checks; they cannot be
-combined with 3.4.1 corpus results and reported as a uniform release gate.
+surfaces. This corpus does not by itself establish full release parity. The private 3.4.1
+peer and consensus jobs verify the pinned oracle artifact and runtime definitions
+separately. Historical public-oracle checks remain compatibility checks; they
+cannot substitute for private 3.4.1 evidence in the release gate.
 
 ## Recorder and legacy runner
 

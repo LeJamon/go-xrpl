@@ -1038,7 +1038,7 @@ func (r *nodeRuntime) bindStreams() error {
 	r.ledger.SetServerStatusCallback(serverStatus.publish)
 	if feeTrack := r.ledger.FeeTrack(); feeTrack != nil {
 		feeTrack.SetOnChange(func() {
-			r.ledger.SignalServerStatusPublication(serverStatus.statusPublication(nil))
+			r.ledger.SignalServerStatus()
 		})
 	}
 	if r.consensus != nil && r.consensus.Adaptor != nil {

@@ -456,7 +456,7 @@ func (e *Engine) checkLedger() {
 		var target consensus.Ledger
 		if e.mode == consensus.ModeWrongLedger && e.wrongLedgerID == netLgr {
 			if target = e.resolveTargetLedger(netLgr); target == nil {
-				e.adaptor.RequestLedger(netLgr)
+				e.enqueueLedgerRequestLocked(netLgr)
 				return
 			}
 		}
@@ -611,6 +611,14 @@ func (e *Engine) resolveTargetLedger(id consensus.LedgerID) consensus.Ledger {
 	return nil
 }
 
+// Acquisition may synchronously hand a newly available ledger back to the
+// engine. Finish the recovery state transition and release e.mu first.
+func (e *Engine) enqueueLedgerRequestLocked(id consensus.LedgerID) {
+	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
+		e.adaptor.RequestLedger(id)
+	})
+}
+
 // handleWrongLedger switches to the network's preferred ledger. target is
 // an already-resolved ledger (nil to resolve here).
 func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consensus.Ledger) {
@@ -698,7 +706,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	} else {
 		// Not found — request from peers and remain pinned until the preferred
 		// ledger is acquired or a topology change invalidates the request.
-		e.adaptor.RequestLedger(netLedgerID)
+		e.enqueueLedgerRequestLocked(netLedgerID)
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
 			"t", "consensus",
 			"event", "wrong-lcl",

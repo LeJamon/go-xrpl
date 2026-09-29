@@ -35,12 +35,18 @@ type serverStatusPublisher struct {
 	publisher serverStatusEventPublisher
 	haveLast  bool
 	last      serverStatusSnapshot
-	haveMode  bool
-	mode      string
+	// mode tracks delivery so fee signals cannot observe later queued transitions.
+	mode string
 }
 
 func newServerStatusPublisher(services *types.ServiceGraph, publisher serverStatusEventPublisher) *serverStatusPublisher {
-	return &serverStatusPublisher{services: services, publisher: publisher}
+	mode := "full"
+	if services != nil && services.Ledger() != nil {
+		if info := services.Ledger().GetServerInfo(); info.ServerState != "" {
+			mode = info.ServerState
+		}
+	}
+	return &serverStatusPublisher{services: services, publisher: publisher, mode: mode}
 }
 
 func (p *serverStatusPublisher) publish(mode *string) {
@@ -68,19 +74,9 @@ func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rp
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	serverStatus := "full"
+	serverStatus := p.mode
 	if mode != nil {
 		serverStatus = *mode
-		p.mode = serverStatus
-		p.haveMode = true
-	} else if p.haveMode {
-		serverStatus = p.mode
-	} else {
-		if info := p.services.Ledger().GetServerInfo(); info.ServerState != "" {
-			serverStatus = info.ServerState
-		}
-		p.mode = serverStatus
-		p.haveMode = true
 	}
 	baseFee, _, _ := p.services.Ledger().GetCurrentFees()
 	load := handlers.ComputeServerLoad(p.services)
@@ -113,6 +109,7 @@ func (p *serverStatusPublisher) publishCaptured(snapshot serverStatusSnapshot, e
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.mode = snapshot.serverStatus
 	if p.haveLast && snapshot == p.last {
 		return
 	}
