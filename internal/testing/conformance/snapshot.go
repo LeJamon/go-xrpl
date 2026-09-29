@@ -37,23 +37,29 @@ const (
 // transaction and close_input are deliberately independent from the expected
 // submit and closed-ledger values.
 type snapshotFixture struct {
-	FixtureVersion            string             `json:"fixture_version"`
-	OracleRepository          string             `json:"oracle_repository"`
-	OracleTag                 string             `json:"oracle_tag"`
-	OracleCommit              string             `json:"oracle_commit"`
-	Suite                     string             `json:"suite"`
-	Testcase                  string             `json:"testcase"`
-	Family                    string             `json:"family"`
-	Profile                   string             `json:"profile"`
-	NetworkID                 uint32             `json:"network_id"`
-	ApplyFlags                uint32             `json:"apply_flags"`
-	SkipSignatureVerification bool               `json:"skip_signature_verification"`
-	TxQConfig                 snapshotTxQConfig  `json:"txq_config"`
-	TxBlob                    string             `json:"tx_blob"`
-	Parent                    snapshotLedger     `json:"parent"`
-	CloseInput                snapshotCloseInput `json:"close_input"`
-	Submit                    snapshotSubmit     `json:"submit"`
-	Closed                    snapshotLedger     `json:"closed"`
+	FixtureVersion            string               `json:"fixture_version"`
+	OracleRepository          string               `json:"oracle_repository"`
+	OracleTag                 string               `json:"oracle_tag"`
+	OracleCommit              string               `json:"oracle_commit"`
+	Suite                     string               `json:"suite"`
+	Testcase                  string               `json:"testcase"`
+	Family                    string               `json:"family"`
+	Profile                   string               `json:"profile"`
+	NetworkID                 uint32               `json:"network_id"`
+	ApplyFlags                uint32               `json:"apply_flags"`
+	SkipSignatureVerification bool                 `json:"skip_signature_verification"`
+	TxQConfig                 snapshotTxQConfig    `json:"txq_config"`
+	TxBlob                    string               `json:"tx_blob"`
+	PreSubmit                 []snapshotSubmission `json:"pre_submit,omitempty"`
+	Parent                    snapshotLedger       `json:"parent"`
+	CloseInput                snapshotCloseInput   `json:"close_input"`
+	Submit                    snapshotSubmit       `json:"submit"`
+	Closed                    snapshotLedger       `json:"closed"`
+}
+
+type snapshotSubmission struct {
+	TxBlob string         `json:"tx_blob"`
+	Submit snapshotSubmit `json:"submit"`
 }
 
 type snapshotSubmit struct {
@@ -194,29 +200,22 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 	if err := validateSnapshotTxQConfig(fixture.TxQConfig); err != nil {
 		return err
 	}
-	if fixture.Submit.Boundary != snapshotSubmitBoundary {
-		return fmt.Errorf("submit.boundary=%q, want %q", fixture.Submit.Boundary, snapshotSubmitBoundary)
+	if err := validateSnapshotSubmit(fixture.Submit); err != nil {
+		return err
 	}
-	if fixture.Submit.EngineResult == "" {
-		return errors.New("submit.engine_result is empty")
-	}
-	if ter.Result(fixture.Submit.EngineResultCode).String() != fixture.Submit.EngineResult {
-		return fmt.Errorf("submit TER %q does not match numeric code %d", fixture.Submit.EngineResult, fixture.Submit.EngineResultCode)
-	}
-	if fixture.Submit.Applied && fixture.Submit.Queued {
-		return errors.New("submit.applied and submit.queued cannot both be true")
-	}
-	if fixture.Submit.Queued != (ter.Result(fixture.Submit.EngineResultCode) == ter.TerQUEUED) {
-		return fmt.Errorf("submit.queued does not match TER %q", fixture.Submit.EngineResult)
+	for i, prior := range fixture.PreSubmit {
+		if prior.TxBlob == "" {
+			return fmt.Errorf("pre_submit[%d].tx_blob is empty", i)
+		}
+		if err := validateSnapshotSubmit(prior.Submit); err != nil {
+			return fmt.Errorf("pre_submit[%d]: %w", i, err)
+		}
 	}
 	if fixture.CloseInput.CloseTimeResolution < 2 || fixture.CloseInput.CloseTimeResolution > 120 {
 		return fmt.Errorf("close_input.close_time_resolution=%d is outside XRPL range", fixture.CloseInput.CloseTimeResolution)
 	}
 	if fixture.CloseInput.TxBlobs == nil {
 		return errors.New("close_input.tx_blobs is missing")
-	}
-	if err := validateSnapshotEntries("submit.post_submit_sle", fixture.Submit.PostSubmitSLE); err != nil {
-		return err
 	}
 	if err := validateSnapshotLedgerShape("parent", fixture.Parent); err != nil {
 		return err
@@ -225,6 +224,25 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 		return err
 	}
 	return nil
+}
+
+func validateSnapshotSubmit(submit snapshotSubmit) error {
+	if submit.Boundary != snapshotSubmitBoundary {
+		return fmt.Errorf("submit.boundary=%q, want %q", submit.Boundary, snapshotSubmitBoundary)
+	}
+	if submit.EngineResult == "" {
+		return errors.New("submit.engine_result is empty")
+	}
+	if ter.Result(submit.EngineResultCode).String() != submit.EngineResult {
+		return fmt.Errorf("submit TER %q does not match numeric code %d", submit.EngineResult, submit.EngineResultCode)
+	}
+	if submit.Applied && submit.Queued {
+		return errors.New("submit.applied and submit.queued cannot both be true")
+	}
+	if submit.Queued != (ter.Result(submit.EngineResultCode) == ter.TerQUEUED) {
+		return fmt.Errorf("submit.queued does not match TER %q", submit.EngineResult)
+	}
+	return validateSnapshotEntries("submit.post_submit_sle", submit.PostSubmitSLE)
 }
 
 // validateSnapshotSemanticInputs validates every input needed to execute a
@@ -268,6 +286,22 @@ func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
 	}
 	if err := validateSnapshotEntriesBytes("submit.post_submit_sle", fixture.Submit.PostSubmitSLE); err != nil {
 		return err
+	}
+	for i, prior := range fixture.PreSubmit {
+		blob, err := decodeSnapshotBytes("pre_submit.tx_blob", prior.TxBlob)
+		if err != nil {
+			return fmt.Errorf("pre_submit[%d]: %w", i, err)
+		}
+		pending, err := parseSnapshotPending("pre_submit.tx_blob", blob)
+		if err != nil {
+			return fmt.Errorf("pre_submit[%d]: %w", i, err)
+		}
+		if prior.Submit.Applied && !snapshotPendingContains(closePending, pending) {
+			return fmt.Errorf("applied pre_submit[%d] is absent from close_input.tx_blobs", i)
+		}
+		if err := validateSnapshotEntriesBytes("submit.post_submit_sle", prior.Submit.PostSubmitSLE); err != nil {
+			return fmt.Errorf("pre_submit[%d]: %w", i, err)
+		}
 	}
 	return nil
 }
@@ -415,41 +449,25 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	if err != nil {
 		return fmt.Errorf("create open ledger: %w", err)
 	}
-	beforeState, err := view.Current().StateMapHash()
-	if err != nil {
-		return fmt.Errorf("hash open state before submit: %w", err)
-	}
-	beforeTxs, err := view.Current().TxMapHash()
-	if err != nil {
-		return fmt.Errorf("hash open transactions before submit: %w", err)
-	}
 	submitApply := snapshotApplyConfig(parent, fixture.NetworkID, tx.ApplyFlags(fixture.ApplyFlags))
 	queue, err := txq.New(fixture.TxQConfig.toConfig())
 	if err != nil {
 		return fmt.Errorf("create transaction queue: %w", err)
 	}
-	out := view.SubmitDetailed(pending, submitApply, queue)
-	if err := assertSnapshotSubmit(out, fixture.Submit); err != nil {
-		return err
-	}
-
-	if !out.Applied {
-		if out.Changed {
-			return errors.New("rejected or queued snapshot submission changed the open ledger")
+	for i, prior := range fixture.PreSubmit {
+		blob, err := decodeSnapshotBytes("pre_submit.tx_blob", prior.TxBlob)
+		if err != nil {
+			return err
 		}
-		afterState, hashErr := view.Current().StateMapHash()
-		if hashErr != nil {
-			return fmt.Errorf("hash open state after non-applied submit: %w", hashErr)
+		pending, err := parseSnapshotPending("pre_submit.tx_blob", blob)
+		if err != nil {
+			return err
 		}
-		afterTxs, hashErr := view.Current().TxMapHash()
-		if hashErr != nil {
-			return fmt.Errorf("hash open transactions after non-applied submit: %w", hashErr)
-		}
-		if beforeState != afterState || beforeTxs != afterTxs {
-			return errors.New("rejected or queued snapshot submission mutated ledger state")
+		if err := submitSnapshot(view, pending, submitApply, queue, prior.Submit); err != nil {
+			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
 	}
-	if err := assertSnapshotPostSubmitState(view.Current(), fixture.Submit.PostSubmitSLE); err != nil {
+	if err := submitSnapshot(view, pending, submitApply, queue, fixture.Submit); err != nil {
 		return err
 	}
 
@@ -469,6 +487,42 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	}
 	if err := runSnapshotReplay(fixture, parent, closed); err != nil {
 		return fmt.Errorf("inbound replay mismatch: %w", err)
+	}
+	return nil
+}
+
+func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, apply openledger.ApplyConfig, queue *txq.TxQ, expected snapshotSubmit) error {
+	beforeState, err := view.Current().StateMapHash()
+	if err != nil {
+		return fmt.Errorf("hash open state before submit: %w", err)
+	}
+	beforeTxs, err := view.Current().TxMapHash()
+	if err != nil {
+		return fmt.Errorf("hash open transactions before submit: %w", err)
+	}
+	out := view.SubmitDetailed(pending, apply, queue)
+	if err := assertSnapshotSubmit(out, expected); err != nil {
+		return err
+	}
+
+	if !out.Applied {
+		if out.Changed {
+			return errors.New("rejected or queued snapshot submission changed the open ledger")
+		}
+		afterState, hashErr := view.Current().StateMapHash()
+		if hashErr != nil {
+			return fmt.Errorf("hash open state after non-applied submit: %w", hashErr)
+		}
+		afterTxs, hashErr := view.Current().TxMapHash()
+		if hashErr != nil {
+			return fmt.Errorf("hash open transactions after non-applied submit: %w", hashErr)
+		}
+		if beforeState != afterState || beforeTxs != afterTxs {
+			return errors.New("rejected or queued snapshot submission mutated ledger state")
+		}
+	}
+	if err := assertSnapshotPostSubmitState(view.Current(), expected.PostSubmitSLE); err != nil {
+		return err
 	}
 	return nil
 }
@@ -932,6 +986,25 @@ func validateSnapshotJSONShape(data []byte) error {
 	if root == nil {
 		return errors.New("snapshot fixture must be a JSON object")
 	}
+	if raw, present := root["pre_submit"]; present {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return errors.New("pre_submit must be an array")
+		}
+		var submissions []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &submissions); err != nil {
+			return fmt.Errorf("pre_submit must be an array: %w", err)
+		}
+		for i, submission := range submissions {
+			name := fmt.Sprintf("pre_submit[%d]", i)
+			if err := requireSnapshotKeys(name, submission, "tx_blob", "submit"); err != nil {
+				return err
+			}
+			if err := validateSnapshotSubmitJSON(name+".submit", submission["submit"]); err != nil {
+				return err
+			}
+		}
+		delete(root, "pre_submit")
+	}
 	if err := requireSnapshotKeys("fixture", root, "fixture_version", "oracle_repository", "oracle_tag", "oracle_commit", "suite", "testcase", "family", "profile", "network_id", "apply_flags", "skip_signature_verification", "txq_config", "tx_blob", "parent", "close_input", "submit", "closed"); err != nil {
 		return err
 	}
@@ -961,14 +1034,18 @@ func validateSnapshotJSONShape(data []byte) error {
 	if err := requireSnapshotKeys("close_input", closeInput, "parent_close_time", "close_time", "ledger_sequence", "close_time_resolution", "close_flags", "tx_blobs"); err != nil {
 		return err
 	}
+	return validateSnapshotSubmitJSON("submit", root["submit"])
+}
+
+func validateSnapshotSubmitJSON(name string, raw json.RawMessage) error {
 	var submit map[string]json.RawMessage
-	if err := decodeSnapshotObject("submit", root["submit"], &submit); err != nil {
+	if err := decodeSnapshotObject(name, raw, &submit); err != nil {
 		return err
 	}
-	if err := requireSnapshotKeys("submit", submit, "boundary", "engine_result", "engine_result_code", "applied", "queued", "fee", "post_submit_sle"); err != nil {
+	if err := requireSnapshotKeys(name, submit, "boundary", "engine_result", "engine_result_code", "applied", "queued", "fee", "post_submit_sle"); err != nil {
 		return err
 	}
-	return validateSnapshotEntriesJSON("submit.post_submit_sle", submit["post_submit_sle"])
+	return validateSnapshotEntriesJSON(name+".post_submit_sle", submit["post_submit_sle"])
 }
 
 func validateSnapshotLedgerJSON(name string, raw json.RawMessage) error {

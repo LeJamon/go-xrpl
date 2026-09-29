@@ -457,8 +457,9 @@ jobs:
             .completed_stages.inbound_replay == .executed and
             (.completed_cases | length) == .discovered and
             ([.completed_cases[]] | add) == .executed and
-            ([.completed_submission_types[]] | add) == .executed and
-            ([.completed_submission_results[]] | add) == .executed and
+            .completed_submissions >= .executed and
+            ([.completed_submission_types[]] | add) == .completed_submissions and
+            ([.completed_submission_results[]] | add) == .completed_submissions and
             ([.completed_closed_transaction_types[]] | add) == .completed_replay_leaves and
             .completed_close_inputs > 0 and .completed_replay_leaves > 0
           ' "$GOXRPL_ENGINE_EVIDENCE_REPORT" >/dev/null

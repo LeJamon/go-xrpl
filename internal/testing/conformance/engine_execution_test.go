@@ -68,6 +68,7 @@ func TestEngineExecutionOrder(t *testing.T) {
 		Results         map[string]int `json:"completed_submission_results"`
 		PresentFields   map[string]int `json:"completed_submission_common_fields_present"`
 		EnabledRules    map[string]int `json:"completed_parent_rules_enabled"`
+		Submissions     int            `json:"completed_submissions"`
 		CloseInputs     int            `json:"completed_close_inputs"`
 		ReplayLeaves    int            `json:"completed_replay_leaves"`
 		SoakSeed        uint64         `json:"soak_seed"`
@@ -120,12 +121,16 @@ func TestEngineExecutionOrder(t *testing.T) {
 		}) {
 			report.Passed++
 			report.CompletedCases[c.Name]++
-			submitted := decode(c.Fixture.TxBlob)
-			report.SubmittedTypes[fmt.Sprint(submitted["TransactionType"])]++
-			report.Results[c.Fixture.Submit.EngineResult]++
-			for _, field := range tx.FormatCommonFields() {
-				if _, present := submitted[field.Name]; present {
-					report.PresentFields[field.Name]++
+			submissions := append(slices.Clone(c.Fixture.PreSubmit), snapshotSubmission{TxBlob: c.Fixture.TxBlob, Submit: c.Fixture.Submit})
+			report.Submissions += len(submissions)
+			for _, submission := range submissions {
+				submitted := decode(submission.TxBlob)
+				report.SubmittedTypes[fmt.Sprint(submitted["TransactionType"])]++
+				report.Results[submission.Submit.EngineResult]++
+				for _, field := range tx.FormatCommonFields() {
+					if _, present := submitted[field.Name]; present {
+						report.PresentFields[field.Name]++
+					}
 				}
 			}
 			for _, rule := range c.Fixture.Parent.Rules {

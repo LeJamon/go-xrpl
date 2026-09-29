@@ -241,6 +241,50 @@ func TestSnapshotRejectsFamilyMismatch(t *testing.T) {
 	}
 }
 
+func TestSnapshotExecutesAndComparesPriorSubmissions(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-require-destination.json")
+	fixture.PreSubmit = []snapshotSubmission{{TxBlob: fixture.TxBlob, Submit: fixture.Submit}}
+	if err := runSnapshotFixture(fixture); err == nil || !strings.HasPrefix(err.Error(), "engine_result=") {
+		t.Fatalf("duplicate primary submission did not fail after pre_submit consumed its sequence: %v", err)
+	}
+	fixture.PreSubmit[0].Submit.EngineResult = ter.TemMALFORMED.String()
+	fixture.PreSubmit[0].Submit.EngineResultCode = int(ter.TemMALFORMED)
+	fixture.PreSubmit[0].Submit.Applied = false
+	if err := runSnapshotFixture(fixture); err == nil || !strings.HasPrefix(err.Error(), "pre_submit[0]: engine_result=") {
+		t.Fatalf("prior submission result was not compared: %v", err)
+	}
+}
+
+func TestSnapshotRejectsIncompletePriorSubmissionEvidence(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-require-destination.json")
+	fixture.PreSubmit = []snapshotSubmission{{TxBlob: fixture.TxBlob, Submit: fixture.Submit}}
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"tx_blob", "engine_result_code", "post_submit_sle"} {
+		t.Run(field, func(t *testing.T) {
+			var object map[string]any
+			if err := json.Unmarshal(data, &object); err != nil {
+				t.Fatal(err)
+			}
+			prior := object["pre_submit"].([]any)[0].(map[string]any)
+			if field == "tx_blob" {
+				delete(prior, field)
+			} else {
+				delete(prior["submit"].(map[string]any), field)
+			}
+			modified, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeSnapshotFixture(modified); err == nil || !strings.Contains(err.Error(), field+" is missing") {
+				t.Fatalf("missing prior submission evidence accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestSnapshotRejectsModifiedSignatureAndExpectedBytes(t *testing.T) {
 	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
 	invalidSignature := fixture
