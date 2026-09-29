@@ -292,11 +292,11 @@ func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
 		if err != nil {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
-		pending, err := parseSnapshotPending("pre_submit.tx_blob", blob)
+		priorPending, err := parseSnapshotPending("pre_submit.tx_blob", blob)
 		if err != nil {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
-		if prior.Submit.Applied && !snapshotPendingContains(closePending, pending) {
+		if prior.Submit.Applied && !snapshotPendingContains(closePending, priorPending) {
 			return fmt.Errorf("applied pre_submit[%d] is absent from close_input.tx_blobs", i)
 		}
 		if err := validateSnapshotEntriesBytes("submit.post_submit_sle", prior.Submit.PostSubmitSLE); err != nil {
@@ -459,11 +459,11 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		if err != nil {
 			return err
 		}
-		pending, err := parseSnapshotPending("pre_submit.tx_blob", blob)
+		priorPending, err := parseSnapshotPending("pre_submit.tx_blob", blob)
 		if err != nil {
 			return err
 		}
-		if err := submitSnapshot(view, pending, submitApply, queue, prior.Submit); err != nil {
+		if err := submitSnapshot(view, priorPending, submitApply, queue, prior.Submit); err != nil {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
 	}
@@ -505,6 +505,13 @@ func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, a
 		return err
 	}
 
+	expectedQueueSize := 0
+	if expected.Queued {
+		expectedQueueSize = 1
+	}
+	if queue.Size() != expectedQueueSize {
+		return fmt.Errorf("submission queue size=%d, want %d for the empty-start queue", queue.Size(), expectedQueueSize)
+	}
 	queuedBlob, queued := queue.GetTxBlob(pending.Hash)
 	if queued != out.Queued || (queued && !bytes.Equal(queuedBlob, pending.Blob)) {
 		return errors.New("submission queue membership or signed bytes differ")

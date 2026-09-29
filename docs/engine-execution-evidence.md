@@ -14,7 +14,7 @@ The initial Go candidate is `v3.4.1` at
 `xrpld-private`. Older repository instructions and historical 3.4.0 fixtures
 are not the oracle for this work.
 
-The reference binary used for the checks below has SHA-256
+The original reference binary used for the oracle-only unit checks has SHA-256
 `f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3d6113`.
 Its exact-commit production build provenance is recorded by the
 [#2015 corpus work](https://github.com/LeJamon/go-xrpl/pull/2022).
@@ -58,7 +58,7 @@ repository's CGO and native library environment.
 | `just test-pkg './internal/testing/accountset/... ./internal/testing/multisign/... ./internal/testing/networkid/... ./internal/testing/ticket/... -race -count=1'` | Pass on initial candidate | Independent Go integration cases |
 | Private `xrpld --unittest=NetworkID,AccountSet,Ticket,MultiSign --unittest-jobs 1` | 4 suites, 43 cases, 4,979 assertions; zero failures | Oracle-only execution; not a shared-input comparison |
 | `just test-pkg './internal/tx/xchain/... -race -count=1'` with the added `TestXChainModifyBridgeBinaryRoundTrip` | Pass | Typed binary parsing and round-trip regression; no signature or engine-result claim |
-| `just test` | 164 packages passed, zero cached package results | Full current Go regression suite; independent Go tests do not establish C++ parity |
+| `just test` | 164 packages passed; 59 executed, 105 reused unchanged cached results | Full combined candidate regression suite; independent Go tests do not establish C++ parity |
 | `just build-all`, `just vet`, strict `golangci-lint run --config .golangci.yml` | Pass | Compile/static checks on the implementation candidate |
 | Same XChain regression with a temporary Go overlay restoring the old direct `ReflectFlatten` call | All four bridge combinations reject parsing with `not a valid json` | Negative control proving that the regression detects the original defect; tracked production files were unchanged |
 
@@ -124,11 +124,23 @@ seconds. `FuzzEngineDifferentialOrder` exposes those same permutations to Go's
 fuzzer. This loop exercises recorded cases; any separately generated C++ cases are
 accounted for in the corpus provenance. It is not exhaustive state-space exploration.
 
+A temporary overlay removing the retry loop makes the seeded insufficient-balance
+Payment fail because a retriable transaction remains at close. The same signed
+case passes normally with the oracle fee-only result. This confirms retry-pass
+execution; the queue-pressure case alone does not establish it.
+
 The report separates completed cases, wire transaction types, TERs, profiles,
 close inputs and replay leaves. Common-field presence and enabled-rule counts
 are observations, not evidence that every behavior of that field or amendment
 was exercised. Zero execution, exclusions, mismatches, missing stages, dirty
 CI candidates and inconsistent accounting fail the required check.
+
+The invariant recovery scenario deliberately records a malformed closed parent:
+an Escrow amount at the native-supply bound, with a replayable ledger header and
+skip list. The signed expired cancellation triggers `tecINVARIANT_FAILED` and
+fee-only recovery in both implementations. This is diagnostic invariant evidence,
+not a claim that a healthy chain can create that parent. Fatal
+`tefINVARIANT_FAILED` recovery remains unexecuted in the shared-input corpus.
 
 ## Ledger service boundaries
 
@@ -139,6 +151,15 @@ signed submission through `Service.SubmitTransaction`, then calls
 `AcceptConsensusResult` with the independently recorded close set and time.
 Only after verifying the closed candidate does it mark that candidate validated
 and check complete durable transaction history.
+
+The queue configuration is preserved exactly, including its recorded standalone
+fee thresholds, in both service runs. The non-standalone service run verifies
+signed submission and consensus acceptance with those explicit queue settings;
+it does not establish parity under default network queue thresholds. This corpus
+starts with an empty queue and applies its prior submissions before optionally
+queuing one primary transaction. Complete queue size and signed membership are
+checked; multi-candidate eviction, ordering and multi-ledger queue history remain
+unexecuted.
 
 Cases with an applied submitted close-set transaction also run the standalone
 `acceptLedgerAt` seam at the recorded time. Standalone service submission
@@ -178,6 +199,18 @@ enabled amendment. The historical AMM fidelity and transient open-view gaps
 above remain release blockers for the affected coverage in #2017. An unchanged
 issue status alone is not a demonstrated 3.4.1 protocol defect.
 
-Expanded signed C++ recordings, service-startup comparisons and final-head
-results are being assembled in this branch. The final PR must publish their
-actual counts and tested SHA before claiming completion of the execution work.
+The final pinned recording contains 108 cases, 16 amendment profiles, 10 submitted
+transaction families, 111 signed submissions including three prior submissions,
+88 close-set transactions and 176 closed leaves including Batch inners. The C++
+recorder passed 3,542 assertions with zero failures. Its source commit, binary and
+complete build identity are in the [corpus manifest](../internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json).
+
+The required Go corpus passes 108/108 cases with zero failures, skips or exclusions.
+All 432 fixed-seed executions pass submission, close and inbound replay. Race-enabled
+conformance and the complete service package pass. Durable service execution covers
+all 108 cases through consensus close and 86 applicable cases through standalone
+close; the other 22 have no applied submitted transaction in the close set.
+
+The PR and retained JSON reports identify the exact clean tested head and the
+additional ten-second seed-2016 soak count. Those measured reports, together with
+the explicit coverage limits above, define the bounded result of this work.

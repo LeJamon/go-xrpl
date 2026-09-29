@@ -151,7 +151,15 @@ func submitServiceTransaction(
 	if err != nil {
 		t.Fatalf("%s SubmitTransaction: %v", label, err)
 	}
-	queued := serviceQueueHasTx(svc.QueueAllTxs(), hash)
+	candidates := svc.QueueAllTxs()
+	expectedQueueSize := 0
+	if want.Queued {
+		expectedQueueSize = 1
+	}
+	if len(candidates) != expectedQueueSize {
+		t.Fatalf("%s queue size=%d, want %d for the empty-start queue", label, len(candidates), expectedQueueSize)
+	}
+	queued := serviceQueueHasTx(candidates, hash)
 	outcome := openledger.SubmitOutcome{
 		Result:  result.Result,
 		Applied: result.Applied,

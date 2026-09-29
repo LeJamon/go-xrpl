@@ -129,296 +129,677 @@
       "supported": true
     }
   ],
-  "binary_sha256": "164d20cd3247b82fa89f24330fce365ce5d19acef3d2b7657e9bb87cd7a35f24",
-  "build_identity": "macOS arm64; Apple Clang 17.0.0; Conan 2.18.1; CMake 4.1.2; Ninja 1.13.0; Release xrpld with tests; exact d147fcc production objects plus separately compiled recorder; compile SHA256 4c17f299a3b36fd40d95bdacc1b30e9049e5eb95e4e38d1721dd2cb0bbdf1032; link SHA256 3e3923ceba096fff03058cc9c69636a4d48f8f7af07a998bed40d5176d221985",
-  "config_identity": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
+  "binary_sha256": "e396315799376c609a2b887880db62e1e7dbdd056de808495603d07f551dfe5d",
+  "build_identity": "{\"oracle\":{\"repository\":\"XRPLF/xrpld-private\",\"tag\":\"3.4.1\",\"commit\":\"d147fccf54a500fce586522f28d6044c37fd8d29\"},\"production_source\":\"/Users/thomashussenet/Documents/project_goXRPL/rippled-worktrees/v3.4.1-oracle\",\"verified_production_binary\":\"/private/tmp/issue-2011-oracle-build/build/xrpld\",\"verified_production_binary_sha256\":\"f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3d6113\",\"verified_production_binary_version\":\"xrpld version 3.4.1\",\"instrumented_source_root\":\"/private/tmp/issue-2011-oracle-build/source\",\"instrumented_batch_test_sha256\":\"c4b44f108cbdc9cc03ceb55d30e3bf7452406ebc82efed9314247e18abf75b91\",\"recorder_source\":\"/Users/thomashussenet/Documents/project_goXRPL/goXRPL-worktrees/issue-2016-oracle-scenarios/scripts/oracle/strict_recorder.cpp\",\"recorder_source_sha256\":\"044769fed7eb673961d5cc45b119f7ad5487046d850dc37de0cddff7e5886fd4\",\"config\":\"/Users/thomashussenet/Documents/project_goXRPL/goXRPL-worktrees/issue-2016-oracle-scenarios/scripts/oracle/strict-corpus-config.json\",\"config_sha256\":\"0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d\",\"config_values_verified\":{\"fixture_version\":\"v4\",\"oracle_repository\":\"XRPLF/xrpld-private\",\"oracle_tag\":\"3.4.1\",\"oracle_commit\":\"d147fccf54a500fce586522f28d6044c37fd8d29\",\"network_id\":0,\"scenario_overrides\":{\"network_id\":{\"AccountSet/network-id-missing\":1025,\"AccountSet/network-id-wrong\":1025},\"queue_history\":{\"AccountSet/queued-low-fee\":{\"txq_config\":{\"ledgers_in_queue\":2,\"queue_size_min\":2,\"minimum_txn_in_ledger_standalone\":2,\"normal_consensus_increase_percent\":0},\"internal_config\":{\"min_ledgers_to_compute_size_limit\":3,\"max_ledger_counts_to_store\":100},\"pre_submit_count\":3,\"pre_submit_order\":\"alice->bob, bob->alice, alice->bob\",\"primary\":{\"engine_result\":\"terQUEUED\",\"applied\":false,\"queued\":true}}},\"persistent_cleanup\":{\"NFTokenAcceptOffer/expired-sell-offer-cleanup\":{\"profile\":\"c1-l1-b1-f1\",\"engine_result\":\"tecEXPIRED\",\"applied\":true,\"queued\":false,\"expected_deleted_object\":\"NFTokenOffer\"},\"OfferCreate/expired-offer-cleanup\":{\"profile\":\"c1-l1-b1-f1\",\"engine_result\":\"tecKILLED\",\"applied\":true,\"queued\":false,\"expected_deleted_object\":\"Offer\",\"expected_retained_object\":\"Offer\"}},\"invariant_recovery\":{\"EscrowCancel/malformed-escrow-cancel-refund\":{\"profile\":\"c1-l1-b1-f1\",\"engine_result\":\"tecINVARIANT_FAILED\",\"applied\":true,\"queued\":false,\"coverage\":\"malformed parent escrow refund reaches fee-only recovery and records invariant failure\"}},\"seeded_payments\":{\"seed\":2016,\"profile\":\"c1-l1-b1-f1\",\"samples\":[\"Payment/seed2016-payment-0-valid-base-fee\",\"Payment/seed2016-payment-1-insufficient-balance\",\"Payment/seed2016-payment-2-valid-fee-edge\",\"Payment/seed2016-payment-3-future-sequence\"],\"coverage\":\"deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence\"}},\"apply_flags\":0,\"skip_signature_verification\":false,\"profile_encoding\":\"c<cleanup>-l<lending>-b<BatchV1_1>-f<fixBatchV1_2>\",\"profiles\":\"all 16 boolean combinations\",\"txq_config\":{\"ledgers_in_queue\":20,\"queue_size_min\":2000,\"retry_sequence_percent\":25,\"minimum_escalation_multiplier\":128000,\"minimum_txn_in_ledger\":32,\"minimum_txn_in_ledger_standalone\":1000,\"target_txn_in_ledger\":256,\"maximum_txn_in_ledger\":0,\"maximum_txn_in_ledger_set\":false,\"normal_consensus_increase_percent\":20,\"slow_consensus_decrease_percent\":50,\"maximum_txn_per_account\":10,\"minimum_last_ledger_buffer\":2,\"standalone\":true},\"fees\":{\"reference_fee_drops\":10,\"account_reserve_drops\":200000000,\"owner_reserve_increment_drops\":50000000},\"signature_policy\":\"real canonical signatures with Application::checkSigs(true)\",\"submission_policy\":\"one direct submit RPC per signed tx_blob; optional pre_submit history uses the same open ledger and queue; no retries or output-derived setup\",\"close_policy\":{\"setup\":\"Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent\",\"request_seconds_after_now\":5,\"capture\":\"effective agreed close time computed from the pre-close header and resolution\"},\"snapshot_policy\":\"raw ledger header, effective rule IDs, fee schedule, raw SLE bytes, raw transaction and metadata bytes\",\"families\":[\"Payment\",\"AccountSet\",\"TrustSet\",\"TicketCreate\",\"Batch\",\"VaultCreate\",\"LoanBrokerSet\",\"NFTokenAcceptOffer\",\"OfferCreate\",\"EscrowCancel\"],\"batch_wrapper_policy\":\"canonical RawTransaction and poisoned CreatedNode wrapper, on both fix sides where BatchV1_1 is enabled\",\"submit_policy\":\"open_ledger boundary, engine_result token and numeric TER, applied/queued flags, uint64 fee, complete current open-ledger SLE bytes\"},\"compile_command_sha256\":\"ebc54200f341c60562c8583a3649434b0e477bb040e70670554c3f1342afeb86\",\"link_command_sha256\":\"3e3923ceba096fff03058cc9c69636a4d48f8f7af07a998bed40d5176d221985\",\"strict_binary\":\"/private/tmp/issue-2016-oracle-build/build/xrpld\",\"strict_binary_sha256\":\"e396315799376c609a2b887880db62e1e7dbdd056de808495603d07f551dfe5d\",\"build_method\":\"hardlinked exact-commit production build objects; newly compiled recorder object; relinked xrpld\",\"clean_build\":{}}",
+  "config_identity": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
   "config_source": "scripts/oracle/strict-corpus-config.json",
   "coverage_limits": [
-    "45 signed open-ledger submit/close cases in 7 transaction families, all 16 cleanup/lending/Batch/fix profiles; no excluded cases.",
-    "Empty initial TxQ at minimum fee metrics only; historical queue contents, load/escalation transitions and retries are not recorded.",
-    "No RPC/parser rejection boundary cases, exhaustive Batch wrappers, all lending operations or other transaction families; whole-release parity remains #2017."
+    "Bounded common-engine evidence: 108 signed cases across 16 profiles and 10 submitted transaction families; not exhaustive transactor or whole-node parity.",
+    "Fresh parents persist Amendments. Queue starts empty with recorded standalone thresholds; one case uses three applied pre-submits then queues the primary. Multi-candidate eviction/order and multi-ledger queue history are unexecuted.",
+    "Seed 2016 generates four signed XRP Payment samples only. The bounded Go soak permutes and replays recorded cases; it does not generate fresh oracle inputs at runtime.",
+    "Invariant recovery uses an explicitly malformed, replayable Escrow parent and verifies tecINVARIANT_FAILED fee-only recovery. Fatal tefINVARIANT_FAILED is unexecuted.",
+    "AMM test-fidelity gap #1498 and transient open-view fixture gap #1126 remain release coverage blockers; original signed #1737 transaction is unavailable.",
+    "Full native cryptography capability, live peer/consensus and protocol-facing RPC parity are not established by this corpus."
   ],
-  "fixture_count": 45,
+  "fixture_count": 108,
   "fixture_version": "v4",
   "fixtures": {
     "c0-l0-b0-f0-Payment-valid.json": {
       "family": "Payment",
       "profile": "c0-l0-b0-f0",
-      "sha256": "f33750ee820a75a882e72df63ddbf975e586446bdc6079bf830591125a228251",
+      "sha256": "00026eb5d76ba7ae216977f861fa05186e5410985762590a98a1f3ed91454909",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b0-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c0-l0-b0-f1",
-      "sha256": "58de33718c24ec32b6ab7643416969c3ed333b362016ddb169fd31d3e2a3cc2f",
+      "sha256": "c5d7664f2cea3743a7e9e49b98b29de20f529a721440d77560e1e0d03e5db57c",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f0-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f0",
+      "sha256": "12a3b08813d0af0fe3587253f307bf7e773a6fec47e6d8c345eb29f86efc05d3",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f0-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c0-l0-b1-f0",
-      "sha256": "02c176c7c9440ee0fbcd1d6298ba17ac38bc9930abf7e645ab7d6ea19abaf317",
+      "sha256": "6eefd270fa7ee39285b3ae8adcbb76bd1c5c87d4fd17b0da692f0f0276ac2069",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f0-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f0",
+      "sha256": "9331470284a54986cbed38d480a0b06260429de81ad02aa320bf4e138110a14b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f0-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f0",
+      "sha256": "767820d4de6e8e50f5233376e22d3a02c2adbb50af85408aa0a60efa453b7f8c",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f0-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c0-l0-b1-f0",
-      "sha256": "c08f201a63a9537de017f89f18f8d44798f483eacee4dc15a72399e764a5424a",
+      "sha256": "9a09de16718f7145b2ac6aebbfa7f9d094eb63a3be0ce4a3dcc9d8067da23ae9",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f0-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f0",
+      "sha256": "59bc2682179b46bcb54fa5c3635f658f08ad67b5d809c38666553c1fde234379",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-AccountSet-require-destination.json": {
       "family": "AccountSet",
       "profile": "c0-l0-b1-f1",
-      "sha256": "c04fb79de7a48a6cd787f02ddd87b5f970f0e87128737f39dad430c05c50b94e",
+      "sha256": "857b2137f05da618d99c14669a1a81ec1378a87fdcae5b2f5859e6c6af99084b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "c9536ca180dcc72df064f2ac4775df51d64e6370d12c21a0f09098d7b73095c1",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c0-l0-b1-f1",
-      "sha256": "bfba1b7a428823b1cff6b748917c1b31b6a6539d690e1650322a742e4859ed59",
+      "sha256": "99883a74bc055ae16874bddbfa2674d55f9a7d8f70fdcabcbb7e343867e23536",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "33534dfb6e910b9fc63bf097b080487524924387a766ef23f45d0117ee219b80",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "867b111e3e860b1ff338d6fe5dfb9f80029e36ac5b12f38b0309242feb424e48",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c0-l0-b1-f1",
-      "sha256": "c815351e78fb69120e29c163a6b8f0cf9f9e071474cd5b7c3626caa4abe6fb27",
+      "sha256": "935ba9c58dbda79a54c484b1500e673cb2afbe1de05841a797055d3a5c36d46d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l0-b1-f1-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c0-l0-b1-f1",
+      "sha256": "e4736399d5f7e80e202fcb27a7b0381b7ed501d9c4baeeb60781405304b28619",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c0-l0-b1-f1",
-      "sha256": "f84b1175598a070b5818519bb04756b9c64ce3ae2cea8b3b72c84392c20025c8",
+      "sha256": "2aa2bd6068a46b11bf088eaaeddc8716b6a57b600b26756d2fd6f5f0fbf15530",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-TicketCreate-one-ticket.json": {
       "family": "TicketCreate",
       "profile": "c0-l0-b1-f1",
-      "sha256": "74ba718a9149d7989b0a3103858dd9a345b426d3fca1eaf8bb3c85d9ae601027",
+      "sha256": "f7dd03a9b9cdd0dcee244ff41fd591d66463ac61c60cff6f4714d8c262aac34a",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-TrustSet-gateway-usd-limit.json": {
       "family": "TrustSet",
       "profile": "c0-l0-b1-f1",
-      "sha256": "ec1d841b3836f603f436de8a42421b71db1ac0f198d8644fe1a4eebb33921a20",
+      "sha256": "70b86bd973bfc5ad397e1aa4704fd6a3595058ca724b2c5d97cddf7940aa064a",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l0-b1-f1-VaultCreate-xrp-vault-create.json": {
       "family": "VaultCreate",
       "profile": "c0-l0-b1-f1",
-      "sha256": "9da93236a3607b133ccd4a42f3c6c4a28e565d30a14d4111919a0bde1047297d",
+      "sha256": "a5811a0270023df1b52d772f6bd77ed3711a40227e41052f499f03d417498624",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b0-f0-Payment-valid.json": {
       "family": "Payment",
       "profile": "c0-l1-b0-f0",
-      "sha256": "86aed68a97c39b68a4f817b1effe65f30267952a126f435b092d2bc69474bef0",
+      "sha256": "d1316eb934a150acb17141bd286cb3458f8adf5cdfe3846c5829b941d2f604de",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b0-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c0-l1-b0-f1",
-      "sha256": "2686c0872ff6b499c2b4e7b7b30e522dffc4a6df55bcc452302b6f78db87dd70",
+      "sha256": "0a6fbb1643a185d406fb531af231b8ce012cd9cc7b7c0b6574bb26de50b1bd7c",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f0-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f0",
+      "sha256": "b7d47a14eb842b5442ea8c0f1bf5020fef1010eb3fd09260b7075210dece1d03",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f0-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c0-l1-b1-f0",
-      "sha256": "4376c6bda18f5a1658df4de230ba3930243ff7417ff10c57e1dcd25b9e08cc96",
+      "sha256": "c968fb7f0f99ab366b11f0760425dc3114168232be543241389685b09986324b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f0-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f0",
+      "sha256": "afa9570f60c12c292a3565c614754094f2d052d0fd90b087c5df06ec301361e3",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f0-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f0",
+      "sha256": "7f0faf394c4847e7b8397765328852291709def80649e7da27811c8568c38f5c",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f0-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c0-l1-b1-f0",
-      "sha256": "a1df23fb5ba0b6cb478a036c60a69cbf0e0e300a20099221ebc58562e8d9c8ae",
+      "sha256": "5b5a08653408841edc1d4cc400de6df9b4f45315cbc1fede52acd451f4e41bf1",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f0-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f0",
+      "sha256": "37e93ec2427e12ad7730dadb903fe2234100704c9b6bc8235b6701dbac98d6e6",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-AccountSet-require-destination.json": {
       "family": "AccountSet",
       "profile": "c0-l1-b1-f1",
-      "sha256": "0d6604d9715b969b11a38148b1a560897cf9f4afc99c489b1e047532519c112c",
+      "sha256": "0420a065b19a099c71ff7ddd05d5a7d943f12f76a3b1e0df59b1948a620b9462",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "b1e869fd37cf20dd17b991c898bf4f388c28676935dea77482de29afd86cadf6",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c0-l1-b1-f1",
-      "sha256": "785b75e1454a3251578c4c2afc557949dde433690799c008b3e54642b840e721",
+      "sha256": "a14c59ca73c1405459b2b0c3eab3b0d475ce03b8393fcdeca553f21e83de9032",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "246e84fb40b518667ab93c4a4cd73115a72e17c8783a2eae920dd114f126fb45",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "235a6e1bf874e3bffab18883048b9f6d3b047d786e58b44290d3779fb87fa1e6",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c0-l1-b1-f1",
-      "sha256": "ee797cc61c3763a93debb5ae946c408f9b92769dfeef4db742f5683d567919d5",
+      "sha256": "c288f266748d89c36de076617d16ce9160dc9c26f3ca2b1e8505c5e04a3ebc68",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c0-l1-b1-f1-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c0-l1-b1-f1",
+      "sha256": "bbba05fded847f7485d411f43b9b87ece7ca69ea365d2d21f8673fba4d72662b",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c0-l1-b1-f1",
-      "sha256": "90f7d0d51f8b498032068ae2f5d320f9dcb0cf5c90b38b102c05c72743aa907b",
+      "sha256": "1114ca2ac7c5f67601708dba4b5346ce143c60d5a0694fb321753cd332896321",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-TicketCreate-one-ticket.json": {
       "family": "TicketCreate",
       "profile": "c0-l1-b1-f1",
-      "sha256": "750764734bec9a511e22796353238f4da0e0ce134fd94c263446c83cf79cac2d",
+      "sha256": "bb720bbd1fe8d67ae93cdeab37bb9e1156de14fe936e2a1ffe928060f0496065",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-TrustSet-gateway-usd-limit.json": {
       "family": "TrustSet",
       "profile": "c0-l1-b1-f1",
-      "sha256": "acfc9c51e96c3969d0302883445d42b3738517ae9f99b8d5673f9a7858f71617",
+      "sha256": "4707be0cc99774fc528e5076991ee744f7275e7ca7ec4d646db0363c3f154c35",
       "suite": "app/StrictOracleRecorder"
     },
     "c0-l1-b1-f1-VaultCreate-xrp-vault-create.json": {
       "family": "VaultCreate",
       "profile": "c0-l1-b1-f1",
-      "sha256": "7028120103bb1660a58a850c5c1e63523e500aac8f67334d89a3ed5981546de6",
+      "sha256": "0c510546c8f9a230c8b7f7579a4d25888c8175f0dc260fcbb838434d8a1cb1ca",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b0-f0-Payment-valid.json": {
       "family": "Payment",
       "profile": "c1-l0-b0-f0",
-      "sha256": "0ca3e03e68ee0d1000e2af629fa81779ea4688ff54bb14d8e76980e844d3b6eb",
+      "sha256": "1d1653acab2dd7b04f0eff9c325d5c48e614f4a3bda0566c1a558d4a567b7525",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b0-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c1-l0-b0-f1",
-      "sha256": "36a2d993eaf7bc15ce766c11af8c7d316f2993c92b3fa87e27ea313ea48df2b3",
+      "sha256": "3bda8c73d158a766339e4477f8ab236d1f7cc896dae1d4f83fa758cfd2b13077",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f0-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f0",
+      "sha256": "2b7700c99f2cb6a8a3a2928935eed824270f5bb48b0cfd06b13bbf01e4e2b423",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f0-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c1-l0-b1-f0",
-      "sha256": "22275519dd55c90a9ecee8b953edb95b574c6e99d11b5caf6aadb300741dc8fd",
+      "sha256": "ff1ec78d2d208caa9d5c1c81fef96dc96e9f987e04a2fa52d400437040dbf92e",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f0-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f0",
+      "sha256": "64ef9c3e5b3f8a56704f6e264fd7bdb44ef05aafafd7d343a7b6ada2eb04b807",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f0-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f0",
+      "sha256": "af05ec2ceb1585b23326518b7761b5b100ee88d50e029e3e7dc7bba85f7571e4",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f0-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c1-l0-b1-f0",
-      "sha256": "dedb595df46d3c1c894919e8689e4252a7ef7cc7716d7850c9cbe9747a648c72",
+      "sha256": "ee7b0e4b66d2e331362e50a9f998f0629d93f74c6c92bb5a6099d6fc98ed7157",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f0-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f0",
+      "sha256": "04968c7d38bcd6016a715d38e1cf804f03c5212da6eb458e098f75cd8c9e37df",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-AccountSet-require-destination.json": {
       "family": "AccountSet",
       "profile": "c1-l0-b1-f1",
-      "sha256": "03a3cac65c1816fb3957eebd34c989533b37e574ee19e1a0c15fec45a447af07",
+      "sha256": "6838d7cc7ad12ee1b752aefab547d37cf7f9e0cb2d3094b43f3238918ff3a142",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "17527169c2d58345c93d4180109bba264cd7ad1290365d092038697d10d9038c",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c1-l0-b1-f1",
-      "sha256": "8c8f52034d90017db5d76c69417fa39325a97a08966c33c5a9e6f724fabe78ff",
+      "sha256": "fce1ffd0a8ad1edfae8d104fe4e58d827a94c439c2ca7957a6200c2bfa4a1c47",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "80535130ea42aeaf101a6a3cbb1cfe6ac20efd7461d6915b6ce54729107e1a3f",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "9824f45490c9c78b256f9db15749b3ce98d84c364ee344b7760f770f83c1d158",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c1-l0-b1-f1",
-      "sha256": "f12cde6825e68cd8fc1be408f6f4581b3cff10c02cfb5e88f71f39ea11714dc7",
+      "sha256": "c26516d243e8fbd1bb138535db1da029085ef6eb8be6608eb0bc710659327128",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l0-b1-f1-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c1-l0-b1-f1",
+      "sha256": "cae02d9d3f26b0fc78c4d7ec3efc984f3b8125330f9bca25ecb82d1e238fc802",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c1-l0-b1-f1",
-      "sha256": "5bba5bcbdd76a60f10545494cee42e7866e1840004be567f03595861c6b6267a",
+      "sha256": "6c205feec748a4633e04845dc15ac6da06e9ab86e46e4b9c85a70c449ee74606",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-TicketCreate-one-ticket.json": {
       "family": "TicketCreate",
       "profile": "c1-l0-b1-f1",
-      "sha256": "07efa9b6584f3ee0efaaf86add2fa5eb3d7e4af5de0c3e5d2f9cfad0ca8ba7ae",
+      "sha256": "11075b36ae69ffb4662bb694226380752216dd2011e8dab40aa3dfce72e1ad41",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-TrustSet-gateway-usd-limit.json": {
       "family": "TrustSet",
       "profile": "c1-l0-b1-f1",
-      "sha256": "ea378b9bef5d1850631926249d15ccd110ab587bd589c77847a6b16124939a24",
+      "sha256": "320db584e6f76fe4dcf263a2f427f828345262eda7eefcb271f3cc9c157492eb",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l0-b1-f1-VaultCreate-xrp-vault-create.json": {
       "family": "VaultCreate",
       "profile": "c1-l0-b1-f1",
-      "sha256": "341db712045c653c1070f60b5c274dc4c3996580a48566a6603be9da5635536c",
+      "sha256": "4ebcf4da03face8bb7b49b4dc9c6533553e42eb6fd27821b1b81d8fa3a302943",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b0-f0-Payment-valid.json": {
       "family": "Payment",
       "profile": "c1-l1-b0-f0",
-      "sha256": "1b71cf71b4a6a13f867fef9d25df8642b7935eb7b8805737db70268522d9278a",
+      "sha256": "b4485c56955782c636c8ae4f4210e4a01184a18ada1fd1da851f38fa57c0b978",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b0-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c1-l1-b0-f1",
-      "sha256": "01549e722bc27fca5481c28c354865023d56a6800b2bbae3a61e606b115603b6",
+      "sha256": "5bb755877205c5ba8e4bc80579d718409d6734d4b24762235b9eb69e9082d9b0",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f0-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f0",
+      "sha256": "48897dc5a3272c9131ec9dd6b3b74b89a70073d619c8b3ab81630f043989a064",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f0-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c1-l1-b1-f0",
-      "sha256": "b3aae62cc26ad8dbfb7c6d2f3d51e186ee7b850ef6f09456de6ef004e5fd6e83",
+      "sha256": "6da8ffd787bfbf37a80b441df63370ffc8ec0df3a1787938c1e90a207c96e01d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f0-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f0",
+      "sha256": "b5a9ae0101cb38adf16078469ac85a8ce7f78079439373664a39370c22fab15a",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f0-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f0",
+      "sha256": "772d72668f52c1dc707fa0176c6d9ec600ccd0e3a8f58ce3073e0397cf6748d8",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f0-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c1-l1-b1-f0",
-      "sha256": "0403e6369f4c6c3914049dae438d9d94949614df1455317bee89063e63f2332f",
+      "sha256": "b22991c9b99de34c8b6c65da3355e72028a21191e2ff464d61960a2aa45c3268",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f0-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f0",
+      "sha256": "800f7e650d507d04a3d4f154608f6353483a3f3c247615add1ebaf3a85571e4e",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-consumed-ticket.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "edb6f1ee5b1a8ee772cc5da8b4646fadbd149bc0a0231145cfcd0497a326954a",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-expired-last-ledger.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "9645a641e0fa93347385cd4bcb1b274b53d27c2ab2db7ee8b18688d5bf3efe34",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-first-error-fee-before-flags.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "51e32bbd68ea354328c3b7b3a952de0e92f3abcad7dd8c356d29fb0abdb997e3",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-future-sequence.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "333ad3e8d950eb81e45c048680a35634ecdb7e465c5fdde59ff7e1c4040eae01",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-invalid-flags.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "a216d852b7b6c5510c3351bb5fe6e2138ac1584e15b37b9224329c3a7e623934",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-low-fee.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "3970d253b9c6ae369b8c3d65078a947c87aa3d05197ac43d77409eeac7895987",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-master-disabled.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "a8f4602c433de227aa9a6e9d7b3b80d28c056505387b426125d05033737af3bd",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-missing-ticket.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "31fdc4e854ec52a6d0985bc358b3831d0d2808c0ea390fc18c0ca3be76721138",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-multisign-missing-quorum.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "e5c65d3925bf5740473b1b56daeb1ebec3baffbe2d4f6a9516250c45fdb0a651",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-multisign-valid-quorum.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "14fe9000f2bb14a4e45a495a841e2738e8925e66ade20c07d7da6c779d7bbe3c",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-negative-fee.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "12e11aff83939839b6e2957ba528138c3c641b92cb6d6d57a0ce4c8bba594a37",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-network-id-missing.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "bc175a0c037f4a3f6207050979bbf499999d934f49379d7afb8e79e4b8fb6dc2",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-network-id-noncanonical.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "68bd45da79ae4eafeac58618a46a72f9fb7914c283b0597449c6eb1834acf920",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-network-id-wrong.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "bd33bd4ac7f05b9ad31befc310167206f9c3844b9f0dc7d6539c35be9d46b9a9",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-past-sequence.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "a1e3ba100ef3a20db32512bccb79e5d4c71adae2aa202a942111e219c3caef85",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-queued-low-fee.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "1f85e6af0e8afede258926a39ad680a19083e6d7795b56e4a6f0a3221eec1d7d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-regular-key.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "a4704ed11fac6e54944f40625f3bd87ce000d48e8a892e7fa70fd10efcc586ea",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-AccountSet-require-destination.json": {
       "family": "AccountSet",
       "profile": "c1-l1-b1-f1",
-      "sha256": "93ad247ab343219230093463dae0b36509a3877d74ae1c7c60f52fb9a1362963",
+      "sha256": "28339c35e3da25b4c203e8ad15e76b7b3022530422756b3fe54ceaaac245f615",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-service-boundary-amendments.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "f01fb59b0d7ebc5171e4fffefa040be9571294e9112f419a61bc7ccf6a8798fd",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-valid-ticket.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "4eab7cc5a6a418576745b094566450e76804bcefe2cf4f1b4cebea32e4b0887f",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-wrong-key.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "1c30558c5d16ab3cc74bad2b094282ab790a711b12af399e9e2a493c96e46a5b",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-wrong-prior-transaction.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "f12ba58f8b214cf198bb624b19b6ec113b7606626ea454d061c48fde55458084",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Batch-all-or-nothing-rollback.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "025460043d0fa53fee858ff66deacf0832d44e76dfd0b285293265e950c04109",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-Batch-canonical.json": {
       "family": "Batch",
       "profile": "c1-l1-b1-f1",
-      "sha256": "8f708962f1c11ec4efda071be926fe789035e47783df7f5aa0c9d0c60ce5356b",
+      "sha256": "603da194888a8785ae3934efea0ed9672bc72c26b2d62cf69b188b03682d1b53",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Batch-independent-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "924521ee4fe7840af9a8408be50e6942579bd15fe23886beab5884a710ec2637",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Batch-only-one-mixed.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "34f96a71ee4d18d2026b45342b1d79bb6790db9a9bc2798b1e6d7a8fe53917f2",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-Batch-poisoned-created-node-wrapper.json": {
       "family": "Batch",
       "profile": "c1-l1-b1-f1",
-      "sha256": "09040e667906b0d1bae59e99e46878bff72500fbfc6713535dde8bb7e3610626",
+      "sha256": "2878e37ba91e209a7671a38f82f7601952cf9829ee074dedac87a735fdc34069",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Batch-until-failure.json": {
+      "family": "Batch",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "0bf665b9e9fa3c8d63965feb36fc4b8fbfe359b000045bcb3fb55b074af92704",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-EscrowCancel-malformed-escrow-cancel-refund.json": {
+      "family": "EscrowCancel",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "247976fcedadee218c0a482ee4ea46dd06e049631ef974b3691e9cfa2fc0d452",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-LoanBrokerSet-closed-ended-vault.json": {
       "family": "LoanBrokerSet",
       "profile": "c1-l1-b1-f1",
-      "sha256": "c7187652715be970fb97f2eecacdb6f6b1abb851ea83d81bcec1abe413a9020b",
+      "sha256": "bb54d06251edbd4242f40018dec307a5f068d8f4b422f29ef46091ac577d1268",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-NFTokenAcceptOffer-expired-sell-offer-cleanup.json": {
+      "family": "NFTokenAcceptOffer",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "f79e1ba41e8977b86f392ed8b04d40bccbe1a696aa16b7ab6ba891c7db902ab9",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-OfferCreate-expired-offer-cleanup.json": {
+      "family": "OfferCreate",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "b744ae8a67e93b8b022502d1f94c2d34ef4ebd8018021773819a74845f21c62f",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-delegate-permission-denied.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "6edb9fd49356b2aad15e3e051c348a226b789c44fabcac3a78beccf275e4322d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-delegate-sponsor-fee-payer.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "0c0b67fcd2b20467106e99d31e8680e3a26c0445f18fc8fb0ca4db879712f816",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-seed2016-payment-0-valid-base-fee.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "cee8a4fecec5ea5e17bddad08d72457f43cc6980c223f37b6b2fb557a23e1a9e",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-seed2016-payment-1-insufficient-balance.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "0efc475a8eb8cd334c5b909cbb933be1ce640578e02bd9acbd8d09245e161684",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-seed2016-payment-2-valid-fee-edge.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "e064815b4a3e5d7280bfcbef94033fd92148f902afe950e6a57387bab51a9a8f",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-Payment-seed2016-payment-3-future-sequence.json": {
+      "family": "Payment",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "4042ae3e43f739c9a9ece1918164cd422b192caada76791f3f39334e2f90ee37",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-Payment-valid.json": {
       "family": "Payment",
       "profile": "c1-l1-b1-f1",
-      "sha256": "4b53bdea5bef1da85f2390b2691a0afa08ffd70aad2c80906d6b8bfc1a03b4fa",
+      "sha256": "3c8bad36e2a3425d1880e969a5588dca9ecf2ce20aa4902ff3b3bf378e42a281",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-TicketCreate-insufficient-reserve.json": {
+      "family": "TicketCreate",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "db3765488c046ba3616e92cc1e62e9dc4a4299fc0fbad717ff953c6a05d85716",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-TicketCreate-one-ticket.json": {
       "family": "TicketCreate",
       "profile": "c1-l1-b1-f1",
-      "sha256": "4d4f89ff43a293075b8400972635805e0e29e236b537c2fb101127b48da4ab7a",
+      "sha256": "e494c763f4c1288ea0137c2b3d220e87ef8a77222cc7d5520a06f11878665ed2",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-TrustSet-gateway-usd-limit.json": {
       "family": "TrustSet",
       "profile": "c1-l1-b1-f1",
-      "sha256": "ff08b3544a6058085bab5ca193eea24f726f76ca5d2ea810128d69ffc8980adf",
+      "sha256": "88fceab460f87fbcbc778c125c5a73e7ff400af33a5c15443a6b302b485b8463",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-VaultCreate-xrp-vault-create.json": {
       "family": "VaultCreate",
       "profile": "c1-l1-b1-f1",
-      "sha256": "2cabe1551d28117a6d6f25518cce9494d1500dc841944312e0062e780db58fbc",
+      "sha256": "eb555e475c9463fa650676d7add97e8d85952ad8518aafc1eecdf633272afd2a",
       "suite": "app/StrictOracleRecorder"
     }
   },
   "oracle_repository": "XRPLF/xrpld-private",
-  "recorder_commit": "3a61cca73b9e4eda88bc8444793c1c2e52576aab",
+  "recorder_commit": "33836340bb531f260c7bad897e54e5483bacd479",
   "recorder_sources": {
-    "scripts/oracle/record-v4.py": "83d2e25eb7fe9acc92988ea82ccc1f71dde31b272fe04dd5d98c10d9d67d8bbf",
+    "scripts/oracle/record-v4.py": "3fa8252f02a8eca1d69b0a88b53b240d4ae81b565783aa140efc8d5870e5b0a0",
     "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
-    "scripts/oracle/strict-corpus-config.json": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
-    "scripts/oracle/strict_recorder.cpp": "5451931911f0c45b788f0f249d694ac94fec7f77863a0bbc7dd5e23a86f9fea6"
+    "scripts/oracle/strict-corpus-config.json": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
+    "scripts/oracle/strict_recorder.cpp": "044769fed7eb673961d5cc45b119f7ad5487046d850dc37de0cddff7e5886fd4"
   },
   "rippled_commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
   "rippled_tag": "3.4.1",

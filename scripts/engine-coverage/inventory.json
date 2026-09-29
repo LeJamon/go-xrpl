@@ -16236,16 +16236,19 @@
     "checked_in_v4_corpus": {
       "corpus_role": "initial prerequisite corpus; source evidence only",
       "manifest_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json",
-      "manifest_sha256": "1769e6fd56fdcbec28e355ee1bc136f68f54ddd4af20878acfe2cac244592925",
+      "manifest_sha256": "73da124981e528ff876114e526004cd844bf3ccb4b95503b2143eb1eaedfaa67",
       "manifest_schema": 3,
       "fixture_version": "v4",
-      "fixture_count": 45,
+      "fixture_count": 108,
       "family_counts": {
-        "AccountSet": 4,
-        "Batch": 16,
+        "AccountSet": 25,
+        "Batch": 48,
+        "EscrowCancel": 1,
         "LoanBrokerSet": 1,
-        "Payment": 12,
-        "TicketCreate": 4,
+        "NFTokenAcceptOffer": 1,
+        "OfferCreate": 1,
+        "Payment": 18,
+        "TicketCreate": 5,
         "TrustSet": 4,
         "VaultCreate": 4
       },
@@ -16253,31 +16256,76 @@
         "app/StrictOracleRecorder"
       ],
       "amendment_profile_count": 16,
-      "oracle_binary_sha256": "164d20cd3247b82fa89f24330fce365ce5d19acef3d2b7657e9bb87cd7a35f24",
-      "recorder_commit": "3a61cca73b9e4eda88bc8444793c1c2e52576aab",
+      "oracle_binary_sha256": "e396315799376c609a2b887880db62e1e7dbdd056de808495603d07f551dfe5d",
+      "recorder_commit": "33836340bb531f260c7bad897e54e5483bacd479",
       "recorder_source_sha256": {
-        "scripts/oracle/record-v4.py": "83d2e25eb7fe9acc92988ea82ccc1f71dde31b272fe04dd5d98c10d9d67d8bbf",
+        "scripts/oracle/record-v4.py": "3fa8252f02a8eca1d69b0a88b53b240d4ae81b565783aa140efc8d5870e5b0a0",
         "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
-        "scripts/oracle/strict-corpus-config.json": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
-        "scripts/oracle/strict_recorder.cpp": "5451931911f0c45b788f0f249d694ac94fec7f77863a0bbc7dd5e23a86f9fea6"
+        "scripts/oracle/strict-corpus-config.json": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
+        "scripts/oracle/strict_recorder.cpp": "044769fed7eb673961d5cc45b119f7ad5487046d850dc37de0cddff7e5886fd4"
       },
-      "config_identity": "d72cdc5d25206979632f3a52b1c9c45223f37e93ae61948f01b50c5fcaed7461",
+      "config_identity": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
       "fixture_observations": {
         "source": "raw fixture submit.engine_result and submit.engine_result_code",
         "submit_result_counts": {
+          "tecEXPIRED": 1,
+          "tecINSUFFICIENT_RESERVE": 1,
+          "tecINVARIANT_FAILED": 1,
+          "tecKILLED": 1,
+          "tecUNFUNDED_PAYMENT": 1,
+          "tefBAD_AUTH": 1,
+          "tefBAD_QUORUM": 1,
+          "tefMASTER_DISABLED": 1,
+          "tefMAX_LEDGER": 1,
+          "tefNO_TICKET": 1,
+          "tefPAST_SEQ": 1,
+          "tefWRONG_PRIOR": 1,
+          "telINSUF_FEE_P": 1,
+          "telNETWORK_ID_MAKES_TX_NON_CANONICAL": 1,
+          "telREQUIRES_NETWORK_ID": 1,
+          "telWRONG_NETWORK": 1,
+          "temBAD_FEE": 2,
+          "temINVALID_FLAG": 1,
           "temMALFORMED": 4,
-          "tesSUCCESS": 41
+          "terNO_DELEGATE_PERMISSION": 1,
+          "terPRE_SEQ": 2,
+          "terPRE_TICKET": 1,
+          "terQUEUED": 1,
+          "tesSUCCESS": 80
         },
         "submit_result_code_counts": {
+          "-180": 1,
+          "-185": 1,
+          "-187": 1,
+          "-188": 1,
+          "-189": 1,
+          "-190": 1,
+          "-196": 1,
+          "-276": 1,
+          "-295": 2,
           "-299": 4,
-          "0": 41
+          "-384": 1,
+          "-385": 1,
+          "-386": 1,
+          "-394": 1,
+          "-85": 1,
+          "-88": 1,
+          "-89": 1,
+          "-92": 2,
+          "0": 80,
+          "104": 1,
+          "141": 1,
+          "147": 1,
+          "148": 1,
+          "150": 1
         },
         "applied_counts": {
-          "false": 4,
-          "true": 41
+          "false": 23,
+          "true": 85
         },
         "queued_counts": {
-          "false": 45
+          "false": 107,
+          "true": 1
         }
       },
       "go_replay_report": {
@@ -16288,9 +16336,12 @@
         "per_transaction_flags_written_here": false
       },
       "coverage_limits": [
-        "45 signed open-ledger submit/close cases in 7 transaction families, all 16 cleanup/lending/Batch/fix profiles; no excluded cases.",
-        "Empty initial TxQ at minimum fee metrics only; historical queue contents, load/escalation transitions and retries are not recorded.",
-        "No RPC/parser rejection boundary cases, exhaustive Batch wrappers, all lending operations or other transaction families; whole-release parity remains #2017."
+        "Bounded common-engine evidence: 108 signed cases across 16 profiles and 10 submitted transaction families; not exhaustive transactor or whole-node parity.",
+        "Fresh parents persist Amendments. Queue starts empty with recorded standalone thresholds; one case uses three applied pre-submits then queues the primary. Multi-candidate eviction/order and multi-ledger queue history are unexecuted.",
+        "Seed 2016 generates four signed XRP Payment samples only. The bounded Go soak permutes and replays recorded cases; it does not generate fresh oracle inputs at runtime.",
+        "Invariant recovery uses an explicitly malformed, replayable Escrow parent and verifies tecINVARIANT_FAILED fee-only recovery. Fatal tefINVARIANT_FAILED is unexecuted.",
+        "AMM test-fidelity gap #1498 and transient open-view fixture gap #1126 remain release coverage blockers; original signed #1737 transaction is unavailable.",
+        "Full native cryptography capability, live peer/consensus and protocol-facing RPC parity are not established by this corpus."
       ]
     },
     "legacy_runner": {
