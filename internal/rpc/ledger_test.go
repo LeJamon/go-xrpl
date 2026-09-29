@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -1197,6 +1198,135 @@ func TestLedgerResponseStructure(t *testing.T) {
 		"ledger_index": float64(2),
 		"validated":    true,
 	}, resultToMap(t, result))
+}
+
+func TestLedgerExpandedTransactionMetadataDependsOnClosedState(t *testing.T) {
+	const hashByte = 0xA1
+	transactionData := marshalStoredTransaction(
+		t,
+		validStoredPaymentTransaction(),
+		validStoredMetadata(),
+		true,
+	)
+	wantTxBlob, err := binarycodec.Encode(validStoredPaymentTransaction())
+	require.NoError(t, err)
+	wantMetaBlob, err := binarycodec.Encode(validStoredMetadata())
+	require.NoError(t, err)
+
+	closed := newDefaultLedgerReader(2, true)
+	closed.transactions = append(closed.transactions, struct {
+		hash [32]byte
+		data []byte
+	}{hash: [32]byte{hashByte}, data: transactionData})
+	open := newDefaultLedgerReader(3, false)
+	open.transactions = append(open.transactions, struct {
+		hash [32]byte
+		data []byte
+	}{hash: [32]byte{hashByte}, data: transactionData})
+
+	mock := &ledgerMock{
+		mockLedgerService: newMockLedgerService(),
+		getLedgerBySequenceFn: func(seq uint32) (types.LedgerReader, error) {
+			switch seq {
+			case closed.seq:
+				return closed, nil
+			case open.seq:
+				return open, nil
+			default:
+				return nil, svcerr.ErrLedgerNotFound
+			}
+		},
+	}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
+	method := &handlers.LedgerMethod{}
+
+	for _, test := range []struct {
+		name        string
+		ledgerIndex string
+		wantMeta    bool
+	}{
+		{name: "closed", ledgerIndex: "validated", wantMeta: true},
+		{name: "open", ledgerIndex: "current", wantMeta: false},
+	} {
+		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+			for _, binary := range []bool{false, true} {
+				name := test.name
+				if apiVersion > 1 {
+					name += "/v2"
+				} else {
+					name += "/v1"
+				}
+				if binary {
+					name += "/binary"
+				} else {
+					name += "/json"
+				}
+				t.Run(name, func(t *testing.T) {
+					ctx := &types.RpcContext{
+						Context:    context.Background(),
+						Role:       types.RoleGuest,
+						ApiVersion: apiVersion,
+						Services:   services,
+					}
+					params, err := json.Marshal(map[string]any{
+						"ledger_index": test.ledgerIndex,
+						"transactions": true,
+						"expand":       true,
+						"binary":       binary,
+					})
+					require.NoError(t, err)
+
+					result, rpcErr := method.Handle(ctx, params)
+					require.Nil(t, rpcErr)
+					response := resultToMap(t, result)
+					ledgerJSON, ok := response["ledger"].(map[string]any)
+					require.True(t, ok)
+					transactions, ok := ledgerJSON["transactions"].([]any)
+					require.True(t, ok)
+					require.Len(t, transactions, 1)
+					transaction, ok := transactions[0].(map[string]any)
+					require.True(t, ok)
+					if binary {
+						assert.Equal(t, wantTxBlob, transaction["tx_blob"])
+					} else if apiVersion > 1 {
+						txJSON, ok := transaction["tx_json"].(map[string]any)
+						require.True(t, ok)
+						assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", txJSON["Account"])
+						assert.Equal(t, "1000000", txJSON["DeliverMax"])
+						assert.NotContains(t, txJSON, "Amount")
+					} else {
+						assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", transaction["Account"])
+						assert.Equal(t, "1000000", transaction["Amount"])
+					}
+					if test.wantMeta {
+						metaField := "metaData"
+						if apiVersion > 1 {
+							metaField = "meta"
+						}
+						if binary {
+							if apiVersion > 1 {
+								metaField = "meta_blob"
+							} else {
+								metaField = "meta"
+							}
+						}
+						if binary {
+							assert.Equal(t, wantMetaBlob, transaction[metaField])
+						} else {
+							metadata, ok := transaction[metaField].(map[string]any)
+							require.True(t, ok)
+							assert.Equal(t, "tesSUCCESS", metadata["TransactionResult"])
+						}
+						assert.Contains(t, transaction, metaField)
+					} else {
+						assert.NotContains(t, transaction, "meta")
+						assert.NotContains(t, transaction, "meta_blob")
+						assert.NotContains(t, transaction, "metaData")
+					}
+				})
+			}
+		}
+	}
 }
 
 // TestLedgerServiceUnavailable tests behavior when ledger service is not available

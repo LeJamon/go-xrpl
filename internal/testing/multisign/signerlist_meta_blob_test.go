@@ -54,6 +54,7 @@ func accountIDBytes(t *testing.T, addr string) []byte {
 
 func TestSignerListReplace_MetaBlob_NoAccount_SortedEntries_NoPrevTxn(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	b1 := jtx.NewAccount("b1")
 	b2 := jtx.NewAccount("b2")
@@ -68,6 +69,8 @@ func TestSignerListReplace_MetaBlob_NoAccount_SortedEntries_NoPrevTxn(t *testing
 	env.Close()
 	env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: b1, Weight: 1}})
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	// Submit the entries deliberately in reverse-of-sorted order so a correct
 	// implementation must reorder them.

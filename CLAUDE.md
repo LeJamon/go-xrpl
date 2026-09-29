@@ -65,9 +65,8 @@ just lint            # auto-installs golangci-lint at the CI-pinned version
 just fmt
 just tidy
 
-just conformance               # full suite with per-suite breakdown
-just conformance TxQ           # filter by suite name
-just conformance --failing     # only suites with failures
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4 --failing
 
 just run             # plain `go run ./cmd/goxrpl`
 just dev             # hot reload (needs `air`)
@@ -79,7 +78,7 @@ just dev             # hot reload (needs `air`)
 go build -o ./tmp/goxrpl ./cmd/goxrpl     # build
 go test ./...                              # all tests
 go test ./internal/tx/offer/...            # one package
-./scripts/conformance-summary.sh           # conformance summary
+./scripts/conformance-summary.sh --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
 ```
 
 The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions at

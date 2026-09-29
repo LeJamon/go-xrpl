@@ -271,6 +271,9 @@ func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.Transacti
 		if e != nil {
 			return false
 		}
+		if !l.IsClosed() {
+			metaBlob = nil
+		}
 		list.Transactions = append(list.Transactions, &rpcv1.TransactionAndMetadata{
 			TransactionBlob: append([]byte(nil), txBlob...),
 			MetadataBlob:    append([]byte(nil), metaBlob...),

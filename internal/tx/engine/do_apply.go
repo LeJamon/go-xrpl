@@ -203,10 +203,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	}
 
 	// Apply all tracked changes to the base view and generate metadata automatically
-	if err := table.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
-		return ter.TefINTERNAL, 0
-	}
-	generatedMeta, err := e.applyTable(table)
+	generatedMeta, err := e.applyTable(table, st.chargedFee)
 	if err != nil {
 		return ter.TefINTERNAL, 0
 	}
@@ -217,11 +214,8 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	return result, st.chargedFee
 }
 
-// applyPreApplyAccountChanges performs payFee, the non-ticket sequence
-// increment, PreviousTxn threading, AccountTxnID update, and writes the
-// pre-doApply account back into the ApplyStateTable. Mirrors the fee/seq
-// portion of rippled Transactor::apply() (payFee + consumeSeqProxy +
-// AccountTxnID block).
+// applyPreApplyAccountChanges charges the fee, consumes an account sequence,
+// and updates AccountTxnID before running the transaction handler.
 func (e *Engine) applyPreApplyAccountChanges(st *applyState) ter.Result {
 	// Reference: rippled Transactor::payFee + consumeSeqProxy in Transactor.cpp
 	if st.hasExternalFeePayer() {
@@ -234,10 +228,6 @@ func (e *Engine) applyPreApplyAccountChanges(st *applyState) ter.Result {
 	if !st.isTicket && st.common.Sequence != nil {
 		st.account.Sequence = *st.common.Sequence + 1
 	}
-
-	// Update PreviousTxnID and PreviousTxnLgrSeq (thread the account)
-	st.account.PreviousTxnID = st.txHash
-	st.account.PreviousTxnLgrSeq = e.config.LedgerSequence
 
 	// Update AccountTxnID if the account has tracking enabled (field present).
 	// Keyed on presence, not non-zero: a freshly-enabled asfAccountTxnID is
@@ -464,10 +454,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	}
 
 	// Apply all tracked changes and generate proper metadata
-	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
-		return ter.TefINTERNAL
-	}
-	generatedMeta, applyErr := e.applyTable(tecTable)
+	generatedMeta, applyErr := e.applyTable(tecTable, st.chargedFee)
 	if applyErr != nil {
 		return ter.TefINTERNAL
 	}
@@ -712,9 +699,8 @@ func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys
 	return result
 }
 
-// writeRecoveryAccount applies the fee/seq/ticket-count/PreviousTxn/AccountTxnID
-// mutations to the freshly-restored account and writes it through the recovery
-// table.
+// writeRecoveryAccount charges the fee and consumes the sequence or ticket
+// on the restored account.
 // Reference: rippled Transactor.cpp reset() lines 998-1052.
 func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *applystate.ApplyStateTable, recoveredAccount *state.AccountRoot) ter.Result {
 	// An external delegate or sponsor pays instead of the source account.
@@ -739,10 +725,6 @@ func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *applystate.Apply
 	if st.isTicket && recoveredAccount.TicketCount > 0 {
 		recoveredAccount.TicketCount--
 	}
-	// Apply PreviousTxnID/PreviousTxnLgrSeq threading
-	recoveredAccount.PreviousTxnID = st.txHash
-	recoveredAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
-
 	// Do NOT update sfAccountTxnID on the tec path. rippled updates it in the
 	// apply() preamble (Transactor.cpp:568) BEFORE doApply(); on a tec that
 	// whole preamble is rolled back by reset() (Transactor.cpp:1001
@@ -947,10 +929,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 		return ter.TefINVARIANT_FAILED
 	}
 
-	if err := invTecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
-		return ter.TefINTERNAL
-	}
-	generatedMeta, applyErr := e.applyTable(invTecTable)
+	generatedMeta, applyErr := e.applyTable(invTecTable, st.chargedFee)
 	if applyErr != nil {
 		return ter.TefINTERNAL
 	}
@@ -959,9 +938,22 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	return ter.TecINVARIANT_FAILED
 }
 
-func (e *Engine) applyTable(table *applystate.ApplyStateTable) (*txcore.Metadata, error) {
+func (e *Engine) applyTable(table *applystate.ApplyStateTable, fee uint64) (*txcore.Metadata, error) {
+	if !e.config.IsViewOpen() {
+		if err := table.AdjustDropsDestroyed(drops.XRPAmount(fee)); err != nil {
+			return nil, err
+		}
+	}
 	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
 		return table.Preview()
+	}
+	if e.config.IsViewOpen() {
+		// Keep diagnostic metadata without committing its threading to the open view.
+		metadata, err := table.Preview()
+		if err != nil {
+			return nil, err
+		}
+		return metadata, table.ApplyUnthreaded()
 	}
 	return table.Apply()
 }

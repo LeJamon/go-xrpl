@@ -58,11 +58,14 @@ func findCreatedNewFields(t *testing.T, res jtx.TxResult, entryType string) map[
 // Destination, PublicKey, SettleDelay) must appear.
 func TestPayChanCreate_Meta_NewFields(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	pk := alice.PublicKeyHex()
 	res := env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build())
@@ -106,6 +109,7 @@ func hasNode(res jtx.TxResult, nodeType, entryType string) bool {
 // the channel's PreviousTxnID (a tx_hash + account_hash fork vs rippled).
 func TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 	env.FundAmount(alice, uint64(jtx.XRP(10000)))
@@ -117,6 +121,8 @@ func TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched(t *testing.T) {
 	chanK := chanKeylet(alice, bob, createSeq)
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
 
@@ -144,6 +150,7 @@ func TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched(t *testing.T) {
 // and PreviousFields came out empty.
 func TestPayChanFund_Meta_PreviousAmount(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 	env.FundAmount(alice, uint64(jtx.XRP(10000)))
@@ -155,6 +162,8 @@ func TestPayChanFund_Meta_PreviousAmount(t *testing.T) {
 	chanK := chanKeylet(alice, bob, createSeq)
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
 	res := env.Submit(ChannelFund(alice, chanIDHex, xrp(1000)).Build())
@@ -172,6 +181,7 @@ func TestPayChanFund_Meta_PreviousAmount(t *testing.T) {
 // shadowing root cause as the Fund case.
 func TestPayChanClaim_Meta_PreviousBalance(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 	env.FundAmount(alice, uint64(jtx.XRP(10000)))
@@ -191,6 +201,8 @@ func TestPayChanClaim_Meta_PreviousBalance(t *testing.T) {
 		ChannelClaim(bob, chanIDHex).Balance(xrp(100)).Amount(xrp(100)).Signature(sig1).PublicKey(pk).Build()))
 	env.Close()
 	require.Equal(t, uint64(xrp(100)), chanBalance(env, chanK))
+
+	env.SetOpenLedger(false)
 
 	sig2 := signClaimAuth(alice, chanIDHex, uint64(xrp(250)))
 	res := env.Submit(
@@ -229,6 +241,7 @@ func TestPayChanClaim_Meta_ImmediateCloseUsesClaimedBalance(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
+			env.EnableOpenLedgerReplay()
 			alice := jtx.NewAccount("alice")
 			bob := jtx.NewAccount("bob")
 			env.FundAmount(alice, uint64(xrp(10000)))
@@ -240,6 +253,8 @@ func TestPayChanClaim_Meta_ImmediateCloseUsesClaimedBalance(t *testing.T) {
 			chanK := chanKeylet(alice, bob, createSeq)
 			jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, drops(10000), 100, pk).Build()))
 			env.Close()
+
+			env.SetOpenLedger(false)
 
 			chanIDHex := hex.EncodeToString(chanK.Key[:])
 			claim := ChannelClaim(alice, chanIDHex).Balance(drops(tc.balance)).Close()

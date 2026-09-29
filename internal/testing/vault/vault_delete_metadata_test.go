@@ -33,6 +33,7 @@ func TestVaultDeleteIOUMetadataTransitions(t *testing.T) {
 		amendment.FeatureFixAMMOverflowOffer,
 	}
 	env := jtx.NewTestEnvWithConfig(t, cfg)
+	env.SetOpenLedger(false)
 	env.DisableFeature("LendingProtocolV1_1")
 	env.DisableFeature("fixCleanup3_4_0")
 	env.EnableFeature("SingleAssetVault")

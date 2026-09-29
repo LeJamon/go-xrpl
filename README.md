@@ -142,16 +142,17 @@ just vet
 just lint
 ```
 
-For historical 3.4.0 corpus diagnostics:
+To inspect the required private 3.4.1 corpus:
 
 ```shell
-just conformance --corpus /path/to/rippled-3.4.0-v3
-just conformance --corpus /path/to/rippled-3.4.0-v3 --failing
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4 --failing
 ```
 
-These legacy commands do not establish private 3.4.1 parity. The required signed
-3.4.1 corpus and strict replay are tracked in [#2015](https://github.com/LeJamon/go-xrpl/issues/2015);
-see the [release evidence matrix](docs/release-3.4.1.md) for remaining gates.
+The committed signed corpus pins private rippled 3.4.1 source and recorder
+provenance. Missing, stale, mixed, empty, or zero-executed corpora fail closed.
+See the corpus coverage limits and the [release evidence matrix](docs/release-3.4.1.md)
+before interpreting a pass as a release claim.
 
 ## Documentation
 

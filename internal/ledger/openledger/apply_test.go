@@ -10,6 +10,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -107,6 +108,50 @@ func TestTxqAdapter_ApplyTransaction_ContinuesTransactionIndex(t *testing.T) {
 	}
 	if view.TxCount() != uint32(len(transactions)) {
 		t.Fatalf("ledger transaction count = %d, want %d", view.TxCount(), len(transactions))
+	}
+}
+
+func TestTxqAdapterAccountCreationDefersThreading(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice)
+	view := freshView(t, env)
+	sourceBefore, err := state.ReadAccountRoot(view, alice.AccountID())
+	if err != nil || sourceBefore == nil {
+		t.Fatalf("read source: %v", err)
+	}
+	dropsBefore := view.TotalDrops()
+	transaction := payment.Pay(alice, bob, 200_000_000).Sequence(env.Seq(alice)).Build()
+	blob := buildSignedBlob(t, env, transaction, alice)
+	parsed, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := openledger.NewTxqAdapter(view, openledger.ApplyConfig{
+		BaseFee: 10, ReserveBase: 200_000_000, ReserveIncrement: 50_000_000,
+		Rules: amendment.AllSupportedRules(),
+	})
+	if result, applied := adapter.ApplyTransaction(parsed); !result.IsSuccess() || !applied {
+		t.Fatalf("account creation = %s/%v", result, applied)
+	}
+	sourceAfter, err := state.ReadAccountRoot(view, alice.AccountID())
+	if err != nil || sourceAfter == nil {
+		t.Fatalf("read source after: %v", err)
+	}
+	destination, err := state.ReadAccountRoot(view, bob.AccountID())
+	if err != nil || destination == nil {
+		t.Fatalf("read new destination: %v", err)
+	}
+	if sourceAfter.PreviousTxnID != sourceBefore.PreviousTxnID || sourceAfter.PreviousTxnLgrSeq != sourceBefore.PreviousTxnLgrSeq {
+		t.Fatal("source was threaded in the open view")
+	}
+	if destination.PreviousTxnID != ([32]byte{}) || destination.PreviousTxnLgrSeq != 0 {
+		t.Fatal("new destination was threaded in the open view")
+	}
+	if view.TotalDrops() != dropsBefore {
+		t.Fatal("open submission destroyed ledger XRP")
 	}
 }
 

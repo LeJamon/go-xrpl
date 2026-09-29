@@ -31,6 +31,7 @@ import (
 // mirrors this by skipping threading when entry.Original == entry.Current.
 func TestReproNoOpModify_NoGhostModifiedNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	disableAllAmendmentsBD(env)
 
 	const senderSeed = "shutW9X6jm9Uo3eTPkhweAcv8cYeP"
@@ -48,6 +49,8 @@ func TestReproNoOpModify_NoGhostModifiedNode(t *testing.T) {
 	first := env.Submit(TrustSet(sender, limit).Build())
 	jtx.RequireTxSuccess(t, first)
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	// 2nd TrustSet — same limit, same issuer. This is the no-op modify.
 	// The RippleState's binary state is unchanged; only the sender's

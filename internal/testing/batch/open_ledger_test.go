@@ -409,6 +409,7 @@ func TestClosedLedgerIndexesBatchInnerTransactions(t *testing.T) {
 
 func TestClosedLedgerIndexesSponsoredBatchAfterDelegatedMultiSign(t *testing.T) {
 	env := newBatchEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	delegate := jtx.NewAccount("delegate")
 	destination := jtx.NewAccount("destination")

@@ -278,7 +278,7 @@ jobs:
             packages: ./internal/tx/...
             race: "-race"
           - group: core
-            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/... ./internal/validator/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/...
+            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/... ./internal/validator/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/...
             race: "-race"
           - group: libs
             packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./internal/testutil/...
@@ -414,6 +414,58 @@ jobs:
         with:
           name: issue-1908-producer-${{ github.sha }}-test-repeated
           path: ${{ runner.temp }}/issue-1908-producer-test-repeated
+          if-no-files-found: error
+
+  conformance-final:
+    name: Conformance (pinned rippled 3.4.1 corpus)
+    runs-on: ubuntu-latest
+    env:
+      GOXRPL_FIXTURES_DIR: internal/testing/conformance/testdata/rippled-3.4.1-v4
+      GOXRPL_CONFORMANCE_REQUIRED: "1"
+      GOXRPL_CONFORMANCE_REPORT: /tmp/issue-2015-conformance-final/conformance-report.json
+      ORACLE_REPOSITORY: XRPLF/xrpld-private
+      ORACLE_TAG: 3.4.1
+      ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
+      EVIDENCE_DIR: /tmp/issue-2015-conformance-final
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run pinned final conformance corpus
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 GOXRPL_CONFORMANCE_REQUIRED=1 go test -race -count=1 -v ./internal/testing/conformance 2>&1 | tee "$EVIDENCE_DIR/conformance.log"
+      - name: Validate conformance accounting
+        shell: bash
+        run: |
+          test -s "$GOXRPL_CONFORMANCE_REPORT"
+          jq -e '
+            .oracle_repository == "XRPLF/xrpld-private" and
+            .oracle_tag == "3.4.1" and
+            .oracle_commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
+            (.total.executed | type == "number" and . > 0) and
+            .total.failed == 0 and
+            .total.skipped == 0 and
+            .total.discovered == (.total.executed + .total.excluded) and
+            .total.executed == (.total.passed + .total.failed)
+          ' "$GOXRPL_CONFORMANCE_REPORT" >/dev/null
+      - name: Record final conformance producer evidence
+        if: always()
+        env:
+          EVIDENCE_LABEL: conformance-final
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4
+            GOXRPL_CONFORMANCE_REQUIRED=1
+            go test -race -count=1 -v ./internal/testing/conformance
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload final conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-2015-conformance-final-${{ github.sha }}
+          path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: error
 
   peer-interop:

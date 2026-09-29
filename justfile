@@ -52,7 +52,7 @@ test-tx:
 
 # CI group: ledger / txq / rpc / consensus / peermanagement / manifest.
 test-core:
-    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
+    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
 
 # CI group: codec / crypto / shamap / storage / etc.
 test-libs:
@@ -95,9 +95,9 @@ fuzz-determinism fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDeterminism$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
 
 # Differential-vs-rippled fuzzer (issue #682, scope 2): replays recorded rippled
-# fixtures and diffs goXRPL's TER + post-state. Historical 3.4.0 diagnostics; needs the
+# fixtures and diffs goXRPL's TER + post-state. Needs the pinned private-3.4.1
 # conformance corpus; set GOXRPL_FIXTURES_DIR explicitly. e.g.
-# `GOXRPL_FIXTURES_DIR=/path/to/rippled-3.4.0-v3 just fuzz-differential 5m`.
+# `GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 just fuzz-differential 5m`.
 fuzz-differential fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDifferential$' -fuzztime {{fuzztime}} ./internal/testing/conformance/
 
@@ -152,9 +152,9 @@ fmt:
 tidy:
     go mod tidy
 
-# Historical 3.4.0 corpus diagnostics, not private 3.4.1 release evidence. E.g.
-# `just conformance --corpus /path/to/rippled-3.4.0-v3` or use
-# `GOXRPL_FIXTURES_DIR=/path/to/rippled-3.4.0-v3 just conformance`.
+# Required final-oracle conformance summary. Pass the corpus explicitly, e.g.
+# `just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4` or use
+# `GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 just conformance`.
 conformance *args:
     ./scripts/conformance-summary.sh {{args}}
 

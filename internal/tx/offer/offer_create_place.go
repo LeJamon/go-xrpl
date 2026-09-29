@@ -64,16 +64,14 @@ func (o *OfferCreate) placeRemainingOffer(
 
 	// Reference: lines 895-910
 	ledgerOffer := &state.LedgerOffer{
-		Account:           ctx.Account.Account,
-		Sequence:          offerSequence,
-		TakerPays:         saTakerPays,
-		TakerGets:         saTakerGets,
-		BookDirectory:     bookDirKey.Key,
-		BookNode:          bookDirResult.Page,
-		OwnerNode:         ownerDirResult.Page,
-		Flags:             0,
-		PreviousTxnID:     ctx.TxHash,
-		PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
+		Account:       ctx.Account.Account,
+		Sequence:      offerSequence,
+		TakerPays:     saTakerPays,
+		TakerGets:     saTakerGets,
+		BookDirectory: bookDirKey.Key,
+		BookNode:      bookDirResult.Page,
+		OwnerNode:     ownerDirResult.Page,
+		Flags:         0,
 	}
 
 	// Reference: line 903-904

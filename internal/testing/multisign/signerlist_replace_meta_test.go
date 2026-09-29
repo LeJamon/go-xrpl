@@ -25,6 +25,7 @@ import (
 
 func TestSignerListReplace_Meta_NoDirectoryNode_AndSignerListID(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	b1 := jtx.NewAccount("b1")
 	b2 := jtx.NewAccount("b2")
@@ -40,6 +41,8 @@ func TestSignerListReplace_Meta_NoDirectoryNode_AndSignerListID(t *testing.T) {
 
 	env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: b1, Weight: 1}})
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	res := env.Submit(jtx.NewSignerListSetTx(alice, 2, []jtx.TestSigner{
 		{Account: b1, Weight: 1},

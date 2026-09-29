@@ -46,6 +46,9 @@ func TestMPTokenIssuanceSet_Meta_NoOpLockEmitsNoGhost(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	issuer := jtx.NewAccount("issuer")
 	m := mpt.NewMPTTester(t, env, issuer)
+	// The issuance must be created by a closed-ledger apply so later in-place
+	// modifications carry the node-level threading fields.
+	env.SetOpenLedger(false)
 	m.Create(mpt.CreateOpts{Flags: mpt.TfMPTCanLock})
 	env.Close()
 
