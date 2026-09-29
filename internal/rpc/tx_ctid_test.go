@@ -20,6 +20,9 @@ func configureCTIDMockPublishedRange(mock *mockLedgerService, first, last uint32
 	mock.serverInfo.ValidatedLedgerSeq = last
 	mock.serverInfo.HavePublished = true
 	mock.serverInfo.PublishedLedgerSeq = last
+	mock.serverInfo.HaveValidatedRange = true
+	mock.serverInfo.ValidatedRangeMin = first
+	mock.serverInfo.ValidatedRangeMax = last
 	mock.serverInfo.CompleteLedgers = fmt.Sprintf("%d-%d", first, last)
 }
 
@@ -178,6 +181,7 @@ func TestTxMethodCTIDRejectsWithoutPublishedFrontier(t *testing.T) {
 	reader := newCTIDTestReader(t, ledgerSequence, true, true)
 	ctx, service, lookupCalls := newCTIDTestContext(t, 1, ledgerSequence, reader)
 	service.serverInfo.HavePublished = false
+	service.serverInfo.HaveValidatedRange = false
 	ctid, ok := handlers.EncodeCTID(ledgerSequence, 0, 0)
 	require.True(t, ok)
 	params, err := json.Marshal(map[string]any{"ctid": ctid})
@@ -188,6 +192,31 @@ func TestTxMethodCTIDRejectsWithoutPublishedFrontier(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, rpcerrors.RpcTXN_NOT_FOUND, rpcErr.Code)
 	assert.Zero(t, *lookupCalls)
+}
+
+func TestTxMethodCTIDTracksAvailableRangeAdvancement(t *testing.T) {
+	const ledgerSequence = 100
+	reader := newCTIDTestReader(t, ledgerSequence, true, true)
+	ctx, service, lookupCalls := newCTIDTestContext(t, 1, ledgerSequence, reader)
+	ctid, ok := handlers.EncodeCTID(ledgerSequence, 0, 0)
+	require.True(t, ok)
+	params, err := json.Marshal(map[string]any{"ctid": ctid})
+	require.NoError(t, err)
+
+	service.serverInfo.ValidatedRangeMax = ledgerSequence - 1
+	result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, params)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcTXN_NOT_FOUND, rpcErr.Code)
+	assert.Zero(t, *lookupCalls)
+
+	service.serverInfo.ValidatedRangeMax = ledgerSequence
+	result, rpcErr = (&handlers.TxMethod{}).Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	response, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.NotEmpty(t, response["hash"])
+	assert.Equal(t, 1, *lookupCalls)
 }
 
 func TestTxMethodCTIDNetworkErrorPrecedesValidatedRangeLookup(t *testing.T) {
