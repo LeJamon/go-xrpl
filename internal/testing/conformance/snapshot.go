@@ -201,14 +201,24 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 	if fixture.Submit.EngineResult == "" {
 		return errors.New("submit.engine_result is empty")
 	}
-	if ter.Result(fixture.Submit.EngineResultCode).String() != fixture.Submit.EngineResult {
+	result := ter.Result(fixture.Submit.EngineResultCode)
+	if result.String() == "-" {
+		return fmt.Errorf("unknown submit TER code %d", fixture.Submit.EngineResultCode)
+	}
+	if result.String() != fixture.Submit.EngineResult {
 		return fmt.Errorf("submit TER %q does not match numeric code %d", fixture.Submit.EngineResult, fixture.Submit.EngineResultCode)
 	}
 	if fixture.Submit.Applied && fixture.Submit.Queued {
 		return errors.New("submit.applied and submit.queued cannot both be true")
 	}
-	if fixture.Submit.Queued != (ter.Result(fixture.Submit.EngineResultCode) == ter.TerQUEUED) {
+	if fixture.Submit.Queued != (result == ter.TerQUEUED) {
 		return fmt.Errorf("submit.queued does not match TER %q", fixture.Submit.EngineResult)
+	}
+	if (result.IsSuccess() && !fixture.Submit.Applied) || (fixture.Submit.Applied && !result.IsSuccess() && !result.IsTec()) {
+		return fmt.Errorf("submit.applied does not match TER %q", fixture.Submit.EngineResult)
+	}
+	if !fixture.Submit.Applied && fixture.Submit.Fee != 0 {
+		return errors.New("submit.fee must be zero when submit.applied is false")
 	}
 	if fixture.CloseInput.CloseTimeResolution < 2 || fixture.CloseInput.CloseTimeResolution > 120 {
 		return fmt.Errorf("close_input.close_time_resolution=%d is outside XRPL range", fixture.CloseInput.CloseTimeResolution)

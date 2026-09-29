@@ -31,7 +31,7 @@ func minimalSnapshotFixture() snapshotFixture {
 		Profile:          "c0-l0-b0-f0",
 		TxBlob:           "00",
 		TxQConfig:        snapshotTxQConfigFromConfig(txq.DefaultConfig()),
-		Submit:           snapshotSubmit{Boundary: snapshotSubmitBoundary, EngineResult: ter.TesSUCCESS.String(), EngineResultCode: int(ter.TesSUCCESS), PostSubmitSLE: []snapshotEntry{}},
+		Submit:           snapshotSubmit{Boundary: snapshotSubmitBoundary, EngineResult: ter.TesSUCCESS.String(), EngineResultCode: int(ter.TesSUCCESS), Applied: true, PostSubmitSLE: []snapshotEntry{}},
 		CloseInput:       snapshotCloseInput{CloseTimeResolution: 2, TxBlobs: []string{}},
 		Parent:           minimalSnapshotLedger(),
 		Closed:           minimalSnapshotLedger(),
