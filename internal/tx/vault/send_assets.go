@@ -106,7 +106,7 @@ func sendIOUAssets(ctx *tx.ApplyContext, from [20]byte, asset tx.Asset, payments
 		if amount.IsZero() || from == payment.Account {
 			continue
 		}
-		if from == issuer || payment.Account == issuer {
+		if from == issuer || payment.Account == issuer || asset.Issuer == state.AccountOneAddress {
 			if r := tx.RippleCreditWithNumberContext(ctx.View, from, payment.Account, amount, ctx.NumberContext()); r != ter.TesSUCCESS {
 				return r
 			}
