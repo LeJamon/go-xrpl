@@ -248,22 +248,7 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 		return ter.TefEXCEPTION
 	}
 
-	// Fee adequacy floor. rippled enforces feePaid >= minimumFee whenever the
-	// apply view is open (Transactor::checkFee, Transactor.cpp:278-290), with
-	// minimumFee = scaleFeeLoad(baseFee, feeTrack, unlimited); when the view is
-	// not open, fee=0 is accepted (Transactor.cpp:292-293). go-xrpl reaches that
-	// floor on two gates that share the same check:
-	//   - OpenLedger: the open-ledger submission path always enforces it.
-	//   - EnforceLoadFee: the TxQ direct-apply / clear-queue / accept paths,
-	//     which target the open ledger but run with OpenLedger=false (rippled's
-	//     tapNONE). They enforce only while load is elevated. At normal load the
-	//     base-fee floor is already guaranteed by the TxQ admission check, and
-	//     keeping OpenLedger=false avoids re-rejecting the fee=0 txns those paths
-	//     legitimately carry (the SetRegularKey free password change) and the
-	//     pseudo-tx gating the OpenLedger flag also controls.
-	if e.config.OpenLedger ||
-		(e.config.EnforceLoadFee && e.config.FeeTrack != nil &&
-			e.config.FeeTrack.LoadFactor() > feetrack.LoadBase) {
+	if e.config.IsViewOpen() {
 		if r := e.enforceFeeFloor(fee, baseFeeForTx); r != ter.TesSUCCESS {
 			return r
 		}
