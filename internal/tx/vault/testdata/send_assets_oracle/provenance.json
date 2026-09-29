@@ -1,0 +1,22 @@
+{
+  "repository": "XRPLF/xrpld-private",
+  "tag": "3.4.1",
+  "commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+  "version": "xrpld version 3.4.1",
+  "suite": "xrpl.ledger.TokenHelpersBoundary",
+  "assertions": 2042,
+  "failures": 0,
+  "rows": 36,
+  "waived_rows": 32,
+  "build_notes": "Existing Ninja xrpld target built from the pinned private source; pre-existing Batch_test.cpp instrumentation is unrelated to TokenHelpers and lending. The recorder verifies the clean oracle pin and TokenHelpers source, then compiles only the harness and links a separate executable without modifying the shared build.",
+  "sha256": {
+    "harness": "22547abca928b3c74b3ee487197d3a09770ca0cef7d23a733a36a58b59971c13",
+    "generator": "1ec201b002689d4d25eaff8e40ea3d4cac2094e7b80d6249c4a4404c9b769589",
+    "helper_source": "5dcfc9e93ae74b12717c43c4c7b1d7e54073229893a6d7e5d5e910186e4081b1",
+    "helper_object": "1630fac87bf43f1920e7b0eeacd210fa08d2a63b727342d0c59482225389058b",
+    "library": "666b9f7157f7421a23182766eccbcc59fc4dc192ddfd2c788f84dd3df7370011",
+    "executable": "1775761ab8910ea9d3dd591b9ea08261a3f406710e1ddd3671013af17a1bccd1",
+    "evidence": "b4778c9bbcee6242a5f0396026e0918e2f3c90649f71be38b43b3517c85012a5"
+  },
+  "reproduce": "python3 record.py --build /path/to/pinned/ninja/build --oracle /path/to/clean/private/3.4.1 --output /tmp/send-assets-oracle"
+}
