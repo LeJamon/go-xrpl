@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,14 +81,33 @@ func TestAdapterSubmissionSmoke(t *testing.T) {
 func TestAdapterSubmissionQueueAndFailHardRelayDecisions(t *testing.T) {
 	build := func(t *testing.T) (*service.Service, []byte, string) {
 		t.Helper()
-		svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
+		queueCfg := txq.StandaloneConfig()
+		queueCfg.MinimumTxnInLedgerStandalone = 1
+		queueCfg.TargetTxnInLedger = 1
+		svc, err := service.New(service.Config{
+			Standalone:    true,
+			GenesisConfig: genesis.DefaultConfig(),
+			TxQ:           &queueCfg,
+		})
 		require.NoError(t, err)
 		require.NoError(t, svc.Start())
 		t.Cleanup(svc.Stop)
 		env := jtx.NewTestEnv(t)
 		master := jtx.MasterAccount()
+		for sequence, name := range []string{"queue-primer-a", "queue-primer-b"} {
+			txn := payment.Pay(master, jtx.NewAccount(name), 100_000_000).Fee(10).Sequence(uint32(sequence + 1)).Build()
+			env.SignWith(txn, master)
+			blob, err := tx.SerializeTransaction(txn)
+			require.NoError(t, err)
+			parsed, err := tx.ParseFromBinary(blob)
+			require.NoError(t, err)
+			prior, err := svc.SubmitTransaction(parsed, blob, false)
+			require.NoError(t, err)
+			require.Equal(t, ter.TesSUCCESS, prior.Result)
+			require.True(t, prior.Applied)
+		}
 		destination := jtx.NewAccount("destination")
-		txn := payment.Pay(master, destination, 100_000_000).Fee(1).Sequence(1).Build()
+		txn := payment.Pay(master, destination, 100_000_000).Fee(10).Sequence(3).Build()
 		env.SignWith(txn, master)
 		txJSON, err := tx.ToJSON(txn)
 		require.NoError(t, err)

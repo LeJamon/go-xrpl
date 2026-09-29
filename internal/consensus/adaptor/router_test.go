@@ -45,6 +45,20 @@ func adaptorHasTx(t *testing.T, a *Adaptor, id consensus.TxID) bool {
 	return exists
 }
 
+func routerSignedPaymentWithFee(t *testing.T, env *jtx.TestEnv, sender, destination *jtx.Account, fee uint64, sequence uint32) []byte {
+	t.Helper()
+	env.SetVerifySignatures(true)
+	txn := payment.Pay(sender, destination, 100_000_000).Fee(fee).Sequence(sequence).Build()
+	env.SignWith(txn, sender)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	return blob
+}
+
 func (m *mockEngine) Start(context.Context) error              { return nil }
 func (m *mockEngine) Stop() error                              { return nil }
 func (m *mockEngine) StartRound(consensus.RoundID, bool) error { return nil }
@@ -298,21 +312,20 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 }
 
 func TestRouterRelaysQueuedTransactionAsDeferred(t *testing.T) {
-	a := newTestAdaptor(t)
+	a := newTestAdaptorWithFeeEscalation(t)
 	router := newTestRouter(&mockEngine{}, a, nil)
 
 	env := jtx.NewTestEnv(t)
-	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
+	for sequence, name := range []string{"queue-primer-a", "queue-primer-b"} {
+		blob := routerSignedPaymentWithFee(t, env, master, jtx.NewAccount(name), 10, uint32(sequence+1))
+		outcome, err := a.SubmitPendingTx(blob, false)
+		require.NoError(t, err)
+		require.Equal(t, openledger.ResultSuccess, outcome.Class)
+		require.True(t, outcome.Applied)
+	}
 	alice := jtx.NewAccount("queued-relay-destination")
-	txn := payment.Pay(master, alice, 100_000_000).Fee(1).Sequence(1).Build()
-	env.SignWith(txn, master)
-	txMap, err := txn.Flatten()
-	require.NoError(t, err)
-	hexStr, err := binarycodec.Encode(txMap)
-	require.NoError(t, err)
-	blob, err := hex.DecodeString(hexStr)
-	require.NoError(t, err)
+	blob := routerSignedPaymentWithFee(t, env, master, alice, 10, 3)
 
 	dispatch := router.handleTransaction(&peermanagement.InboundMessage{
 		PeerID: 3,

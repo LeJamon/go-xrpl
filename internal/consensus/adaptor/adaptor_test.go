@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +43,29 @@ func newTestAdaptor(t *testing.T) *Adaptor {
 		LedgerService: svc,
 		Identity:      identity,
 		Validators:    validators,
+	})
+}
+
+func newTestAdaptorWithFeeEscalation(t *testing.T) *Adaptor {
+	t.Helper()
+	queueCfg := txq.StandaloneConfig()
+	queueCfg.MinimumTxnInLedgerStandalone = 1
+	queueCfg.TargetTxnInLedger = 1
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		TxQ:           &queueCfg,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	return New(Config{
+		LedgerService: svc,
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
 	})
 }
 
