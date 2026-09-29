@@ -130,6 +130,16 @@ def verify_config(config: Path) -> dict:
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
+    expected_overrides = {
+        "network_id": {
+            "AccountSet/network-id-missing": 1025,
+            "AccountSet/network-id-wrong": 1025,
+        }
+    }
+    if values.get("scenario_overrides") != expected_overrides:
+        raise SystemExit(
+            "strict-corpus-config.json scenario overrides do not match recorder scenarios"
+        )
     return values
 
 

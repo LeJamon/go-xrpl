@@ -1,12 +1,23 @@
 #include <test/jtx/Account.h>
+#include <test/jtx/account_txn_id.h>
+#include <test/jtx/delegate.h>
 #include <test/jtx/Env.h>
 #include <test/jtx/TestHelpers.h>
 #include <test/jtx/amount.h>
 #include <test/jtx/batch.h>
 #include <test/jtx/envconfig.h>
+#include <test/jtx/fee.h>
 #include <test/jtx/flags.h>
+#include <test/jtx/last_ledger_sequence.h>
+#include <test/jtx/multisign.h>
+#include <test/jtx/noop.h>
 #include <test/jtx/pay.h>
+#include <test/jtx/regkey.h>
+#include <test/jtx/seq.h>
+#include <test/jtx/sig.h>
+#include <test/jtx/sponsor.h>
 #include <test/jtx/ticket.h>
+#include <test/jtx/txflags.h>
 #include <test/jtx/trust.h>
 #include <test/jtx/vault.h>
 
@@ -15,16 +26,23 @@
 #include <xrpl/config/Constants.h>
 #include <xrpl/core/NetworkIDService.h>
 #include <xrpl/json/to_string.h>
+#include <xrpl/ledger/AmendmentTable.h>
+#include <xrpl/ledger/ApplyView.h>
 #include <xrpl/ledger/LedgerTiming.h>
+#include <xrpl/ledger/OpenView.h>
 #include <xrpl/ledger/ReadView.h>
 #include <xrpl/protocol/Feature.h>
+#include <xrpl/protocol/Indexes.h>
 #include <xrpl/protocol/LedgerHeader.h>
 #include <xrpl/protocol/Serializer.h>
+#include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
 #include <xrpl/protocol/TER.h>
+#include <xrpl/protocol/TxFormats.h>
 #include <xrpl/protocol/TxFlags.h>
 #include <xrpl/protocol/jss.h>
+#include <xrpl/tx/apply.h>
 #include <xrpld/app/misc/TxQ.h>
 
 #include <chrono>
@@ -37,6 +55,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 
 namespace xrpl::test {
 
@@ -82,6 +101,13 @@ struct Profile
             features = features - fixBatchV1_2;
         return features;
     }
+};
+
+struct Expected
+{
+    TER ter = tesSUCCESS;
+    bool applied = true;
+    bool queued = false;
 };
 
 std::uint32_t
@@ -200,6 +226,14 @@ recorderConfig()
     });
 }
 
+std::unique_ptr<Config>
+networkConfig(std::uint32_t networkID)
+{
+    auto config = recorderConfig();
+    config->networkId = networkID;
+    return config;
+}
+
 void
 assertFreshRuntime(Env& env, beast::unit_test::Suite& suite)
 {
@@ -285,7 +319,8 @@ public:
            std::string const& family,
            std::string const& testcase,
            Env& env,
-           JTx const& transaction)
+           JTx const& transaction,
+           std::optional<Expected> expected = std::nullopt)
     {
         auto const parent = env.closed();
         json::Value fixture;
@@ -318,23 +353,30 @@ public:
         fixture["submit"] = submitBoundary(response, transaction, *postSubmitView);
         auto const parsed = Env::parseResult(response);
 
-        TER const expectedTer =
-            family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
-            ? TER{temMALFORMED}
-            : TER{tesSUCCESS};
-        auto const expectedApplied = expectedTer == tesSUCCESS;
+        Expected expectedResult = expected.value_or(Expected{});
+        if (!expected)
+        {
+            expectedResult = {
+                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
+                    ? TER{temMALFORMED}
+                    : TER{tesSUCCESS},
+                family == "Batch" && testcase == "poisoned-created-node-wrapper" && profile.batchFix
+                    ? false
+                    : true,
+                false};
+        }
         suite_.expect(
-            parsed.ter && *parsed.ter == expectedTer,
+            parsed.ter && *parsed.ter == expectedResult.ter,
             testcase + " returned an unexpected TER",
             __FILE__,
             __LINE__);
         suite_.expect(
-            response["result"]["applied"].asBool() == expectedApplied,
+            response["result"]["applied"].asBool() == expectedResult.applied,
             testcase + " returned an unexpected applied flag",
             __FILE__,
             __LINE__);
         suite_.expect(
-            response["result"]["queued"].asBool() == false,
+            response["result"]["queued"].asBool() == expectedResult.queued,
             testcase + " unexpectedly entered the transaction queue",
             __FILE__,
             __LINE__);
@@ -376,6 +418,173 @@ makePayment(Env& env)
 }
 
 JTx
+makeInvalidAccountSetFlags(Env& env)
+{
+    return env.jt(jtx::fset(Account{"alice"}, asfRequireDest, asfRequireDest));
+}
+
+JTx
+makeNegativeFee(Env& env)
+{
+    return env.jt(jtx::noop(Account{"alice"}), jtx::Fee(1, true));
+}
+
+JTx
+makeLowFee(Env& env)
+{
+    return env.jt(
+        jtx::fset(Account{"alice"}, asfRequireDest),
+        jtx::Fee(1));
+}
+
+JTx
+makePastSequence(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto result = jtx::noop(alice);
+    result[jss::Sequence] = env.seq(alice) - 1;
+    return env.jt(result);
+}
+
+JTx
+makeFutureSequence(Env& env)
+{
+    auto const alice = Account{"alice"};
+    return env.jt(jtx::noop(alice), jtx::Seq(env.seq(alice) + 1));
+}
+
+json::Value
+networkTransaction(Env& env)
+{
+    auto const alice = Account{"alice"};
+    json::Value result;
+    result[jss::Account] = alice.human();
+    result[jss::TransactionType] = jss::AccountSet;
+    result[jss::Fee] = to_string(env.current()->fees().base);
+    result[jss::Sequence] = env.seq(alice);
+    return result;
+}
+
+JTx
+makeNetworkMissing(Env& env)
+{
+    return env.jtnofill(networkTransaction(env));
+}
+
+JTx
+makeNetworkWrong(Env& env)
+{
+    auto result = networkTransaction(env);
+    result[jss::NetworkID] = 0;
+    return env.jtnofill(result);
+}
+
+JTx
+makeNonCanonicalNetworkID(Env& env)
+{
+    auto result = networkTransaction(env);
+    result[jss::NetworkID] = 0;
+    return env.jtnofill(result);
+}
+
+JTx
+makeExpiredLedger(Env& env)
+{
+    return env.jt(
+        jtx::noop(Account{"alice"}),
+        jtx::LastLedgerSeq(env.current()->header().seq - 1));
+}
+
+JTx
+makeWrongPrior(Env& env)
+{
+    return env.jt(jtx::noop(Account{"alice"}), jtx::AccountTxnId(uint256(1)));
+}
+
+JTx
+makeMissingTicket(Env& env)
+{
+    auto const alice = Account{"alice"};
+    return env.jt(jtx::noop(alice), jtx::ticket::Use(env.seq(alice) + 1));
+}
+
+JTx
+makeValidTicket(Env& env)
+{
+    auto const alice = Account{"alice"};
+    return env.jt(jtx::noop(alice), jtx::ticket::Use(env.seq(alice) - 1));
+}
+
+JTx
+makeConsumedTicket(Env& env)
+{
+    auto const alice = Account{"alice"};
+    return env.jt(jtx::noop(alice), jtx::ticket::Use(env.seq(alice) - 1));
+}
+
+JTx
+makeRegularKeyPayment(Env& env)
+{
+    return env.jt(jtx::noop(Account{"alice"}), jtx::Sig(Account{"bob"}));
+}
+
+JTx
+makeMasterDisabled(Env& env)
+{
+    return env.jt(jtx::noop(Account{"alice"}), jtx::Sig(Account{"alice"}));
+}
+
+JTx
+makeWrongKey(Env& env)
+{
+    return env.jt(jtx::noop(Account{"alice"}), jtx::Sig(Account{"bob"}));
+}
+
+JTx
+makeMissingMultisignQuorum(Env& env)
+{
+    return env.jt(
+        jtx::noop(Account{"alice"}),
+        jtx::Fee(20),
+        jtx::Msig(Account{"bob"}));
+}
+
+JTx
+makeValidMultisign(Env& env)
+{
+    return env.jt(
+        jtx::noop(Account{"alice"}),
+        jtx::Fee(30),
+        jtx::Msig(Account{"bob"}, Account{"carol"}));
+}
+
+JTx
+makeDelegatePermissionDenied(Env& env)
+{
+    return env.jt(
+        jtx::pay(Account{"alice"}, Account{"carol"}, jtx::XRP(1)),
+        jtx::delegate::As(Account{"carol"}));
+}
+
+JTx
+makeDelegateSponsorPayment(Env& env)
+{
+    return env.jt(
+        jtx::pay(Account{"alice"}, Account{"carol"}, jtx::XRP(100)),
+        jtx::delegate::As(Account{"bob"}),
+        jtx::Fee(jtx::XRP(10)),
+        jtx::sponsor::As(Account{"sponsor"}, spfSponsorFee),
+        jtx::Sig(sfSponsorSignature, Account{"sponsor"}));
+}
+
+JTx
+makeFirstError(Env& env)
+{
+    auto result = jtx::fset(Account{"alice"}, asfRequireDest, asfRequireDest);
+    return env.jt(result, jtx::Fee(1, true));
+}
+
+JTx
 makeAccountSet(Env& env)
 {
     return env.jt(jtx::fset(Account{"alice"}, asfRequireDest));
@@ -406,6 +615,62 @@ makeBatch(Env& env)
         jtx::batch::Inner(jtx::pay(bob, alice, jtx::XRP(1)), env.seq(bob)),
         jtx::batch::Inner(jtx::pay(carol, alice, jtx::XRP(1)), env.seq(carol)),
         jtx::batch::Sig(bob, carol));
+}
+
+JTx
+makeBatchOnlyOneMixed(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const sequence = env.seq(alice);
+    auto const fee = jtx::batch::calcBatchFee(env, 0, 3);
+    return env.jt(
+        jtx::batch::outer(alice, sequence, fee, tfOnlyOne),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(9999)), sequence + 1),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(1)), sequence + 2),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(2)), sequence + 3));
+}
+
+JTx
+makeBatchUntilFailure(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const sequence = env.seq(alice);
+    auto const fee = jtx::batch::calcBatchFee(env, 0, 3);
+    return env.jt(
+        jtx::batch::outer(alice, sequence, fee, tfUntilFailure),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(1)), sequence + 1),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(9999)), sequence + 2),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(2)), sequence + 3));
+}
+
+JTx
+makeBatchRollback(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const sequence = env.seq(alice);
+    auto const fee = jtx::batch::calcBatchFee(env, 0, 2);
+    return env.jt(
+        jtx::batch::outer(alice, sequence, fee, tfAllOrNothing),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(1)), sequence + 1),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(9999)), sequence + 2));
+}
+
+JTx
+makeBatchIndependentMixed(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const sequence = env.seq(alice);
+    auto const fee = jtx::batch::calcBatchFee(env, 0, 4);
+    return env.jt(
+        jtx::batch::outer(alice, sequence, fee, tfIndependent),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(1)), sequence + 1),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(9999)), sequence + 2),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(9999)), sequence + 3),
+        jtx::batch::Inner(jtx::pay(alice, bob, jtx::XRP(3)), sequence + 4));
 }
 
 JTx
@@ -468,19 +733,201 @@ fundAndClose(Env& env, std::initializer_list<Account> accounts)
     env.close();
 }
 
+std::unique_ptr<Config>
+serviceConfig(Profile const& profile)
+{
+    auto config = recorderConfig();
+    config->startUp = StartUpType::Fresh;
+
+    FeatureBitset forced;
+    foreachFeature(profile.features(), [&](uint256 const& feature) {
+        auto const name = featureToName(feature);
+        auto const amendment = allAmendments().find(name);
+        if (amendment == allAmendments().end())
+            return;
+
+        if (amendment->second == AmendmentSupport::Retired)
+        {
+            forced.set(feature);
+            return;
+        }
+
+        if (amendment->second == AmendmentSupport::Unsupported)
+            return;
+
+        config->section(Sections::kAmendments).append(
+            to_string(feature) + " " + name);
+    });
+    foreachFeature(forced, [&](uint256 const& feature) {
+        config->features.insert(feature);
+    });
+    return config;
+}
+
+void
+setupPastSequence(Env& env)
+{
+    auto const alice = Account{"alice"};
+    fundAndClose(env, {alice});
+    env(jtx::fset(alice, asfRequireDest));
+    env.close();
+}
+
+void
+setupExpiredLedger(Env& env)
+{
+    fundAndClose(env, {Account{"alice"}});
+}
+
+void
+setupPriorConstraint(Env& env)
+{
+    auto const alice = Account{"alice"};
+    fundAndClose(env, {alice});
+    env(jtx::fset(alice, asfAccountTxnID));
+    env.close();
+}
+
+void
+setupValidTicket(Env& env)
+{
+    auto const alice = Account{"alice"};
+    fundAndClose(env, {alice});
+    env(jtx::ticket::create(alice, 1));
+    env.close();
+}
+
+void
+setupConsumedTicket(Env& env)
+{
+    auto const alice = Account{"alice"};
+    fundAndClose(env, {alice});
+    env(jtx::ticket::create(alice, 2));
+    env.close();
+    env(jtx::noop(alice), jtx::ticket::Use(env.seq(alice) - 1));
+    env.close();
+}
+
+void
+setupTicketReserveFailure(Env& env)
+{
+    auto const alice = Account{"alice"};
+    env.fund(env.current()->fees().accountReserve(1, 1) - jtx::drops(1), alice);
+    env.close();
+}
+
+void
+setupRegularKey(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    fundAndClose(env, {alice, bob});
+    env(jtx::regkey(alice, bob));
+    env.close();
+}
+
+void
+setupMasterDisabled(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    fundAndClose(env, {alice, bob});
+    env(jtx::regkey(alice, bob));
+    env.close();
+    env(jtx::fset(alice, asfDisableMaster), jtx::Sig(alice));
+    env.close();
+}
+
+void
+setupMultisign(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const carol = Account{"carol"};
+    fundAndClose(env, {alice, bob, carol});
+    env(jtx::signers(alice, 2, {{bob, 1}, {carol, 1}}));
+    env.close();
+}
+
+void
+setupDelegate(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const carol = Account{"carol"};
+    fundAndClose(env, {alice, bob, carol});
+    env(jtx::delegate::set(alice, bob, {"Payment"}));
+    env.close();
+}
+
+void
+setupDelegateSponsor(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    auto const carol = Account{"carol"};
+    auto const sponsor = Account{"sponsor"};
+    fundAndClose(env, {alice, bob, carol, sponsor});
+    env(jtx::delegate::set(alice, bob, {"Payment"}));
+    env.close();
+}
+
 template <class Builder>
 void
 recordWithSetup(FixtureRecorder& recorder,
                 beast::unit_test::Suite& suite,
                 Profile const& profile,
                 std::string const& family,
-                std::string const& testcase,
-                std::initializer_list<Account> accounts,
-                Builder&& builder)
+                 std::string const& testcase,
+                 std::initializer_list<Account> accounts,
+                 Builder&& builder,
+                 std::optional<Expected> expected = std::nullopt)
 {
     Env env{suite, recorderConfig(), profile.features()};
     env.app().checkSigs(true);
     fundAndClose(env, accounts);
+    assertFreshRuntime(env, suite);
+    recorder.record(profile, family, testcase, env, builder(env), expected);
+}
+
+template <class Setup, class Builder>
+void
+recordScenario(FixtureRecorder& recorder,
+               beast::unit_test::Suite& suite,
+               Profile const& profile,
+               std::string const& family,
+               std::string const& testcase,
+               std::unique_ptr<Config> config,
+               Setup&& setup,
+               Builder&& builder,
+               Expected expected)
+{
+    Env env{suite, std::move(config), profile.features()};
+    env.app().checkSigs(true);
+    setup(env);
+    assertFreshRuntime(env, suite);
+    recorder.record(profile, family, testcase, env, builder(env), expected);
+}
+
+template <class Builder>
+void
+recordServiceScenario(
+    FixtureRecorder& recorder,
+    beast::unit_test::Suite& suite,
+    Profile const& profile,
+    std::string const& family,
+    std::string const& testcase,
+    Builder&& builder)
+{
+    Env env{suite, serviceConfig(profile), FeatureBitset{}};
+    env.app().checkSigs(true);
+    fundAndClose(env, {Account{"alice"}, Account{"bob"}});
+    auto const parent = env.closed();
+    suite.expect(
+        parent->read(keylet::amendments()) != nullptr,
+        "fresh service parent did not persist Amendments singleton",
+        __FILE__,
+        __LINE__);
     assertFreshRuntime(env, suite);
     recorder.record(profile, family, testcase, env, builder(env));
 }
@@ -534,6 +981,42 @@ public:
                             "poisoned-created-node-wrapper",
                             {Account{"alice"}, Account{"bob"}},
                             makePoisonedBatch);
+                        recordWithSetup(
+                            recorder,
+                            *this,
+                            profile,
+                            "Batch",
+                            "only-one-mixed",
+                            {Account{"alice"}, Account{"bob"}},
+                            makeBatchOnlyOneMixed,
+                            Expected{TER{tesSUCCESS}, true, false});
+                        recordWithSetup(
+                            recorder,
+                            *this,
+                            profile,
+                            "Batch",
+                            "until-failure",
+                            {Account{"alice"}, Account{"bob"}},
+                            makeBatchUntilFailure,
+                            Expected{TER{tesSUCCESS}, true, false});
+                        recordWithSetup(
+                            recorder,
+                            *this,
+                            profile,
+                            "Batch",
+                            "all-or-nothing-rollback",
+                            {Account{"alice"}, Account{"bob"}},
+                            makeBatchRollback,
+                            Expected{TER{tesSUCCESS}, true, false});
+                        recordWithSetup(
+                            recorder,
+                            *this,
+                            profile,
+                            "Batch",
+                            "independent-mixed",
+                            {Account{"alice"}, Account{"bob"}},
+                            makeBatchIndependentMixed,
+                            Expected{TER{tesSUCCESS}, true, false});
                     }
 
         for (int cleanup = 0; cleanup <= 1; ++cleanup)
@@ -591,6 +1074,234 @@ public:
                         {Account{"alice"}},
                         makeLoanBrokerSet);
             }
+
+        Profile const representative{true, true, true, true};
+        recordWithSetup(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "invalid-flags",
+            {Account{"alice"}},
+            makeInvalidAccountSetFlags,
+            Expected{TER{temINVALID_FLAG}, false, false});
+        recordWithSetup(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "negative-fee",
+            {Account{"alice"}},
+            makeNegativeFee,
+            Expected{TER{temBAD_FEE}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "low-fee",
+            recorderConfig(),
+            setupRegularKey,
+            makeLowFee,
+            Expected{TER{telINSUF_FEE_P}, false, false});
+        recordWithSetup(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "first-error-fee-before-flags",
+            {Account{"alice"}},
+            makeFirstError,
+            Expected{TER{temBAD_FEE}, false, false});
+
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "TicketCreate",
+            "insufficient-reserve",
+            recorderConfig(),
+            setupTicketReserveFailure,
+            [](Env& env) { return env.jt(jtx::ticket::create(Account{"alice"}, 1)); },
+            Expected{TER{tecINSUFFICIENT_RESERVE}, true, false});
+        recordWithSetup(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "missing-ticket",
+            {Account{"alice"}},
+            makeMissingTicket,
+            Expected{TER{terPRE_TICKET}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "valid-ticket",
+            recorderConfig(),
+            setupValidTicket,
+            makeValidTicket,
+            Expected{TER{tesSUCCESS}, true, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "consumed-ticket",
+            recorderConfig(),
+            setupConsumedTicket,
+            makeConsumedTicket,
+            Expected{TER{tefNO_TICKET}, false, false});
+
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "past-sequence",
+            recorderConfig(),
+            setupPastSequence,
+            makePastSequence,
+            Expected{TER{tefPAST_SEQ}, false, false});
+        recordWithSetup(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "future-sequence",
+            {Account{"alice"}},
+            makeFutureSequence,
+            Expected{TER{terPRE_SEQ}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "expired-last-ledger",
+            recorderConfig(),
+            setupExpiredLedger,
+            makeExpiredLedger,
+            Expected{TER{tefMAX_LEDGER}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "wrong-prior-transaction",
+            recorderConfig(),
+            setupPriorConstraint,
+            makeWrongPrior,
+            Expected{TER{tefWRONG_PRIOR}, false, false});
+
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "regular-key",
+            recorderConfig(),
+            setupRegularKey,
+            makeRegularKeyPayment,
+            Expected{TER{tesSUCCESS}, true, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "master-disabled",
+            recorderConfig(),
+            setupMasterDisabled,
+            makeMasterDisabled,
+            Expected{TER{tefMASTER_DISABLED}, false, false});
+        recordWithSetup(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "wrong-key",
+            {Account{"alice"}, Account{"bob"}},
+            makeWrongKey,
+            Expected{TER{tefBAD_AUTH}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "multisign-missing-quorum",
+            recorderConfig(),
+            setupMultisign,
+            makeMissingMultisignQuorum,
+            Expected{TER{tefBAD_QUORUM}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "multisign-valid-quorum",
+            recorderConfig(),
+            setupMultisign,
+            makeValidMultisign,
+            Expected{TER{tesSUCCESS}, true, false});
+
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "Payment",
+            "delegate-permission-denied",
+            recorderConfig(),
+            setupDelegate,
+            makeDelegatePermissionDenied,
+            Expected{TER{terNO_DELEGATE_PERMISSION}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "Payment",
+            "delegate-sponsor-fee-payer",
+            recorderConfig(),
+            setupDelegateSponsor,
+            makeDelegateSponsorPayment,
+            Expected{TER{tesSUCCESS}, true, false});
+
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "network-id-missing",
+            networkConfig(1025),
+            [](Env& env) { fundAndClose(env, {Account{"alice"}}); },
+            makeNetworkMissing,
+            Expected{TER{telREQUIRES_NETWORK_ID}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "network-id-wrong",
+            networkConfig(1025),
+            [](Env& env) { fundAndClose(env, {Account{"alice"}}); },
+            makeNetworkWrong,
+            Expected{TER{telWRONG_NETWORK}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "network-id-noncanonical",
+            recorderConfig(),
+            [](Env& env) { fundAndClose(env, {Account{"alice"}}); },
+            makeNonCanonicalNetworkID,
+            Expected{TER{telNETWORK_ID_MAKES_TX_NON_CANONICAL}, false, false});
+        recordServiceScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "service-boundary-amendments",
+            makeAccountSet);
     }
 };
 
