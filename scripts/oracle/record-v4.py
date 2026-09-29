@@ -129,6 +129,7 @@ def verify_config(config: Path) -> dict:
         "LoanBrokerSet",
         "NFTokenAcceptOffer",
         "OfferCreate",
+        "EscrowCancel",
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
@@ -173,7 +174,16 @@ def verify_config(config: Path) -> dict:
                 "queued": False,
                 "expected_deleted_object": "Offer",
                 "expected_retained_object": "Offer",
-            }
+            },
+        },
+        "invariant_recovery": {
+            "EscrowCancel/malformed-escrow-cancel-refund": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tecINVARIANT_FAILED",
+                "applied": True,
+                "queued": False,
+                "coverage": "malformed parent escrow refund reaches fee-only recovery and records invariant failure",
+            },
         },
         "seeded_payments": {
             "seed": 2016,

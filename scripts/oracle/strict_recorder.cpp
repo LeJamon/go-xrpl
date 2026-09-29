@@ -6,6 +6,7 @@
 #include <test/jtx/amount.h>
 #include <test/jtx/batch.h>
 #include <test/jtx/envconfig.h>
+#include <test/jtx/escrow.h>
 #include <test/jtx/fee.h>
 #include <test/jtx/flags.h>
 #include <test/jtx/last_ledger_sequence.h>
@@ -30,6 +31,7 @@
 #include <xrpl/json/to_string.h>
 #include <xrpl/ledger/AmendmentTable.h>
 #include <xrpl/ledger/ApplyView.h>
+#include <xrpl/ledger/Ledger.h>
 #include <xrpl/ledger/LedgerTiming.h>
 #include <xrpl/ledger/OpenView.h>
 #include <xrpl/ledger/ReadView.h>
@@ -41,11 +43,14 @@
 #include <xrpl/protocol/SeqProxy.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
+#include <xrpl/protocol/SystemParameters.h>
 #include <xrpl/protocol/TER.h>
 #include <xrpl/protocol/TxFormats.h>
 #include <xrpl/protocol/TxFlags.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/tx/apply.h>
+#include <xrpld/app/ledger/LedgerMaster.h>
+#include <xrpld/app/ledger/OpenLedger.h>
 #include <xrpld/app/misc/TxQ.h>
 
 #include <algorithm>
@@ -1283,6 +1288,96 @@ setupDelegateSponsor(Env& env)
     env.close();
 }
 
+template <class Mutator>
+void
+installMalformedParent(Env& env, Mutator&& mutator)
+{
+    auto const base = std::dynamic_pointer_cast<Ledger const>(env.closed());
+    env.test.expect(
+        base != nullptr,
+        "closed ledger was not a Ledger",
+        __FILE__,
+        __LINE__);
+    if (!base)
+        return;
+
+    auto malformed = std::make_shared<Ledger>(
+        *base, base->header().closeTime + base->header().closeTimeResolution);
+    {
+        OpenView view(malformed.get());
+        if (!mutator(view))
+        {
+            env.test.expect(false, "failed to locate malformed parent entry", __FILE__, __LINE__);
+            return;
+        }
+        view.apply(*malformed);
+    }
+    malformed->updateSkipList();
+    malformed->setAccepted(
+        malformed->header().closeTime,
+        malformed->header().closeTimeResolution,
+        true);
+
+    auto retries = OrderedTxs({});
+    env.app().getOpenLedger().accept(
+        env.app(),
+        malformed->rules(),
+        malformed,
+        OrderedTxs({}),
+        false,
+        retries,
+        TapNone);
+    env.app().getLedgerMaster().switchLCL(malformed);
+    env.timeKeeper().set(malformed->header().closeTime);
+}
+
+void
+setupMalformedEscrow(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    fundAndClose(env, {alice, bob});
+
+    auto const escrowSequence = env.seq(alice);
+    env(
+        jtx::escrow::create(alice, bob, jtx::XRP(1)),
+        jtx::escrow::kFinishTime(env.now() + std::chrono::seconds{1}),
+        jtx::escrow::kCancelTime(env.now() + std::chrono::seconds{2}));
+    env.test.expect(env.close(), "escrow setup ledger close failed", __FILE__, __LINE__);
+
+    auto const escrowKey =
+        keylet::escrow(alice.id(), SeqProxy::rawSequence(escrowSequence));
+    auto const malformedAmount = kInitialXrp;
+    auto const fee = env.closed()->fees().base;
+    installMalformedParent(env, [&](OpenView& view) {
+        auto const escrow = view.read(escrowKey);
+        auto const owner = view.read(keylet::account(alice.id()));
+        if (!escrow || !owner)
+            return false;
+        auto replacement = std::make_shared<SLE>(*escrow);
+        replacement->setFieldAmount(sfAmount, malformedAmount);
+        view.rawReplace(replacement);
+        auto ownerReplacement = std::make_shared<SLE>(*owner);
+        ownerReplacement->setFieldAmount(sfBalance, fee);
+        view.rawReplace(ownerReplacement);
+        return true;
+    });
+
+    auto const escrow = env.le(escrowKey);
+    env.test.expect(
+        escrow && escrow->getFieldAmount(sfAmount) == malformedAmount,
+        "malformed escrow amount was not preserved in the parent ledger",
+        __FILE__,
+        __LINE__);
+}
+
+JTx
+makeExpiredEscrowCancel(Env& env)
+{
+    auto const alice = Account{"alice"};
+    return env.jt(jtx::escrow::cancel(alice, alice, env.seq(alice) - 1));
+}
+
 template <class Builder>
 void
 recordWithSetup(FixtureRecorder& recorder,
@@ -1548,6 +1643,17 @@ public:
             {Account{"alice"}},
             makeFirstError,
             Expected{TER{temBAD_FEE}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "EscrowCancel",
+            "malformed-escrow-cancel-refund",
+            recorderConfig(),
+            setupMalformedEscrow,
+            makeExpiredEscrowCancel,
+            Expected{TER{tecINVARIANT_FAILED}, true, false});
+
         recordScenario(
             recorder,
             *this,

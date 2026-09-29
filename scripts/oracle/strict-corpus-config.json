@@ -47,6 +47,15 @@
         "expected_retained_object": "Offer"
       }
     },
+    "invariant_recovery": {
+      "EscrowCancel/malformed-escrow-cancel-refund": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tecINVARIANT_FAILED",
+        "applied": true,
+        "queued": false,
+        "coverage": "malformed parent escrow refund reaches fee-only recovery and records invariant failure"
+      }
+    },
     "seeded_payments": {
       "seed": 2016,
       "profile": "c1-l1-b1-f1",
@@ -101,7 +110,8 @@
     "VaultCreate",
     "LoanBrokerSet",
     "NFTokenAcceptOffer",
-    "OfferCreate"
+    "OfferCreate",
+    "EscrowCancel"
   ],
   "batch_wrapper_policy": "canonical RawTransaction and poisoned CreatedNode wrapper, on both fix sides where BatchV1_1 is enabled",
   "submit_policy": "open_ledger boundary, engine_result token and numeric TER, applied/queued flags, uint64 fee, complete current open-ledger SLE bytes"
