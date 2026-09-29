@@ -12,8 +12,9 @@ ledger data. The client can participate in the peer network, process
 transactions, maintain ledger state, take part in consensus, and expose
 JSON-RPC, WebSocket, and optional gRPC services.
 
-Protocol compatibility is current through **rippled v3.4.0**. go-xrpl has its
-own architecture and follows Go conventions.
+The release branch targets private **rippled v3.4.1**. [Release sign-off](docs/release-3.4.1.md)
+remains open until the merged candidate passes every required evidence gate.
+go-xrpl has its own architecture and software version policy.
 
 > [!IMPORTANT]
 > go-xrpl is under active development. Review the
@@ -141,15 +142,16 @@ just vet
 just lint
 ```
 
-To inspect the conformance suite:
+For historical 3.4.0 corpus diagnostics:
 
 ```shell
 just conformance --corpus /path/to/rippled-3.4.0-v3
 just conformance --corpus /path/to/rippled-3.4.0-v3 --failing
 ```
 
-The required corpus is external and must carry final rippled 3.4.0 provenance;
-missing, stale, empty, or zero-executed corpora fail closed.
+These legacy commands do not establish private 3.4.1 parity. The required signed
+3.4.1 corpus and strict replay are tracked in [#2015](https://github.com/LeJamon/go-xrpl/issues/2015);
+see the [release evidence matrix](docs/release-3.4.1.md) for remaining gates.
 
 ## Documentation
 

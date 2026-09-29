@@ -1,5 +1,11 @@
 # Conformance
 
+The release target is private `XRPLF/xrpld-private` **3.4.1**, commit
+`d147fccf54a500fce586522f28d6044c37fd8d29`. [Release sign-off](release-3.4.1.md)
+remains open. The legacy corpus commands below describe historical 3.4.0
+diagnostics; they are not 3.4.1 release evidence. #2015 supplies the required
+signed private corpus and strict replay.
+
 There is no formal XRP Ledger specification. [rippled](https://github.com/XRPLF/rippled),
 the C++ reference implementation, *is* the spec — so for go-xrpl, "correct" means
 "behaves the way rippled behaves". This document explains how that parity is
@@ -14,8 +20,9 @@ behavior is deliberately mirrored, the Go code cites the rippled source file it
 follows (e.g. `Transactor.cpp`, `applySteps.h`), so a reviewer can check the port
 against the original.
 
-The pinned local `rippled-worktrees/v3.4.0-oracle/` tree at commit
-`4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17` is the working reference. Its
+The pinned local `rippled-worktrees/v3.4.1-oracle/` tree at commit
+`d147fccf54a500fce586522f28d6044c37fd8d29` from private `XRPLF/xrpld-private`
+is the working reference. Its
 transaction implementations live under `src/libxrpl/tx/transactors/`, headers
 under `include/xrpl/tx/transactors/`, ledger code under `src/libxrpl/ledger/`,
 protocol definitions under `src/libxrpl/protocol/` and
@@ -28,8 +35,8 @@ Conformance tests live in `internal/testing/conformance/` and run rippled-derive
 fixtures against the go-xrpl transaction engine and ledger. They are exposed as Go
 subtests under `TestConformance/app/<Suite>` and `TestConformance/ledger/<Suite>`.
 
-Final-release conformance requires an explicit v3 corpus recorded from rippled
-3.4.0 at the commit above. The corpus manifest pins the oracle repository,
+Historical diagnostics use an explicit v3 corpus recorded from rippled
+3.4.0 at `4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17`. The corpus manifest pins the oracle repository,
 recorder commit, build and amendment configuration, all four
 `fixCleanup3_4_0`/`LendingProtocolV1_1` combinations, fixture counts, and every
 skip reason. Transaction observations include the execution boundary, symbolic
@@ -68,7 +75,7 @@ and are not executed:
 ```
 
 In the per-suite table, suites are colored green (all pass), yellow (partial), or
-red (none pass). The in-scope result is the release gate.
+red (none pass). This historical result is not the private 3.4.1 release gate.
 
 ## What is intentionally out of scope
 

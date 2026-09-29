@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -20,9 +19,6 @@ from pathlib import Path
 ORACLE_REPOSITORY = "XRPLF/xrpld-private"
 ORACLE_TAG = "3.4.1"
 ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
-DEFAULT_ORACLE_ROOT = Path(
-    "/Users/thomashussenet/Documents/project_goXRPL/rippled-worktrees/v3.4.1-oracle"
-)
 SOURCE_RELATIVE = Path("include/xrpl/protocol/detail/features.macro")
 
 ACTIVE = re.compile(
@@ -118,10 +114,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "oracle_root",
-        nargs="?",
         type=Path,
-        default=Path(os.environ.get("GOXRPL_AMENDMENT_ORACLE_DIR", DEFAULT_ORACLE_ROOT)),
-        help="clean pinned private rippled checkout (defaults to the local v3.4.1 oracle)",
+        help="clean pinned private rippled checkout",
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

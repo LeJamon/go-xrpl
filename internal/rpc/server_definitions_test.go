@@ -33,8 +33,9 @@ type serverDefinitionsSectionFixture struct {
 
 type serverDefinitionsHashFixture struct {
 	Oracle struct {
-		Tag    string `json:"tag"`
-		Commit string `json:"commit"`
+		Repository string `json:"repository"`
+		Tag        string `json:"tag"`
+		Commit     string `json:"commit"`
 	} `json:"oracle"`
 	FullDocumentSHA512Half string                                     `json:"full_document_sha512_half"`
 	FullDocumentBytes      int                                        `json:"full_document_bytes"`
@@ -306,8 +307,8 @@ func TestServerDefinitionsHash(t *testing.T) {
 	hash, ok := resp["hash"].(string)
 	require.True(t, ok, "response should contain a string hash")
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
-	// Pinned to the v3.4.0 ServerDefinitions document and its compact
-	// Json::FastWriter serialization (oracle commit 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17).
+	// Pinned to the v3.4.1 ServerDefinitions document and its compact
+	// Json::FastWriter serialization from the private release oracle.
 	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
@@ -374,8 +375,9 @@ func TestServerDefinitionsHash(t *testing.T) {
 // even when the complete-document hash is accidentally updated.
 func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
 	fixture := loadServerDefinitionsFinalHashFixture(t)
-	assert.Equal(t, "3.4.0", fixture.Oracle.Tag)
-	assert.Equal(t, "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17", fixture.Oracle.Commit)
+	assert.Equal(t, "XRPLF/xrpld-private", fixture.Oracle.Repository)
+	assert.Equal(t, "3.4.1", fixture.Oracle.Tag)
+	assert.Equal(t, "d147fccf54a500fce586522f28d6044c37fd8d29", fixture.Oracle.Commit)
 	assert.Equal(t,
 		"1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
 		fixture.FullDocumentSHA512Half,
@@ -453,7 +455,7 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	}
 }
 
-func TestServerDefinitions_3_4_0_Final_Sections(t *testing.T) {
+func TestServerDefinitions_3_4_1_Final_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
