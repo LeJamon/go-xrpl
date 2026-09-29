@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func copyPinnedCorpus(t *testing.T) (string, pinnedManifest) {
@@ -244,6 +246,54 @@ func TestPinnedCorpusRejectsMalformedFixtureAfterChecksum(t *testing.T) {
 			writePinnedManifest(t, root, manifest)
 			if _, err := loadPinnedCorpus(root); err == nil || !strings.Contains(strings.ToLower(err.Error()), test.want) {
 				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPinnedCorpusRejectsMalformedExcludedResults(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*snapshotSubmit)
+		want   string
+	}{
+		{"unknown TER", func(s *snapshotSubmit) { s.EngineResult, s.EngineResultCode = "-", 9999 }, "unknown submit TER"},
+		{"unapplied success", func(s *snapshotSubmit) { s.Applied = false }, "submit.applied"},
+		{"applied malformed", func(s *snapshotSubmit) {
+			s.EngineResult, s.EngineResultCode = ter.TemMALFORMED.String(), int(ter.TemMALFORMED)
+		}, "submit.applied"},
+		{"unapplied fee", func(s *snapshotSubmit) {
+			s.EngineResult, s.EngineResultCode = ter.TemMALFORMED.String(), int(ter.TemMALFORMED)
+			s.Applied, s.Fee = false, 1
+		}, "submit.fee"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, manifest := copyPinnedCorpus(t)
+			name := "c0-l0-b1-f1-Batch-canonical.json"
+			path := filepath.Join(root, name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture, err := decodeSnapshotFixture(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.change(&fixture.Submit)
+			data, err = json.Marshal(fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			pin := manifest.Fixtures[name]
+			pin.SHA256 = sha256Hex(data)
+			pin.ExcludeReason = "explicit exclusion must not hide malformed results"
+			manifest.Fixtures[name] = pin
+			writePinnedManifest(t, root, manifest)
+			if _, err := loadPinnedCorpus(root); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q", err, tc.want)
 			}
 		})
 	}

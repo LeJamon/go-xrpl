@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -233,14 +234,24 @@ func validateSnapshotSubmit(submit snapshotSubmit) error {
 	if submit.EngineResult == "" {
 		return errors.New("submit.engine_result is empty")
 	}
-	if ter.Result(submit.EngineResultCode).String() != submit.EngineResult {
+	result := ter.Result(submit.EngineResultCode)
+	if result.String() == "-" {
+		return fmt.Errorf("unknown submit TER code %d", submit.EngineResultCode)
+	}
+	if result.String() != submit.EngineResult {
 		return fmt.Errorf("submit TER %q does not match numeric code %d", submit.EngineResult, submit.EngineResultCode)
 	}
 	if submit.Applied && submit.Queued {
 		return errors.New("submit.applied and submit.queued cannot both be true")
 	}
-	if submit.Queued != (ter.Result(submit.EngineResultCode) == ter.TerQUEUED) {
+	if submit.Queued != (result == ter.TerQUEUED) {
 		return fmt.Errorf("submit.queued does not match TER %q", submit.EngineResult)
+	}
+	if (result.IsSuccess() && !submit.Applied) || (submit.Applied && !result.IsSuccess() && !result.IsTec()) {
+		return fmt.Errorf("submit.applied does not match TER %q", submit.EngineResult)
+	}
+	if !submit.Applied && submit.Fee != 0 {
+		return errors.New("submit.fee must be zero when submit.applied is false")
 	}
 	return validateSnapshotEntries("submit.post_submit_sle", submit.PostSubmitSLE)
 }
@@ -786,6 +797,9 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 	if err != nil {
 		return loadedSnapshotLedger{}, err
 	}
+	if err := validateSnapshotFees(state, explicitRules, fees); err != nil {
+		return loadedSnapshotLedger{}, err
+	}
 	l, err := ledger.NewFromHeader(*hdr, state, txs, fees)
 	if err != nil {
 		return loadedSnapshotLedger{}, fmt.Errorf("construct ledger: %w", err)
@@ -800,6 +814,38 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		}
 	}
 	return loadedSnapshotLedger{Ledger: l, Header: *hdr, EffectiveRules: explicitRules, Fees: fees, State: state, Txs: txs}, nil
+}
+
+func validateSnapshotFees(stateMap *shamap.SHAMap, rules *amendment.Rules, fees drops.Fees) error {
+	item, found, err := stateMap.Get(keylet.Fees().Key)
+	if err != nil {
+		return fmt.Errorf("read snapshot FeeSettings: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	settings, err := ledgerstate.ParseFeeSettings(item.Data())
+	if err != nil {
+		return fmt.Errorf("parse snapshot FeeSettings: %w", err)
+	}
+	if settings.IsUsingModernFees() && !rules.Enabled(amendment.FeatureXRPFees) {
+		return errors.New("snapshot FeeSettings uses XRPFees fields before the amendment is enabled")
+	}
+	for _, field := range []struct {
+		name     string
+		present  bool
+		amount   uint64
+		recorded drops.XRPAmount
+	}{
+		{"base", settings.HasBaseFee || settings.HasBaseFeeDrops, settings.GetBaseFee(), fees.Base},
+		{"reserve", settings.HasReserveBase || settings.HasReserveBaseDrops, settings.GetReserveBase(), fees.Reserve},
+		{"increment", settings.HasReserveIncrement || settings.HasReserveIncrementDrops, settings.GetReserveIncrement(), fees.Increment},
+	} {
+		if field.present && uint64(field.recorded) != field.amount {
+			return fmt.Errorf("snapshot fees.%s disagrees with FeeSettings: recorded=%d, ledger=%d", field.name, field.recorded, field.amount)
+		}
+	}
+	return nil
 }
 
 func assertSnapshotLedger(got *ledger.Ledger, want loadedSnapshotLedger) error {
