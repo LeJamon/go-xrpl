@@ -119,7 +119,7 @@ func TestTxMethodCTIDRejectsOpenUnvalidatedAndOutOfRangeLedgers(t *testing.T) {
 			first:       1,
 			published:   100,
 			requested:   101,
-			reader:      newDefaultLedgerReader(101, false),
+			reader:      newCTIDTestReader(t, 101, false, false),
 			wantLookups: 0,
 		},
 		{
@@ -127,19 +127,15 @@ func TestTxMethodCTIDRejectsOpenUnvalidatedAndOutOfRangeLedgers(t *testing.T) {
 			first:       1,
 			published:   101,
 			requested:   101,
-			reader:      newDefaultLedgerReader(101, false),
+			reader:      newCTIDTestReader(t, 101, false, false),
 			wantLookups: 1,
 		},
 		{
-			name:      "unvalidated closed ledger",
-			first:     1,
-			published: 100,
-			requested: 100,
-			reader: func() *mockLedgerReader {
-				reader := newDefaultLedgerReader(100, false)
-				reader.closed = true
-				return reader
-			}(),
+			name:        "unvalidated closed ledger",
+			first:       1,
+			published:   100,
+			requested:   100,
+			reader:      newCTIDTestReader(t, 100, true, false),
 			wantLookups: 1,
 		},
 		{
@@ -147,7 +143,7 @@ func TestTxMethodCTIDRejectsOpenUnvalidatedAndOutOfRangeLedgers(t *testing.T) {
 			first:       1,
 			published:   100,
 			requested:   101,
-			reader:      newDefaultLedgerReader(101, true),
+			reader:      newCTIDTestReader(t, 101, true, true),
 			wantLookups: 0,
 		},
 		{
@@ -155,7 +151,7 @@ func TestTxMethodCTIDRejectsOpenUnvalidatedAndOutOfRangeLedgers(t *testing.T) {
 			first:       100,
 			published:   100,
 			requested:   99,
-			reader:      newDefaultLedgerReader(99, true),
+			reader:      newCTIDTestReader(t, 99, true, true),
 			wantLookups: 1,
 		},
 	}
@@ -175,6 +171,23 @@ func TestTxMethodCTIDRejectsOpenUnvalidatedAndOutOfRangeLedgers(t *testing.T) {
 			assert.Equal(t, tc.wantLookups, *lookupCalls)
 		})
 	}
+}
+
+func TestTxMethodCTIDRejectsWithoutPublishedFrontier(t *testing.T) {
+	const ledgerSequence = 100
+	reader := newCTIDTestReader(t, ledgerSequence, true, true)
+	ctx, service, lookupCalls := newCTIDTestContext(t, 1, ledgerSequence, reader)
+	service.serverInfo.HavePublished = false
+	ctid, ok := handlers.EncodeCTID(ledgerSequence, 0, 0)
+	require.True(t, ok)
+	params, err := json.Marshal(map[string]any{"ctid": ctid})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, params)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcTXN_NOT_FOUND, rpcErr.Code)
+	assert.Zero(t, *lookupCalls)
 }
 
 func TestTxMethodCTIDNetworkErrorPrecedesValidatedRangeLookup(t *testing.T) {
