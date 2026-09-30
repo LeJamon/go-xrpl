@@ -1,8 +1,10 @@
 package service_test
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // signedPaymentWithFee builds a signed Payment blob carrying an explicit
@@ -508,5 +511,68 @@ func TestService_SubmitTransaction_FailHardNotQueued(t *testing.T) {
 	}
 	if blob, included, deferred, ok := svc.TransactionForRelay(hash); ok || len(blob) != 0 || included || deferred {
 		t.Errorf("fail_hard rejected tx must not be retained for relay: (%x, %v, %v, %v)", blob, included, deferred, ok)
+	}
+}
+
+func TestServiceSubmissionPublishesCurrentOpenLedger(t *testing.T) {
+	for _, ingress := range []string{"rpc", "peer"} {
+		t.Run(ingress, func(t *testing.T) {
+			svc := newServiceForOpenLedgerTest(t)
+			t.Cleanup(svc.Stop)
+			env := jtx.NewTestEnv(t)
+			master, receiver := jtx.MasterAccount(), jtx.NewAccount("published-recipient")
+			before := svc.GetOpenLedger()
+			blob, hash := signedPaymentWithFee(t, env, master, receiver, 100_000_000, 10, 1)
+			if ingress == "rpc" {
+				result := submitBlob(t, svc, blob, false)
+				if result.Result != ter.TesSUCCESS || !result.Applied {
+					t.Fatalf("submit: %+v", result)
+				}
+			} else {
+				result, err := svc.SubmitOpenLedgerTxDetailed(blob, false)
+				if err != nil || result.Result != ter.TesSUCCESS || !result.Applied {
+					t.Fatalf("submit: %+v, %v", result, err)
+				}
+			}
+			current := svc.GetOpenLedger()
+			if current.TxCount() != 1 {
+				t.Errorf("published transaction count=%d, want 1", current.TxCount())
+			}
+			if found, err := current.TxExists(hash); err != nil || !found {
+				t.Errorf("published transaction: present=%t err=%v", found, err)
+			}
+			if metrics := svc.TxQMetrics(); metrics.TxInLedger != 1 {
+				t.Errorf("queue metrics transaction count=%d, want 1", metrics.TxInLedger)
+			}
+			if sequence, err := svc.GetAutofillSequence(master.Address, false); err != nil || sequence != 2 {
+				t.Errorf("autofill sequence=%d err=%v, want 2", sequence, err)
+			}
+			if before.TxCount() != 0 {
+				t.Error("submission mutated the previously published snapshot")
+			}
+			accountKey := keylet.Account(master.ID)
+			expectedAccount, err := current.Read(accountKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, selector := range []string{"", "current", strconv.FormatUint(uint64(current.Sequence()), 10)} {
+				entry, err := svc.GetLedgerEntry(t.Context(), accountKey.Key, selector)
+				if err != nil || entry == nil || !bytes.Equal(entry.Node, expectedAccount) {
+					t.Errorf("current account query %q: entry=%+v err=%v", selector, entry, err)
+				}
+			}
+			selected, err := svc.GetLedgerBySequence(current.Sequence())
+			if err != nil || selected == nil || selected.TxCount() != 1 {
+				t.Errorf("open sequence query: ledger=%v err=%v", selected, err)
+			}
+			closeLedger(t, svc)
+			closed := svc.GetClosedLedger()
+			if found, err := closed.TxExists(hash); err != nil || !found {
+				t.Errorf("closed transaction: present=%t err=%v", found, err)
+			}
+			if closed.TxCount() != 1 || closed.TotalDrops() != before.TotalDrops()-10 {
+				t.Errorf("closed effects: txs=%d supply=%d, want 1/%d", closed.TxCount(), closed.TotalDrops(), before.TotalDrops()-10)
+			}
+		})
 	}
 }

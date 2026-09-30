@@ -876,6 +876,13 @@ func (s *Service) acceptPreferredOpenLedgerLocked(closed *ledger.Ledger) error {
 // publishes the validated frontier only after preparation succeeds.
 func (s *Service) acceptStandaloneOpenLedgerLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx) error {
 	pending := s.pendingTxs
+	if s.openLedgerView != nil {
+		var err error
+		pending, err = s.openLedgerView.CurrentTransactions()
+		if err != nil {
+			return fmt.Errorf("collect open transactions for retry order: %w", err)
+		}
+	}
 	if s.startupReplay != nil {
 		pending = append([]openledger.PendingTx(nil), pending...)
 		for _, replayTx := range s.startupReplay.OrderedTxs() {
@@ -1437,6 +1444,16 @@ func (s *Service) compactRelayCacheOrderLocked() {
 func (s *Service) GetOpenLedger() *ledger.Ledger {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.currentOpenLedgerLocked()
+}
+
+// currentOpenLedgerLocked reads the published view while preserving openLedger
+// as the ledger-frontier identity used by consensus ownership checks.
+// Caller must hold s.mu.
+func (s *Service) currentOpenLedgerLocked() *ledger.Ledger {
+	if s.openLedgerView != nil {
+		return s.openLedgerView.Current()
+	}
 	return s.openLedger
 }
 
@@ -1496,8 +1513,8 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 	s.historyComponent.mu.RLock()
 	history := s.ledgerHistory[seq]
 	var open *ledger.Ledger
-	if s.openLedger != nil && s.openLedger.Sequence() == seq {
-		open = s.openLedger
+	if current := s.currentOpenLedgerLocked(); current != nil && current.Sequence() == seq {
+		open = current
 	}
 	s.historyComponent.mu.RUnlock()
 	s.mu.RUnlock()
@@ -1718,10 +1735,11 @@ func (s *Service) GetCurrentLedgerIndex() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.openLedger == nil {
+	current := s.currentOpenLedgerLocked()
+	if current == nil {
 		return 0
 	}
-	return s.openLedger.Sequence()
+	return current.Sequence()
 }
 
 // GetClosedLedgerIndex returns the last closed ledger index
@@ -1916,8 +1934,8 @@ func (s *Service) TxQMetrics() txq.Metrics {
 		return txq.Metrics{}
 	}
 	var txInLedger uint32
-	if s.openLedger != nil {
-		txInLedger = s.openLedger.TxCount()
+	if current := s.currentOpenLedgerLocked(); current != nil {
+		txInLedger = current.TxCount()
 	}
 	return s.txQueue.Metrics(txInLedger)
 }
@@ -1956,8 +1974,8 @@ func (s *Service) GetServerInfo() ServerInfo {
 		PublishedLedgerSeq: s.publishedLedgerSeq,
 	}
 
-	if s.openLedger != nil {
-		info.OpenLedgerSeq = s.openLedger.Sequence()
+	if current := s.currentOpenLedgerLocked(); current != nil {
+		info.OpenLedgerSeq = current.Sequence()
 	}
 
 	if s.closedLedger != nil {
