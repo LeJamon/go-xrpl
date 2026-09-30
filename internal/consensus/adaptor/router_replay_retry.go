@@ -39,7 +39,7 @@ const (
 // failed transaction-only head. The verified anchor and already prepared
 // successors remain resident while maintenance drives the bounded retry.
 func (c *catchupReplayCoordinator) standardReplayHasAvailabilityBlockLocked() bool {
-	if !c.standardReplay.active {
+	if !c.standardReplay.active || c.standardReplay.replacement != nil {
 		return false
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]

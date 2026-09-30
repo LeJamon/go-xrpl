@@ -59,14 +59,33 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 		replacement.acquisition = nil
 	}
 	generation, seq, hash, hint := replacement.generation, replacement.seq, replacement.hash, replacement.peerID
+	anchorSeq, targetSeq, targetHash := c.standardReplay.anchorSeq, c.standardReplay.targetSeq, c.standardReplay.targetHash
 	c.acquisitionMu.Unlock()
-	peerID, ok := c.resolveAcquisitionPeer(seq, hint)
-	if !ok {
-		return
+	var survivor *inbound.Ledger
+	for _, candidate := range c.fetchTracker.Active() {
+		if candidate.TransactionOnly() || candidate.Reason() != inbound.ReasonConsensus || candidate.Seq() <= anchorSeq {
+			continue
+		}
+		if candidate.Hash() == hash && candidate.Seq() == seq ||
+			c.canAdoptKnownFrozenPivot(candidate.Seq(), candidate.Hash(), targetSeq, targetHash) {
+			survivor = candidate
+			seq, hash, hint = candidate.Seq(), candidate.Hash(), candidate.PeerID()
+			break
+		}
+	}
+	peerID := hint
+	if survivor == nil {
+		var ok bool
+		peerID, ok = c.resolveAcquisitionPeer(seq, hint)
+		if !ok {
+			return
+		}
 	}
 	c.acquisitionMu.Lock()
 	if c.stoppedForShutdown() || !c.standardReplay.active || c.standardReplay.generation != generation ||
-		c.standardReplay.replacement != replacement || replacement.acquisition != nil {
+		c.standardReplay.replacement != replacement || replacement.acquisition != nil ||
+		c.standardReplay.targetSeq != targetSeq || c.standardReplay.targetHash != targetHash ||
+		(survivor != nil && c.fetchTracker.Find(hash) != survivor) {
 		c.acquisitionMu.Unlock()
 		return
 	}
@@ -85,8 +104,10 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 		}
 	}
 	if c.canAdmitCatchupLocked(hash, maxConcurrentCatchup) {
-		c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
-		if il := c.fetchTracker.Find(hash); il != nil && !il.TransactionOnly() && il.Reason() == inbound.ReasonConsensus && il.Seq() == seq {
+		admission := c.startFrozenPivotReplacementLocked(seq, hash, peerID)
+		if il := admission.acquisition; (admission.outcome == fullStateAdmissionStarted || admission.outcome == fullStateAdmissionJoined) &&
+			il != nil && !il.TransactionOnly() && il.Reason() == inbound.ReasonConsensus && il.Seq() == seq {
+			replacement.seq, replacement.hash = seq, hash
 			replacement.acquisition = il
 			replacement.peerID = peerID
 			if c.consensusRecovery.targetHash != ([32]byte{}) {

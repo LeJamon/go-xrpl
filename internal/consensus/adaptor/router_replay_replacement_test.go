@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -164,6 +166,7 @@ func TestReplayRecoveryRetains177AppliedLedgersAndPreparedSuffix(t *testing.T) {
 		sender.mu.Lock()
 		sender.acquisitionPeers = []uint64{uint64(8 + attempt)}
 		sender.mu.Unlock()
+		c.retryStandardReplayAvailability(time.Now())
 		entry := c.standardReplay.entries[links[177].seq]
 		require.Equal(t, standardReplayAvailabilityRetryStarted, c.retryStandardReplayAvailability(entry.availabilityNextRetryAt))
 		retry := c.fetchTracker.Find(links[177].hash)
@@ -185,6 +188,7 @@ func TestReplayRecoveryRetains177AppliedLedgersAndPreparedSuffix(t *testing.T) {
 	sender.mu.Lock()
 	sender.acquisitionPeers = []uint64{11}
 	sender.mu.Unlock()
+	c.retryStandardReplayAvailability(time.Now())
 	entry := c.standardReplay.entries[links[179].seq]
 	require.Equal(t, standardReplayAvailabilityRetryStarted, c.retryStandardReplayAvailability(entry.availabilityNextRetryAt))
 	completeStandardReplayTestLink(t, r, links[179])
@@ -198,4 +202,42 @@ func TestReplayRecoveryRetains177AppliedLedgersAndPreparedSuffix(t *testing.T) {
 		require.NotNil(t, held)
 		assert.Equal(t, link.ledger.Header().AccountHash, held.Header().AccountHash)
 	}
+}
+
+func TestReplayReplacementAdoptsInFlightAncestorAndKeepsTarget(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 5)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+	c := r.catchupReplay
+	completeStandardReplayTestLink(t, r, links[0])
+	for _, link := range links[3:] {
+		completeStandardReplayTestLink(t, r, link)
+		c.recordAcquiredSeqHash(link.seq, link.hash, link.ledger.ParentHash())
+	}
+	target, pivot := links[4], links[2]
+	c.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
+	old := c.fetchTracker.Find(pivot.hash)
+	require.NotNil(t, old)
+	c.acquisitionMu.Lock()
+	require.True(t, c.discardInboundAcquisitionLocked(old))
+	admission := c.startFrozenPivotReplacementLocked(pivot.seq, pivot.hash, 7)
+	c.acquisitionMu.Unlock()
+	c.retireLegacyAcquisitions([]*inbound.Ledger{old})
+	require.Equal(t, fullStateAdmissionStarted, admission.outcome)
+	generation := c.standardReplay.generation
+	require.True(t, c.reserveStandardReplayReplacement(generation, links[1].seq, links[1].hash, 7, time.Now()))
+	require.NotNil(t, c.standardReplay.replacement)
+	assert.Same(t, admission.acquisition, c.standardReplay.replacement.acquisition)
+	assert.Equal(t, pivot.hash, c.standardReplay.replacement.hash)
+	assert.Equal(t, target.hash, c.standardReplay.targetHash)
+	assert.Equal(t, links[0].hash, c.standardReplay.anchorHash)
+	completeIssue1863FullStatePivot(t, r, pivot)
+	drainStandardReplayTestPipeline(t, r)
+	assert.Equal(t, generation, c.standardReplay.generation)
+	assert.False(t, c.standardReplay.active)
+	held, err := svc.GetLedgerByHash(target.hash)
+	require.NoError(t, err)
+	require.NotNil(t, held)
 }
