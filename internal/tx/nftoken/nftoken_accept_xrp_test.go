@@ -77,6 +77,15 @@ func TestCreditNFTokenIssuerXRP(t *testing.T) {
 		require.Equal(t, 1, view.updates)
 	})
 
+	t.Run("tentative balance above the supply cap", func(t *testing.T) {
+		ctx, view := newContext(t, state.MaxNativeDrops)
+
+		require.Equal(t, ter.TesSUCCESS, creditNFTokenIssuerXRP(ctx, issuerID, 1))
+		issuer, err := tx.ReadAccountRoot(view, issuerID)
+		require.NoError(t, err)
+		require.Equal(t, state.MaxNativeDrops+1, issuer.Balance)
+	})
+
 	t.Run("source alias", func(t *testing.T) {
 		ctx, view := newContext(t, 100)
 		ctx.AccountID = issuerID
@@ -119,11 +128,11 @@ func TestCreditNFTokenIssuerXRP(t *testing.T) {
 			},
 		},
 		{
-			name: "serialization failure",
+			name: "native wire magnitude overflow",
 			setup: func(view *issuerCreditFaultView) {
 				issuerData, err := state.SerializeAccountRoot(&state.AccountRoot{
 					Account: issuerAddress,
-					Balance: state.MaxNativeDrops,
+					Balance: 0x1FFFFFFFFFFFFFFF,
 				})
 				require.NoError(t, err)
 				view.store[view.issuerKey.Key] = issuerData
