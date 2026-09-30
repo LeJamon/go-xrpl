@@ -4128,6 +4128,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	if !removed {
 		return
 	}
+	if c.failStandardReplayReplacement(il, cause) {
+		c.retireStandardReplay(retirement)
+		c.retireAcquisitionStore(c.lifecycleContext(), il)
+		return
+	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	c.retireStandardReplay(retirement)
 	c.retireAcquisitionStore(c.lifecycleContext(), il)
@@ -4163,6 +4168,7 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(il *inbound.L
 		return
 	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
+	c.failStandardReplayReplacement(il, cause)
 	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
 }
 
@@ -4179,6 +4185,7 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisitionWithSnapshot(
 		return
 	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
+	c.failStandardReplayReplacement(il, cause)
 	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
 }
 
@@ -4360,6 +4367,9 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 			return
 		}
 		c.completeStandardTransactionReplay(h, txMap, peerID)
+		return
+	}
+	if c.completeStandardReplayReplacement(il, h, stateMap, txMap) {
 		return
 	}
 	var handoff standardReplayPivotHandoff

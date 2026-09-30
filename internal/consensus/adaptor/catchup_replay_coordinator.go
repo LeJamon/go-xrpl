@@ -491,6 +491,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	c.fetchTracker.Sweep()
 	c.retryInboundLedgerAcquisitions(now)
 	c.tickHeaderDiscovery(now)
+	c.retryStandardReplayReplacement(now)
 	c.rebootstrapFrozenPivotIfStalled(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a

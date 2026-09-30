@@ -48,6 +48,7 @@ type standardReplayPipeline struct {
 	baseRelease       func()
 	// acquisitionMu protects the owner retained between tracker removal and installation.
 	pivotHandoff *standardReplayPivotHandoff
+	replacement  *standardReplayReplacement
 }
 
 type standardReplayIdentity struct {
@@ -64,6 +65,7 @@ type standardReplayIdentity struct {
 	targetSeq        uint32
 	targetHash       [32]byte
 	pivotHandoff     *standardReplayPivotHandoff
+	replacement      *standardReplayReplacement
 }
 
 type standardReplayPivotHandoff struct {
@@ -715,6 +717,11 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		if !ok {
 			break
 		}
+		if replacement := c.standardReplay.replacement; replacement != nil && replacement.hash == link.hash {
+			c.standardReplay.collectSeq = link.seq
+			c.standardReplay.collectHash = link.hash
+			continue
+		}
 		if c.replayNeedsFullStateLocked(link.hash) {
 			c.startLedgerAcquisitionLegacyLocked(link.seq, link.hash, peerID)
 			break
@@ -815,6 +822,7 @@ func (c *catchupReplayCoordinator) standardReplayIdentityLocked() standardReplay
 		targetSeq:        c.standardReplay.targetSeq,
 		targetHash:       c.standardReplay.targetHash,
 		pivotHandoff:     c.standardReplay.pivotHandoff,
+		replacement:      c.standardReplay.replacement,
 	}
 }
 
@@ -922,6 +930,12 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	targetHash := c.standardReplay.targetHash
 	discardedEntries := len(c.standardReplay.entries)
 	var retired []*inbound.Ledger
+	if replacement := c.standardReplay.replacement; replacement != nil {
+		if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
+			retired = append(retired, replacement.acquisition)
+		}
+		c.standardReplay.replacement = nil
+	}
 	if !c.standardReplay.pivotReady {
 		if pivot := c.fetchTracker.Find(c.standardReplay.pivotHash); pivot != nil &&
 			!pivot.TransactionOnly() && c.discardInboundAcquisitionLocked(pivot) {
@@ -1252,6 +1266,13 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 		delete(c.standardReplay.entries, entry.seq)
 		c.standardReplay.anchorSeq = entry.seq
 		c.standardReplay.anchorHash = entry.hash
+		var supersededReplacement *inbound.Ledger
+		if replacement := c.standardReplay.replacement; replacement != nil && replacement.seq <= entry.seq {
+			if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
+				supersededReplacement = replacement.acquisition
+			}
+			c.standardReplay.replacement = nil
+		}
 		c.replayPipelineApplied.Add(1)
 		c.replayPipelineApplyUs.Add(durationMicros(applyDuration))
 		c.replayPipelinePersistUs.Add(durationMicros(persistDuration))
@@ -1262,6 +1283,9 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 		}
 		c.acquisitionMu.Unlock()
 		releaseCommit()
+		if supersededReplacement != nil {
+			c.retireLegacyAcquisitions([]*inbound.Ledger{supersededReplacement})
+		}
 		if c.stoppedForShutdown() {
 			return
 		}

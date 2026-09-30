@@ -466,7 +466,7 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 		return false
 	}
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active {
+	if !c.standardReplay.active || c.standardReplay.replacement != nil {
 		c.acquisitionMu.Unlock()
 		return false
 	}
@@ -593,48 +593,9 @@ func (c *catchupReplayCoordinator) retargetFrozenPivot(
 		c.replayCommitMu.Unlock()
 		return false
 	}
-	preparedTailSeq := c.standardReplay.collectSeq
-	preparedOccupancy := len(c.standardReplay.entries)
-	pivotHash := c.standardReplay.pivotHash
-	pivotStartedAt := c.standardReplay.pivotStartedAt
-	pivotStateRate := uint64(0)
-	if pivot := c.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
-		elapsed := now.Sub(pivotStartedAt)
-		if elapsed > 0 {
-			pivotStateRate = uint64(float64(pivot.Snapshot().StateUseful) / elapsed.Seconds())
-		}
-	}
-	retired := c.cancelStandardReplayPipelineLocked(string(reason))
-	retired.ledgers = append(retired.ledgers, c.discardSupersededProvisionalFullStateLocked(target.hash)...)
-	c.consensusRecovery.targetHash = target.hash
-	c.consensusRecovery.anchorSeq = 0
-	c.consensusRecovery.anchorHash = [32]byte{}
-	c.consensusRecovery.stepHash = [32]byte{}
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()
-	c.retireStandardReplay(retired)
-	c.replayPipelineFallbacks.Add(1)
-	c.logger.Warn("retargeting frozen recovery to a newer full-state pivot",
-		"reason", string(reason),
-		"pivot_seq", pivotSeq,
-		"frontier_seq", frontierSeq,
-		"prepared_tail_seq", preparedTailSeq,
-		"trusted_head_seq", target.seq,
-		"trusted_head_hash", fmt.Sprintf("%x", target.hash[:8]),
-		"prepared_occupancy", preparedOccupancy,
-		"prepared_limit", standardReplayPreparedLimit,
-		"pivot_state_nodes_per_sec", pivotStateRate,
-	)
-	if c.beginFrozenPivotRecovery(target.seq, target.hash, peerID) {
-		return true
-	}
-	c.replayPipelineRetargetFailures.Add(1)
-	c.logger.Warn("failed to start replacement full-state pivot",
-		"reason", string(reason),
-		"target_seq", target.seq,
-		"target_hash", fmt.Sprintf("%x", target.hash[:8]),
-	)
-	return false
+	return c.reserveStandardReplayReplacement(generation, target.seq, target.hash, peerID, now)
 }
 
 func (c *catchupReplayCoordinator) failFrozenPivotHandoff(handoff standardReplayPivotHandoff) bool {
