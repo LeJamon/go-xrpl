@@ -19,6 +19,14 @@ ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
 ORACLE_TAG = "3.4.1"
 ORACLE_REPOSITORY = "XRPLF/xrpld-private"
 OLD_BINARY_SHA256 = "f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3d6113"
+CONAN_REMOTE_NAME = "xrplf"
+CONAN_REMOTE_URL = "https://conan.xrplf.org/repository/conan/"
+RECORDER_SOURCE_PATHS = (
+    "scripts/oracle/record-v4.py",
+    "scripts/oracle/record-v4.sh",
+    "scripts/oracle/strict-corpus-config.json",
+    "scripts/oracle/strict_recorder.cpp",
+)
 
 
 def sha256(path: Path) -> str:
@@ -31,6 +39,26 @@ def sha256(path: Path) -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def recorder_source_git_identity(repo: Path) -> dict[str, str]:
+    commit = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    status = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            *RECORDER_SOURCE_PATHS,
+        ],
+        text=True,
+    )
+    return {"commit": commit, "status": status}
 
 
 def run(
@@ -128,8 +156,10 @@ def verify_config(config: Path) -> dict:
         "VaultCreate",
         "LoanBrokerSet",
         "NFTokenAcceptOffer",
+        "NFTokenAuth",
         "OfferCreate",
         "EscrowCancel",
+        "EscrowToken",
     }
     if set(values.get("families", [])) != expected_families:
         raise SystemExit("strict-corpus-config.json families do not match recorder families")
@@ -157,7 +187,65 @@ def verify_config(config: Path) -> dict:
                     "applied": False,
                     "queued": True,
                 },
-            }
+            },
+            "AccountSet/queue-multi-candidate-eviction-order": {
+                "txq_config": {
+                    "ledgers_in_queue": 2,
+                    "queue_size_min": 2,
+                    "minimum_txn_in_ledger_standalone": 2,
+                    "normal_consensus_increase_percent": 0,
+                },
+                "internal_config": {
+                    "min_ledgers_to_compute_size_limit": 3,
+                    "max_ledger_counts_to_store": 100,
+                },
+                "history_count": 1,
+                "history_pre_submit_counts": [0],
+                "history_post_close_queue": "captured after an authenticated empty close and replayed into the successor open view",
+                "pre_submit_count": 8,
+                "pre_submit_order": "alice->bob, bob->alice, alice->bob, charlie fee10, daria fee11, erin fee20, fred fee21, gina fee30",
+                "primary": {
+                    "engine_result": "tesSUCCESS",
+                    "applied": True,
+                    "queued": False,
+                },
+                "coverage": "an authenticated empty warmup close establishes the successor open view, then five authenticated low-fee candidates fill and evict within the bounded queue after three applied payments; high-fee primary remains independently applied",
+            },
+            "AccountSet/queue-multi-ledger-history": {
+                "txq_config": {
+                    "ledgers_in_queue": 2,
+                    "queue_size_min": 2,
+                    "minimum_txn_in_ledger_standalone": 2,
+                    "normal_consensus_increase_percent": 0,
+                },
+                "internal_config": {
+                    "min_ledgers_to_compute_size_limit": 3,
+                    "max_ledger_counts_to_store": 100,
+                },
+                "history_count": 3,
+                "history_pre_submit_counts": [0, 8, 0],
+                "history_post_close_queue": "captured after each authenticated close and replayed into successor open view; the first close has no submissions and establishes the queue lifecycle",
+                "primary": {
+                    "engine_result": "tesSUCCESS",
+                    "applied": True,
+                    "queued": False,
+                },
+                "coverage": "three linked closes, including an authenticated empty warmup and five ordered low-fee candidates after three applied payments, carry queue state through ProcessClosedLedger and acceptance before primary submit",
+            },
+            "AccountSet/queue-default-network-thresholds": {
+                "txq_config": {
+                    "ledgers_in_queue": 20,
+                    "queue_size_min": 2000,
+                    "minimum_txn_in_ledger_standalone": 1000,
+                    "normal_consensus_increase_percent": 20,
+                },
+                "primary": {
+                    "engine_result": "tesSUCCESS",
+                    "applied": True,
+                    "queued": False,
+                },
+                "coverage": "default network queue thresholds are exercised with authenticated setup and a direct open-ledger submit",
+            },
         },
         "persistent_cleanup": {
             "NFTokenAcceptOffer/expired-sell-offer-cleanup": {
@@ -184,6 +272,27 @@ def verify_config(config: Path) -> dict:
                 "queued": False,
                 "coverage": "malformed parent escrow refund reaches fee-only recovery and records invariant failure",
             },
+            "AccountSet/persistent-fee-invariant-recovery": {
+                "profile": "c1-l1-b1-f1",
+                "engine_result": "tefINVARIANT_FAILED",
+                "applied": False,
+                "queued": False,
+                "coverage": "malformed AccountRoot over-issue persists through fee-only recovery and records fatal invariant failure",
+            },
+        },
+        "transient_open_ledger": {
+            "profile": "c1-l1-b1-f1",
+            "nf_token_auth": [
+                "NFTokenAuth/Unauthorized_buyer_tries_to_create_buy_offer",
+                "NFTokenAuth/Seller_tries_to_accept_buy_offer_from_unauth_buyer",
+                "NFTokenAuth/Unauthorized_buyer_tries_to_accept_sell_offer",
+                "NFTokenAuth/Authorized_broker_tries_to_bridge_offers_from_unauthorized_buyer.",
+            ],
+            "escrow_token": [
+                "EscrowToken/MPT_Finish_Preclaim",
+                "EscrowToken/MPT_Cancel_Preclaim",
+            ],
+            "operation": "capture actual rawInsert/rawErase state deltas before one open-ledger submit; close rebuilds from parent and close_input",
         },
         "seeded_payments": {
             "seed": 2016,
@@ -260,6 +369,14 @@ def clean_source(oracle: Path, destination: Path, recorder_source: Path) -> None
     )
 
 
+def register_conan_remote(clean_root: Path, conan_env: dict[str, str]) -> None:
+    run(
+        ["conan", "remote", "add", CONAN_REMOTE_NAME, CONAN_REMOTE_URL, "--force"],
+        log=clean_root / "conan-remote.log",
+        env=conan_env,
+    )
+
+
 def clean_build(
     *, oracle: Path, build_root: Path, recorder_source: Path
 ) -> tuple[Path, str | None, str | None, dict[str, object]]:
@@ -278,6 +395,7 @@ def clean_build(
         log=clean_root / "conan-profile-detect.log",
         env=conan_env,
     )
+    register_conan_remote(clean_root, conan_env)
     conan = [
         "conan",
         "install",
@@ -323,15 +441,40 @@ def clean_build(
     ]
     run(build_command, log=clean_root / "cmake-build.log")
     binary = build / "xrpld"
+    compile_commands = json.loads((build / "compile_commands.json").read_text())
+    recorder_compile = next(
+        entry
+        for entry in compile_commands
+        if entry["file"].endswith("/src/test/app/StrictOracleRecorder_test.cpp")
+    )
+    recorder_compile_text = recorder_compile.get("command")
+    if not recorder_compile_text:
+        recorder_compile_text = shlex.join(recorder_compile["arguments"])
+    recorder_compile_hash = sha256_text(recorder_compile_text)
+    commands = subprocess.check_output(
+        ["ninja", "-C", str(build), "-t", "commands", "xrpld"], text=True
+    ).splitlines()
+    link_text = next(
+        line for line in reversed(commands) if " -o xrpld" in line
+    ).strip()
+    if link_text.startswith(": && "):
+        link_text = link_text[4:]
+    if link_text.endswith(" && :"):
+        link_text = link_text[:-5]
+    link_hash = sha256_text(link_text)
     return (
         binary,
-        None,
-        None,
+        recorder_compile_hash,
+        link_hash,
         {
             "source": str(source),
             "install": str(install),
             "build": str(build),
             "conan_lock_sha256": sha256(oracle / "conan.lock"),
+            "conan_remote": {
+                "name": CONAN_REMOTE_NAME,
+                "url": CONAN_REMOTE_URL,
+            },
             "conan_profile_detect_command_sha256": sha256_text(
                 "conan profile detect --force"
             ),
@@ -339,6 +482,10 @@ def clean_build(
             "configure_command_sha256": sha256_text(shlex.join(cmake)),
             "build_command": build_command,
             "build_command_sha256": sha256_text(shlex.join(build_command)),
+            "recorder_compile_command": recorder_compile_text,
+            "recorder_compile_command_sha256": recorder_compile_hash,
+            "link_command": link_text,
+            "link_command_sha256": link_hash,
         },
     )
 
@@ -460,6 +607,8 @@ def main() -> None:
     build = build_root / "build"
     recorder_source = Path(__file__).with_name("strict_recorder.cpp").resolve()
     config = Path(__file__).with_name("strict-corpus-config.json").resolve()
+    repository = Path(__file__).resolve().parents[2]
+    recorder_git = recorder_source_git_identity(repository)
     if not oracle.is_dir() or not recorder_source.is_file():
         raise SystemExit("exact oracle checkout and recorder source are required")
     oracle_identity = check_oracle(oracle)
@@ -508,6 +657,7 @@ def main() -> None:
         "instrumented_batch_test_sha256": instrumented_batch_hash,
         "recorder_source": str(recorder_source),
         "recorder_source_sha256": sha256(recorder_source),
+        "recorder_source_git": recorder_git,
         "config": str(config),
         "config_sha256": sha256(config),
         "config_values_verified": config_values,

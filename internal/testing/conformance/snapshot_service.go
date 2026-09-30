@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 )
 
 // SnapshotCase is the validated v4 input needed by a ledger service execution.
@@ -21,22 +22,41 @@ type SnapshotCase struct {
 	TxHash    [32]byte
 	CloseSet  [][]byte
 	PreSubmit []SnapshotSubmission
+	History   []SnapshotHistoryCase
 }
 
 // SnapshotSubmission is one signed transaction submitted before the primary
 // fixture transaction. Its expected result and post-submit state are captured
 // independently by the oracle.
 type SnapshotSubmission struct {
-	TxBlob []byte
-	TxHash [32]byte
-	Submit SnapshotSubmit
+	TxBlob           []byte
+	TxHash           [32]byte
+	Submit           SnapshotSubmit
+	OpenLedgerInject []SnapshotEntry
+	OpenLedgerErase  []SnapshotEntry
 }
 
 type SnapshotFixture = snapshotFixture
 type SnapshotSubmit = snapshotSubmit
+type SnapshotQueue = snapshotQueue
+type SnapshotQueueMetrics = snapshotQueueMetrics
+type SnapshotHistory = snapshotHistory
+type SnapshotCloseInput = snapshotCloseInput
 type SnapshotTxQConfig = snapshotTxQConfig
 type SnapshotLedger = loadedSnapshotLedger
 type SnapshotEntry = snapshotEntry
+
+// SnapshotHistoryCase is one authenticated ledger transition replayed before
+// the main fixture parent. CloseSet is the parsed close_input transaction set;
+// Queue, when present, is the oracle's post-close open-ledger queue state.
+type SnapshotHistoryCase struct {
+	Parent     SnapshotLedger
+	PreSubmit  []SnapshotSubmission
+	CloseSet   [][]byte
+	CloseInput SnapshotCloseInput
+	Closed     SnapshotLedger
+	Queue      *SnapshotQueue
+}
 
 type PinnedFixturePin = pinnedFixturePin
 
@@ -91,9 +111,56 @@ func LoadSnapshotCases() ([]SnapshotCase, error) {
 				return nil, fmt.Errorf("%s: %w", pinned.Name, err)
 			}
 			preSubmit = append(preSubmit, SnapshotSubmission{
-				TxBlob: append([]byte(nil), priorBlob...),
-				TxHash: priorPending.Hash,
-				Submit: prior.Submit,
+				TxBlob:           append([]byte(nil), priorBlob...),
+				TxHash:           priorPending.Hash,
+				Submit:           prior.Submit,
+				OpenLedgerInject: append([]SnapshotEntry(nil), prior.OpenLedgerInject...),
+				OpenLedgerErase:  append([]SnapshotEntry(nil), prior.OpenLedgerErase...),
+			})
+		}
+		history := make([]SnapshotHistoryCase, 0, len(pinned.Fixture.History))
+		for historyIndex, item := range pinned.Fixture.History {
+			historyParent, err := loadSnapshotLedger(item.Parent)
+			if err != nil {
+				return nil, fmt.Errorf("%s history[%d] parent: %w", pinned.Name, historyIndex, err)
+			}
+			historyClosed, err := loadSnapshotLedger(item.Closed)
+			if err != nil {
+				return nil, fmt.Errorf("%s history[%d] closed: %w", pinned.Name, historyIndex, err)
+			}
+			historyClosePending, err := parseSnapshotCloseSet(item.CloseInput.TxBlobs)
+			if err != nil {
+				return nil, fmt.Errorf("%s history[%d] close_input: %w", pinned.Name, historyIndex, err)
+			}
+			historyCloseSet := make([][]byte, len(historyClosePending))
+			for j := range historyClosePending {
+				historyCloseSet[j] = append([]byte(nil), historyClosePending[j].Blob...)
+			}
+			historyPreSubmit := make([]SnapshotSubmission, 0, len(item.PreSubmit))
+			for j, prior := range item.PreSubmit {
+				priorBlob, err := decodeSnapshotBytes(fmt.Sprintf("history[%d].pre_submit[%d].tx_blob", historyIndex, j), prior.TxBlob)
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", pinned.Name, err)
+				}
+				priorPending, err := parseSnapshotPending(fmt.Sprintf("history[%d].pre_submit[%d].tx_blob", historyIndex, j), priorBlob)
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", pinned.Name, err)
+				}
+				historyPreSubmit = append(historyPreSubmit, SnapshotSubmission{
+					TxBlob:           append([]byte(nil), priorBlob...),
+					TxHash:           priorPending.Hash,
+					Submit:           prior.Submit,
+					OpenLedgerInject: append([]SnapshotEntry(nil), prior.OpenLedgerInject...),
+					OpenLedgerErase:  append([]SnapshotEntry(nil), prior.OpenLedgerErase...),
+				})
+			}
+			history = append(history, SnapshotHistoryCase{
+				Parent:     historyParent,
+				PreSubmit:  historyPreSubmit,
+				CloseSet:   historyCloseSet,
+				CloseInput: item.CloseInput,
+				Closed:     historyClosed,
+				Queue:      item.Queue,
 			})
 		}
 		result = append(result, SnapshotCase{
@@ -106,6 +173,7 @@ func LoadSnapshotCases() ([]SnapshotCase, error) {
 			TxHash:    pending.Hash,
 			CloseSet:  closeSet,
 			PreSubmit: preSubmit,
+			History:   history,
 		})
 	}
 	return result, nil
@@ -122,6 +190,27 @@ func AssertSnapshotLedger(got *ledger.Ledger, want SnapshotLedger) error {
 // service result type exposes that state through QueueAllTxs.
 func AssertSnapshotSubmit(got openledger.SubmitOutcome, want SnapshotSubmit) error {
 	return assertSnapshotSubmit(got, want)
+}
+
+// AssertSnapshotQueue compares the fee-ordered queue candidates and metrics
+// captured at an oracle submission boundary.
+func AssertSnapshotQueue(
+	got []*txq.CandidateDetails,
+	metrics txq.Metrics,
+	want *SnapshotQueue,
+) error {
+	return assertSnapshotQueueDetails(got, metrics, want)
+}
+
+// ApplySnapshotOpenLedgerChanges applies the authenticated raw state surgery
+// captured for one submission while keeping the view open. It is shared by
+// the engine and service harnesses so both replay paths enforce the same
+// erase-byte and insert-absence checks.
+func ApplySnapshotOpenLedgerChanges(
+	view *openledger.OpenLedger,
+	inject, erase []SnapshotEntry,
+) error {
+	return applySnapshotOpenLedger(view, inject, erase)
 }
 
 func AssertSnapshotPostSubmitState(got *ledger.Ledger, want []SnapshotEntry) error {

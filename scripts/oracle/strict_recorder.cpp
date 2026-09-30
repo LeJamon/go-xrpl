@@ -20,6 +20,7 @@
 #include <test/jtx/sponsor.h>
 #include <test/jtx/ticket.h>
 #include <test/jtx/token.h>
+#include <test/jtx/ter.h>
 #include <test/jtx/txflags.h>
 #include <test/jtx/trust.h>
 #include <test/jtx/vault.h>
@@ -35,18 +36,22 @@
 #include <xrpl/ledger/LedgerTiming.h>
 #include <xrpl/ledger/OpenView.h>
 #include <xrpl/ledger/ReadView.h>
+#include <xrpl/ledger/Sandbox.h>
 #include <xrpl/protocol/Feature.h>
 #include <xrpl/protocol/Indexes.h>
 #include <xrpl/protocol/LedgerHeader.h>
+#include <xrpl/protocol/MPTIssue.h>
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/SeqProxy.h>
+#include <xrpl/protocol/STAmount.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
 #include <xrpl/protocol/SystemParameters.h>
 #include <xrpl/protocol/TER.h>
 #include <xrpl/protocol/TxFormats.h>
 #include <xrpl/protocol/TxFlags.h>
+#include <xrpl/protocol/XRPAmount.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/tx/apply.h>
 #include <xrpld/app/ledger/LedgerMaster.h>
@@ -60,6 +65,7 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -151,6 +157,60 @@ sleEntries(ReadView const& view)
         state.append(entry);
     }
     return state;
+}
+
+using SerializedState = std::map<std::string, std::string>;
+
+SerializedState
+serializedState(ReadView const& view)
+{
+    SerializedState state;
+    for (auto const& sle : view.sles)
+    {
+        if (!sle)
+            continue;
+        Serializer raw;
+        sle->add(raw);
+        state.emplace(to_string(sle->key()), strHex(raw.slice()));
+    }
+    return state;
+}
+
+struct OpenLedgerDelta
+{
+    json::Value inject{json::ValueType::Array};
+    json::Value erase{json::ValueType::Array};
+};
+
+OpenLedgerDelta
+openLedgerDelta(ReadView const& before, ReadView const& after)
+{
+    auto const oldState = serializedState(before);
+    auto const newState = serializedState(after);
+    OpenLedgerDelta delta;
+    for (auto const& [index, oldData] : oldState)
+    {
+        auto const found = newState.find(index);
+        if (found == newState.end() || found->second != oldData)
+        {
+            json::Value entry;
+            entry["index"] = index;
+            entry["data"] = oldData;
+            delta.erase.append(entry);
+        }
+    }
+    for (auto const& [index, newData] : newState)
+    {
+        auto const found = oldState.find(index);
+        if (found == oldState.end() || found->second != newData)
+        {
+            json::Value entry;
+            entry["index"] = index;
+            entry["data"] = newData;
+            delta.inject.append(entry);
+        }
+    }
+    return delta;
 }
 
 std::optional<Keylet>
@@ -419,10 +479,38 @@ class FixtureRecorder
     std::filesystem::path directory_;
 
     static json::Value
+    queueState(Env& env)
+    {
+        json::Value result;
+        result["tx_blobs"] = json::Value{json::ValueType::Array};
+        for (auto const& detail : env.app().getTxQ().getTxs())
+        {
+            if (detail.txn)
+                result["tx_blobs"].append(serialize(*detail.txn));
+        }
+
+        auto const metrics = env.app().getTxQ().getMetrics(*env.current());
+        result["metrics"]["tx_count"] = json::Value{static_cast<json::UInt>(metrics.txCount)};
+        if (metrics.txQMaxSize)
+            result["metrics"]["max_size"] = json::Value{static_cast<json::UInt>(*metrics.txQMaxSize)};
+        else
+            result["metrics"]["max_size"] = json::Value{json::ValueType::Null};
+        result["metrics"]["tx_in_ledger"] = json::Value{static_cast<json::UInt>(metrics.txInLedger)};
+        result["metrics"]["tx_per_ledger"] = json::Value{static_cast<json::UInt>(metrics.txPerLedger)};
+        result["metrics"]["reference_fee_level"] = json::Value{static_cast<json::UInt>(metrics.referenceFeeLevel.value())};
+        result["metrics"]["min_processing_fee_level"] = json::Value{static_cast<json::UInt>(metrics.minProcessingFeeLevel.value())};
+        result["metrics"]["med_fee_level"] = json::Value{static_cast<json::UInt>(metrics.medFeeLevel.value())};
+        result["metrics"]["open_ledger_fee_level"] = json::Value{static_cast<json::UInt>(metrics.openLedgerFeeLevel.value())};
+        return result;
+    }
+
+    static json::Value
     submitBoundary(
+        Env& env,
         json::Value const& response,
         JTx const& transaction,
-        ReadView const& postSubmitView)
+        ReadView const& postSubmitView,
+        bool captureQueue)
     {
         json::Value result;
         result["boundary"] = "open_ledger";
@@ -435,6 +523,8 @@ class FixtureRecorder
             ? transaction.jv[jss::Fee].asUInt()
             : 0;
         result["post_submit_sle"] = sleEntries(postSubmitView);
+        if (captureQueue)
+            result["queue"] = queueState(env);
         return result;
     }
 
@@ -446,7 +536,7 @@ public:
     }
 
 private:
-    template <class PreBuilder, class Builder>
+    template <class PreBuilder, class Builder, class Mutator>
     void
     recordImpl(Profile const& profile,
                std::string const& family,
@@ -456,7 +546,11 @@ private:
                Builder&& builder,
                Expected expected,
                json::Value txqConfigValue,
-               bool includePreSubmit)
+               bool includePreSubmit,
+               bool captureQueue,
+               Mutator&& mutator,
+               std::vector<Expected> preExpected = {},
+               json::Value history = {})
     {
         auto const parent = env.closed();
         auto cleanupKey = std::optional<Keylet>{};
@@ -497,12 +591,16 @@ private:
         fixture["skip_signature_verification"] = false;
         fixture["txq_config"] = std::move(txqConfigValue);
         fixture["parent"] = snapshot(*parent);
+        if (history.size() != 0)
+            fixture["history"] = std::move(history);
 
         if (includePreSubmit)
         {
             fixture["pre_submit"] = json::Value{json::ValueType::Array};
-            for (auto const& preTransaction : preBuilder(env))
+            auto const preTransactions = preBuilder(env);
+            for (std::size_t preIndex = 0; preIndex < preTransactions.size(); ++preIndex)
             {
+                auto const& preTransaction = preTransactions[preIndex];
                 if (!suite_.expect(
                         preTransaction.stx != nullptr,
                         testcase + " pre-submit did not produce a signed STTx",
@@ -516,27 +614,44 @@ private:
                 json::Value entry;
                 entry["tx_blob"] = txBlob;
                 entry["submit"] =
-                    submitBoundary(response, preTransaction, *postSubmitView);
+                    submitBoundary(env, response, preTransaction, *postSubmitView, captureQueue);
                 fixture["pre_submit"].append(entry);
 
                 auto const parsed = Env::parseResult(response);
+                auto const expectedPre = preIndex < preExpected.size()
+                    ? preExpected[preIndex]
+                    : Expected{};
                 suite_.expect(
-                    parsed.ter && *parsed.ter == tesSUCCESS,
+                    parsed.ter && *parsed.ter == expectedPre.ter,
                     testcase + " pre-submit returned an unexpected TER",
                     __FILE__,
                     __LINE__);
                 suite_.expect(
-                    response["result"]["applied"].asBool(),
-                    testcase + " pre-submit was not applied",
+                    response["result"]["applied"].asBool() == expectedPre.applied,
+                    testcase + " pre-submit returned an unexpected applied flag",
                     __FILE__,
                     __LINE__);
                 suite_.expect(
-                    !response["result"]["queued"].asBool(),
-                    testcase + " pre-submit unexpectedly entered the transaction queue",
+                    response["result"]["queued"].asBool() == expectedPre.queued,
+                    testcase + " pre-submit returned an unexpected queued flag",
                     __FILE__,
                     __LINE__);
             }
         }
+
+        auto const beforeTransient = env.current();
+        if (!suite_.expect(
+                mutator(env),
+                testcase + " transient open-ledger mutation failed",
+                __FILE__,
+                __LINE__))
+            return;
+        auto const afterTransient = env.current();
+        auto const delta = openLedgerDelta(*beforeTransient, *afterTransient);
+        if (delta.inject.size() != 0)
+            fixture["open_ledger_inject"] = delta.inject;
+        if (delta.erase.size() != 0)
+            fixture["open_ledger_erase"] = delta.erase;
 
         auto const transaction = builder(env);
         if (!suite_.expect(
@@ -551,7 +666,7 @@ private:
 
         auto const response = env.rpc("submit", txBlob);
         auto const postSubmitView = env.current();
-        fixture["submit"] = submitBoundary(response, transaction, *postSubmitView);
+        fixture["submit"] = submitBoundary(env, response, transaction, *postSubmitView, captureQueue);
         if (cleanupKey)
             suite_.expect(
                 postSubmitView->read(*cleanupKey) == nullptr,
@@ -646,6 +761,7 @@ public:
         }
         auto noPreSubmit = [](Env&) { return std::vector<JTx>{}; };
         auto existingTransaction = [&transaction](Env&) { return transaction; };
+        auto noTransient = [](Env&) { return true; };
         recordImpl(
             profile,
             family,
@@ -655,7 +771,9 @@ public:
             existingTransaction,
             expectedResult,
             txqConfig(),
-            false);
+            false,
+            false,
+            noTransient);
     }
 
     template <class PreBuilder, class Builder>
@@ -677,7 +795,141 @@ public:
             std::forward<Builder>(builder),
             expected,
             smallQueueTxqConfig(),
-            true);
+            true,
+            false,
+            [](Env&) { return true; });
+    }
+
+    template <class PreBuilder, class Builder>
+    void
+    recordWithQueueCandidates(Profile const& profile,
+                              std::string const& family,
+                              std::string const& testcase,
+                              Env& env,
+                              PreBuilder&& preBuilder,
+                              Builder&& builder,
+                              std::vector<Expected> preExpected,
+                              Expected expected,
+                              json::Value history = {})
+    {
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            std::forward<PreBuilder>(preBuilder),
+            std::forward<Builder>(builder),
+            expected,
+            smallQueueTxqConfig(),
+            true,
+            true,
+            [](Env&) { return true; },
+            std::move(preExpected),
+            std::move(history));
+    }
+
+    template <class Builder>
+    void
+    recordWithLedgerHistory(Profile const& profile,
+                            std::string const& family,
+                            std::string const& testcase,
+                            Env& env,
+                            json::Value history,
+                            Builder&& builder,
+                            Expected expected)
+    {
+        auto noPreSubmit = [](Env&) { return std::vector<JTx>{}; };
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            noPreSubmit,
+            std::forward<Builder>(builder),
+            expected,
+            smallQueueTxqConfig(),
+            false,
+            true,
+            [](Env&) { return true; },
+            {},
+            std::move(history));
+    }
+
+    template <class Mutator, class Builder>
+    void
+    recordWithTransient(Profile const& profile,
+                        std::string const& family,
+                        std::string const& testcase,
+                        Env& env,
+                        Mutator&& mutator,
+                        Builder&& builder,
+                        Expected expected)
+    {
+        auto noPreSubmit = [](Env&) { return std::vector<JTx>{}; };
+        recordImpl(
+            profile,
+            family,
+            testcase,
+            env,
+            noPreSubmit,
+            std::forward<Builder>(builder),
+            expected,
+            txqConfig(),
+            false,
+            false,
+            std::forward<Mutator>(mutator));
+    }
+
+    json::Value
+    captureHistoryStep(Env& env, std::vector<JTx> const& transactions)
+    {
+        auto const parent = env.closed();
+        json::Value step;
+        step["parent"] = snapshot(*parent);
+        step["pre_submit"] = json::Value{json::ValueType::Array};
+        for (auto const& transaction : transactions)
+        {
+            if (!suite_.expect(
+                    transaction.stx != nullptr,
+                    "history pre-submit did not produce a signed STTx",
+                    __FILE__,
+                    __LINE__))
+                return {};
+
+            auto const txBlob = serialize(*transaction.stx);
+            auto const response = env.rpc("submit", txBlob);
+            auto const postSubmitView = env.current();
+            json::Value entry;
+            entry["tx_blob"] = txBlob;
+            entry["submit"] = submitBoundary(env, response, transaction, *postSubmitView, true);
+            step["pre_submit"].append(entry);
+        }
+
+        auto const openBeforeClose = env.current();
+        auto const requestedClose = env.now() + std::chrono::seconds{5};
+        auto const& openHeader = openBeforeClose->header();
+        auto const closeResolution = getNextLedgerTimeResolution(
+            openHeader.closeTimeResolution,
+            getCloseAgree(openHeader),
+            openHeader.seq);
+        auto const agreedCloseTime = openHeader.parentCloseTime + closeResolution;
+        step["close_input"]["parent_close_time"] = networkSeconds(openHeader.parentCloseTime);
+        step["close_input"]["close_time"] = networkSeconds(agreedCloseTime);
+        step["close_input"]["ledger_sequence"] = openHeader.seq;
+        step["close_input"]["close_time_resolution"] = closeResolution.count();
+        step["close_input"]["close_flags"] = openHeader.closeFlags;
+        step["close_input"]["tx_blobs"] = transactionBlobs(*openBeforeClose);
+
+        auto const closed = env.close(requestedClose);
+        suite_.expect(closed, "history ledger close failed", __FILE__, __LINE__);
+        suite_.expect(
+            env.closed()->header().closeTime == agreedCloseTime,
+            "history close time was not independently reproducible",
+            __FILE__,
+            __LINE__);
+        step["closed"] = snapshot(*env.closed());
+        step["queue"] = queueState(env);
+        return step;
     }
 };
 
@@ -771,6 +1023,68 @@ makeQueuedLowFee(Env& env)
     return env.jt(
         jtx::fset(Account{"alice"}, asfRequireDest),
         jtx::Fee(10));
+}
+
+void
+fundAndClose(Env& env, std::initializer_list<Account> accounts);
+
+void
+setupQueueEviction(Env& env)
+{
+    auto fundPair = [&](Account const& first, Account const& second) {
+        env.fund(jtx::XRP(10000), jtx::noripple(first));
+        env.fund(jtx::XRP(10000), jtx::noripple(second));
+        env.close();
+    };
+    fundPair(Account{"alice"}, Account{"bob"});
+    fundPair(Account{"charlie"}, Account{"daria"});
+    fundPair(Account{"erin"}, Account{"fred"});
+    fundPair(Account{"gina"}, Account{"hank"});
+}
+
+std::vector<JTx>
+makeQueueCandidates(Env& env)
+{
+    return {
+        env.jt(jtx::fset(Account{"charlie"}, asfRequireDest), jtx::Fee(10)),
+        env.jt(jtx::fset(Account{"daria"}, asfRequireDest), jtx::Fee(11)),
+        env.jt(jtx::fset(Account{"erin"}, asfRequireDest), jtx::Fee(20)),
+        env.jt(jtx::fset(Account{"fred"}, asfRequireDest), jtx::Fee(21)),
+        env.jt(jtx::fset(Account{"gina"}, asfRequireDest), jtx::Fee(30)),
+    };
+}
+
+std::vector<JTx>
+makeQueueEvictionSubmissions(Env& env)
+{
+    auto result = makeQueuePrefill(env);
+    auto candidates = makeQueueCandidates(env);
+    result.insert(result.end(), candidates.begin(), candidates.end());
+    return result;
+}
+
+JTx
+makeQueueEvictionPrimary(Env& env)
+{
+    return env.jt(jtx::noop(Account{"hank"}), jtx::Fee(20000));
+}
+
+std::vector<JTx>
+makeQueueHistoryFirstStep(Env& env)
+{
+    return makeQueueEvictionSubmissions(env);
+}
+
+std::vector<JTx>
+makeQueueHistorySecondStep(Env&)
+{
+    return {};
+}
+
+JTx
+makeQueueHistoryPrimary(Env& env)
+{
+    return env.jt(jtx::noop(Account{"charlie"}), jtx::Fee(10));
 }
 
 JTx
@@ -974,6 +1288,22 @@ makeExpiredNFTokenAccept(Env& env)
                            SeqProxy::rawSequence(env.seq(minter) - 1))
                            .key;
     return env.jt(jtx::token::acceptSellOffer(buyer, offer));
+}
+
+std::tuple<uint256, uint256>
+mintAndOfferNFT(Env& env, Account const& account, jtx::PrettyAmount const& currency, std::uint32_t xfee = 0)
+{
+    auto const nftID = jtx::token::getNextID(env, account, 0, tfTransferable, xfee);
+    env(jtx::token::mint(account, 0), jtx::token::XferFee(xfee), jtx::Txflags(tfTransferable));
+    env.close();
+
+    auto const sellIdx = keylet::nftokenOffer(
+                             account,
+                             SeqProxy::rawSequence(env.seq(account)))
+                             .key;
+    env(jtx::token::createOffer(account, nftID, currency), jtx::Txflags(tfSellNFToken));
+    env.close();
+    return {nftID, sellIdx};
 }
 
 JTx
@@ -1371,11 +1701,234 @@ setupMalformedEscrow(Env& env)
         __LINE__);
 }
 
+void
+setupFatalInvariantAccount(Env& env)
+{
+    auto const alice = Account{"alice"};
+    auto const sponsorAccount = Account{"sponsor"};
+    fundAndClose(env, {alice, sponsorAccount});
+    env(
+        jtx::sponsor::set_fee(sponsorAccount, 0, jtx::drops(100)),
+        jtx::sponsor::SponseeAcc(alice));
+    env.close();
+    installMalformedParent(env, [&](OpenView& view) {
+        auto const owner = view.read(keylet::account(alice.id()));
+        if (!owner)
+            return false;
+        auto replacement = std::make_shared<SLE>(*owner);
+        replacement->setFieldAmount(sfBalance, jtx::drops(-1));
+        view.rawReplace(replacement);
+        return true;
+    });
+
+    auto const owner = env.le(keylet::account(alice.id()));
+    env.test.expect(
+        owner && owner->getFieldAmount(sfBalance).xrp() < XRPAmount{0},
+        "fatal invariant setup did not preserve an invalid account balance",
+        __FILE__,
+        __LINE__);
+}
+
+JTx
+makeFatalInvariantRecovery(Env& env)
+{
+    return env.jt(
+        jtx::fset(Account{"alice"}, asfRequireDest),
+        jtx::sponsor::As(Account{"sponsor"}, spfSponsorFee));
+}
+
 JTx
 makeExpiredEscrowCancel(Env& env)
 {
     auto const alice = Account{"alice"};
     return env.jt(jtx::escrow::cancel(alice, alice, env.seq(alice) - 1));
+}
+
+bool
+insertUnauthorizedNFTrustline(Env& env)
+{
+    auto const gateway = Account{"G1"};
+    auto const buyer = Account{"A1"};
+    return env.app().getOpenLedger().modify([&](OpenView& view, beast::Journal) {
+        auto const trustline = std::make_shared<SLE>(
+            keylet::trustLine(buyer, gateway, gateway["USD"].currency));
+        trustline->setFieldAmount(sfBalance, gateway["USD"](-1000));
+        view.rawInsert(trustline);
+        return true;
+    });
+}
+
+void
+setupUnauthorizedCreateBuyOffer(Env& env, uint256& nftID)
+{
+    auto const gateway = Account{"G1"};
+    auto const buyer = Account{"A1"};
+    auto const seller = Account{"A2"};
+    fundAndClose(env, {gateway, buyer, seller});
+    env(jtx::fset(gateway, asfRequireAuth));
+    env.close();
+
+    auto const minted = mintAndOfferNFT(env, seller, jtx::drops(1));
+    nftID = std::get<0>(minted);
+    auto unfundedOffer =
+        jtx::token::createOffer(buyer, nftID, gateway["USD"](10));
+    env(unfundedOffer, jtx::token::Owner(seller), jtx::Ter(tecUNFUNDED_OFFER));
+    env.close();
+}
+
+JTx
+makeUnauthorizedCreateBuyOffer(Env& env, uint256 const& nftID)
+{
+    auto const gateway = Account{"G1"};
+    auto const buyer = Account{"A1"};
+    auto const seller = Account{"A2"};
+    return env.jt(
+        jtx::token::createOffer(buyer, nftID, gateway["USD"](10)),
+        jtx::token::Owner(seller));
+}
+
+void
+setupUnauthorizedAcceptBuyOffer(Env& env, uint256& buyIdx)
+{
+    auto const gateway = Account{"G1"};
+    auto const buyer = Account{"A1"};
+    auto const seller = Account{"A2"};
+    auto const usd = gateway["USD"];
+    fundAndClose(env, {gateway, buyer, seller});
+    env(jtx::fset(gateway, asfRequireAuth));
+    env.close();
+
+    auto const limit = usd(10000);
+    auto const [nftID, unusedSellIdx] = mintAndOfferNFT(env, seller, jtx::drops(1));
+    (void)unusedSellIdx;
+    env(jtx::trust(buyer, limit));
+    env(jtx::trust(gateway, limit, buyer, tfSetfAuth));
+    env(jtx::pay(gateway, buyer, usd(10)));
+    env(jtx::trust(seller, limit));
+    env(jtx::trust(gateway, limit, seller, tfSetfAuth));
+    env(jtx::pay(gateway, seller, usd(10)));
+    env.close();
+
+    buyIdx = keylet::nftokenOffer(buyer, SeqProxy::rawSequence(env.seq(buyer))).key;
+    env(jtx::token::createOffer(buyer, nftID, usd(10)), jtx::token::Owner(seller));
+    env.close();
+    env(jtx::pay(buyer, gateway, usd(10)));
+    env(jtx::trust(buyer, usd(0)));
+    env(jtx::trust(gateway, buyer["USD"](0)));
+    env.close();
+}
+
+JTx
+makeUnauthorizedAcceptBuyOffer(Env& env, uint256 const& buyIdx)
+{
+    return env.jt(jtx::token::acceptBuyOffer(Account{"A2"}, buyIdx));
+}
+
+void
+setupUnauthorizedAcceptSellOffer(Env& env, uint256& sellIdx)
+{
+    auto const gateway = Account{"G1"};
+    auto const buyer = Account{"A1"};
+    auto const seller = Account{"A2"};
+    auto const usd = gateway["USD"];
+    fundAndClose(env, {gateway, buyer, seller});
+    env(jtx::fset(gateway, asfRequireAuth));
+    env.close();
+    auto const limit = usd(10000);
+    env(jtx::trust(seller, limit));
+    env(jtx::trust(gateway, limit, seller, tfSetfAuth));
+    auto const [unusedNftID, offer] = mintAndOfferNFT(env, seller, usd(10));
+    (void)unusedNftID;
+    sellIdx = offer;
+    auto insufficientFunds = jtx::token::acceptSellOffer(buyer, sellIdx);
+    env(insufficientFunds, jtx::Ter(tecINSUFFICIENT_FUNDS));
+    env.close();
+}
+
+JTx
+makeUnauthorizedAcceptSellOffer(Env& env, uint256 const& sellIdx)
+{
+    return env.jt(jtx::token::acceptSellOffer(Account{"A1"}, sellIdx));
+}
+
+void
+setupUnauthorizedBrokerOffer(Env& env, uint256& buyIdx, uint256& sellIdx)
+{
+    auto const gateway = Account{"G1"};
+    auto const buyer = Account{"A1"};
+    auto const seller = Account{"A2"};
+    auto const broker = Account{"broker"};
+    auto const usd = gateway["USD"];
+    fundAndClose(env, {gateway, buyer, seller, broker});
+    env(jtx::fset(gateway, asfRequireAuth));
+    env.close();
+    auto const limit = usd(10000);
+    env(jtx::trust(buyer, limit));
+    env(jtx::trust(gateway, usd(0), buyer, tfSetfAuth));
+    env(jtx::pay(gateway, buyer, usd(1000)));
+    env(jtx::trust(seller, limit));
+    env(jtx::trust(gateway, usd(0), seller, tfSetfAuth));
+    env(jtx::pay(gateway, seller, usd(1000)));
+    env(jtx::trust(broker, limit));
+    env(jtx::trust(gateway, usd(0), broker, tfSetfAuth));
+    env(jtx::pay(gateway, broker, usd(1000)));
+    env.close();
+
+    auto const [nftID, sellOffer] = mintAndOfferNFT(env, seller, usd(10));
+    sellIdx = sellOffer;
+    buyIdx = keylet::nftokenOffer(buyer, SeqProxy::rawSequence(env.seq(buyer))).key;
+    env(jtx::token::createOffer(buyer, nftID, usd(11)), jtx::token::Owner(seller));
+    env.close();
+    env(jtx::pay(buyer, gateway, usd(1000)));
+    env(jtx::trust(buyer, usd(0)));
+    env.close();
+}
+
+JTx
+makeUnauthorizedBrokerOffer(Env& env, uint256 const& buyIdx, uint256 const& sellIdx)
+{
+    auto const gateway = Account{"G1"};
+    return env.jt(
+        jtx::token::brokerOffers(Account{"broker"}, buyIdx, sellIdx),
+        jtx::token::BrokerFee(gateway["USD"](1)));
+}
+
+bool
+insertMissingMPTEscrow(Env& env, std::uint32_t sequence)
+{
+    auto const alice = Account{"alice"};
+    auto const bob = Account{"bob"};
+    return env.app().getOpenLedger().modify([&](OpenView& view, beast::Journal) {
+        Sandbox sandbox{&view, TapNone};
+        auto const escrow = std::make_shared<SLE>(
+            keylet::escrow(alice, SeqProxy::rawSequence(sequence)));
+        MPTIssue const issue{makeMptID(1, AccountID(0x4985601))};
+        STAmount const amount{issue, 10};
+        escrow->setAccountID(sfDestination, bob);
+        escrow->setFieldAmount(sfAmount, amount);
+        sandbox.insert(escrow);
+        sandbox.apply(view);
+        return true;
+    });
+}
+
+JTx
+makeMPTFinishPreclaim(Env& env, std::uint32_t sequence)
+{
+    auto const baseFee = env.current()->fees().base;
+    return env.jt(
+        jtx::escrow::finish(Account{"bob"}, Account{"alice"}, sequence),
+        jtx::escrow::kCondition(jtx::escrow::kCb1),
+        jtx::escrow::kFulfillment(jtx::escrow::kFb1),
+        jtx::Fee(baseFee * 150));
+}
+
+JTx
+makeMPTCancelPreclaim(Env& env, std::uint32_t sequence)
+{
+    return env.jt(
+        jtx::escrow::cancel(Account{"bob"}, Account{"alice"}, sequence),
+        jtx::Fee(env.current()->fees().base));
 }
 
 template <class Builder>
@@ -1420,6 +1973,138 @@ recordScenario(FixtureRecorder& recorder,
     recorder.record(profile, family, testcase, env, builder(env), expected);
 }
 
+template <class Setup, class Mutator, class Builder>
+void
+recordTransientScenario(FixtureRecorder& recorder,
+                        beast::unit_test::Suite& suite,
+                        Profile const& profile,
+                        std::string const& family,
+                        std::string const& testcase,
+                        Setup&& setup,
+                        Mutator&& mutator,
+                        Builder&& builder,
+                        Expected expected)
+{
+    auto config = recorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
+    env.app().checkSigs(true);
+    setup(env);
+    assertPersistedAmendments(env, profile, suite);
+    assertFreshRuntime(env, suite);
+    recorder.recordWithTransient(
+        profile,
+        family,
+        testcase,
+        env,
+        std::forward<Mutator>(mutator),
+        std::forward<Builder>(builder),
+        expected);
+}
+
+void
+recordNFTokenAuthTransientScenarios(
+    FixtureRecorder& recorder,
+    beast::unit_test::Suite& suite,
+    Profile const& profile)
+{
+    {
+        uint256 nftID;
+        recordTransientScenario(
+            recorder,
+            suite,
+            profile,
+            "NFTokenAuth",
+            "Unauthorized_buyer_tries_to_create_buy_offer",
+            [&](Env& env) { setupUnauthorizedCreateBuyOffer(env, nftID); },
+            insertUnauthorizedNFTrustline,
+            [&](Env& env) { return makeUnauthorizedCreateBuyOffer(env, nftID); },
+            Expected{TER{tecNO_AUTH}, true, false});
+    }
+    {
+        uint256 buyIdx;
+        recordTransientScenario(
+            recorder,
+            suite,
+            profile,
+            "NFTokenAuth",
+            "Seller_tries_to_accept_buy_offer_from_unauth_buyer",
+            [&](Env& env) { setupUnauthorizedAcceptBuyOffer(env, buyIdx); },
+            insertUnauthorizedNFTrustline,
+            [&](Env& env) { return makeUnauthorizedAcceptBuyOffer(env, buyIdx); },
+            Expected{TER{tecNO_AUTH}, true, false});
+    }
+    {
+        uint256 sellIdx;
+        recordTransientScenario(
+            recorder,
+            suite,
+            profile,
+            "NFTokenAuth",
+            "Unauthorized_buyer_tries_to_accept_sell_offer",
+            [&](Env& env) { setupUnauthorizedAcceptSellOffer(env, sellIdx); },
+            insertUnauthorizedNFTrustline,
+            [&](Env& env) { return makeUnauthorizedAcceptSellOffer(env, sellIdx); },
+            Expected{TER{tecNO_AUTH}, true, false});
+    }
+    {
+        uint256 buyIdx;
+        uint256 sellIdx;
+        recordTransientScenario(
+            recorder,
+            suite,
+            profile,
+            "NFTokenAuth",
+            "Authorized_broker_tries_to_bridge_offers_from_unauthorized_buyer.",
+            [&](Env& env) { setupUnauthorizedBrokerOffer(env, buyIdx, sellIdx); },
+            insertUnauthorizedNFTrustline,
+            [&](Env& env) { return makeUnauthorizedBrokerOffer(env, buyIdx, sellIdx); },
+            Expected{TER{tecNO_AUTH}, true, false});
+    }
+}
+
+void
+recordEscrowTokenTransientScenarios(
+    FixtureRecorder& recorder,
+    beast::unit_test::Suite& suite,
+    Profile const& profile)
+{
+    {
+        std::uint32_t sequence = 0;
+        auto setup = [&](Env& env) {
+            fundAndClose(env, {Account{"alice"}, Account{"bob"}});
+            sequence = env.seq(Account{"alice"});
+        };
+        recordTransientScenario(
+            recorder,
+            suite,
+            profile,
+            "EscrowToken",
+            "MPT_Finish_Preclaim",
+            setup,
+            [&](Env& env) { return insertMissingMPTEscrow(env, sequence); },
+            [&](Env& env) { return makeMPTFinishPreclaim(env, sequence); },
+            Expected{TER{tecOBJECT_NOT_FOUND}, true, false});
+    }
+    {
+        std::uint32_t sequence = 0;
+        auto setup = [&](Env& env) {
+            fundAndClose(env, {Account{"alice"}, Account{"bob"}});
+            sequence = env.seq(Account{"alice"});
+        };
+        recordTransientScenario(
+            recorder,
+            suite,
+            profile,
+            "EscrowToken",
+            "MPT_Cancel_Preclaim",
+            setup,
+            [&](Env& env) { return insertMissingMPTEscrow(env, sequence); },
+            [&](Env& env) { return makeMPTCancelPreclaim(env, sequence); },
+            Expected{TER{tecOBJECT_NOT_FOUND}, true, false});
+    }
+}
+
 void
 recordQueueScenario(FixtureRecorder& recorder,
                     beast::unit_test::Suite& suite,
@@ -1442,6 +2127,68 @@ recordQueueScenario(FixtureRecorder& recorder,
         makeQueuePrefill,
         makeQueuedLowFee,
         Expected{TER{terQUEUED}, false, true});
+}
+
+void
+recordQueueEvictionScenario(FixtureRecorder& recorder,
+                            beast::unit_test::Suite& suite,
+                            Profile const& profile)
+{
+    auto config = smallQueueRecorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
+    env.app().checkSigs(true);
+    setupQueueEviction(env);
+    assertPersistedAmendments(env, profile, suite);
+    assertFreshRuntime(env, suite);
+    json::Value history{json::ValueType::Array};
+    history.append(recorder.captureHistoryStep(env, {}));
+    recorder.recordWithQueueCandidates(
+        profile,
+        "AccountSet",
+        "queue-multi-candidate-eviction-order",
+        env,
+        makeQueueEvictionSubmissions,
+        makeQueueEvictionPrimary,
+        {
+            Expected{TER{tesSUCCESS}, true, false},
+            Expected{TER{tesSUCCESS}, true, false},
+            Expected{TER{tesSUCCESS}, true, false},
+            Expected{TER{terQUEUED}, false, true},
+            Expected{TER{terQUEUED}, false, true},
+            Expected{TER{terQUEUED}, false, true},
+            Expected{TER{terQUEUED}, false, true},
+            Expected{TER{terQUEUED}, false, true},
+        },
+        Expected{TER{tesSUCCESS}, true, false},
+        std::move(history));
+}
+
+void
+recordQueueHistoryScenario(FixtureRecorder& recorder,
+                           beast::unit_test::Suite& suite,
+                           Profile const& profile)
+{
+    auto config = smallQueueRecorderConfig();
+    configureServiceConfig(*config, profile);
+    Env env{suite, std::move(config), FeatureBitset{}};
+    env.app().checkSigs(true);
+    setupQueueEviction(env);
+    assertPersistedAmendments(env, profile, suite);
+    assertFreshRuntime(env, suite);
+
+    json::Value history{json::ValueType::Array};
+    history.append(recorder.captureHistoryStep(env, {}));
+    history.append(recorder.captureHistoryStep(env, makeQueueHistoryFirstStep(env)));
+    history.append(recorder.captureHistoryStep(env, makeQueueHistorySecondStep(env)));
+    recorder.recordWithLedgerHistory(
+        profile,
+        "AccountSet",
+        "queue-multi-ledger-history",
+        env,
+        std::move(history),
+        makeQueueHistoryPrimary,
+        Expected{TER{tesSUCCESS}, true, false});
 }
 
 template <class Builder>
@@ -1606,6 +2353,8 @@ public:
             }
 
         Profile const representative{true, true, true, true};
+        recordNFTokenAuthTransientScenarios(recorder, *this, representative);
+        recordEscrowTokenTransientScenarios(recorder, *this, representative);
         recordWithSetup(
             recorder,
             *this,
@@ -1653,6 +2402,26 @@ public:
             setupMalformedEscrow,
             makeExpiredEscrowCancel,
             Expected{TER{tecINVARIANT_FAILED}, true, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "persistent-fee-invariant-recovery",
+            recorderConfig(),
+            setupFatalInvariantAccount,
+            makeFatalInvariantRecovery,
+            Expected{TER{tefINVARIANT_FAILED}, false, false});
+        recordScenario(
+            recorder,
+            *this,
+            representative,
+            "AccountSet",
+            "queue-default-network-thresholds",
+            recorderConfig(),
+            [](Env& env) { fundAndClose(env, {Account{"alice"}, Account{"bob"}}); },
+            makeAccountSet,
+            Expected{TER{tesSUCCESS}, true, false});
 
         recordScenario(
             recorder,
@@ -1863,6 +2632,8 @@ public:
             makeExpiredOfferFillOrKill,
             Expected{TER{tecKILLED}, true, false});
         recordQueueScenario(recorder, *this, representative);
+        recordQueueEvictionScenario(recorder, *this, representative);
+        recordQueueHistoryScenario(recorder, *this, representative);
         for (std::uint32_t sample = 0; sample < 4; ++sample)
         {
             auto const seeded = seededPaymentSample(sample);

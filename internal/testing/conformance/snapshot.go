@@ -52,6 +52,9 @@ type snapshotFixture struct {
 	TxQConfig                 snapshotTxQConfig    `json:"txq_config"`
 	TxBlob                    string               `json:"tx_blob"`
 	PreSubmit                 []snapshotSubmission `json:"pre_submit,omitempty"`
+	OpenLedgerInject          []snapshotEntry      `json:"open_ledger_inject,omitempty"`
+	OpenLedgerErase           []snapshotEntry      `json:"open_ledger_erase,omitempty"`
+	History                   []snapshotHistory    `json:"history,omitempty"`
 	Parent                    snapshotLedger       `json:"parent"`
 	CloseInput                snapshotCloseInput   `json:"close_input"`
 	Submit                    snapshotSubmit       `json:"submit"`
@@ -59,8 +62,10 @@ type snapshotFixture struct {
 }
 
 type snapshotSubmission struct {
-	TxBlob string         `json:"tx_blob"`
-	Submit snapshotSubmit `json:"submit"`
+	TxBlob           string          `json:"tx_blob"`
+	Submit           snapshotSubmit  `json:"submit"`
+	OpenLedgerInject []snapshotEntry `json:"open_ledger_inject,omitempty"`
+	OpenLedgerErase  []snapshotEntry `json:"open_ledger_erase,omitempty"`
 }
 
 type snapshotSubmit struct {
@@ -71,6 +76,37 @@ type snapshotSubmit struct {
 	Queued           bool            `json:"queued"`
 	Fee              uint64          `json:"fee"`
 	PostSubmitSLE    []snapshotEntry `json:"post_submit_sle"`
+	Queue            *snapshotQueue  `json:"queue,omitempty"`
+}
+
+// snapshotQueue authenticates the complete queue disposition after a
+// submission. The order is the fee order exposed by TxQ::getTxs/AllTxs;
+// retaining the signed bytes catches both eviction and same-fee ordering
+// differences while metrics cover the default threshold calculation.
+type snapshotQueue struct {
+	TxBlobs []string             `json:"tx_blobs"`
+	Metrics snapshotQueueMetrics `json:"metrics"`
+}
+
+type snapshotQueueMetrics struct {
+	TxCount               uint64  `json:"tx_count"`
+	MaxSize               *uint64 `json:"max_size"`
+	TxInLedger            uint64  `json:"tx_in_ledger"`
+	TxPerLedger           uint64  `json:"tx_per_ledger"`
+	ReferenceFeeLevel     uint64  `json:"reference_fee_level"`
+	MinProcessingFeeLevel uint64  `json:"min_processing_fee_level"`
+	MedFeeLevel           uint64  `json:"med_fee_level"`
+	OpenLedgerFeeLevel    uint64  `json:"open_ledger_fee_level"`
+}
+
+// snapshotHistory records one authenticated closed-ledger transition that
+// establishes the queue's fee history before the main fixture parent.
+type snapshotHistory struct {
+	Parent     snapshotLedger       `json:"parent"`
+	PreSubmit  []snapshotSubmission `json:"pre_submit,omitempty"`
+	CloseInput snapshotCloseInput   `json:"close_input"`
+	Closed     snapshotLedger       `json:"closed"`
+	Queue      *snapshotQueue       `json:"queue,omitempty"`
 }
 
 // snapshotCloseInput contains only values captured before closing the oracle
@@ -204,12 +240,21 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 	if err := validateSnapshotSubmit(fixture.Submit); err != nil {
 		return err
 	}
+	if err := validateSnapshotOpenLedger("open_ledger", fixture.OpenLedgerInject, fixture.OpenLedgerErase); err != nil {
+		return err
+	}
+	if err := validateSnapshotHistory(fixture.History); err != nil {
+		return err
+	}
 	for i, prior := range fixture.PreSubmit {
 		if prior.TxBlob == "" {
 			return fmt.Errorf("pre_submit[%d].tx_blob is empty", i)
 		}
 		if err := validateSnapshotSubmit(prior.Submit); err != nil {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
+		}
+		if err := validateSnapshotOpenLedger(fmt.Sprintf("pre_submit[%d].open_ledger", i), prior.OpenLedgerInject, prior.OpenLedgerErase); err != nil {
+			return err
 		}
 	}
 	if fixture.CloseInput.CloseTimeResolution < 2 || fixture.CloseInput.CloseTimeResolution > 120 {
@@ -223,6 +268,45 @@ func validateSnapshotFixture(fixture *snapshotFixture) error {
 	}
 	if err := validateSnapshotLedgerShape("closed", fixture.Closed); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateSnapshotHistory(history []snapshotHistory) error {
+	if history == nil {
+		return nil
+	}
+	if len(history) == 0 {
+		return errors.New("history must not be empty when present")
+	}
+	for i, item := range history {
+		name := fmt.Sprintf("history[%d]", i)
+		if err := validateSnapshotLedgerShape(name+".parent", item.Parent); err != nil {
+			return err
+		}
+		if err := validateSnapshotLedgerShape(name+".closed", item.Closed); err != nil {
+			return err
+		}
+		if err := validateSnapshotQueue(item.Queue); err != nil {
+			return fmt.Errorf("%s.queue: %w", name, err)
+		}
+		if item.CloseInput.CloseTimeResolution < 2 || item.CloseInput.CloseTimeResolution > 120 {
+			return fmt.Errorf("%s.close_input.close_time_resolution=%d is outside XRPL range", name, item.CloseInput.CloseTimeResolution)
+		}
+		if item.CloseInput.TxBlobs == nil {
+			return fmt.Errorf("%s.close_input.tx_blobs is missing", name)
+		}
+		for j, prior := range item.PreSubmit {
+			if prior.TxBlob == "" {
+				return fmt.Errorf("%s.pre_submit[%d].tx_blob is empty", name, j)
+			}
+			if err := validateSnapshotSubmit(prior.Submit); err != nil {
+				return fmt.Errorf("%s.pre_submit[%d]: %w", name, j, err)
+			}
+			if err := validateSnapshotOpenLedger(fmt.Sprintf("%s.pre_submit[%d].open_ledger", name, j), prior.OpenLedgerInject, prior.OpenLedgerErase); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -253,7 +337,41 @@ func validateSnapshotSubmit(submit snapshotSubmit) error {
 	if !submit.Applied && submit.Fee != 0 {
 		return errors.New("submit.fee must be zero when submit.applied is false")
 	}
-	return validateSnapshotEntries("submit.post_submit_sle", submit.PostSubmitSLE)
+	if err := validateSnapshotEntries("submit.post_submit_sle", submit.PostSubmitSLE); err != nil {
+		return err
+	}
+	return validateSnapshotQueue(submit.Queue)
+}
+
+func validateSnapshotQueue(queue *snapshotQueue) error {
+	if queue == nil {
+		return nil
+	}
+	if queue.TxBlobs == nil {
+		return errors.New("submit.queue.tx_blobs is missing")
+	}
+	if queue.Metrics.TxCount != uint64(len(queue.TxBlobs)) {
+		return fmt.Errorf("submit.queue.metrics.tx_count=%d, want %d", queue.Metrics.TxCount, len(queue.TxBlobs))
+	}
+	seen := make(map[[32]byte]struct{}, len(queue.TxBlobs))
+	for i, encoded := range queue.TxBlobs {
+		blob, err := decodeSnapshotBytes(fmt.Sprintf("submit.queue.tx_blobs[%d]", i), encoded)
+		if err != nil {
+			return err
+		}
+		pending, err := parseSnapshotPending(fmt.Sprintf("submit.queue.tx_blobs[%d]", i), blob)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := seen[pending.Hash]; duplicate {
+			return fmt.Errorf("submit.queue.tx_blobs[%d] duplicates transaction %x", i, pending.Hash)
+		}
+		seen[pending.Hash] = struct{}{}
+	}
+	if queue.Metrics.MaxSize != nil && *queue.Metrics.MaxSize == 0 {
+		return errors.New("submit.queue.metrics.max_size must be positive when present")
+	}
+	return nil
 }
 
 // validateSnapshotSemanticInputs validates every input needed to execute a
@@ -313,6 +431,62 @@ func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
 		if err := validateSnapshotEntriesBytes("submit.post_submit_sle", prior.Submit.PostSubmitSLE); err != nil {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
+	}
+	if err := validateSnapshotHistorySemantic(fixture); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSnapshotHistorySemantic(fixture *snapshotFixture) error {
+	if fixture == nil || fixture.History == nil {
+		return nil
+	}
+	var previous *loadedSnapshotLedger
+	for i, item := range fixture.History {
+		name := fmt.Sprintf("history[%d]", i)
+		parent, err := loadSnapshotLedger(item.Parent)
+		if err != nil {
+			return fmt.Errorf("%s parent snapshot: %w", name, err)
+		}
+		closed, err := loadSnapshotLedger(item.Closed)
+		if err != nil {
+			return fmt.Errorf("%s closed snapshot: %w", name, err)
+		}
+		if err := validateSnapshotLineage(parent, closed, item.CloseInput); err != nil {
+			return fmt.Errorf("%s lineage: %w", name, err)
+		}
+		if previous != nil && parent.Header.Hash != previous.Header.Hash {
+			return fmt.Errorf("%s parent hash does not follow history[%d].closed", name, i-1)
+		}
+		closePending, err := parseSnapshotCloseSet(item.CloseInput.TxBlobs)
+		if err != nil {
+			return fmt.Errorf("%s close_input: %w", name, err)
+		}
+		for j, prior := range item.PreSubmit {
+			blob, err := decodeSnapshotBytes(fmt.Sprintf("%s.pre_submit[%d].tx_blob", name, j), prior.TxBlob)
+			if err != nil {
+				return err
+			}
+			pending, err := parseSnapshotPending(fmt.Sprintf("%s.pre_submit[%d].tx_blob", name, j), blob)
+			if err != nil {
+				return err
+			}
+			if prior.Submit.Applied && !snapshotPendingContains(closePending, pending) {
+				return fmt.Errorf("%s applied pre_submit[%d] is absent from close_input.tx_blobs", name, j)
+			}
+			if err := validateSnapshotEntriesBytes(fmt.Sprintf("%s.pre_submit[%d].submit.post_submit_sle", name, j), prior.Submit.PostSubmitSLE); err != nil {
+				return err
+			}
+		}
+		previous = &closed
+	}
+	mainParent, err := loadSnapshotLedger(fixture.Parent)
+	if err != nil {
+		return fmt.Errorf("parent snapshot after history: %w", err)
+	}
+	if previous != nil && mainParent.Header.Hash != previous.Header.Hash {
+		return errors.New("fixture parent does not follow the last history closed ledger")
 	}
 	return nil
 }
@@ -406,6 +580,22 @@ func validateSnapshotEntriesBytes(name string, entries []snapshotEntry) error {
 	return nil
 }
 
+func validateSnapshotOpenLedger(name string, inject, erase []snapshotEntry) error {
+	if err := validateSnapshotEntries(name+"_inject", inject); err != nil {
+		return err
+	}
+	if err := validateSnapshotEntries(name+"_erase", erase); err != nil {
+		return err
+	}
+	if err := validateSnapshotEntriesBytes(name+"_inject", inject); err != nil {
+		return err
+	}
+	if err := validateSnapshotEntriesBytes(name+"_erase", erase); err != nil {
+		return err
+	}
+	return nil
+}
+
 func validateSnapshotSLEBytes(name string, data []byte) error {
 	if _, err := ledgerstate.DecodeType(data); err != nil {
 		return fmt.Errorf("%s is not a valid ledger entry: %w", name, err)
@@ -456,14 +646,33 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		return errors.New("applied tx_blob is absent from close_input.tx_blobs")
 	}
 
-	view, err := openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
-	if err != nil {
-		return fmt.Errorf("create open ledger: %w", err)
-	}
 	submitApply := snapshotApplyConfig(parent, fixture.NetworkID, tx.ApplyFlags(fixture.ApplyFlags))
 	queue, err := txq.New(fixture.TxQConfig.toConfig())
 	if err != nil {
 		return fmt.Errorf("create transaction queue: %w", err)
+	}
+	historyReplay, err := replaySnapshotHistory(
+		fixture.History,
+		queue,
+		fixture.NetworkID,
+		tx.ApplyFlags(fixture.ApplyFlags),
+	)
+	if err != nil {
+		return fmt.Errorf("replay ledger history: %w", err)
+	}
+	var view *openledger.OpenLedger
+	if historyReplay != nil {
+		if err := assertSnapshotLedger(historyReplay.Closed, parent); err != nil {
+			return fmt.Errorf("history latest parent mismatch: %w", err)
+		}
+		parent.Ledger = historyReplay.Closed
+		parent.Header = historyReplay.Closed.Header()
+		view = historyReplay.Open
+	} else {
+		view, err = openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
+		if err != nil {
+			return fmt.Errorf("create open ledger: %w", err)
+		}
 	}
 	for i, prior := range fixture.PreSubmit {
 		blob, err := decodeSnapshotBytes("pre_submit.tx_blob", prior.TxBlob)
@@ -474,9 +683,15 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		if err != nil {
 			return err
 		}
+		if err := applySnapshotOpenLedger(view, prior.OpenLedgerInject, prior.OpenLedgerErase); err != nil {
+			return fmt.Errorf("pre_submit[%d] open-ledger mutation: %w", i, err)
+		}
 		if err := submitSnapshot(view, priorPending, submitApply, queue, prior.Submit); err != nil {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
+	}
+	if err := applySnapshotOpenLedger(view, fixture.OpenLedgerInject, fixture.OpenLedgerErase); err != nil {
+		return fmt.Errorf("open-ledger mutation: %w", err)
 	}
 	if err := submitSnapshot(view, pending, submitApply, queue, fixture.Submit); err != nil {
 		return err
@@ -502,6 +717,86 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	return nil
 }
 
+// applySnapshotOpenLedger applies authenticated raw state mutations to the
+// current open view. Erases run before inserts so a recorder can authenticate
+// and replace one SLE as two primitive operations. The mutations are
+// intentionally kept outside the close input: they model test-only state that
+// exists while the view is open and is never carried into the closed-ledger
+// snapshot.
+func applySnapshotOpenLedger(view *openledger.OpenLedger, inject, erase []snapshotEntry) error {
+	if view == nil {
+		return errors.New("open-ledger mutation received nil view")
+	}
+	if len(inject) == 0 && len(erase) == 0 {
+		return nil
+	}
+	if err := validateSnapshotOpenLedger("open_ledger", inject, erase); err != nil {
+		return err
+	}
+	var mutationErr error
+	if !view.Modify(func(current *ledger.Ledger) bool {
+		for i, entry := range erase {
+			index, err := decodeSnapshotHash(fmt.Sprintf("open_ledger_erase[%d].index", i), entry.Index)
+			if err != nil {
+				mutationErr = err
+				return false
+			}
+			want, err := decodeSnapshotBytes(fmt.Sprintf("open_ledger_erase[%d].data", i), entry.Data)
+			if err != nil {
+				mutationErr = err
+				return false
+			}
+			got, err := current.Read(keylet.Child(index))
+			if err != nil {
+				mutationErr = fmt.Errorf("read erase target %x: %w", index, err)
+				return false
+			}
+			if got == nil {
+				mutationErr = fmt.Errorf("erase target %x is absent", index)
+				return false
+			}
+			if !bytes.Equal(got, want) {
+				mutationErr = fmt.Errorf("erase target %x bytes differ from authenticated data", index)
+				return false
+			}
+			if err := current.Erase(keylet.Child(index)); err != nil {
+				mutationErr = fmt.Errorf("erase target %x: %w", index, err)
+				return false
+			}
+		}
+		for i, entry := range inject {
+			index, err := decodeSnapshotHash(fmt.Sprintf("open_ledger_inject[%d].index", i), entry.Index)
+			if err != nil {
+				mutationErr = err
+				return false
+			}
+			data, err := decodeSnapshotBytes(fmt.Sprintf("open_ledger_inject[%d].data", i), entry.Data)
+			if err != nil {
+				mutationErr = err
+				return false
+			}
+			if existing, err := current.Read(keylet.Child(index)); err != nil {
+				mutationErr = fmt.Errorf("read insert target %x: %w", index, err)
+				return false
+			} else if existing != nil {
+				mutationErr = fmt.Errorf("insert target %x already exists", index)
+				return false
+			}
+			if err := current.Insert(keylet.Child(index), data); err != nil {
+				mutationErr = fmt.Errorf("insert target %x: %w", index, err)
+				return false
+			}
+		}
+		return true
+	}) {
+		if mutationErr != nil {
+			return mutationErr
+		}
+		return errors.New("open-ledger mutation was not published")
+	}
+	return nil
+}
+
 func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, apply openledger.ApplyConfig, queue *txq.TxQ, expected snapshotSubmit) error {
 	beforeState, err := view.Current().StateMapHash()
 	if err != nil {
@@ -516,16 +811,22 @@ func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, a
 		return err
 	}
 
-	expectedQueueSize := 0
-	if expected.Queued {
-		expectedQueueSize = 1
-	}
-	if queue.Size() != expectedQueueSize {
-		return fmt.Errorf("submission queue size=%d, want %d for the empty-start queue", queue.Size(), expectedQueueSize)
-	}
-	queuedBlob, queued := queue.GetTxBlob(pending.Hash)
-	if queued != out.Queued || (queued && !bytes.Equal(queuedBlob, pending.Blob)) {
-		return errors.New("submission queue membership or signed bytes differ")
+	if expected.Queue != nil {
+		if err := assertSnapshotQueue(queue, view.Current(), expected.Queue); err != nil {
+			return err
+		}
+	} else {
+		expectedQueueSize := 0
+		if expected.Queued {
+			expectedQueueSize = 1
+		}
+		if queue.Size() != expectedQueueSize {
+			return fmt.Errorf("submission queue size=%d, want %d for the empty-start queue", queue.Size(), expectedQueueSize)
+		}
+		queuedBlob, queued := queue.GetTxBlob(pending.Hash)
+		if queued != out.Queued || (queued && !bytes.Equal(queuedBlob, pending.Blob)) {
+			return errors.New("submission queue membership or signed bytes differ")
+		}
 	}
 	if out.Applied {
 		if err := assertSnapshotAppliedTransaction(view.Current(), pending, out.Metadata); err != nil {
@@ -550,6 +851,58 @@ func submitSnapshot(view *openledger.OpenLedger, pending openledger.PendingTx, a
 	}
 	if err := assertSnapshotPostSubmitState(view.Current(), expected.PostSubmitSLE); err != nil {
 		return err
+	}
+	return nil
+}
+
+func assertSnapshotQueue(queue *txq.TxQ, current *ledger.Ledger, expected *snapshotQueue) error {
+	if queue == nil || current == nil || expected == nil {
+		return errors.New("queue comparison received nil input")
+	}
+	return assertSnapshotQueueDetails(queue.AllTxs(), queue.Metrics(current.TxCount()), expected)
+}
+
+func assertSnapshotQueueDetails(details []*txq.CandidateDetails, metrics txq.Metrics, expected *snapshotQueue) error {
+	if expected == nil {
+		return errors.New("queue comparison received nil expected state")
+	}
+	if len(details) != len(expected.TxBlobs) {
+		return fmt.Errorf("submission queue size=%d, want %d", len(details), len(expected.TxBlobs))
+	}
+	for i, detail := range details {
+		if detail == nil {
+			return fmt.Errorf("submission queue item %d is nil", i)
+		}
+		actual := strings.ToUpper(hex.EncodeToString(detail.TxBlob))
+		if actual != strings.ToUpper(expected.TxBlobs[i]) {
+			return fmt.Errorf("submission queue item %d signed bytes differ", i)
+		}
+	}
+	actualMetrics := snapshotQueueMetrics{
+		TxCount:               metrics.TxCount,
+		TxInLedger:            metrics.TxInLedger,
+		TxPerLedger:           metrics.TxPerLedger,
+		ReferenceFeeLevel:     metrics.ReferenceFeeLevel,
+		MinProcessingFeeLevel: metrics.MinProcessingFeeLevel,
+		MedFeeLevel:           metrics.MedFeeLevel,
+		OpenLedgerFeeLevel:    metrics.OpenLedgerFeeLevel,
+	}
+	if metrics.TxQMaxSize != nil {
+		maxSize := *metrics.TxQMaxSize
+		actualMetrics.MaxSize = &maxSize
+	}
+	if actualMetrics.TxCount != expected.Metrics.TxCount ||
+		actualMetrics.TxInLedger != expected.Metrics.TxInLedger ||
+		actualMetrics.TxPerLedger != expected.Metrics.TxPerLedger ||
+		actualMetrics.ReferenceFeeLevel != expected.Metrics.ReferenceFeeLevel ||
+		actualMetrics.MinProcessingFeeLevel != expected.Metrics.MinProcessingFeeLevel ||
+		actualMetrics.MedFeeLevel != expected.Metrics.MedFeeLevel ||
+		actualMetrics.OpenLedgerFeeLevel != expected.Metrics.OpenLedgerFeeLevel {
+		return fmt.Errorf("submission queue fee metrics differ: got %+v want %+v", actualMetrics, expected.Metrics)
+	}
+	if (actualMetrics.MaxSize == nil) != (expected.Metrics.MaxSize == nil) ||
+		(actualMetrics.MaxSize != nil && *actualMetrics.MaxSize != *expected.Metrics.MaxSize) {
+		return fmt.Errorf("submission queue max size differs: got %v want %v", actualMetrics.MaxSize, expected.Metrics.MaxSize)
 	}
 	return nil
 }
@@ -623,6 +976,174 @@ func snapshotApplyConfig(parent loadedSnapshotLedger, networkID uint32, flags tx
 		ApplyFlags:                flags,
 		Rules:                     parent.EffectiveRules,
 	}
+}
+
+type snapshotClosedLedgerContext struct {
+	ledger    *ledger.Ledger
+	feeLevels []txq.FeeLevel
+}
+
+func (c snapshotClosedLedgerContext) GetLedgerSequence() uint32 {
+	if c.ledger == nil {
+		return 0
+	}
+	return c.ledger.Sequence()
+}
+
+func (c snapshotClosedLedgerContext) GetTransactionCount() uint32 {
+	if c.ledger == nil {
+		return 0
+	}
+	return c.ledger.TxCount()
+}
+
+func (c snapshotClosedLedgerContext) GetTransactionFeeLevels() []txq.FeeLevel {
+	return append([]txq.FeeLevel(nil), c.feeLevels...)
+}
+
+func snapshotClosedLedgerFeeLevels(closed *ledger.Ledger) ([]txq.FeeLevel, error) {
+	if closed == nil {
+		return nil, errors.New("closed ledger is nil")
+	}
+	baseFee := uint64(closed.Fees().Base)
+	levels := make([]txq.FeeLevel, 0, closed.TxCount())
+	var callbackErr error
+	if err := closed.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		if err != nil {
+			callbackErr = err
+			return false
+		}
+		parsed, err := tx.ParseFromBinary(raw)
+		if err != nil {
+			callbackErr = err
+			return false
+		}
+		common := parsed.GetCommon()
+		if common == nil {
+			callbackErr = errors.New("closed transaction has no common fields")
+			return false
+		}
+		fee, err := strconv.ParseUint(common.Fee, 10, 64)
+		if err != nil {
+			callbackErr = fmt.Errorf("parse closed transaction fee: %w", err)
+			return false
+		}
+		levels = append(levels, txq.ToFeeLevel(fee, baseFee))
+		return true
+	}); err != nil {
+		return nil, err
+	}
+	if callbackErr != nil {
+		return nil, callbackErr
+	}
+	return levels, nil
+}
+
+type snapshotHistoryReplay struct {
+	Open   *openledger.OpenLedger
+	Closed *ledger.Ledger
+}
+
+func replaySnapshotHistory(
+	history []snapshotHistory,
+	queue *txq.TxQ,
+	networkID uint32,
+	flags tx.ApplyFlags,
+) (*snapshotHistoryReplay, error) {
+	if len(history) == 0 {
+		return nil, nil
+	}
+	var previous *ledger.Ledger
+	var view *openledger.OpenLedger
+	for i, item := range history {
+		name := fmt.Sprintf("history[%d]", i)
+		parent, err := loadSnapshotLedger(item.Parent)
+		if err != nil {
+			return nil, fmt.Errorf("%s parent snapshot: %w", name, err)
+		}
+		if previous != nil && parent.Header.Hash != previous.Hash() {
+			return nil, fmt.Errorf("%s parent does not follow previous closed ledger", name)
+		}
+		if view == nil {
+			view, err = openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
+			if err != nil {
+				return nil, fmt.Errorf("%s open ledger: %w", name, err)
+			}
+		} else if view.Current().ParentHash() != parent.Header.Hash {
+			return nil, fmt.Errorf("%s open ledger does not build on its parent", name)
+		}
+		apply := snapshotApplyConfig(parent, networkID, flags)
+		for j, prior := range item.PreSubmit {
+			blob, err := decodeSnapshotBytes(fmt.Sprintf("%s.pre_submit[%d].tx_blob", name, j), prior.TxBlob)
+			if err != nil {
+				return nil, err
+			}
+			pending, err := parseSnapshotPending(fmt.Sprintf("%s.pre_submit[%d].tx_blob", name, j), blob)
+			if err != nil {
+				return nil, err
+			}
+			if err := applySnapshotOpenLedger(view, prior.OpenLedgerInject, prior.OpenLedgerErase); err != nil {
+				return nil, fmt.Errorf("%s.pre_submit[%d] open-ledger mutation: %w", name, j, err)
+			}
+			if err := submitSnapshot(view, pending, apply, queue, prior.Submit); err != nil {
+				return nil, fmt.Errorf("%s.pre_submit[%d]: %w", name, j, err)
+			}
+		}
+		closePending, err := parseSnapshotCloseSet(item.CloseInput.TxBlobs)
+		if err != nil {
+			return nil, fmt.Errorf("%s close input: %w", name, err)
+		}
+		built, err := openledger.BuildClosedLedger(parent.Ledger, closePending, openledger.BuildConfig{
+			CloseTime:  protocol.FromRippleTime(item.CloseInput.CloseTime),
+			CloseFlags: item.CloseInput.CloseFlags,
+			Apply:      apply,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%s build closed ledger: %w", name, err)
+		}
+		if len(built.Retries) != 0 {
+			return nil, fmt.Errorf("%s closed ledger left %d retriable transactions", name, len(built.Retries))
+		}
+		closed, err := loadSnapshotLedger(item.Closed)
+		if err != nil {
+			return nil, fmt.Errorf("%s closed snapshot: %w", name, err)
+		}
+		if err := assertSnapshotLedger(built.Ledger, closed); err != nil {
+			return nil, fmt.Errorf("%s closed ledger mismatch: %w", name, err)
+		}
+		if err := runSnapshotReplayTransactions(networkID, parent, closed, item.Closed.Transactions); err != nil {
+			return nil, fmt.Errorf("%s inbound replay mismatch: %w", name, err)
+		}
+		closedApply := snapshotApplyConfig(closed, networkID, flags)
+		levels, err := snapshotClosedLedgerFeeLevels(built.Ledger)
+		if err != nil {
+			return nil, fmt.Errorf("%s fee history: %w", name, err)
+		}
+		var retries []openledger.PendingTx
+		processClosed := func() {
+			queue.ProcessClosedLedger(snapshotClosedLedgerContext{ledger: built.Ledger, feeLevels: levels}, false)
+		}
+		modifier := func(next *ledger.Ledger) {
+			adapter := openledger.NewTxqAdapter(next, closedApply)
+			queue.Accept(adapter)
+		}
+		if err := view.AcceptWithPrecommit(
+			built.Ledger, nil, false, &retries, closedApply, queue, processClosed, modifier, nil, nil,
+		); err != nil {
+			return nil, fmt.Errorf("%s next open ledger: %w", name, err)
+		}
+		if len(retries) != 0 {
+			return nil, fmt.Errorf("%s next open ledger left %d retries", name, len(retries))
+		}
+		if item.Queue != nil {
+			if err := assertSnapshotQueue(queue, view.Current(), item.Queue); err != nil {
+				return nil, fmt.Errorf("%s post-close queue: %w", name, err)
+			}
+		}
+		previous = built.Ledger
+	}
+	return &snapshotHistoryReplay{Open: view, Closed: previous}, nil
 }
 
 func assertSnapshotSubmit(out openledger.SubmitOutcome, want snapshotSubmit) error {
@@ -1096,14 +1617,60 @@ func validateSnapshotJSONShape(data []byte) error {
 		}
 		for i, submission := range submissions {
 			name := fmt.Sprintf("pre_submit[%d]", i)
-			if err := requireSnapshotKeys(name, submission, "tx_blob", "submit"); err != nil {
+			if err := requireSnapshotKeysWithOptional(name, submission, []string{"tx_blob", "submit"}, []string{"open_ledger_inject", "open_ledger_erase"}); err != nil {
 				return err
 			}
 			if err := validateSnapshotSubmitJSON(name+".submit", submission["submit"]); err != nil {
 				return err
 			}
+			if err := validateOptionalSnapshotEntriesJSON(name+".open_ledger_inject", submission["open_ledger_inject"]); err != nil {
+				return err
+			}
+			if err := validateOptionalSnapshotEntriesJSON(name+".open_ledger_erase", submission["open_ledger_erase"]); err != nil {
+				return err
+			}
 		}
 		delete(root, "pre_submit")
+	}
+	for _, key := range []string{"open_ledger_inject", "open_ledger_erase"} {
+		if raw, present := root[key]; present {
+			if err := validateOptionalSnapshotEntriesJSON("fixture."+key, raw); err != nil {
+				return err
+			}
+			delete(root, key)
+		}
+	}
+	if rawHistory, present := root["history"]; present {
+		var history []map[string]json.RawMessage
+		if err := json.Unmarshal(rawHistory, &history); err != nil || history == nil {
+			return errors.New("history must be an array")
+		}
+		for i, item := range history {
+			name := fmt.Sprintf("history[%d]", i)
+			if err := requireSnapshotKeysWithOptional(name, item, []string{"parent", "close_input", "closed"}, []string{"pre_submit", "queue"}); err != nil {
+				return err
+			}
+			if err := validateSnapshotLedgerJSON(name+".parent", item["parent"]); err != nil {
+				return err
+			}
+			if err := validateSnapshotLedgerJSON(name+".closed", item["closed"]); err != nil {
+				return err
+			}
+			if err := validateSnapshotCloseInputJSON(name+".close_input", item["close_input"]); err != nil {
+				return err
+			}
+			if rawQueue, exists := item["queue"]; exists {
+				if err := validateSnapshotQueueJSON(name+".queue", rawQueue); err != nil {
+					return err
+				}
+			}
+			if rawPrior, exists := item["pre_submit"]; exists {
+				if err := validateSnapshotPreSubmitJSON(name+".pre_submit", rawPrior); err != nil {
+					return err
+				}
+			}
+		}
+		delete(root, "history")
 	}
 	if err := requireSnapshotKeys("fixture", root, "fixture_version", "oracle_repository", "oracle_tag", "oracle_commit", "suite", "testcase", "family", "profile", "network_id", "apply_flags", "skip_signature_verification", "txq_config", "tx_blob", "parent", "close_input", "submit", "closed"); err != nil {
 		return err
@@ -1127,14 +1694,44 @@ func validateSnapshotJSONShape(data []byte) error {
 	if err := validateSnapshotLedgerJSON("closed", root["closed"]); err != nil {
 		return err
 	}
-	var closeInput map[string]json.RawMessage
-	if err := decodeSnapshotObject("close_input", root["close_input"], &closeInput); err != nil {
-		return err
-	}
-	if err := requireSnapshotKeys("close_input", closeInput, "parent_close_time", "close_time", "ledger_sequence", "close_time_resolution", "close_flags", "tx_blobs"); err != nil {
+	if err := validateSnapshotCloseInputJSON("close_input", root["close_input"]); err != nil {
 		return err
 	}
 	return validateSnapshotSubmitJSON("submit", root["submit"])
+}
+
+func validateSnapshotPreSubmitJSON(name string, raw json.RawMessage) error {
+	var submissions []map[string]json.RawMessage
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &submissions) != nil {
+		return fmt.Errorf("%s must be an array", name)
+	}
+	for i, submission := range submissions {
+		itemName := fmt.Sprintf("%s[%d]", name, i)
+		if err := requireSnapshotKeysWithOptional(itemName, submission, []string{"tx_blob", "submit"}, []string{"open_ledger_inject", "open_ledger_erase"}); err != nil {
+			return err
+		}
+		if err := validateSnapshotSubmitJSON(itemName+".submit", submission["submit"]); err != nil {
+			return err
+		}
+		if err := validateOptionalSnapshotEntriesJSON(itemName+".open_ledger_inject", submission["open_ledger_inject"]); err != nil {
+			return err
+		}
+		if err := validateOptionalSnapshotEntriesJSON(itemName+".open_ledger_erase", submission["open_ledger_erase"]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSnapshotCloseInputJSON(name string, raw json.RawMessage) error {
+	var closeInput map[string]json.RawMessage
+	if err := decodeSnapshotObject(name, raw, &closeInput); err != nil {
+		return err
+	}
+	if err := requireSnapshotKeys(name, closeInput, "parent_close_time", "close_time", "ledger_sequence", "close_time_resolution", "close_flags", "tx_blobs"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateSnapshotSubmitJSON(name string, raw json.RawMessage) error {
@@ -1142,10 +1739,58 @@ func validateSnapshotSubmitJSON(name string, raw json.RawMessage) error {
 	if err := decodeSnapshotObject(name, raw, &submit); err != nil {
 		return err
 	}
-	if err := requireSnapshotKeys(name, submit, "boundary", "engine_result", "engine_result_code", "applied", "queued", "fee", "post_submit_sle"); err != nil {
+	if err := requireSnapshotKeysWithOptional(name, submit, []string{"boundary", "engine_result", "engine_result_code", "applied", "queued", "fee", "post_submit_sle"}, []string{"queue"}); err != nil {
 		return err
 	}
-	return validateSnapshotEntriesJSON(name+".post_submit_sle", submit["post_submit_sle"])
+	if err := validateSnapshotEntriesJSON(name+".post_submit_sle", submit["post_submit_sle"]); err != nil {
+		return err
+	}
+	if rawQueue, present := submit["queue"]; present {
+		if err := validateSnapshotQueueJSON(name+".queue", rawQueue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSnapshotQueueJSON(name string, raw json.RawMessage) error {
+	var queue map[string]json.RawMessage
+	if err := decodeSnapshotObject(name, raw, &queue); err != nil {
+		return err
+	}
+	if err := requireSnapshotKeys(name, queue, "tx_blobs", "metrics"); err != nil {
+		return err
+	}
+	var blobs []string
+	if err := json.Unmarshal(queue["tx_blobs"], &blobs); err != nil || blobs == nil {
+		return fmt.Errorf("%s.tx_blobs must be an array of strings", name)
+	}
+	for i, blob := range blobs {
+		if strings.TrimSpace(blob) == "" {
+			return fmt.Errorf("%s.tx_blobs[%d] is empty", name, i)
+		}
+	}
+	var metrics map[string]json.RawMessage
+	if err := decodeSnapshotObject(name+".metrics", queue["metrics"], &metrics); err != nil {
+		return err
+	}
+	if err := requireSnapshotKeysWithNullableOptional(name+".metrics", metrics, []string{
+		"tx_count", "tx_in_ledger", "tx_per_ledger",
+		"reference_fee_level", "min_processing_fee_level", "med_fee_level",
+		"open_ledger_fee_level",
+	}, []string{"max_size"}); err != nil {
+		return err
+	}
+	if _, present := metrics["max_size"]; !present {
+		return fmt.Errorf("%s.metrics.max_size is missing", name)
+	}
+	if rawMax := metrics["max_size"]; !bytes.Equal(bytes.TrimSpace(rawMax), []byte("null")) {
+		var maxSize uint64
+		if err := json.Unmarshal(rawMax, &maxSize); err != nil {
+			return fmt.Errorf("%s.metrics.max_size must be a non-negative integer or null", name)
+		}
+	}
+	return nil
 }
 
 func validateSnapshotLedgerJSON(name string, raw json.RawMessage) error {
@@ -1213,6 +1858,16 @@ func validateSnapshotEntriesJSON(name string, raw json.RawMessage) error {
 	return nil
 }
 
+func validateOptionalSnapshotEntriesJSON(name string, raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("%s must be an array", name)
+	}
+	return validateSnapshotEntriesJSON(name, raw)
+}
+
 func decodeSnapshotObject(name string, raw json.RawMessage, target any) error {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("%s must be an object", name)
@@ -1224,8 +1879,20 @@ func decodeSnapshotObject(name string, raw json.RawMessage, target any) error {
 }
 
 func requireSnapshotKeys(name string, object map[string]json.RawMessage, keys ...string) error {
-	allowed := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
+	return requireSnapshotKeysWithOptional(name, object, keys, nil)
+}
+
+func requireSnapshotKeysWithOptional(name string, object map[string]json.RawMessage, required, optional []string) error {
+	return requireSnapshotKeysWithOptionalNullPolicy(name, object, required, optional, nil)
+}
+
+func requireSnapshotKeysWithNullableOptional(name string, object map[string]json.RawMessage, required, nullable []string) error {
+	return requireSnapshotKeysWithOptionalNullPolicy(name, object, required, nil, nullable)
+}
+
+func requireSnapshotKeysWithOptionalNullPolicy(name string, object map[string]json.RawMessage, required, optional, nullable []string) error {
+	allowed := make(map[string]struct{}, len(required)+len(optional)+len(nullable))
+	for _, key := range append(append(append([]string(nil), required...), optional...), nullable...) {
 		allowed[key] = struct{}{}
 	}
 	for key := range object {
@@ -1233,12 +1900,17 @@ func requireSnapshotKeys(name string, object map[string]json.RawMessage, keys ..
 			return fmt.Errorf("%s.%s is an unknown field", name, key)
 		}
 	}
-	for _, key := range keys {
+	for _, key := range required {
 		raw, ok := object[key]
 		if !ok {
 			return fmt.Errorf("%s.%s is missing", name, key)
 		}
 		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("%s.%s must not be null", name, key)
+		}
+	}
+	for _, key := range optional {
+		if raw, ok := object[key]; ok && (len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))) {
 			return fmt.Errorf("%s.%s must not be null", name, key)
 		}
 	}

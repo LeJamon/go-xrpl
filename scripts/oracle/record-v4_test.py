@@ -14,6 +14,35 @@ spec.loader.exec_module(recorder)
 
 
 class RecorderProvenanceTest(unittest.TestCase):
+    def test_clean_build_registers_pinned_xrplf_remote(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append((list(command), kwargs))
+
+            with patch.object(recorder, "run", side_effect=run):
+                recorder.register_conan_remote(
+                    root,
+                    {"CONAN_HOME": str(root / "conan-home")},
+                )
+
+            self.assertEqual(len(calls), 1)
+            command, kwargs = calls[0]
+            self.assertEqual(
+                command,
+                [
+                    "conan",
+                    "remote",
+                    "add",
+                    "xrplf",
+                    "https://conan.xrplf.org/repository/conan/",
+                    "--force",
+                ],
+            )
+            self.assertEqual(kwargs["env"]["CONAN_HOME"], str(root / "conan-home"))
+
     def test_build_must_not_alias_production_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             production = Path(directory) / "production"
