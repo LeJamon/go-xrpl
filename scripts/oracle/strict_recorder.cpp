@@ -1716,14 +1716,17 @@ setupFatalInvariantAccount(Env& env)
         if (!owner)
             return false;
         auto replacement = std::make_shared<SLE>(*owner);
-        replacement->setFieldAmount(sfBalance, jtx::drops(-1));
+        // Keep the malformed balance inside XRPAmount's representable range
+        // while exceeding the genesis supply. XRPBalanceChecks must see the
+        // authenticated parent as invalid before the transaction runs.
+        replacement->setFieldAmount(sfBalance, kInitialXrp + jtx::drops(1));
         view.rawReplace(replacement);
         return true;
     });
 
     auto const owner = env.le(keylet::account(alice.id()));
     env.test.expect(
-        owner && owner->getFieldAmount(sfBalance).xrp() < XRPAmount{0},
+        owner && owner->getFieldAmount(sfBalance).xrp() > kInitialXrp,
         "fatal invariant setup did not preserve an invalid account balance",
         __FILE__,
         __LINE__);
