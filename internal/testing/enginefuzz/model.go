@@ -12,11 +12,17 @@ const (
 
 type amendmentProfile uint8
 
-const profileV341 amendmentProfile = 0
+const (
+	profileV341 amendmentProfile = iota
+	profileV341AMMDisabled
+)
 
 func (p amendmentProfile) String() string {
 	if p == profileV341 {
-		return "rippled-v3.4.1-supported"
+		return "go-v3.4.1-supported"
+	}
+	if p == profileV341AMMDisabled {
+		return "go-v3.4.1-supported-with-amm-disabled"
 	}
 	return fmt.Sprintf("unknown-%d", p)
 }

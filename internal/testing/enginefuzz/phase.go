@@ -7,6 +7,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 const (
@@ -132,7 +133,10 @@ func runPhaseTrace(t testing.TB, tr phaseTrace) phaseReport {
 	for i, step := range tr.Steps {
 		payer, transaction, flags := sc.buildPhase(step)
 		result, err := sc.submitAndCheck(i, step.String(), payer, transaction, flags, func(result jtx.TxResult) error {
-			return classifySafetyOutcome(step.String(), result, tr.Profile, i)
+			if err := classifySafetyOutcome(step.String(), result, tr.Profile, i); err != nil {
+				return err
+			}
+			return classifyPhaseShape(step, result)
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -157,6 +161,85 @@ func runPhaseTrace(t testing.TB, tr phaseTrace) phaseReport {
 	sc.closeAndCheck(len(tr.Steps))
 	report.Closes++
 	return report
+}
+
+func classifyPhaseShape(step phaseStep, result jtx.TxResult) error {
+	var want ter.Result
+	var applied bool
+	var handler, invariants bool
+
+	switch step.Kind {
+	case phaseExplicitFee:
+		switch step.Option % 4 {
+		case 0:
+			want = ter.TelINSUF_FEE_P
+		case 1:
+			want, applied, handler, invariants = ter.TesSUCCESS, true, true, true
+		default:
+			want = ter.TemBAD_FEE
+		}
+	case phaseSequence:
+		switch step.Option % 3 {
+		case 0:
+			want = ter.TefPAST_SEQ
+		case 1:
+			want = ter.TerPRE_SEQ
+		default:
+			want, applied, handler, invariants = ter.TesSUCCESS, true, true, true
+		}
+	case phaseTicketAndSequence:
+		want = ter.TemSEQ_AND_TICKET
+	case phaseNetworkID:
+		want = ter.TelNETWORK_ID_MAKES_TX_NON_CANONICAL
+	case phaseSigningKey:
+		want, applied, handler, invariants = ter.TesSUCCESS, true, true, true
+	case phaseLastLedger:
+		if step.Option&1 == 0 {
+			want = ter.TefMAX_LEDGER
+		} else {
+			want, applied, handler, invariants = ter.TesSUCCESS, true, true, true
+		}
+	case phaseAccountTxnID:
+		if step.Option&1 == 0 {
+			want = ter.TemINVALID
+		} else {
+			want = ter.TefWRONG_PRIOR
+		}
+	case phaseDelegate:
+		if step.Option&1 == 0 {
+			want = ter.TemBAD_SIGNER
+		} else {
+			want = ter.TerNO_DELEGATE_PERMISSION
+		}
+	case phaseApplyNone:
+		want, applied, invariants = ter.TecNO_DST_INSUF_XRP, true, true
+	case phaseApplyRetry, phaseApplyFailHard:
+		want = ter.TecNO_DST_INSUF_XRP
+	default:
+		return fmt.Errorf("%s: unknown phase kind", step)
+	}
+	if result.Result != want {
+		return fmt.Errorf("%s: result=%s want=%s", step, result.Code, want)
+	}
+	if result.Applied != applied {
+		return fmt.Errorf("%s: applied=%t want=%t", step, result.Applied, applied)
+	}
+	if result.ApplyInvoked != handler || result.InvariantsChecked != invariants {
+		return fmt.Errorf("%s: phases apply=%t/invariants=%t want=%t/%t", step, result.ApplyInvoked, result.InvariantsChecked, handler, invariants)
+	}
+	if handler && result.TransactionCalls == 0 {
+		return fmt.Errorf("%s: handler phase was not counted", step)
+	}
+	if invariants && result.InvariantChecks == 0 {
+		return fmt.Errorf("%s: invariant phase was not counted", step)
+	}
+	if applied && result.Fee == 0 {
+		return fmt.Errorf("%s: applied phase did not claim a fee", step)
+	}
+	if !applied && result.Fee != 0 {
+		return fmt.Errorf("%s: rejected phase claimed fee %d", step, result.Fee)
+	}
+	return nil
 }
 
 func (sc *scenario) buildPhase(step phaseStep) (*jtx.Account, tx.Transaction, tx.ApplyFlags) {

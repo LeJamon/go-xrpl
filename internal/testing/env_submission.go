@@ -346,7 +346,15 @@ func (e *TestEnv) openLedgerApplyConfig(view *ledger.Ledger, verifySignatures bo
 		NumberContextOverride:     e.numberContextOverride,
 		ApplyFlags:                e.txQApplyFlags,
 		FeeTrack:                  e.feeTrack,
+		ApplyObserver:             e.applyObserver,
 	}
+}
+
+// SetApplyObserverForTest installs a test-only execution observer. The
+// observer receives phases from the next direct submissions and closed-ledger
+// replay until it is replaced with nil.
+func (e *TestEnv) SetApplyObserverForTest(observer txengine.ApplyObserver) {
+	e.applyObserver = observer
 }
 
 func (e *TestEnv) applyStaged(
@@ -363,7 +371,7 @@ func (e *TestEnv) applyStaged(
 		}
 		engine := txengine.NewEngine(staged, config)
 		engine.SetBaseTxCount(transactionCount)
-		engine.SetApplyObserverForTest(observed.observe)
+		engine.SetApplyObserverForTest(e.observeApplyPhases(observed.observe))
 		if e.invariantViolationHook != nil {
 			engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
 		}
@@ -379,7 +387,7 @@ func (e *TestEnv) applyStaged(
 	}
 	engine := txengine.NewEngine(e.ledger, config)
 	engine.SetBaseTxCount(transactionCount)
-	engine.SetApplyObserverForTest(observed.observe)
+	engine.SetApplyObserverForTest(e.observeApplyPhases(observed.observe))
 	if e.invariantViolationHook != nil {
 		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
 	}
@@ -392,18 +400,31 @@ func (e *TestEnv) applyStaged(
 	return observed
 }
 
+func (e *TestEnv) observeApplyPhases(observe txengine.ApplyObserver) txengine.ApplyObserver {
+	return func(phase txengine.ApplyPhase) {
+		observe(phase)
+		if e.applyObserver != nil {
+			e.applyObserver(phase)
+		}
+	}
+}
+
 type stagedApplyResult struct {
 	tx.ApplyResult
 	ApplyInvoked      bool
 	InvariantsChecked bool
+	TransactionCalls  int
+	InvariantChecks   int
 }
 
 func (r *stagedApplyResult) observe(phase txengine.ApplyPhase) {
 	switch phase {
 	case txengine.ApplyPhaseTransaction:
 		r.ApplyInvoked = true
+		r.TransactionCalls++
 	case txengine.ApplyPhaseInvariants:
 		r.InvariantsChecked = true
+		r.InvariantChecks++
 	}
 }
 
@@ -438,6 +459,8 @@ func (e *TestEnv) applyDirect(txn tx.Transaction, flags tx.ApplyFlags) TxResult 
 	result := txResultFromApply(applyResult.ApplyResult)
 	result.ApplyInvoked = applyResult.ApplyInvoked
 	result.InvariantsChecked = applyResult.InvariantsChecked
+	result.TransactionCalls = applyResult.TransactionCalls
+	result.InvariantChecks = applyResult.InvariantChecks
 	return result
 }
 

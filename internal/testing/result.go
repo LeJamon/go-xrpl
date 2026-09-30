@@ -31,6 +31,12 @@ type TxResult struct {
 	ApplyInvoked      bool
 	InvariantsChecked bool
 
+	// TransactionCalls and InvariantChecks count observed engine phases for the
+	// submission path. Closed-ledger replay reports its phases through the test
+	// environment observer because a batch's inner transactions run at close.
+	TransactionCalls int
+	InvariantChecks  int
+
 	// Message provides additional details about the result.
 	Message string
 

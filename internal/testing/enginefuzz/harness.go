@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
@@ -20,7 +19,125 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-const profileV341Fingerprint = "4873a15b9a4c71c633b1458c698ac560f231e0cda3894caddfc4056ed7de6631"
+const (
+	profileV341Fingerprint       = "4873a15b9a4c71c633b1458c698ac560f231e0cda3894caddfc4056ed7de6631"
+	profileV341AMMDisabledDigest = "8a2c7d5359d1d06b1775a9c8a3066804625ae34d494641fe13a529cd114e2dc2"
+)
+
+// profileV341Features is the release 3.4.1 supported amendment set. It is
+// encoded here instead of derived from SupportedFeatures so a build tag cannot
+// silently change the fuzz oracle. Optional native cryptography is exercised by
+// its dedicated tagged tests and is not part of this engine profile.
+const profileV341Features = `
+AMM
+AMMClawback
+BatchV1_1
+CheckCashMakesTrustLine
+Checks
+Clawback
+Credentials
+CryptoConditions
+CryptoConditionsSuite
+DID
+DeepFreeze
+DeletableAccounts
+DepositAuth
+DepositPreauth
+DisallowIncoming
+DynamicMPT
+DynamicNFT
+EnforceInvariants
+Escrow
+ExpandedSignerList
+FeeEscalation
+Flow
+FlowCross
+FlowSortStrands
+HardenedValidations
+ImmediateOfferKilled
+LendingProtocol
+LendingProtocolV1_1
+MPTokensV1
+MultiSign
+MultiSignReserve
+NFTokenMintOffer
+NegativeUNL
+NonFungibleTokensV1
+NonFungibleTokensV1_1
+PayChan
+PermissionDelegationV1_1
+PermissionedDEX
+PermissionedDomains
+PriceOracle
+RequireFullyCanonicalSig
+SingleAssetVault
+SortedDirectories
+Sponsor
+TickSize
+TicketBatch
+TokenEscrow
+TrustSetAuth
+XChainBridge
+XRPFees
+fix1201
+fix1368
+fix1373
+fix1512
+fix1513
+fix1515
+fix1523
+fix1528
+fix1543
+fix1571
+fix1578
+fix1623
+fix1781
+fixAMMClawbackRounding
+fixAMMOverflowOffer
+fixAMMv1_1
+fixAMMv1_2
+fixAMMv1_3
+fixAmendmentMajorityCalc
+fixBatchV1_2
+fixCheckThreading
+fixCleanup3_1_3
+fixCleanup3_2_0
+fixCleanup3_3_0
+fixCleanup3_4_0
+fixDirectoryLimit
+fixDisallowIncomingV1
+fixEmptyDID
+fixEnforceNFTokenTrustline
+fixEnforceNFTokenTrustlineV2
+fixFillOrKill
+fixFrozenLPTokenTransfer
+fixIncludeKeyletFields
+fixInnerObjTemplate
+fixInnerObjTemplate2
+fixInvalidTxFlags
+fixMPTDeliveredAmount
+fixMasterKeyAsRegularKey
+fixNFTokenDirV1
+fixNFTokenNegOffer
+fixNFTokenPageLinks
+fixNFTokenRemint
+fixNFTokenReserve
+fixNonFungibleTokensV1_2
+fixPayChanCancelAfter
+fixPayChanRecipientOwnerDir
+fixPreviousTxnID
+fixPriceOracleOrder
+fixQualityUpperBound
+fixReducedOffersV1
+fixReducedOffersV2
+fixRemoveNFTokenAutoTrustLine
+fixRmSmallIncreasedQOffers
+fixSTAmountCanonicalize
+fixTakerDryOfferRemoval
+fixTokenEscrowV1
+fixTrustLinesToSelf
+fixUniversalNumber
+fixXChainRewardRounding`
 
 type executionRecord struct {
 	Step   traceStep
@@ -95,22 +212,37 @@ func newScenario(t testing.TB, profile amendmentProfile) *scenario {
 
 func applyAmendmentProfile(t testing.TB, env *jtx.TestEnv, profile amendmentProfile) {
 	t.Helper()
-	if profile != profileV341 {
+	names := strings.Fields(profileV341Features)
+	switch profile {
+	case profileV341:
+	case profileV341AMMDisabled:
+		names = removeFeature(names, "AMM")
+	default:
 		t.Fatalf("unknown amendment profile %d", profile)
-	}
-	features := amendment.SupportedFeatures()
-	names := make([]string, len(features))
-	for i, feature := range features {
-		names[i] = feature.Name
 	}
 	sort.Strings(names)
 	digest := sha256.Sum256([]byte(strings.Join(names, "\n")))
 	got := hex.EncodeToString(digest[:])
-	if got != profileV341Fingerprint {
+	want := profileV341Fingerprint
+	switch profile {
+	case profileV341AMMDisabled:
+		want = profileV341AMMDisabledDigest
+	}
+	if got != want {
 		t.Fatalf("amendment profile %s changed: got fingerprint %s", profile, got)
 	}
 	env.SetAmendments(names)
 	env.Close()
+}
+
+func removeFeature(features []string, name string) []string {
+	result := make([]string, 0, len(features))
+	for _, feature := range features {
+		if feature != name {
+			result = append(result, feature)
+		}
+	}
+	return result
 }
 
 func runTrace(t testing.TB, tr trace) runReport {
@@ -201,6 +333,9 @@ func (sc *scenario) submitAndCheck(
 			return jtx.TxResult{}, fmt.Errorf("step %d %s profile=%s result=%s: applied result skipped invariants", index, description, sc.profile, result.Code)
 		}
 		sc.expectedSupply -= result.Fee
+		if built.TxType() == tx.TypeBatch {
+			sc.ledgerDrops -= result.Fee
+		}
 		if beforeInfo != nil && afterInfo != nil && afterInfo.Sequence != beforeInfo.Sequence+1 {
 			return jtx.TxResult{}, fmt.Errorf("step %d %s profile=%s result=%s: sequence %d -> %d", index, description, sc.profile, result.Code, beforeInfo.Sequence, afterInfo.Sequence)
 		}
@@ -237,9 +372,13 @@ func (sc *scenario) closeAndCheck(index int) {
 }
 
 func (sc *scenario) totalXRP() (uint64, error) {
+	return totalLedgerXRP(sc.env)
+}
+
+func totalLedgerXRP(env *jtx.TestEnv) (uint64, error) {
 	var total uint64
 	var sumErr error
-	err := sc.env.Ledger().ForEach(func(_ [32]byte, data []byte) bool {
+	err := env.Ledger().ForEach(func(_ [32]byte, data []byte) bool {
 		var amount uint64
 		switch entry.Type(state.EntryTypeCode(data)) {
 		case entry.TypeAccountRoot:
