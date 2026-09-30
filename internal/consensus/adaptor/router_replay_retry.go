@@ -39,13 +39,12 @@ const (
 // failed transaction-only head. The verified anchor and already prepared
 // successors remain resident while maintenance drives the bounded retry.
 func (c *catchupReplayCoordinator) standardReplayHasAvailabilityBlockLocked() bool {
-	for _, entry := range c.standardReplay.entries {
-		if entry.failureClass == standardReplayFailureAvailability &&
-			(entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted) {
-			return true
-		}
+	if !c.standardReplay.active {
+		return false
 	}
-	return false
+	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
+	return entry != nil && entry.failureClass == standardReplayFailureAvailability &&
+		(entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted)
 }
 
 func (c *catchupReplayCoordinator) standardReplayAvailabilityHeadLocked() *standardReplayEntry {
@@ -75,11 +74,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time
 		c.acquisitionMu.Unlock()
 		return standardReplayAvailabilityRetryNone
 	}
-	if !entry.availabilityNextRetryAt.IsZero() && now.Before(entry.availabilityNextRetryAt) {
-		c.acquisitionMu.Unlock()
-		return standardReplayAvailabilityRetryWaiting
-	}
-	if !entry.availabilityDeadlineAt.IsZero() && !now.Before(entry.availabilityDeadlineAt) {
+	if entry.availabilityRetries >= standardReplayAvailabilityRetryLimit {
 		entry.availabilityPending = false
 		entry.availabilityRetrying = false
 		entry.availabilityExhausted = true
@@ -87,7 +82,15 @@ func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time
 		c.acquisitionMu.Unlock()
 		return standardReplayAvailabilityRetryExhausted
 	}
-	if entry.availabilityRetries >= standardReplayAvailabilityRetryLimit {
+	if entry.availabilityDeadlineAt.IsZero() {
+		entry.availabilityDeadlineAt = now.Add(standardReplayAvailabilityWaitWindow)
+		entry.availabilityNextRetryAt = now.Add(standardReplayAvailabilityRetryDelays[entry.availabilityRetries])
+	}
+	if !entry.availabilityNextRetryAt.IsZero() && now.Before(entry.availabilityNextRetryAt) {
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryWaiting
+	}
+	if !entry.availabilityDeadlineAt.IsZero() && !now.Before(entry.availabilityDeadlineAt) {
 		entry.availabilityPending = false
 		entry.availabilityRetrying = false
 		entry.availabilityExhausted = true
@@ -106,6 +109,14 @@ func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time
 		if candidate != 0 && !standardReplayContainsPeer(tried, candidate) {
 			peerID = candidate
 			break
+		}
+	}
+	if peerID == 0 {
+		for _, candidate := range c.acquisition.SelectLedgerPeers(entry.hash, entry.seq, nil, 1) {
+			if candidate != 0 {
+				peerID = candidate
+				break
+			}
 		}
 	}
 	if peerID == 0 {
@@ -164,7 +175,7 @@ func (c *catchupReplayCoordinator) standardReplayAvailabilityRetryActiveLocked(n
 			(!entry.availabilityPending && !entry.availabilityRetrying) {
 			continue
 		}
-		if entry.availabilityDeadlineAt.IsZero() || now.Before(entry.availabilityDeadlineAt) {
+		if !entry.availabilityDeadlineAt.IsZero() && now.Before(entry.availabilityDeadlineAt) {
 			return true
 		}
 	}

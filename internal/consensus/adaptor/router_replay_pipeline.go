@@ -1139,9 +1139,6 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntry(
 	if class == standardReplayFailureAvailability {
 		entry.failed = false
 		entry.availabilityRetrying = false
-		if entry.availabilityDeadlineAt.IsZero() {
-			entry.availabilityDeadlineAt = now.Add(standardReplayAvailabilityWaitWindow)
-		}
 		if entry.availabilityRetries >= standardReplayAvailabilityRetryLimit {
 			entry.availabilityPending = false
 			entry.availabilityExhausted = true
@@ -1149,7 +1146,7 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntry(
 		} else {
 			entry.availabilityPending = true
 			entry.availabilityExhausted = false
-			entry.availabilityNextRetryAt = now.Add(standardReplayAvailabilityRetryDelays[entry.availabilityRetries])
+			entry.availabilityNextRetryAt = time.Time{}
 		}
 	} else {
 		entry.failed = true
