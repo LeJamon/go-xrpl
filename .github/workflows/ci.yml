@@ -48,13 +48,10 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-lint
           if-no-files-found: error
 
-  # Advisory linters (security smells, leaked HTTP bodies, missing request
-  # contexts, slice preallocation). The codebase is currently clean against this
-  # config, so the job is green. continue-on-error keeps it non-blocking: a new
-  # finding shows up on the PR (and goes red here) without gating the merge, to
-  # be fixed opportunistically.
+  # Advisory findings remain visible independently; release evidence requires
+  # a successful run alongside the required checks.
   lint-advisory:
-    name: Lint (advisory, non-blocking)
+    name: Lint (advisory)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -512,7 +509,15 @@ jobs:
             ([.completed_submission_types[]] | add) == .completed_submissions and
             ([.completed_submission_results[]] | add) == .completed_submissions and
             ([.completed_closed_transaction_types[]] | add) == .completed_replay_leaves and
-            .completed_close_inputs > 0 and .completed_replay_leaves > 0
+            .completed_close_inputs > 0 and .completed_replay_leaves > 0 and
+            .completed_queue_checks > 0 and
+            .completed_history_transitions > 0 and
+            .completed_history_submissions > 0 and
+            .completed_history_close_inputs > 0 and
+            .completed_history_replay_leaves > 0 and
+            .completed_submissions >= (.executed + .completed_history_submissions) and
+            .completed_close_inputs >= .completed_history_close_inputs and
+            .completed_replay_leaves >= .completed_history_replay_leaves
           ' "$GOXRPL_ENGINE_EVIDENCE_REPORT" >/dev/null
       - name: Record final conformance producer evidence
         if: always()

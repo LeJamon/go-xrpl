@@ -19,26 +19,38 @@ import (
 
 func shuffledSnapshot(fixture snapshotFixture, seed uint64) snapshotFixture {
 	random := rand.New(rand.NewPCG(seed, seed^0x5852504c))
-	fixture.Parent.State = slices.Clone(fixture.Parent.State)
-	fixture.Parent.Transactions = slices.Clone(fixture.Parent.Transactions)
-	fixture.Parent.Rules = slices.Clone(fixture.Parent.Rules)
-	fixture.CloseInput.TxBlobs = slices.Clone(fixture.CloseInput.TxBlobs)
-	fixture.Closed.Transactions = slices.Clone(fixture.Closed.Transactions)
-	random.Shuffle(len(fixture.Parent.State), func(i, j int) {
-		fixture.Parent.State[i], fixture.Parent.State[j] = fixture.Parent.State[j], fixture.Parent.State[i]
-	})
-	random.Shuffle(len(fixture.Parent.Transactions), func(i, j int) {
-		fixture.Parent.Transactions[i], fixture.Parent.Transactions[j] = fixture.Parent.Transactions[j], fixture.Parent.Transactions[i]
-	})
-	random.Shuffle(len(fixture.Parent.Rules), func(i, j int) {
-		fixture.Parent.Rules[i], fixture.Parent.Rules[j] = fixture.Parent.Rules[j], fixture.Parent.Rules[i]
-	})
-	random.Shuffle(len(fixture.CloseInput.TxBlobs), func(i, j int) {
-		fixture.CloseInput.TxBlobs[i], fixture.CloseInput.TxBlobs[j] = fixture.CloseInput.TxBlobs[j], fixture.CloseInput.TxBlobs[i]
-	})
-	random.Shuffle(len(fixture.Closed.Transactions), func(i, j int) {
-		fixture.Closed.Transactions[i], fixture.Closed.Transactions[j] = fixture.Closed.Transactions[j], fixture.Closed.Transactions[i]
-	})
+	shuffleLedger := func(value snapshotLedger) snapshotLedger {
+		value.State = slices.Clone(value.State)
+		value.Transactions = slices.Clone(value.Transactions)
+		value.Rules = slices.Clone(value.Rules)
+		random.Shuffle(len(value.State), func(i, j int) {
+			value.State[i], value.State[j] = value.State[j], value.State[i]
+		})
+		random.Shuffle(len(value.Transactions), func(i, j int) {
+			value.Transactions[i], value.Transactions[j] = value.Transactions[j], value.Transactions[i]
+		})
+		random.Shuffle(len(value.Rules), func(i, j int) {
+			value.Rules[i], value.Rules[j] = value.Rules[j], value.Rules[i]
+		})
+		return value
+	}
+	shuffleClose := func(value snapshotCloseInput) snapshotCloseInput {
+		value.TxBlobs = slices.Clone(value.TxBlobs)
+		random.Shuffle(len(value.TxBlobs), func(i, j int) {
+			value.TxBlobs[i], value.TxBlobs[j] = value.TxBlobs[j], value.TxBlobs[i]
+		})
+		return value
+	}
+	fixture.Parent = shuffleLedger(fixture.Parent)
+	fixture.Closed = shuffleLedger(fixture.Closed)
+	fixture.CloseInput = shuffleClose(fixture.CloseInput)
+	fixture.History = slices.Clone(fixture.History)
+	for i := range fixture.History {
+		item := &fixture.History[i]
+		item.Parent = shuffleLedger(item.Parent)
+		item.Closed = shuffleLedger(item.Closed)
+		item.CloseInput = shuffleClose(item.CloseInput)
+	}
 	return fixture
 }
 
@@ -49,32 +61,37 @@ func TestEngineExecutionOrder(t *testing.T) {
 	}
 	seeds := []uint64{0, 1, 2016, ^uint64(0)}
 	report := struct {
-		OracleCommit    string         `json:"oracle_commit"`
-		ManifestSHA256  string         `json:"manifest_sha256"`
-		TestedSHA       string         `json:"tested_sha"`
-		Dirty           bool           `json:"dirty"`
-		Seeds           []uint64       `json:"seeds"`
-		DurationSeconds float64        `json:"duration_seconds"`
-		Discovered      int            `json:"discovered"`
-		Executed        int            `json:"executed"`
-		Passed          int            `json:"passed"`
-		Failed          int            `json:"failed"`
-		Excluded        int            `json:"excluded"`
-		Profiles        map[string]int `json:"executed_profiles"`
-		Families        map[string]int `json:"executed_families"`
-		CompletedStages map[string]int `json:"completed_stages"`
-		CompletedCases  map[string]int `json:"completed_cases"`
-		SubmittedTypes  map[string]int `json:"completed_submission_types"`
-		ClosedTypes     map[string]int `json:"completed_closed_transaction_types"`
-		Results         map[string]int `json:"completed_submission_results"`
-		PresentFields   map[string]int `json:"completed_submission_common_fields_present"`
-		EnabledRules    map[string]int `json:"completed_parent_rules_enabled"`
-		Submissions     int            `json:"completed_submissions"`
-		CloseInputs     int            `json:"completed_close_inputs"`
-		ReplayLeaves    int            `json:"completed_replay_leaves"`
-		SoakSeed        uint64         `json:"soak_seed"`
-		SoakSeconds     int            `json:"requested_soak_seconds"`
-		SoakExecuted    int            `json:"soak_executed"`
+		OracleCommit        string         `json:"oracle_commit"`
+		ManifestSHA256      string         `json:"manifest_sha256"`
+		TestedSHA           string         `json:"tested_sha"`
+		Dirty               bool           `json:"dirty"`
+		Seeds               []uint64       `json:"seeds"`
+		DurationSeconds     float64        `json:"duration_seconds"`
+		Discovered          int            `json:"discovered"`
+		Executed            int            `json:"executed"`
+		Passed              int            `json:"passed"`
+		Failed              int            `json:"failed"`
+		Excluded            int            `json:"excluded"`
+		Profiles            map[string]int `json:"executed_profiles"`
+		Families            map[string]int `json:"executed_families"`
+		CompletedStages     map[string]int `json:"completed_stages"`
+		CompletedCases      map[string]int `json:"completed_cases"`
+		SubmittedTypes      map[string]int `json:"completed_submission_types"`
+		ClosedTypes         map[string]int `json:"completed_closed_transaction_types"`
+		Results             map[string]int `json:"completed_submission_results"`
+		PresentFields       map[string]int `json:"completed_submission_common_fields_present"`
+		EnabledRules        map[string]int `json:"completed_parent_rules_enabled"`
+		Submissions         int            `json:"completed_submissions"`
+		CloseInputs         int            `json:"completed_close_inputs"`
+		ReplayLeaves        int            `json:"completed_replay_leaves"`
+		QueueChecks         int            `json:"completed_queue_checks"`
+		HistoryTransitions  int            `json:"completed_history_transitions"`
+		HistorySubmissions  int            `json:"completed_history_submissions"`
+		HistoryCloseInputs  int            `json:"completed_history_close_inputs"`
+		HistoryReplayLeaves int            `json:"completed_history_replay_leaves"`
+		SoakSeed            uint64         `json:"soak_seed"`
+		SoakSeconds         int            `json:"requested_soak_seconds"`
+		SoakExecuted        int            `json:"soak_executed"`
 	}{
 		OracleCommit: corpus.Manifest.RippledCommit, ManifestSHA256: corpus.ManifestSHA256,
 		Seeds: seeds, Discovered: len(corpus.Cases),
@@ -130,8 +147,29 @@ func TestEngineExecutionOrder(t *testing.T) {
 			report.Passed++
 			report.CompletedCases[c.Name]++
 			submissions := append(slices.Clone(c.Fixture.PreSubmit), snapshotSubmission{TxBlob: c.Fixture.TxBlob, Submit: c.Fixture.Submit})
+			parents := []snapshotLedger{c.Fixture.Parent}
+			closedLedgers := []snapshotLedger{c.Fixture.Closed}
+			report.CloseInputs += len(c.Fixture.CloseInput.TxBlobs)
+			report.ReplayLeaves += len(c.Fixture.Closed.Transactions)
+			for _, history := range c.Fixture.History {
+				submissions = append(submissions, history.PreSubmit...)
+				parents = append(parents, history.Parent)
+				closedLedgers = append(closedLedgers, history.Closed)
+				report.HistoryTransitions++
+				if history.Queue != nil {
+					report.QueueChecks++
+				}
+				report.HistorySubmissions += len(history.PreSubmit)
+				report.HistoryCloseInputs += len(history.CloseInput.TxBlobs)
+				report.HistoryReplayLeaves += len(history.Closed.Transactions)
+				report.CloseInputs += len(history.CloseInput.TxBlobs)
+				report.ReplayLeaves += len(history.Closed.Transactions)
+			}
 			report.Submissions += len(submissions)
 			for _, submission := range submissions {
+				if submission.Submit.Queue != nil {
+					report.QueueChecks++
+				}
 				submitted := decode(submission.TxBlob)
 				report.SubmittedTypes[fmt.Sprint(submitted["TransactionType"])]++
 				report.Results[submission.Submit.EngineResult]++
@@ -141,18 +179,20 @@ func TestEngineExecutionOrder(t *testing.T) {
 					}
 				}
 			}
-			for _, rule := range c.Fixture.Parent.Rules {
-				report.EnabledRules[rule]++
+			for _, parent := range parents {
+				for _, rule := range parent.Rules {
+					report.EnabledRules[rule]++
+				}
 			}
-			for _, transaction := range c.Fixture.Closed.Transactions {
-				fields := decode(transaction.TxBlob)
-				report.ClosedTypes[fmt.Sprint(fields["TransactionType"])]++
+			for _, closed := range closedLedgers {
+				for _, transaction := range closed.Transactions {
+					fields := decode(transaction.TxBlob)
+					report.ClosedTypes[fmt.Sprint(fields["TransactionType"])]++
+				}
 			}
 			for _, stage := range []string{"signed_submission", "closed_ledger", "inbound_replay"} {
 				report.CompletedStages[stage]++
 			}
-			report.CloseInputs += len(c.Fixture.CloseInput.TxBlobs)
-			report.ReplayLeaves += len(c.Fixture.Closed.Transactions)
 		} else {
 			report.Failed++
 		}

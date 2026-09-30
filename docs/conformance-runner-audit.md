@@ -39,7 +39,20 @@ special tolerances. A rejected submission must preserve both open-ledger maps.
 The required test and fuzz entrypoints use only v4. Legacy code remains available
 to its diagnostic contract tests; reorganizing or deleting that package surface
 does not establish additional release parity. The v4 corpus does not claim to
-exercise RPC/parser rejection boundaries, historical queue/load transitions or
+exercise RPC/parser rejection boundaries, every historical queue/load transition or
 every transaction family. Those limitations are explicit in its manifest and
 execution report; they cannot be reported as executed coverage. The whole-release
 sign-off remains #2017.
+
+## Final-gap extension
+
+The v4 contract now also carries raw open-view insert/erase inputs, per-submit
+queue membership and fee metrics, and linked prior ledger closes. Queue history
+must be constructed from recorded inputs and actual close transitions; expected
+metrics never prime or repair the queue. Signed local submissions remain local
+through close/requeue, including candidates evicted from the bounded queue.
+
+The durable service runner executes the same recorded history and verifies every
+closed ledger and persisted transaction leaf. Optional observations are strictly
+decoded, including the distinction between an absent queue capacity and zero.
+Corpus provenance authenticates the added fixture bytes and recorder build.

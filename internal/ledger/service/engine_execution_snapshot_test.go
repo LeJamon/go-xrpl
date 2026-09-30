@@ -46,7 +46,7 @@ func TestServiceSnapshotExecutionFromDurableParent(t *testing.T) {
 	}
 	t.Logf("service-compatible cases=%d skipped=%d", len(compatible), len(skipped))
 	if len(skipped) != 0 {
-		t.Logf("skipped cases: %s", strings.Join(skipped, ", "))
+		t.Fatalf("pinned service corpus contains unsupported cases: %s", strings.Join(skipped, ", "))
 	}
 	if len(compatible) == 0 {
 		t.Fatalf("pinned service corpus has no case whose explicit rules equal the parent Amendments SLE rules")
@@ -70,7 +70,7 @@ func TestServiceSnapshotExecutionFromDurableParent(t *testing.T) {
 func runServiceConsensusSnapshot(t *testing.T, c conformance.SnapshotCase) {
 	t.Helper()
 	ctx := context.Background()
-	svc := newServiceFromSnapshotParent(t, c, false)
+	svc := newServiceFromSnapshotHistory(t, c, false)
 	parent := svc.GetClosedLedger()
 	if err := assertServiceLedger("startup parent", parent, c.Parent); err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func runServiceConsensusSnapshot(t *testing.T, c conformance.SnapshotCase) {
 func runServiceStandaloneSnapshot(t *testing.T, c conformance.SnapshotCase) {
 	t.Helper()
 	ctx := context.Background()
-	svc := newServiceFromSnapshotParent(t, c, true)
+	svc := newServiceFromSnapshotHistory(t, c, true)
 	// Standalone SubmitTransaction deliberately bypasses signatures in the
 	// service, so signature evidence comes only from the consensus-mode run.
 	submitServiceSequence(t, svc, c)
@@ -128,10 +128,71 @@ func runServiceStandaloneSnapshot(t *testing.T, c conformance.SnapshotCase) {
 
 func submitServiceSequence(t *testing.T, svc *Service, c conformance.SnapshotCase) *SubmitResult {
 	t.Helper()
-	for i, prior := range c.PreSubmit {
-		submitServiceTransaction(t, svc, fmt.Sprintf("pre_submit[%d]", i), prior.TxBlob, prior.TxHash, prior.Submit)
-	}
+	submitServicePriorTransactions(t, svc, "pre_submit", c.PreSubmit)
+	applyServiceOpenLedgerChanges(t, svc, c.Fixture.OpenLedgerInject, c.Fixture.OpenLedgerErase)
 	return submitServiceTransaction(t, svc, "submit", c.TxBlob, c.TxHash, c.Fixture.Submit)
+}
+
+func submitServicePriorTransactions(t *testing.T, svc *Service, label string, submissions []conformance.SnapshotSubmission) {
+	t.Helper()
+	for i, prior := range submissions {
+		applyServiceOpenLedgerChanges(t, svc, prior.OpenLedgerInject, prior.OpenLedgerErase)
+		submitServiceTransaction(t, svc, fmt.Sprintf("%s[%d]", label, i), prior.TxBlob, prior.TxHash, prior.Submit)
+	}
+}
+
+func newServiceFromSnapshotHistory(t *testing.T, c conformance.SnapshotCase, standalone bool) *Service {
+	t.Helper()
+	initial := c
+	if len(c.History) != 0 {
+		initial.Parent = c.History[0].Parent
+	}
+	svc := newServiceFromSnapshotParent(t, initial, standalone)
+	for i, history := range c.History {
+		label := fmt.Sprintf("history[%d]", i)
+		parent := svc.GetClosedLedger()
+		if err := assertServiceLedger(label+" parent", parent, history.Parent); err != nil {
+			t.Fatal(err)
+		}
+		submitServicePriorTransactions(t, svc, label+".pre_submit", history.PreSubmit)
+		closeAgree := history.CloseInput.CloseFlags&ledgerheader.LCFNoConsensusTime == 0
+		seq, err := svc.AcceptConsensusResult(t.Context(), parent, history.CloseSet, nil,
+			protocol.FromRippleTime(history.CloseInput.CloseTime), closeAgree)
+		if err != nil {
+			t.Fatalf("%s consensus close: %v", label, err)
+		}
+		closed := svc.GetClosedLedger()
+		if err := assertServiceLedger(label+" closed", closed, history.Closed); err != nil {
+			t.Fatal(err)
+		}
+		svc.SetValidatedLedger(seq, closed.Hash())
+		svc.FlushPersists()
+		historyCase := c
+		historyCase.Closed = history.Closed
+		if err := assertServiceTransactionHistory(svc, historyCase); err != nil {
+			t.Fatalf("%s durable transaction history: %v", label, err)
+		}
+		if history.Queue != nil {
+			if err := conformance.AssertSnapshotQueue(svc.QueueAllTxs(), svc.TxQMetrics(), history.Queue); err != nil {
+				t.Fatalf("%s queue after close: %v", label, err)
+			}
+		}
+	}
+	if err := assertServiceLedger("parent after history", svc.GetClosedLedger(), c.Parent); err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+func applyServiceOpenLedgerChanges(t *testing.T, svc *Service, inject, erase []conformance.SnapshotEntry) {
+	t.Helper()
+	svc.openLedgerMu.Lock()
+	defer svc.openLedgerMu.Unlock()
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if err := conformance.ApplySnapshotOpenLedgerChanges(svc.openLedgerView, inject, erase); err != nil {
+		t.Fatalf("open-ledger fixture changes: %v", err)
+	}
 }
 
 func submitServiceTransaction(
@@ -152,12 +213,18 @@ func submitServiceTransaction(
 		t.Fatalf("%s SubmitTransaction: %v", label, err)
 	}
 	candidates := svc.QueueAllTxs()
-	expectedQueueSize := 0
-	if want.Queued {
-		expectedQueueSize = 1
-	}
-	if len(candidates) != expectedQueueSize {
-		t.Fatalf("%s queue size=%d, want %d for the empty-start queue", label, len(candidates), expectedQueueSize)
+	if want.Queue != nil {
+		if err := conformance.AssertSnapshotQueue(candidates, svc.TxQMetrics(), want.Queue); err != nil {
+			t.Fatalf("%s queue: %v", label, err)
+		}
+	} else {
+		expectedQueueSize := 0
+		if want.Queued {
+			expectedQueueSize = 1
+		}
+		if len(candidates) != expectedQueueSize {
+			t.Fatalf("%s queue size=%d, want %d for the empty-start queue", label, len(candidates), expectedQueueSize)
+		}
 	}
 	queued := serviceQueueHasTx(candidates, hash)
 	outcome := openledger.SubmitOutcome{

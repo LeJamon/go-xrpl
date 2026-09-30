@@ -10,10 +10,10 @@
       "include/xrpl/protocol/detail/features.macro": "1708df2ea0150a3105f13f7f39c42c798ac5addae9833c073fe6df9e9e17208b"
     }
   },
-  "go_base_commit": "02f4f17c7d1c1b5676b112ddfa669655bcff4415",
+  "go_base_commit": "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f",
   "go_base_commit_provenance": {
-    "protocol_base": "02f4f17c7d1c1b5676b112ddfa669655bcff4415",
-    "prerequisite_baseline": "b002da57fb415b40a1150f0e0dc82f764a340556",
+    "protocol_base": "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f",
+    "prerequisite_baseline": "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f",
     "prerequisite_baseline_role": "merged #2021/#2022 input used to refresh this snapshot; not asserted as the current working-tree HEAD",
     "current_source_identity": "source_sha256 entries below; runtime HEAD belongs to a separate report"
   },
@@ -3953,6 +3953,10 @@
               "line": 254
             },
             {
+              "name": "TestPreflightAccountTxnIDRequiresHashEncoding",
+              "line": 347
+            },
+            {
               "name": "TestPreflightPrecedence_AccountBeforeFee",
               "line": 281
             },
@@ -3962,7 +3966,7 @@
             },
             {
               "name": "TestPreflightPrecedence_InnerBatchFlagLast",
-              "line": 348
+              "line": 363
             },
             {
               "name": "TestPreflightPrecedence_NetworkIDBeforeAccount",
@@ -16234,18 +16238,20 @@
   "evidence": {
     "execution_semantics": "Rows are source/registry coverage. A row is executed only when a checked-in or explicitly supplied fixture record says so; named tests alone never set executed=true.",
     "checked_in_v4_corpus": {
-      "corpus_role": "initial prerequisite corpus; source evidence only",
+      "corpus_role": "committed release corpus; source inventory only",
       "manifest_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json",
-      "manifest_sha256": "e564d9ab98d0980d6214f3710eadb52f691090cd0272a277fee61dbb9617630a",
+      "manifest_sha256": "00539f3ca6ecc671564850ae7fdb2c92240689769ab5eadad316db78c896dde9",
       "manifest_schema": 4,
       "fixture_version": "v4",
-      "fixture_count": 108,
+      "fixture_count": 118,
       "family_counts": {
-        "AccountSet": 25,
+        "AccountSet": 29,
         "Batch": 48,
         "EscrowCancel": 1,
+        "EscrowToken": 2,
         "LoanBrokerSet": 1,
         "NFTokenAcceptOffer": 1,
+        "NFTokenAuth": 4,
         "OfferCreate": 1,
         "Payment": 18,
         "TicketCreate": 5,
@@ -16256,16 +16262,16 @@
         "app/StrictOracleRecorder"
       ],
       "amendment_profile_count": 16,
-      "oracle_binary_sha256": "e396315799376c609a2b887880db62e1e7dbdd056de808495603d07f551dfe5d",
-      "recorder_commit": "33836340bb531f260c7bad897e54e5483bacd479",
+      "oracle_binary_sha256": "6b5faf1e7711342e823c24a7a39968d9a0f6dafe1aafbcd3140592e56efd6339",
+      "recorder_commit": "cfaf47a857b04b97ca806133432c9ec1a3f1db39",
       "recorder_source_sha256": {
-        "scripts/oracle/record-v4.py": "3fa8252f02a8eca1d69b0a88b53b240d4ae81b565783aa140efc8d5870e5b0a0",
+        "scripts/oracle/record-v4.py": "402a7ab78165c88fe9f3b3b220f8cc06c3a08ad60f5fcc448b2d8e1e897f47fd",
         "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
-        "scripts/oracle/strict-corpus-config.json": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
-        "scripts/oracle/strict_recorder.cpp": "044769fed7eb673961d5cc45b119f7ad5487046d850dc37de0cddff7e5886fd4"
+        "scripts/oracle/strict-corpus-config.json": "511d9308c2d03b3e84316146c4c1f14bd54c6959d87f196fcd008463652d665d",
+        "scripts/oracle/strict_recorder.cpp": "bed9c7a8181885208b10a74c080dc429595dba2409b82d9088b4e5fff096d19c"
       },
-      "recorder_source_archive": "scripts/oracle/recorded/33836340bb531f260c7bad897e54e5483bacd479",
-      "config_identity": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
+      "recorder_source_archive": "scripts/oracle/recorded/cfaf47a857b04b97ca806133432c9ec1a3f1db39",
+      "config_identity": "511d9308c2d03b3e84316146c4c1f14bd54c6959d87f196fcd008463652d665d",
       "fixture_observations": {
         "source": "raw fixture submit.engine_result and submit.engine_result_code",
         "submit_result_counts": {
@@ -16273,9 +16279,12 @@
           "tecINSUFFICIENT_RESERVE": 1,
           "tecINVARIANT_FAILED": 1,
           "tecKILLED": 1,
+          "tecNO_AUTH": 4,
+          "tecOBJECT_NOT_FOUND": 2,
           "tecUNFUNDED_PAYMENT": 1,
           "tefBAD_AUTH": 1,
           "tefBAD_QUORUM": 1,
+          "tefINVARIANT_FAILED": 1,
           "tefMASTER_DISABLED": 1,
           "tefMAX_LEDGER": 1,
           "tefNO_TICKET": 1,
@@ -16292,10 +16301,11 @@
           "terPRE_SEQ": 2,
           "terPRE_TICKET": 1,
           "terQUEUED": 1,
-          "tesSUCCESS": 80
+          "tesSUCCESS": 83
         },
         "submit_result_code_counts": {
           "-180": 1,
+          "-182": 1,
           "-185": 1,
           "-187": 1,
           "-188": 1,
@@ -16313,19 +16323,21 @@
           "-88": 1,
           "-89": 1,
           "-92": 2,
-          "0": 80,
+          "0": 83,
           "104": 1,
+          "134": 4,
           "141": 1,
           "147": 1,
           "148": 1,
-          "150": 1
+          "150": 1,
+          "160": 2
         },
         "applied_counts": {
-          "false": 23,
-          "true": 85
+          "false": 24,
+          "true": 94
         },
         "queued_counts": {
-          "false": 107,
+          "false": 117,
           "true": 1
         }
       },
@@ -16337,11 +16349,11 @@
         "per_transaction_flags_written_here": false
       },
       "coverage_limits": [
-        "Bounded common-engine evidence: 108 signed cases across 16 profiles and 10 submitted transaction families; not exhaustive transactor or whole-node parity.",
-        "Fresh parents persist Amendments. Queue starts empty with recorded standalone thresholds; one case uses three applied pre-submits then queues the primary. Multi-candidate eviction/order and multi-ledger queue history are unexecuted.",
+        "Bounded common-engine evidence: 118 signed cases across 16 amendment profiles and 12 submitted transaction families; it is not exhaustive transactor or whole-node parity.",
+        "Fresh parents persist Amendments and start with an empty queue. Queue evidence includes default network thresholds, five-candidate fee ordering and eviction, and a three-close history with an authenticated empty warmup and exact post-close queue snapshots.",
         "Seed 2016 generates four signed XRP Payment samples only. The bounded Go soak permutes and replays recorded cases; it does not generate fresh oracle inputs at runtime.",
-        "Invariant recovery uses an explicitly malformed, replayable Escrow parent and verifies tecINVARIANT_FAILED fee-only recovery. Fatal tefINVARIANT_FAILED is unexecuted.",
-        "AMM test-fidelity gap #1498 and transient open-view fixture gap #1126 remain release coverage blockers; original signed #1737 transaction is unavailable.",
+        "Invariant recovery includes malformed Escrow tecINVARIANT_FAILED fee-only recovery and malformed AccountRoot tefINVARIANT_FAILED persistent recovery; the fatal diagnostic is an intentional oracle row.",
+        "The six transient open-ledger rows cover four NFTokenAuth and two EscrowToken cases using authenticated rawInsert/rawErase deltas without closing before submission; AMM test-fidelity gap #1498 remains outside this corpus.",
         "Full native cryptography capability, live peer/consensus and protocol-facing RPC parity are not established by this corpus."
       ]
     },
@@ -16370,7 +16382,7 @@
       {
         "path": "codec/binarycodec/definitions/final_inventory_test.go",
         "test": "TestFinalDefinitionsMatchRippled",
-        "scope": "definitions registry against v3.4.0 oracle; not engine execution"
+        "scope": "definitions registry against hash-pinned private v3.4.1 source; not engine execution"
       }
     ],
     "oracle_source_contracts": [
