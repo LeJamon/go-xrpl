@@ -136,3 +136,66 @@ func TestReplayCompletionRetiresUnneededReplacement(t *testing.T) {
 	assert.Nil(t, c.fetchTracker.Find(links[2].hash))
 	assert.Equal(t, uint64(3), c.replayPipelineApplied.Load())
 }
+
+func TestReplayRecoveryRetains177AppliedLedgersAndPreparedSuffix(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 181)
+	armStandardReplayTestPipeline(t, r, a, sender, links[:3])
+	c := r.catchupReplay
+	target := links[len(links)-1]
+	c.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
+	require.True(t, c.continueFrozenPivotRecovery(target.seq, target.hash, 7))
+	generation := c.standardReplay.generation
+	for _, link := range links[:177] {
+		completeStandardReplayTestLink(t, r, link)
+	}
+	require.Equal(t, uint64(177), c.replayPipelineApplied.Load())
+	completeStandardReplayTestLink(t, r, links[178])
+	completeStandardReplayTestLink(t, r, links[180])
+	future := c.fetchTracker.Find(links[179].hash)
+	require.NotNil(t, future)
+	c.failInboundAcquisition(future)
+	head := c.fetchTracker.Find(links[177].hash)
+	require.NotNil(t, head)
+	c.failInboundAcquisition(head)
+	for attempt := uint8(0); attempt < standardReplayAvailabilityRetryLimit; attempt++ {
+		sender.mu.Lock()
+		sender.acquisitionPeers = []uint64{uint64(8 + attempt)}
+		sender.mu.Unlock()
+		entry := c.standardReplay.entries[links[177].seq]
+		require.Equal(t, standardReplayAvailabilityRetryStarted, c.retryStandardReplayAvailability(entry.availabilityNextRetryAt))
+		retry := c.fetchTracker.Find(links[177].hash)
+		require.NotNil(t, retry)
+		c.failInboundAcquisition(retry)
+	}
+	c.maintenanceTick()
+	require.NotNil(t, c.standardReplay.replacement)
+	assert.Equal(t, generation, c.standardReplay.generation)
+	assert.Equal(t, links[176].hash, c.standardReplay.anchorHash)
+	assert.Equal(t, uint64(177), c.replayPipelineApplied.Load())
+	assert.False(t, c.standardReplay.entries[links[178].seq].readyAt.IsZero())
+	assert.False(t, c.standardReplay.entries[links[180].seq].readyAt.IsZero())
+	assert.True(t, c.standardReplay.entries[links[179].seq].availabilityPending)
+	assert.LessOrEqual(t, len(c.standardReplay.entries), standardReplayPreparedLimit)
+	completeIssue1863FullStatePivot(t, r, links[177])
+	drainStandardReplayTestPipeline(t, r)
+	require.Equal(t, links[178].hash, c.standardReplay.anchorHash)
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{11}
+	sender.mu.Unlock()
+	entry := c.standardReplay.entries[links[179].seq]
+	require.Equal(t, standardReplayAvailabilityRetryStarted, c.retryStandardReplayAvailability(entry.availabilityNextRetryAt))
+	completeStandardReplayTestLink(t, r, links[179])
+	drainStandardReplayTestPipeline(t, r)
+	assert.False(t, c.standardReplay.active)
+	assert.Equal(t, uint64(180), c.replayPipelineApplied.Load())
+	assert.Equal(t, generation, c.standardReplay.generation)
+	for _, link := range []standardReplayTestLink{links[176], links[177], links[180]} {
+		held, err := svc.GetLedgerByHash(link.hash)
+		require.NoError(t, err)
+		require.NotNil(t, held)
+		assert.Equal(t, link.ledger.Header().AccountHash, held.Header().AccountHash)
+	}
+}

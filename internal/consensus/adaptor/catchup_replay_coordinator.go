@@ -492,6 +492,9 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	// Retry the actionable standard-replay head before rearming unrelated
 	// acquisitions or extending the prepared suffix.
 	c.retryStandardReplayAvailability(now)
+	if generation, seq, hash, peerID, ok := c.standardReplayAvailabilityExhaustedState(); ok {
+		c.reserveStandardReplayReplacement(generation, seq, hash, peerID, now)
+	}
 	c.retryInboundLedgerAcquisitions(now)
 	c.tickHeaderDiscovery(now)
 	c.retryStandardReplayReplacement(now)

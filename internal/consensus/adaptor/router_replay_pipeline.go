@@ -1035,27 +1035,6 @@ func (c *catchupReplayCoordinator) releaseStandardReplayBaseLocked() {
 	}
 }
 
-func (c *catchupReplayCoordinator) discardSupersededProvisionalFullStateLocked(keepHash [32]byte) []*inbound.Ledger {
-	if c.adaptor == nil {
-		return nil
-	}
-	svc := c.adaptor.LedgerService()
-	if svc == nil || !svc.IsFastLoadProvisional() {
-		return nil
-	}
-
-	var retired []*inbound.Ledger
-	for _, candidate := range c.fetchTracker.Active() {
-		if candidate.Hash() == keepHash || candidate.Reason() != inbound.ReasonConsensus || candidate.TransactionOnly() {
-			continue
-		}
-		if c.discardInboundAcquisitionLocked(candidate) {
-			retired = append(retired, candidate)
-		}
-	}
-	return retired
-}
-
 func (c *catchupReplayCoordinator) waitStandardReplayCommit() {
 	c.replayCommitMu.Lock()
 	c.replayCommitMu.Unlock()
