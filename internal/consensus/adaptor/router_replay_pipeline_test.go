@@ -100,6 +100,14 @@ func armStandardReplayTestPipeline(
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[len(links)-1].hash)))
 }
 
+func failStandardReplayAvailabilityAt(t *testing.T, c *catchupReplayCoordinator, il *inbound.Ledger, at time.Time) {
+	t.Helper()
+	retirement, _, removed := c.removeInboundAcquisitionWithSession(il, il.Snapshot(), false)
+	require.True(t, removed)
+	c.retireStandardReplay(retirement)
+	require.True(t, c.failStandardReplayPipelineEntryAt(il, standardReplayFailureAvailability, at))
+}
+
 func TestStandardReplayPipelineAppliesReadySuccessorsInOrder(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
@@ -550,6 +558,75 @@ func TestStandardReplayAvailabilityRetryReusesTriedPeerAfterFreshChoice(t *testi
 	retry = r.catchupReplay.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, retry)
 	assert.Equal(t, uint64(8), retry.PeerID(), "a previously tried peer remains a bounded fallback")
+}
+
+func TestStandardReplayAvailabilityRetryBackoffBoundaries(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	head := r.catchupReplay.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, head)
+	r.catchupReplay.failInboundAcquisition(head)
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{8}
+	sender.mu.Unlock()
+
+	t0 := time.Now()
+	assert.Equal(t, standardReplayAvailabilityRetryWaiting,
+		r.catchupReplay.retryStandardReplayAvailability(t0))
+	r.catchupReplay.acquisitionMu.Lock()
+	entry := r.catchupReplay.standardReplay.entries[links[0].seq]
+	firstDue := entry.availabilityNextRetryAt
+	assert.Equal(t, t0.Add(time.Second), firstDue)
+	r.catchupReplay.acquisitionMu.Unlock()
+	assert.Equal(t, standardReplayAvailabilityRetryWaiting,
+		r.catchupReplay.retryStandardReplayAvailability(firstDue.Add(-time.Nanosecond)))
+	assert.Equal(t, standardReplayAvailabilityRetryStarted,
+		r.catchupReplay.retryStandardReplayAvailability(firstDue))
+	first := r.catchupReplay.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, first)
+	failStandardReplayAvailabilityAt(t, r.catchupReplay, first, firstDue)
+
+	r.catchupReplay.acquisitionMu.Lock()
+	entry = r.catchupReplay.standardReplay.entries[links[0].seq]
+	secondDue := entry.availabilityNextRetryAt
+	assert.Equal(t, firstDue.Add(2*time.Second), secondDue)
+	r.catchupReplay.acquisitionMu.Unlock()
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{9}
+	sender.mu.Unlock()
+	assert.Equal(t, standardReplayAvailabilityRetryWaiting,
+		r.catchupReplay.retryStandardReplayAvailability(secondDue.Add(-time.Nanosecond)))
+	assert.Equal(t, standardReplayAvailabilityRetryStarted,
+		r.catchupReplay.retryStandardReplayAvailability(secondDue))
+	second := r.catchupReplay.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, second)
+	failStandardReplayAvailabilityAt(t, r.catchupReplay, second, secondDue)
+
+	r.catchupReplay.acquisitionMu.Lock()
+	entry = r.catchupReplay.standardReplay.entries[links[0].seq]
+	thirdDue := entry.availabilityNextRetryAt
+	assert.Equal(t, secondDue.Add(4*time.Second), thirdDue)
+	r.catchupReplay.acquisitionMu.Unlock()
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{10}
+	sender.mu.Unlock()
+	assert.Equal(t, standardReplayAvailabilityRetryWaiting,
+		r.catchupReplay.retryStandardReplayAvailability(thirdDue.Add(-time.Nanosecond)))
+	assert.Equal(t, standardReplayAvailabilityRetryStarted,
+		r.catchupReplay.retryStandardReplayAvailability(thirdDue))
+	third := r.catchupReplay.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, third)
+	failStandardReplayAvailabilityAt(t, r.catchupReplay, third, thirdDue)
+
+	r.catchupReplay.acquisitionMu.Lock()
+	entry = r.catchupReplay.standardReplay.entries[links[0].seq]
+	assert.True(t, entry.availabilityExhausted)
+	assert.Zero(t, entry.availabilityNextRetryAt)
+	r.catchupReplay.acquisitionMu.Unlock()
 }
 
 func TestStandardReplayAvailabilityRetryRejectsStaleFailure(t *testing.T) {

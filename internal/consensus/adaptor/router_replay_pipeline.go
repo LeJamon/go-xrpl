@@ -1117,14 +1117,21 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntry(
 	il *inbound.Ledger,
 	failureClass ...standardReplayFailureClass,
 ) bool {
-	if il == nil {
-		return false
-	}
 	class := standardReplayFailureInvalidData
 	if len(failureClass) > 0 {
 		class = failureClass[0]
 	}
-	now := time.Now()
+	return c.failStandardReplayPipelineEntryAt(il, class, time.Now())
+}
+
+func (c *catchupReplayCoordinator) failStandardReplayPipelineEntryAt(
+	il *inbound.Ledger,
+	class standardReplayFailureClass,
+	now time.Time,
+) bool {
+	if il == nil {
+		return false
+	}
 	c.acquisitionMu.Lock()
 	entry := c.standardReplay.entries[il.Seq()]
 	if !c.standardReplay.active || entry == nil || entry.seq != il.Seq() || entry.hash != il.Hash() || entry.acquisition != il {
@@ -1146,7 +1153,11 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntry(
 		} else {
 			entry.availabilityPending = true
 			entry.availabilityExhausted = false
-			entry.availabilityNextRetryAt = time.Time{}
+			if entry.availabilityDeadlineAt.IsZero() {
+				entry.availabilityNextRetryAt = time.Time{}
+			} else {
+				entry.availabilityNextRetryAt = now.Add(standardReplayAvailabilityRetryDelays[entry.availabilityRetries])
+			}
 		}
 	} else {
 		entry.failed = true

@@ -170,16 +170,15 @@ func (c *catchupReplayCoordinator) standardReplayAvailabilityExhaustedState() (u
 // to the retry window. A missing peer may keep the session parked briefly, but
 // it cannot suppress normal recovery forever.
 func (c *catchupReplayCoordinator) standardReplayAvailabilityRetryActiveLocked(now time.Time) bool {
-	for _, entry := range c.standardReplay.entries {
-		if entry.failureClass != standardReplayFailureAvailability || entry.availabilityExhausted ||
-			(!entry.availabilityPending && !entry.availabilityRetrying) {
-			continue
-		}
-		if !entry.availabilityDeadlineAt.IsZero() && now.Before(entry.availabilityDeadlineAt) {
-			return true
-		}
+	if !c.standardReplay.active {
+		return false
 	}
-	return false
+	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
+	if entry == nil || entry.failureClass != standardReplayFailureAvailability || entry.availabilityExhausted ||
+		(!entry.availabilityPending && !entry.availabilityRetrying) {
+		return false
+	}
+	return !entry.availabilityDeadlineAt.IsZero() && now.Before(entry.availabilityDeadlineAt)
 }
 
 func appendUniquePeers(peers []uint64, additions ...uint64) []uint64 {
