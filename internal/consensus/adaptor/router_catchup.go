@@ -1650,10 +1650,13 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 		if existing.Reason() != inbound.ReasonConsensus {
 			return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 		}
+		if seq != 0 && existing.Seq() != 0 && existing.Seq() != seq {
+			return fullStateAdmission{outcome: fullStateAdmissionRejected}
+		}
 		il, _ := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 			return nil
 		})
-		if il != nil && !il.TransactionOnly() {
+		if il != nil && !il.TransactionOnly() && il.Reason() == inbound.ReasonConsensus {
 			return fullStateAdmission{outcome: fullStateAdmissionJoined, acquisition: il}
 		}
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}
@@ -1674,7 +1677,7 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 		// A concurrent caller may have registered the hash between the policy
 		// check and GetOrCreateWithSequence. Treat the same full-state object
 		// as a join and let transaction-only work wait for its owner.
-		if il != nil && !il.TransactionOnly() {
+		if il != nil && !il.TransactionOnly() && il.Reason() == inbound.ReasonConsensus {
 			return fullStateAdmission{outcome: fullStateAdmissionJoined, acquisition: il}
 		}
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}

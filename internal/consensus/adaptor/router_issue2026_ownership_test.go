@@ -249,3 +249,30 @@ func TestKnownFrozenPivotAdoptionRequiresVerifiedTrustedAncestry(t *testing.T) {
 		assert.False(t, r2.catchupReplay.canAdoptKnownFrozenPivot(pivotSeq2, pivotHash2, targetSeq2, targetHash2))
 	})
 }
+
+func TestFrozenPivotAncestryDiscoveryDoesNotTrustPeerTarget(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	c := r.catchupReplay
+	seq := svc.GetClosedLedgerIndex() + 10
+	pivot, target := [32]byte{0x91}, [32]byte{0x92}
+	c.startLedgerAcquisitionLegacy(seq, pivot, 7)
+	c.recordCatchupTarget(seq+2, target, 7)
+	candidate, missingAncestry := c.knownFrozenPivotCandidate(seq+2, target)
+	assert.Nil(t, candidate)
+	assert.False(t, missingAncestry)
+}
+
+func TestFullStateAdmissionRejectsConflictingKnownSequence(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	c := r.catchupReplay
+	seq, hash := svc.GetClosedLedgerIndex()+10, [32]byte{0x93}
+	c.startLedgerAcquisitionLegacy(seq, hash, 7)
+	original := c.fetchTracker.Find(hash)
+	require.NotNil(t, original)
+	c.acquisitionMu.Lock()
+	admission := c.admitFullStateLocked(seq+1, hash, 7, fullStateAdmissionCatchup)
+	c.acquisitionMu.Unlock()
+	assert.Equal(t, fullStateAdmissionRejected, admission.outcome)
+	assert.Equal(t, seq, original.Seq())
+	assert.False(t, c.standardReplay.active)
+}
