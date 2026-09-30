@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 
 	"github.com/stretchr/testify/assert"
@@ -293,4 +294,32 @@ func TestReplayReplacementCancellationClearsStandaloneStep(t *testing.T) {
 	require.True(t, canceled)
 	assert.Zero(t, c.consensusRecovery.stepHash)
 	assert.Nil(t, c.fetchTracker.Find(links[2].hash))
+}
+
+func TestReplayReplacementRemainsOwnedWhenTrustedTargetAdvances(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 6)
+	armStandardReplayTestPipeline(t, r, a, sender, links[:2])
+	c := r.catchupReplay
+	require.True(t, c.reserveStandardReplayReplacement(c.standardReplay.generation, links[2].seq, links[2].hash, 7, time.Now()))
+	replacement := c.fetchTracker.Find(links[2].hash)
+	require.NotNil(t, replacement)
+	target := links[5]
+	c.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(target.hash)))
+	require.Equal(t, target.hash, c.standardReplay.targetHash)
+	now := time.Now()
+	replacement.RearmTimer(now)
+	for range 2 {
+		now = now.Add(4 * time.Second)
+		require.Equal(t, inbound.TimerEscalate, replacement.OnTimer(now))
+		replacement.RearmTimer(now)
+	}
+	c.onLedgerFullyValidated(target.seq, target.hash)
+	assert.Same(t, replacement, c.fetchTracker.Find(links[2].hash))
+	require.NotNil(t, c.standardReplay.replacement)
+	assert.Same(t, replacement, c.standardReplay.replacement.acquisition)
+	assert.Equal(t, target.hash, c.standardReplay.targetHash)
 }

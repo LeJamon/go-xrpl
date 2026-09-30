@@ -2276,8 +2276,7 @@ func (c *catchupReplayCoordinator) obsoleteCatchupVictimLocked(targetSeq uint32)
 		if candidate.Reason() != inbound.ReasonConsensus || candidate.TransactionOnly() ||
 			seq == 0 || seq >= targetSeq || candidate.Hash() == c.consensusRecovery.targetHash ||
 			candidate.Hash() == c.consensusRecovery.stepHash ||
-			(c.standardReplay.active && !c.standardReplay.pivotReady &&
-				candidate.Hash() == c.standardReplay.pivotHash) {
+			c.standardReplayOwnsLocked(candidate.Hash()) {
 			continue
 		}
 		consecutive := candidate.ConsecutiveTimeouts()

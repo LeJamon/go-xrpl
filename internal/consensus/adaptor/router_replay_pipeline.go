@@ -1046,6 +1046,9 @@ func (c *catchupReplayCoordinator) waitStandardReplayCommit() {
 }
 
 func (c *catchupReplayCoordinator) standardReplayOwnsLocked(hash [32]byte) bool {
+	if replacement := c.standardReplay.replacement; c.standardReplay.active && replacement != nil && replacement.hash == hash {
+		return true
+	}
 	if c.standardReplay.active &&
 		(hash == c.standardReplay.pivotHash || hash == c.standardReplay.targetHash) {
 		return true
