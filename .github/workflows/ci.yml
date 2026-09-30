@@ -138,6 +138,7 @@ jobs:
           ../tmp/goxrpl version |
             grep --fixed-strings --line-regexp "Confidential MPT crypto: unavailable"
       - name: Record built artifact
+        id: binary
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build
         run: |
@@ -145,11 +146,12 @@ jobs:
           sha256sum ../tmp/goxrpl > "$EVIDENCE_DIR/goxrpl-binary.sha256"
           go version -m ../tmp/goxrpl > "$EVIDENCE_DIR/goxrpl-build-info.txt"
           ../tmp/goxrpl version > "$EVIDENCE_DIR/goxrpl-default-version.txt"
+          printf 'path=%s\n' "$(realpath ../tmp/goxrpl)" >> "$GITHUB_OUTPUT"
       - name: Retain built artifact
         uses: actions/upload-artifact@v4
         with:
           name: goxrpl-${{ github.sha }}-linux-amd64
-          path: ../tmp/goxrpl
+          path: ${{ steps.binary.outputs.path }}
           if-no-files-found: error
       - name: Record producer evidence
         if: always()
