@@ -9,6 +9,7 @@ package amm_test
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -412,50 +413,57 @@ func TestAMMRippling(t *testing.T) {
 // testAMMID
 // Reference: rippled AMM_test.cpp testAMMID (line 5769)
 
-// TestAMMID verifies that the AMM account root exists with correct flags
-// after creation and after a deposit operation.
-// Note: The full rippled test also verifies the AMMID field in account_data
-// and in affected nodes metadata. This simplified version verifies the AMM
-// account exists and has the correct flags, since AccountInfo does not
-// currently expose the AMMID field.
+// TestAMMID verifies the AMM pseudo-account identity in its AccountRoot and
+// in the deposit transaction's affected-node metadata.
 func TestAMMID(t *testing.T) {
 	env := setupAMM(t)
 
 	// Compute AMM account address.
 	ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
+	ammID := coreAmm.ComputeAMMKeylet(amm.XRP(), env.USD).Key
+	ammIDHex := strings.ToUpper(hex.EncodeToString(ammID[:]))
 
-	// Verify AMM account exists with correct flags.
-	info := env.AccountInfo(ammAcc)
-	if info == nil {
-		t.Fatal("AMM account not found in ledger")
-	}
+	// Verify the AMM account root carries the AMM ledger-entry identity.
+	accountRoot, err := state.ReadAccountRoot(env.Ledger(), ammAcc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, accountRoot)
+	require.True(t, accountRoot.HasAMMID())
+	require.Equal(t, ammID, accountRoot.AMMID)
 
 	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth
-	if info.Flags != expectedFlags {
-		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X",
-			info.Flags, expectedFlags)
-	}
+	require.Equal(t, expectedFlags, accountRoot.Flags)
 
 	// Carol deposits to the AMM.
 	depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-		Amount(amm.IOUAmount(env.GW, "USD", 1000)).
-		SingleAsset().
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000)).
+		LPToken().
 		Build()
 	result := env.Submit(depositTx)
-	if !result.Success {
-		t.Fatalf("Carol deposit should succeed: %s - %s", result.Code, result.Message)
+	jtx.RequireTxSuccess(t, result)
+	require.NotNil(t, result.Metadata)
+
+	var foundAMMAccount bool
+	for _, node := range result.Metadata.AffectedNodes {
+		if node.NodeType != "ModifiedNode" || node.LedgerEntryType != "AccountRoot" {
+			continue
+		}
+		if node.FinalFields == nil || node.FinalFields["Account"] != ammAcc.Address {
+			continue
+		}
+		gotAMMID, ok := node.FinalFields["AMMID"].(string)
+		require.True(t, ok, "AMM AccountRoot metadata missing AMMID: %#v", node.FinalFields)
+		require.Equal(t, ammIDHex, gotAMMID)
+		foundAMMAccount = true
 	}
+	require.True(t, foundAMMAccount, "deposit metadata missing AMM AccountRoot")
 	env.Close()
 
-	// Verify AMM account still exists after deposit.
-	infoAfter := env.AccountInfo(ammAcc)
-	if infoAfter == nil {
-		t.Fatal("AMM account should still exist after deposit")
-	}
-	if infoAfter.Flags != expectedFlags {
-		t.Fatalf("AMM account flags should be unchanged after deposit: got 0x%08X, want 0x%08X",
-			infoAfter.Flags, expectedFlags)
-	}
+	// Verify the identity and pseudo-account flags survive the deposit.
+	accountRootAfter, err := state.ReadAccountRoot(env.Ledger(), ammAcc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, accountRootAfter)
+	require.Equal(t, ammID, accountRootAfter.AMMID)
+	require.Equal(t, expectedFlags, accountRootAfter.Flags)
 }
 
 // testFailedPseudoAccount
