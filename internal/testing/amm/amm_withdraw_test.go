@@ -14,7 +14,7 @@ import (
 )
 
 // TestInvalidWithdraw tests invalid withdrawal scenarios.
-// Reference: rippled AMM_test.cpp testInvalidWithdraw (line 1685)
+// Reference: rippled AMM_test.cpp testInvalidWithdraw
 func TestInvalidWithdraw(t *testing.T) {
 	// Invalid flags - tfBurnable
 	// Reference: ammAlice.withdraw(alice, 1'000'000, ..., tfBurnable, ..., ter(temINVALID_FLAG));
@@ -265,7 +265,7 @@ func TestInvalidWithdraw(t *testing.T) {
 		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
-	// === testMalformed cases (rippled AMM_test.cpp line 6623) ===
+	// === testMalformed cases (rippled AMM_test.cpp) ===
 
 	// tfSingleAsset flag alone (no Amount) → temMALFORMED
 	t.Run("Malformed_SingleAssetFlagOnly", func(t *testing.T) {
@@ -315,7 +315,7 @@ func TestInvalidWithdraw(t *testing.T) {
 	})
 
 	// tfLimitLPToken with Amount=XRP(100) and EPrice=USD(100) → temBAD_AMM_TOKENS
-	// Reference: rippled AMM_test.cpp line 6669-6678
+	// Reference: rippled AMM_test.cpp
 	t.Run("Malformed_LimitLPTokenMismatchedEPrice", func(t *testing.T) {
 		env := setupAMM(t)
 
@@ -330,7 +330,7 @@ func TestInvalidWithdraw(t *testing.T) {
 }
 
 // TestWithdraw tests valid withdrawal scenarios.
-// Reference: rippled AMM_test.cpp testWithdraw (line 2265)
+// Reference: rippled AMM_test.cpp testWithdraw
 func TestWithdraw(t *testing.T) {
 	// Equal withdrawal by tokens
 	// Reference: ammAlice.withdraw(alice, 1'000'000)
@@ -647,7 +647,7 @@ func TestWithdrawPrecisionLossAmendmentMatrix(t *testing.T) {
 
 // TestFixReserveCheckOnWithdrawal tests that the fixAMMv1_2 amendment properly
 // enforces reserve checks on AMM withdrawals.
-// Reference: rippled AMM_test.cpp testFixReserveCheckOnWithdrawal (line 7433)
+// Reference: rippled AMM_test.cpp testFixReserveCheckOnWithdrawal
 //
 // Setup: accounts are funded with the minimum XRP required (reserve(2) + 5*baseFee).
 // GW creates an EUR/USD AMM. Alice deposits USD(1). The withdrawal tests verify

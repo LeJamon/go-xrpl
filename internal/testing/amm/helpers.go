@@ -402,7 +402,7 @@ func (e *AMMTestEnv) AMMIOUBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amou
 // CheckInvariant verifies the AMM invariant: sqrt(amount1 * amount2) >= lptBalance.
 // When fixAMMv1_3 is enabled, uses upward rounding mode for the sqrt calculation.
 // If shouldFail is true, expects the invariant to be violated (sqrt < lptBalance).
-// Reference: rippled AMM_test.cpp invariant() function (line 7578)
+// Reference: rippled AMM_test.cpp invariant() function
 func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, shouldFail bool, msg string) {
 	e.T().Helper()
 

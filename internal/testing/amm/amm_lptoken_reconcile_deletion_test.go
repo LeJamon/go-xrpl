@@ -23,7 +23,7 @@ import (
 // this exercises the fix for both callers.
 //
 // Scenario mirrors rippled AMM_test.cpp testLPTokenBalance ("Last Liquidity
-// Provider is the issuer of one token", line 7183): gw mints
+// Provider is the issuer of one token"): gw mints
 // sqrt(XRP(2)*USD(1)) = 1414.2135623730951 at create and never touches it again,
 // while alice/carol's large tfLPToken deposits+withdrawals drive the stored
 // balance through magnitude ~1e6, losing low-order mantissa digits so it lands a

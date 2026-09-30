@@ -69,7 +69,7 @@ func TestAMMBookStep_FillModes(t *testing.T) {
 	})
 
 	// Passive: offer stays on books without crossing AMM.
-	// Reference: rippled AMMExtended_test.cpp testFillModes (line 265-302)
+	// Reference: rippled AMMExtended_test.cpp testFillModes
 	// With fixAMMv1_1, passive offers respect AMM quality threshold properly.
 	t.Run("Passive", func(t *testing.T) {
 		pool := [2]tx.Amount{amm.XRPAmount(10100), amm.IOUAmount(nil, "USD", 10000)}

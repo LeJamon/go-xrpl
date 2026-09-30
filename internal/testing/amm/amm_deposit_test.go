@@ -42,7 +42,7 @@ func setupAMMProfile(t *testing.T, smallNumber bool) *amm.AMMTestEnv {
 }
 
 // TestInvalidDeposit tests invalid deposit scenarios.
-// Reference: rippled AMM_test.cpp testInvalidDeposit (line 438)
+// Reference: rippled AMM_test.cpp testInvalidDeposit
 func TestInvalidDeposit(t *testing.T) {
 	// Invalid flags
 	// Reference: ammAlice.deposit(alice, 1'000'000, std::nullopt, tfWithdrawAll, ter(temINVALID_FLAG));
@@ -213,7 +213,7 @@ func TestInvalidDeposit(t *testing.T) {
 }
 
 // TestDeposit tests valid deposit scenarios.
-// Reference: rippled AMM_test.cpp testDeposit (line 1383)
+// Reference: rippled AMM_test.cpp testDeposit
 func TestDeposit(t *testing.T) {
 	// Equal deposit by tokens
 	// Reference: ammAlice.deposit(carol, 1'000'000) - deposits 10% of pool
@@ -377,7 +377,7 @@ func TestDepositInvalidAMM(t *testing.T) {
 
 // TestAMMDepositWithFrozenAssets tests deposit behavior when one of the AMM
 // assets has a frozen trust line.
-// Reference: rippled AMM_test.cpp testAMMDepositWithFrozenAssets (line 7351)
+// Reference: rippled AMM_test.cpp testAMMDepositWithFrozenAssets
 func TestAMMDepositWithFrozenAssets(t *testing.T) {
 	// Helper that sets up the environment: create AMM(XRP(100)/USD(100)),
 	// then freeze alice's USD trust line, then run the callback.

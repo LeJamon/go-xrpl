@@ -1,8 +1,8 @@
 // Package amm_test contains AMM deposit and withdraw rounding tests.
 // Reference: rippled/src/test/app/AMM_test.cpp
-//   - testDepositAndWithdrawRounding (line 7527)
-//   - testDepositRounding (line 7598)
-//   - testWithdrawRounding (line 7779)
+//   - testDepositAndWithdrawRounding
+//   - testDepositRounding
+//   - testWithdrawRounding
 //
 // These tests verify that the AMM math correctly handles rounding for
 // various deposit and withdrawal modes. The key invariant is:
@@ -151,7 +151,7 @@ func setupGBPEURPoolAliceOnly(t *testing.T, gbpPool, eurPool float64, tradingFee
 }
 
 // TestDepositAndWithdrawRounding tests rounding behavior for deposits and withdrawals.
-// Reference: rippled AMM_test.cpp testDepositAndWithdrawRounding (line 7527)
+// Reference: rippled AMM_test.cpp testDepositAndWithdrawRounding
 //
 // The test creates an AMM with specific XRP/XPM balances, burns tokens to reach a
 // specific LP state, then verifies single-asset deposit and withdrawal rounding.
@@ -308,7 +308,7 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 }
 
 // TestDepositRounding tests deposit rounding for various deposit modes.
-// Reference: rippled AMM_test.cpp testDepositRounding (line 7598)
+// Reference: rippled AMM_test.cpp testDepositRounding
 //
 // All subtests use GBP/EUR IOU pools and verify the invariant:
 //
@@ -502,7 +502,7 @@ func TestDepositRounding(t *testing.T) {
 }
 
 // TestWithdrawRounding tests withdrawal rounding for various withdraw modes.
-// Reference: rippled AMM_test.cpp testWithdrawRounding (line 7779)
+// Reference: rippled AMM_test.cpp testWithdrawRounding
 //
 // All subtests use GBP/EUR IOU pools and verify the invariant:
 //

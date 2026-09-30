@@ -13,7 +13,7 @@ import (
 )
 
 // TestInvalidFeeVote tests invalid fee vote scenarios.
-// Reference: rippled AMM_test.cpp testInvalidFeeVote (line 2618)
+// Reference: rippled AMM_test.cpp testInvalidFeeVote
 func TestInvalidFeeVote(t *testing.T) {
 	// Invalid flags
 	// Reference: ammAlice.vote(std::nullopt, 1'000, tfWithdrawAll, ..., ter(temINVALID_FLAG));
@@ -92,7 +92,7 @@ func TestInvalidFeeVote(t *testing.T) {
 }
 
 // TestFeeVote tests valid fee vote scenarios.
-// Reference: rippled AMM_test.cpp testFeeVote (line 2687)
+// Reference: rippled AMM_test.cpp testFeeVote
 func TestFeeVote(t *testing.T) {
 	// One vote sets fee to 1%
 	// Reference: ammAlice.vote({}, 1'000); BEAST_EXPECT(ammAlice.expectTradingFee(1'000));
@@ -243,7 +243,7 @@ func TestFeeVote(t *testing.T) {
 // the OUTPUT (updatedVoteSlots) array, mirroring rippled's
 // minPos = updatedVoteSlots.size() captured before push_back, and the
 // replacement updatedVoteSlots[minPos] = ... (AMMVote.cpp:149,187,191).
-// Reference: rippled AMM_test.cpp testFeeVote (line 2745).
+// Reference: rippled AMM_test.cpp testFeeVote.
 func TestFeeVoteSlotReplacement(t *testing.T) {
 	// setupAMM: alice creates XRP(10000)/USD(10000); alice holds 10,000,000 LP
 	// tokens and occupies the first vote slot.

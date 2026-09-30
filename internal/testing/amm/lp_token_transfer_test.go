@@ -384,19 +384,14 @@ func TestLPTokenTransfer_WithdrawAllAsLastLP(t *testing.T) {
 	})
 }
 
-// ----------------------------------------------------------------
-// testAMMTokens
-// Reference: rippled AMM_test.cpp testAMMTokens (line 4743)
-// ----------------------------------------------------------------
-
 // TestAMMTokens_LPTokenXRPOfferCrossing tests LP token offer crossing with XRP.
 // Carol buys LP tokens with XRP, Alice sells LP tokens for XRP.
 // After crossing, both have LP tokens and can vote, bid, and withdraw.
-// Reference: rippled AMM_test.cpp testAMMTokens block 1 (line 4749-4795)
+// Reference: rippled AMM_test.cpp testAMMTokens block 1
 func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 	t.Run("LPToken_XRP_OfferCross", func(t *testing.T) {
 		// Offer crossing with AMM LPTokens and XRP.
-		// Reference: rippled AMM_test.cpp testAMMTokens block 1 (line 4749-4795)
+		// Reference: rippled AMM_test.cpp testAMMTokens block 1
 		amm.WithDefaultAMM(t, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
 			xrpAsset := amm.XRP()
 			usdAsset := env.USD
@@ -508,11 +503,11 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 
 // TestAMMTokens_TwoAMMLPTokenOfferCrossing tests offer crossing between two
 // AMMs' LP tokens.
-// Reference: rippled AMM_test.cpp testAMMTokens block 2 (line 4797-4819)
+// Reference: rippled AMM_test.cpp testAMMTokens block 2
 func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 	t.Run("TwoAMM_LPToken_OfferCross", func(t *testing.T) {
 		// Offer crossing with two AMM LPTokens.
-		// Reference: rippled AMM_test.cpp testAMMTokens block 2 (line 4797-4819)
+		// Reference: rippled AMM_test.cpp testAMMTokens block 2
 		amm.WithDefaultAMM(t, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
 			xrpAsset := amm.XRP()
 			usdAsset := env.USD
@@ -607,7 +602,7 @@ func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 
 // TestAMMTokens_DirectLPTokenPayment tests direct LP token payment between LPs.
 // LPs must trust-set first because the auto-created AMM trust line has 0 limit.
-// Reference: rippled AMM_test.cpp testAMMTokens block 3 (line 4821-4851)
+// Reference: rippled AMM_test.cpp testAMMTokens block 3
 func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
 	env.FundWithIOUs(30000, 0)

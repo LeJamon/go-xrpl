@@ -63,7 +63,7 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	// With fixAMMv1_3 upward rounding, the exact USD(2000) amount causes the
 	// equalDepositLimit check to fail (rounding makes deposit exceed limit).
 	// rippled's test uses USD(2000.25) with fixAMMv1_3 enabled.
-	// Reference: rippled AMMClawback_test.cpp line 1375-1377
+	// Reference: rippled AMMClawback_test.cpp
 	depositTx = amm.AMMDeposit(env.Carol, env.USD, env.EUR).
 		Amount(amm.IOUAmount(env.GW, "USD", 2000.25)).
 		Amount2(amm.IOUAmount(env.GW, "EUR", 500)).
@@ -499,7 +499,7 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		env.Close()
 
 		// With fixAMMv1_3, use USD(2000.25) — matching rippled's test
-		// Reference: rippled AMMClawback_test.cpp line 1975-1978
+		// Reference: rippled AMMClawback_test.cpp
 		depositTx = amm.AMMDeposit(env.Carol, env.USD, env.EUR).
 			Amount(amm.IOUAmount(env.GW, "USD", 2000.25)).
 			Amount2(amm.IOUAmount(env.GW, "EUR", 500)).

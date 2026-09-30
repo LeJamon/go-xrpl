@@ -13,7 +13,7 @@ import (
 )
 
 // TestInstanceCreate tests basic AMM creation.
-// Reference: rippled AMM_test.cpp testInstanceCreate (line 54)
+// Reference: rippled AMM_test.cpp testInstanceCreate
 func TestInstanceCreate(t *testing.T) {
 	// XRP to IOU
 	// Reference: testAMM([&](AMM& ammAlice, Env&) { BEAST_EXPECT(ammAlice.expectBalances(XRP(10'000), USD(10'000), IOUAmount{10'000'000, 0})); }
@@ -74,7 +74,7 @@ func TestInstanceCreate(t *testing.T) {
 }
 
 // TestInvalidInstance tests invalid AMM creation scenarios.
-// Reference: rippled AMM_test.cpp testInvalidInstance (line 155)
+// Reference: rippled AMM_test.cpp testInvalidInstance
 func TestInvalidInstance(t *testing.T) {
 	// Can't have both XRP tokens
 	// Reference: AMM ammAlice(env, alice, XRP(10'000), XRP(10'000), ter(temBAD_AMM_TOKENS));

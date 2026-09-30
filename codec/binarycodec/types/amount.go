@@ -134,10 +134,8 @@ func (e *InvalidCodeError) Error() string {
 // Amount is a struct that represents an XRPL Amount.
 type Amount struct{}
 
-// RawXRPAmount carries the native amount bits of an authenticated ledger
-// object without applying the network supply cap. Rippled can preserve such a
-// value after raw ledger surgery so its invariant checker reports the
-// corruption; ordinary JSON amounts continue to use the capped encoder.
+// RawXRPAmount preserves native ledger amounts above the supply cap so
+// invariant checks can detect corrupt state. Ordinary JSON amounts remain capped.
 type RawXRPAmount struct {
 	Drops    uint64
 	Negative bool
@@ -203,10 +201,8 @@ func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	return a.toJSON(p, false)
 }
 
-// ToJSONAllowOverCap decodes a native amount from a raw ledger entry while
-// preserving a positive value above the network's instantiated XRP supply.
-// It is used only by typed ledger-entry decoders; the public binary codec
-// remains strict and rejects the same value when it is supplied as JSON.
+// ToJSONAllowOverCap decodes ledger amounts without enforcing the XRP supply
+// cap. Transaction decoding must use ToJSON.
 func (a *Amount) ToJSONAllowOverCap(p *serdes.BinaryParser) (any, error) {
 	return a.toJSON(p, true)
 }

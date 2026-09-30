@@ -14,7 +14,7 @@ import (
 )
 
 // TestAMMDelete tests AMM deletion scenarios.
-// Reference: rippled AMM_test.cpp ammDelete tests (around line 5740)
+// Reference: rippled AMM_test.cpp ammDelete tests
 func TestAMMDelete(t *testing.T) {
 	// Delete after withdrawAll
 	// Reference: amm.ammDelete(alice, ter(terNO_AMM)) - trying to delete already deleted AMM
@@ -104,24 +104,19 @@ func TestAMMDeleteAfterWithdraw(t *testing.T) {
 	})
 }
 
-// ----------------------------------------------------------------
-// testAutoDelete
-// Reference: rippled AMM_test.cpp testAutoDelete (line 5644)
-// ----------------------------------------------------------------
-
 // TestAutoDeleteAMM tests auto-deletion behavior with many trust lines.
 // In rippled, maxDeletableAMMTrustLines = 512. When an AMM has more trust
 // lines than this limit, withdrawAll puts the AMM in an empty state rather
 // than fully deleting it, because the trust lines cannot all be deleted in
 // one transaction. Operations on the empty AMM fail with tecAMM_EMPTY,
 // except deposit with tfTwoAssetIfEmpty which re-seeds the pool.
-// Reference: rippled AMM_test.cpp testAutoDelete (line 5644)
+// Reference: rippled AMM_test.cpp testAutoDelete
 func TestAutoDeleteAMM(t *testing.T) {
 	// First block: AMM with maxDeletableAMMTrustLines + 10 trust lines.
 	// After withdrawAll, AMM is in empty state (not fully deleted).
 	// Operations fail with tecAMM_EMPTY. Deposit with tfTwoAssetIfEmpty re-seeds.
 	// Then withdrawAll again fully deletes the AMM.
-	// Reference: rippled AMM_test.cpp testAutoDelete first block (line 5651)
+	// Reference: rippled AMM_test.cpp testAutoDelete first block
 	t.Run("EmptyState_OperationsFail", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping: creates 522 accounts (slow)")
@@ -238,7 +233,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 
 	// Second block: AMM with maxDeletableAMMTrustLines*2 + 10 trust lines.
 	// After withdrawAll, AMMDelete must be called twice.
-	// Reference: rippled AMM_test.cpp testAutoDelete second block (line 5722)
+	// Reference: rippled AMM_test.cpp testAutoDelete second block
 	t.Run("MultipleDeleteCalls", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping: creates 1034 accounts (very slow)")
