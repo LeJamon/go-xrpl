@@ -16240,7 +16240,7 @@
     "checked_in_v4_corpus": {
       "corpus_role": "committed release corpus; source inventory only",
       "manifest_path": "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json",
-      "manifest_sha256": "00539f3ca6ecc671564850ae7fdb2c92240689769ab5eadad316db78c896dde9",
+      "manifest_sha256": "55ef9157dfcc40bf3abebe8ddda8aed6a333ccc7038177e7fabbe7f1c0f73b63",
       "manifest_schema": 4,
       "fixture_version": "v4",
       "fixture_count": 118,

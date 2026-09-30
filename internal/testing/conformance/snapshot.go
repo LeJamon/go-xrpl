@@ -1032,7 +1032,16 @@ func snapshotClosedLedgerFeeLevels(closed *ledger.Ledger) ([]txq.FeeLevel, error
 	if closed == nil {
 		return nil, errors.New("closed ledger is nil")
 	}
-	baseFee := uint64(closed.Fees().Base)
+	fees := closed.Fees()
+	config := tx.EngineConfig{
+		BaseFee:          uint64(fees.Base),
+		ReserveBase:      uint64(fees.Reserve),
+		ReserveIncrement: uint64(fees.Increment),
+		LedgerSequence:   closed.Sequence(),
+		ParentCloseTime:  protocol.ToRippleTime(closed.ParentCloseTime()),
+		ParentHash:       closed.ParentHash(),
+		Rules:            closed.Rules(),
+	}
 	levels := make([]txq.FeeLevel, 0, closed.TxCount())
 	var callbackErr error
 	if err := closed.ForEachTransaction(func(_ [32]byte, data []byte) bool {
@@ -1056,7 +1065,12 @@ func snapshotClosedLedgerFeeLevels(closed *ledger.Ledger) ([]txq.FeeLevel, error
 			callbackErr = fmt.Errorf("parse closed transaction fee: %w", err)
 			return false
 		}
-		levels = append(levels, txq.ToFeeLevel(fee, baseFee))
+		baseFee, err := sign.CalculateBaseFee(parsed, closed, config)
+		if err != nil {
+			return true
+		}
+		defaultBaseFee := sign.CalculateDefaultBaseFee(parsed, config)
+		levels = append(levels, txq.ToFeeLevelWithDefaultBaseFee(fee, baseFee, defaultBaseFee))
 		return true
 	}); err != nil {
 		return nil, err

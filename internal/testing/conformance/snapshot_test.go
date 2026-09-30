@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -183,6 +184,33 @@ func TestSnapshotQueueJSONRequiresCompleteMetricsAndAllowsNullMaxSize(t *testing
 	submit["queue"].(map[string]any)["unexpected"] = true
 	if _, err := decodeSnapshotFixture(marshal(object)); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("unknown queue field accepted: %v", err)
+	}
+}
+
+func TestSnapshotClosedLedgerFeeLevelsUseTransactionBaseFee(t *testing.T) {
+	all.RegisterAll()
+	for _, tc := range []struct {
+		fixture string
+		want    []txq.FeeLevel
+	}{
+		{"c1-l1-b1-f1-AccountSet-multisign-valid-quorum.json", []txq.FeeLevel{256}},
+		{"c1-l1-b1-f1-Batch-canonical.json", []txq.FeeLevel{0, 0, 256}},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			fixture := loadSnapshotV4Fixture(t, tc.fixture)
+			closed, err := loadSnapshotLedger(fixture.Closed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := snapshotClosedLedgerFeeLevels(closed.Ledger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("fee levels = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

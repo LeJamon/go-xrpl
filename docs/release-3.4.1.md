@@ -172,8 +172,8 @@ even one with a similar version string, does not satisfy this check.
 ## Final closure checklist
 
 - [x] Integrate #2011–#2016 into `v3.4.1` and inspect the refreshed baseline.
-- [ ] Integrate the remaining AMM fidelity, transient fixture and engine
-  property repairs, then recheck historical blocker dispositions.
+- [x] Include the AMM fidelity, transient fixture, engine property and service
+  publication repairs in the final candidate; recheck historical blocker dispositions.
 - [ ] Run peer/manifest interop and RPC/submission/consensus smoke against a
   binary or image proven to come from the pinned private oracle.
 - [ ] Build the actual release artifacts and exercise each advertised native

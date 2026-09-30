@@ -190,7 +190,9 @@ each submission and close before reaching the primary case. The history sets
 fee metrics through actual closes and carries retained local transactions
 through open-ledger acceptance. Every historical close requires a queue observation. Queue checks compare complete
 signed membership, fee levels, ledger occupancy and the optional maximum size. Expected metrics
-never initialize the queue.
+never initialize the queue. Closed-ledger fee history uses transaction-specific
+base fees, including Batch and multisign fees, and excludes failed fee calculations
+from the median sample while preserving the total transaction count.
 
 The expanded cases exercise fee-based eviction, default network thresholds and
 three linked closes with queue promotion and local transaction re-admission.
