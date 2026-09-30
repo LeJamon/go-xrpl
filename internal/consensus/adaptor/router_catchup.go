@@ -4039,7 +4039,12 @@ func (c *catchupReplayCoordinator) failInboundAcquisition(il *inbound.Ledger) {
 	if il == nil {
 		return
 	}
-	c.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), inboundAcquisitionTimerFailure(il))
+	c.failInboundAcquisitionWithSnapshot(
+		il,
+		il.Snapshot(),
+		inboundAcquisitionTimerFailure(il),
+		standardReplayFailureAvailability,
+	)
 }
 
 func inboundAcquisitionTimerFailure(il *inbound.Ledger) error {
@@ -4118,6 +4123,7 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	il *inbound.Ledger,
 	snapshot inbound.Snapshot,
 	cause error,
+	failureClass ...standardReplayFailureClass,
 ) {
 	if il == nil {
 		return
@@ -4141,7 +4147,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"timeouts", il.Timeouts(),
 	)
-	if reason == inbound.ReasonConsensus && il.TransactionOnly() && c.failStandardReplayPipelineEntry(il) {
+	class := standardReplayFailureInvalidData
+	if len(failureClass) > 0 {
+		class = failureClass[0]
+	}
+	if reason == inbound.ReasonConsensus && il.TransactionOnly() && c.failStandardReplayPipelineEntry(il, class) {
 		return
 	}
 	if reason == inbound.ReasonConsensus {
@@ -4156,7 +4166,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	}
 }
 
-func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(il *inbound.Ledger, cause error) {
+func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(
+	il *inbound.Ledger,
+	cause error,
+	failureClass ...standardReplayFailureClass,
+) {
 	if il == nil {
 		return
 	}
@@ -4169,13 +4183,14 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(il *inbound.L
 	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	c.failStandardReplayReplacement(il, cause)
-	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
+	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired, failureClass...)
 }
 
 func (c *catchupReplayCoordinator) discardFailedInboundAcquisitionWithSnapshot(
 	il *inbound.Ledger,
 	snapshot inbound.Snapshot,
 	cause error,
+	failureClass ...standardReplayFailureClass,
 ) {
 	if il == nil {
 		return
@@ -4186,13 +4201,14 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisitionWithSnapshot(
 	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	c.failStandardReplayReplacement(il, cause)
-	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
+	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired, failureClass...)
 }
 
 func (c *catchupReplayCoordinator) finishDiscardedInboundAcquisitionOwned(
 	il *inbound.Ledger,
 	retirement standardReplayRetirement,
 	pivotRetired bool,
+	failureClass ...standardReplayFailureClass,
 ) {
 	c.retireStandardReplay(retirement)
 	c.retireAcquisitionStore(c.lifecycleContext(), il)
@@ -4200,7 +4216,11 @@ func (c *catchupReplayCoordinator) finishDiscardedInboundAcquisitionOwned(
 		return
 	}
 	if il.TransactionOnly() {
-		c.failStandardReplayPipelineEntry(il)
+		class := standardReplayFailureInvalidData
+		if len(failureClass) > 0 {
+			class = failureClass[0]
+		}
+		c.failStandardReplayPipelineEntry(il, class)
 		return
 	}
 	if pivotRetired {
@@ -4287,7 +4307,7 @@ func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
 	defer releaseAdmission()
 	if err := c.flushAcquisitionStore(c.lifecycleContext(), il); err != nil {
 		c.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
+		c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
 		return
 	}
 	c.completeInboundLedgerReady(il)
@@ -4322,21 +4342,21 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		c.logger.Warn("inbound ledger: failed to get result", "error", err)
-		c.discardFailedInboundAcquisition(il, err)
+		c.discardFailedInboundAcquisition(il, err, standardReplayFailureExecution)
 		return
 	}
 	if c.adaptor == nil {
-		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"))
+		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"), standardReplayFailureExecution)
 		return
 	}
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
-		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: ledger service unavailable"))
+		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: ledger service unavailable"), standardReplayFailureExecution)
 		return
 	}
 	if err = c.promoteAcquisitionStore(c.lifecycleContext(), il); err != nil {
 		c.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
+		c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
 		return
 	}
 	if err = svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {

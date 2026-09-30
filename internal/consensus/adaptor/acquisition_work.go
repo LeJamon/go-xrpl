@@ -106,6 +106,7 @@ type acquisitionWorkResult struct {
 	remove         bool
 	timerFailure   bool
 	policyFailure  bool
+	failureClass   standardReplayFailureClass
 	yielded        bool
 	timerEscalate  bool
 	timerAt        time.Time
@@ -324,6 +325,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 				result.haveSnapshot = true
 				result.remove = true
 				result.timerFailure = true
+				result.failureClass = standardReplayFailureAvailability
 			case inbound.TimerEscalate:
 				result.timerEscalate = true
 				result.timerAt = time.Now()
@@ -337,6 +339,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		}
 		if err := batch.ledger.CheckpointPersistence(batch.ctx, useful); err != nil {
 			result.persistenceErr = err
+			result.failureClass = standardReplayFailurePersistence
 			result.remove = true
 		}
 	}
@@ -348,6 +351,9 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	}
 	if result.complete && l.flush != nil {
 		result.persistenceErr = l.flush(batch.ctx, batch.ledger)
+		if result.persistenceErr != nil {
+			result.failureClass = standardReplayFailurePersistence
+		}
 	}
 	result.ack = make(chan struct{})
 	select {
@@ -458,6 +464,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		result.haveSnapshot = true
 		result.remove = true
 		result.timerFailure = true
+		result.failureClass = standardReplayFailureAvailability
 		return result
 	}
 
@@ -509,6 +516,9 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 					result.err = err
 					result.remove = true
 					result.policyFailure = errors.Is(err, inbound.ErrHeaderRejected)
+					if result.policyFailure {
+						result.failureClass = standardReplayFailureInvalidData
+					}
 					result.snapshot = ledger.Snapshot()
 					result.haveSnapshot = true
 					return result
@@ -577,6 +587,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 			result.haveSnapshot = true
 			result.remove = true
 			result.timerFailure = true
+			result.failureClass = standardReplayFailureAvailability
 			return result
 		case inbound.TimerEscalate:
 			result.timerEscalate = true
@@ -767,7 +778,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 	}
 	if result.persistenceErr != nil {
 		c.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
-		c.discardFailedInboundAcquisition(ledger, result.persistenceErr)
+		c.discardFailedInboundAcquisition(ledger, result.persistenceErr, standardReplayFailurePersistence)
 		return
 	}
 	if result.remove {
@@ -775,19 +786,24 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 			c.logger.Warn("inbound ledger: acquisition data rejected", "error", result.err)
 		}
 		cause := result.err
+		failureClass := result.failureClass
 		if result.timerFailure {
 			cause = inboundAcquisitionTimerFailure(ledger)
+			failureClass = standardReplayFailureAvailability
 		} else if cause == nil && result.policyFailure {
 			cause = errors.New("inbound ledger acquisition rejected by local policy")
+			failureClass = standardReplayFailureInvalidData
+		} else if failureClass == standardReplayFailureNone {
+			failureClass = standardReplayFailureInvalidData
 		}
 		if result.timerFailure || result.policyFailure {
-			c.failInboundAcquisitionWithSnapshot(ledger, result.snapshot, cause)
+			c.failInboundAcquisitionWithSnapshot(ledger, result.snapshot, cause, failureClass)
 		} else {
 			snapshot := result.snapshot
 			if !result.haveSnapshot {
 				snapshot = ledger.Snapshot()
 			}
-			c.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot, cause)
+			c.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot, cause, failureClass)
 		}
 		return
 	}

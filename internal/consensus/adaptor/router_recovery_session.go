@@ -495,6 +495,10 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 		c.acquisitionMu.Unlock()
 		return true
 	}
+	if c.standardReplayAvailabilityRetryActiveLocked(now) {
+		c.acquisitionMu.Unlock()
+		return false
+	}
 	// A flag without an executing owner or a ready head is not progress.
 	// Clear it so a missing-head stall can still reach normal recovery.
 	c.standardReplay.applying = false

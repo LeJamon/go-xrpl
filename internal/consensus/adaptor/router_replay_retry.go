@@ -1,0 +1,188 @@
+package adaptor
+
+import (
+	"time"
+)
+
+type standardReplayFailureClass uint8
+
+const (
+	standardReplayFailureNone standardReplayFailureClass = iota
+	standardReplayFailureAvailability
+	standardReplayFailureInvalidData
+	standardReplayFailurePersistence
+	standardReplayFailureExecution
+	standardReplayFailureCancellation
+)
+
+const (
+	standardReplayAvailabilityRetryLimit uint8 = 3
+	standardReplayAvailabilityWaitWindow       = standardReplayProgressWindow
+)
+
+var standardReplayAvailabilityRetryDelays = [...]time.Duration{
+	time.Second,
+	2 * time.Second,
+	4 * time.Second,
+}
+
+type standardReplayAvailabilityRetryResult uint8
+
+const (
+	standardReplayAvailabilityRetryNone standardReplayAvailabilityRetryResult = iota
+	standardReplayAvailabilityRetryWaiting
+	standardReplayAvailabilityRetryStarted
+	standardReplayAvailabilityRetryExhausted
+)
+
+// standardReplayHasAvailabilityBlockLocked keeps collector refills behind a
+// failed transaction-only head. The verified anchor and already prepared
+// successors remain resident while maintenance drives the bounded retry.
+func (c *catchupReplayCoordinator) standardReplayHasAvailabilityBlockLocked() bool {
+	for _, entry := range c.standardReplay.entries {
+		if entry.failureClass == standardReplayFailureAvailability &&
+			(entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *catchupReplayCoordinator) standardReplayAvailabilityHeadLocked() *standardReplayEntry {
+	if !c.standardReplay.active || !c.standardReplay.pivotReady {
+		return nil
+	}
+	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
+	if entry == nil || entry.generation != c.standardReplay.generation ||
+		entry.seq != c.standardReplay.anchorSeq+1 || entry.acquisition != nil ||
+		!entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted ||
+		!entry.readyAt.IsZero() {
+		return nil
+	}
+	return entry
+}
+
+// retryStandardReplayAvailability is called from maintenanceTick. It makes
+// one fresh transaction-only admission for the actionable head at a time;
+// peer scarcity leaves the entry parked without consuming a retry attempt.
+func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time) standardReplayAvailabilityRetryResult {
+	if c.stoppedForShutdown() {
+		return standardReplayAvailabilityRetryNone
+	}
+	c.acquisitionMu.Lock()
+	entry := c.standardReplayAvailabilityHeadLocked()
+	if entry == nil {
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryNone
+	}
+	if !entry.availabilityNextRetryAt.IsZero() && now.Before(entry.availabilityNextRetryAt) {
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryWaiting
+	}
+	if !entry.availabilityDeadlineAt.IsZero() && !now.Before(entry.availabilityDeadlineAt) {
+		entry.availabilityPending = false
+		entry.availabilityRetrying = false
+		entry.availabilityExhausted = true
+		entry.availabilityNextRetryAt = time.Time{}
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryExhausted
+	}
+	if entry.availabilityRetries >= standardReplayAvailabilityRetryLimit {
+		entry.availabilityPending = false
+		entry.availabilityRetrying = false
+		entry.availabilityExhausted = true
+		entry.availabilityNextRetryAt = time.Time{}
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryExhausted
+	}
+	if c.acquisition == nil {
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryWaiting
+	}
+
+	tried := append([]uint64(nil), entry.availabilityTriedPeers...)
+	var peerID uint64
+	for _, candidate := range c.acquisition.SelectLedgerPeers(entry.hash, entry.seq, tried, 1) {
+		if candidate != 0 && !standardReplayContainsPeer(tried, candidate) {
+			peerID = candidate
+			break
+		}
+	}
+	if peerID == 0 {
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryWaiting
+	}
+
+	il, _ := c.startLedgerReplayAcquisitionLegacyLocked(entry.seq, entry.hash, peerID)
+	if il == nil || !il.TransactionOnly() {
+		c.acquisitionMu.Unlock()
+		return standardReplayAvailabilityRetryWaiting
+	}
+	entry.acquisition = il
+	entry.peerID = peerID
+	entry.requestedAt = now
+	entry.availabilityPending = false
+	entry.availabilityRetrying = true
+	entry.availabilityRetries++
+	entry.availabilityNextRetryAt = time.Time{}
+	entry.availabilityTriedPeers = appendUniquePeers(entry.availabilityTriedPeers, il.Peers()...)
+	entry.availabilityTriedPeers = appendUniquePeer(entry.availabilityTriedPeers, peerID)
+	c.acquisitionMu.Unlock()
+	return standardReplayAvailabilityRetryStarted
+}
+
+// standardReplayAvailabilityExhausted reports an actionable head whose
+// transaction-only availability budget is exhausted. The replacement layer
+// owns the next full-state decision; this retry layer leaves the session and
+// its verified anchor intact.
+func (c *catchupReplayCoordinator) standardReplayAvailabilityExhausted() (uint32, [32]byte, bool) {
+	_, seq, hash, _, ok := c.standardReplayAvailabilityExhaustedState()
+	return seq, hash, ok
+}
+
+func (c *catchupReplayCoordinator) standardReplayAvailabilityExhaustedState() (uint64, uint32, [32]byte, uint64, bool) {
+	c.acquisitionMu.Lock()
+	defer c.acquisitionMu.Unlock()
+	if !c.standardReplay.active || !c.standardReplay.pivotReady {
+		return 0, 0, [32]byte{}, 0, false
+	}
+	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
+	if entry == nil || entry.generation != c.standardReplay.generation ||
+		entry.seq != c.standardReplay.anchorSeq+1 || entry.failureClass != standardReplayFailureAvailability ||
+		!entry.availabilityExhausted || entry.acquisition != nil {
+		return 0, 0, [32]byte{}, 0, false
+	}
+	return entry.generation, entry.seq, entry.hash, entry.peerID, true
+}
+
+// standardReplayAvailabilityRetryActiveLocked bounds the watchdog exemption
+// to the retry window. A missing peer may keep the session parked briefly, but
+// it cannot suppress normal recovery forever.
+func (c *catchupReplayCoordinator) standardReplayAvailabilityRetryActiveLocked(now time.Time) bool {
+	for _, entry := range c.standardReplay.entries {
+		if entry.failureClass != standardReplayFailureAvailability || entry.availabilityExhausted ||
+			(!entry.availabilityPending && !entry.availabilityRetrying) {
+			continue
+		}
+		if entry.availabilityDeadlineAt.IsZero() || now.Before(entry.availabilityDeadlineAt) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUniquePeers(peers []uint64, additions ...uint64) []uint64 {
+	for _, peerID := range additions {
+		peers = appendUniquePeer(peers, peerID)
+	}
+	return peers
+}
+
+func standardReplayContainsPeer(peers []uint64, peerID uint64) bool {
+	for _, existing := range peers {
+		if existing == peerID {
+			return true
+		}
+	}
+	return false
+}

@@ -81,18 +81,26 @@ type standardReplayTarget struct {
 }
 
 type standardReplayEntry struct {
-	generation  uint64
-	seq         uint32
-	hash        [32]byte
-	parentHash  [32]byte
-	peerID      uint64
-	requestedAt time.Time
-	readyAt     time.Time
-	header      header.LedgerHeader
-	txMap       *shamap.SHAMap
-	acquisition *inbound.Ledger
-	durable     bool
-	failed      bool
+	generation              uint64
+	seq                     uint32
+	hash                    [32]byte
+	parentHash              [32]byte
+	peerID                  uint64
+	requestedAt             time.Time
+	readyAt                 time.Time
+	header                  header.LedgerHeader
+	txMap                   *shamap.SHAMap
+	acquisition             *inbound.Ledger
+	durable                 bool
+	failed                  bool
+	failureClass            standardReplayFailureClass
+	availabilityPending     bool
+	availabilityRetrying    bool
+	availabilityExhausted   bool
+	availabilityRetries     uint8
+	availabilityNextRetryAt time.Time
+	availabilityDeadlineAt  time.Time
+	availabilityTriedPeers  []uint64
 }
 
 type standardReplayLink struct {
@@ -695,6 +703,10 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		c.standardReplay.targetSeq = targetSeq
 		c.standardReplay.targetHash = targetHash
 	}
+	if !initial && c.standardReplayHasAvailabilityBlockLocked() {
+		c.acquisitionMu.Unlock()
+		return true
+	}
 
 	now := time.Now()
 	for _, link := range links {
@@ -743,13 +755,14 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 			break
 		}
 		c.standardReplay.entries[link.seq] = &standardReplayEntry{
-			generation:  c.standardReplay.generation,
-			seq:         link.seq,
-			hash:        link.hash,
-			parentHash:  link.parentHash,
-			peerID:      peerID,
-			requestedAt: now,
-			acquisition: il,
+			generation:             c.standardReplay.generation,
+			seq:                    link.seq,
+			hash:                   link.hash,
+			parentHash:             link.parentHash,
+			peerID:                 peerID,
+			requestedAt:            now,
+			acquisition:            il,
+			availabilityTriedPeers: append([]uint64(nil), il.Peers()...),
 		}
 		c.standardReplay.collectSeq = link.seq
 		c.standardReplay.collectHash = link.hash
@@ -943,7 +956,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 		}
 	}
 	for _, entry := range c.standardReplay.entries {
-		if entry.failed {
+		if entry.failed && entry.failureClass != standardReplayFailureAvailability {
 			c.requireReplayFullStateLocked(entry.seq, entry.hash)
 		}
 		if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
@@ -1072,7 +1085,7 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	}
 	now := time.Now()
 	entry := c.standardReplay.entries[h.LedgerIndex]
-	if !c.standardReplay.active || entry == nil || entry.hash != h.Hash ||
+	if !c.standardReplay.active || entry == nil || entry.seq != h.LedgerIndex || entry.hash != h.Hash ||
 		entry.generation != c.standardReplay.generation || entry.acquisition != il {
 		return false, false
 	}
@@ -1085,6 +1098,15 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	entry.peerID = peerID
 	entry.readyAt = now
 	entry.acquisition = nil
+	entry.failed = false
+	entry.failureClass = standardReplayFailureNone
+	entry.availabilityPending = false
+	entry.availabilityRetrying = false
+	entry.availabilityExhausted = false
+	entry.availabilityRetries = 0
+	entry.availabilityNextRetryAt = time.Time{}
+	entry.availabilityDeadlineAt = time.Time{}
+	entry.availabilityTriedPeers = nil
 	c.replayPipelineReady.Add(1)
 	c.replayPipelineRetried.Add(uint64(il.Timeouts()))
 	c.replayPipelineAcquireUs.Add(durationMicros(now.Sub(entry.requestedAt)))
@@ -1112,21 +1134,52 @@ func (c *catchupReplayCoordinator) refillStandardReplayCollector(peerHint uint64
 	return c.tryArmStandardReplayPipeline(svc, nil, targetSeq, targetHash, peerHint)
 }
 
-func (c *catchupReplayCoordinator) failStandardReplayPipelineEntry(il *inbound.Ledger) bool {
+func (c *catchupReplayCoordinator) failStandardReplayPipelineEntry(
+	il *inbound.Ledger,
+	failureClass ...standardReplayFailureClass,
+) bool {
 	if il == nil {
 		return false
+	}
+	class := standardReplayFailureInvalidData
+	if len(failureClass) > 0 {
+		class = failureClass[0]
 	}
 	now := time.Now()
 	c.acquisitionMu.Lock()
 	entry := c.standardReplay.entries[il.Seq()]
-	if !c.standardReplay.active || entry == nil || entry.hash != il.Hash() || entry.acquisition != il {
+	if !c.standardReplay.active || entry == nil || entry.seq != il.Seq() || entry.hash != il.Hash() || entry.acquisition != il {
 		c.acquisitionMu.Unlock()
 		return false
 	}
-	entry.failed = true
+	entry.failureClass = class
 	entry.acquisition = nil
 	entry.peerID = il.PeerID()
+	entry.availabilityTriedPeers = appendUniquePeers(entry.availabilityTriedPeers, il.Peers()...)
 	c.replayPipelineRetried.Add(uint64(il.Timeouts()))
+	if class == standardReplayFailureAvailability {
+		entry.failed = false
+		entry.availabilityRetrying = false
+		if entry.availabilityDeadlineAt.IsZero() {
+			entry.availabilityDeadlineAt = now.Add(standardReplayAvailabilityWaitWindow)
+		}
+		if entry.availabilityRetries >= standardReplayAvailabilityRetryLimit {
+			entry.availabilityPending = false
+			entry.availabilityExhausted = true
+			entry.availabilityNextRetryAt = time.Time{}
+		} else {
+			entry.availabilityPending = true
+			entry.availabilityExhausted = false
+			entry.availabilityNextRetryAt = now.Add(standardReplayAvailabilityRetryDelays[entry.availabilityRetries])
+		}
+	} else {
+		entry.failed = true
+		entry.availabilityPending = false
+		entry.availabilityRetrying = false
+		entry.availabilityExhausted = false
+		entry.availabilityNextRetryAt = time.Time{}
+		entry.availabilityDeadlineAt = time.Time{}
+	}
 	// A failed entry may be far ahead of a frozen pivot that is still being
 	// acquired. Do not let that failure wake the drain before the pivot is
 	// installed: the prepared head has no locally available parent until then,
@@ -1150,12 +1203,14 @@ func (c *catchupReplayCoordinator) updateStandardReplayHeadBlockLocked(now time.
 		return
 	}
 	head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
-	if head != nil && (!head.readyAt.IsZero() || head.failed) {
+	if head != nil && (!head.readyAt.IsZero() || head.failed || head.availabilityPending ||
+		head.availabilityRetrying || head.availabilityExhausted) {
 		c.standardReplay.headBlockedAt = time.Time{}
 		return
 	}
 	for seq, entry := range c.standardReplay.entries {
-		if seq > c.standardReplay.anchorSeq+1 && (!entry.readyAt.IsZero() || entry.failed) {
+		if seq > c.standardReplay.anchorSeq+1 && (!entry.readyAt.IsZero() || entry.failed ||
+			entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted) {
 			if c.standardReplay.headBlockedAt.IsZero() {
 				c.standardReplay.headBlockedAt = now
 			}
@@ -1205,6 +1260,12 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 			return
 		}
 		generation := c.standardReplay.generation
+		if entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted {
+			c.standardReplay.applying = false
+			c.updateStandardReplayHeadBlockLocked(time.Now())
+			c.acquisitionMu.Unlock()
+			return
+		}
 		if entry.failed {
 			retired, target, current := c.discardStandardReplayHeadLocked(entry, generation)
 			c.acquisitionMu.Unlock()

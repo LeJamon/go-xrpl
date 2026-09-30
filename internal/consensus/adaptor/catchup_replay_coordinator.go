@@ -489,6 +489,9 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	now := time.Now()
 
 	c.fetchTracker.Sweep()
+	// Retry the actionable standard-replay head before rearming unrelated
+	// acquisitions or extending the prepared suffix.
+	c.retryStandardReplayAvailability(now)
 	c.retryInboundLedgerAcquisitions(now)
 	c.tickHeaderDiscovery(now)
 	c.retryStandardReplayReplacement(now)
