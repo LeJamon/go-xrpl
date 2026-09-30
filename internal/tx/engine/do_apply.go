@@ -929,6 +929,9 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 		violation2 = e.invariantViolationHook(ter.TecINVARIANT_FAILED, invTecTable)
 	}
 	if violation2 != nil {
+		// The fee-only recovery itself still violates a protocol invariant, so
+		// rippled rejects the transaction without charging the tentative fee.
+		st.chargedFee = 0
 		return ter.TefINVARIANT_FAILED
 	}
 

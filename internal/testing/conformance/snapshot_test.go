@@ -362,6 +362,28 @@ func TestSnapshotRejectsFamilyMismatch(t *testing.T) {
 	}
 }
 
+func TestSnapshotFamilyAliasesAreExplicit(t *testing.T) {
+	tests := []struct {
+		family string
+		txType string
+		want   bool
+	}{
+		{family: "NFTokenAuth", txType: "NFTokenCreateOffer", want: true},
+		{family: "NFTokenAuth", txType: "NFTokenAcceptOffer", want: true},
+		{family: "NFTokenAuth", txType: "NFTokenCancelOffer", want: false},
+		{family: "EscrowToken", txType: "EscrowCancel", want: true},
+		{family: "EscrowToken", txType: "EscrowFinish", want: true},
+		{family: "EscrowToken", txType: "EscrowCreate", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.family+"/"+test.txType, func(t *testing.T) {
+			if got := snapshotFamilyMatchesTxType(test.family, test.txType); got != test.want {
+				t.Fatalf("snapshotFamilyMatchesTxType(%q, %q) = %t, want %t", test.family, test.txType, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSnapshotExecutesAndComparesPriorSubmissions(t *testing.T) {
 	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-require-destination.json")
 	fixture.PreSubmit = []snapshotSubmission{{TxBlob: fixture.TxBlob, Submit: fixture.Submit}}

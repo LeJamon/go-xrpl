@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/hex"
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -166,6 +167,54 @@ func TestXRPAmountDeserialization(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tc.expectedDrops, result)
+		})
+	}
+}
+
+func TestRawXRPAmountPreservesAuthenticatedLedgerBits(t *testing.T) {
+	tests := []struct {
+		name      string
+		drops     uint64
+		expected  string
+		wantError bool
+	}{
+		{
+			name:     "over-cap positive ledger amount",
+			drops:    uint64(MaxDrops) + 1,
+			expected: "416345785d8a0001",
+		},
+		{
+			name:     "largest native magnitude before MPT marker",
+			drops:    0x1fffffffffffffff,
+			expected: "5fffffffffffffff",
+		},
+		{
+			name:      "MPT marker is not native magnitude",
+			drops:     0x2000000000000000,
+			wantError: true,
+		},
+		{
+			name:      "native sign marker is not magnitude",
+			drops:     0x4000000000000000,
+			wantError: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := (&Amount{}).FromJSON(RawXRPAmount{Drops: tc.drops})
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, hex.EncodeToString(encoded))
+
+			defs := definitions.Get()
+			_, err = (&Amount{}).ToJSON(serdes.NewBinaryParser(encoded, defs))
+			require.Error(t, err, "ordinary JSON decoding must retain the XRP supply cap")
+			permissive, err := (&Amount{}).ToJSONAllowOverCap(serdes.NewBinaryParser(encoded, defs))
+			require.NoError(t, err)
+			require.Equal(t, strconv.FormatUint(tc.drops, 10), permissive)
 		})
 	}
 }

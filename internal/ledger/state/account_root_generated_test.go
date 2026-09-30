@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func TestSerializeAccountRootGeneratedBytesAndPresentZero(t *testing.T) {
@@ -83,6 +85,38 @@ func TestSerializeAccountRootGeneratedBytesAndPresentZero(t *testing.T) {
 	}
 	if !bytes.Equal(roundTrip, got) {
 		t.Fatalf("parse/serialize changed bytes\n got: %X\nwant: %X", roundTrip, got)
+	}
+}
+
+func TestAccountRootPreservesAuthenticatedPositiveOverCapBalance(t *testing.T) {
+	const overCap = uint64(binarytypes.MaxDrops) + 1
+	entry := &ledgerfields.AccountRoot{}
+	entry.SetAccount(walkerTestAccount)
+	entry.SetBalance(binarytypes.RawXRPAmount{Drops: overCap})
+	entry.SetSequence(1)
+	entry.SetOwnerCount(0)
+	entry.SetFlags(0)
+
+	raw, err := entry.Encode()
+	if err != nil {
+		t.Fatalf("encode over-cap AccountRoot: %v", err)
+	}
+	if _, err := binarycodec.DecodeBytes(raw); err == nil {
+		t.Fatal("ordinary binary JSON decode accepted over-cap AccountRoot balance")
+	}
+	parsed, err := ParseAccountRoot(raw)
+	if err != nil {
+		t.Fatalf("parse over-cap AccountRoot: %v", err)
+	}
+	if parsed.Balance != overCap {
+		t.Fatalf("parsed balance = %d, want %d", parsed.Balance, overCap)
+	}
+	roundTrip, err := SerializeAccountRoot(parsed)
+	if err != nil {
+		t.Fatalf("serialize over-cap AccountRoot: %v", err)
+	}
+	if !bytes.Equal(roundTrip, raw) {
+		t.Fatalf("over-cap AccountRoot changed on round trip\n got: %X\nwant: %X", roundTrip, raw)
 	}
 }
 

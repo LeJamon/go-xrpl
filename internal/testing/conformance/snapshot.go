@@ -12,13 +12,16 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -403,7 +406,7 @@ func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
 	if err != nil {
 		return err
 	}
-	if got := pending.Parsed.TxType().String(); fixture.Family != got {
+	if got := pending.Parsed.TxType().String(); !snapshotFamilyMatchesTxType(fixture.Family, got) {
 		return fmt.Errorf("family=%q does not match tx_blob type %q", fixture.Family, got)
 	}
 	closePending, err := parseSnapshotCloseSet(fixture.CloseInput.TxBlobs)
@@ -436,6 +439,20 @@ func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
 		return err
 	}
 	return nil
+}
+
+func snapshotFamilyMatchesTxType(family, txType string) bool {
+	if family == txType {
+		return true
+	}
+	switch family {
+	case "NFTokenAuth":
+		return txType == "NFTokenCreateOffer" || txType == "NFTokenAcceptOffer"
+	case "EscrowToken":
+		return txType == "EscrowCancel" || txType == "EscrowFinish"
+	default:
+		return false
+	}
 }
 
 func validateSnapshotHistorySemantic(fixture *snapshotFixture) error {
@@ -601,7 +618,14 @@ func validateSnapshotSLEBytes(name string, data []byte) error {
 		return fmt.Errorf("%s is not a valid ledger entry: %w", name, err)
 	}
 	if _, err := binarycodec.DecodeBytes(data); err != nil {
-		return fmt.Errorf("decode %s: %w", name, err)
+		// A rawReplace can preserve a native AccountRoot balance above the
+		// instantiated network supply. The typed ledger decoder accepts that
+		// authenticated corruption so XRPBalanceChecks can report it; ordinary
+		// transaction/object JSON remains capped by binarycodec.
+		account, parseErr := ledgerstate.ParseAccountRoot(data)
+		if parseErr != nil || account.Balance <= binarytypes.MaxDrops {
+			return fmt.Errorf("decode %s: %w", name, err)
+		}
 	}
 	return nil
 }
@@ -1056,6 +1080,7 @@ func replaySnapshotHistory(
 	}
 	var previous *ledger.Ledger
 	var view *openledger.OpenLedger
+	heldLocals := localtxs.New()
 	for i, item := range history {
 		name := fmt.Sprintf("history[%d]", i)
 		parent, err := loadSnapshotLedger(item.Parent)
@@ -1089,10 +1114,21 @@ func replaySnapshotHistory(
 			if err := submitSnapshot(view, pending, apply, queue, prior.Submit); err != nil {
 				return nil, fmt.Errorf("%s.pre_submit[%d]: %w", name, j, err)
 			}
+			// LocalTxs receives only transactions that passed ingress signature
+			// preprocessing. Engine TERs remain eligible for retention, just as
+			// production RPC submission does, but malformed signatures are rejected
+			// before the open-ledger path and must not be replayed as locals.
+			if sign.CheckSTTxSignature(pending.Parsed, apply.Rules, !apply.SkipSignatureVerification) == "" {
+				heldLocals.PushBack(view.Current().Sequence(), pending)
+			}
 		}
 		closePending, err := parseSnapshotCloseSet(item.CloseInput.TxBlobs)
 		if err != nil {
 			return nil, fmt.Errorf("%s close input: %w", name, err)
+		}
+		retrySalt, err := openledger.ComputeSalt(closePending)
+		if err != nil {
+			return nil, fmt.Errorf("%s close input canonical salt: %w", name, err)
 		}
 		built, err := openledger.BuildClosedLedger(parent.Ledger, closePending, openledger.BuildConfig{
 			CloseTime:  protocol.FromRippleTime(item.CloseInput.CloseTime),
@@ -1115,7 +1151,12 @@ func replaySnapshotHistory(
 		if err := runSnapshotReplayTransactions(networkID, parent, closed, item.Closed.Transactions); err != nil {
 			return nil, fmt.Errorf("%s inbound replay mismatch: %w", name, err)
 		}
+		if err := heldLocals.Sweep(built.Ledger); err != nil {
+			return nil, fmt.Errorf("%s local transaction sweep: %w", name, err)
+		}
+		locals := heldLocals.GetTxSet()
 		closedApply := snapshotApplyConfig(closed, networkID, flags)
+		closedApply.RetrySalt = &retrySalt
 		levels, err := snapshotClosedLedgerFeeLevels(built.Ledger)
 		if err != nil {
 			return nil, fmt.Errorf("%s fee history: %w", name, err)
@@ -1129,7 +1170,7 @@ func replaySnapshotHistory(
 			queue.Accept(adapter)
 		}
 		if err := view.AcceptWithPrecommit(
-			built.Ledger, nil, false, &retries, closedApply, queue, processClosed, modifier, nil, nil,
+			built.Ledger, locals, false, &retries, closedApply, queue, processClosed, modifier, nil, nil,
 		); err != nil {
 			return nil, fmt.Errorf("%s next open ledger: %w", name, err)
 		}

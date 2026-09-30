@@ -352,6 +352,21 @@ func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.A
 		return ter.TecINTERNAL
 	}
 
+	// Rippled checks that the issuance exists before checking weak
+	// authorization. A transiently inserted escrow can carry an MPT amount
+	// whose issuance is absent, which must return tecOBJECT_NOT_FOUND.
+	issuanceKey, err := mptIssuanceKeyFromHex(amount.MPTIssuanceID())
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	issuanceData, err := view.Read(issuanceKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuanceData == nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+
 	// requireAuth on account (WeakAuth)
 	if tr := requireMPTAuthForEscrow(view, amount.MPTIssuanceID(), accountID, parentCloseTime); tr != ter.TesSUCCESS {
 		return tr

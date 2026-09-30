@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -245,7 +246,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	}
 
 	var sle entry.AccountRoot
-	sle.SetBalance(fmt.Sprintf("%d", account.Balance))
+	if account.Balance > binarytypes.MaxDrops {
+		sle.SetBalance(binarytypes.RawXRPAmount{Drops: account.Balance})
+	} else {
+		sle.SetBalance(fmt.Sprintf("%d", account.Balance))
+	}
 	sle.SetSequence(account.Sequence)
 	sle.SetOwnerCount(account.OwnerCount)
 	if account.SponsoredOwnerCount > 0 {
