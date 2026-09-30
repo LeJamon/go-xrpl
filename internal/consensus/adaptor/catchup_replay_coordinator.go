@@ -103,6 +103,7 @@ type catchupReplayCoordinator struct {
 	consensusRecovery         consensusRecovery
 	lastHandoffSeq            uint32
 	standardReplay            standardReplayPipeline
+	pendingFrozenPivot        frozenPivotPendingIntent
 
 	standardReplayDrainWake  chan struct{}
 	standardReplayDrainOwner *standardReplayDrainOwner
@@ -269,6 +270,7 @@ func (c *catchupReplayCoordinator) stopAcquisitions() (legacy, replay int) {
 	}
 	retirement := c.cancelStandardReplayPipelineLocked("shutdown")
 	c.consensusRecovery = consensusRecovery{}
+	c.pendingFrozenPivot = frozenPivotPendingIntent{}
 	c.lastHandoffSeq = 0
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()

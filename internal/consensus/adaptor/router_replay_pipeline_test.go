@@ -295,7 +295,7 @@ func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {
 	assert.GreaterOrEqual(t, r.FastSyncMetrics().ReplayPipelineDiscarded, uint64(len(oldLinks)))
 }
 
-func TestStandardReplayPipelineLeavesFullStateSlotAvailable(t *testing.T) {
+func TestStandardReplayPipelineDefersUnrelatedFullStateAcquisition(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
@@ -308,8 +308,8 @@ func TestStandardReplayPipelineLeavesFullStateSlotAvailable(t *testing.T) {
 	r.catchupReplay.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+1, fullStateHash, 7)
 	r.catchupReplay.acquisitionMu.Unlock()
 	fullState := r.catchupReplay.fetchTracker.Find(fullStateHash)
-	require.NotNil(t, fullState)
-	assert.False(t, fullState.TransactionOnly())
+	assert.Nil(t, fullState)
+	assert.Len(t, sender.legacyCalls(), len(links))
 }
 
 func TestStandardReplayPipelineReplacesRedundantFullStateAcquisition(t *testing.T) {
@@ -755,7 +755,8 @@ func TestStandardReplayPipelineFallbackRespectsProtectedLimit(t *testing.T) {
 	r.catchupReplay.acquisitionMu.Lock()
 	for i := range maxConcurrentCatchup {
 		hash := [32]byte{0xf0, byte(i + 1)}
-		r.catchupReplay.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+uint32(i)+1, hash, 7)
+		admission := r.catchupReplay.startFrozenPivotReplacementLocked(links[len(links)-1].seq+uint32(i)+1, hash, 7)
+		require.Equal(t, fullStateAdmissionStarted, admission.outcome)
 	}
 	r.catchupReplay.acquisitionMu.Unlock()
 	require.Equal(t, maxConcurrentCatchup, r.catchupReplay.protectedCatchupInFlight())

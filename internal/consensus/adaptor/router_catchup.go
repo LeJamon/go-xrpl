@@ -792,6 +792,9 @@ func (c *catchupReplayCoordinator) armConsensusCatchup() {
 		return
 	}
 	c.retireLocallySatisfiedFrozenPivot("local_frontier")
+	if c.retryPendingFrozenPivot() {
+		return
+	}
 	if c.armPendingConsensusLedger() {
 		return
 	}
@@ -1506,7 +1509,7 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 		return nil, false
 	}
 	if c.replayNeedsFullStateLocked(hash) {
-		c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
+		_ = c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, true)
 		return c.fetchTracker.Find(hash), false
 	}
 	if seq != 0 && c.belowFloor(seq) {
@@ -1553,48 +1556,134 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 }
 
 func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
-	c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, false)
+	_ = c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, false)
 }
 
-func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(seq uint32, hash [32]byte, peerID uint64, repair bool) {
-	if c.stoppedForShutdown() {
-		return
+type fullStateAdmissionPurpose uint8
+
+const (
+	fullStateAdmissionCatchup fullStateAdmissionPurpose = iota
+	fullStateAdmissionRepair
+	fullStateAdmissionReplacement
+)
+
+type fullStateAdmissionOutcome uint8
+
+const (
+	fullStateAdmissionRejected fullStateAdmissionOutcome = iota
+	fullStateAdmissionDeferred
+	fullStateAdmissionJoined
+	fullStateAdmissionStarted
+)
+
+type fullStateAdmission struct {
+	outcome     fullStateAdmissionOutcome
+	acquisition *inbound.Ledger
+}
+
+func (p fullStateAdmissionPurpose) bypassesReplayOwnership() bool {
+	return p == fullStateAdmissionRepair || p == fullStateAdmissionReplacement
+}
+
+// startLedgerAcquisitionLegacyModeLocked preserves the legacy call shape for
+// existing callers while routing every full-state start through the ownership
+// admission point. Repair is the only ordinary caller that may bypass the
+// replay owner; deliberate replacement uses the purpose-specific helper in
+// router_recovery_session.go.
+func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	repair bool,
+) fullStateAdmission {
+	purpose := fullStateAdmissionCatchup
+	if repair {
+		purpose = fullStateAdmissionRepair
 	}
-	repairParent := repair && c.replayFaultBlocked() && c.adaptor.LedgerService().ReplayRecoveryParent(hash)
+	return c.admitFullStateLocked(seq, hash, peerID, purpose)
+}
+
+// admitFullStateLocked is the single admission point for provisional
+// full-state fetches. Caller holds acquisitionMu. A deferred result leaves all
+// replay state untouched so a later wakeup can retry the same intent without
+// consuming a new replay generation.
+func (c *catchupReplayCoordinator) admitFullStateLocked(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	purpose fullStateAdmissionPurpose,
+) fullStateAdmission {
+	if c.stoppedForShutdown() {
+		return fullStateAdmission{outcome: fullStateAdmissionRejected}
+	}
+	repair := purpose == fullStateAdmissionRepair || purpose == fullStateAdmissionReplacement
+	repairParent := false
+	if repair && c.replayFaultBlocked() {
+		if svc := c.adaptor.LedgerService(); svc != nil {
+			repairParent = svc.ReplayRecoveryParent(hash)
+		}
+	}
 	if c.replayFaultBlocked() && !repairParent {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionRejected}
 	}
 	if c.catchupRetryBlocked(hash, time.Now()) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 	if !repairParent && seq != 0 && c.belowFloor(seq) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionRejected}
 	}
 	if c.standardReplay.pivotHandoff != nil &&
 		c.standardReplay.pivotHandoff.acquisition.Hash() == hash {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
-	if svc := c.adaptor.LedgerService(); svc != nil && !repairParent {
+	if svc := c.adaptor.LedgerService(); svc != nil && !repairParent && purpose != fullStateAdmissionReplacement {
 		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
-			return
+			return fullStateAdmission{outcome: fullStateAdmissionRejected}
 		}
 	}
 	// Safety net: if a replay-delta for the same hash is still
 	// registered, don't start a legacy on top of it — one path is
 	// always enough.
 	if c.replayer.Has(hash) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
+	}
+
+	// Join an existing full-state acquisition after the policy checks. The
+	// sequence update is important when a hash-only consensus request learns
+	// its sequence later; it also makes exact-hash reuse visible to the caller.
+	if existing := c.fetchTracker.Find(hash); existing != nil {
+		il, _ := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
+			return nil
+		})
+		if il != nil && !il.TransactionOnly() {
+			return fullStateAdmission{outcome: fullStateAdmissionJoined, acquisition: il}
+		}
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}
+	}
+
+	// A live standard replay is the sole owner of the full-state lane. Even a
+	// prepared target or successor hash must not start a new state walk from a
+	// regular consensus/validation caller. Repair and deliberate replacement
+	// are explicit owner transitions and are admitted through their dedicated
+	// purposes.
+	if c.standardReplay.active && !purpose.bypassesReplayOwnership() {
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 	if !c.canAdmitProvisionalFullStateLocked(hash) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 
 	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, c.logger, c.acquisitionOpts()...)
 	})
 	if !created {
-		// Already acquiring this hash (consensus or a prior arm).
-		return
+		// A concurrent caller may have registered the hash between the policy
+		// check and GetOrCreateWithSequence. Treat the same full-state object
+		// as a join and let transaction-only work wait for its owner.
+		if il != nil && !il.TransactionOnly() {
+			return fullStateAdmission{outcome: fullStateAdmissionJoined, acquisition: il}
+		}
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}
 	}
 
 	c.logger.Info("starting ledger acquisition (legacy)",
@@ -1613,6 +1702,7 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(seq ui
 	if !requested {
 		c.requestLedgerBase(il, 0, "failed to request ledger base from peer")
 	}
+	return fullStateAdmission{outcome: fullStateAdmissionStarted, acquisition: il}
 }
 
 // Caller holds acquisitionMu.
