@@ -102,7 +102,8 @@ func decodePhaseTrace(data []byte) phaseTrace {
 }
 
 func encodePhaseTrace(tr phaseTrace) []byte {
-	data := []byte{byte(tr.Profile)}
+	data := make([]byte, 1, 1+phaseStepSize*len(tr.Steps))
+	data[0] = byte(tr.Profile)
 	for _, step := range tr.Steps {
 		buf := make([]byte, phaseStepSize)
 		buf[0] = byte(step.Kind)

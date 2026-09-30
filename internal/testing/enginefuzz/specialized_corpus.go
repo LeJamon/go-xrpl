@@ -406,7 +406,7 @@ func runSpecializedPermissionedDomain(t testing.TB) *specializedState {
 	owner, issuer := accounts[0], accounts[1]
 	s.establishBaseline()
 	sequence := s.env.Seq(owner)
-	credentialType := "7065726d646f6d61696e"
+	credentialType := hex.EncodeToString([]byte("permdomain"))
 	s.submit(owner, permissioneddomain.DomainSet(owner).Credential(issuer, credentialType).Build(), specializedSubmitOptions{Want: ter.TesSUCCESS, Applied: true, SequenceStep: 1})
 	s.close()
 	domainKey := keylet.PermissionedDomain(owner.ID, sequence)
