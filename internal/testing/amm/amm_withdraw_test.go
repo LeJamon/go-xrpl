@@ -252,7 +252,7 @@ func TestInvalidWithdraw(t *testing.T) {
 	})
 
 	// LPTokenIn denominated in an unrelated IOU → temBAD_AMM_TOKENS.
-	// Reference: rippled AMMWithdraw.cpp preclaim lines 261-265 — Alice IS an LP
+	// Reference: rippled AMMWithdraw.cpp preclaim — Alice IS an LP
 	// (passes the lpTokens<=zero check) but her LPTokenIn issue is not the AMM's.
 	t.Run("WrongLPTokenIssue", func(t *testing.T) {
 		env := setupAMM(t)

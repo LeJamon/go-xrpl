@@ -326,7 +326,7 @@ func TestDepositRounding(t *testing.T) {
 		}
 
 		// Single asset deposit with various exponents
-		// Reference: rippled AMM_test.cpp lines 7603-7636
+		// Reference: rippled AMM_test.cpp
 		// Pool: GBP(30,000) / EUR(30,000) with tfee=0
 		// Deposits EUR with mantissa=1 and various exponents
 		// The EUR(1, -3) case fails the invariant without fixAMMv1_3
@@ -365,7 +365,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// Two-asset proportional deposit (1:1 pool ratio)
-		// Reference: rippled AMM_test.cpp lines 7638-7664
+		// Reference: rippled AMM_test.cpp
 		t.Run("TwoAssetProportional_1to1/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 30000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -385,7 +385,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// Two-asset proportional deposit (1:3 pool ratio)
-		// Reference: rippled AMM_test.cpp lines 7666-7697
+		// Reference: rippled AMM_test.cpp
 		t.Run("TwoAssetProportional_1to3/"+suffix, func(t *testing.T) {
 			for _, tc := range []struct {
 				name       string
@@ -421,7 +421,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// tfLPToken deposit
-		// Reference: rippled AMM_test.cpp lines 7699-7719
+		// Reference: rippled AMM_test.cpp
 		t.Run("LPTokenDeposit/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 7000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -440,7 +440,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// tfOneAssetLPToken deposit
-		// Reference: rippled AMM_test.cpp lines 7721-7753
+		// Reference: rippled AMM_test.cpp
 		t.Run("OneAssetLPTokenDeposit/"+suffix, func(t *testing.T) {
 			for _, tc := range []struct {
 				name     string
@@ -480,7 +480,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// Single deposit with EP (effective price) limit
-		// Reference: rippled AMM_test.cpp lines 7755-7776
+		// Reference: rippled AMM_test.cpp
 		t.Run("SingleDepositWithEP/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 30000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -517,7 +517,7 @@ func TestWithdrawRounding(t *testing.T) {
 		}
 
 		// tfLPToken withdraw
-		// Reference: rippled AMM_test.cpp lines 7786-7794
+		// Reference: rippled AMM_test.cpp
 		t.Run("LPTokenWithdraw/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -534,7 +534,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfWithdrawAll mode
-		// Reference: rippled AMM_test.cpp lines 7797-7806
+		// Reference: rippled AMM_test.cpp
 		t.Run("WithdrawAll/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -548,7 +548,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfTwoAsset withdraw mode
-		// Reference: rippled AMM_test.cpp lines 7808-7821
+		// Reference: rippled AMM_test.cpp
 		t.Run("TwoAssetWithdraw/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -567,7 +567,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfSingleAsset withdraw mode
-		// Reference: rippled AMM_test.cpp lines 7823-7839
+		// Reference: rippled AMM_test.cpp
 		t.Run("SingleAssetWithdraw/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -584,7 +584,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfOneAssetWithdrawAll mode
-		// Reference: rippled AMM_test.cpp lines 7841-7865
+		// Reference: rippled AMM_test.cpp
 		t.Run("OneAssetWithdrawAll/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 7000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -610,7 +610,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfOneAssetLPToken mode
-		// Reference: rippled AMM_test.cpp lines 7867-7880
+		// Reference: rippled AMM_test.cpp
 		t.Run("OneAssetLPToken/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -630,7 +630,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfLimitLPToken mode
-		// Reference: rippled AMM_test.cpp lines 7882-7895
+		// Reference: rippled AMM_test.cpp
 		// NOTE: The invariant INTENTIONALLY FAILS here (shouldFail=true in rippled)
 		t.Run("LimitLPToken/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)

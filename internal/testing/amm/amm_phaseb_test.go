@@ -19,7 +19,7 @@ import (
 const badXRPCurrency = "0000000000000000000000005852500000000000"
 
 // Item 12: invalidAMMAsset badCurrency / badIssuer checks.
-// Reference: rippled AMMCore.cpp invalidAMMAsset (lines 65-77).
+// Reference: rippled AMMCore.cpp invalidAMMAsset.
 func TestPhaseB_InvalidAMMAsset(t *testing.T) {
 	// An asset using the bad "XRP" 160-bit currency code is temBAD_CURRENCY.
 	t.Run("BadCurrency_Create", func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestPhaseB_DepositLPTokenOutWrongIssuer(t *testing.T) {
 // Item 11: tfLPToken deposit minimums are compared against the POST-adjustment
 // deposit amounts. A high Amount minimum that the proportional deposit cannot
 // meet yields tecAMM_FAILED; a satisfiable minimum succeeds.
-// Reference: rippled AMMDeposit.cpp deposit() lines 553-565.
+// Reference: rippled AMMDeposit.cpp deposit().
 func TestPhaseB_DepositLPTokenMinimums(t *testing.T) {
 	// Requesting 1,000,000 of ~10,000,000 LP tokens deposits ~1000 USD; a
 	// USD(2000) minimum is not met → tecAMM_FAILED.
@@ -159,7 +159,7 @@ func TestPhaseB_BidAuthAccounts(t *testing.T) {
 // Item 15: AMMClawback must NOT reject on a (non-rippled) empty-currency check;
 // the only rippled malformed checks are holder==issuer, isXRP(asset), the
 // tfClawTwoAssets issuer match, and the asset-issuer-must-be-Account rule.
-// Reference: rippled AMMClawback.cpp preflight lines 36-92.
+// Reference: rippled AMMClawback.cpp preflight.
 func TestPhaseB_ClawbackPreflight(t *testing.T) {
 	// holder == issuer is temMALFORMED.
 	t.Run("HolderEqualsIssuer", func(t *testing.T) {

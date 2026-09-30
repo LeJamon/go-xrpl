@@ -281,7 +281,7 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 	})
 
 	// Offer crossing AMM — after RequireAuth setup, AMM account needs auth too
-	// Reference: rippled AMMExtended_test.cpp testMissingAuth lines 1427-1443
+	// Reference: rippled AMMExtended_test.cpp testMissingAuth
 	t.Run("OfferCrossingAMM", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))

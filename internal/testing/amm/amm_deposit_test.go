@@ -412,7 +412,6 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 	}
 
 	// Deposit two assets, one of which is frozen -> tecFROZEN.
-	// Reference: lines 7370-7381
 	t.Run("TwoAsset_FrozenToken", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 
@@ -426,7 +425,6 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 	})
 
 	// Deposit single frozen asset -> tecFROZEN.
-	// Reference: lines 7383-7396
 	t.Run("SingleAsset_FrozenToken", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 
@@ -440,7 +438,6 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 
 	// With AMMClawback enabled: deposit the non-frozen asset (XRP) when the
 	// other asset is frozen -> tecFROZEN.
-	// Reference: lines 7398-7413
 	t.Run("SingleAsset_NonFrozen_WithAMMClawback", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 		env.EnableFeature("AMMClawback")
@@ -453,7 +450,6 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
-	// Reference: lines 7414-7429
 	t.Run("SingleAsset_NonFrozen_WithoutAMMClawback", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 		env.DisableFeature("AMMClawback")
@@ -474,7 +470,7 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 // sfTradingFee as a value-independent optional, so its mere presence is
 // temMALFORMED; before the fix a zero was indistinguishable from absent and the
 // deposit wrongly proceeded.
-// Reference: rippled AMMDeposit.cpp preflight lines 67-95.
+// Reference: rippled AMMDeposit.cpp preflight.
 func TestDepositTradingFeePresentZero(t *testing.T) {
 	env := setupAMM(t)
 
