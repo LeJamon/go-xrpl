@@ -212,7 +212,7 @@ func TestBid(t *testing.T) {
 			{name: "BidWithAuthAccounts", deposit: true, min: 120, auth: true, price: "120"},
 		} {
 			t.Run(fmt.Sprintf("%s/cleanup=%t", tc.name, cleanup), func(t *testing.T) {
-				env := setupAMM(t)
+				env := setupAMMProfile(t, true)
 				if !cleanup {
 					env.DisableFeature("fixCleanup3_4_0")
 					env.Close()
@@ -252,7 +252,7 @@ func TestBid(t *testing.T) {
 	}
 
 	t.Run("DiscountAndAuthAccountsReset", func(t *testing.T) {
-		env := setupAMM(t)
+		env := setupAMMProfile(t, true)
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
 		env.Close()
 		jtx.RequireTxSuccess(t, env.Submit(amm.AMMVote(env.Alice, amm.XRP(), env.USD, 1000).Build()))
@@ -267,7 +267,7 @@ func TestBid(t *testing.T) {
 	})
 
 	t.Run("OutbidPreviousOwner", func(t *testing.T) {
-		env := setupAMM(t)
+		env := setupAMMProfile(t, true)
 
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
@@ -313,7 +313,7 @@ func TestBid(t *testing.T) {
 	})
 
 	t.Run("OutbidPreviousOwnerWithoutLPLine", func(t *testing.T) {
-		env := setupAMM(t)
+		env := setupAMMProfile(t, true)
 
 		result := env.Submit(amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).

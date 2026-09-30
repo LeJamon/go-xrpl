@@ -400,23 +400,26 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 }
 
 func TestAMMBookStep_SwapRounding(t *testing.T) {
-	// Pool: XRP(51600.000981)/USD(80304.09987141784)
+	// Pool: XRP(51600.000981)/USD(803040.9987141784)
 	// Bob offers XRP(6300) for USD(100000) — very bad quality, should not cross AMM.
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 	env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(200000)))
 	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(200000)))
 	env.Close()
 
-	env.Trust(env.Alice, env.GW, "USD", 200000)
+	env.Trust(env.Alice, env.GW, "USD", 1000000)
 	env.Close()
 
-	env.PayIOU(env.GW, env.Alice, "USD", 100000)
+	env.PayIOUAmount(env.GW, env.Alice,
+		state.NewIssuedAmountFromValue(8040409987141784, -10, "USD", env.GW.Address))
 	env.Close()
 
 	// Alice creates AMM with precise amounts
 	createTx := amm.AMMCreate(env.Alice,
 		tx.NewXRPAmount(51_600_000_981),
-		amm.IOUAmount(env.GW, "USD", 80304.09987141784)).
+		state.NewIssuedAmountFromValue(8030409987141784, -10, "USD", env.GW.Address)).
 		TradingFee(889).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
@@ -430,6 +433,8 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 	// Fund bob
 	env.TestEnv.FundAmount(env.Bob, 1_092_878_933) // ~1092.878933 XRP
 	env.Trust(env.Bob, env.GW, "USD", 1000000)
+	env.PayIOUAmount(env.GW, env.Bob,
+		state.NewIssuedAmountFromValue(3_988035892323031, -28, "USD", env.GW.Address))
 	env.Close()
 
 	// Bob creates offer: buy XRP(6300), sell USD(100000) — terrible quality
@@ -437,7 +442,7 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 	offerTx := offerbuild.OfferCreate(env.Bob,
 		amm.XRPAmount(6300),
 		amm.IOUAmount(env.GW, "USD", 100000)).Build()
-	amm.ExpectTER(t, env.Submit(offerTx), "tecUNFUNDED_OFFER")
+	jtx.RequireTxSuccess(t, env.Submit(offerTx))
 	env.Close()
 
 	// AMM should be unchanged

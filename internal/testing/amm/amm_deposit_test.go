@@ -16,8 +16,17 @@ import (
 // Reference: rippled testAMM helper
 func setupAMM(t *testing.T) *amm.AMMTestEnv {
 	t.Helper()
+	return setupAMMProfile(t, false)
+}
+
+func setupAMMProfile(t *testing.T, smallNumber bool) *amm.AMMTestEnv {
+	t.Helper()
 
 	env := amm.NewAMMTestEnv(t)
+	if smallNumber {
+		env.DisableFeature("SingleAssetVault")
+		env.DisableFeature("LendingProtocol")
+	}
 	env.FundWithIOUs(30000, 0)
 	env.Close()
 

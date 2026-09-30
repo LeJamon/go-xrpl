@@ -4,12 +4,14 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAMMBookStep_BadPathAssert(t *testing.T) {
@@ -76,84 +78,117 @@ func TestAMMBookStep_BadPathAssert(t *testing.T) {
 }
 
 func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
+	for _, tc := range []struct {
+		name       string
+		fixAMMv1_1 bool
+		fixAMMv1_3 bool
+		aPool      int64
+		bPool      int64
+		offer      int64
+	}{
+		{
+			name:       "fixAMMv1_1",
+			fixAMMv1_1: true,
+			fixAMMv1_3: true,
+			aPool:      3093541659651604,
+			bPool:      3200215509984419,
+			offer:      200215509984419,
+		},
+		{
+			name:       "legacy",
+			fixAMMv1_1: false,
+			fixAMMv1_3: false,
+			aPool:      3093541659651605,
+			bPool:      3200215509984417,
+			offer:      200215509984417,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			env.DisableFeature("SingleAssetVault")
+			env.DisableFeature("LendingProtocol")
+			if !tc.fixAMMv1_1 {
+				env.DisableFeature("fixAMMv1_1")
+			}
+			if !tc.fixAMMv1_3 {
+				env.DisableFeature("fixAMMv1_3")
+			}
+			env.Close()
 
-	ann := jtx.NewAccount("ann")
-	bob := jtx.NewAccount("bob2")
-	cam := jtx.NewAccount("cam")
-	carol := jtx.NewAccount("carol2")
+			ann := jtx.NewAccount("ann")
+			bob := jtx.NewAccount("bob2")
+			cam := jtx.NewAccount("cam")
+			carol := jtx.NewAccount("carol2")
 
-	reserve4 := env.TestEnv.ReserveBase() + 4*env.TestEnv.ReserveIncrement()
-	fee5 := uint64(50) // 5 * 10 drops
+			reserve4 := env.TestEnv.ReserveBase() + 4*env.TestEnv.ReserveIncrement()
+			fee5 := uint64(50) // 5 * 10 drops
 
-	env.TestEnv.FundAmount(carol, uint64(jtx.XRP(1000)))
-	env.TestEnv.FundAmount(ann, reserve4+fee5)
-	env.TestEnv.FundAmount(bob, reserve4+fee5)
-	env.TestEnv.FundAmount(cam, reserve4+fee5)
-	env.Close()
+			env.TestEnv.FundAmount(carol, uint64(jtx.XRP(1000)))
+			env.TestEnv.FundAmount(ann, reserve4+fee5)
+			env.TestEnv.FundAmount(bob, reserve4+fee5)
+			env.TestEnv.FundAmount(cam, reserve4+fee5)
+			env.Close()
 
-	// Trust lines
-	annBUX := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "BUX", ann.Address) }
-	bobBUX := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "BUX", bob.Address) }
+			// Trust lines
+			annBUX := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "BUX", ann.Address) }
+			bobBUX := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "BUX", bob.Address) }
 
-	env.Trust(ann, bob, "BUX", 40)
-	env.Trust(cam, ann, "BUX", 40)
-	env.Trust(bob, ann, "BUX", 30)
-	env.Trust(cam, bob, "BUX", 40)
-	env.Trust(carol, bob, "BUX", 400)
-	env.Trust(carol, ann, "BUX", 400)
-	env.Close()
+			env.Trust(ann, bob, "BUX", 40)
+			env.Trust(cam, ann, "BUX", 40)
+			env.Trust(bob, ann, "BUX", 30)
+			env.Trust(cam, bob, "BUX", 40)
+			env.Trust(carol, bob, "BUX", 400)
+			env.Trust(carol, ann, "BUX", 400)
+			env.Close()
 
-	// Fund
-	payTx1 := payment.PayIssued(ann, cam, annBUX(35)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(payTx1))
-	payTx2 := payment.PayIssued(bob, cam, bobBUX(35)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(payTx2))
-	payTx3 := payment.PayIssued(bob, carol, bobBUX(400)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(payTx3))
-	payTx4 := payment.PayIssued(ann, carol, annBUX(400)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(payTx4))
-	env.Close()
+			// Fund
+			payTx1 := payment.PayIssued(ann, cam, annBUX(35)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(payTx1))
+			payTx2 := payment.PayIssued(bob, cam, bobBUX(35)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(payTx2))
+			payTx3 := payment.PayIssued(bob, carol, bobBUX(400)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(payTx3))
+			payTx4 := payment.PayIssued(ann, carol, annBUX(400)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(payTx4))
+			env.Close()
 
-	// Carol creates AMM: A_BUX(300)/B_BUX(330)
-	createTx := amm.AMMCreate(carol, annBUX(300), bobBUX(330)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(createTx))
-	env.Close()
+			// Carol creates AMM: A_BUX(300)/B_BUX(330)
+			createTx := amm.AMMCreate(carol, annBUX(300), bobBUX(330)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(createTx))
+			env.Close()
+			assetA := tx.Asset{Currency: "BUX", Issuer: ann.Address}
+			assetB := tx.Asset{Currency: "BUX", Issuer: bob.Address}
+			lpBefore := env.ReadAMMData(assetA, assetB).LPTokenBalance
 
-	// cam creates passive offer: buy A_BUX(29), sell B_BUX(30)
-	offerTx1 := offerbuild.OfferCreate(cam, annBUX(29), bobBUX(30)).Passive().Build()
-	jtx.RequireTxSuccess(t, env.Submit(offerTx1))
-	env.Close()
+			// cam creates passive offer: buy A_BUX(29), sell B_BUX(30)
+			offerTx1 := offerbuild.OfferCreate(cam, annBUX(29), bobBUX(30)).Passive().Build()
+			jtx.RequireTxSuccess(t, env.Submit(offerTx1))
+			env.Close()
 
-	// cam: A_BUX(35), B_BUX(35), 1 offer
-	requireAMMIOUBalance(t, env.TestEnv, cam, ann, "BUX", 35)
-	requireAMMIOUBalance(t, env.TestEnv, cam, bob, "BUX", 35)
-	offerbuild.RequireOfferCount(t, env.TestEnv, cam, 1)
+			// cam: A_BUX(35), B_BUX(35), 1 offer
+			requireAMMIOUBalance(t, env.TestEnv, cam, ann, "BUX", 35)
+			requireAMMIOUBalance(t, env.TestEnv, cam, bob, "BUX", 35)
+			offerbuild.RequireOfferCount(t, env.TestEnv, cam, 1)
 
-	// cam's offer: buy B_BUX(30), sell A_BUX(30) — this used to cause assert
-	offerTx2 := offerbuild.OfferCreate(cam, bobBUX(30), annBUX(30)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(offerTx2))
-	env.Close()
+			// cam's offer: buy B_BUX(30), sell A_BUX(30) — this used to cause assert
+			offerTx2 := offerbuild.OfferCreate(cam, bobBUX(30), annBUX(30)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(offerTx2))
+			env.Close()
 
-	// Verify AMM was consumed up to first cam offer quality
-	// (exact amounts depend on fixAMMv1_1, checking approximate)
-	ammAcc := amm.AMMAccount(t, env,
-		tx.Asset{Currency: "BUX", Issuer: ann.Address},
-		tx.Asset{Currency: "BUX", Issuer: bob.Address})
-
-	ammABUX := env.AMMPoolIOU(ammAcc, ann, "BUX")
-	ammBBUX := env.AMMPoolIOU(ammAcc, bob, "BUX")
-	// With fixAMMv1_1: A_BUX ≈ 309.354, B_BUX ≈ 320.021
-	if ammABUX < 309 || ammABUX > 310 {
-		t.Errorf("AMM A_BUX: got %f, want ~309.35", ammABUX)
+			// Verify AMM and the remaining offer against both rippled feature profiles.
+			ammAcc := amm.AMMAccount(t, env, assetA, assetB)
+			expectAmount := func(mantissa int64) tx.Amount {
+				return state.NewIssuedAmountFromValue(mantissa, -13, "BUX", ann.Address)
+			}
+			require.Equal(t, expectAmount(tc.aPool), env.AMMPoolIOUPrecise(ammAcc, ann, "BUX"))
+			require.Equal(t, state.NewIssuedAmountFromValue(tc.bPool, -13, "BUX", bob.Address), env.AMMPoolIOUPrecise(ammAcc, bob, "BUX"))
+			require.Equal(t, lpBefore, env.ReadAMMData(assetA, assetB).LPTokenBalance)
+			offerbuild.RequireOfferCount(t, env.TestEnv, cam, 1)
+			offers := env.AccountOffers(cam)
+			require.Equal(t, state.NewIssuedAmountFromValue(tc.offer, -13, "BUX", bob.Address), offers[0].TakerPays)
+			require.Equal(t, state.NewIssuedAmountFromValue(tc.offer, -13, "BUX", ann.Address), offers[0].TakerGets)
+		})
 	}
-	if ammBBUX < 320 || ammBBUX > 321 {
-		t.Errorf("AMM B_BUX: got %f, want ~320.02", ammBBUX)
-	}
-	// rippled testDirectToDirectPath (AMMExtended_test.cpp:1305-1325): cam's
-	// self-crossed passive offer is removed; only cam's new offer rests on the
-	// book, with the unfilled remainder (~20.02 B_BUX / ~20.02 A_BUX).
-	offerbuild.RequireOfferCount(t, env.TestEnv, cam, 1)
 }
 
 func TestAMMBookStep_XRPPathLoop(t *testing.T) {

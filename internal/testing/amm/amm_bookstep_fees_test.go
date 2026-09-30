@@ -4,6 +4,7 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
@@ -307,56 +308,97 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 }
 
 func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
-	env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30000)))
-	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000)))
-	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(1000)))
-	env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(1000)))
-	env.Close()
+	for _, tc := range []struct {
+		name       string
+		fixAMMv1_1 bool
+		fixAMMv1_3 bool
+		poolUSD    int64
+		carolUSD   int64
+	}{
+		{
+			name:       "fixAMMv1_1",
+			fixAMMv1_1: true,
+			fixAMMv1_3: true,
+			poolUSD:    8928571428571429,
+			carolUSD:   1085714285714286,
+		},
+		{
+			name:       "legacy",
+			fixAMMv1_1: false,
+			fixAMMv1_3: false,
+			poolUSD:    8928571428571428,
+			carolUSD:   1085714285714286,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			env.DisableFeature("SingleAssetVault")
+			env.DisableFeature("LendingProtocol")
+			if !tc.fixAMMv1_1 {
+				env.DisableFeature("fixAMMv1_1")
+			}
+			if !tc.fixAMMv1_3 {
+				env.DisableFeature("fixAMMv1_3")
+			}
+			env.Close()
+			env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30000)))
+			env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000)))
+			env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(1000)))
+			env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(1000)))
+			env.Close()
 
-	env.Trust(env.Alice, env.GW, "USD", 10000)
-	env.Trust(env.Alice, env.GW, "GBP", 10000)
-	env.Trust(env.Bob, env.GW, "USD", 10000)
-	env.Trust(env.Bob, env.GW, "GBP", 10000)
-	env.Trust(env.Carol, env.GW, "USD", 10000)
-	env.Trust(env.Carol, env.GW, "GBP", 10000)
-	env.Close()
+			env.Trust(env.Alice, env.GW, "USD", 10000)
+			env.Trust(env.Alice, env.GW, "GBP", 10000)
+			env.Trust(env.Bob, env.GW, "USD", 10000)
+			env.Trust(env.Bob, env.GW, "GBP", 10000)
+			env.Trust(env.Carol, env.GW, "USD", 10000)
+			env.Trust(env.Carol, env.GW, "GBP", 10000)
+			env.Close()
 
-	env.PayIOU(env.GW, env.Alice, "USD", 1000)
-	env.PayIOU(env.GW, env.Alice, "GBP", 1000)
-	env.PayIOU(env.GW, env.Bob, "USD", 1000)
-	env.PayIOU(env.GW, env.Bob, "GBP", 1000)
-	env.PayIOU(env.GW, env.Carol, "USD", 1000)
-	env.PayIOU(env.GW, env.Carol, "GBP", 1000)
-	env.Close()
+			env.PayIOU(env.GW, env.Alice, "USD", 1000)
+			env.PayIOU(env.GW, env.Alice, "GBP", 1000)
+			env.PayIOU(env.GW, env.Bob, "USD", 1000)
+			env.PayIOU(env.GW, env.Bob, "GBP", 1000)
+			env.PayIOU(env.GW, env.Carol, "USD", 1000)
+			env.PayIOU(env.GW, env.Carol, "GBP", 1000)
+			env.Close()
 
-	// GW sets 25% transfer rate (1.25 = rate 1250000000)
-	env.TestEnv.SetTransferRate(env.GW, 1250000000)
-	env.Close()
+			// GW sets 25% transfer rate (1.25 = rate 1250000000)
+			env.TestEnv.SetTransferRate(env.GW, 1250000000)
+			env.Close()
 
-	// Bob creates AMM: GBP(1000)/USD(1000)
-	createTx := amm.AMMCreate(env.Bob,
-		amm.IOUAmount(env.GW, "GBP", 1000),
-		amm.IOUAmount(env.GW, "USD", 1000)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(createTx))
-	env.Close()
+			// Bob creates AMM: GBP(1000)/USD(1000)
+			createTx := amm.AMMCreate(env.Bob,
+				amm.IOUAmount(env.GW, "GBP", 1000),
+				amm.IOUAmount(env.GW, "USD", 1000)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(createTx))
+			env.Close()
+			ammAcc := amm.AMMAccount(t, env, env.GBP, env.USD)
+			lpBefore := env.ReadAMMData(env.GBP, env.USD).LPTokenBalance
 
-	// alice pays carol USD(100) via path(~USD), sendmax GBP(150)
-	payTx := payment.PayIssued(env.Alice, env.Carol, amm.IOUAmount(env.GW, "USD", 100)).
-		PathsCurrency("USD", env.GW).
-		SendMax(amm.IOUAmount(env.GW, "GBP", 150)).
-		NoDirectRipple().
-		PartialPayment().
-		Build()
-	jtx.RequireTxSuccess(t, env.Submit(payTx))
-	env.Close()
+			// alice pays carol USD(100) via path(~USD), sendmax GBP(150)
+			payTx := payment.PayIssued(env.Alice, env.Carol, amm.IOUAmount(env.GW, "USD", 100)).
+				PathsCurrency("USD", env.GW).
+				SendMax(amm.IOUAmount(env.GW, "GBP", 150)).
+				NoDirectRipple().
+				PartialPayment().
+				Build()
+			jtx.RequireTxSuccess(t, env.Submit(payTx))
+			env.Close()
 
-	// alice: GBP(1000 - 120*1.25) = GBP(850)
-	requireAMMAmount(t, ammHolding(t, env, env.Alice, env.GBP), "850")
+			// alice: GBP(1000 - 120*1.25) = GBP(850)
+			requireAMMAmount(t, ammHolding(t, env, env.Alice, env.GBP), "850")
 
-	// carol: USD(1000 + 85.714...) ≈ USD(1085.714)
-	carolUSD := env.TestEnv.BalanceIOU(env.Carol, "USD", env.GW)
-	if carolUSD < 1085 || carolUSD > 1086 {
-		t.Errorf("Carol USD: got %f, want ~1085.71", carolUSD)
+			require.Equal(t,
+				state.NewIssuedAmountFromValue(1120, 0, "GBP", env.GW.Address),
+				env.AMMPoolIOUPrecise(ammAcc, env.GW, "GBP"))
+			require.Equal(t,
+				state.NewIssuedAmountFromValue(tc.poolUSD, -13, "USD", env.GW.Address),
+				env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD"))
+			require.Equal(t,
+				state.NewIssuedAmountFromValue(tc.carolUSD, -12, "USD", env.GW.Address),
+				ammHolding(t, env, env.Carol, env.USD))
+			require.Equal(t, lpBefore, env.ReadAMMData(env.GBP, env.USD).LPTokenBalance)
+		})
 	}
 }

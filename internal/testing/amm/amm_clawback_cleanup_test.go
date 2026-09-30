@@ -452,7 +452,7 @@ func TestAMMClawback_All(t *testing.T) {
 		env.Close()
 
 		bobXrpAfter := env.TestEnv.Balance(env.Bob)
-		require.Equal(t, int64(jtx.XRP(400)), int64(bobXrpAfter)-int64(bobXrpBefore))
+		require.Equal(t, jtx.XRP(400), int64(bobXrpAfter)-int64(bobXrpBefore))
 	})
 }
 

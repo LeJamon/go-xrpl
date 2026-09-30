@@ -4,6 +4,7 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
@@ -120,6 +121,8 @@ func TestAMMBookStep_Payment(t *testing.T) {
 	//   pay(becky, becky, USD(10)), path(~USD), sendmax(XRP(10))
 	// Expected: AMM XRP(107692308 drops), USD(130)
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 	env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30000)))
 	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(5000)))
 	env.Close()
@@ -141,6 +144,7 @@ func TestAMMBookStep_Payment(t *testing.T) {
 	env.Close()
 
 	ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+	lpBefore := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
 
 	// becky pays herself USD(10) via AMM, path(~USD), sendmax(XRP(10))
 	payTx := payment.PayIssued(becky, becky, amm.IOUAmount(env.GW, "USD", 10)).
@@ -151,18 +155,22 @@ func TestAMMBookStep_Payment(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// AMM: XRP should be ~107692308 drops, USD should be 130
+	// AMM: XRP should be exactly 107692308 drops, USD should be exactly 130.
 	ammXRP := env.AMMPoolXRP(ammAcc)
-	// The constant product: 100*1M * 140 = 14,000,000,000. After -10 USD (output): USD=130
-	// XRP = 14,000,000,000 / 130 = 107,692,307.69... ≈ 107,692,308 drops (rounded up)
-	if ammXRP < 107_692_307 || ammXRP > 107_692_309 {
-		t.Errorf("AMM XRP: got %d, want ~107692308", ammXRP)
-	}
+	require.Equal(t, uint64(107_692_308), ammXRP)
+	ammUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+	require.Equal(t, state.NewIssuedAmountFromValue(130, 0, "USD", env.GW.Address), ammUSD)
+	require.Equal(t, lpBefore, env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance)
 
-	ammUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-	if ammUSD != 130 {
-		t.Errorf("AMM USD: got %f, want 130", ammUSD)
-	}
+	// DepositAuth must not prevent a self-payment through the AMM.
+	env.TestEnv.EnableDepositAuth(becky)
+	env.Close()
+	secondPayment := payment.PayIssued(becky, becky, amm.IOUAmount(env.GW, "USD", 10)).
+		SendMax(amm.XRPAmount(10)).
+		PathsCurrency("USD", env.GW).
+		Build()
+	jtx.RequireTxSuccess(t, env.Submit(secondPayment))
+	env.Close()
 }
 
 func TestAMMBookStep_PayIOU(t *testing.T) {

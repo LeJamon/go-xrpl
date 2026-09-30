@@ -4,6 +4,7 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
@@ -353,6 +354,8 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 
 func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
 	env.FundWithIOUs(20000, 0) // Match rippled: fund with 20000
 	env.Close()
 
@@ -383,6 +386,13 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		result := env.SubmitMultiSigned(createTx, []*jtx.Account{becky, bogie})
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+		env.ExpectAMMBalancesExact(t, ammAcc, uint64(jtx.XRP(10000)),
+			state.NewIssuedAmountFromValue(10000, 0, "USD", env.GW.Address))
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		want, err := state.NewIssuedAmountFromDecimalString("10000000", data.LPTokenBalance.Currency, data.LPTokenBalance.Issuer)
+		require.NoError(t, err)
+		require.Equal(t, want, data.LPTokenBalance)
 	})
 
 	// Multisigned AMMDeposit (proportional, 1_000_000 LP tokens)
@@ -394,6 +404,13 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		result := env.SubmitMultiSigned(depositTx, []*jtx.Account{becky, bogie})
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+		env.ExpectAMMBalancesExact(t, ammAcc, uint64(jtx.XRP(11000)),
+			state.NewIssuedAmountFromValue(11000, 0, "USD", env.GW.Address))
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		want, err := state.NewIssuedAmountFromDecimalString("11000000", data.LPTokenBalance.Currency, data.LPTokenBalance.Issuer)
+		require.NoError(t, err)
+		require.Equal(t, want, data.LPTokenBalance)
 	})
 
 	// Multisigned AMMWithdraw
@@ -405,6 +422,13 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		result := env.SubmitMultiSigned(withdrawTx, []*jtx.Account{becky, bogie})
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+		env.ExpectAMMBalancesExact(t, ammAcc, uint64(jtx.XRP(10000)),
+			state.NewIssuedAmountFromValue(10000, 0, "USD", env.GW.Address))
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		want, err := state.NewIssuedAmountFromDecimalString("10000000", data.LPTokenBalance.Currency, data.LPTokenBalance.Issuer)
+		require.NoError(t, err)
+		require.Equal(t, want, data.LPTokenBalance)
 	})
 
 	// Multisigned AMMVote
@@ -413,6 +437,7 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		result := env.SubmitMultiSigned(voteTx, []*jtx.Account{becky, bogie})
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		require.Equal(t, uint16(1000), env.ReadAMMData(amm.XRP(), env.USD).TradingFee)
 	})
 
 	// Multisigned AMMBid
@@ -422,5 +447,21 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 			Build()
 		result := env.SubmitMultiSigned(bidTx, []*jtx.Account{becky, bogie})
 		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+		env.ExpectAMMBalancesExact(t, ammAcc, uint64(jtx.XRP(10000)),
+			state.NewIssuedAmountFromValue(10000, 0, "USD", env.GW.Address))
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		want, err := state.NewIssuedAmountFromDecimalString("9996000", data.LPTokenBalance.Currency, data.LPTokenBalance.Issuer)
+		require.NoError(t, err)
+		require.Equal(t, want, data.LPTokenBalance)
+		require.NotNil(t, data.AuctionSlot)
+		require.Equal(t, env.Alice.ID, data.AuctionSlot.Account)
+		require.Equal(t,
+			state.NewIssuedAmountFromValue(4000, 0, data.LPTokenBalance.Currency, data.LPTokenBalance.Issuer),
+			data.AuctionSlot.Price)
+		require.Equal(t, uint16(100), data.AuctionSlot.DiscountedFee)
+		require.False(t, data.AuctionSlot.AuthAccountsPresent)
+		require.Empty(t, data.AuctionSlot.AuthAccounts)
 	})
 }
