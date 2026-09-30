@@ -5,6 +5,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -25,11 +27,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with invalid flags (tfBurnable)")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 
 	// Invalid flags - tfTwoAssetIfEmpty
@@ -42,11 +40,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			Flags(amm.TfTwoAssetIfEmpty). // Invalid for withdraw
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with invalid flags (tfTwoAssetIfEmpty)")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 
 	// Invalid options - no tokens, no amounts, no flags
@@ -56,11 +50,7 @@ func TestInvalidWithdraw(t *testing.T) {
 
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with no parameters")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Invalid options - conflicting flags
@@ -73,11 +63,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			Flags(amm.TfSingleAsset | amm.TfTwoAsset).
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with conflicting flags")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Invalid options - tokens with tfWithdrawAll
@@ -90,11 +76,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			WithdrawAll().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow tokens with tfWithdrawAll")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Invalid options - tfWithdrawAll with tfOneAssetWithdrawAll
@@ -106,11 +88,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			Flags(amm.TfWithdrawAll | amm.TfOneAssetWithdrawAll).
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow tfWithdrawAll with tfOneAssetWithdrawAll")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Invalid tokens - zero
@@ -123,11 +101,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with zero tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Invalid tokens - negative
@@ -140,11 +114,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with negative tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Mismatched token - invalid Asset1Out issue
@@ -157,11 +127,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with mismatched asset")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Mismatched token - invalid Asset2Out issue
@@ -175,11 +141,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			TwoAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with mismatched Asset2")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Asset1Out.issue == Asset2Out.issue
@@ -193,11 +155,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			TwoAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow same asset for both outputs")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Invalid amount value - zero
@@ -210,11 +168,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with zero amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Invalid amount value - negative
@@ -227,11 +181,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw with negative amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Withdraw all tokens from one side - tecAMM_BALANCE
@@ -244,11 +194,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdrawing all tokens from one side")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_BALANCE)
+		amm.ExpectTER(t, result, ter.TecAMM_BALANCE.String())
 	})
 
 	// Withdraw all tokens from one side - XRP
@@ -261,11 +207,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdrawing all XRP from pool")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_BALANCE)
+		amm.ExpectTER(t, result, ter.TecAMM_BALANCE.String())
 	})
 
 	// Invalid Account (non-existent)
@@ -279,11 +221,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.SubmitWithOptions(jtx.WithSeq(withdrawTx, 1), jtx.SubmitOptions{SkipSignature: true})
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw from non-existent account")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
+		amm.ExpectTER(t, result, ter.TerNO_ACCOUNT.String())
 	})
 
 	// Invalid AMM (non-existent)
@@ -296,11 +234,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow withdraw from non-existent AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 
 	// Carol is not a Liquidity Provider
@@ -314,11 +248,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow non-LP to withdraw")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_BALANCE)
+		amm.ExpectTER(t, result, ter.TecAMM_BALANCE.String())
 	})
 
 	// LPTokenIn denominated in an unrelated IOU → temBAD_AMM_TOKENS.
@@ -332,11 +262,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should reject LPTokenIn with a non-AMM issue")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// === testMalformed cases (rippled AMM_test.cpp line 6623) ===
@@ -349,11 +275,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			Flags(amm.TfSingleAsset).
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow tfSingleAsset without Amount")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// tfOneAssetLPToken flag alone (no Amount, no LPTokenIn) → temMALFORMED
@@ -364,11 +286,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			Flags(amm.TfOneAssetLPToken).
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow tfOneAssetLPToken without Amount and LPTokenIn")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// tfLimitLPToken flag alone (no Amount, no EPrice) → temMALFORMED
@@ -379,11 +297,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			Flags(amm.TfLimitLPToken).
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow tfLimitLPToken without Amount and EPrice")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Both assets are XRP → temBAD_AMM_TOKENS
@@ -397,11 +311,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			TwoAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow both assets to be XRP")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// tfLimitLPToken with Amount=XRP(100) and EPrice=USD(100) → temBAD_AMM_TOKENS
@@ -415,11 +325,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LimitLPToken().
 			Build()
 		result := env.Submit(withdrawTx)
-
-		if result.Success {
-			t.Fatal("Should not allow tfLimitLPToken with non-LP EPrice")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 }
 
@@ -649,9 +555,9 @@ func TestWithdrawExactPriceZeroDenominator(t *testing.T) {
 		cleanup340 bool
 		want       string
 	}{
-		{name: "CleanupEnabled", cleanup: true, want: amm.TecAMM_FAILED},
+		{name: "CleanupEnabled", cleanup: true, want: ter.TecAMM_FAILED.String()},
 		{name: "CleanupDisabled", cleanup: false, want: "tefEXCEPTION"},
-		{name: "Cleanup340Only", cleanup: false, cleanup340: true, want: amm.TecAMM_FAILED},
+		{name: "Cleanup340Only", cleanup: false, cleanup340: true, want: ter.TecAMM_FAILED.String()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 100, 100, 1000, true)
@@ -700,7 +606,7 @@ func TestWithdrawPrecisionLossAmendmentMatrix(t *testing.T) {
 		cleanup330 bool
 		want       string
 	}{
-		{name: "AMMv13Disabled", fixAMMv13: false, cleanup330: true, want: amm.TecAMM_BALANCE},
+		{name: "AMMv13Disabled", fixAMMv13: false, cleanup330: true, want: ter.TecAMM_BALANCE.String()},
 		{name: "CleanupDisabled", fixAMMv13: true, cleanup330: false, want: "tecINVARIANT_FAILED"},
 		{name: "BothEnabled", fixAMMv13: true, cleanup330: true, want: "tecPRECISION_LOSS"},
 	} {

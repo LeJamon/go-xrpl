@@ -3,6 +3,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 )
@@ -21,5 +23,5 @@ func TestAMMMPTReleaseGate(t *testing.T) {
 
 	mpt := state.NewMPTAmountWithIssuanceID(100, env.GW.Address, releaseGateMPTID)
 	result := env.Submit(amm.AMMCreate(env.Alice, mpt, amm.XRPAmount(1)).Build())
-	amm.ExpectTER(t, result, amm.TemDISABLED)
+	amm.ExpectTER(t, result, ter.TemDISABLED.String())
 }

@@ -5,6 +5,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -83,11 +85,7 @@ func TestInvalidInstance(t *testing.T) {
 
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.XRPAmount(10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with both XRP tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Can't have both tokens the same IOU
@@ -99,11 +97,7 @@ func TestInvalidInstance(t *testing.T) {
 
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with same IOU tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Can't have zero amounts
@@ -115,11 +109,7 @@ func TestInvalidInstance(t *testing.T) {
 
 		createTx := amm.AMMCreate(env.Alice, tx.NewXRPAmount(0), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with zero XRP amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Reference: AMM ammAlice1(env, alice, XRP(10'000), USD(0), ter(temBAD_AMOUNT));
@@ -130,11 +120,7 @@ func TestInvalidInstance(t *testing.T) {
 
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 0)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with zero IOU amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Can't have negative amounts
@@ -146,11 +132,7 @@ func TestInvalidInstance(t *testing.T) {
 
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", -10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with negative IOU amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Reference: AMM ammAlice3(env, alice, XRP(-10'000), USD(10'000), ter(temBAD_AMOUNT));
@@ -161,11 +143,7 @@ func TestInvalidInstance(t *testing.T) {
 
 		createTx := amm.AMMCreate(env.Alice, tx.NewXRPAmount(-10000*1_000_000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with negative XRP amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Insufficient IOU balance
@@ -178,11 +156,7 @@ func TestInvalidInstance(t *testing.T) {
 		// Try to create with 40000 USD (more than alice has)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 40000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with insufficient IOU balance")
-		}
-		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
+		amm.ExpectTER(t, result, ter.TecUNFUNDED_AMM.String())
 	})
 
 	// Insufficient XRP balance
@@ -195,11 +169,7 @@ func TestInvalidInstance(t *testing.T) {
 		// Try to create with 40000 XRP (more than alice has)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(40000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with insufficient XRP balance")
-		}
-		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
+		amm.ExpectTER(t, result, ter.TecUNFUNDED_AMM.String())
 	})
 
 	// Invalid trading fee (> 1000)
@@ -214,11 +184,7 @@ func TestInvalidInstance(t *testing.T) {
 			TradingFee(1001). // Invalid: > 1000
 			Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with trading fee > 1000")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_FEE)
+		amm.ExpectTER(t, result, ter.TemBAD_FEE.String())
 	})
 
 	// AMM already exists
@@ -243,7 +209,7 @@ func TestInvalidInstance(t *testing.T) {
 		if result2.Success {
 			t.Fatal("Should not allow creating duplicate AMM")
 		}
-		amm.ExpectTER(t, result2, amm.TecDUPLICATE)
+		amm.ExpectTER(t, result2, ter.TecDUPLICATE.String())
 	})
 
 	// Invalid flags
@@ -258,11 +224,7 @@ func TestInvalidInstance(t *testing.T) {
 			Flags(amm.TfWithdrawAll). // Invalid flag for AMMCreate
 			Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with invalid flags")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 
 	// Invalid (non-existent) Account
@@ -275,11 +237,7 @@ func TestInvalidInstance(t *testing.T) {
 		bad := jtx.NewAccount("bad") // Not funded
 		createTx := amm.AMMCreate(bad, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.SubmitWithOptions(jtx.WithSeq(createTx, 1), jtx.SubmitOptions{SkipSignature: true})
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM from non-existent account")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
+		amm.ExpectTER(t, result, ter.TerNO_ACCOUNT.String())
 	})
 
 	// Globally frozen
@@ -296,10 +254,6 @@ func TestInvalidInstance(t *testing.T) {
 		// Try to create AMM with frozen asset
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("Should not allow creating AMM with globally frozen asset")
-		}
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 }

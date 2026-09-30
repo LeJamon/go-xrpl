@@ -40,7 +40,6 @@ func newPinnedAMMTestEnv(t *testing.T) *amm.AMMTestEnv {
 	bob := jtx.NewAccount("bob")
 	return &amm.AMMTestEnv{
 		TestEnv: testEnv,
-		T:       t,
 		GW:      gw,
 		Alice:   alice,
 		Carol:   carol,

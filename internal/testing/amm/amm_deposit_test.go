@@ -5,6 +5,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -43,11 +45,7 @@ func TestInvalidDeposit(t *testing.T) {
 			Flags(amm.TfWithdrawAll). // Invalid for deposit
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with invalid flags")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 
 	// Invalid tokens - zero
@@ -60,11 +58,7 @@ func TestInvalidDeposit(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with zero LP tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Invalid tokens - negative
@@ -77,11 +71,7 @@ func TestInvalidDeposit(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with negative LP tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Invalid amount - zero
@@ -94,11 +84,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with zero amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Invalid amount - negative
@@ -111,11 +97,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with negative amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Invalid Account (non-existent)
@@ -129,11 +111,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.SubmitWithOptions(jtx.WithSeq(depositTx, 1), jtx.SubmitOptions{SkipSignature: true})
-
-		if result.Success {
-			t.Fatal("Should not allow deposit from non-existent account")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
+		amm.ExpectTER(t, result, ter.TerNO_ACCOUNT.String())
 	})
 
 	// Invalid AMM (non-existent)
@@ -147,11 +125,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit to non-existent AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 
 	// Depositing mismatched token
@@ -165,11 +139,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with mismatched token")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Deposit non-empty AMM with tfTwoAssetIfEmpty
@@ -183,11 +153,7 @@ func TestInvalidDeposit(t *testing.T) {
 			TwoAssetIfEmpty().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow TwoAssetIfEmpty deposit to non-empty AMM")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_NOT_EMPTY)
+		amm.ExpectTER(t, result, ter.TecAMM_NOT_EMPTY.String())
 	})
 
 	// Insufficient balance
@@ -215,11 +181,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with insufficient balance")
-		}
-		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
+		amm.ExpectTER(t, result, ter.TecUNFUNDED_AMM.String())
 	})
 
 	// Globally frozen asset
@@ -237,11 +199,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit of frozen asset")
-		}
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 }
 
@@ -405,11 +363,7 @@ func TestDepositInvalidAMM(t *testing.T) {
 		SingleAsset().
 		Build()
 	result := env.Submit(depositTx)
-
-	if result.Success {
-		t.Fatal("Should not allow deposit to non-existent AMM")
-	}
-	amm.ExpectTER(t, result, amm.TerNO_AMM)
+	amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 }
 
 // TestAMMDepositWithFrozenAssets tests deposit behavior when one of the AMM
@@ -459,7 +413,7 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 			TwoAsset().
 			Build()
 		result := env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
 	// Deposit single frozen asset -> tecFROZEN.
@@ -472,7 +426,7 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
 	// With AMMClawback enabled: deposit the non-frozen asset (XRP) when the
@@ -487,7 +441,7 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
 	// Reference: lines 7414-7429
@@ -521,9 +475,5 @@ func TestDepositTradingFeePresentZero(t *testing.T) {
 		TradingFee(0). // present, value 0
 		Build()
 	result := env.Submit(depositTx)
-
-	if result.Success {
-		t.Fatal("tfSingleAsset deposit carrying TradingFee=0 must be rejected")
-	}
-	amm.ExpectTER(t, result, amm.TemMALFORMED)
+	amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 }

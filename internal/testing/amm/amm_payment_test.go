@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	"github.com/stretchr/testify/require"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -115,7 +117,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 					balanceBefore, sequenceBefore := env.Balance(env.Carol), env.Seq(env.Carol)
 					usdBefore := env.IOUBalance(env.Carol, env.GW, "USD")
 					poolBefore := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-					amm.ExpectTER(t, env.Submit(payTx), amm.TecNO_PERMISSION)
+					amm.ExpectTER(t, env.Submit(payTx), ter.TecNO_PERMISSION.String())
 					require.Equal(t, balanceBefore-env.BaseFee(), env.Balance(env.Carol))
 					require.Equal(t, sequenceBefore+1, env.Seq(env.Carol))
 					require.Equal(t, usdBefore, env.IOUBalance(env.Carol, env.GW, "USD"))
@@ -142,7 +144,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 										Fee(1500). // baseFee * 150
 										Build()
 		result := env.Submit(escrowTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	})
 
 	// Reference: lines 3662-3676 -- payment channel to AMM account -> tecNO_PERMISSION.
@@ -158,7 +160,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 			env.Carol.PublicKeyHex(),
 		).Build()
 		result := env.Submit(channelTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	})
 
 	// Reference: lines 3678-3682 -- check to AMM account -> tecNO_PERMISSION.
@@ -168,7 +170,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 
 		checkTx := check.CheckCreate(env.Carol, ammAcc, amm.XRPAmount(100)).Build()
 		result := env.Submit(checkTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	})
 
 	t.Run("PoolConsumption", func(t *testing.T) {
@@ -208,7 +210,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 				poolXRP := env.AMMPoolXRP(ammAcc)
 				poolUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
 				lpBalance := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
-				amm.ExpectTER(t, env.Submit(payTx), amm.TecPATH_PARTIAL)
+				amm.ExpectTER(t, env.Submit(payTx), ter.TecPATH_PARTIAL.String())
 				require.Equal(t, aliceBalance-env.BaseFee(), env.Balance(env.Alice))
 				require.Equal(t, aliceSequence+1, env.Seq(env.Alice))
 				require.Equal(t, aliceUSD, env.IOUBalance(env.Alice, env.GW, "USD"))
@@ -389,7 +391,7 @@ func TestAMMRippling(t *testing.T) {
 	ammIssueAmt := tx.NewIssuedAmountFromFloat64(10000, "TST", ammAcc.Address)
 	trustD := trustset.TrustSet(d, ammIssueAmt).Build()
 	result := env.Submit(trustD)
-	amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+	amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	env.Close()
 
 	// Payment from C to D delivering TST.AMM using SendMax TSTA and path
@@ -499,7 +501,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 		// Now AMMCreate should fail with tecDUPLICATE (all 256 slots occupied)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, amm.TecDUPLICATE)
+		amm.ExpectTER(t, result, ter.TecDUPLICATE.String())
 	})
 
 	// terADDRESS_COLLISION: With featureSingleAssetVault enabled, AMMCreate returns
@@ -537,12 +539,6 @@ func TestFailedPseudoAccount(t *testing.T) {
 		// Now AMMCreate should fail with terADDRESS_COLLISION
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, amm.TerADDRESS_COLLISION)
+		amm.ExpectTER(t, result, ter.TerADDRESS_COLLISION.String())
 	})
 }
-
-// Suppress unused import warnings.
-var (
-	_ = paymentPkg.PathStep{}
-	_ = trustset.TrustSet
-)

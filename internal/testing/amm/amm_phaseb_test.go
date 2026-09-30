@@ -6,6 +6,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -26,11 +28,7 @@ func TestPhaseB_InvalidAMMAsset(t *testing.T) {
 		badAsset := tx.NewIssuedAmountFromFloat64(1000, badXRPCurrency, env.GW.Address)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(1000), badAsset).Build()
 		result := env.Submit(createTx)
-
-		if result.Success {
-			t.Fatal("AMMCreate with bad XRP currency must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_CURRENCY)
+		amm.ExpectTER(t, result, ter.TemBAD_CURRENCY.String())
 	})
 
 	// An XRP amount carrying a non-zero issuer is temBAD_ISSUER. AMMDeposit's
@@ -45,11 +43,7 @@ func TestPhaseB_InvalidAMMAsset(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("AMMDeposit with XRP asset + issuer must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_ISSUER)
+		amm.ExpectTER(t, result, ter.TemBAD_ISSUER.String())
 	})
 
 	// The bad XRP currency in a deposit Amount is temBAD_CURRENCY.
@@ -62,11 +56,7 @@ func TestPhaseB_InvalidAMMAsset(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("AMMDeposit with bad XRP currency amount must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_CURRENCY)
+		amm.ExpectTER(t, result, ter.TemBAD_CURRENCY.String())
 	})
 }
 
@@ -86,11 +76,7 @@ func TestPhaseB_DepositLPTokenOutWrongIssuer(t *testing.T) {
 		LPToken().
 		Build()
 	result := env.Submit(depositTx)
-
-	if result.Success {
-		t.Fatal("AMMDeposit with wrong LPTokenOut issuer must fail")
-	}
-	amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+	amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 }
 
 // Item 11: tfLPToken deposit minimums are compared against the POST-adjustment
@@ -110,11 +96,7 @@ func TestPhaseB_DepositLPTokenMinimums(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("tfLPToken deposit with unmet minimum must fail tecAMM_FAILED")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_FAILED)
+		amm.ExpectTER(t, result, ter.TecAMM_FAILED.String())
 	})
 
 	// A minimum below the proportional deposit succeeds.
@@ -158,11 +140,7 @@ func TestPhaseB_BidAuthAccounts(t *testing.T) {
 			AuthAccounts(env.Bob.Address, env.Bob.Address).
 			Build()
 		result := env.Submit(bidTx)
-
-		if result.Success {
-			t.Fatal("Bid with duplicate AuthAccounts must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	t.Run("Self", func(t *testing.T) {
@@ -174,11 +152,7 @@ func TestPhaseB_BidAuthAccounts(t *testing.T) {
 			AuthAccounts(env.Carol.Address).
 			Build()
 		result := env.Submit(bidTx)
-
-		if result.Success {
-			t.Fatal("Bid authorizing self must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 }
 
@@ -192,10 +166,7 @@ func TestPhaseB_ClawbackPreflight(t *testing.T) {
 		env := setupAMM(t)
 		clawTx := amm.AMMClawback(env.GW, env.GW.Address, env.USD, amm.XRP()).Build()
 		result := env.Submit(clawTx)
-		if result.Success {
-			t.Fatal("clawback with holder==issuer must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Asset being XRP is temMALFORMED (asset must be an issued currency).
@@ -203,10 +174,7 @@ func TestPhaseB_ClawbackPreflight(t *testing.T) {
 		env := setupAMM(t)
 		clawTx := amm.AMMClawback(env.GW, env.Carol.Address, amm.XRP(), env.USD).Build()
 		result := env.Submit(clawTx)
-		if result.Success {
-			t.Fatal("clawback with XRP asset must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 
 	// Asset issuer not matching Account is temMALFORMED (not the removed
@@ -216,9 +184,6 @@ func TestPhaseB_ClawbackPreflight(t *testing.T) {
 		// Alice is not the USD issuer; asset.issuer (gw) != Account (alice).
 		clawTx := amm.AMMClawback(env.Alice, env.Carol.Address, env.USD, amm.XRP()).Build()
 		result := env.Submit(clawTx)
-		if result.Success {
-			t.Fatal("clawback with asset issuer != Account must fail")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 	})
 }

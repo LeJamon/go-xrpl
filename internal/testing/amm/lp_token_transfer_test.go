@@ -10,6 +10,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
@@ -89,7 +91,7 @@ func TestLPTokenTransfer_DirectStep(t *testing.T) {
 		before := env.TestEnv.IOUBalance(env.Bob, ammAccount, lpAmt.Currency)
 		payTx := payment.PayIssued(env.Bob, ammAccount, lpAmt).Build()
 		result := env.Submit(payTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 		after := env.TestEnv.IOUBalance(env.Bob, ammAccount, lpAmt.Currency)
 		require.Equal(t, before, after)
 	})
@@ -246,7 +248,7 @@ func TestLPTokenTransfer_GlobalFreeze(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 }
 

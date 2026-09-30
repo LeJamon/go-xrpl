@@ -207,6 +207,11 @@ func NewTestEnvBacked(t testing.TB) *TestEnv {
 	return env
 }
 
+// T returns the test handle shared by this environment and its fixtures.
+func (e *TestEnv) T() testing.TB {
+	return e.t
+}
+
 // enablePebbleBacking enables PebbleDB-backed SHAMaps on the environment.
 // Must be called before any transactions are submitted.
 func (e *TestEnv) enablePebbleBacking(t testing.TB) {

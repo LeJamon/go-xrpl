@@ -58,7 +58,7 @@ func TestLPTokenMPTTransferCapability(t *testing.T) {
 					beforeLP := env.ReadAMMData(asset1, asset2).LPTokenBalance.Value()
 					jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(env.GW, env.Alice, env.LPTokenAmountFromLedger(asset1, asset2, 1_000)).Build()))
 					env.Close()
-					jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, pool, limit.Currency, 1_000)
+					requireAMMIOUBalance(t, env.TestEnv, env.Alice, pool, limit.Currency, 1_000)
 
 					balance, sequence, owners := env.Balance(env.Alice), env.Seq(env.Alice), env.OwnerCount(env.Alice)
 					result := env.Submit(payment.PayIssued(env.Alice, env.Bob, env.LPTokenAmountFromLedger(asset1, asset2, 100)).Build())
@@ -69,8 +69,8 @@ func TestLPTokenMPTTransferCapability(t *testing.T) {
 					} else {
 						jtx.RequireTxClaimed(t, result, jtx.TecNO_AUTH)
 					}
-					jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, pool, limit.Currency, wantAlice)
-					jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, pool, limit.Currency, wantBob)
+					requireAMMIOUBalance(t, env.TestEnv, env.Alice, pool, limit.Currency, wantAlice)
+					requireAMMIOUBalance(t, env.TestEnv, env.Bob, pool, limit.Currency, wantBob)
 					jtx.RequireBalance(t, env.TestEnv, env.Alice, balance-env.BaseFee())
 					jtx.RequireSequence(t, env.TestEnv, env.Alice, sequence+1)
 					jtx.RequireOwnerCount(t, env.TestEnv, env.Alice, owners)

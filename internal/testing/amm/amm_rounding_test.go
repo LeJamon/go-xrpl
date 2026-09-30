@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -255,7 +257,7 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 				if fixV1_3 {
 					jtx.RequireTxSuccess(t, result)
 				} else {
-					amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
+					amm.ExpectTER(t, result, ter.TecUNFUNDED_AMM.String())
 				}
 			})
 		})

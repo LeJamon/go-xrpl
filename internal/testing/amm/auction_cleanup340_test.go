@@ -44,7 +44,7 @@ func TestAMMBidCleanup340Floor(t *testing.T) {
 						require.Equal(t, env.Alice.ID, after.AuctionSlot.Account)
 						require.Equal(t, fee/10, after.AuctionSlot.DiscountedFee)
 						require.Equal(t, uint64(10_000_000_000), env.Balance(pool))
-						jtx.RequireIOUBalance(t, env.TestEnv, pool, env.GW, "USD", 10000)
+						requireAMMIOUBalance(t, env.TestEnv, pool, env.GW, "USD", 10000)
 						if fee == 0 && enabled {
 							result = env.Submit(amm.AMMBid(env.Alice, amm.XRP(), env.USD).Build())
 							jtx.RequireTxSuccess(t, result)

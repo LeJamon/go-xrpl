@@ -1,6 +1,7 @@
 package amm_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -37,4 +38,13 @@ func ammIssuedAmount(t *testing.T, value string, asset tx.Asset) tx.Amount {
 func requireAMMAmount(t *testing.T, got tx.Amount, value string) {
 	t.Helper()
 	require.Equal(t, ammIssuedAmount(t, value, tx.Asset{Currency: got.Currency, Issuer: got.Issuer}), got)
+}
+
+func requireAMMIOUBalance(t testing.TB, env *jtx.TestEnv, holder, issuer *jtx.Account, currency string, expected float64) {
+	t.Helper()
+	actual, found := env.LookupIOUBalance(holder, issuer, currency)
+	require.True(t, found, "holding trust line must exist")
+	want, err := state.NewIssuedAmountFromDecimalString(strconv.FormatFloat(expected, 'f', -1, 64), currency, issuer.Address)
+	require.NoError(t, err)
+	require.Equal(t, want, *actual)
 }
