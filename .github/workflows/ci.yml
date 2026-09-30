@@ -135,13 +135,33 @@ jobs:
           expected="$(git describe --tags --always --dirty)"
           ../tmp/goxrpl version |
             grep --fixed-strings --line-regexp "go-xrpl version ${expected}"
+          ../tmp/goxrpl version |
+            grep --fixed-strings --line-regexp "Confidential MPT crypto: unavailable"
+      - name: Record built artifact
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          sha256sum ../tmp/goxrpl > "$EVIDENCE_DIR/goxrpl-binary.sha256"
+          go version -m ../tmp/goxrpl > "$EVIDENCE_DIR/goxrpl-build-info.txt"
+          ../tmp/goxrpl version > "$EVIDENCE_DIR/goxrpl-default-version.txt"
+      - name: Retain built artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goxrpl-${{ github.sha }}-linux-amd64
+          path: ../tmp/goxrpl
+          if-no-files-found: error
       - name: Record producer evidence
         if: always()
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build
           EVIDENCE_LABEL: build
           EVIDENCE_STATUS: ${{ job.status }}
-          EVIDENCE_COMMAND: ./scripts/build.sh; ../tmp/goxrpl version | grep --fixed-strings --line-regexp "go-xrpl version $(git describe --tags --always --dirty)"
+          EVIDENCE_COMMAND: >-
+            ./scripts/build.sh;
+            ../tmp/goxrpl version | grep --fixed-strings --line-regexp "go-xrpl version $(git describe --tags --always --dirty)";
+            ../tmp/goxrpl version | grep --fixed-strings --line-regexp "Confidential MPT crypto: unavailable";
+            sha256sum ../tmp/goxrpl; go version -m ../tmp/goxrpl
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
@@ -697,7 +717,7 @@ jobs:
           run_recorded oracle_version_commit 'grep --fixed-strings --line-regexp "Git commit hash: $ORACLE_COMMIT" "$EVIDENCE_DIR/oracle-version.txt"'
           run_recorded goxrpl_image_build 'docker build --build-arg "VERSION=$GITHUB_SHA" -t "$GOXRPL_IMAGE" .'
           run_recorded goxrpl_image_id 'docker image inspect "$GOXRPL_IMAGE" --format "{{.Id}} {{json .RepoDigests}}"'
-          run_recorded goxrpl_version 'docker run --rm "$GOXRPL_IMAGE" version > "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "go-xrpl version $GITHUB_SHA" "$EVIDENCE_DIR/goxrpl-version.txt"'
+          run_recorded goxrpl_version 'docker run --rm "$GOXRPL_IMAGE" version > "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "go-xrpl version $GITHUB_SHA" "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "Confidential MPT crypto: available" "$EVIDENCE_DIR/goxrpl-version.txt"'
           run_recorded consensus_smoke 'GOXRPL_IMAGE="$GOXRPL_IMAGE" RIPPLED_IMAGE="$ORACLE_IMAGE" PAYMENT_COUNT=3 MIN_SEQ_EMPTY=15 BOOT_TIMEOUT=240 TX_TIMEOUT=180 bash scripts/consensus-smoke/smoke.sh > "$EVIDENCE_DIR/consensus-smoke.log" 2>&1'
           run_recorded consensus_smoke_log 'test -s "$EVIDENCE_DIR/consensus-smoke.log" && cat "$EVIDENCE_DIR/consensus-smoke.log"'
 

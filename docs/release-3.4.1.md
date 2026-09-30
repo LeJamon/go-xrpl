@@ -150,7 +150,10 @@ and reconciles the executed counts.
 Each run retains `release-evidence-<tested-sha>`, containing the workflow,
 producer commands and environment, strict corpus and engine execution reports,
 oracle package/binary/image provenance, and production-image consensus smoke
-results. `final-acceptance.txt` records the tested Git tree and commit. These
+results. The default binary is retained separately as
+`goxrpl-<tested-sha>-linux-amd64`, with its checksum and Go build settings in
+the evidence. Both the default binary and native production image must report
+the capability expected for their build profile. `final-acceptance.txt` records the tested Git tree and commit. These
 artifacts establish the executed scope documented in the reports; they do not
 turn unexecuted inventory rows into parity evidence.
 
