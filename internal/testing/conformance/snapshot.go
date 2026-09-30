@@ -109,7 +109,7 @@ type snapshotHistory struct {
 	PreSubmit  []snapshotSubmission `json:"pre_submit,omitempty"`
 	CloseInput snapshotCloseInput   `json:"close_input"`
 	Closed     snapshotLedger       `json:"closed"`
-	Queue      *snapshotQueue       `json:"queue,omitempty"`
+	Queue      *snapshotQueue       `json:"queue"`
 }
 
 // snapshotCloseInput contains only values captured before closing the oracle
@@ -284,6 +284,9 @@ func validateSnapshotHistory(history []snapshotHistory) error {
 	}
 	for i, item := range history {
 		name := fmt.Sprintf("history[%d]", i)
+		if item.Queue == nil {
+			return fmt.Errorf("%s.queue is missing", name)
+		}
 		if err := validateSnapshotLedgerShape(name+".parent", item.Parent); err != nil {
 			return err
 		}
@@ -1177,10 +1180,8 @@ func replaySnapshotHistory(
 		if len(retries) != 0 {
 			return nil, fmt.Errorf("%s next open ledger left %d retries", name, len(retries))
 		}
-		if item.Queue != nil {
-			if err := assertSnapshotQueue(queue, view.Current(), item.Queue); err != nil {
-				return nil, fmt.Errorf("%s post-close queue: %w", name, err)
-			}
+		if err := assertSnapshotQueue(queue, view.Current(), item.Queue); err != nil {
+			return nil, fmt.Errorf("%s post-close queue: %w", name, err)
 		}
 		previous = built.Ledger
 	}
@@ -1688,7 +1689,7 @@ func validateSnapshotJSONShape(data []byte) error {
 		}
 		for i, item := range history {
 			name := fmt.Sprintf("history[%d]", i)
-			if err := requireSnapshotKeysWithOptional(name, item, []string{"parent", "close_input", "closed"}, []string{"pre_submit", "queue"}); err != nil {
+			if err := requireSnapshotKeysWithOptional(name, item, []string{"parent", "close_input", "closed", "queue"}, []string{"pre_submit"}); err != nil {
 				return err
 			}
 			if err := validateSnapshotLedgerJSON(name+".parent", item["parent"]); err != nil {
@@ -1700,10 +1701,8 @@ func validateSnapshotJSONShape(data []byte) error {
 			if err := validateSnapshotCloseInputJSON(name+".close_input", item["close_input"]); err != nil {
 				return err
 			}
-			if rawQueue, exists := item["queue"]; exists {
-				if err := validateSnapshotQueueJSON(name+".queue", rawQueue); err != nil {
-					return err
-				}
+			if err := validateSnapshotQueueJSON(name+".queue", item["queue"]); err != nil {
+				return err
 			}
 			if rawPrior, exists := item["pre_submit"]; exists {
 				if err := validateSnapshotPreSubmitJSON(name+".pre_submit", rawPrior); err != nil {

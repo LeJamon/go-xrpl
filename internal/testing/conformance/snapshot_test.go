@@ -186,6 +186,39 @@ func TestSnapshotQueueJSONRequiresCompleteMetricsAndAllowsNullMaxSize(t *testing
 	}
 }
 
+func TestSnapshotHistoryRequiresQueueObservations(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-queue-multi-ledger-history.json")
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"missing", "null"} {
+		t.Run(mode, func(t *testing.T) {
+			var object map[string]any
+			if err := json.Unmarshal(data, &object); err != nil {
+				t.Fatal(err)
+			}
+			history := object["history"].([]any)[0].(map[string]any)
+			if mode == "missing" {
+				delete(history, "queue")
+			} else {
+				history["queue"] = nil
+			}
+			modified, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeSnapshotFixture(modified); err == nil || !strings.Contains(err.Error(), "history[0].queue") {
+				t.Fatalf("%s history queue accepted: %v", mode, err)
+			}
+		})
+	}
+	fixture.History[0].Queue = nil
+	if err := runSnapshotFixture(fixture); err == nil || !strings.Contains(err.Error(), "history[0].queue") {
+		t.Fatalf("execution accepted missing history queue: %v", err)
+	}
+}
+
 func TestSnapshotSubmitComparesNumericTERAppliedQueuedAndFee(t *testing.T) {
 	want := snapshotSubmit{
 		Boundary:         snapshotSubmitBoundary,

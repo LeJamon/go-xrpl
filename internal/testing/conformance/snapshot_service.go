@@ -48,7 +48,7 @@ type SnapshotEntry = snapshotEntry
 
 // SnapshotHistoryCase is one authenticated ledger transition replayed before
 // the main fixture parent. CloseSet is the parsed close_input transaction set;
-// Queue, when present, is the oracle's post-close open-ledger queue state.
+// Queue is the oracle's required post-close open-ledger queue state.
 type SnapshotHistoryCase struct {
 	Parent     SnapshotLedger
 	PreSubmit  []SnapshotSubmission

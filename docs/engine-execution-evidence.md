@@ -188,8 +188,8 @@ The queue configuration is preserved exactly in both service runs. Cases with
 recorded history restart from the earliest authenticated parent and execute
 each submission and close before reaching the primary case. The history sets
 fee metrics through actual closes and carries retained local transactions
-through open-ledger acceptance. Queue checks compare complete signed membership,
-fee levels, ledger occupancy and the optional maximum size. Expected metrics
+through open-ledger acceptance. Every historical close requires a queue observation. Queue checks compare complete
+signed membership, fee levels, ledger occupancy and the optional maximum size. Expected metrics
 never initialize the queue.
 
 The expanded cases exercise fee-based eviction, default network thresholds and

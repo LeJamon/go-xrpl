@@ -172,10 +172,8 @@ func newServiceFromSnapshotHistory(t *testing.T, c conformance.SnapshotCase, sta
 		if err := assertServiceTransactionHistory(svc, historyCase); err != nil {
 			t.Fatalf("%s durable transaction history: %v", label, err)
 		}
-		if history.Queue != nil {
-			if err := conformance.AssertSnapshotQueue(svc.QueueAllTxs(), svc.TxQMetrics(), history.Queue); err != nil {
-				t.Fatalf("%s queue after close: %v", label, err)
-			}
+		if err := conformance.AssertSnapshotQueue(svc.QueueAllTxs(), svc.TxQMetrics(), history.Queue); err != nil {
+			t.Fatalf("%s queue after close: %v", label, err)
 		}
 	}
 	if err := assertServiceLedger("parent after history", svc.GetClosedLedger(), c.Parent); err != nil {

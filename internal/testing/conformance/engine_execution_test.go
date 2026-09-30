@@ -156,9 +156,7 @@ func TestEngineExecutionOrder(t *testing.T) {
 				parents = append(parents, history.Parent)
 				closedLedgers = append(closedLedgers, history.Closed)
 				report.HistoryTransitions++
-				if history.Queue != nil {
-					report.QueueChecks++
-				}
+				report.QueueChecks++
 				report.HistorySubmissions += len(history.PreSubmit)
 				report.HistoryCloseInputs += len(history.CloseInput.TxBlobs)
 				report.HistoryReplayLeaves += len(history.Closed.Transactions)
