@@ -129,19 +129,19 @@
       "supported": true
     }
   ],
-  "binary_sha256": "e396315799376c609a2b887880db62e1e7dbdd056de808495603d07f551dfe5d",
-  "build_identity": "{\"oracle\":{\"repository\":\"XRPLF/xrpld-private\",\"tag\":\"3.4.1\",\"commit\":\"d147fccf54a500fce586522f28d6044c37fd8d29\"},\"production_source\":\"/Users/thomashussenet/Documents/project_goXRPL/rippled-worktrees/v3.4.1-oracle\",\"verified_production_binary\":\"/private/tmp/issue-2011-oracle-build/build/xrpld\",\"verified_production_binary_sha256\":\"f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3d6113\",\"verified_production_binary_version\":\"xrpld version 3.4.1\",\"instrumented_source_root\":\"/private/tmp/issue-2011-oracle-build/source\",\"instrumented_batch_test_sha256\":\"c4b44f108cbdc9cc03ceb55d30e3bf7452406ebc82efed9314247e18abf75b91\",\"recorder_source\":\"/Users/thomashussenet/Documents/project_goXRPL/goXRPL-worktrees/issue-2016-oracle-scenarios/scripts/oracle/strict_recorder.cpp\",\"recorder_source_sha256\":\"044769fed7eb673961d5cc45b119f7ad5487046d850dc37de0cddff7e5886fd4\",\"config\":\"/Users/thomashussenet/Documents/project_goXRPL/goXRPL-worktrees/issue-2016-oracle-scenarios/scripts/oracle/strict-corpus-config.json\",\"config_sha256\":\"0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d\",\"config_values_verified\":{\"fixture_version\":\"v4\",\"oracle_repository\":\"XRPLF/xrpld-private\",\"oracle_tag\":\"3.4.1\",\"oracle_commit\":\"d147fccf54a500fce586522f28d6044c37fd8d29\",\"network_id\":0,\"scenario_overrides\":{\"network_id\":{\"AccountSet/network-id-missing\":1025,\"AccountSet/network-id-wrong\":1025},\"queue_history\":{\"AccountSet/queued-low-fee\":{\"txq_config\":{\"ledgers_in_queue\":2,\"queue_size_min\":2,\"minimum_txn_in_ledger_standalone\":2,\"normal_consensus_increase_percent\":0},\"internal_config\":{\"min_ledgers_to_compute_size_limit\":3,\"max_ledger_counts_to_store\":100},\"pre_submit_count\":3,\"pre_submit_order\":\"alice->bob, bob->alice, alice->bob\",\"primary\":{\"engine_result\":\"terQUEUED\",\"applied\":false,\"queued\":true}}},\"persistent_cleanup\":{\"NFTokenAcceptOffer/expired-sell-offer-cleanup\":{\"profile\":\"c1-l1-b1-f1\",\"engine_result\":\"tecEXPIRED\",\"applied\":true,\"queued\":false,\"expected_deleted_object\":\"NFTokenOffer\"},\"OfferCreate/expired-offer-cleanup\":{\"profile\":\"c1-l1-b1-f1\",\"engine_result\":\"tecKILLED\",\"applied\":true,\"queued\":false,\"expected_deleted_object\":\"Offer\",\"expected_retained_object\":\"Offer\"}},\"invariant_recovery\":{\"EscrowCancel/malformed-escrow-cancel-refund\":{\"profile\":\"c1-l1-b1-f1\",\"engine_result\":\"tecINVARIANT_FAILED\",\"applied\":true,\"queued\":false,\"coverage\":\"malformed parent escrow refund reaches fee-only recovery and records invariant failure\"}},\"seeded_payments\":{\"seed\":2016,\"profile\":\"c1-l1-b1-f1\",\"samples\":[\"Payment/seed2016-payment-0-valid-base-fee\",\"Payment/seed2016-payment-1-insufficient-balance\",\"Payment/seed2016-payment-2-valid-fee-edge\",\"Payment/seed2016-payment-3-future-sequence\"],\"coverage\":\"deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence\"}},\"apply_flags\":0,\"skip_signature_verification\":false,\"profile_encoding\":\"c<cleanup>-l<lending>-b<BatchV1_1>-f<fixBatchV1_2>\",\"profiles\":\"all 16 boolean combinations\",\"txq_config\":{\"ledgers_in_queue\":20,\"queue_size_min\":2000,\"retry_sequence_percent\":25,\"minimum_escalation_multiplier\":128000,\"minimum_txn_in_ledger\":32,\"minimum_txn_in_ledger_standalone\":1000,\"target_txn_in_ledger\":256,\"maximum_txn_in_ledger\":0,\"maximum_txn_in_ledger_set\":false,\"normal_consensus_increase_percent\":20,\"slow_consensus_decrease_percent\":50,\"maximum_txn_per_account\":10,\"minimum_last_ledger_buffer\":2,\"standalone\":true},\"fees\":{\"reference_fee_drops\":10,\"account_reserve_drops\":200000000,\"owner_reserve_increment_drops\":50000000},\"signature_policy\":\"real canonical signatures with Application::checkSigs(true)\",\"submission_policy\":\"one direct submit RPC per signed tx_blob; optional pre_submit history uses the same open ledger and queue; no retries or output-derived setup\",\"close_policy\":{\"setup\":\"Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent\",\"request_seconds_after_now\":5,\"capture\":\"effective agreed close time computed from the pre-close header and resolution\"},\"snapshot_policy\":\"raw ledger header, effective rule IDs, fee schedule, raw SLE bytes, raw transaction and metadata bytes\",\"families\":[\"Payment\",\"AccountSet\",\"TrustSet\",\"TicketCreate\",\"Batch\",\"VaultCreate\",\"LoanBrokerSet\",\"NFTokenAcceptOffer\",\"OfferCreate\",\"EscrowCancel\"],\"batch_wrapper_policy\":\"canonical RawTransaction and poisoned CreatedNode wrapper, on both fix sides where BatchV1_1 is enabled\",\"submit_policy\":\"open_ledger boundary, engine_result token and numeric TER, applied/queued flags, uint64 fee, complete current open-ledger SLE bytes\"},\"compile_command_sha256\":\"ebc54200f341c60562c8583a3649434b0e477bb040e70670554c3f1342afeb86\",\"link_command_sha256\":\"3e3923ceba096fff03058cc9c69636a4d48f8f7af07a998bed40d5176d221985\",\"strict_binary\":\"/private/tmp/issue-2016-oracle-build/build/xrpld\",\"strict_binary_sha256\":\"e396315799376c609a2b887880db62e1e7dbdd056de808495603d07f551dfe5d\",\"build_method\":\"hardlinked exact-commit production build objects; newly compiled recorder object; relinked xrpld\",\"clean_build\":{}}",
-  "config_identity": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
+  "binary_sha256": "6b5faf1e7711342e823c24a7a39968d9a0f6dafe1aafbcd3140592e56efd6339",
+  "build_identity": "/private/tmp/issue-2015-oracle-build/build-identity.json",
+  "config_identity": "511d9308c2d03b3e84316146c4c1f14bd54c6959d87f196fcd008463652d665d",
   "config_source": "scripts/oracle/strict-corpus-config.json",
   "coverage_limits": [
-    "Bounded common-engine evidence: 108 signed cases across 16 profiles and 10 submitted transaction families; not exhaustive transactor or whole-node parity.",
-    "Fresh parents persist Amendments. Queue starts empty with recorded standalone thresholds; one case uses three applied pre-submits then queues the primary. Multi-candidate eviction/order and multi-ledger queue history are unexecuted.",
+    "Bounded common-engine evidence: 118 signed cases across 16 amendment profiles and 12 submitted transaction families; it is not exhaustive transactor or whole-node parity.",
+    "Fresh parents persist Amendments and start with an empty queue. Queue evidence includes default network thresholds, five-candidate fee ordering and eviction, and a three-close history with an authenticated empty warmup and exact post-close queue snapshots.",
     "Seed 2016 generates four signed XRP Payment samples only. The bounded Go soak permutes and replays recorded cases; it does not generate fresh oracle inputs at runtime.",
-    "Invariant recovery uses an explicitly malformed, replayable Escrow parent and verifies tecINVARIANT_FAILED fee-only recovery. Fatal tefINVARIANT_FAILED is unexecuted.",
-    "AMM test-fidelity gap #1498 and transient open-view fixture gap #1126 remain release coverage blockers; original signed #1737 transaction is unavailable.",
+    "Invariant recovery includes malformed Escrow tecINVARIANT_FAILED fee-only recovery and malformed AccountRoot tefINVARIANT_FAILED persistent recovery; the fatal diagnostic is an intentional oracle row.",
+    "The six transient open-ledger rows cover four NFTokenAuth and two EscrowToken cases using authenticated rawInsert/rawErase deltas without closing before submission; AMM test-fidelity gap #1498 remains outside this corpus.",
     "Full native cryptography capability, live peer/consensus and protocol-facing RPC parity are not established by this corpus."
   ],
-  "fixture_count": 108,
+  "fixture_count": 118,
   "fixture_version": "v4",
   "fixtures": {
     "c0-l0-b0-f0-Payment-valid.json": {
@@ -624,6 +624,30 @@
       "sha256": "a1e3ba100ef3a20db32512bccb79e5d4c71adae2aa202a942111e219c3caef85",
       "suite": "app/StrictOracleRecorder"
     },
+    "c1-l1-b1-f1-AccountSet-persistent-fee-invariant-recovery.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "d963b64faf16e697aa83fce64f5dc92d5e441a71e615006cb9bc80fec0338abe",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-queue-default-network-thresholds.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "a8e043845106e57a8c722d85d3cab193dd1256091da4d13ed8a9e216ce96fee2",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-queue-multi-candidate-eviction-order.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "5aae9bbf17f01a647e08bc18bd83d4eeddb4ed5072ba7e25fa0074845a3037c1",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-AccountSet-queue-multi-ledger-history.json": {
+      "family": "AccountSet",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "90fa92e7fba059a4ff038f483d794d9a620a937d268dfd7a1db1becdf3e67b49",
+      "suite": "app/StrictOracleRecorder"
+    },
     "c1-l1-b1-f1-AccountSet-queued-low-fee.json": {
       "family": "AccountSet",
       "profile": "c1-l1-b1-f1",
@@ -708,6 +732,18 @@
       "sha256": "247976fcedadee218c0a482ee4ea46dd06e049631ef974b3691e9cfa2fc0d452",
       "suite": "app/StrictOracleRecorder"
     },
+    "c1-l1-b1-f1-EscrowToken-MPT_Cancel_Preclaim.json": {
+      "family": "EscrowToken",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "159a4aefa68063a14ec46aa953a2ee5c0b214cbf9753a335b5bb3e9400f276ed",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-EscrowToken-MPT_Finish_Preclaim.json": {
+      "family": "EscrowToken",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "6cbac4b445402afa779d1183c45ec7a71cfe3baf56fb7b4874f91ad35255567a",
+      "suite": "app/StrictOracleRecorder"
+    },
     "c1-l1-b1-f1-LoanBrokerSet-closed-ended-vault.json": {
       "family": "LoanBrokerSet",
       "profile": "c1-l1-b1-f1",
@@ -718,6 +754,30 @@
       "family": "NFTokenAcceptOffer",
       "profile": "c1-l1-b1-f1",
       "sha256": "f79e1ba41e8977b86f392ed8b04d40bccbe1a696aa16b7ab6ba891c7db902ab9",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-NFTokenAuth-Authorized_broker_tries_to_bridge_offers_from_unauthorized_buyer..json": {
+      "family": "NFTokenAuth",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "bf8475351bb13f20b0390195eb81f5351e46fb735e89162b4a7f7d08820ead95",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-NFTokenAuth-Seller_tries_to_accept_buy_offer_from_unauth_buyer.json": {
+      "family": "NFTokenAuth",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "808be94b03eed15f0b9d236a7fa7b2dc612314b3939f9f9827245fab98a07ad3",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-NFTokenAuth-Unauthorized_buyer_tries_to_accept_sell_offer.json": {
+      "family": "NFTokenAuth",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "5e0e2b986e66943dd823336e86d6193cae09ae90c908df912483a10ccd0fd18d",
+      "suite": "app/StrictOracleRecorder"
+    },
+    "c1-l1-b1-f1-NFTokenAuth-Unauthorized_buyer_tries_to_create_buy_offer.json": {
+      "family": "NFTokenAuth",
+      "profile": "c1-l1-b1-f1",
+      "sha256": "97b3a268f5716dfe3c674dcfcd856873240bc0582fbaa5f95fca32afaf538f30",
       "suite": "app/StrictOracleRecorder"
     },
     "c1-l1-b1-f1-OfferCreate-expired-offer-cleanup.json": {
@@ -794,13 +854,13 @@
     }
   },
   "oracle_repository": "XRPLF/xrpld-private",
-  "recorder_commit": "33836340bb531f260c7bad897e54e5483bacd479",
-  "recorder_source_archive": "scripts/oracle/recorded/33836340bb531f260c7bad897e54e5483bacd479",
+  "recorder_commit": "cfaf47a857b04b97ca806133432c9ec1a3f1db39",
+  "recorder_source_archive": "scripts/oracle/recorded/cfaf47a857b04b97ca806133432c9ec1a3f1db39",
   "recorder_sources": {
-    "scripts/oracle/record-v4.py": "3fa8252f02a8eca1d69b0a88b53b240d4ae81b565783aa140efc8d5870e5b0a0",
+    "scripts/oracle/record-v4.py": "402a7ab78165c88fe9f3b3b220f8cc06c3a08ad60f5fcc448b2d8e1e897f47fd",
     "scripts/oracle/record-v4.sh": "cd497a5b398e7e702695e166dd2bcafd1a96b6a2366bcbdd2eb0608957eed5e8",
-    "scripts/oracle/strict-corpus-config.json": "0faeb90f5ba7793217e873a85370f079bd6f7cae25e18145bca7307aaf8f326d",
-    "scripts/oracle/strict_recorder.cpp": "044769fed7eb673961d5cc45b119f7ad5487046d850dc37de0cddff7e5886fd4"
+    "scripts/oracle/strict-corpus-config.json": "511d9308c2d03b3e84316146c4c1f14bd54c6959d87f196fcd008463652d665d",
+    "scripts/oracle/strict_recorder.cpp": "bed9c7a8181885208b10a74c080dc429595dba2409b82d9088b4e5fff096d19c"
   },
   "rippled_commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
   "rippled_tag": "3.4.1",
