@@ -327,6 +327,7 @@ func (e *Engine) ApplyInnerTransaction(
 	innerConfig.ParentBatchID = &parentBatchID
 	innerEngine := NewEngine(atomicView, innerConfig)
 	innerEngine.invariantViolationHook = e.invariantViolationHook
+	innerEngine.applyObserver = e.applyObserver
 	innerEngine.SetBaseTxCount(transactionIndex)
 	return innerEngine.applyWithContext(ctx, innerTx, &parentBatchID)
 }

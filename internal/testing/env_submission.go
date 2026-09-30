@@ -261,7 +261,15 @@ func (e *TestEnv) SubmitWithOptions(txn tx.Transaction, options SubmitOptions) T
 	}
 
 	// Direct apply path (no TxQ)
-	return e.applyDirect(txn)
+	return e.applyDirect(txn, tx.TapNONE)
+}
+
+// SubmitWithFlags applies a transaction directly with the supplied engine
+// flags. It bypasses TxQ so tests can exercise one exact application pass.
+func (e *TestEnv) SubmitWithFlags(txn tx.Transaction, flags tx.ApplyFlags) TxResult {
+	e.t.Helper()
+	e.autoFill(txn, SubmitOptions{})
+	return e.applyDirect(txn, flags)
 }
 
 // toRippleTime converts a wall-clock time to seconds since the Ripple epoch,
@@ -345,7 +353,8 @@ func (e *TestEnv) applyStaged(
 	txn tx.Transaction,
 	config tx.EngineConfig,
 	transactionCount uint32,
-) tx.ApplyResult {
+) stagedApplyResult {
+	var observed stagedApplyResult
 	blob, err := tx.SerializeTransaction(txn)
 	if err != nil {
 		staged, snapshotErr := e.ledger.MutableSnapshotUnflushed()
@@ -354,6 +363,7 @@ func (e *TestEnv) applyStaged(
 		}
 		engine := txengine.NewEngine(staged, config)
 		engine.SetBaseTxCount(transactionCount)
+		engine.SetApplyObserverForTest(observed.observe)
 		if e.invariantViolationHook != nil {
 			engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
 		}
@@ -361,13 +371,15 @@ func (e *TestEnv) applyStaged(
 		if applyResult.Applied {
 			e.t.Fatalf("applied transaction cannot be serialized: %v", err)
 		}
-		return applyResult
+		observed.ApplyResult = applyResult
+		return observed
 	}
 	if err := tx.BindRawBytes(txn, blob); err != nil {
 		e.t.Fatalf("bind serialized transaction: %v", err)
 	}
 	engine := txengine.NewEngine(e.ledger, config)
 	engine.SetBaseTxCount(transactionCount)
+	engine.SetApplyObserverForTest(observed.observe)
 	if e.invariantViolationHook != nil {
 		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
 	}
@@ -376,12 +388,28 @@ func (e *TestEnv) applyStaged(
 	if err != nil {
 		e.t.Fatalf("apply transaction atomically: %v", err)
 	}
-	return blockResult.ApplyResult
+	observed.ApplyResult = blockResult.ApplyResult
+	return observed
+}
+
+type stagedApplyResult struct {
+	tx.ApplyResult
+	ApplyInvoked      bool
+	InvariantsChecked bool
+}
+
+func (r *stagedApplyResult) observe(phase txengine.ApplyPhase) {
+	switch phase {
+	case txengine.ApplyPhaseTransaction:
+		r.ApplyInvoked = true
+	case txengine.ApplyPhaseInvariants:
+		r.InvariantsChecked = true
+	}
 }
 
 // applyDirect applies a transaction directly without TxQ routing.
 // This is the original Submit path.
-func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
+func (e *TestEnv) applyDirect(txn tx.Transaction, flags tx.ApplyFlags) TxResult {
 	e.t.Helper()
 
 	// Header-based ParentCloseTime (not the clock) keeps the initial apply and
@@ -389,13 +417,14 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{
 		openLedger: e.openLedger,
 		feeTrack:   true,
+		applyFlags: flags,
 	})
 
 	// Open-ledger admission commits only the outer Batch. Consensus replay at
 	// close applies the inner transactions in canonical order.
 	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger)
 
-	if applyResult.Result.IsApplied() {
+	if applyResult.Applied {
 		e.txInLedger++
 	}
 	if _, batch := txn.(tx.BatchInnerApplier); batch && applyResult.Applied {
@@ -406,7 +435,10 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		e.addHeldTransaction(txn.GetCommon().Account, txn)
 	}
 
-	return txResultFromApply(applyResult)
+	result := txResultFromApply(applyResult.ApplyResult)
+	result.ApplyInvoked = applyResult.ApplyInvoked
+	result.InvariantsChecked = applyResult.InvariantsChecked
+	return result
 }
 
 // submitViaTxQ routes a transaction through the TxQ for fee escalation

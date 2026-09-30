@@ -275,7 +275,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	if e.txQueue != nil && !e.bypassTxQ {
 		return e.submitViaTxQ(txn)
 	}
-	return e.applyDirect(txn)
+	return e.applyDirect(txn, tx.TapNONE)
 }
 
 // findAccountByAddress looks up a registered account by its XRPL address.

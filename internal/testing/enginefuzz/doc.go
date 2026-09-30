@@ -1,18 +1,15 @@
 // Package enginefuzz hosts a stateful, property-based fuzz harness over the
 // goXRPL transaction engine.
 //
-// Every other fuzz target in the repository covers a stateless decode surface
-// (codec, crypto, shamap-wire, peer-frame). This package adds the missing
-// stateful layer: it generates structurally-plausible transaction sequences
-// from the fuzzer's byte stream, applies them through internal/tx/engine
-// against a seeded ledger, and asserts after every apply that the engine never
-// reports an invariant violation (tec/tefINVARIANT_FAILED) and that total XRP
-// is never inflated.
+// The bounded traces generate structurally plausible transaction sequences
+// from the fuzzer byte stream, apply them through internal/tx/engine against a
+// seeded ledger, and verify result classification, rollback atomicity, fee and
+// sequence accounting, state supply, and deterministic close behavior. The
+// deterministic corpus also requires every supported generated kind to reach
+// an applied result and the transaction and invariant phases.
 //
-// The engine runs the full internal/tx/invariants set on every apply -- the
-// same oracle rippled exercises under Antithesis -- so a fuzzer-found invariant
-// violation is, by construction, a consensus-safety bug.
-//
-// The harness and fuzz target live in this package's _test.go files; this file
-// exists only so the package has a non-test compilation unit. See issue #682.
+// Invariant checks run on applied tes and fee-claiming tec paths. The harness
+// records phase reachability and common-field/ApplyFlags coverage, but it is a
+// bounded Go property target rather than a rippled differential oracle or a
+// whole-node coverage claim.
 package enginefuzz
