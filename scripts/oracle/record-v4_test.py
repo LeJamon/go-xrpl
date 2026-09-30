@@ -11,9 +11,24 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("record_v4", Path(__file__).with_name("record-v4.py"))
 recorder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recorder)
+manifest_spec = importlib.util.spec_from_file_location(
+    "recorded_corpus_manifest", Path(__file__).parents[1] / "recorded-corpus-manifest.py"
+)
+manifest = importlib.util.module_from_spec(manifest_spec)
+manifest_spec.loader.exec_module(manifest)
 
 
 class RecorderProvenanceTest(unittest.TestCase):
+    def test_manifest_inputs_reject_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "identity.json"
+            target.write_text("{}")
+            alias = root / "alias.json"
+            alias.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                manifest.regular_file(alias, "--build-identity")
+
     def test_clean_build_registers_pinned_xrplf_remote(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

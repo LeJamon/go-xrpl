@@ -4,8 +4,8 @@ These files were emitted by the executed C++ `app/StrictOracleRecorder` linked
 against `XRPLF/xrpld-private` tag `3.4.1`, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`. `manifest.json` authenticates every
 fixture, the four recorder sources, the recorder source commit, the clean
-recorder binary, the build identity, the configuration and all 16 amendment
-profiles. The recorder sources are archived at
+recorder binary, the archived build identity, the configuration and all 16
+amendment profiles. The recorder sources and build identity are archived at
 `scripts/oracle/recorded/cfaf47a857b04b97ca806133432c9ec1a3f1db39/`.
 
 The final recorder source commit is
@@ -86,19 +86,24 @@ python3 scripts/oracle/record-v4.py --clean-build --record \
 The clean build archived the exact oracle commit, used its Conan lockfile and
 registered the pinned public package remote
 `https://conan.xrplf.org/repository/conan/`. The original oracle checkout was
-not modified. The final build identity is
-`/private/tmp/issue-2015-oracle-build/build-identity.json`.
+not modified. The exact 62,369-byte build identity is archived at
+`scripts/oracle/recorded/cfaf47a857b04b97ca806133432c9ec1a3f1db39/build-identity.json`.
+It records the source, binary and configuration hashes, compiler and linker
+commands, clean-build commands, Conan lock hash and pinned remote. The loader
+authenticates the archive bytes and checks their oracle, recorder, configuration
+and binary identities before loading fixtures.
 
 | Identity | Value |
 | --- | --- |
 | Recorder source commit | `cfaf47a857b04b97ca806133432c9ec1a3f1db39` |
 | Recorder binary SHA-256 | `6b5faf1e7711342e823c24a7a39968d9a0f6dafe1aafbcd3140592e56efd6339` |
+| Build identity archive SHA-256 | `d116bed6c3649544e94237b49cd81a699bb7fabc5cdc874b743c79cac8b40653` |
 | Recorder C++ source SHA-256 | `bed9c7a8181885208b10a74c080dc429595dba2409b82d9088b4e5fff096d19c` |
 | Recorder configuration SHA-256 | `511d9308c2d03b3e84316146c4c1f14bd54c6959d87f196fcd008463652d665d` |
 | Compile command SHA-256 | `180378f2af31fec6a3a29c023de40f949be5558c46b20a2b8c15a5e1052c4f95` |
 | Link command SHA-256 | `e768ef906039f04d73ede0754c954dc275bd0a5254a7226c73a47887a27d5ca5` |
 | Conan lock SHA-256 | `9d5e382cce56445d65694ed3add13b0bccea58ff9d4e2aad65ac3c9c54089bc5` |
-| Corpus manifest SHA-256 | `00539f3ca6ecc671564850ae7fdb2c92240689769ab5eadad316db78c896dde9` |
+| Corpus manifest SHA-256 | `55ef9157dfcc40bf3abebe8ddda8aed6a333ccc7038177e7fabbe7f1c0f73b63` |
 
 The recorder emitted 118 fixtures and reported:
 

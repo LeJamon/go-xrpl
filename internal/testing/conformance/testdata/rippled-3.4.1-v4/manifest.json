@@ -130,7 +130,8 @@
     }
   ],
   "binary_sha256": "6b5faf1e7711342e823c24a7a39968d9a0f6dafe1aafbcd3140592e56efd6339",
-  "build_identity": "/private/tmp/issue-2015-oracle-build/build-identity.json",
+  "build_identity": "scripts/oracle/recorded/cfaf47a857b04b97ca806133432c9ec1a3f1db39/build-identity.json",
+  "build_identity_sha256": "d116bed6c3649544e94237b49cd81a699bb7fabc5cdc874b743c79cac8b40653",
   "config_identity": "511d9308c2d03b3e84316146c4c1f14bd54c6959d87f196fcd008463652d665d",
   "config_source": "scripts/oracle/strict-corpus-config.json",
   "coverage_limits": [
