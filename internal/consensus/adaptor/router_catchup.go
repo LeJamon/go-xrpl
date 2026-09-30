@@ -1498,6 +1498,9 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacy(seq uint32, hash
 	if c.stoppedForShutdown() {
 		return
 	}
+	if _, _, _, complete := c.localReplayReplacementCandidate(seq, hash); complete {
+		return
+	}
 	c.acquisitionMu.Lock()
 	defer c.acquisitionMu.Unlock()
 	c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)

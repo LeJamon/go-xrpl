@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -17,6 +18,68 @@ type standardReplayReplacement struct {
 	acquisition *inbound.Ledger
 	retryAt     time.Time
 	installing  bool
+}
+
+const standardReplayLocalCandidateCheckTimeout = time.Second
+
+// localReplayReplacementCandidate returns a complete, root-checked local
+// ledger suitable for the replacement install path. A hash lookup alone is
+// insufficient: the service may retain an unvalidated or partially materialized
+// ledger by hash, so callers must receive usable state and transaction maps.
+func (c *catchupReplayCoordinator) localReplayReplacementCandidate(
+	seq uint32,
+	hash [32]byte,
+) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap, bool) {
+	if seq == 0 || hash == ([32]byte{}) || c.adaptor == nil {
+		return nil, nil, nil, false
+	}
+	svc := c.adaptor.LedgerService()
+	if svc == nil {
+		return nil, nil, nil, false
+	}
+	local, err := svc.GetLedgerByHash(hash)
+	if err != nil || local == nil || !local.IsClosed() || local.Sequence() != seq || local.Hash() != hash {
+		return nil, nil, nil, false
+	}
+	h := local.Header()
+	if h.LedgerIndex != seq || h.Hash != hash || header.CalculateHash(h) != hash {
+		return nil, nil, nil, false
+	}
+	stateMap, err := local.StateMapSnapshot()
+	if err != nil || stateMap == nil {
+		return nil, nil, nil, false
+	}
+	txMap, err := local.TxMapSnapshot()
+	if err != nil || txMap == nil {
+		return nil, nil, nil, false
+	}
+
+	ctx := c.lifecycleContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, standardReplayLocalCandidateCheckTimeout)
+	defer cancel()
+	if !localReplayMapComplete(ctx, stateMap) || !localReplayMapComplete(ctx, txMap) {
+		return nil, nil, nil, false
+	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil || stateRoot != h.AccountHash {
+		return nil, nil, nil, false
+	}
+	txRoot, err := txMap.Hash()
+	if err != nil || txRoot != h.TxHash {
+		return nil, nil, nil, false
+	}
+	return &h, stateMap, txMap, true
+}
+
+func localReplayMapComplete(ctx context.Context, m *shamap.SHAMap) bool {
+	if m == nil {
+		return false
+	}
+	result, err := m.CheckComplete(ctx)
+	return err == nil && result != nil && len(result.Missing) == 0 && len(result.Corrupt) == 0
 }
 
 func (c *catchupReplayCoordinator) reserveStandardReplayReplacement(generation uint64, seq uint32, hash [32]byte, peerID uint64, now time.Time) bool {
@@ -61,6 +124,11 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 	generation, seq, hash, hint := replacement.generation, replacement.seq, replacement.hash, replacement.peerID
 	anchorSeq, targetSeq, targetHash := c.standardReplay.anchorSeq, c.standardReplay.targetSeq, c.standardReplay.targetHash
 	c.acquisitionMu.Unlock()
+	if localHeader, stateMap, txMap, ok := c.localReplayReplacementCandidate(seq, hash); ok {
+		if c.completeLocalStandardReplayReplacement(generation, replacement, localHeader, stateMap, txMap) {
+			return
+		}
+	}
 	var survivor *inbound.Ledger
 	for _, candidate := range c.fetchTracker.Active() {
 		if candidate.TransactionOnly() || candidate.Reason() != inbound.ReasonConsensus || candidate.Seq() <= anchorSeq {
@@ -90,6 +158,9 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 		return
 	}
 	if c.standardReplay.anchorSeq >= seq {
+		if c.consensusRecovery.stepHash == replacement.hash {
+			c.consensusRecovery.stepHash = [32]byte{}
+		}
 		c.standardReplay.replacement = nil
 		c.acquisitionMu.Unlock()
 		return
@@ -164,6 +235,71 @@ func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound
 		return true
 	}
 	c.acquisitionMu.Lock()
+	retirement, installed := c.installStandardReplayReplacementLocked(replacement, h, initial)
+	c.acquisitionMu.Unlock()
+	c.replayCommitMu.Unlock()
+	if !installed {
+		return true
+	}
+	return c.finishStandardReplayReplacement(replacement, h, initial, retirement)
+}
+
+// The candidate must pass localReplayReplacementCandidate before publication.
+func (c *catchupReplayCoordinator) completeLocalStandardReplayReplacement(
+	generation uint64,
+	replacement *standardReplayReplacement,
+	h *header.LedgerHeader,
+	stateMap, txMap *shamap.SHAMap,
+) bool {
+	if replacement == nil || h == nil || stateMap == nil || txMap == nil {
+		return false
+	}
+	c.replayCommitMu.Lock()
+	c.acquisitionMu.Lock()
+	if c.stoppedForShutdown() || !c.standardReplay.active || c.standardReplay.generation != generation ||
+		c.standardReplay.replacement != replacement || replacement.generation != generation ||
+		replacement.acquisition != nil || replacement.installing || replacement.seq != h.LedgerIndex ||
+		replacement.hash != h.Hash || c.standardReplay.anchorSeq >= h.LedgerIndex {
+		c.acquisitionMu.Unlock()
+		c.replayCommitMu.Unlock()
+		return false
+	}
+	replacement.installing = true
+	c.acquisitionMu.Unlock()
+	initial, err := c.adaptor.LedgerService().BootstrapLedgerWithState(c.lifecycleContext(), h, stateMap, txMap)
+	if err != nil {
+		c.acquisitionMu.Lock()
+		if c.standardReplay.active && c.standardReplay.generation == generation &&
+			c.standardReplay.replacement == replacement && replacement.installing {
+			replacement.installing = false
+		}
+		c.acquisitionMu.Unlock()
+		c.replayCommitMu.Unlock()
+		c.logger.Warn("verified local replacement candidate could not be bootstrapped", "seq", h.LedgerIndex,
+			"hash", fmt.Sprintf("%x", h.Hash[:8]), "error", err)
+		return false
+	}
+	c.acquisitionMu.Lock()
+	retirement, installed := c.installStandardReplayReplacementLocked(replacement, h, initial)
+	c.acquisitionMu.Unlock()
+	c.replayCommitMu.Unlock()
+	if !installed {
+		return false
+	}
+	return c.finishStandardReplayReplacement(replacement, h, initial, retirement)
+}
+
+// Caller holds replayCommitMu and acquisitionMu after successful Bootstrap.
+func (c *catchupReplayCoordinator) installStandardReplayReplacementLocked(
+	replacement *standardReplayReplacement,
+	h *header.LedgerHeader,
+	initial bool,
+) (standardReplayRetirement, bool) {
+	if replacement == nil || h == nil || !c.standardReplay.active ||
+		c.standardReplay.replacement != replacement || replacement.generation != c.standardReplay.generation ||
+		replacement.seq != h.LedgerIndex || replacement.hash != h.Hash {
+		return standardReplayRetirement{}, false
+	}
 	var retired []*inbound.Ledger
 	if c.standardReplay.anchorSeq < h.LedgerIndex {
 		lastSeq, lastHash := h.LedgerIndex, h.Hash
@@ -203,7 +339,7 @@ func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound
 	c.standardReplay.replacement = nil
 	delete(c.replayFallbackRequired, h.Hash)
 	reachedTarget := c.standardReplay.targetSeq == h.LedgerIndex && c.standardReplay.targetHash == h.Hash
-	retirement := standardReplayRetirement{}
+	retirement := standardReplayRetirement{ledgers: retired}
 	if reachedTarget {
 		retirement.baseLedger, retirement.release = c.standardReplay.baseLedger, c.standardReplay.baseRelease
 		c.standardReplay.baseLedger, c.standardReplay.baseRelease = nil, nil
@@ -212,9 +348,15 @@ func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound
 		c.standardReplay.backpressured = false
 		c.standardReplay.entries = nil
 	}
-	c.acquisitionMu.Unlock()
-	c.replayCommitMu.Unlock()
-	c.retireLegacyAcquisitions(retired)
+	return retirement, true
+}
+
+func (c *catchupReplayCoordinator) finishStandardReplayReplacement(
+	replacement *standardReplayReplacement,
+	h *header.LedgerHeader,
+	initial bool,
+	retirement standardReplayRetirement,
+) bool {
 	c.retireStandardReplay(retirement)
 	c.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initial)
 	c.acquisitionMu.Lock()

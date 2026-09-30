@@ -276,3 +276,17 @@ func TestFullStateAdmissionRejectsConflictingKnownSequence(t *testing.T) {
 	assert.Equal(t, seq, original.Seq())
 	assert.False(t, c.standardReplay.active)
 }
+
+func TestPendingFrozenPivotPrefersTrustedTargetOverHigherPendingSequence(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	c := r.catchupReplay
+	seq := svc.GetClosedLedgerIndex() + 10
+	pendingHash, trustedHash := [32]byte{0x94}, [32]byte{0x95}
+	c.acquisitionMu.Lock()
+	c.rememberFrozenPivotPendingLocked(seq+1, pendingHash, 7)
+	c.acquisitionMu.Unlock()
+	c.recordValidationCatchupTarget(seq, trustedHash, 8, catchupSourceQuorum)
+	require.True(t, c.retryPendingFrozenPivot())
+	assert.Equal(t, trustedHash, c.standardReplay.targetHash)
+	assert.Nil(t, c.fetchTracker.Find(pendingHash))
+}

@@ -38,10 +38,6 @@ func (c *catchupReplayCoordinator) clearFrozenPivotPendingLocked(seq uint32, has
 	}
 }
 
-// retryPendingFrozenPivot is called by the normal catch-up wakeup path after
-// an acquisition completes or fails. It reads one stable intent, then lets
-// beginFrozenPivotRecovery perform the same admission and ownership checks as
-// an externally triggered request.
 func (c *catchupReplayCoordinator) retryPendingFrozenPivot() bool {
 	c.acquisitionMu.Lock()
 	intent := c.pendingFrozenPivot
@@ -51,7 +47,7 @@ func (c *catchupReplayCoordinator) retryPendingFrozenPivot() bool {
 	}
 	if target := c.credibleCatchupFrontier(); target.source != catchupSourcePeer &&
 		target.seq != 0 &&
-		(target.seq > intent.seq || (target.seq == intent.seq && target.hash != intent.hash)) {
+		(target.seq != intent.seq || target.hash != intent.hash) {
 		if target.peerID == 0 {
 			target.peerID = intent.peerID
 		}
@@ -71,11 +67,7 @@ func (c *catchupReplayCoordinator) retryPendingFrozenPivot() bool {
 	return c.beginFrozenPivotRecovery(intent.seq, intent.hash, intent.peerID)
 }
 
-// canAdoptKnownFrozenPivot proves that a known-sequence full-state survivor is
-// on the verified branch leading to a trusted target. Sequence proximity alone
-// is deliberately insufficient: every header link from P+1 through T must be
-// present with an acquired-or-stronger source, and the current catch-up target
-// must carry validation or quorum trust.
+// Adoption requires acquired headers linking the survivor to the trusted target.
 func (c *catchupReplayCoordinator) canAdoptKnownFrozenPivot(
 	pivotSeq uint32,
 	pivotHash [32]byte,
@@ -149,11 +141,7 @@ func (c *catchupReplayCoordinator) knownFrozenPivotCandidate(targetSeq uint32, t
 	return best, missingAncestry
 }
 
-// startFrozenPivotReplacementLocked is the explicit ownership escape used by
-// deliberate replacement. Its caller must first prove ancestry with
-// canAdoptKnownFrozenPivot and retain the existing collector target; this
-// helper only performs admission and starts or joins the full-state fetch.
-// Caller holds acquisitionMu.
+// Caller holds acquisitionMu and has established replacement or rearm ownership.
 func (c *catchupReplayCoordinator) startFrozenPivotReplacementLocked(
 	seq uint32,
 	hash [32]byte,
@@ -414,8 +402,8 @@ func (c *catchupReplayCoordinator) locallySatisfiesLedger(seq uint32, hash [32]b
 			return true
 		}
 	}
-	held, err := svc.GetLedgerByHash(hash)
-	return err == nil && held != nil && held.Sequence() == seq
+	_, _, _, complete := c.localReplayReplacementCandidate(seq, hash)
+	return complete
 }
 
 func (c *catchupReplayCoordinator) consensusHandoffComplete(seq uint32, hash [32]byte) bool {
