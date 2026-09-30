@@ -813,7 +813,9 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 func (c *catchupReplayCoordinator) standardReplayResidentCountLocked() int {
 	count := 0
 	for _, entry := range c.standardReplay.entries {
-		if entry.acquisition != nil || (!entry.readyAt.IsZero() && !entry.durable) {
+		// Parked failures reserve the slot needed for their next attempt.
+		if entry.acquisition != nil || entry.availabilityPending || entry.availabilityRetrying ||
+			entry.availabilityExhausted || (!entry.readyAt.IsZero() && !entry.durable) {
 			count++
 		}
 	}
@@ -946,6 +948,9 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	if replacement := c.standardReplay.replacement; replacement != nil {
 		if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
 			retired = append(retired, replacement.acquisition)
+		}
+		if c.consensusRecovery.stepHash == replacement.hash {
+			c.consensusRecovery.stepHash = [32]byte{}
 		}
 		c.standardReplay.replacement = nil
 	}
@@ -1318,6 +1323,9 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 		if replacement := c.standardReplay.replacement; replacement != nil && replacement.seq <= entry.seq {
 			if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
 				supersededReplacement = replacement.acquisition
+			}
+			if c.consensusRecovery.stepHash == replacement.hash {
+				c.consensusRecovery.stepHash = [32]byte{}
 			}
 			c.standardReplay.replacement = nil
 		}

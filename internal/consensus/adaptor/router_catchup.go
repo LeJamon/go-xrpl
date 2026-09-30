@@ -1585,11 +1585,6 @@ func (p fullStateAdmissionPurpose) bypassesReplayOwnership() bool {
 	return p == fullStateAdmissionRepair || p == fullStateAdmissionReplacement
 }
 
-// startLedgerAcquisitionLegacyModeLocked preserves the legacy call shape for
-// existing callers while routing every full-state start through the ownership
-// admission point. Repair is the only ordinary caller that may bypass the
-// replay owner; deliberate replacement uses the purpose-specific helper in
-// router_recovery_session.go.
 func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(
 	seq uint32,
 	hash [32]byte,
@@ -1603,10 +1598,7 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(
 	return c.admitFullStateLocked(seq, hash, peerID, purpose)
 }
 
-// admitFullStateLocked is the single admission point for provisional
-// full-state fetches. Caller holds acquisitionMu. A deferred result leaves all
-// replay state untouched so a later wakeup can retry the same intent without
-// consuming a new replay generation.
+// Caller holds acquisitionMu. Deferred admission leaves replay ownership intact.
 func (c *catchupReplayCoordinator) admitFullStateLocked(
 	seq uint32,
 	hash [32]byte,
@@ -1648,9 +1640,6 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 
-	// Join an existing full-state acquisition after the policy checks. The
-	// sequence update is important when a hash-only consensus request learns
-	// its sequence later; it also makes exact-hash reuse visible to the caller.
 	if existing := c.fetchTracker.Find(hash); existing != nil {
 		il, _ := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 			return nil
@@ -1661,11 +1650,7 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}
 	}
 
-	// A live standard replay is the sole owner of the full-state lane. Even a
-	// prepared target or successor hash must not start a new state walk from a
-	// regular consensus/validation caller. Repair and deliberate replacement
-	// are explicit owner transitions and are admitted through their dedicated
-	// purposes.
+	// Prepared successors and targets also belong to the replay owner.
 	if c.standardReplay.active && !purpose.bypassesReplayOwnership() {
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}

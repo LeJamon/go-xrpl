@@ -1,8 +1,6 @@
 package adaptor
 
-import (
-	"time"
-)
+import "time"
 
 type standardReplayFailureClass uint8
 
@@ -12,7 +10,6 @@ const (
 	standardReplayFailureInvalidData
 	standardReplayFailurePersistence
 	standardReplayFailureExecution
-	standardReplayFailureCancellation
 )
 
 const (
@@ -35,9 +32,6 @@ const (
 	standardReplayAvailabilityRetryExhausted
 )
 
-// standardReplayHasAvailabilityBlockLocked keeps collector refills behind a
-// failed transaction-only head. The verified anchor and already prepared
-// successors remain resident while maintenance drives the bounded retry.
 func (c *catchupReplayCoordinator) standardReplayHasAvailabilityBlockLocked() bool {
 	if !c.standardReplay.active || c.standardReplay.replacement != nil {
 		return false
@@ -61,9 +55,6 @@ func (c *catchupReplayCoordinator) standardReplayAvailabilityHeadLocked() *stand
 	return entry
 }
 
-// retryStandardReplayAvailability is called from maintenanceTick. It makes
-// one fresh transaction-only admission for the actionable head at a time;
-// peer scarcity leaves the entry parked without consuming a retry attempt.
 func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time) standardReplayAvailabilityRetryResult {
 	if c.stoppedForShutdown() {
 		return standardReplayAvailabilityRetryNone
@@ -138,17 +129,11 @@ func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time
 	entry.availabilityNextRetryAt = time.Time{}
 	entry.availabilityTriedPeers = appendUniquePeers(entry.availabilityTriedPeers, il.Peers()...)
 	entry.availabilityTriedPeers = appendUniquePeer(entry.availabilityTriedPeers, peerID)
+	c.logger.Debug("retrying unavailable replay head", "generation", entry.generation,
+		"anchor_seq", c.standardReplay.anchorSeq, "seq", entry.seq, "peer", peerID,
+		"attempt", entry.availabilityRetries, "retained_entries", len(c.standardReplay.entries))
 	c.acquisitionMu.Unlock()
 	return standardReplayAvailabilityRetryStarted
-}
-
-// standardReplayAvailabilityExhausted reports an actionable head whose
-// transaction-only availability budget is exhausted. The replacement layer
-// owns the next full-state decision; this retry layer leaves the session and
-// its verified anchor intact.
-func (c *catchupReplayCoordinator) standardReplayAvailabilityExhausted() (uint32, [32]byte, bool) {
-	_, seq, hash, _, ok := c.standardReplayAvailabilityExhaustedState()
-	return seq, hash, ok
 }
 
 func (c *catchupReplayCoordinator) standardReplayAvailabilityExhaustedState() (uint64, uint32, [32]byte, uint64, bool) {
@@ -166,9 +151,6 @@ func (c *catchupReplayCoordinator) standardReplayAvailabilityExhaustedState() (u
 	return entry.generation, entry.seq, entry.hash, entry.peerID, true
 }
 
-// standardReplayAvailabilityRetryActiveLocked bounds the watchdog exemption
-// to the retry window. A missing peer may keep the session parked briefly, but
-// it cannot suppress normal recovery forever.
 func (c *catchupReplayCoordinator) standardReplayAvailabilityRetryActiveLocked(now time.Time) bool {
 	if !c.standardReplay.active {
 		return false

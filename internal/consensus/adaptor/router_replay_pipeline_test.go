@@ -423,7 +423,7 @@ func TestStandardReplayPipelineParksUnavailableHeadForBoundedRetries(t *testing.
 		r.catchupReplay.acquisitionMu.Unlock()
 	}
 
-	seq, hash, exhausted := r.catchupReplay.standardReplayAvailabilityExhausted()
+	_, seq, hash, _, exhausted := r.catchupReplay.standardReplayAvailabilityExhaustedState()
 	assert.True(t, exhausted)
 	assert.Equal(t, links[0].seq, seq)
 	assert.Equal(t, links[0].hash, hash)

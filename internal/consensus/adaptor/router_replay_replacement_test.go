@@ -116,6 +116,7 @@ func TestReplayReplacementRejectsStaleCancellation(t *testing.T) {
 	require.True(t, canceled)
 	assert.Nil(t, c.standardReplay.replacement)
 	assert.Nil(t, c.fetchTracker.Find(links[0].hash))
+	assert.NotEqual(t, links[0].hash, c.consensusRecovery.stepHash)
 	c.failInboundAcquisition(acquisition)
 	assert.False(t, c.standardReplay.active)
 }
@@ -240,4 +241,56 @@ func TestReplayReplacementAdoptsInFlightAncestorAndKeepsTarget(t *testing.T) {
 	held, err := svc.GetLedgerByHash(target.hash)
 	require.NoError(t, err)
 	require.NotNil(t, held)
+}
+
+func TestReplayRetryReservesResidentCapacityDuringDelayedPivot(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 14)
+	armStandardReplayTestPipeline(t, r, a, sender, links[:3])
+	c := r.catchupReplay
+	target := links[len(links)-1]
+	c.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
+	require.True(t, c.continueFrozenPivotRecovery(target.seq, target.hash, 7))
+	c.standardReplay.pivotReady = false
+	completeStandardReplayTestLink(t, r, links[0])
+	c.standardReplay.entries[links[0].seq].durable = true
+	failed := c.fetchTracker.Find(links[1].hash)
+	require.NotNil(t, failed)
+	c.failInboundAcquisition(failed)
+	require.True(t, c.refillStandardReplayCollector(7))
+	c.standardReplay.pivotReady = true
+	c.drainStandardReplayPipeline()
+	require.Equal(t, links[0].hash, c.standardReplay.anchorHash)
+	sender.mu.Lock()
+	sender.acquisitionPeers = []uint64{7}
+	sender.mu.Unlock()
+	now := time.Now()
+	require.Equal(t, standardReplayAvailabilityRetryWaiting, c.retryStandardReplayAvailability(now))
+	require.Equal(t, standardReplayAvailabilityRetryStarted, c.retryStandardReplayAvailability(now.Add(time.Second)))
+	assert.LessOrEqual(t, c.standardReplayResidentCountLocked(), standardReplayPipelineWindow)
+	active := 0
+	for _, il := range c.fetchTracker.Active() {
+		if il.TransactionOnly() {
+			active++
+		}
+	}
+	assert.LessOrEqual(t, active, standardReplayPipelineWindow)
+}
+
+func TestReplayReplacementCancellationClearsStandaloneStep(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	armStandardReplayTestPipeline(t, r, a, sender, links[:2])
+	c := r.catchupReplay
+	require.True(t, c.reserveStandardReplayReplacement(c.standardReplay.generation, links[2].seq, links[2].hash, 7, time.Now()))
+	require.Equal(t, links[2].hash, c.consensusRecovery.stepHash)
+	require.Nil(t, c.standardReplay.entries[links[2].seq])
+	_, canceled := c.cancelStandardReplayPipelineIdentity(c.standardReplayIdentityLocked(), "test_cancel")
+	require.True(t, canceled)
+	assert.Zero(t, c.consensusRecovery.stepHash)
+	assert.Nil(t, c.fetchTracker.Find(links[2].hash))
 }
