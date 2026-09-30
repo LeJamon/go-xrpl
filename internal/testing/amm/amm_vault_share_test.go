@@ -2,6 +2,7 @@ package amm_test
 
 import (
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -144,7 +145,9 @@ func TestAMMCreateRejectsNestedVaultShareAmounts(t *testing.T) {
 			if test.shareFirst {
 				amount, amount2 = fixture.share, fixture.xrp
 			}
-			create := ammtest.AMMCreate(fixture.creator, amount, amount2).Build()
+			create := ammtest.AMMCreate(fixture.creator, amount, amount2).
+				Fee(strconv.FormatUint(ammCreateFee, 10)).
+				Build()
 			create.SetSequence(fixture.env.Seq(fixture.creator))
 			blob, err := tx.SerializeTransaction(create)
 			require.NoError(t, err)

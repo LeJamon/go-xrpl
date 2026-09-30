@@ -3,7 +3,8 @@
 package amm
 
 import (
-	"slices"
+	"fmt"
+	"strconv"
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -14,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -57,7 +59,7 @@ const (
 // Reference: rippled AMMTest base class
 type AMMTestEnv struct {
 	*jtx.TestEnv
-	T *testing.T
+	T testing.TB
 
 	// Standard test accounts matching rippled's test environment
 	GW    *jtx.Account // Gateway/issuer account
@@ -74,7 +76,7 @@ type AMMTestEnv struct {
 
 // NewAMMTestEnv creates a new AMM test environment with standard accounts and currencies.
 // This matches rippled's AMMTest setup.
-func NewAMMTestEnv(t *testing.T) *AMMTestEnv {
+func NewAMMTestEnv(t testing.TB) *AMMTestEnv {
 	t.Helper()
 
 	env := jtx.NewTestEnv(t)
@@ -199,17 +201,10 @@ func ToIOUForCalc(amt tx.Amount) tx.Amount {
 }
 
 // ExpectTER checks if the result matches one of the expected TER codes.
-func ExpectTER(t *testing.T, result jtx.TxResult, expectedCodes ...string) {
+func ExpectTER(t *testing.T, result jtx.TxResult, expectedCode string) {
 	t.Helper()
-
-	if slices.Contains(expectedCodes, result.Code) {
-		return
-	}
-
-	if len(expectedCodes) == 1 {
-		t.Fatalf("Expected %s, got %s: %s", expectedCodes[0], result.Code, result.Message)
-	} else {
-		t.Fatalf("Expected one of %v, got %s: %s", expectedCodes, result.Code, result.Message)
+	if result.Code != expectedCode {
+		t.Fatalf("expected %s, got %s: %s", expectedCode, result.Code, result.Message)
 	}
 }
 
@@ -225,11 +220,6 @@ func IOUAmount(issuer *jtx.Account, currency string, amount float64) tx.Amount {
 		return tx.NewIssuedAmountFromFloat64(amount, currency, "")
 	}
 	return tx.NewIssuedAmountFromFloat64(amount, currency, issuer.Address)
-}
-
-// IOU creates an IOU amount (alias for IOUAmount).
-func IOU(issuer *jtx.Account, currency string, amount float64) tx.Amount {
-	return IOUAmount(issuer, currency, amount)
 }
 
 // LPTokenAmount creates an LP token amount for the given AMM asset pair.
@@ -397,15 +387,15 @@ func (e *AMMTestEnv) AMMPoolIOU(ammAcc *jtx.Account, issuer *jtx.Account, curren
 // AMMPoolIOUPrecise returns the precise IOU balance of the AMM pool (full mantissa/exponent).
 func (e *AMMTestEnv) AMMPoolIOUPrecise(ammAcc *jtx.Account, issuer *jtx.Account, currency string) tx.Amount {
 	e.T.Helper()
-	balance := e.TestEnv.IOUBalance(ammAcc, issuer, currency)
-	if balance == nil {
-		return tx.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
+	balance, found := e.TestEnv.LookupIOUBalance(ammAcc, issuer, currency)
+	if !found {
+		e.T.Fatalf("AMMPoolIOUPrecise: missing %s trust line", currency)
 	}
 	return *balance
 }
 
 // accountFromAddress creates a jtx.Account with properly decoded ID from an address string.
-func accountFromAddress(t *testing.T, addr string) *jtx.Account {
+func accountFromAddress(t testing.TB, addr string) *jtx.Account {
 	t.Helper()
 	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(addr)
 	if err != nil {
@@ -416,16 +406,18 @@ func accountFromAddress(t *testing.T, addr string) *jtx.Account {
 	return &jtx.Account{Address: addr, ID: id20}
 }
 
-// AMMBalances returns (asset1Balance, asset2Balance, lptBalance) for the given AMM.
+// AMMIOUBalances returns (asset1Balance, asset2Balance, lptBalance) for an IOU/IOU AMM.
 // This matches rippled's amm.balances(issue1, issue2) which returns the pool's IOU
 // balances and total LP token supply.
-func (e *AMMTestEnv) AMMBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount, tx.Amount) {
+func (e *AMMTestEnv) AMMIOUBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount, tx.Amount) {
 	e.T.Helper()
 
 	ammAcc := e.ReadAMMAccount(asset1, asset2)
 	if ammAcc == nil {
-		zero := tx.NewIssuedAmountFromFloat64(0, "", "")
-		return zero, zero, zero
+		e.T.Fatalf("AMMIOUBalances: AMM not found for %s/%s", asset1.Currency, asset2.Currency)
+	}
+	if asset1.IsNative() || asset2.IsNative() || asset1.IsMPT() || asset2.IsMPT() {
+		e.T.Fatalf("AMMIOUBalances: only IOU/IOU pools are supported")
 	}
 
 	// Get pool IOU balances — must decode issuer addresses to get proper account IDs
@@ -437,9 +429,7 @@ func (e *AMMTestEnv) AMMBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount,
 	// Get LP token balance from AMM SLE
 	ammData := e.ReadAMMData(asset1, asset2)
 	if ammData == nil {
-		// AMM deleted (e.g., after WithdrawAll) — all balances are zero
-		zero := tx.NewIssuedAmountFromFloat64(0, "", "")
-		return zero, zero, zero
+		e.T.Fatalf("AMMIOUBalances: AMM disappeared while reading balances")
 	}
 	lptBalance := ammData.LPTokenBalance
 
@@ -453,7 +443,7 @@ func (e *AMMTestEnv) AMMBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount,
 func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, shouldFail bool, msg string) {
 	e.T.Helper()
 
-	bal1, bal2, lptBalance := e.AMMBalances(asset1, asset2)
+	bal1, bal2, lptBalance := e.AMMIOUBalances(asset1, asset2)
 
 	// Set rounding mode for the invariant check
 	mode := state.RoundToNearest
@@ -482,32 +472,34 @@ func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, sh
 }
 
 // ExpectAMMBalances checks that the AMM pool has the expected XRP and IOU balances.
-// xrpDrops is in drops, iouAmount is as float64.
+// The issued balance is compared using its canonical mantissa, exponent, and issue.
 func (e *AMMTestEnv) ExpectAMMBalances(t *testing.T, ammAcc *jtx.Account, xrpDrops uint64, issuer *jtx.Account, currency string, iouAmount float64) {
-	t.Helper()
+	expected, err := state.NewIssuedAmountFromDecimalString(
+		strconv.FormatFloat(iouAmount, 'f', -1, 64), currency, issuer.Address,
+	)
+	if err != nil {
+		t.Fatalf("AMM %s expected balance is not a decimal amount: %v", currency, err)
+	}
+	e.ExpectAMMBalancesExact(t, ammAcc, xrpDrops, expected)
+}
 
+// ExpectAMMBalancesExact checks an AMM's XRP and issued-token balances without
+// converting the expected issued amount through float64.
+func (e *AMMTestEnv) ExpectAMMBalancesExact(t *testing.T, ammAcc *jtx.Account, xrpDrops uint64, expected tx.Amount) {
+	t.Helper()
 	actualXRP := e.AMMPoolXRP(ammAcc)
 	if actualXRP != xrpDrops {
 		t.Errorf("AMM XRP balance: got %d drops, want %d drops", actualXRP, xrpDrops)
 	}
-
-	actualIOU := e.AMMPoolIOU(ammAcc, issuer, currency)
-	// Allow small float tolerance
-	diff := actualIOU - iouAmount
-	if diff < 0 {
-		diff = -diff
+	if expected.IsNative() || expected.Currency == "" || expected.Issuer == "" {
+		t.Fatalf("AMM expected balance must be an issued amount: %s", expected.Value())
 	}
-	if diff > 0.0001 {
-		t.Errorf("AMM %s balance: got %f, want %f", currency, actualIOU, iouAmount)
+	issuer := accountFromAddress(t, expected.Issuer)
+	actualIOU := e.AMMPoolIOUPrecise(ammAcc, issuer, expected.Currency)
+	if actualIOU.Native != expected.Native || actualIOU.Currency != expected.Currency ||
+		actualIOU.Issuer != expected.Issuer || actualIOU.Compare(expected) != 0 {
+		t.Errorf("AMM %s balance: got %s, want %s", expected.Currency, actualIOU.Value(), expected.Value())
 	}
-}
-
-// WithAMM sets up an AMM and calls the test callback.
-// This matches rippled's testAMM helper function.
-func WithAMM(t *testing.T, amount1, amount2 tx.Amount, tradingFee uint16, callback TestAMMCallback) {
-	t.Helper()
-	pool := [2]tx.Amount{amount1, amount2}
-	TestAMM(t, &pool, tradingFee, callback)
 }
 
 // WithDefaultAMM sets up an AMM with XRP(10000)/USD(10000) and no trading fee.
@@ -516,38 +508,14 @@ func WithDefaultAMM(t *testing.T, callback TestAMMCallback) {
 	TestAMM(t, nil, 0, callback)
 }
 
-// AccountOffers returns all offers owned by an account by iterating its owner directory.
-// Returns a slice of parsed LedgerOffer structs.
+// AccountOffers returns all offers owned by an account through the shared,
+// fail-closed owner-directory reader.
 func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*state.LedgerOffer {
 	e.T.Helper()
-
-	var offers []*state.LedgerOffer
-	dirKey := keylet.OwnerDir(acc.ID)
-	_ = state.DirForEach(e.Ledger(), dirKey, func(itemKey [32]byte) error {
-		// Read the raw entry (Read doesn't check type)
-		k := keylet.Keylet{Key: itemKey, Type: entry.TypeOffer}
-		data, err := e.Ledger().Read(k)
-		if err != nil || data == nil {
-			return nil
-		}
-		// Check if the first bytes indicate an offer SLE.
-		// Offer entries have LedgerEntryType = 0x006F.
-		// The binary codec prefix starts with type/field codes; check for offer signature.
-		offer, err := state.ParseLedgerOffer(data)
-		if err != nil {
-			return nil
-		}
-		// Only include if the offer has a valid account and non-zero amounts
-		if offer.Account == "" || (offer.TakerPays.IsZero() && offer.TakerGets.IsZero()) {
-			return nil // Not a valid offer entry
-		}
-		// Verify it belongs to the account we're querying
-		if offer.Account != acc.Address {
-			return nil
-		}
-		offers = append(offers, offer)
-		return nil
-	})
+	offers, err := offerbuild.OffersOnAccountChecked(e.TestEnv, acc)
+	if err != nil {
+		e.T.Fatalf("AccountOffers(%s): %v", acc.Name, err)
+	}
 
 	return offers
 }
@@ -599,16 +567,89 @@ func (e *AMMTestEnv) AMMTradingFee(asset1, asset2 tx.Asset) uint16 {
 // ReadAMMData reads and parses the AMM SLE for the given asset pair.
 func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 	e.T.Helper()
-	ammKey := coreAmm.ComputeAMMKeylet(asset1, asset2)
-	data, err := e.Ledger().Read(ammKey)
-	if err != nil || data == nil {
+	ammData, found, err := lookupAMMData(e.Ledger(), asset1, asset2)
+	if err != nil {
+		e.T.Fatalf("ReadAMMData: %v", err)
+	}
+	if !found {
 		return nil
+	}
+	return ammData
+}
+
+type ammLedgerReader interface {
+	Exists(keylet.Keylet) (bool, error)
+	Read(keylet.Keylet) ([]byte, error)
+}
+
+func validateAMMAsset(asset tx.Asset) error {
+	if asset.IsMPT() {
+		if asset.Currency != "" || asset.Issuer != "" {
+			return fmt.Errorf("MPT asset cannot include currency or issuer")
+		}
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return fmt.Errorf("invalid MPT issuance ID: %w", err)
+		}
+		if mptutil.Issuer(id) == ([20]byte{}) {
+			return fmt.Errorf("MPT issuance ID has zero issuer")
+		}
+		return nil
+	}
+	if asset.IsNative() {
+		return nil
+	}
+	if asset.Currency == "" || asset.Issuer == "" {
+		return fmt.Errorf("issued asset requires currency and issuer")
+	}
+	currency, err := keylet.ParseCurrency(asset.Currency)
+	if err != nil || currency == ([20]byte{}) {
+		return fmt.Errorf("invalid asset currency: %q", asset.Currency)
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return fmt.Errorf("invalid asset issuer: %w", err)
+	}
+	if issuer == ([20]byte{}) {
+		return fmt.Errorf("asset issuer cannot be the zero account")
+	}
+	return nil
+}
+
+func lookupAMMData(reader ammLedgerReader, asset1, asset2 tx.Asset) (*coreAmm.AMMData, bool, error) {
+	if err := validateAMMAsset(asset1); err != nil {
+		return nil, false, err
+	}
+	if err := validateAMMAsset(asset2); err != nil {
+		return nil, false, err
+	}
+	ammKey := coreAmm.ComputeAMMKeylet(asset1, asset2)
+	exists, err := reader.Exists(ammKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("existence check failed: %w", err)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := reader.Read(ammKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("read failed: %w", err)
+	}
+	if data == nil {
+		return nil, false, fmt.Errorf("ledger reported an AMM without data")
+	}
+	typ, err := state.DecodeType(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode ledger entry type: %w", err)
+	}
+	if typ != entry.TypeAMM {
+		return nil, false, fmt.Errorf("ledger entry has type %v, want AMM", typ)
 	}
 	ammData, err := coreAmm.ParseAMMData(data)
 	if err != nil {
-		e.T.Fatalf("ReadAMMData: parse error: %v", err)
+		return nil, false, fmt.Errorf("parse AMM: %w", err)
 	}
-	return ammData
+	return ammData, true, nil
 }
 
 // AMMAssetOut computes the asset amount received for burning LP tokens.
@@ -625,58 +666,33 @@ func (e *AMMTestEnv) ExpectLPTokens(account *jtx.Account, asset1, asset2 tx.Asse
 
 	ammAcc := e.ReadAMMAccount(asset1, asset2)
 	if ammAcc == nil {
-		if expected != 0 {
-			e.T.Errorf("ExpectLPTokens(%s): AMM not found, want %f", account.Name, expected)
-		}
-		return
+		e.T.Fatalf("ExpectLPTokens(%s): AMM not found", account.Name)
 	}
 	lptCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(asset1, asset2)
 
-	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
-	if balance == nil {
-		if expected != 0 {
-			e.T.Errorf("ExpectLPTokens(%s): no trust line, want %f", account.Name, expected)
-		}
-		return
+	want, err := state.NewIssuedAmountFromDecimalString(
+		strconv.FormatFloat(expected, 'f', -1, 64), lptCurrency, ammAcc.Address,
+	)
+	if err != nil {
+		e.T.Fatalf("ExpectLPTokens(%s): expected balance is not a decimal amount: %v", account.Name, err)
 	}
-	actual := balance.Float64()
-
-	// Allow small relative tolerance for rounding
-	diff := actual - expected
-	if diff < 0 {
-		diff = -diff
-	}
-	tolerance := 0.01
-	if expected != 0 {
-		relTol := expected * 1e-10
-		if relTol > tolerance {
-			tolerance = relTol
-		}
-	}
-	if diff > tolerance {
-		e.T.Errorf("ExpectLPTokens(%s): got %f, want %f (diff=%f)", account.Name, actual, expected, diff)
-	}
+	e.ExpectLPTokensExact(account, asset1, asset2, want)
 }
 
-// ExpectLPTokensPrecise checks LP token balance with precise Amount comparison.
-func (e *AMMTestEnv) ExpectLPTokensPrecise(account *jtx.Account, asset1, asset2 tx.Asset, expected tx.Amount) {
+// ExpectLPTokensExact compares the complete LP-token amount, including its
+// mantissa, exponent, currency, and pseudo-account issuer.
+func (e *AMMTestEnv) ExpectLPTokensExact(account *jtx.Account, asset1, asset2 tx.Asset, expected tx.Amount) {
 	e.T.Helper()
-
 	ammAcc := e.ReadAMMAccount(asset1, asset2)
 	if ammAcc == nil {
-		e.T.Errorf("ExpectLPTokensPrecise(%s): AMM not found", account.Name)
-		return
+		e.T.Fatalf("ExpectLPTokensExact(%s): AMM not found", account.Name)
 	}
 	lptCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(asset1, asset2)
-
-	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
-	if balance == nil {
-		e.T.Errorf("ExpectLPTokensPrecise(%s): no trust line", account.Name)
-		return
+	balance, found := e.TestEnv.LookupIOUBalance(account, ammAcc, lptCurrency)
+	if !found {
+		e.T.Fatalf("ExpectLPTokensExact(%s): no trust line", account.Name)
 	}
-
-	if balance.Mantissa() != expected.Mantissa() || balance.Exponent() != expected.Exponent() {
-		e.T.Errorf("ExpectLPTokensPrecise(%s): got %de%d, want %de%d",
-			account.Name, balance.Mantissa(), balance.Exponent(), expected.Mantissa(), expected.Exponent())
+	if expected.Native || expected.Currency != lptCurrency || expected.Issuer != ammAcc.Address || balance.Compare(expected) != 0 {
+		e.T.Errorf("ExpectLPTokensExact(%s): got %s, want %s", account.Name, balance.Value(), expected.Value())
 	}
 }

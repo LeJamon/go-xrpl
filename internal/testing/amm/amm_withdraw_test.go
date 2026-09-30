@@ -8,6 +8,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/stretchr/testify/require"
 )
 
 // TestInvalidWithdraw tests invalid withdrawal scenarios.
@@ -545,20 +546,7 @@ func TestWithdraw(t *testing.T) {
 		}
 		env.Close()
 
-		// AMM should be deleted after this
-		// Verify by trying to deposit - should fail with terNO_AMM
-		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			Amount(amm.XRPAmount(100)).
-			SingleAsset().
-			Build()
-		result = env.Submit(depositTx)
-
-		if result.Success {
-			t.Log("Note: AMM may not have been deleted if other LPs exist")
-		} else {
-			amm.ExpectTER(t, result, amm.TerNO_AMM)
-			t.Log("Withdraw all and AMM deletion passed")
-		}
+		require.Nil(t, env.ReadAMMData(amm.XRP(), env.USD))
 	})
 
 	// Single deposit then withdraw all in USD
@@ -679,7 +667,7 @@ func TestWithdrawExactPriceZeroDenominator(t *testing.T) {
 				env.EnableFeatureNow("fixCleanup3_4_0")
 			}
 
-			beforeGBP, beforeEUR, beforeLP := env.AMMBalances(env.GBP, env.EUR)
+			beforeGBP, beforeEUR, beforeLP := env.AMMIOUBalances(env.GBP, env.EUR)
 			if beforeLP.Value() != "100" {
 				t.Fatalf("unexpected initial LP balance: %s", beforeLP.Value())
 			}
@@ -695,7 +683,7 @@ func TestWithdrawExactPriceZeroDenominator(t *testing.T) {
 			result := env.Submit(withdrawTx)
 			amm.ExpectTER(t, result, tc.want)
 
-			afterGBP, afterEUR, afterLP := env.AMMBalances(env.GBP, env.EUR)
+			afterGBP, afterEUR, afterLP := env.AMMIOUBalances(env.GBP, env.EUR)
 			if beforeGBP.Compare(afterGBP) != 0 || beforeEUR.Compare(afterEUR) != 0 || beforeLP.Compare(afterLP) != 0 {
 				t.Fatalf("failed withdrawal changed AMM state: before=(%s,%s,%s), after=(%s,%s,%s)",
 					beforeGBP.Value(), beforeEUR.Value(), beforeLP.Value(),

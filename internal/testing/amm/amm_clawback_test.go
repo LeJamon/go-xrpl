@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/testing/clawback"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
@@ -55,17 +56,103 @@ func setupClawbackEnvWithUSD(t *testing.T, gwFund, aliceFund int64, usdFund floa
 	return env
 }
 
-// ammIsDeleted checks whether the AMM for the given asset pair has been deleted
-// by attempting a deposit and expecting terNO_AMM.
+// ammIsDeleted checks whether the AMM ledger entry for the given asset pair has
+// been deleted.
 func ammIsDeleted(t *testing.T, env *amm.AMMTestEnv, asset, asset2 tx.Asset) bool {
 	t.Helper()
+	return !env.LedgerEntryExists(coreAmm.ComputeAMMKeylet(asset, asset2))
+}
 
-	depositTx := amm.AMMDeposit(env.Alice, asset, asset2).
-		Amount(amm.XRPAmount(1)).
-		SingleAsset().
-		Build()
-	result := env.Submit(depositTx)
-	return result.Code == amm.TerNO_AMM
+func requireDeletedNode(t *testing.T, metadata *tx.Metadata, key keylet.Keylet) {
+	t.Helper()
+	want := strings.ToUpper(hex.EncodeToString(key.Key[:]))
+	for _, node := range metadata.AffectedNodes {
+		if node.LedgerIndex == want {
+			require.Equal(t, "DeletedNode", node.NodeType)
+			return
+		}
+	}
+	t.Fatalf("deleted node %s not found", want)
+}
+
+func TestAMMClawbackTerminalIOUPoolMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		fixAMMv13        bool
+		fixClawbackRound bool
+	}{
+		{name: "Legacy"},
+		{name: "AMMv1_3", fixAMMv13: true},
+		{name: "ClawbackRounding", fixClawbackRound: true},
+		{name: "Both", fixAMMv13: true, fixClawbackRound: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			if !tc.fixAMMv13 {
+				env.DisableFeature("fixAMMv1_3")
+			}
+			if !tc.fixClawbackRound {
+				env.DisableFeature("fixAMMClawbackRounding")
+			}
+
+			gw2 := jtx.NewAccount("gw2")
+			env.FundAmount(env.GW, uint64(jtx.XRP(1_000_000)))
+			env.FundAmount(gw2, uint64(jtx.XRP(1_000_000)))
+			env.FundAmount(env.Alice, uint64(jtx.XRP(1_000_000)))
+			env.Close()
+
+			jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build()))
+			env.Close()
+
+			eur := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
+			env.Trust(env.Alice, env.GW, "USD", 100_000)
+			env.PayIOU(env.GW, env.Alice, "USD", 3_000)
+			env.Trust(env.Alice, gw2, "EUR", 100_000)
+			env.PayIOU(gw2, env.Alice, "EUR", 3_000)
+			env.Close()
+
+			jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(
+				env.Alice,
+				amm.IOUAmount(gw2, "EUR", 1_000),
+				amm.IOUAmount(env.GW, "USD", 2_000),
+			).Build()))
+			env.Close()
+
+			ammAccount := amm.AMMAccount(t, env, env.USD, eur)
+			lpCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(env.USD, eur)
+			claw := func() jtx.TxResult {
+				result := env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, eur).
+					Amount(amm.IOUAmount(env.GW, "USD", 1_000)).
+					Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+				return result
+			}
+
+			claw()
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1_000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 2_500)
+
+			result := claw()
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1_000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 3_000)
+
+			ammKey := coreAmm.ComputeAMMKeylet(env.USD, eur)
+			jtx.RequireLedgerEntryNotExists(t, env.TestEnv, ammKey)
+			jtx.RequireLedgerEntryNotExists(t, env.TestEnv, keylet.Account(ammAccount.ID))
+			jtx.RequireLedgerEntryNotExists(t, env.TestEnv, keylet.OwnerDir(ammAccount.ID))
+			jtx.RequireLedgerEntryNotExists(t, env.TestEnv, keylet.Line(ammAccount.ID, env.GW.ID, "USD"))
+			jtx.RequireLedgerEntryNotExists(t, env.TestEnv, keylet.Line(ammAccount.ID, gw2.ID, "EUR"))
+			jtx.RequireLedgerEntryNotExists(t, env.TestEnv, keylet.Line(env.Alice.ID, ammAccount.ID, lpCurrency))
+
+			require.NotNil(t, result.Metadata)
+			requireDeletedNode(t, result.Metadata, ammKey)
+			requireDeletedNode(t, result.Metadata, keylet.Account(ammAccount.ID))
+			requireDeletedNode(t, result.Metadata, keylet.Line(ammAccount.ID, env.GW.ID, "USD"))
+			requireDeletedNode(t, result.Metadata, keylet.Line(ammAccount.ID, gw2.ID, "EUR"))
+			requireDeletedNode(t, result.Metadata, keylet.Line(env.Alice.ID, ammAccount.ID, lpCurrency))
+		})
+	}
 }
 
 // TestAMMClawback tests AMMClawback transaction scenarios.
@@ -88,12 +175,7 @@ func TestAMMClawback(t *testing.T) {
 			Amount(amm.IOUAmount(env.GW, "USD", 100)).
 			Build()
 		result = env.Submit(clawbackTx)
-
-		if result.Success {
-			t.Log("Basic clawback succeeded")
-		} else {
-			t.Logf("Basic clawback result: %s (may require clawback to be enabled)", result.Code)
-		}
+		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
 	})
 
 	// Non-issuer cannot clawback
@@ -104,11 +186,7 @@ func TestAMMClawback(t *testing.T) {
 			Amount(amm.IOUAmount(env.GW, "USD", 100)).
 			Build()
 		result := env.Submit(clawbackTx)
-
-		if result.Success {
-			t.Fatal("Non-issuer should not be able to clawback")
-		}
-		t.Logf("Non-issuer clawback correctly failed: %s", result.Code)
+		amm.ExpectTER(t, result, amm.TemMALFORMED)
 	})
 
 	// Invalid holder account
@@ -120,11 +198,7 @@ func TestAMMClawback(t *testing.T) {
 			Amount(amm.IOUAmount(env.GW, "USD", 100)).
 			Build()
 		result := env.Submit(clawbackTx)
-
-		if result.Success {
-			t.Fatal("Should not allow clawback with invalid holder")
-		}
-		t.Logf("Invalid holder clawback correctly failed: %s", result.Code)
+		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
 	})
 
 	// Clawback from non-existent AMM
@@ -221,11 +295,7 @@ func TestClawbackBasic(t *testing.T) {
 
 		// Try to enable clawback on gateway - should fail because gw already has trust lines
 		result = env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
-		if result.Success {
-			t.Logf("Note: Expected tecOWNERS when enabling clawback after trust lines exist")
-		} else {
-			t.Logf("Correctly rejected enabling clawback after trust lines: %s", result.Code)
-		}
+		amm.ExpectTER(t, result, "tecOWNERS")
 	})
 }
 
@@ -311,9 +381,7 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 
 		// rippled expected: alice USD = 1000 (3000 - 2000 deposited), EUR = 2500 (2000 + 500 returned)
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1000)
-		// EUR return depends on IOU trust line update implementation
-		aliceEUR := env.TestEnv.BalanceIOU(env.Alice, "EUR", gw2)
-		t.Logf("Alice EUR after first clawback: %.2f (rippled expects 2500)", aliceEUR)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 2500)
 
 		// gw clawback another 1000 USD from the AMM pool
 		clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
@@ -325,11 +393,8 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 
 		// rippled expected: alice USD still 1000, EUR = 3000 (all returned), AMM deleted
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1000)
-		aliceEUR = env.TestEnv.BalanceIOU(env.Alice, "EUR", gw2)
-		t.Logf("Alice EUR after second clawback: %.2f (rippled expects 3000)", aliceEUR)
-
-		deleted := ammIsDeleted(t, env, env.USD, EUR)
-		t.Logf("AMM deleted after full clawback: %v (rippled expects true)", deleted)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 3000)
+		require.True(t, ammIsDeleted(t, env, env.USD, EUR))
 	})
 
 	// Sub-test 2: USD/XRP pool
@@ -359,7 +424,7 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 		// Alice should get ~500 XRP back
 		aliceXrpAfter := env.TestEnv.Balance(env.Alice)
 		xrpDelta := int64(aliceXrpAfter) - int64(aliceXrpBefore)
-		t.Logf("Alice XRP delta after first clawback: %d drops (rippled expects ~500 XRP)", xrpDelta)
+		require.Equal(t, int64(jtx.XRP(500)), xrpDelta)
 
 		// gw clawback another 1000 USD
 		aliceXrpBefore = env.TestEnv.Balance(env.Alice)
@@ -374,10 +439,8 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 
 		aliceXrpAfter = env.TestEnv.Balance(env.Alice)
 		xrpDelta = int64(aliceXrpAfter) - int64(aliceXrpBefore)
-		t.Logf("Alice XRP delta after second clawback: %d drops (rippled expects ~500 XRP)", xrpDelta)
-
-		deleted := ammIsDeleted(t, env, env.USD, amm.XRP())
-		t.Logf("AMM deleted after full clawback: %v (rippled expects true)", deleted)
+		require.Equal(t, int64(jtx.XRP(500)), xrpDelta)
+		require.True(t, ammIsDeleted(t, env, env.USD, amm.XRP()))
 	})
 }
 
@@ -423,7 +486,7 @@ func setupAMMClawbackExactLPBoundary(t *testing.T, cleanup bool) (*amm.AMMTestEn
 func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 	env, ammAccount := setupAMMClawbackExactLPBoundary(t, false)
 
-	usdBefore, eurBefore, lpSupplyBefore := env.AMMBalances(env.USD, env.EUR)
+	usdBefore, eurBefore, lpSupplyBefore := env.AMMIOUBalances(env.USD, env.EUR)
 	require.Equal(t, "15", usdBefore.Value())
 	require.Equal(t, "15", eurBefore.Value())
 	require.Equal(t, "15", lpSupplyBefore.Value())
@@ -453,7 +516,7 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 	require.Equal(t, issuerSequenceBefore+1, env.Seq(env.GW))
 	require.Equal(t, holderOwnerCountBefore, env.OwnerCount(env.Alice))
 
-	usdAfter, eurAfter, lpSupplyAfter := env.AMMBalances(env.USD, env.EUR)
+	usdAfter, eurAfter, lpSupplyAfter := env.AMMIOUBalances(env.USD, env.EUR)
 	require.Zero(t, usdBefore.Compare(usdAfter))
 	require.Zero(t, eurBefore.Compare(eurAfter))
 	require.Zero(t, lpSupplyBefore.Compare(lpSupplyAfter))
@@ -469,7 +532,7 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 
 	withdrawAllResult := env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, env.EUR).Build())
 	jtx.RequireTxSuccess(t, withdrawAllResult)
-	_, _, lpSupplyAfterWithdrawAll := env.AMMBalances(env.USD, env.EUR)
+	_, _, lpSupplyAfterWithdrawAll := env.AMMIOUBalances(env.USD, env.EUR)
 	require.Equal(t, "5", lpSupplyAfterWithdrawAll.Value())
 	holderLPAfterWithdrawAll := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
 	if holderLPAfterWithdrawAll != nil {
@@ -479,7 +542,7 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 
 func TestAMMClawbackExactLPBoundaryWithCleanup(t *testing.T) {
 	env, ammAccount := setupAMMClawbackExactLPBoundary(t, true)
-	_, _, lpSupplyBefore := env.AMMBalances(env.USD, env.EUR)
+	_, _, lpSupplyBefore := env.AMMIOUBalances(env.USD, env.EUR)
 	holderLPBefore := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
 	require.NotNil(t, holderLPBefore)
 	require.Equal(t, "10", holderLPBefore.Value())
@@ -490,7 +553,7 @@ func TestAMMClawbackExactLPBoundaryWithCleanup(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	_, _, lpSupplyAfter := env.AMMBalances(env.USD, env.EUR)
+	_, _, lpSupplyAfter := env.AMMIOUBalances(env.USD, env.EUR)
 	require.Equal(t, "5", lpSupplyAfter.Value())
 	holderLPAfter := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
 	if holderLPAfter != nil {
@@ -756,11 +819,8 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 
 		// rippled expects: USD still 2000, EUR = 6000 (all returned), AMM deleted
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
-		aliceEUR := env.TestEnv.BalanceIOU(env.Alice, "EUR", gw2)
-		t.Logf("Alice EUR after all clawbacks: %.2f (rippled expects 6000)", aliceEUR)
-
-		deleted := ammIsDeleted(t, env, env.USD, EUR)
-		t.Logf("AMM deleted after exceeding clawback: %v (rippled expects true)", deleted)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 6000)
+		require.True(t, ammIsDeleted(t, env, env.USD, EUR))
 	})
 
 	// USD/XRP pool with multiple depositors
@@ -811,9 +871,7 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 			TwoAsset().
 			Build()
 		result = env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Alice deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// bob deposits USD(1000) + XRP(2000) into XRP/USD AMM
@@ -823,9 +881,7 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 			TwoAsset().
 			Build()
 		result = env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Bob deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// gw clawback 500 USD from alice in XRP/USD amm
@@ -837,8 +893,8 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 		env.Close()
 
 		// rippled expects: alice USD = 5000, bob USD = 4000
-		t.Logf("Alice USD after clawback: %.2f (rippled expects 5000)", env.TestEnv.BalanceIOU(env.Alice, "USD", env.GW))
-		t.Logf("Bob USD unchanged: %.2f (rippled expects 4000)", env.TestEnv.BalanceIOU(env.Bob, "USD", env.GW))
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 5000)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 4000)
 
 		// gw clawback 10 USD from bob in amm
 		clawbackTx = amm.AMMClawback(env.GW, env.Bob.Address, env.USD, amm.XRP()).
@@ -862,9 +918,7 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 			TwoAsset().
 			Build()
 		result = env.Submit(depositTx)
-		if !result.Success {
-			t.Logf("Alice EUR deposit: %s (may fail due to implementation)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// gw2 clawback 200 EUR from alice
@@ -872,7 +926,9 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 			Amount(amm.IOUAmount(gw2, "EUR", 200)).
 			Build()
 		result = env.Submit(clawbackTx)
-		t.Logf("gw2 clawback 200 EUR from alice: %s", result.Code)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 4000)
 
 		// Exceed: gw clawback 1000 USD from alice (exceeds remaining in pool)
 		clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).
@@ -967,8 +1023,8 @@ func TestAMMClawback_All(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		t.Logf("Bob USD after clawback-all: %.2f (rippled expects 3000)", env.TestEnv.BalanceIOU(env.Bob, "USD", env.GW))
-		t.Logf("Bob EUR after clawback-all: %.2f (rippled expects ~5000)", env.TestEnv.BalanceIOU(env.Bob, "EUR", gw2))
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 3000)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, gw2, "EUR", 5000)
 
 		// gw2 clawback ALL carol's EUR in amm
 		clawbackTx = amm.AMMClawback(gw2, env.Carol.Address, EUR, env.USD).Build()
@@ -976,7 +1032,7 @@ func TestAMMClawback_All(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		t.Logf("Carol USD after gw2 clawback: %.2f (rippled expects ~4000)", env.TestEnv.BalanceIOU(env.Carol, "USD", env.GW))
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 4000)
 
 		// gw2 clawback ALL alice's EUR in amm (should delete AMM)
 		clawbackTx = amm.AMMClawback(gw2, env.Alice.Address, EUR, env.USD).Build()
@@ -984,8 +1040,7 @@ func TestAMMClawback_All(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		deleted := ammIsDeleted(t, env, env.USD, EUR)
-		t.Logf("AMM deleted after all clawbacks: %v (rippled expects true)", deleted)
+		require.True(t, ammIsDeleted(t, env, env.USD, EUR))
 	})
 
 	// XRP/USD pool: clawback all from alice and bob
@@ -1042,8 +1097,7 @@ func TestAMMClawback_All(t *testing.T) {
 		env.Close()
 
 		aliceXrpAfter := env.TestEnv.Balance(env.Alice)
-		t.Logf("Alice XRP delta after clawback-all: %d drops (rippled expects ~200 XRP)",
-			int64(aliceXrpAfter)-int64(aliceXrpBefore))
+		require.Equal(t, int64(jtx.XRP(200))-1, int64(aliceXrpAfter)-int64(aliceXrpBefore))
 
 		// gw clawback all bob's USD in amm
 		bobXrpBefore := env.TestEnv.Balance(env.Bob)
@@ -1053,8 +1107,7 @@ func TestAMMClawback_All(t *testing.T) {
 		env.Close()
 
 		bobXrpAfter := env.TestEnv.Balance(env.Bob)
-		t.Logf("Bob XRP delta after clawback-all: %d drops (rippled expects ~400 XRP)",
-			int64(bobXrpAfter)-int64(bobXrpBefore))
+		require.Equal(t, int64(jtx.XRP(400)), int64(bobXrpAfter)-int64(bobXrpBefore))
 	})
 }
 
@@ -1131,7 +1184,7 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	env.Close()
 
 	// rippled expects: carol EUR = 7750 (8000 - 500 + 250 returned proportionally)
-	t.Logf("Carol EUR after USD clawback: %.2f (rippled expects 7750)", env.TestEnv.BalanceIOU(env.Carol, "EUR", env.GW))
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 7750)
 
 	// gw clawback 1000 USD from bob WITH tfClawTwoAssets
 	// EUR is NOT returned to bob (both assets clawed back)
@@ -1144,7 +1197,7 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	env.Close()
 
 	// rippled expects: bob EUR = 8000 (no EUR returned because tfClawTwoAssets)
-	t.Logf("Bob EUR after tfClawTwoAssets: %.2f (rippled expects 8000)", env.TestEnv.BalanceIOU(env.Bob, "EUR", env.GW))
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "EUR", 8000)
 
 	// gw clawback all USD from alice with tfClawTwoAssets
 	clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, env.EUR).
@@ -1155,8 +1208,8 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	env.Close()
 
 	// rippled expects: alice USD = 2000, alice EUR = 8000 (no EUR returned)
-	t.Logf("Alice USD after clawback-all: %.2f (rippled expects 2000)", env.TestEnv.BalanceIOU(env.Alice, "USD", env.GW))
-	t.Logf("Alice EUR after clawback-all: %.2f (rippled expects 8000)", env.TestEnv.BalanceIOU(env.Alice, "EUR", env.GW))
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "EUR", 8000)
 }
 
 // TestAMMClawback_SameCurrency tests clawback from AMM pool where both assets
@@ -1235,8 +1288,8 @@ func TestAMMClawback_SameCurrency(t *testing.T) {
 	env.Close()
 
 	// rippled expects: bob gw["USD"] = 5000 (7000 - 2000 deposited), bob gw2["USD"] = 5000 (2000 + 3000 returned)
-	t.Logf("Bob gw[USD] after clawback: %.2f (rippled expects 5000)", env.TestEnv.BalanceIOU(env.Bob, "USD", env.GW))
-	t.Logf("Bob gw2[USD] after clawback: %.2f (rippled expects 5000)", env.TestEnv.BalanceIOU(env.Bob, "USD", gw2))
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 5000)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, gw2, "USD", 5000)
 }
 
 // TestAMMClawback_IssuesEachOther tests clawback when two gateways issue tokens
@@ -1306,20 +1359,19 @@ func TestAMMClawback_IssuesEachOther(t *testing.T) {
 		Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 		Build()
 	result = env.Submit(clawbackTx)
-	t.Logf("gw clawback 1000 USD from gw2: %s", result.Code)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	t.Logf("After gw clawback 1000 USD from gw2:")
-	t.Logf("  alice USD: %.2f (rippled expects 2000)", env.TestEnv.BalanceIOU(env.Alice, "USD", env.GW))
-	t.Logf("  gw EUR: %.2f (rippled expects 4000)", env.TestEnv.BalanceIOU(env.GW, "EUR", gw2))
-	t.Logf("  gw2 USD: %.2f (rippled expects 3000)", env.TestEnv.BalanceIOU(gw2, "USD", env.GW))
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.GW, gw2, "EUR", 4000)
+	jtx.RequireIOUBalance(t, env.TestEnv, gw2, env.GW, "USD", 3000)
 
 	// gw2 claws back 1000 EUR from gw
 	clawbackTx = amm.AMMClawback(gw2, env.GW.Address, EUR, env.USD).
 		Amount(amm.IOUAmount(gw2, "EUR", 1000)).
 		Build()
 	result = env.Submit(clawbackTx)
-	t.Logf("gw2 clawback 1000 EUR from gw: %s", result.Code)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// gw2 claws back 4000 EUR from alice
@@ -1327,11 +1379,10 @@ func TestAMMClawback_IssuesEachOther(t *testing.T) {
 		Amount(amm.IOUAmount(gw2, "EUR", 4000)).
 		Build()
 	result = env.Submit(clawbackTx)
-	t.Logf("gw2 clawback 4000 EUR from alice: %s", result.Code)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	t.Logf("After gw2 clawback 4000 EUR from alice:")
-	t.Logf("  alice USD: %.2f (rippled expects 4000)", env.TestEnv.BalanceIOU(env.Alice, "USD", env.GW))
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 4000)
 }
 
 // TestAMMClawback_NotHoldingLPToken tests that clawback from an account that
@@ -1358,17 +1409,13 @@ func TestAMMClawback_NotHoldingLPToken(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Alice did not deposit. rippled expects tecAMM_BALANCE.
-	// Note: Current impl may return tesSUCCESS due to hardcoded LP token split.
+	// Alice did not deposit, so the issuer cannot claw back an LP balance that
+	// does not exist for her.
 	clawbackTx := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).
 		Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 		Build()
 	result = env.Submit(clawbackTx)
-	if result.Code == amm.TecAMM_BALANCE {
-		t.Logf("Correctly returned tecAMM_BALANCE for holder with no LP tokens")
-	} else {
-		t.Logf("Expected tecAMM_BALANCE for holder with no LP tokens, got %s (known implementation gap: holder LP token lookup not yet reading actual trust line balance)", result.Code)
-	}
+	amm.ExpectTER(t, result, amm.TecAMM_BALANCE)
 }
 
 // TestAMMClawback_AssetFrozen tests clawback when assets are frozen.
@@ -1417,7 +1464,7 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		env.Close()
 
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1000)
-		t.Logf("Alice EUR after frozen clawback: %.2f (rippled expects 2500)", env.TestEnv.BalanceIOU(env.Alice, "EUR", gw2))
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 2500)
 
 		// gw clawback another 1000 USD -- AMM gets deleted
 		clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
@@ -1428,8 +1475,8 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		env.Close()
 
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1000)
-		t.Logf("Alice EUR after second frozen clawback: %.2f (rippled expects 3000)", env.TestEnv.BalanceIOU(env.Alice, "EUR", gw2))
-		t.Logf("AMM deleted: %v (rippled expects true)", ammIsDeleted(t, env, env.USD, EUR))
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 3000)
+		require.True(t, ammIsDeleted(t, env, env.USD, EUR))
 	})
 
 	// Sub-test 2: Both trust lines frozen
@@ -1604,8 +1651,8 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		t.Logf("Alice USD after all clawbacks: %.2f (rippled expects 2000)", env.TestEnv.BalanceIOU(env.Alice, "USD", env.GW))
-		t.Logf("Alice EUR after all clawbacks: %.2f (rippled expects 8000)", env.TestEnv.BalanceIOU(env.Alice, "EUR", env.GW))
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "EUR", 8000)
 	})
 }
 
@@ -1653,10 +1700,10 @@ func TestAMMClawback_SingleDepositAndClawback(t *testing.T) {
 	env.Close()
 
 	// Alice should have received some XRP back (proportional to LP tokens burned)
-	// rippled expects ~29.29 XRP back
+	// With fixAMMv1_3 enabled, rippled returns exactly 29.289321 XRP.
 	aliceXrpAfter := env.TestEnv.Balance(env.Alice)
 	xrpDelta := int64(aliceXrpAfter) - int64(aliceXrpBefore)
-	t.Logf("Alice received %d drops XRP back (~%.6f XRP, rippled expects ~29.29 XRP)", xrpDelta, float64(xrpDelta)/1000000)
+	require.Equal(t, int64(29_289_321), xrpDelta)
 }
 
 // TestAMMClawback_LastHolderLPTokenBalance tests edge cases where the last LP
@@ -1699,27 +1746,24 @@ func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
 
 		// Bob deposits, then withdraws to make alice sole LP holder
 		depositTx := amm.AMMDeposit(bob, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
-		if result.Success {
-			env.Close()
-			withdrawTx := amm.AMMWithdraw(bob, amm.XRP(), env.USD).WithdrawAll().Build()
-			result = env.Submit(withdrawTx)
-			if result.Success {
-				env.Close()
-			}
-		} else {
-			env.Close()
-		}
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		withdrawTx := amm.AMMWithdraw(bob, amm.XRP(), env.USD).WithdrawAll().Build()
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
+		env.Close()
 
 		// Clawback 0.5 USD from alice
 		clawbackTx := amm.AMMClawback(env.GW, alice.Address, env.USD, amm.XRP()).
 			Amount(amm.IOUAmount(env.GW, "USD", 0.5)).
 			Build()
 		result = env.Submit(clawbackTx)
-		t.Logf("Partial clawback from last holder: %s (success=%v)", result.Code, result.Success)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.False(t, ammIsDeleted(t, env, env.USD, amm.XRP()))
 	})
 
 	// Sub-test 2: IOU/XRP pool - clawback all of last holder's balance
@@ -1732,25 +1776,21 @@ func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
 		env.Close()
 
 		depositTx := amm.AMMDeposit(bob, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000000)).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().Build()
 		result = env.Submit(depositTx)
-		if result.Success {
-			env.Close()
-			withdrawTx := amm.AMMWithdraw(bob, amm.XRP(), env.USD).WithdrawAll().Build()
-			result = env.Submit(withdrawTx)
-			if result.Success {
-				env.Close()
-			}
-		} else {
-			env.Close()
-		}
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		withdrawTx := amm.AMMWithdraw(bob, amm.XRP(), env.USD).WithdrawAll().Build()
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
+		env.Close()
 
 		// Clawback all from alice
 		clawbackTx := amm.AMMClawback(env.GW, alice.Address, env.USD, amm.XRP()).Build()
 		result = env.Submit(clawbackTx)
-		// rippled: result depends on fixAMMClawbackRounding and fixAMMv1_3
-		t.Logf("Clawback all from last holder: %s (success=%v)", result.Code, result.Success)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.True(t, ammIsDeleted(t, env, env.USD, amm.XRP()))
 	})
 
 	// Sub-test 3: IOU/IOU pool (different issuers)
@@ -1774,25 +1814,21 @@ func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
 		env.Close()
 
 		depositTx := amm.AMMDeposit(bob, env.USD, EUR).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000)).
+			LPTokenOut(amm.LPTokenAmount(env, env.USD, EUR, 1000)).
 			LPToken().Build()
 		result = env.Submit(depositTx)
-		if result.Success {
-			env.Close()
-			withdrawTx := amm.AMMWithdraw(bob, env.USD, EUR).WithdrawAll().Build()
-			result = env.Submit(withdrawTx)
-			if result.Success {
-				env.Close()
-			}
-		} else {
-			env.Close()
-		}
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		withdrawTx := amm.AMMWithdraw(bob, env.USD, EUR).WithdrawAll().Build()
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
+		env.Close()
 
 		// Clawback all from alice
 		clawbackTx := amm.AMMClawback(env.GW, alice.Address, env.USD, EUR).Build()
 		result = env.Submit(clawbackTx)
-		// rippled: with fixAMMv1_3+fixAMMClawbackRounding -> AMM deleted, else tecINTERNAL
-		t.Logf("Clawback all IOU/IOU different issuers: %s (success=%v)", result.Code, result.Success)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.True(t, ammIsDeleted(t, env, env.USD, EUR))
 	})
 
 	// Sub-test 4: IOU/IOU pool (same issuer) with tfClawTwoAssets
@@ -1811,26 +1847,22 @@ func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
 		env.Close()
 
 		depositTx := amm.AMMDeposit(bob, env.USD, env.EUR).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 1000)).
+			LPTokenOut(amm.LPTokenAmount(env, env.USD, env.EUR, 1000)).
 			LPToken().Build()
 		result = env.Submit(depositTx)
-		if result.Success {
-			env.Close()
-			withdrawTx := amm.AMMWithdraw(bob, env.USD, env.EUR).WithdrawAll().Build()
-			result = env.Submit(withdrawTx)
-			if result.Success {
-				env.Close()
-			}
-		} else {
-			env.Close()
-		}
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		withdrawTx := amm.AMMWithdraw(bob, env.USD, env.EUR).WithdrawAll().Build()
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
+		env.Close()
 
 		// Clawback all with tfClawTwoAssets
 		clawbackTx := amm.AMMClawback(env.GW, alice.Address, env.USD, env.EUR).
 			ClawTwoAssets().Build()
 		result = env.Submit(clawbackTx)
-		// rippled: with fixAMMClawbackRounding -> AMM deleted, else tecINTERNAL
-		t.Logf("Clawback all IOU/IOU same issuer: %s (success=%v)", result.Code, result.Success)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.True(t, ammIsDeleted(t, env, env.USD, env.EUR))
 	})
 }
 

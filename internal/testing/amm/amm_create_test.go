@@ -119,7 +119,7 @@ func TestInvalidInstance(t *testing.T) {
 		if result.Success {
 			t.Fatal("Should not allow creating AMM with zero XRP amount")
 		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
 	})
 
 	// Reference: AMM ammAlice1(env, alice, XRP(10'000), USD(0), ter(temBAD_AMOUNT));
@@ -134,7 +134,7 @@ func TestInvalidInstance(t *testing.T) {
 		if result.Success {
 			t.Fatal("Should not allow creating AMM with zero IOU amount")
 		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT, amm.TemMALFORMED)
+		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
 	})
 
 	// Can't have negative amounts

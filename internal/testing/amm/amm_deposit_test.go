@@ -206,7 +206,7 @@ func TestInvalidDeposit(t *testing.T) {
 
 		// Create AMM
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
-		env.Submit(createTx)
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
 		// Carol tries to deposit 1000 USD (but only has 100)
@@ -367,19 +367,11 @@ func TestDeposit(t *testing.T) {
 		env := setupAMM(t)
 
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 100000)).
+			LPTokenOut(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 100000)).
 			Amount(amm.IOUAmount(env.GW, "USD", 205)).
 			OneAssetLPToken().
 			Build()
-		result := env.Submit(depositTx)
-
-		// May fail due to calculated amount exceeding limit
-		if result.Success {
-			t.Log("Single deposit with token amount succeeded")
-		} else {
-			// tecAMM_FAILED is expected if calculated amount exceeds limit
-			t.Logf("Single deposit with token amount result: %s (may be expected)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 
 	// Deposit with effective price limit (LimitLPToken)
@@ -395,14 +387,7 @@ func TestDeposit(t *testing.T) {
 			EPrice(ePrice).
 			LimitLPToken().
 			Build()
-		result := env.Submit(depositTx)
-
-		// Result depends on whether effective price is within limit
-		if result.Success {
-			t.Log("Deposit with price limit succeeded")
-		} else {
-			t.Logf("Deposit with price limit result: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 }
 
