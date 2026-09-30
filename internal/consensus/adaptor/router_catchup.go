@@ -1630,7 +1630,13 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 	}
 	if svc := c.adaptor.LedgerService(); svc != nil && !repairParent && purpose != fullStateAdmissionReplacement {
 		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
-			return fullStateAdmission{outcome: fullStateAdmissionRejected}
+			heldSeq := seq
+			if heldSeq == 0 {
+				heldSeq = held.Sequence()
+			}
+			if svc.HasCompleteLedgerHash(heldSeq, hash) {
+				return fullStateAdmission{outcome: fullStateAdmissionRejected}
+			}
 		}
 	}
 	// Safety net: if a replay-delta for the same hash is still
@@ -1641,6 +1647,9 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 	}
 
 	if existing := c.fetchTracker.Find(hash); existing != nil {
+		if existing.Reason() != inbound.ReasonConsensus {
+			return fullStateAdmission{outcome: fullStateAdmissionDeferred}
+		}
 		il, _ := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 			return nil
 		})

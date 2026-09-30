@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,6 +44,123 @@ func TestFrozenPivotRecoveryDefersAtCapacityAndRetriesOnePendingIntent(t *testin
 	assert.Equal(t, generation+1, r.catchupReplay.standardReplay.generation)
 	assert.NotNil(t, r.catchupReplay.fetchTracker.Find(targetHash))
 	assert.Len(t, sender.legacyCalls(), 2)
+}
+
+func TestFrozenPivotRecoveryAdoptsVerifiedKnownSequenceSurvivor(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	sender.mu.Lock()
+	sender.peerSupportsReplay = false
+	sender.mu.Unlock()
+	closed := svc.GetClosedLedgerIndex()
+	pivotSeq := closed + 10
+	pivotHash := [32]byte{0xf1}
+	successorHash := [32]byte{0xf2}
+	targetSeq := pivotSeq + 2
+	targetHash := [32]byte{0xf3}
+	trackCatchupPeer(r, 8, targetSeq, targetHash)
+
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.startLedgerAcquisitionLegacyLocked(pivotSeq, pivotHash, 7)
+	r.catchupReplay.acquisitionMu.Unlock()
+	survivor := r.catchupReplay.fetchTracker.Find(pivotHash)
+	require.NotNil(t, survivor)
+	require.False(t, survivor.TransactionOnly())
+
+	r.catchupReplay.recordAcquiredSeqHash(pivotSeq+1, successorHash, pivotHash)
+	r.catchupReplay.recordAcquiredSeqHash(targetSeq, targetHash, successorHash)
+	r.catchupReplay.recordValidationCatchupTarget(targetSeq, targetHash, 8, catchupSourceQuorum)
+
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(targetSeq, targetHash, 8))
+	r.catchupReplay.acquisitionMu.Lock()
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
+	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
+	assert.Equal(t, targetSeq, r.catchupReplay.standardReplay.targetSeq)
+	assert.Equal(t, targetHash, r.catchupReplay.standardReplay.targetHash)
+	r.catchupReplay.acquisitionMu.Unlock()
+	assert.Same(t, survivor, r.catchupReplay.fetchTracker.Find(pivotHash))
+	successor := r.catchupReplay.fetchTracker.Find(successorHash)
+	require.NotNil(t, successor)
+	assert.True(t, successor.TransactionOnly())
+	calls := sender.legacyCalls()
+	require.Len(t, calls, 3)
+	assert.Equal(t, pivotSeq, calls[0].seq)
+	assert.Equal(t, pivotHash, calls[0].hash)
+	assert.Equal(t, pivotSeq+1, calls[1].seq)
+	assert.Equal(t, targetSeq, calls[2].seq)
+}
+
+func TestFrozenPivotRecoveryStartsHeaderDiscoveryForUnknownSurvivorAncestry(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	pivotSeq := closed + 10
+	pivotHash := [32]byte{0xf4}
+	targetSeq := pivotSeq + 2
+	targetHash := [32]byte{0xf5}
+
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.startLedgerAcquisitionLegacyLocked(pivotSeq, pivotHash, 7)
+	r.catchupReplay.acquisitionMu.Unlock()
+	require.NotNil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
+	r.catchupReplay.recordValidationCatchupTarget(targetSeq, targetHash, 8, catchupSourceQuorum)
+
+	assert.False(t, r.catchupReplay.beginFrozenPivotRecovery(targetSeq, targetHash, 8))
+	r.catchupReplay.headerDiscoveryMu.Lock()
+	discovery := r.catchupReplay.headerDiscovery
+	r.catchupReplay.headerDiscoveryMu.Unlock()
+	require.NotNil(t, discovery)
+	assert.Equal(t, targetSeq, discovery.targetSeq)
+	assert.Equal(t, targetHash, discovery.targetHash)
+	requests := sender.headerRequests()
+	require.Len(t, requests, 1)
+	assert.Equal(t, targetSeq, requests[0].seq)
+	assert.Equal(t, targetHash, requests[0].hash)
+	assert.Len(t, sender.legacyCalls(), 1)
+}
+
+func TestFullStateAdmissionDefersUnrelatedGenericAcquisition(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	targetSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	targetHash := [32]byte{0xf6}
+	trackCatchupPeer(r, 7, targetSeq, targetHash)
+	_, started := r.catchupReplay.startGenericAcquisition(targetHash, targetSeq)
+	require.True(t, started)
+	generic := r.catchupReplay.fetchTracker.Find(targetHash)
+	require.NotNil(t, generic)
+	require.Equal(t, inbound.ReasonGeneric, generic.Reason())
+
+	r.catchupReplay.acquisitionMu.Lock()
+	admission := r.catchupReplay.admitFullStateLocked(
+		targetSeq, targetHash, 7, fullStateAdmissionCatchup,
+	)
+	r.catchupReplay.acquisitionMu.Unlock()
+
+	assert.Equal(t, fullStateAdmissionDeferred, admission.outcome)
+	assert.Same(t, generic, r.catchupReplay.fetchTracker.Find(targetHash))
+	assert.Len(t, sender.legacyCalls(), 1)
+}
+
+func TestPendingFrozenPivotUsesLatestTrustedTarget(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	oldSeq := closed + 10
+	oldHash := [32]byte{0xf7}
+	newHash := [32]byte{0xf8}
+
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.rememberFrozenPivotPendingLocked(oldSeq, oldHash, 7)
+	r.catchupReplay.acquisitionMu.Unlock()
+	r.catchupReplay.recordValidationCatchupTarget(oldSeq, newHash, 8, catchupSourceQuorum)
+
+	require.True(t, r.catchupReplay.retryPendingFrozenPivot())
+	r.catchupReplay.acquisitionMu.Lock()
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.Equal(t, oldSeq, r.catchupReplay.standardReplay.targetSeq)
+	assert.Equal(t, newHash, r.catchupReplay.standardReplay.targetHash)
+	r.catchupReplay.acquisitionMu.Unlock()
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(oldHash))
+	assert.NotNil(t, r.catchupReplay.fetchTracker.Find(newHash))
+	assert.Len(t, sender.legacyCalls(), 1)
 }
 
 func TestFrozenPivotRecoveryBlocksRegularFullStateDuringActiveSession(t *testing.T) {
