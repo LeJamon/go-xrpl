@@ -138,6 +138,28 @@ Run it under both default and `mptcrypto` profiles, together with native crypto
 and MPT transaction/integration tests. A successful native unit run does not
 replace testing the actual shipped daemon/image.
 
+## Candidate verification and retained evidence
+
+CI runs the complete required matrix for pull requests and for every push to
+`v3.4.1`. The release evidence job runs after all producers and rejects failed
+jobs, missing producers, failed producer records, dirty source trees, mismatched
+candidate SHAs and mixed oracle identities. Advisory lint is included in this
+release gate. The conformance gate requires zero failures, skips or exclusions
+and reconciles the executed counts.
+
+Each run retains `release-evidence-<tested-sha>`, containing the workflow,
+producer commands and environment, strict corpus and engine execution reports,
+oracle package/binary/image provenance, and production-image consensus smoke
+results. `final-acceptance.txt` records the tested Git tree and commit. These
+artifacts establish the executed scope documented in the reports; they do not
+turn unexecuted inventory rows into parity evidence.
+
+A pull request run tests GitHub's merge candidate. After merge, use the separate
+push run for the resulting `v3.4.1` commit. Check that the remote branch still
+names that commit and that the producer records and engine execution report in
+the retained artifact name it before signing off. A successful run on a previous commit,
+even one with a similar version string, does not satisfy this check.
+
 ## Final closure checklist
 
 - [ ] Integrate #2015 and #2016 into `v3.4.1`; recheck all sibling and
