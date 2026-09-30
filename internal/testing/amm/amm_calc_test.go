@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	pay "github.com/LeJamon/go-xrpl/internal/testing/payment"
@@ -34,9 +33,9 @@ func TestAMMCalc_LPTokensOnCreate(t *testing.T) {
 			calcRequireXRPPool(t, e, uint64(tc.xrp)*1000000, create.Amount2.Value(), tc.lp)
 			calcRequireLP(t, e, e.Alice, amm.XRP(), e.USD, tc.lp)
 			require.Equal(t, uint64(tc.xrp)*1000000+e.ReserveIncrement(), before-e.Balance(e.Alice))
-			want, err := calcAmount(t, "30000", e.USD).Sub(create.Amount2)
+			want, err := ammIssuedAmount(t, "30000", e.USD).Sub(create.Amount2)
 			require.NoError(t, err)
-			require.Equal(t, want, calcHolding(t, e, e.Alice, e.USD))
+			require.Equal(t, want, ammHolding(t, e, e.Alice, e.USD))
 		})
 	}
 	t.Run("IOU_IOU", func(t *testing.T) {
@@ -46,12 +45,12 @@ func TestAMMCalc_LPTokensOnCreate(t *testing.T) {
 		jtx.RequireTxSuccess(t, e.Submit(amm.AMMCreate(e.Alice, amm.IOUAmount(e.GW, "USD", 20000), amm.IOUAmount(e.GW, "BTC", 0.5)).Build()))
 		pool := e.ReadAMMAccount(e.USD, e.BTC)
 		require.NotNil(t, pool)
-		calcRequireAmount(t, calcHolding(t, e, pool, e.USD), "20000")
-		calcRequireAmount(t, calcHolding(t, e, pool, e.BTC), "0.5")
-		calcRequireAmount(t, e.ReadAMMData(e.USD, e.BTC).LPTokenBalance, "100")
+		requireAMMAmount(t, ammHolding(t, e, pool, e.USD), "20000")
+		requireAMMAmount(t, ammHolding(t, e, pool, e.BTC), "0.5")
+		requireAMMAmount(t, e.ReadAMMData(e.USD, e.BTC).LPTokenBalance, "100")
 		calcRequireLP(t, e, e.Alice, e.USD, e.BTC, "100")
-		calcRequireAmount(t, calcHolding(t, e, e.Alice, e.USD), "10000")
-		calcRequireAmount(t, calcHolding(t, e, e.Alice, e.BTC), "0.5")
+		requireAMMAmount(t, ammHolding(t, e, e.Alice, e.USD), "10000")
+		requireAMMAmount(t, ammHolding(t, e, e.Alice, e.BTC), "0.5")
 		require.Equal(t, e.ReserveIncrement(), before-e.Balance(e.Alice))
 	})
 }
@@ -94,9 +93,9 @@ func TestAMMCalc_Deposit(t *testing.T) {
 			calcRequireLP(t, e, e.Carol, amm.XRP(), e.USD, tc.minted)
 			calcRequireLP(t, e, e.Alice, amm.XRP(), e.USD, "10000000")
 			require.Equal(t, tc.xrp-10000000000+10, before-e.Balance(e.Carol))
-			want, err := calcAmount(t, "40000", e.USD).Sub(calcAmount(t, tc.usd, e.USD))
+			want, err := ammIssuedAmount(t, "40000", e.USD).Sub(ammIssuedAmount(t, tc.usd, e.USD))
 			require.NoError(t, err)
-			require.Equal(t, want, calcHolding(t, e, e.Carol, e.USD))
+			require.Equal(t, want, ammHolding(t, e, e.Carol, e.USD))
 		})
 	}
 }
@@ -129,9 +128,9 @@ func TestAMMCalc_Withdraw(t *testing.T) {
 			calcRequireXRPPool(t, e, tc.xrp, tc.usd, tc.supply)
 			calcRequireLP(t, e, e.Alice, amm.XRP(), e.USD, tc.supply)
 			require.Equal(t, before+10000000000-tc.xrp-10, e.Balance(e.Alice))
-			want, err := calcAmount(t, "30000", e.USD).Sub(calcAmount(t, tc.usd, e.USD))
+			want, err := ammIssuedAmount(t, "30000", e.USD).Sub(ammIssuedAmount(t, tc.usd, e.USD))
 			require.NoError(t, err)
-			require.Equal(t, want, calcHolding(t, e, e.Alice, e.USD))
+			require.Equal(t, want, ammHolding(t, e, e.Alice, e.USD))
 		})
 	}
 }
@@ -142,12 +141,12 @@ func TestAMMCalc_DepositWithdrawRoundTrip(t *testing.T) {
 	jtx.RequireTxSuccess(t, e.Submit(amm.AMMDeposit(e.Carol, amm.XRP(), e.USD).LPTokenOut(amm.LPTokenAmount(e, amm.XRP(), e.USD, 1000000)).LPToken().Build()))
 	calcRequireXRPPool(t, e, 11000000000, "11000", "11000000")
 	calcRequireLP(t, e, e.Carol, amm.XRP(), e.USD, "1000000")
-	calcRequireAmount(t, calcHolding(t, e, e.Carol, e.USD), "29000")
+	requireAMMAmount(t, ammHolding(t, e, e.Carol, e.USD), "29000")
 	require.Equal(t, before-1000000010, e.Balance(e.Carol))
 	e.Close()
 	jtx.RequireTxSuccess(t, e.Submit(amm.AMMWithdraw(e.Carol, amm.XRP(), e.USD).WithdrawAll().Build()))
 	calcRequireXRPPool(t, e, 10000000000, "10000", "10000000")
-	calcRequireAmount(t, calcHolding(t, e, e.Carol, e.USD), "30000")
+	requireAMMAmount(t, ammHolding(t, e, e.Carol, e.USD), "30000")
 	require.Equal(t, before-20, e.Balance(e.Carol))
 	pool := e.ReadAMMAccount(amm.XRP(), e.USD)
 	supply := e.ReadAMMData(amm.XRP(), e.USD).LPTokenBalance
@@ -173,7 +172,7 @@ func TestAMMCalc_SwapAndQuality(t *testing.T) {
 			lp := e.ReadAMMData(amm.XRP(), e.USD).LPTokenBalance
 			pool := e.ReadAMMAccount(amm.XRP(), e.USD)
 			product := func() *big.Rat {
-				usd, ok := new(big.Rat).SetString(calcHolding(t, e, pool, e.USD).Value())
+				usd, ok := new(big.Rat).SetString(ammHolding(t, e, pool, e.USD).Value())
 				require.True(t, ok)
 				return new(big.Rat).Mul(new(big.Rat).SetInt(new(big.Int).SetUint64(e.Balance(pool))), usd)
 			}
@@ -184,13 +183,13 @@ func TestAMMCalc_SwapAndQuality(t *testing.T) {
 			}
 			jtx.RequireTxSuccess(t, e.Submit(p.Build()))
 			calcRequireXRPPool(t, e, uint64(10000+tc.delivered)*1000000, "10000", lp.Value())
-			calcRequireAmount(t, calcHolding(t, e, e.Carol, e.USD), big.NewInt(30000+tc.delivered).String())
+			requireAMMAmount(t, ammHolding(t, e, e.Carol, e.USD), big.NewInt(30000+tc.delivered).String())
 			require.Equal(t, uint64(tc.delivered)*1000000+10, before-e.Balance(e.Bob))
 			require.Zero(t, kBefore.Cmp(product()))
 			if tc.limited {
 				jtx.RequireTxClaimed(t, e.Submit(p.Build()), ter.TecPATH_DRY.String())
 				calcRequireXRPPool(t, e, 10_010_000_000, "10000", lp.Value())
-				calcRequireAmount(t, calcHolding(t, e, e.Carol, e.USD), "30010")
+				requireAMMAmount(t, ammHolding(t, e, e.Carol, e.USD), "30010")
 				require.Equal(t, before-10_000_020, e.Balance(e.Bob))
 			}
 		})
@@ -224,26 +223,26 @@ func TestAMMCalc_TradingFee(t *testing.T) {
 			if feeOnDeposit {
 				wantUSD = "3999.999999999999"
 			}
-			calcRequireAmount(t, calcHolding(t, e, pool, e.USD), wantUSD)
-			calcRequireAmount(t, calcHolding(t, e, pool, e.EUR), "1000")
-			calcRequireAmount(t, calcHolding(t, e, e.Carol, e.USD), "27000")
+			requireAMMAmount(t, ammHolding(t, e, pool, e.USD), wantUSD)
+			requireAMMAmount(t, ammHolding(t, e, pool, e.EUR), "1000")
+			requireAMMAmount(t, ammHolding(t, e, e.Carol, e.USD), "27000")
 			require.Equal(t, beforeXRP-10, e.Balance(e.Carol))
 			if feeOnDeposit {
 				calcRequireLP(t, e, e.Carol, e.USD, e.EUR, "994.981155689671")
-				calcRequireAmount(t, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance, "1994.981155689671")
+				requireAMMAmount(t, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance, "1994.981155689671")
 				return
 			}
 			calcRequireLP(t, e, e.Carol, e.USD, e.EUR, "1000")
-			calcRequireAmount(t, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance, "2000")
+			requireAMMAmount(t, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance, "2000")
 			jtx.RequireTxSuccess(t, e.Submit(amm.AMMVote(e.Alice, e.USD, e.EUR, 1000).Build()))
 			require.Equal(t, uint16(1000), e.ReadAMMData(e.USD, e.EUR).TradingFee)
 			jtx.RequireTxSuccess(t, e.Submit(amm.AMMWithdraw(e.Carol, e.USD, e.EUR).
 				Amount(amm.IOUAmount(e.GW, "USD", 0)).OneAssetWithdrawAll().Build()))
-			calcRequireAmount(t, calcHolding(t, e, pool, e.USD), "1005.025125628141")
-			calcRequireAmount(t, calcHolding(t, e, pool, e.EUR), "1000")
-			calcRequireAmount(t, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance, "1000")
+			requireAMMAmount(t, ammHolding(t, e, pool, e.USD), "1005.025125628141")
+			requireAMMAmount(t, ammHolding(t, e, pool, e.EUR), "1000")
+			requireAMMAmount(t, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance, "1000")
 			calcRequireLP(t, e, e.Alice, e.USD, e.EUR, "1000")
-			calcRequireAmount(t, calcHolding(t, e, e.Carol, e.USD), "29994.97487437186")
+			requireAMMAmount(t, ammHolding(t, e, e.Carol, e.USD), "29994.97487437186")
 			require.Equal(t, beforeXRP-20, e.Balance(e.Carol))
 			line, err := e.LedgerEntry(keylet.Line(e.Carol.ID, pool.ID, e.ReadAMMData(e.USD, e.EUR).LPTokenBalance.Currency))
 			require.NoError(t, err)
@@ -274,42 +273,19 @@ func calcRequireXRPPool(t *testing.T, e *amm.AMMTestEnv, xrp uint64, usd, lp str
 	pool := e.ReadAMMAccount(amm.XRP(), e.USD)
 	require.NotNil(t, pool)
 	require.Equal(t, xrp, e.Balance(pool))
-	calcRequireAmount(t, calcHolding(t, e, pool, e.USD), usd)
+	requireAMMAmount(t, ammHolding(t, e, pool, e.USD), usd)
 	data := e.ReadAMMData(amm.XRP(), e.USD)
 	require.NotNil(t, data)
-	calcRequireAmount(t, data.LPTokenBalance, lp)
+	require.Equal(t, pool.Address, data.LPTokenBalance.Issuer)
+	require.Equal(t, amm.LPTokenAmount(e, amm.XRP(), e.USD, 0).Currency, data.LPTokenBalance.Currency)
+	requireAMMAmount(t, data.LPTokenBalance, lp)
 }
 func calcRequireLP(t *testing.T, e *amm.AMMTestEnv, holder *jtx.Account, a, b tx.Asset, value string) {
 	t.Helper()
 	pool := e.ReadAMMAccount(a, b)
 	require.NotNil(t, pool)
 	supply := e.ReadAMMData(a, b).LPTokenBalance
-	calcRequireAmount(t, calcHolding(t, e, holder, tx.Asset{Currency: supply.Currency, Issuer: pool.Address}), value)
-}
-func calcHolding(t *testing.T, e *amm.AMMTestEnv, holder *jtx.Account, asset tx.Asset) tx.Amount {
-	t.Helper()
-	issuer, err := state.DecodeAccountID(asset.Issuer)
-	require.NoError(t, err)
-	data, err := e.LedgerEntry(keylet.Line(holder.ID, issuer, asset.Currency))
-	require.NoError(t, err)
-	require.NotEmpty(t, data, "holding trust line must exist")
-	line, err := state.ParseRippleState(data)
-	require.NoError(t, err)
-	amount := line.Balance
-	if !keylet.IsLowAccount(holder.ID, issuer) {
-		amount = amount.Negate()
-	}
-	require.Equal(t, asset.Currency, amount.Currency)
-	amount.Issuer = asset.Issuer
-	return amount
-}
-func calcAmount(t *testing.T, value string, asset tx.Asset) tx.Amount {
-	t.Helper()
-	amount, err := state.NewIssuedAmountFromDecimalString(value, asset.Currency, asset.Issuer)
-	require.NoError(t, err)
-	return amount
-}
-func calcRequireAmount(t *testing.T, got tx.Amount, value string) {
-	t.Helper()
-	require.Equal(t, calcAmount(t, value, tx.Asset{Currency: got.Currency, Issuer: got.Issuer}), got)
+	require.Equal(t, pool.Address, supply.Issuer)
+	require.Equal(t, amm.LPTokenAmount(e, a, b, 0).Currency, supply.Currency)
+	requireAMMAmount(t, ammHolding(t, e, holder, tx.Asset{Currency: supply.Currency, Issuer: pool.Address}), value)
 }

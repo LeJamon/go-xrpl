@@ -779,8 +779,8 @@ func TestAMMBookStep_Selection(t *testing.T) {
 			ammAccAddr := amm.AMMAccount(t, env, usdAsset, ethAsset)
 
 			// Save AMM balances before payment
-			ammUSD := env.TestEnv.BalanceIOU(ammAccAddr, "USD", env.GW)
-			ammETH := env.TestEnv.BalanceIOU(ammAccAddr, "ETH", gw1)
+			ammUSD := ammHolding(t, env, ammAccAddr, env.USD)
+			ammETH := ammHolding(t, env, ammAccAddr, tx.Asset{Currency: "ETH", Issuer: gw1.Address})
 
 			// Carol pays Bob USD(100), path(~USD), sendmax(ETH(500))
 			payTx := payment.PayIssued(env.Carol, env.Bob,
@@ -796,14 +796,8 @@ func TestAMMBookStep_Selection(t *testing.T) {
 			jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 2100)
 
 			// AMM should NOT be selected — balances unchanged
-			ammUSDAfter := env.TestEnv.BalanceIOU(ammAccAddr, "USD", env.GW)
-			ammETHAfter := env.TestEnv.BalanceIOU(ammAccAddr, "ETH", gw1)
-			if math.Abs(ammUSD-ammUSDAfter) > 0.0001 {
-				t.Errorf("AMM USD changed: before %f, after %f (AMM was selected, shouldn't be)", ammUSD, ammUSDAfter)
-			}
-			if math.Abs(ammETH-ammETHAfter) > 0.0001 {
-				t.Errorf("AMM ETH changed: before %f, after %f (AMM was selected, shouldn't be)", ammETH, ammETHAfter)
-			}
+			require.Equal(t, ammUSD, ammHolding(t, env, ammAccAddr, env.USD))
+			require.Equal(t, ammETH, ammHolding(t, env, ammAccAddr, tx.Asset{Currency: "ETH", Issuer: gw1.Address}))
 		})
 	}
 }
@@ -1489,7 +1483,7 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 
 	// Save starting balances
 	xrpBefore := env.AMMPoolXRP(ammAcc)
-	usdBefore := env.AMMPoolIOU(ammAcc, env.GW, "USD")
+	usdBefore := ammHolding(t, env, ammAcc, env.USD)
 
 	// Fund bob
 	env.TestEnv.FundAmount(env.Bob, 1_092_878_933) // ~1092.878933 XRP
@@ -1506,13 +1500,11 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 
 	// AMM should be unchanged
 	xrpAfter := env.AMMPoolXRP(ammAcc)
-	usdAfter := env.AMMPoolIOU(ammAcc, env.GW, "USD")
+	usdAfter := ammHolding(t, env, ammAcc, env.USD)
 	if xrpBefore != xrpAfter {
 		t.Errorf("AMM XRP changed: before %d, after %d", xrpBefore, xrpAfter)
 	}
-	if math.Abs(usdBefore-usdAfter) > 0.0001 {
-		t.Errorf("AMM USD changed: before %f, after %f", usdBefore, usdAfter)
-	}
+	require.Equal(t, usdBefore, usdAfter)
 }
 
 // TestAMMBookStep_FixAMMOfferBlockedByLOB tests AMM offer blocked by LOB fix.
@@ -1836,10 +1828,7 @@ func TestAMMBookStep_OfferCrossWithLimitOverride(t *testing.T) {
 
 	// Bob receives USD(1) from AMM crossing. Rippled checks raw sfBalance=-1
 	// (from low/gateway's perspective), but BalanceIOU returns Bob's perspective = +1.
-	bobUSD := env.TestEnv.BalanceIOU(env.Bob, "USD", env.GW)
-	if math.Abs(bobUSD-1) > 0.0001 {
-		t.Errorf("Bob USD: got %f, want 1", bobUSD)
-	}
+	requireAMMAmount(t, ammHolding(t, env, env.Bob, env.USD), "1")
 
 	// Bob XRP = 200000 - 3000 - baseFee = 196999999990
 	bobXRP := env.TestEnv.Balance(env.Bob)
@@ -1916,12 +1905,18 @@ func TestAMMBookStep_CurrencyConversionInParts(t *testing.T) {
 	// Without partial payment: tecPATH_PARTIAL
 	// With partial payment: succeeds, gets ~99.01 XRP
 	amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
+		beforeXRP := env.Balance(env.Alice)
+		beforeLP := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
 		// Without partial payment — should fail
 		payTx := payment.Pay(env.Alice, env.Alice, uint64(jtx.XRP(100))).
 			SendMax(amm.IOUAmount(env.GW, "USD", 100)).
 			Build()
 		result := env.Submit(payTx)
 		amm.ExpectTER(t, result, "tecPATH_PARTIAL")
+		require.Equal(t, beforeXRP-env.BaseFee(), env.Balance(env.Alice))
+		require.Equal(t, uint64(10_000_000_000), env.AMMPoolXRP(ammAcc))
+		requireAMMAmount(t, ammHolding(t, env, ammAcc, env.USD), "10000")
+		requireAMMAmount(t, ammHolding(t, env, env.Alice, env.USD), "20000")
 
 		// With partial payment — should succeed
 		payTx2 := payment.Pay(env.Alice, env.Alice, uint64(jtx.XRP(100))).
@@ -1932,23 +1927,14 @@ func TestAMMBookStep_CurrencyConversionInParts(t *testing.T) {
 		jtx.RequireTxSuccess(t, result2)
 		env.Close()
 
-		// AMM: XRP should be ~9900990100 drops, USD should be 10100
-		// Constant product: 10000*1M * 10000 = 10^11. After +100 USD: 10100 * x = 10^11
-		// x = 10^11/10100 = 9900990099.0099... drops
-		// So XRP balance = ~9900990100 drops
-		ammXRP := env.AMMPoolXRP(ammAcc)
-		// Allow 1 drop tolerance for rounding
-		if ammXRP < 9_900_990_099 || ammXRP > 9_900_990_101 {
-			t.Errorf("AMM XRP: got %d, want ~9900990100", ammXRP)
-		}
+		require.Equal(t, uint64(9_900_990_100), env.AMMPoolXRP(ammAcc))
+		require.Equal(t, beforeXRP+99_009_900-2*env.BaseFee(), env.Balance(env.Alice))
+		require.Equal(t, beforeLP, env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance)
 
-		ammUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-		if math.Abs(ammUSD-10100) > 0.0001 {
-			t.Errorf("AMM USD: got %f, want 10100", ammUSD)
-		}
+		requireAMMAmount(t, ammHolding(t, env, ammAcc, env.USD), "10100")
 
 		// Alice USD: initial 30000 - 10000(AMM) - 100(pay) = 19900
-		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 19900)
+		requireAMMAmount(t, ammHolding(t, env, env.Alice, env.USD), "19900")
 	})
 }
 
@@ -2031,7 +2017,7 @@ func TestAMMBookStep_CrossCurrencyEndXRP(t *testing.T) {
 // K = 5000*50000 = 250,000,000. USD after = 250,000,000/49700 = 5030.181086519115.
 // Dan's remaining offer: XRP(200)/EUR(20).
 func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
+	env := newCalcEnv(t)
 
 	// Create two gateways
 	gw1 := jtx.NewAccount("gateway_1")
@@ -2100,13 +2086,7 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 		t.Errorf("AMM XRP: got %d, want %d", ammXRP, uint64(jtx.XRP(49700)))
 	}
 
-	ammUSD := env.AMMPoolIOU(ammAcc, gw1, "USD")
-	// rippled expects: STAmount{USD1, UINT64_C(5030181086519115), -12}
-	// = 5030181086519115 * 10^-12 = 5030.181086519115
-	expectedUSD := 5030.181086519115
-	if math.Abs(ammUSD-expectedUSD) > 0.000001 {
-		t.Errorf("AMM USD: got %f, want %f", ammUSD, expectedUSD)
-	}
+	requireAMMAmount(t, ammHolding(t, env, ammAcc, tx.Asset{Currency: "USD", Issuer: gw1.Address}), "5030.181086519115")
 
 	// Dan should have 1 remaining offer: TakerPays=XRP(200), TakerGets=EUR(20)
 	offerbuild.RequireOfferCount(t, env.TestEnv, dan, 1)
@@ -2115,10 +2095,7 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 		amm.IOUAmount(gw2, "EUR", 20))
 
 	// Bob should have 30 EUR
-	bobEUR := env.TestEnv.BalanceIOU(env.Bob, "EUR", gw2)
-	if math.Abs(bobEUR-30) > 0.0001 {
-		t.Errorf("Bob EUR: got %f, want 30", bobEUR)
-	}
+	requireAMMAmount(t, ammHolding(t, env, env.Bob, tx.Asset{Currency: "EUR", Issuer: gw2.Address}), "30")
 }
 
 // TestAMMBookStep_OfferFeesConsumeFunds tests that alice's offer only crosses
@@ -2128,7 +2105,7 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 // fee, she has exactly reserve(3) + 100 XRP. Available = 100 XRP.
 // Reference: rippled AMMExtended_test.cpp testOfferFeesConsumeFunds (line 540)
 func TestAMMBookStep_OfferFeesConsumeFunds(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
+	env := newCalcEnv(t)
 
 	gw1 := jtx.NewAccount("gw1")
 	gw2 := jtx.NewAccount("gw2")
@@ -2183,16 +2160,10 @@ func TestAMMBookStep_OfferFeesConsumeFunds(t *testing.T) {
 	if ammXRP != uint64(jtx.XRP(1100)) {
 		t.Errorf("AMM XRP: got %d, want %d", ammXRP, uint64(jtx.XRP(1100)))
 	}
-	ammUSD := env.AMMPoolIOU(ammAcc, gw1, "USD")
-	if math.Abs(ammUSD-1090.909090909091) > 0.01 {
-		t.Errorf("AMM USD: got %f, want ~1090.909", ammUSD)
-	}
+	requireAMMAmount(t, ammHolding(t, env, ammAcc, tx.Asset{Currency: "USD", Issuer: gw1.Address}), "1090.909090909091")
 
 	// Alice got ~109.09 USD
-	aliceUSD := env.TestEnv.BalanceIOU(env.Alice, "USD", gw1)
-	if math.Abs(aliceUSD-109.090909090909) > 0.01 {
-		t.Errorf("Alice USD: got %f, want ~109.09", aliceUSD)
-	}
+	requireAMMAmount(t, ammHolding(t, env, env.Alice, tx.Asset{Currency: "USD", Issuer: gw1.Address}), "109.090909090909")
 
 	// Alice XRP should be reserve(3) = reserveBase + 3*increment (after offer consumed)
 	aliceXRP := env.TestEnv.Balance(env.Alice)
@@ -2478,10 +2449,7 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		if ammBobXRP != uint64(jtx.XRP(10000)) {
 			t.Errorf("AMM Bob XRP: got %d, want %d", ammBobXRP, uint64(jtx.XRP(10000)))
 		}
-		ammBobEUR := env.AMMPoolIOU(ammBob, env.GW, "EUR")
-		if math.Abs(ammBobEUR-10100) > 0.001 {
-			t.Errorf("AMM Bob EUR: got %f, want 10100", ammBobEUR)
-		}
+		requireAMMAmount(t, ammHolding(t, env, ammBob, env.EUR), "10100")
 
 		// Carol: USD(15100), EUR(14900)
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 15100)
@@ -2602,10 +2570,7 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		if ammBobXRP != uint64(jtx.XRP(10000)) {
 			t.Errorf("AMM Bob XRP: got %d, want %d", ammBobXRP, uint64(jtx.XRP(10000)))
 		}
-		ammBobEUR := env.AMMPoolIOU(ammBob, env.GW, "EUR")
-		if math.Abs(ammBobEUR-10100) > 0.001 {
-			t.Errorf("AMM Bob EUR: got %f, want 10100", ammBobEUR)
-		}
+		requireAMMAmount(t, ammHolding(t, env, ammBob, env.EUR), "10100")
 
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 15100)
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 14900)
@@ -2853,10 +2818,7 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 	offerbuild.RequireOfferCount(t, env.TestEnv, env.Alice, 0)
 
 	// Alice has USD_bob(100)
-	aliceUSD := env.TestEnv.BalanceIOU(env.Alice, "USD", env.Bob)
-	if math.Abs(aliceUSD-100) > 0.0001 {
-		t.Errorf("Alice USD_bob: got %f, want 100", aliceUSD)
-	}
+	requireAMMAmount(t, ammHolding(t, env, env.Alice, tx.Asset{Currency: "USD", Issuer: env.Bob.Address}), "100")
 }
 
 // TestAMMBookStep_BadPathAssert tests that invalid paths don't cause panics.
@@ -3253,14 +3215,8 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		// Carol: USD(150+50=200)
 		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 200)
 		// AMM: BTC(100+50=150), USD(150-50=100)
-		btcPool := env.AMMPoolIOU(ammAcc, env.GW, "BTC")
-		usdPool := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-		if math.Abs(btcPool-150) > 0.001 {
-			t.Errorf("AMM BTC: got %f, want 150", btcPool)
-		}
-		if math.Abs(usdPool-100) > 0.001 {
-			t.Errorf("AMM USD: got %f, want 100", usdPool)
-		}
+		requireAMMAmount(t, ammHolding(t, env, ammAcc, env.BTC), "150")
+		requireAMMAmount(t, ammHolding(t, env, ammAcc, env.USD), "100")
 	})
 
 	// Sub-test 2: simple XRP → USD through AMM and sendmax
@@ -3408,10 +3364,7 @@ func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 	env.Close()
 
 	// alice: GBP(1000 - 120*1.25) = GBP(850)
-	aliceGBP := env.TestEnv.BalanceIOU(env.Alice, "GBP", env.GW)
-	if math.Abs(aliceGBP-850) > 0.01 {
-		t.Errorf("Alice GBP: got %f, want 850", aliceGBP)
-	}
+	requireAMMAmount(t, ammHolding(t, env, env.Alice, env.GBP), "850")
 
 	// carol: USD(1000 + 85.714...) ≈ USD(1085.714)
 	carolUSD := env.TestEnv.BalanceIOU(env.Carol, "USD", env.GW)
@@ -3912,7 +3865,7 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 // Payment via AMM, then freeze AMM's trust line, then verify AMM not consumed.
 // Reference: rippled AMMExtended_test.cpp testOffersWhenFrozen (line 3486)
 func TestAMMBookStep_OffersWhenFrozen(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
+	env := newCalcEnv(t)
 	g1 := jtx.NewAccount("G1")
 	a2 := jtx.NewAccount("A2")
 	a3 := jtx.NewAccount("A3")
@@ -3963,15 +3916,10 @@ func TestAMMBookStep_OffersWhenFrozen(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(offerTx))
 	env.Close()
 
-	// AMM: ~XRP(1000), ~USD(1001) (the offer crosses but may not exactly reverse)
 	ammXRP := env.AMMPoolXRP(ammAcc)
-	ammUSD := env.AMMPoolIOU(ammAcc, g1, "USD")
-	if ammXRP < uint64(jtx.XRP(999)) || ammXRP > uint64(jtx.XRP(1002)) {
-		t.Errorf("AMM XRP: got %d, want ~%d", ammXRP, uint64(jtx.XRP(1000)))
-	}
-	if ammUSD < 999 || ammUSD > 1002 {
-		t.Errorf("AMM USD: got %f, want ~1001", ammUSD)
-	}
+	ammUSD := ammHolding(t, env, ammAcc, tx.Asset{Currency: "USD", Issuer: g1.Address})
+	require.Equal(t, uint64(jtx.XRP(1000)), ammXRP)
+	requireAMMAmount(t, ammUSD, "1001")
 
 	// Freeze AMM's trust line
 	env.TestEnv.FreezeTrustLine(g1, ammAcc, "USD")
@@ -3987,13 +3935,18 @@ func TestAMMBookStep_OffersWhenFrozen(t *testing.T) {
 
 	// AMM should NOT have been consumed (frozen) — same as before the frozen payment
 	ammXRP2 := env.AMMPoolXRP(ammAcc)
-	ammUSD2 := env.AMMPoolIOU(ammAcc, g1, "USD")
+	ammUSD2 := ammHolding(t, env, ammAcc, tx.Asset{Currency: "USD", Issuer: g1.Address})
 	if ammXRP2 != ammXRP {
 		t.Errorf("AMM XRP changed after freeze: before %d, after %d", ammXRP, ammXRP2)
 	}
-	if math.Abs(ammUSD2-ammUSD) > 0.0001 {
-		t.Errorf("AMM USD changed after freeze: before %f, after %f", ammUSD, ammUSD2)
-	}
+	require.Equal(t, ammUSD, ammUSD2)
+	env.TestEnv.FreezeTrustLine(g1, a4, "USD")
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(a2, g1USD(999), amm.XRPAmount(999)).Build()))
+	env.Close()
+	offerbuild.RequireOfferCount(t, env.TestEnv, a4, 0)
+	require.Equal(t, ammXRP, env.AMMPoolXRP(ammAcc))
+	require.Equal(t, ammUSD, ammHolding(t, env, ammAcc, tx.Asset{Currency: "USD", Issuer: g1.Address}))
 }
 
 // TestAMMBookStep_ToStrand tests ToStrand with AMM.
