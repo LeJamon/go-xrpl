@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,22 +33,23 @@ var pinnedRecorderSources = []string{
 }
 
 type pinnedManifest struct {
-	Schema           int                         `json:"schema"`
-	FixtureVersion   string                      `json:"fixture_version"`
-	OracleRepository string                      `json:"oracle_repository"`
-	RippledTag       string                      `json:"rippled_tag"`
-	RippledCommit    string                      `json:"rippled_commit"`
-	RecorderCommit   string                      `json:"recorder_commit"`
-	RecorderArchive  string                      `json:"recorder_source_archive"`
-	RecorderSources  map[string]string           `json:"recorder_sources"`
-	BinarySHA256     string                      `json:"binary_sha256"`
-	BuildIdentity    string                      `json:"build_identity"`
-	ConfigIdentity   string                      `json:"config_identity"`
-	ConfigSource     string                      `json:"config_source"`
-	AmendmentMatrix  []pinnedProfile             `json:"amendment_matrix"`
-	FixtureCount     int                         `json:"fixture_count"`
-	Fixtures         map[string]pinnedFixturePin `json:"fixtures"`
-	CoverageLimits   []string                    `json:"coverage_limits"`
+	Schema              int                         `json:"schema"`
+	FixtureVersion      string                      `json:"fixture_version"`
+	OracleRepository    string                      `json:"oracle_repository"`
+	RippledTag          string                      `json:"rippled_tag"`
+	RippledCommit       string                      `json:"rippled_commit"`
+	RecorderCommit      string                      `json:"recorder_commit"`
+	RecorderArchive     string                      `json:"recorder_source_archive"`
+	RecorderSources     map[string]string           `json:"recorder_sources"`
+	BinarySHA256        string                      `json:"binary_sha256"`
+	BuildIdentity       string                      `json:"build_identity"`
+	BuildIdentitySHA256 string                      `json:"build_identity_sha256"`
+	ConfigIdentity      string                      `json:"config_identity"`
+	ConfigSource        string                      `json:"config_source"`
+	AmendmentMatrix     []pinnedProfile             `json:"amendment_matrix"`
+	FixtureCount        int                         `json:"fixture_count"`
+	Fixtures            map[string]pinnedFixturePin `json:"fixtures"`
+	CoverageLimits      []string                    `json:"coverage_limits"`
 }
 
 type pinnedProfile struct {
@@ -202,7 +204,7 @@ func readRegularCorpusFile(root *os.Root, path string) ([]byte, error) {
 }
 
 func validatePinnedManifestKeys(data []byte) error {
-	object, err := exactJSONKeys(data, "manifest", "schema", "fixture_version", "oracle_repository", "rippled_tag", "rippled_commit", "recorder_commit", "recorder_source_archive", "recorder_sources", "binary_sha256", "build_identity", "config_identity", "config_source", "amendment_matrix", "fixture_count", "fixtures", "coverage_limits")
+	object, err := exactJSONKeys(data, "manifest", "schema", "fixture_version", "oracle_repository", "rippled_tag", "rippled_commit", "recorder_commit", "recorder_source_archive", "recorder_sources", "binary_sha256", "build_identity", "build_identity_sha256", "config_identity", "config_source", "amendment_matrix", "fixture_count", "fixtures", "coverage_limits")
 	if err != nil {
 		return err
 	}
@@ -248,6 +250,10 @@ func exactJSONKeys(data []byte, context string, allowed ...string) (map[string]j
 }
 
 func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, error) {
+	return validatePinnedManifestAt(manifest, conformanceRepositoryRoot())
+}
+
+func validatePinnedManifestAt(manifest pinnedManifest, repository string) (map[string]pinnedProfile, error) {
 	if manifest.Schema != pinnedManifestSchema || manifest.FixtureVersion != pinnedFixtureVersion {
 		return nil, fmt.Errorf("required corpus format is schema %d/%s", pinnedManifestSchema, pinnedFixtureVersion)
 	}
@@ -260,8 +266,12 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 	if manifest.RecorderArchive != "scripts/oracle/recorded/"+manifest.RecorderCommit {
 		return nil, errors.New("recorder_source_archive must identify the recorded source commit archive")
 	}
-	if !validSHA256(manifest.BinarySHA256) || strings.TrimSpace(manifest.BuildIdentity) == "" || !validSHA256(manifest.ConfigIdentity) {
-		return nil, errors.New("binary_sha256, build_identity, and SHA-256 config_identity are required")
+	if !validSHA256(manifest.BinarySHA256) || strings.TrimSpace(manifest.BuildIdentity) == "" || !validSHA256(manifest.BuildIdentitySHA256) || !validSHA256(manifest.ConfigIdentity) {
+		return nil, errors.New("binary_sha256, build_identity, build_identity_sha256, and SHA-256 config_identity are required")
+	}
+	expectedBuildIdentity := manifest.RecorderArchive + "/build-identity.json"
+	if manifest.BuildIdentity != expectedBuildIdentity || !fs.ValidPath(manifest.BuildIdentity) || strings.Contains(manifest.BuildIdentity, "\\") {
+		return nil, errors.New("build_identity must identify the archived recorder build identity")
 	}
 	if len(manifest.RecorderSources) != len(pinnedRecorderSources) {
 		return nil, errors.New("recorder_sources must contain the complete recorder source inventory")
@@ -274,7 +284,7 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 	if manifest.ConfigSource != "scripts/oracle/strict-corpus-config.json" || manifest.RecorderSources[manifest.ConfigSource] != manifest.ConfigIdentity {
 		return nil, errors.New("config_source must identify a checksummed recorder source matching config_identity")
 	}
-	repo, err := os.OpenRoot(conformanceRepositoryRoot())
+	repo, err := os.OpenRoot(repository)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +300,16 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 		if sha256Hex(data) != checksum {
 			return nil, fmt.Errorf("recorder source %s: SHA-256 mismatch", name)
 		}
+	}
+	identity, err := readRegularCorpusFile(repo, manifest.BuildIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("build identity %s: %w", manifest.BuildIdentity, err)
+	}
+	if sha256Hex(identity) != manifest.BuildIdentitySHA256 {
+		return nil, errors.New("build identity: SHA-256 mismatch")
+	}
+	if err := validatePinnedBuildIdentity(identity, manifest); err != nil {
+		return nil, err
 	}
 	if manifest.FixtureCount == 0 {
 		return nil, errCorpusEmpty
@@ -317,6 +337,91 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 		}
 	}
 	return validatePinnedProfiles(manifest.AmendmentMatrix)
+}
+
+func validatePinnedBuildIdentity(data []byte, manifest pinnedManifest) error {
+	var object map[string]json.RawMessage
+	if err := decodeStrictJSON(data, &object); err != nil {
+		return fmt.Errorf("build identity: invalid JSON: %w", err)
+	}
+	oracle, err := requiredJSONMap(object, "oracle", "build identity")
+	if err != nil {
+		return err
+	}
+	for field, want := range map[string]string{
+		"repository": pinnedOracleRepository,
+		"tag":        pinnedOracleTag,
+		"commit":     pinnedOracleCommit,
+	} {
+		got, err := requiredJSONString(oracle, field, "build identity.oracle")
+		if err != nil {
+			return err
+		}
+		if got != want {
+			return fmt.Errorf("build identity.oracle.%s does not match the pinned oracle", field)
+		}
+	}
+	recorderGit, err := requiredJSONMap(object, "recorder_source_git", "build identity")
+	if err != nil {
+		return err
+	}
+	if got, err := requiredJSONString(recorderGit, "commit", "build identity.recorder_source_git"); err != nil {
+		return err
+	} else if got != manifest.RecorderCommit {
+		return errors.New("build identity recorder source commit does not match recorder_commit")
+	}
+	if got, err := requiredJSONString(recorderGit, "status", "build identity.recorder_source_git"); err != nil {
+		return err
+	} else if got != "" {
+		return errors.New("build identity recorder source is not clean")
+	}
+	checksums := map[string]string{
+		"recorder_source_sha256":            manifest.RecorderSources["scripts/oracle/strict_recorder.cpp"],
+		"config_sha256":                     manifest.ConfigIdentity,
+		"strict_binary_sha256":              manifest.BinarySHA256,
+		"verified_production_binary_sha256": manifest.BinarySHA256,
+	}
+	for field, want := range checksums {
+		got, err := requiredJSONString(object, field, "build identity")
+		if err != nil {
+			return err
+		}
+		if got != want {
+			return fmt.Errorf("build identity.%s does not match the manifest", field)
+		}
+	}
+	version, err := requiredJSONString(object, "verified_production_binary_version", "build identity")
+	if err != nil {
+		return err
+	}
+	if version != "xrpld version 3.4.1" {
+		return errors.New("build identity verified binary version does not match the pinned oracle")
+	}
+	return nil
+}
+
+func requiredJSONMap(object map[string]json.RawMessage, field, context string) (map[string]json.RawMessage, error) {
+	raw, ok := object[field]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("%s.%s is required", context, field)
+	}
+	var value map[string]json.RawMessage
+	if err := decodeStrictJSON(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s.%s: %w", context, field, err)
+	}
+	return value, nil
+}
+
+func requiredJSONString(object map[string]json.RawMessage, field, context string) (string, error) {
+	raw, ok := object[field]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", fmt.Errorf("%s.%s is required", context, field)
+	}
+	var value string
+	if err := decodeStrictJSON(raw, &value); err != nil {
+		return "", fmt.Errorf("%s.%s: %w", context, field, err)
+	}
+	return value, nil
 }
 
 func validatePinnedProfiles(matrix []pinnedProfile) (map[string]pinnedProfile, error) {

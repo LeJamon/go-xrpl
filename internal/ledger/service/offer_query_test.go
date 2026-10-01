@@ -202,6 +202,9 @@ func newOfferTestService(t *testing.T) *Service {
 	if err := svc.Start(); err != nil {
 		t.Fatalf("start service: %v", err)
 	}
+	t.Cleanup(svc.Stop)
+	// Query fixtures inject SLEs into the published candidate.
+	svc.openLedger = svc.openLedgerView.Current()
 	return svc
 }
 

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 )
 
 // TestInvalidFeeVote tests invalid fee vote scenarios.
-// Reference: rippled AMM_test.cpp testInvalidFeeVote (line 2618)
+// Reference: rippled AMM_test.cpp testInvalidFeeVote
 func TestInvalidFeeVote(t *testing.T) {
 	// Invalid flags
 	// Reference: ammAlice.vote(std::nullopt, 1'000, tfWithdrawAll, ..., ter(temINVALID_FLAG));
@@ -22,11 +24,7 @@ func TestInvalidFeeVote(t *testing.T) {
 			Flags(amm.TfWithdrawAll).
 			Build()
 		result := env.Submit(voteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow vote with invalid flags")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 
 	// Invalid fee - > 1000 basis points (> 1%)
@@ -36,11 +34,7 @@ func TestInvalidFeeVote(t *testing.T) {
 
 		voteTx := amm.AMMVote(env.Alice, amm.XRP(), env.USD, 1001).Build()
 		result := env.Submit(voteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow vote with fee > 1000")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_FEE)
+		amm.ExpectTER(t, result, ter.TemBAD_FEE.String())
 	})
 
 	// Invalid Account (non-existent)
@@ -51,11 +45,7 @@ func TestInvalidFeeVote(t *testing.T) {
 		bad := jtx.NewAccount("bad")
 		voteTx := amm.AMMVote(bad, amm.XRP(), env.USD, 1000).Build()
 		result := env.SubmitWithOptions(jtx.WithSeq(voteTx, 1), jtx.SubmitOptions{SkipSignature: true})
-
-		if result.Success {
-			t.Fatal("Should not allow vote from non-existent account")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
+		amm.ExpectTER(t, result, ter.TerNO_ACCOUNT.String())
 	})
 
 	// Invalid AMM (non-existent)
@@ -65,11 +55,7 @@ func TestInvalidFeeVote(t *testing.T) {
 
 		voteTx := amm.AMMVote(env.Alice, env.USD, env.GBP, 1000).Build()
 		result := env.Submit(voteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow vote on non-existent AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 
 	// Account is not LP
@@ -80,11 +66,7 @@ func TestInvalidFeeVote(t *testing.T) {
 		// Carol hasn't deposited, so she can't vote
 		voteTx := amm.AMMVote(env.Carol, amm.XRP(), env.USD, 1000).Build()
 		result := env.Submit(voteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow non-LP to vote")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_INVALID_TOKENS)
+		amm.ExpectTER(t, result, ter.TecAMM_INVALID_TOKENS.String())
 	})
 
 	// Invalid AMM - AMM was deleted
@@ -105,16 +87,12 @@ func TestInvalidFeeVote(t *testing.T) {
 		// Try to vote on deleted AMM
 		voteTx := amm.AMMVote(env.Alice, amm.XRP(), env.USD, 1000).Build()
 		result = env.Submit(voteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow vote on deleted AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 }
 
 // TestFeeVote tests valid fee vote scenarios.
-// Reference: rippled AMM_test.cpp testFeeVote (line 2687)
+// Reference: rippled AMM_test.cpp testFeeVote
 func TestFeeVote(t *testing.T) {
 	// One vote sets fee to 1%
 	// Reference: ammAlice.vote({}, 1'000); BEAST_EXPECT(ammAlice.expectTradingFee(1'000));
@@ -265,7 +243,7 @@ func TestFeeVote(t *testing.T) {
 // the OUTPUT (updatedVoteSlots) array, mirroring rippled's
 // minPos = updatedVoteSlots.size() captured before push_back, and the
 // replacement updatedVoteSlots[minPos] = ... (AMMVote.cpp:149,187,191).
-// Reference: rippled AMM_test.cpp testFeeVote (line 2745).
+// Reference: rippled AMM_test.cpp testFeeVote.
 func TestFeeVoteSlotReplacement(t *testing.T) {
 	// setupAMM: alice creates XRP(10000)/USD(10000); alice holds 10,000,000 LP
 	// tokens and occupies the first vote slot.

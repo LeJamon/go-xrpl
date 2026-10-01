@@ -2,14 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, v3.4.1]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 # Cancel superseded runs for the same PR/branch so a new push doesn't leave the
-# whole matrix running on a stale commit. Pushes to main are never cancelled —
+# whole matrix running on a stale commit. Branch pushes are never cancelled —
 # their runs are the record for that commit.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,13 +48,10 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-lint
           if-no-files-found: error
 
-  # Advisory linters (security smells, leaked HTTP bodies, missing request
-  # contexts, slice preallocation). The codebase is currently clean against this
-  # config, so the job is green. continue-on-error keeps it non-blocking: a new
-  # finding shows up on the PR (and goes red here) without gating the merge, to
-  # be fixed opportunistically.
+  # Advisory findings remain visible independently; release evidence requires
+  # a successful run alongside the required checks.
   lint-advisory:
-    name: Lint (advisory, non-blocking)
+    name: Lint (advisory)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -134,13 +132,35 @@ jobs:
           expected="$(git describe --tags --always --dirty)"
           ../tmp/goxrpl version |
             grep --fixed-strings --line-regexp "go-xrpl version ${expected}"
+          ../tmp/goxrpl version |
+            grep --fixed-strings --line-regexp "Confidential MPT crypto: unavailable"
+      - name: Record built artifact
+        id: binary
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          sha256sum ../tmp/goxrpl > "$EVIDENCE_DIR/goxrpl-binary.sha256"
+          go version -m ../tmp/goxrpl > "$EVIDENCE_DIR/goxrpl-build-info.txt"
+          ../tmp/goxrpl version > "$EVIDENCE_DIR/goxrpl-default-version.txt"
+          printf 'path=%s\n' "$(realpath ../tmp/goxrpl)" >> "$GITHUB_OUTPUT"
+      - name: Retain built artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goxrpl-${{ github.sha }}-linux-amd64
+          path: ${{ steps.binary.outputs.path }}
+          if-no-files-found: error
       - name: Record producer evidence
         if: always()
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build
           EVIDENCE_LABEL: build
           EVIDENCE_STATUS: ${{ job.status }}
-          EVIDENCE_COMMAND: ./scripts/build.sh; ../tmp/goxrpl version | grep --fixed-strings --line-regexp "go-xrpl version $(git describe --tags --always --dirty)"
+          EVIDENCE_COMMAND: >-
+            ./scripts/build.sh;
+            ../tmp/goxrpl version | grep --fixed-strings --line-regexp "go-xrpl version $(git describe --tags --always --dirty)";
+            ../tmp/goxrpl version | grep --fixed-strings --line-regexp "Confidential MPT crypto: unavailable";
+            sha256sum ../tmp/goxrpl; go version -m ../tmp/goxrpl
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
@@ -458,6 +478,7 @@ jobs:
             (.total.executed | type == "number" and . > 0) and
             .total.failed == 0 and
             .total.skipped == 0 and
+            .total.excluded == 0 and
             .total.discovered == (.total.executed + .total.excluded) and
             .total.executed == (.total.passed + .total.failed)
           ' "$GOXRPL_CONFORMANCE_REPORT" >/dev/null
@@ -488,7 +509,15 @@ jobs:
             ([.completed_submission_types[]] | add) == .completed_submissions and
             ([.completed_submission_results[]] | add) == .completed_submissions and
             ([.completed_closed_transaction_types[]] | add) == .completed_replay_leaves and
-            .completed_close_inputs > 0 and .completed_replay_leaves > 0
+            .completed_close_inputs > 0 and .completed_replay_leaves > 0 and
+            .completed_queue_checks > 0 and
+            .completed_history_transitions > 0 and
+            .completed_history_submissions > 0 and
+            .completed_history_close_inputs > 0 and
+            .completed_history_replay_leaves > 0 and
+            .completed_submissions >= (.executed + .completed_history_submissions) and
+            .completed_close_inputs >= .completed_history_close_inputs and
+            .completed_replay_leaves >= .completed_history_replay_leaves
           ' "$GOXRPL_ENGINE_EVIDENCE_REPORT" >/dev/null
       - name: Record final conformance producer evidence
         if: always()
@@ -695,7 +724,7 @@ jobs:
           run_recorded oracle_version_commit 'grep --fixed-strings --line-regexp "Git commit hash: $ORACLE_COMMIT" "$EVIDENCE_DIR/oracle-version.txt"'
           run_recorded goxrpl_image_build 'docker build --build-arg "VERSION=$GITHUB_SHA" -t "$GOXRPL_IMAGE" .'
           run_recorded goxrpl_image_id 'docker image inspect "$GOXRPL_IMAGE" --format "{{.Id}} {{json .RepoDigests}}"'
-          run_recorded goxrpl_version 'docker run --rm "$GOXRPL_IMAGE" version > "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "go-xrpl version $GITHUB_SHA" "$EVIDENCE_DIR/goxrpl-version.txt"'
+          run_recorded goxrpl_version 'docker run --rm "$GOXRPL_IMAGE" version > "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "go-xrpl version $GITHUB_SHA" "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "Confidential MPT crypto: available" "$EVIDENCE_DIR/goxrpl-version.txt"'
           run_recorded consensus_smoke 'GOXRPL_IMAGE="$GOXRPL_IMAGE" RIPPLED_IMAGE="$ORACLE_IMAGE" PAYMENT_COUNT=3 MIN_SEQ_EMPTY=15 BOOT_TIMEOUT=240 TX_TIMEOUT=180 bash scripts/consensus-smoke/smoke.sh > "$EVIDENCE_DIR/consensus-smoke.log" 2>&1'
           run_recorded consensus_smoke_log 'test -s "$EVIDENCE_DIR/consensus-smoke.log" && cat "$EVIDENCE_DIR/consensus-smoke.log"'
 
@@ -790,3 +819,60 @@ jobs:
       - name: Dump final consensus logs on failure
         if: failure()
         run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true
+
+  release-evidence:
+    name: Release candidate evidence
+    if: always()
+    needs:
+      - lint
+      - lint-advisory
+      - generate
+      - build
+      - build-386
+      - postgres
+      - test
+      - test-mpt-crypto
+      - test-repeated
+      - conformance-final
+      - peer-interop
+      - peer-interop-final
+      - consensus-smoke
+      - consensus-smoke-final
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Collect producer evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: issue-1908-producer-${{ github.sha }}-*
+          path: ${{ runner.temp }}/release-evidence/producers
+          merge-multiple: true
+      - name: Collect executed corpus evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: issue-2015-conformance-final-${{ github.sha }}
+          path: ${{ runner.temp }}/release-evidence/producers
+      - name: Verify all evidence belongs to this candidate
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/release-evidence
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          (evidence / "needs-results.txt").write_text(
+              "".join(f"{name}={job['result']}\n" for name, job in sorted(needs.items()))
+          )
+          (evidence / "workflow-commands.txt").write_bytes(Path(".github/workflows/ci.yml").read_bytes())
+          PY
+          scripts/acceptance/final-evidence.sh aggregate
+      - name: Retain release candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/release-evidence
+          if-no-files-found: error

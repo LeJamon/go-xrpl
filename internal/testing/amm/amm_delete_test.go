@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 )
 
 // TestAMMDelete tests AMM deletion scenarios.
-// Reference: rippled AMM_test.cpp ammDelete tests (around line 5740)
+// Reference: rippled AMM_test.cpp ammDelete tests
 func TestAMMDelete(t *testing.T) {
 	// Delete after withdrawAll
 	// Reference: amm.ammDelete(alice, ter(terNO_AMM)) - trying to delete already deleted AMM
@@ -32,11 +34,7 @@ func TestAMMDelete(t *testing.T) {
 		// Try to delete an already deleted AMM
 		deleteTx := amm.AMMDelete(env.Alice, amm.XRP(), env.USD).Build()
 		result = env.Submit(deleteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deleting already deleted AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 
 	// Delete non-existent AMM
@@ -48,11 +46,7 @@ func TestAMMDelete(t *testing.T) {
 		// Try to delete AMM that was never created
 		deleteTx := amm.AMMDelete(env.Alice, env.USD, env.GBP).Build()
 		result := env.Submit(deleteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deleting non-existent AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 
 	// Delete AMM that still has LP tokens (should fail)
@@ -64,13 +58,7 @@ func TestAMMDelete(t *testing.T) {
 		deleteTx := amm.AMMDelete(env.Carol, amm.XRP(), env.USD).Build()
 		result := env.Submit(deleteTx)
 
-		// Should fail - AMM is not empty
-		if result.Success {
-			t.Log("Note: AMMDelete may succeed if AMM is in special state")
-		} else {
-			// Expected to fail with some error (tecAMM_NOT_EMPTY or similar)
-			t.Logf("Delete AMM with LP tokens correctly failed: %s", result.Code)
-		}
+		amm.ExpectTER(t, result, "tecAMM_NOT_EMPTY")
 	})
 
 	// Invalid flags for AMMDelete
@@ -81,11 +69,7 @@ func TestAMMDelete(t *testing.T) {
 			Flags(amm.TfWithdrawAll). // Invalid flag for delete
 			Build()
 		result := env.Submit(deleteTx)
-
-		if result.Success {
-			t.Fatal("Should not allow delete with invalid flags")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 }
 
@@ -114,20 +98,11 @@ func TestAMMDeleteAfterWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result = env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow operations on deleted AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 
 		t.Log("AMM correctly deleted after full withdrawal")
 	})
 }
-
-// ----------------------------------------------------------------
-// testAutoDelete
-// Reference: rippled AMM_test.cpp testAutoDelete (line 5644)
-// ----------------------------------------------------------------
 
 // TestAutoDeleteAMM tests auto-deletion behavior with many trust lines.
 // In rippled, maxDeletableAMMTrustLines = 512. When an AMM has more trust
@@ -135,13 +110,13 @@ func TestAMMDeleteAfterWithdraw(t *testing.T) {
 // than fully deleting it, because the trust lines cannot all be deleted in
 // one transaction. Operations on the empty AMM fail with tecAMM_EMPTY,
 // except deposit with tfTwoAssetIfEmpty which re-seeds the pool.
-// Reference: rippled AMM_test.cpp testAutoDelete (line 5644)
+// Reference: rippled AMM_test.cpp testAutoDelete
 func TestAutoDeleteAMM(t *testing.T) {
 	// First block: AMM with maxDeletableAMMTrustLines + 10 trust lines.
 	// After withdrawAll, AMM is in empty state (not fully deleted).
 	// Operations fail with tecAMM_EMPTY. Deposit with tfTwoAssetIfEmpty re-seeds.
 	// Then withdrawAll again fully deletes the AMM.
-	// Reference: rippled AMM_test.cpp testAutoDelete first block (line 5651)
+	// Reference: rippled AMM_test.cpp testAutoDelete first block
 	t.Run("EmptyState_OperationsFail", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping: creates 522 accounts (slow)")
@@ -204,12 +179,12 @@ func TestAutoDeleteAMM(t *testing.T) {
 			BidMin(amm.LPTokenAmount(env, xrpAsset, usdAsset, 1000)).
 			Build()
 		result = env.Submit(bidTx)
-		amm.ExpectTER(t, result, amm.TecAMM_EMPTY)
+		amm.ExpectTER(t, result, ter.TecAMM_EMPTY.String())
 
 		// Vote should fail with tecAMM_EMPTY
 		voteTx := amm.AMMVote(env.Alice, xrpAsset, usdAsset, 100).Build()
 		result = env.Submit(voteTx)
-		amm.ExpectTER(t, result, amm.TecAMM_EMPTY)
+		amm.ExpectTER(t, result, ter.TecAMM_EMPTY.String())
 
 		// Withdraw should fail with tecAMM_EMPTY
 		withdrawTx2 := amm.AMMWithdraw(env.Alice, xrpAsset, usdAsset).
@@ -217,7 +192,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 			LPToken().
 			Build()
 		result = env.Submit(withdrawTx2)
-		amm.ExpectTER(t, result, amm.TecAMM_EMPTY)
+		amm.ExpectTER(t, result, ter.TecAMM_EMPTY.String())
 
 		// Regular deposit should fail with tecAMM_EMPTY
 		depositTx := amm.AMMDeposit(env.Alice, xrpAsset, usdAsset).
@@ -225,7 +200,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 			SingleAsset().
 			Build()
 		result = env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecAMM_EMPTY)
+		amm.ExpectTER(t, result, ter.TecAMM_EMPTY.String())
 
 		// Deposit with tfTwoAssetIfEmpty should succeed and re-seed the pool
 		depositEmpty := amm.AMMDeposit(env.Alice, xrpAsset, usdAsset).
@@ -258,7 +233,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 
 	// Second block: AMM with maxDeletableAMMTrustLines*2 + 10 trust lines.
 	// After withdrawAll, AMMDelete must be called twice.
-	// Reference: rippled AMM_test.cpp testAutoDelete second block (line 5722)
+	// Reference: rippled AMM_test.cpp testAutoDelete second block
 	t.Run("MultipleDeleteCalls", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping: creates 1034 accounts (very slow)")
@@ -316,7 +291,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 		// First AMMDelete — returns tecINCOMPLETE (partial cleanup)
 		deleteTx := amm.AMMDelete(env.Alice, xrpAsset, usdAsset).Build()
 		result = env.Submit(deleteTx)
-		amm.ExpectTER(t, result, amm.TecINCOMPLETE)
+		amm.ExpectTER(t, result, ter.TecINCOMPLETE.String())
 
 		// AMM should still exist
 		ammData = env.ReadAMMData(xrpAsset, usdAsset)
@@ -341,12 +316,6 @@ func TestAutoDeleteAMM(t *testing.T) {
 		// Third AMMDelete — terNO_AMM
 		deleteTx3 := amm.AMMDelete(env.Alice, xrpAsset, usdAsset).Build()
 		result = env.Submit(deleteTx3)
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 }
-
-// Suppress unused import warnings
-var (
-	_ = jtx.XRP
-	_ = trustset.TrustSet
-)

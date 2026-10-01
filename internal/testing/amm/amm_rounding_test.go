@@ -1,8 +1,8 @@
 // Package amm_test contains AMM deposit and withdraw rounding tests.
 // Reference: rippled/src/test/app/AMM_test.cpp
-//   - testDepositAndWithdrawRounding (line 7527)
-//   - testDepositRounding (line 7598)
-//   - testWithdrawRounding (line 7779)
+//   - testDepositAndWithdrawRounding
+//   - testDepositRounding
+//   - testWithdrawRounding
 //
 // These tests verify that the AMM math correctly handles rounding for
 // various deposit and withdrawal modes. The key invariant is:
@@ -21,9 +21,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/stretchr/testify/require"
 )
 
 // setupGBPEURPoolWithBob creates a GBP/EUR AMM and funds Bob with
@@ -148,7 +151,7 @@ func setupGBPEURPoolAliceOnly(t *testing.T, gbpPool, eurPool float64, tradingFee
 }
 
 // TestDepositAndWithdrawRounding tests rounding behavior for deposits and withdrawals.
-// Reference: rippled AMM_test.cpp testDepositAndWithdrawRounding (line 7527)
+// Reference: rippled AMM_test.cpp testDepositAndWithdrawRounding
 //
 // The test creates an AMM with specific XRP/XPM balances, burns tokens to reach a
 // specific LP state, then verifies single-asset deposit and withdrawal rounding.
@@ -254,7 +257,7 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 				if fixV1_3 {
 					jtx.RequireTxSuccess(t, result)
 				} else {
-					amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
+					amm.ExpectTER(t, result, ter.TecUNFUNDED_AMM.String())
 				}
 			})
 		})
@@ -305,7 +308,7 @@ func TestDepositAndWithdrawRounding(t *testing.T) {
 }
 
 // TestDepositRounding tests deposit rounding for various deposit modes.
-// Reference: rippled AMM_test.cpp testDepositRounding (line 7598)
+// Reference: rippled AMM_test.cpp testDepositRounding
 //
 // All subtests use GBP/EUR IOU pools and verify the invariant:
 //
@@ -323,7 +326,7 @@ func TestDepositRounding(t *testing.T) {
 		}
 
 		// Single asset deposit with various exponents
-		// Reference: rippled AMM_test.cpp lines 7603-7636
+		// Reference: rippled AMM_test.cpp
 		// Pool: GBP(30,000) / EUR(30,000) with tfee=0
 		// Deposits EUR with mantissa=1 and various exponents
 		// The EUR(1, -3) case fails the invariant without fixAMMv1_3
@@ -362,7 +365,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// Two-asset proportional deposit (1:1 pool ratio)
-		// Reference: rippled AMM_test.cpp lines 7638-7664
+		// Reference: rippled AMM_test.cpp
 		t.Run("TwoAssetProportional_1to1/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 30000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -382,7 +385,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// Two-asset proportional deposit (1:3 pool ratio)
-		// Reference: rippled AMM_test.cpp lines 7666-7697
+		// Reference: rippled AMM_test.cpp
 		t.Run("TwoAssetProportional_1to3/"+suffix, func(t *testing.T) {
 			for _, tc := range []struct {
 				name       string
@@ -418,7 +421,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// tfLPToken deposit
-		// Reference: rippled AMM_test.cpp lines 7699-7719
+		// Reference: rippled AMM_test.cpp
 		t.Run("LPTokenDeposit/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 7000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -437,7 +440,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// tfOneAssetLPToken deposit
-		// Reference: rippled AMM_test.cpp lines 7721-7753
+		// Reference: rippled AMM_test.cpp
 		t.Run("OneAssetLPTokenDeposit/"+suffix, func(t *testing.T) {
 			for _, tc := range []struct {
 				name     string
@@ -477,7 +480,7 @@ func TestDepositRounding(t *testing.T) {
 		})
 
 		// Single deposit with EP (effective price) limit
-		// Reference: rippled AMM_test.cpp lines 7755-7776
+		// Reference: rippled AMM_test.cpp
 		t.Run("SingleDepositWithEP/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 30000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -499,7 +502,7 @@ func TestDepositRounding(t *testing.T) {
 }
 
 // TestWithdrawRounding tests withdrawal rounding for various withdraw modes.
-// Reference: rippled AMM_test.cpp testWithdrawRounding (line 7779)
+// Reference: rippled AMM_test.cpp testWithdrawRounding
 //
 // All subtests use GBP/EUR IOU pools and verify the invariant:
 //
@@ -514,7 +517,7 @@ func TestWithdrawRounding(t *testing.T) {
 		}
 
 		// tfLPToken withdraw
-		// Reference: rippled AMM_test.cpp lines 7786-7794
+		// Reference: rippled AMM_test.cpp
 		t.Run("LPTokenWithdraw/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -531,7 +534,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfWithdrawAll mode
-		// Reference: rippled AMM_test.cpp lines 7797-7806
+		// Reference: rippled AMM_test.cpp
 		t.Run("WithdrawAll/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -541,12 +544,11 @@ func TestWithdrawRounding(t *testing.T) {
 			jtx.RequireTxSuccess(t, env.Submit(wdTx))
 			env.Close()
 
-			// After withdraw-all, invariant holds trivially (balances go to zero)
-			env.CheckInvariant(env.GBP, env.EUR, fixV1_3, false, "with2")
+			require.Nil(t, env.ReadAMMData(env.GBP, env.EUR))
 		})
 
 		// tfTwoAsset withdraw mode
-		// Reference: rippled AMM_test.cpp lines 7808-7821
+		// Reference: rippled AMM_test.cpp
 		t.Run("TwoAssetWithdraw/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -565,7 +567,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfSingleAsset withdraw mode
-		// Reference: rippled AMM_test.cpp lines 7823-7839
+		// Reference: rippled AMM_test.cpp
 		t.Run("SingleAssetWithdraw/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -582,7 +584,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfOneAssetWithdrawAll mode
-		// Reference: rippled AMM_test.cpp lines 7841-7865
+		// Reference: rippled AMM_test.cpp
 		t.Run("OneAssetWithdrawAll/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolWithBob(t, 7000, 30000, 100000, 100000, 0, fixV1_3)
 
@@ -608,7 +610,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfOneAssetLPToken mode
-		// Reference: rippled AMM_test.cpp lines 7867-7880
+		// Reference: rippled AMM_test.cpp
 		t.Run("OneAssetLPToken/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)
 
@@ -628,7 +630,7 @@ func TestWithdrawRounding(t *testing.T) {
 		})
 
 		// tfLimitLPToken mode
-		// Reference: rippled AMM_test.cpp lines 7882-7895
+		// Reference: rippled AMM_test.cpp
 		// NOTE: The invariant INTENTIONALLY FAILS here (shouldFail=true in rippled)
 		t.Run("LimitLPToken/"+suffix, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 7000, 30000, 0, fixV1_3)

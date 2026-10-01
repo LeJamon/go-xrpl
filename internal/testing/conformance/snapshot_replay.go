@@ -11,11 +11,24 @@ import (
 )
 
 func runSnapshotReplay(fixture snapshotFixture, parent, closed loadedSnapshotLedger) error {
+	return runSnapshotReplayTransactions(
+		fixture.NetworkID,
+		parent,
+		closed,
+		fixture.Closed.Transactions,
+	)
+}
+
+func runSnapshotReplayTransactions(
+	networkID uint32,
+	parent, closed loadedSnapshotLedger,
+	transactions []snapshotTransaction,
+) error {
 	response := &message.ReplayDeltaResponse{
 		LedgerHash:   closed.Header.Hash[:],
 		LedgerHeader: ledgerheader.AddRaw(closed.Header, false),
 	}
-	for i, transaction := range fixture.Closed.Transactions {
+	for i, transaction := range transactions {
 		txBlob, err := decodeSnapshotBytes("replay transaction", transaction.TxBlob)
 		if err != nil {
 			return err
@@ -41,7 +54,7 @@ func runSnapshotReplay(fixture snapshotFixture, parent, closed loadedSnapshotLed
 		BaseFee:                   uint64(parent.Fees.Base),
 		ReserveBase:               uint64(parent.Fees.Reserve),
 		ReserveIncrement:          uint64(parent.Fees.Increment),
-		NetworkID:                 fixture.NetworkID,
+		NetworkID:                 networkID,
 		Rules:                     parent.EffectiveRules,
 		SkipSignatureVerification: false,
 	})

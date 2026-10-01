@@ -13,22 +13,32 @@ import (
 func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
 	script, repo, sha := acceptanceEvidenceRepo(t)
 	jobs := []string{
-		"lint", "generate", "build", "build-386", "postgres", "test",
+		"lint", "lint-advisory", "generate", "build", "build-386", "postgres", "test",
 		"test-mpt-crypto", "peer-interop", "peer-interop-final", "consensus-smoke",
 		"consensus-smoke-final", "test-repeated", "conformance-final",
 	}
 	producers := []string{
-		"lint", "generate", "build", "build-386", "postgres", "test-integration-offer",
+		"lint", "lint-advisory", "generate", "build", "build-386", "postgres", "test-integration-offer",
 		"test-integration", "test-tx", "test-core", "test-libs",
 		"test-mpt-crypto-ubuntu-latest", "test-mpt-crypto-macos-latest",
 		"peer-interop", "peer-interop-final", "consensus-smoke-3.3.0", "consensus-smoke-3.2.0",
 		"consensus-smoke-final", "test-repeated", "conformance-final",
 	}
-	for _, missing := range append([]string{""}, producers...) {
-		name := "complete"
-		if missing != "" {
-			name = "missing_" + missing
-		}
+	type evidenceCase struct {
+		name, missing, replace, with, diagnostic string
+	}
+	cases := make([]evidenceCase, 0, 4+len(producers))
+	cases = append(cases, []evidenceCase{
+		{name: "complete"},
+		{name: "failed_producer", replace: "status=success", with: "status=failure", diagnostic: "producer_failed="},
+		{name: "dirty_producer", replace: "go_dirty=false", with: "go_dirty=true", diagnostic: "producer_dirty="},
+		{name: "stale_producer", replace: "tested_sha=" + sha, with: "tested_sha=" + strings.Repeat("0", 40), diagnostic: "producer_sha_mismatch="},
+	}...)
+	for _, producer := range producers {
+		cases = append(cases, evidenceCase{name: "missing_" + producer, missing: producer, diagnostic: "producer_evidence_missing=" + producer + ".txt"})
+	}
+	for _, tc := range cases {
+		name, missing := tc.name, tc.missing
 		t.Run(name, func(t *testing.T) {
 			evidenceDir := t.TempDir()
 			if err := os.Mkdir(filepath.Join(evidenceDir, "producers"), 0o755); err != nil {
@@ -49,30 +59,32 @@ func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
 					if isFinalOracleProducer(producer) {
 						content += "oracle_repository=XRPLF/xrpld-private\noracle_tag=3.4.1\noracle_commit=d147fccf54a500fce586522f28d6044c37fd8d29\n"
 					}
-					write(filepath.Join("producers", "producer-"+producer+".txt"),
-						content)
+					if producer == "test-core" && tc.replace != "" {
+						content = strings.ReplaceAll(content, tc.replace, tc.with)
+					}
+					write(filepath.Join("producers", "producer-"+producer+".txt"), content)
 				}
 			}
 			cmd := exec.CommandContext(t.Context(), "bash", script, "aggregate")
 			cmd.Dir = repo
 			cmd.Env = append(os.Environ(), "EVIDENCE_DIR="+evidenceDir, "EXPECTED_SHA="+sha)
 			output, runErr := cmd.CombinedOutput()
-			if missing == "" {
+			if name == "complete" {
 				if runErr != nil {
 					t.Fatalf("complete evidence rejected: %v\n%s", runErr, output)
 				}
 				return
 			}
 			if runErr == nil {
-				t.Fatalf("accepted evidence without producer %s", missing)
+				t.Fatalf("accepted invalid evidence: %s", name)
 			}
 			manifest, err := os.ReadFile(filepath.Join(evidenceDir, "final-acceptance.txt"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "producer_evidence_missing=" + missing + ".txt\n"
+			want := tc.diagnostic
 			if !strings.Contains(string(manifest), want) {
-				t.Fatalf("missing producer was not diagnosed: want %q in\n%s\ncommand: %v\n%s", want, manifest, runErr, output)
+				t.Fatalf("invalid evidence was not diagnosed: want %q in\n%s\ncommand: %v\n%s", want, manifest, runErr, output)
 			}
 		})
 	}
@@ -85,12 +97,12 @@ func TestAcceptanceEvidenceRejectsMixedOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs := []string{
-		"lint", "generate", "build", "build-386", "postgres", "test",
+		"lint", "lint-advisory", "generate", "build", "build-386", "postgres", "test",
 		"test-mpt-crypto", "peer-interop", "peer-interop-final", "consensus-smoke",
 		"consensus-smoke-final", "test-repeated", "conformance-final",
 	}
 	producers := []string{
-		"lint", "generate", "build", "build-386", "postgres", "test-integration-offer",
+		"lint", "lint-advisory", "generate", "build", "build-386", "postgres", "test-integration-offer",
 		"test-integration", "test-tx", "test-core", "test-libs",
 		"test-mpt-crypto-ubuntu-latest", "test-mpt-crypto-macos-latest",
 		"peer-interop", "peer-interop-final", "consensus-smoke-3.3.0", "consensus-smoke-3.2.0",
@@ -144,6 +156,34 @@ func isFinalOracleProducer(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func TestAcceptanceEvidenceRequiresCleanCandidate(t *testing.T) {
+	for _, state := range []string{"missing_sha", "wrong_sha", "dirty"} {
+		t.Run(state, func(t *testing.T) {
+			script, repo, sha := acceptanceEvidenceRepo(t)
+			want := "must identify the candidate"
+			switch state {
+			case "missing_sha":
+				sha = ""
+			case "wrong_sha":
+				sha = strings.Repeat("0", 40)
+				want = "does not match the candidate"
+			case "dirty":
+				if err := os.WriteFile(filepath.Join(repo, "untracked.go"), []byte("package fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				want = "checkout must be clean"
+			}
+			cmd := exec.CommandContext(t.Context(), "bash", script, "aggregate")
+			cmd.Dir = repo
+			cmd.Env = append(os.Environ(), "EVIDENCE_DIR="+t.TempDir(), "EXPECTED_SHA="+sha, "GITHUB_SHA=")
+			output, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), want) {
+				t.Fatalf("want rejection %q: %v\n%s", want, err, output)
+			}
+		})
 	}
 }
 

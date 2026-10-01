@@ -20,8 +20,22 @@ type TxResult struct {
 
 	Queued bool
 
-	// Fee is the amount charged in drops. It is zero for queued and rejected transactions.
+	// Fee is the amount reported by the engine. Applied results charge this fee;
+	// terminal invariant failures may report an attempted fee while committing no
+	// ledger changes.
 	Fee uint64
+
+	// ApplyInvoked and InvariantsChecked expose execution reachability to the
+	// engine evidence harness. They are false when a transaction stops during
+	// preflight or preclaim before the corresponding engine phase.
+	ApplyInvoked      bool
+	InvariantsChecked bool
+
+	// TransactionCalls and InvariantChecks count observed engine phases for the
+	// submission path. Closed-ledger replay reports its phases through the test
+	// environment observer because a batch's inner transactions run at close.
+	TransactionCalls int
+	InvariantChecks  int
 
 	// Message provides additional details about the result.
 	Message string

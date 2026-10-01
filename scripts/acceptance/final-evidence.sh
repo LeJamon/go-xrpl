@@ -57,7 +57,7 @@ worktree_status() {
     ':(exclude)rippled-worktrees/v3.2.0-oracle' \
     ':(exclude)rippled-worktrees/v3.3.0-oracle' \
     ':(exclude)rippled-worktrees/v3.4.0-oracle' \
-    ':(exclude)rippled-worktrees/v3.4.1-oracle' 2>/dev/null || true
+    ':(exclude)rippled-worktrees/v3.4.1-oracle' || die 'could not inspect Go worktree'
 }
 
 write_common_metadata() {
@@ -74,6 +74,11 @@ write_common_metadata() {
     printf 'job=%s\n' "${GITHUB_JOB:-}"
     printf 'repository=%s\n' "${GITHUB_REPOSITORY:-}"
     printf 'ref=%s\n' "${GITHUB_REF:-}"
+    printf 'tree_sha=%s\n' "$(git rev-parse HEAD^{tree})"
+    printf 'platform=%s\n' "$(uname -sm)"
+    printf 'go_version=%s\n' "$(go version)"
+    printf 'cgo_enabled=%s\n' "$(go env CGO_ENABLED)"
+    printf 'goflags=%s\n' "$(go env GOFLAGS)"
   } > "$output"
   if [[ -n "$dirty_status" ]]; then
     printf '%s\n' "$dirty_status" > "${output%.txt}.git-status.txt"
@@ -109,6 +114,7 @@ case "$mode" in
   source)
     output="$evidence_dir/source-provenance.txt"
     write_common_metadata "$output"
+    [[ -z "$(worktree_status)" ]] || die 'Go source must be clean'
     if [[ -n "$expected_sha" && "$go_sha" != "$expected_sha" ]]; then
       printf 'sha_validation=failed\n' >> "$output"
       die "tested SHA $go_sha does not match expected SHA $expected_sha"
@@ -197,14 +203,15 @@ case "$mode" in
       sha256sum "$source_manifest"
     } >> "$output"
 
-    json_count="$(find "$corpus" -type f -name '*.json' ! -path "$source_manifest" -print | wc -l | tr -d ' ')"
+    json_count="$(jq -r '.fixture_count' "$source_manifest")"
     [[ "$json_count" =~ ^[1-9][0-9]*$ ]] || die 'final conformance corpus contains no JSON fixtures'
 
     result_log="$evidence_dir/conformance-replay.log"
+    result_report="$evidence_dir/conformance-report.json"
     replay_command='GOXRPL_FIXTURES_DIR="$FINAL_CONFORMANCE_CORPUS" GOXRPL_CONFORMANCE_REQUIRED=1 go test -count=1 -timeout 30m -v ./internal/testing/conformance/...'
     printf 'command=%s\nfixture_count=%s\n' "$replay_command" "$json_count" >> "$output"
     set +e
-    GOXRPL_FIXTURES_DIR="$corpus" GOXRPL_CONFORMANCE_REQUIRED=1 \
+    GOXRPL_FIXTURES_DIR="$corpus" GOXRPL_CONFORMANCE_REQUIRED=1 GOXRPL_CONFORMANCE_REPORT="$result_report" \
       go test -count=1 -timeout 30m -v ./internal/testing/conformance/... > "$result_log" 2>&1
     replay_status=$?
     set -e
@@ -218,18 +225,26 @@ case "$mode" in
       printf 'failed=%s\n' "$fail_count"
       printf 'skipped=%s\n' "$skip_count"
     } >> "$output"
-    (( replay_status == 0 && pass_count > 0 && fail_count == 0 )) ||
-      die 'final conformance replay failed or produced no passing fixtures'
+    (( replay_status == 0 && pass_count > 0 && fail_count == 0 && skip_count == 0 )) ||
+      die 'final conformance replay failed, skipped cases or produced no passing fixtures'
+    jq -e --argjson count "$json_count" \
+      '.total.discovered == $count and .total.executed == $count and
+       .total.passed == $count and .total.failed == 0 and
+       .total.skipped == 0 and .total.excluded == 0' \
+      "$result_report" >/dev/null || die 'final conformance execution counts do not reconcile'
     ;;
 
   aggregate)
+    [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || die 'EXPECTED_SHA or GITHUB_SHA must identify the candidate'
+    [[ "$go_sha" == "$expected_sha" ]] || die 'aggregator checkout does not match the candidate'
+    [[ -z "$(worktree_status)" ]] || die 'aggregator checkout must be clean'
     results_file="$evidence_dir/needs-results.txt"
     [[ -s "$results_file" ]] || die 'needs-results.txt is missing or empty'
     output="$evidence_dir/final-acceptance.txt"
     write_common_metadata "$output"
     status_failed=0
     {
-      printf 'required_jobs=lint,generate,build,build-386,postgres,test,test-mpt-crypto,peer-interop,peer-interop-final,consensus-smoke,consensus-smoke-final,test-repeated,conformance-final\n'
+      printf 'required_jobs=lint,lint-advisory,generate,build,build-386,postgres,test,test-mpt-crypto,peer-interop,peer-interop-final,consensus-smoke,consensus-smoke-final,test-repeated,conformance-final\n'
       printf 'needs_results=%s\n' "$results_file"
       printf '\n[producer-evidence]\n'
     } >> "$output"
@@ -245,7 +260,7 @@ case "$mode" in
     fi
 
     required_jobs=(
-      lint generate build build-386 postgres test test-mpt-crypto
+      lint lint-advisory generate build build-386 postgres test test-mpt-crypto
       peer-interop peer-interop-final consensus-smoke consensus-smoke-final
       test-repeated conformance-final
     )
@@ -278,6 +293,10 @@ case "$mode" in
           printf 'producer_dirty=%s\n' "$producer_file" >> "$output"
           status_failed=1
         fi
+        if ! grep --fixed-strings --line-regexp 'status=success' "$producer_file" >/dev/null; then
+          printf 'producer_failed=%s\n' "$producer_file" >> "$output"
+          status_failed=1
+        fi
         case "${producer_file##*/}" in
           producer-peer-interop-final.txt|producer-consensus-smoke-final.txt|producer-conformance-final.txt)
             for identity in \
@@ -293,7 +312,7 @@ case "$mode" in
         esac
       done
       required_producers=(
-        lint.txt generate.txt build.txt build-386.txt postgres.txt test-integration-offer.txt test-integration.txt
+        lint.txt lint-advisory.txt generate.txt build.txt build-386.txt postgres.txt test-integration-offer.txt test-integration.txt
         test-tx.txt test-core.txt test-libs.txt
         test-mpt-crypto-ubuntu-latest.txt test-mpt-crypto-macos-latest.txt
         peer-interop.txt peer-interop-final.txt

@@ -1,34 +1,29 @@
-// Package amm_test contains tests for AMM bid transactions.
-// Reference: rippled/src/test/app/AMM_test.cpp testInvalidBid and testBid
 package amm_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
-// TestInvalidBid tests invalid bid scenarios.
-// Reference: rippled AMM_test.cpp testInvalidBid (line 2804)
 func TestInvalidBid(t *testing.T) {
-	// Invalid flags
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 0, .flags = tfWithdrawAll}), ter(temINVALID_FLAG));
 	t.Run("InvalidFlags", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
@@ -37,26 +32,18 @@ func TestInvalidBid(t *testing.T) {
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid with invalid flags")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		jtx.RequireTxFail(t, result, ter.TemINVALID_FLAG.String())
 	})
 
-	// Invalid Bid price <= 0
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 0}), ter(temBAD_AMOUNT));
 	t.Run("ZeroBidMin", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
@@ -64,26 +51,18 @@ func TestInvalidBid(t *testing.T) {
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid with zero bidMin")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		jtx.RequireTxFail(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
-	// Negative bid price
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = -100}), ter(temBAD_AMOUNT));
 	t.Run("NegativeBidMin", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
@@ -91,26 +70,18 @@ func TestInvalidBid(t *testing.T) {
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid with negative bidMin")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		jtx.RequireTxFail(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
-	// Zero bidMax
-	// Reference: env(ammAlice.bid({.account = carol, .bidMax = 0}), ter(temBAD_AMOUNT));
 	t.Run("ZeroBidMax", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
@@ -118,43 +89,29 @@ func TestInvalidBid(t *testing.T) {
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid with zero bidMax")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		jtx.RequireTxFail(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
-	// Invalid Min/Max combination - bidMin > bidMax
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 200, .bidMax = 100}), ter(tecAMM_INVALID_TOKENS));
 	t.Run("InvalidMinMaxCombination", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// First deposit as Carol to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Use real LP token issuer so we reach the bidMin > bidMax check
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 200)).
 			BidMax(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 100)).
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bidMin > bidMax")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_INVALID_TOKENS)
+		jtx.RequireTxFail(t, result, ter.TecAMM_INVALID_TOKENS.String())
 	})
 
-	// Invalid Account (non-existent)
-	// Reference: env(ammAlice.bid({.account = bad, .bidMax = 100}), seq(1), ter(terNO_ACCOUNT));
 	t.Run("NonExistentAccount", func(t *testing.T) {
 		env := setupAMM(t)
 
@@ -164,31 +121,20 @@ func TestInvalidBid(t *testing.T) {
 			Build()
 		result := env.SubmitWithOptions(jtx.WithSeq(bidTx, 1), jtx.SubmitOptions{SkipSignature: true})
 
-		if result.Success {
-			t.Fatal("Should not allow bid from non-existent account")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
+		jtx.RequireTxFail(t, result, ter.TerNO_ACCOUNT.String())
 	})
 
-	// Account is not LP
-	// Reference: env(ammAlice.bid({.account = dan, .bidMin = 100}), ter(tecAMM_INVALID_TOKENS));
 	t.Run("NotLiquidityProvider", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// Carol hasn't deposited, so she can't bid
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
 			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result := env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow non-LP to bid")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_INVALID_TOKENS)
+		jtx.RequireTxFail(t, result, ter.TecAMM_INVALID_TOKENS.String())
 	})
 
-	// Invalid AMM (non-existent pair)
-	// Reference: env(ammAlice.bid({.account = alice, .bidMax = 100, .assets = {{USD, GBP}}}), ter(terNO_AMM));
 	t.Run("NonExistentAMM", func(t *testing.T) {
 		env := setupAMM(t)
 
@@ -197,270 +143,145 @@ func TestInvalidBid(t *testing.T) {
 			Build()
 		result := env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid on non-existent AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		jtx.RequireTxFail(t, result, ter.TerNO_AMM.String())
 	})
 
-	// Invalid AMM (deleted)
-	// Reference: ammAlice.withdrawAll(alice); env(ammAlice.bid({...}), ter(terNO_AMM));
 	t.Run("DeletedAMM", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// Withdraw all to delete AMM
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			WithdrawAll().
 			Build()
 		result := env.Submit(withdrawTx)
-		if !result.Success {
-			t.Fatalf("Withdraw all should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Try to bid on deleted AMM
 		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
 			BidMax(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid on deleted AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		jtx.RequireTxFail(t, result, ter.TerNO_AMM.String())
 	})
 
-	// Invalid Min/Max issue - must be LP tokens
-	// Reference: env(ammAlice.bid({.account = alice, .bidMax = STAmount{USD, 100}}), ter(temBAD_AMM_TOKENS));
 	t.Run("BidWithWrongTokenType", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// Try to bid with USD instead of LP tokens
 		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
 			BidMax(amm.IOUAmount(env.GW, "USD", 100)). // Wrong: should be LP tokens
 			Build()
 		result := env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid with non-LP tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		jtx.RequireTxFail(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
-	// Bid price exceeds LP owned tokens
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 1'000'001}), ter(tecAMM_INVALID_TOKENS));
 	t.Run("BidExceedsOwnedTokens", func(t *testing.T) {
 		env := setupAMM(t)
 
-		// First deposit as Carol to become LP with limited tokens
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Try to bid more tokens than Carol owns — use real LP token issuer
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 1000001)).
 			Build()
 		result = env.Submit(bidTx)
 
-		if result.Success {
-			t.Fatal("Should not allow bid exceeding owned tokens")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_INVALID_TOKENS)
+		jtx.RequireTxFail(t, result, ter.TecAMM_INVALID_TOKENS.String())
 	})
 }
 
-// TestBid tests valid bid scenarios.
-// Reference: rippled AMM_test.cpp testBid (line 3029)
 func TestBid(t *testing.T) {
-	// Bid with bidMin - pay minimum price
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 110}));
-	t.Run("BidWithBidMin", func(t *testing.T) {
-		env := setupAMM(t)
-
-		// First deposit as Carol to become LP
-		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
-			LPToken().
-			Build()
-		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
+	for _, cleanup := range []bool{false, true} {
+		for _, tc := range []struct {
+			name     string
+			deposit  bool
+			min, max float64
+			auth     bool
+			price    string
+		}{
+			{name: "BidWithBidMin", deposit: true, min: 110, price: "110"},
+			{name: "BidWithExactMinMax", deposit: true, min: 110, max: 110, price: "110"},
+			{name: "BidWithMinMaxRange", min: 100, max: 200, price: "100"},
+			{name: "BidWithBidMaxOnly", deposit: true, max: 600, price: "4.4"},
+			{name: "BidWithAutoPrice", price: "4"},
+			{name: "BidWithAuthAccounts", deposit: true, min: 120, auth: true, price: "120"},
+		} {
+			t.Run(fmt.Sprintf("%s/cleanup=%t", tc.name, cleanup), func(t *testing.T) {
+				env := setupAMMProfile(t, true)
+				if !cleanup {
+					env.DisableFeature("fixCleanup3_4_0")
+					env.Close()
+				}
+				bidder := env.Alice
+				if tc.deposit {
+					bidder = env.Carol
+					jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(bidder, amm.XRP(), env.USD).
+						LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).LPToken().Build()))
+					env.Close()
+				}
+				if tc.auth {
+					env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
+					env.Close()
+				}
+				before := captureBidState(t, env, bidder)
+				bid := amm.AMMBid(bidder, amm.XRP(), env.USD)
+				if tc.min != 0 {
+					bid.BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, tc.min))
+				}
+				if tc.max != 0 {
+					bid.BidMax(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, tc.max))
+				}
+				var auth [][20]byte
+				if tc.auth {
+					bid.AuthAccounts(env.Bob.Address)
+					auth = append(auth, env.Bob.ID)
+				}
+				price := tc.price
+				if !cleanup && tc.min == 0 {
+					price = "0"
+				}
+				jtx.RequireTxSuccess(t, env.Submit(bid.Build()))
+				assertBidState(t, env, bidder, before, price, "0", 0, auth)
+			})
 		}
-		env.Close()
+	}
 
-		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 110)).
-			Build()
-		result = env.Submit(bidTx)
-
-		if !result.Success {
-			t.Fatalf("Bid with bidMin should succeed: %s - %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		t.Log("Bid with bidMin passed")
-	})
-
-	// Bid with exact min/max
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 110, .bidMax = 110}));
-	t.Run("BidWithExactMinMax", func(t *testing.T) {
-		env := setupAMM(t)
-
-		// First deposit as Carol to become LP
-		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
-			LPToken().
-			Build()
-		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
-		env.Close()
-
-		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 110)).
-			BidMax(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 110)).
-			Build()
-		result = env.Submit(bidTx)
-
-		if !result.Success {
-			t.Fatalf("Bid with exact min/max should succeed: %s - %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		t.Log("Bid with exact min/max passed")
-	})
-
-	// Bid with min/max range
-	// Reference: env(ammAlice.bid({.account = alice, .bidMin = 180, .bidMax = 200}));
-	t.Run("BidWithMinMaxRange", func(t *testing.T) {
-		env := setupAMM(t)
-
-		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
-			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 100)).
-			BidMax(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 200)).
-			Build()
-		result := env.Submit(bidTx)
-
-		if !result.Success {
-			t.Fatalf("Bid with min/max range should succeed: %s - %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		t.Log("Bid with min/max range passed")
-	})
-
-	// Bid with just bidMax
-	// Reference: env(ammAlice.bid({.account = carol, .bidMax = 600}));
-	t.Run("BidWithBidMaxOnly", func(t *testing.T) {
-		env := setupAMM(t)
-
-		// First deposit as Carol to become LP
-		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
-			LPToken().
-			Build()
-		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
-		env.Close()
-
-		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMax(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 600)).
-			Build()
-		result = env.Submit(bidTx)
-
-		if !result.Success {
-			t.Fatalf("Bid with bidMax only should succeed: %s - %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		t.Log("Bid with bidMax only passed")
-	})
-
-	// Bid without price (auto-calculate)
-	// Reference: env(ammAlice.bid({.account = bob}));
-	t.Run("BidWithAutoPrice", func(t *testing.T) {
-		env := setupAMM(t)
-
-		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).Build()
-		result := env.Submit(bidTx)
-
-		// This may succeed or fail depending on auction slot state
-		// If no one owns the slot, it should succeed
-		if result.Success {
-			t.Log("Bid with auto price succeeded")
-		} else {
-			t.Logf("Bid with auto price result: %s (may be expected)", result.Code)
-		}
-	})
-
-	// Bid with authorized accounts
-	// Reference: env(ammAlice.bid({.account = carol, .bidMin = 120, .authAccounts = {bob, ed}}));
-	t.Run("BidWithAuthAccounts", func(t *testing.T) {
-		env := setupAMM(t)
-
-		// Fund Bob
+	t.Run("DiscountAndAuthAccountsReset", func(t *testing.T) {
+		env := setupAMMProfile(t, true)
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
 		env.Close()
-
-		// First deposit as Carol to become LP
-		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
-			LPToken().
-			Build()
-		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Deposit should succeed: %s", result.Code)
-		}
-		env.Close()
-
-		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
-			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 120)).
-			AuthAccounts(env.Bob.Address).
-			Build()
-		result = env.Submit(bidTx)
-
-		if !result.Success {
-			t.Fatalf("Bid with auth accounts should succeed: %s - %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		t.Log("Bid with auth accounts passed")
+		jtx.RequireTxSuccess(t, env.Submit(amm.AMMVote(env.Alice, amm.XRP(), env.USD, 1000).Build()))
+		before := captureBidState(t, env, env.Alice)
+		jtx.RequireTxSuccess(t, env.Submit(amm.AMMBid(env.Alice, amm.XRP(), env.USD).
+			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 5000)).
+			AuthAccounts(env.Bob.Address, env.Carol.Address).Build()))
+		assertBidState(t, env, env.Alice, before, "5000", "0", 100, [][20]byte{env.Bob.ID, env.Carol.ID})
+		before = captureBidState(t, env, env.Alice)
+		jtx.RequireTxSuccess(t, env.Submit(amm.AMMBid(env.Alice, amm.XRP(), env.USD).Build()))
+		assertBidState(t, env, env.Alice, before, "9248", "4750", 100, nil)
 	})
 
-	// Outbid previous slot owner
-	// Reference: Multiple sequential bids, each outbidding the previous
 	t.Run("OutbidPreviousOwner", func(t *testing.T) {
-		env := setupAMM(t)
+		env := setupAMMProfile(t, true)
 
-		// Carol deposits to become LP
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-		if !result.Success {
-			t.Fatalf("Carol deposit should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Carol bids first
 		bidTx1 := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 110)).
 			Build()
 		result = env.Submit(bidTx1)
-		if !result.Success {
-			t.Fatalf("Carol's bid should succeed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		ammAccount := env.ReadAMMAccount(amm.XRP(), env.USD)
@@ -471,16 +292,16 @@ func TestBid(t *testing.T) {
 		balanceBefore := bidLPHolding(lineBefore, env.Carol.ID, ammAccount.ID)
 		ownerCountBefore := env.OwnerCount(env.Carol)
 
-		// Alice outbids Carol
+		beforeBid := captureBidState(t, env, env.Alice)
+
 		bidTx2 := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 200)).
 			Build()
 		result = env.Submit(bidTx2)
-		if !result.Success {
-			t.Fatalf("Alice's outbid should succeed: %s - %s", result.Code, result.Message)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
+		assertBidState(t, env, env.Alice, beforeBid, "200", "104.5", 0, nil)
 		lineAfter := readBidLPLine(t, env, lineKey)
 		balanceAfter := bidLPHolding(lineAfter, env.Carol.ID, ammAccount.ID)
 		refund, err := balanceAfter.Sub(balanceBefore)
@@ -492,19 +313,19 @@ func TestBid(t *testing.T) {
 	})
 
 	t.Run("OutbidPreviousOwnerWithoutLPLine", func(t *testing.T) {
-		env := setupAMM(t)
+		env := setupAMMProfile(t, true)
 
 		result := env.Submit(amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build())
-		require.True(t, result.Success, "Carol deposit: %s - %s", result.Code, result.Message)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		result = env.Submit(amm.AMMBid(env.Carol, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 110)).
 			Build())
-		require.True(t, result.Success, "Carol bid: %s - %s", result.Code, result.Message)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		ammAccount := env.ReadAMMAccount(amm.XRP(), env.USD)
@@ -514,7 +335,7 @@ func TestBid(t *testing.T) {
 		require.True(t, env.LedgerEntryExists(lineKey))
 
 		result = env.Submit(amm.AMMWithdraw(env.Carol, amm.XRP(), env.USD).WithdrawAll().Build())
-		require.True(t, result.Success, "Carol withdraw all: %s - %s", result.Code, result.Message)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		require.False(t, env.LedgerEntryExists(lineKey), "withdraw all should remove Carol's LP line")
@@ -525,12 +346,14 @@ func TestBid(t *testing.T) {
 		ownerCountBefore := env.OwnerCount(env.Carol)
 		ammOwnerCountBefore := env.OwnerCount(ammAccount)
 
+		beforeBid := captureBidState(t, env, env.Alice)
 		result = env.Submit(amm.AMMBid(env.Alice, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 200)).
 			Build())
-		require.True(t, result.Success, "Alice outbid: %s - %s", result.Code, result.Message)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
+		assertBidState(t, env, env.Alice, beforeBid, "200", "104.5", 0, nil)
 		line := readBidLPLine(t, env, lineKey)
 		holding := bidLPHolding(line, env.Carol.ID, ammAccount.ID)
 		wantRefund := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 104.5)
@@ -577,6 +400,97 @@ func TestBid(t *testing.T) {
 	})
 }
 
+type bidState struct {
+	pool                              *jtx.Account
+	owner                             [20]byte
+	total, bidderLP, ownerLP, poolUSD tx.Amount
+	poolXRP, bidderXRP                uint64
+	expiration                        uint32
+}
+
+func captureBidState(t *testing.T, env *amm.AMMTestEnv, bidder *jtx.Account) bidState {
+	t.Helper()
+	data := env.ReadAMMData(amm.XRP(), env.USD)
+	require.NotNil(t, data)
+	require.NotNil(t, data.AuctionSlot)
+	pool := env.ReadAMMAccount(amm.XRP(), env.USD)
+	require.NotNil(t, pool)
+	usd := env.IOUBalance(pool, env.GW, "USD")
+	require.NotNil(t, usd)
+	return bidState{
+		pool: pool, owner: data.AuctionSlot.Account, total: data.LPTokenBalance,
+		bidderLP: bidHolding(t, env, bidder.ID, pool.ID, data.LPTokenBalance.Currency, true),
+		ownerLP:  bidHolding(t, env, data.AuctionSlot.Account, pool.ID, data.LPTokenBalance.Currency, false),
+		poolUSD:  *usd, poolXRP: env.Balance(pool), bidderXRP: env.Balance(bidder),
+		expiration: protocol.ToRippleTime(env.Ledger().ParentCloseTime()) + 86400,
+	}
+}
+
+func bidHolding(t *testing.T, env *amm.AMMTestEnv, holder, pool [20]byte, currency string, required bool) tx.Amount {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Line(holder, pool, currency))
+	require.NoError(t, err)
+	if len(data) == 0 {
+		require.False(t, required, "expected bidder LP trust line")
+		return tx.NewIssuedAmount(0, 0, currency, state.AccountOneAddress)
+	}
+	line, err := state.ParseRippleState(data)
+	require.NoError(t, err)
+	holding := bidLPHolding(line, holder, pool)
+	require.Equal(t, currency, holding.Currency)
+	require.Equal(t, state.AccountOneAddress, holding.Issuer)
+	return holding
+}
+
+func assertBidState(t *testing.T, env *amm.AMMTestEnv, bidder *jtx.Account, before bidState, price, refund string, discountedFee uint16, auth [][20]byte) {
+	t.Helper()
+	amount := func(value string, prototype tx.Amount) tx.Amount {
+		t.Helper()
+		result, err := state.NewIssuedAmountFromDecimalString(value, prototype.Currency, prototype.Issuer)
+		require.NoError(t, err)
+		return result
+	}
+	subtract := func(a, b tx.Amount) tx.Amount {
+		t.Helper()
+		result, err := a.Sub(b)
+		require.NoError(t, err)
+		return result
+	}
+	add := func(a, b tx.Amount) tx.Amount {
+		t.Helper()
+		result, err := a.Add(b)
+		require.NoError(t, err)
+		return result
+	}
+	data := env.ReadAMMData(amm.XRP(), env.USD)
+	require.NotNil(t, data)
+	require.NotNil(t, data.AuctionSlot)
+	require.Equal(t, bidder.ID, data.AuctionSlot.Account)
+	require.Equal(t, amount(price, before.total), data.AuctionSlot.Price)
+	require.Equal(t, before.expiration, data.AuctionSlot.Expiration)
+	require.Equal(t, discountedFee, data.AuctionSlot.DiscountedFee)
+	require.Equal(t, len(auth) != 0, data.AuctionSlot.AuthAccountsPresent)
+	require.Len(t, data.AuctionSlot.AuthAccounts, len(auth))
+	for i, account := range auth {
+		require.Equal(t, account, data.AuctionSlot.AuthAccounts[i])
+	}
+	burn := subtract(amount(price, before.total), amount(refund, before.total))
+	require.Equal(t, subtract(before.total, burn), data.LPTokenBalance, "LP supply burn")
+	wantBidder := subtract(before.bidderLP, amount(price, before.bidderLP))
+	if before.owner == bidder.ID {
+		wantBidder = add(wantBidder, amount(refund, before.bidderLP))
+	} else {
+		wantOwner := add(before.ownerLP, amount(refund, before.ownerLP))
+		require.Equal(t, wantOwner, bidHolding(t, env, before.owner, before.pool.ID, before.total.Currency, !wantOwner.IsZero()), "old owner refund")
+	}
+	require.Equal(t, wantBidder, bidHolding(t, env, bidder.ID, before.pool.ID, before.total.Currency, !wantBidder.IsZero()), "bidder LP debit")
+	require.Equal(t, before.bidderXRP-env.BaseFee(), env.Balance(bidder), "only the transaction fee is charged in XRP")
+	require.Equal(t, before.poolXRP, env.Balance(before.pool))
+	usd := env.IOUBalance(before.pool, env.GW, "USD")
+	require.NotNil(t, usd)
+	require.Equal(t, before.poolUSD, *usd)
+}
+
 func readBidLPLine(t *testing.T, env *amm.AMMTestEnv, lineKey keylet.Keylet) *state.RippleState {
 	t.Helper()
 	data, err := env.LedgerEntry(lineKey)
@@ -593,26 +507,17 @@ func bidLPHolding(line *state.RippleState, holderID, ammAccountID [20]byte) stat
 	return line.Balance.Negate()
 }
 
-// TestBidAuthAccountsPrecedence pins that the fixAMMv1_3 duplicate/self
-// AuthAccounts check is a preflight rejection (temMALFORMED), ahead of preclaim's
-// terNO_AMM — so it is not masked when no AMM exists for the asset pair. Before
-// the fix the check lived in Preclaim, behind the AMM lookup.
-// Reference: rippled AMMBid.cpp preflight lines 81-95.
 func TestBidAuthAccountsPrecedence(t *testing.T) {
-	// fixAMMv1_3 is Supported::yes, so it is enabled in the default env.
 	t.Run("DuplicateAuthAccountsBeatsNoAMM", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.FundWithIOUs(30000, 0)
 		env.Close()
-		// No AMM is created for XRP/USD in this env.
 		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
 			AuthAccounts(env.Bob.Address, env.Bob.Address). // duplicate
 			Build()
 		result := env.Submit(bidTx)
-		if result.Success {
-			t.Fatal("duplicate AuthAccounts must be rejected in preflight")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+
+		jtx.RequireTxFail(t, result, ter.TemMALFORMED.String())
 	})
 
 	t.Run("SelfAuthAccountBeatsNoAMM", func(t *testing.T) {
@@ -623,9 +528,7 @@ func TestBidAuthAccountsPrecedence(t *testing.T) {
 			AuthAccounts(env.Carol.Address). // self-authorization
 			Build()
 		result := env.Submit(bidTx)
-		if result.Success {
-			t.Fatal("self AuthAccount must be rejected in preflight")
-		}
-		amm.ExpectTER(t, result, amm.TemMALFORMED)
+
+		jtx.RequireTxFail(t, result, ter.TemMALFORMED.String())
 	})
 }

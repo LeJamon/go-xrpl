@@ -187,8 +187,8 @@ func TestApplyXRPNotCreated_ActualSecondPassEscalates(t *testing.T) {
 			if result.Result != ter.TefINVARIANT_FAILED || result.Applied {
 				t.Fatalf("result/applied = %s/%v, want tefINVARIANT_FAILED/false", result.Result, result.Applied)
 			}
-			if result.Fee != xrpOverflowFee || view.destroyed != 0 {
-				t.Fatalf("terminal invariant failure charged fee/result fee = %d/%d, want 0/%d", view.destroyed, result.Fee, xrpOverflowFee)
+			if result.Fee != 0 || view.destroyed != 0 {
+				t.Fatalf("terminal invariant failure charged fee/result fee = %d/%d, want 0/0", view.destroyed, result.Fee)
 			}
 			if hookCalls != 1 {
 				t.Fatalf("fee-only invariant hook calls = %d, want 1", hookCalls)

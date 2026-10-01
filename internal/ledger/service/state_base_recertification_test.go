@@ -51,8 +51,7 @@ func newStateBaseRecertificationFixture(t *testing.T) *stateBaseRecertificationF
 	rawTx, _ := validRelationalTestTransaction(t, 1)
 	txBlob, txHash := makeTxMetaBlobForTest(t, rawTx, 0)
 	require.NoError(t, svc.openLedger.AddTransactionWithMeta(txHash, txBlob))
-	_, err := svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, svc)
 	svc.FlushPersists()
 	validated := svc.GetValidatedLedger()
 	require.NotNil(t, validated)
@@ -447,9 +446,13 @@ func TestStateBaseRecertificationCarriesProofAcrossValidationDuringWalk(t *testi
 		data := make([]byte, 12)
 		data[11] = byte(i + 50)
 		if i == 0 {
-			require.NoError(t, f.svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
+			modifyPublishedOpenLedger(t, f.svc, func(view *ledger.Ledger) error {
+				return view.Insert(keylet.Keylet{Key: key}, data)
+			})
 		} else {
-			require.NoError(t, f.svc.openLedger.Update(keylet.Keylet{Key: key}, data))
+			modifyPublishedOpenLedger(t, f.svc, func(view *ledger.Ledger) error {
+				return view.Update(keylet.Keylet{Key: key}, data)
+			})
 		}
 		_, err = f.svc.AcceptLedger(context.Background())
 		require.NoError(t, err)

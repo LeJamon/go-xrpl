@@ -64,8 +64,7 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.openLedger.Update(keylet.Fees(), feeData))
-	_, err = svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, svc)
 	svc.FlushPersists()
 
 	want := svc.GetValidatedLedger()
@@ -75,6 +74,9 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.NoError(t, err)
 	wantTxHash, err := want.TxMapHash()
 	require.NoError(t, err)
+	// Preferred-ledger adoption keeps an in-memory persisted copy. Evict it so
+	// this test exercises the durable node-store reload path.
+	discardPersistedLedgerCache(t, svc, wantHash)
 
 	svc.mu.Lock()
 	svc.evictOldHistoryLocked(want.Sequence() + historyWindow)
@@ -167,11 +169,11 @@ func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 	entryKey := [32]byte{0xDD, 0xEE, 0xFF}
 	entryData := []byte("unvalidated-state")
 	require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: entryKey}, entryData))
-	require.NoError(t, svc.openLedger.Close(time.Now(), 0))
-	closed := svc.openLedger
+	closed := closeStoredLedgerFixtureWithValidation(t, svc, false)
 	require.False(t, closed.IsValidated())
 	svc.enqueueNodePersist(closed)
 	svc.FlushPersists()
+	discardPersistedLedgerCache(t, svc, closed.Hash())
 
 	svc.mu.Lock()
 	svc.putHistoryLocked(closed)

@@ -14,7 +14,7 @@ dependencies land, and the published evidence must name that exact remote SHA.
 | Peeled commit | `d147fccf54a500fce586522f28d6044c37fd8d29` |
 | Read-only local checkout | `rippled-worktrees/v3.4.1-oracle` |
 | Release-delta base | `4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17` (`3.4.0`) |
-| Go integration baseline inspected | `02f4f17c7d1c1b5676b112ddfa669655bcff4415` |
+| Go integration baseline inspected | `8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f` |
 
 The local oracle worktree belongs to `xrpld-private/.git`. Before regenerating
 evidence, verify its `HEAD`, peeled tag and clean tracked/untracked status.
@@ -132,16 +132,48 @@ explicit capability limit, not an alternate accepted execution mode. Enabling
 an unsupported or unknown amendment must block proposals and validations;
 unsupported majority-only entries must not block or receive support votes.
 
+`MPTokensV2` is unsupported in both the private oracle registry and Go. AMMs
+whose pool assets include MPTs therefore are outside the advertised release
+profile. The AMM gate tests require `temDISABLED`; existing tests that force
+the amendment exercise development behavior and do not establish shipped
+support. Ordinary MPT issuance, transfer and escrow have separate coverage.
+
 Relevant regression coverage lives in `amendment`,
 `internal/consensus/adaptor`, `internal/consensus/rcl`, and `internal/rpc`.
 Run it under both default and `mptcrypto` profiles, together with native crypto
 and MPT transaction/integration tests. A successful native unit run does not
 replace testing the actual shipped daemon/image.
 
+## Candidate verification and retained evidence
+
+CI runs the complete required matrix for pull requests and for every push to
+`v3.4.1`. The release evidence job runs after all producers and rejects failed
+jobs, missing producers, failed producer records, dirty source trees, mismatched
+candidate SHAs and mixed oracle identities. Advisory lint is included in this
+release gate. The conformance gate requires zero failures, skips or exclusions
+and reconciles the executed counts.
+
+Each run retains `release-evidence-<tested-sha>`, containing the workflow,
+producer commands and environment, strict corpus and engine execution reports,
+oracle package/binary/image provenance, and production-image consensus smoke
+results. The default binary is retained separately as
+`goxrpl-<tested-sha>-linux-amd64`, with its checksum and Go build settings in
+the evidence. Both the default binary and native production image must report
+the capability expected for their build profile. `final-acceptance.txt` records the tested Git tree and commit. These
+artifacts establish the executed scope documented in the reports; they do not
+turn unexecuted inventory rows into parity evidence.
+
+A pull request run tests GitHub's merge candidate. After merge, use the separate
+push run for the resulting `v3.4.1` commit. Check that the remote branch still
+names that commit and that the producer records and engine execution report in
+the retained artifact name it before signing off. A successful run on a previous commit,
+even one with a similar version string, does not satisfy this check.
+
 ## Final closure checklist
 
-- [ ] Integrate #2015 and #2016 into `v3.4.1`; recheck all sibling and
-  historical blockers against that refreshed candidate.
+- [x] Integrate #2011–#2016 into `v3.4.1` and inspect the refreshed baseline.
+- [x] Include the AMM fidelity, transient fixture, engine property and service
+  publication repairs in the final candidate; recheck historical blocker dispositions.
 - [ ] Run peer/manifest interop and RPC/submission/consensus smoke against a
   binary or image proven to come from the pinned private oracle.
 - [ ] Build the actual release artifacts and exercise each advertised native

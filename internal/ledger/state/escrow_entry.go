@@ -138,7 +138,7 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 	}
 
 	var err error
-	if fields["Account"] != nil {
+	if fields["Account"] != nil && entry.Account != "" {
 		escrow.Account, err = decodeLedgerAccount("Escrow.Account", entry.Account)
 		if err != nil {
 			return nil, err

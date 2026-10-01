@@ -108,6 +108,9 @@ type ApplyConfig struct {
 	// acceptance. Rippled keeps this salt on the CanonicalTXSet that carries
 	// build leftovers and newly retriable open-ledger transactions.
 	RetrySalt *[32]byte
+	// ApplyObserver is a test-only hook for recording engine phases during
+	// closed-ledger replay. Production callers leave it nil.
+	ApplyObserver txengine.ApplyObserver
 }
 
 // ApplyTxs runs rippled's open-ledger 3-pass apply against view, which
@@ -334,6 +337,9 @@ func applyTxs(
 			engineConfig.ApplyFlags |= tx.TapRETRY
 		}
 		engine := txengine.NewEngine(view, engineConfig)
+		if cfg.ApplyObserver != nil {
+			engine.SetApplyObserverForTest(cfg.ApplyObserver)
+		}
 		// Issue #470: the per-pass engine's txCount starts at 0. Without
 		// re-seeding from the view's current tx count, txs committed on a
 		// retry pass would re-use TxIndex values already assigned to txs

@@ -3,6 +3,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
@@ -324,7 +326,7 @@ func TestAMMClawbackZeroRoundedMPT(t *testing.T) {
 				Amount(mpt.MPTAmount(1)).
 				Build())
 			if cleanup {
-				jtx.RequireTxClaimed(t, result, ammtest.TecAMM_FAILED)
+				jtx.RequireTxClaimed(t, result, ter.TecAMM_FAILED.String())
 			} else {
 				jtx.RequireTxSuccess(t, result)
 			}
@@ -365,7 +367,7 @@ func TestAMMClawbackZeroRoundedMPT(t *testing.T) {
 				Amount(btc.MPTAmount(500)).
 				Build())
 			if cleanup {
-				jtx.RequireTxClaimed(t, result, ammtest.TecAMM_FAILED)
+				jtx.RequireTxClaimed(t, result, ter.TecAMM_FAILED.String())
 			} else {
 				jtx.RequireTxSuccess(t, result)
 			}

@@ -30,6 +30,20 @@ func copyPinnedCorpus(t *testing.T) (string, pinnedManifest) {
 	return root, manifest
 }
 
+func copyPinnedRecorderArchive(t *testing.T, manifest pinnedManifest) string {
+	t.Helper()
+	root := t.TempDir()
+	source := filepath.Join(conformanceRepositoryRoot(), manifest.RecorderArchive)
+	target := filepath.Join(root, manifest.RecorderArchive)
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(target, os.DirFS(source)); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func writePinnedManifest(t *testing.T, root string, manifest pinnedManifest) {
 	t.Helper()
 	data, err := json.Marshal(manifest)
@@ -113,6 +127,9 @@ func TestPinnedCorpusNegativeControls(t *testing.T) {
 		{"unsafe recorder archive", func(_ *testing.T, _ string, m *pinnedManifest) { m.RecorderArchive = "../recorder" }, "recorder_source_archive"},
 		{"live recorder sources", func(_ *testing.T, _ string, m *pinnedManifest) { m.RecorderArchive = "." }, "recorder_source_archive"},
 		{"missing binary", func(_ *testing.T, _ string, m *pinnedManifest) { m.BinarySHA256 = "" }, "binary_sha256"},
+		{"missing build identity", func(_ *testing.T, _ string, m *pinnedManifest) { m.BuildIdentity = "" }, "build_identity"},
+		{"unsafe build identity", func(_ *testing.T, _ string, m *pinnedManifest) { m.BuildIdentity = "../build-identity.json" }, "archived recorder build identity"},
+		{"missing build identity hash", func(_ *testing.T, _ string, m *pinnedManifest) { m.BuildIdentitySHA256 = "" }, "build_identity_sha256"},
 		{"missing config", func(_ *testing.T, _ string, m *pinnedManifest) { m.ConfigIdentity = "" }, "config_identity"},
 		{"missing recorder source", func(_ *testing.T, _ string, m *pinnedManifest) { m.RecorderSources = nil }, "recorder_sources"},
 		{"incomplete recorder source", func(_ *testing.T, _ string, m *pinnedManifest) {
@@ -195,6 +212,62 @@ func TestPinnedCorpusNegativeControls(t *testing.T) {
 			writePinnedManifest(t, root, manifest)
 			_, err := loadPinnedCorpus(root)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPinnedBuildIdentityNegativeControls(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*testing.T, string, *pinnedManifest)
+		want   string
+	}{
+		{"missing archive", func(t *testing.T, root string, m *pinnedManifest) {
+			if err := os.Remove(filepath.Join(root, m.BuildIdentity)); err != nil {
+				t.Fatal(err)
+			}
+		}, "build identity"},
+		{"hash mismatch", func(t *testing.T, root string, m *pinnedManifest) {
+			if err := os.WriteFile(filepath.Join(root, m.BuildIdentity), []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, "SHA-256 mismatch"},
+		{"unsafe path", func(_ *testing.T, _ string, m *pinnedManifest) {
+			m.BuildIdentity = "../build-identity.json"
+		}, "archived recorder build identity"},
+		{"semantic mismatch", func(t *testing.T, root string, m *pinnedManifest) {
+			path := filepath.Join(root, m.BuildIdentity)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var identity map[string]any
+			if err := json.Unmarshal(data, &identity); err != nil {
+				t.Fatal(err)
+			}
+			recorderGit, ok := identity["recorder_source_git"].(map[string]any)
+			if !ok {
+				t.Fatal("recorder_source_git is not an object")
+			}
+			recorderGit["commit"] = strings.Repeat("1", 40)
+			data, err = json.Marshal(identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			m.BuildIdentitySHA256 = sha256Hex(data)
+		}, "recorder source commit"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, manifest := copyPinnedCorpus(t)
+			root := copyPinnedRecorderArchive(t, manifest)
+			test.modify(t, root, &manifest)
+			if _, err := validatePinnedManifestAt(manifest, root); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error=%v, want %q", err, test.want)
 			}
 		})

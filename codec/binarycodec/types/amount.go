@@ -134,9 +134,18 @@ func (e *InvalidCodeError) Error() string {
 // Amount is a struct that represents an XRPL Amount.
 type Amount struct{}
 
+// RawXRPAmount preserves native ledger amounts above the supply cap so
+// invariant checks can detect corrupt state. Ordinary JSON amounts remain capped.
+type RawXRPAmount struct {
+	Drops    uint64
+	Negative bool
+}
+
 // FromJSON serializes an issued currency amount to its bytes representation from JSON.
 func (a *Amount) FromJSON(value any) ([]byte, error) {
 	switch v := value.(type) {
+	case RawXRPAmount:
+		return serializeRawXrpAmount(v)
 	case string:
 		return serializeXrpAmount(v)
 	case map[string]any:
@@ -189,6 +198,16 @@ func (a *Amount) FromJSON(value any) ([]byte, error) {
 // 2. If bit 0x20 is set → MPT (33 bytes)
 // 3. Otherwise → XRP (8 bytes)
 func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
+	return a.toJSON(p, false)
+}
+
+// ToJSONAllowOverCap decodes ledger amounts without enforcing the XRP supply
+// cap. Transaction decoding must use ToJSON.
+func (a *Amount) ToJSONAllowOverCap(p *serdes.BinaryParser) (any, error) {
+	return a.toJSON(p, true)
+}
+
+func (a *Amount) toJSON(p *serdes.BinaryParser, allowOverCap bool) (any, error) {
 	b, err := p.Peek()
 	if err != nil {
 		return nil, err
@@ -240,7 +259,7 @@ func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	// cap, but its JSON re-entry path applies it (STAmount.cpp:937-938,
 	// cMaxNativeN = 10^17). This codec round-trips through JSON, so enforce the
 	// cap on decode — otherwise an over-cap blob decodes to a value Encode rejects.
-	if xrpVal > uint64(MaxDrops) {
+	if xrpVal > uint64(MaxDrops) && !allowOverCap {
 		return nil, &InvalidAmountError{Amount: sign + strconv.FormatUint(xrpVal, 10)}
 	}
 	return sign + strconv.FormatUint(xrpVal, 10), nil
@@ -546,6 +565,21 @@ func serializeXrpAmount(value string) ([]byte, error) {
 	binary.BigEndian.PutUint64(valBytes, serialized)
 
 	return valBytes, nil
+}
+
+func serializeRawXrpAmount(value RawXRPAmount) ([]byte, error) {
+	// Bit 62 is the native positive marker and bit 61 identifies MPT amounts;
+	// neither belongs to the native magnitude.
+	if value.Drops > 0x1FFFFFFFFFFFFFFF {
+		return nil, &InvalidAmountError{Amount: strconv.FormatUint(value.Drops, 10)}
+	}
+	serialized := value.Drops
+	if !value.Negative || value.Drops == 0 {
+		serialized |= PosSignBitMask
+	}
+	amount := make([]byte, NativeAmountByteLength)
+	binary.BigEndian.PutUint64(amount, serialized)
+	return amount, nil
 }
 
 // XRPL definition of precision is number of significant digits:

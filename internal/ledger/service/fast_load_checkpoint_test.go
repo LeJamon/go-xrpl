@@ -109,8 +109,7 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	rawTx, _ := validRelationalTestTransaction(t, 1)
 	txBlob, txHash := makeTxMetaBlobForTest(t, rawTx, 0)
 	require.NoError(t, writer.openLedger.AddTransactionWithMeta(txHash, txBlob))
-	_, err := writer.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, writer)
 	writer.FlushPersists()
 	want := writer.GetValidatedLedger()
 	require.NotNil(t, want)
@@ -178,8 +177,7 @@ func TestService_FastLoadCheckpointZeroTransactionRoot(t *testing.T) {
 
 	writer := newFastLoadCheckpointService(t, db, repositories, true)
 	require.NoError(t, writer.Start())
-	_, err := writer.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, writer)
 	writer.FlushPersists()
 	writer.Stop()
 	prepared, err := writer.PrepareFastLoadCheckpoint(ctx)
@@ -359,8 +357,7 @@ func TestService_FastLoadCheckpointManagedMutationFallsBackToStrictTraversal(t *
 		data[11] = byte(i + 1)
 		require.NoError(t, writer.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	_, err := writer.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, writer)
 	writer.FlushPersists()
 	writer.Stop()
 	prepared, err := writer.PrepareFastLoadCheckpoint(ctx)
@@ -401,8 +398,7 @@ func TestService_FastLoadStrictTraversalDoesNotRequireReusableSnapshot(t *testin
 
 			writer := newFastLoadCheckpointService(t, base, repositories, true)
 			require.NoError(t, writer.Start())
-			_, err := writer.AcceptLedger(ctx)
-			require.NoError(t, err)
+			closeStoredLedgerFixture(t, writer)
 			writer.FlushPersists()
 			want := writer.GetValidatedLedger()
 			require.NotNil(t, want)
@@ -495,8 +491,7 @@ func TestService_ValidatedStateBaseBootstrapCandidateUsesCompleteBoundGeneration
 				stateKey[0] = 0xd1
 				stateKey[31] = 0x01
 				require.NoError(t, writer.openLedger.Insert(keylet.Keylet{Key: stateKey}, []byte("candidate-state")))
-				_, err := writer.AcceptLedger(ctx)
-				require.NoError(t, err)
+				closeStoredLedgerFixture(t, writer)
 				writer.FlushPersists()
 				target := writer.GetValidatedLedger()
 				require.NotNil(t, target)

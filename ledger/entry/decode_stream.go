@@ -214,10 +214,13 @@ func (r *streamReader) readBlobHex() (string, error) {
 
 // readAmount decodes an XRP-only Amount through the canonical codec.
 func (r *streamReader) readAmount() (any, error) {
-	value, err := r.decodeViaCodec(&types.Amount{}, -1)
+	sub := serdes.NewBinaryParser(r.data[r.pos:], definitions.Get())
+	start := sub.Remaining()
+	value, err := (&types.Amount{}).ToJSONAllowOverCap(sub)
 	if err != nil {
 		return nil, err
 	}
+	r.pos += start - sub.Remaining()
 	if _, ok := value.(string); !ok {
 		return nil, errUnsupportedAmount
 	}

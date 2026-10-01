@@ -1,6 +1,7 @@
 package offer
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"testing"
@@ -97,48 +98,65 @@ func GetOffer(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) *state.Ledger
 // Iterates the owner directory and filters for Offer type (0x006f).
 // Equivalent to rippled's offers(account, N) require funclet.
 func CountOffers(env *jtx.TestEnv, acc *jtx.Account) uint32 {
-	dirKey := keylet.OwnerDir(acc.ID)
-	var count uint32
-	_ = state.DirForEach(env.Ledger(), dirKey, func(itemKey [32]byte) error {
-		entryKey := keylet.Keylet{Key: itemKey}
-		data, readErr := env.LedgerEntry(entryKey)
-		if readErr != nil || len(data) == 0 {
-			return nil
-		}
-		entryType, typeErr := state.DecodeType(data)
-		if typeErr != nil {
-			return nil
-		}
-		if entryType == entry.TypeOffer {
-			count++
-		}
-		return nil
-	})
-	return count
+	offers, err := OffersOnAccountChecked(env, acc)
+	if err != nil {
+		panic(fmt.Errorf("count offers for %s: %w", acc.Name, err))
+	}
+	return uint32(len(offers))
 }
 
-// OffersOnAccount returns all parsed offer entries owned by an account.
-func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
+// offersOnAccount reads and parses all offer entries owned by an account.
+func offersOnAccount(view state.LedgerView, acc *jtx.Account) ([]*state.LedgerOffer, error) {
 	dirKey := keylet.OwnerDir(acc.ID)
 	var offers []*state.LedgerOffer
-	_ = state.DirForEach(env.Ledger(), dirKey, func(itemKey [32]byte) error {
+	err := state.DirForEach(view, dirKey, func(itemKey [32]byte) error {
 		entryKey := keylet.Keylet{Key: itemKey}
-		data, readErr := env.LedgerEntry(entryKey)
-		if readErr != nil || len(data) == 0 {
-			return nil
+		data, readErr := view.Read(entryKey)
+		if readErr != nil {
+			return fmt.Errorf("read owned entry: %w", readErr)
+		}
+		if data == nil {
+			return fmt.Errorf("owned entry %x has no data", itemKey)
 		}
 		entryType, typeErr := state.DecodeType(data)
 		if typeErr != nil {
-			return nil
+			return fmt.Errorf("decode owned entry type: %w", typeErr)
 		}
 		if entryType == entry.TypeOffer {
 			offer, parseErr := state.ParseLedgerOffer(data)
-			if parseErr == nil {
-				offers = append(offers, offer)
+			if parseErr != nil {
+				return fmt.Errorf("parse owned offer: %w", parseErr)
 			}
+			if offer.Account == "" || offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
+				return fmt.Errorf("owned offer %x is malformed", itemKey)
+			}
+			if offer.Account != acc.Address {
+				return fmt.Errorf("owned offer %x belongs to %s, want %s", itemKey, offer.Account, acc.Address)
+			}
+			offers = append(offers, offer)
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return offers, nil
+}
+
+// OffersOnAccountChecked returns all parsed offer entries and propagates any
+// owner-directory, ledger-read, or offer-parse failure to the caller.
+func OffersOnAccountChecked(env *jtx.TestEnv, acc *jtx.Account) ([]*state.LedgerOffer, error) {
+	return offersOnAccount(env.Ledger(), acc)
+}
+
+// OffersOnAccount returns all parsed offer entries owned by an account.
+// Corrupt ledger state is a test failure, so this compatibility wrapper panics
+// instead of silently treating a read or parse error as an empty directory.
+func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
+	offers, err := OffersOnAccountChecked(env, acc)
+	if err != nil {
+		panic(fmt.Errorf("offers for %s: %w", acc.Name, err))
+	}
 	return offers
 }
 

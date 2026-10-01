@@ -429,7 +429,7 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return readFeesFromLedger(s.openLedger)
+	return readFeesFromLedger(s.currentOpenLedgerLocked())
 }
 
 // GetAutofillFee returns the Fee (drops) a transaction should carry to
@@ -538,7 +538,8 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.openLedger == nil {
+	current := s.currentOpenLedgerLocked()
+	if current == nil {
 		return 0, svcerr.ErrNoOpenLedger
 	}
 
@@ -549,7 +550,7 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
 
-	data, readErr := s.openLedger.Read(keylet.Account(accountID))
+	data, readErr := current.Read(keylet.Account(accountID))
 	if readErr != nil || data == nil {
 		if hasTicketSequence {
 			return 0, nil

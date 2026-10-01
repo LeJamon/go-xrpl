@@ -31,8 +31,8 @@ from typing import Any, Iterable
 ORACLE_REPOSITORY = "XRPLF/xrpld-private"
 ORACLE_TAG = "3.4.1"
 ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
-GO_BASE_COMMIT = "02f4f17c7d1c1b5676b112ddfa669655bcff4415"
-GO_PREREQUISITE_BASELINE = "b002da57fb415b40a1150f0e0dc82f764a340556"
+GO_BASE_COMMIT = "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f"
+GO_PREREQUISITE_BASELINE = "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f"
 SCHEMA = 1
 
 TRANSACTION_MACRO = "include/xrpl/protocol/detail/transactions.macro"
@@ -623,7 +623,7 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         raise ValueError("v4 conformance amendment matrix is missing or has unsupported profiles")
 
     return {
-        "corpus_role": "initial prerequisite corpus; source evidence only",
+        "corpus_role": "committed release corpus; source inventory only",
         "manifest_path": V4_MANIFEST,
         "manifest_sha256": sha256(manifest_path),
         "manifest_schema": manifest["schema"],
@@ -1215,7 +1215,7 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
             "go_only_contracts": [
                 {"path": "internal/tx/common_wire_coverage_test.go", "test": "TestCommonTemplateFieldsSurviveRegisteredTypedProjection", "scope": "all registered types × common fields; Go codec round-trip only"},
                 {"path": "internal/tx/template_registry_test.go", "test": "TestParseFromBinary_EveryRegisteredTypeAcceptsCommonFields", "scope": "registered type parsing; Go-only"},
-                {"path": "codec/binarycodec/definitions/final_inventory_test.go", "test": "TestFinalDefinitionsMatchRippled", "scope": "definitions registry against v3.4.0 oracle; not engine execution"},
+                {"path": "codec/binarycodec/definitions/final_inventory_test.go", "test": "TestFinalDefinitionsMatchRippled", "scope": "definitions registry against hash-pinned private v3.4.1 source; not engine execution"},
             ],
             "oracle_source_contracts": [
                 {"path": TRANSACTION_MACRO, "scope": "transaction tags, codes, settings, unique fields"},

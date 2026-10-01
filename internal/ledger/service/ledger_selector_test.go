@@ -154,6 +154,8 @@ func TestGetLedgerForQueryUsesLedgerValidatedState(t *testing.T) {
 func ledgerSelectorService(t *testing.T) (*Service, *ledger.Ledger, *ledger.Ledger, *ledger.Ledger) {
 	t.Helper()
 	svc := newOfferTestService(t)
+	// Selector unit cases install their own ledger frontiers without submission.
+	svc.openLedgerView = nil
 	validated := svc.GetValidatedLedger()
 	if validated == nil {
 		t.Fatal("service has no validated ledger")

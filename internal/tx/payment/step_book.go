@@ -351,7 +351,6 @@ func (s *BookStep) forEachOffer(
 				return true
 			}
 		}
-
 		// Self-cross detection (CLOB only, default path only)
 		if !isAMM && s.defaultPath && s.qualityLimit != nil {
 			if !offerQuality.WorseThan(*s.qualityLimit) &&
@@ -418,7 +417,16 @@ func (s *BookStep) forEachOffer(
 			if err != nil {
 				throwConsumeFailure(err)
 			}
-			isFundedByIssuer := !s.book.Out.IsMPT && offerOwner == s.book.Out.Issuer
+			offerGets := s.offerTakerGets(clobOffer)
+			offerIssuer := [20]byte{}
+			if !offerGets.IsNative {
+				if offerGets.IsMPT {
+					offerIssuer = mptIssuer(offerGets.MPTID)
+				} else if decoded, decodeErr := state.DecodeAccountID(offerGets.IOU.Issuer); decodeErr == nil {
+					offerIssuer = decoded
+				}
+			}
+			isFundedByIssuer := !offerGets.IsNative && !offerGets.IsMPT && offerOwner == offerIssuer
 			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
 				stpOut = MulRatioWithNumberContext(ownerGives, QualityOne, ofrTrOut, false, sb.NumberContext())

@@ -269,8 +269,7 @@ func TestService_RefreshValidatedStatePromotesWithoutRestamping(t *testing.T) {
 		binary.BigEndian.PutUint32(data[8:], i)
 		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	seq, err := svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	seq := closeStoredLedgerFixture(t, svc).Sequence()
 	svc.FlushPersists()
 	validated := svc.GetValidatedLedger()
 	root, err := validated.StateMapHash()
@@ -415,8 +414,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 		binary.BigEndian.PutUint32(data[8:], i)
 		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	seq, err := svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	seq := closeStoredLedgerFixture(t, svc).Sequence()
 	svc.FlushPersists()
 
 	wantErr := errors.New("checkpoint stopped traversal")
@@ -511,8 +509,7 @@ func TestService_RefreshValidatedStateChecksHealthByElapsedWork(t *testing.T) {
 		binary.BigEndian.PutUint32(data[8:], i)
 		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	seq, err := svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	seq := closeStoredLedgerFixture(t, svc).Sequence()
 	svc.FlushPersists()
 	committed, err := db.RotateGeneration(ctx, seq, 1)
 	require.True(t, committed)
@@ -800,8 +797,7 @@ func newRotatingRefreshFixture(
 		binary.BigEndian.PutUint32(data[8:], uint32(i+1))
 		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	seq, err := svc.AcceptLedger(t.Context())
-	require.NoError(t, err)
+	seq := closeStoredLedgerFixture(t, svc).Sequence()
 	svc.FlushPersists()
 	committed, err := db.RotateGeneration(t.Context(), seq, 1)
 	require.True(t, committed)

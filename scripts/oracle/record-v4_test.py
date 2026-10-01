@@ -11,9 +11,53 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("record_v4", Path(__file__).with_name("record-v4.py"))
 recorder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(recorder)
+manifest_spec = importlib.util.spec_from_file_location(
+    "recorded_corpus_manifest", Path(__file__).parents[1] / "recorded-corpus-manifest.py"
+)
+manifest = importlib.util.module_from_spec(manifest_spec)
+manifest_spec.loader.exec_module(manifest)
 
 
 class RecorderProvenanceTest(unittest.TestCase):
+    def test_manifest_inputs_reject_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "identity.json"
+            target.write_text("{}")
+            alias = root / "alias.json"
+            alias.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                manifest.regular_file(alias, "--build-identity")
+
+    def test_clean_build_registers_pinned_xrplf_remote(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append((list(command), kwargs))
+
+            with patch.object(recorder, "run", side_effect=run):
+                recorder.register_conan_remote(
+                    root,
+                    {"CONAN_HOME": str(root / "conan-home")},
+                )
+
+            self.assertEqual(len(calls), 1)
+            command, kwargs = calls[0]
+            self.assertEqual(
+                command,
+                [
+                    "conan",
+                    "remote",
+                    "add",
+                    "xrplf",
+                    "https://conan.xrplf.org/repository/conan/",
+                    "--force",
+                ],
+            )
+            self.assertEqual(kwargs["env"]["CONAN_HOME"], str(root / "conan-home"))
+
     def test_build_must_not_alias_production_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             production = Path(directory) / "production"

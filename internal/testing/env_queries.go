@@ -104,6 +104,31 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Am
 	return &balance
 }
 
+// LookupIOUBalance returns an IOU balance and whether its trust line exists.
+// Callers that assert ledger state must distinguish a missing line from a
+// present zero balance; IOUBalance retains the legacy zero-on-absence behavior
+// for tests that intentionally query optional holdings.
+func (e *TestEnv) LookupIOUBalance(holder, issuer *Account, currency string) (*state.Amount, bool) {
+	e.t.Helper()
+
+	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
+	rs, exists, err := readRippleState(e.ledger, lineKey)
+	if err != nil {
+		e.t.Fatalf("Failed to read trust line: %v", err)
+	}
+	if !exists {
+		return nil, false
+	}
+
+	isLow := keylet.IsLowAccount(holder.ID, issuer.ID)
+	balance := rs.Balance
+	if !isLow {
+		balance = balance.Negate()
+	}
+	balance.Issuer = issuer.Address
+	return &balance, true
+}
+
 // BalanceIOU returns the IOU balance of an account for a specific currency and issuer as float64.
 // This is a convenience method for tests that need simple numeric comparisons.
 func (e *TestEnv) BalanceIOU(holder *Account, currency string, issuer *Account) float64 {

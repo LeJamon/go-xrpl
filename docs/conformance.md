@@ -27,7 +27,14 @@ the tested submission: header, state entries, transaction/metadata leaves,
 effective rules and fees. Explicit rules must equal the rules loaded from the
 authenticated Amendments SLE, including permanent rules. The signed transaction
 bytes, optional `pre_submit` history and close inputs are recorded separately
-from expectations. Prior submissions execute in order through the same queue. Go verifies the parent roots, submits
+from expectations. Optional `history` entries describe earlier authenticated
+parents, signed submissions and closes that establish the queue's fee history.
+They execute through the production close and open-ledger acceptance paths.
+Serialized `open_ledger_inject` and `open_ledger_erase` inputs reproduce the
+recorder's transient view changes without closing them into the parent. They
+are explicit diagnostic inputs, never inferred from expected output.
+
+Prior submissions execute in order through the same queue. Go verifies the parent roots, submits
 those unchanged bytes with signature checks enabled, and compares the first
 observed boundary, symbolic/numeric TER, applied/queued flags, fees and state.
 Closing the recorded transaction set must reproduce every state and

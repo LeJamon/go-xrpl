@@ -1,11 +1,13 @@
 package conformance
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,6 +119,134 @@ func TestDecodeSnapshotFixtureRejectsUnknownAndMissingFields(t *testing.T) {
 	}
 }
 
+func TestSnapshotQueueJSONRequiresCompleteMetricsAndAllowsNullMaxSize(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	submit := object["submit"].(map[string]any)
+	metrics := map[string]any{
+		"tx_count":                 1,
+		"max_size":                 nil,
+		"tx_in_ledger":             1,
+		"tx_per_ledger":            1,
+		"reference_fee_level":      256,
+		"min_processing_fee_level": 256,
+		"med_fee_level":            128000,
+		"open_ledger_fee_level":    256,
+	}
+	submit["queue"] = map[string]any{
+		"tx_blobs": []string{fixture.TxBlob},
+		"metrics":  metrics,
+	}
+	marshal := func(value map[string]any) []byte {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	if _, err := decodeSnapshotFixture(marshal(object)); err != nil {
+		t.Fatalf("valid queue with null max_size rejected: %v", err)
+	}
+
+	missingMax := map[string]any{}
+	for key, value := range metrics {
+		missingMax[key] = value
+	}
+	delete(missingMax, "max_size")
+	submit["queue"].(map[string]any)["metrics"] = missingMax
+	if _, err := decodeSnapshotFixture(marshal(object)); err == nil || !strings.Contains(err.Error(), "max_size is missing") {
+		t.Fatalf("missing max_size accepted: %v", err)
+	}
+
+	negativeMax := map[string]any{}
+	for key, value := range metrics {
+		negativeMax[key] = value
+	}
+	negativeMax["max_size"] = -1
+	submit["queue"].(map[string]any)["metrics"] = negativeMax
+	if _, err := decodeSnapshotFixture(marshal(object)); err == nil || !strings.Contains(err.Error(), "non-negative integer") {
+		t.Fatalf("negative max_size accepted: %v", err)
+	}
+
+	unknown := map[string]any{}
+	for key, value := range metrics {
+		unknown[key] = value
+	}
+	submit["queue"].(map[string]any)["metrics"] = unknown
+	submit["queue"].(map[string]any)["unexpected"] = true
+	if _, err := decodeSnapshotFixture(marshal(object)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown queue field accepted: %v", err)
+	}
+}
+
+func TestSnapshotClosedLedgerFeeLevelsUseTransactionBaseFee(t *testing.T) {
+	all.RegisterAll()
+	for _, tc := range []struct {
+		fixture string
+		want    []txq.FeeLevel
+	}{
+		{"c1-l1-b1-f1-AccountSet-multisign-valid-quorum.json", []txq.FeeLevel{256}},
+		{"c1-l1-b1-f1-Batch-canonical.json", []txq.FeeLevel{0, 0, 256}},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			fixture := loadSnapshotV4Fixture(t, tc.fixture)
+			closed, err := loadSnapshotLedger(fixture.Closed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := snapshotClosedLedgerFeeLevels(closed.Ledger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("fee levels = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotHistoryRequiresQueueObservations(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c1-l1-b1-f1-AccountSet-queue-multi-ledger-history.json")
+	data, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"missing", "null"} {
+		t.Run(mode, func(t *testing.T) {
+			var object map[string]any
+			if err := json.Unmarshal(data, &object); err != nil {
+				t.Fatal(err)
+			}
+			history := object["history"].([]any)[0].(map[string]any)
+			if mode == "missing" {
+				delete(history, "queue")
+			} else {
+				history["queue"] = nil
+			}
+			modified, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeSnapshotFixture(modified); err == nil || !strings.Contains(err.Error(), "history[0].queue") {
+				t.Fatalf("%s history queue accepted: %v", mode, err)
+			}
+		})
+	}
+	fixture.History[0].Queue = nil
+	if err := runSnapshotFixture(fixture); err == nil || !strings.Contains(err.Error(), "history[0].queue") {
+		t.Fatalf("execution accepted missing history queue: %v", err)
+	}
+}
+
 func TestSnapshotSubmitComparesNumericTERAppliedQueuedAndFee(t *testing.T) {
 	want := snapshotSubmit{
 		Boundary:         snapshotSubmitBoundary,
@@ -207,6 +337,52 @@ func TestSnapshotRejectsSignatureSkipAndUnsupportedProfile(t *testing.T) {
 	}
 }
 
+func TestSnapshotOpenLedgerMutationAuthenticatesAndStaysOpen(t *testing.T) {
+	fixture := loadSnapshotV4Fixture(t, "c0-l0-b0-f0-Payment-valid.json")
+	if len(fixture.Parent.State) == 0 {
+		t.Fatal("fixture parent has no state entry for transient mutation test")
+	}
+	parent, err := loadSnapshotLedger(fixture.Parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := fixture.Parent.State[0]
+	if err := applySnapshotOpenLedger(view, nil, []snapshotEntry{entry}); err != nil {
+		t.Fatalf("authenticated erase: %v", err)
+	}
+	index, err := decodeSnapshotHash("entry.index", entry.Index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := view.Current().Read(keylet.Child(index)); err != nil {
+		t.Fatal(err)
+	} else if data != nil {
+		t.Fatal("erased entry remained in open ledger")
+	}
+	if !view.Current().IsOpen() {
+		t.Fatal("transient erase closed the open ledger")
+	}
+	if err := applySnapshotOpenLedger(view, []snapshotEntry{entry}, nil); err != nil {
+		t.Fatalf("authenticated insert: %v", err)
+	}
+	if data, err := view.Current().Read(keylet.Child(index)); err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(data, mustDecodeSnapshotTestHex(t, entry.Data)) {
+		t.Fatal("inserted entry bytes differ")
+	}
+	wrong := entry
+	wrongBytes := mustDecodeSnapshotTestHex(t, entry.Data)
+	wrongBytes[len(wrongBytes)-1] ^= 1
+	wrong.Data = strings.ToUpper(hex.EncodeToString(wrongBytes))
+	if err := applySnapshotOpenLedger(view, nil, []snapshotEntry{wrong}); err == nil || !strings.Contains(err.Error(), "bytes differ") {
+		t.Fatalf("unauthenticated erase accepted: %v", err)
+	}
+}
+
 func loadSnapshotV4Fixture(t *testing.T, name string) snapshotFixture {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
@@ -244,6 +420,28 @@ func TestSnapshotRejectsFamilyMismatch(t *testing.T) {
 	fixture.Family = "Payment"
 	if err := runSnapshotFixture(fixture); err == nil || !strings.Contains(err.Error(), "does not match tx_blob type") {
 		t.Fatalf("family mismatch accepted: %v", err)
+	}
+}
+
+func TestSnapshotFamilyAliasesAreExplicit(t *testing.T) {
+	tests := []struct {
+		family string
+		txType string
+		want   bool
+	}{
+		{family: "NFTokenAuth", txType: "NFTokenCreateOffer", want: true},
+		{family: "NFTokenAuth", txType: "NFTokenAcceptOffer", want: true},
+		{family: "NFTokenAuth", txType: "NFTokenCancelOffer", want: false},
+		{family: "EscrowToken", txType: "EscrowCancel", want: true},
+		{family: "EscrowToken", txType: "EscrowFinish", want: true},
+		{family: "EscrowToken", txType: "EscrowCreate", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.family+"/"+test.txType, func(t *testing.T) {
+			if got := snapshotFamilyMatchesTxType(test.family, test.txType); got != test.want {
+				t.Fatalf("snapshotFamilyMatchesTxType(%q, %q) = %t, want %t", test.family, test.txType, got, test.want)
+			}
+		})
 	}
 }
 

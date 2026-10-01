@@ -23,6 +23,48 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def require_identity_value(identity, path):
+    value = identity
+    for component in path.split("."):
+        if not isinstance(value, dict) or component not in value:
+            raise ValueError(f"build identity is missing {path}")
+        value = value[component]
+    return value
+
+
+def validate_build_identity(data, recorder_commit, sources, binary_sha256, config_sha256):
+    try:
+        identity = json.loads(data)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"build identity is not valid JSON: {error}") from error
+    if not isinstance(identity, dict):
+        raise ValueError("build identity must be a JSON object")
+    expected = {
+        "oracle.repository": ORACLE_REPOSITORY,
+        "oracle.tag": ORACLE_TAG,
+        "oracle.commit": ORACLE_COMMIT,
+        "recorder_source_git.commit": recorder_commit,
+        "recorder_source_git.status": "",
+        "recorder_source_sha256": sources["scripts/oracle/strict_recorder.cpp"],
+        "config_sha256": config_sha256,
+        "strict_binary_sha256": binary_sha256,
+        "verified_production_binary_sha256": binary_sha256,
+    }
+    for path, want in expected.items():
+        try:
+            got = require_identity_value(identity, path)
+        except ValueError as error:
+            raise ValueError(str(error)) from error
+        if got != want:
+            raise ValueError(f"build identity {path} does not match the recorded inputs")
+
+
+def regular_file(path, description):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{description} must name a regular file")
+    return path.resolve()
+
+
 def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args]).strip()
 
@@ -55,8 +97,12 @@ def main():
     recorder_commit = git(repo, "rev-parse", f"{args.recorder_commit}^{{commit}}").decode()
     sources = {}
     for name in args.recorder_source:
-        path = (repo / name).resolve()
-        if not path.is_relative_to(repo) or not path.is_file():
+        input_path = repo / name
+        try:
+            path = regular_file(input_path, f"recorder source {name}")
+        except ValueError as error:
+            parser.error(str(error))
+        if not path.is_relative_to(repo):
             parser.error(f"recorder source must be a regular repository file: {name}")
         relative = path.relative_to(repo).as_posix()
         data = path.read_bytes()
@@ -77,12 +123,38 @@ def main():
             parser.error(f"recorded source archive differs: {snapshot}")
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         snapshot.write_bytes(data)
-    config = args.config.resolve()
+    try:
+        config = regular_file(args.config, "--config")
+    except ValueError as error:
+        parser.error(str(error))
     if config != repo / "scripts/oracle/strict-corpus-config.json":
         parser.error("--config must select scripts/oracle/strict-corpus-config.json")
-    version = subprocess.check_output([str(args.binary.resolve()), "--version"], text=True)
+    try:
+        binary = regular_file(args.binary, "--binary")
+    except ValueError as error:
+        parser.error(str(error))
+    version = subprocess.check_output([str(binary), "--version"], text=True)
     if version.splitlines()[0] != "xrpld version 3.4.1":
         parser.error("binary does not report pinned version 3.4.1")
+    try:
+        build_identity = regular_file(Path(args.build_identity), "--build-identity")
+    except ValueError as error:
+        parser.error(str(error))
+    build_identity_data = build_identity.read_bytes()
+    binary_sha256 = sha256(binary.read_bytes())
+    config_sha256 = sha256(config.read_bytes())
+    try:
+        validate_build_identity(build_identity_data, recorder_commit, sources, binary_sha256, config_sha256)
+    except ValueError as error:
+        parser.error(str(error))
+    build_identity_archive = archive / "build-identity.json"
+    identity_snapshot = repo / build_identity_archive
+    if identity_snapshot.is_symlink() or not identity_snapshot.resolve().is_relative_to(repo):
+        parser.error(f"build identity archive must be a regular repository file: {identity_snapshot}")
+    if identity_snapshot.exists() and identity_snapshot.read_bytes() != build_identity_data:
+        parser.error(f"build identity archive differs: {identity_snapshot}")
+    identity_snapshot.parent.mkdir(parents=True, exist_ok=True)
+    identity_snapshot.write_bytes(build_identity_data)
     fixtures = {}
     profiles_seen = set()
     for path in sorted(args.corpus.rglob("*.json")):
@@ -136,9 +208,10 @@ def main():
         "recorder_commit": recorder_commit,
         "recorder_source_archive": archive.as_posix(),
         "recorder_sources": sources,
-        "binary_sha256": sha256(args.binary.read_bytes()),
-        "build_identity": args.build_identity,
-        "config_identity": sha256(config.read_bytes()),
+        "binary_sha256": binary_sha256,
+        "build_identity": build_identity_archive.as_posix(),
+        "build_identity_sha256": sha256(build_identity_data),
+        "config_identity": config_sha256,
         "config_source": config.relative_to(repo).as_posix(),
         "amendment_matrix": matrix,
         "fixture_count": len(fixtures),
