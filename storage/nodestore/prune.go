@@ -16,7 +16,7 @@ func (d *KVDatabase) DeleteBefore(
 	boundary uint32,
 	batchSize int,
 ) (deleted uint64, err error) {
-	return d.DeleteBeforeWithPrune(ctx, boundary, batchSize, nil)
+	return d.DeleteBeforeWithRetention(ctx, boundary, batchSize, nil, nil)
 }
 
 // DeleteBeforeWithPrune acquires the durable mutation gate before invalidating
@@ -27,11 +27,42 @@ func (d *KVDatabase) DeleteBeforeWithPrune(
 	batchSize int,
 	beginPrune func() func(),
 ) (deleted uint64, err error) {
+	return d.DeleteBeforeWithRetention(ctx, boundary, batchSize, nil, beginPrune)
+}
+
+// DeleteBeforeWithRetention acquires the durable mutation gate, then invokes
+// guard before any prune invalidation or backend mutation. A non-nil release
+// returned by guard remains held until the complete deletion attempt exits.
+func (d *KVDatabase) DeleteBeforeWithRetention(
+	ctx context.Context,
+	boundary uint32,
+	batchSize int,
+	guard func(context.Context) (func(), error),
+	beginPrune func() func(),
+) (deleted uint64, err error) {
 	if boundary == 0 {
 		return 0, nil
 	}
-	d.mutationMu.Lock()
+	if err := d.lockMutation(ctx); err != nil {
+		return 0, err
+	}
 	defer d.mutationMu.Unlock()
+	if err := d.begin(ctx); err != nil {
+		return 0, err
+	}
+	defer d.lifecycleMu.RUnlock()
+	if guard != nil {
+		release, guardErr := guard(ctx)
+		if release != nil {
+			defer release()
+		}
+		if guardErr != nil {
+			return 0, guardErr
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if beginPrune != nil {
 		finish := beginPrune()
 		defer finish()
@@ -39,10 +70,6 @@ func (d *KVDatabase) DeleteBeforeWithPrune(
 	if err := d.bumpDurableMutation(ctx); err != nil {
 		return 0, fmt.Errorf("delete-before durable generation: %w", err)
 	}
-	if err := d.begin(ctx); err != nil {
-		return 0, err
-	}
-	defer d.lifecycleMu.RUnlock()
 	if batchSize <= 0 {
 		batchSize = defaultDeleteBatch
 	}

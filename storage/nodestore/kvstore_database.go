@@ -103,6 +103,35 @@ type KVDatabase struct {
 	}
 }
 
+const mutationLockPoll = time.Millisecond
+
+// lockMutation acquires the exclusive gate used by destructive operations
+// without leaving callers stranded behind a long-running durable snapshot or
+// another mutation. The caller owns the lock after a nil return.
+func (d *KVDatabase) lockMutation(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if d.mutationMu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				d.mutationMu.Unlock()
+				return err
+			}
+			return nil
+		}
+		timer := time.NewTimer(mutationLockPoll)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // NewKVDatabase constructs a NodeStore over store using config.
 func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatabase, error) {
 	if store == nil {
