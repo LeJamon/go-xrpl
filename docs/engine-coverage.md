@@ -4,13 +4,11 @@
 source and registry audit for issue #2016. It is pinned to
 `XRPLF/xrpld-private` tag `3.4.1`, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`, and records hashes for the oracle
-registry sources. The protocol base parent is
-`02f4f17c7d1c1b5676b112ddfa669655bcff4415`. The merged #2021/#2022 revision
-`b002da57fb415b40a1150f0e0dc82f764a340556` is recorded only as the prerequisite
-baseline used while refreshing this snapshot; it is not asserted to be the
-current working-tree `HEAD`. Current Go source bytes are identified by the
-snapshot's `source_sha256` entries, while the runtime `HEAD` belongs in a
-separate execution report.
+registry sources. The recorded Go protocol base and prerequisite baseline are
+both `8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f`. These historical provenance
+fields do not assert the current working-tree `HEAD`. The snapshot's
+`source_sha256` entries identify its hashed source inputs, while the runtime
+`HEAD` belongs in a separate execution report.
 
 Generate or check the snapshot from the Go repository root. With no argument,
 the generator resolves `rippled-worktrees/v3.4.1-oracle` beside the checkout
