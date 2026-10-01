@@ -1,16 +1,65 @@
 package adaptor
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFrozenPivotRecoveryDefersPersistedReplayFault(t *testing.T) {
+	a := newReplayFaultBlockedAdaptor(t)
+	svc := a.LedgerService()
+	t.Cleanup(svc.Stop)
+	r := newTestRouter(nil, a, nil)
+	var logs bytes.Buffer
+	r.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	r.catchupReplay.logger = r.logger
+
+	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	pivotHash := [32]byte{0xa1}
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	trusted, err := a.GetValidatorKey()
+	require.NoError(t, err)
+	tracker := rcl.NewValidationTracker(1)
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{trusted}, 1)
+	tracker.SetFullyValidatedCallback(func(id consensus.LedgerID, seq uint32) {
+		a.OnLedgerFullyValidated(id, seq)
+	})
+	a.SetValidationHistorian(tracker)
+	now := time.Now()
+	require.True(t, tracker.Add(&consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: pivotSeq,
+		LedgerID:  consensus.LedgerID(pivotHash),
+		SignTime:  now,
+		SeenTime:  now,
+		Full:      true,
+	}))
+
+	for range 5 {
+		a.OnLedgerFullyValidated(consensus.LedgerID(pivotHash), pivotSeq)
+	}
+
+	assert.True(t, r.catchupReplay.replayFaultBlocked())
+	assert.False(t, a.IsValidator())
+	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.Zero(t, r.catchupReplay.standardReplay.generation)
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
+	assert.Equal(t, 1, strings.Count(logs.String(), "frozen recovery pivot admission deferred by replay fault"))
+	assert.Contains(t, logs.String(), "fault-1")
+	assert.Contains(t, logs.String(), "invoke admin replay_recover with fault_id")
+}
 
 func TestReplayFaultAuthenticationRequiresVerifiedAncestry(t *testing.T) {
 	r, a, _, svc := makeRouter(t)

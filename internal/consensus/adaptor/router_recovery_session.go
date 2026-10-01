@@ -17,6 +17,9 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 	if c.stoppedForShutdown() || seq == 0 || hash == ([32]byte{}) {
 		return false
 	}
+	if c.deferFrozenPivotForReplayFault(seq, hash) {
+		return false
+	}
 	if c.retireLocallySatisfiedFrozenPivot("local_frontier") {
 		return false
 	}

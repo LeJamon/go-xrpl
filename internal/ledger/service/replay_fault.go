@@ -41,6 +41,16 @@ type replayEvidence struct {
 	MissingNodeHash          [32]byte            `json:"missing_node_hash,omitempty"`
 	MissingTree              string              `json:"missing_tree,omitempty"`
 	Detail                   json.RawMessage     `json:"detail,omitempty"`
+
+	StartupVerification *replayStartupVerification `json:"startup_verification,omitempty"`
+}
+
+type replayStartupVerification struct {
+	Ledger          header.LedgerHeader `json:"ledger"`
+	Class           replayfault.Class   `json:"class"`
+	MissingNodeHash [32]byte            `json:"missing_node_hash,omitempty"`
+	MissingTree     string              `json:"missing_tree"`
+	Error           string              `json:"error"`
 }
 
 type replayRepairReservation struct {
@@ -55,6 +65,104 @@ const replayFaultOriginExecution = "execution"
 
 func replayFaultStateClass(class replayfault.Class) bool {
 	return class == replayfault.MissingState || class == replayfault.CorruptState
+}
+
+const (
+	replayStartupMissingStateReason    = "startup_verification_missing_state"
+	replayStartupCorruptStateReason    = "startup_verification_corrupt_state"
+	replayStartupAuthenticatedAction   = "run replay_recover with the persisted fault ID to request verified state repair"
+	replayStartupUnauthenticatedAction = "run replay_recover with the persisted fault ID to reauthenticate the historical target and request verified state repair; if the target cannot be reauthenticated, keep this validator blocked and use a separate observer data directory"
+)
+
+func (s *Service) recordStartupVerificationFailure(ctx context.Context, h header.LedgerHeader, cause error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s.replayFaults == nil || h.Hash == ([32]byte{}) {
+		return
+	}
+	var verificationFailure *storedSHAMapVerificationFailure
+	if !errors.As(cause, &verificationFailure) || verificationFailure == nil || verificationFailure.err == nil {
+		return
+	}
+	class := replayStateFailureClass(verificationFailure.err)
+	if !replayFaultStateClass(class) {
+		return
+	}
+
+	fault := s.replayFaults.Snapshot()
+	if fault == nil {
+		return
+	}
+	var evidence replayEvidence
+	if err := json.Unmarshal(fault.Evidence, &evidence); err != nil || evidence.NetworkID != s.config.NetworkID || !startupReplayFaultMatches(fault, evidence, h) {
+		return
+	}
+	missing, _ := missingNodeHash(verificationFailure.err)
+	startup := &replayStartupVerification{
+		Ledger:          h,
+		Class:           class,
+		MissingNodeHash: missing,
+		MissingTree:     verificationFailure.mapType.String(),
+		Error:           cause.Error(),
+	}
+	if evidence.StartupVerification != nil && *evidence.StartupVerification == *startup &&
+		fault.BlockedReason != "" && fault.OperatorAction != "" {
+		return
+	}
+	rawEvidence := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(fault.Evidence, &rawEvidence); err != nil {
+		s.logger.Error("decode startup replay verification evidence", "error", err)
+		return
+	}
+	startupRaw, err := json.Marshal(startup)
+	if err != nil {
+		s.logger.Error("encode startup replay verification evidence", "error", err)
+		return
+	}
+	rawEvidence["startup_verification"] = startupRaw
+	raw, err := json.Marshal(rawEvidence)
+	if err != nil {
+		s.logger.Error("encode startup replay verification evidence", "error", err)
+		return
+	}
+
+	next := *fault
+	next.Evidence = raw
+	next.BlockedReason = replayStartupMissingStateReason
+	if class == replayfault.CorruptState {
+		next.BlockedReason = replayStartupCorruptStateReason
+	}
+	if evidence.Authenticated {
+		next.OperatorAction = replayStartupAuthenticatedAction
+	} else {
+		next.OperatorAction = replayStartupUnauthenticatedAction
+	}
+	missingNode := "none"
+	if startup.MissingNodeHash != ([32]byte{}) {
+		missingNode = fmt.Sprintf("%x", startup.MissingNodeHash)
+	}
+	next.RecoveryError = fmt.Sprintf(
+		"%s: fault=%s ledger=%d tree=%s missing_node=%s error=%s; explicit authenticated recovery is required",
+		next.BlockedReason, fault.ID, h.LedgerIndex, startup.MissingTree, missingNode, startup.Error,
+	)
+	if err := s.replayFaults.Update(fault.ID, next); err != nil {
+		s.logger.Error("persist startup replay verification evidence", "error", err)
+	}
+}
+
+func startupReplayFaultMatches(fault *replayfault.Fault, evidence replayEvidence, h header.LedgerHeader) bool {
+	if fault == nil || h.Hash == ([32]byte{}) || header.CalculateHash(h) != h.Hash ||
+		fault.ParentHash != h.Hash || fault.Sequence == 0 || h.LedgerIndex == ^uint32(0) ||
+		fault.Sequence != h.LedgerIndex+1 || evidence.Target.Hash != fault.TargetHash ||
+		evidence.Target.ParentHash != fault.ParentHash || evidence.Target.LedgerIndex != fault.Sequence ||
+		header.CalculateHash(evidence.Target) != fault.TargetHash {
+		return false
+	}
+	if evidence.Parent.Hash != ([32]byte{}) && evidence.Parent.Hash != h.Hash {
+		return false
+	}
+	return true
 }
 
 type replaySnapshotItem struct {

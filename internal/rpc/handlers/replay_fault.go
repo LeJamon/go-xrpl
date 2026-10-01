@@ -64,6 +64,12 @@ func replayFaultStatusJSON(status replayfault.Status, blocked bool) map[string]a
 	if status.Recovery.AcquisitionError != "" {
 		recovery["acquisition_error"] = status.Recovery.AcquisitionError
 	}
+	if status.Recovery.BlockedReason != "" {
+		recovery["blocked_reason"] = status.Recovery.BlockedReason
+	}
+	if status.Recovery.OperatorAction != "" {
+		recovery["operator_action"] = status.Recovery.OperatorAction
+	}
 	verificationState := status.TransitionVerification
 	if verificationState == "" {
 		verificationState = "unknown"

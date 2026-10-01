@@ -344,6 +344,33 @@ func TestUpdatePreservesIdentityAndAttempts(t *testing.T) {
 	}
 }
 
+func TestRecoveryBlockerSurvivesRestartUntilVerifiedClear(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, recordTestFault(store, Fault{ID: "fault", Class: Unclassified}))
+	require.NoError(t, store.Update("fault", Fault{
+		BlockedReason:  "startup_verification_missing_state",
+		OperatorAction: "run replay_recover", RecoveryError: "missing node",
+	}))
+	want := store.Status().Recovery
+	require.Equal(t, "missing node", want.LastError)
+	store, err = Open(path)
+	require.NoError(t, err)
+	require.Equal(t, want, store.Status().Recovery)
+	require.ErrorContains(t, store.Revalidate(t.Context(), "fault", func(context.Context, Fault) error {
+		return errors.New("historical authentication unavailable")
+	}), "authentication unavailable")
+	require.Equal(t, want.BlockedReason, store.Status().Recovery.BlockedReason)
+	require.Equal(t, want.OperatorAction, store.Status().Recovery.OperatorAction)
+	require.NoError(t, store.Revalidate(t.Context(), "fault", func(context.Context, Fault) error {
+		return nil
+	}))
+	require.False(t, store.Status().Blocked)
+	require.Empty(t, store.Status().Recovery.BlockedReason)
+	require.Empty(t, store.Status().Recovery.OperatorAction)
+}
+
 func TestRevalidationPanicRemainsBlockedAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	store, err := Open(path)

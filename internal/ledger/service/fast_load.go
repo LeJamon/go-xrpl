@@ -24,6 +24,19 @@ import (
 
 var errStoredLedgerUnavailable = errors.New("stored ledger is incomplete or invalid")
 
+// storedSHAMapVerificationFailure retains the tree that failed strict startup
+// verification while preserving the underlying typed storage error.
+type storedSHAMapVerificationFailure struct {
+	mapType shamap.Type
+	err     error
+}
+
+func (e *storedSHAMapVerificationFailure) Error() string {
+	return fmt.Sprintf("%s tree: %v", e.mapType, e.err)
+}
+
+func (e *storedSHAMapVerificationFailure) Unwrap() error { return e.err }
+
 func isUnavailableSHAMapNode(err error) bool {
 	return errors.Is(err, shamap.ErrNodeNotInStore) || errors.Is(err, shamap.ErrInvalidNodeData)
 }
@@ -73,6 +86,7 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if !accepted {
 		metrics, nodeFingerprint, baseAvailable, err := s.verifyFastLoadStrictState(ctx, h)
 		if err != nil {
+			s.recordStartupVerificationFailure(ctx, h, err)
 			return nil, fmt.Errorf("ledger %d: %w", info.Sequence, err)
 		}
 		s.fastLoadStrictNodes.Store(metrics.nodes)
@@ -116,7 +130,7 @@ func (s *Service) verifyFastLoadStrictState(
 	verify := func() error {
 		stateMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.AccountHash, shamap.TypeState)
 		if err != nil {
-			return fmt.Errorf("state tree: %w", err)
+			return &storedSHAMapVerificationFailure{mapType: shamap.TypeState, err: err}
 		}
 		metrics = stateMetrics
 		if h.TxHash == ([32]byte{}) {
@@ -124,7 +138,7 @@ func (s *Service) verifyFastLoadStrictState(
 		}
 		txMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.TxHash, shamap.TypeTransaction)
 		if err != nil {
-			return fmt.Errorf("transaction tree: %w", err)
+			return &storedSHAMapVerificationFailure{mapType: shamap.TypeTransaction, err: err}
 		}
 		metrics.nodes += txMetrics.nodes
 		metrics.elapsed += txMetrics.elapsed
