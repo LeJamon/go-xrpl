@@ -89,13 +89,27 @@ func (s *Service) runStateBaseRecertification(ctx context.Context, wake <-chan s
 		case <-ctx.Done():
 			return
 		case <-wake:
+			if s.ReplayBlocked() {
+				if timer != nil {
+					timer.Stop()
+					timer = nil
+				}
+				retry = nil
+				continue
+			}
 			if retry != nil {
 				continue
 			}
 		case <-retry:
+			if s.ReplayBlocked() {
+				timer = nil
+				retry = nil
+				continue
+			}
 		}
 		if timer != nil {
 			timer.Stop()
+			timer = nil
 		}
 		retry = nil
 		if err := s.recertifyValidatedStateBase(ctx); err != nil {
@@ -107,6 +121,9 @@ func (s *Service) runStateBaseRecertification(ctx context.Context, wake <-chan s
 			}
 			if ctx.Err() != nil {
 				return
+			}
+			if s.ReplayBlocked() {
+				continue
 			}
 			timer = time.NewTimer(30 * time.Second)
 			retry = timer.C
@@ -233,11 +250,13 @@ func (s *Service) recertifyValidatedStateBase(ctx context.Context) (retErr error
 		"workers", policy.workers, "scheduling", scheduling)
 	metrics, err := s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.AccountHash, shamap.TypeState, policy)
 	if err != nil {
+		s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeState, err)
 		return fmt.Errorf("re-certify durable state tree: %w", err)
 	}
 	if h.TxHash != ([32]byte{}) {
 		txMetrics, err := s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.TxHash, shamap.TypeTransaction, policy)
 		if err != nil {
+			s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeTransaction, err)
 			return fmt.Errorf("re-certify durable transaction tree: %w", err)
 		}
 		metrics.nodes += txMetrics.nodes
@@ -347,10 +366,12 @@ func (s *Service) verifyRecertificationTip(ctx context.Context, h header.LedgerH
 		return err
 	}
 	if err := s.verifyDurableSHAMapRoot(ctx, h.AccountHash, "state"); err != nil {
+		s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeState, err)
 		return err
 	}
 	if h.TxHash != ([32]byte{}) {
 		if err := s.verifyDurableSHAMapRoot(ctx, h.TxHash, "transaction"); err != nil {
+			s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeTransaction, err)
 			return err
 		}
 	}

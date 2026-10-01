@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // ReplayFailure is a structured replay divergence. Unwrap preserves the
@@ -30,10 +31,11 @@ type ReplayFailure struct {
 	ExpectedResult   string `json:"expected_result,omitempty"`
 	ActualResult     string `json:"actual_result,omitempty"`
 
-	ExpectedRoot [32]byte `json:"expected_root,omitempty"`
-	ActualRoot   [32]byte `json:"actual_root,omitempty"`
-	ExpectedHash [32]byte `json:"expected_hash,omitempty"`
-	ActualHash   [32]byte `json:"actual_hash,omitempty"`
+	ExpectedRoot    [32]byte `json:"expected_root,omitempty"`
+	ActualRoot      [32]byte `json:"actual_root,omitempty"`
+	ExpectedHash    [32]byte `json:"expected_hash,omitempty"`
+	ActualHash      [32]byte `json:"actual_hash,omitempty"`
+	MissingNodeHash [32]byte `json:"missing_node_hash,omitempty"`
 
 	cause error `json:"-"`
 }
@@ -44,12 +46,17 @@ func newReplayFailure(cause error, stage, format string, args ...any) *ReplayFai
 	if cause != nil {
 		kind = cause.Error()
 	}
-	return &ReplayFailure{
+	failure := &ReplayFailure{
 		Kind:    kind,
 		Stage:   stage,
 		Message: message,
 		cause:   cause,
 	}
+	var missing *shamap.MissingNodeError
+	if errors.As(cause, &missing) {
+		failure.MissingNodeHash = missing.Hash
+	}
+	return failure
 }
 
 // Error implements error and retains the sentinel text in the message so

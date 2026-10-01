@@ -31,6 +31,24 @@ var (
 	ErrNodeNotInStore = errors.New("node not found in store")
 )
 
+// MissingNodeError identifies the exact node that was referenced by a backed
+// map but absent from its family store. It unwraps to ErrNodeNotInStore so
+// callers can classify the failure without losing the full repair key.
+type MissingNodeError struct {
+	Hash [32]byte
+}
+
+func (e *MissingNodeError) Error() string {
+	if e == nil {
+		return ErrNodeNotInStore.Error()
+	}
+	return fmt.Sprintf("node %x is missing: %s", e.Hash, ErrNodeNotInStore)
+}
+
+func (e *MissingNodeError) Unwrap() error {
+	return ErrNodeNotInStore
+}
+
 // AddNodeResult classifies the outcome of placing a peer-supplied node by
 // NodeID. It lets the inbound caller tell a genuinely bad node from one that
 // is simply ahead of its frontier and should be re-requested rather than

@@ -204,6 +204,38 @@ func TestReplayFaultCorruptParentIsNotExecutionDisagreement(t *testing.T) {
 	require.Equal(t, replayfault.Unclassified, replayStateFailureClass(context.Canceled))
 }
 
+func TestReplayFaultKnownMissingStateSurvivesCanceledDiagnosis(t *testing.T) {
+	svc := replayFaultService(t, "")
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
+	require.NoError(t, err)
+	evidence := replayEvidence{Parent: parent.Header(), Target: target.Header(), Authenticated: true, NetworkID: svc.config.NetworkID}
+	raw, err := json.Marshal(evidence)
+	require.NoError(t, err)
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{
+		Class: replayfault.MissingState, ParentHash: parent.Hash(), TargetHash: target.Hash(),
+		Sequence: target.Sequence(), Evidence: raw,
+	}))
+	fault := svc.replayFaults.Snapshot()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.diagnoseReplayFault(ctx, *fault, evidence, parent, replay, svc.EngineConfigForReplay(parent), shamap.ErrNodeNotInStore)
+	require.Equal(t, replayfault.MissingState, svc.replayFaults.Snapshot().Class)
+}
+
+func TestRecordLiveStateVerificationFailureDoesNotTakeServiceMu(t *testing.T) {
+	svc := replayFaultService(t, "")
+	h := svc.GetValidatedLedger().Header()
+	svc.mu.Lock()
+	svc.recordLiveStateVerificationFailure(t.Context(), h, shamap.TypeState, &shamap.MissingNodeError{Hash: [32]byte{0x42}}, false)
+	svc.mu.Unlock()
+	require.True(t, svc.ReplayBlocked())
+	fault := svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
+}
+
 func TestReplayFaultRestoresNonemptyParentTransactionsAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	svc := replayFaultService(t, path)
@@ -283,6 +315,25 @@ func TestReplayFaultClassifiesIncompleteTransactionInputs(t *testing.T) {
 			require.True(t, svc.ReplayBlocked())
 		})
 	}
+}
+
+func TestReplayPreparationKeepsKnownMissingClassAfterCanceledInputWalk(t *testing.T) {
+	svc := replayFaultService(t, "")
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	txMap := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, txMap.PutWithNodeType([32]byte{0x42}, []byte("transaction bytes fixture"), shamap.NodeTypeTransactionWithMeta))
+	svc.SetReplayParentAcquirer(func(uint32, [32]byte) error { return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	svc.RecordReplayPreparationFailure(ctx, target.Header(), txMap, parent, true, shamap.ErrNodeNotInStore)
+	fault := svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
+	var evidence replayEvidence
+	require.NoError(t, json.Unmarshal(fault.Evidence, &evidence))
+	require.Equal(t, replayfault.MissingState, evidence.RepairClass)
 }
 
 func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {

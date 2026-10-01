@@ -152,7 +152,7 @@ func (s *Service) verifyDurableSHAMapRoot(ctx context.Context, root [32]byte, na
 		return err
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("durable %s root is missing", name)
+		return fmt.Errorf("durable %s root: %w", name, &shamap.MissingNodeError{Hash: root})
 	}
 	node, err := shamap.DeserializeFromPrefix(data)
 	if err != nil {

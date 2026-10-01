@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -147,6 +149,14 @@ func requireStateBaseRecertificationUnavailable(t *testing.T, f *stateBaseRecert
 func TestStateBaseRecertificationRejectsMissingDurableDescendantWithWarmCache(t *testing.T) {
 	f := newStateBaseRecertificationFixture(t)
 	ctx := context.Background()
+	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
+	var repairCalls int
+	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+		repairCalls++
+		require.Equal(t, f.validated.Sequence(), seq)
+		require.Equal(t, f.validated.Hash(), hash)
+		return nil
+	})
 
 	provider, ok := f.svc.shamapFamily.(interface {
 		FullBelowCache() *shamap.FullBelowCache
@@ -178,6 +188,47 @@ func TestStateBaseRecertificationRejectsMissingDurableDescendantWithWarmCache(t 
 	err = f.svc.recertifyValidatedStateBase(ctx)
 	require.Error(t, err)
 	requireStateBaseRecertificationUnavailable(t, f)
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
+	require.Equal(t, 1, repairCalls)
+	require.True(t, f.svc.ReplayBlocked())
+	require.False(t, f.svc.ReplayRecoveryParent([32]byte{0xff}))
+	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
+	var evidence replayEvidence
+	require.NoError(t, json.Unmarshal(fault.Evidence, &evidence))
+	require.Equal(t, replayFaultOriginStateBaseRecertification, evidence.Origin)
+	require.Equal(t, f.validated.Hash(), evidence.Target.Hash)
+	require.Equal(t, "state", evidence.MissingTree)
+	require.Equal(t, f.childHash, evidence.MissingNodeHash)
+}
+
+func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.invalidate(t)
+	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
+	var repairCalls int
+	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+		repairCalls++
+		require.Equal(t, f.validated.Sequence(), seq)
+		require.Equal(t, f.validated.Hash(), hash)
+		return nil
+	})
+	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
+	require.Equal(t, 1, repairCalls)
+	require.False(t, f.svc.ReplayRecoveryParent([32]byte{0x7f}))
+	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
+
+	f.svc.mu.Lock()
+	f.svc.replayRepairTarget = f.validated
+	f.svc.mu.Unlock()
+	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
+	require.False(t, f.svc.ReplayBlocked())
+	_, found := f.svc.currentValidatedStateBaseProof()
+	require.True(t, found)
 }
 
 type blockingStateBaseRecertificationDatabase struct {

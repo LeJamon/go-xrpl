@@ -161,7 +161,7 @@ func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte
 		return nil, fmt.Errorf("failed to fetch root node: %w", err)
 	}
 	if data == nil {
-		return nil, fmt.Errorf("root node %x: %w", rootHash[:8], ErrNodeNotInStore)
+		return nil, fmt.Errorf("root node: %w", &MissingNodeError{Hash: rootHash})
 	}
 
 	node, err := decodeAndVerifyPrefixNode(data, rootHash)
@@ -223,7 +223,7 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
 	}
 	if data == nil {
-		return nil, fmt.Errorf("child node %x: %w", hash[:8], ErrNodeNotInStore)
+		return nil, fmt.Errorf("child node: %w", &MissingNodeError{Hash: hash})
 	}
 
 	// Fresh deserialised copy — not shared across SHAMap instances.

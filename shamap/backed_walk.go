@@ -176,7 +176,7 @@ func (sm *SHAMap) SetVerifiedBaseContext(ctx context.Context, rootHash [32]byte)
 		return fmt.Errorf("load verified SHAMap base root: %w", err)
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("%w: root %x is missing", errVerifiedBaseUnavailable, rootHash[:8])
+		return fmt.Errorf("%w: %w", errVerifiedBaseUnavailable, &MissingNodeError{Hash: rootHash})
 	}
 	view, err := decodeTraversalNode(data, rootHash)
 	if err != nil {
@@ -581,7 +581,7 @@ func (sm *SHAMap) loadVerifiedBaseTraversalNode(
 		return traversalNode{}, fmt.Errorf("%w: read %x: %v", errVerifiedBaseUnavailable, hash[:8], err)
 	}
 	if len(data) == 0 {
-		return traversalNode{}, fmt.Errorf("%w: node %x is missing", errVerifiedBaseUnavailable, hash[:8])
+		return traversalNode{}, fmt.Errorf("%w: %w", errVerifiedBaseUnavailable, &MissingNodeError{Hash: hash})
 	}
 	view, err := decodeTraversalNode(data, hash)
 	if err != nil {
