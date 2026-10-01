@@ -2,15 +2,17 @@
 package amm_test
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
@@ -116,17 +118,16 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 	}
 
 	// Helper: parse pool amount from string
-	parsePool := func(s string, isXRP bool) tx.Amount {
+	parsePool := func(t *testing.T, s string, isXRP bool) tx.Amount {
+		t.Helper()
 		if isXRP {
-			var drops int64
-			for _, c := range s {
-				drops = drops*10 + int64(c-'0')
-			}
+			drops, err := strconv.ParseInt(s, 10, 64)
+			require.NoError(t, err)
 			return tx.NewXRPAmount(drops)
 		}
-		f := 0.0
-		fmt.Sscanf(s, "%f", &f)
-		return tx.NewIssuedAmountFromFloat64(f, "", "")
+		amount, err := state.NewIssuedAmountFromDecimalString(s, "", "")
+		require.NoError(t, err)
+		return amount
 	}
 
 	// Run tests for both amendment states
@@ -140,8 +141,8 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 				poolInIsXRP := isXRPStr(tc.poolInStr)
 				poolOutIsXRP := isXRPStr(tc.poolOutStr)
 
-				poolIn := parsePool(tc.poolInStr, poolInIsXRP)
-				poolOut := parsePool(tc.poolOutStr, poolOutIsXRP)
+				poolIn := parsePool(t, tc.poolInStr, poolInIsXRP)
+				poolOut := parsePool(t, tc.poolOutStr, poolOutIsXRP)
 
 				takerPays, takerGets, ok, _ := paymenttx.ChangeSpotPriceQuality(
 					poolIn, poolOut, tc.quality, tc.fee, fixAMMv1_1, poolOutIsXRP,
