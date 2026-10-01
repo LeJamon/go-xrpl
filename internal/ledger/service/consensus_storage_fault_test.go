@@ -68,14 +68,16 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				require.True(t, found)
 				require.NotEqual(t, masterKey[0]>>4, missingKey.Key[0]>>4)
 				blob, _ := startupPaymentBlob(t, destinationName, 1)
+				destination := jtx.NewAccount(destinationName)
+				insertAccountRoot(t, f.svc, destination.Address, 100_000_000, 0)
 				if applyPhase {
-					destination := jtx.NewAccount(destinationName)
-					insertAccountRoot(t, f.svc, destination.Address, 100_000_000, 0)
 					insertTrustLine(t, f.svc, destination.Address, master.Address, "USD", "0")
-					closeStoredLedgerFixture(t, f.svc)
-					f.svc.FlushPersists()
-					f.validated = f.svc.GetValidatedLedger()
-					f.stateRoot = f.validated.Header().AccountHash
+				}
+				closeStoredLedgerFixture(t, f.svc)
+				f.svc.FlushPersists()
+				f.validated = f.svc.GetValidatedLedger()
+				f.stateRoot = f.validated.Header().AccountHash
+				if applyPhase {
 					line, err := f.validated.Read(missingKey)
 					require.NoError(t, err)
 					require.NotEmpty(t, line)
