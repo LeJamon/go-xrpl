@@ -97,7 +97,7 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 	select {
 	case <-store.rotateEntered:
 	case <-time.After(10 * time.Second):
-		t.Fatal("production rotator did not enter RotateGenerationWithPrune")
+		t.Fatal("production rotator did not enter RotateGenerationWithRetention")
 	}
 
 	runtime.stopRuntime()
@@ -179,17 +179,19 @@ func (s *shutdownRecertificationStore) FetchBatchUncached(
 	return s.RotatingKVDatabase.FetchBatchUncached(ctx, hashes, maxNodes, maxBytes)
 }
 
-func (s *shutdownRecertificationStore) RotateGenerationWithPrune(
+func (s *shutdownRecertificationStore) RotateGenerationWithRetention(
 	ctx context.Context,
 	lastRotated, minimumOnline uint32,
+	guard func(context.Context) (func(), error),
 	beginPrune func() func(),
 ) (bool, error) {
 	s.rotateEnteredOnce.Do(func() { close(s.rotateEntered) })
 	defer s.rotateFinishedOnce.Do(func() { close(s.rotateFinished) })
-	return s.RotatingKVDatabase.RotateGenerationWithPrune(
+	return s.RotatingKVDatabase.RotateGenerationWithRetention(
 		ctx,
 		lastRotated,
 		minimumOnline,
+		guard,
 		beginPrune,
 	)
 }

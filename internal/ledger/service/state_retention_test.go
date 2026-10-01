@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -210,6 +211,28 @@ func TestStateRetentionDoesNotPublishPlanAfterSyncFailure(t *testing.T) {
 	committed, err := db.RotateGeneration(ctx, 20, 1)
 	require.NoError(t, err)
 	require.True(t, committed, "failed preparation must release the generation pin")
+}
+
+func TestStateRetentionGatesMissingValidatedState(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.svc.StopStateBaseRecertification()
+	child, err := f.db.Fetch(t.Context(), nodestore.Hash256(f.childHash))
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	child.LedgerSeq = f.validated.Sequence() - 1
+	require.NoError(t, f.db.Store(t.Context(), child))
+	_, err = f.db.DeleteBefore(t.Context(), f.validated.Sequence(), 1)
+	require.NoError(t, err)
+	_, guard, err := f.svc.PrepareStateRetention(t.Context(), f.validated.Sequence(), nil)
+	require.Error(t, err)
+	require.Nil(t, guard)
+	var missing *shamap.MissingNodeError
+	require.ErrorAs(t, err, &missing)
+	require.Equal(t, f.childHash, missing.Hash)
+	require.True(t, f.svc.ReplayBlocked())
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
 }
 
 func TestStateRetentionRestampsLegacyStateAndTransactions(t *testing.T) {

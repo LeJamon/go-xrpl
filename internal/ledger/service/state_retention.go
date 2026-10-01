@@ -72,6 +72,7 @@ func (s *Service) PrepareStateRetention(
 				continue
 			}
 			if err := s.preserveStateDifference(ctx, root, previous[root.kind], sequence, checkpoint, 0); err != nil {
+				s.recordStateRetentionFailure(ctx, root, err)
 				return 0, nil, fmt.Errorf("preserve live %s tree %x: %w", root.kind, root.hash, err)
 			}
 			preserved[root] = struct{}{}
@@ -90,6 +91,21 @@ func (s *Service) PrepareStateRetention(
 
 	}
 	return 0, nil, errStateRetentionChanged
+}
+
+func (s *Service) recordStateRetentionFailure(ctx context.Context, root retainedStateRoot, cause error) {
+	s.mu.RLock()
+	validated := s.validatedLedger
+	if validated == nil {
+		s.mu.RUnlock()
+		return
+	}
+	h := validated.Header()
+	s.mu.RUnlock()
+	if root.kind == shamap.TypeState && root.hash == h.AccountHash ||
+		root.kind == shamap.TypeTransaction && root.hash == h.TxHash {
+		s.recordStateBaseRecertificationFailure(ctx, h, root.kind, cause)
+	}
 }
 
 func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, preserved map[retainedStateRoot]struct{}, preparedOpen []retainedStateRoot) func(context.Context) (func(), error) {
