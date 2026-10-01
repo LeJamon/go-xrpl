@@ -145,6 +145,323 @@ func (a *AMM) SetSponsor(value string) {
 	a.present |= ammBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (a *AMM) HasAccount() bool {
+	return a != nil && a.present&ammBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (a *AMM) GetAccount() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.Account, "AMM.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (a *AMM) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetAccount(address)
+	return nil
+}
+
+// HasTradingFee reports whether TradingFee is present.
+func (a *AMM) HasTradingFee() bool {
+	return a != nil && a.present&ammBitTradingFee != 0
+}
+
+// ClearTradingFee removes TradingFee from the serialized entry.
+func (a *AMM) ClearTradingFee() {
+	if a == nil {
+		return
+	}
+	a.TradingFee = 0
+	a.present &^= ammBitTradingFee
+	a.dirty = true
+}
+
+// GetTradingFee returns the typed UInt16 value.
+func (a *AMM) GetTradingFee() (uint16, error) {
+	if a == nil {
+		return 0, nil
+	}
+	if a.TradingFee < 0 || a.TradingFee > 65535 {
+		return 0, fmt.Errorf("ledgerfields: AMM.TradingFee: value %d is out of range for UInt16", a.TradingFee)
+	}
+	return uint16(a.TradingFee), nil
+}
+
+// SetTradingFeeValue assigns a typed UInt16 value.
+func (a *AMM) SetTradingFeeValue(value uint16) {
+	a.SetTradingFee(value)
+}
+
+// HasVoteSlots reports whether VoteSlots is present.
+func (a *AMM) HasVoteSlots() bool {
+	return a != nil && a.present&ammBitVoteSlots != 0
+}
+
+// ClearVoteSlots removes VoteSlots from the serialized entry.
+func (a *AMM) ClearVoteSlots() {
+	if a == nil {
+		return
+	}
+	a.VoteSlots = nil
+	a.present &^= ammBitVoteSlots
+	a.dirty = true
+}
+
+// GetVoteSlots returns typed nested objects.
+func (a *AMM) GetVoteSlots() ([]VoteEntryValue, error) {
+	if a == nil || a.VoteSlots == nil {
+		return nil, nil
+	}
+	return voteEntryValueSliceFromAny(a.VoteSlots, "AMM.VoteSlots")
+}
+
+// SetVoteSlotsValue assigns typed nested objects.
+func (a *AMM) SetVoteSlotsValue(value []VoteEntryValue) error {
+	encoded, err := voteEntryValueSliceToAny(value, "AMM.VoteSlots")
+	if err != nil {
+		return err
+	}
+	a.SetVoteSlots(encoded)
+	return nil
+}
+
+// HasAuctionSlot reports whether AuctionSlot is present.
+func (a *AMM) HasAuctionSlot() bool {
+	return a != nil && a.present&ammBitAuctionSlot != 0
+}
+
+// ClearAuctionSlot removes AuctionSlot from the serialized entry.
+func (a *AMM) ClearAuctionSlot() {
+	if a == nil {
+		return
+	}
+	a.AuctionSlot = nil
+	a.present &^= ammBitAuctionSlot
+	a.dirty = true
+}
+
+// GetAuctionSlot returns the typed nested object.
+func (a *AMM) GetAuctionSlot() (AuctionSlotValue, error) {
+	if a == nil || a.AuctionSlot == nil {
+		return AuctionSlotValue{}, nil
+	}
+	return auctionSlotValueFromAny(a.AuctionSlot, "AMM.AuctionSlot")
+}
+
+// SetAuctionSlotValue assigns the typed nested object.
+func (a *AMM) SetAuctionSlotValue(value AuctionSlotValue) error {
+	encoded, err := auctionSlotValueToAny(value, "AMM.AuctionSlot")
+	if err != nil {
+		return err
+	}
+	a.SetAuctionSlot(encoded)
+	return nil
+}
+
+// HasLPTokenBalance reports whether LPTokenBalance is present.
+func (a *AMM) HasLPTokenBalance() bool {
+	return a != nil && a.present&ammBitLPTokenBalance != 0
+}
+
+// GetLPTokenBalance returns the typed Amount value.
+func (a *AMM) GetLPTokenBalance() (AmountValue, error) {
+	if a == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(a.LPTokenBalance, "AMM.LPTokenBalance", false)
+}
+
+// SetLPTokenBalanceValue assigns a typed Amount value.
+func (a *AMM) SetLPTokenBalanceValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "AMM.LPTokenBalance", false)
+	if err != nil {
+		return err
+	}
+	a.SetLPTokenBalance(encoded)
+	return nil
+}
+
+// HasAsset reports whether Asset is present.
+func (a *AMM) HasAsset() bool {
+	return a != nil && a.present&ammBitAsset != 0
+}
+
+// GetAsset returns the typed Issue value.
+func (a *AMM) GetAsset() (IssueValue, error) {
+	if a == nil || a.Asset == nil {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny(a.Asset, "AMM.Asset")
+}
+
+// SetAssetValue assigns a typed Issue value.
+func (a *AMM) SetAssetValue(value IssueValue) error {
+	encoded, err := issueValueToAny(value, "AMM.Asset")
+	if err != nil {
+		return err
+	}
+	a.SetAsset(encoded)
+	return nil
+}
+
+// HasAsset2 reports whether Asset2 is present.
+func (a *AMM) HasAsset2() bool {
+	return a != nil && a.present&ammBitAsset2 != 0
+}
+
+// GetAsset2 returns the typed Issue value.
+func (a *AMM) GetAsset2() (IssueValue, error) {
+	if a == nil || a.Asset2 == nil {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny(a.Asset2, "AMM.Asset2")
+}
+
+// SetAsset2Value assigns a typed Issue value.
+func (a *AMM) SetAsset2Value(value IssueValue) error {
+	encoded, err := issueValueToAny(value, "AMM.Asset2")
+	if err != nil {
+		return err
+	}
+	a.SetAsset2(encoded)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (a *AMM) HasOwnerNode() bool {
+	return a != nil && a.present&ammBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (a *AMM) GetOwnerNode() (uint64, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(a.OwnerNode, "AMM.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (a *AMM) SetOwnerNodeValue(value uint64) {
+	a.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags is present.
+func (a *AMM) HasFlags() bool {
+	return a != nil && a.present&ammBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (a *AMM) GetFlags() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (a *AMM) SetFlagsValue(value uint32) {
+	a.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (a *AMM) HasPreviousTxnID() bool {
+	return a != nil && a.present&ammBitPreviousTxnID != 0
+}
+
+// ClearPreviousTxnID removes PreviousTxnID from the serialized entry.
+func (a *AMM) ClearPreviousTxnID() {
+	if a == nil {
+		return
+	}
+	a.PreviousTxnID = ""
+	a.present &^= ammBitPreviousTxnID
+	a.dirty = true
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (a *AMM) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.PreviousTxnID, "AMM.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (a *AMM) SetPreviousTxnIDValue(value [32]byte) {
+	a.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (a *AMM) HasPreviousTxnLgrSeq() bool {
+	return a != nil && a.present&ammBitPreviousTxnLgrSeq != 0
+}
+
+// ClearPreviousTxnLgrSeq removes PreviousTxnLgrSeq from the serialized entry.
+func (a *AMM) ClearPreviousTxnLgrSeq() {
+	if a == nil {
+		return
+	}
+	a.PreviousTxnLgrSeq = 0
+	a.present &^= ammBitPreviousTxnLgrSeq
+	a.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (a *AMM) GetPreviousTxnLgrSeq() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (a *AMM) SetPreviousTxnLgrSeqValue(value uint32) {
+	a.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (a *AMM) HasSponsor() bool {
+	return a != nil && a.present&ammBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (a *AMM) ClearSponsor() {
+	if a == nil {
+		return
+	}
+	a.Sponsor = ""
+	a.present &^= ammBitSponsor
+	a.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (a *AMM) GetSponsor() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.Sponsor, "AMM.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (a *AMM) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetSponsor(address)
+	return nil
+}
+
 func (a *AMM) validateRequired() error {
 	if a.decoded && !a.dirty {
 		return nil

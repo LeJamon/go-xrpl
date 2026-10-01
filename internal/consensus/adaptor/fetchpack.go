@@ -171,7 +171,17 @@ func (r *Router) FetchPackCacheSize() uint32 {
 	if r == nil {
 		return 0
 	}
-	return uint32(r.fetchPacks.Size())
+	if r.catchupReplay == nil {
+		return 0
+	}
+	return r.catchupReplay.fetchPackCacheSize()
+}
+
+func (c *catchupReplayCoordinator) fetchPackCacheSize() uint32 {
+	if c == nil || c.fetchPacks == nil {
+		return 0
+	}
+	return uint32(c.fetchPacks.Size())
 }
 
 // sweep drops entries at least as old as the effective max age for the current
@@ -215,17 +225,19 @@ func (c *fetchPackCache) effectiveMaxAge(size int) time.Duration {
 //
 // The handler runs on the consensus router goroutine. Replies are ignored
 // unless an acquisition is in flight (an unsolicited pack can complete
-// nothing), and a peer that ships poisoned blobs is charged. The wire decoder
-// already bounds a reply by message.MaxMessageSize, so every object in a
-// valid frame is processed; the sender's serving cap applies only to locally
-// built packs and must not truncate a legal inbound pack.
-func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
-	if r.fetchPacks == nil {
+// nothing). The wire decoder already bounds a reply by message.MaxMessageSize,
+// so every object in a valid frame is processed. The sender's serving cap applies
+// only to locally built packs and must not truncate a legal inbound pack.
+func (c *catchupReplayCoordinator) handleFetchPackReply(msg *peermanagement.InboundMessage) {
+	if c.stoppedForShutdown() {
+		return
+	}
+	if c.fetchPacks == nil {
 		return
 	}
 	decoded, err := message.Decode(message.TypeGetObjects, msg.Payload)
 	if err != nil {
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-decode")
+		c.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-decode")
 		return
 	}
 	gob, ok := decoded.(*message.GetObjectByHash)
@@ -241,14 +253,13 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	// With no acquisition in flight there is nothing a pack can complete, so
 	// drop it before any per-object hashing. The router is single-goroutine,
 	// so this snapshot stays valid for the completion pass below.
-	active := r.fetchTracker.Active()
+	active := c.fetchTracker.Active()
 	if len(active) == 0 {
 		return
 	}
 
 	now := time.Now()
 	stored := 0
-	poisoned := 0
 	// Per-ledgerseq "late pack" short-circuit: skip caching nodes for a
 	// ledger we already hold. go-xrpl packs are single-ledger, but track
 	// per-object so a multi-seq pack is handled too.
@@ -261,7 +272,7 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		}
 		if obj.LedgerSeq != 0 && obj.LedgerSeq != pLSeq {
 			pLSeq = obj.LedgerSeq
-			pLDo = !r.haveLedgerSeq(pLSeq)
+			pLDo = !c.haveLedgerSeq(pLSeq)
 		}
 		if !pLDo {
 			continue
@@ -274,23 +285,23 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		}
 		var hash [32]byte
 		copy(hash[:], obj.Hash)
-		// A blob that does not hash to its claimed key is poisoned; an honest
-		// pack contains none, so a non-header verify failure is bad data.
 		if !shamap.VerifyFetchPackNode(hash, obj.Data) {
-			poisoned++
 			continue
 		}
-		if r.fetchPacks.add(hash, obj.Data, now) {
+		if c.fetchPacks.add(hash, obj.Data, now) {
 			stored++
 		}
-	}
-	if poisoned > 0 {
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-poison")
 	}
 	if stored == 0 {
 		return
 	}
-	r.tryCompleteFromFetchPack(active, now)
+	c.tryCompleteFromFetchPack(active, now)
+}
+
+func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
+	if r.catchupReplay != nil {
+		r.catchupReplay.handleFetchPackReply(msg)
+	}
 }
 
 // isLedgerHeaderObject reports whether a fetch-pack object is the pack's leading
@@ -304,11 +315,11 @@ func isLedgerHeaderObject(data []byte) bool {
 
 // haveLedgerSeq reports whether a ledger at seq is already in our store, so a
 // late fetch-pack for an already-acquired ledger is not cached.
-func (r *Router) haveLedgerSeq(seq uint32) bool {
+func (c *catchupReplayCoordinator) haveLedgerSeq(seq uint32) bool {
 	if seq == 0 {
 		return false
 	}
-	svc := r.adaptor.LedgerService()
+	svc := c.adaptor.LedgerService()
 	if svc == nil {
 		return false
 	}
@@ -319,21 +330,21 @@ func (r *Router) haveLedgerSeq(seq uint32) bool {
 // each given in-flight acquisition, finalizing any that complete. The caller
 // passes the active snapshot it already holds so the set is consistent with the
 // pack just cached.
-func (r *Router) tryCompleteFromFetchPack(active []*inbound.Ledger, now time.Time) {
-	if r.fetchPacks == nil {
+func (c *catchupReplayCoordinator) tryCompleteFromFetchPack(active []*inbound.Ledger, now time.Time) {
+	if c.fetchPacks == nil {
 		return
 	}
-	fetch := func(hash [32]byte) ([]byte, bool) { return r.fetchPacks.get(hash, time.Now()) }
-	workLane := r.currentAcquisitionWork()
+	fetch := func(hash [32]byte) ([]byte, bool) { return c.fetchPacks.get(hash, time.Now()) }
+	workLane := c.currentAcquisitionWork()
 	for _, il := range active {
 		if workLane != nil {
-			if !r.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkLocal, fetch: fetch}) {
-				r.logger.Warn("fetch-pack completion deferred: acquisition worker saturated", "seq", il.Seq())
+			if !c.submitAcquisitionWork(il, acquisitionWorkEvent{kind: acquisitionWorkLocal, fetch: fetch}) {
+				c.logger.Warn("fetch-pack completion deferred: acquisition worker saturated", "seq", il.Seq())
 			}
 			continue
 		}
 		if il.CheckLocal(fetch) && il.IsComplete() {
-			r.completeInboundLedger(il)
+			c.completeInboundLedger(il)
 		}
 	}
 }
@@ -348,15 +359,15 @@ func (r *Router) tryCompleteFromFetchPack(active []*inbound.Ledger, now time.Tim
 // extended for the reply, so the caller leaves it in flight; false when no
 // fetch-pack is possible — the common case for a forward tip acquisition whose
 // child does not exist yet — or one was already tried, so the caller reaps it.
-func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
-	if r.fetchPacks == nil || il.FetchPackRequested() {
+func (c *catchupReplayCoordinator) tryFetchPackEscalation(il *inbound.Ledger) bool {
+	if c.fetchPacks == nil || il.FetchPackRequested() {
 		return false
 	}
 	peerID := il.PeerID()
 	if peerID == 0 {
 		return false
 	}
-	svc := r.adaptor.LedgerService()
+	svc := c.adaptor.LedgerService()
 	if svc == nil {
 		return false
 	}
@@ -378,14 +389,14 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 	if err != nil {
 		return false
 	}
-	if err := r.acquisition.SendPriorityToPeer(peerID, frame); err != nil {
-		r.logger.Debug("fetch-pack request send failed",
+	if err := c.acquisition.SendPriorityToPeer(peerID, frame); err != nil {
+		c.logger.Debug("fetch-pack request send failed",
 			"seq", il.Seq(), "err", err)
 		return false
 	}
 
 	il.MarkFetchPackRequested()
-	r.logger.Info("requested fetch-pack for stalled acquisition",
+	c.logger.Info("requested fetch-pack for stalled acquisition",
 		"seq", il.Seq(),
 		"hash", fmt.Sprintf("%x", wantHash[:4]),
 		"child", fmt.Sprintf("%x", childHash[:4]),

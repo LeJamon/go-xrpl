@@ -143,7 +143,7 @@ type BatchInnerPreflightRunner interface {
 // transaction to be retried on the next pass.
 // Reference: rippled applySteps.h — PreclaimResult.likelyToClaimFee
 type Preclaimer interface {
-	Preclaim(view LedgerView, config EngineConfig) ter.Result
+	Preclaim(view ReadOnlyLedgerView, config EngineConfig) ter.Result
 }
 
 // BadCurrency is the currency code that may not name a non-native (issued)
@@ -154,7 +154,7 @@ const BadCurrency = "XRP"
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
 // Used by Batch transactions which require a higher fee based on inner tx count and signers.
 type BatchFeeCalculator interface {
-	CalculateMinimumFee(view LedgerView, config EngineConfig) uint64
+	CalculateMinimumFee(view ReadOnlyLedgerView, config EngineConfig) uint64
 }
 
 // CustomBaseFeeCalculator is implemented by transaction types that override calculateBaseFee()
@@ -162,7 +162,7 @@ type BatchFeeCalculator interface {
 // Reference: rippled Transactor::calculateBaseFee() virtual override pattern —
 // rippled's version has access to the view (view.fees().increment).
 type CustomBaseFeeCalculator interface {
-	CalculateBaseFee(view LedgerView, config EngineConfig) (uint64, error)
+	CalculateBaseFee(view ReadOnlyLedgerView, config EngineConfig) (uint64, error)
 }
 
 // BatchSignerInfo represents a single batch signer entry for authorization checking.

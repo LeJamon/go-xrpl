@@ -1,6 +1,7 @@
 package invariants
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -31,6 +32,28 @@ func pseudoObjectSLE(t *testing.T, objectType string) []byte {
 	}
 	if objectType == "AMM" {
 		return ammSLE(t, testPseudoAddr, "0")
+	}
+	if objectType == "Vault" {
+		fields["Sequence"] = uint32(1)
+		fields["OwnerNode"] = "0"
+		fields["Owner"] = testPseudoAddr
+		fields["Asset"] = map[string]any{"currency": "XRP"}
+		fields["ShareMPTID"] = strings.Repeat("0", 48)
+		fields["WithdrawalPolicy"] = uint8(1)
+		fields["Flags"] = uint32(0)
+		fields["PreviousTxnID"] = strings.Repeat("0", 64)
+		fields["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	if objectType == "LoanBroker" {
+		fields["Sequence"] = uint32(1)
+		fields["OwnerNode"] = "0"
+		fields["VaultNode"] = "0"
+		fields["VaultID"] = strings.Repeat("0", 64)
+		fields["Owner"] = testPseudoAddr
+		fields["LoanSequence"] = uint32(1)
+		fields["Flags"] = uint32(0)
+		fields["PreviousTxnID"] = strings.Repeat("0", 64)
+		fields["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return mustEncode(t, fields)
 }

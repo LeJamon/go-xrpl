@@ -1,13 +1,10 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -39,84 +36,62 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Delegate: %w", err)
 	}
-	fields := decoded.ToMap()
 	entry := &DelegateData{
-		HasDestinationNode: fields["DestinationNode"] != nil,
-		PreviousTxnLgrSeq:  decoded.PreviousTxnLgrSeq,
+		HasDestinationNode: decoded.HasDestinationNode(),
 		Sponsor:            decoded.Sponsor,
 	}
 
 	var err error
-	if _, ok := fields["Account"]; ok {
-		entry.Account, err = decodeLedgerAccount("Delegate.Account", decoded.Account)
+	if decoded.HasAccount() {
+		entry.Account, err = decoded.GetAccount()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["Authorize"]; ok {
-		entry.Authorize, err = decodeLedgerAccount("Delegate.Authorize", decoded.Authorize)
+	if decoded.HasAuthorize() {
+		entry.Authorize, err = decoded.GetAuthorize()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["OwnerNode"]; ok {
-		entry.OwnerNode, err = parseLedgerUint64("Delegate.OwnerNode", decoded.OwnerNode)
+	if decoded.HasOwnerNode() {
+		entry.OwnerNode, err = decoded.GetOwnerNode()
 		if err != nil {
 			return nil, err
 		}
 	}
 	if entry.HasDestinationNode {
-		entry.DestinationNode, err = parseLedgerUint64("Delegate.DestinationNode", decoded.DestinationNode)
+		entry.DestinationNode, err = decoded.GetDestinationNode()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["PreviousTxnID"]; ok {
-		if err := decodeLedgerHex("Delegate.PreviousTxnID", decoded.PreviousTxnID, entry.PreviousTxnID[:]); err != nil {
+	if decoded.HasPreviousTxnID() {
+		entry.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
 			return nil, err
 		}
 	}
-	entry.Permissions, err = decodeDelegatePermissions(decoded.Permissions)
+	if decoded.HasPreviousTxnLgrSeq() {
+		entry.PreviousTxnLgrSeq, err = decoded.GetPreviousTxnLgrSeq()
+		if err != nil {
+			return nil, err
+		}
+	}
+	permissions, err := decoded.GetPermissions()
 	if err != nil {
 		return nil, err
 	}
+	entry.Permissions = make([]uint32, 0, len(permissions))
+	for i, permission := range permissions {
+		permissionValue, err := permission.GetPermissionValue()
+		if err != nil {
+			return nil, fmt.Errorf("Delegate.Permissions[%d].PermissionValue: %w", i, err)
+		}
+		entry.Permissions = append(entry.Permissions, permissionValue)
+	}
 
 	return entry, nil
-}
-
-func decodeDelegatePermissions(values []any) ([]uint32, error) {
-	var perms []uint32
-	for i, value := range values {
-		wrapper, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("Delegate.Permissions[%d]: expected object, got %T", i, value)
-		}
-		value, ok = wrapper["Permission"]
-		if !ok {
-			continue
-		}
-		permission, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("Delegate.Permissions[%d].Permission: expected object, got %T", i, value)
-		}
-		value, ok = permission["PermissionValue"]
-		if !ok {
-			continue
-		}
-		var permissionValue uint32
-		switch value := value.(type) {
-		case string:
-			permissionValue = LookupPermissionValue(value)
-		case uint32:
-			permissionValue = value
-		default:
-			return nil, fmt.Errorf("Delegate.Permissions[%d].Permission.PermissionValue: expected string, got %T", i, value)
-		}
-		if permissionValue > 0 {
-			perms = append(perms, permissionValue)
-		}
-	}
-	return perms, nil
 }
 
 // SerializeDelegate serializes a Delegate ledger entry. prevTxnID/prevTxnLgrSeq
@@ -126,45 +101,33 @@ func decodeDelegatePermissions(values []any) ([]uint32, error) {
 // directory; pass nil to omit the field, matching its soeOPTIONAL status.
 // Reference: rippled DelegateSet.cpp doApply()
 func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64, destinationNode *uint64, sponsor string, prevTxnID [32]byte, prevTxnLgrSeq uint32) ([]byte, error) {
-	accountAddr, err := addresscodec.EncodeAccountIDToClassicAddress(account[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode account address: %w", err)
-	}
-	authorizeAddr, err := addresscodec.EncodeAccountIDToClassicAddress(authorize[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode authorize address: %w", err)
-	}
-
-	// Build Permissions array
-	permsArray := make([]any, len(permissions))
-	for i, pv := range permissions {
-		permsArray[i] = map[string]any{
-			"Permission": map[string]any{
-				"PermissionValue": pv,
-			},
-		}
+	permissionValues := make([]ledgerfields.PermissionValue, len(permissions))
+	for i, value := range permissions {
+		permissionValues[i].SetPermissionValue(value)
 	}
 
 	entry := &ledgerfields.Delegate{}
-	entry.SetAccount(accountAddr)
-	entry.SetAuthorize(authorizeAddr)
-	entry.SetPermissions(permsArray)
-	entry.SetOwnerNode(fmt.Sprintf("%X", ownerNode))
-	entry.SetFlags(0)
+	if err := entry.SetAccountValue(account); err != nil {
+		return nil, fmt.Errorf("failed to encode Delegate.Account: %w", err)
+	}
+	if err := entry.SetAuthorizeValue(authorize); err != nil {
+		return nil, fmt.Errorf("failed to encode Delegate.Authorize: %w", err)
+	}
+	if err := entry.SetPermissionsValue(permissionValues); err != nil {
+		return nil, fmt.Errorf("failed to encode Delegate.Permissions: %w", err)
+	}
+	entry.SetOwnerNodeValue(ownerNode)
+	entry.SetFlagsValue(0)
 	if sponsor != "" {
 		entry.SetSponsor(sponsor)
 	}
 
 	if destinationNode != nil {
-		entry.SetDestinationNode(fmt.Sprintf("%X", *destinationNode))
+		entry.SetDestinationNodeValue(*destinationNode)
 	}
 
-	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
-	var emptyHash [32]byte
-	if prevTxnID != emptyHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(prevTxnID[:])))
-		entry.SetPreviousTxnLgrSeq(prevTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(prevTxnID)
+	entry.SetPreviousTxnLgrSeqValue(prevTxnLgrSeq)
 
 	data, err := entry.Encode()
 	if err != nil {

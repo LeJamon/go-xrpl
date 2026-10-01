@@ -2,7 +2,6 @@ package invariants
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"math/big"
 	"strconv"
@@ -321,7 +320,7 @@ func (c *vvChecker) feePayerForCorrection() ([20]byte, bool) {
 		return c.feePayerID, c.feePayerPreFunded
 	}
 	if c.flat != nil {
-		if u32Field(c.flat, "SponsorFlags")&txcore.SpfSponsorFee != 0 {
+		if flattenedUint32Field(c.flat, "SponsorFlags")&txcore.SpfSponsorFee != 0 {
 			if sponsor, ok := c.flat["Sponsor"].(string); ok {
 				if id, err := state.DecodeAccountID(sponsor); err == nil {
 					return id, false
@@ -1032,172 +1031,149 @@ func vvMPTIDIssuer(id [24]byte) [20]byte {
 	return issuer
 }
 
-func vvMakeVault(m map[string]any, key [32]byte, scale state.MantissaScale) (vvVault, bool) {
+func vvMakeVault(decoded decodedLendingEntry, key [32]byte, scale state.MantissaScale) (vvVault, bool) {
 	v := vvVault{key: key}
-	am, ok := m["Asset"].(map[string]any)
+	model, ok := decoded.model.(*entry.Vault)
 	if !ok {
 		return v, false
 	}
-	v.asset = vvAssetFromMap(am, scale)
-	pseudo, err := state.DecodeAccountID(vvStr(m, "Account"))
+	issue, err := model.GetAsset()
 	if err != nil {
 		return v, false
 	}
-	v.pseudoID = pseudo
-	if owner, oerr := state.DecodeAccountID(vvStr(m, "Owner")); oerr == nil {
-		v.owner = owner
+	if v.asset, ok = vvAssetFromIssue(issue, scale); !ok {
+		return v, false
 	}
-	if b, herr := hex.DecodeString(vvStr(m, "ShareMPTID")); herr == nil && len(b) == 24 {
-		copy(v.shareMPTID[:], b)
+	v.pseudoID, err = model.GetAccount()
+	if err != nil {
+		return v, false
 	}
-	v.assetsTotal = vvNumber(m, "AssetsTotal", scale)
-	v.assetsAvailable = vvNumber(m, "AssetsAvailable", scale)
-	v.assetsMaximum = vvNumber(m, "AssetsMaximum", scale)
-	v.lossUnrealized = vvNumber(m, "LossUnrealized", scale)
-	if kind, ok := vvU64Present(m, "VaultKind"); ok {
-		v.vaultKind = uint8(kind)
+	if model.HasOwner() {
+		v.owner, err = model.GetOwner()
+		if err != nil {
+			return v, false
+		}
+	}
+	v.shareMPTID, err = model.GetShareMPTID()
+	if err != nil {
+		return v, false
+	}
+	v.assetsTotal = vvNumberValue(model.HasAssetsTotal, model.GetAssetsTotal, scale)
+	v.assetsAvailable = vvNumberValue(model.HasAssetsAvailable, model.GetAssetsAvailable, scale)
+	v.assetsMaximum = vvNumberValue(model.HasAssetsMaximum, model.GetAssetsMaximum, scale)
+	v.lossUnrealized = vvNumberValue(model.HasLossUnrealized, model.GetLossUnrealized, scale)
+	if model.HasVaultKind() {
+		kind, err := model.GetVaultKind()
+		if err != nil {
+			return v, false
+		}
+		v.vaultKind = kind
 		v.hasVaultKind = true
 	}
-	if date, ok := vvU64Present(m, "SubscriptionDate"); ok {
-		v.subscriptionDate = uint32(date)
+	if model.HasSubscriptionDate() {
+		value, err := model.GetSubscriptionDate()
+		if err != nil {
+			return v, false
+		}
+		v.subscriptionDate = value
 		v.hasSubscriptionDate = true
 	}
-	if date, ok := vvU64Present(m, "RedemptionDate"); ok {
-		v.redemptionDate = uint32(date)
+	if model.HasRedemptionDate() {
+		value, err := model.GetRedemptionDate()
+		if err != nil {
+			return v, false
+		}
+		v.redemptionDate = value
 		v.hasRedemptionDate = true
 	}
 	return v, true
 }
 
-func vvAssetFromMap(m map[string]any, scale state.MantissaScale) vvAsset {
-	if mptID, ok := m["mpt_issuance_id"].(string); ok {
-		a := vvAsset{isMPT: true, numberScale: scale}
-		if b, err := hex.DecodeString(mptID); err == nil && len(b) == 24 {
-			copy(a.mptID[:], b)
-		}
-		return a
-	}
-	cur, _ := m["currency"].(string)
-	iss, _ := m["issuer"].(string)
-	if isNativeXRPCurrency(cur) && iss == "" {
-		return vvAsset{isXRP: true, numberScale: scale}
-	}
-	a := vvAsset{currency: cur, numberScale: scale}
-	if id, err := state.DecodeAccountID(iss); err == nil {
-		a.issuer = id
-	}
-	return a
-}
-
-func vvMakeShares(m map[string]any) vvShares {
-	seq := u32Field(m, "Sequence")
-	issuer, _ := state.DecodeAccountID(vvStr(m, "Issuer"))
-	s := vvShares{
-		shareMPTID:  keylet.MakeMPTID(seq, issuer),
-		sharesTotal: vvU64(m, "OutstandingAmount"),
-		sharesMax:   vvMaxMPTokenAmount,
-	}
-	if maxAmt, ok := vvU64Present(m, "MaximumAmount"); ok {
-		s.sharesMax = maxAmt
-	}
-	return s
-}
-
-// vvBalanceAmount parses a RippleState Balance (an IOU Amount) from its decoded
-// map form.
-func vvBalanceAmount(m map[string]any) state.Amount {
-	v, ok := m["Balance"]
+func vvMakeShares(decoded decodedLendingEntry) vvShares {
+	model, ok := decoded.model.(*entry.MPTokenIssuance)
 	if !ok {
-		return state.Amount{}
+		return vvShares{}
 	}
-	raw, err := json.Marshal(v)
+	issuer, err := model.GetIssuer()
 	if err != nil {
-		return state.Amount{}
+		return vvShares{}
 	}
-	amt, err := state.AmountFromJSON(raw)
+	sequence, err := model.GetSequence()
 	if err != nil {
-		return state.Amount{}
+		return vvShares{}
 	}
-	return amt
-}
-
-func vvStr(m map[string]any, key string) string {
-	s, _ := m[key].(string)
+	s := vvShares{shareMPTID: keylet.MakeMPTID(sequence, issuer), sharesMax: vvMaxMPTokenAmount}
+	if model.HasOutstandingAmount() {
+		s.sharesTotal, _ = model.GetOutstandingAmount()
+	}
+	if model.HasMaximumAmount() {
+		s.sharesMax, _ = model.GetMaximumAmount()
+	}
 	return s
 }
 
-// vvU64 reads a decimal (sMD_BaseTen) UInt64 field, 0 when absent.
-func vvU64(m map[string]any, key string) uint64 {
-	v, _ := vvU64Present(m, key)
-	return v
-}
-
-func vvU64Present(m map[string]any, key string) (uint64, bool) {
-	switch v := m[key].(type) {
-	case string:
-		if v == "" {
-			return 0, false
-		}
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	case float64:
-		return uint64(v), true
-	case uint64:
-		return v, true
-	case uint32:
-		return uint64(v), true
-	case uint16:
-		return uint64(v), true
-	case uint8:
-		return uint64(v), true
-	case int:
-		return uint64(v), true
-	case int64:
-		if v < 0 {
-			return 0, false
-		}
-		return uint64(v), true
-	case int32:
-		if v < 0 {
-			return 0, false
-		}
-		return uint64(v), true
-	case int16:
-		if v < 0 {
-			return 0, false
-		}
-		return uint64(v), true
-	case int8:
-		if v < 0 {
-			return 0, false
-		}
-		return uint64(v), true
+func vvBalanceAmount(decoded decodedLendingEntry) state.Amount {
+	model, ok := decoded.model.(*entry.RippleState)
+	if !ok || !model.HasBalance() {
+		return state.Amount{}
 	}
-	return 0, false
+	value, err := model.GetBalance()
+	if err != nil {
+		return state.Amount{}
+	}
+	amount, err := state.AmountFromLedgerValue(value)
+	if err != nil {
+		return state.Amount{}
+	}
+	return amount
 }
 
-// vvI64 reads a native XRP drops field (rendered as a decimal string), 0 when
-// absent.
-func vvI64(m map[string]any, key string) int64 {
-	switch v := m[key].(type) {
-	case string:
-		n, _ := strconv.ParseInt(v, 10, 64)
-		return n
-	case float64:
-		return int64(v)
-	case int:
-		return int64(v)
-	case int64:
-		return v
+// vvU64 reads a typed UInt64 field, 0 when absent.
+func vvU64(decoded decodedLendingEntry, key string) uint64 {
+	switch model := decoded.model.(type) {
+	case *entry.MPTokenIssuance:
+		if key == "OutstandingAmount" && model.HasOutstandingAmount() {
+			value, _ := model.GetOutstandingAmount()
+			return value
+		}
+	case *entry.MPToken:
+		if key == "MPTAmount" && model.HasMPTAmount() {
+			value, _ := model.GetMPTAmount()
+			return value
+		}
 	}
 	return 0
 }
 
-func vvNumber(m map[string]any, key string, scale state.MantissaScale) state.XRPLNumber {
-	return vvParseNumber(vvStr(m, key), scale)
+// vvI64 reads a native XRP drops field, 0 when absent.
+func vvI64(decoded decodedLendingEntry, key string) int64 {
+	if key != "Balance" {
+		return 0
+	}
+	model, ok := decoded.model.(*entry.AccountRoot)
+	if !ok || !model.HasBalance() {
+		return 0
+	}
+	value, err := model.GetBalance()
+	if err != nil {
+		return 0
+	}
+	amount, err := state.AmountFromLedgerValue(value)
+	if err != nil || !amount.IsNative() {
+		return 0
+	}
+	return amount.Drops()
+}
+
+func vvNumberValue(has func() bool, get func() (entry.NumberValue, error), scale state.MantissaScale) state.XRPLNumber {
+	if !has() {
+		return vvZero(scale)
+	}
+	value, err := get()
+	if err != nil {
+		return vvZero(scale)
+	}
+	return vvParseNumber(value, scale)
 }
 
 func vvParseNumber(s string, scale state.MantissaScale) state.XRPLNumber {

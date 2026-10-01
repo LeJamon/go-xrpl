@@ -33,6 +33,19 @@ func main() {
 		outDir = os.Args[1]
 	}
 	defs := definitions.Get()
+	if path, content, err := generateInnerValues(defs, outDir); err != nil {
+		log.Fatalf("generate inner values: %v", err)
+	} else {
+		formatted, err := format.Source(content)
+		if err != nil {
+			_ = os.WriteFile(path+".broken", content, 0o644) //nolint:gosec // generated source artifact, world-readable by intent
+			log.Fatalf("gofmt %s: %v (wrote %s.broken)", path, err, path)
+		}
+		if err := os.WriteFile(path, formatted, 0o644); err != nil { //nolint:gosec // G306: generated source artifact, world-readable by intent
+			log.Fatalf("write %s: %v", path, err)
+		}
+		fmt.Printf("wrote %s\n", path)
+	}
 	for _, entry := range schema.Specs {
 		path, content, err := generate(defs, entry, outDir)
 		if err != nil {
@@ -79,6 +92,8 @@ type fieldRender struct {
 	SetterDefaultExpr string
 	SetterGoType      string
 	SetterAssignment  string
+	Clearable         bool
+	Compound          *compoundRender
 }
 
 type entryRender struct {
@@ -105,6 +120,30 @@ type decodeArm struct {
 	XRPOnly         bool // for Amount fields
 	IsBaseTenUInt64 bool // UInt64 sMD_BaseTen field — decode as decimal not hex
 	Meta            schema.Meta
+}
+
+type innerFieldRender struct {
+	Name        string
+	GoField     string
+	XRPLType    string
+	GoType      string
+	Style       uint8
+	BitConst    string
+	BaseTen     bool
+	NestedType  string
+	SetterError bool
+}
+
+type innerObjectRender struct {
+	Name   string
+	Type   string
+	Fields []innerFieldRender
+}
+
+type compoundRender struct {
+	Template string
+	Type     string
+	Array    bool
 }
 
 func generate(defs *definitions.Definitions, entry schema.Entry, outDir string) (string, []byte, error) {
@@ -220,6 +259,9 @@ func generate(defs *definitions.Definitions, entry schema.Entry, outDir string) 
 		if err != nil {
 			return "", nil, fmt.Errorf("render %s: %w", f.Name, err)
 		}
+		if err := attachCompound(&fr); err != nil {
+			return "", nil, fmt.Errorf("render %s: %w", f.Name, err)
+		}
 		er.Fields = append(er.Fields, fr)
 
 		// Include even MetaNever fields in DecodeArms: the parser still has
@@ -269,6 +311,7 @@ func makeFieldRender(f schema.Field, fi *definitions.FieldInstance, entryName, b
 		Meta:             f.Meta,
 		Style:            f.Style,
 		DeferredRequired: f.DeferredRequired,
+		Clearable:        f.Style != schema.StyleRequired,
 	}
 	// Balance on AccountRoot is always XRP. Other Amount fields may be IOU.
 	if entryName == "AccountRoot" && f.Name == "Balance" {
@@ -387,6 +430,135 @@ func makeFieldRender(f schema.Field, fi *definitions.FieldInstance, entryName, b
 	return fr, nil
 }
 
+func attachCompound(fr *fieldRender) error {
+	switch fr.XRPLType {
+	case "STObject":
+		if _, ok := schema.InnerObjectTemplateByName(fr.Name); !ok {
+			return fmt.Errorf("STObject field %s has no inner-object template", fr.Name)
+		}
+		fr.Compound = &compoundRender{Template: fr.Name, Type: innerTypeName(fr.Name)}
+	case "STArray":
+		templateName, ok := schema.ArrayElementTemplate(fr.Name)
+		if !ok {
+			return fmt.Errorf("STArray field %s has no inner-object template", fr.Name)
+		}
+		if _, ok := schema.InnerObjectTemplateByName(templateName); !ok {
+			return fmt.Errorf("STArray field %s references missing template %s", fr.Name, templateName)
+		}
+		fr.Compound = &compoundRender{Template: templateName, Type: innerTypeName(templateName), Array: true}
+	case "Vector256", "Issue", "XChainBridge", "Number":
+		fr.Compound = &compoundRender{Type: fr.XRPLType}
+	default:
+		return nil
+	}
+	return nil
+}
+
+func innerTypeName(template string) string { return template + "Value" }
+
+func generateInnerValues(defs *definitions.Definitions, outDir string) (string, []byte, error) {
+	renders := make([]innerObjectRender, 0)
+	for _, name := range schema.InnerObjectTemplateNames() {
+		spec, ok := schema.InnerObjectTemplateByName(name)
+		if !ok {
+			return "", nil, fmt.Errorf("inner object template %s disappeared", name)
+		}
+		fields := make([]innerFieldRender, 0, len(spec.Fields))
+		for fieldName, fieldSpec := range spec.Fields {
+			fi, err := defs.FieldInstanceByName(fieldName)
+			if err != nil {
+				return "", nil, fmt.Errorf("inner field %s.%s: %w", name, fieldName, err)
+			}
+			fr, err := makeInnerFieldRender(fieldName, fieldSpec, fi)
+			if err != nil {
+				return "", nil, fmt.Errorf("inner field %s.%s: %w", name, fieldName, err)
+			}
+			fr.BitConst = "inner" + innerTypeName(name) + "Bit" + fr.Name
+			fields = append(fields, fr)
+		}
+		sort.Slice(fields, func(i, j int) bool {
+			left, _ := defs.FieldInstanceByName(fields[i].Name)
+			right, _ := defs.FieldInstanceByName(fields[j].Name)
+			return left.Ordinal < right.Ordinal
+		})
+		renders = append(renders, innerObjectRender{Name: name, Type: innerTypeName(name), Fields: fields})
+	}
+	var buf strings.Builder
+	if err := innerValuesTemplate.Execute(&buf, renders); err != nil {
+		return "", nil, err
+	}
+	return filepath.Join(outDir, "inner_values_gen.go"), []byte(buf.String()), nil
+}
+
+func makeInnerFieldRender(name string, spec schema.InnerFieldTemplate, fi *definitions.FieldInstance) (innerFieldRender, error) {
+	xrplType := fi.Type
+	if spec.Kind == schema.InnerPermissionValue {
+		xrplType = "PermissionValue"
+	}
+	fr := innerFieldRender{
+		Name:     name,
+		GoField:  name,
+		XRPLType: xrplType,
+		Style:    uint8(spec.Style - schema.InnerRequired),
+		BitConst: "",
+		BaseTen:  definitions.IsBaseTenUInt64FieldName(name),
+	}
+	switch xrplType {
+	case "AccountID", "Amount", "Issue", "XChainBridge", "Number", "STArray", "STObject":
+		fr.SetterError = true
+	}
+	switch xrplType {
+	case "UInt8":
+		fr.GoType = "uint8"
+	case "UInt16":
+		fr.GoType = "uint16"
+	case "UInt32", "PermissionValue":
+		fr.GoType = "uint32"
+	case "UInt64":
+		fr.GoType = "uint64"
+	case "Hash128":
+		fr.GoType = "[16]byte"
+	case "Hash160":
+		fr.GoType = "[20]byte"
+	case "Hash192":
+		fr.GoType = "[24]byte"
+	case "Hash256":
+		fr.GoType = "[32]byte"
+	case "AccountID":
+		fr.GoType = "[20]byte"
+	case "Blob":
+		fr.GoType = "[]byte"
+	case "Amount":
+		fr.GoType = "AmountValue"
+	case "Vector256":
+		fr.GoType = "Vector256Value"
+	case "Issue":
+		fr.GoType = "IssueValue"
+	case "XChainBridge":
+		fr.GoType = "XChainBridgeValue"
+	case "Number":
+		fr.GoType = "NumberValue"
+	case "Currency":
+		fr.GoType = "string"
+	case "STArray":
+		templateName, ok := schema.ArrayElementTemplate(name)
+		if !ok {
+			return fr, fmt.Errorf("STArray field has no element template")
+		}
+		fr.NestedType = innerTypeName(templateName)
+		fr.GoType = "[]" + fr.NestedType
+	case "STObject":
+		if _, ok := schema.InnerObjectTemplateByName(name); !ok {
+			return fr, fmt.Errorf("STObject field has no template")
+		}
+		fr.NestedType = innerTypeName(name)
+		fr.GoType = fr.NestedType
+	default:
+		return fr, fmt.Errorf("unsupported XRPL type %q", xrplType)
+	}
+	return fr, nil
+}
+
 // defaultExprFor builds the per-field "is type-default" predicate used to gate
 // CreatedNode.NewFields. It mirrors rippled's STBase::isDefault() overrides
 // (STAmount: zero XRP; STIssue: xrpIssue; STNumber: zero; STBitString/UInt*:
@@ -485,6 +657,22 @@ const headerComment = `// Code generated by entrygen; DO NOT EDIT.
 
 var tmpl = template.Must(template.New("entry").Funcs(template.FuncMap{
 	"isZero": func(s string) bool { return s == "" },
+	"lowerFirst": func(s string) string {
+		if s == "" {
+			return s
+		}
+		return strings.ToLower(s[:1]) + s[1:]
+	},
+	"zeroValue": func(goType string) string {
+		switch goType {
+		case "any", "map[string]any", "[]any", "[]string":
+			return "nil"
+		case "string":
+			return `""`
+		default:
+			return "0"
+		}
+	},
 }).Parse(headerComment + `
 package entry
 
@@ -535,7 +723,307 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .SetterGo
 	{{ $.Receiver }}.present |= {{ .BitConst }}
 }
 
-{{ end }}func ({{ .Receiver }} *{{ .StructName }}) validateRequired() error {
+{{ end }}{{ range .Fields }}// Has{{ .GoField }} reports whether {{ .Name }} is present.
+func ({{ $.Receiver }} *{{ $.StructName }}) Has{{ .GoField }}() bool {
+	return {{ $.Receiver }} != nil && {{ $.Receiver }}.present&{{ .BitConst }} != 0
+}
+
+{{ if .Clearable }}// Clear{{ .GoField }} removes {{ .Name }} from the serialized entry.
+func ({{ $.Receiver }} *{{ $.StructName }}) Clear{{ .GoField }}() {
+	if {{ $.Receiver }} == nil {
+		return
+	}
+	{{ $.Receiver }}.{{ .GoField }} = {{ zeroValue .GoType }}
+	{{ $.Receiver }}.present &^= {{ .BitConst }}
+	{{ $.Receiver }}.dirty = true
+}
+
+{{ end }}{{ if eq .XRPLType "Amount" }}// Get{{ .GoField }} returns the typed Amount value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (AmountValue, error) {
+	if {{ $.Receiver }} == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, {{ .XRPOnly }})
+}
+
+// Set{{ .GoField }}Value assigns a typed Amount value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value AmountValue) error {
+	encoded, err := amountValueToAny(value, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, {{ .XRPOnly }})
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if eq .XRPLType "Vector256" }}// Get{{ .GoField }} returns the typed Vector256 values.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (Vector256Value, error) {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
+		return nil, nil
+	}
+	return vector256ValueFromStrings({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns typed Vector256 values.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value Vector256Value) {
+	{{ $.Receiver }}.Set{{ .GoField }}(vector256ValueToStrings(value))
+}
+
+{{ else if eq .XRPLType "Issue" }}// Get{{ .GoField }} returns the typed Issue value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (IssueValue, error) {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns a typed Issue value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value IssueValue) error {
+	encoded, err := issueValueToAny(value, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if eq .XRPLType "XChainBridge" }}// Get{{ .GoField }} returns the typed XChainBridge value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (XChainBridgeValue, error) {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
+		return XChainBridgeValue{}, nil
+	}
+	return xchainBridgeValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns a typed XChainBridge value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value XChainBridgeValue) error {
+	encoded, err := xchainBridgeValueToAny(value, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if eq .XRPLType "Number" }}// Get{{ .GoField }} returns the exact decoded Number text.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (NumberValue, error) {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
+		return "0", nil
+	}
+	return numberValueFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns an exact Number text value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value NumberValue) error {
+	encoded, err := numberValueToAny(value, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if and (eq .XRPLType "STObject") .Compound }}// Get{{ .GoField }} returns the typed nested object.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ({{ .Compound.Type }}, error) {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
+		return {{ .Compound.Type }}{}, nil
+	}
+	return {{ lowerFirst .Compound.Type }}FromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns the typed nested object.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value {{ .Compound.Type }}) error {
+	encoded, err := {{ lowerFirst .Compound.Type }}ToAny(value, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if and (eq .XRPLType "STArray") .Compound }}// Get{{ .GoField }} returns typed nested objects.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([]{{ .Compound.Type }}, error) {
+	if {{ $.Receiver }} == nil || {{ $.Receiver }}.{{ .GoField }} == nil {
+		return nil, nil
+	}
+	return {{ lowerFirst .Compound.Type }}SliceFromAny({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns typed nested objects.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value []{{ .Compound.Type }}) error {
+	encoded, err := {{ lowerFirst .Compound.Type }}SliceToAny(value, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if eq .XRPLType "Hash128" }}// Get{{ .GoField }} returns the typed 128-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([16]byte, error) {
+	var result [16]byte
+	if {{ $.Receiver }} == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, 16)
+	copy(result[:], raw)
+	return result, err
+}
+
+// Set{{ .GoField }}Value assigns a typed 128-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value [16]byte) {
+	{{ $.Receiver }}.Set{{ .GoField }}(hashValueToString(value[:]))
+}
+
+{{ else if or (eq .XRPLType "Hash160") (eq .XRPLType "Currency") }}// Get{{ .GoField }} returns the typed 160-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([20]byte, error) {
+	var result [20]byte
+	if {{ $.Receiver }} == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, 20)
+	copy(result[:], raw)
+	return result, err
+}
+
+// Set{{ .GoField }}Value assigns a typed 160-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value [20]byte) {
+	{{ $.Receiver }}.Set{{ .GoField }}(hashValueToString(value[:]))
+}
+
+{{ else if eq .XRPLType "Hash192" }}// Get{{ .GoField }} returns the typed 192-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([24]byte, error) {
+	var result [24]byte
+	if {{ $.Receiver }} == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, 24)
+	copy(result[:], raw)
+	return result, err
+}
+
+// Set{{ .GoField }}Value assigns a typed 192-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value [24]byte) {
+	{{ $.Receiver }}.Set{{ .GoField }}(hashValueToString(value[:]))
+}
+
+{{ else if eq .XRPLType "Hash256" }}// Get{{ .GoField }} returns the typed 256-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([32]byte, error) {
+	var result [32]byte
+	if {{ $.Receiver }} == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// Set{{ .GoField }}Value assigns a typed 256-bit hash.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value [32]byte) {
+	{{ $.Receiver }}.Set{{ .GoField }}(hashValueToString(value[:]))
+}
+
+{{ else if eq .XRPLType "Blob" }}// Get{{ .GoField }} returns the raw bytes of the Blob field.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([]byte, error) {
+	if {{ $.Receiver }} == nil {
+		return nil, nil
+	}
+	return blobValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns a Blob from raw bytes.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value []byte) {
+	{{ $.Receiver }}.Set{{ .GoField }}(blobValueToString(value))
+}
+
+{{ else if eq .XRPLType "AccountID" }}// Get{{ .GoField }} returns the 20-byte AccountID.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() ([20]byte, error) {
+	if {{ $.Receiver }} == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }})
+}
+
+// Set{{ .GoField }}Value assigns a 20-byte AccountID.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	{{ $.Receiver }}.Set{{ .GoField }}(address)
+	return nil
+}
+
+{{ else if eq .XRPLType "UInt8" }}// Get{{ .GoField }} returns the typed UInt8 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (uint8, error) {
+	if {{ $.Receiver }} == nil {
+		return 0, nil
+	}
+	if {{ $.Receiver }}.{{ .GoField }} < 0 || {{ $.Receiver }}.{{ .GoField }} > 255 {
+		return 0, fmt.Errorf("ledgerfields: {{ $.Name }}.{{ .Name }}: value %d is out of range for UInt8", {{ $.Receiver }}.{{ .GoField }})
+	}
+	return uint8({{ $.Receiver }}.{{ .GoField }}), nil
+}
+
+{{ else if eq .XRPLType "UInt16" }}// Get{{ .GoField }} returns the typed UInt16 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (uint16, error) {
+	if {{ $.Receiver }} == nil {
+		return 0, nil
+	}
+	if {{ $.Receiver }}.{{ .GoField }} < 0 || {{ $.Receiver }}.{{ .GoField }} > 65535 {
+		return 0, fmt.Errorf("ledgerfields: {{ $.Name }}.{{ .Name }}: value %d is out of range for UInt16", {{ $.Receiver }}.{{ .GoField }})
+	}
+	return uint16({{ $.Receiver }}.{{ .GoField }}), nil
+}
+
+// Set{{ .GoField }}Value assigns a typed UInt16 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value uint16) {
+	{{ $.Receiver }}.Set{{ .GoField }}(value)
+}
+
+{{ else if eq .XRPLType "UInt32" }}// Get{{ .GoField }} returns the typed UInt32 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (uint32, error) {
+	if {{ $.Receiver }} == nil {
+		return 0, nil
+	}
+	return {{ $.Receiver }}.{{ .GoField }}, nil
+}
+
+// Set{{ .GoField }}Value assigns a typed UInt32 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value uint32) {
+	{{ $.Receiver }}.Set{{ .GoField }}(value)
+}
+
+{{ else if eq .XRPLType "Int32" }}// Get{{ .GoField }} returns the typed Int32 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (int32, error) {
+	if {{ $.Receiver }} == nil {
+		return 0, nil
+	}
+	if {{ $.Receiver }}.{{ .GoField }} < -2147483648 || {{ $.Receiver }}.{{ .GoField }} > 2147483647 {
+		return 0, fmt.Errorf("ledgerfields: {{ $.Name }}.{{ .Name }}: value %d is out of range for Int32", {{ $.Receiver }}.{{ .GoField }})
+	}
+	return int32({{ $.Receiver }}.{{ .GoField }}), nil
+}
+
+// Set{{ .GoField }}Value assigns a typed Int32 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value int32) {
+	{{ $.Receiver }}.Set{{ .GoField }}(value)
+}
+
+{{ else if eq .XRPLType "UInt64" }}// Get{{ .GoField }} returns the typed UInt64 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Get{{ .GoField }}() (uint64, error) {
+	if {{ $.Receiver }} == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString({{ $.Receiver }}.{{ .GoField }}, {{ printf "%q" (printf "%s.%s" $.Name .Name) }}, {{ .IsBaseTenUInt64 }})
+}
+
+// Set{{ .GoField }}Value assigns a typed UInt64 value.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value uint64) {
+	{{ $.Receiver }}.Set{{ .GoField }}(uint64ValueToString(value, {{ .IsBaseTenUInt64 }}))
+}
+
+{{ end }}{{ end }}func ({{ .Receiver }} *{{ .StructName }}) validateRequired() error {
 	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty {
 		return nil
 	}
@@ -933,3 +1421,497 @@ func ({{ .Receiver }} *{{ .StructName }}) Hash(index [32]byte) ([32]byte, error)
 	return sha512half.Sum(prefix[:], data, index[:]), nil
 }
 `))
+
+var innerValuesTemplate = template.Must(template.New("innerValues").Funcs(template.FuncMap{
+	"lowerFirst": func(s string) string {
+		if s == "" {
+			return s
+		}
+		return strings.ToLower(s[:1]) + s[1:]
+	},
+	"hasPrefix": strings.HasPrefix,
+	"zeroValue": func(goType string) string {
+		switch {
+		case strings.HasPrefix(goType, "[]"):
+			return "nil"
+		case goType == "string":
+			return `""`
+		case strings.HasPrefix(goType, "[") || strings.HasSuffix(goType, "Value"):
+			return goType + "{}"
+		default:
+			return "0"
+		}
+	},
+	"cloneExpr": func(goType, nested, value string) string {
+		if goType == "[]byte" {
+			return "innerCloneBytes(" + value + ")"
+		}
+		if strings.HasPrefix(goType, "[]") && nested != "" {
+			return "clone" + nested + "Slice(" + value + ")"
+		}
+		return value
+	},
+	"isRequired": func(style uint8) bool { return style == uint8(schema.StyleRequired-1) },
+	"isOptional": func(style uint8) bool { return style != uint8(schema.StyleRequired-1) },
+}).Parse(`// Code generated by entrygen; DO NOT EDIT.
+//
+// Source: ledger/entry/schema/inner.go and codec definitions.
+// Regenerate: go generate ./ledger/entry/...
+
+package entry
+
+import (
+	"encoding/hex"
+	"fmt"
+	"math"
+	"reflect"
+	"strconv"
+	"strings"
+
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+)
+
+// NumberValue preserves the exact JSON text of an XRPL Number.
+type NumberValue = string
+
+// Vector256Value is a typed vector of 256-bit hashes.
+type Vector256Value = [][32]byte
+
+// IssueValue is the typed JSON representation of an XRPL Issue.
+type IssueValue struct {
+	Currency      string
+	Issuer        string
+	MPTIssuanceID string
+}
+
+// XChainBridgeValue is the typed representation of an XRPL XChainBridge.
+type XChainBridgeValue struct {
+	LockingChainDoor  [20]byte
+	LockingChainIssue IssueValue
+	IssuingChainDoor  [20]byte
+	IssuingChainIssue IssueValue
+	lockingChainDoorEmpty bool
+	issuingChainDoorEmpty bool
+}
+
+func vector256ValueFromStrings(values []string, field string) (Vector256Value, error) {
+	if values == nil {
+		return nil, nil
+	}
+	result := make(Vector256Value, len(values))
+	for i, value := range values {
+		raw, err := hashValueFromString(value, fmt.Sprintf("%s[%d]", field, i), 32)
+		if err != nil {
+			return nil, err
+		}
+		copy(result[i][:], raw)
+	}
+	return result, nil
+}
+
+func vector256ValueToStrings(values Vector256Value) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, len(values))
+	for i := range values {
+		result[i] = hashValueToString(values[i][:])
+	}
+	return result
+}
+
+func issueValueFromAny(value any, field string) (IssueValue, error) {
+	object, ok := value.(map[string]any)
+	if !ok || object == nil {
+		return IssueValue{}, fmt.Errorf("ledgerfields: %s: issue has type %T, want object", field, value)
+	}
+	result := IssueValue{}
+	if raw, ok := object["mpt_issuance_id"]; ok {
+		id, ok := raw.(string)
+		if !ok || id == "" {
+			return result, fmt.Errorf("ledgerfields: %s: MPT issuance ID has type %T, want non-empty string", field, raw)
+		}
+		if decoded, err := hex.DecodeString(id); err != nil || len(decoded) != 24 {
+			return result, fmt.Errorf("ledgerfields: %s: invalid MPT issuance ID", field)
+		}
+		if _, ok := object["currency"]; ok {
+			return result, fmt.Errorf("ledgerfields: %s: MPT issue cannot carry currency", field)
+		}
+		if _, ok := object["issuer"]; ok {
+			return result, fmt.Errorf("ledgerfields: %s: MPT issue cannot carry issuer", field)
+		}
+		result.MPTIssuanceID = id
+		return result, nil
+	}
+	currency, ok := object["currency"].(string)
+	if !ok || currency == "" {
+		return result, fmt.Errorf("ledgerfields: %s: issue currency is missing or invalid", field)
+	}
+	result.Currency = currency
+	if currency == "XRP" {
+		if _, ok := object["issuer"]; ok {
+			return IssueValue{}, fmt.Errorf("ledgerfields: %s: XRP issue cannot carry issuer", field)
+		}
+		return result, nil
+	}
+	issuer, ok := object["issuer"].(string)
+	if !ok || issuer == "" {
+		return IssueValue{}, fmt.Errorf("ledgerfields: %s: issue issuer is missing or invalid", field)
+	}
+	result.Issuer = issuer
+	return result, nil
+}
+
+func issueValueToAny(value IssueValue, field string) (any, error) {
+	if value.MPTIssuanceID != "" {
+		if value.Currency != "" || value.Issuer != "" {
+			return nil, fmt.Errorf("ledgerfields: %s: MPT issue cannot carry currency or issuer", field)
+		}
+		decoded, err := hex.DecodeString(value.MPTIssuanceID)
+		if err != nil || len(decoded) != 24 {
+			return nil, fmt.Errorf("ledgerfields: %s: invalid MPT issuance ID", field)
+		}
+		return map[string]any{"mpt_issuance_id": strings.ToUpper(value.MPTIssuanceID)}, nil
+	}
+	currency := value.Currency
+	if currency == "" {
+		currency = "XRP"
+	}
+	if currency == "XRP" {
+		if value.Issuer != "" {
+			return nil, fmt.Errorf("ledgerfields: %s: XRP issue cannot carry issuer", field)
+		}
+		return map[string]any{"currency": currency}, nil
+	}
+	if value.Issuer == "" {
+		return nil, fmt.Errorf("ledgerfields: %s: issued issue requires issuer", field)
+	}
+	return map[string]any{"currency": currency, "issuer": value.Issuer}, nil
+}
+
+func xchainBridgeValueFromAny(value any, field string) (XChainBridgeValue, error) {
+	object, ok := value.(map[string]any)
+	if !ok || object == nil {
+		return XChainBridgeValue{}, fmt.Errorf("ledgerfields: %s: bridge has type %T, want object", field, value)
+	}
+	var result XChainBridgeValue
+	var err error
+	if raw, ok := object["LockingChainDoor"].(string); ok && raw == "" {
+		result.lockingChainDoorEmpty = true
+	}
+	if result.LockingChainDoor, err = accountIDValueFromStringValue(object["LockingChainDoor"], field+".LockingChainDoor"); err != nil {
+		return result, err
+	}
+	if result.LockingChainIssue, err = issueValueFromAny(object["LockingChainIssue"], field+".LockingChainIssue"); err != nil {
+		return result, err
+	}
+	if result.IssuingChainDoor, err = accountIDValueFromStringValue(object["IssuingChainDoor"], field+".IssuingChainDoor"); err != nil {
+		return result, err
+	}
+	if raw, ok := object["IssuingChainDoor"].(string); ok && raw == "" {
+		result.issuingChainDoorEmpty = true
+	}
+	if result.IssuingChainIssue, err = issueValueFromAny(object["IssuingChainIssue"], field+".IssuingChainIssue"); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func xchainBridgeValueToAny(value XChainBridgeValue, field string) (any, error) {
+	lockingDoor, err := innerAccountValueToAny(value.LockingChainDoor, value.lockingChainDoorEmpty, field+".LockingChainDoor")
+	if err != nil {
+		return nil, err
+	}
+	issuingDoor, err := innerAccountValueToAny(value.IssuingChainDoor, value.issuingChainDoorEmpty, field+".IssuingChainDoor")
+	if err != nil {
+		return nil, err
+	}
+	lockingIssue, err := issueValueToAny(value.LockingChainIssue, field+".LockingChainIssue")
+	if err != nil {
+		return nil, err
+	}
+	issuingIssue, err := issueValueToAny(value.IssuingChainIssue, field+".IssuingChainIssue")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"LockingChainDoor":  lockingDoor,
+		"LockingChainIssue": lockingIssue,
+		"IssuingChainDoor":  issuingDoor,
+		"IssuingChainIssue": issuingIssue,
+	}, nil
+}
+
+func accountIDValueFromStringValue(value any, field string) ([20]byte, error) {
+	s, ok := value.(string)
+	if !ok {
+		return [20]byte{}, fmt.Errorf("ledgerfields: %s: account has type %T, want string", field, value)
+	}
+	return accountIDValueFromString(s, field)
+}
+
+func innerAccountValueToAny(value [20]byte, empty bool, field string) (any, error) {
+	if empty && value == [20]byte{} {
+		return "", nil
+	}
+	return accountIDValueToString(value)
+}
+
+func numberValueFromAny(value any, field string) (NumberValue, error) {
+	if value == nil {
+		return "0", nil
+	}
+	s, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("ledgerfields: %s: Number has type %T, want string", field, value)
+	}
+	return s, nil
+}
+
+func numberValueToAny(value NumberValue, field string) (any, error) {
+	if value == "" {
+		return "0", nil
+	}
+	return string(value), nil
+}
+
+func innerUnsigned(value any, field string, max uint64) (uint64, error) {
+	var n uint64
+	switch v := value.(type) {
+	case int:
+		if v < 0 { return 0, fmt.Errorf("ledgerfields: %s: negative integer", field) }; n = uint64(v)
+	case int32:
+		if v < 0 { return 0, fmt.Errorf("ledgerfields: %s: negative integer", field) }; n = uint64(v)
+	case int64:
+		if v < 0 { return 0, fmt.Errorf("ledgerfields: %s: negative integer", field) }; n = uint64(v)
+	case uint8: n = uint64(v)
+	case uint16: n = uint64(v)
+	case uint32: n = uint64(v)
+	case uint64: n = v
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > float64(max) || v != math.Trunc(v) { return 0, fmt.Errorf("ledgerfields: %s: invalid integer", field) }; n = uint64(v)
+	default:
+		return 0, fmt.Errorf("ledgerfields: %s: integer has type %T", field, value)
+	}
+	if n > max { return 0, fmt.Errorf("ledgerfields: %s: integer %d is out of range", field, n) }
+	return n, nil
+}
+
+func innerValueFromAny(value any, field, xrplType string, baseTen bool) (any, error) {
+	switch xrplType {
+	case "UInt8": n, err := innerUnsigned(value, field, 1<<8-1); return uint8(n), err
+	case "UInt16": n, err := innerUnsigned(value, field, 1<<16-1); return uint16(n), err
+	case "UInt32": n, err := innerUnsigned(value, field, 1<<32-1); return uint32(n), err
+	case "UInt64":
+		s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: UInt64 has type %T", field, value) }
+		n, err := uint64ValueFromString(s, field, baseTen); return n, err
+	case "Hash128":
+		s, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("ledgerfields: %s: Hash128 has type %T, want string", field, value)
+		}
+		raw, err := hashValueFromString(s, field, 16)
+		var result [16]byte
+		copy(result[:], raw)
+		return result, err
+	case "Hash160", "Currency":
+		s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }
+		if xrplType == "Currency" { return s, nil }
+		raw, err := hashValueFromString(s, field, 20); var result [20]byte; copy(result[:], raw); return result, err
+	case "Hash192": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }; raw, err := hashValueFromString(s, field, 24); var result [24]byte; copy(result[:], raw); return result, err
+	case "Hash256": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }; raw, err := hashValueFromString(s, field, 32); var result [32]byte; copy(result[:], raw); return result, err
+	case "AccountID": return accountIDValueFromStringValue(value, field)
+	case "Blob": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: Blob has type %T", field, value) }; return blobValueFromString(s, field)
+	case "Amount": return amountValueFromAny(value, field, false)
+	case "Issue": return issueValueFromAny(value, field)
+	case "XChainBridge": return xchainBridgeValueFromAny(value, field)
+	case "Number": return numberValueFromAny(value, field)
+	case "PermissionValue":
+		s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: PermissionValue has type %T", field, value) }
+		if n, err := definitions.Get().DelegatablePermissionValue(s); err == nil { return uint32(n), nil }
+		n, err := strconv.ParseUint(s, 10, 32); if err != nil { return nil, fmt.Errorf("ledgerfields: %s: invalid permission %q", field, s) }; return uint32(n), nil
+	default: return nil, fmt.Errorf("ledgerfields: %s: unsupported inner type %s", field, xrplType)
+	}
+}
+
+func innerValueToAny(value any, field, xrplType string, baseTen bool) (any, error) {
+	switch xrplType {
+	case "UInt8": n, err := innerUnsigned(value, field, 1<<8-1); return uint8(n), err
+	case "UInt16": n, err := innerUnsigned(value, field, 1<<16-1); return uint16(n), err
+	case "UInt32": n, err := innerUnsigned(value, field, 1<<32-1); return uint32(n), err
+	case "UInt64": n, ok := value.(uint64); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want uint64, got %T", field, value) }; return uint64ValueToString(n, baseTen), nil
+	case "Hash128": v, ok := value.([16]byte); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want [16]byte, got %T", field, value) }; return hashValueToString(v[:]), nil
+	case "Hash160": v, ok := value.([20]byte); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want [20]byte, got %T", field, value) }; return hashValueToString(v[:]), nil
+	case "Hash192": v, ok := value.([24]byte); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want [24]byte, got %T", field, value) }; return hashValueToString(v[:]), nil
+	case "Hash256": v, ok := value.([32]byte); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want [32]byte, got %T", field, value) }; return hashValueToString(v[:]), nil
+	case "Currency": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want string, got %T", field, value) }; return s, nil
+	case "AccountID": v, ok := value.([20]byte); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want [20]byte, got %T", field, value) }; return accountIDValueToString(v)
+	case "Blob": v, ok := value.([]byte); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want []byte, got %T", field, value) }; return blobValueToString(v), nil
+	case "Amount": v, ok := value.(AmountValue); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want AmountValue, got %T", field, value) }; return amountValueToAny(v, field, false)
+	case "Issue": v, ok := value.(IssueValue); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want IssueValue, got %T", field, value) }; return issueValueToAny(v, field)
+	case "XChainBridge": v, ok := value.(XChainBridgeValue); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want XChainBridgeValue, got %T", field, value) }; return xchainBridgeValueToAny(v, field)
+	case "Number": v, ok := value.(NumberValue); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want NumberValue, got %T", field, value) }; return numberValueToAny(v, field)
+	case "PermissionValue": n, ok := value.(uint32); if !ok { return nil, fmt.Errorf("ledgerfields: %s: want uint32, got %T", field, value) }; if name, err := definitions.Get().DelegatablePermissionName(int32(n)); err == nil { return name, nil }; return strconv.FormatUint(uint64(n), 10), nil
+	default: return nil, fmt.Errorf("ledgerfields: %s: unsupported inner type %s", field, xrplType)
+	}
+}
+
+func innerTypedValueIsDefault(value any, xrplType string) bool {
+	switch xrplType {
+	case "Number": return numberIsDefault(value)
+	case "Amount": return amountIsDefault(value)
+	case "Blob": v, _ := value.([]byte); return len(v) == 0
+	case "Vector256": v, _ := value.(Vector256Value); return len(v) == 0
+	case "Currency": v, _ := value.(string); return v == ""
+	case "AccountID": v, _ := value.([20]byte); return v == [20]byte{}
+	case "Hash128": v, _ := value.([16]byte); return v == [16]byte{}
+	case "Hash160": v, _ := value.([20]byte); return v == [20]byte{}
+	case "Hash192": v, _ := value.([24]byte); return v == [24]byte{}
+	case "Hash256": v, _ := value.([32]byte); return v == [32]byte{}
+	case "UInt8": v, _ := value.(uint8); return v == 0
+	case "UInt16": v, _ := value.(uint16); return v == 0
+	case "UInt32": v, _ := value.(uint32); return v == 0
+	case "UInt64": v, _ := value.(uint64); return v == 0
+	}
+	return reflect.ValueOf(value).IsZero()
+}
+
+func innerCloneBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	return append([]byte(nil), value...)
+}
+
+{{ range . }}
+func clone{{ .Type }}(value {{ .Type }}) {{ .Type }} {
+{{ range .Fields }}{{ if eq .GoType "[]byte" }}	value.{{ .GoField }} = innerCloneBytes(value.{{ .GoField }})
+{{ else if .NestedType }}	value.{{ .GoField }} = clone{{ .NestedType }}Slice(value.{{ .GoField }})
+{{ end }}{{ end }}	return value
+}
+
+func clone{{ .Type }}Slice(value []{{ .Type }}) []{{ .Type }} {
+	if value == nil {
+		return nil
+	}
+	result := make([]{{ .Type }}, len(value))
+	for i := range value {
+		result[i] = clone{{ .Type }}(value[i])
+	}
+	return result
+}
+{{ end }}
+
+{{ range . }}{{ $inner := . }}
+// {{ .Type }} is the typed representation of the {{ .Name }} nested object.
+type {{ .Type }} struct {
+	present uint64
+	emptyAccounts uint64
+{{ range .Fields }}	{{ .GoField }} {{ .GoType }}
+{{ end }}}
+
+const (
+{{ range $i, $f := .Fields }}{{ if eq $i 0 }}	{{ $f.BitConst }} uint64 = 1 << iota
+{{ else }}	{{ $f.BitConst }}
+{{ end }}{{ end }})
+
+{{ range .Fields }}func (v {{ $inner.Type }}) Has{{ .GoField }}() bool { return v.present&{{ .BitConst }} != 0 }
+{{ if isOptional .Style }}func (v *{{ $inner.Type }}) Clear{{ .GoField }}() { if v == nil { return }; v.{{ .GoField }} = {{ if eq .GoType "[]byte" }}nil{{ else if hasPrefix .GoType "[]" }}nil{{ else if eq .GoType "string" }}""{{ else }}{{ zeroValue .GoType }}{{ end }}; v.present &^= {{ .BitConst }}{{ if eq .XRPLType "AccountID" }}; v.emptyAccounts &^= {{ .BitConst }}{{ end }} }
+{{ end }}func (v {{ $inner.Type }}) Get{{ .GoField }}() ({{ .GoType }}, error) { return {{ cloneExpr .GoType .NestedType (printf "v.%s" .GoField) }}, nil }
+{{ if eq .XRPLType "AccountID" }}func (v {{ $inner.Type }}) Get{{ .GoField }}Address() (string, error) { if v.emptyAccounts&{{ .BitConst }} != 0 && v.{{ .GoField }} == [20]byte{} { return "", nil }; return accountIDValueToString(v.{{ .GoField }}) }
+func (v *{{ $inner.Type }}) Set{{ .GoField }}Address(value string) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; decoded, err := accountIDValueFromString(value, "{{ $inner.Type }}.{{ .Name }}"); if err != nil { return err }; v.{{ .GoField }} = decoded; v.present |= {{ .BitConst }}; if value == "" { v.emptyAccounts |= {{ .BitConst }} } else { v.emptyAccounts &^= {{ .BitConst }} }; return nil }
+{{ end }}{{ if or (eq .XRPLType "Hash128") (eq .XRPLType "Hash160") (eq .XRPLType "Hash192") (eq .XRPLType "Hash256") (eq .XRPLType "Blob") }}func (v {{ $inner.Type }}) Get{{ .GoField }}Hex() (string, error) {
+{{ if eq .XRPLType "Blob" }}	return blobValueToString(v.{{ .GoField }}), nil
+{{ else }}	return hashValueToString(v.{{ .GoField }}[:]), nil
+{{ end }}}
+func (v *{{ $inner.Type }}) Set{{ .GoField }}Hex(value string) error {
+	if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }
+{{ if eq .XRPLType "Blob" }}	decoded, err := blobValueFromString(value, "{{ $inner.Type }}.{{ .Name }}")
+	if err != nil { return err }
+	v.{{ .GoField }} = innerCloneBytes(decoded)
+{{ else }}	decoded, err := hashValueFromString(value, "{{ $inner.Type }}.{{ .Name }}", {{ if eq .XRPLType "Hash128" }}16{{ else if eq .XRPLType "Hash160" }}20{{ else if eq .XRPLType "Hash192" }}24{{ else }}32{{ end }})
+	if err != nil { return err }
+	copy(v.{{ .GoField }}[:], decoded)
+{{ end }}	v.present |= {{ .BitConst }}
+	return nil
+}
+{{ end }}{{ if .SetterError }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }; {{ end }}return nil }
+func (v *{{ $inner.Type }}) Set{{ .GoField }}Value(value {{ .GoType }}) error { return v.Set{{ .GoField }}(value) }
+{{ else }}func (v *{{ $inner.Type }}) Set{{ .GoField }}(value {{ .GoType }}) { v.{{ .GoField }} = {{ cloneExpr .GoType .NestedType "value" }}; v.present |= {{ .BitConst }}; {{ if eq .XRPLType "AccountID" }}v.emptyAccounts &^= {{ .BitConst }}; {{ end }}{{ if eq .Style 2 }}if innerTypedValueIsDefault(value, "{{ .XRPLType }}") { v.present &^= {{ .BitConst }} }{{ end }} }
+func (v *{{ $inner.Type }}) Set{{ .GoField }}Value(value {{ .GoType }}) { v.Set{{ .GoField }}(value) }
+{{ end }}
+
+{{ end }}func {{ lowerFirst .Type }}FromAny(value any, field string) ({{ .Type }}, error) {
+	object, ok := value.(map[string]any)
+	if !ok || object == nil { return {{ .Type }}{}, fmt.Errorf("ledgerfields: %s: nested object has type %T", field, value) }
+	var result {{ .Type }}
+	for key := range object {
+		switch key {
+{{ range $inner.Fields }}		case "{{ .Name }}":
+{{ end }}		default:
+			return result, fmt.Errorf("ledgerfields: %s: unknown nested field %q", field, key)
+		}
+	}
+{{ range .Fields }}	if raw, ok := object["{{ .Name }}"]; ok {
+{{ if .NestedType }}		decoded, err := {{ lowerFirst .NestedType }}SliceFromAny(raw, field+".{{ .Name }}")
+		if err != nil { return result, err }
+		result.{{ .GoField }} = decoded
+{{ else }}		decoded, err := innerValueFromAny(raw, field+".{{ .Name }}", "{{ .XRPLType }}", {{ .BaseTen }})
+		if err != nil { return result, err }
+		value, ok := decoded.({{ .GoType }})
+		if !ok { return result, fmt.Errorf("ledgerfields: %s.{{ .Name }}: decoded value has type %T", field, decoded) }
+		result.{{ .GoField }} = value
+{{ end }}
+		{{ if eq .XRPLType "AccountID" }}if rawString, ok := raw.(string); ok && rawString == "" { result.emptyAccounts |= {{ .BitConst }} }{{ end }}
+		result.present |= {{ .BitConst }}
+{{ if eq .Style 0 }}	} else {
+		return result, fmt.Errorf("ledgerfields: %s: required field {{ .Name }} is missing", field)
+{{ end }}	}
+{{ end }}	return result, nil
+}
+
+func {{ lowerFirst .Type }}ToAny(value {{ .Type }}, field string) (map[string]any, error) {
+	result := make(map[string]any)
+{{ range .Fields }}{{ if eq .Style 0 }}	if value.present&{{ .BitConst }} == 0 {
+		return nil, fmt.Errorf("ledgerfields: %s: required field {{ .Name }} is not set", field)
+	} else {
+{{ else }}	if value.present&{{ .BitConst }} != 0 {
+{{ end }}
+{{ if .NestedType }}		raw, err := {{ lowerFirst .NestedType }}SliceToAny(value.{{ .GoField }}, field+".{{ .Name }}")
+{{ else if eq .XRPLType "AccountID" }}		raw, err := innerAccountValueToAny(value.{{ .GoField }}, value.emptyAccounts&{{ .BitConst }} != 0, field+".{{ .Name }}")
+{{ else }}		raw, err := innerValueToAny(value.{{ .GoField }}, field+".{{ .Name }}", "{{ .XRPLType }}", {{ .BaseTen }})
+{{ end }}		if err != nil { return nil, err }
+		result["{{ .Name }}"] = raw
+	}
+{{ end }}	return result, nil
+}
+
+func (v {{ .Type }}) ToMap() (map[string]any, error) { return {{ lowerFirst .Type }}ToAny(v, "{{ .Name }}") }
+
+func {{ lowerFirst .Type }}SliceFromAny(value any, field string) ([]{{ .Type }}, error) {
+	array, ok := normalizeInnerArray(value)
+	if !ok { return nil, fmt.Errorf("ledgerfields: %s: expected array, got %T", field, value) }
+	result := make([]{{ .Type }}, 0, len(array))
+	for i, item := range array {
+		object, ok := item.(map[string]any)
+		if !ok { return nil, fmt.Errorf("ledgerfields: %s[%d]: expected wrapped object, got %T", field, i, item) }
+		if len(object) != 1 { return nil, fmt.Errorf("ledgerfields: %s[%d]: expected one wrapper", field, i) }
+		raw, ok := object["{{ .Name }}"]
+		if !ok { return nil, fmt.Errorf("ledgerfields: %s[%d]: expected {{ .Name }} wrapper", field, i) }
+		decoded, err := {{ lowerFirst .Type }}FromAny(raw, fmt.Sprintf("%s[%d].{{ .Name }}", field, i))
+		if err != nil { return nil, err }
+		result = append(result, decoded)
+	}
+	return result, nil
+}
+
+func {{ lowerFirst .Type }}SliceToAny(value []{{ .Type }}, field string) ([]any, error) {
+	result := make([]any, 0, len(value))
+	for i, item := range value {
+		object, err := {{ lowerFirst .Type }}ToAny(item, fmt.Sprintf("%s[%d].{{ .Name }}", field, i))
+		if err != nil { return nil, err }
+		result = append(result, map[string]any{"{{ .Name }}": object})
+	}
+	return result, nil
+}
+{{ end }}`))

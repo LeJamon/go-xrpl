@@ -250,6 +250,532 @@ func (v *Vault) SetSponsor(value string) {
 	v.present |= vaultBitSponsor
 }
 
+// HasSequence reports whether Sequence is present.
+func (v *Vault) HasSequence() bool {
+	return v != nil && v.present&vaultBitSequence != 0
+}
+
+// GetSequence returns the typed UInt32 value.
+func (v *Vault) GetSequence() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (v *Vault) SetSequenceValue(value uint32) {
+	v.SetSequence(value)
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (v *Vault) HasOwnerNode() bool {
+	return v != nil && v.present&vaultBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (v *Vault) GetOwnerNode() (uint64, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(v.OwnerNode, "Vault.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (v *Vault) SetOwnerNodeValue(value uint64) {
+	v.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasOwner reports whether Owner is present.
+func (v *Vault) HasOwner() bool {
+	return v != nil && v.present&vaultBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (v *Vault) GetOwner() ([20]byte, error) {
+	if v == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(v.Owner, "Vault.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (v *Vault) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	v.SetOwner(address)
+	return nil
+}
+
+// HasAccount reports whether Account is present.
+func (v *Vault) HasAccount() bool {
+	return v != nil && v.present&vaultBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (v *Vault) GetAccount() ([20]byte, error) {
+	if v == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(v.Account, "Vault.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (v *Vault) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	v.SetAccount(address)
+	return nil
+}
+
+// HasData reports whether Data is present.
+func (v *Vault) HasData() bool {
+	return v != nil && v.present&vaultBitData != 0
+}
+
+// ClearData removes Data from the serialized entry.
+func (v *Vault) ClearData() {
+	if v == nil {
+		return
+	}
+	v.Data = ""
+	v.present &^= vaultBitData
+	v.dirty = true
+}
+
+// GetData returns the raw bytes of the Blob field.
+func (v *Vault) GetData() ([]byte, error) {
+	if v == nil {
+		return nil, nil
+	}
+	return blobValueFromString(v.Data, "Vault.Data")
+}
+
+// SetDataValue assigns a Blob from raw bytes.
+func (v *Vault) SetDataValue(value []byte) {
+	v.SetData(blobValueToString(value))
+}
+
+// HasAsset reports whether Asset is present.
+func (v *Vault) HasAsset() bool {
+	return v != nil && v.present&vaultBitAsset != 0
+}
+
+// GetAsset returns the typed Issue value.
+func (v *Vault) GetAsset() (IssueValue, error) {
+	if v == nil || v.Asset == nil {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny(v.Asset, "Vault.Asset")
+}
+
+// SetAssetValue assigns a typed Issue value.
+func (v *Vault) SetAssetValue(value IssueValue) error {
+	encoded, err := issueValueToAny(value, "Vault.Asset")
+	if err != nil {
+		return err
+	}
+	v.SetAsset(encoded)
+	return nil
+}
+
+// HasAssetsTotal reports whether AssetsTotal is present.
+func (v *Vault) HasAssetsTotal() bool {
+	return v != nil && v.present&vaultBitAssetsTotal != 0
+}
+
+// ClearAssetsTotal removes AssetsTotal from the serialized entry.
+func (v *Vault) ClearAssetsTotal() {
+	if v == nil {
+		return
+	}
+	v.AssetsTotal = nil
+	v.present &^= vaultBitAssetsTotal
+	v.dirty = true
+}
+
+// GetAssetsTotal returns the exact decoded Number text.
+func (v *Vault) GetAssetsTotal() (NumberValue, error) {
+	if v == nil || v.AssetsTotal == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsTotal, "Vault.AssetsTotal")
+}
+
+// SetAssetsTotalValue assigns an exact Number text value.
+func (v *Vault) SetAssetsTotalValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsTotal")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsTotal(encoded)
+	return nil
+}
+
+// HasAssetsAvailable reports whether AssetsAvailable is present.
+func (v *Vault) HasAssetsAvailable() bool {
+	return v != nil && v.present&vaultBitAssetsAvailable != 0
+}
+
+// ClearAssetsAvailable removes AssetsAvailable from the serialized entry.
+func (v *Vault) ClearAssetsAvailable() {
+	if v == nil {
+		return
+	}
+	v.AssetsAvailable = nil
+	v.present &^= vaultBitAssetsAvailable
+	v.dirty = true
+}
+
+// GetAssetsAvailable returns the exact decoded Number text.
+func (v *Vault) GetAssetsAvailable() (NumberValue, error) {
+	if v == nil || v.AssetsAvailable == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsAvailable, "Vault.AssetsAvailable")
+}
+
+// SetAssetsAvailableValue assigns an exact Number text value.
+func (v *Vault) SetAssetsAvailableValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsAvailable")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsAvailable(encoded)
+	return nil
+}
+
+// HasAssetsMaximum reports whether AssetsMaximum is present.
+func (v *Vault) HasAssetsMaximum() bool {
+	return v != nil && v.present&vaultBitAssetsMaximum != 0
+}
+
+// ClearAssetsMaximum removes AssetsMaximum from the serialized entry.
+func (v *Vault) ClearAssetsMaximum() {
+	if v == nil {
+		return
+	}
+	v.AssetsMaximum = nil
+	v.present &^= vaultBitAssetsMaximum
+	v.dirty = true
+}
+
+// GetAssetsMaximum returns the exact decoded Number text.
+func (v *Vault) GetAssetsMaximum() (NumberValue, error) {
+	if v == nil || v.AssetsMaximum == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsMaximum, "Vault.AssetsMaximum")
+}
+
+// SetAssetsMaximumValue assigns an exact Number text value.
+func (v *Vault) SetAssetsMaximumValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsMaximum")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsMaximum(encoded)
+	return nil
+}
+
+// HasLossUnrealized reports whether LossUnrealized is present.
+func (v *Vault) HasLossUnrealized() bool {
+	return v != nil && v.present&vaultBitLossUnrealized != 0
+}
+
+// ClearLossUnrealized removes LossUnrealized from the serialized entry.
+func (v *Vault) ClearLossUnrealized() {
+	if v == nil {
+		return
+	}
+	v.LossUnrealized = nil
+	v.present &^= vaultBitLossUnrealized
+	v.dirty = true
+}
+
+// GetLossUnrealized returns the exact decoded Number text.
+func (v *Vault) GetLossUnrealized() (NumberValue, error) {
+	if v == nil || v.LossUnrealized == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(v.LossUnrealized, "Vault.LossUnrealized")
+}
+
+// SetLossUnrealizedValue assigns an exact Number text value.
+func (v *Vault) SetLossUnrealizedValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.LossUnrealized")
+	if err != nil {
+		return err
+	}
+	v.SetLossUnrealized(encoded)
+	return nil
+}
+
+// HasShareMPTID reports whether ShareMPTID is present.
+func (v *Vault) HasShareMPTID() bool {
+	return v != nil && v.present&vaultBitShareMPTID != 0
+}
+
+// GetShareMPTID returns the typed 192-bit hash.
+func (v *Vault) GetShareMPTID() ([24]byte, error) {
+	var result [24]byte
+	if v == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(v.ShareMPTID, "Vault.ShareMPTID", 24)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetShareMPTIDValue assigns a typed 192-bit hash.
+func (v *Vault) SetShareMPTIDValue(value [24]byte) {
+	v.SetShareMPTID(hashValueToString(value[:]))
+}
+
+// HasWithdrawalPolicy reports whether WithdrawalPolicy is present.
+func (v *Vault) HasWithdrawalPolicy() bool {
+	return v != nil && v.present&vaultBitWithdrawalPolicy != 0
+}
+
+// GetWithdrawalPolicy returns the typed UInt8 value.
+func (v *Vault) GetWithdrawalPolicy() (uint8, error) {
+	if v == nil {
+		return 0, nil
+	}
+	if v.WithdrawalPolicy < 0 || v.WithdrawalPolicy > 255 {
+		return 0, fmt.Errorf("ledgerfields: Vault.WithdrawalPolicy: value %d is out of range for UInt8", v.WithdrawalPolicy)
+	}
+	return uint8(v.WithdrawalPolicy), nil
+}
+
+// HasScale reports whether Scale is present.
+func (v *Vault) HasScale() bool {
+	return v != nil && v.present&vaultBitScale != 0
+}
+
+// ClearScale removes Scale from the serialized entry.
+func (v *Vault) ClearScale() {
+	if v == nil {
+		return
+	}
+	v.Scale = 0
+	v.present &^= vaultBitScale
+	v.dirty = true
+}
+
+// GetScale returns the typed UInt8 value.
+func (v *Vault) GetScale() (uint8, error) {
+	if v == nil {
+		return 0, nil
+	}
+	if v.Scale < 0 || v.Scale > 255 {
+		return 0, fmt.Errorf("ledgerfields: Vault.Scale: value %d is out of range for UInt8", v.Scale)
+	}
+	return uint8(v.Scale), nil
+}
+
+// HasLEVersion reports whether LEVersion is present.
+func (v *Vault) HasLEVersion() bool {
+	return v != nil && v.present&vaultBitLEVersion != 0
+}
+
+// ClearLEVersion removes LEVersion from the serialized entry.
+func (v *Vault) ClearLEVersion() {
+	if v == nil {
+		return
+	}
+	v.LEVersion = 0
+	v.present &^= vaultBitLEVersion
+	v.dirty = true
+}
+
+// GetLEVersion returns the typed UInt8 value.
+func (v *Vault) GetLEVersion() (uint8, error) {
+	if v == nil {
+		return 0, nil
+	}
+	if v.LEVersion < 0 || v.LEVersion > 255 {
+		return 0, fmt.Errorf("ledgerfields: Vault.LEVersion: value %d is out of range for UInt8", v.LEVersion)
+	}
+	return uint8(v.LEVersion), nil
+}
+
+// HasVaultKind reports whether VaultKind is present.
+func (v *Vault) HasVaultKind() bool {
+	return v != nil && v.present&vaultBitVaultKind != 0
+}
+
+// ClearVaultKind removes VaultKind from the serialized entry.
+func (v *Vault) ClearVaultKind() {
+	if v == nil {
+		return
+	}
+	v.VaultKind = 0
+	v.present &^= vaultBitVaultKind
+	v.dirty = true
+}
+
+// GetVaultKind returns the typed UInt8 value.
+func (v *Vault) GetVaultKind() (uint8, error) {
+	if v == nil {
+		return 0, nil
+	}
+	if v.VaultKind < 0 || v.VaultKind > 255 {
+		return 0, fmt.Errorf("ledgerfields: Vault.VaultKind: value %d is out of range for UInt8", v.VaultKind)
+	}
+	return uint8(v.VaultKind), nil
+}
+
+// HasSubscriptionDate reports whether SubscriptionDate is present.
+func (v *Vault) HasSubscriptionDate() bool {
+	return v != nil && v.present&vaultBitSubscriptionDate != 0
+}
+
+// ClearSubscriptionDate removes SubscriptionDate from the serialized entry.
+func (v *Vault) ClearSubscriptionDate() {
+	if v == nil {
+		return
+	}
+	v.SubscriptionDate = 0
+	v.present &^= vaultBitSubscriptionDate
+	v.dirty = true
+}
+
+// GetSubscriptionDate returns the typed UInt32 value.
+func (v *Vault) GetSubscriptionDate() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.SubscriptionDate, nil
+}
+
+// SetSubscriptionDateValue assigns a typed UInt32 value.
+func (v *Vault) SetSubscriptionDateValue(value uint32) {
+	v.SetSubscriptionDate(value)
+}
+
+// HasRedemptionDate reports whether RedemptionDate is present.
+func (v *Vault) HasRedemptionDate() bool {
+	return v != nil && v.present&vaultBitRedemptionDate != 0
+}
+
+// ClearRedemptionDate removes RedemptionDate from the serialized entry.
+func (v *Vault) ClearRedemptionDate() {
+	if v == nil {
+		return
+	}
+	v.RedemptionDate = 0
+	v.present &^= vaultBitRedemptionDate
+	v.dirty = true
+}
+
+// GetRedemptionDate returns the typed UInt32 value.
+func (v *Vault) GetRedemptionDate() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.RedemptionDate, nil
+}
+
+// SetRedemptionDateValue assigns a typed UInt32 value.
+func (v *Vault) SetRedemptionDateValue(value uint32) {
+	v.SetRedemptionDate(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (v *Vault) HasFlags() bool {
+	return v != nil && v.present&vaultBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (v *Vault) GetFlags() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (v *Vault) SetFlagsValue(value uint32) {
+	v.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (v *Vault) HasPreviousTxnID() bool {
+	return v != nil && v.present&vaultBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (v *Vault) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if v == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(v.PreviousTxnID, "Vault.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (v *Vault) SetPreviousTxnIDValue(value [32]byte) {
+	v.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (v *Vault) HasPreviousTxnLgrSeq() bool {
+	return v != nil && v.present&vaultBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (v *Vault) GetPreviousTxnLgrSeq() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (v *Vault) SetPreviousTxnLgrSeqValue(value uint32) {
+	v.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (v *Vault) HasSponsor() bool {
+	return v != nil && v.present&vaultBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (v *Vault) ClearSponsor() {
+	if v == nil {
+		return
+	}
+	v.Sponsor = ""
+	v.present &^= vaultBitSponsor
+	v.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (v *Vault) GetSponsor() ([20]byte, error) {
+	if v == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(v.Sponsor, "Vault.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (v *Vault) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	v.SetSponsor(address)
+	return nil
+}
+
 func (v *Vault) validateRequired() error {
 	if v.decoded && !v.dirty {
 		return nil

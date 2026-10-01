@@ -1,10 +1,8 @@
 package state
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
@@ -53,7 +51,7 @@ type RippleState struct {
 
 	// PreviousTxnLgrSeq is the ledger sequence of the previous transaction
 	PreviousTxnLgrSeq uint32
-	decodedOptionals  map[string]any
+	decoded           entry.RippleState
 	binaryBadCurrency bool
 }
 
@@ -87,8 +85,7 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode RippleState: %w", err)
 	}
-	fields := decoded.ToMap()
-	decodeIssued := func(field string, value any) (Amount, error) {
+	decodeIssued := func(field string, value entry.AmountValue) (Amount, error) {
 		amount, err := decodeLedgerAmount("RippleState."+field, value)
 		if err != nil {
 			return Amount{}, err
@@ -98,11 +95,15 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 		}
 		return amount, nil
 	}
-	balance, err := decodeIssued("Balance", decoded.Balance)
+	balanceValue, err := decoded.GetBalance()
 	if err != nil {
 		return nil, err
 	}
-	decodeLimit := func(field string, value any) (Amount, error) {
+	balance, err := decodeIssued("Balance", balanceValue)
+	if err != nil {
+		return nil, err
+	}
+	decodeLimit := func(field string, value entry.AmountValue) (Amount, error) {
 		amount, err := decodeLedgerAmount("RippleState."+field, value)
 		if err != nil {
 			return Amount{}, err
@@ -122,11 +123,19 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 		}
 		return amount, nil
 	}
-	lowLimit, err := decodeLimit("LowLimit", decoded.LowLimit)
+	lowLimitValue, err := decoded.GetLowLimit()
 	if err != nil {
 		return nil, err
 	}
-	highLimit, err := decodeLimit("HighLimit", decoded.HighLimit)
+	lowLimit, err := decodeLimit("LowLimit", lowLimitValue)
+	if err != nil {
+		return nil, err
+	}
+	highLimitValue, err := decoded.GetHighLimit()
+	if err != nil {
+		return nil, err
+	}
+	highLimit, err := decodeLimit("HighLimit", highLimitValue)
 	if err != nil {
 		return nil, err
 	}
@@ -149,38 +158,39 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 		LowQualityOut:     decoded.LowQualityOut,
 		HighQualityIn:     decoded.HighQualityIn,
 		HighQualityOut:    decoded.HighQualityOut,
-		HighSponsor:       decoded.HighSponsor,
-		LowSponsor:        decoded.LowSponsor,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
-		decodedOptionals:  make(map[string]any),
+		HasLowNode:        decoded.HasLowNode(),
+		HasHighNode:       decoded.HasHighNode(),
+		HasLowQualityIn:   decoded.HasLowQualityIn(),
+		HasLowQualityOut:  decoded.HasLowQualityOut(),
+		HasHighQualityIn:  decoded.HasHighQualityIn(),
+		HasHighQualityOut: decoded.HasHighQualityOut(),
+		decoded:           decoded,
 		binaryBadCurrency: badCurrencyAmounts == 3,
 	}
-	if _, ok := fields["LowNode"]; ok {
-		rs.LowNode, err = parseLedgerUint64("RippleState.LowNode", decoded.LowNode)
+	if rs.HasLowNode {
+		rs.LowNode, err = decoded.GetLowNode()
 		if err != nil {
 			return nil, err
 		}
-		rs.HasLowNode = true
 	}
-	if _, ok := fields["HighNode"]; ok {
-		rs.HighNode, err = parseLedgerUint64("RippleState.HighNode", decoded.HighNode)
+	if rs.HasHighNode {
+		rs.HighNode, err = decoded.GetHighNode()
 		if err != nil {
 			return nil, err
 		}
-		rs.HasHighNode = true
 	}
-	_, rs.HasLowQualityIn = fields["LowQualityIn"]
-	_, rs.HasLowQualityOut = fields["LowQualityOut"]
-	_, rs.HasHighQualityIn = fields["HighQualityIn"]
-	_, rs.HasHighQualityOut = fields["HighQualityOut"]
-	if _, ok := fields["PreviousTxnID"]; ok {
-		if err := decodeLedgerHex("RippleState.PreviousTxnID", decoded.PreviousTxnID, rs.PreviousTxnID[:]); err != nil {
+	if decoded.HasHighSponsor() {
+		rs.HighSponsor = decoded.HighSponsor
+	}
+	if decoded.HasLowSponsor() {
+		rs.LowSponsor = decoded.LowSponsor
+	}
+	if decoded.HasPreviousTxnID() {
+		rs.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
 			return nil, err
 		}
-		rs.decodedOptionals["PreviousTxnID"] = rs.PreviousTxnID
-	}
-	if _, ok := fields["PreviousTxnLgrSeq"]; ok {
-		rs.decodedOptionals["PreviousTxnLgrSeq"] = rs.PreviousTxnLgrSeq
 	}
 	return rs, nil
 }
@@ -229,27 +239,25 @@ func parseCanonicalAmountBinary(data []byte) (Amount, error) {
 	if parser.Remaining() != 0 {
 		return Amount{}, errors.New("trailing amount bytes")
 	}
-	return decodeLedgerAmount("Amount", decoded)
+	amountValue, err := entry.ParseAmountValue(decoded)
+	if err != nil {
+		return Amount{}, err
+	}
+	return decodeLedgerAmount("Amount", amountValue)
 }
 
-func serializeAmount(amount Amount, currency string, useAccountOne bool) any {
+func serializeAmountValue(amount Amount, currency string, useAccountOne bool) entry.AmountValue {
+	value := amount.LedgerValue()
 	if amount.IsNative() {
-		return amount.Value()
+		return value
 	}
-	valueStr := amount.Value()
-	curr := currency
-	if curr == "" {
-		curr = amount.Currency
+	if currency != "" {
+		value.Currency = currency
 	}
-	issuer := amount.Issuer
 	if useAccountOne {
-		issuer = accountOne
+		value.Issuer = accountOne
 	}
-	return map[string]any{
-		"value":    valueStr,
-		"currency": curr,
-		"issuer":   issuer,
-	}
+	return value
 }
 
 // SerializeRippleState serializes a RippleState to binary
@@ -269,42 +277,60 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 		encodedCurrency = "USD"
 	}
 
-	entry := &entry.RippleState{}
-	entry.SetFlags(rs.Flags)
-	entry.SetBalance(serializeAmount(rs.Balance, encodedCurrency, true))
-	entry.SetLowLimit(serializeAmount(rs.LowLimit, encodedCurrency, false))
-	entry.SetHighLimit(serializeAmount(rs.HighLimit, encodedCurrency, false))
+	entry := rs.decoded
+	entry.SetFlagsValue(rs.Flags)
+	if err := entry.SetBalanceValue(serializeAmountValue(rs.Balance, encodedCurrency, true)); err != nil {
+		return nil, err
+	}
+	if err := entry.SetLowLimitValue(serializeAmountValue(rs.LowLimit, encodedCurrency, false)); err != nil {
+		return nil, err
+	}
+	if err := entry.SetHighLimitValue(serializeAmountValue(rs.HighLimit, encodedCurrency, false)); err != nil {
+		return nil, err
+	}
 	if rs.HasLowNode || rs.LowNode != 0 {
-		entry.SetLowNode(fmt.Sprintf("%x", rs.LowNode))
+		entry.SetLowNodeValue(rs.LowNode)
+	} else {
+		entry.ClearLowNode()
 	}
 	if rs.HasHighNode || rs.HighNode != 0 {
-		entry.SetHighNode(fmt.Sprintf("%x", rs.HighNode))
+		entry.SetHighNodeValue(rs.HighNode)
+	} else {
+		entry.ClearHighNode()
 	}
 	if rs.HasLowQualityIn || rs.LowQualityIn != 0 {
-		entry.SetLowQualityIn(rs.LowQualityIn)
+		entry.SetLowQualityInValue(rs.LowQualityIn)
+	} else {
+		entry.ClearLowQualityIn()
 	}
 	if rs.HasLowQualityOut || rs.LowQualityOut != 0 {
-		entry.SetLowQualityOut(rs.LowQualityOut)
+		entry.SetLowQualityOutValue(rs.LowQualityOut)
+	} else {
+		entry.ClearLowQualityOut()
 	}
 	if rs.HasHighQualityIn || rs.HighQualityIn != 0 {
-		entry.SetHighQualityIn(rs.HighQualityIn)
+		entry.SetHighQualityInValue(rs.HighQualityIn)
+	} else {
+		entry.ClearHighQualityIn()
 	}
 	if rs.HasHighQualityOut || rs.HighQualityOut != 0 {
-		entry.SetHighQualityOut(rs.HighQualityOut)
+		entry.SetHighQualityOutValue(rs.HighQualityOut)
+	} else {
+		entry.ClearHighQualityOut()
 	}
-	if rs.HighSponsor != "" {
+	if rs.HighSponsor != "" || (entry.HasHighSponsor() && rs.HighSponsor == entry.HighSponsor) {
 		entry.SetHighSponsor(rs.HighSponsor)
+	} else {
+		entry.ClearHighSponsor()
 	}
-	if rs.LowSponsor != "" {
+	if rs.LowSponsor != "" || (entry.HasLowSponsor() && rs.LowSponsor == entry.LowSponsor) {
 		entry.SetLowSponsor(rs.LowSponsor)
+	} else {
+		entry.ClearLowSponsor()
 	}
 
-	if rs.PreviousTxnID != [32]byte{} || decodedFieldUnchanged(rs.decodedOptionals, "PreviousTxnID", rs.PreviousTxnID) {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(rs.PreviousTxnID[:])))
-	}
-	if rs.PreviousTxnLgrSeq != 0 || decodedFieldUnchanged(rs.decodedOptionals, "PreviousTxnLgrSeq", rs.PreviousTxnLgrSeq) {
-		entry.SetPreviousTxnLgrSeq(rs.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(rs.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(rs.PreviousTxnLgrSeq)
 
 	data, err := entry.Encode()
 	if err != nil {

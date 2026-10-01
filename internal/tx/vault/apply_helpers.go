@@ -37,7 +37,7 @@ func mptIDIssuer(id [24]byte) [20]byte {
 
 // readMPTIssuance reads and parses an MPT issuance, returning (nil, nil) when
 // absent.
-func readMPTIssuance(view tx.LedgerView, id [24]byte) (*state.MPTokenIssuanceData, error) {
+func readMPTIssuance(view tx.ReadOnlyLedgerView, id [24]byte) (*state.MPTokenIssuanceData, error) {
 	data, err := view.Read(keylet.MPTIssuance(id))
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func readMPTIssuance(view tx.LedgerView, id [24]byte) (*state.MPTokenIssuanceDat
 
 // canAddHolding checks whether accountID could hold asset: XRP/IOU via
 // canAddHoldingIssue, MPT via issuance existence + lsfMPTCanTransfer.
-func canAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
+func canAddHolding(view tx.ReadOnlyLedgerView, asset tx.Asset) ter.Result {
 	if !asset.IsMPT() {
 		return canAddHoldingIssue(view, asset)
 	}
@@ -71,7 +71,7 @@ func canAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func holdingExists(view tx.LedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
+func holdingExists(view tx.ReadOnlyLedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
 	if asset.IsNative() {
 		return true, nil
 	}
@@ -95,15 +95,15 @@ func holdingExists(view tx.LedgerView, accountID [20]byte, asset tx.Asset) (bool
 	return view.Exists(keylet.Line(accountID, issuerID, asset.Currency))
 }
 
-func canTransfer(view tx.LedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
+func canTransfer(view tx.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
 	return mptutil.CanTransferAsset(view, asset, from, to, waiveMPTCanTransfer)
 }
 
-func requireAuth(view tx.LedgerView, asset tx.Asset, account [20]byte, authType mptutil.AuthType, parentCloseTime uint32) ter.Result {
+func requireAuth(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType mptutil.AuthType, parentCloseTime uint32) ter.Result {
 	return mptutil.RequireAssetAuthAt(view, asset, account, authType, parentCloseTime)
 }
 
-func checkFrozen(view tx.LedgerView, asset tx.Asset, account [20]byte) ter.Result {
+func checkFrozen(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte) ter.Result {
 	if !mptutil.IsAssetFrozen(view, asset, account) {
 		return ter.TesSUCCESS
 	}
@@ -245,7 +245,7 @@ func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amoun
 
 // canAddHoldingIssue mirrors rippled's canAddHolding for an IOU/XRP asset: XRP is
 // always addable; an IOU issuer must exist and have DefaultRipple set.
-func canAddHoldingIssue(view tx.LedgerView, asset tx.Asset) ter.Result {
+func canAddHoldingIssue(view tx.ReadOnlyLedgerView, asset tx.Asset) ter.Result {
 	if isNativeAsset(asset) {
 		return ter.TesSUCCESS
 	}
@@ -364,7 +364,7 @@ func readVault(view AssetReadView, vaultKey keylet.Keylet) (*vaultData, error) {
 }
 
 // readMPToken reads and parses an MPToken, returning (nil, nil) when absent.
-func readMPToken(view tx.LedgerView, tokenKey keylet.Keylet) (*state.MPTokenData, error) {
+func readMPToken(view tx.ReadOnlyLedgerView, tokenKey keylet.Keylet) (*state.MPTokenData, error) {
 	data, err := view.Read(tokenKey)
 	if err != nil {
 		return nil, err
@@ -377,7 +377,7 @@ func readMPToken(view tx.LedgerView, tokenKey keylet.Keylet) (*state.MPTokenData
 
 // isSoleShareholder reports whether account holds every outstanding share of the
 // vault, so it owns both the available and the future value.
-func isSoleShareholder(view tx.LedgerView, account [20]byte, shareMPTID [24]byte, outstanding uint64) bool {
+func isSoleShareholder(view tx.ReadOnlyLedgerView, account [20]byte, shareMPTID [24]byte, outstanding uint64) bool {
 	if outstanding == 0 {
 		return false
 	}
@@ -488,7 +488,7 @@ func vaultAssetOf(vd *vaultData) tx.Asset {
 // `to`: the destination must exist, satisfy any RequireDestTag / DepositAuth
 // requirement, and (for an IOU delivered to a third party) not exceed its trust
 // limit. Reference: rippled View.cpp canWithdraw.
-func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
+func canWithdraw(view tx.ReadOnlyLedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
 	toAcct, err := tx.ReadAccountRoot(view, to)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -533,7 +533,7 @@ func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDes
 
 // withdrawToDestExceedsLimit rejects an IOU withdrawal that would push the
 // third-party destination past its trust limit. XRP and MPT are exempt.
-func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
+func withdrawToDestExceedsLimit(view tx.ReadOnlyLedgerView, from, to [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
 	if amount.IsNative() || amount.IsMPT() {
 		return ter.TesSUCCESS
 	}
@@ -563,7 +563,7 @@ func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx
 
 // lineBalanceInTerms returns the trust-line balance between account and issuer
 // expressed in account's terms (positive means the account holds the asset).
-func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
+func lineBalanceInTerms(view tx.ReadOnlyLedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
 		return numberContext.Int(0)
@@ -580,7 +580,7 @@ func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency s
 }
 
 // lineLimit returns account's own trust limit toward issuer for currency.
-func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
+func lineLimit(view tx.ReadOnlyLedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
 		return numberContext.Int(0)
@@ -614,7 +614,7 @@ func assetMatches(amount tx.Amount, vd *vaultData) bool {
 // spendableAsset returns how much of asset accountID can spend, mirroring
 // accountHolds(shFULL_BALANCE): the full XRP or trust-line balance, treated as
 // effectively unbounded when the account is the asset's issuer.
-func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]byte, asset tx.Asset) (state.XRPLNumber, error) {
+func spendableAsset(view tx.ReadOnlyLedgerView, config tx.EngineConfig, accountID [20]byte, asset tx.Asset) (state.XRPLNumber, error) {
 	scale := vaultNumberScale(config.Rules)
 	zero := func() state.XRPLNumber {
 		return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
@@ -702,7 +702,7 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 	return bal.Add(limit), nil
 }
 
-func actualAssetHolding(view tx.LedgerView, accountID [20]byte, asset tx.Asset, rules *amendment.Rules) (state.XRPLNumber, error) {
+func actualAssetHolding(view tx.ReadOnlyLedgerView, accountID [20]byte, asset tx.Asset, rules *amendment.Rules) (state.XRPLNumber, error) {
 	scale := vaultNumberScale(rules)
 	zero := func() state.XRPLNumber {
 		return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
@@ -898,7 +898,7 @@ func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 
 // holderMPTBalance returns how many shares holderID holds under the share
 // issuance (0 when the holder has no MPToken).
-func holderMPTBalance(view tx.LedgerView, shareMPTID [24]byte, holderID [20]byte) uint64 {
+func holderMPTBalance(view tx.ReadOnlyLedgerView, shareMPTID [24]byte, holderID [20]byte) uint64 {
 	token, err := readMPToken(view, keylet.MPTokenByID(shareMPTID, holderID))
 	if err != nil || token == nil {
 		return 0

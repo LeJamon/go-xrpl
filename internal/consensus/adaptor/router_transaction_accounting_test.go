@@ -85,6 +85,7 @@ func TestRouterTransactionPanicMarksAdmittedTransactionBad(t *testing.T) {
 	// Let the transaction pass suppression admission, then force the submit
 	// boundary to panic so the deferred transaction recovery path is exercised.
 	router.adaptor = nil
+	router.catchupReplay.adaptor = router.adaptor
 	require.NotPanics(t, func() {
 		router.handleTransaction(routerFetchedTransactionMessage(blob, 7))
 	})

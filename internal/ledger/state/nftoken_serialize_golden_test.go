@@ -3,6 +3,8 @@ package state
 import (
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func nftHexUpper(b []byte) string { return strings.ToUpper(hexEncode(b)) }
@@ -48,7 +50,7 @@ func TestSerializeNFTokenOffer_Golden(t *testing.T) {
 	tokenID := [32]byte{0xde, 0xad, 0xbe, 0xef}
 	exp := uint32(700000000)
 
-	xrp, err := SerializeNFTokenOffer(owner, tokenID, "1000000", 1, 3, 5, "", nil)
+	xrp, err := SerializeNFTokenOffer(owner, tokenID, entry.AmountValue{Value: "1000000"}, 1, 3, 5, "", nil)
 	if err != nil {
 		t.Fatalf("SerializeNFTokenOffer(xrp): %v", err)
 	}
@@ -57,7 +59,7 @@ func TestSerializeNFTokenOffer_Golden(t *testing.T) {
 		t.Fatalf("offer_xrp byte divergence:\n got=%s\nwant=%s", gotHex, wantXRP)
 	}
 
-	iou := map[string]any{"value": "50", "currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}
+	iou := entry.AmountValue{Value: "50", Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}
 	full, err := SerializeNFTokenOffer(owner, tokenID, iou, 0, 7, 9, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", &exp)
 	if err != nil {
 		t.Fatalf("SerializeNFTokenOffer(iou): %v", err)

@@ -27,7 +27,7 @@ const parityRate uint32 = 1_000_000_000
 // escrowCreatePreclaimIOU validates IOU escrow creation preconditions.
 // Reference: rippled Escrow.cpp escrowCreatePreclaimHelper<Issue> lines 204-279
 func escrowCreatePreclaimIOU(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	accountID, destID [20]byte,
 	amount tx.Amount,
 	numberContext state.NumberContext,
@@ -130,7 +130,7 @@ func escrowCreatePreclaimIOU(
 
 // escrowCreatePreclaimMPT validates MPT escrow creation preconditions.
 // Reference: rippled Escrow.cpp escrowCreatePreclaimHelper<MPTIssue> lines 283-359
-func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, accountID, destID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
+func escrowCreatePreclaimMPT(view tx.ReadOnlyLedgerView, rules *amendment.Rules, accountID, destID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
 	// FeatureMPTokensV1 must be enabled
 	if !rules.Enabled(amendment.FeatureMPTokensV1) {
 		return ter.TemDISABLED
@@ -238,7 +238,7 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 
 // escrowFinishPreclaimIOU validates IOU escrow finish preconditions.
 // Reference: rippled Escrow.cpp lines 702-724
-func escrowFinishPreclaimIOU(view tx.LedgerView, destID [20]byte, amount tx.Amount) ter.Result {
+func escrowFinishPreclaimIOU(view tx.ReadOnlyLedgerView, destID [20]byte, amount tx.Amount) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -268,7 +268,7 @@ func escrowFinishPreclaimIOU(view tx.LedgerView, destID [20]byte, amount tx.Amou
 
 // escrowFinishPreclaimMPT validates MPT escrow finish preconditions.
 // Reference: rippled Escrow.cpp lines 726-758
-func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
+func escrowFinishPreclaimMPT(view tx.ReadOnlyLedgerView, destID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
 	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
 	// not in Amount.Issuer which is empty for MPT.
 	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
@@ -318,7 +318,7 @@ func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amou
 
 // escrowCancelPreclaimIOU validates IOU escrow cancel preconditions.
 // Reference: rippled Escrow.cpp lines 1219-1237
-func escrowCancelPreclaimIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) ter.Result {
+func escrowCancelPreclaimIOU(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -339,7 +339,7 @@ func escrowCancelPreclaimIOU(view tx.LedgerView, accountID [20]byte, amount tx.A
 
 // escrowCancelPreclaimMPT validates MPT escrow cancel preconditions.
 // Reference: rippled Escrow.cpp lines 1239-1267
-func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
+func escrowCancelPreclaimMPT(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
 	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
 	// not in Amount.Issuer which is empty for MPT.
 	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
@@ -816,7 +816,7 @@ func escrowUnlockMPT(
 
 // 6. Shared Utilities
 
-func getIOUTransferRate(view tx.LedgerView, issuerID [20]byte) (uint32, ter.Result) {
+func getIOUTransferRate(view tx.ReadOnlyLedgerView, issuerID [20]byte) (uint32, ter.Result) {
 	issuer, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil {
 		return 0, ter.TefINTERNAL
@@ -831,7 +831,7 @@ func getIOUTransferRate(view tx.LedgerView, issuerID [20]byte) (uint32, ter.Resu
 }
 
 func isIOUFrozen(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	accountID, issuerID [20]byte,
 	currency string,
 ) (bool, ter.Result) {
@@ -853,7 +853,7 @@ func isIOUFrozen(
 }
 
 func isIOUDeepFrozen(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	accountID, issuerID [20]byte,
 	currency string,
 ) (bool, ter.Result) {
@@ -878,7 +878,7 @@ func isIOUDeepFrozen(
 // is authorized on the trust line.
 // Reference: rippled View.cpp requireAuth(view, Issue, account) for IOU
 // Uses the default (legacy) auth type: trust line must exist if requireAuth is set.
-func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency string) ter.Result {
+func requireAuthIOU(view tx.ReadOnlyLedgerView, issuerID, accountID [20]byte, currency string) ter.Result {
 	// Issuer is always authorized for own currency
 	if issuerID == accountID {
 		return ter.TesSUCCESS
@@ -931,7 +931,7 @@ func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency s
 	return ter.TesSUCCESS
 }
 
-func requireMPTAuthForEscrow(view tx.LedgerView, issuanceID string, accountID [20]byte, parentCloseTime uint32) ter.Result {
+func requireMPTAuthForEscrow(view tx.ReadOnlyLedgerView, issuanceID string, accountID [20]byte, parentCloseTime uint32) ter.Result {
 	id, err := mptutil.DecodeID(issuanceID)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -942,7 +942,7 @@ func requireMPTAuthForEscrow(view tx.LedgerView, issuanceID string, accountID [2
 // isMPTFrozen checks if an MPT is frozen for a given account.
 // Checks global lock on issuance + individual lock on MPToken.
 // Reference: rippled View.cpp isFrozen(view, account, MPTIssue)
-func isMPTFrozen(view tx.LedgerView, issuanceFlags uint32, issuanceKey keylet.Keylet, accountID, issuerID [20]byte) (bool, ter.Result) {
+func isMPTFrozen(view tx.ReadOnlyLedgerView, issuanceFlags uint32, issuanceKey keylet.Keylet, accountID, issuerID [20]byte) (bool, ter.Result) {
 	// Issuer is never frozen
 	if issuerID == accountID {
 		return false, ter.TesSUCCESS
@@ -1374,7 +1374,7 @@ func createMPTokenForEscrow(
 // accountHoldsIOU returns the IOU balance for an account (ignoring freeze).
 // Positive balance means the account holds tokens.
 // Reference: rippled View.cpp accountHolds with fhIGNORE_FREEZE
-func accountHoldsIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (tx.Amount, ter.Result) {
+func accountHoldsIOU(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) (tx.Amount, ter.Result) {
 	issuerStr, err := state.EncodeAccountID(issuerID)
 	if err != nil {
 		return tx.NewIssuedAmount(0, 0, currency, ""), ter.TefINTERNAL
@@ -1410,7 +1410,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency 
 
 // accountHoldsMPT returns the MPT balance for an account (ignoring freeze/auth).
 // Reference: rippled View.cpp accountHolds(view, account, MPTIssue, fhIGNORE_FREEZE, ahIGNORE_AUTH)
-func accountHoldsMPT(view tx.LedgerView, issuanceKey keylet.Keylet, accountID [20]byte) (int64, ter.Result) {
+func accountHoldsMPT(view tx.ReadOnlyLedgerView, issuanceKey keylet.Keylet, accountID [20]byte) (int64, ter.Result) {
 	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
 	tokenData, err := view.Read(tokenKey)
 	if err != nil {

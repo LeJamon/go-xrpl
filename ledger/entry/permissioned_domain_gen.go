@@ -105,6 +105,178 @@ func (p *PermissionedDomain) SetSponsor(value string) {
 	p.present |= permissioneddomainBitSponsor
 }
 
+// HasOwner reports whether Owner is present.
+func (p *PermissionedDomain) HasOwner() bool {
+	return p != nil && p.present&permissioneddomainBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (p *PermissionedDomain) GetOwner() ([20]byte, error) {
+	if p == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(p.Owner, "PermissionedDomain.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (p *PermissionedDomain) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	p.SetOwner(address)
+	return nil
+}
+
+// HasSequence reports whether Sequence is present.
+func (p *PermissionedDomain) HasSequence() bool {
+	return p != nil && p.present&permissioneddomainBitSequence != 0
+}
+
+// GetSequence returns the typed UInt32 value.
+func (p *PermissionedDomain) GetSequence() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (p *PermissionedDomain) SetSequenceValue(value uint32) {
+	p.SetSequence(value)
+}
+
+// HasAcceptedCredentials reports whether AcceptedCredentials is present.
+func (p *PermissionedDomain) HasAcceptedCredentials() bool {
+	return p != nil && p.present&permissioneddomainBitAcceptedCredentials != 0
+}
+
+// GetAcceptedCredentials returns typed nested objects.
+func (p *PermissionedDomain) GetAcceptedCredentials() ([]CredentialValue, error) {
+	if p == nil || p.AcceptedCredentials == nil {
+		return nil, nil
+	}
+	return credentialValueSliceFromAny(p.AcceptedCredentials, "PermissionedDomain.AcceptedCredentials")
+}
+
+// SetAcceptedCredentialsValue assigns typed nested objects.
+func (p *PermissionedDomain) SetAcceptedCredentialsValue(value []CredentialValue) error {
+	encoded, err := credentialValueSliceToAny(value, "PermissionedDomain.AcceptedCredentials")
+	if err != nil {
+		return err
+	}
+	p.SetAcceptedCredentials(encoded)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (p *PermissionedDomain) HasOwnerNode() bool {
+	return p != nil && p.present&permissioneddomainBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (p *PermissionedDomain) GetOwnerNode() (uint64, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(p.OwnerNode, "PermissionedDomain.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (p *PermissionedDomain) SetOwnerNodeValue(value uint64) {
+	p.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags is present.
+func (p *PermissionedDomain) HasFlags() bool {
+	return p != nil && p.present&permissioneddomainBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (p *PermissionedDomain) GetFlags() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (p *PermissionedDomain) SetFlagsValue(value uint32) {
+	p.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (p *PermissionedDomain) HasPreviousTxnID() bool {
+	return p != nil && p.present&permissioneddomainBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (p *PermissionedDomain) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if p == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(p.PreviousTxnID, "PermissionedDomain.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (p *PermissionedDomain) SetPreviousTxnIDValue(value [32]byte) {
+	p.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (p *PermissionedDomain) HasPreviousTxnLgrSeq() bool {
+	return p != nil && p.present&permissioneddomainBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (p *PermissionedDomain) GetPreviousTxnLgrSeq() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (p *PermissionedDomain) SetPreviousTxnLgrSeqValue(value uint32) {
+	p.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (p *PermissionedDomain) HasSponsor() bool {
+	return p != nil && p.present&permissioneddomainBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (p *PermissionedDomain) ClearSponsor() {
+	if p == nil {
+		return
+	}
+	p.Sponsor = ""
+	p.present &^= permissioneddomainBitSponsor
+	p.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (p *PermissionedDomain) GetSponsor() ([20]byte, error) {
+	if p == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(p.Sponsor, "PermissionedDomain.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (p *PermissionedDomain) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	p.SetSponsor(address)
+	return nil
+}
+
 func (p *PermissionedDomain) validateRequired() error {
 	if p.decoded && !p.dirty {
 		return nil

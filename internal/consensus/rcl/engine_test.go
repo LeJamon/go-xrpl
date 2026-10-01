@@ -321,7 +321,7 @@ func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	return ledger, err
 }
 
-func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
+func (a *mockAdaptor) BuildLedger(_ context.Context, parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
 	a.mu.RLock()
 	hook := a.buildLedgerHook
 	buildErr := a.buildLedgerErr

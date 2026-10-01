@@ -152,7 +152,8 @@ type Ledger struct {
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
 	// since then; timeouts is the cumulative no-progress count used for
-	// diagnostics and escalation; consecutiveTimeouts bounds terminal stalls.
+	// diagnostics, escalation, and terminal failure; consecutiveTimeouts tracks
+	// the current no-progress streak for diagnostics and victim ranking.
 	// byHash latches eligibility for a by-hash escalation on the next aggressive
 	// request. All guarded by mu.
 	lastTimer           time.Time
@@ -198,7 +199,8 @@ type Ledger struct {
 	// transactions against the held parent and verifies AccountHash before
 	// adoption. In this mode the peer's account-state SHAMap is deliberately
 	// ignored, avoiding a full-state download for every child ledger.
-	transactionOnly bool
+	transactionOnly   bool
+	fullStateRequired atomic.Bool
 }
 
 // Option configures an acquisition at construction.
@@ -356,6 +358,16 @@ func (l *Ledger) TransactionOnly() bool {
 	return l.transactionOnly
 }
 
+// RequireFullState retains a replay fallback requirement for this acquisition.
+func (l *Ledger) RequireFullState() {
+	l.fullStateRequired.Store(true)
+}
+
+// FullStateRequired reports whether replay fallback must preserve this acquisition.
+func (l *Ledger) FullStateRequired() bool {
+	return l.fullStateRequired.Load()
+}
+
 // State returns the current acquisition state.
 func (l *Ledger) State() State {
 	l.mu.Lock()
@@ -489,10 +501,10 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	l.lastTimer = now
 	l.timeouts++
 	l.consecutiveTimeouts++
-	if l.consecutiveTimeouts > ledgerTimeoutRetriesMax {
+	if l.timeouts > ledgerTimeoutRetriesMax {
 		l.state = StateFailed
-		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d consecutive timeouts (%d total; have_state=%t have_tx=%t last_reject=%q)",
-			l.seq, l.consecutiveTimeouts, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
+		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d timeouts (%d consecutive; have_state=%t have_tx=%t last_reject=%q)",
+			l.seq, l.timeouts, l.consecutiveTimeouts, l.haveState, l.haveTx, l.lastRejectErr)
 		l.logger.Warn("inbound ledger: acquisition failed, retry budget exhausted",
 			"seq", l.seq,
 			"hash", fmt.Sprintf("%x", l.hash[:8]),
@@ -553,7 +565,9 @@ func (l *Ledger) RearmTimer(now time.Time) {
 
 // markProgressLocked records that a fresh node was attached this interval, so
 // the next OnTimer fire treats the acquisition as progressing rather than
-// timing out (rippled sets progress_ on a useful received node). Caller holds mu.
+// timing out (rippled sets progress_ on a useful received node). The
+// cumulative timeout budget remains unchanged; only the current streak used
+// for diagnostics and victim ranking is reset. Caller holds mu.
 func (l *Ledger) markProgressLocked() {
 	l.progress = true
 	l.consecutiveTimeouts = 0
@@ -648,6 +662,22 @@ func (l *Ledger) Seq() uint32 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.seq
+}
+
+// updateSequence fills a sequence learned after a hash-only acquisition was
+// registered. The acquisition's origin remains hash-only so recovery can
+// distinguish it from an index-addressed request.
+func (l *Ledger) updateSequence(seq uint32) {
+	if l == nil || seq == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.seq != 0 {
+		return
+	}
+	l.seq = seq
+	l.publishSnapshotLocked()
 }
 
 // SequenceInitiallyUnknown reports whether the acquisition was created by

@@ -1,6 +1,7 @@
 package openledger_test
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/stretchr/testify/require"
 )
 
 func buildSignedBlobOL(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
@@ -168,6 +170,73 @@ func TestOpenLedger_Modify_ReturnsFalse_DoesNotPublish(t *testing.T) {
 	if post != pre {
 		t.Errorf("Current() pointer swapped despite Modify returning false")
 	}
+}
+
+func TestOpenLedgerAcceptCanceledBeforeCommitDoesNotPublish(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	parent := closedParent(t, env)
+	ol, err := openledger.New(parent, openledger.Config{})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	before := ol.Current()
+	var precommit, modifier, publication int
+	err = ol.AcceptWithPrecommitContext(
+		ctx,
+		parent,
+		nil,
+		false,
+		nil,
+		openledger.ApplyConfig{Rules: amendment.AllSupportedRules()},
+		nil,
+		func() { precommit++ },
+		func(*ledger.Ledger) { modifier++ },
+		nil,
+		func(func()) { publication++ },
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Same(t, before, ol.Current())
+	require.Zero(t, precommit)
+	require.Zero(t, modifier)
+	require.Zero(t, publication)
+}
+
+func TestOpenLedgerAcceptCommitDrainsAfterCancellation(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	parent := closedParent(t, env)
+	ol, err := openledger.New(parent, openledger.Config{})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	before := ol.Current()
+	var precommit, modifier, publication int
+	err = ol.AcceptWithPrecommitContext(
+		ctx,
+		parent,
+		nil,
+		false,
+		nil,
+		openledger.ApplyConfig{Rules: amendment.AllSupportedRules()},
+		nil,
+		func() {
+			precommit++
+			cancel()
+		},
+		func(*ledger.Ledger) { modifier++ },
+		nil,
+		func(publish func()) {
+			publication++
+			publish()
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotSame(t, before, ol.Current())
+	require.Equal(t, 1, precommit)
+	require.Equal(t, 1, modifier)
+	require.Equal(t, 1, publication)
 }
 
 // TestOpenLedger_ConcurrentSubmitReader spawns parallel Submit + Current

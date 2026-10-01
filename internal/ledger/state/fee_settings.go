@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -43,6 +42,7 @@ type FeeSettings struct {
 	PreviousTxnLgrSeq uint32
 
 	feeFieldsPresent bool
+	decoded          ledgerfields.FeeSettings
 }
 
 // ParseFeeSettings parses fee settings data from binary format
@@ -55,43 +55,57 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode FeeSettings: %w", err)
 	}
-	fields := decoded.ToMap()
 	fee := &FeeSettings{
-		ReferenceFeeUnits: decoded.ReferenceFeeUnits,
-		ReserveBase:       decoded.ReserveBase,
-		ReserveIncrement:  decoded.ReserveIncrement,
-		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		decoded: decoded,
 	}
 
-	var err error
-	if _, ok := fields["BaseFee"]; ok {
-		fee.BaseFee, err = parseLedgerUint64("FeeSettings.BaseFee", decoded.BaseFee)
+	if decoded.HasBaseFee() {
+		var err error
+		fee.BaseFee, err = decoded.GetBaseFee()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to decode FeeSettings.BaseFee: %w", err)
 		}
 		fee.HasBaseFee = true
 	}
-	_, hasReferenceFeeUnits := fields["ReferenceFeeUnits"]
-	if _, ok := fields["ReserveBase"]; ok {
+	hasReferenceFeeUnits := decoded.HasReferenceFeeUnits()
+	if hasReferenceFeeUnits {
+		fee.ReferenceFeeUnits = decoded.ReferenceFeeUnits
+	}
+	if decoded.HasReserveBase() {
+		fee.ReserveBase = decoded.ReserveBase
 		fee.HasReserveBase = true
 	}
-	if _, ok := fields["ReserveIncrement"]; ok {
+	if decoded.HasReserveIncrement() {
+		fee.ReserveIncrement = decoded.ReserveIncrement
 		fee.HasReserveIncrement = true
 	}
 	for _, amount := range []struct {
 		name    string
-		value   any
+		value   func() (ledgerfields.AmountValue, error)
 		dst     *uint64
 		present *bool
 	}{
-		{"BaseFeeDrops", decoded.BaseFeeDrops, &fee.BaseFeeDrops, &fee.HasBaseFeeDrops},
-		{"ReserveBaseDrops", decoded.ReserveBaseDrops, &fee.ReserveBaseDrops, &fee.HasReserveBaseDrops},
-		{"ReserveIncrementDrops", decoded.ReserveIncrementDrops, &fee.ReserveIncrementDrops, &fee.HasReserveIncrementDrops},
+		{"BaseFeeDrops", decoded.GetBaseFeeDrops, &fee.BaseFeeDrops, &fee.HasBaseFeeDrops},
+		{"ReserveBaseDrops", decoded.GetReserveBaseDrops, &fee.ReserveBaseDrops, &fee.HasReserveBaseDrops},
+		{"ReserveIncrementDrops", decoded.GetReserveIncrementDrops, &fee.ReserveIncrementDrops, &fee.HasReserveIncrementDrops},
 	} {
-		if _, ok := fields[amount.name]; !ok {
+		var present bool
+		switch amount.name {
+		case "BaseFeeDrops":
+			present = decoded.HasBaseFeeDrops()
+		case "ReserveBaseDrops":
+			present = decoded.HasReserveBaseDrops()
+		case "ReserveIncrementDrops":
+			present = decoded.HasReserveIncrementDrops()
+		}
+		if !present {
 			continue
 		}
-		decodedAmount, err := decodeLedgerAmount("FeeSettings."+amount.name, amount.value)
+		amountValue, err := amount.value()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode FeeSettings.%s: %w", amount.name, err)
+		}
+		decodedAmount, err := decodeLedgerAmount("FeeSettings."+amount.name, amountValue)
 		if err != nil {
 			return nil, err
 		}
@@ -102,10 +116,15 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 		*amount.dst = drops
 		*amount.present = true
 	}
-	if _, ok := fields["PreviousTxnID"]; ok {
-		if err := decodeLedgerHex("FeeSettings.PreviousTxnID", decoded.PreviousTxnID, fee.PreviousTxnID[:]); err != nil {
-			return nil, err
+	if decoded.HasPreviousTxnID() {
+		var err error
+		fee.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode FeeSettings.PreviousTxnID: %w", err)
 		}
+	}
+	if decoded.HasPreviousTxnLgrSeq() {
+		fee.PreviousTxnLgrSeq = decoded.PreviousTxnLgrSeq
 	}
 	modern := fee.HasBaseFeeDrops || fee.HasReserveBaseDrops || fee.HasReserveIncrementDrops
 	legacy := fee.HasBaseFee || fee.HasReserveBase || fee.HasReserveIncrement
@@ -128,27 +147,54 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 	// SLE template. The genesis FeeSettings (genesis.go) already emits Flags=0;
 	// the runtime serializer (SetFee re-serialization) must match or the
 	// post-fee-vote FeeSettings state diverges (account_hash fork).
-	entry := &ledgerfields.FeeSettings{}
-	entry.SetFlags(0)
+	entry := fee.decoded
+	if !entry.HasFlags() {
+		entry.SetFlagsValue(0)
+	}
 
 	if fee.XRPFeesMode {
-		entry.SetBaseFeeDrops(fmt.Sprintf("%d", fee.BaseFeeDrops))
-		entry.SetReserveBaseDrops(fmt.Sprintf("%d", fee.ReserveBaseDrops))
-		entry.SetReserveIncrementDrops(fmt.Sprintf("%d", fee.ReserveIncrementDrops))
+		if err := entry.SetBaseFeeDropsValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", fee.BaseFeeDrops)}); err != nil {
+			return nil, fmt.Errorf("failed to encode FeeSettings.BaseFeeDrops: %w", err)
+		}
+		if err := entry.SetReserveBaseDropsValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", fee.ReserveBaseDrops)}); err != nil {
+			return nil, fmt.Errorf("failed to encode FeeSettings.ReserveBaseDrops: %w", err)
+		}
+		if err := entry.SetReserveIncrementDropsValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", fee.ReserveIncrementDrops)}); err != nil {
+			return nil, fmt.Errorf("failed to encode FeeSettings.ReserveIncrementDrops: %w", err)
+		}
+		entry.ClearBaseFee()
+		entry.ClearReferenceFeeUnits()
+		entry.ClearReserveBase()
+		entry.ClearReserveIncrement()
 	} else {
-		entry.SetBaseFee(fmt.Sprintf("%x", fee.BaseFee))
-		entry.SetReferenceFeeUnits(fee.ReferenceFeeUnits)
-		entry.SetReserveBase(fee.ReserveBase)
-		entry.SetReserveIncrement(fee.ReserveIncrement)
+		entry.SetBaseFeeValue(fee.BaseFee)
+		entry.SetReferenceFeeUnitsValue(fee.ReferenceFeeUnits)
+		entry.SetReserveBaseValue(fee.ReserveBase)
+		entry.SetReserveIncrementValue(fee.ReserveIncrement)
+		entry.ClearBaseFeeDrops()
+		entry.ClearReserveBaseDrops()
+		entry.ClearReserveIncrementDrops()
 	}
 
-	// Add tracking fields if present
 	var zeroHash [32]byte
-	if fee.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnID(hex.EncodeToString(fee.PreviousTxnID[:]))
+	previousTxnIDUnchanged := false
+	if entry.HasPreviousTxnID() {
+		original, err := entry.GetPreviousTxnID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode FeeSettings.PreviousTxnID: %w", err)
+		}
+		previousTxnIDUnchanged = original == fee.PreviousTxnID
 	}
-	if fee.PreviousTxnLgrSeq > 0 {
-		entry.SetPreviousTxnLgrSeq(fee.PreviousTxnLgrSeq)
+	if fee.PreviousTxnID != zeroHash || previousTxnIDUnchanged {
+		entry.SetPreviousTxnIDValue(fee.PreviousTxnID)
+	} else {
+		entry.ClearPreviousTxnID()
+	}
+	previousTxnLgrSeqUnchanged := entry.HasPreviousTxnLgrSeq() && entry.PreviousTxnLgrSeq == fee.PreviousTxnLgrSeq
+	if fee.PreviousTxnLgrSeq != 0 || previousTxnLgrSeqUnchanged {
+		entry.SetPreviousTxnLgrSeqValue(fee.PreviousTxnLgrSeq)
+	} else {
+		entry.ClearPreviousTxnLgrSeq()
 	}
 
 	data, err := entry.Encode()

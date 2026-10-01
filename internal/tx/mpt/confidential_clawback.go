@@ -77,7 +77,7 @@ func (c *ConfidentialMPTClawback) Validate() error {
 	return nil
 }
 
-func (c *ConfidentialMPTClawback) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (c *ConfidentialMPTClawback) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	id, _ := parseConfidentialID(c.MPTokenIssuanceID)
 	accountID, err := state.DecodeAccountID(c.Account)
 	if err != nil {

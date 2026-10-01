@@ -17,7 +17,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -414,12 +413,11 @@ func isBookDirectory(blob []byte) bool {
 	if entry.Type(uint16(blob[1])<<8|uint16(blob[2])) != entry.TypeDirectoryNode {
 		return false
 	}
-	fields, err := binarycodec.DecodeBytes(blob)
-	if err != nil {
+	var directory entry.DirectoryNode
+	if err := directory.Decode(blob); err != nil {
 		return false
 	}
-	_, hasOwner := fields["Owner"]
-	return !hasOwner
+	return !directory.HasOwner()
 }
 
 // getQualityNext returns base + 2^64, the smallest key past the highest

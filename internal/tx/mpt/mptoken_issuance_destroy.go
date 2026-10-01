@@ -80,7 +80,7 @@ func (m *MPTokenIssuanceDestroy) RequiredAmendments() [][32]byte {
 // admission, simulate), matching rippled where they live in
 // MPTokenIssuanceDestroy::preclaim.
 // Reference: rippled MPTokenIssuanceDestroy.cpp preclaim().
-func (m *MPTokenIssuanceDestroy) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (m *MPTokenIssuanceDestroy) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	var mptID [24]byte
 	issuanceIDBytes, decErr := hex.DecodeString(m.MPTokenIssuanceID)
 	if decErr != nil || len(issuanceIDBytes) != 24 {

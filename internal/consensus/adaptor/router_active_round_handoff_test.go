@@ -43,23 +43,23 @@ func TestRouter_ActiveRoundRecoveryDefersPromotionAndHandoff(t *testing.T) {
 	require.NoError(t, err)
 	_, result := a.recheckFullyValidated(child.Sequence(), child.Hash())
 	require.Equal(t, validationRecheckAccepted, result)
-	hdr, initial, err := r.storeVerifiedLedger(child)
+	hdr, initial, err := r.catchupReplay.storeVerifiedLedger(child)
 	require.NoError(t, err)
 	require.False(t, initial)
 
 	// Both pipeline and classic replay enter this common completion method.
-	require.False(t, r.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, false))
+	require.False(t, r.catchupReplay.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, false))
 	require.Equal(t, parent.Hash(), svc.GetClosedLedger().Hash())
 	require.Equal(t, validatedBefore, svc.GetValidatedLedger().Hash(), "do not promote the service frontier before the handoff policy permits it")
 	require.Equal(t, consensus.ModeProposing, e.Mode())
-	require.Equal(t, child.Hash(), r.consensusRecovery.targetHash, "keep the verified result available for retry")
+	require.Equal(t, child.Hash(), r.catchupReplay.consensusRecovery.targetHash, "keep the verified result available for retry")
 	held, err := svc.GetLedgerByHash(child.Hash())
 	require.NoError(t, err)
 	require.NotNil(t, held)
 
 	// A round that fails to finish still has a bounded recovery path.
 	now = now.Add(cfg.Timing.LedgerMaxConsensus + time.Second)
-	require.True(t, r.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, false))
+	require.True(t, r.catchupReplay.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, false))
 	require.Equal(t, child.Hash(), svc.GetClosedLedger().Hash())
 	require.Equal(t, child.Hash(), svc.GetValidatedLedger().Hash())
 	require.Equal(t, consensus.ModeSwitchedLedger, e.Mode())

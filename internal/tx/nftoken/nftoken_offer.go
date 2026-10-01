@@ -234,7 +234,7 @@ func tokenOfferCreateApply(
 
 	offerData, err := serializeNFTokenOfferRaw(
 		accountID, tokenID,
-		amountToCodecFormat(*amount), flags,
+		amount.LedgerValue(), flags,
 		ownerNode, offerNode,
 		destination, expiration,
 	)

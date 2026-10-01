@@ -145,7 +145,7 @@ func (p *PermissionedDomainSet) RequiredAmendments() [][32]byte {
 // order: every AcceptedCredentials issuer must exist (tecNO_ISSUER); when a
 // DomainID is given, the domain must exist (tecNO_ENTRY) and be owned by the
 // sender (tecNO_PERMISSION). The mutation stays in Apply (rippled doApply).
-func (p *PermissionedDomainSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (p *PermissionedDomainSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(p.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

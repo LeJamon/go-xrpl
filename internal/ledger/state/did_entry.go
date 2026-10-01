@@ -1,9 +1,7 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
@@ -21,31 +19,36 @@ type DIDData struct {
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+	decoded           ledgerfields.DID
 }
 
 // SerializeDID serializes a DID ledger entry using the binary codec.
 func SerializeDID(did *DIDData, accountAddress string) ([]byte, error) {
-	entry := &ledgerfields.DID{}
+	entry := did.decoded
 	entry.SetAccount(accountAddress)
-	entry.SetOwnerNode(strconv.FormatUint(did.OwnerNode, 16))
-	entry.SetFlags(0)
+	entry.SetOwnerNodeValue(did.OwnerNode)
+	if !entry.HasFlags() {
+		entry.SetFlagsValue(0)
+	}
 
-	if did.URI != "" {
+	if did.URI != "" || (entry.HasURI() && strings.EqualFold(did.URI, entry.URI)) {
 		entry.SetURI(did.URI)
+	} else {
+		entry.ClearURI()
 	}
-	if did.DIDDocument != "" {
+	if did.DIDDocument != "" || (entry.HasDIDDocument() && strings.EqualFold(did.DIDDocument, entry.DIDDocument)) {
 		entry.SetDIDDocument(did.DIDDocument)
+	} else {
+		entry.ClearDIDDocument()
 	}
-	if did.Data != "" {
+	if did.Data != "" || (entry.HasData() && strings.EqualFold(did.Data, entry.Data)) {
 		entry.SetData(did.Data)
+	} else {
+		entry.ClearData()
 	}
 
-	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
-	var emptyHash [32]byte
-	if did.PreviousTxnID != emptyHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(did.PreviousTxnID[:])))
-		entry.SetPreviousTxnLgrSeq(did.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(did.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(did.PreviousTxnLgrSeq)
 
 	return entry.Encode()
 }
@@ -56,29 +59,35 @@ func ParseDID(data []byte) (*DIDData, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode DID: %w", err)
 	}
-	fields := decoded.ToMap()
 	did := &DIDData{
-		URI:               strings.ToLower(decoded.URI),
-		DIDDocument:       strings.ToLower(decoded.DIDDocument),
-		Data:              strings.ToLower(decoded.Data),
-		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		URI:         strings.ToLower(decoded.URI),
+		DIDDocument: strings.ToLower(decoded.DIDDocument),
+		Data:        strings.ToLower(decoded.Data),
+		decoded:     decoded,
 	}
 
 	var err error
-	if _, ok := fields["Account"]; ok {
-		did.Account, err = decodeLedgerAccount("DID.Account", decoded.Account)
+	if decoded.HasAccount() {
+		did.Account, err = decoded.GetAccount()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["OwnerNode"]; ok {
-		did.OwnerNode, err = parseLedgerUint64("DID.OwnerNode", decoded.OwnerNode)
+	if decoded.HasOwnerNode() {
+		did.OwnerNode, err = decoded.GetOwnerNode()
 		if err != nil {
 			return nil, err
 		}
 	}
-	if _, ok := fields["PreviousTxnID"]; ok {
-		if err := decodeLedgerHex("DID.PreviousTxnID", decoded.PreviousTxnID, did.PreviousTxnID[:]); err != nil {
+	if decoded.HasPreviousTxnID() {
+		did.PreviousTxnID, err = decoded.GetPreviousTxnID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if decoded.HasPreviousTxnLgrSeq() {
+		did.PreviousTxnLgrSeq, err = decoded.GetPreviousTxnLgrSeq()
+		if err != nil {
 			return nil, err
 		}
 	}

@@ -149,7 +149,7 @@ func (e *EscrowCreate) PreflightRules(rules *amendment.Rules) error {
 // tecNO_PERMISSION on the final pass even though the initial apply succeeded.
 // Reference: rippled Escrow.cpp EscrowCreate::preclaim() lines 362-395 and
 // doApply() lines 457-489.
-func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (e *EscrowCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	rules := config.RequireRules()
 	closeTime := config.ParentCloseTime
 
@@ -212,7 +212,7 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 // readDestinationForEscrow reads and parses the destination AccountRoot from a
 // LedgerView, returning tecNO_DST if it is absent. Used by Preclaim where there
 // is no ApplyContext.
-func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.AccountRoot, ter.Result) {
+func readDestinationForEscrow(view tx.ReadOnlyLedgerView, destID [20]byte) (*state.AccountRoot, ter.Result) {
 	data, err := view.Read(keylet.Account(destID))
 	if err != nil {
 		return nil, ter.TefINTERNAL

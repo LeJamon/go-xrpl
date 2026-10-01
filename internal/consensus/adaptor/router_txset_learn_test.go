@@ -95,7 +95,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		defer engine.mu.Unlock()
 		return len(engine.txSets) == 1 && engine.txSets[0] == consensus.TxSetID(setID)
 	}, time.Second, 10*time.Millisecond,
-		"tx-set acquisition must deliver the set to consensus")
+		"tx-set acquisition must deliver the complete set to consensus")
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		exists, err := a.HasTx(consensus.TxID(txHash))
 		require.NoError(collect, err)

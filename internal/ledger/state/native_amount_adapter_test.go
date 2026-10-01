@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 const (
@@ -184,7 +185,9 @@ func TestEscrowAcceptsExplicitEmptyAccountButRejectsMissingOrMalformedAccount(t 
 	if _, err := ParseEscrow(encodeNativeAdapterEntry(t, missing)); err == nil {
 		t.Fatal("ParseEscrow accepted missing required Account")
 	}
-	if _, err := decodeLedgerAccount("Escrow.Account", "not-an-account"); err == nil {
-		t.Fatal("decodeLedgerAccount accepted malformed nonempty Account")
+	var malformed entry.Escrow
+	malformed.SetAccount("not-an-account")
+	if _, err := malformed.GetAccount(); err == nil {
+		t.Fatal("GetAccount accepted malformed nonempty Account")
 	}
 }

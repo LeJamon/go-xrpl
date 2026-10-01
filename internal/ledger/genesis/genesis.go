@@ -431,18 +431,17 @@ func serializeAccountRoot(a *accountRoot) ([]byte, error) {
 		return nil, errors.New("failed to encode AccountRoot: nil entry")
 	}
 
-	address, err := addresscodec.EncodeAccountIDToClassicAddress(a.Account[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode account address: %w", err)
-	}
-
 	var sle ledgerfields.AccountRoot
 	sle.SetFlags(a.Flags)
-	sle.SetAccount(address)
-	sle.SetBalance(fmt.Sprintf("%d", a.Balance))
+	if err := sle.SetAccountValue(a.Account); err != nil {
+		return nil, fmt.Errorf("failed to encode account address: %w", err)
+	}
+	if err := sle.SetBalanceValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", a.Balance)}); err != nil {
+		return nil, err
+	}
 	sle.SetSequence(a.Sequence)
 	sle.SetOwnerCount(a.OwnerCount)
-	sle.SetPreviousTxnID("0000000000000000000000000000000000000000000000000000000000000000")
+	sle.SetPreviousTxnIDValue([32]byte{})
 	sle.SetPreviousTxnLgrSeq(0)
 
 	data, err := sle.Encode()
@@ -461,12 +460,18 @@ func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 	sle.SetFlags(0)
 
 	if f.IsUsingModernFees() {
-		sle.SetBaseFeeDrops(fmt.Sprintf("%d", f.BaseFeeDrops))
-		sle.SetReserveBaseDrops(fmt.Sprintf("%d", f.ReserveBaseDrops))
-		sle.SetReserveIncrementDrops(fmt.Sprintf("%d", f.ReserveIncrementDrops))
+		if err := sle.SetBaseFeeDropsValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", f.BaseFeeDrops)}); err != nil {
+			return nil, err
+		}
+		if err := sle.SetReserveBaseDropsValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", f.ReserveBaseDrops)}); err != nil {
+			return nil, err
+		}
+		if err := sle.SetReserveIncrementDropsValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", f.ReserveIncrementDrops)}); err != nil {
+			return nil, err
+		}
 	} else {
 		if f.BaseFee != nil {
-			sle.SetBaseFee(fmt.Sprintf("%x", *f.BaseFee))
+			sle.SetBaseFeeValue(*f.BaseFee)
 		}
 		if f.ReferenceFeeUnits != nil {
 			sle.SetReferenceFeeUnits(*f.ReferenceFeeUnits)
@@ -487,15 +492,9 @@ func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 }
 
 func serializeAmendments(amendments [][32]byte) ([]byte, error) {
-	// Amendment hashes become hex strings for the Vector256 field.
-	amendmentHexes := make([]string, len(amendments))
-	for i, amendment := range amendments {
-		amendmentHexes[i] = fmt.Sprintf("%064X", amendment)
-	}
-
 	var sle ledgerfields.Amendments
 	sle.SetFlags(0)
-	sle.SetAmendments(amendmentHexes)
+	sle.SetAmendmentsValue(amendments)
 
 	data, err := sle.Encode()
 	if err != nil {

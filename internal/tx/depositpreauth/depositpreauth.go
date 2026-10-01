@@ -313,7 +313,7 @@ func toKeyletPairs(pairs []sortedCredPair) []keylet.CredentialPair {
 // not (tecDUPLICATE); an UnauthorizeCredentials entry must exist (tecNO_ENTRY).
 // The reserve check and mutation stay in Apply (rippled doApply).
 // Reference: rippled DepositPreauth::preclaim.
-func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (d *DepositPreauth) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(d.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

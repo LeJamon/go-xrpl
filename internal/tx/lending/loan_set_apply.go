@@ -47,7 +47,7 @@ func (l *LoanSet) loanSetValueFields() []string {
 
 // CalculateBaseFee includes transaction and sponsor signers through the common
 // fee, then adds the nested counterparty signers.
-func (l *LoanSet) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) (uint64, error) {
+func (l *LoanSet) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	normal := sign.CalculateDefaultBaseFee(l, config)
 	cp := l.GetCommon().CounterpartySignature
 	if cp == nil {
@@ -60,7 +60,7 @@ func (l *LoanSet) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) (uin
 	return normal + uint64(signerCount)*config.BaseFee, nil
 }
 
-func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {

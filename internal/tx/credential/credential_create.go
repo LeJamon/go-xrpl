@@ -119,7 +119,7 @@ func (c *CredentialCreate) RequiredAmendments() [][32]byte {
 // of this (subject, issuer, type) already exists (tecDUPLICATE), matching rippled
 // CredentialCreate::preclaim. The Expiration-in-the-past check (tecEXPIRED) and
 // the reserve check stay in Apply, mirroring rippled CredentialCreate::doApply.
-func (c *CredentialCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (c *CredentialCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	subjectID, err := state.DecodeAccountID(c.Subject)
 	if err != nil {
 		return ter.TecNO_TARGET

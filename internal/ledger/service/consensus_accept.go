@@ -77,6 +77,9 @@ func (s *Service) acceptConsensusResult(
 	pending := make([]openledger.PendingTx, 0, len(txBlobs))
 	agreedSet := shamap.New(shamap.TypeTransaction)
 	for _, blob := range txBlobs {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		// Malformed entries still contribute to the agreed set's ordering salt.
 		hash := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob)
 		if err := agreedSet.PutWithNodeType(hash, blob, shamap.NodeTypeTransactionNoMeta); err != nil {
@@ -94,6 +97,9 @@ func (s *Service) acceptConsensusResult(
 	}
 	disputed := make([]openledger.PendingTx, 0, len(disputedBlobs))
 	for _, blob := range disputedBlobs {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if ptx, err := openledger.ParsePendingTx(blob); err == nil && !ptx.Parsed.TxType().IsPseudoTransaction() {
 			disputed = append(disputed, ptx)
 		}
@@ -116,7 +122,7 @@ func (s *Service) acceptConsensusResult(
 
 	var retriableTxs []openledger.PendingTx
 	if !replayed {
-		closed, retriableTxs, err = s.buildClosedLedger(expectedClosed, pending, salt, closeTime, false, &timings.apply)
+		closed, retriableTxs, err = s.buildClosedLedger(ctx, expectedClosed, pending, salt, closeTime, false, &timings.apply)
 		if err != nil {
 			return 0, err
 		}
@@ -139,6 +145,9 @@ func (s *Service) acceptConsensusResult(
 		}
 		added := false
 		for _, ptx := range disputed {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
 			if _, dup := seen[ptx.Hash]; dup {
 				continue
 			}
@@ -175,8 +184,9 @@ func (s *Service) acceptConsensusResult(
 
 	closedSeq := closed.Sequence()
 	closedLedgerHash := closed.Hash()
+	closedTxCount := closed.TxCount()
 	stageStarted := time.Now()
-	stagedResults, err := stageTransactionResults(closed, closedSeq, closedLedgerHash)
+	stagedResults, err := stageTransactionResultsContext(ctx, closed, closedSeq, closedLedgerHash)
 	if err != nil {
 		return 0, fmt.Errorf("collect transaction results: %w", err)
 	}
@@ -184,7 +194,7 @@ func (s *Service) acceptConsensusResult(
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	gateWait, gateErr := s.lockOpenLedgerIfRunningTimed(openLedgerConsensus)
+	gateWait, gateErr := s.lockOpenLedgerIfRunningTimed(ctx, openLedgerConsensus)
 	timings.gateWait = gateWait.Wait
 	timings.lifecycleWait += gateWait.LifecycleWait
 	if gateErr != nil {
@@ -206,7 +216,7 @@ func (s *Service) acceptConsensusResult(
 		s.mu.Unlock()
 		return 0, fmt.Errorf("%w: ledger ownership changed during build", ErrConsensusParentMismatch)
 	}
-	acceptOpen := s.openLedgerAcceptanceLocked(&timings.relay, &salt)
+	acceptOpen := s.openLedgerAcceptanceLocked(ctx, &timings.relay, &salt)
 	s.mu.Unlock()
 	nextStarted := time.Now()
 	newOpen, err := ledger.NewOpen(closed, time.Now())
@@ -295,8 +305,8 @@ func (s *Service) acceptConsensusResult(
 	s.openLedgerMu.Unlock()
 	gateHeld = false
 	{
-		stateRoot, _ := closed.StateMapHash()
-		txRoot, _ := closed.TxMapHash()
+		closedHeader := closed.Header()
+		stateRoot, txRoot := closedHeader.AccountHash, closedHeader.TxHash
 		parentHash := closed.ParentHash()
 		s.logger.Info("local-built ledger round-summary",
 			"t", "consensus-build",
@@ -310,7 +320,7 @@ func (s *Service) acceptConsensusResult(
 			"state_root", fmt.Sprintf("%x", stateRoot[:8]),
 			"tx_root", fmt.Sprintf("%x", txRoot[:8]),
 			"total_drops", closed.TotalDrops(),
-			"tx_count", closed.TxCount(),
+			"tx_count", closedTxCount,
 			"tx_hashes", canonicalTxHashes,
 		)
 	}

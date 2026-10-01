@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -87,10 +88,22 @@ const (
 )
 
 func (g *priorityGate) Lock() {
-	g.LockRole(openLedgerTransition)
+	_, _ = g.LockRoleContext(context.Background(), openLedgerTransition)
 }
 
 func (g *priorityGate) LockRole(role openLedgerRole) openLedgerGateWait {
+	wait, _ := g.LockRoleContext(context.Background(), role)
+	return wait
+}
+
+// LockRoleContext waits for the role's turn without retaining a canceled
+// waiter in the priority queues. If cancellation races with ownership transfer
+// the waiter briefly acquires the gate, releases it, and returns the context
+// error so no owner is abandoned.
+func (g *priorityGate) LockRoleContext(ctx context.Context, role openLedgerRole) (openLedgerGateWait, error) {
+	if err := ctx.Err(); err != nil {
+		return openLedgerGateWait{}, err
+	}
 	queuedAt := time.Now()
 	g.mu.Lock()
 	if !g.held && len(g.priority) == 0 && len(g.ingress) == 0 {
@@ -99,7 +112,7 @@ func (g *priorityGate) LockRole(role openLedgerRole) openLedgerGateWait {
 		acquiredAt := time.Now()
 		g.ownerSince = acquiredAt
 		g.mu.Unlock()
-		return openLedgerGateWait{Role: role, Wait: acquiredAt.Sub(queuedAt), AcquiredAt: acquiredAt}
+		return openLedgerGateWait{Role: role, Wait: acquiredAt.Sub(queuedAt), AcquiredAt: acquiredAt}, nil
 	}
 
 	waiter := &priorityGateWaiter{
@@ -115,17 +128,52 @@ func (g *priorityGate) LockRole(role openLedgerRole) openLedgerGateWait {
 	ingressQueued := len(g.ingress)
 	g.mu.Unlock()
 
-	<-waiter.ready
-	acquiredAt := time.Now()
-	wait := openLedgerGateWait{
-		Role:           role,
-		Wait:           acquiredAt.Sub(queuedAt),
-		PriorityQueued: priorityQueued,
-		IngressQueued:  ingressQueued,
-		AcquiredAt:     acquiredAt,
+	select {
+	case <-waiter.ready:
+		acquiredAt := time.Now()
+		wait := openLedgerGateWait{
+			Role:           role,
+			Wait:           acquiredAt.Sub(queuedAt),
+			PriorityQueued: priorityQueued,
+			IngressQueued:  ingressQueued,
+			AcquiredAt:     acquiredAt,
+		}
+		g.recordWait(wait)
+		if err := ctx.Err(); err != nil {
+			g.Unlock()
+			return wait, err
+		}
+		return wait, nil
+	case <-ctx.Done():
+		g.mu.Lock()
+		removed := g.removeWaiterLocked(role, waiter)
+		g.mu.Unlock()
+		if removed {
+			return openLedgerGateWait{Role: role, Wait: time.Since(queuedAt), PriorityQueued: priorityQueued, IngressQueued: ingressQueued}, ctx.Err()
+		}
+		// Unlock selected this waiter concurrently with cancellation. Wait for
+		// the ownership handoff, then release the gate before returning.
+		<-waiter.ready
+		g.Unlock()
+		return openLedgerGateWait{Role: role, Wait: time.Since(queuedAt), PriorityQueued: priorityQueued, IngressQueued: ingressQueued}, ctx.Err()
 	}
-	g.recordWait(wait)
-	return wait
+}
+
+func (g *priorityGate) removeWaiterLocked(role openLedgerRole, target *priorityGateWaiter) bool {
+	queue := &g.priority
+	if role == openLedgerIngress {
+		queue = &g.ingress
+	}
+	for i, waiter := range *queue {
+		if waiter != target {
+			continue
+		}
+		copy((*queue)[i:], (*queue)[i+1:])
+		(*queue)[len(*queue)-1] = nil
+		*queue = (*queue)[:len(*queue)-1]
+		return true
+	}
+	return false
 }
 
 func (g *priorityGate) TryLock() bool {

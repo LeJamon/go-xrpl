@@ -472,7 +472,7 @@ func (r *Router) handleValidationWorkResult(result validationWorkResult) {
 		"hash_short", fmt.Sprintf("%x", result.validation.LedgerID[:8]))
 
 	if disposition.AcquireEligible() {
-		r.maybeAcquireFromValidation(result.validation, result.origin.PeerID)
+		r.catchupReplay.maybeAcquireFromValidation(result.validation, result.origin.PeerID)
 	}
 	if disposition.Relay {
 		if err := r.gossip.RelayValidation(result.validation, result.origin.PeerID); err != nil {
@@ -510,7 +510,7 @@ func (r *Router) handleLegacyValidation(
 			"peer", peerID)
 		return
 	}
-	r.maybeAcquireFromValidation(validation, originPeer)
+	r.catchupReplay.maybeAcquireFromValidation(validation, originPeer)
 }
 
 func (r *Router) validationPeerContext(

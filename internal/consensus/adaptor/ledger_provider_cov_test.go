@@ -126,10 +126,10 @@ func TestLpRouter_OurLCLMatchesPeers(t *testing.T) {
 
 			if test.peers != nil {
 				for i, state := range test.peers(closed.Sequence(), closed.Hash()) {
-					router.peerStates[peermanagement.PeerID(i+1)] = state
+					router.catchupReplay.peerStates[peermanagement.PeerID(i+1)] = state
 				}
 			}
-			assert.Equal(t, test.matches, router.ourLCLMatchesPeers())
+			assert.Equal(t, test.matches, router.catchupReplay.ourLCLMatchesPeers())
 		})
 	}
 }

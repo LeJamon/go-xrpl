@@ -21,30 +21,31 @@ func lendingV11Rules() *amendment.Rules {
 }
 
 func loanInvariantMap(flags uint32, paymentRemaining uint32) map[string]any {
-	return map[string]any{
-		"LedgerEntryType":          "Loan",
-		"OwnerNode":                "0",
-		"LoanBrokerNode":           "0",
-		"LoanBrokerID":             strings.Repeat("1", 64),
-		"LoanSequence":             uint32(1),
-		"Borrower":                 testPseudoAddr,
-		"StartDate":                uint32(1000),
-		"PaymentInterval":          uint32(100),
-		"NextPaymentDueDate":       uint32(1100),
-		"PaymentRemaining":         paymentRemaining,
-		"PeriodicPayment":          "1",
-		"PrincipalOutstanding":     "1",
-		"TotalValueOutstanding":    "1",
-		"ManagementFeeOutstanding": "0",
-		"LoanScale":                int32(0),
-		"Flags":                    flags,
-		"PreviousTxnID":            strings.Repeat("0", 64),
-		"PreviousTxnLgrSeq":        uint32(1),
+	fields := map[string]any{
+		"LedgerEntryType":       "Loan",
+		"OwnerNode":             "0",
+		"LoanBrokerNode":        "0",
+		"LoanBrokerID":          strings.Repeat("1", 64),
+		"LoanSequence":          uint32(1),
+		"Borrower":              testPseudoAddr,
+		"StartDate":             uint32(1000),
+		"PaymentInterval":       uint32(100),
+		"NextPaymentDueDate":    uint32(1100),
+		"PeriodicPayment":       "1",
+		"PrincipalOutstanding":  "1",
+		"TotalValueOutstanding": "1",
+		"Flags":                 flags,
+		"PreviousTxnID":         strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq":     uint32(1),
 	}
+	if paymentRemaining != 0 {
+		fields["PaymentRemaining"] = paymentRemaining
+	}
+	return fields
 }
 
 func loanBrokerInvariantMap(ownerCount uint32, debt string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"LedgerEntryType":   "LoanBroker",
 		"Sequence":          uint32(1),
 		"OwnerNode":         "0",
@@ -53,13 +54,40 @@ func loanBrokerInvariantMap(ownerCount uint32, debt string) map[string]any {
 		"Account":           testPseudoAddr,
 		"Owner":             testPseudoAddr,
 		"LoanSequence":      uint32(1),
-		"OwnerCount":        ownerCount,
 		"DebtTotal":         debt,
-		"CoverAvailable":    "0",
 		"Flags":             uint32(0),
 		"PreviousTxnID":     strings.Repeat("0", 64),
 		"PreviousTxnLgrSeq": uint32(1),
 	}
+	if ownerCount != 0 {
+		fields["OwnerCount"] = ownerCount
+	}
+	if debt == "0" {
+		delete(fields, "DebtTotal")
+	}
+	return fields
+}
+
+func loanScheduleVaultMap(redemptionDate *uint32) map[string]any {
+	fields := map[string]any{
+		"LedgerEntryType":   "Vault",
+		"Flags":             uint32(0),
+		"Sequence":          uint32(1),
+		"OwnerNode":         "0",
+		"Owner":             testPseudoAddr,
+		"Account":           testPseudoAddr,
+		"Asset":             map[string]any{"currency": "XRP"},
+		"ShareMPTID":        strings.Repeat("0", 48),
+		"WithdrawalPolicy":  uint8(1),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(1),
+		"VaultKind":         vaulttx.VaultKindClosedEnded,
+		"SubscriptionDate":  uint32(1000),
+	}
+	if redemptionDate != nil {
+		fields["RedemptionDate"] = *redemptionDate
+	}
+	return fields
 }
 
 func deletedBrokerView(t *testing.T) mapView {
@@ -177,16 +205,11 @@ func TestValidLoan_RedemptionScheduleRunsBeforeLendingGate(t *testing.T) {
 		brokerID[i] = 0x11
 		vaultID[i] = 0x22
 	}
-	broker := mustEncode(t, map[string]any{
-		"LedgerEntryType": "LoanBroker",
-		"VaultID":         strings.ToUpper(hexEncode32(vaultID)),
-	})
-	vault := mustEncode(t, map[string]any{
-		"LedgerEntryType": "Vault",
-		"VaultKind":       vaulttx.VaultKindClosedEnded,
-		"RedemptionDate":  uint32(1150),
-		"Asset":           map[string]any{"currency": "XRP"},
-	})
+	brokerFields := loanBrokerInvariantMap(0, "0")
+	brokerFields["VaultID"] = strings.ToUpper(hexEncode32(vaultID))
+	broker := mustEncode(t, brokerFields)
+	badRedemption := uint32(1150)
+	vault := mustEncode(t, loanScheduleVaultMap(&badRedemption))
 	view := mapView{data: map[[32]byte][]byte{
 		keylet.LoanBrokerByID(brokerID).Key: broker,
 		keylet.VaultByID(vaultID).Key:       vault,
@@ -209,22 +232,14 @@ func TestValidLoan_RedemptionScheduleRunsBeforeLendingGate(t *testing.T) {
 		})
 	}
 
-	validVault := mustEncode(t, map[string]any{
-		"LedgerEntryType": "Vault",
-		"VaultKind":       vaulttx.VaultKindClosedEnded,
-		"RedemptionDate":  uint32(1200),
-		"Asset":           map[string]any{"currency": "XRP"},
-	})
+	validRedemption := uint32(1200)
+	validVault := mustEncode(t, loanScheduleVaultMap(&validRedemption))
 	view.data[keylet.VaultByID(vaultID).Key] = validVault
 	if violation := checkValidLoanForTx(vvTx{txType: protocol.TxTypeLoanSet}, TesSUCCESS, []InvariantEntry{entryChange}, view, amendment.EmptyRules()); violation != nil {
 		t.Fatalf("valid schedule rejected while lending disabled: %v", violation)
 	}
 
-	missingRedemption := mustEncode(t, map[string]any{
-		"LedgerEntryType": "Vault",
-		"VaultKind":       vaulttx.VaultKindClosedEnded,
-		"Asset":           map[string]any{"currency": "XRP"},
-	})
+	missingRedemption := mustEncode(t, loanScheduleVaultMap(nil))
 	view.data[keylet.VaultByID(vaultID).Key] = missingRedemption
 	if violation := checkValidLoanForTx(vvTx{txType: protocol.TxTypeLoanSet}, TesSUCCESS, []InvariantEntry{entryChange}, view, amendment.EmptyRules()); violation == nil || !strings.Contains(violation.Message, "RedemptionDate") {
 		t.Fatalf("missing RedemptionDate violation = %v, want malformed-date failure", violation)

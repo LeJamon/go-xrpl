@@ -13,11 +13,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 type GetAggregatePriceMethod struct{ baseHandler }
@@ -164,15 +164,12 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		if entry == nil {
 			return nil, rpcInternalError("get_aggregate_price: oracle lookup returned no result", nil).WithExtra(lookupFields)
 		}
-		if _, err := state.ParseOracle(entry.Node); err != nil {
-			return nil, rpcInternalError("get_aggregate_price: oracle decoding failed", err).WithExtra(lookupFields)
-		}
-		decoded, err := binarycodec.Decode(hex.EncodeToString(entry.Node))
-		if err != nil {
+		var decoded ledgerfields.Oracle
+		if err := decoded.Decode(entry.Node); err != nil {
 			return nil, rpcInternalError("get_aggregate_price: oracle decoding failed", err).WithExtra(lookupFields)
 		}
 
-		if err := iterateAggregatePriceData(ctx, decoded, func(node map[string]any) bool {
+		if err := iterateAggregatePriceData(ctx, &decoded, func(node *ledgerfields.Oracle) bool {
 			point, found := aggregatePriceFromNode(node, baseAsset, quoteAsset)
 			if found {
 				prices = append(prices, point)
@@ -289,9 +286,14 @@ func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
-func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, visit func(map[string]any) bool) error {
+func iterateAggregatePriceData(ctx *types.RpcContext, initial *ledgerfields.Oracle, visit func(*ledgerfields.Oracle) bool) error {
 	oracle := initial
-	chain := initial
+	previousID, err := initial.GetPreviousTxnID()
+	if err != nil {
+		return err
+	}
+	previousSequence := initial.PreviousTxnLgrSeq
+	hasPrevious := initial.HasPreviousTxnID() && initial.HasPreviousTxnLgrSeq()
 	isNew := false
 	for history := uint8(0); ; {
 		if oracle == nil || visit(oracle) || isNew {
@@ -302,8 +304,7 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 			return nil
 		}
 
-		previousID, previousSequence, ok := aggregatePreviousTransaction(chain)
-		if !ok {
+		if !hasPrevious {
 			return nil
 		}
 		transaction, err := ctx.Services.Ledger().GetTransaction(previousID)
@@ -327,14 +328,16 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 			if nodeType(inner) != "Oracle" {
 				continue
 			}
-			chain = inner
-			oracle, isNew = inner["NewFields"].(map[string]any)
+			previousID, previousSequence, hasPrevious = aggregatePreviousTransaction(inner)
+			fields, isNewEntry := inner["NewFields"].(map[string]any)
+			isNew = isNewEntry
 			if isNew && history == 1 {
 				return nil
 			}
 			if !isNew {
-				oracle, _ = inner["FinalFields"].(map[string]any)
+				fields, _ = inner["FinalFields"].(map[string]any)
 			}
+			oracle = aggregateOracleFromFields(fields)
 			found = true
 			break
 		}
@@ -359,66 +362,51 @@ func aggregatePreviousTransaction(node map[string]any) ([32]byte, uint32, bool) 
 	return hash, sequence, ok
 }
 
-func aggregatePriceFromNode(node map[string]any, baseAsset, quoteAsset string) (aggregatePricePoint, bool) {
-	lastUpdateTime, ok := aggregateUint32(node["LastUpdateTime"])
-	if !ok {
+func aggregateOracleFromFields(fields map[string]any) *ledgerfields.Oracle {
+	if fields == nil {
+		return nil
+	}
+	oracle := &ledgerfields.Oracle{}
+	if lastUpdateTime, ok := aggregateUint32(fields["LastUpdateTime"]); ok {
+		oracle.SetLastUpdateTime(lastUpdateTime)
+	}
+	if series, ok := fields["PriceDataSeries"].([]any); ok {
+		oracle.SetPriceDataSeries(series)
+	}
+	return oracle
+}
+
+func aggregatePriceFromNode(node *ledgerfields.Oracle, baseAsset, quoteAsset string) (aggregatePricePoint, bool) {
+	if node == nil || !node.HasLastUpdateTime() {
 		return aggregatePricePoint{}, false
 	}
-	series, ok := node["PriceDataSeries"].([]any)
-	if !ok {
+	series, err := node.GetPriceDataSeries()
+	if err != nil {
 		return aggregatePricePoint{}, false
 	}
-	for _, rawPrice := range series {
-		priceData, ok := rawPrice.(map[string]any)
-		if !ok {
+	for _, price := range series {
+		base, err := price.GetBaseAsset()
+		if err != nil {
 			continue
 		}
-		if nested, nestedOK := priceData["PriceData"].(map[string]any); nestedOK {
-			priceData = nested
-		}
-		base, _ := priceData["BaseAsset"].(string)
-		quote, _ := priceData["QuoteAsset"].(string)
-		if base != baseAsset || quote != quoteAsset {
+		quote, err := price.GetQuoteAsset()
+		if err != nil || base != baseAsset || quote != quoteAsset || !price.HasAssetPrice() {
 			continue
 		}
-		assetPrice, ok := aggregateAssetPrice(priceData["AssetPrice"])
-		if !ok {
+		assetPrice, err := price.GetAssetPrice()
+		if err != nil {
 			continue
 		}
-		var scale uint32
-		if rawScale, present := priceData["Scale"]; present {
-			scale, ok = aggregateUint32(rawScale)
-			if !ok || scale > 255 {
-				continue
-			}
+		scale, err := price.GetScale()
+		if err != nil {
+			continue
 		}
 		return aggregatePricePoint{
 			price:          newAggregatePriceAmountUnsigned(assetPrice, -int(scale)),
-			lastUpdateTime: lastUpdateTime,
+			lastUpdateTime: node.LastUpdateTime,
 		}, true
 	}
 	return aggregatePricePoint{}, false
-}
-
-func aggregateAssetPrice(value any) (uint64, bool) {
-	switch typed := value.(type) {
-	case string:
-		price, err := strconv.ParseUint(typed, 16, 64)
-		return price, err == nil
-	case uint64:
-		return typed, true
-	case uint32:
-		return uint64(typed), true
-	case int:
-		return uint64(typed), typed >= 0
-	case float64:
-		if typed < 0 || typed > float64(^uint32(0)) || typed != float64(uint64(typed)) {
-			return 0, false
-		}
-		return uint64(typed), true
-	default:
-		return 0, false
-	}
 }
 
 func aggregateUint32(value any) (uint32, bool) {

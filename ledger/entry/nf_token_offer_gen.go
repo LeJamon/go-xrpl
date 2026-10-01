@@ -132,6 +132,260 @@ func (n *NFTokenOffer) SetSponsor(value string) {
 	n.present |= nftokenofferBitSponsor
 }
 
+// HasOwner reports whether Owner is present.
+func (n *NFTokenOffer) HasOwner() bool {
+	return n != nil && n.present&nftokenofferBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (n *NFTokenOffer) GetOwner() ([20]byte, error) {
+	if n == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(n.Owner, "NFTokenOffer.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (n *NFTokenOffer) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	n.SetOwner(address)
+	return nil
+}
+
+// HasNFTokenID reports whether NFTokenID is present.
+func (n *NFTokenOffer) HasNFTokenID() bool {
+	return n != nil && n.present&nftokenofferBitNFTokenID != 0
+}
+
+// GetNFTokenID returns the typed 256-bit hash.
+func (n *NFTokenOffer) GetNFTokenID() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.NFTokenID, "NFTokenOffer.NFTokenID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetNFTokenIDValue assigns a typed 256-bit hash.
+func (n *NFTokenOffer) SetNFTokenIDValue(value [32]byte) {
+	n.SetNFTokenID(hashValueToString(value[:]))
+}
+
+// HasAmount reports whether Amount is present.
+func (n *NFTokenOffer) HasAmount() bool {
+	return n != nil && n.present&nftokenofferBitAmount != 0
+}
+
+// GetAmount returns the typed Amount value.
+func (n *NFTokenOffer) GetAmount() (AmountValue, error) {
+	if n == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(n.Amount, "NFTokenOffer.Amount", false)
+}
+
+// SetAmountValue assigns a typed Amount value.
+func (n *NFTokenOffer) SetAmountValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "NFTokenOffer.Amount", false)
+	if err != nil {
+		return err
+	}
+	n.SetAmount(encoded)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (n *NFTokenOffer) HasOwnerNode() bool {
+	return n != nil && n.present&nftokenofferBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (n *NFTokenOffer) GetOwnerNode() (uint64, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(n.OwnerNode, "NFTokenOffer.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (n *NFTokenOffer) SetOwnerNodeValue(value uint64) {
+	n.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasNFTokenOfferNode reports whether NFTokenOfferNode is present.
+func (n *NFTokenOffer) HasNFTokenOfferNode() bool {
+	return n != nil && n.present&nftokenofferBitNFTokenOfferNode != 0
+}
+
+// GetNFTokenOfferNode returns the typed UInt64 value.
+func (n *NFTokenOffer) GetNFTokenOfferNode() (uint64, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(n.NFTokenOfferNode, "NFTokenOffer.NFTokenOfferNode", false)
+}
+
+// SetNFTokenOfferNodeValue assigns a typed UInt64 value.
+func (n *NFTokenOffer) SetNFTokenOfferNodeValue(value uint64) {
+	n.SetNFTokenOfferNode(uint64ValueToString(value, false))
+}
+
+// HasDestination reports whether Destination is present.
+func (n *NFTokenOffer) HasDestination() bool {
+	return n != nil && n.present&nftokenofferBitDestination != 0
+}
+
+// ClearDestination removes Destination from the serialized entry.
+func (n *NFTokenOffer) ClearDestination() {
+	if n == nil {
+		return
+	}
+	n.Destination = ""
+	n.present &^= nftokenofferBitDestination
+	n.dirty = true
+}
+
+// GetDestination returns the 20-byte AccountID.
+func (n *NFTokenOffer) GetDestination() ([20]byte, error) {
+	if n == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(n.Destination, "NFTokenOffer.Destination")
+}
+
+// SetDestinationValue assigns a 20-byte AccountID.
+func (n *NFTokenOffer) SetDestinationValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	n.SetDestination(address)
+	return nil
+}
+
+// HasExpiration reports whether Expiration is present.
+func (n *NFTokenOffer) HasExpiration() bool {
+	return n != nil && n.present&nftokenofferBitExpiration != 0
+}
+
+// ClearExpiration removes Expiration from the serialized entry.
+func (n *NFTokenOffer) ClearExpiration() {
+	if n == nil {
+		return
+	}
+	n.Expiration = 0
+	n.present &^= nftokenofferBitExpiration
+	n.dirty = true
+}
+
+// GetExpiration returns the typed UInt32 value.
+func (n *NFTokenOffer) GetExpiration() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (n *NFTokenOffer) SetExpirationValue(value uint32) {
+	n.SetExpiration(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (n *NFTokenOffer) HasFlags() bool {
+	return n != nil && n.present&nftokenofferBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (n *NFTokenOffer) GetFlags() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (n *NFTokenOffer) SetFlagsValue(value uint32) {
+	n.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (n *NFTokenOffer) HasPreviousTxnID() bool {
+	return n != nil && n.present&nftokenofferBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (n *NFTokenOffer) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.PreviousTxnID, "NFTokenOffer.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (n *NFTokenOffer) SetPreviousTxnIDValue(value [32]byte) {
+	n.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (n *NFTokenOffer) HasPreviousTxnLgrSeq() bool {
+	return n != nil && n.present&nftokenofferBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (n *NFTokenOffer) GetPreviousTxnLgrSeq() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (n *NFTokenOffer) SetPreviousTxnLgrSeqValue(value uint32) {
+	n.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (n *NFTokenOffer) HasSponsor() bool {
+	return n != nil && n.present&nftokenofferBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (n *NFTokenOffer) ClearSponsor() {
+	if n == nil {
+		return
+	}
+	n.Sponsor = ""
+	n.present &^= nftokenofferBitSponsor
+	n.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (n *NFTokenOffer) GetSponsor() ([20]byte, error) {
+	if n == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(n.Sponsor, "NFTokenOffer.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (n *NFTokenOffer) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	n.SetSponsor(address)
+	return nil
+}
+
 func (n *NFTokenOffer) validateRequired() error {
 	if n.decoded && !n.dirty {
 		return nil

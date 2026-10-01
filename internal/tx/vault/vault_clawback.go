@@ -116,7 +116,7 @@ func (v *VaultClawback) clawsBackShares(vd *vaultData, accountID [20]byte) bool 
 // Preclaim runs the clawback dispatch: owner share burns require an asset-empty
 // vault with outstanding shares, and issuer asset clawbacks require the
 // appropriate clawback permissions. Reference: rippled VaultClawback::preclaim.
-func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (v *VaultClawback) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(v.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

@@ -322,7 +322,7 @@ func (a *AccountSet) EnableDefaultRipple() {
 // with a non-empty owner directory — rippled returns tecOWNERS from the
 // RequireAuth gate, not tecNO_PERMISSION from the Clawback gate. The flag
 // mutations stay in Apply (rippled doApply).
-func (a *AccountSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (a *AccountSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -634,7 +634,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 // is not empty.
 //
 // Reference: rippled View.cpp dirIsEmpty (lines 905-911).
-func ownerDirIsEmpty(view tx.LedgerView, accountID [20]byte) bool {
+func ownerDirIsEmpty(view tx.ReadOnlyLedgerView, accountID [20]byte) bool {
 	key := keylet.OwnerDir(accountID)
 	exists, err := view.Exists(key)
 	if err != nil || !exists {

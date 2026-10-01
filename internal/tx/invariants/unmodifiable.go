@@ -80,13 +80,117 @@ func unmodifiableViolation() *InvariantViolation {
 	}
 }
 
-func fieldChanged(before, after map[string]any, name string) bool {
-	b, bok := before[name]
-	a, aok := after[name]
+func fieldChanged(before, after decodedLendingEntry, name string) bool {
+	b, bok := lendingFieldValue(before, name)
+	a, aok := lendingFieldValue(after, name)
 	if bok != aok {
 		return true
 	}
 	return bok && !reflect.DeepEqual(b, a)
+}
+
+func typedLendingField[T any](has func() bool, get func() (T, error)) (any, bool) {
+	if !has() {
+		return nil, false
+	}
+	value, err := get()
+	if err != nil {
+		return nil, true
+	}
+	return value, true
+}
+
+func lendingFieldValue(decoded decodedLendingEntry, name string) (any, bool) {
+	switch model := decoded.model.(type) {
+	case *entry.LoanBroker:
+		switch name {
+		case "Sequence":
+			return typedLendingField(model.HasSequence, model.GetSequence)
+		case "OwnerNode":
+			return typedLendingField(model.HasOwnerNode, model.GetOwnerNode)
+		case "VaultNode":
+			return typedLendingField(model.HasVaultNode, model.GetVaultNode)
+		case "VaultID":
+			return typedLendingField(model.HasVaultID, model.GetVaultID)
+		case "Account":
+			return typedLendingField(model.HasAccount, model.GetAccount)
+		case "Owner":
+			return typedLendingField(model.HasOwner, model.GetOwner)
+		case "ManagementFeeRate":
+			return typedLendingField(model.HasManagementFeeRate, model.GetManagementFeeRate)
+		case "CoverRateMinimum":
+			return typedLendingField(model.HasCoverRateMinimum, model.GetCoverRateMinimum)
+		case "CoverRateLiquidation":
+			return typedLendingField(model.HasCoverRateLiquidation, model.GetCoverRateLiquidation)
+		}
+	case *entry.Loan:
+		switch name {
+		case "LoanSequence":
+			return typedLendingField(model.HasLoanSequence, model.GetLoanSequence)
+		case "OwnerNode":
+			return typedLendingField(model.HasOwnerNode, model.GetOwnerNode)
+		case "LoanBrokerNode":
+			return typedLendingField(model.HasLoanBrokerNode, model.GetLoanBrokerNode)
+		case "LoanBrokerID":
+			return typedLendingField(model.HasLoanBrokerID, model.GetLoanBrokerID)
+		case "Borrower":
+			return typedLendingField(model.HasBorrower, model.GetBorrower)
+		case "LoanOriginationFee":
+			return typedLendingField(model.HasLoanOriginationFee, model.GetLoanOriginationFee)
+		case "LoanServiceFee":
+			return typedLendingField(model.HasLoanServiceFee, model.GetLoanServiceFee)
+		case "LatePaymentFee":
+			return typedLendingField(model.HasLatePaymentFee, model.GetLatePaymentFee)
+		case "ClosePaymentFee":
+			return typedLendingField(model.HasClosePaymentFee, model.GetClosePaymentFee)
+		case "OverpaymentFee":
+			return typedLendingField(model.HasOverpaymentFee, model.GetOverpaymentFee)
+		case "InterestRate":
+			return typedLendingField(model.HasInterestRate, model.GetInterestRate)
+		case "LateInterestRate":
+			return typedLendingField(model.HasLateInterestRate, model.GetLateInterestRate)
+		case "CloseInterestRate":
+			return typedLendingField(model.HasCloseInterestRate, model.GetCloseInterestRate)
+		case "OverpaymentInterestRate":
+			return typedLendingField(model.HasOverpaymentInterestRate, model.GetOverpaymentInterestRate)
+		case "StartDate":
+			return typedLendingField(model.HasStartDate, model.GetStartDate)
+		case "PaymentInterval":
+			return typedLendingField(model.HasPaymentInterval, model.GetPaymentInterval)
+		case "GracePeriod":
+			return typedLendingField(model.HasGracePeriod, model.GetGracePeriod)
+		case "LoanScale":
+			return typedLendingField(model.HasLoanScale, model.GetLoanScale)
+		}
+	case *entry.Vault:
+		switch name {
+		case "VaultKind":
+			return typedLendingField(model.HasVaultKind, model.GetVaultKind)
+		case "SubscriptionDate":
+			return typedLendingField(model.HasSubscriptionDate, model.GetSubscriptionDate)
+		case "RedemptionDate":
+			return typedLendingField(model.HasRedemptionDate, model.GetRedemptionDate)
+		case "Sequence":
+			return typedLendingField(model.HasSequence, model.GetSequence)
+		case "OwnerNode":
+			return typedLendingField(model.HasOwnerNode, model.GetOwnerNode)
+		case "Owner":
+			return typedLendingField(model.HasOwner, model.GetOwner)
+		case "WithdrawalPolicy":
+			return typedLendingField(model.HasWithdrawalPolicy, model.GetWithdrawalPolicy)
+		case "Scale":
+			return typedLendingField(model.HasScale, model.GetScale)
+		case "LEVersion":
+			return typedLendingField(model.HasLEVersion, model.GetLEVersion)
+		case "Asset":
+			return typedLendingField(model.HasAsset, model.GetAsset)
+		case "Account":
+			return typedLendingField(model.HasAccount, model.GetAccount)
+		case "ShareMPTID":
+			return typedLendingField(model.HasShareMPTID, model.GetShareMPTID)
+		}
+	}
+	return nil, false
 }
 
 // unmodifiableFields is the field list from rippled's

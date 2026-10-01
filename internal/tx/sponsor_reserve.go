@@ -6,10 +6,10 @@ import (
 	"math/bits"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func reserveOwnerCount(account *state.AccountRoot, ownerDelta int) (uint32, bool) {
@@ -67,7 +67,7 @@ func checkedAccountReserve(config EngineConfig, ownerCount, accountCount uint32)
 
 // AccountReserveForView returns account's reserve at the supplied raw owner
 // count, using the view's amendment rules.
-func AccountReserveForView(view LedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (uint64, bool) {
+func AccountReserveForView(view ReadOnlyLedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (uint64, bool) {
 	if account == nil {
 		return 0, false
 	}
@@ -112,7 +112,7 @@ func (ctx *ApplyContext) UsesReserveSponsorFor(accountID [20]byte, account *stat
 	return sponsor != nil, result
 }
 
-func readSponsorship(view LedgerView, sponsorID, sponseeID [20]byte) (*state.SponsorshipData, bool, error) {
+func readSponsorship(view ReadOnlyLedgerView, sponsorID, sponseeID [20]byte) (*state.SponsorshipData, bool, error) {
 	data, err := view.Read(keylet.Sponsorship(sponsorID, sponseeID))
 	if err != nil {
 		return nil, false, err
@@ -334,23 +334,26 @@ func DecreaseOwnerCountOnView(view state.LedgerView, accountID [20]byte, sponsor
 // LedgerEntrySponsor returns the AccountID stored in a ledger entry sponsor
 // field. An absent field is not an error.
 func LedgerEntrySponsor(data []byte, field string) (string, error) {
-	fields, err := binarycodec.DecodeBytes(data)
+	if field != "Sponsor" {
+		return "", fmt.Errorf("unsupported ledger entry sponsor field %q", field)
+	}
+	model, err := decodeSponsoredEntry(data)
 	if err != nil {
 		return "", err
 	}
-	value, ok := fields[field]
-	if !ok {
+	sponsorEntry, ok := model.(sponsorEntry)
+	if !ok || !sponsorEntry.HasSponsor() {
 		return "", nil
 	}
-	sponsor, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("%s is not an AccountID", field)
+	sponsorID, err := sponsorEntry.GetSponsor()
+	if err != nil {
+		return "", err
 	}
-	return sponsor, nil
+	return state.EncodeAccountID(sponsorID)
 }
 
 // LedgerEntrySponsorFromView reads a ledger entry and returns its sponsor.
-func LedgerEntrySponsorFromView(view LedgerView, object keylet.Keylet, field string) (string, error) {
+func LedgerEntrySponsorFromView(view ReadOnlyLedgerView, object keylet.Keylet, field string) (string, error) {
 	data, err := view.Read(object)
 	if err != nil {
 		return "", err
@@ -364,14 +367,51 @@ func LedgerEntrySponsorFromView(view LedgerView, object keylet.Keylet, field str
 // SetLedgerEntrySponsor sets or removes a ledger entry sponsor field while
 // preserving every other serialized field.
 func SetLedgerEntrySponsor(data []byte, field, sponsor string) ([]byte, error) {
-	fields, err := binarycodec.DecodeBytes(data)
+	if field != "Sponsor" {
+		return nil, fmt.Errorf("unsupported ledger entry sponsor field %q", field)
+	}
+	model, err := decodeSponsoredEntry(data)
 	if err != nil {
 		return nil, err
 	}
-	if sponsor == "" {
-		delete(fields, field)
-	} else {
-		fields[field] = sponsor
+	sponsorEntry, ok := model.(sponsorEntry)
+	if !ok {
+		return nil, fmt.Errorf("ledger entry %s does not support sponsorship", model.Type())
 	}
-	return binarycodec.EncodeBytes(fields)
+	if sponsor == "" {
+		sponsorEntry.ClearSponsor()
+	} else {
+		sponsorID, err := state.DecodeAccountID(sponsor)
+		if err != nil {
+			return nil, err
+		}
+		if err := sponsorEntry.SetSponsorValue(sponsorID); err != nil {
+			return nil, err
+		}
+	}
+	return sponsorEntry.Encode()
+}
+
+type sponsorEntry interface {
+	entry.Entry
+	Encode() ([]byte, error)
+	HasSponsor() bool
+	GetSponsor() ([20]byte, error)
+	SetSponsorValue([20]byte) error
+	ClearSponsor()
+}
+
+func decodeSponsoredEntry(data []byte) (entry.Entry, error) {
+	typ, err := state.DecodeType(data)
+	if err != nil {
+		return nil, err
+	}
+	model := entry.New(typ)
+	if model == nil {
+		return nil, fmt.Errorf("unsupported ledger entry type %s", typ)
+	}
+	if err := model.Decode(data); err != nil {
+		return nil, err
+	}
+	return model, nil
 }

@@ -96,7 +96,7 @@ func (v *VaultDelete) vaultIDBytes() ([32]byte, bool) {
 
 // Preclaim checks the vault exists, the submitter owns it, and the vault holds
 // no assets or outstanding shares. Reference: rippled VaultDelete::preclaim.
-func (v *VaultDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (v *VaultDelete) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(v.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

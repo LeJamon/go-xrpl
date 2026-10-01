@@ -233,6 +233,7 @@ func TestRouterTrustedValidationQueueFullShedsWithoutCrypto(t *testing.T) {
 	router.validationWork = lane
 	var logs bytes.Buffer
 	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	router.catchupReplay.logger = router.logger
 
 	require.Equal(t, 64, cap(lane.untrustedJobs))
 	for range cap(lane.trustedJobs) {
@@ -333,6 +334,7 @@ func TestRouterUntrustedValidationQueueSaturationRateLimited(t *testing.T) {
 	router := newTestRouter(engine, adaptor, nil)
 	var logs bytes.Buffer
 	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	router.catchupReplay.logger = router.logger
 	lane := router.validationWork
 	lane.trustedWorkers = 0
 	lane.untrustedWorkers = 0
@@ -598,17 +600,17 @@ func TestRouterValidationResultUsesDispositionForAcquireAndRelay(t *testing.T) {
 
 	require.Equal(t, 1, engine.processedCount())
 	require.Len(t, sender.relayed, 1)
-	entry, ok := router.seqHash[validation.LedgerSeq]
+	entry, ok := router.catchupReplay.seqHash[validation.LedgerSeq]
 	require.True(t, ok, "trusted current validation must enter acquisition bookkeeping")
 	require.Equal(t, [32]byte(validation.LedgerID), entry.hash)
 
 	engine.disposition.Status = consensus.ValidationConflicting
-	delete(router.seqHash, validation.LedgerSeq)
+	delete(router.catchupReplay.seqHash, validation.LedgerSeq)
 	router.handleValidationWorkResult(validationWorkResult{
 		validation: validation,
 		origin:     consensus.ValidationOrigin{PeerID: 9},
 	})
-	_, ok = router.seqHash[validation.LedgerSeq]
+	_, ok = router.catchupReplay.seqHash[validation.LedgerSeq]
 	require.False(t, ok, "Byzantine validation must not drive acquisition")
 	require.Len(t, sender.relayed, 2, "valid Byzantine validation must still relay")
 	require.Empty(t, sender.bad, "Byzantine signer behavior must not charge the relay peer")

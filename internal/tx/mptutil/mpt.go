@@ -80,7 +80,7 @@ func Issuer(id [24]byte) [20]byte {
 	return issuer
 }
 
-func ReadIssuance(view state.LedgerView, id [24]byte) (*state.MPTokenIssuanceData, keylet.Keylet, ter.Result) {
+func ReadIssuance(view state.ReadOnlyLedgerView, id [24]byte) (*state.MPTokenIssuanceData, keylet.Keylet, ter.Result) {
 	k := keylet.MPTIssuance(id)
 	raw, err := view.Read(k)
 	if err != nil {
@@ -96,7 +96,7 @@ func ReadIssuance(view state.LedgerView, id [24]byte) (*state.MPTokenIssuanceDat
 	return issuance, k, ter.TesSUCCESS
 }
 
-func ReadHolding(view state.LedgerView, id [24]byte, account [20]byte) (*state.MPTokenData, keylet.Keylet, ter.Result) {
+func ReadHolding(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte) (*state.MPTokenData, keylet.Keylet, ter.Result) {
 	k := keylet.MPTokenByID(id, account)
 	raw, err := view.Read(k)
 	if err != nil {
@@ -127,12 +127,12 @@ func AvailableAmount(issuance *state.MPTokenIssuanceData) uint64 {
 	return maximum - issuance.OutstandingAmount
 }
 
-func IsGlobalFrozen(view state.LedgerView, id [24]byte) bool {
+func IsGlobalFrozen(view state.ReadOnlyLedgerView, id [24]byte) bool {
 	issuance, _, result := ReadIssuance(view, id)
 	return result == ter.TesSUCCESS && issuance.Flags&entry.LsfMPTLocked != 0
 }
 
-func IsIndividualFrozen(view state.LedgerView, id [24]byte, account [20]byte) bool {
+func IsIndividualFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte) bool {
 	if account == Issuer(id) {
 		return false
 	}
@@ -140,16 +140,16 @@ func IsIndividualFrozen(view state.LedgerView, id [24]byte, account [20]byte) bo
 	return result == ter.TesSUCCESS && token.Flags&entry.LsfMPTLocked != 0
 }
 
-func IsFrozen(view state.LedgerView, id [24]byte, account [20]byte) bool {
+func IsFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte) bool {
 	return isFrozen(view, id, account, 0)
 }
 
-func isFrozen(view state.LedgerView, id [24]byte, account [20]byte, depth uint8) bool {
+func isFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8) bool {
 	return IsGlobalFrozen(view, id) || IsIndividualFrozen(view, id, account) ||
 		isVaultPseudoAccountFrozen(view, id, account, depth)
 }
 
-func isVaultPseudoAccountFrozen(view state.LedgerView, id [24]byte, account [20]byte, depth uint8) bool {
+func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8) bool {
 	rules := view.Rules()
 	if rules == nil || !rules.Enabled(amendment.FeatureSingleAssetVault) {
 		return false
@@ -185,7 +185,7 @@ func isVaultPseudoAccountFrozen(view state.LedgerView, id [24]byte, account [20]
 	return isAnyAssetFrozen(view, asset, [][20]byte{issuance.Issuer, account}, depth+1)
 }
 
-func IsAssetFrozen(view state.LedgerView, asset tx.Asset, account [20]byte) bool {
+func IsAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte) bool {
 	if asset.IsNative() {
 		return false
 	}
@@ -200,7 +200,7 @@ func IsAssetFrozen(view state.LedgerView, asset tx.Asset, account [20]byte) bool
 // regular account into a pseudo-account. A regular freeze on the source is
 // bypassed when the source is the issuer; pseudo-accounts must always be able
 // to withdraw what they receive, so their individual freeze is checked too.
-func CheckDepositFreeze(view state.LedgerView, srcAcct, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
+func CheckDepositFreeze(view state.ReadOnlyLedgerView, srcAcct, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsNative() {
 		return ter.TesSUCCESS
 	}
@@ -227,7 +227,7 @@ func CheckDepositFreeze(view state.LedgerView, srcAcct, pseudoAcct [20]byte, ass
 // pseudo-account through the submitting account to the destination. Issuer
 // redemption is always allowed; a regular freeze on a self-withdrawing
 // submitter is allowed, while a deep freeze still prevents the withdrawal.
-func CheckWithdrawFreeze(view state.LedgerView, pseudoAcct, submitterAcct, dstAcct [20]byte, asset tx.Asset) ter.Result {
+func CheckWithdrawFreeze(view state.ReadOnlyLedgerView, pseudoAcct, submitterAcct, dstAcct [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsNative() {
 		return ter.TesSUCCESS
 	}
@@ -256,7 +256,7 @@ func CheckWithdrawFreeze(view state.LedgerView, pseudoAcct, submitterAcct, dstAc
 	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
 }
 
-func checkPseudoAccountBackingFreeze(view state.LedgerView, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
+func checkPseudoAccountBackingFreeze(view state.ReadOnlyLedgerView, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
 	if !asset.IsMPT() {
 		return ter.TesSUCCESS
 	}
@@ -285,7 +285,7 @@ func assetIssuer(asset tx.Asset) ([20]byte, ter.Result) {
 	return issuer, ter.TesSUCCESS
 }
 
-func checkGlobalFrozen(view state.LedgerView, asset tx.Asset) ter.Result {
+func checkGlobalFrozen(view state.ReadOnlyLedgerView, asset tx.Asset) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
@@ -302,7 +302,7 @@ func checkGlobalFrozen(view state.LedgerView, asset tx.Asset) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func checkIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+func checkIndividualFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
@@ -320,7 +320,7 @@ func checkIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Ass
 }
 
 // CheckDeepFrozen returns whether an account is unable to receive an asset.
-func CheckDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+func CheckDeepFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsNative() {
 		return ter.TesSUCCESS
 	}
@@ -344,7 +344,7 @@ func CheckDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) te
 	return ter.TesSUCCESS
 }
 
-func isIOUDeepFrozen(view state.LedgerView, account, issuer [20]byte, currency string) bool {
+func isIOUDeepFrozen(view state.ReadOnlyLedgerView, account, issuer [20]byte, currency string) bool {
 	if currency == "" || currency == "XRP" || account == issuer {
 		return false
 	}
@@ -356,7 +356,7 @@ func isIOUDeepFrozen(view state.LedgerView, account, issuer [20]byte, currency s
 	return err == nil && line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0
 }
 
-func isAnyAssetFrozen(view state.LedgerView, asset tx.Asset, accounts [][20]byte, depth uint8) bool {
+func isAnyAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, accounts [][20]byte, depth uint8) bool {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
@@ -377,7 +377,7 @@ func isAnyAssetFrozen(view state.LedgerView, asset tx.Asset, accounts [][20]byte
 	return false
 }
 
-func TransferRate(view state.LedgerView, id [24]byte) uint32 {
+func TransferRate(view state.ReadOnlyLedgerView, id [24]byte) uint32 {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS || issuance.TransferFee == 0 {
 		return RateOne
@@ -385,7 +385,7 @@ func TransferRate(view state.LedgerView, id [24]byte) uint32 {
 	return RateOne + 10_000*uint32(issuance.TransferFee)
 }
 
-func RequireAuth(view state.LedgerView, id [24]byte, account [20]byte, strong bool) ter.Result {
+func RequireAuth(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, strong bool) ter.Result {
 	authType := WeakAuth
 	if strong {
 		authType = StrongAuth
@@ -393,7 +393,7 @@ func RequireAuth(view state.LedgerView, id [24]byte, account [20]byte, strong bo
 	return RequireAuthWithTypeAt(view, id, account, authType, 0)
 }
 
-func RequireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, strong bool, parentCloseTime uint32) ter.Result {
+func RequireAuthAt(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, strong bool, parentCloseTime uint32) ter.Result {
 	authType := WeakAuth
 	if strong {
 		authType = StrongAuth
@@ -401,15 +401,15 @@ func RequireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, strong 
 	return RequireAuthWithTypeAt(view, id, account, authType, parentCloseTime)
 }
 
-func RequireAuthWithType(view state.LedgerView, id [24]byte, account [20]byte, authType AuthType) ter.Result {
+func RequireAuthWithType(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, authType AuthType) ter.Result {
 	return RequireAuthWithTypeAt(view, id, account, authType, 0)
 }
 
-func RequireAuthWithTypeAt(view state.LedgerView, id [24]byte, account [20]byte, authType AuthType, parentCloseTime uint32) ter.Result {
+func RequireAuthWithTypeAt(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, authType AuthType, parentCloseTime uint32) ter.Result {
 	return requireAuthAt(view, id, account, authType, parentCloseTime, 0)
 }
 
-func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, authType AuthType, parentCloseTime uint32, depth uint8) ter.Result {
+func requireAuthAt(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, authType AuthType, parentCloseTime uint32, depth uint8) ter.Result {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return result
@@ -489,14 +489,14 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, authTyp
 	return ter.TecNO_AUTH
 }
 
-func pseudoAccountAuthExempt(view state.LedgerView, account [20]byte, rules *amendment.Rules) (bool, ter.Result) {
+func pseudoAccountAuthExempt(view state.ReadOnlyLedgerView, account [20]byte, rules *amendment.Rules) (bool, ter.Result) {
 	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
 		return false, ter.TesSUCCESS
 	}
 	return pseudoAccount(view, account)
 }
 
-func pseudoAccount(view state.LedgerView, account [20]byte) (bool, ter.Result) {
+func pseudoAccount(view state.ReadOnlyLedgerView, account [20]byte) (bool, ter.Result) {
 	accountRaw, err := view.Read(keylet.Account(account))
 	if err != nil {
 		return false, ter.TefINTERNAL
@@ -511,11 +511,11 @@ func pseudoAccount(view state.LedgerView, account [20]byte) (bool, ter.Result) {
 	return accountRoot.IsPseudoAccount(), ter.TesSUCCESS
 }
 
-func RequireAssetAuthAt(view state.LedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32) ter.Result {
+func RequireAssetAuthAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32) ter.Result {
 	return requireAssetAuthWithTypeAt(view, asset, account, authType, parentCloseTime, 0)
 }
 
-func requireAssetAuthAt(view state.LedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32, depth uint8) ter.Result {
+func requireAssetAuthAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32, depth uint8) ter.Result {
 	authType := WeakAuth
 	if strong {
 		authType = StrongAuth
@@ -523,7 +523,7 @@ func requireAssetAuthAt(view state.LedgerView, asset tx.Asset, account [20]byte,
 	return requireAssetAuthWithTypeAt(view, asset, account, authType, parentCloseTime, depth)
 }
 
-func requireAssetAuthWithTypeAt(view state.LedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32, depth uint8) ter.Result {
+func requireAssetAuthWithTypeAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32, depth uint8) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
@@ -582,7 +582,7 @@ func requireAssetAuthWithTypeAt(view state.LedgerView, asset tx.Asset, account [
 // requireAuthPseudoAccountException preserves the implicit authorization that
 // pseudo-accounts receive for assets they hold. Cleanup 3.4.0 applies this to
 // IOU trust lines as well as MPT holdings.
-func requireAuthPseudoAccountException(view state.LedgerView, account [20]byte, fallback ter.Result) ter.Result {
+func requireAuthPseudoAccountException(view state.ReadOnlyLedgerView, account [20]byte, fallback ter.Result) ter.Result {
 	rules := view.Rules()
 	if rules == nil || !rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
 		return fallback
@@ -597,7 +597,7 @@ func requireAuthPseudoAccountException(view state.LedgerView, account [20]byte, 
 	return fallback
 }
 
-func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
+func ValidDomain(view state.ReadOnlyLedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
 	domainID, ok := decodeDomainID(domainIDHex)
 	if !ok {
 		return ter.TefINTERNAL
@@ -605,7 +605,7 @@ func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, pa
 	return credential.ValidDomain(view, domainID, account, parentCloseTime)
 }
 
-func validDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
+func validDomain(view state.ReadOnlyLedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
 	return ValidDomain(view, domainIDHex, account, parentCloseTime)
 }
 
@@ -629,11 +629,11 @@ func decodeDomainID(domainIDHex string) ([32]byte, bool) {
 	return domainID, true
 }
 
-func CanTrade(view state.LedgerView, id [24]byte) ter.Result {
+func CanTrade(view state.ReadOnlyLedgerView, id [24]byte) ter.Result {
 	return canTrade(view, id, 0)
 }
 
-func canTrade(view state.LedgerView, id [24]byte, depth uint8) ter.Result {
+func canTrade(view state.ReadOnlyLedgerView, id [24]byte, depth uint8) ter.Result {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return result
@@ -661,15 +661,15 @@ func canTrade(view state.LedgerView, id [24]byte, depth uint8) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func CanTransfer(view state.LedgerView, id [24]byte, from, to [20]byte) ter.Result {
+func CanTransfer(view state.ReadOnlyLedgerView, id [24]byte, from, to [20]byte) ter.Result {
 	return canTransfer(view, id, from, to, false, 0)
 }
 
-func CanTransferWithWaive(view state.LedgerView, id [24]byte, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
+func CanTransferWithWaive(view state.ReadOnlyLedgerView, id [24]byte, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
 	return canTransfer(view, id, from, to, waiveMPTCanTransfer, 0)
 }
 
-func canTransfer(view state.LedgerView, id [24]byte, from, to [20]byte, waiveMPTCanTransfer bool, depth uint8) ter.Result {
+func canTransfer(view state.ReadOnlyLedgerView, id [24]byte, from, to [20]byte, waiveMPTCanTransfer bool, depth uint8) ter.Result {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return result
@@ -694,7 +694,7 @@ func canTransfer(view state.LedgerView, id [24]byte, from, to [20]byte, waiveMPT
 	return ter.TesSUCCESS
 }
 
-func CanTransferAsset(view state.LedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
+func CanTransferAsset(view state.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
 	return canTransferAssetWithWaive(view, asset, from, to, waiveMPTCanTransfer, 0)
 }
 
@@ -703,7 +703,7 @@ func CanTransferAsset(view state.LedgerView, asset tx.Asset, from, to [20]byte, 
 // AMMID; ordinary IOU issuers are intentionally a no-op. Every MPT pool asset
 // must permit the same holder-to-holder transfer, including any reference
 // holding's recursive transfer capability.
-func CanTransferLPToken(view state.LedgerView, from, to, lpTokenIssuer [20]byte) ter.Result {
+func CanTransferLPToken(view state.ReadOnlyLedgerView, from, to, lpTokenIssuer [20]byte) ter.Result {
 	issuerRaw, err := view.Read(keylet.Account(lpTokenIssuer))
 	if err != nil {
 		return ter.TecINTERNAL
@@ -727,13 +727,9 @@ func CanTransferLPToken(view state.LedgerView, from, to, lpTokenIssuer [20]byte)
 	if err := amm.Decode(ammRaw); err != nil {
 		return ter.TecINTERNAL
 	}
-	checkAsset := func(value any) ter.Result {
-		fields, ok := value.(map[string]any)
-		if !ok {
-			return ter.TesSUCCESS
-		}
-		idValue, ok := fields["mpt_issuance_id"].(string)
-		if !ok || idValue == "" {
+	checkAsset := func(value entry.IssueValue) ter.Result {
+		idValue := value.MPTIssuanceID
+		if idValue == "" {
 			return ter.TesSUCCESS
 		}
 		id, err := DecodeID(idValue)
@@ -742,17 +738,25 @@ func CanTransferLPToken(view state.LedgerView, from, to, lpTokenIssuer [20]byte)
 		}
 		return CanTransfer(view, id, from, to)
 	}
-	if result := checkAsset(amm.Asset); result != ter.TesSUCCESS {
+	asset, err := amm.GetAsset()
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if result := checkAsset(asset); result != ter.TesSUCCESS {
 		return result
 	}
-	return checkAsset(amm.Asset2)
+	asset2, err := amm.GetAsset2()
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	return checkAsset(asset2)
 }
 
-func canTransferAsset(view state.LedgerView, asset tx.Asset, from, to [20]byte, depth uint8) ter.Result {
+func canTransferAsset(view state.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, depth uint8) ter.Result {
 	return canTransferAssetWithWaive(view, asset, from, to, false, depth)
 }
 
-func canTransferAssetWithWaive(view state.LedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool, depth uint8) ter.Result {
+func canTransferAssetWithWaive(view state.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool, depth uint8) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
@@ -812,7 +816,7 @@ func canTransferAssetWithWaive(view state.LedgerView, asset tx.Asset, from, to [
 	return ter.TesSUCCESS
 }
 
-func referencedAsset(view state.LedgerView, issuance *state.MPTokenIssuanceData) (tx.Asset, ter.Result) {
+func referencedAsset(view state.ReadOnlyLedgerView, issuance *state.MPTokenIssuanceData) (tx.Asset, ter.Result) {
 	if issuance.ReferenceHolding == nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
@@ -853,7 +857,7 @@ func referencedAsset(view state.LedgerView, issuance *state.MPTokenIssuanceData)
 	}
 }
 
-func vaultAsset(view state.LedgerView, vaultID [32]byte) (tx.Asset, ter.Result) {
+func vaultAsset(view state.ReadOnlyLedgerView, vaultID [32]byte) (tx.Asset, ter.Result) {
 	raw, err := view.Read(keylet.VaultByID(vaultID))
 	if err != nil || raw == nil {
 		return tx.Asset{}, ter.TefINTERNAL
@@ -862,25 +866,23 @@ func vaultAsset(view state.LedgerView, vaultID [32]byte) (tx.Asset, ter.Result) 
 	if err := decoded.Decode(raw); err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	issue, ok := decoded.Asset.(map[string]any)
-	if !ok {
+	issue, err := decoded.GetAsset()
+	if err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	if id, ok := issue["mpt_issuance_id"].(string); ok {
+	if id := issue.MPTIssuanceID; id != "" {
 		if _, err := DecodeID(id); err != nil {
 			return tx.Asset{}, ter.TefINTERNAL
 		}
 		return tx.Asset{MPTIssuanceID: id}, ter.TesSUCCESS
 	}
-	currency, ok := issue["currency"].(string)
-	if !ok || currency == "" {
+	if issue.Currency == "" {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	issuer, _ := issue["issuer"].(string)
-	return tx.Asset{Currency: currency, Issuer: issuer}, ter.TesSUCCESS
+	return tx.Asset{Currency: issue.Currency, Issuer: issue.Issuer}, ter.TesSUCCESS
 }
 
-func Funds(view state.LedgerView, id [24]byte, account [20]byte, zeroIfFrozen bool) (int64, ter.Result) {
+func Funds(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, zeroIfFrozen bool) (int64, ter.Result) {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return 0, result
@@ -913,7 +915,7 @@ func Funds(view state.LedgerView, id [24]byte, account [20]byte, zeroIfFrozen bo
 	return amount, ter.TesSUCCESS
 }
 
-func IssuerFundsToSelfIssue(view state.LedgerView, id [24]byte) (int64, ter.Result) {
+func IssuerFundsToSelfIssue(view state.ReadOnlyLedgerView, id [24]byte) (int64, ter.Result) {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return 0, result
@@ -1167,7 +1169,7 @@ func Credit(view state.LedgerView, id [24]byte, sender, receiver [20]byte, amoun
 	return ter.TesSUCCESS
 }
 
-func mptokensV2Enabled(view state.LedgerView) bool {
+func mptokensV2Enabled(view state.ReadOnlyLedgerView) bool {
 	rules := view.Rules()
 	return rules != nil && rules.MPTokensV2Enabled()
 }

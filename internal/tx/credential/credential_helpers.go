@@ -58,64 +58,80 @@ func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("parse credential: %w", err)
 	}
-	fields := decoded.ToMap()
 
-	subject, err := state.DecodeAccountID(decoded.Subject)
+	subject, err := decoded.GetSubject()
 	if err != nil {
 		return nil, fmt.Errorf("parse credential Subject: %w", err)
 	}
-	issuer, err := state.DecodeAccountID(decoded.Issuer)
+	issuer, err := decoded.GetIssuer()
 	if err != nil {
 		return nil, fmt.Errorf("parse credential Issuer: %w", err)
 	}
-	credentialType, err := hex.DecodeString(decoded.CredentialType)
+	credentialType, err := decoded.GetCredentialType()
 	if err != nil {
 		return nil, fmt.Errorf("parse credential CredentialType: %w", err)
 	}
-	issuerNode, err := tx.ParseUint64Hex(decoded.IssuerNode)
+	issuerNode, err := decoded.GetIssuerNode()
 	if err != nil {
 		return nil, fmt.Errorf("parse credential IssuerNode: %w", err)
+	}
+	flags, err := decoded.GetFlags()
+	if err != nil {
+		return nil, fmt.Errorf("parse credential Flags: %w", err)
+	}
+	previousTxnLgrSeq, err := decoded.GetPreviousTxnLgrSeq()
+	if err != nil {
+		return nil, fmt.Errorf("parse credential PreviousTxnLgrSeq: %w", err)
 	}
 
 	cred := &CredentialEntry{
 		Subject:           subject,
 		Issuer:            issuer,
 		CredentialType:    credentialType,
-		Flags:             decoded.Flags,
+		Flags:             flags,
 		IssuerNode:        issuerNode,
-		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
-		Sponsor:           decoded.Sponsor,
+		PreviousTxnLgrSeq: previousTxnLgrSeq,
+	}
+	if decoded.HasSponsor() {
+		sponsor, err := decoded.GetSponsor()
+		if err != nil {
+			return nil, fmt.Errorf("parse credential Sponsor: %w", err)
+		}
+		cred.Sponsor, err = state.EncodeAccountID(sponsor)
+		if err != nil {
+			return nil, fmt.Errorf("parse credential Sponsor: %w", err)
+		}
 	}
 
-	if _, ok := fields["Expiration"]; ok {
-		expiration := decoded.Expiration
+	if decoded.HasExpiration() {
+		expiration, err := decoded.GetExpiration()
+		if err != nil {
+			return nil, fmt.Errorf("parse credential Expiration: %w", err)
+		}
 		cred.Expiration = &expiration
 	}
 
-	if _, ok := fields["URI"]; ok {
-		cred.URI, err = hex.DecodeString(decoded.URI)
+	if decoded.HasURI() {
+		cred.URI, err = decoded.GetURI()
 		if err != nil {
 			return nil, fmt.Errorf("parse credential URI: %w", err)
 		}
 	}
 
-	if _, ok := fields["SubjectNode"]; ok {
-		cred.SubjectNode, err = tx.ParseUint64Hex(decoded.SubjectNode)
+	if decoded.HasSubjectNode() {
+		cred.SubjectNode, err = decoded.GetSubjectNode()
 		if err != nil {
 			return nil, fmt.Errorf("parse credential SubjectNode: %w", err)
 		}
 		cred.HasSubjectNode = true
 	}
 
-	if _, ok := fields["PreviousTxnID"]; ok {
-		previousTxnID, err := hex.DecodeString(decoded.PreviousTxnID)
+	if decoded.HasPreviousTxnID() {
+		previousTxnID, err := decoded.GetPreviousTxnID()
 		if err != nil {
 			return nil, fmt.Errorf("parse credential PreviousTxnID: %w", err)
 		}
-		if len(previousTxnID) != len(cred.PreviousTxnID) {
-			return nil, fmt.Errorf("parse credential PreviousTxnID: decoded length %d, want %d", len(previousTxnID), len(cred.PreviousTxnID))
-		}
-		copy(cred.PreviousTxnID[:], previousTxnID)
+		cred.PreviousTxnID = previousTxnID
 	}
 
 	return cred, nil
@@ -127,31 +143,19 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 		return nil, errors.New("serialize credential: nil entry")
 	}
 
-	subjectStr, err := state.EncodeAccountID(cred.Subject)
-	if err != nil {
-		return nil, fmt.Errorf("serialize credential subject: %w", err)
-	}
-	if subjectStr == "" {
-		return nil, errors.New("serialize credential: empty subject")
-	}
-
-	issuerStr, err := state.EncodeAccountID(cred.Issuer)
-	if err != nil {
-		return nil, fmt.Errorf("serialize credential issuer: %w", err)
-	}
-	if issuerStr == "" {
-		return nil, errors.New("serialize credential: empty issuer")
-	}
-
 	if len(cred.CredentialType) == 0 {
 		return nil, errors.New("serialize credential: empty credential type")
 	}
 
 	var sle entry.Credential
-	sle.SetSubject(subjectStr)
-	sle.SetIssuer(issuerStr)
-	sle.SetCredentialType(hex.EncodeToString(cred.CredentialType))
-	sle.SetIssuerNode(tx.FormatUint64Hex(cred.IssuerNode))
+	if err := sle.SetSubjectValue(cred.Subject); err != nil {
+		return nil, fmt.Errorf("serialize credential subject: %w", err)
+	}
+	if err := sle.SetIssuerValue(cred.Issuer); err != nil {
+		return nil, fmt.Errorf("serialize credential issuer: %w", err)
+	}
+	sle.SetCredentialTypeValue(cred.CredentialType)
+	sle.SetIssuerNodeValue(cred.IssuerNode)
 	sle.SetFlags(cred.Flags)
 	if cred.Sponsor != "" {
 		sle.SetSponsor(cred.Sponsor)
@@ -162,20 +166,15 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 	}
 
 	if len(cred.URI) > 0 {
-		sle.SetURI(hex.EncodeToString(cred.URI))
+		sle.SetURIValue(cred.URI)
 	}
 
 	if cred.HasSubjectNode && cred.Subject != cred.Issuer {
-		sle.SetSubjectNode(tx.FormatUint64Hex(cred.SubjectNode))
+		sle.SetSubjectNodeValue(cred.SubjectNode)
 	}
 
-	var zeroHash [32]byte
-	if cred.PreviousTxnID != zeroHash {
-		sle.SetPreviousTxnID(hex.EncodeToString(cred.PreviousTxnID[:]))
-		sle.SetPreviousTxnLgrSeq(cred.PreviousTxnLgrSeq)
-	} else if cred.PreviousTxnLgrSeq != 0 {
-		return nil, errors.New("serialize credential: PreviousTxnLgrSeq set without PreviousTxnID")
-	}
+	sle.SetPreviousTxnIDValue(cred.PreviousTxnID)
+	sle.SetPreviousTxnLgrSeq(cred.PreviousTxnLgrSeq)
 
 	data, err := sle.Encode()
 	if err != nil {
@@ -254,7 +253,7 @@ func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) ter.Res
 
 // ValidCredentials is the view-based form of ValidateCredentialIDs, usable from
 // Preclaim where only a LedgerView (not an ApplyContext) is available.
-func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string, rules *amendment.Rules) ter.Result {
+func ValidCredentials(view tx.ReadOnlyLedgerView, subject [20]byte, credentialIDs []string, rules *amendment.Rules) ter.Result {
 	for _, idHex := range credentialIDs {
 		credID, ok := parseCredentialID(idHex)
 		if !ok {
@@ -290,7 +289,7 @@ func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []stri
 // ValidDomain checks whether subject has an accepted, unexpired credential
 // matching a permissioned domain. It is read-only so callers that suppress
 // tecEXPIRED during preclaim must call VerifyValidDomain during apply.
-func ValidDomain(view state.LedgerView, domainID [32]byte, subject [20]byte, closeTime uint32) ter.Result {
+func ValidDomain(view state.ReadOnlyLedgerView, domainID [32]byte, subject [20]byte, closeTime uint32) ter.Result {
 	domain, result := readPermissionedDomain(view, domainID)
 	if result != ter.TesSUCCESS {
 		return result
@@ -323,7 +322,7 @@ func ValidDomain(view state.LedgerView, domainID [32]byte, subject [20]byte, clo
 	return ter.TecNO_AUTH
 }
 
-func readPermissionedDomain(view state.LedgerView, domainID [32]byte) (*state.PermissionedDomainData, ter.Result) {
+func readPermissionedDomain(view state.ReadOnlyLedgerView, domainID [32]byte) (*state.PermissionedDomainData, ter.Result) {
 	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
 	if err != nil {
 		return nil, ter.TefINTERNAL
@@ -338,7 +337,7 @@ func readPermissionedDomain(view state.LedgerView, domainID [32]byte) (*state.Pe
 	return domain, ter.TesSUCCESS
 }
 
-func domainCredentialIDs(view state.LedgerView, domainID [32]byte, subject [20]byte) ([]string, ter.Result) {
+func domainCredentialIDs(view state.ReadOnlyLedgerView, domainID [32]byte, subject [20]byte) ([]string, ter.Result) {
 	domain, result := readPermissionedDomain(view, domainID)
 	if result != ter.TesSUCCESS {
 		return nil, result
@@ -488,7 +487,7 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 	return ter.TesSUCCESS
 }
 
-func CheckDepositPreauth(view tx.LedgerView, credentialIDs []string, credentialsPresent bool, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
+func CheckDepositPreauth(view tx.ReadOnlyLedgerView, credentialIDs []string, credentialsPresent bool, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
 	if dstAccount == nil || dstAccount.Flags&state.LsfDepositAuth == 0 || src == dst {
 		return ter.TesSUCCESS
 	}
@@ -511,7 +510,7 @@ func CheckDepositPreauth(view tx.LedgerView, credentialIDs []string, credentials
 // credentials that passed preflight and preclaim, since credential IDs are
 // deduplicated there and all credentials share the sender as Subject.
 // Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [20]byte) ter.Result {
+func authorizedDepositPreauth(view tx.ReadOnlyLedgerView, credentialIDs []string, dst [20]byte) ter.Result {
 	pairs := make([]keylet.CredentialPair, 0, len(credentialIDs))
 	seen := make(map[string]bool, len(credentialIDs))
 

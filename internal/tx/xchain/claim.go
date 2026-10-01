@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-func (x *XChainClaim) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainClaim) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -55,7 +55,15 @@ func (x *XChainClaim) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result
 	if err := claim.Decode(data); err != nil {
 		return ter.TecINTERNAL
 	}
-	if claim.Account != x.Account {
+	claimAccount, err := claim.GetAccount()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	claimAccountAddress, err := state.EncodeAccountID(claimAccount)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if claimAccountAddress != x.Account {
 		return ter.TecXCHAIN_BAD_CLAIM_ID
 	}
 	return ter.TesSUCCESS
@@ -87,7 +95,11 @@ func (x *XChainClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err := claim.Decode(data); err != nil {
 		return ter.TecINTERNAL
 	}
-	if !attestationsWithinLimit(claim.XChainClaimAttestations) {
+	attestations, err := claim.GetXChainClaimAttestations()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if !attestationsWithinLimit(attestations) {
 		return ter.TefEXCEPTION
 	}
 	signers, result := loadSignerSet(outer, bridge)
@@ -97,7 +109,7 @@ func (x *XChainClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	sendingAmount := amountWithAsset(x.Amount, x.XChainBridge.issue(srcChain))
 	_, rewards, quorum := claimQuorum(
 		outer,
-		append([]any(nil), claim.XChainClaimAttestations...),
+		attestations,
 		signers,
 		sendingAmount,
 		srcChain == lockingChain,
@@ -107,13 +119,25 @@ func (x *XChainClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !quorum {
 		return ter.TecXCHAIN_CLAIM_NO_QUORUM
 	}
-	reward, err := amountFromAny(claim.SignatureReward)
+	rewardValue, err := claim.GetSignatureReward()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	reward, err := state.AmountFromLedgerValue(rewardValue)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	claimOwner, err := claim.GetAccount()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	claimOwnerAddress, err := state.EncodeAccountID(claimOwner)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
 	final := finalizeClaim(
 		ctx, outer, x.XChainBridge, x.Destination, x.DestinationTag, x.Account,
-		sendingAmount, claim.Account, reward, rewards, srcChain, claimKey, keepClaim, true,
+		sendingAmount, claimOwnerAddress, reward, rewards, srcChain, claimKey, keepClaim, true,
 	)
 	if result := final.result(); result != ter.TesSUCCESS {
 		return result

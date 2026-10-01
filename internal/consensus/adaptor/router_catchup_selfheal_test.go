@@ -84,9 +84,9 @@ func TestCompleteInboundLedger_CatchUpStoresTipWithoutSwitching(t *testing.T) {
 
 	tipSeq := closedSeq + 30 // deep gap: the parent chain is absent
 	il := completedCatchUpAcquisition(t, tipSeq)
-	r.fetchTracker.Track(il)
+	r.catchupReplay.fetchTracker.Track(il)
 
-	r.completeInboundLedger(il)
+	r.catchupReplay.completeInboundLedger(il)
 
 	assert.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
 	require.NotNil(t, svc.GetClosedLedger())
@@ -121,9 +121,9 @@ func TestCompleteInboundLedger_SingleLedgerCatchUpWaitsForConsensus(t *testing.T
 	require.NoError(t, il.GotStateNodes(wire))
 	il.CollectMissingRequest(false)
 	require.True(t, il.IsComplete())
-	r.fetchTracker.Track(il)
+	r.catchupReplay.fetchTracker.Track(il)
 
-	r.completeInboundLedger(il)
+	r.catchupReplay.completeInboundLedger(il)
 
 	assert.Equal(t, parent.Sequence(), svc.GetClosedLedgerIndex())
 	stored, err := svc.GetLedgerByHash(ledgerHash)

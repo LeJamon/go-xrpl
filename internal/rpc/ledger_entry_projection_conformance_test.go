@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -42,21 +43,30 @@ func TestLedgerEntryProjectionUsesResolvedLedgerState(t *testing.T) {
 }
 
 func TestLedgerEntryProjectionAddsMPTokenIssuanceFields(t *testing.T) {
-	mock := newMockLedgerEntryService()
-	method, ctx := ledgerEntryParserContext(mock)
-	const index = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
-	mock.ledgerEntryResult = &types.LedgerEntryResult{
-		Node: []byte(`{"LedgerEntryType":"MPTokenIssuance","Sequence":16909060,"Issuer":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`),
+	for name, data := range map[string][]byte{
+		"json": []byte(`{"LedgerEntryType":"MPTokenIssuance","Sequence":16909060,"Issuer":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`),
+		"binary": encodeSyntheticRPCObject(t, map[string]any{
+			"LedgerEntryType": "MPTokenIssuance", "Flags": uint32(0),
+			"Sequence": uint32(16909060), "Issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"OwnerNode": "0", "OutstandingAmount": "0",
+			"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			method, ctx := ledgerEntryParserContext(mock)
+			const index = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+			mock.ledgerEntryResult = &types.LedgerEntryResult{Node: data}
+			result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{"index": index})
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+			node, ok := response["node"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, index, node["index"])
+			assert.Equal(t, "01020304B5F762798A53D543A014CAF8B297CFF8F2F937E8", node["mpt_issuance_id"])
+		})
 	}
-
-	result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{"index": index})
-	require.Nil(t, rpcErr)
-	response, ok := result.(map[string]any)
-	require.True(t, ok)
-	node, ok := response["node"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, index, node["index"])
-	assert.Equal(t, "01020304B5F762798A53D543A014CAF8B297CFF8F2F937E8", node["mpt_issuance_id"])
 }
 
 func TestLedgerEntryBinaryUsesJsonCppAsBoolCoercion(t *testing.T) {

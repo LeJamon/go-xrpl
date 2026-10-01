@@ -95,12 +95,18 @@ func replayEvidenceFor(replay *inbound.ReplayDelta, cfg tx.EngineConfig, authent
 }
 
 func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated, lockHeld bool) (derived *ledger.Ledger, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if replay == nil {
 		return nil, errors.New("replay transition is required")
 	}
 	evidence := replayEvidenceFor(replay, cfg, authenticated)
 	raw, err := json.Marshal(evidence)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	h := evidence.Target
@@ -115,8 +121,14 @@ func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, 
 			s.recordReplayFailure(ctx, id, replay, cfg, evidence, err, lockHeld)
 		}
 	}()
-	derived, err = replay.Apply(cfg)
+	derived, err = replay.ApplyContext(ctx, cfg)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if cancelErr := s.replayFaults.CancelReplay(id); cancelErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("clear canceled replay intent: %w", cancelErr))
+			}
+			return nil, err
+		}
 		s.recordReplayFailure(ctx, id, replay, cfg, evidence, err, lockHeld)
 		return nil, err
 	}

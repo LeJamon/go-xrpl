@@ -50,7 +50,7 @@ func TestHeaderDiscoveryWireHeaderForms(t *testing.T) {
 					Nodes:    []message.LedgerNode{{NodeData: data}},
 				}),
 			})
-			entry, published := r.lookupSeqHash(link.seq)
+			entry, published := r.catchupReplay.lookupSeqHash(link.seq)
 			if tc.accepted {
 				require.True(t, published)
 				require.True(t, entry.haveParent)
@@ -115,10 +115,10 @@ func TestHeaderDiscoveryWireEnvelope(t *testing.T) {
 				require.Len(t, bad, 1)
 				require.Equal(t, tc.wantReason, bad[0].reason)
 				require.Len(t, sender.headerRequests(), 1)
-				require.Empty(t, r.headerDiscovery.headers)
+				require.Empty(t, r.catchupReplay.headerDiscovery.headers)
 			} else {
 				require.Empty(t, bad)
-				require.Contains(t, r.headerDiscovery.headers, target.seq)
+				require.Contains(t, r.catchupReplay.headerDiscovery.headers, target.seq)
 				require.Len(t, sender.headerRequests(), 2)
 			}
 			require.Equal(t, base.Hash(), svc.GetValidatedLedger().Hash())
@@ -135,15 +135,15 @@ func TestHeaderDiscoveryWaitsForValidationWindow(t *testing.T) {
 		target = buildAlternativeReplaySuccessor(t, parent, time.Second)
 		parent = target.ledger
 	}
-	r.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
+	r.catchupReplay.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
 	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.CloseTime().Add(10 * time.Second) })
-	r.armCatchupTowardTargetWithPeer(7)
-	require.Nil(t, r.headerDiscovery)
+	r.catchupReplay.armCatchupTowardTargetWithPeer(7)
+	require.Nil(t, r.catchupReplay.headerDiscovery)
 	require.Empty(t, sender.headerRequests())
 	require.Empty(t, sender.legacyCalls())
 	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.CloseTime().Add(11 * time.Second) })
-	r.armCatchupTowardTargetWithPeer(7)
-	require.NotNil(t, r.headerDiscovery)
+	r.catchupReplay.armCatchupTowardTargetWithPeer(7)
+	require.NotNil(t, r.catchupReplay.headerDiscovery)
 	require.Len(t, sender.headerRequests(), 1)
 	require.Empty(t, sender.legacyCalls())
 }

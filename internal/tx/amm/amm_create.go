@@ -92,7 +92,7 @@ func (a *AMMCreate) Flatten() (map[string]any, error) {
 // CalculateBaseFee returns the minimum fee for AMMCreate transactions.
 // AMMCreate requires one owner reserve as the fee (not the standard base fee).
 // Reference: rippled AMMCreate.cpp calculateBaseFee — returns view.fees().increment
-func (a *AMMCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) (uint64, error) {
+func (a *AMMCreate) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	return config.ReserveIncrement, nil
 }
 
@@ -110,7 +110,7 @@ func (a *AMMCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 // pseudo-account collision (featureSingleAssetVault), and the clawback gate.
 // The view's source-account balance is already the pre-fee balance.
 // Reference: rippled AMMCreate.cpp preclaim
-func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (a *AMMCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

@@ -70,12 +70,28 @@ func TestAdg_BuildLedger(t *testing.T) {
 	txSet, err := a.BuildTxSet(nil)
 	require.NoError(t, err)
 
-	built, err := a.BuildLedger(lcl, txSet, time.Now(), true, nil)
+	built, err := a.BuildLedger(context.Background(), lcl, txSet, time.Now(), true, nil)
 	require.NoError(t, err)
 	require.NotNil(t, built)
 	assert.Equal(t, lcl.Seq()+1, built.Seq())
 
 	_ = svc
+}
+
+func TestAdg_BuildLedgerPropagatesCancellation(t *testing.T) {
+	a := newTestAdaptor(t)
+	lcl, err := a.GetLastClosedLedger()
+	require.NoError(t, err)
+	txSet, err := a.BuildTxSet(nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = a.BuildLedger(ctx, lcl, txSet, time.Now(), true, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	closed := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, closed)
+	assert.Equal(t, lcl.ID(), consensus.LedgerID(closed.Hash()))
 }
 
 func TestOnLedgerSwitchedMovesCanonicalFrontierBeforeBuild(t *testing.T) {
@@ -89,18 +105,18 @@ func TestOnLedgerSwitchedMovesCanonicalFrontierBeforeBuild(t *testing.T) {
 	frontier := preferred
 	for range 2 {
 		closeTime = closeTime.Add(2 * time.Second)
-		frontier, err = a.BuildLedger(frontier, txSet, closeTime, true, nil)
+		frontier, err = a.BuildLedger(context.Background(), frontier, txSet, closeTime, true, nil)
 		require.NoError(t, err)
 	}
 
-	_, err = a.BuildLedger(preferred, txSet, closeTime.Add(2*time.Second), true, nil)
+	_, err = a.BuildLedger(context.Background(), preferred, txSet, closeTime.Add(2*time.Second), true, nil)
 	require.ErrorIs(t, err, service.ErrConsensusParentMismatch)
 	assert.Equal(t, frontier.ID(), consensus.LedgerID(a.ledgerService.GetClosedLedger().Hash()))
 
 	a.OnLedgerSwitched(preferred)
 	assert.Equal(t, preferred.ID(), consensus.LedgerID(a.ledgerService.GetClosedLedger().Hash()))
 	assert.Equal(t, preferred.Seq()+1, a.ledgerService.GetCurrentLedgerIndex())
-	built, err := a.BuildLedger(preferred, txSet, closeTime.Add(4*time.Second), true, nil)
+	built, err := a.BuildLedger(context.Background(), preferred, txSet, closeTime.Add(4*time.Second), true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, preferred.Seq()+1, built.Seq())
 	assert.Equal(t, preferred.ID(), built.ParentID())

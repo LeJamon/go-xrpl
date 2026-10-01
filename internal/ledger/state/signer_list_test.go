@@ -75,3 +75,77 @@ func TestSerializeSignerList_MacroFieldSet(t *testing.T) {
 		t.Errorf("SLE bytes diverge from rippled-canonical blob:\n got  %x\n want %x", data, canonBytes)
 	}
 }
+
+func TestSignerListTypedNestedWireValues(t *testing.T) {
+	owner := [20]byte{7}
+	zeroAccount := EncodeAccountIDSafe([20]byte{})
+	for _, tc := range []struct {
+		name     string
+		account  string
+		locator  string
+		expanded bool
+	}{
+		{name: "empty account", account: "", locator: strings.Repeat("0", 64), expanded: true},
+		{name: "explicit zero account", account: zeroAccount, locator: strings.Repeat("AB", 32), expanded: true},
+		{name: "wallet locator disabled", account: EncodeAccountIDSafe([20]byte{1}), locator: strings.Repeat("AB", 32)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := SerializeSignerList(1, []SignerEntry{{Account: tc.account, SignerWeight: 65535, WalletLocator: tc.locator}}, LsfOneOwnerCount, tc.expanded, ^uint64(0), &owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inner := map[string]any{"Account": tc.account, "SignerWeight": uint16(65535)}
+			if tc.expanded {
+				inner["WalletLocator"] = tc.locator
+			}
+			expected, err := binarycodec.Encode(map[string]any{
+				"LedgerEntryType": "SignerList", "Flags": LsfOneOwnerCount,
+				"SignerQuorum": uint32(1), "SignerListID": uint32(0),
+				"OwnerNode": "FFFFFFFFFFFFFFFF", "Owner": EncodeAccountIDSafe(owner),
+				"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
+				"SignerEntries": []any{map[string]any{"SignerEntry": inner}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.EqualFold(hex.EncodeToString(data), expected) {
+				t.Fatalf("wire = %X, want %s", data, expected)
+			}
+			parsed, err := ParseSignerList(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.SignerEntries) != 1 || parsed.SignerEntries[0].Account != tc.account || parsed.SignerEntries[0].SignerWeight != 65535 || parsed.OwnerNode != ^uint64(0) {
+				t.Fatalf("parsed = %#v", parsed)
+			}
+			wantLocator := ""
+			if tc.expanded {
+				wantLocator = tc.locator
+			}
+			if parsed.SignerEntries[0].WalletLocator != wantLocator {
+				t.Fatalf("wallet locator = %q, want %q", parsed.SignerEntries[0].WalletLocator, wantLocator)
+			}
+		})
+	}
+}
+
+func TestDepositPreauthTypedCredentialsWire(t *testing.T) {
+	owner := [20]byte{1}
+	issuer := EncodeAccountIDSafe([20]byte{2})
+	data, err := SerializeDepositPreauthCredentials(owner, []DepositPreauthCredential{{Issuer: issuer, CredentialType: "ABC"}}, ^uint64(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType": "DepositPreauth", "Flags": uint32(0),
+		"Account": EncodeAccountIDSafe(owner), "OwnerNode": "FFFFFFFFFFFFFFFF",
+		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
+		"AuthorizeCredentials": []any{map[string]any{"Credential": map[string]any{"Issuer": issuer, "CredentialType": "ABC"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(hex.EncodeToString(data), expected) {
+		t.Fatalf("wire = %X, want %s", data, expected)
+	}
+}

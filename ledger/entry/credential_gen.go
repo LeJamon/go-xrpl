@@ -132,6 +132,262 @@ func (c *Credential) SetSponsor(value string) {
 	c.present |= credentialBitSponsor
 }
 
+// HasSubject reports whether Subject is present.
+func (c *Credential) HasSubject() bool {
+	return c != nil && c.present&credentialBitSubject != 0
+}
+
+// GetSubject returns the 20-byte AccountID.
+func (c *Credential) GetSubject() ([20]byte, error) {
+	if c == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(c.Subject, "Credential.Subject")
+}
+
+// SetSubjectValue assigns a 20-byte AccountID.
+func (c *Credential) SetSubjectValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	c.SetSubject(address)
+	return nil
+}
+
+// HasIssuer reports whether Issuer is present.
+func (c *Credential) HasIssuer() bool {
+	return c != nil && c.present&credentialBitIssuer != 0
+}
+
+// GetIssuer returns the 20-byte AccountID.
+func (c *Credential) GetIssuer() ([20]byte, error) {
+	if c == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(c.Issuer, "Credential.Issuer")
+}
+
+// SetIssuerValue assigns a 20-byte AccountID.
+func (c *Credential) SetIssuerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	c.SetIssuer(address)
+	return nil
+}
+
+// HasCredentialType reports whether CredentialType is present.
+func (c *Credential) HasCredentialType() bool {
+	return c != nil && c.present&credentialBitCredentialType != 0
+}
+
+// GetCredentialType returns the raw bytes of the Blob field.
+func (c *Credential) GetCredentialType() ([]byte, error) {
+	if c == nil {
+		return nil, nil
+	}
+	return blobValueFromString(c.CredentialType, "Credential.CredentialType")
+}
+
+// SetCredentialTypeValue assigns a Blob from raw bytes.
+func (c *Credential) SetCredentialTypeValue(value []byte) {
+	c.SetCredentialType(blobValueToString(value))
+}
+
+// HasExpiration reports whether Expiration is present.
+func (c *Credential) HasExpiration() bool {
+	return c != nil && c.present&credentialBitExpiration != 0
+}
+
+// ClearExpiration removes Expiration from the serialized entry.
+func (c *Credential) ClearExpiration() {
+	if c == nil {
+		return
+	}
+	c.Expiration = 0
+	c.present &^= credentialBitExpiration
+	c.dirty = true
+}
+
+// GetExpiration returns the typed UInt32 value.
+func (c *Credential) GetExpiration() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (c *Credential) SetExpirationValue(value uint32) {
+	c.SetExpiration(value)
+}
+
+// HasURI reports whether URI is present.
+func (c *Credential) HasURI() bool {
+	return c != nil && c.present&credentialBitURI != 0
+}
+
+// ClearURI removes URI from the serialized entry.
+func (c *Credential) ClearURI() {
+	if c == nil {
+		return
+	}
+	c.URI = ""
+	c.present &^= credentialBitURI
+	c.dirty = true
+}
+
+// GetURI returns the raw bytes of the Blob field.
+func (c *Credential) GetURI() ([]byte, error) {
+	if c == nil {
+		return nil, nil
+	}
+	return blobValueFromString(c.URI, "Credential.URI")
+}
+
+// SetURIValue assigns a Blob from raw bytes.
+func (c *Credential) SetURIValue(value []byte) {
+	c.SetURI(blobValueToString(value))
+}
+
+// HasIssuerNode reports whether IssuerNode is present.
+func (c *Credential) HasIssuerNode() bool {
+	return c != nil && c.present&credentialBitIssuerNode != 0
+}
+
+// GetIssuerNode returns the typed UInt64 value.
+func (c *Credential) GetIssuerNode() (uint64, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(c.IssuerNode, "Credential.IssuerNode", false)
+}
+
+// SetIssuerNodeValue assigns a typed UInt64 value.
+func (c *Credential) SetIssuerNodeValue(value uint64) {
+	c.SetIssuerNode(uint64ValueToString(value, false))
+}
+
+// HasSubjectNode reports whether SubjectNode is present.
+func (c *Credential) HasSubjectNode() bool {
+	return c != nil && c.present&credentialBitSubjectNode != 0
+}
+
+// ClearSubjectNode removes SubjectNode from the serialized entry.
+func (c *Credential) ClearSubjectNode() {
+	if c == nil {
+		return
+	}
+	c.SubjectNode = ""
+	c.present &^= credentialBitSubjectNode
+	c.dirty = true
+}
+
+// GetSubjectNode returns the typed UInt64 value.
+func (c *Credential) GetSubjectNode() (uint64, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(c.SubjectNode, "Credential.SubjectNode", false)
+}
+
+// SetSubjectNodeValue assigns a typed UInt64 value.
+func (c *Credential) SetSubjectNodeValue(value uint64) {
+	c.SetSubjectNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags is present.
+func (c *Credential) HasFlags() bool {
+	return c != nil && c.present&credentialBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (c *Credential) GetFlags() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (c *Credential) SetFlagsValue(value uint32) {
+	c.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (c *Credential) HasPreviousTxnID() bool {
+	return c != nil && c.present&credentialBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (c *Credential) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if c == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(c.PreviousTxnID, "Credential.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (c *Credential) SetPreviousTxnIDValue(value [32]byte) {
+	c.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (c *Credential) HasPreviousTxnLgrSeq() bool {
+	return c != nil && c.present&credentialBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (c *Credential) GetPreviousTxnLgrSeq() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (c *Credential) SetPreviousTxnLgrSeqValue(value uint32) {
+	c.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (c *Credential) HasSponsor() bool {
+	return c != nil && c.present&credentialBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (c *Credential) ClearSponsor() {
+	if c == nil {
+		return
+	}
+	c.Sponsor = ""
+	c.present &^= credentialBitSponsor
+	c.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (c *Credential) GetSponsor() ([20]byte, error) {
+	if c == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(c.Sponsor, "Credential.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (c *Credential) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	c.SetSponsor(address)
+	return nil
+}
+
 func (c *Credential) validateRequired() error {
 	if c.decoded && !c.dirty {
 		return nil

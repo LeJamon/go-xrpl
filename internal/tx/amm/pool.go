@@ -14,7 +14,7 @@ import (
 // For XRP: reads from the AMM account's AccountRoot.Balance
 // For IOU: reads from the trustline between AMM account and issuer
 // Reference: rippled AMMUtils.cpp ammAccountHolds
-func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) tx.Amount {
+func ammAccountHolds(view tx.ReadOnlyLedgerView, ammAccountID [20]byte, asset tx.Asset) tx.Amount {
 	if isXRPAsset(asset) {
 		// XRP: read from AccountRoot
 		accountKey := keylet.Account(ammAccountID)
@@ -76,7 +76,7 @@ func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) 
 
 // ammPoolHolds returns the balances of both assets in the AMM pool.
 // Reference: rippled AMMUtils.cpp ammPoolHolds
-func ammPoolHolds(view tx.LedgerView, ammAccountID [20]byte, asset1, asset2 tx.Asset, fhZeroIfFrozen bool) (tx.Amount, tx.Amount) {
+func ammPoolHolds(view tx.ReadOnlyLedgerView, ammAccountID [20]byte, asset1, asset2 tx.Asset, fhZeroIfFrozen bool) (tx.Amount, tx.Amount) {
 	balance1 := ammAccountHolds(view, ammAccountID, asset1)
 	balance2 := ammAccountHolds(view, ammAccountID, asset2)
 
@@ -96,7 +96,7 @@ func ammPoolHolds(view tx.LedgerView, ammAccountID [20]byte, asset1, asset2 tx.A
 // AMMHolds returns the pool balances and LP token balance for an AMM.
 // This is the main function to get current AMM state.
 // Reference: rippled AMMUtils.cpp ammHolds
-func AMMHolds(view tx.LedgerView, amm *AMMData, fhZeroIfFrozen bool) (asset1Balance, asset2Balance, lptBalance tx.Amount) {
+func AMMHolds(view tx.ReadOnlyLedgerView, amm *AMMData, fhZeroIfFrozen bool) (asset1Balance, asset2Balance, lptBalance tx.Amount) {
 	// Get pool balances from actual state
 	asset1Balance, asset2Balance = ammPoolHolds(view, amm.Account, amm.Asset, amm.Asset2, fhZeroIfFrozen)
 
@@ -116,7 +116,7 @@ func IsAMMEmpty(amm *AMMData) bool {
 // ammLPHolds returns the LP token balance held by an account for an AMM.
 // LP tokens are stored in a trustline between the LP account and the AMM account.
 // Reference: rippled AMMUtils.cpp ammLPHolds lines 113-160
-func ammLPHolds(view tx.LedgerView, amm *AMMData, lpAccountID [20]byte) tx.Amount {
+func ammLPHolds(view tx.ReadOnlyLedgerView, amm *AMMData, lpAccountID [20]byte) tx.Amount {
 	// LP token currency is derived from the two asset currencies
 	lptCurrency := GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2)
 	ammAccountID := amm.Account

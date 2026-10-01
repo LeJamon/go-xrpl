@@ -84,7 +84,7 @@ func vaultScaleOfForRules(v *vault.VaultLending, integral bool, rules *amendment
 
 // -------------------- LoanDelete --------------------
 
-func (l *LoanDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (l *LoanDelete) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -170,7 +170,7 @@ func (l *LoanDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 
 // -------------------- LoanManage --------------------
 
-func (l *LoanManage) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanManage) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

@@ -31,7 +31,7 @@ func assetIssuerID(asset tx.Asset) ([20]byte, ter.Result) {
 	return issuer, ter.TesSUCCESS
 }
 
-func requireAssetAuth(view tx.LedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32) ter.Result {
+func requireAssetAuth(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32) ter.Result {
 	if !asset.IsMPT() {
 		return tx.RequireAuth(view, asset, account)
 	}
@@ -42,7 +42,7 @@ func requireAssetAuth(view tx.LedgerView, asset tx.Asset, account [20]byte, stro
 	return mptutil.RequireAuthAt(view, id, account, strong, parentCloseTime)
 }
 
-func assetFrozen(view tx.LedgerView, account [20]byte, asset tx.Asset) bool {
+func assetFrozen(view tx.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) bool {
 	if !asset.IsMPT() {
 		return tx.IsFrozen(view, account, asset)
 	}
@@ -50,7 +50,7 @@ func assetFrozen(view tx.LedgerView, account [20]byte, asset tx.Asset) bool {
 	return result == ter.TesSUCCESS && mptutil.IsFrozen(view, id, account)
 }
 
-func assetIndividuallyFrozen(view tx.LedgerView, account [20]byte, asset tx.Asset) bool {
+func assetIndividuallyFrozen(view tx.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) bool {
 	if !asset.IsMPT() {
 		return tx.IsIndividualFrozen(view, account, asset)
 	}
@@ -65,7 +65,7 @@ func frozenAssetResult(asset tx.Asset) ter.Result {
 	return ter.TecFROZEN
 }
 
-func canMPTTradeAndTransfer(view tx.LedgerView, asset tx.Asset, from, to [20]byte) ter.Result {
+func canMPTTradeAndTransfer(view tx.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte) ter.Result {
 	if !asset.IsMPT() {
 		return ter.TesSUCCESS
 	}
@@ -79,7 +79,7 @@ func canMPTTradeAndTransfer(view tx.LedgerView, asset tx.Asset, from, to [20]byt
 	return mptutil.CanTransfer(view, id, from, to)
 }
 
-func mptFunds(view tx.LedgerView, account [20]byte, amount tx.Amount, zeroIfFrozen bool) (int64, ter.Result) {
+func mptFunds(view tx.ReadOnlyLedgerView, account [20]byte, amount tx.Amount, zeroIfFrozen bool) (int64, ter.Result) {
 	id, result := decodeMPTAsset(amountAsset(amount))
 	if result != ter.TesSUCCESS {
 		return 0, result

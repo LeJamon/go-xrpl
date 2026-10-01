@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -197,8 +198,14 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			})
 			continue
 		}
-		if sponsoredFilter != nil && accountObjectIsSponsored(decoded) != *sponsoredFilter {
-			continue
+		if sponsoredFilter != nil {
+			sponsored, err := accountObjectIsSponsored(obj)
+			if err != nil {
+				return nil, rpcInternalError("account_objects: sponsorship decoding failed", err)
+			}
+			if sponsored != *sponsoredFilter {
+				continue
+			}
 		}
 		decoded["index"] = strings.ToUpper(obj.Index)
 		objects = append(objects, decoded)
@@ -219,19 +226,26 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	return response, nil
 }
 
-func accountObjectIsSponsored(object map[string]any) bool {
-	ledgerEntryType, _ := object["LedgerEntryType"].(string)
-	switch ledgerEntryType {
-	case "RippleState":
-		return hasAccountField(object, "HighSponsor") || hasAccountField(object, "LowSponsor")
-	default:
-		return sponsorshipSupportedObjectTypes[ledgerEntryType] && hasAccountField(object, "Sponsor")
+func accountObjectIsSponsored(object types.AccountObjectItem) (bool, error) {
+	if object.LedgerEntryType == "RippleState" {
+		var line entry.RippleState
+		if err := line.Decode(object.Data); err != nil {
+			return false, err
+		}
+		return line.HasHighSponsor() || line.HasLowSponsor(), nil
 	}
-}
-
-func hasAccountField(object map[string]any, name string) bool {
-	_, ok := object[name]
-	return ok
+	if !sponsorshipSupportedObjectTypes[object.LedgerEntryType] {
+		return false, nil
+	}
+	decoded := entry.NewByName(object.LedgerEntryType)
+	if decoded == nil {
+		return false, errors.New("unknown sponsored ledger entry type")
+	}
+	if err := decoded.Decode(object.Data); err != nil {
+		return false, err
+	}
+	sponsored, ok := decoded.(interface{ HasSponsor() bool })
+	return ok && sponsored.HasSponsor(), nil
 }
 
 // sleTypeToRPCName converts a PascalCase SLE type name to the rippled RPC name

@@ -71,7 +71,7 @@ func TestRequestAcquisitionBase_QueryTypeEscalation(t *testing.T) {
 	router := newTestRouter(&mockEngine{}, New(Config{LedgerService: svc, Sender: rs}), nil)
 	il := inbound.New([32]byte{0xAB}, 42, 7, serveTestLogger())
 
-	router.requestAcquisitionBase(il)
+	router.catchupReplay.requestAcquisitionBase(il)
 	require.NotEmpty(t, rs.baseIndirects())
 	for _, indirect := range rs.baseIndirects() {
 		assert.False(t, indirect)
@@ -79,7 +79,7 @@ func TestRequestAcquisitionBase_QueryTypeEscalation(t *testing.T) {
 
 	now := time.Now()
 	require.Equal(t, inbound.TimerEscalate, il.OnTimer(now.Add(time.Hour)))
-	router.requestAcquisitionBase(il)
+	router.catchupReplay.requestAcquisitionBase(il)
 	got := rs.baseIndirects()
 	require.Greater(t, len(got), len(il.Peers()))
 	for _, indirect := range got[len(il.Peers()):] {
@@ -144,7 +144,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 
 	// First attempt, before any timeout → direct.
 	require.Equal(t, 0, il.Timeouts())
-	router.requestMissingAcquisitionNodes(il, 0)
+	router.catchupReplay.requestMissingAcquisitionNodes(il, 0)
 	got := rs.stateIndirects()
 	require.Len(t, got, 1, "first attempt must issue one state-node request")
 	assert.False(t, got[0],
@@ -156,7 +156,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 	require.Equal(t, inbound.TimerRefresh, il.OnTimer(now.Add(time.Hour)))
 	require.Equal(t, inbound.TimerEscalate, il.OnTimer(now.Add(2*time.Hour)))
 	require.Greater(t, il.Timeouts(), 0)
-	router.requestMissingAcquisitionNodes(il, 0)
+	router.catchupReplay.requestMissingAcquisitionNodes(il, 0)
 	got = rs.stateIndirects()
 	require.Len(t, got, 2, "post-timeout attempt must issue a second state-node request")
 	assert.True(t, got[1],
@@ -176,7 +176,7 @@ func TestRequestMissingAcquisitionNodes_ReplyUsesOneLevelFatNodes(t *testing.T) 
 	il := inbound.New(l.Hash(), l.Sequence(), 7, serveTestLogger())
 	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(l)))
 
-	router.requestMissingAcquisitionNodes(il, 7)
+	router.catchupReplay.requestMissingAcquisitionNodes(il, 7)
 	assert.Equal(t, []uint32{1}, rs.queryDepths(),
 		"reply-driven requests must ask for one descendant level")
 }

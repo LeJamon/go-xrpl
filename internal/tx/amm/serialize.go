@@ -23,99 +23,118 @@ func parseAMMData(data []byte) (*AMMData, error) {
 		return nil, fmt.Errorf("failed to decode AMM binary: %w", err)
 	}
 
-	account, err := state.DecodeAccountID(decoded.Account)
+	account, err := decoded.GetAccount()
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode AMM Account: %w", err)
 	}
-	asset, err := issueValueToAsset("Asset", decoded.Asset)
+	assetValue, err := decoded.GetAsset()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM Asset: %w", err)
+	}
+	asset, err := issueValueToAsset("Asset", assetValue)
 	if err != nil {
 		return nil, err
 	}
-	asset2, err := issueValueToAsset("Asset2", decoded.Asset2)
+	asset2Value, err := decoded.GetAsset2()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM Asset2: %w", err)
+	}
+	asset2, err := issueValueToAsset("Asset2", asset2Value)
 	if err != nil {
 		return nil, err
 	}
-	lpTokenBalance, err := amountValueToAmount("LPTokenBalance", decoded.LPTokenBalance)
+	lpTokenBalanceValue, err := decoded.GetLPTokenBalance()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM LPTokenBalance: %w", err)
+	}
+	lpTokenBalance, err := amountValueToAmount("LPTokenBalance", lpTokenBalanceValue)
 	if err != nil {
 		return nil, err
 	}
-	ownerNode, err := parseHexUint64(decoded.OwnerNode)
+	ownerNode, err := decoded.GetOwnerNode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse AMM OwnerNode: %w", err)
+	}
+	tradingFee, err := decoded.GetTradingFee()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM TradingFee: %w", err)
+	}
+	voteSlots, err := decoded.GetVoteSlots()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM VoteSlots: %w", err)
+	}
+	previousTxnLgrSeq, err := decoded.GetPreviousTxnLgrSeq()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM PreviousTxnLgrSeq: %w", err)
 	}
 
 	amm := &AMMData{
 		Account:           account,
 		Asset:             asset,
 		Asset2:            asset2,
-		TradingFee:        uint16(decoded.TradingFee),
+		TradingFee:        tradingFee,
 		LPTokenBalance:    lpTokenBalance,
 		OwnerNode:         ownerNode,
-		VoteSlots:         make([]VoteSlotData, 0, len(decoded.VoteSlots)),
+		VoteSlots:         make([]VoteSlotData, 0, len(voteSlots)),
 		PreviousTxnID:     decoded.PreviousTxnID,
-		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		PreviousTxnLgrSeq: previousTxnLgrSeq,
 	}
 
 	// VoteSlots (STArray of VoteEntry objects)
-	for i, entry := range decoded.VoteSlots {
-		entryMap, ok := entry.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d]: unexpected entry type %T", i, entry)
-		}
-		voteEntryObj, ok := entryMap["VoteEntry"].(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d]: missing VoteEntry", i)
-		}
+	for i, voteEntry := range voteSlots {
 		var slot VoteSlotData
-		acctStr, ok := voteEntryObj["Account"].(string)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d]: unexpected Account type %T", i, voteEntryObj["Account"])
-		}
-		slot.Account, err = state.DecodeAccountID(acctStr)
+		slot.Account, err = voteEntry.GetAccount()
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d] Account: %w", i, err)
 		}
-		slot.TradingFee = getFieldUint16(voteEntryObj, "TradingFee")
-		slot.VoteWeight = getFieldUint32(voteEntryObj, "VoteWeight")
+		slot.TradingFee, err = voteEntry.GetTradingFee()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d] TradingFee: %w", i, err)
+		}
+		slot.VoteWeight, err = voteEntry.GetVoteWeight()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM VoteSlots[%d] VoteWeight: %w", i, err)
+		}
 		amm.VoteSlots = append(amm.VoteSlots, slot)
 	}
 
 	// AuctionSlot (STObject, optional)
-	if decoded.AuctionSlot != nil {
-		auctionObj := decoded.AuctionSlot
+	if decoded.HasAuctionSlot() {
+		auctionObj, err := decoded.GetAuctionSlot()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM AuctionSlot: %w", err)
+		}
 		slot := &AuctionSlotData{
 			AuthAccounts: make([][20]byte, 0),
 		}
-		acctStr, ok := auctionObj["Account"].(string)
-		if !ok {
-			return nil, fmt.Errorf("failed to parse AMM AuctionSlot: unexpected Account type %T", auctionObj["Account"])
-		}
-		slot.Account, err = state.DecodeAccountID(acctStr)
+		slot.Account, err = auctionObj.GetAccount()
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse AMM AuctionSlot Account: %w", err)
 		}
-		slot.Expiration = getFieldUint32(auctionObj, "Expiration")
-		slot.DiscountedFee = getFieldUint16(auctionObj, "DiscountedFee")
-		slot.Price, err = amountValueToAmount("AuctionSlot Price", auctionObj["Price"])
+		slot.Expiration, err = auctionObj.GetExpiration()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM AuctionSlot Expiration: %w", err)
+		}
+		slot.DiscountedFee, err = auctionObj.GetDiscountedFee()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM AuctionSlot DiscountedFee: %w", err)
+		}
+		price, err := auctionObj.GetPrice()
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM AuctionSlot Price: %w", err)
+		}
+		slot.Price, err = amountValueToAmount("AuctionSlot Price", price)
 		if err != nil {
 			return nil, err
 		}
-		if authArr, ok := auctionObj["AuthAccounts"].([]any); ok {
+		if auctionObj.HasAuthAccounts() {
+			authArr, err := auctionObj.GetAuthAccounts()
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts: %w", err)
+			}
 			slot.AuthAccountsPresent = true
-			for i, authEntry := range authArr {
-				authMap, ok := authEntry.(map[string]any)
-				if !ok {
-					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d]: unexpected entry type %T", i, authEntry)
-				}
-				authAcctObj, ok := authMap["AuthAccount"].(map[string]any)
-				if !ok {
-					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d]: missing AuthAccount", i)
-				}
-				authAccount, ok := authAcctObj["Account"].(string)
-				if !ok {
-					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d]: unexpected Account type %T", i, authAcctObj["Account"])
-				}
-				id, err := state.DecodeAccountID(authAccount)
+			for i, authAccount := range authArr {
+				id, err := authAccount.GetAccount()
 				if err != nil {
 					return nil, fmt.Errorf("failed to parse AMM AuctionSlot AuthAccounts[%d] Account: %w", i, err)
 				}
@@ -128,20 +147,26 @@ func parseAMMData(data []byte) (*AMMData, error) {
 	return amm, nil
 }
 
-func issueValueToAsset(field string, value any) (tx.Asset, error) {
-	issue, ok := value.(map[string]any)
-	if !ok {
-		return tx.Asset{}, fmt.Errorf("failed to parse AMM %s: unexpected Issue type %T", field, value)
+func issueValueToAsset(field string, value ledgerfields.IssueValue) (tx.Asset, error) {
+	if value.MPTIssuanceID != "" {
+		return tx.Asset{MPTIssuanceID: strings.ToUpper(value.MPTIssuanceID)}, nil
 	}
-	return issueMapToAsset(issue), nil
+	if value.Currency == "" {
+		return tx.Asset{}, fmt.Errorf("failed to parse AMM %s: missing currency", field)
+	}
+	return tx.Asset{Currency: value.Currency, Issuer: value.Issuer}, nil
 }
 
-func amountValueToAmount(field string, value any) (tx.Amount, error) {
-	amount, ok := value.(map[string]any)
-	if !ok {
-		return tx.Amount{}, fmt.Errorf("failed to parse AMM %s: unexpected Amount type %T", field, value)
+func amountValueToAmount(field string, value ledgerfields.AmountValue) (tx.Amount, error) {
+	var (
+		parsed tx.Amount
+		err    error
+	)
+	if value.MPTIssuanceID != "" {
+		parsed, err = state.AmountFromLedgerValue(value)
+	} else {
+		parsed, err = state.NewIssuedAmountFromDecimalString(value.Value, value.Currency, value.Issuer)
 	}
-	parsed, err := amountMapToAmount(amount)
 	if err != nil {
 		return tx.Amount{}, fmt.Errorf("failed to parse AMM %s: %w", field, err)
 	}
@@ -167,11 +192,19 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	}
 
 	entry := &ledgerfields.AMM{}
-	entry.SetAccount(accountAddr)
-	entry.SetAsset(assetToIssueMap(amm.Asset))
-	entry.SetAsset2(assetToIssueMap(amm.Asset2))
-	entry.SetOwnerNode(fmt.Sprintf("%x", amm.OwnerNode))
-	entry.SetLPTokenBalance(amountToAmountMap(lptBal))
+	if err := entry.SetAccountValue(amm.Account); err != nil {
+		return nil, fmt.Errorf("failed to encode AMM Account: %w", err)
+	}
+	if err := entry.SetAssetValue(assetToIssueValue(amm.Asset)); err != nil {
+		return nil, fmt.Errorf("failed to encode AMM Asset: %w", err)
+	}
+	if err := entry.SetAsset2Value(assetToIssueValue(amm.Asset2)); err != nil {
+		return nil, fmt.Errorf("failed to encode AMM Asset2: %w", err)
+	}
+	entry.SetOwnerNodeValue(amm.OwnerNode)
+	if err := entry.SetLPTokenBalanceValue(amountToAmountValue(lptBal)); err != nil {
+		return nil, fmt.Errorf("failed to encode AMM LPTokenBalance: %w", err)
+	}
 	entry.SetFlags(0)
 	entry.SetTradingFee(amm.TradingFee)
 
@@ -181,147 +214,75 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	}
 
 	if len(amm.VoteSlots) > 0 {
-		voteSlots := make([]any, 0, len(amm.VoteSlots))
-		for _, slot := range amm.VoteSlots {
-			slotAcctAddr, err := state.EncodeAccountID(slot.Account)
-			if err != nil {
+		voteSlots := make([]ledgerfields.VoteEntryValue, len(amm.VoteSlots))
+		for i, slot := range amm.VoteSlots {
+			if err := voteSlots[i].SetAccountValue(slot.Account); err != nil {
 				return nil, fmt.Errorf("failed to encode AMM vote account: %w", err)
 			}
-			ve := map[string]any{
-				"Account":    slotAcctAddr,
-				"VoteWeight": slot.VoteWeight,
-			}
-			if slot.TradingFee != 0 {
-				ve["TradingFee"] = slot.TradingFee
-			}
-			voteEntry := map[string]any{"VoteEntry": ve}
-			voteSlots = append(voteSlots, voteEntry)
+			voteSlots[i].SetTradingFee(slot.TradingFee)
+			voteSlots[i].SetVoteWeight(slot.VoteWeight)
 		}
-		entry.SetVoteSlots(voteSlots)
+		if err := entry.SetVoteSlotsValue(voteSlots); err != nil {
+			return nil, fmt.Errorf("failed to encode AMM VoteSlots: %w", err)
+		}
 	}
 
 	if amm.AuctionSlot != nil {
-		slotAcctAddr, err := state.EncodeAccountID(amm.AuctionSlot.Account)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode AMM auction account: %w", err)
-		}
 		slotPrice := amm.AuctionSlot.Price
 		if slotPrice.Currency == "" {
 			slotPrice = state.NewIssuedAmountFromValue(
 				slotPrice.Mantissa(), slotPrice.Exponent(),
 				lptBal.Currency, lptBal.Issuer)
 		}
-		auctionSlot := map[string]any{
-			"Account":    slotAcctAddr,
-			"Expiration": amm.AuctionSlot.Expiration,
-			"Price":      amountToAmountMap(slotPrice),
+		var auctionSlot ledgerfields.AuctionSlotValue
+		if err := auctionSlot.SetAccountValue(amm.AuctionSlot.Account); err != nil {
+			return nil, fmt.Errorf("failed to encode AMM auction account: %w", err)
 		}
-		if amm.AuctionSlot.DiscountedFee != 0 {
-			auctionSlot["DiscountedFee"] = amm.AuctionSlot.DiscountedFee
+		auctionSlot.SetExpiration(amm.AuctionSlot.Expiration)
+		if err := auctionSlot.SetPriceValue(amountToAmountValue(slotPrice)); err != nil {
+			return nil, fmt.Errorf("failed to encode AMM auction price: %w", err)
 		}
+		auctionSlot.SetDiscountedFee(amm.AuctionSlot.DiscountedFee)
 		if amm.AuctionSlot.AuthAccountsPresent {
-			authAccounts := make([]any, 0, len(amm.AuctionSlot.AuthAccounts))
-			for _, authID := range amm.AuctionSlot.AuthAccounts {
-				authAcctAddr, err := state.EncodeAccountID(authID)
-				if err != nil {
+			authAccounts := make([]ledgerfields.AuthAccountValue, len(amm.AuctionSlot.AuthAccounts))
+			for i, authID := range amm.AuctionSlot.AuthAccounts {
+				if err := authAccounts[i].SetAccountValue(authID); err != nil {
 					return nil, fmt.Errorf("failed to encode AMM authorized account: %w", err)
 				}
-				authAccounts = append(authAccounts, map[string]any{
-					"AuthAccount": map[string]any{
-						"Account": authAcctAddr,
-					},
-				})
 			}
-			auctionSlot["AuthAccounts"] = authAccounts
+			if err := auctionSlot.SetAuthAccountsValue(authAccounts); err != nil {
+				return nil, fmt.Errorf("failed to encode AMM authorized accounts: %w", err)
+			}
 		}
-		entry.SetAuctionSlot(auctionSlot)
+		if err := entry.SetAuctionSlotValue(auctionSlot); err != nil {
+			return nil, fmt.Errorf("failed to encode AMM AuctionSlot: %w", err)
+		}
 	}
 
 	return entry.Encode()
 }
 
-// issueMapToAsset converts a binary codec Issue map to a tx.Asset.
-func issueMapToAsset(m map[string]any) tx.Asset {
-	asset := tx.Asset{}
-	if mptID, ok := m["mpt_issuance_id"].(string); ok {
-		asset.MPTIssuanceID = strings.ToUpper(mptID)
-		return asset
-	}
-	if currency, ok := m["currency"].(string); ok {
-		asset.Currency = currency
-	}
-	if issuer, ok := m["issuer"].(string); ok {
-		asset.Issuer = issuer
-	}
-	return asset
-}
-
-// assetToIssueMap converts a tx.Asset to a binary codec Issue map.
-func assetToIssueMap(asset tx.Asset) map[string]any {
+func assetToIssueValue(asset tx.Asset) ledgerfields.IssueValue {
 	if asset.IsMPT() {
-		return map[string]any{"mpt_issuance_id": strings.ToUpper(asset.MPTIssuanceID)}
+		return ledgerfields.IssueValue{MPTIssuanceID: strings.ToUpper(asset.MPTIssuanceID)}
 	}
 	isXRP := isXRPAsset(asset)
 	if isXRP {
-		return map[string]any{"currency": "XRP"}
+		return ledgerfields.IssueValue{Currency: "XRP"}
 	}
-	return map[string]any{
-		"currency": asset.Currency,
-		"issuer":   asset.Issuer,
-	}
+	return ledgerfields.IssueValue{Currency: asset.Currency, Issuer: asset.Issuer}
 }
 
-// amountMapToAmount converts a binary codec Amount map to a tx.Amount.
-func amountMapToAmount(m map[string]any) (tx.Amount, error) {
-	valueStr, _ := m["value"].(string)
-	currency, _ := m["currency"].(string)
-	issuer, _ := m["issuer"].(string)
-	return state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
-}
-
-// amountToAmountMap converts a tx.Amount to a binary codec Amount map.
-func amountToAmountMap(amt tx.Amount) map[string]any {
-	return map[string]any{
-		"value":    amt.Value(),
-		"currency": amt.Currency,
-		"issuer":   amt.Issuer,
+func amountToAmountValue(amt tx.Amount) ledgerfields.AmountValue {
+	value := ledgerfields.AmountValue{
+		Value:    amt.Value(),
+		Currency: amt.Currency,
+		Issuer:   amt.Issuer,
 	}
-}
-
-// getFieldUint16 extracts a uint16 from a decoded JSON map field.
-func getFieldUint16(fields map[string]any, name string) uint16 {
-	switch v := fields[name].(type) {
-	case float64:
-		return uint16(v)
-	case int:
-		return uint16(v)
-	case uint16:
-		return v
+	if amt.IsMPT() {
+		value.Currency = ""
+		value.Issuer = ""
+		value.MPTIssuanceID = strings.ToUpper(amt.MPTIssuanceID())
 	}
-	return 0
-}
-
-// getFieldUint32 extracts a uint32 from a decoded JSON map field.
-func getFieldUint32(fields map[string]any, name string) uint32 {
-	switch v := fields[name].(type) {
-	case float64:
-		return uint32(v)
-	case int:
-		return uint32(v)
-	case uint32:
-		return v
-	}
-	return 0
-}
-
-// parseHexUint64 parses a hex string to uint64.
-func parseHexUint64(s string) (uint64, error) {
-	s = strings.TrimPrefix(s, "0x")
-	s = strings.TrimPrefix(s, "0X")
-	if s == "" || s == "0" {
-		return 0, nil
-	}
-	var val uint64
-	_, err := fmt.Sscanf(s, "%x", &val)
-	return val, err
+	return value
 }

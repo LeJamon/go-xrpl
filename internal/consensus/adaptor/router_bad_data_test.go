@@ -99,7 +99,7 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 	svc := r.adaptor.LedgerService()
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
-	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
 
 	bad := &message.ReplayDeltaResponse{
 		LedgerHash: target[:],
@@ -136,7 +136,7 @@ func TestRouter_HandleReplayDeltaResponse_ChargesErrorsBeforeRouting(t *testing.
 				parent := r.adaptor.LedgerService().GetClosedLedger()
 				require.NotNil(t, parent)
 				target := [32]byte{0xAC}
-				require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
+				require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
 				peerID := uint64(7)
 				resp := &message.ReplayDeltaResponse{
 					LedgerHash: target[:],
@@ -144,7 +144,7 @@ func TestRouter_HandleReplayDeltaResponse_ChargesErrorsBeforeRouting(t *testing.
 				}
 				switch route {
 				case "stale":
-					r.replayer.Abandon(target)
+					r.catchupReplay.replayer.Abandon(target)
 				case "unexpected peer":
 					peerID = 8
 				case "missing hash":
@@ -157,7 +157,7 @@ func TestRouter_HandleReplayDeltaResponse_ChargesErrorsBeforeRouting(t *testing.
 				})
 
 				assert.Equal(t, []badDataCall{{peerID: peerID, reason: "replay-delta-verify"}}, sender.getBadDataCalls())
-				assert.Equal(t, route != "stale", r.replayer.Has(target))
+				assert.Equal(t, route != "stale", r.catchupReplay.replayer.Has(target))
 				assert.Equal(t, []replayDeltaCall{{peerID: 7, hash: target}}, sender.replayCalls())
 				assert.Empty(t, sender.legacyCalls())
 			})
@@ -174,7 +174,7 @@ func TestRouter_HandleReplayDeltaResponse_RouteMismatchDoesNotChargePeer(t *test
 	require.NoError(t, err)
 
 	resp, _, target, seq := buildSuccessorAgainstParent(t, parent)
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, wrongParent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, wrongParent))
 	payload, err := message.Encode(resp)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{

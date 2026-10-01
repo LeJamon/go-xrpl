@@ -28,12 +28,10 @@ func loanPayFixture(t *testing.T, beforeOverrides, afterOverrides map[string]any
 	before := loanInvariantMap(0, 2)
 	before["PrincipalOutstanding"] = "90"
 	before["TotalValueOutstanding"] = "100"
-	before["ManagementFeeOutstanding"] = "0"
 	before["NextPaymentDueDate"] = uint32(1100)
 	after := loanInvariantMap(0, 1)
 	after["PrincipalOutstanding"] = "89"
 	after["TotalValueOutstanding"] = "99"
-	after["ManagementFeeOutstanding"] = "0"
 	after["NextPaymentDueDate"] = uint32(1200)
 	for field, value := range beforeOverrides {
 		before[field] = value
@@ -215,7 +213,6 @@ func TestValidLoan_LoanPayFullRepaymentKeepsZeroBalancesAndDueDate(t *testing.T)
 	before := loanInvariantMap(0, 1)
 	before["PrincipalOutstanding"] = "90"
 	before["TotalValueOutstanding"] = "100"
-	before["ManagementFeeOutstanding"] = "0"
 	before["NextPaymentDueDate"] = uint32(1100)
 	for _, rulesCase := range loanPayRuleCases() {
 		if !rulesCase.enable {
@@ -223,10 +220,9 @@ func TestValidLoan_LoanPayFullRepaymentKeepsZeroBalancesAndDueDate(t *testing.T)
 		}
 		t.Run(rulesCase.name, func(t *testing.T) {
 			after := loanInvariantMap(0, 0)
-			after["PrincipalOutstanding"] = "0"
-			after["TotalValueOutstanding"] = "0"
-			after["ManagementFeeOutstanding"] = "0"
-			after["NextPaymentDueDate"] = uint32(0)
+			delete(after, "PrincipalOutstanding")
+			delete(after, "TotalValueOutstanding")
+			delete(after, "NextPaymentDueDate")
 			change := InvariantEntry{
 				EntryType: entry.TypeLoan,
 				Before:    mustEncode(t, before),
@@ -254,13 +250,11 @@ func TestValidLoan_LoanPayFullRepaymentRequiresZeroBalancesAndDueDate(t *testing
 			before := loanInvariantMap(0, 1)
 			before["PrincipalOutstanding"] = "90"
 			before["TotalValueOutstanding"] = "100"
-			before["ManagementFeeOutstanding"] = "0"
 			before["NextPaymentDueDate"] = uint32(1100)
 			after := loanInvariantMap(0, 0)
-			after["PrincipalOutstanding"] = "0"
-			after["TotalValueOutstanding"] = "0"
-			after["ManagementFeeOutstanding"] = "0"
-			after["NextPaymentDueDate"] = uint32(0)
+			delete(after, "PrincipalOutstanding")
+			delete(after, "TotalValueOutstanding")
+			delete(after, "NextPaymentDueDate")
 			for field, value := range tc.afterOverrides {
 				after[field] = value
 			}

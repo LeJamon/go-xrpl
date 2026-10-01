@@ -326,7 +326,7 @@ func equalTokens(src, dst tx.Amount) bool {
 // precedence: a payment that fails both credential and domain checks reports the
 // credential code.
 // Reference: rippled Payment.cpp:282-378
-func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	// Reference: rippled Payment.cpp:296-346
 	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
 		destAccount, readErr := state.ReadAccountRoot(view, destID)

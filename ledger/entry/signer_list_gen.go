@@ -114,6 +114,206 @@ func (s *SignerList) SetSponsor(value string) {
 	s.present |= signerlistBitSponsor
 }
 
+// HasOwner reports whether Owner is present.
+func (s *SignerList) HasOwner() bool {
+	return s != nil && s.present&signerlistBitOwner != 0
+}
+
+// ClearOwner removes Owner from the serialized entry.
+func (s *SignerList) ClearOwner() {
+	if s == nil {
+		return
+	}
+	s.Owner = ""
+	s.present &^= signerlistBitOwner
+	s.dirty = true
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (s *SignerList) GetOwner() ([20]byte, error) {
+	if s == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(s.Owner, "SignerList.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (s *SignerList) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	s.SetOwner(address)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (s *SignerList) HasOwnerNode() bool {
+	return s != nil && s.present&signerlistBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (s *SignerList) GetOwnerNode() (uint64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(s.OwnerNode, "SignerList.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (s *SignerList) SetOwnerNodeValue(value uint64) {
+	s.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasSignerQuorum reports whether SignerQuorum is present.
+func (s *SignerList) HasSignerQuorum() bool {
+	return s != nil && s.present&signerlistBitSignerQuorum != 0
+}
+
+// GetSignerQuorum returns the typed UInt32 value.
+func (s *SignerList) GetSignerQuorum() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.SignerQuorum, nil
+}
+
+// SetSignerQuorumValue assigns a typed UInt32 value.
+func (s *SignerList) SetSignerQuorumValue(value uint32) {
+	s.SetSignerQuorum(value)
+}
+
+// HasSignerEntries reports whether SignerEntries is present.
+func (s *SignerList) HasSignerEntries() bool {
+	return s != nil && s.present&signerlistBitSignerEntries != 0
+}
+
+// GetSignerEntries returns typed nested objects.
+func (s *SignerList) GetSignerEntries() ([]SignerEntryValue, error) {
+	if s == nil || s.SignerEntries == nil {
+		return nil, nil
+	}
+	return signerEntryValueSliceFromAny(s.SignerEntries, "SignerList.SignerEntries")
+}
+
+// SetSignerEntriesValue assigns typed nested objects.
+func (s *SignerList) SetSignerEntriesValue(value []SignerEntryValue) error {
+	encoded, err := signerEntryValueSliceToAny(value, "SignerList.SignerEntries")
+	if err != nil {
+		return err
+	}
+	s.SetSignerEntries(encoded)
+	return nil
+}
+
+// HasSignerListID reports whether SignerListID is present.
+func (s *SignerList) HasSignerListID() bool {
+	return s != nil && s.present&signerlistBitSignerListID != 0
+}
+
+// GetSignerListID returns the typed UInt32 value.
+func (s *SignerList) GetSignerListID() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.SignerListID, nil
+}
+
+// SetSignerListIDValue assigns a typed UInt32 value.
+func (s *SignerList) SetSignerListIDValue(value uint32) {
+	s.SetSignerListID(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (s *SignerList) HasFlags() bool {
+	return s != nil && s.present&signerlistBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (s *SignerList) GetFlags() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (s *SignerList) SetFlagsValue(value uint32) {
+	s.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (s *SignerList) HasPreviousTxnID() bool {
+	return s != nil && s.present&signerlistBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (s *SignerList) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if s == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(s.PreviousTxnID, "SignerList.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (s *SignerList) SetPreviousTxnIDValue(value [32]byte) {
+	s.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (s *SignerList) HasPreviousTxnLgrSeq() bool {
+	return s != nil && s.present&signerlistBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (s *SignerList) GetPreviousTxnLgrSeq() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (s *SignerList) SetPreviousTxnLgrSeqValue(value uint32) {
+	s.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (s *SignerList) HasSponsor() bool {
+	return s != nil && s.present&signerlistBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (s *SignerList) ClearSponsor() {
+	if s == nil {
+		return
+	}
+	s.Sponsor = ""
+	s.present &^= signerlistBitSponsor
+	s.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (s *SignerList) GetSponsor() ([20]byte, error) {
+	if s == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(s.Sponsor, "SignerList.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (s *SignerList) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	s.SetSponsor(address)
+	return nil
+}
+
 func (s *SignerList) validateRequired() error {
 	if s.decoded && !s.dirty {
 		return nil

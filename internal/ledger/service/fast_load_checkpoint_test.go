@@ -513,7 +513,12 @@ func TestService_ValidatedStateBaseBootstrapCandidateUsesCompleteBoundGeneration
 				require.NoError(t, stateMap.StartSync())
 				require.NoError(t, stateMap.FinishSyncContext(ctx))
 
+				parent := reader.GetClosedLedger().Header()
 				candidateHeader := targetHeader
+				// Startup parents include wall-clock close times, so writer and reader may differ.
+				candidateHeader.ParentHash = parent.Hash
+				candidateHeader.ParentCloseTime = parent.CloseTime
+				candidateHeader.CloseTime = parent.CloseTime.Add(time.Second)
 				candidateHeader.Validated = false
 				candidateHeader.CloseFlags ^= header.LCFNoConsensusTime
 				candidateHeader.Hash = header.CalculateHash(candidateHeader)

@@ -163,7 +163,7 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 // keeps its checks in Apply, where they deliberately share the single directory
 // Read with the mutation so it sees exactly the bytes the checks validated.
 // Reference: rippled LedgerStateFix.cpp preclaim().
-func (l *LedgerStateFix) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LedgerStateFix) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	if l.LedgerFixType != LedgerFixTypeNFTokenPageLink {
 		return ter.TesSUCCESS
 	}
@@ -590,7 +590,7 @@ func decrementKey(key [32]byte) [32]byte {
 // CalculateBaseFee returns the minimum fee for LedgerStateFix transactions:
 // one owner reserve increment, read from the live FeeSettings, just like
 // AccountDelete.
-func (l *LedgerStateFix) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
+func (l *LedgerStateFix) CalculateBaseFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	if view != nil {
 		data, err := view.Read(keylet.Fees())
 		if err == nil && data != nil {

@@ -1,6 +1,7 @@
 package openledger
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -211,7 +212,18 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
-	return applyTxs(view, txs, retries, cfg, true, true)
+	return ApplyTxsContext(context.Background(), view, txs, retries, cfg)
+}
+
+// ApplyTxsContext is ApplyTxs with cancellation checks at every preparation
+// boundary. A transaction engine call itself may still be uninterruptible;
+// callers must discard the private view when this returns a cancellation
+// error rather than publishing it.
+func ApplyTxsContext(ctx context.Context, view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return applyTxs(ctx, view, txs, retries, cfg, true, true)
 }
 
 type retryCandidate struct {
@@ -249,6 +261,7 @@ func orderRetryCandidates(queue []retryCandidate, salt *[32]byte) {
 }
 
 func applyTxs(
+	ctx context.Context,
 	view *ledger.Ledger,
 	txs []PendingTx,
 	retries *[]PendingTx,
@@ -256,6 +269,9 @@ func applyTxs(
 	checkMembership bool,
 	includeSeededRetries bool,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if view == nil {
 		return errors.New("openledger.ApplyTxs: view is nil")
 	}
@@ -277,6 +293,9 @@ func applyTxs(
 	parsed := make([]tx.Transaction, len(txs))
 	eligible := make([]bool, len(txs))
 	for i, ptx := range txs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		t, err := tx.ParseFromBinary(ptx.Blob)
 		if err != nil {
 			return fmt.Errorf("openledger.ApplyTxs: parse transaction %x: %w", ptx.Hash, err)
@@ -303,6 +322,9 @@ func applyTxs(
 	retrySeen := make(map[[32]byte]struct{}, len(txs))
 	if includeSeededRetries && retries != nil {
 		for _, ptx := range *retries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			parsedRetry, err := tx.ParseFromBinary(ptx.Blob)
 			if err != nil {
 				return fmt.Errorf("openledger.ApplyTxs: parse seeded retry %x: %w", ptx.Hash, err)
@@ -358,6 +380,9 @@ func applyTxs(
 	bp := buildEngine(true, cfg.SkipSignatureVerification)
 	initialChanges := 0
 	for i, ptx := range txs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if parsed[i] == nil || !eligible[i] {
 			continue
 		}
@@ -383,6 +408,9 @@ func applyTxs(
 		certainRetry = nextRetryState(certainRetry, initialChanges, 0)
 	}
 	for pass := 0; pass < retryLoopCount && len(retrySet) > 0; pass++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// Signatures were verified on the initial pass; retry passes
 		// normally skip. Seeded retries have no initial tx pass, so verify
 		// them on the first shared retry pass before allowing later passes
@@ -394,6 +422,9 @@ func applyTxs(
 		// appends and each candidate is read before its slot is reused.
 		nextRetries := retrySet[:0]
 		for _, candidate := range retrySet {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			ptx := candidate.pending
 			class, err := applyAndClassify(bp, candidate.parsed, ptx.Blob, cfg.Mode, logger)
 			if err != nil {
@@ -421,6 +452,9 @@ func applyTxs(
 		certainRetry = nextRetryState(certainRetry, changes, pass+passOffset)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if retries != nil {
 		if includeSeededRetries {
 			*retries = (*retries)[:0]

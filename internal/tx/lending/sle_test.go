@@ -309,3 +309,31 @@ func assertLendingEncoding(t *testing.T, got []byte, fields map[string]any) {
 		t.Fatalf("encoding mismatch\n got: %s\nwant: %s", hex.EncodeToString(got), hex.EncodeToString(want))
 	}
 }
+
+func TestLendingThreadingSequenceWithZeroTransactionHash(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		encode func() ([]byte, error)
+	}{
+		{"LoanBroker", func() ([]byte, error) {
+			return serializeLoanBroker(&loanBrokerData{Account: [20]byte{1}, Owner: [20]byte{2}, PreviousTxnLgrSeq: 7})
+		}},
+		{"Loan", func() ([]byte, error) {
+			return serializeLoan(&loanData{Borrower: [20]byte{1}, PreviousTxnLgrSeq: 7})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := test.encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields, err := binarycodec.DecodeBytes(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fields["PreviousTxnID"] != strings.Repeat("0", 64) || fields["PreviousTxnLgrSeq"] != uint32(7) {
+				t.Fatalf("threading fields = (%v, %v), want (zero hash, 7)", fields["PreviousTxnID"], fields["PreviousTxnLgrSeq"])
+			}
+		})
+	}
+}

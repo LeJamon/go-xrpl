@@ -20,7 +20,7 @@ type panicBaseFeeTransaction struct {
 	tx.BaseTx
 }
 
-func (p *panicBaseFeeTransaction) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) (uint64, error) {
+func (p *panicBaseFeeTransaction) CalculateBaseFee(tx.ReadOnlyLedgerView, tx.EngineConfig) (uint64, error) {
 	panic("fee calculation failed")
 }
 

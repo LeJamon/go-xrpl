@@ -888,13 +888,14 @@ func SponsorSignerCount(transaction txcore.Transaction) int {
 // the standard single-sign or multisign fee. Calculator panics are converted to
 // a typed tefEXCEPTION error so callers can reject the transaction without
 // treating a zero fee as a valid result.
-func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, config txcore.EngineConfig) (fee uint64, err error) {
+func CalculateBaseFee(transaction txcore.Transaction, view txcore.ReadOnlyLedgerView, config txcore.EngineConfig) (fee uint64, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			fee = 0
 			err = ter.Errorf(ter.TefEXCEPTION, "base fee calculation panicked: %v", recovered)
 		}
 	}()
+	view = txcore.NewReadOnlyLedgerView(view)
 
 	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil &&
 		transaction.GetCommon().GetFlags()&txcore.TfInnerBatchTxn == 0 &&

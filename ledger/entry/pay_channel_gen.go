@@ -186,6 +186,410 @@ func (p *PayChannel) SetSponsor(value string) {
 	p.present |= paychannelBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (p *PayChannel) HasAccount() bool {
+	return p != nil && p.present&paychannelBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (p *PayChannel) GetAccount() ([20]byte, error) {
+	if p == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(p.Account, "PayChannel.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (p *PayChannel) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	p.SetAccount(address)
+	return nil
+}
+
+// HasDestination reports whether Destination is present.
+func (p *PayChannel) HasDestination() bool {
+	return p != nil && p.present&paychannelBitDestination != 0
+}
+
+// GetDestination returns the 20-byte AccountID.
+func (p *PayChannel) GetDestination() ([20]byte, error) {
+	if p == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(p.Destination, "PayChannel.Destination")
+}
+
+// SetDestinationValue assigns a 20-byte AccountID.
+func (p *PayChannel) SetDestinationValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	p.SetDestination(address)
+	return nil
+}
+
+// HasSequence reports whether Sequence is present.
+func (p *PayChannel) HasSequence() bool {
+	return p != nil && p.present&paychannelBitSequence != 0
+}
+
+// ClearSequence removes Sequence from the serialized entry.
+func (p *PayChannel) ClearSequence() {
+	if p == nil {
+		return
+	}
+	p.Sequence = 0
+	p.present &^= paychannelBitSequence
+	p.dirty = true
+}
+
+// GetSequence returns the typed UInt32 value.
+func (p *PayChannel) GetSequence() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (p *PayChannel) SetSequenceValue(value uint32) {
+	p.SetSequence(value)
+}
+
+// HasAmount reports whether Amount is present.
+func (p *PayChannel) HasAmount() bool {
+	return p != nil && p.present&paychannelBitAmount != 0
+}
+
+// GetAmount returns the typed Amount value.
+func (p *PayChannel) GetAmount() (AmountValue, error) {
+	if p == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(p.Amount, "PayChannel.Amount", false)
+}
+
+// SetAmountValue assigns a typed Amount value.
+func (p *PayChannel) SetAmountValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "PayChannel.Amount", false)
+	if err != nil {
+		return err
+	}
+	p.SetAmount(encoded)
+	return nil
+}
+
+// HasBalance reports whether Balance is present.
+func (p *PayChannel) HasBalance() bool {
+	return p != nil && p.present&paychannelBitBalance != 0
+}
+
+// GetBalance returns the typed Amount value.
+func (p *PayChannel) GetBalance() (AmountValue, error) {
+	if p == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(p.Balance, "PayChannel.Balance", false)
+}
+
+// SetBalanceValue assigns a typed Amount value.
+func (p *PayChannel) SetBalanceValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "PayChannel.Balance", false)
+	if err != nil {
+		return err
+	}
+	p.SetBalance(encoded)
+	return nil
+}
+
+// HasPublicKey reports whether PublicKey is present.
+func (p *PayChannel) HasPublicKey() bool {
+	return p != nil && p.present&paychannelBitPublicKey != 0
+}
+
+// GetPublicKey returns the raw bytes of the Blob field.
+func (p *PayChannel) GetPublicKey() ([]byte, error) {
+	if p == nil {
+		return nil, nil
+	}
+	return blobValueFromString(p.PublicKey, "PayChannel.PublicKey")
+}
+
+// SetPublicKeyValue assigns a Blob from raw bytes.
+func (p *PayChannel) SetPublicKeyValue(value []byte) {
+	p.SetPublicKey(blobValueToString(value))
+}
+
+// HasSettleDelay reports whether SettleDelay is present.
+func (p *PayChannel) HasSettleDelay() bool {
+	return p != nil && p.present&paychannelBitSettleDelay != 0
+}
+
+// GetSettleDelay returns the typed UInt32 value.
+func (p *PayChannel) GetSettleDelay() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.SettleDelay, nil
+}
+
+// SetSettleDelayValue assigns a typed UInt32 value.
+func (p *PayChannel) SetSettleDelayValue(value uint32) {
+	p.SetSettleDelay(value)
+}
+
+// HasExpiration reports whether Expiration is present.
+func (p *PayChannel) HasExpiration() bool {
+	return p != nil && p.present&paychannelBitExpiration != 0
+}
+
+// ClearExpiration removes Expiration from the serialized entry.
+func (p *PayChannel) ClearExpiration() {
+	if p == nil {
+		return
+	}
+	p.Expiration = 0
+	p.present &^= paychannelBitExpiration
+	p.dirty = true
+}
+
+// GetExpiration returns the typed UInt32 value.
+func (p *PayChannel) GetExpiration() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (p *PayChannel) SetExpirationValue(value uint32) {
+	p.SetExpiration(value)
+}
+
+// HasCancelAfter reports whether CancelAfter is present.
+func (p *PayChannel) HasCancelAfter() bool {
+	return p != nil && p.present&paychannelBitCancelAfter != 0
+}
+
+// ClearCancelAfter removes CancelAfter from the serialized entry.
+func (p *PayChannel) ClearCancelAfter() {
+	if p == nil {
+		return
+	}
+	p.CancelAfter = 0
+	p.present &^= paychannelBitCancelAfter
+	p.dirty = true
+}
+
+// GetCancelAfter returns the typed UInt32 value.
+func (p *PayChannel) GetCancelAfter() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.CancelAfter, nil
+}
+
+// SetCancelAfterValue assigns a typed UInt32 value.
+func (p *PayChannel) SetCancelAfterValue(value uint32) {
+	p.SetCancelAfter(value)
+}
+
+// HasSourceTag reports whether SourceTag is present.
+func (p *PayChannel) HasSourceTag() bool {
+	return p != nil && p.present&paychannelBitSourceTag != 0
+}
+
+// ClearSourceTag removes SourceTag from the serialized entry.
+func (p *PayChannel) ClearSourceTag() {
+	if p == nil {
+		return
+	}
+	p.SourceTag = 0
+	p.present &^= paychannelBitSourceTag
+	p.dirty = true
+}
+
+// GetSourceTag returns the typed UInt32 value.
+func (p *PayChannel) GetSourceTag() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.SourceTag, nil
+}
+
+// SetSourceTagValue assigns a typed UInt32 value.
+func (p *PayChannel) SetSourceTagValue(value uint32) {
+	p.SetSourceTag(value)
+}
+
+// HasDestinationTag reports whether DestinationTag is present.
+func (p *PayChannel) HasDestinationTag() bool {
+	return p != nil && p.present&paychannelBitDestinationTag != 0
+}
+
+// ClearDestinationTag removes DestinationTag from the serialized entry.
+func (p *PayChannel) ClearDestinationTag() {
+	if p == nil {
+		return
+	}
+	p.DestinationTag = 0
+	p.present &^= paychannelBitDestinationTag
+	p.dirty = true
+}
+
+// GetDestinationTag returns the typed UInt32 value.
+func (p *PayChannel) GetDestinationTag() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.DestinationTag, nil
+}
+
+// SetDestinationTagValue assigns a typed UInt32 value.
+func (p *PayChannel) SetDestinationTagValue(value uint32) {
+	p.SetDestinationTag(value)
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (p *PayChannel) HasOwnerNode() bool {
+	return p != nil && p.present&paychannelBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (p *PayChannel) GetOwnerNode() (uint64, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(p.OwnerNode, "PayChannel.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (p *PayChannel) SetOwnerNodeValue(value uint64) {
+	p.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasDestinationNode reports whether DestinationNode is present.
+func (p *PayChannel) HasDestinationNode() bool {
+	return p != nil && p.present&paychannelBitDestinationNode != 0
+}
+
+// ClearDestinationNode removes DestinationNode from the serialized entry.
+func (p *PayChannel) ClearDestinationNode() {
+	if p == nil {
+		return
+	}
+	p.DestinationNode = ""
+	p.present &^= paychannelBitDestinationNode
+	p.dirty = true
+}
+
+// GetDestinationNode returns the typed UInt64 value.
+func (p *PayChannel) GetDestinationNode() (uint64, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(p.DestinationNode, "PayChannel.DestinationNode", false)
+}
+
+// SetDestinationNodeValue assigns a typed UInt64 value.
+func (p *PayChannel) SetDestinationNodeValue(value uint64) {
+	p.SetDestinationNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags is present.
+func (p *PayChannel) HasFlags() bool {
+	return p != nil && p.present&paychannelBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (p *PayChannel) GetFlags() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (p *PayChannel) SetFlagsValue(value uint32) {
+	p.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (p *PayChannel) HasPreviousTxnID() bool {
+	return p != nil && p.present&paychannelBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (p *PayChannel) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if p == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(p.PreviousTxnID, "PayChannel.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (p *PayChannel) SetPreviousTxnIDValue(value [32]byte) {
+	p.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (p *PayChannel) HasPreviousTxnLgrSeq() bool {
+	return p != nil && p.present&paychannelBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (p *PayChannel) GetPreviousTxnLgrSeq() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (p *PayChannel) SetPreviousTxnLgrSeqValue(value uint32) {
+	p.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (p *PayChannel) HasSponsor() bool {
+	return p != nil && p.present&paychannelBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (p *PayChannel) ClearSponsor() {
+	if p == nil {
+		return
+	}
+	p.Sponsor = ""
+	p.present &^= paychannelBitSponsor
+	p.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (p *PayChannel) GetSponsor() ([20]byte, error) {
+	if p == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(p.Sponsor, "PayChannel.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (p *PayChannel) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	p.SetSponsor(address)
+	return nil
+}
+
 func (p *PayChannel) validateRequired() error {
 	if p.decoded && !p.dirty {
 		return nil

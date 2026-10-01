@@ -148,7 +148,7 @@ func (v *VaultSet) vaultIDBytes() ([32]byte, bool) {
 // Preclaim checks the vault exists, the submitter owns it, and any DomainID
 // update targets a private vault whose share issuance exists.
 // Reference: rippled VaultSet::preclaim.
-func (v *VaultSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (v *VaultSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(v.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

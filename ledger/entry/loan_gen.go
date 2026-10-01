@@ -362,6 +362,767 @@ func (l *Loan) SetSponsor(value string) {
 	l.present |= loanBitSponsor
 }
 
+// HasOwnerNode reports whether OwnerNode is present.
+func (l *Loan) HasOwnerNode() bool {
+	return l != nil && l.present&loanBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (l *Loan) GetOwnerNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.OwnerNode, "Loan.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (l *Loan) SetOwnerNodeValue(value uint64) {
+	l.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasLoanBrokerNode reports whether LoanBrokerNode is present.
+func (l *Loan) HasLoanBrokerNode() bool {
+	return l != nil && l.present&loanBitLoanBrokerNode != 0
+}
+
+// GetLoanBrokerNode returns the typed UInt64 value.
+func (l *Loan) GetLoanBrokerNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.LoanBrokerNode, "Loan.LoanBrokerNode", false)
+}
+
+// SetLoanBrokerNodeValue assigns a typed UInt64 value.
+func (l *Loan) SetLoanBrokerNodeValue(value uint64) {
+	l.SetLoanBrokerNode(uint64ValueToString(value, false))
+}
+
+// HasLoanBrokerID reports whether LoanBrokerID is present.
+func (l *Loan) HasLoanBrokerID() bool {
+	return l != nil && l.present&loanBitLoanBrokerID != 0
+}
+
+// GetLoanBrokerID returns the typed 256-bit hash.
+func (l *Loan) GetLoanBrokerID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.LoanBrokerID, "Loan.LoanBrokerID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLoanBrokerIDValue assigns a typed 256-bit hash.
+func (l *Loan) SetLoanBrokerIDValue(value [32]byte) {
+	l.SetLoanBrokerID(hashValueToString(value[:]))
+}
+
+// HasLoanSequence reports whether LoanSequence is present.
+func (l *Loan) HasLoanSequence() bool {
+	return l != nil && l.present&loanBitLoanSequence != 0
+}
+
+// GetLoanSequence returns the typed UInt32 value.
+func (l *Loan) GetLoanSequence() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.LoanSequence, nil
+}
+
+// SetLoanSequenceValue assigns a typed UInt32 value.
+func (l *Loan) SetLoanSequenceValue(value uint32) {
+	l.SetLoanSequence(value)
+}
+
+// HasBorrower reports whether Borrower is present.
+func (l *Loan) HasBorrower() bool {
+	return l != nil && l.present&loanBitBorrower != 0
+}
+
+// GetBorrower returns the 20-byte AccountID.
+func (l *Loan) GetBorrower() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Borrower, "Loan.Borrower")
+}
+
+// SetBorrowerValue assigns a 20-byte AccountID.
+func (l *Loan) SetBorrowerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetBorrower(address)
+	return nil
+}
+
+// HasLoanOriginationFee reports whether LoanOriginationFee is present.
+func (l *Loan) HasLoanOriginationFee() bool {
+	return l != nil && l.present&loanBitLoanOriginationFee != 0
+}
+
+// ClearLoanOriginationFee removes LoanOriginationFee from the serialized entry.
+func (l *Loan) ClearLoanOriginationFee() {
+	if l == nil {
+		return
+	}
+	l.LoanOriginationFee = nil
+	l.present &^= loanBitLoanOriginationFee
+	l.dirty = true
+}
+
+// GetLoanOriginationFee returns the exact decoded Number text.
+func (l *Loan) GetLoanOriginationFee() (NumberValue, error) {
+	if l == nil || l.LoanOriginationFee == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.LoanOriginationFee, "Loan.LoanOriginationFee")
+}
+
+// SetLoanOriginationFeeValue assigns an exact Number text value.
+func (l *Loan) SetLoanOriginationFeeValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.LoanOriginationFee")
+	if err != nil {
+		return err
+	}
+	l.SetLoanOriginationFee(encoded)
+	return nil
+}
+
+// HasLoanServiceFee reports whether LoanServiceFee is present.
+func (l *Loan) HasLoanServiceFee() bool {
+	return l != nil && l.present&loanBitLoanServiceFee != 0
+}
+
+// ClearLoanServiceFee removes LoanServiceFee from the serialized entry.
+func (l *Loan) ClearLoanServiceFee() {
+	if l == nil {
+		return
+	}
+	l.LoanServiceFee = nil
+	l.present &^= loanBitLoanServiceFee
+	l.dirty = true
+}
+
+// GetLoanServiceFee returns the exact decoded Number text.
+func (l *Loan) GetLoanServiceFee() (NumberValue, error) {
+	if l == nil || l.LoanServiceFee == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.LoanServiceFee, "Loan.LoanServiceFee")
+}
+
+// SetLoanServiceFeeValue assigns an exact Number text value.
+func (l *Loan) SetLoanServiceFeeValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.LoanServiceFee")
+	if err != nil {
+		return err
+	}
+	l.SetLoanServiceFee(encoded)
+	return nil
+}
+
+// HasLatePaymentFee reports whether LatePaymentFee is present.
+func (l *Loan) HasLatePaymentFee() bool {
+	return l != nil && l.present&loanBitLatePaymentFee != 0
+}
+
+// ClearLatePaymentFee removes LatePaymentFee from the serialized entry.
+func (l *Loan) ClearLatePaymentFee() {
+	if l == nil {
+		return
+	}
+	l.LatePaymentFee = nil
+	l.present &^= loanBitLatePaymentFee
+	l.dirty = true
+}
+
+// GetLatePaymentFee returns the exact decoded Number text.
+func (l *Loan) GetLatePaymentFee() (NumberValue, error) {
+	if l == nil || l.LatePaymentFee == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.LatePaymentFee, "Loan.LatePaymentFee")
+}
+
+// SetLatePaymentFeeValue assigns an exact Number text value.
+func (l *Loan) SetLatePaymentFeeValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.LatePaymentFee")
+	if err != nil {
+		return err
+	}
+	l.SetLatePaymentFee(encoded)
+	return nil
+}
+
+// HasClosePaymentFee reports whether ClosePaymentFee is present.
+func (l *Loan) HasClosePaymentFee() bool {
+	return l != nil && l.present&loanBitClosePaymentFee != 0
+}
+
+// ClearClosePaymentFee removes ClosePaymentFee from the serialized entry.
+func (l *Loan) ClearClosePaymentFee() {
+	if l == nil {
+		return
+	}
+	l.ClosePaymentFee = nil
+	l.present &^= loanBitClosePaymentFee
+	l.dirty = true
+}
+
+// GetClosePaymentFee returns the exact decoded Number text.
+func (l *Loan) GetClosePaymentFee() (NumberValue, error) {
+	if l == nil || l.ClosePaymentFee == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.ClosePaymentFee, "Loan.ClosePaymentFee")
+}
+
+// SetClosePaymentFeeValue assigns an exact Number text value.
+func (l *Loan) SetClosePaymentFeeValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.ClosePaymentFee")
+	if err != nil {
+		return err
+	}
+	l.SetClosePaymentFee(encoded)
+	return nil
+}
+
+// HasOverpaymentFee reports whether OverpaymentFee is present.
+func (l *Loan) HasOverpaymentFee() bool {
+	return l != nil && l.present&loanBitOverpaymentFee != 0
+}
+
+// ClearOverpaymentFee removes OverpaymentFee from the serialized entry.
+func (l *Loan) ClearOverpaymentFee() {
+	if l == nil {
+		return
+	}
+	l.OverpaymentFee = 0
+	l.present &^= loanBitOverpaymentFee
+	l.dirty = true
+}
+
+// GetOverpaymentFee returns the typed UInt32 value.
+func (l *Loan) GetOverpaymentFee() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.OverpaymentFee, nil
+}
+
+// SetOverpaymentFeeValue assigns a typed UInt32 value.
+func (l *Loan) SetOverpaymentFeeValue(value uint32) {
+	l.SetOverpaymentFee(value)
+}
+
+// HasInterestRate reports whether InterestRate is present.
+func (l *Loan) HasInterestRate() bool {
+	return l != nil && l.present&loanBitInterestRate != 0
+}
+
+// ClearInterestRate removes InterestRate from the serialized entry.
+func (l *Loan) ClearInterestRate() {
+	if l == nil {
+		return
+	}
+	l.InterestRate = 0
+	l.present &^= loanBitInterestRate
+	l.dirty = true
+}
+
+// GetInterestRate returns the typed UInt32 value.
+func (l *Loan) GetInterestRate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.InterestRate, nil
+}
+
+// SetInterestRateValue assigns a typed UInt32 value.
+func (l *Loan) SetInterestRateValue(value uint32) {
+	l.SetInterestRate(value)
+}
+
+// HasLateInterestRate reports whether LateInterestRate is present.
+func (l *Loan) HasLateInterestRate() bool {
+	return l != nil && l.present&loanBitLateInterestRate != 0
+}
+
+// ClearLateInterestRate removes LateInterestRate from the serialized entry.
+func (l *Loan) ClearLateInterestRate() {
+	if l == nil {
+		return
+	}
+	l.LateInterestRate = 0
+	l.present &^= loanBitLateInterestRate
+	l.dirty = true
+}
+
+// GetLateInterestRate returns the typed UInt32 value.
+func (l *Loan) GetLateInterestRate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.LateInterestRate, nil
+}
+
+// SetLateInterestRateValue assigns a typed UInt32 value.
+func (l *Loan) SetLateInterestRateValue(value uint32) {
+	l.SetLateInterestRate(value)
+}
+
+// HasCloseInterestRate reports whether CloseInterestRate is present.
+func (l *Loan) HasCloseInterestRate() bool {
+	return l != nil && l.present&loanBitCloseInterestRate != 0
+}
+
+// ClearCloseInterestRate removes CloseInterestRate from the serialized entry.
+func (l *Loan) ClearCloseInterestRate() {
+	if l == nil {
+		return
+	}
+	l.CloseInterestRate = 0
+	l.present &^= loanBitCloseInterestRate
+	l.dirty = true
+}
+
+// GetCloseInterestRate returns the typed UInt32 value.
+func (l *Loan) GetCloseInterestRate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.CloseInterestRate, nil
+}
+
+// SetCloseInterestRateValue assigns a typed UInt32 value.
+func (l *Loan) SetCloseInterestRateValue(value uint32) {
+	l.SetCloseInterestRate(value)
+}
+
+// HasOverpaymentInterestRate reports whether OverpaymentInterestRate is present.
+func (l *Loan) HasOverpaymentInterestRate() bool {
+	return l != nil && l.present&loanBitOverpaymentInterestRate != 0
+}
+
+// ClearOverpaymentInterestRate removes OverpaymentInterestRate from the serialized entry.
+func (l *Loan) ClearOverpaymentInterestRate() {
+	if l == nil {
+		return
+	}
+	l.OverpaymentInterestRate = 0
+	l.present &^= loanBitOverpaymentInterestRate
+	l.dirty = true
+}
+
+// GetOverpaymentInterestRate returns the typed UInt32 value.
+func (l *Loan) GetOverpaymentInterestRate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.OverpaymentInterestRate, nil
+}
+
+// SetOverpaymentInterestRateValue assigns a typed UInt32 value.
+func (l *Loan) SetOverpaymentInterestRateValue(value uint32) {
+	l.SetOverpaymentInterestRate(value)
+}
+
+// HasStartDate reports whether StartDate is present.
+func (l *Loan) HasStartDate() bool {
+	return l != nil && l.present&loanBitStartDate != 0
+}
+
+// GetStartDate returns the typed UInt32 value.
+func (l *Loan) GetStartDate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.StartDate, nil
+}
+
+// SetStartDateValue assigns a typed UInt32 value.
+func (l *Loan) SetStartDateValue(value uint32) {
+	l.SetStartDate(value)
+}
+
+// HasPaymentInterval reports whether PaymentInterval is present.
+func (l *Loan) HasPaymentInterval() bool {
+	return l != nil && l.present&loanBitPaymentInterval != 0
+}
+
+// GetPaymentInterval returns the typed UInt32 value.
+func (l *Loan) GetPaymentInterval() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.PaymentInterval, nil
+}
+
+// SetPaymentIntervalValue assigns a typed UInt32 value.
+func (l *Loan) SetPaymentIntervalValue(value uint32) {
+	l.SetPaymentInterval(value)
+}
+
+// HasGracePeriod reports whether GracePeriod is present.
+func (l *Loan) HasGracePeriod() bool {
+	return l != nil && l.present&loanBitGracePeriod != 0
+}
+
+// ClearGracePeriod removes GracePeriod from the serialized entry.
+func (l *Loan) ClearGracePeriod() {
+	if l == nil {
+		return
+	}
+	l.GracePeriod = 0
+	l.present &^= loanBitGracePeriod
+	l.dirty = true
+}
+
+// GetGracePeriod returns the typed UInt32 value.
+func (l *Loan) GetGracePeriod() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.GracePeriod, nil
+}
+
+// SetGracePeriodValue assigns a typed UInt32 value.
+func (l *Loan) SetGracePeriodValue(value uint32) {
+	l.SetGracePeriod(value)
+}
+
+// HasPreviousPaymentDueDate reports whether PreviousPaymentDueDate is present.
+func (l *Loan) HasPreviousPaymentDueDate() bool {
+	return l != nil && l.present&loanBitPreviousPaymentDueDate != 0
+}
+
+// ClearPreviousPaymentDueDate removes PreviousPaymentDueDate from the serialized entry.
+func (l *Loan) ClearPreviousPaymentDueDate() {
+	if l == nil {
+		return
+	}
+	l.PreviousPaymentDueDate = 0
+	l.present &^= loanBitPreviousPaymentDueDate
+	l.dirty = true
+}
+
+// GetPreviousPaymentDueDate returns the typed UInt32 value.
+func (l *Loan) GetPreviousPaymentDueDate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.PreviousPaymentDueDate, nil
+}
+
+// SetPreviousPaymentDueDateValue assigns a typed UInt32 value.
+func (l *Loan) SetPreviousPaymentDueDateValue(value uint32) {
+	l.SetPreviousPaymentDueDate(value)
+}
+
+// HasNextPaymentDueDate reports whether NextPaymentDueDate is present.
+func (l *Loan) HasNextPaymentDueDate() bool {
+	return l != nil && l.present&loanBitNextPaymentDueDate != 0
+}
+
+// ClearNextPaymentDueDate removes NextPaymentDueDate from the serialized entry.
+func (l *Loan) ClearNextPaymentDueDate() {
+	if l == nil {
+		return
+	}
+	l.NextPaymentDueDate = 0
+	l.present &^= loanBitNextPaymentDueDate
+	l.dirty = true
+}
+
+// GetNextPaymentDueDate returns the typed UInt32 value.
+func (l *Loan) GetNextPaymentDueDate() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.NextPaymentDueDate, nil
+}
+
+// SetNextPaymentDueDateValue assigns a typed UInt32 value.
+func (l *Loan) SetNextPaymentDueDateValue(value uint32) {
+	l.SetNextPaymentDueDate(value)
+}
+
+// HasPaymentRemaining reports whether PaymentRemaining is present.
+func (l *Loan) HasPaymentRemaining() bool {
+	return l != nil && l.present&loanBitPaymentRemaining != 0
+}
+
+// ClearPaymentRemaining removes PaymentRemaining from the serialized entry.
+func (l *Loan) ClearPaymentRemaining() {
+	if l == nil {
+		return
+	}
+	l.PaymentRemaining = 0
+	l.present &^= loanBitPaymentRemaining
+	l.dirty = true
+}
+
+// GetPaymentRemaining returns the typed UInt32 value.
+func (l *Loan) GetPaymentRemaining() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.PaymentRemaining, nil
+}
+
+// SetPaymentRemainingValue assigns a typed UInt32 value.
+func (l *Loan) SetPaymentRemainingValue(value uint32) {
+	l.SetPaymentRemaining(value)
+}
+
+// HasPeriodicPayment reports whether PeriodicPayment is present.
+func (l *Loan) HasPeriodicPayment() bool {
+	return l != nil && l.present&loanBitPeriodicPayment != 0
+}
+
+// GetPeriodicPayment returns the exact decoded Number text.
+func (l *Loan) GetPeriodicPayment() (NumberValue, error) {
+	if l == nil || l.PeriodicPayment == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.PeriodicPayment, "Loan.PeriodicPayment")
+}
+
+// SetPeriodicPaymentValue assigns an exact Number text value.
+func (l *Loan) SetPeriodicPaymentValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.PeriodicPayment")
+	if err != nil {
+		return err
+	}
+	l.SetPeriodicPayment(encoded)
+	return nil
+}
+
+// HasPrincipalOutstanding reports whether PrincipalOutstanding is present.
+func (l *Loan) HasPrincipalOutstanding() bool {
+	return l != nil && l.present&loanBitPrincipalOutstanding != 0
+}
+
+// ClearPrincipalOutstanding removes PrincipalOutstanding from the serialized entry.
+func (l *Loan) ClearPrincipalOutstanding() {
+	if l == nil {
+		return
+	}
+	l.PrincipalOutstanding = nil
+	l.present &^= loanBitPrincipalOutstanding
+	l.dirty = true
+}
+
+// GetPrincipalOutstanding returns the exact decoded Number text.
+func (l *Loan) GetPrincipalOutstanding() (NumberValue, error) {
+	if l == nil || l.PrincipalOutstanding == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.PrincipalOutstanding, "Loan.PrincipalOutstanding")
+}
+
+// SetPrincipalOutstandingValue assigns an exact Number text value.
+func (l *Loan) SetPrincipalOutstandingValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.PrincipalOutstanding")
+	if err != nil {
+		return err
+	}
+	l.SetPrincipalOutstanding(encoded)
+	return nil
+}
+
+// HasTotalValueOutstanding reports whether TotalValueOutstanding is present.
+func (l *Loan) HasTotalValueOutstanding() bool {
+	return l != nil && l.present&loanBitTotalValueOutstanding != 0
+}
+
+// ClearTotalValueOutstanding removes TotalValueOutstanding from the serialized entry.
+func (l *Loan) ClearTotalValueOutstanding() {
+	if l == nil {
+		return
+	}
+	l.TotalValueOutstanding = nil
+	l.present &^= loanBitTotalValueOutstanding
+	l.dirty = true
+}
+
+// GetTotalValueOutstanding returns the exact decoded Number text.
+func (l *Loan) GetTotalValueOutstanding() (NumberValue, error) {
+	if l == nil || l.TotalValueOutstanding == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.TotalValueOutstanding, "Loan.TotalValueOutstanding")
+}
+
+// SetTotalValueOutstandingValue assigns an exact Number text value.
+func (l *Loan) SetTotalValueOutstandingValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.TotalValueOutstanding")
+	if err != nil {
+		return err
+	}
+	l.SetTotalValueOutstanding(encoded)
+	return nil
+}
+
+// HasManagementFeeOutstanding reports whether ManagementFeeOutstanding is present.
+func (l *Loan) HasManagementFeeOutstanding() bool {
+	return l != nil && l.present&loanBitManagementFeeOutstanding != 0
+}
+
+// ClearManagementFeeOutstanding removes ManagementFeeOutstanding from the serialized entry.
+func (l *Loan) ClearManagementFeeOutstanding() {
+	if l == nil {
+		return
+	}
+	l.ManagementFeeOutstanding = nil
+	l.present &^= loanBitManagementFeeOutstanding
+	l.dirty = true
+}
+
+// GetManagementFeeOutstanding returns the exact decoded Number text.
+func (l *Loan) GetManagementFeeOutstanding() (NumberValue, error) {
+	if l == nil || l.ManagementFeeOutstanding == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(l.ManagementFeeOutstanding, "Loan.ManagementFeeOutstanding")
+}
+
+// SetManagementFeeOutstandingValue assigns an exact Number text value.
+func (l *Loan) SetManagementFeeOutstandingValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Loan.ManagementFeeOutstanding")
+	if err != nil {
+		return err
+	}
+	l.SetManagementFeeOutstanding(encoded)
+	return nil
+}
+
+// HasLoanScale reports whether LoanScale is present.
+func (l *Loan) HasLoanScale() bool {
+	return l != nil && l.present&loanBitLoanScale != 0
+}
+
+// ClearLoanScale removes LoanScale from the serialized entry.
+func (l *Loan) ClearLoanScale() {
+	if l == nil {
+		return
+	}
+	l.LoanScale = 0
+	l.present &^= loanBitLoanScale
+	l.dirty = true
+}
+
+// GetLoanScale returns the typed Int32 value.
+func (l *Loan) GetLoanScale() (int32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	if l.LoanScale < -2147483648 || l.LoanScale > 2147483647 {
+		return 0, fmt.Errorf("ledgerfields: Loan.LoanScale: value %d is out of range for Int32", l.LoanScale)
+	}
+	return int32(l.LoanScale), nil
+}
+
+// SetLoanScaleValue assigns a typed Int32 value.
+func (l *Loan) SetLoanScaleValue(value int32) {
+	l.SetLoanScale(value)
+}
+
+// HasFlags reports whether Flags is present.
+func (l *Loan) HasFlags() bool {
+	return l != nil && l.present&loanBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (l *Loan) GetFlags() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (l *Loan) SetFlagsValue(value uint32) {
+	l.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (l *Loan) HasPreviousTxnID() bool {
+	return l != nil && l.present&loanBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (l *Loan) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.PreviousTxnID, "Loan.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (l *Loan) SetPreviousTxnIDValue(value [32]byte) {
+	l.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (l *Loan) HasPreviousTxnLgrSeq() bool {
+	return l != nil && l.present&loanBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (l *Loan) GetPreviousTxnLgrSeq() (uint32, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return l.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (l *Loan) SetPreviousTxnLgrSeqValue(value uint32) {
+	l.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (l *Loan) HasSponsor() bool {
+	return l != nil && l.present&loanBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (l *Loan) ClearSponsor() {
+	if l == nil {
+		return
+	}
+	l.Sponsor = ""
+	l.present &^= loanBitSponsor
+	l.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (l *Loan) GetSponsor() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Sponsor, "Loan.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (l *Loan) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetSponsor(address)
+	return nil
+}
+
 func (l *Loan) validateRequired() error {
 	if l.decoded && !l.dirty {
 		return nil

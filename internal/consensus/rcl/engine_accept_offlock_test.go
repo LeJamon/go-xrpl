@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -8,6 +9,22 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
+
+type cancelingBuildAdaptor struct {
+	*mockAdaptor
+	build func(context.Context, consensus.Ledger, consensus.TxSet, time.Time, bool, [][]byte) (consensus.Ledger, error)
+}
+
+func (a *cancelingBuildAdaptor) BuildLedger(
+	ctx context.Context,
+	parent consensus.Ledger,
+	txSet consensus.TxSet,
+	closeTime time.Time,
+	closeTimeCorrect bool,
+	disputedTxs [][]byte,
+) (consensus.Ledger, error) {
+	return a.build(ctx, parent, txSet, closeTime, closeTimeCorrect, disputedTxs)
+}
 
 // fakeClock is a deterministic, advance-on-demand test clock.
 type fakeClock struct {
@@ -253,6 +270,116 @@ func TestEngine_AcceptLedger_BuildFailureReleasesBuildingSequence(t *testing.T) 
 	}
 	if got := engine.Phase(); got != consensus.PhaseEstablish {
 		t.Fatalf("phase after failed apply = %s, want establish", got)
+	}
+}
+
+func TestEngine_StopCancelsInFlightBuild(t *testing.T) {
+	base := newMockAdaptor()
+	started := make(chan struct{})
+	adaptor := &cancelingBuildAdaptor{
+		mockAdaptor: base,
+		build: func(ctx context.Context, _ consensus.Ledger, _ consensus.TxSet, _ time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: base.lastLCL.ID()}, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	driveToEstablish(t, engine, base)
+
+	acceptDone := make(chan struct{})
+	go func() {
+		engine.mu.Lock()
+		engine.acceptLedger(consensus.ResultSuccess)
+		engine.mu.Unlock()
+		close(acceptDone)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("BuildLedger did not start")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- engine.Stop() }()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not cancel the in-flight BuildLedger")
+	}
+	select {
+	case <-acceptDone:
+	case <-time.After(time.Second):
+		t.Fatal("acceptance owner did not finish after cancellation")
+	}
+	if got := base.lastLCL.Seq(); got != 100 {
+		t.Fatalf("canceled acceptance published ledger seq %d, want 100", got)
+	}
+}
+
+func TestEngine_AcceptLedger_CommitsWhenBuildCancelsLifecycle(t *testing.T) {
+	base := newMockAdaptor()
+	base.standalone = true
+	base.validator = true
+	base.opMode = consensus.OpModeFull
+	base.quorum = 1
+	base.setTrusted([]consensus.NodeID{base.nodeID})
+	ctx, cancel := context.WithCancel(t.Context())
+	adaptor := &cancelingBuildAdaptor{
+		mockAdaptor: base,
+		build: func(ctx context.Context, parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (consensus.Ledger, error) {
+			ledger, err := base.BuildLedger(ctx, parent, txSet, closeTime, closeTimeCorrect, disputedTxs)
+			cancel()
+			return ledger, err
+		},
+	}
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+	subscriber := &testSubscriber{events: make(chan consensus.Event, 8)}
+	engine.Subscribe(subscriber)
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: base.lastLCL.ID()}, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	driveToEstablish(t, engine, base)
+
+	engine.mu.Lock()
+	engine.acceptLedger(consensus.ResultSuccess)
+	engine.mu.Unlock()
+
+	if got := base.lastLCL.Seq(); got != 101 {
+		t.Fatalf("successful build canceled its lifecycle before commit: last closed seq = %d, want 101", got)
+	}
+	if err := engine.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	accepted := 0
+	for {
+		select {
+		case event := <-subscriber.events:
+			if _, ok := event.(*consensus.LedgerAcceptedEvent); ok {
+				accepted++
+			}
+		default:
+			if accepted != 1 {
+				t.Fatalf("ledger accepted notifications = %d, want 1", accepted)
+			}
+			return
+		}
 	}
 }
 

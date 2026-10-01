@@ -6,7 +6,6 @@ package ledger
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -55,29 +54,11 @@ func loadAmendmentsFromData(data []byte) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to decode amendments entry: %w", err)
 	}
 
-	enabledIDs, err := decodeAmendmentIDs(decoded.Amendments)
+	enabledIDs, err := decoded.GetAmendments()
 	if err != nil {
 		return nil, err
 	}
 	return newRulesWithPermanentAmendments(enabledIDs), nil
-}
-
-func decodeAmendmentIDs(values []string) ([][32]byte, error) {
-	ids := make([][32]byte, 0, len(values))
-	for i, value := range values {
-		decoded, err := hex.DecodeString(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode amendment %d: %w", i, err)
-		}
-		if len(decoded) != len([32]byte{}) {
-			return nil, fmt.Errorf("failed to decode amendment %d: decoded length %d, want 32", i, len(decoded))
-		}
-
-		var id [32]byte
-		copy(id[:], decoded)
-		ids = append(ids, id)
-	}
-	return ids, nil
 }
 
 func newRulesWithPermanentAmendments(enabledIDs [][32]byte) *amendment.Rules {

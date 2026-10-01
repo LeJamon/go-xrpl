@@ -134,7 +134,7 @@ func (v *VaultWithdraw) destination(accountID [20]byte) ([20]byte, error) {
 	return state.DecodeAccountID(v.Destination)
 }
 
-func checkVaultShareFrozen(view tx.LedgerView, account [20]byte, vd *vaultData) ter.Result {
+func checkVaultShareFrozen(view tx.ReadOnlyLedgerView, account [20]byte, vd *vaultData) ter.Result {
 	share := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
 	return checkFrozen(view, share, account)
 }
@@ -142,7 +142,7 @@ func checkVaultShareFrozen(view tx.LedgerView, account [20]byte, vd *vaultData) 
 // Preclaim checks the vault exists, the amount denominates the asset or shares,
 // the withdrawal can be delivered to the destination, and nothing is frozen.
 // Reference: rippled VaultWithdraw::preclaim.
-func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(v.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -269,7 +269,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 // equivalent IOU asset amount, so the destination trust-line limit can be
 // enforced. Reference: rippled VaultWithdraw::preclaim sharesToAssetsWithdraw.
 func (v *VaultWithdraw) sharesToAssetAmount(
-	view tx.LedgerView,
+	view tx.ReadOnlyLedgerView,
 	vd *vaultData,
 	accountID [20]byte,
 	rules *amendment.Rules,

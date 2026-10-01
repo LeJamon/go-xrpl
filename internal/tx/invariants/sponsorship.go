@@ -206,11 +206,8 @@ func decodeSponsorshipState(typ entry.Type, data []byte) (sponsorshipState, erro
 			return sponsorshipState{}, err
 		}
 	}
-	toMap, ok := decoded.(interface{ ToMap() map[string]any })
-	if !ok {
-		return sponsorshipState{}, fmt.Errorf("%T has no field map", decoded)
-	}
-	if _, sponsored := toMap.ToMap()["Sponsor"]; !sponsored {
+	sponsorField, ok := decoded.(interface{ HasSponsor() bool })
+	if !ok || !sponsorField.HasSponsor() {
 		return sponsorshipState{}, nil
 	}
 
@@ -246,16 +243,16 @@ func accountRootHasSponsorshipFields(data []byte) (bool, error) {
 	if err := decoded.Decode(data); err != nil {
 		return false, err
 	}
-	fields := decoded.(interface{ ToMap() map[string]any }).ToMap()
-	for _, name := range []string{
-		"SponsoredOwnerCount",
-		"SponsoringOwnerCount",
-		"SponsoringAccountCount",
-		"Sponsor",
-	} {
-		if _, present := fields[name]; present {
-			return true, nil
-		}
+	if sponsorship, ok := decoded.(interface {
+		HasSponsoredOwnerCount() bool
+		HasSponsoringOwnerCount() bool
+		HasSponsoringAccountCount() bool
+		HasSponsor() bool
+	}); ok {
+		return sponsorship.HasSponsoredOwnerCount() ||
+			sponsorship.HasSponsoringOwnerCount() ||
+			sponsorship.HasSponsoringAccountCount() ||
+			sponsorship.HasSponsor(), nil
 	}
 	return false, nil
 }

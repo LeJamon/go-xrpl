@@ -117,7 +117,7 @@ func TestSubmitTransactionMissingAccountPrecedesBaseFeeFailure(t *testing.T) {
 
 type submitStateFeeFailure struct{ tx.Transaction }
 
-func (submitStateFeeFailure) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) (uint64, error) {
+func (submitStateFeeFailure) CalculateBaseFee(tx.ReadOnlyLedgerView, tx.EngineConfig) (uint64, error) {
 	panic("controlled fee failure")
 }
 

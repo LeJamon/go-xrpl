@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func (t *observingAutofillRulesTx) Flatten() (map[string]any, error) { return ni
 func (t *observingAutofillRulesTx) GetRawBytes() []byte              { return nil }
 func (t *observingAutofillRulesTx) SetRawBytes([]byte)               {}
 func (t *observingAutofillRulesTx) RequiredAmendments() [][32]byte   { return nil }
-func (t *observingAutofillRulesTx) CalculateBaseFee(_ tx.LedgerView, cfg tx.EngineConfig) (uint64, error) {
+func (t *observingAutofillRulesTx) CalculateBaseFee(_ tx.ReadOnlyLedgerView, cfg tx.EngineConfig) (uint64, error) {
 	t.rules = cfg.Rules
 	return cfg.BaseFee, nil
 }
@@ -70,7 +71,7 @@ func TestOpenLedgerAcceptanceUsesLastValidatedRules(t *testing.T) {
 
 	svc.openLedgerMu.Lock()
 	svc.mu.Lock()
-	accept := svc.openLedgerAcceptanceLocked(nil, nil)
+	accept := svc.openLedgerAcceptanceLocked(context.Background(), nil, nil)
 	svc.mu.Unlock()
 	err = accept(localClosed, nil, false, nil)
 	svc.openLedgerMu.Unlock()

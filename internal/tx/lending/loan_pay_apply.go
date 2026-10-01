@@ -69,7 +69,7 @@ func accountToLoan(loan *loanData, acc *lmath.LoanAccount) {
 // capped: the payment handler never processes more than
 // loanMaximumPaymentsPerTransaction payments, so the fee never exceeds
 // loanMaximumPaymentsPerTransaction / loanPaymentsPerFeeIncrement increments.
-func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
+func (l *LoanPay) CalculateBaseFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	normal := sign.CalculateDefaultBaseFee(l, config)
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && l.Amount.Signum() <= 0 {
@@ -143,7 +143,7 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (
 	return uint64(feeIncrements) * normal, nil
 }
 
-func (l *LoanPay) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (l *LoanPay) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {

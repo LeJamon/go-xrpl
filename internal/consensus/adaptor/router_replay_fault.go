@@ -4,29 +4,29 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
 
-func (r *Router) replayFaultBlocked() bool {
-	return r.adaptor != nil && r.adaptor.LedgerService() != nil && r.adaptor.LedgerService().ReplayBlocked()
+func (c *catchupReplayCoordinator) replayFaultBlocked() bool {
+	return c.adaptor != nil && c.adaptor.LedgerService() != nil && c.adaptor.LedgerService().ReplayBlocked()
 }
 
-func (r *Router) replayTargetAuthenticated(h header.LedgerHeader) bool {
-	if _, result := r.adaptor.recheckFullyValidated(h.LedgerIndex, h.Hash); result == validationRecheckAccepted {
+func (c *catchupReplayCoordinator) replayTargetAuthenticated(h header.LedgerHeader) bool {
+	if _, result := c.adaptor.recheckFullyValidated(h.LedgerIndex, h.Hash); result == validationRecheckAccepted {
 		return true
 	}
-	r.acquisitionMu.Lock()
-	targetSeq, targetHash := r.standardReplay.targetSeq, r.standardReplay.targetHash
-	r.acquisitionMu.Unlock()
+	c.acquisitionMu.Lock()
+	targetSeq, targetHash := c.standardReplay.targetSeq, c.standardReplay.targetHash
+	c.acquisitionMu.Unlock()
 	if targetSeq <= h.LedgerIndex {
-		targetSeq, targetHash, _ = r.bestCatchupTarget()
+		targetSeq, targetHash, _ = c.bestCatchupTarget()
 	}
 	if targetSeq <= h.LedgerIndex {
 		return false
 	}
-	if _, result := r.adaptor.recheckFullyValidated(targetSeq, targetHash); result != validationRecheckAccepted {
+	if _, result := c.adaptor.recheckFullyValidated(targetSeq, targetHash); result != validationRecheckAccepted {
 		return false
 	}
 	hash := h.Hash
 	for seq := h.LedgerIndex + 1; seq != 0 && seq <= targetSeq; seq++ {
-		entry, ok := r.lookupSeqHash(seq)
+		entry, ok := c.lookupSeqHash(seq)
 		if !ok || !entry.haveParent || entry.parentHash != hash || entry.parentFrom == seqHashSourcePeer {
 			return false
 		}

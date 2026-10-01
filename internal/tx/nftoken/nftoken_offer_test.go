@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -34,7 +35,7 @@ func insertSellOffer(t *testing.T, view *mockView, owner [20]byte, tokenID [32]b
 
 	data, err := serializeNFTokenOfferRaw(
 		owner, tokenID,
-		"0", NFTokenCreateOfferFlagSellNFToken,
+		tx.NewXRPAmount(0).LedgerValue(), NFTokenCreateOfferFlagSellNFToken,
 		ownerRes.Page, sellRes.Page,
 		"", nil,
 	)

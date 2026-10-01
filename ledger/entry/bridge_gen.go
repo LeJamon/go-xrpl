@@ -141,6 +141,270 @@ func (b *Bridge) SetSponsor(value string) {
 	b.present |= bridgeBitSponsor
 }
 
+// HasAccount reports whether Account is present.
+func (b *Bridge) HasAccount() bool {
+	return b != nil && b.present&bridgeBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (b *Bridge) GetAccount() ([20]byte, error) {
+	if b == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(b.Account, "Bridge.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (b *Bridge) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	b.SetAccount(address)
+	return nil
+}
+
+// HasSignatureReward reports whether SignatureReward is present.
+func (b *Bridge) HasSignatureReward() bool {
+	return b != nil && b.present&bridgeBitSignatureReward != 0
+}
+
+// GetSignatureReward returns the typed Amount value.
+func (b *Bridge) GetSignatureReward() (AmountValue, error) {
+	if b == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(b.SignatureReward, "Bridge.SignatureReward", false)
+}
+
+// SetSignatureRewardValue assigns a typed Amount value.
+func (b *Bridge) SetSignatureRewardValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Bridge.SignatureReward", false)
+	if err != nil {
+		return err
+	}
+	b.SetSignatureReward(encoded)
+	return nil
+}
+
+// HasMinAccountCreateAmount reports whether MinAccountCreateAmount is present.
+func (b *Bridge) HasMinAccountCreateAmount() bool {
+	return b != nil && b.present&bridgeBitMinAccountCreateAmount != 0
+}
+
+// ClearMinAccountCreateAmount removes MinAccountCreateAmount from the serialized entry.
+func (b *Bridge) ClearMinAccountCreateAmount() {
+	if b == nil {
+		return
+	}
+	b.MinAccountCreateAmount = nil
+	b.present &^= bridgeBitMinAccountCreateAmount
+	b.dirty = true
+}
+
+// GetMinAccountCreateAmount returns the typed Amount value.
+func (b *Bridge) GetMinAccountCreateAmount() (AmountValue, error) {
+	if b == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(b.MinAccountCreateAmount, "Bridge.MinAccountCreateAmount", false)
+}
+
+// SetMinAccountCreateAmountValue assigns a typed Amount value.
+func (b *Bridge) SetMinAccountCreateAmountValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Bridge.MinAccountCreateAmount", false)
+	if err != nil {
+		return err
+	}
+	b.SetMinAccountCreateAmount(encoded)
+	return nil
+}
+
+// HasXChainBridge reports whether XChainBridge is present.
+func (b *Bridge) HasXChainBridge() bool {
+	return b != nil && b.present&bridgeBitXChainBridge != 0
+}
+
+// GetXChainBridge returns the typed XChainBridge value.
+func (b *Bridge) GetXChainBridge() (XChainBridgeValue, error) {
+	if b == nil || b.XChainBridge == nil {
+		return XChainBridgeValue{}, nil
+	}
+	return xchainBridgeValueFromAny(b.XChainBridge, "Bridge.XChainBridge")
+}
+
+// SetXChainBridgeValue assigns a typed XChainBridge value.
+func (b *Bridge) SetXChainBridgeValue(value XChainBridgeValue) error {
+	encoded, err := xchainBridgeValueToAny(value, "Bridge.XChainBridge")
+	if err != nil {
+		return err
+	}
+	b.SetXChainBridge(encoded)
+	return nil
+}
+
+// HasXChainClaimID reports whether XChainClaimID is present.
+func (b *Bridge) HasXChainClaimID() bool {
+	return b != nil && b.present&bridgeBitXChainClaimID != 0
+}
+
+// GetXChainClaimID returns the typed UInt64 value.
+func (b *Bridge) GetXChainClaimID() (uint64, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(b.XChainClaimID, "Bridge.XChainClaimID", false)
+}
+
+// SetXChainClaimIDValue assigns a typed UInt64 value.
+func (b *Bridge) SetXChainClaimIDValue(value uint64) {
+	b.SetXChainClaimID(uint64ValueToString(value, false))
+}
+
+// HasXChainAccountCreateCount reports whether XChainAccountCreateCount is present.
+func (b *Bridge) HasXChainAccountCreateCount() bool {
+	return b != nil && b.present&bridgeBitXChainAccountCreateCount != 0
+}
+
+// GetXChainAccountCreateCount returns the typed UInt64 value.
+func (b *Bridge) GetXChainAccountCreateCount() (uint64, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(b.XChainAccountCreateCount, "Bridge.XChainAccountCreateCount", false)
+}
+
+// SetXChainAccountCreateCountValue assigns a typed UInt64 value.
+func (b *Bridge) SetXChainAccountCreateCountValue(value uint64) {
+	b.SetXChainAccountCreateCount(uint64ValueToString(value, false))
+}
+
+// HasXChainAccountClaimCount reports whether XChainAccountClaimCount is present.
+func (b *Bridge) HasXChainAccountClaimCount() bool {
+	return b != nil && b.present&bridgeBitXChainAccountClaimCount != 0
+}
+
+// GetXChainAccountClaimCount returns the typed UInt64 value.
+func (b *Bridge) GetXChainAccountClaimCount() (uint64, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(b.XChainAccountClaimCount, "Bridge.XChainAccountClaimCount", false)
+}
+
+// SetXChainAccountClaimCountValue assigns a typed UInt64 value.
+func (b *Bridge) SetXChainAccountClaimCountValue(value uint64) {
+	b.SetXChainAccountClaimCount(uint64ValueToString(value, false))
+}
+
+// HasOwnerNode reports whether OwnerNode is present.
+func (b *Bridge) HasOwnerNode() bool {
+	return b != nil && b.present&bridgeBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (b *Bridge) GetOwnerNode() (uint64, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(b.OwnerNode, "Bridge.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (b *Bridge) SetOwnerNodeValue(value uint64) {
+	b.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags is present.
+func (b *Bridge) HasFlags() bool {
+	return b != nil && b.present&bridgeBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (b *Bridge) GetFlags() (uint32, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return b.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (b *Bridge) SetFlagsValue(value uint32) {
+	b.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (b *Bridge) HasPreviousTxnID() bool {
+	return b != nil && b.present&bridgeBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (b *Bridge) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if b == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(b.PreviousTxnID, "Bridge.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (b *Bridge) SetPreviousTxnIDValue(value [32]byte) {
+	b.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (b *Bridge) HasPreviousTxnLgrSeq() bool {
+	return b != nil && b.present&bridgeBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (b *Bridge) GetPreviousTxnLgrSeq() (uint32, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return b.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (b *Bridge) SetPreviousTxnLgrSeqValue(value uint32) {
+	b.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (b *Bridge) HasSponsor() bool {
+	return b != nil && b.present&bridgeBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (b *Bridge) ClearSponsor() {
+	if b == nil {
+		return
+	}
+	b.Sponsor = ""
+	b.present &^= bridgeBitSponsor
+	b.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (b *Bridge) GetSponsor() ([20]byte, error) {
+	if b == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(b.Sponsor, "Bridge.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (b *Bridge) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	b.SetSponsor(address)
+	return nil
+}
+
 func (b *Bridge) validateRequired() error {
 	if b.decoded && !b.dirty {
 		return nil

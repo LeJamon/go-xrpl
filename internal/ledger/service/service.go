@@ -354,11 +354,14 @@ const (
 var errServiceNotRunning = errors.New("ledger service is not running")
 
 func (s *Service) lockOpenLedgerIfRunning(role openLedgerRole) error {
-	_, err := s.lockOpenLedgerIfRunningTimed(role)
+	_, err := s.lockOpenLedgerIfRunningTimed(context.Background(), role)
 	return err
 }
 
-func (s *Service) lockOpenLedgerIfRunningTimed(role openLedgerRole) (openLedgerGateWait, error) {
+func (s *Service) lockOpenLedgerIfRunningTimed(ctx context.Context, role openLedgerRole) (openLedgerGateWait, error) {
+	if err := ctx.Err(); err != nil {
+		return openLedgerGateWait{}, err
+	}
 	lifecycleStarted := time.Now()
 	s.lifecycleMu.Lock()
 	if s.lifecycleState != serviceRunning {
@@ -368,7 +371,10 @@ func (s *Service) lockOpenLedgerIfRunningTimed(role openLedgerRole) (openLedgerG
 	lifecycleWait := time.Since(lifecycleStarted)
 	s.lifecycleMu.Unlock()
 
-	wait := s.openLedgerMu.LockRole(role)
+	wait, err := s.openLedgerMu.LockRoleContext(ctx, role)
+	if err != nil {
+		return wait, err
+	}
 	lifecycleStarted = time.Now()
 	s.lifecycleMu.Lock()
 	wait.LifecycleWait = lifecycleWait + time.Since(lifecycleStarted)
@@ -377,6 +383,10 @@ func (s *Service) lockOpenLedgerIfRunningTimed(role openLedgerRole) (openLedgerG
 	if !running {
 		s.openLedgerMu.Unlock()
 		return wait, errServiceNotRunning
+	}
+	if err := ctx.Err(); err != nil {
+		s.openLedgerMu.Unlock()
+		return wait, err
 	}
 	return wait, nil
 }
@@ -869,16 +879,16 @@ func (s *Service) tickLoadFeeLocked() {
 
 // Caller must hold openLedgerMu and s.mu.
 func (s *Service) acceptPreferredOpenLedgerLocked(closed *ledger.Ledger) error {
-	return s.openLedgerAcceptanceForValidatedLocked(nil, nil, nil, true)(closed, nil, false, nil)
+	return s.openLedgerAcceptanceForValidatedLocked(context.Background(), nil, nil, nil, true)(closed, nil, false, nil)
 }
 
 // Standalone validates the closed ledger before preparing its successor, but
 // publishes the validated frontier only after preparation succeeds.
-func (s *Service) acceptStandaloneOpenLedgerLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx) error {
+func (s *Service) acceptStandaloneOpenLedgerLocked(ctx context.Context, closed *ledger.Ledger, retriableTxs []openledger.PendingTx) error {
 	pending := s.pendingTxs
 	if s.openLedgerView != nil {
 		var err error
-		pending, err = s.openLedgerView.CurrentTransactions()
+		pending, err = s.openLedgerView.CurrentTransactions(ctx)
 		if err != nil {
 			return fmt.Errorf("collect open transactions for retry order: %w", err)
 		}
@@ -893,16 +903,17 @@ func (s *Service) acceptStandaloneOpenLedgerLocked(closed *ledger.Ledger, retria
 	if err != nil {
 		return err
 	}
-	return s.openLedgerAcceptanceForValidatedLocked(nil, &salt, closed, false)(closed, retriableTxs, false, nil)
+	return s.openLedgerAcceptanceForValidatedLocked(ctx, nil, &salt, closed, false)(closed, retriableTxs, false, nil)
 }
 
 // openLedgerAcceptanceLocked captures service configuration under mu. The returned
 // operation requires openLedgerMu, but runs storage reads and replay without mu.
-func (s *Service) openLedgerAcceptanceLocked(relayDuration *time.Duration, retrySalt *[32]byte) func(*ledger.Ledger, []openledger.PendingTx, bool, func(func())) error {
-	return s.openLedgerAcceptanceForValidatedLocked(relayDuration, retrySalt, nil, false)
+func (s *Service) openLedgerAcceptanceLocked(ctx context.Context, relayDuration *time.Duration, retrySalt *[32]byte) func(*ledger.Ledger, []openledger.PendingTx, bool, func(func())) error {
+	return s.openLedgerAcceptanceForValidatedLocked(ctx, relayDuration, retrySalt, nil, false)
 }
 
 func (s *Service) openLedgerAcceptanceForValidatedLocked(
+	ctx context.Context,
 	relayDuration *time.Duration,
 	retrySalt *[32]byte,
 	validatedOverride *ledger.Ledger,
@@ -979,13 +990,17 @@ func (s *Service) openLedgerAcceptanceForValidatedLocked(
 			}
 		}
 		if view == nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			processClosed()
 			if publication != nil {
 				publication(func() {})
 			}
 			return nil
 		}
-		if err := view.AcceptWithPrecommit(
+		if err := view.AcceptWithPrecommitContext(
+			ctx,
 			closed,
 			locals,
 			anyDisputes,

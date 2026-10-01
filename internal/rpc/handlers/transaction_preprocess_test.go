@@ -26,6 +26,57 @@ func signerValue(account string) map[string]any {
 	}}
 }
 
+func TestPreprocessTransactionRequiredFieldOrder(t *testing.T) {
+	for _, mode := range []transactionPreprocessMode{
+		transactionPreprocessSign,
+		transactionPreprocessSignFor,
+		transactionPreprocessSubmitMultisigned,
+		transactionPreprocessSimulate,
+	} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			fields := map[string]any{"TransactionType": "Payment"}
+			fields["Paths"] = []any{}
+			for _, field := range []struct {
+				name  string
+				value any
+			}{
+				{"Destination", loadAdmissionSigner},
+				{"Amount", "1"},
+				{"Account", loadAdmissionAccount},
+				{"Sequence", 1},
+				{"Fee", "10"},
+				{"SigningPubKey", ""},
+			} {
+				if field.name == "Account" {
+					_, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: mode})
+					want := "Field 'Paths' may not be explicitly set to default."
+					wantError := rpcerrors.RpcErrorInvalidParams(want)
+					if mode == transactionPreprocessSimulate {
+						wantError = rpcerrors.RpcErrorInvalidTransaction(want)
+					}
+					if !reflect.DeepEqual(rpcErr, wantError) {
+						t.Fatalf("error = %#v, want %#v", rpcErr, wantError)
+					}
+					delete(fields, "Paths")
+				}
+				_, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: mode})
+				want := "Field '" + field.name + "' is required but missing."
+				wantError := rpcerrors.RpcErrorInvalidParams(want)
+				if mode == transactionPreprocessSimulate {
+					wantError = rpcerrors.RpcErrorInvalidTransaction(want)
+				}
+				if !reflect.DeepEqual(rpcErr, wantError) {
+					t.Fatalf("error = %#v, want %#v", rpcErr, wantError)
+				}
+				fields[field.name] = field.value
+			}
+			if _, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: mode}); rpcErr != nil {
+				t.Fatalf("complete transaction: %v", rpcErr)
+			}
+		})
+	}
+}
+
 func TestNormalizeSignersStrictAndLossless(t *testing.T) {
 	first := signerValue(loadAdmissionSigner)
 	second := signerValue(loadAdmissionSigningAccount)

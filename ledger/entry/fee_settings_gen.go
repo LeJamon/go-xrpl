@@ -132,6 +132,327 @@ func (f *FeeSettings) SetSponsor(value string) {
 	f.present |= feesettingsBitSponsor
 }
 
+// HasBaseFee reports whether BaseFee is present.
+func (f *FeeSettings) HasBaseFee() bool {
+	return f != nil && f.present&feesettingsBitBaseFee != 0
+}
+
+// ClearBaseFee removes BaseFee from the serialized entry.
+func (f *FeeSettings) ClearBaseFee() {
+	if f == nil {
+		return
+	}
+	f.BaseFee = ""
+	f.present &^= feesettingsBitBaseFee
+	f.dirty = true
+}
+
+// GetBaseFee returns the typed UInt64 value.
+func (f *FeeSettings) GetBaseFee() (uint64, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(f.BaseFee, "FeeSettings.BaseFee", false)
+}
+
+// SetBaseFeeValue assigns a typed UInt64 value.
+func (f *FeeSettings) SetBaseFeeValue(value uint64) {
+	f.SetBaseFee(uint64ValueToString(value, false))
+}
+
+// HasReferenceFeeUnits reports whether ReferenceFeeUnits is present.
+func (f *FeeSettings) HasReferenceFeeUnits() bool {
+	return f != nil && f.present&feesettingsBitReferenceFeeUnits != 0
+}
+
+// ClearReferenceFeeUnits removes ReferenceFeeUnits from the serialized entry.
+func (f *FeeSettings) ClearReferenceFeeUnits() {
+	if f == nil {
+		return
+	}
+	f.ReferenceFeeUnits = 0
+	f.present &^= feesettingsBitReferenceFeeUnits
+	f.dirty = true
+}
+
+// GetReferenceFeeUnits returns the typed UInt32 value.
+func (f *FeeSettings) GetReferenceFeeUnits() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.ReferenceFeeUnits, nil
+}
+
+// SetReferenceFeeUnitsValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetReferenceFeeUnitsValue(value uint32) {
+	f.SetReferenceFeeUnits(value)
+}
+
+// HasReserveBase reports whether ReserveBase is present.
+func (f *FeeSettings) HasReserveBase() bool {
+	return f != nil && f.present&feesettingsBitReserveBase != 0
+}
+
+// ClearReserveBase removes ReserveBase from the serialized entry.
+func (f *FeeSettings) ClearReserveBase() {
+	if f == nil {
+		return
+	}
+	f.ReserveBase = 0
+	f.present &^= feesettingsBitReserveBase
+	f.dirty = true
+}
+
+// GetReserveBase returns the typed UInt32 value.
+func (f *FeeSettings) GetReserveBase() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.ReserveBase, nil
+}
+
+// SetReserveBaseValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetReserveBaseValue(value uint32) {
+	f.SetReserveBase(value)
+}
+
+// HasReserveIncrement reports whether ReserveIncrement is present.
+func (f *FeeSettings) HasReserveIncrement() bool {
+	return f != nil && f.present&feesettingsBitReserveIncrement != 0
+}
+
+// ClearReserveIncrement removes ReserveIncrement from the serialized entry.
+func (f *FeeSettings) ClearReserveIncrement() {
+	if f == nil {
+		return
+	}
+	f.ReserveIncrement = 0
+	f.present &^= feesettingsBitReserveIncrement
+	f.dirty = true
+}
+
+// GetReserveIncrement returns the typed UInt32 value.
+func (f *FeeSettings) GetReserveIncrement() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.ReserveIncrement, nil
+}
+
+// SetReserveIncrementValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetReserveIncrementValue(value uint32) {
+	f.SetReserveIncrement(value)
+}
+
+// HasBaseFeeDrops reports whether BaseFeeDrops is present.
+func (f *FeeSettings) HasBaseFeeDrops() bool {
+	return f != nil && f.present&feesettingsBitBaseFeeDrops != 0
+}
+
+// ClearBaseFeeDrops removes BaseFeeDrops from the serialized entry.
+func (f *FeeSettings) ClearBaseFeeDrops() {
+	if f == nil {
+		return
+	}
+	f.BaseFeeDrops = nil
+	f.present &^= feesettingsBitBaseFeeDrops
+	f.dirty = true
+}
+
+// GetBaseFeeDrops returns the typed Amount value.
+func (f *FeeSettings) GetBaseFeeDrops() (AmountValue, error) {
+	if f == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(f.BaseFeeDrops, "FeeSettings.BaseFeeDrops", false)
+}
+
+// SetBaseFeeDropsValue assigns a typed Amount value.
+func (f *FeeSettings) SetBaseFeeDropsValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "FeeSettings.BaseFeeDrops", false)
+	if err != nil {
+		return err
+	}
+	f.SetBaseFeeDrops(encoded)
+	return nil
+}
+
+// HasReserveBaseDrops reports whether ReserveBaseDrops is present.
+func (f *FeeSettings) HasReserveBaseDrops() bool {
+	return f != nil && f.present&feesettingsBitReserveBaseDrops != 0
+}
+
+// ClearReserveBaseDrops removes ReserveBaseDrops from the serialized entry.
+func (f *FeeSettings) ClearReserveBaseDrops() {
+	if f == nil {
+		return
+	}
+	f.ReserveBaseDrops = nil
+	f.present &^= feesettingsBitReserveBaseDrops
+	f.dirty = true
+}
+
+// GetReserveBaseDrops returns the typed Amount value.
+func (f *FeeSettings) GetReserveBaseDrops() (AmountValue, error) {
+	if f == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(f.ReserveBaseDrops, "FeeSettings.ReserveBaseDrops", false)
+}
+
+// SetReserveBaseDropsValue assigns a typed Amount value.
+func (f *FeeSettings) SetReserveBaseDropsValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "FeeSettings.ReserveBaseDrops", false)
+	if err != nil {
+		return err
+	}
+	f.SetReserveBaseDrops(encoded)
+	return nil
+}
+
+// HasReserveIncrementDrops reports whether ReserveIncrementDrops is present.
+func (f *FeeSettings) HasReserveIncrementDrops() bool {
+	return f != nil && f.present&feesettingsBitReserveIncrementDrops != 0
+}
+
+// ClearReserveIncrementDrops removes ReserveIncrementDrops from the serialized entry.
+func (f *FeeSettings) ClearReserveIncrementDrops() {
+	if f == nil {
+		return
+	}
+	f.ReserveIncrementDrops = nil
+	f.present &^= feesettingsBitReserveIncrementDrops
+	f.dirty = true
+}
+
+// GetReserveIncrementDrops returns the typed Amount value.
+func (f *FeeSettings) GetReserveIncrementDrops() (AmountValue, error) {
+	if f == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(f.ReserveIncrementDrops, "FeeSettings.ReserveIncrementDrops", false)
+}
+
+// SetReserveIncrementDropsValue assigns a typed Amount value.
+func (f *FeeSettings) SetReserveIncrementDropsValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "FeeSettings.ReserveIncrementDrops", false)
+	if err != nil {
+		return err
+	}
+	f.SetReserveIncrementDrops(encoded)
+	return nil
+}
+
+// HasFlags reports whether Flags is present.
+func (f *FeeSettings) HasFlags() bool {
+	return f != nil && f.present&feesettingsBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (f *FeeSettings) GetFlags() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetFlagsValue(value uint32) {
+	f.SetFlags(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID is present.
+func (f *FeeSettings) HasPreviousTxnID() bool {
+	return f != nil && f.present&feesettingsBitPreviousTxnID != 0
+}
+
+// ClearPreviousTxnID removes PreviousTxnID from the serialized entry.
+func (f *FeeSettings) ClearPreviousTxnID() {
+	if f == nil {
+		return
+	}
+	f.PreviousTxnID = ""
+	f.present &^= feesettingsBitPreviousTxnID
+	f.dirty = true
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (f *FeeSettings) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if f == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(f.PreviousTxnID, "FeeSettings.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (f *FeeSettings) SetPreviousTxnIDValue(value [32]byte) {
+	f.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
+func (f *FeeSettings) HasPreviousTxnLgrSeq() bool {
+	return f != nil && f.present&feesettingsBitPreviousTxnLgrSeq != 0
+}
+
+// ClearPreviousTxnLgrSeq removes PreviousTxnLgrSeq from the serialized entry.
+func (f *FeeSettings) ClearPreviousTxnLgrSeq() {
+	if f == nil {
+		return
+	}
+	f.PreviousTxnLgrSeq = 0
+	f.present &^= feesettingsBitPreviousTxnLgrSeq
+	f.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (f *FeeSettings) GetPreviousTxnLgrSeq() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetPreviousTxnLgrSeqValue(value uint32) {
+	f.SetPreviousTxnLgrSeq(value)
+}
+
+// HasSponsor reports whether Sponsor is present.
+func (f *FeeSettings) HasSponsor() bool {
+	return f != nil && f.present&feesettingsBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (f *FeeSettings) ClearSponsor() {
+	if f == nil {
+		return
+	}
+	f.Sponsor = ""
+	f.present &^= feesettingsBitSponsor
+	f.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (f *FeeSettings) GetSponsor() ([20]byte, error) {
+	if f == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(f.Sponsor, "FeeSettings.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (f *FeeSettings) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	f.SetSponsor(address)
+	return nil
+}
+
 func (f *FeeSettings) validateRequired() error {
 	if f.decoded && !f.dirty {
 		return nil

@@ -88,7 +88,7 @@ func (v *VaultDeposit) vaultIDBytes() ([32]byte, bool) {
 // Preclaim checks the vault exists, the deposited asset matches, the depositor
 // is authorized (private vaults), and holds enough of the asset.
 // Reference: rippled VaultDeposit::preclaim.
-func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (v *VaultDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(v.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT

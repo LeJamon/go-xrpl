@@ -1394,6 +1394,7 @@ func encodeBookDir(t *testing.T) []byte {
 		"LedgerEntryType":   "DirectoryNode",
 		"Flags":             uint32(0),
 		"RootIndex":         "0000000000000000000000000000000000000000000000000000000000000000",
+		"Indexes":           []string{},
 		"TakerPaysCurrency": "0000000000000000000000000000000000000000",
 		"TakerPaysIssuer":   "0000000000000000000000000000000000000000",
 		"TakerGetsCurrency": "0000000000000000000000000000000000000000",
@@ -1415,6 +1416,7 @@ func encodeOwnerDir(t *testing.T) []byte {
 		"LedgerEntryType": "DirectoryNode",
 		"Flags":           uint32(0),
 		"RootIndex":       "0000000000000000000000000000000000000000000000000000000000000000",
+		"Indexes":         []string{},
 		"Owner":           owner,
 	})
 	if err != nil {

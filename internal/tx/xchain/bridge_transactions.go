@@ -2,9 +2,7 @@ package xchain
 
 import (
 	"errors"
-	"strconv"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -19,7 +17,7 @@ func bridgeOwnerChain(account string, bridge XChainBridge) chainType {
 	return issuingChain
 }
 
-func (x *XChainCreateBridge) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (x *XChainCreateBridge) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	for _, chain := range []chainType{issuingChain, lockingChain} {
 		bridgeKey, err := bridgeKeylet(x.XChainBridge, chain)
 		if err != nil {
@@ -91,16 +89,32 @@ func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	bridge := &entry.Bridge{}
-	bridge.SetAccount(x.Account)
-	bridge.SetSignatureReward(mustAmountAny(x.SignatureReward))
-	if x.MinAccountCreateAmount != nil {
-		bridge.SetMinAccountCreateAmount(mustAmountAny(*x.MinAccountCreateAmount))
+	accountID, err := state.DecodeAccountID(x.Account)
+	if err != nil {
+		return ter.TecINTERNAL
 	}
-	bridge.SetXChainBridge(bridgeMap(x.XChainBridge))
-	bridge.SetXChainClaimID("0")
-	bridge.SetXChainAccountCreateCount("0")
-	bridge.SetXChainAccountClaimCount("0")
-	bridge.SetOwnerNode(strconv.FormatUint(dirResult.Page, 16))
+	if err := bridge.SetAccountValue(accountID); err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := bridge.SetSignatureRewardValue(ledgerAmountValue(x.SignatureReward)); err != nil {
+		return ter.TecINTERNAL
+	}
+	if x.MinAccountCreateAmount != nil {
+		if err := bridge.SetMinAccountCreateAmountValue(ledgerAmountValue(*x.MinAccountCreateAmount)); err != nil {
+			return ter.TecINTERNAL
+		}
+	}
+	bridgeSpecValue, err := bridgeValue(x.XChainBridge)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := bridge.SetXChainBridgeValue(bridgeSpecValue); err != nil {
+		return ter.TecINTERNAL
+	}
+	bridge.SetXChainClaimIDValue(0)
+	bridge.SetXChainAccountCreateCountValue(0)
+	bridge.SetXChainAccountClaimCountValue(0)
+	bridge.SetOwnerNodeValue(dirResult.Page)
 	bridge.SetFlags(0)
 
 	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
@@ -114,7 +128,7 @@ func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (x *XChainModifyBridge) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainModifyBridge) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	chain := bridgeOwnerChain(x.Account, x.XChainBridge)
 	bridgeKey, err := bridgeKeylet(x.XChainBridge, chain)
 	if err != nil {
@@ -140,20 +154,24 @@ func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil || data == nil {
 		return ter.TecINTERNAL
 	}
-	fields, err := binarycodec.DecodeBytes(data)
-	if err != nil {
+	bridge := &entry.Bridge{}
+	if err := bridge.Decode(data); err != nil {
 		return ctx.Internal("XChainModifyBridge.decode", err)
 	}
 	if x.SignatureReward != nil {
-		fields["SignatureReward"] = mustAmountAny(*x.SignatureReward)
+		if err := bridge.SetSignatureRewardValue(ledgerAmountValue(*x.SignatureReward)); err != nil {
+			return ctx.Internal("XChainModifyBridge.signatureReward", err)
+		}
 	}
 	if x.MinAccountCreateAmount != nil {
-		fields["MinAccountCreateAmount"] = mustAmountAny(*x.MinAccountCreateAmount)
+		if err := bridge.SetMinAccountCreateAmountValue(ledgerAmountValue(*x.MinAccountCreateAmount)); err != nil {
+			return ctx.Internal("XChainModifyBridge.minAccountCreateAmount", err)
+		}
 	}
 	if x.GetFlags()&tfClearAccountCreateAmount != 0 {
-		delete(fields, "MinAccountCreateAmount")
+		bridge.ClearMinAccountCreateAmount()
 	}
-	data, err = binarycodec.EncodeBytes(fields)
+	data, err = bridge.Encode()
 	if err != nil {
 		return ctx.Internal("XChainModifyBridge.encode", err)
 	}
@@ -163,7 +181,7 @@ func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (x *XChainCreateClaimID) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+func (x *XChainCreateClaimID) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -171,7 +189,11 @@ func (x *XChainCreateClaimID) Preclaim(view tx.LedgerView, config tx.EngineConfi
 	if bridge == nil {
 		return ter.TecNO_ENTRY
 	}
-	reward, err := amountFromAny(bridge.SignatureReward)
+	rewardValue, err := bridge.GetSignatureReward()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	reward, err := state.AmountFromLedgerValue(rewardValue)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
@@ -204,7 +226,7 @@ func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil || bridge == nil {
 		return ter.TecINTERNAL
 	}
-	current, err := parseHexUint(bridge.XChainClaimID)
+	current, err := bridge.GetXChainClaimID()
 	if err != nil {
 		return ter.TecINTERNAL
 	}
@@ -231,20 +253,42 @@ func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ctx.Internal("XChainCreateClaimID.dirInsert", err)
 	}
 	claim := &entry.XChainOwnedClaimID{}
-	claim.SetAccount(x.Account)
-	claim.SetXChainBridge(bridgeMap(x.XChainBridge))
-	claim.SetXChainClaimID(strconv.FormatUint(claimID, 16))
-	claim.SetOtherChainSource(x.OtherChainSource)
-	claim.SetXChainClaimAttestations([]any{})
-	claim.SetSignatureReward(mustAmountAny(x.SignatureReward))
-	claim.SetOwnerNode(strconv.FormatUint(dirResult.Page, 16))
+	accountID, err := state.DecodeAccountID(x.Account)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := claim.SetAccountValue(accountID); err != nil {
+		return ter.TecINTERNAL
+	}
+	bridgeSpecValue, err := bridgeValue(x.XChainBridge)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := claim.SetXChainBridgeValue(bridgeSpecValue); err != nil {
+		return ter.TecINTERNAL
+	}
+	claim.SetXChainClaimIDValue(claimID)
+	otherChainSource, err := state.DecodeAccountID(x.OtherChainSource)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := claim.SetOtherChainSourceValue(otherChainSource); err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := claim.SetXChainClaimAttestationsValue([]entry.XChainClaimProofSigValue{}); err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := claim.SetSignatureRewardValue(ledgerAmountValue(x.SignatureReward)); err != nil {
+		return ter.TecINTERNAL
+	}
+	claim.SetOwnerNodeValue(dirResult.Page)
 	claim.SetFlags(0)
 	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	claimData, result := encodeEntry(claim)
 	if result != ter.TesSUCCESS {
 		return result
 	}
-	bridge.SetXChainClaimID(strconv.FormatUint(claimID, 16))
+	bridge.SetXChainClaimIDValue(claimID)
 	bridgeData, result := encodeEntry(bridge)
 	if result != ter.TesSUCCESS {
 		return result
@@ -258,7 +302,7 @@ func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func (x *XChainCommit) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainCommit) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -266,13 +310,17 @@ func (x *XChainCommit) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Resul
 	if bridge == nil {
 		return ter.TecNO_ENTRY
 	}
-	if bridge.Account == x.Account {
+	bridgeAccountAddress, err := bridgeAccount(bridge)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if bridgeAccountAddress == x.Account {
 		return ter.TecXCHAIN_SELF_COMMIT
 	}
 	chain := lockingChain
-	if bridge.Account == x.XChainBridge.IssuingChainDoor {
+	if bridgeAccountAddress == x.XChainBridge.IssuingChainDoor {
 		chain = issuingChain
-	} else if bridge.Account != x.XChainBridge.LockingChainDoor {
+	} else if bridgeAccountAddress != x.XChainBridge.LockingChainDoor {
 		return ter.TecINTERNAL
 	}
 	if !assetEqual(assetOf(x.Amount), x.XChainBridge.issue(chain)) {
@@ -286,10 +334,14 @@ func (x *XChainCommit) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil || bridge == nil {
 		return ter.TecINTERNAL
 	}
-	return transferFunds(ctx, x.Account, bridge.Account, nil, "", x.Amount, false, false, true)
+	bridgeAccountAddress, err := bridgeAccount(bridge)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	return transferFunds(ctx, x.Account, bridgeAccountAddress, nil, "", x.Amount, false, false, true)
 }
 
-func (x *XChainAccountCreateCommit) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (x *XChainAccountCreateCommit) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) ter.Result {
 	bridge, _, err := readBridge(view, x.XChainBridge)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -297,17 +349,25 @@ func (x *XChainAccountCreateCommit) Preclaim(view tx.LedgerView, _ tx.EngineConf
 	if bridge == nil {
 		return ter.TecNO_ENTRY
 	}
-	reward, err := amountFromAny(bridge.SignatureReward)
+	rewardValue, err := bridge.GetSignatureReward()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	reward, err := state.AmountFromLedgerValue(rewardValue)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
 	if reward.Compare(x.SignatureReward) != 0 {
 		return ter.TecXCHAIN_REWARD_MISMATCH
 	}
-	if bridge.MinAccountCreateAmount == nil {
+	if !bridge.HasMinAccountCreateAmount() {
 		return ter.TecXCHAIN_CREATE_ACCOUNT_DISABLED
 	}
-	minimum, err := amountFromAny(bridge.MinAccountCreateAmount)
+	minimumValue, err := bridge.GetMinAccountCreateAmount()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	minimum, err := state.AmountFromLedgerValue(minimumValue)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
@@ -317,13 +377,17 @@ func (x *XChainAccountCreateCommit) Preclaim(view tx.LedgerView, _ tx.EngineConf
 	if !assetEqual(assetOf(minimum), assetOf(x.Amount)) {
 		return ter.TecXCHAIN_BAD_TRANSFER_ISSUE
 	}
-	if bridge.Account == x.Account {
+	bridgeAccountAddress, err := bridgeAccount(bridge)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if bridgeAccountAddress == x.Account {
 		return ter.TecXCHAIN_SELF_COMMIT
 	}
 	srcChain := lockingChain
-	if bridge.Account == x.XChainBridge.IssuingChainDoor {
+	if bridgeAccountAddress == x.XChainBridge.IssuingChainDoor {
 		srcChain = issuingChain
-	} else if bridge.Account != x.XChainBridge.LockingChainDoor {
+	} else if bridgeAccountAddress != x.XChainBridge.LockingChainDoor {
 		return ter.TecINTERNAL
 	}
 	if !assetEqual(assetOf(x.Amount), x.XChainBridge.issue(srcChain)) {
@@ -344,14 +408,18 @@ func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ter.TecINTERNAL
 	}
-	if result := transferFunds(ctx, x.Account, bridge.Account, nil, "", total, true, false, true); result != ter.TesSUCCESS {
-		return result
-	}
-	count, err := parseHexUint(bridge.XChainAccountCreateCount)
+	bridgeAccountAddress, err := bridgeAccount(bridge)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
-	bridge.SetXChainAccountCreateCount(strconv.FormatUint(count+1, 16))
+	if result := transferFunds(ctx, x.Account, bridgeAccountAddress, nil, "", total, true, false, true); result != ter.TesSUCCESS {
+		return result
+	}
+	count, err := bridge.GetXChainAccountCreateCount()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	bridge.SetXChainAccountCreateCountValue(count + 1)
 	data, result := encodeEntry(bridge)
 	if result != ter.TesSUCCESS {
 		return result

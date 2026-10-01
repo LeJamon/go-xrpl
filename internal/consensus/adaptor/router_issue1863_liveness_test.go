@@ -16,7 +16,7 @@ import (
 func completeIssue1863FullStatePivot(t *testing.T, r *Router, pivot standardReplayTestLink) {
 	t.Helper()
 
-	il := r.fetchTracker.Find(pivot.hash)
+	il := r.catchupReplay.fetchTracker.Find(pivot.hash)
 	require.NotNil(t, il)
 	require.False(t, il.TransactionOnly())
 
@@ -59,7 +59,7 @@ func completeIssue1863FullStatePivot(t *testing.T, r *Router, pivot standardRepl
 	}
 	il.CollectMissingRequest(false)
 	require.True(t, il.IsComplete())
-	r.completeInboundLedger(il)
+	r.catchupReplay.completeInboundLedger(il)
 }
 
 func TestIssue1863MixedRecoveryRetainsPivotAndResumes(t *testing.T) {
@@ -98,10 +98,10 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 	require.NotNil(t, parent)
 	pivot := buildAlternativeReplaySuccessor(t, parent, time.Second)
 	child := buildAlternativeReplaySuccessor(t, pivot.ledger, time.Second)
-	r.recordSeqHash(pivot.seq, pivot.hash, parent.Hash(), true)
-	r.recordSeqHash(child.seq, child.hash, pivot.hash, true)
+	r.catchupReplay.recordSeqHash(pivot.seq, pivot.hash, parent.Hash(), true)
+	r.catchupReplay.recordSeqHash(child.seq, child.hash, pivot.hash, true)
 	trackCatchupPeer(r, 7, child.seq, child.hash)
-	require.True(t, r.beginFrozenPivotRecovery(pivot.seq, pivot.hash, 7))
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivot.seq, pivot.hash, 7))
 
 	for svc.GetClosedLedgerIndex() < child.seq {
 		_, err := svc.AcceptConsensusResult(t.Context(), svc.GetClosedLedger(), nil, nil, time.Now(), true)
@@ -111,23 +111,23 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 
 	trusted, err := a.GetValidatorKey()
 	require.NoError(t, err)
-	r.maybeAcquireFromValidation(&consensus.Validation{
+	r.catchupReplay.maybeAcquireFromValidation(&consensus.Validation{
 		NodeID:    trusted,
 		LedgerSeq: child.seq,
 		LedgerID:  consensus.LedgerID(child.hash),
 		Full:      true,
 	}, 7)
-	childAcquisition := r.fetchTracker.Find(child.hash)
+	childAcquisition := r.catchupReplay.fetchTracker.Find(child.hash)
 	require.NotNil(t, childAcquisition)
 	require.True(t, childAcquisition.TransactionOnly())
 	completeStandardReplayTestLink(t, r, child)
 
-	fallback := r.fetchTracker.Find(child.hash)
+	fallback := r.catchupReplay.fetchTracker.Find(child.hash)
 	require.NotNil(t, fallback)
 	require.False(t, fallback.TransactionOnly())
-	require.Equal(t, 2, r.protectedCatchupInFlight())
+	require.Equal(t, 2, r.catchupReplay.protectedCatchupInFlight())
 
-	pivotAcquisition := r.fetchTracker.Find(pivot.hash)
+	pivotAcquisition := r.catchupReplay.fetchTracker.Find(pivot.hash)
 	require.NotNil(t, pivotAcquisition)
 	now := time.Now()
 	pivotAcquisition.RearmTimer(now)
@@ -137,37 +137,37 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 		pivotAcquisition.RearmTimer(now)
 	}
 
-	r.onLedgerFullyValidated(child.seq, child.hash)
-	require.Same(t, pivotAcquisition, r.fetchTracker.Find(pivot.hash),
+	r.catchupReplay.onLedgerFullyValidated(child.seq, child.hash)
+	require.Same(t, pivotAcquisition, r.catchupReplay.fetchTracker.Find(pivot.hash),
 		"quorum eviction must retain the active automatic recovery pivot")
-	require.True(t, r.standardReplay.active)
-	require.False(t, r.standardReplay.pivotReady)
-	require.Equal(t, pivot.hash, r.standardReplay.pivotHash)
+	require.True(t, r.catchupReplay.standardReplay.active)
+	require.False(t, r.catchupReplay.standardReplay.pivotReady)
+	require.Equal(t, pivot.hash, r.catchupReplay.standardReplay.pivotHash)
 
-	r.failInboundAcquisition(fallback)
-	require.Same(t, pivotAcquisition, r.fetchTracker.Find(pivot.hash))
-	require.True(t, r.standardReplay.active)
-	require.False(t, r.standardReplay.pivotReady)
+	r.catchupReplay.failInboundAcquisition(fallback)
+	require.Same(t, pivotAcquisition, r.catchupReplay.fetchTracker.Find(pivot.hash))
+	require.True(t, r.catchupReplay.standardReplay.active)
+	require.False(t, r.catchupReplay.standardReplay.pivotReady)
 
-	successor := r.fetchTracker.Find(child.hash)
+	successor := r.catchupReplay.fetchTracker.Find(child.hash)
 	require.NotNil(t, successor)
 	require.True(t, successor.TransactionOnly())
 	completeStandardReplayTestLink(t, r, child)
-	entry := r.standardReplay.entries[child.seq]
+	entry := r.catchupReplay.standardReplay.entries[child.seq]
 	require.NotNil(t, entry)
 	require.False(t, entry.readyAt.IsZero())
-	require.Equal(t, pivot.seq, r.standardReplay.anchorSeq)
+	require.Equal(t, pivot.seq, r.catchupReplay.standardReplay.anchorSeq)
 
 	if orphan {
-		generation := r.standardReplay.generation
-		require.True(t, r.fetchTracker.DiscardExpected(pivotAcquisition))
-		r.retireLegacyAcquisitions([]*inbound.Ledger{pivotAcquisition})
+		generation := r.catchupReplay.standardReplay.generation
+		require.True(t, r.catchupReplay.fetchTracker.DiscardExpected(pivotAcquisition))
+		r.catchupReplay.retireLegacyAcquisitions([]*inbound.Ledger{pivotAcquisition})
 		r.maintenanceTick()
-		rearmed := r.fetchTracker.Find(pivot.hash)
+		rearmed := r.catchupReplay.fetchTracker.Find(pivot.hash)
 		require.NotNil(t, rearmed)
 		require.NotSame(t, pivotAcquisition, rearmed)
-		require.Equal(t, generation, r.standardReplay.generation)
-		require.Same(t, entry, r.standardReplay.entries[child.seq])
+		require.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+		require.Same(t, entry, r.catchupReplay.standardReplay.entries[child.seq])
 	}
 
 	completeIssue1863FullStatePivot(t, r, pivot)
@@ -175,7 +175,7 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 	require.Eventually(t, func() bool {
 		closed := svc.GetClosedLedger()
 		return closed != nil && closed.Hash() == child.hash &&
-			r.standardReplay.anchorSeq == child.seq
+			r.catchupReplay.standardReplay.anchorSeq == child.seq
 	}, time.Second, time.Millisecond)
 	require.Equal(t, child.hash, svc.GetClosedLedger().Hash())
 	require.Contains(t, engine.getLedgers(), consensus.LedgerID(child.hash))
