@@ -205,7 +205,8 @@ func TestAccountDeleteEngineRollsBackLegacyDirectoryEraseFailure(t *testing.T) {
 
 	result := engine.NewEngine(view, accountDeleteEngineConfig(view.rules)).Apply(accountDelete)
 
-	require.Equal(t, ter.TefINTERNAL, result.Result)
+	require.Equal(t, ter.TefEXCEPTION, result.Result)
+	require.ErrorIs(t, result.Cause, view.eraseError[ownerDir.Key])
 	require.False(t, result.Applied)
 	require.Zero(t, result.Fee)
 	require.Nil(t, result.Metadata)

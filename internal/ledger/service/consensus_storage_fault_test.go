@@ -120,6 +120,7 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				f.svc.mu.Unlock()
 				transaction, err := tx.ParseFromBinary(blob)
 				require.NoError(t, err)
+				transaction.GetCommon().TxnSignature = ""
 				simulation, err := f.svc.SimulateTransaction(transaction)
 				require.NoError(t, err)
 				require.Equal(t, ter.TefEXCEPTION, simulation.Result)

@@ -68,7 +68,6 @@ func newStorageCauseBatch(missingKey keylet.Keylet, applied *bool) *batch.Batch 
 }
 
 func TestApplyBatchInnerTransactionsRollsBackOnTypedStorageCause(t *testing.T) {
-	batch.Register()
 	missingKey := keylet.Keylet{Key: [32]byte{0x91}}
 	missingHash := [32]byte{0x92}
 	innerApplied := false
