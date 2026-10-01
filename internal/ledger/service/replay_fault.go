@@ -597,6 +597,9 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 		if err := s.restoreReplayParentAt(ctx, repaired, evidence.Target.Hash); err != nil {
 			return fmt.Errorf("install repaired execution state: %w", err)
 		}
+		if err := s.flushPersists(ctx); err != nil {
+			return fmt.Errorf("persist repaired execution state: %w", err)
+		}
 		return nil
 	}
 	if validated == nil || validated.Hash() != evidence.Target.Hash || validated.Sequence() != evidence.Target.LedgerIndex {
@@ -604,6 +607,9 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 	}
 	if err := s.restoreReplayParent(ctx, repaired); err != nil {
 		return fmt.Errorf("install repaired state base: %w", err)
+	}
+	if err := s.persistRepairedValidatedTip(ctx, repaired); err != nil {
+		return fmt.Errorf("publish repaired validated tip: %w", err)
 	}
 	if err := s.recertifyValidatedStateBase(ctx); err != nil {
 		return fmt.Errorf("re-certify repaired state base: %w", err)
@@ -848,6 +854,15 @@ func (s *Service) recordLiveStateVerificationFailureOrigin(ctx context.Context, 
 	}
 }
 
+func (s *Service) persistRepairedValidatedTip(ctx context.Context, repaired *ledger.Ledger) error {
+	if s.nodeStore == nil {
+		return errors.New("NodeStore is required to publish a repaired validated tip")
+	}
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	return s.persistValidatedTipLocked(ctx, repaired, true)
+}
+
 func missingNodeHash(err error) ([32]byte, bool) {
 	var missing *shamap.MissingNodeError
 	if !errors.As(err, &missing) || missing == nil {
@@ -975,7 +990,13 @@ func (s *Service) RecordReplayAcquisitionFailure(hash [32]byte, cause error) {
 }
 
 func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledger) error {
-	return s.restoreReplayParentAt(ctx, verified, [32]byte{})
+	if err := s.restoreReplayParentAt(ctx, verified, [32]byte{}); err != nil {
+		return err
+	}
+	if err := s.flushPersists(ctx); err != nil {
+		return fmt.Errorf("persist repaired replay parent: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Ledger, expectedClosedHash [32]byte) error {
@@ -1027,7 +1048,11 @@ func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Le
 	}
 	s.putHistoryLocked(repaired)
 	s.cachePersistedLedgerLocked(repaired)
-	s.enqueueNodePersist(repaired)
+	if repaired.IsValidated() {
+		s.enqueueValidatedHistoryPersist(repaired)
+	} else {
+		s.enqueueNodePersist(repaired)
+	}
 	s.replayRepairParent = nil
 	s.replayRepairTarget = nil
 	return nil

@@ -205,7 +205,42 @@ func TestStateBaseRecertificationRejectsMissingDurableDescendantWithWarmCache(t 
 
 func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing.T) {
 	f := newStateBaseRecertificationFixture(t)
+	ctx := t.Context()
+	stateSource, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
+	var stateCopyErr error
+	require.NoError(t, stateSource.ForEachCtx(ctx, func(item *shamap.Item) bool {
+		stateCopyErr = stateMap.Put(item.Key(), item.Data())
+		return stateCopyErr == nil
+	}))
+	require.NoError(t, stateCopyErr)
+	txSource, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	var txCopyErr error
+	require.NoError(t, txSource.ForEachCtx(ctx, func(item *shamap.Item) bool {
+		txCopyErr = txMap.PutWithNodeType(item.Key(), item.Data(), shamap.NodeTypeTransactionWithMeta)
+		return txCopyErr == nil
+	}))
+	require.NoError(t, txCopyErr)
+	stateHash, err := stateMap.Hash()
+	require.NoError(t, err)
+	txHash, err := txMap.Hash()
+	require.NoError(t, err)
+	require.Equal(t, f.validated.Header().AccountHash, stateHash)
+	require.Equal(t, f.validated.Header().TxHash, txHash)
+	child, err := f.db.Fetch(ctx, nodestore.Hash256(f.childHash))
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	child.LedgerSeq = f.validated.Sequence() - 1
+	require.NoError(t, f.db.Store(ctx, child))
+	require.NoError(t, f.db.Sync(ctx))
+	deleted, err := f.db.DeleteBefore(ctx, f.validated.Sequence(), 1)
+	require.NoError(t, err)
+	require.Positive(t, deleted)
 	f.invalidate(t)
+	f.svc.invalidateCompleteLedger(f.validated.Sequence())
 	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
 	var repairCalls int
 	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
@@ -222,16 +257,12 @@ func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing
 	require.False(t, f.svc.ReplayRecoveryParent([32]byte{0x7f}))
 	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
 
-	stateMap, err := f.validated.StateMapSnapshot()
-	require.NoError(t, err)
-	txMap, err := f.validated.TxMapSnapshot()
-	require.NoError(t, err)
 	wrongHeader := f.validated.Header()
 	wrongHeader.Hash[0] ^= 1
-	require.ErrorIs(t, f.svc.StoreLedgerWithState(t.Context(), &wrongHeader, stateMap, txMap), replayfault.ErrBlocked)
+	require.ErrorIs(t, f.svc.StoreLedgerWithState(ctx, &wrongHeader, stateMap, txMap), replayfault.ErrBlocked)
 	targetHeader := f.validated.Header()
-	require.NoError(t, f.svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
-	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
+	require.NoError(t, f.svc.StoreLedgerWithState(ctx, &targetHeader, stateMap, txMap))
+	require.NoError(t, f.svc.RevalidateReplayFault(ctx, fault.ID))
 	require.False(t, f.svc.ReplayBlocked())
 	_, found := f.svc.currentValidatedStateBaseProof()
 	require.True(t, found)
