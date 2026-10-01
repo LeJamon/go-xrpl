@@ -34,7 +34,7 @@ type ApplyResult struct {
 	// Cause retains a non-protocol error that caused Result. It is populated
 	// only for execution paths that can prove the underlying operation failed;
 	// the TER result remains unchanged for protocol callers.
-	Cause error
+	Cause error `json:"-"`
 }
 
 // Metadata tracks changes made by a transaction

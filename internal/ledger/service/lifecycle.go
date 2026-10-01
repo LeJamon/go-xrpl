@@ -1128,7 +1128,7 @@ func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.Ledg
 		if err != nil {
 			return err
 		}
-		if fault := s.replayFaults.Snapshot(); fault != nil && repaired.Hash() == fault.TargetHash {
+		if fault := s.replayFaults.Snapshot(); replayFaultMatchesRepairTarget(fault, repaired.Hash()) {
 			s.replayRepairTarget = repaired
 		} else {
 			s.replayRepairParent = repaired

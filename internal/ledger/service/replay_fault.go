@@ -44,6 +44,7 @@ type replayEvidence struct {
 }
 
 const replayFaultOriginStateBaseRecertification = "state_base_recertification"
+const replayFaultOriginExecution = "execution"
 
 func replayFaultStateClass(class replayfault.Class) bool {
 	return class == replayfault.MissingState || class == replayfault.CorruptState
@@ -476,7 +477,7 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		if evidence.NetworkID != s.config.NetworkID {
 			return errors.New("replay evidence network does not match configuration")
 		}
-		if evidence.Origin == replayFaultOriginStateBaseRecertification {
+		if evidence.Origin == replayFaultOriginStateBaseRecertification || evidence.Origin == replayFaultOriginExecution {
 			return s.revalidateStateBaseRecertificationFault(ctx, fault, evidence)
 		}
 		parent, err := s.loadReplayParent(ctx, fault, evidence)
@@ -563,12 +564,22 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 	s.mu.RLock()
 	repaired := s.replayRepairTarget
 	validated := s.validatedLedger
+	closed := s.closedLedger
 	s.mu.RUnlock()
 	if repaired == nil || repaired.Hash() != evidence.RepairHash {
 		if err := s.requestReplayParentRepair(fault, evidence); err != nil {
 			return err
 		}
 		return errors.New("state base repair requested; retry explicitly after acquisition")
+	}
+	if evidence.Origin == replayFaultOriginExecution {
+		if closed == nil || closed.Hash() != evidence.Target.Hash || closed.Sequence() != evidence.Target.LedgerIndex {
+			return errors.New("closed ledger changed while execution repair was pending")
+		}
+		if err := s.restoreReplayParentAt(ctx, repaired, evidence.Target.Hash); err != nil {
+			return fmt.Errorf("install repaired execution state: %w", err)
+		}
+		return nil
 	}
 	if validated == nil || validated.Hash() != evidence.Target.Hash || validated.Sequence() != evidence.Target.LedgerIndex {
 		return errors.New("validated ledger changed while state base repair was pending")
@@ -610,6 +621,18 @@ func (s *Service) ReplayRecoveryParent(hash [32]byte) bool {
 		expected = fault.TargetHash
 	}
 	return hash == expected && evidence.Authenticated && fault.AcquisitionAttempts > 0 && fault.AcquisitionAttempts <= 3
+}
+
+func replayFaultMatchesRepairTarget(fault *replayfault.Fault, hash [32]byte) bool {
+	if fault == nil || hash == ([32]byte{}) {
+		return false
+	}
+	if hash == fault.TargetHash {
+		return true
+	}
+	var evidence replayEvidence
+	return json.Unmarshal(fault.Evidence, &evidence) == nil &&
+		evidence.RepairHash != ([32]byte{}) && hash == evidence.RepairHash
 }
 
 func (s *Service) requestReplayParentRepair(fault replayfault.Fault, evidence replayEvidence) error {
@@ -696,11 +719,63 @@ func (s *Service) recordStateBaseRecertificationFailure(ctx context.Context, h h
 	}
 }
 
+func (s *Service) recordExecutionStateFailure(ctx context.Context, parent *ledger.Ledger, cause error) {
+	if parent == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s.replayFaults == nil {
+		return
+	}
+	class := replayStateFailureClass(cause)
+	if !replayFaultStateClass(class) {
+		return
+	}
+	h := parent.Header()
+	if h.Hash == ([32]byte{}) {
+		return
+	}
+	s.mu.RLock()
+	current := s.closedLedger != nil && s.closedLedger.Hash() == h.Hash && s.closedLedger.Sequence() == h.LedgerIndex
+	authenticate := s.replayAuthenticate
+	s.mu.RUnlock()
+	if !current {
+		return
+	}
+	authenticated := authenticate != nil && authenticate(h)
+	s.mu.RLock()
+	current = s.closedLedger != nil && s.closedLedger.Hash() == h.Hash && s.closedLedger.Sequence() == h.LedgerIndex
+	if current {
+		s.recordLiveStateVerificationFailureOrigin(ctx, h, shamap.TypeState, cause, authenticated, replayFaultOriginExecution)
+	}
+	s.mu.RUnlock()
+	if !current || !authenticated {
+		return
+	}
+	fault := s.replayFaults.Snapshot()
+	if fault == nil {
+		return
+	}
+	var evidence replayEvidence
+	if err := json.Unmarshal(fault.Evidence, &evidence); err != nil {
+		return
+	}
+	if err := s.requestReplayParentRepair(*fault, evidence); err != nil {
+		s.logger.Warn("execution state repair request unavailable", "error", err)
+	}
+}
+
 // recordLiveStateVerificationFailure latches a proven missing or corrupt node
 // in a live validated ledger. The caller must establish that h is the current
 // live validated ledger before calling this method. It intentionally does not
 // take Service.mu, so retention and persistence guards can call it safely.
 func (s *Service) recordLiveStateVerificationFailure(ctx context.Context, h header.LedgerHeader, mapType shamap.Type, cause error, authenticated bool) {
+	s.recordLiveStateVerificationFailureOrigin(ctx, h, mapType, cause, authenticated, replayFaultOriginStateBaseRecertification)
+}
+
+func (s *Service) recordLiveStateVerificationFailureOrigin(ctx context.Context, h header.LedgerHeader, mapType shamap.Type, cause error, authenticated bool, origin string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -712,7 +787,7 @@ func (s *Service) recordLiveStateVerificationFailure(ctx context.Context, h head
 		return
 	}
 	evidence := replayEvidence{
-		Origin:         replayFaultOriginStateBaseRecertification,
+		Origin:         origin,
 		RepairClass:    class,
 		Target:         h,
 		NetworkID:      s.config.NetworkID,
@@ -882,7 +957,14 @@ func (s *Service) RecordReplayAcquisitionFailure(hash [32]byte, cause error) {
 }
 
 func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledger) error {
+	return s.restoreReplayParentAt(ctx, verified, [32]byte{})
+}
+
+func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Ledger, expectedClosedHash [32]byte) error {
 	repaired := verified
+	if repaired == nil {
+		return errors.New("verified replay ledger is required")
+	}
 	if err := s.lockOpenLedgerIfRunning(openLedgerPreferredSwitch); err != nil {
 		return err
 	}
@@ -891,6 +973,10 @@ func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledg
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
+	if expectedClosedHash != ([32]byte{}) &&
+		(s.closedLedger == nil || s.closedLedger.Hash() != expectedClosedHash) {
+		return errors.New("closed ledger changed before repaired execution state could be installed")
+	}
 	if s.closedLedger != nil && s.closedLedger.Hash() == repaired.Hash() {
 		newOpen, err := ledger.NewOpen(repaired, time.Now())
 		if err != nil {
