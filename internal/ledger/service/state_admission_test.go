@@ -60,6 +60,22 @@ func TestStateAdmissionPropagatesCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestStateAdmissionDoesNotChangeCallerMapState(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	source := shamap.New(shamap.TypeState)
+	require.NoError(t, source.Put([32]byte{3}, []byte("state-value-1234")))
+
+	releaseAdmission, err := svc.AcquireStateAdmission(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, svc.VerifyDetachedMaps(t.Context(), source, nil))
+	releaseAdmission()
+
+	// Admission runs synchronization on a detached snapshot. The caller can
+	// continue building its original map after the proof returns.
+	require.NoError(t, source.Put([32]byte{4}, []byte("state-value-5678")))
+}
+
 func TestStateAdmissionPinsDurableMutationUntilRelease(t *testing.T) {
 	db := newTestNodeStore(t, 0)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })

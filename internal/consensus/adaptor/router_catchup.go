@@ -2769,8 +2769,52 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 	// Without this step the adopted ledger would carry the parent's
 	// stale state map, breaking consensus on the next round.
 	parent := rd.Parent()
+	svc := c.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	if err != nil {
+		seq := rd.Seq()
+		hash := rd.Hash()
+		c.acquisitionMu.Lock()
+		c.requireReplayFullStateLocked(seq, hash)
+		c.replayer.Abandon(hash)
+		c.acquisitionMu.Unlock()
+		c.logger.Error("replay delta admission failed; validator duties blocked",
+			"seq", seq,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+			"error", err,
+		)
+		c.fallbackReplayAcquisition(seq, hash, rd.PeerID())
+		return
+	}
+	defer releaseAdmission()
+	if parent == nil {
+		return
+	}
+	parentState, err := parent.StateMapSnapshot()
+	if err != nil {
+		c.logger.Error("replay delta parent snapshot failed; validator duties blocked", "error", err)
+		return
+	}
+	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), parentState, nil); err != nil {
+		seq := rd.Seq()
+		hash := rd.Hash()
+		c.acquisitionMu.Lock()
+		c.requireReplayFullStateLocked(seq, hash)
+		c.replayer.Abandon(hash)
+		c.acquisitionMu.Unlock()
+		c.logger.Error("replay delta parent admission failed; validator duties blocked",
+			"seq", seq,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+			"error", err,
+		)
+		c.fallbackReplayAcquisition(seq, hash, rd.PeerID())
+		return
+	}
 	engineCfg := c.adaptor.EngineConfigForReplay(parent)
-	derived, err := c.adaptor.LedgerService().ApplyReplay(c.lifecycleContext(), rd, engineCfg, c.replayTargetAuthenticated(rd.TargetHeader()))
+	derived, err := svc.ApplyReplay(c.lifecycleContext(), rd, engineCfg, c.replayTargetAuthenticated(rd.TargetHeader()))
 	if err != nil {
 		seq := rd.Seq()
 		hash := rd.Hash()
@@ -2809,6 +2853,18 @@ func (c *catchupReplayCoordinator) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if l == nil || c.stoppedForShutdown() {
 		return context.Canceled
 	}
+	svc := c.adaptor.LedgerService()
+	if svc == nil {
+		return errors.New("no ledger service")
+	}
+	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
+	if err := svc.VerifyDetachedLedger(c.lifecycleContext(), l); err != nil {
+		return err
+	}
 	c.replayCommitMu.Lock()
 	if c.stoppedForShutdown() {
 		c.replayCommitMu.Unlock()
@@ -2831,6 +2887,18 @@ func (c *catchupReplayCoordinator) adoptVerifiedLedger(l *ledger.Ledger) error {
 func (c *catchupReplayCoordinator) storeVerifiedLedger(l *ledger.Ledger) (header.LedgerHeader, bool, error) {
 	if c.stoppedForShutdown() {
 		return header.LedgerHeader{}, false, context.Canceled
+	}
+	svc := c.adaptor.LedgerService()
+	if svc == nil {
+		return header.LedgerHeader{}, false, errors.New("no ledger service")
+	}
+	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	if err != nil {
+		return header.LedgerHeader{}, false, err
+	}
+	defer releaseAdmission()
+	if err := svc.VerifyDetachedLedger(c.lifecycleContext(), l); err != nil {
+		return header.LedgerHeader{}, false, err
 	}
 	c.replayCommitMu.Lock()
 	defer c.replayCommitMu.Unlock()
@@ -4173,6 +4241,13 @@ func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
 	if c.stoppedForShutdown() {
 		return
 	}
+	releaseAdmission, err := c.acquireStateAdmission()
+	if err != nil {
+		c.logger.Warn("inbound ledger: state admission failed", "error", err, "seq", il.Seq())
+		c.discardFailedInboundAcquisition(il, err)
+		return
+	}
+	defer releaseAdmission()
 	if err := c.flushAcquisitionStore(c.lifecycleContext(), il); err != nil {
 		c.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
 		c.discardFailedInboundAcquisition(il, err)
@@ -4181,10 +4256,28 @@ func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
 	c.completeInboundLedgerReady(il)
 }
 
+func (c *catchupReplayCoordinator) acquireStateAdmission() (func(), error) {
+	if c.adaptor == nil {
+		return func() {}, nil
+	}
+	svc := c.adaptor.LedgerService()
+	if svc == nil {
+		return func() {}, nil
+	}
+	return svc.AcquireStateAdmission(c.lifecycleContext())
+}
+
 func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger) {
 	if c.stoppedForShutdown() {
 		return
 	}
+	releaseAdmission, err := c.acquireStateAdmission()
+	if err != nil {
+		c.logger.Warn("inbound ledger: state admission failed", "error", err, "seq", il.Seq())
+		c.discardFailedInboundAcquisition(il, err)
+		return
+	}
+	defer releaseAdmission()
 	if il.Reason() == inbound.ReasonHistory && !c.historySequenceAllowed(il.Seq()) {
 		c.discardHistoryAcquisition(il, "outside_history_window")
 		return
@@ -4206,6 +4299,11 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 	}
 	if err = c.promoteAcquisitionStore(c.lifecycleContext(), il); err != nil {
 		c.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
+		c.discardFailedInboundAcquisition(il, err)
+		return
+	}
+	if err = svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
+		c.logger.Warn("inbound ledger: detached state admission failed", "error", err, "seq", il.Seq())
 		c.discardFailedInboundAcquisition(il, err)
 		return
 	}
@@ -4341,6 +4439,12 @@ func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
 	if svc == nil {
 		return
 	}
+	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	if err != nil {
+		c.logger.Warn("standard transaction replay state admission failed", "error", err, "seq", h.LedgerIndex)
+		return
+	}
+	defer releaseAdmission()
 	parentHeld := false
 	fallback := func(err error) {
 		parent, _ := svc.GetLedgerByHash(h.ParentHash)
@@ -4386,6 +4490,10 @@ func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
 			return
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
+	}
+	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
+		fallback(err)
+		return
 	}
 
 	// NewStoredLedgerReplay only needs a header and verified transaction map

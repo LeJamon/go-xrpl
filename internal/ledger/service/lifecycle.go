@@ -411,6 +411,11 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 		return err
 	}
 	defer releaseAdmission()
+	if parent != nil && !s.isServiceOwnedLedger(parent) {
+		if err := s.VerifyDetachedLedger(context.Background(), parent); err != nil {
+			return fmt.Errorf("preferred ledger state admission: %w", err)
+		}
+	}
 	if beforeLock != nil {
 		beforeLock()
 	}
@@ -639,7 +644,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		}
 	}
 	verifyStoredOutsideLocks := func() (bool, error) {
-		if !fromStored || l == nil {
+		if l == nil {
 			return false, nil
 		}
 		hash := l.Hash()
