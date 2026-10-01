@@ -236,6 +236,31 @@ func TestRecordLiveStateVerificationFailureDoesNotTakeServiceMu(t *testing.T) {
 	require.Equal(t, replayfault.MissingState, fault.Class)
 }
 
+func TestStateBaseRecertificationFaultPersistsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	svc := replayFaultService(t, path)
+	h := svc.GetValidatedLedger().Header()
+	svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool { return true })
+	svc.recordStateBaseRecertificationFailure(t.Context(), h, shamap.TypeState, &shamap.MissingNodeError{Hash: [32]byte{0x42}})
+	fault := svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	var evidence replayEvidence
+	require.NoError(t, json.Unmarshal(fault.Evidence, &evidence))
+	require.Equal(t, replayFaultOriginStateBaseRecertification, evidence.Origin)
+	svc.Stop()
+
+	restarted := replayFaultService(t, path)
+	restartedFault := restarted.replayFaults.Snapshot()
+	require.NotNil(t, restartedFault)
+	require.Equal(t, fault.ID, restartedFault.ID)
+	require.Equal(t, replayfault.MissingState, restartedFault.Class)
+	require.True(t, restarted.ReplayBlocked())
+	var restartedEvidence replayEvidence
+	require.NoError(t, json.Unmarshal(restartedFault.Evidence, &restartedEvidence))
+	require.Equal(t, evidence.Target.Hash, restartedEvidence.Target.Hash)
+	require.Equal(t, evidence.MissingNodeHash, restartedEvidence.MissingNodeHash)
+}
+
 func TestReplayFaultRestoresNonemptyParentTransactionsAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	svc := replayFaultService(t, path)
