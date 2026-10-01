@@ -2802,6 +2802,7 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 	parent := rd.Parent()
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
+		c.replayer.Abandon(rd.Hash())
 		return
 	}
 	failParentAdmission := func(cause error) {
