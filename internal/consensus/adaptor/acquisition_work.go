@@ -682,6 +682,7 @@ func acquisitionRequestCandidates(preferred, available []uint64) []uint64 {
 			remaining = append(remaining, peerID)
 		}
 	}
+	// #nosec G404 -- Peer ordering distributes requests; it does not establish trust.
 	rand.Shuffle(len(remaining), func(i, j int) {
 		remaining[i], remaining[j] = remaining[j], remaining[i]
 	})
@@ -706,6 +707,7 @@ func selectUsefulAcquisitionPeers(counts map[uint64]int) []uint64 {
 		}
 	}
 	if len(peers) > acquisitionMaxUsefulPeers {
+		// #nosec G404 -- Peer ordering distributes requests; it does not establish trust.
 		rand.Shuffle(len(peers), func(i, j int) {
 			peers[i], peers[j] = peers[j], peers[i]
 		})

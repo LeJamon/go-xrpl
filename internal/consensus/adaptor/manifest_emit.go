@@ -349,6 +349,7 @@ func (r *Router) selectManifestSnapshot() ([][]byte, [][32]byte, [32]byte) {
 	if r.manifestShuffle != nil {
 		r.manifestShuffle(wires)
 	} else {
+		// #nosec G404 -- Only transmission order is randomized; manifest selection and trust are already fixed.
 		rand.Shuffle(len(wires), func(i, j int) { wires[i], wires[j] = wires[j], wires[i] })
 	}
 	hashes := make([][32]byte, len(wires))

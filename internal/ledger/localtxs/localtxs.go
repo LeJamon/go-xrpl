@@ -89,7 +89,7 @@ func (l *LocalTxs) PushBack(currentLedgerSeq uint32, ptx openledger.PendingTx) {
 //     past the ticket AND the Ticket SLE is gone (burned).
 func (l *LocalTxs) Sweep(view sweepView) error {
 	viewValue := reflect.ValueOf(view)
-	if view == nil || viewValue.Kind() == reflect.Ptr && viewValue.IsNil() {
+	if view == nil || viewValue.Kind() == reflect.Pointer && viewValue.IsNil() {
 		return errors.New("localtxs.Sweep: view is nil")
 	}
 	l.mu.Lock()

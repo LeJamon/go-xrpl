@@ -642,6 +642,7 @@ func (d *Discovery) selectPeersToConnect(count int, bootstrap bool) []string {
 			}
 		}
 
+		// #nosec G404 -- Randomize eligible peer order; connection validation does not rely on secrecy.
 		rand.Shuffle(len(candidates), func(i, j int) {
 			candidates[i], candidates[j] = candidates[j], candidates[i]
 		})
@@ -686,6 +687,7 @@ func (d *Discovery) selectPeersToConnect(count int, bootstrap bool) []string {
 }
 
 func (d *Discovery) rankCompressionCandidatesLocked(candidates []string) {
+	// #nosec G404 -- Randomize eligible peer order; connection validation does not rely on secrecy.
 	rand.Shuffle(len(candidates), func(i, j int) {
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	})
