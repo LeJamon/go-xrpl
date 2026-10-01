@@ -261,6 +261,30 @@ func TestStateBaseRecertificationFaultPersistsAcrossRestart(t *testing.T) {
 	require.Equal(t, evidence.MissingNodeHash, restartedEvidence.MissingNodeHash)
 }
 
+func TestExecutionStateFailureIgnoresSupersededClosedFrontier(t *testing.T) {
+	svc := replayFaultService(t, "")
+	closed := svc.GetClosedLedger()
+	stateMap, err := closed.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := closed.TxMapSnapshot()
+	require.NoError(t, err)
+	replacementHeader := closed.Header()
+	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
+	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, closed.Fees())
+	require.NoError(t, err)
+
+	svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool {
+		svc.mu.Lock()
+		svc.closedLedger = replacement
+		svc.mu.Unlock()
+		return true
+	})
+	svc.recordExecutionStateFailure(t.Context(), closed, &shamap.MissingNodeError{Hash: [32]byte{0x43}})
+	require.False(t, svc.ReplayBlocked())
+	require.Same(t, replacement, svc.GetClosedLedger())
+}
+
 func TestReplayFaultRestoresNonemptyParentTransactionsAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	svc := replayFaultService(t, path)

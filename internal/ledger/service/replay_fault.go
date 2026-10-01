@@ -209,6 +209,11 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 	_, err = s.admitReplayRecoveryJob(func(workerCtx context.Context) error {
 		captureCtx, cancel := context.WithTimeout(workerCtx, 5*time.Minute)
 		defer cancel()
+		releaseAdmission, admissionErr := s.AcquireStateAdmission(captureCtx)
+		if admissionErr != nil {
+			return admissionErr
+		}
+		defer releaseAdmission()
 		s.diagnoseReplayFault(captureCtx, *fault, evidence, parent, replay, cfg, cause)
 		return nil
 	})
@@ -457,6 +462,14 @@ func (s *Service) RevalidateReplayFault(ctx context.Context, id string) error {
 }
 
 func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarted func()) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
 	return s.replayFaults.Revalidate(ctx, id, func(ctx context.Context, fault replayfault.Fault) error {
 		if onStarted != nil {
 			onStarted()
@@ -961,9 +974,20 @@ func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledg
 }
 
 func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Ledger, expectedClosedHash [32]byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	repaired := verified
 	if repaired == nil {
 		return errors.New("verified replay ledger is required")
+	}
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return fmt.Errorf("admit repaired state: %w", err)
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedLedger(ctx, repaired); err != nil {
+		return fmt.Errorf("verify repaired state: %w", err)
 	}
 	if err := s.lockOpenLedgerIfRunning(openLedgerPreferredSwitch); err != nil {
 		return err

@@ -222,9 +222,15 @@ func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing
 	require.False(t, f.svc.ReplayRecoveryParent([32]byte{0x7f}))
 	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
 
-	f.svc.mu.Lock()
-	f.svc.replayRepairTarget = f.validated
-	f.svc.mu.Unlock()
+	stateMap, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	wrongHeader := f.validated.Header()
+	wrongHeader.Hash[0] ^= 1
+	require.ErrorIs(t, f.svc.StoreLedgerWithState(t.Context(), &wrongHeader, stateMap, txMap), replayfault.ErrBlocked)
+	targetHeader := f.validated.Header()
+	require.NoError(t, f.svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
 	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
 	require.False(t, f.svc.ReplayBlocked())
 	_, found := f.svc.currentValidatedStateBaseProof()
