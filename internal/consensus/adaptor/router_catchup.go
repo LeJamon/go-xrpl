@@ -2717,6 +2717,12 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 		c.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-verify")
 	}
 
+	releaseAdmission, err := c.acquireStateAdmission()
+	if err != nil {
+		c.logger.Warn("replay delta admission failed", "error", err, "peer", msg.PeerID)
+		return
+	}
+	defer releaseAdmission()
 	rd, err := c.replayer.HandleResponseFrom(uint64(msg.PeerID), resp)
 	if c.stoppedForShutdown() {
 		return
@@ -2798,44 +2804,42 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 	if svc == nil {
 		return
 	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
-	if err != nil {
+	failParentAdmission := func(cause error) {
+		txMap := shamap.New(shamap.TypeTransaction)
+		for _, txn := range rd.OrderedTxs() {
+			if err := txMap.PutWithNodeType(txn.Hash, txn.LeafBlob, shamap.NodeTypeTransactionWithMeta); err != nil {
+				cause = errors.Join(cause, err)
+				txMap = nil
+				break
+			}
+		}
+		svc.RecordReplayPreparationFailure(c.lifecycleContext(), rd.TargetHeader(), txMap, parent,
+			c.replayTargetAuthenticated(rd.TargetHeader()), cause)
 		seq := rd.Seq()
 		hash := rd.Hash()
 		c.acquisitionMu.Lock()
 		c.requireReplayFullStateLocked(seq, hash)
 		c.replayer.Abandon(hash)
 		c.acquisitionMu.Unlock()
-		c.logger.Error("replay delta admission failed; validator duties blocked",
+		c.logger.Error("replay delta parent admission failed",
 			"seq", seq,
 			"hash", fmt.Sprintf("%x", hash[:8]),
-			"error", err,
+			"error", cause,
+			"validator_duties_blocked", svc.ReplayBlocked(),
 		)
 		c.fallbackReplayAcquisition(seq, hash, rd.PeerID())
-		return
 	}
-	defer releaseAdmission()
 	if parent == nil {
+		failParentAdmission(errors.New("replay parent is unavailable"))
 		return
 	}
 	parentState, err := parent.StateMapSnapshot()
 	if err != nil {
-		c.logger.Error("replay delta parent snapshot failed; validator duties blocked", "error", err)
+		failParentAdmission(err)
 		return
 	}
 	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), parentState, nil); err != nil {
-		seq := rd.Seq()
-		hash := rd.Hash()
-		c.acquisitionMu.Lock()
-		c.requireReplayFullStateLocked(seq, hash)
-		c.replayer.Abandon(hash)
-		c.acquisitionMu.Unlock()
-		c.logger.Error("replay delta parent admission failed; validator duties blocked",
-			"seq", seq,
-			"hash", fmt.Sprintf("%x", hash[:8]),
-			"error", err,
-		)
-		c.fallbackReplayAcquisition(seq, hash, rd.PeerID())
+		failParentAdmission(err)
 		return
 	}
 	engineCfg := c.adaptor.EngineConfigForReplay(parent)
