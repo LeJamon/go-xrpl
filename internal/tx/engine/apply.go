@@ -44,6 +44,7 @@ func (e *Engine) applyWithContext(
 			Message: "pseudo-transactions cannot be submitted",
 		}
 	}
+	e.resetStateErrors()
 
 	account := tx.GetCommon().Account
 	e.logger.Debug("apply",
@@ -100,6 +101,12 @@ func (e *Engine) applyWithContext(
 	} else {
 		result, preclaimCause = e.preclaimWithCause(tx, txHash)
 	}
+	if preclaimCause == nil {
+		preclaimCause = e.stateError()
+	}
+	// Preclaim and application have independent cause lifetimes. Preserve the
+	// preclaim cause in the result, then start the fee/apply phase cleanly.
+	e.resetStateErrors()
 	if !result.IsSuccess() && !result.IsTec() {
 		e.logger.Debug("preclaim failed",
 			"txType", txType.String(),
@@ -136,12 +143,18 @@ func (e *Engine) applyWithContext(
 	// application. A failure here means the preclaim result cannot safely enter
 	// apply, including a tec result that would otherwise claim a fee.
 	if _, err := sign.CalculateBaseFee(tx, e.view, e.config); err != nil {
+		cause := e.stateError()
+		feeResult := ter.TefINTERNAL
+		if cause != nil {
+			feeResult = ter.TefEXCEPTION
+		}
 		e.logger.Error("transaction base fee recomputation failed",
 			"txHash", hex.EncodeToString(txHash[:]), "error", err)
 		return txcore.ApplyResult{
-			Result:  ter.TefINTERNAL,
+			Result:  feeResult,
 			Applied: false,
-			Message: ter.TefINTERNAL.Message(),
+			Message: feeResult.Message(),
+			Cause:   cause,
 		}
 	}
 
@@ -160,6 +173,15 @@ func (e *Engine) applyWithContext(
 		// paths this is clamped to the payer's balance (rippled reset()); on the
 		// success path it equals the declared fee.
 		result, fee = e.doApply(ctx, tx, metadata, txHash)
+		applyCause := e.stateError()
+		if applyCause != nil {
+			return txcore.ApplyResult{
+				Result:  result,
+				Applied: false,
+				Message: result.Message(),
+				Cause:   applyCause,
+			}
+		}
 	} else if result.IsTec() {
 		// Tec from preclaim. When TapFAIL_HARD is set a tec result must do
 		// nothing — no fee charged, no sequence consumed, not applied. Reference:
@@ -182,6 +204,15 @@ func (e *Engine) applyWithContext(
 		// Reference: rippled applySteps.cpp — preclaim tec with likelyToClaimFee=true
 		// still enters Transactor::operator() which always applies fee/sequence.
 		committed, chargedFee := e.commitPreclaimTec(ctx, tx, txHash, fee, result, metadata)
+		commitCause := e.stateError()
+		if commitCause != nil {
+			return txcore.ApplyResult{
+				Result:  ter.TefEXCEPTION,
+				Applied: false,
+				Message: ter.TefEXCEPTION.Message(),
+				Cause:   commitCause,
+			}
+		}
 		// commitPreclaimTec returns the original tec on a clean fee claim, or an
 		// invariant-escalated code (tec/tefINVARIANT_FAILED) / tefINTERNAL when the
 		// fee-only delta fails its invariant pass or cannot be written.
@@ -251,7 +282,7 @@ func (e *Engine) applyWithContext(
 		Fee:      fee,
 		Metadata: metadata,
 		Message:  result.Message(),
-		Cause:    preclaimCause,
+		Cause:    nil,
 	}
 }
 
@@ -269,6 +300,7 @@ func (e *Engine) ApplyBatchInnerTransactions(
 	if outer.Metadata == nil {
 		return txcore.ApplyResult{Result: ter.TefINTERNAL, Message: ter.TefINTERNAL.Message()}
 	}
+	e.resetStateErrors()
 
 	txHash, err := txcore.ComputeTransactionHash(transaction)
 	if err != nil {
@@ -296,10 +328,16 @@ func (e *Engine) ApplyBatchInnerTransactions(
 		result, records = batch.ApplyInnerTransactions(innerCtx)
 		return result
 	})
+	if innerCtx.Cause == nil {
+		innerCtx.Cause = e.stateError()
+	}
 	if !innerResult.IsSuccess() {
 		e.logger.Warn("batch inner application failed",
 			"txHash", hex.EncodeToString(txHash[:]),
 			"ter", innerResult.String())
+		if innerCtx.Cause != nil {
+			innerResult = ter.TefEXCEPTION
+		}
 		return txcore.ApplyResult{
 			Result:  innerResult,
 			Applied: false,
@@ -309,7 +347,7 @@ func (e *Engine) ApplyBatchInnerTransactions(
 	}
 	if innerCtx.Cause != nil {
 		return txcore.ApplyResult{
-			Result:  ter.TefINTERNAL,
+			Result:  ter.TefEXCEPTION,
 			Applied: false,
 			Message: innerCtx.Cause.Error(),
 			Cause:   innerCtx.Cause,
@@ -381,6 +419,14 @@ func (e *Engine) applyPseudoSafely(apply func() txcore.ApplyResult) (result txco
 		if !completed {
 			e.logger.Error("pseudo-transaction apply panic recovered, returning tefEXCEPTION",
 				"panic", recovered)
+			if cause := e.stateError(); cause != nil {
+				result = txcore.ApplyResult{
+					Result:  ter.TefEXCEPTION,
+					Applied: false,
+					Message: ter.TefEXCEPTION.Message(),
+					Cause:   cause,
+				}
+			}
 		}
 	}()
 
@@ -396,7 +442,19 @@ func (e *Engine) applyPseudoSafely(apply func() txcore.ApplyResult) (result txco
 // - No signature
 // - No sequence number checks
 // Reference: rippled Change.cpp preflight/preclaim/doApply
-func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transaction) txcore.ApplyResult {
+func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transaction) (applyResult txcore.ApplyResult) {
+	e.resetStateErrors()
+	defer func() {
+		if cause := e.stateError(); cause != nil {
+			applyResult = txcore.ApplyResult{
+				Result:  ter.TefEXCEPTION,
+				Applied: false,
+				Fee:     0,
+				Message: ter.TefEXCEPTION.Message(),
+				Cause:   cause,
+			}
+		}
+	}()
 	rules := e.rules()
 
 	// Preflight gates — mirror rippled Change::preflight (Change.cpp:36-80).
@@ -469,7 +527,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	}
 
 	// Create ApplyStateTable to track changes
-	table := applystate.NewApplyStateTable(snapshot, txHash, e.config.LedgerSequence, rules)
+	table := applystate.NewApplyStateTableWithErrorRecorder(snapshot, txHash, e.config.LedgerSequence, rules, e.stateErrors.record)
 
 	// Create a minimal ApplyContext for pseudo-transactions
 	ctx := &txcore.ApplyContext{
@@ -575,7 +633,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		ctx:                 ctx,
 	}
 
-	tecTable := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+	tecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
 
 	if st.isTicket {
 		if r := e.consumeTicketForRecovery(st, tecTable); r != ter.TesSUCCESS {
@@ -596,11 +654,20 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 	// two-pass reset the doApply tec path uses. The fee-only state this builds is
 	// exactly the reset() state, so applyInvariantViolation's semantics fit.
 	if r, handled := e.runInvariantsOnTable(st, origResult, tecTable); handled {
+		if e.stateError() != nil {
+			return ter.TefEXCEPTION, 0
+		}
 		return r, st.chargedFee
+	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION, 0
 	}
 
 	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL, 0
+	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION, 0
 	}
 	generatedMeta, applyErr := e.applyTable(tecTable)
 	if applyErr != nil {

@@ -110,7 +110,7 @@ func (bp *BlockProcessor) applyTransaction(
 	}
 	result.Hash = hash
 
-	base, ok := bp.engine.view.(*ledger.Ledger)
+	base, ok := bp.engine.baseView.(*ledger.Ledger)
 	if !ok {
 		return result, fmt.Errorf("block processor requires a ledger-backed engine view")
 	}

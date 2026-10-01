@@ -31,6 +31,7 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 }
 
 func (e *Engine) preclaimWithCause(tx txcore.Transaction, txHash [32]byte) (result ter.Result, cause error) {
+	e.resetStateErrors()
 	// Any panic reachable from adversarial ledger state — most commonly an
 	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
 	// or amount — is recovered and surfaced as tefEXCEPTION so it can never
@@ -44,6 +45,12 @@ func (e *Engine) preclaimWithCause(tx txcore.Transaction, txHash [32]byte) (resu
 		if r := recover(); r != nil {
 			e.logger.Error("transaction preclaim panic recovered, returning tefEXCEPTION",
 				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+		if cause == nil {
+			cause = e.stateError()
+		}
+		if cause != nil {
 			result = ter.TefEXCEPTION
 		}
 	}()
@@ -127,10 +134,17 @@ func (e *Engine) preclaimInner(tx txcore.Transaction, txHash [32]byte) (result t
 }
 
 func (e *Engine) preclaimInnerWithCause(tx txcore.Transaction, txHash [32]byte) (result ter.Result, cause error) {
+	e.resetStateErrors()
 	defer func() {
 		if r := recover(); r != nil {
 			e.logger.Error("batch inner preclaim panic recovered, returning tefEXCEPTION",
 				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+		if cause == nil {
+			cause = e.stateError()
+		}
+		if cause != nil {
 			result = ter.TefEXCEPTION
 		}
 	}()
