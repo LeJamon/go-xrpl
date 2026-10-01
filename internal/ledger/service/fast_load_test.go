@@ -1040,7 +1040,7 @@ func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 		var key [32]byte
 		key[0] = byte(i / shamap.BranchFactor)
 		key[1] = byte((i % shamap.BranchFactor) << 4)
-		key[31] = byte(i)
+		key[31] = byte(i + 1)
 		data := make([]byte, 12)
 		data[10] = byte(i >> 8)
 		data[11] = byte(i)

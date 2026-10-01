@@ -72,8 +72,7 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 					destination := jtx.NewAccount(destinationName)
 					insertAccountRoot(t, f.svc, destination.Address, 100_000_000, 0)
 					insertTrustLine(t, f.svc, destination.Address, master.Address, "USD", "0")
-					_, err := f.svc.AcceptLedger(t.Context())
-					require.NoError(t, err)
+					closeStoredLedgerFixture(t, f.svc)
 					f.svc.FlushPersists()
 					f.validated = f.svc.GetValidatedLedger()
 					f.stateRoot = f.validated.Header().AccountHash
@@ -127,15 +126,19 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				require.False(t, simulation.Applied)
 				f.svc.mu.Lock()
 				f.svc.openLedgerView = originalOpenView
-				f.svc.closedLedger = parent
-				beforeOpen := f.svc.openLedger
 				f.svc.mu.Unlock()
 				if standalone {
-					pending, parseErr := openledger.ParsePendingTx(blob)
-					require.NoError(t, parseErr)
-					f.svc.mu.Lock()
-					f.svc.pendingTxs = []openledger.PendingTx{pending}
-					f.svc.mu.Unlock()
+					result, submitErr := f.svc.SubmitOpenLedgerTxDetailed(blob, false)
+					require.NoError(t, submitErr)
+					require.Equal(t, ter.TesSUCCESS, result.Result)
+					require.True(t, result.Applied)
+					require.Equal(t, uint32(1), f.svc.GetOpenLedger().TxCount())
+				}
+				f.svc.mu.Lock()
+				f.svc.closedLedger = parent
+				beforeOpen := f.svc.currentOpenLedgerLocked()
+				f.svc.mu.Unlock()
+				if standalone {
 					_, err = f.svc.AcceptLedger(t.Context())
 				} else {
 					_, err = f.svc.AcceptConsensusResult(t.Context(), parent, [][]byte{blob}, nil, time.Now(), true)
