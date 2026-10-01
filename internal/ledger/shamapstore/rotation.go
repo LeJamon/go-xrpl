@@ -446,6 +446,13 @@ func (r *Rotator) waitHealthy(ctx context.Context) bool {
 	}
 }
 
+func (r *Rotator) healthyNow() bool {
+	r.healthMu.RLock()
+	healthy := r.healthy
+	r.healthMu.RUnlock()
+	return healthy == nil || healthy()
+}
+
 func (r *Rotator) refreshCheckpoint(ctx context.Context, work time.Duration) error {
 	if !r.waitHealthy(ctx) {
 		return ctx.Err()
@@ -515,7 +522,15 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 			"requestedSeq", validatedSeq, "refreshedSeq", refreshedSeq)
 		return
 	}
-	if !r.waitHealthy(ctx) {
+	if retain != nil && stateGuard == nil {
+		r.logger.Warn("online delete: live-state retention returned no commit guard")
+		return
+	}
+	if stateGuard == nil {
+		if !r.waitHealthy(ctx) {
+			return
+		}
+	} else if !r.healthyNow() {
 		return
 	}
 
@@ -597,8 +612,12 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		r.logger.Warn("online delete: nodestore rotation did not commit", "boundary", lastRotated)
 		return
 	}
+	if err := r.store.SetRotation(refreshedSeq, minimumOnline); err != nil {
+		r.logger.Warn("online delete: failed to persist committed rotation", "seq", refreshedSeq, "err", err)
+		return
+	}
 	if stateGuard != nil {
-		if !r.waitHealthy(ctx) {
+		if !r.healthyNow() {
 			return
 		}
 		if err := deleteRelational(); err != nil {
@@ -608,10 +627,6 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 			r.logger.Warn("online delete: relational prune failed", "boundary", lastRotated, "err", err)
 			return
 		}
-	}
-	if err := r.store.SetRotation(refreshedSeq, minimumOnline); err != nil {
-		r.logger.Warn("online delete: failed to persist lastRotated", "seq", refreshedSeq, "err", err)
-		return
 	}
 
 	r.logger.Info("online delete: rotation finished",

@@ -47,10 +47,6 @@ func (d *KVDatabase) DeleteBeforeWithRetention(
 		return 0, err
 	}
 	defer d.mutationMu.Unlock()
-	if err := d.begin(ctx); err != nil {
-		return 0, err
-	}
-	defer d.lifecycleMu.RUnlock()
 	if guard != nil {
 		release, guardErr := guard(ctx)
 		if release != nil {
@@ -60,6 +56,10 @@ func (d *KVDatabase) DeleteBeforeWithRetention(
 			return 0, guardErr
 		}
 	}
+	if err := d.begin(ctx); err != nil {
+		return 0, err
+	}
+	defer d.lifecycleMu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}

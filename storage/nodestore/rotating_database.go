@@ -228,10 +228,6 @@ func (d *RotatingKVDatabase) RotateGenerationWithRetention(
 		return false, err
 	}
 	defer d.mutationMu.Unlock()
-	if err := d.begin(ctx); err != nil {
-		return false, err
-	}
-	defer d.lifecycleMu.RUnlock()
 	if guard != nil {
 		release, guardErr := guard(ctx)
 		if release != nil {
@@ -241,6 +237,10 @@ func (d *RotatingKVDatabase) RotateGenerationWithRetention(
 			return false, guardErr
 		}
 	}
+	if err := d.begin(ctx); err != nil {
+		return false, err
+	}
+	defer d.lifecycleMu.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}

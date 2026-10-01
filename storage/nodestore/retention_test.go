@@ -244,6 +244,43 @@ func TestMutationAdmissionHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestRetentionGuardCanUseDatabaseWhileLifecycleWriterWaits(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	node := testNode(NodeAccount, []byte("guard-read"), 1)
+	if err := database.Store(t.Context(), node); err != nil {
+		t.Fatal(err)
+	}
+
+	writerStarted := make(chan struct{})
+	writerAcquired := make(chan struct{})
+	guardErr := errors.New("lifecycle writer did not acquire")
+	deleted, err := database.DeleteBeforeWithRetention(
+		t.Context(), 2, 1,
+		func(ctx context.Context) (func(), error) {
+			go func() {
+				close(writerStarted)
+				database.lifecycleMu.Lock()
+				close(writerAcquired)
+				database.lifecycleMu.Unlock()
+			}()
+			<-writerStarted
+			select {
+			case <-writerAcquired:
+			case <-time.After(time.Second):
+				return nil, guardErr
+			}
+			if _, fetchErr := database.Fetch(ctx, node.Hash); fetchErr != nil {
+				return nil, fetchErr
+			}
+			return nil, nil
+		},
+		nil,
+	)
+	if err != nil || deleted != 1 {
+		t.Fatalf("deleted=%d err=%v, want one successful deletion", deleted, err)
+	}
+}
+
 func TestRetentionCancellationAfterGuardReleasesWithoutMutation(t *testing.T) {
 	database := testDatabase(t, memorydb.New(), noCacheConfig())
 	ctx, cancel := context.WithCancel(context.Background())
