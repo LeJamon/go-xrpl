@@ -94,10 +94,11 @@ func (e *Engine) applyWithContext(
 	}
 
 	// Step 3: Preclaim checks (validate against ledger state)
+	var preclaimCause error
 	if parentBatchID != nil {
-		result = e.preclaimInner(tx, txHash)
+		result, preclaimCause = e.preclaimInnerWithCause(tx, txHash)
 	} else {
-		result = e.preclaim(tx, txHash)
+		result, preclaimCause = e.preclaimWithCause(tx, txHash)
 	}
 	if !result.IsSuccess() && !result.IsTec() {
 		e.logger.Debug("preclaim failed",
@@ -110,6 +111,7 @@ func (e *Engine) applyWithContext(
 			Result:  result,
 			Applied: false,
 			Message: result.Message(),
+			Cause:   preclaimCause,
 		}
 	}
 
@@ -126,6 +128,7 @@ func (e *Engine) applyWithContext(
 			Result:  result,
 			Applied: false,
 			Message: result.Message(),
+			Cause:   preclaimCause,
 		}
 	}
 
@@ -167,6 +170,7 @@ func (e *Engine) applyWithContext(
 				Result:  result,
 				Applied: false,
 				Message: result.Message(),
+				Cause:   preclaimCause,
 			}
 		}
 		// Otherwise the fee must still be deducted and sequence consumed, but
@@ -186,6 +190,7 @@ func (e *Engine) applyWithContext(
 				Result:  committed,
 				Applied: false,
 				Message: committed.Message(),
+				Cause:   preclaimCause,
 			}
 		}
 		result = committed
@@ -246,6 +251,7 @@ func (e *Engine) applyWithContext(
 		Fee:      fee,
 		Metadata: metadata,
 		Message:  result.Message(),
+		Cause:    preclaimCause,
 	}
 }
 
@@ -298,6 +304,15 @@ func (e *Engine) ApplyBatchInnerTransactions(
 			Result:  innerResult,
 			Applied: false,
 			Message: innerResult.Message(),
+			Cause:   innerCtx.Cause,
+		}
+	}
+	if innerCtx.Cause != nil {
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
+			Applied: false,
+			Message: innerCtx.Cause.Error(),
+			Cause:   innerCtx.Cause,
 		}
 	}
 

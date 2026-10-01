@@ -30,6 +30,11 @@ type ApplyResult struct {
 
 	// Message is a human-readable result message
 	Message string
+
+	// Cause retains a non-protocol error that caused Result. It is populated
+	// only for execution paths that can prove the underlying operation failed;
+	// the TER result remains unchanged for protocol callers.
+	Cause error
 }
 
 // Metadata tracks changes made by a transaction
