@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -234,6 +235,165 @@ func TestRecordLiveStateVerificationFailureDoesNotTakeServiceMu(t *testing.T) {
 	fault := svc.replayFaults.Snapshot()
 	require.NotNil(t, fault)
 	require.Equal(t, replayfault.MissingState, fault.Class)
+}
+
+func TestStartupVerificationEnrichesMatchedLegacyFaultWithoutReclassifyingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	svc := replayFaultService(t, path)
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	originalDetail := json.RawMessage(`{"failure":"legacy execution evidence"}`)
+	original := replayEvidence{
+		Parent:         parent.Header(),
+		Target:         target.Header(),
+		Transactions:   []inbound.DecodedTx{{Index: 7, TxBytes: []byte{1, 2, 3}}},
+		NetworkID:      svc.config.NetworkID,
+		Authenticated:  false,
+		ParentSnapshot: false,
+		Detail:         originalDetail,
+	}
+	raw, err := json.Marshal(original)
+	require.NoError(t, err)
+	rawFields := make(map[string]json.RawMessage)
+	require.NoError(t, json.Unmarshal(raw, &rawFields))
+	rawFields["legacy_extra"] = json.RawMessage(`{"preserve":true}`)
+	raw, err = json.Marshal(rawFields)
+	require.NoError(t, err)
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{
+		Class:      replayfault.Unclassified,
+		ParentHash: parent.Hash(),
+		TargetHash: target.Hash(),
+		Sequence:   target.Sequence(),
+		Message:    "legacy replay disagreement",
+		Evidence:   raw,
+	}))
+	faultBefore := svc.replayFaults.Snapshot()
+	require.NotNil(t, faultBefore)
+	missingHash := [32]byte{0x42}
+	svc.recordStartupVerificationFailure(t.Context(), parent.Header(), &storedSHAMapVerificationFailure{
+		mapType: shamap.TypeState,
+		err:     &shamap.MissingNodeError{Hash: missingHash},
+	})
+
+	fault := svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, faultBefore.ID, fault.ID)
+	require.Equal(t, faultBefore.Class, fault.Class)
+	require.Equal(t, faultBefore.Message, fault.Message)
+	var enriched replayEvidence
+	require.NoError(t, json.Unmarshal(fault.Evidence, &enriched))
+	require.Equal(t, original.Authenticated, enriched.Authenticated)
+	require.Equal(t, original.Transactions, enriched.Transactions)
+	require.Equal(t, originalDetail, enriched.Detail)
+	enrichedFields := make(map[string]json.RawMessage)
+	require.NoError(t, json.Unmarshal(fault.Evidence, &enrichedFields))
+	require.JSONEq(t, `{"preserve":true}`, string(enrichedFields["legacy_extra"]))
+	require.NotNil(t, enriched.StartupVerification)
+	require.Equal(t, parent.Hash(), enriched.StartupVerification.Ledger.Hash)
+	require.Equal(t, replayfault.MissingState, enriched.StartupVerification.Class)
+	require.Equal(t, missingHash, enriched.StartupVerification.MissingNodeHash)
+	require.Equal(t, "state", enriched.StartupVerification.MissingTree)
+	require.Contains(t, svc.ReplayFaultStatus().Recovery.BlockedReason, "startup_verification_missing_state")
+	require.Contains(t, svc.ReplayFaultStatus().Recovery.OperatorAction, "reauthenticated")
+	require.Contains(t, svc.ReplayFaultStatus().Recovery.LastError, "missing_node=42")
+
+	reopened, err := replayfault.Open(path)
+	require.NoError(t, err)
+	status := reopened.Status()
+	require.Equal(t, svc.ReplayFaultStatus().Recovery.BlockedReason, status.Recovery.BlockedReason)
+	require.Equal(t, svc.ReplayFaultStatus().Recovery.OperatorAction, status.Recovery.OperatorAction)
+	require.Equal(t, svc.ReplayFaultStatus().Recovery.LastError, status.Recovery.LastError)
+}
+
+func TestStartupVerificationRejectsUnrelatedOrInvalidEvidence(t *testing.T) {
+	svc := replayFaultService(t, "")
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	evidence := replayEvidence{Parent: parent.Header(), Target: target.Header(), NetworkID: svc.config.NetworkID}
+	raw, err := json.Marshal(evidence)
+	require.NoError(t, err)
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{
+		Class:      replayfault.Unclassified,
+		ParentHash: parent.Hash(),
+		TargetHash: target.Hash(),
+		Sequence:   target.Sequence(),
+		Evidence:   raw,
+	}))
+	faultBefore := svc.replayFaults.Snapshot()
+	require.NotNil(t, faultBefore)
+
+	wrongParent := parent.Header()
+	wrongParent.Hash[0] ^= 1
+	svc.recordStartupVerificationFailure(t.Context(), wrongParent, &storedSHAMapVerificationFailure{
+		mapType: shamap.TypeState,
+		err:     &shamap.MissingNodeError{Hash: [32]byte{0x43}},
+	})
+	faultAfterMismatch := svc.replayFaults.Snapshot()
+	require.Equal(t, faultBefore.Evidence, faultAfterMismatch.Evidence)
+
+	invalidTarget := target.Header()
+	invalidTarget.Hash[0] ^= 1
+	invalid := evidence
+	invalid.Target = invalidTarget
+	invalidRaw, err := json.Marshal(invalid)
+	require.NoError(t, err)
+	require.NoError(t, svc.replayFaults.Update(faultBefore.ID, replayfault.Fault{
+		Evidence: invalidRaw,
+	}))
+	invalidBefore := svc.replayFaults.Snapshot()
+	svc.recordStartupVerificationFailure(t.Context(), parent.Header(), &storedSHAMapVerificationFailure{
+		mapType: shamap.TypeState,
+		err:     &shamap.MissingNodeError{Hash: [32]byte{0x44}},
+	})
+	invalidAfter := svc.replayFaults.Snapshot()
+	require.True(t, bytes.Equal(invalidBefore.Evidence, invalidAfter.Evidence))
+}
+
+func TestStartupVerificationPreservesExecutionDisagreementClass(t *testing.T) {
+	svc := replayFaultService(t, "")
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	evidence := replayEvidence{Parent: parent.Header(), Target: target.Header(), NetworkID: svc.config.NetworkID}
+	raw, err := json.Marshal(evidence)
+	require.NoError(t, err)
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{
+		Class:      replayfault.ExecutionDisagreement,
+		ParentHash: parent.Hash(),
+		TargetHash: target.Hash(),
+		Sequence:   target.Sequence(),
+		Evidence:   raw,
+	}))
+	svc.recordStartupVerificationFailure(t.Context(), parent.Header(), &storedSHAMapVerificationFailure{
+		mapType: shamap.TypeState,
+		err:     &shamap.MissingNodeError{Hash: [32]byte{0x46}},
+	})
+	fault := svc.replayFaults.Snapshot()
+	require.Equal(t, replayfault.ExecutionDisagreement, fault.Class)
+	var enriched replayEvidence
+	require.NoError(t, json.Unmarshal(fault.Evidence, &enriched))
+	require.NotNil(t, enriched.StartupVerification)
+}
+
+func TestStartupVerificationRequiresMatchingNetwork(t *testing.T) {
+	svc := replayFaultService(t, "")
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	evidence := replayEvidence{Parent: parent.Header(), Target: target.Header(), NetworkID: svc.config.NetworkID + 1}
+	raw, err := json.Marshal(evidence)
+	require.NoError(t, err)
+	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{
+		Class:      replayfault.Unclassified,
+		ParentHash: parent.Hash(),
+		TargetHash: target.Hash(),
+		Sequence:   target.Sequence(),
+		Evidence:   raw,
+	}))
+	faultBefore := svc.replayFaults.Snapshot()
+	svc.recordStartupVerificationFailure(t.Context(), parent.Header(), &storedSHAMapVerificationFailure{
+		mapType: shamap.TypeState,
+		err:     &shamap.MissingNodeError{Hash: [32]byte{0x45}},
+	})
+	require.Equal(t, faultBefore.Evidence, svc.replayFaults.Snapshot().Evidence)
 }
 
 func TestStateBaseRecertificationFaultPersistsAcrossRestart(t *testing.T) {

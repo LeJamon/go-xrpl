@@ -34,6 +34,10 @@ func TestReplayFaultStatusJSONOmitsEvidence(t *testing.T) {
 	created := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	status := replayfault.Status{
 		Blocked: true,
+		Recovery: replayfault.RecoveryProgress{
+			BlockedReason:  "historical_target_authentication_required",
+			OperatorAction: "call replay_recover with fault_id fault-1",
+		},
 		Fault: &replayfault.Fault{
 			ID:         "fault-1",
 			Class:      replayfault.ExecutionDisagreement,
@@ -51,6 +55,9 @@ func TestReplayFaultStatusJSONOmitsEvidence(t *testing.T) {
 	got := replayFaultStatusJSON(status, true)
 	assert.Equal(t, false, got["follower_mode"])
 	assert.Equal(t, "pending", got["transition_verification"])
+	recovery := got["recovery"].(map[string]any)
+	assert.Equal(t, status.Recovery.BlockedReason, recovery["blocked_reason"])
+	assert.Equal(t, status.Recovery.OperatorAction, recovery["operator_action"])
 	fault := got["fault"].(map[string]any)
 	assert.Equal(t, "fault-1", fault["id"])
 	assert.Equal(t, "execution_disagreement", fault["class"])
@@ -59,6 +66,13 @@ func TestReplayFaultStatusJSONOmitsEvidence(t *testing.T) {
 	encoded, err := json.Marshal(got)
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "private")
+}
+
+func TestReplayFaultStatusJSONOmitsAbsentBlocker(t *testing.T) {
+	got := replayFaultStatusJSON(replayfault.Status{}, false)
+	recovery := got["recovery"].(map[string]any)
+	assert.NotContains(t, recovery, "blocked_reason")
+	assert.NotContains(t, recovery, "operator_action")
 }
 
 func TestReplayFaultStatusJSONMarksRecoveryRunning(t *testing.T) {

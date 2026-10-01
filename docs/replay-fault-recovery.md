@@ -79,3 +79,38 @@ execution disagreement. Execution disagreement requires authenticated target
 inputs, a complete parent matching its state commitment, and reproduction of
 the same structured failure on a fresh replay. Other execution failures remain
 unclassified and keep validator duties blocked.
+
+## Restarting with incomplete state and a legacy fault
+
+When strict startup verification discovers missing or corrupt state belonging
+to the saved fault's parent, the journal retains that new diagnosis alongside
+the original replay evidence. The fault ID, original failure message,
+transactions, and authentication evidence are preserved. A storage diagnosis
+does not authenticate the failed transition or supersede an execution
+disagreement.
+
+Ordinary pivot acquisition is suspended while the replay fault is unresolved.
+Repeated peer or quorum notifications do not create and cancel new pivot
+sessions. Inspect `replay_fault.recovery.blocked_reason` and
+`replay_fault.recovery.operator_action` in the admin `server_info` response, then call `replay_recover` with the reported fault ID. Recovery
+checks authentication before requesting bounded acquisition of the exact
+missing state; inspect `recovery.last_error` and `recovery.acquisition_error`
+after the worker finishes. Retry explicitly after the requested acquisition
+completes. Successful verification of the saved transition is still required
+to release validator duties.
+
+If the old target has aged out of trusted-validation history, a quorum for a
+newer ledger is insufficient. The node must also have a verified ancestry chain
+connecting the saved target to that trusted ledger. Restoring the missing
+parent nodes alone does not supply this authentication. Do not edit
+`authenticated`, remove the journal, or treat acquisition of a newer pivot as
+proof that the old replay failure is resolved.
+
+If historical authentication cannot be established, keep this validator
+blocked and preserve its data directory and evidence for diagnosis. To restore
+network visibility meanwhile, start a separate non-validating node with a new
+data directory, the same network and trusted-validator configuration, and
+neither `validation_seed` nor `validator_token`. Let that node acquire and
+verify network state normally. This is an observer recovery workflow; it does
+not authorize resuming the faulted validator or clear its journal. There is no
+administrative override that certifies an unauthenticated historical transition.

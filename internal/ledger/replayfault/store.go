@@ -34,6 +34,8 @@ type Fault struct {
 	AcquisitionAttempts int             `json:"acquisition_attempts,omitempty"`
 	AcquisitionError    string          `json:"acquisition_error,omitempty"`
 	RecoveryError       string          `json:"recovery_error,omitempty"`
+	BlockedReason       string          `json:"blocked_reason,omitempty"`
+	OperatorAction      string          `json:"operator_action,omitempty"`
 	ID                  string          `json:"id"`
 	Class               Class           `json:"class"`
 	ParentHash          [32]byte        `json:"parent_hash"`
@@ -47,12 +49,14 @@ type Fault struct {
 }
 
 // RecoveryProgress describes the current or most recent explicit
-// revalidation attempt.
+// revalidation attempt and any durable blocker requiring operator action.
 type RecoveryProgress struct {
 	AcquisitionAttempts int       `json:"acquisition_attempts,omitempty"`
 	AcquisitionError    string    `json:"acquisition_error,omitempty"`
+	BlockedReason       string    `json:"blocked_reason,omitempty"`
 	InFlight            bool      `json:"in_flight"`
 	ID                  string    `json:"id,omitempty"`
+	OperatorAction      string    `json:"operator_action,omitempty"`
 	Generation          uint64    `json:"generation,omitempty"`
 	Attempts            int       `json:"attempts,omitempty"`
 	StartedAt           time.Time `json:"started_at,omitempty"`
@@ -70,8 +74,10 @@ func (p RecoveryProgress) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		AcquisitionAttempts int        `json:"acquisition_attempts,omitempty"`
 		AcquisitionError    string     `json:"acquisition_error,omitempty"`
+		BlockedReason       string     `json:"blocked_reason,omitempty"`
 		InFlight            bool       `json:"in_flight"`
 		ID                  string     `json:"id,omitempty"`
+		OperatorAction      string     `json:"operator_action,omitempty"`
 		Generation          uint64     `json:"generation,omitempty"`
 		Attempts            int        `json:"attempts,omitempty"`
 		StartedAt           *time.Time `json:"started_at,omitempty"`
@@ -79,8 +85,10 @@ func (p RecoveryProgress) MarshalJSON() ([]byte, error) {
 	}{
 		AcquisitionAttempts: p.AcquisitionAttempts,
 		AcquisitionError:    p.AcquisitionError,
+		BlockedReason:       p.BlockedReason,
 		InFlight:            p.InFlight,
 		ID:                  p.ID,
+		OperatorAction:      p.OperatorAction,
 		Generation:          p.Generation,
 		Attempts:            p.Attempts,
 		StartedAt:           startedAt,
@@ -369,6 +377,12 @@ func (s *Store) Update(id string, fault Fault) error {
 	next.CreatedAt = s.fault.CreatedAt
 	next.Attempts = s.fault.Attempts
 	next.AcquisitionAttempts = max(next.AcquisitionAttempts, s.fault.AcquisitionAttempts)
+	if next.BlockedReason == "" {
+		next.BlockedReason = s.fault.BlockedReason
+	}
+	if next.OperatorAction == "" {
+		next.OperatorAction = s.fault.OperatorAction
+	}
 	if next.Class == "" {
 		next.Class = s.fault.Class
 	}
@@ -378,6 +392,7 @@ func (s *Store) Update(id string, fault Fault) error {
 	next.Evidence = cloneRaw(next.Evidence)
 	s.fault = cloneFault(&next)
 	s.blocked = true
+	s.recovery.LastError = next.RecoveryError
 	s.generation++
 	if err := s.persistLocked(s.fault); err != nil {
 		s.persistenceErr = err
@@ -415,10 +430,18 @@ func (s *Store) Status() Status {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	recovery := s.recovery.RecoveryProgress
+	if s.fault != nil {
+		if recovery.LastError == "" {
+			recovery.LastError = s.fault.RecoveryError
+		}
+		recovery.BlockedReason = s.fault.BlockedReason
+		recovery.OperatorAction = s.fault.OperatorAction
+	}
 	return Status{
 		Fault:            faultSummary(s.fault),
 		Blocked:          s.blocked,
-		Recovery:         s.recovery.RecoveryProgress,
+		Recovery:         recovery,
 		PersistenceError: s.persistenceErr,
 	}
 }

@@ -95,6 +95,8 @@ type catchupReplayCoordinator struct {
 	replayPipelinePersistUs              atomic.Uint64
 
 	acquisitionMu             sync.Mutex
+	replayFaultBlockWarningMu sync.Mutex
+	replayFaultBlockWarningID string
 	replayAvailabilityRetries map[[32]byte]replayAvailabilityRetryState
 	replayFallbackRequired    map[[32]byte]uint32
 	replayCommitMu            sync.Mutex
