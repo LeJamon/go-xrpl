@@ -43,6 +43,13 @@ type replayEvidence struct {
 	Detail                   json.RawMessage     `json:"detail,omitempty"`
 }
 
+type replayRepairReservation struct {
+	// These pointers remain reusable until the durable replay-fault clear has
+	// committed. Cleanup compares identity so a newer acquisition is preserved.
+	parent *ledger.Ledger
+	target *ledger.Ledger
+}
+
 const replayFaultOriginStateBaseRecertification = "state_base_recertification"
 const replayFaultOriginExecution = "execution"
 
@@ -475,7 +482,8 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		return err
 	}
 	defer releaseAdmission()
-	return s.replayFaults.Revalidate(ctx, id, func(ctx context.Context, fault replayfault.Fault) error {
+	var reservation replayRepairReservation
+	err = s.replayFaults.Revalidate(ctx, id, func(ctx context.Context, fault replayfault.Fault) error {
 		if onStarted != nil {
 			onStarted()
 		}
@@ -496,8 +504,13 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 			return errors.New("replay evidence network does not match configuration")
 		}
 		if evidence.Origin == replayFaultOriginStateBaseRecertification || evidence.Origin == replayFaultOriginExecution {
-			return s.revalidateStateBaseRecertificationFault(ctx, fault, evidence)
+			var err error
+			reservation, err = s.revalidateStateBaseRecertificationFault(ctx, fault, evidence)
+			return err
 		}
+		s.mu.RLock()
+		acquiredParent := s.replayRepairParent
+		s.mu.RUnlock()
 		parent, err := s.loadReplayParent(ctx, fault, evidence)
 		if err != nil {
 			class := replayStateFailureClass(err)
@@ -541,6 +554,7 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 				}
 				return errors.New("target transaction acquisition requested; retry after completion")
 			}
+			reservation.target = repaired
 			txMap, err = repaired.TxMapSnapshot()
 			if err != nil {
 				return err
@@ -568,16 +582,25 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 			return err
 		}
 		if fault.Class == replayfault.MissingState || fault.Class == replayfault.CorruptState || evidence.RepairClass == replayfault.MissingState || evidence.RepairClass == replayfault.CorruptState {
+			if acquiredParent != nil && parent.Hash() == acquiredParent.Hash() {
+				reservation.parent = acquiredParent
+			}
 			return s.restoreReplayParent(ctx, parent)
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	s.releaseReplayRepair(reservation)
+	return nil
 }
 
-func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, fault replayfault.Fault, evidence replayEvidence) error {
+func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, fault replayfault.Fault, evidence replayEvidence) (replayRepairReservation, error) {
+	var reservation replayRepairReservation
 	if evidence.RepairHash == ([32]byte{}) || evidence.RepairHash != fault.TargetHash || evidence.RepairSequence != fault.Sequence ||
 		evidence.Target.Hash != fault.TargetHash || evidence.Target.ParentHash != fault.ParentHash || header.CalculateHash(evidence.Target) != fault.TargetHash {
-		return errors.New("state base repair identity is invalid")
+		return reservation, errors.New("state base repair identity is invalid")
 	}
 	s.mu.RLock()
 	repaired := s.replayRepairTarget
@@ -586,41 +609,42 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 	s.mu.RUnlock()
 	if repaired == nil || repaired.Hash() != evidence.RepairHash {
 		if err := s.requestReplayParentRepair(fault, evidence); err != nil {
-			return err
+			return reservation, err
 		}
-		return errors.New("state base repair requested; retry explicitly after acquisition")
+		return reservation, errors.New("state base repair requested; retry explicitly after acquisition")
 	}
+	reservation.target = repaired
 	validatedIdentity := validated != nil && validated.Hash() == evidence.Target.Hash && validated.Sequence() == evidence.Target.LedgerIndex
 	if validatedIdentity && !repaired.IsValidated() {
 		if err := repaired.SetValidated(); err != nil {
-			return fmt.Errorf("mark exact validated repair: %w", err)
+			return reservation, fmt.Errorf("mark exact validated repair: %w", err)
 		}
 	}
 	if evidence.Origin == replayFaultOriginExecution {
 		if closed == nil || closed.Hash() != evidence.Target.Hash || closed.Sequence() != evidence.Target.LedgerIndex {
-			return errors.New("closed ledger changed while execution repair was pending")
+			return reservation, errors.New("closed ledger changed while execution repair was pending")
 		}
 		if err := s.persistRepairedLedger(ctx, repaired); err != nil {
-			return fmt.Errorf("persist repaired execution state: %w", err)
+			return reservation, fmt.Errorf("persist repaired execution state: %w", err)
 		}
 		if err := s.restoreReplayParentAt(ctx, repaired, evidence.Target.Hash); err != nil {
-			return fmt.Errorf("install repaired execution state: %w", err)
+			return reservation, fmt.Errorf("install repaired execution state: %w", err)
 		}
-		return nil
+		return reservation, nil
 	}
 	if !validatedIdentity {
-		return errors.New("validated ledger changed while state base repair was pending")
+		return reservation, errors.New("validated ledger changed while state base repair was pending")
 	}
 	if err := s.restoreReplayParent(ctx, repaired); err != nil {
-		return fmt.Errorf("install repaired state base: %w", err)
+		return reservation, fmt.Errorf("install repaired state base: %w", err)
 	}
 	if err := s.persistRepairedValidatedTip(ctx, repaired); err != nil {
-		return fmt.Errorf("publish repaired validated tip: %w", err)
+		return reservation, fmt.Errorf("publish repaired validated tip: %w", err)
 	}
 	if err := s.recertifyValidatedStateBase(ctx); err != nil {
-		return fmt.Errorf("re-certify repaired state base: %w", err)
+		return reservation, fmt.Errorf("re-certify repaired state base: %w", err)
 	}
-	return nil
+	return reservation, nil
 }
 
 func (s *Service) SetReplayParentAcquirer(acquire func(uint32, [32]byte) error) {
@@ -1078,7 +1102,25 @@ func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Le
 	}
 	s.putHistoryLocked(repaired)
 	s.cachePersistedLedgerLocked(repaired)
-	s.replayRepairParent = nil
-	s.replayRepairTarget = nil
 	return nil
+}
+
+func (s *Service) releaseReplayRepair(reservation replayRepairReservation) {
+	if reservation.parent == nil && reservation.target == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Preserve an already-latched fault. The service lock also serializes this
+	// check with publication, while identity checks prevent cleanup from
+	// clearing a reservation acquired for a newer fault.
+	if s.replayFaults != nil && s.replayFaults.Snapshot() != nil {
+		return
+	}
+	if reservation.parent != nil && s.replayRepairParent == reservation.parent {
+		s.replayRepairParent = nil
+	}
+	if reservation.target != nil && s.replayRepairTarget == reservation.target {
+		s.replayRepairTarget = nil
+	}
 }
