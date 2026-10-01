@@ -129,6 +129,7 @@ func (s *Service) acceptConsensusResult(
 	if !replayed {
 		closed, retriableTxs, err = s.buildClosedLedger(ctx, expectedClosed, pending, salt, closeTime, false, &timings.apply)
 		if err != nil {
+			s.recordExecutionStateFailure(ctx, expectedClosed, err)
 			return 0, err
 		}
 	} else {

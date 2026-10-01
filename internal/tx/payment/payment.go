@@ -327,15 +327,11 @@ func equalTokens(src, dst tx.Amount) bool {
 // credential code.
 // Reference: rippled Payment.cpp:282-378
 func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
-	result, _ := p.preclaim(view, config)
+	result, _ := p.PreclaimWithError(view, config)
 	return result
 }
 
 func (p *Payment) PreclaimWithError(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (ter.Result, error) {
-	return p.preclaim(view, config)
-}
-
-func (p *Payment) preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (ter.Result, error) {
 	// Reference: rippled Payment.cpp:296-346
 	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
 		destAccount, readErr := state.ReadAccountRoot(view, destID)

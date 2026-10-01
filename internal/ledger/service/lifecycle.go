@@ -25,12 +25,18 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
-func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
+func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (sequence uint32, retErr error) {
 	releaseAdmission, err := s.AcquireStateAdmission(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer releaseAdmission()
+	var failedParent *ledger.Ledger
+	defer func() {
+		if failedParent != nil {
+			s.recordExecutionStateFailure(ctx, failedParent, retErr)
+		}
+	}()
 	if _, err := s.lockOpenLedgerIfRunningTimed(ctx, openLedgerConsensus); err != nil {
 		return 0, err
 	}
@@ -79,6 +85,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	} else {
 		closed, retriableTxs, err = s.buildClosedLedgerLocked(ctx, s.pendingTxs, closeTime, s.config.Standalone)
 		if err != nil {
+			failedParent = s.closedLedger
 			return 0, err
 		}
 	}

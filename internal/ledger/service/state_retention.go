@@ -88,7 +88,6 @@ func (s *Service) PrepareStateRetention(
 		for _, root := range openRoots {
 			previous[root.kind] = root.hash
 		}
-
 	}
 	return 0, nil, errStateRetentionChanged
 }

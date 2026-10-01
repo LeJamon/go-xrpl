@@ -66,7 +66,7 @@ func (s *Service) isServiceOwnedLedger(l *ledger.Ledger) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return l == s.genesisLedger || l == s.closedLedger || l == s.openLedger || l == s.validatedLedger
+	return l == s.closedLedger || l == s.openLedger || l == s.validatedLedger
 }
 
 func (s *Service) verifyDetachedMap(ctx context.Context, name string, source *shamap.SHAMap) error {
