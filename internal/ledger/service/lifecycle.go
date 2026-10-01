@@ -25,7 +25,18 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
-func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
+func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (sequence uint32, retErr error) {
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer releaseAdmission()
+	var failedParent *ledger.Ledger
+	defer func() {
+		if failedParent != nil {
+			s.recordExecutionStateFailure(ctx, failedParent, retErr)
+		}
+	}()
 	if _, err := s.lockOpenLedgerIfRunningTimed(ctx, openLedgerConsensus); err != nil {
 		return 0, err
 	}
@@ -74,6 +85,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	} else {
 		closed, retriableTxs, err = s.buildClosedLedgerLocked(ctx, s.pendingTxs, closeTime, s.config.Standalone)
 		if err != nil {
+			failedParent = s.closedLedger
 			return 0, err
 		}
 	}
@@ -401,6 +413,16 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 }
 
 func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func()) error {
+	releaseAdmission, err := s.AcquireStateAdmission(context.Background())
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
+	if parent != nil && !s.isServiceOwnedLedger(parent) {
+		if err := s.VerifyDetachedLedger(context.Background(), parent); err != nil {
+			return fmt.Errorf("preferred ledger state admission: %w", err)
+		}
+	}
 	if beforeLock != nil {
 		beforeLock()
 	}
@@ -581,6 +603,11 @@ func (s *Service) PromoteStoredValidatedLedgerAt(seq uint32, expectedHash [32]by
 }
 
 func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
+	releaseAdmission, err := s.AcquireStateAdmission(context.Background())
+	if err != nil {
+		return
+	}
+	defer releaseAdmission()
 	if !s.beginValidatedLedgerUpdate() {
 		return
 	}
@@ -597,6 +624,8 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		loadedStored       *ledger.Ledger
 		verifiedTipHash    [32]byte
 		historicalVerified bool
+		storedVerified     bool
+		storedVerifiedHash [32]byte
 		gateHeld           bool
 	)
 	defer func() {
@@ -620,6 +649,23 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 			s.openLedgerMu.Unlock()
 			gateHeld = false
 		}
+	}
+	verifyStoredOutsideLocks := func() (bool, error) {
+		if l == nil {
+			return false, nil
+		}
+		hash := l.Hash()
+		if storedVerified && storedVerifiedHash == hash {
+			return false, nil
+		}
+		candidate := l
+		unlockForLookup()
+		if err := s.VerifyDetachedLedger(context.Background(), candidate); err != nil {
+			return true, err
+		}
+		storedVerified = true
+		storedVerifiedHash = hash
+		return true, nil
 	}
 	for {
 		s.mu.Lock()
@@ -700,6 +746,17 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 				}
 				continue
 			}
+			if verified, err := verifyStoredOutsideLocks(); verified {
+				if err != nil {
+					s.logger.Warn("stored ledger failed state admission",
+						"seq", seq,
+						"hash", fmt.Sprintf("%x", expectedHash[:8]),
+						"error", err,
+					)
+					return
+				}
+				continue
+			}
 			break
 		}
 		fromStored = allowStored
@@ -711,12 +768,34 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 				}
 				continue
 			}
+			if verified, err := verifyStoredOutsideLocks(); verified {
+				if err != nil {
+					s.logger.Warn("stored ledger failed state admission",
+						"seq", seq,
+						"hash", fmt.Sprintf("%x", expectedHash[:8]),
+						"error", err,
+					)
+					return
+				}
+				continue
+			}
 			break
 		}
 		if loadedStored != nil {
 			l = loadedStored
 			if !gateHeld {
 				if err := acquireGateAndRetry(); err != nil {
+					return
+				}
+				continue
+			}
+			if verified, err := verifyStoredOutsideLocks(); verified {
+				if err != nil {
+					s.logger.Warn("stored ledger failed state admission",
+						"seq", seq,
+						"hash", fmt.Sprintf("%x", expectedHash[:8]),
+						"error", err,
+					)
 					return
 				}
 				continue
@@ -872,6 +951,14 @@ func (s *Service) IsFastLoadProvisional() bool {
 // changing the node's closed/open ledger frontier. Consensus may later select
 // the stored ledger as its preferred parent.
 func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
@@ -891,12 +978,20 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 // BootstrapLedgerWithState stores an acquired ledger and reports whether the
 // node still needs an initial network-ledger switch. Consensus owns that switch.
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
+		return false, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
 	initialCandidate := s.networkLedgerState != networkLedgerReady
-	err := s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	err = s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
 	if err == nil && initialCandidate && !s.ReplayBlocked() {
 		s.rememberValidatedStateBaseCandidate(*h)
 	}
@@ -906,6 +1001,14 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated
 // history without changing the node's current ledger frontiers.
 func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
@@ -1032,7 +1135,7 @@ func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.Ledg
 		if err != nil {
 			return err
 		}
-		if fault := s.replayFaults.Snapshot(); fault != nil && repaired.Hash() == fault.TargetHash {
+		if fault := s.replayFaults.Snapshot(); replayFaultMatchesRepairTarget(fault, repaired.Hash()) {
 			s.replayRepairTarget = repaired
 		} else {
 			s.replayRepairParent = repaired

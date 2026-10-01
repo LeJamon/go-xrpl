@@ -76,6 +76,7 @@ type ApplyStateTable struct {
 	base             AtomicLedgerView
 	items            map[[32]byte]*TrackedEntry
 	threadOnlyOwners map[[32]byte]*ThreadedOwner
+	recordError      func(error)
 	drops            drops.XRPAmount
 	txHash           [32]byte
 	txSeq            uint32
@@ -93,10 +94,34 @@ var _ AtomicLedgerView = (*ApplyStateTable)(nil)
 // rules controls amendment-gated behaviour (threading, metadata flags).
 // If nil, defaults to all amendments enabled.
 func NewApplyStateTable(base AtomicLedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
+	return newApplyStateTable(base, txHash, txSeq, rules, nil)
+}
+
+// NewApplyStateTableWithErrorRecorder creates an ApplyStateTable that reports
+// errors from its underlying view to record. This keeps ledger-operation
+// failures observable when a transaction handler turns them into a TER.
+func NewApplyStateTableWithErrorRecorder(
+	base AtomicLedgerView,
+	txHash [32]byte,
+	txSeq uint32,
+	rules *amendment.Rules,
+	record func(error),
+) *ApplyStateTable {
+	return newApplyStateTable(base, txHash, txSeq, rules, record)
+}
+
+func newApplyStateTable(
+	base AtomicLedgerView,
+	txHash [32]byte,
+	txSeq uint32,
+	rules *amendment.Rules,
+	record func(error),
+) *ApplyStateTable {
 	return &ApplyStateTable{
 		base:             base,
 		items:            make(map[[32]byte]*TrackedEntry),
 		threadOnlyOwners: make(map[[32]byte]*ThreadedOwner),
+		recordError:      record,
 		txHash:           txHash,
 		txSeq:            txSeq,
 		rules:            rules,
@@ -123,11 +148,19 @@ func (t *ApplyStateTable) clone() *ApplyStateTable {
 		base:             t.base,
 		items:            items,
 		threadOnlyOwners: threadOnlyOwners,
+		recordError:      t.recordError,
 		drops:            t.drops,
 		txHash:           t.txHash,
 		txSeq:            t.txSeq,
 		rules:            t.rules,
 	}
+}
+
+func (t *ApplyStateTable) record(err error) error {
+	if err != nil && t.recordError != nil {
+		t.recordError(err)
+	}
+	return err
 }
 
 func (t *ApplyStateTable) adopt(staged *ApplyStateTable) {
@@ -161,7 +194,7 @@ func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
 	// Read from base
 	data, err := t.base.Read(k)
 	if err != nil {
-		return nil, err
+		return nil, t.record(err)
 	}
 	if data != nil && !state.MatchesKeyletType(k, data) {
 		return nil, nil
@@ -184,7 +217,8 @@ func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
 	if entry, exists := t.items[k.Key]; exists {
 		return entry.Action != ActionErase && state.MatchesKeyletType(k, entry.Current), nil
 	}
-	return t.base.Exists(k)
+	exists, err := t.base.Exists(k)
+	return exists, t.record(err)
 }
 
 // Insert adds a new entry
@@ -204,7 +238,7 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 	// Check base
 	exists, err := t.base.Exists(k)
 	if err != nil {
-		return err
+		return t.record(err)
 	}
 	if exists {
 		return fmt.Errorf("entry already exists")
@@ -238,7 +272,7 @@ func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 	// Read original from base to track it
 	original, err := t.base.Read(k)
 	if err != nil {
-		return err
+		return t.record(err)
 	}
 
 	if original == nil {
@@ -284,7 +318,7 @@ func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
 	// Read original from base
 	original, err := t.base.Read(k)
 	if err != nil {
-		return err
+		return t.record(err)
 	}
 
 	// Track as erased - Current = Original since there were no modifications
@@ -327,12 +361,13 @@ func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error
 	}
 
 	// Then iterate the base, skipping any key already in our local items
-	return t.base.ForEach(func(key [32]byte, data []byte) bool {
+	err := t.base.ForEach(func(key [32]byte, data []byte) bool {
 		if _, exists := t.items[key]; exists {
 			return true // already yielded or erased — skip
 		}
 		return fn(key, data)
 	})
+	return t.record(err)
 }
 
 // Succ returns the first entry with key > the given key.
@@ -364,7 +399,7 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	for {
 		baseKey, baseData, baseFound, err := t.base.Succ(searchBase)
 		if err != nil {
-			return [32]byte{}, nil, false, err
+			return [32]byte{}, nil, false, t.record(err)
 		}
 		if !baseFound {
 			break
@@ -572,7 +607,7 @@ func (t *ApplyStateTable) applyOrdered(
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, t.record(err)
 	}
 
 	return metadata, nil
@@ -760,6 +795,7 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 			// getForMod fall-through adds to mods).
 			ownerData, err := t.base.Read(ownerKey)
 			if err != nil || ownerData == nil {
+				t.record(err)
 				continue // Owner doesn't exist, skip
 			}
 			oldPrev, oldPrevSeq, newData, changed := threadItem(ownerData, t.txHash, t.txSeq)
@@ -783,7 +819,8 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 // TxExists delegates to the base view to check if a transaction exists.
 // Reference: rippled ReadView::txExists()
 func (t *ApplyStateTable) TxExists(txID [32]byte) (bool, error) {
-	return t.base.TxExists(txID)
+	exists, err := t.base.TxExists(txID)
+	return exists, t.record(err)
 }
 
 // Rules returns the amendment rules for this view.

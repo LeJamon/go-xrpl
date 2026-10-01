@@ -27,6 +27,24 @@ func TestSyncFilter(t *testing.T) {
 	})
 }
 
+func TestNewFromRootHashReportsTypedMissingNode(t *testing.T) {
+	root := [32]byte{0xa5, 0x5a}
+	_, err := NewFromRootHashContext(t.Context(), TypeState, root, &familyAccessBase{})
+	if err == nil {
+		t.Fatal("NewFromRootHashContext unexpectedly succeeded without a root node")
+	}
+	if !errors.Is(err, ErrNodeNotInStore) {
+		t.Fatalf("missing root error = %v, want ErrNodeNotInStore", err)
+	}
+	var missing *MissingNodeError
+	if !errors.As(err, &missing) {
+		t.Fatalf("missing root error = %v, want MissingNodeError", err)
+	}
+	if missing.Hash != root {
+		t.Fatalf("missing root hash = %x, want %x", missing.Hash, root)
+	}
+}
+
 func TestGetMissingNodes(t *testing.T) {
 	// Create a complete map
 	sMap := New(TypeState)

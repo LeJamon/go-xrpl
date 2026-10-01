@@ -27,6 +27,16 @@ type Engine struct {
 	// View provides access to ledger state
 	view applystate.AtomicLedgerView
 
+	// baseView retains the concrete view supplied by the caller. The block
+	// processor needs the ledger-backed view to create and consume snapshots;
+	// transaction callbacks use the recording wrapper in view instead.
+	baseView applystate.AtomicLedgerView
+
+	// stateErrors records the first error returned by the underlying ledger
+	// view. Transaction handlers often convert view errors directly to TERs, so
+	// the engine keeps this operational cause separate from protocol results.
+	stateErrors *stateErrorRecorder
+
 	// Config holds engine configuration
 	config txcore.EngineConfig
 
@@ -73,10 +83,38 @@ func NewEngine(view applystate.AtomicLedgerView, config txcore.EngineConfig) *En
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
+	stateErrors := &stateErrorRecorder{}
+	recordingBase := &recordingAtomicView{
+		AtomicLedgerView: view,
+		recorder:         stateErrors,
+	}
+	var engineView applystate.AtomicLedgerView = recordingBase
+	if hook, ok := any(view).(mptBalanceHook); ok {
+		engineView = &recordingAtomicViewWithBalanceHook{
+			recordingAtomicView: recordingBase,
+			hook:                hook,
+		}
+	}
+	if pseudo, ok := any(view).(atomicPseudoView); ok {
+		recordingPseudo := &recordingPseudoView{
+			recordingAtomicView: recordingBase,
+			pseudo:              pseudo,
+		}
+		if hook, ok := any(view).(mptBalanceHook); ok {
+			engineView = &recordingPseudoViewWithBalanceHook{
+				recordingPseudoView: recordingPseudo,
+				hook:                hook,
+			}
+		} else {
+			engineView = recordingPseudo
+		}
+	}
 	return &Engine{
-		view:   view,
-		config: config,
-		logger: logger.Named(xrpllog.PartitionTx),
+		view:        engineView,
+		baseView:    view,
+		config:      config,
+		logger:      logger.Named(xrpllog.PartitionTx),
+		stateErrors: stateErrors,
 	}
 }
 

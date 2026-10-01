@@ -264,7 +264,10 @@ func TestApplyPseudoStateCommitErrorDoesNotMutateLedger(t *testing.T) {
 
 	result := engine.ApplyPseudo(txn)
 
-	assertNonAppliedResult(t, result, ter.TefINTERNAL)
+	assertNonAppliedResult(t, result, ter.TefEXCEPTION)
+	if result.Cause == nil || result.Cause.Error() != "commit failed" {
+		t.Fatalf("cause = %v, want commit failure", result.Cause)
+	}
 	if atomicView.candidate == nil {
 		t.Fatal("atomic commit was not attempted")
 	}

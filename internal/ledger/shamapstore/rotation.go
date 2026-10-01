@@ -50,6 +50,25 @@ type guardedNodeGenerationRotator interface {
 	) (committed bool, err error)
 }
 
+type retentionNodePruner interface {
+	DeleteBeforeWithRetention(
+		ctx context.Context,
+		boundary uint32,
+		batchSize int,
+		guard func(context.Context) (func(), error),
+		beginPrune func() func(),
+	) (deleted uint64, err error)
+}
+
+type retentionNodeGenerationRotator interface {
+	RotateGenerationWithRetention(
+		ctx context.Context,
+		lastRotated, minimumOnline uint32,
+		guard func(context.Context) (func(), error),
+		beginPrune func() func(),
+	) (committed bool, err error)
+}
+
 // RelationalPruner deletes ledger and transaction index rows below a retention
 // boundary. It is the go-xrpl equivalent of rippled's clearSql over the
 // Ledgers / Transactions / AccountTransactions tables. A nil RelationalPruner
@@ -63,6 +82,16 @@ type RelationalPruner interface {
 // checkpoint must be called periodically with the active walk context. The
 // returned sequence identifies the validated ledger that was preserved.
 type StateRefresh func(ctx context.Context, minimumSeq uint32, checkpoint func(context.Context, time.Duration) error) (uint32, error)
+
+// StateRetention preserves the live state at or above minimumSeq and returns
+// the validated sequence plus an optional prepared guard. The guard factory is
+// invoked by the node-store destructive operation only after its durable
+// mutation gate is held; its release remains held across that operation.
+type StateRetention func(
+	ctx context.Context,
+	minimumSeq uint32,
+	checkpoint func(context.Context, time.Duration) error,
+) (uint32, func(context.Context) (func(), error), error)
 
 // RotationConfig carries the node_db online-delete settings the rotator needs.
 type RotationConfig struct {
@@ -101,6 +130,7 @@ type Rotator struct {
 	logger         xrpllog.Logger
 	hooksMu        sync.RWMutex
 	refresh        StateRefresh
+	retention      StateRetention
 	advance        func(uint32)
 	beginPrune     func() func()
 	retentionGuard func() func()
@@ -152,6 +182,18 @@ func (r *Rotator) SetStateRefresh(refresh StateRefresh, advance func(uint32), be
 	r.refresh = refresh
 	r.advance = advance
 	r.beginPrune = beginPrune
+	r.hooksMu.Unlock()
+}
+
+// SetStateRetention installs the prepared live-state retention hook. When set,
+// it replaces StateRefresh for rotation attempts; StateRefresh remains the
+// fallback for rotators that have not been configured with this hook.
+func (r *Rotator) SetStateRetention(retain StateRetention) {
+	if r == nil {
+		return
+	}
+	r.hooksMu.Lock()
+	r.retention = retain
 	r.hooksMu.Unlock()
 }
 
@@ -404,6 +446,13 @@ func (r *Rotator) waitHealthy(ctx context.Context) bool {
 	}
 }
 
+func (r *Rotator) healthyNow() bool {
+	r.healthMu.RLock()
+	healthy := r.healthy
+	r.healthMu.RUnlock()
+	return healthy == nil || healthy()
+}
+
 func (r *Rotator) refreshCheckpoint(ctx context.Context, work time.Duration) error {
 	if !r.waitHealthy(ctx) {
 		return ctx.Err()
@@ -435,12 +484,13 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 
 	r.hooksMu.RLock()
 	refresh := r.refresh
+	retain := r.retention
 	advance := r.advance
 	beginPrune := r.beginPrune
 	r.hooksMu.RUnlock()
 
-	if refresh == nil {
-		r.logger.Warn("online delete: live-state refresh is not configured")
+	if retain == nil && refresh == nil {
+		r.logger.Warn("online delete: live-state retention is not configured")
 		return
 	}
 	minimumOnline := max(r.MinimumOnline(), rotationMinimum(lastRotated))
@@ -451,10 +501,19 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 	if advance != nil {
 		advance(minimumOnline)
 	}
-	refreshedSeq, err := refresh(ctx, validatedSeq, r.refreshCheckpoint)
+	var (
+		refreshedSeq uint32
+		stateGuard   func(context.Context) (func(), error)
+		err          error
+	)
+	if retain != nil {
+		refreshedSeq, stateGuard, err = retain(ctx, validatedSeq, r.refreshCheckpoint)
+	} else {
+		refreshedSeq, err = refresh(ctx, validatedSeq, r.refreshCheckpoint)
+	}
 	if err != nil {
 		if ctx.Err() == nil {
-			r.logger.Warn("online delete: live-state refresh failed", "seq", validatedSeq, "err", err)
+			r.logger.Warn("online delete: live-state retention failed", "seq", validatedSeq, "err", err)
 		}
 		return
 	}
@@ -463,25 +522,47 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 			"requestedSeq", validatedSeq, "refreshedSeq", refreshedSeq)
 		return
 	}
-	if !r.waitHealthy(ctx) {
+	if retain != nil && stateGuard == nil {
+		r.logger.Warn("online delete: live-state retention returned no commit guard")
+		return
+	}
+	if stateGuard == nil {
+		if !r.waitHealthy(ctx) {
+			return
+		}
+	} else if !r.healthyNow() {
 		return
 	}
 
-	if r.rel != nil {
-		if err := r.rel.DeleteLedgersBefore(ctx, lastRotated); err != nil {
+	deleteRelational := func() error {
+		if r.rel == nil {
+			return nil
+		}
+		return r.rel.DeleteLedgersBefore(ctx, lastRotated)
+	}
+	if stateGuard == nil {
+		if err := deleteRelational(); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			r.logger.Warn("online delete: relational prune failed", "boundary", lastRotated, "err", err)
 			return
 		}
-	}
-	if !r.waitHealthy(ctx) {
-		return
+		if !r.waitHealthy(ctx) {
+			return
+		}
 	}
 
-	deleted, committed, err := func() (uint64, bool, error) {
+	runNodes := func(guard func(context.Context) (func(), error)) (uint64, bool, error) {
 		if generations, ok := r.nodes.(NodeGenerationRotator); ok {
+			if guard != nil {
+				retaining, supported := generations.(retentionNodeGenerationRotator)
+				if !supported {
+					return 0, false, fmt.Errorf("nodestore does not support prepared retention")
+				}
+				committed, err := retaining.RotateGenerationWithRetention(ctx, refreshedSeq, minimumOnline, guard, beginPrune)
+				return 0, committed, err
+			}
 			if guarded, ok := generations.(guardedNodeGenerationRotator); ok {
 				committed, err := guarded.RotateGenerationWithPrune(ctx, refreshedSeq, minimumOnline, beginPrune)
 				return 0, committed, err
@@ -493,6 +574,14 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 			committed, err := generations.RotateGeneration(ctx, refreshedSeq, minimumOnline)
 			return 0, committed, err
 		}
+		if guard != nil {
+			retaining, supported := r.nodes.(retentionNodePruner)
+			if !supported {
+				return 0, false, fmt.Errorf("nodestore does not support prepared retention")
+			}
+			deleted, err := retaining.DeleteBeforeWithRetention(ctx, lastRotated, r.cfg.DeleteBatch, guard, beginPrune)
+			return deleted, err == nil, err
+		}
 		if guarded, ok := r.nodes.(guardedNodePruner); ok {
 			deleted, err := guarded.DeleteBeforeWithPrune(ctx, lastRotated, r.cfg.DeleteBatch, beginPrune)
 			return deleted, err == nil, err
@@ -503,7 +592,8 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		}
 		deleted, err := r.nodes.DeleteBefore(ctx, lastRotated, r.cfg.DeleteBatch)
 		return deleted, err == nil, err
-	}()
+	}
+	deleted, committed, err := runNodes(stateGuard)
 	if err != nil {
 		if committed {
 			r.logger.Warn("online delete: retired generation cleanup failed", "err", err)
@@ -523,8 +613,20 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		return
 	}
 	if err := r.store.SetRotation(refreshedSeq, minimumOnline); err != nil {
-		r.logger.Warn("online delete: failed to persist lastRotated", "seq", refreshedSeq, "err", err)
+		r.logger.Warn("online delete: failed to persist committed rotation", "seq", refreshedSeq, "err", err)
 		return
+	}
+	if stateGuard != nil {
+		if !r.healthyNow() {
+			return
+		}
+		if err := deleteRelational(); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			r.logger.Warn("online delete: relational prune failed", "boundary", lastRotated, "err", err)
+			return
+		}
 	}
 
 	r.logger.Info("online delete: rotation finished",

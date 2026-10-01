@@ -1340,6 +1340,21 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 		return header.LedgerHeader{}, false, 0, nil, errors.New("nil standard replay pipeline entry")
 	}
 	h := entry.header
+	svc := c.adaptor.LedgerService()
+	if svc == nil {
+		return header.LedgerHeader{}, false, 0, nil, errors.New("no ledger service")
+	}
+	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	if err != nil {
+		return header.LedgerHeader{}, false, 0, nil, err
+	}
+	// Keep the durable generation pinned through replay diagnostics as well as
+	// publication. The successful return transfers release ownership below.
+	defer func() {
+		if releaseAdmission != nil {
+			releaseAdmission()
+		}
+	}()
 	defer func() {
 		if retErr == nil || errors.Is(retErr, context.Canceled) || c.replayFaultBlocked() {
 			return
@@ -1348,10 +1363,6 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 		current := c.standardReplay.active && c.standardReplay.generation == generation && c.standardReplay.entries[entry.seq] == activeEntry
 		c.acquisitionMu.Unlock()
 		if !current {
-			return
-		}
-		svc := c.adaptor.LedgerService()
-		if svc == nil {
 			return
 		}
 		parent, _ := svc.GetLedgerByHash(h.ParentHash)
@@ -1366,11 +1377,6 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 	}
 	if h.ParentHash != entry.parentHash {
 		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger no longer attaches to the accepted predecessor")
-	}
-
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("no ledger service")
 	}
 	parent, err := svc.GetLedgerByHash(entry.parentHash)
 	if err != nil || parent == nil {
@@ -1389,6 +1395,9 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 	}
 	txMap, err := c.loadStandardReplayTransactionMap(c.lifecycleContext(), entry)
 	if err != nil {
+		return header.LedgerHeader{}, false, 0, nil, err
+	}
+	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
 		return header.LedgerHeader{}, false, 0, nil, err
 	}
 
@@ -1426,7 +1435,13 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 		c.replayCommitMu.Unlock()
 		return header.LedgerHeader{}, false, persistDuration, nil, err
 	}
-	return storedHeader, initialCandidate, persistDuration, c.replayCommitMu.Unlock, nil
+	commitRelease := c.replayCommitMu.Unlock
+	admissionRelease := releaseAdmission
+	releaseAdmission = nil
+	return storedHeader, initialCandidate, persistDuration, func() {
+		commitRelease()
+		admissionRelease()
+	}, nil
 }
 
 func (c *catchupReplayCoordinator) loadStandardReplayTransactionMap(ctx context.Context, entry *standardReplayEntry) (*shamap.SHAMap, error) {

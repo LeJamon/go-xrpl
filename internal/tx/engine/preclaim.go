@@ -26,6 +26,12 @@ import (
 // The signature stage precedes the fee check so that no fee-charging TER is
 // returned before the signature has been verified.
 func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
+	result, _ = e.preclaimWithCause(tx, txHash)
+	return result
+}
+
+func (e *Engine) preclaimWithCause(tx txcore.Transaction, txHash [32]byte) (result ter.Result, cause error) {
+	e.resetStateErrors()
 	// Any panic reachable from adversarial ledger state — most commonly an
 	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
 	// or amount — is recovered and surfaced as tefEXCEPTION so it can never
@@ -41,27 +47,33 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
 			result = ter.TefEXCEPTION
 		}
+		if cause == nil {
+			cause = e.stateError()
+		}
+		if cause != nil {
+			result = ter.TefEXCEPTION
+		}
 	}()
 
 	common := tx.GetCommon()
 
 	// Resolve and parse the source account; this is shared by all subsequent steps.
-	accountID, account, result := e.preclaimLoadAccount(common)
+	accountID, account, result, cause := e.preclaimLoadAccount(common)
 	if result != ter.TesSUCCESS {
-		return result
+		return result, cause
 	}
 
 	if result := e.checkSeqProxy(common, accountID, account); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkSponsor(common); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 
 	// The signature is verified before the fee check so that a transaction that
@@ -70,7 +82,7 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 	// charging a fee on an unauthorized transaction.
 	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
 	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	// checkBatchSign is part of the signature stage (rippled Batch::checkSign =
 	// Transactor::checkSign + Transactor::checkBatchSign), so it moves ahead of
@@ -80,12 +92,12 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 	// existence, master/regular key), not crypto.
 	if bsp, ok := tx.(txcore.BatchSignerProvider); ok {
 		if result := e.checkBatchSign(bsp.GetBatchSigners()); result != ter.TesSUCCESS {
-			return result
+			return result, nil
 		}
 	}
 
 	if result := e.checkFee(tx, common, account); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 
 	// Transaction-specific preclaim checks.
@@ -103,69 +115,89 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 			ReadOnlyLedgerView: txcore.NewReadOnlyLedgerView(e.view),
 			rules:              e.config.RequireRules(),
 		}
-		if result := preclaimer.Preclaim(preclaimView, e.config); result != ter.TesSUCCESS {
-			return result
+		if withError, ok := tx.(txcore.PreclaimerWithError); ok {
+			result, cause = withError.PreclaimWithError(preclaimView, e.config)
+		} else {
+			result = preclaimer.Preclaim(preclaimView, e.config)
+		}
+		if result != ter.TesSUCCESS {
+			return result, cause
 		}
 	}
 
-	return ter.TesSUCCESS
+	return ter.TesSUCCESS, cause
 }
 
 func (e *Engine) preclaimInner(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
+	result, _ = e.preclaimInnerWithCause(tx, txHash)
+	return result
+}
+
+func (e *Engine) preclaimInnerWithCause(tx txcore.Transaction, txHash [32]byte) (result ter.Result, cause error) {
+	e.resetStateErrors()
 	defer func() {
 		if r := recover(); r != nil {
 			e.logger.Error("batch inner preclaim panic recovered, returning tefEXCEPTION",
 				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
 			result = ter.TefEXCEPTION
 		}
+		if cause == nil {
+			cause = e.stateError()
+		}
+		if cause != nil {
+			result = ter.TefEXCEPTION
+		}
 	}()
 
 	common := tx.GetCommon()
-	accountID, account, result := e.preclaimLoadAccount(common)
+	accountID, account, result, cause := e.preclaimLoadAccount(common)
 	if result != ter.TesSUCCESS {
-		return result
+		return result, cause
 	}
 	if result := e.checkSeqProxy(common, accountID, account); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkSponsor(common); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
-		return result
+		return result, nil
 	}
 	if preclaimer, ok := tx.(txcore.Preclaimer); ok {
 		preclaimView := rulesView{
 			ReadOnlyLedgerView: txcore.NewReadOnlyLedgerView(e.view),
 			rules:              e.config.RequireRules(),
 		}
-		return preclaimer.Preclaim(preclaimView, e.config)
+		if withError, ok := tx.(txcore.PreclaimerWithError); ok {
+			return withError.PreclaimWithError(preclaimView, e.config)
+		}
+		return preclaimer.Preclaim(preclaimView, e.config), nil
 	}
-	return ter.TesSUCCESS
+	return ter.TesSUCCESS, nil
 }
 
 // preclaimLoadAccount decodes the source account and reads + parses its SLE.
 // Returns the decoded accountID, the parsed AccountRoot, and a TER result.
-func (e *Engine) preclaimLoadAccount(common *txcore.Common) ([20]byte, *state.AccountRoot, ter.Result) {
+func (e *Engine) preclaimLoadAccount(common *txcore.Common) ([20]byte, *state.AccountRoot, ter.Result, error) {
 	accountID, err := state.DecodeAccountID(common.Account)
 	if err != nil {
-		return [20]byte{}, nil, ter.TemBAD_SRC_ACCOUNT
+		return [20]byte{}, nil, ter.TemBAD_SRC_ACCOUNT, nil
 	}
 
 	account, err := txcore.ReadAccountRoot(e.view, accountID)
 	if err != nil {
-		return accountID, nil, ter.TefINTERNAL
+		return accountID, nil, ter.TefINTERNAL, err
 	}
 	if account == nil {
-		return accountID, nil, ter.TerNO_ACCOUNT
+		return accountID, nil, ter.TerNO_ACCOUNT, nil
 	}
-	return accountID, account, ter.TesSUCCESS
+	return accountID, account, ter.TesSUCCESS, nil
 }
 
 // checkSeqProxy validates Sequence/TicketSequence against the account state.

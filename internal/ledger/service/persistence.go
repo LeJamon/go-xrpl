@@ -327,8 +327,12 @@ func (p *persistenceWorker) runPersistWorker() {
 			job := p.persistQueue[0]
 			p.persistQueue[0] = nil
 			p.persistQueue = p.persistQueue[1:]
+			p.persistActive = job
 			p.persistMu.Unlock()
 			p.service.runPersistJob(job)
+			p.persistMu.Lock()
+			p.persistActive = nil
+			p.persistMu.Unlock()
 			continue
 		}
 		stopping := p.persistStopping

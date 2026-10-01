@@ -191,7 +191,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, h.AccountHash, s.shamapFamily)
 	if err != nil {
 		if isUnavailableSHAMapNode(err) {
-			return nil, fmt.Errorf("%w: state root: %v", errStoredLedgerUnavailable, err)
+			return nil, fmt.Errorf("%w: state root: %w", errStoredLedgerUnavailable, err)
 		}
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	}
 	if err != nil {
 		if isUnavailableSHAMapNode(err) {
-			return nil, fmt.Errorf("%w: transaction root: %v", errStoredLedgerUnavailable, err)
+			return nil, fmt.Errorf("%w: transaction root: %w", errStoredLedgerUnavailable, err)
 		}
 		return nil, err
 	}
@@ -232,14 +232,14 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	rules, err := ledger.LoadAmendmentsFromSHAMapContext(ctx, stateMap)
 	if err != nil {
 		if isUnavailableSHAMapNode(err) {
-			return nil, fmt.Errorf("%w: amendment state: %v", errStoredLedgerUnavailable, err)
+			return nil, fmt.Errorf("%w: amendment state: %w", errStoredLedgerUnavailable, err)
 		}
 		return nil, err
 	}
 	fees, err := storedLedgerFees(ctx, stateMap, rules.XRPFeesEnabled(), s.configuredFees)
 	if err != nil {
 		if isUnavailableSHAMapNode(err) || errors.Is(err, state.ErrInvalidFeeSettings) || errors.Is(err, errStoredLedgerUnavailable) {
-			return nil, fmt.Errorf("%w: fee settings: %v", errStoredLedgerUnavailable, err)
+			return nil, fmt.Errorf("%w: fee settings: %w", errStoredLedgerUnavailable, err)
 		}
 		return nil, err
 	}
@@ -247,7 +247,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	h.Accepted = true
 	loaded, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, fees)
 	if err != nil && isUnavailableSHAMapNode(err) {
-		return nil, fmt.Errorf("%w: ledger state: %v", errStoredLedgerUnavailable, err)
+		return nil, fmt.Errorf("%w: ledger state: %w", errStoredLedgerUnavailable, err)
 	}
 	return loaded, err
 }
@@ -1127,7 +1127,7 @@ func (s *Service) loadStoredSHAMapNodeWithFetch(
 		return nil, nil, err
 	}
 	if stored == nil {
-		return nil, nil, fmt.Errorf("node %x is missing", pending.hash[:8])
+		return nil, nil, &shamap.MissingNodeError{Hash: pending.hash}
 	}
 	node, err := validateStoredSHAMapNode(pending, mapType, stored)
 	return node, stored, err
@@ -1139,7 +1139,7 @@ func validateStoredSHAMapNode(
 	stored *nodestore.Node,
 ) (shamap.NodeReader, error) {
 	if stored == nil {
-		return nil, fmt.Errorf("node %x is missing", pending.hash[:8])
+		return nil, &shamap.MissingNodeError{Hash: pending.hash}
 	}
 	node, err := shamap.DeserializeFromPrefix(stored.Data)
 	if err != nil {

@@ -28,6 +28,10 @@ type fakeGenerationPruner struct {
 	minimumOnline uint32
 }
 
+type fakePreparedGenerationPruner struct {
+	fakeGenerationPruner
+}
+
 func (f *fakeGenerationPruner) RotateGeneration(
 	_ context.Context,
 	lastRotated, minimumOnline uint32,
@@ -46,6 +50,204 @@ func (f *fakeGenerationPruner) GenerationState() (uint32, uint32) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastRotated, f.minimumOnline
+}
+
+func (f *fakePreparedGenerationPruner) RotateGenerationWithRetention(
+	ctx context.Context,
+	lastRotated, minimumOnline uint32,
+	guard func(context.Context) (func(), error),
+	beginPrune func() func(),
+) (bool, error) {
+	release, err := guard(ctx)
+	if err != nil {
+		if release != nil {
+			release()
+		}
+		return false, err
+	}
+	if release != nil {
+		defer release()
+	}
+	if beginPrune != nil {
+		finish := beginPrune()
+		defer finish()
+	}
+	return f.RotateGeneration(ctx, lastRotated, minimumOnline)
+}
+
+func TestRotate_StateRetentionUsesPreparedGuardBeforeDestruction(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make([]string, 0, 8)
+	nodes := &fakePreparedGenerationPruner{
+		fakeGenerationPruner: fakeGenerationPruner{committed: true},
+	}
+	rel := &fakeRelPruner{}
+	r := NewRotator(store, nodes, rel, RotationConfig{DeleteInterval: 256}, nil)
+	if r == nil {
+		t.Fatal("NewRotator returned nil")
+	}
+	r.SetStateRefresh(nil, nil, func() func() {
+		events = append(events, "begin-prune")
+		return func() { events = append(events, "finish-prune") }
+	})
+	r.SetStateRetention(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, func(context.Context) (func(), error), error) {
+		events = append(events, "retention")
+		return seq, func(context.Context) (func(), error) {
+			events = append(events, "guard")
+			return func() { events = append(events, "guard-release") }, nil
+		}, nil
+	})
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if got := nodes.rotations; got != 1 {
+		t.Fatalf("rotations=%d, want 1", got)
+	}
+	if got := rel.calls(); len(got) != 1 || got[0] != 500 {
+		t.Fatalf("relational deletes=%v, want [500]", got)
+	}
+	want := []string{"retention", "guard", "begin-prune", "finish-prune", "guard-release"}
+	if len(events) != len(want) {
+		t.Fatalf("events=%v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events=%v, want %v", events, want)
+		}
+	}
+}
+
+func TestRotate_StateRetentionGuardFailureAbortsAllPruning(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardErr := errors.New("stale live root")
+	nodes := &fakePreparedGenerationPruner{
+		fakeGenerationPruner: fakeGenerationPruner{committed: true},
+	}
+	rel := &fakeRelPruner{}
+	r := NewRotator(store, nodes, rel, RotationConfig{DeleteInterval: 256}, nil)
+	pruneCalls := 0
+	r.SetStateRefresh(nil, nil, func() func() {
+		pruneCalls++
+		return func() {}
+	})
+	released := false
+	r.SetStateRetention(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, func(context.Context) (func(), error), error) {
+		return seq, func(context.Context) (func(), error) {
+			return func() { released = true }, guardErr
+		}, nil
+	})
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if nodes.rotations != 0 || len(rel.calls()) != 0 || pruneCalls != 0 {
+		t.Fatalf("guard failure mutated rotation: rotations=%d rel=%v pruneCalls=%d", nodes.rotations, rel.calls(), pruneCalls)
+	}
+	if !released {
+		t.Fatal("guard release was not called after guard error")
+	}
+}
+
+func TestRotate_StateRetentionFailsClosedWithoutRetentionBackend(t *testing.T) {
+	r, nodes, rel := newTestRotator(t, false, 256)
+	guardErr := errors.New("stale live root")
+	pruneCalls := 0
+	r.SetStateRefresh(nil, nil, func() func() {
+		pruneCalls++
+		return func() {}
+	})
+	r.SetStateRetention(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, func(context.Context) (func(), error), error) {
+		return seq, func(context.Context) (func(), error) { return nil, guardErr }, nil
+	})
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if got := nodes.calls(); len(got) != 0 {
+		t.Fatalf("node deletion=%v, want none", got)
+	}
+	if len(rel.calls()) != 0 || pruneCalls != 0 {
+		t.Fatalf("unsupported retention backend mutated state: rel=%v pruneCalls=%d", rel.calls(), pruneCalls)
+	}
+}
+
+func TestRotate_StateRetentionOverridesRefresh(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakePreparedGenerationPruner{
+		fakeGenerationPruner: fakeGenerationPruner{committed: true},
+	}
+	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
+	refreshCalls, retentionCalls := 0, 0
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
+		refreshCalls++
+		return seq, nil
+	}, nil, nil)
+	r.SetStateRetention(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, func(context.Context) (func(), error), error) {
+		retentionCalls++
+		return seq, func(context.Context) (func(), error) { return nil, nil }, nil
+	})
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if refreshCalls != 0 || retentionCalls != 1 {
+		t.Fatalf("refreshCalls=%d retentionCalls=%d, want 0/1", refreshCalls, retentionCalls)
+	}
+	if nodes.rotations != 1 {
+		t.Fatalf("generation rotations=%d, want 1", nodes.rotations)
+	}
+}
+
+func TestRotate_StateRetentionWithoutGuardFailsClosed(t *testing.T) {
+	r, nodes, rel := newTestRotator(t, false, 256)
+	r.SetStateRetention(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, func(context.Context) (func(), error), error) {
+		return seq, nil, nil
+	})
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if got := nodes.calls(); len(got) != 0 {
+		t.Fatalf("node deletion=%v, want none", got)
+	}
+	if got := rel.calls(); len(got) != 0 {
+		t.Fatalf("relational deletion=%v, want none", got)
+	}
+	if got := r.store.GetLastRotated(); got != 500 {
+		t.Fatalf("lastRotated=%d, want unchanged 500", got)
+	}
+}
+
+func TestRotate_StateRetentionPersistsBoundaryBeforeRelationalCleanupFailure(t *testing.T) {
+	store, err := New(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := &fakePreparedGenerationPruner{
+		fakeGenerationPruner: fakeGenerationPruner{committed: true},
+	}
+	rel := &fakeRelPruner{err: errors.New("relational cleanup failed")}
+	r := NewRotator(store, nodes, rel, RotationConfig{DeleteInterval: 256}, nil)
+	r.SetStateRetention(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, func(context.Context) (func(), error), error) {
+		return seq, func(context.Context) (func(), error) { return nil, nil }, nil
+	})
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if nodes.rotations != 1 {
+		t.Fatalf("rotations=%d, want 1", nodes.rotations)
+	}
+	if got := r.store.GetLastRotated(); got != 800 {
+		t.Fatalf("lastRotated=%d, want committed generation sequence 800", got)
+	}
+	if got := rel.calls(); len(got) != 1 || got[0] != 500 {
+		t.Fatalf("relational cleanup boundaries=%v, want [500]", got)
+	}
 }
 
 func TestRotate_RefreshFailureAbortsDeletion(t *testing.T) {
@@ -290,13 +492,14 @@ func (f *fakeNodePruner) calls() []uint32 {
 type fakeRelPruner struct {
 	mu         sync.Mutex
 	boundaries []uint32
+	err        error
 }
 
 func (f *fakeRelPruner) DeleteLedgersBefore(_ context.Context, boundary uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boundaries = append(f.boundaries, boundary)
-	return nil
+	return f.err
 }
 
 func (f *fakeRelPruner) calls() []uint32 {

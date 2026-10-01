@@ -58,7 +58,13 @@ func (st *applyState) sourceFeeCharged() uint64 {
 // doApply applies the transaction to the ledger
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
-func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *txcore.Metadata, txHash [32]byte) (ter.Result, uint64) {
+func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *txcore.Metadata, txHash [32]byte) (result ter.Result, chargedFee uint64) {
+	defer func() {
+		if e.stateError() != nil {
+			result = ter.TefEXCEPTION
+			chargedFee = 0
+		}
+	}()
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
@@ -88,7 +94,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	copy(originalAccountData, accountData)
 
 	// Create ApplyStateTable for transaction-specific changes
-	table := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+	table := applystate.NewApplyStateTableWithErrorRecorder(e.view, txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
 
 	st := &applyState{
 		tx:                  tx,
@@ -129,7 +135,10 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	}
 
 	// Dispatch to the per-tx-type Apply().
-	result := e.invokeApply(st)
+	result = e.invokeApply(st)
+	if cause := e.stateError(); cause != nil {
+		return ter.TefEXCEPTION, 0
+	}
 
 	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all
 	// changes: no fee is charged and no state is modified. These are typically
@@ -199,7 +208,13 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	// Run invariant checks BEFORE committing — entries are still inspectable in the table.
 	// Reference: rippled Transactor::apply() — invariant check runs before ctx_->apply().
 	if r, handled := e.runInvariants(st, result); handled {
+		if e.stateError() != nil {
+			return ter.TefEXCEPTION, 0
+		}
 		return r, st.chargedFee
+	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION, 0
 	}
 
 	// Apply all tracked changes to the base view and generate metadata automatically
@@ -364,7 +379,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	//
 	// Create a fresh ApplyStateTable to track tec-specific changes
 	// (fee, sequence, ticket consumption) for proper metadata generation.
-	tecTable := applystate.NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
+	tecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, st.txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
 
 	// Consume ticket through tecTable for proper metadata (DeletedNode + directory changes)
 	// Reference: rippled Transactor.cpp — tec still consumes the ticket.
@@ -448,6 +463,9 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 			}
 		}
 	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION
+	}
 
 	// Run invariant checks on the post-recovery delta BEFORE committing.
 	// rippled runs checkInvariants for every applied result — tes AND every
@@ -460,12 +478,18 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	// Reference: rippled Transactor.cpp:1215-1243 — applied = isTecClaim(result),
 	// then checkInvariants(result, fee) with the two-pass reset escalation.
 	if r, handled := e.runInvariantsOnTable(st, result, tecTable); handled {
+		if e.stateError() != nil {
+			return ter.TefEXCEPTION
+		}
 		return r
 	}
 
 	// Apply all tracked changes and generate proper metadata
 	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL
+	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION
 	}
 	generatedMeta, applyErr := e.applyTable(tecTable)
 	if applyErr != nil {
@@ -875,7 +899,7 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 	// First pass violated: rippled resets to a fee-only state and re-checks.
 	// The inner tx carries no fee, so the reset state has an empty delta; a
 	// second violation there escalates to tefINVARIANT_FAILED.
-	feeOnly := applystate.NewApplyStateTable(e.view, [32]byte{}, e.config.LedgerSequence, rules)
+	feeOnly := applystate.NewApplyStateTableWithErrorRecorder(e.view, [32]byte{}, e.config.LedgerSequence, rules, e.stateErrors.record)
 	if invariants.CheckInvariants(wrapped, invariants.Result(ter.TecINVARIANT_FAILED), innerFeeNone, declaredFee, feeOnly.CollectEntries(), invariants.WithParentCloseTime(feeOnly, e.config.ParentCloseTime), rules, e.config.NumberContext()) != nil {
 		return ter.TefINVARIANT_FAILED
 	}
@@ -910,7 +934,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	}()
 	// Don't call table.Apply() — discard all transaction effects.
 	// Create a fresh tecTable for fee-only changes.
-	invTecTable := applystate.NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
+	invTecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, st.txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
 
 	// Consume ticket through invTecTable if needed.
 	if st.isTicket {
@@ -931,6 +955,9 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	if r := e.payExternalFeeOnTable(st, invTecTable, true); r != ter.TesSUCCESS {
 		return r
 	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION
+	}
 
 	// Second invariant check on fee-only state.
 	// Reference: rippled Transactor.cpp lines 1234-1238
@@ -949,6 +976,9 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 
 	if err := invTecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL
+	}
+	if e.stateError() != nil {
+		return ter.TefEXCEPTION
 	}
 	generatedMeta, applyErr := e.applyTable(invTecTable)
 	if applyErr != nil {

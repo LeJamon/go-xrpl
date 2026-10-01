@@ -320,6 +320,7 @@ func TestRPCConnectionLimitReleasesRejectedWebSocketConnections(t *testing.T) {
 	plainRequest, err := http.NewRequest(http.MethodGet, "http://"+bound.ws[0].address+"/", nil)
 	require.NoError(t, err)
 	plainRequest.Header = authorized.Clone()
+	plainRequest.Close = true
 	response, err := http.DefaultClient.Do(plainRequest)
 	require.NoError(t, err)
 	_ = response.Body.Close()

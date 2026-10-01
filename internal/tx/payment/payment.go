@@ -327,33 +327,38 @@ func equalTokens(src, dst tx.Amount) bool {
 // credential code.
 // Reference: rippled Payment.cpp:282-378
 func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
+	result, _ := p.PreclaimWithError(view, config)
+	return result
+}
+
+func (p *Payment) PreclaimWithError(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (ter.Result, error) {
 	// Reference: rippled Payment.cpp:296-346
 	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
 		destAccount, readErr := state.ReadAccountRoot(view, destID)
 		if readErr != nil {
-			return ter.TefINTERNAL
+			return ter.TefINTERNAL, readErr
 		}
 		if destAccount == nil {
 			// A non-native delivered amount cannot create the account.
 			if !p.Amount.IsNative() {
-				return ter.TecNO_DST
+				return ter.TecNO_DST, nil
 			}
 			// A partial payment may not fund a new account.
 			if (p.GetFlags() & PaymentFlagPartialPayment) != 0 {
 				if result := partialNewDestinationResult(config); result != ter.TesSUCCESS {
-					return result
+					return result, nil
 				}
 			}
 			// The delivered amount must cover the account reserve.
 			if uint64(p.Amount.Drops()) < config.ReserveBase &&
 				p.GetFlags()&PaymentFlagSponsorCreatedAccount == 0 {
-				return ter.TecNO_DST_INSUF_XRP
+				return ter.TecNO_DST_INSUF_XRP, nil
 			}
 		} else if p.GetFlags()&PaymentFlagSponsorCreatedAccount != 0 {
-			return ter.TecNO_SPONSOR_PERMISSION
+			return ter.TecNO_SPONSOR_PERMISSION, nil
 		} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 			// A newly-formed account is exempt — it has no way to set the flag.
-			return ter.TecDST_TAG_NEEDED
+			return ter.TecDST_TAG_NEEDED, nil
 		}
 	}
 
@@ -362,10 +367,10 @@ func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 	ripple := len(p.Paths) > 0 || p.HasField("Paths") || p.SendMax != nil || !p.Amount.IsNative()
 	if ripple && pathCountExceeded(p.Paths) {
 		if config.IsViewOpen() {
-			return ter.TelBAD_PATH_COUNT
+			return ter.TelBAD_PATH_COUNT, nil
 		}
 		if config.ParentBatchID != nil && config.RequireRules().Enabled(amendment.FeatureBatchV1_1) {
-			return ter.TefBAD_PATH_COUNT
+			return ter.TefBAD_PATH_COUNT, nil
 		}
 	}
 
@@ -375,7 +380,7 @@ func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 	if len(p.CredentialIDs) > 0 || p.DomainID != nil {
 		senderID, err := state.DecodeAccountID(p.Account)
 		if err != nil {
-			return ter.TefINTERNAL
+			return ter.TefINTERNAL, nil
 		}
 
 		// Credential validation precedes the domain check: each credential must
@@ -383,7 +388,7 @@ func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 		// checked here (deferred to Apply).
 		// Reference: rippled Payment.cpp:362-365 / credentials::valid()
 		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs, config.RequireRules()); result != ter.TesSUCCESS {
-			return result
+			return result, nil
 		}
 
 		// Domain membership for permissioned payments: both source and destination
@@ -392,22 +397,22 @@ func (p *Payment) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 		if p.DomainID != nil {
 			domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
 			if err != nil {
-				return ter.TemMALFORMED
+				return ter.TemMALFORMED, nil
 			}
 			if !permissioneddomain.DEXDomainPreclaim(view, senderID, domainID, config) {
-				return ter.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION, nil
 			}
 			destID, err := state.DecodeAccountID(p.Destination)
 			if err != nil {
-				return ter.TefINTERNAL
+				return ter.TefINTERNAL, nil
 			}
 			if !permissioneddomain.DEXDomainPreclaim(view, destID, domainID, config) {
-				return ter.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION, nil
 			}
 		}
 	}
 
-	return ter.TesSUCCESS
+	return ter.TesSUCCESS, nil
 }
 
 func pathCountExceeded(paths [][]PathStep) bool {

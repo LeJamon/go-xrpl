@@ -201,7 +201,7 @@ func (d *RotatingKVDatabase) RotateGeneration(
 	ctx context.Context,
 	lastRotated, minimumOnline uint32,
 ) (bool, error) {
-	return d.RotateGenerationWithPrune(ctx, lastRotated, minimumOnline, nil)
+	return d.RotateGenerationWithRetention(ctx, lastRotated, minimumOnline, nil, nil)
 }
 
 // RotateGenerationWithPrune acquires the durable mutation gate before
@@ -211,16 +211,43 @@ func (d *RotatingKVDatabase) RotateGenerationWithPrune(
 	lastRotated, minimumOnline uint32,
 	beginPrune func() func(),
 ) (bool, error) {
-	d.mutationMu.Lock()
+	return d.RotateGenerationWithRetention(ctx, lastRotated, minimumOnline, nil, beginPrune)
+}
+
+// RotateGenerationWithRetention acquires the durable mutation gate, then
+// invokes guard before invalidating SHAMap completeness proofs or swapping the
+// backend generations. A non-nil release returned by guard remains held until
+// the rotation attempt has completely exited.
+func (d *RotatingKVDatabase) RotateGenerationWithRetention(
+	ctx context.Context,
+	lastRotated, minimumOnline uint32,
+	guard func(context.Context) (func(), error),
+	beginPrune func() func(),
+) (bool, error) {
+	if err := d.lockMutation(ctx); err != nil {
+		return false, err
+	}
 	defer d.mutationMu.Unlock()
-	if beginPrune != nil {
-		finish := beginPrune()
-		defer finish()
+	if guard != nil {
+		release, guardErr := guard(ctx)
+		if release != nil {
+			defer release()
+		}
+		if guardErr != nil {
+			return false, guardErr
+		}
 	}
 	if err := d.begin(ctx); err != nil {
 		return false, err
 	}
 	defer d.lifecycleMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if beginPrune != nil {
+		finish := beginPrune()
+		defer finish()
+	}
 	d.pruneMu.Lock()
 	committed, err := d.rotating.Rotate(lastRotated, minimumOnline)
 	if committed {
