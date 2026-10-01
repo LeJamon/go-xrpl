@@ -272,7 +272,6 @@ func (s *Service) acceptConsensusResult(
 
 		timings.persist = time.Since(persistStarted)
 		s.openLedger = newOpen
-		s.tickLoadFeeLocked()
 
 		// Quorum validation publishes the event, rather than the speculative close.
 		event := &LedgerAcceptedEvent{
@@ -293,6 +292,7 @@ func (s *Service) acceptConsensusResult(
 
 		notification = s.validatedLedgerNotificationLocked(previousValidated)
 		publish()
+		s.tickLoadFeeLocked()
 	})
 	if err != nil {
 		return 0, err

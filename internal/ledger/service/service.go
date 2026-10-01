@@ -866,10 +866,14 @@ func (s *Service) SetLastConsensusRoundTime(d time.Duration) {
 // max(loadFactorServer, feeEscalation) so the shared signal never double-counts.
 // Caller must hold s.mu.
 func (s *Service) tickLoadFeeLocked() {
-	if s.feeTrack == nil || s.txQueue == nil || s.openLedger == nil {
+	if s.feeTrack == nil || s.txQueue == nil {
 		return
 	}
-	metrics := s.txQueue.Metrics(s.openLedger.TxCount())
+	current := s.currentOpenLedgerLocked()
+	if current == nil {
+		return
+	}
+	metrics := s.txQueue.Metrics(current.TxCount())
 	if metrics.OpenLedgerFeeLevel > metrics.ReferenceFeeLevel {
 		s.feeTrack.RaiseLocalFee()
 	} else {
