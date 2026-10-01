@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -291,6 +292,47 @@ func TestStateBaseRecertificationFailureIgnoresSupersededFrontier(t *testing.T) 
 	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
 	require.False(t, f.svc.ReplayBlocked())
 	require.Same(t, replacement, f.svc.GetValidatedLedger())
+}
+
+func TestStateBaseRecertificationRepairSyncFailureRetainsExactTarget(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.invalidate(t)
+	f.svc.invalidateCompleteLedger(f.validated.Sequence())
+	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
+	var repairCalls int
+	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+		repairCalls++
+		require.Equal(t, f.validated.Sequence(), seq)
+		require.Equal(t, f.validated.Hash(), hash)
+		return nil
+	})
+	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	stateMap, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	targetHeader := f.validated.Header()
+	require.NoError(t, f.svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
+
+	syncFailure := errors.New("repaired state sync failed")
+	tracking := &checkpointTrackingDatabase{Database: f.db, uncached: f.db, syncErr: syncFailure}
+	f.svc.nodeStore = tracking
+	require.ErrorIs(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID), syncFailure)
+	require.True(t, f.svc.ReplayBlocked())
+	require.Equal(t, 1, repairCalls)
+	f.svc.mu.RLock()
+	repaired := f.svc.replayRepairTarget
+	f.svc.mu.RUnlock()
+	require.NotNil(t, repaired, "failed persistence must retain the acquired repair")
+
+	tracking.mu.Lock()
+	tracking.syncErr = nil
+	tracking.mu.Unlock()
+	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
+	require.False(t, f.svc.ReplayBlocked())
+	require.Equal(t, 1, repairCalls, "retry must reuse the exact acquired repair")
 }
 
 type blockingStateBaseRecertificationDatabase struct {

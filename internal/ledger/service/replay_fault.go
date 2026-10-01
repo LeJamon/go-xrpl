@@ -594,11 +594,11 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 		if closed == nil || closed.Hash() != evidence.Target.Hash || closed.Sequence() != evidence.Target.LedgerIndex {
 			return errors.New("closed ledger changed while execution repair was pending")
 		}
+		if err := s.persistRepairedLedger(ctx, repaired); err != nil {
+			return fmt.Errorf("persist repaired execution state: %w", err)
+		}
 		if err := s.restoreReplayParentAt(ctx, repaired, evidence.Target.Hash); err != nil {
 			return fmt.Errorf("install repaired execution state: %w", err)
-		}
-		if err := s.flushPersists(ctx); err != nil {
-			return fmt.Errorf("persist repaired execution state: %w", err)
 		}
 		return nil
 	}
@@ -854,6 +854,30 @@ func (s *Service) recordLiveStateVerificationFailureOrigin(ctx context.Context, 
 	}
 }
 
+func (s *Service) persistRepairedLedger(ctx context.Context, repaired *ledger.Ledger) error {
+	if repaired == nil {
+		return errors.New("verified replay ledger is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return fmt.Errorf("admit repaired state: %w", err)
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedLedger(ctx, repaired); err != nil {
+		return fmt.Errorf("verify repaired state: %w", err)
+	}
+	if repaired.IsValidated() {
+		return s.persistValidatedLedger(ctx, repaired, false)
+	}
+	if s.nodeStore == nil {
+		return nil
+	}
+	return s.persistToNodeStore(ctx, repaired, repaired.Sequence())
+}
+
 func (s *Service) persistRepairedValidatedTip(ctx context.Context, repaired *ledger.Ledger) error {
 	if s.nodeStore == nil {
 		return errors.New("NodeStore is required to publish a repaired validated tip")
@@ -990,11 +1014,11 @@ func (s *Service) RecordReplayAcquisitionFailure(hash [32]byte, cause error) {
 }
 
 func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledger) error {
-	if err := s.restoreReplayParentAt(ctx, verified, [32]byte{}); err != nil {
+	if err := s.persistRepairedLedger(ctx, verified); err != nil {
 		return err
 	}
-	if err := s.flushPersists(ctx); err != nil {
-		return fmt.Errorf("persist repaired replay parent: %w", err)
+	if err := s.restoreReplayParentAt(ctx, verified, [32]byte{}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1048,11 +1072,6 @@ func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Le
 	}
 	s.putHistoryLocked(repaired)
 	s.cachePersistedLedgerLocked(repaired)
-	if repaired.IsValidated() {
-		s.enqueueValidatedHistoryPersist(repaired)
-	} else {
-		s.enqueueNodePersist(repaired)
-	}
 	s.replayRepairParent = nil
 	s.replayRepairTarget = nil
 	return nil
