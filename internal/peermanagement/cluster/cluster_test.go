@@ -451,14 +451,22 @@ func TestRegistry_LoadConfigParity(t *testing.T) {
 	t.Run("valid table", func(t *testing.T) {
 		r := cluster.New()
 		entries := []string{
-			pubs[0],                                                     // (a) no comment
-			pubs[1] + "    ",                                            // (b) trailing whitespace only
-			pubs[2] + " Comment",                                        // (c) basic comment
-			pubs[3] + " Multi Word Comment",                             // (d) multi-word
-			pubs[4] + "  Leading Whitespace",                            // (e) extra leading ws
-			pubs[5] + " Trailing Whitespace  ",                          // (f) trailing ws after comment
-			pubs[6] + "  Leading & Trailing Whitespace  ",               // (g) both
-			pubs[7] + "  Leading,  Trailing  &  Internal  Whitespace  ", // (h) plus internal
+			// (a) no comment
+			pubs[0],
+			// (b) trailing whitespace only
+			pubs[1] + "    ",
+			// (c) basic comment
+			pubs[2] + " Comment",
+			// (d) multi-word
+			pubs[3] + " Multi Word Comment",
+			// (e) extra leading ws
+			pubs[4] + "  Leading Whitespace",
+			// (f) trailing ws after comment
+			pubs[5] + " Trailing Whitespace  ",
+			// (g) both
+			pubs[6] + "  Leading & Trailing Whitespace  ",
+			// (h) plus internal
+			pubs[7] + "  Leading,  Trailing  &  Internal  Whitespace  ",
 		}
 		if err := r.Load(entries); err != nil {
 			t.Fatalf("Load: %v", err)
