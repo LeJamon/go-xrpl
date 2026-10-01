@@ -28,7 +28,7 @@
   },
   "source_sha256": {
     "protocol/transaction_type.go": "56377642056a30ce2610780328cf03701f0e93f35fb6c33865bf348172df1637",
-    "internal/tx/template.go": "147ce6c44fbc2a72dd2e49988650923e7454e203a853919e32d20b2b62b10b07",
+    "internal/tx/template.go": "68b5063c62f9eb6bd313fd562a43e6ab06295981456b618a1392f5fc8e2c247c",
     "amendment/registry.go": "4cb315e95cae13c39297f64e40dbc7ac6e61d6357d6e908f039206bbb54a072d"
   },
   "engine": {
@@ -3277,6 +3277,10 @@
           "path": "internal/tx/template_test.go",
           "tests": [
             {
+              "name": "TestValidateTemplateFieldsErrorPrecedence",
+              "line": 358
+            },
+            {
               "name": "TestValidateTemplateFieldsRejectsExplicitDefault",
               "line": 306
             }
@@ -4019,6 +4023,16 @@
             {
               "name": "TestTicketedTransactionSigningIncludesZeroSequence",
               "line": 57
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/sign/read_only_view_boundary_test.go",
+          "tests": [
+            {
+              "name": "TestCalculateBaseFeeWrapsCustomCalculatorView",
+              "line": 101
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -6024,7 +6038,7 @@
           "tests": [
             {
               "name": "TestSponsoredTargetOwnershipMatrix",
-              "line": 212
+              "line": 239
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -8307,14 +8321,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 166,
+            "line": 184,
             "symbol": "XChainCreateClaimID.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 202,
+            "line": 224,
             "symbol": "XChainCreateClaimID.Apply"
           }
         ],
@@ -8376,11 +8390,11 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 156
+              "line": 157
             },
             {
               "name": "TestNativeAmountLegalNetPreflightParity",
-              "line": 130
+              "line": 131
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -8454,14 +8468,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 261,
+            "line": 305,
             "symbol": "XChainCommit.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 284,
+            "line": 332,
             "symbol": "XChainCommit.Apply"
           }
         ],
@@ -8537,11 +8551,11 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 157
+              "line": 158
             },
             {
               "name": "TestNativeAmountLegalNetPreflightParity",
-              "line": 125
+              "line": 126
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -8630,7 +8644,7 @@
         "Apply": [
           {
             "path": "internal/tx/xchain/claim.go",
-            "line": 64,
+            "line": 72,
             "symbol": "XChainClaim.Apply"
           }
         ],
@@ -8706,11 +8720,11 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 158
+              "line": 159
             },
             {
               "name": "TestNativeAmountLegalNetPreflightParity",
-              "line": 115
+              "line": 116
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -8782,14 +8796,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 292,
+            "line": 344,
             "symbol": "XChainAccountCreateCommit.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 338,
+            "line": 402,
             "symbol": "XChainAccountCreateCommit.Apply"
           }
         ],
@@ -8851,11 +8865,11 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 159
+              "line": 160
             },
             {
               "name": "TestNativeAmountLegalNetPreflightParity",
-              "line": 120
+              "line": 121
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -8984,7 +8998,7 @@
         "Apply": [
           {
             "path": "internal/tx/xchain/attestations.go",
-            "line": 517,
+            "line": 687,
             "symbol": "XChainAddClaimAttestation.Apply"
           }
         ],
@@ -9056,7 +9070,7 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 160
+              "line": 161
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -9193,7 +9207,7 @@
         "Apply": [
           {
             "path": "internal/tx/xchain/attestations.go",
-            "line": 605,
+            "line": 803,
             "symbol": "XChainAddAccountCreateAttestation.Apply"
           }
         ],
@@ -9265,7 +9279,7 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 161
+              "line": 162
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -9331,14 +9345,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 117,
+            "line": 131,
             "symbol": "XChainModifyBridge.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 133,
+            "line": 147,
             "symbol": "XChainModifyBridge.Apply"
           }
         ],
@@ -9400,7 +9414,7 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 155
+              "line": 156
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -9466,14 +9480,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 22,
+            "line": 20,
             "symbol": "XChainCreateBridge.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/xchain/bridge_transactions.go",
-            "line": 77,
+            "line": 75,
             "symbol": "XChainCreateBridge.Apply"
           }
         ],
@@ -9535,7 +9549,7 @@
           "tests": [
             {
               "name": "TestAllXChainTransactionsRejectMalformedBridge",
-              "line": 154
+              "line": 155
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12854,6 +12868,16 @@
             {
               "name": "TestTransactionMapLocalChecksBatchLimits",
               "line": 320
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/sign/read_only_view_boundary_test.go",
+          "tests": [
+            {
+              "name": "TestCalculateBaseFeeWrapsBatchCalculatorView",
+              "line": 117
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
