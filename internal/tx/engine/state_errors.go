@@ -179,6 +179,9 @@ func (v *recordingPseudoView) MutableSnapshot() (snapshot *ledger.Ledger, err er
 }
 
 func (v *recordingPseudoView) ConsumeState(snapshot *ledger.Ledger) error {
+	if err := v.recorder.cause(); err != nil {
+		return err
+	}
 	err := v.pseudo.ConsumeState(snapshot)
 	v.recorder.record(err)
 	return err
