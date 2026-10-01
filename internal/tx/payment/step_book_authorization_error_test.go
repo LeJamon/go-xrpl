@@ -221,7 +221,8 @@ func TestBookStepIsOfferOwnerAuthorizedPreservesLookupErrors(t *testing.T) {
 		view := newPaymentMockLedgerView()
 		putRequireAuthIssuer(t, view, issuer)
 		putPseudoAccount(t, view, owner)
-		view.data[keylet.Account(owner).Key] = []byte{1, 2, 3}
+		ownerKey := keylet.Account(owner).Key
+		view.data[ownerKey] = view.data[ownerKey][:3]
 		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
 
 		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")

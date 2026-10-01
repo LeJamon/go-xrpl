@@ -70,7 +70,7 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 	requireAMMIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 0)
 }
 
-func TestAMMBookStep_RequireAuthRejectsUnauthorizedSyntheticOffer(t *testing.T) {
+func TestAMMBookStep_RequireAuthAmendmentProfiles(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		cleanup340On bool
