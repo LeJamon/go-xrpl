@@ -10,6 +10,7 @@ import (
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,46 +71,91 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 }
 
 func TestAMMBookStep_RequireAuthRejectsUnauthorizedSyntheticOffer(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
-	env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
-	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
-	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
-	env.Close()
+	for _, tc := range []struct {
+		name         string
+		cleanup340On bool
+		poolXRP      int64
+		poolUSD      float64
+		bobUSD       float64
+		offerCount   uint32
+	}{
+		{
+			name:         "fixCleanup3_4_0 enabled",
+			cleanup340On: true,
+			poolXRP:      1000,
+			poolUSD:      1050,
+			bobUSD:       0,
+			offerCount:   0,
+		},
+		{
+			name:         "fixCleanup3_4_0 disabled",
+			cleanup340On: false,
+			poolXRP:      1050,
+			poolUSD:      1000,
+			bobUSD:       50,
+			offerCount:   1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			if tc.cleanup340On {
+				env.EnableFeature("fixCleanup3_4_0")
+			} else {
+				env.DisableFeature("fixCleanup3_4_0")
+			}
+			env.Close()
 
-	env.TestEnv.EnableRequireAuth(env.GW)
-	env.Close()
+			env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(400000)))
+			env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
+			env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
+			env.Close()
 
-	env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
-	env.Trust(env.Alice, env.GW, "USD", 2000)
-	env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
-	env.Trust(env.Bob, env.GW, "USD", 100)
-	env.PayIOU(env.GW, env.Alice, "USD", 1000)
-	env.PayIOU(env.GW, env.Bob, "USD", 50)
-	env.Close()
+			env.TestEnv.EnableRequireAuth(env.GW)
+			env.Close()
 
-	createTx := amm.AMMCreate(env.Alice,
-		amm.IOUAmount(env.GW, "USD", 1000),
-		amm.XRPAmount(1050)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(createTx))
-	env.Close()
+			env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
+			env.Trust(env.Alice, env.GW, "USD", 2000)
+			env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
+			env.Trust(env.Bob, env.GW, "USD", 100)
+			env.PayIOU(env.GW, env.Alice, "USD", 1000)
+			env.PayIOU(env.GW, env.Bob, "USD", 50)
+			env.Close()
 
-	ammAcc := amm.AMMAccount(t, env,
-		tx.Asset{Currency: "USD", Issuer: env.GW.Address},
-		amm.XRP())
+			createTx := amm.AMMCreate(env.Alice,
+				amm.IOUAmount(env.GW, "USD", 1000),
+				amm.XRPAmount(1050)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(createTx))
+			env.Close()
 
-	offerTx := offerbuild.OfferCreate(env.Bob,
-		amm.XRPAmount(50),
-		amm.IOUAmount(env.GW, "USD", 50)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(offerTx))
-	env.Close()
+			ammAcc := amm.AMMAccount(t, env,
+				tx.Asset{Currency: "USD", Issuer: env.GW.Address},
+				amm.XRP())
 
-	env.ExpectAMMBalances(t, ammAcc,
-		uint64(jtx.XRP(1050)), env.GW, "USD", 1000)
-	requireAMMIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 50)
-	offerbuild.RequireOfferCount(t, env.TestEnv, env.Bob, 1)
-	offerbuild.RequireIsOffer(t, env.TestEnv, env.Bob,
-		amm.XRPAmount(50),
-		amm.IOUAmount(env.GW, "USD", 50))
+			offerTx := offerbuild.OfferCreate(env.Bob,
+				amm.XRPAmount(50),
+				amm.IOUAmount(env.GW, "USD", 50)).Build()
+			jtx.RequireTxSuccess(t, env.Submit(offerTx))
+			env.Close()
+
+			env.ExpectAMMBalances(t, ammAcc,
+				uint64(jtx.XRP(tc.poolXRP)), env.GW, "USD", tc.poolUSD)
+			requireAMMIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", tc.bobUSD)
+			offerbuild.RequireOfferCount(t, env.TestEnv, env.Bob, tc.offerCount)
+			if tc.offerCount == 1 {
+				offerbuild.RequireIsOffer(t, env.TestEnv, env.Bob,
+					amm.XRPAmount(50),
+					amm.IOUAmount(env.GW, "USD", 50))
+			}
+
+			lineData, err := env.LedgerEntry(keylet.Line(ammAcc.ID, env.GW.ID, "USD"))
+			require.NoError(t, err)
+			require.NotNil(t, lineData)
+			line, err := state.ParseRippleState(lineData)
+			require.NoError(t, err)
+			require.Zero(t, line.Flags&(state.LsfLowAuth|state.LsfHighAuth),
+				"AMM pseudo-account trust line must remain unauthorized")
+		})
+	}
 }
 
 func TestAMMBookStep_Payment(t *testing.T) {

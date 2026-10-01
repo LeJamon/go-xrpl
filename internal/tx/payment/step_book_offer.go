@@ -629,7 +629,23 @@ func (s *BookStep) isOfferOwnerAuthorized(
 		authFlag = state.LsfLowAuth
 	}
 
-	return (line.Flags & authFlag) != 0, nil
+	if (line.Flags & authFlag) != 0 {
+		return true, nil
+	}
+
+	// Pseudo-accounts cannot authorize their own trust lines. Once the cleanup
+	// amendment is enabled, rippled implicitly authorizes them for held IOUs.
+	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		ownerAccount, err := tx.ReadAccountRoot(view, owner)
+		if err != nil {
+			return false, fmt.Errorf("read offer owner account: %w", err)
+		}
+		if ownerAccount != nil && ownerAccount.IsPseudoAccount() {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // isDeepFrozen checks if an account's trust line for the given currency/issuer
