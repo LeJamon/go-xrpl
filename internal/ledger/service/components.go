@@ -14,6 +14,7 @@ type persistenceWorker struct {
 	// persistMu owns queue lifecycle; canonicalPersistMu serializes tip replacement.
 	persistMu            sync.Mutex
 	persistQueue         []*persistJob
+	persistActive        *persistJob
 	validatedPersistJobs map[uint32]*persistJob
 	persistWake          chan struct{}
 	persistStarted       bool

@@ -837,6 +837,7 @@ func (b *Batch) applyAllOrNothing(
 		Log:                    ctx.Log,
 		Ctx:                    ctx.Ctx,
 	}
+	defer func() { ctx.Cause = batchCtx.Cause }()
 
 	appliedInners := make([]tx.AppliedInnerTransaction, 0, len(innerTxns))
 	for _, innerTx := range innerTxns {
@@ -882,6 +883,9 @@ func applyInnerWithEngine(
 		ctx.TxHash,
 		transactionIndex,
 	)
+	if result.Cause != nil && ctx.Cause == nil {
+		ctx.Cause = result.Cause
+	}
 	if !result.Applied {
 		return result.Result, nil
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -533,9 +534,18 @@ func TestService_ValidatedStateBaseBootstrapCandidateUsesCompleteBoundGeneration
 					require.Positive(t, deleted)
 				}
 				if storeAtRuntime {
-					require.NoError(t, reader.StoreLedgerWithState(ctx, &candidateHeader, stateMap, nil))
+					err = reader.StoreLedgerWithState(ctx, &candidateHeader, stateMap, nil)
+					if deleteBeforeStore {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
 				} else {
 					initialCandidate, err := reader.BootstrapLedgerWithState(ctx, &candidateHeader, stateMap, nil)
+					if deleteBeforeStore {
+						require.Error(t, err)
+						return
+					}
 					require.NoError(t, err)
 					require.True(t, initialCandidate)
 				}
@@ -562,6 +572,51 @@ func TestService_ValidatedStateBaseBootstrapCandidateUsesCompleteBoundGeneration
 			})
 		}
 	}
+}
+
+func TestService_StateAdmissionRejectsWarmAliasAfterDurableDeletion(t *testing.T) {
+	ctx := context.Background()
+	db := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repositories := newTestRepositories(t, ctx)
+
+	writer := newFastLoadCheckpointService(t, db, repositories, true)
+	require.NoError(t, writer.Start())
+	var stateKey [32]byte
+	stateKey[0] = 0xd2
+	stateKey[31] = 0x01
+	require.NoError(t, writer.openLedger.Insert(keylet.Keylet{Key: stateKey}, []byte("warm-alias-state")))
+	_, err := writer.AcceptLedger(ctx)
+	require.NoError(t, err)
+	writer.FlushPersists()
+	target := writer.GetValidatedLedger()
+	require.NotNil(t, target)
+	targetHeader := target.Header()
+	writer.Stop()
+
+	reader := newFastLoadCheckpointService(t, db, repositories, false)
+	require.NoError(t, reader.Start())
+	t.Cleanup(reader.Stop)
+	parent := reader.GetClosedLedger().Header()
+	candidateHeader := targetHeader
+	candidateHeader.ParentHash = parent.Hash
+	candidateHeader.ParentCloseTime = parent.CloseTime
+	candidateHeader.CloseTime = parent.CloseTime.Add(time.Second)
+	candidateHeader.Validated = false
+	candidateHeader.CloseFlags ^= header.LCFNoConsensusTime
+	candidateHeader.Hash = header.CalculateHash(candidateHeader)
+
+	stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, candidateHeader.AccountHash, reader.shamapFamily)
+	require.NoError(t, err)
+	require.NoError(t, stateMap.StartSync())
+	require.NoError(t, stateMap.FinishSyncContext(ctx))
+	preferred, err := ledger.NewFromHeader(candidateHeader, stateMap, shamap.New(shamap.TypeTransaction), reader.GetClosedLedger().Fees())
+	require.NoError(t, err)
+
+	deleted, err := db.DeleteBefore(ctx, candidateHeader.LedgerIndex, 1)
+	require.NoError(t, err)
+	require.Positive(t, deleted)
+	require.Error(t, reader.SwitchToPreferredLedger(preferred))
 }
 
 func TestService_FastLoadBaseRejectsMutationBeforePivot(t *testing.T) {

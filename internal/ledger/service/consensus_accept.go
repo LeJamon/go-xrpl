@@ -22,6 +22,11 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer releaseAdmission()
 	if s.ReplayBlocked() {
 		return 0, replayfault.ErrBlocked
 	}
@@ -124,6 +129,7 @@ func (s *Service) acceptConsensusResult(
 	if !replayed {
 		closed, retriableTxs, err = s.buildClosedLedger(ctx, expectedClosed, pending, salt, closeTime, false, &timings.apply)
 		if err != nil {
+			s.recordExecutionStateFailure(ctx, expectedClosed, err)
 			return 0, err
 		}
 	} else {

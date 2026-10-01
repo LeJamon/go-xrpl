@@ -146,6 +146,14 @@ type Preclaimer interface {
 	Preclaim(view ReadOnlyLedgerView, config EngineConfig) ter.Result
 }
 
+// PreclaimerWithError is an optional extension for transaction types whose
+// stateful preclaim can expose the storage error behind a TER result. The
+// regular Preclaim method remains the protocol-facing API; callers that need
+// to preserve a typed storage failure use this method when it is available.
+type PreclaimerWithError interface {
+	PreclaimWithError(view ReadOnlyLedgerView, config EngineConfig) (ter.Result, error)
+}
+
 // BadCurrency is the currency code that may not name a non-native (issued)
 // amount: the ISO code "XRP" collides with the native asset.
 // Reference: rippled protocol/UintTypes.cpp badCurrency()

@@ -67,6 +67,10 @@ type ApplyContext struct {
 	// construction site; callers that build an ApplyContext directly must
 	// pass a non-nil context.
 	Ctx context.Context
+
+	// Cause is set by nested transaction application when a typed execution
+	// failure must be returned through a batch-level TER result.
+	Cause error
 }
 
 // InnerInvariantChecker runs the invariant pass for a single Batch inner

@@ -362,6 +362,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 					},
 				)
 				r.rotator.SetRetentionGuard(r.ledger.BeginStateBaseRetentionChange)
+				r.rotator.SetStateRetention(r.ledger.PrepareStateRetention)
 				if err := context.Cause(ctx); err != nil {
 					return err
 				}

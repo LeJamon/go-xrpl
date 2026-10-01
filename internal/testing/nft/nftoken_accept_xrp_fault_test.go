@@ -225,7 +225,13 @@ func TestNFTokenAcceptOfferXRP_IssuerCreditFailuresRollBack(t *testing.T) {
 					SkipSignatureVerification: true,
 				}).Apply(fixture.txn)
 
-				require.Equal(t, ter.TefINTERNAL, result.Result)
+				if fault == "read" {
+					require.Equal(t, ter.TefEXCEPTION, result.Result)
+					require.ErrorIs(t, result.Cause, view.err)
+				} else {
+					require.Equal(t, ter.TefINTERNAL, result.Result)
+					require.NoError(t, result.Cause)
+				}
 				require.False(t, result.Applied)
 				require.Zero(t, result.Fee)
 				require.Nil(t, result.Metadata)

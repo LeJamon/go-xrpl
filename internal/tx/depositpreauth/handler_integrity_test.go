@@ -395,7 +395,8 @@ func TestAuthorizationCommitFailureRollsBackAllLedgerChanges(t *testing.T) {
 				SkipSignatureVerification: true,
 			}).Apply(txn)
 
-			require.Equal(t, ter.TefINTERNAL, result.Result)
+			require.Equal(t, ter.TefEXCEPTION, result.Result)
+			require.ErrorIs(t, result.Cause, view.insertError[form.preauthKey.Key])
 			require.False(t, result.Applied)
 			require.Zero(t, result.Fee)
 			require.Equal(t, before, view.data)
@@ -527,7 +528,8 @@ func TestRemovalCommitFailureRollsBackAllLedgerChanges(t *testing.T) {
 		SkipSignatureVerification: true,
 	}).Apply(txn)
 
-	require.Equal(t, ter.TefINTERNAL, result.Result)
+	require.Equal(t, ter.TefEXCEPTION, result.Result)
+	require.ErrorIs(t, result.Cause, fixture.view.eraseError[fixture.preauthKey.Key])
 	require.False(t, result.Applied)
 	require.Equal(t, beforeAccount, fixture.view.data[accountKey.Key])
 	require.Equal(t, beforeEntry, fixture.view.data[fixture.preauthKey.Key])

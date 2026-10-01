@@ -22,6 +22,7 @@ import (
 )
 
 type replayEvidence struct {
+	Origin                   string              `json:"origin,omitempty"`
 	RepairClass              replayfault.Class   `json:"repair_class,omitempty"`
 	TransactionMapIncomplete bool                `json:"transaction_map_incomplete,omitempty"`
 	TransactionLeaves        []replayStateItem   `json:"transaction_leaves,omitempty"`
@@ -35,7 +36,25 @@ type replayEvidence struct {
 	AcquisitionClass         replayfault.Class   `json:"acquisition_class,omitempty"`
 	AcquisitionError         string              `json:"acquisition_error,omitempty"`
 	ParentSnapshot           bool                `json:"parent_snapshot"`
+	RepairHash               [32]byte            `json:"repair_hash,omitempty"`
+	RepairSequence           uint32              `json:"repair_sequence,omitempty"`
+	MissingNodeHash          [32]byte            `json:"missing_node_hash,omitempty"`
+	MissingTree              string              `json:"missing_tree,omitempty"`
 	Detail                   json.RawMessage     `json:"detail,omitempty"`
+}
+
+type replayRepairReservation struct {
+	// These pointers remain reusable until the durable replay-fault clear has
+	// committed. Cleanup compares identity so a newer acquisition is preserved.
+	parent *ledger.Ledger
+	target *ledger.Ledger
+}
+
+const replayFaultOriginStateBaseRecertification = "state_base_recertification"
+const replayFaultOriginExecution = "execution"
+
+func replayFaultStateClass(class replayfault.Class) bool {
+	return class == replayfault.MissingState || class == replayfault.CorruptState
 }
 
 type replaySnapshotItem struct {
@@ -79,6 +98,11 @@ func (s *Service) WithValidatorDuty(fn func() error) error {
 // ApplyReplay keeps failures out of the canonical ledger and latches the duty
 // gate before returning control to an acquisition fallback.
 func (s *Service) ApplyReplay(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated bool) (*ledger.Ledger, error) {
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseAdmission()
 	return s.applyReplay(ctx, replay, cfg, authenticated, false)
 }
 
@@ -146,12 +170,24 @@ func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, 
 func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *inbound.ReplayDelta, cfg tx.EngineConfig, evidence replayEvidence, cause error, lockHeld bool) {
 	parent := replay.Parent()
 	h := evidence.Target
-	evidence.Detail, _ = json.Marshal(replay.Evidence().Failure)
+	replayEvidence := replay.Evidence()
+	evidence.Detail, _ = json.Marshal(replayEvidence.Failure)
+	class := replayStateFailureClass(cause)
+	if replayFaultStateClass(class) {
+		evidence.RepairClass = class
+		if missing, ok := missingNodeHash(cause); ok {
+			evidence.MissingNodeHash = missing
+		}
+	}
 	raw, _ := json.Marshal(evidence)
 	if !lockHeld {
 		s.mu.Lock()
 	}
-	err := s.replayFaults.FailReplay(id, replayfault.Fault{Class: replayfault.Unclassified, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: cause.Error(), Evidence: raw})
+	message := "replay transition failed"
+	if cause != nil {
+		message = cause.Error()
+	}
+	err := s.replayFaults.FailReplay(id, replayfault.Fault{Class: class, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: message, Evidence: raw})
 	if !lockHeld {
 		s.mu.Unlock()
 	}
@@ -162,6 +198,22 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 	if fault == nil || fault.ID != id {
 		return
 	}
+	if replayFaultStateClass(class) {
+		if lockHeld {
+			_, requestErr := s.admitReplayRecoveryJob(func(workerCtx context.Context) error {
+				if err := workerCtx.Err(); err != nil {
+					return err
+				}
+				return s.requestReplayParentRepair(*fault, evidence)
+			})
+			if requestErr != nil && !errors.Is(requestErr, errReplayRecoveryWorkerRunning) {
+				s.logger.Warn("replay state repair request unavailable", "error", requestErr)
+			}
+		} else if err := s.requestReplayParentRepair(*fault, evidence); err != nil {
+			s.logger.Warn("replay state repair request unavailable", "error", err)
+		}
+		return
+	}
 	// Evidence capture and independent reproduction must not hold the router or
 	// consensus thread while a large parent state is traversed. It shares the
 	// same admitted worker as explicit recovery, so the two operations cannot
@@ -169,6 +221,11 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 	_, err = s.admitReplayRecoveryJob(func(workerCtx context.Context) error {
 		captureCtx, cancel := context.WithTimeout(workerCtx, 5*time.Minute)
 		defer cancel()
+		releaseAdmission, admissionErr := s.AcquireStateAdmission(captureCtx)
+		if admissionErr != nil {
+			return admissionErr
+		}
+		defer releaseAdmission()
 		s.diagnoseReplayFault(captureCtx, *fault, evidence, parent, replay, cfg, cause)
 		return nil
 	})
@@ -180,7 +237,9 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fault, evidence replayEvidence, parent *ledger.Ledger, replay *inbound.ReplayDelta, cfg tx.EngineConfig, cause error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			fault.Class = replayfault.Unclassified
+			if !replayFaultStateClass(fault.Class) {
+				fault.Class = replayfault.Unclassified
+			}
 			fault.Message += fmt.Sprintf("; evidence capture panic: %v", recovered)
 			if err := s.replayFaults.Update(fault.ID, fault); err != nil {
 				s.logger.Error("persist replay diagnosis panic", "error", err)
@@ -190,7 +249,11 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 
 	verified, err := s.captureReplayParent(ctx, fault.ID, parent)
 	if err != nil {
-		fault.Class = replayStateFailureClass(err)
+		if diagnosed := replayStateFailureClass(err); diagnosed != replayfault.Unclassified {
+			fault.Class = diagnosed
+		} else if !replayFaultStateClass(fault.Class) {
+			fault.Class = replayfault.Unclassified
+		}
 		fault.Message += "; parent verification: " + err.Error()
 	} else {
 		evidence.ParentSnapshot = s.config.ReplayFaultPath != ""
@@ -198,7 +261,7 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 		if retryErr == nil {
 			_, retryErr = retry.Apply(cfg)
 		}
-		if evidence.Authenticated && retryErr != nil && sameReplayFailure(retryErr, cause) && replayExecutionDisagreement(retryErr) {
+		if !replayFaultStateClass(fault.Class) && evidence.Authenticated && retryErr != nil && sameReplayFailure(retryErr, cause) && replayExecutionDisagreement(retryErr) {
 			fault.Class = replayfault.ExecutionDisagreement
 		}
 	}
@@ -206,7 +269,7 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 	if err := s.replayFaults.Update(fault.ID, fault); err != nil {
 		s.logger.Error("update replay fault evidence", "error", err)
 	}
-	if fault.Class == replayfault.MissingState || fault.Class == replayfault.CorruptState {
+	if replayFaultStateClass(fault.Class) {
 		_ = s.requestReplayParentRepair(fault, evidence)
 	}
 }
@@ -411,7 +474,16 @@ func (s *Service) RevalidateReplayFault(ctx context.Context, id string) error {
 }
 
 func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarted func()) error {
-	return s.replayFaults.Revalidate(ctx, id, func(ctx context.Context, fault replayfault.Fault) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
+	var reservation replayRepairReservation
+	err = s.replayFaults.Revalidate(ctx, id, func(ctx context.Context, fault replayfault.Fault) error {
 		if onStarted != nil {
 			onStarted()
 		}
@@ -431,6 +503,15 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		if evidence.NetworkID != s.config.NetworkID {
 			return errors.New("replay evidence network does not match configuration")
 		}
+		if evidence.Origin == replayFaultOriginStateBaseRecertification || evidence.Origin == replayFaultOriginExecution {
+			var err error
+			reservation, err = s.revalidateStateBaseRecertificationFault(ctx, fault, evidence)
+			return err
+		}
+		s.mu.RLock()
+		reservation.parent = s.replayRepairParent
+		reservation.target = s.replayRepairTarget
+		s.mu.RUnlock()
 		parent, err := s.loadReplayParent(ctx, fault, evidence)
 		if err != nil {
 			class := replayStateFailureClass(err)
@@ -474,6 +555,7 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 				}
 				return errors.New("target transaction acquisition requested; retry after completion")
 			}
+			reservation.target = repaired
 			txMap, err = repaired.TxMapSnapshot()
 			if err != nil {
 				return err
@@ -505,6 +587,63 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	s.releaseReplayRepair(reservation)
+	return nil
+}
+
+func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, fault replayfault.Fault, evidence replayEvidence) (replayRepairReservation, error) {
+	var reservation replayRepairReservation
+	if evidence.RepairHash == ([32]byte{}) || evidence.RepairHash != fault.TargetHash || evidence.RepairSequence != fault.Sequence ||
+		evidence.Target.Hash != fault.TargetHash || evidence.Target.ParentHash != fault.ParentHash || header.CalculateHash(evidence.Target) != fault.TargetHash {
+		return reservation, errors.New("state base repair identity is invalid")
+	}
+	s.mu.RLock()
+	reservation.parent = s.replayRepairParent
+	repaired := s.replayRepairTarget
+	validated := s.validatedLedger
+	closed := s.closedLedger
+	s.mu.RUnlock()
+	if repaired == nil || repaired.Hash() != evidence.RepairHash {
+		if err := s.requestReplayParentRepair(fault, evidence); err != nil {
+			return reservation, err
+		}
+		return reservation, errors.New("state base repair requested; retry explicitly after acquisition")
+	}
+	reservation.target = repaired
+	validatedIdentity := validated != nil && validated.Hash() == evidence.Target.Hash && validated.Sequence() == evidence.Target.LedgerIndex
+	if validatedIdentity && !repaired.IsValidated() {
+		if err := repaired.SetValidated(); err != nil {
+			return reservation, fmt.Errorf("mark exact validated repair: %w", err)
+		}
+	}
+	if evidence.Origin == replayFaultOriginExecution {
+		if closed == nil || closed.Hash() != evidence.Target.Hash || closed.Sequence() != evidence.Target.LedgerIndex {
+			return reservation, errors.New("closed ledger changed while execution repair was pending")
+		}
+		if err := s.persistRepairedLedger(ctx, repaired); err != nil {
+			return reservation, fmt.Errorf("persist repaired execution state: %w", err)
+		}
+		if err := s.restoreReplayParentAt(ctx, repaired, evidence.Target.Hash); err != nil {
+			return reservation, fmt.Errorf("install repaired execution state: %w", err)
+		}
+		return reservation, nil
+	}
+	if !validatedIdentity {
+		return reservation, errors.New("validated ledger changed while state base repair was pending")
+	}
+	if err := s.restoreReplayParent(ctx, repaired); err != nil {
+		return reservation, fmt.Errorf("install repaired state base: %w", err)
+	}
+	if err := s.persistRepairedValidatedTip(ctx, repaired); err != nil {
+		return reservation, fmt.Errorf("publish repaired validated tip: %w", err)
+	}
+	if err := s.recertifyValidatedStateBase(ctx); err != nil {
+		return reservation, fmt.Errorf("re-certify repaired state base: %w", err)
+	}
+	return reservation, nil
 }
 
 func (s *Service) SetReplayParentAcquirer(acquire func(uint32, [32]byte) error) {
@@ -529,10 +668,24 @@ func (s *Service) ReplayRecoveryParent(hash [32]byte) bool {
 		return false
 	}
 	expected := fault.ParentHash
-	if evidence.TransactionMapIncomplete && evidence.Parent.Hash != ([32]byte{}) {
+	if evidence.RepairHash != ([32]byte{}) {
+		expected = evidence.RepairHash
+	} else if evidence.TransactionMapIncomplete && evidence.Parent.Hash != ([32]byte{}) {
 		expected = fault.TargetHash
 	}
 	return hash == expected && evidence.Authenticated && fault.AcquisitionAttempts > 0 && fault.AcquisitionAttempts <= 3
+}
+
+func replayFaultMatchesRepairTarget(fault *replayfault.Fault, hash [32]byte) bool {
+	if fault == nil || hash == ([32]byte{}) {
+		return false
+	}
+	if hash == fault.TargetHash {
+		return true
+	}
+	var evidence replayEvidence
+	return json.Unmarshal(fault.Evidence, &evidence) == nil &&
+		evidence.RepairHash != ([32]byte{}) && hash == evidence.RepairHash
 }
 
 func (s *Service) requestReplayParentRepair(fault replayfault.Fault, evidence replayEvidence) error {
@@ -559,7 +712,9 @@ func (s *Service) requestReplayParentRepair(fault replayfault.Fault, evidence re
 		return err
 	}
 	seq, hash := fault.Sequence-1, fault.ParentHash
-	if evidence.TransactionMapIncomplete && evidence.Parent.Hash != ([32]byte{}) {
+	if evidence.RepairHash != ([32]byte{}) {
+		seq, hash = evidence.RepairSequence, evidence.RepairHash
+	} else if evidence.TransactionMapIncomplete && evidence.Parent.Hash != ([32]byte{}) {
 		seq, hash = fault.Sequence, fault.TargetHash
 	}
 	if err := acquire(seq, hash); err != nil {
@@ -573,12 +728,223 @@ func (s *Service) requestReplayParentRepair(fault replayfault.Fault, evidence re
 	return nil
 }
 
+func (s *Service) recordStateBaseRecertificationFailure(ctx context.Context, h header.LedgerHeader, mapType shamap.Type, cause error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s.replayFaults == nil {
+		return
+	}
+	class := replayStateFailureClass(cause)
+	if !replayFaultStateClass(class) {
+		return
+	}
+	s.mu.RLock()
+	current := s.validatedLedger != nil && s.validatedLedger.IsValidated() && s.validatedLedger.Hash() == h.Hash
+	authenticate := s.replayAuthenticate
+	s.mu.RUnlock()
+	if !current || h.Hash == ([32]byte{}) {
+		return
+	}
+	authenticated := authenticate != nil && authenticate(h)
+	s.mu.RLock()
+	current = s.validatedLedger != nil && s.validatedLedger.IsValidated() && s.validatedLedger.Hash() == h.Hash
+	if current {
+		s.recordLiveStateVerificationFailure(ctx, h, mapType, cause, authenticated)
+	}
+	s.mu.RUnlock()
+	if !current {
+		return
+	}
+	if !authenticated {
+		return
+	}
+	fault := s.replayFaults.Snapshot()
+	if fault == nil {
+		return
+	}
+	var evidence replayEvidence
+	if err := json.Unmarshal(fault.Evidence, &evidence); err != nil {
+		return
+	}
+	if err := s.requestReplayParentRepair(*fault, evidence); err != nil {
+		s.logger.Warn("state base repair request unavailable", "error", err)
+	}
+}
+
+func (s *Service) recordExecutionStateFailure(ctx context.Context, parent *ledger.Ledger, cause error) {
+	if parent == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s.replayFaults == nil {
+		return
+	}
+	class := replayStateFailureClass(cause)
+	if !replayFaultStateClass(class) {
+		return
+	}
+	h := parent.Header()
+	if h.Hash == ([32]byte{}) {
+		return
+	}
+	s.mu.RLock()
+	current := s.closedLedger != nil && s.closedLedger.Hash() == h.Hash && s.closedLedger.Sequence() == h.LedgerIndex
+	authenticate := s.replayAuthenticate
+	s.mu.RUnlock()
+	if !current {
+		return
+	}
+	authenticated := authenticate != nil && authenticate(h)
+	s.mu.RLock()
+	current = s.closedLedger != nil && s.closedLedger.Hash() == h.Hash && s.closedLedger.Sequence() == h.LedgerIndex
+	if current {
+		s.recordLiveStateVerificationFailureOrigin(ctx, h, shamap.TypeState, cause, authenticated, replayFaultOriginExecution)
+	}
+	s.mu.RUnlock()
+	if !current || !authenticated {
+		return
+	}
+	fault := s.replayFaults.Snapshot()
+	if fault == nil {
+		return
+	}
+	var evidence replayEvidence
+	if err := json.Unmarshal(fault.Evidence, &evidence); err != nil {
+		return
+	}
+	if err := s.requestReplayParentRepair(*fault, evidence); err != nil {
+		s.logger.Warn("execution state repair request unavailable", "error", err)
+	}
+}
+
+// recordLiveStateVerificationFailure latches a proven missing or corrupt node
+// in a live validated ledger. The caller must establish that h is the current
+// live validated ledger before calling this method. It intentionally does not
+// take Service.mu, so retention and persistence guards can call it safely.
+func (s *Service) recordLiveStateVerificationFailure(ctx context.Context, h header.LedgerHeader, mapType shamap.Type, cause error, authenticated bool) {
+	s.recordLiveStateVerificationFailureOrigin(ctx, h, mapType, cause, authenticated, replayFaultOriginStateBaseRecertification)
+}
+
+func (s *Service) recordLiveStateVerificationFailureOrigin(ctx context.Context, h header.LedgerHeader, mapType shamap.Type, cause error, authenticated bool, origin string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s.replayFaults == nil || s.ReplayBlocked() || h.Hash == ([32]byte{}) {
+		return
+	}
+	class := replayStateFailureClass(cause)
+	if !replayFaultStateClass(class) {
+		return
+	}
+	evidence := replayEvidence{
+		Origin:         origin,
+		RepairClass:    class,
+		Target:         h,
+		NetworkID:      s.config.NetworkID,
+		Authenticated:  authenticated,
+		RepairHash:     h.Hash,
+		RepairSequence: h.LedgerIndex,
+		MissingTree:    stateBaseMapName(mapType),
+	}
+	if missing, ok := missingNodeHash(cause); ok {
+		evidence.MissingNodeHash = missing
+	}
+	evidence.Detail, _ = json.Marshal(struct {
+		Error string `json:"error"`
+	}{Error: cause.Error()})
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		s.logger.Error("encode state base recertification fault", "error", err)
+		return
+	}
+	s.invalidateFastLoadCheckpointEligibility("durable validated state is incomplete")
+	id, err := s.replayFaults.BeginReplay(replayfault.Fault{
+		ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Evidence: raw,
+	})
+	if err != nil {
+		s.logger.Error("persist state base recertification intent", "error", err)
+		return
+	}
+	message := cause.Error()
+	if err := s.replayFaults.FailReplay(id, replayfault.Fault{
+		Class: class, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex,
+		Message: message, Evidence: raw,
+	}); err != nil {
+		s.logger.Error("persist state base recertification fault", "error", err)
+		return
+	}
+	if fault := s.replayFaults.Snapshot(); fault != nil {
+		if authenticated {
+			s.logger.Info("live state verification fault latched", "sequence", h.LedgerIndex, "tree", evidence.MissingTree)
+		}
+	}
+}
+
+func (s *Service) persistRepairedLedger(ctx context.Context, repaired *ledger.Ledger) error {
+	if repaired == nil {
+		return errors.New("verified replay ledger is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return fmt.Errorf("admit repaired state: %w", err)
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedLedger(ctx, repaired); err != nil {
+		return fmt.Errorf("verify repaired state: %w", err)
+	}
+	if repaired.IsValidated() {
+		return s.persistValidatedLedger(ctx, repaired, false)
+	}
+	if s.nodeStore == nil {
+		return nil
+	}
+	return s.persistToNodeStore(ctx, repaired, repaired.Sequence())
+}
+
+func (s *Service) persistRepairedValidatedTip(ctx context.Context, repaired *ledger.Ledger) error {
+	if s.nodeStore == nil {
+		return errors.New("NodeStore is required to publish a repaired validated tip")
+	}
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	return s.persistValidatedTipLocked(ctx, repaired, true)
+}
+
+func missingNodeHash(err error) ([32]byte, bool) {
+	var missing *shamap.MissingNodeError
+	if !errors.As(err, &missing) || missing == nil {
+		return [32]byte{}, false
+	}
+	return missing.Hash, true
+}
+
+func stateBaseMapName(mapType shamap.Type) string {
+	if mapType == shamap.TypeTransaction {
+		return "transaction"
+	}
+	return "state"
+}
+
 func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.LedgerHeader, txMap *shamap.SHAMap, parent *ledger.Ledger, authenticated bool, cause error) {
 	if s.ReplayBlocked() {
 		return
 	}
 	evidence := replayEvidence{Target: h, Authenticated: authenticated, NetworkID: s.config.NetworkID}
 	class := replayStateFailureClass(cause)
+	if cause != nil {
+		evidence.Detail, _ = json.Marshal(struct {
+			Error string `json:"error"`
+		}{Error: cause.Error()})
+	}
+	if missing, ok := missingNodeHash(cause); ok {
+		evidence.MissingNodeHash = missing
+	}
 	if parent == nil {
 		class = replayfault.MissingState
 	} else {
@@ -588,6 +954,9 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 	evidence.TransactionMapIncomplete = h.TxHash != ([32]byte{})
 	if parent == nil || evidence.TransactionMapIncomplete {
 		evidence.RepairClass = replayfault.MissingState
+	}
+	if replayFaultStateClass(class) {
+		evidence.RepairClass = class
 	}
 	raw, err := json.Marshal(evidence)
 	if err != nil {
@@ -615,7 +984,15 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 			evidence.TransactionLeaves = append(evidence.TransactionLeaves, replayStateItem{item.Key(), item.Data()})
 			return true
 		}); err != nil {
-			class = replayStateFailureClass(err)
+			if diagnosed := replayStateFailureClass(err); diagnosed != replayfault.Unclassified || !replayFaultStateClass(class) {
+				class = diagnosed
+			}
+			if missing, ok := missingNodeHash(err); ok {
+				evidence.MissingNodeHash = missing
+			}
+			if replayFaultStateClass(class) {
+				evidence.RepairClass = class
+			}
 			evidence.TransactionMapIncomplete = true
 		}
 	} else if h.TxHash != ([32]byte{}) {
@@ -624,7 +1001,11 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 	}
 	raw, _ = json.Marshal(evidence)
 	s.mu.Lock()
-	err = s.replayFaults.FailReplay(id, replayfault.Fault{Class: class, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: cause.Error(), Evidence: raw})
+	message := "replay preparation failed"
+	if cause != nil {
+		message = cause.Error()
+	}
+	err = s.replayFaults.FailReplay(id, replayfault.Fault{Class: class, ParentHash: h.ParentHash, TargetHash: h.Hash, Sequence: h.LedgerIndex, Message: message, Evidence: raw})
 	s.mu.Unlock()
 	if err != nil {
 		s.logger.Error("persist replay preparation fault", "error", err)
@@ -662,7 +1043,31 @@ func (s *Service) RecordReplayAcquisitionFailure(hash [32]byte, cause error) {
 }
 
 func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledger) error {
+	if err := s.persistRepairedLedger(ctx, verified); err != nil {
+		return err
+	}
+	if err := s.restoreReplayParentAt(ctx, verified, [32]byte{}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Ledger, expectedClosedHash [32]byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	repaired := verified
+	if repaired == nil {
+		return errors.New("verified replay ledger is required")
+	}
+	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	if err != nil {
+		return fmt.Errorf("admit repaired state: %w", err)
+	}
+	defer releaseAdmission()
+	if err := s.VerifyDetachedLedger(ctx, repaired); err != nil {
+		return fmt.Errorf("verify repaired state: %w", err)
+	}
 	if err := s.lockOpenLedgerIfRunning(openLedgerPreferredSwitch); err != nil {
 		return err
 	}
@@ -671,6 +1076,10 @@ func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledg
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
+	if expectedClosedHash != ([32]byte{}) &&
+		(s.closedLedger == nil || s.closedLedger.Hash() != expectedClosedHash) {
+		return errors.New("closed ledger changed before repaired execution state could be installed")
+	}
 	if s.closedLedger != nil && s.closedLedger.Hash() == repaired.Hash() {
 		newOpen, err := ledger.NewOpen(repaired, time.Now())
 		if err != nil {
@@ -692,8 +1101,25 @@ func (s *Service) restoreReplayParent(ctx context.Context, verified *ledger.Ledg
 	}
 	s.putHistoryLocked(repaired)
 	s.cachePersistedLedgerLocked(repaired)
-	s.enqueueNodePersist(repaired)
-	s.replayRepairParent = nil
-	s.replayRepairTarget = nil
 	return nil
+}
+
+func (s *Service) releaseReplayRepair(reservation replayRepairReservation) {
+	if reservation.parent == nil && reservation.target == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Preserve an already-latched fault. The service lock also serializes this
+	// check with publication, while identity checks prevent cleanup from
+	// clearing a reservation acquired for a newer fault.
+	if s.replayFaults != nil && s.replayFaults.Snapshot() != nil {
+		return
+	}
+	if reservation.parent != nil && s.replayRepairParent == reservation.parent {
+		s.replayRepairParent = nil
+	}
+	if reservation.target != nil && s.replayRepairTarget == reservation.target {
+		s.replayRepairTarget = nil
+	}
 }

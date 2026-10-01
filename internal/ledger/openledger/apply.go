@@ -155,6 +155,13 @@ func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, b
 			"err", applyErr)
 		return ResultFailure, applyErr
 	}
+	if result.ApplyResult.Cause != nil {
+		logger.Warn("transaction execution cause — staged ledger discarded",
+			"mode", mode,
+			"hash", fmt.Sprintf("%x", result.Hash[:8]),
+			"err", result.ApplyResult.Cause)
+		return ResultFailure, result.ApplyResult.Cause
+	}
 	engineResult := result.ApplyResult.Result
 	switch {
 	case result.ApplyResult.Applied:

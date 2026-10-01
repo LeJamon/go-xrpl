@@ -19,6 +19,7 @@ import (
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +83,28 @@ func TestReplayDelta_Apply_EmptyTxSet(t *testing.T) {
 	gotTx, err := derived.TxMapHash()
 	require.NoError(t, err)
 	assert.Equal(t, hdr.TxHash, gotTx, "derived TxHash must match header")
+}
+
+func TestReplayFailurePreservesMissingNodeEvidence(t *testing.T) {
+	missingHash := [32]byte{0x31, 0x41, 0x59}
+	failure := newReplayFailure(&shamap.MissingNodeError{Hash: missingHash}, "parent_state", "snapshot parent state: %x", missingHash)
+	if !errors.Is(failure, shamap.ErrNodeNotInStore) {
+		t.Fatalf("replay failure = %v, want ErrNodeNotInStore", failure)
+	}
+	var missing *shamap.MissingNodeError
+	if !errors.As(failure, &missing) || missing.Hash != missingHash {
+		t.Fatalf("replay failure cause = %v, want missing hash %x", failure, missingHash)
+	}
+	if failure.MissingNodeHash != missingHash {
+		t.Fatalf("replay evidence hash = %x, want %x", failure.MissingNodeHash, missingHash)
+	}
+	encoded, err := json.Marshal(failure)
+	require.NoError(t, err)
+	var decoded ReplayFailure
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	if decoded.MissingNodeHash != missingHash {
+		t.Fatalf("encoded replay evidence hash = %x, want %x", decoded.MissingNodeHash, missingHash)
+	}
 }
 
 func TestReplayDelta_GotResponse_RejectsResolutionNotDerivedFromParent(t *testing.T) {

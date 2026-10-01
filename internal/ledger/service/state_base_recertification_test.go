@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -146,6 +149,14 @@ func requireStateBaseRecertificationUnavailable(t *testing.T, f *stateBaseRecert
 func TestStateBaseRecertificationRejectsMissingDurableDescendantWithWarmCache(t *testing.T) {
 	f := newStateBaseRecertificationFixture(t)
 	ctx := context.Background()
+	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
+	var repairCalls int
+	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+		repairCalls++
+		require.Equal(t, f.validated.Sequence(), seq)
+		require.Equal(t, f.validated.Hash(), hash)
+		return nil
+	})
 
 	provider, ok := f.svc.shamapFamily.(interface {
 		FullBelowCache() *shamap.FullBelowCache
@@ -177,6 +188,152 @@ func TestStateBaseRecertificationRejectsMissingDurableDescendantWithWarmCache(t 
 	err = f.svc.recertifyValidatedStateBase(ctx)
 	require.Error(t, err)
 	requireStateBaseRecertificationUnavailable(t, f)
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
+	require.Equal(t, 1, repairCalls)
+	require.True(t, f.svc.ReplayBlocked())
+	require.False(t, f.svc.ReplayRecoveryParent([32]byte{0xff}))
+	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
+	var evidence replayEvidence
+	require.NoError(t, json.Unmarshal(fault.Evidence, &evidence))
+	require.Equal(t, replayFaultOriginStateBaseRecertification, evidence.Origin)
+	require.Equal(t, f.validated.Hash(), evidence.Target.Hash)
+	require.Equal(t, "state", evidence.MissingTree)
+	require.Equal(t, f.childHash, evidence.MissingNodeHash)
+}
+
+func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	ctx := t.Context()
+	stateSource, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
+	var stateCopyErr error
+	require.NoError(t, stateSource.ForEachCtx(ctx, func(item *shamap.Item) bool {
+		stateCopyErr = stateMap.Put(item.Key(), item.Data())
+		return stateCopyErr == nil
+	}))
+	require.NoError(t, stateCopyErr)
+	txSource, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	var txCopyErr error
+	require.NoError(t, txSource.ForEachCtx(ctx, func(item *shamap.Item) bool {
+		txCopyErr = txMap.PutWithNodeType(item.Key(), item.Data(), shamap.NodeTypeTransactionWithMeta)
+		return txCopyErr == nil
+	}))
+	require.NoError(t, txCopyErr)
+	stateHash, err := stateMap.Hash()
+	require.NoError(t, err)
+	txHash, err := txMap.Hash()
+	require.NoError(t, err)
+	require.Equal(t, f.validated.Header().AccountHash, stateHash)
+	require.Equal(t, f.validated.Header().TxHash, txHash)
+	child, err := f.db.Fetch(ctx, nodestore.Hash256(f.childHash))
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	child.LedgerSeq = f.validated.Sequence() - 1
+	require.NoError(t, f.db.Store(ctx, child))
+	require.NoError(t, f.db.Sync(ctx))
+	deleted, err := f.db.DeleteBefore(ctx, f.validated.Sequence(), 1)
+	require.NoError(t, err)
+	require.Positive(t, deleted)
+	f.invalidate(t)
+	f.svc.invalidateCompleteLedger(f.validated.Sequence())
+	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
+	var repairCalls int
+	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+		repairCalls++
+		require.Equal(t, f.validated.Sequence(), seq)
+		require.Equal(t, f.validated.Hash(), hash)
+		return nil
+	})
+	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	require.Equal(t, replayfault.MissingState, fault.Class)
+	require.Equal(t, 1, repairCalls)
+	require.False(t, f.svc.ReplayRecoveryParent([32]byte{0x7f}))
+	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
+
+	wrongHeader := f.validated.Header()
+	wrongHeader.Hash[0] ^= 1
+	require.ErrorIs(t, f.svc.StoreLedgerWithState(ctx, &wrongHeader, stateMap, txMap), replayfault.ErrBlocked)
+	targetHeader := f.validated.Header()
+	targetHeader.Validated = false
+	require.NoError(t, f.svc.StoreLedgerWithState(ctx, &targetHeader, stateMap, txMap))
+	require.NoError(t, f.svc.RevalidateReplayFault(ctx, fault.ID))
+	require.False(t, f.svc.ReplayBlocked())
+	_, found := f.svc.currentValidatedStateBaseProof()
+	require.True(t, found)
+}
+
+func TestStateBaseRecertificationFailureIgnoresSupersededFrontier(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	stateMap, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	replacementHeader := f.validated.Header()
+	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
+	replacementHeader.Validated = false
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
+	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, f.validated.Fees())
+	require.NoError(t, err)
+	require.NoError(t, replacement.SetValidated())
+	f.svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool {
+		f.svc.mu.Lock()
+		f.svc.validatedLedger = replacement
+		f.svc.mu.Unlock()
+		return true
+	})
+
+	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
+	require.False(t, f.svc.ReplayBlocked())
+	require.Same(t, replacement, f.svc.GetValidatedLedger())
+}
+
+func TestStateBaseRecertificationRepairSyncFailureRetainsExactTarget(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.invalidate(t)
+	f.svc.invalidateCompleteLedger(f.validated.Sequence())
+	f.svc.SetReplayTargetAuthenticator(func(h header.LedgerHeader) bool { return h.Hash == f.validated.Hash() })
+	var repairCalls int
+	f.svc.SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+		repairCalls++
+		require.Equal(t, f.validated.Sequence(), seq)
+		require.Equal(t, f.validated.Hash(), hash)
+		return nil
+	})
+	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
+	fault := f.svc.replayFaults.Snapshot()
+	require.NotNil(t, fault)
+	stateMap, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	targetHeader := f.validated.Header()
+	targetHeader.Validated = false
+	require.NoError(t, f.svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
+
+	syncFailure := errors.New("repaired state sync failed")
+	tracking := &checkpointTrackingDatabase{Database: f.db, uncached: f.db, syncErr: syncFailure}
+	f.svc.nodeStore = tracking
+	require.ErrorIs(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID), syncFailure)
+	require.True(t, f.svc.ReplayBlocked())
+	require.Equal(t, 1, repairCalls)
+	f.svc.mu.RLock()
+	repaired := f.svc.replayRepairTarget
+	f.svc.mu.RUnlock()
+	require.NotNil(t, repaired, "failed persistence must retain the acquired repair")
+
+	tracking.mu.Lock()
+	tracking.syncErr = nil
+	tracking.mu.Unlock()
+	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
+	require.False(t, f.svc.ReplayBlocked())
+	require.Equal(t, 1, repairCalls, "retry must reuse the exact acquired repair")
 }
 
 type blockingStateBaseRecertificationDatabase struct {

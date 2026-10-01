@@ -741,7 +741,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	// engine path and keeps Phase B free of replay-engine entanglement.
 	stateMap, err := r.parentStateSnapshot()
 	if err != nil {
-		return fmt.Errorf("snapshot parent state: %w", err)
+		return newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
 	}
 
 	r.result, err = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
@@ -834,7 +834,7 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	// parent rather than the deserialized response header.
 	stateMap, err := r.parent.StateMapSnapshot()
 	if err != nil {
-		return nil, fmt.Errorf("snapshot parent state: %w", err)
+		return nil, newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
 	}
 	txMap := shamap.New(shamap.TypeTransaction)
 	parentHeader := r.parent.Header()
@@ -999,7 +999,11 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 		// unreachable from our engine regardless, so preserving the
 		// leaf bought nothing and obscured the real divergence.
 		if !result.Result.IsApplied() {
-			failure := newReplayFailure(ErrReplayTxDiverged, "transaction_result",
+			cause := ErrReplayTxDiverged
+			if result.Cause != nil {
+				cause = errors.Join(cause, result.Cause)
+			}
+			failure := newReplayFailure(cause, "transaction_result",
 				"engine returned a non-applied result; rippled only embeds tes/tec transactions")
 			failure.TxIndex = dtx.Index
 			failure.TxHash = dtx.Hash
