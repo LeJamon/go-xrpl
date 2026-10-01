@@ -73,9 +73,15 @@ func TestReplayReplacementRejectsIncompleteOrInvalidLocalCandidate(t *testing.T)
 	h.Hash = header.CalculateHash(h)
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &h, incompleteState, txMap))
 	family.mu.Lock()
+	clear(family.fetches)
+	family.mu.Unlock()
+	c := r.catchupReplay
+	_, _, _, ok := c.localReplayReplacementCandidate(h.LedgerIndex, h.Hash)
+	require.True(t, ok)
+	family.mu.Lock()
 	var missingHash [32]byte
 	for _, hash := range hashes {
-		if hash != rootHash && family.fetches[hash] == 0 {
+		if hash != rootHash && family.fetches[hash] > 0 {
 			missingHash = hash
 			break
 		}
@@ -88,8 +94,7 @@ func TestReplayReplacementRejectsIncompleteOrInvalidLocalCandidate(t *testing.T)
 	require.NotNil(t, held)
 	require.False(t, svc.HasCompleteLedgerHash(h.LedgerIndex, h.Hash))
 
-	c := r.catchupReplay
-	_, _, _, ok := c.localReplayReplacementCandidate(h.LedgerIndex, h.Hash)
+	_, _, _, ok = c.localReplayReplacementCandidate(h.LedgerIndex, h.Hash)
 	assert.False(t, ok)
 	assert.False(t, c.locallySatisfiesLedger(h.LedgerIndex, h.Hash))
 	_, _, _, ok = c.localReplayReplacementCandidate(h.LedgerIndex+1, h.Hash)
