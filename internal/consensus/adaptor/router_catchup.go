@@ -2275,10 +2275,52 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 		if skipped == historySkipBudget {
 			return
 		}
-		lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
-		held, err := svc.GetLedgerByHashContext(lookupCtx, target.hash)
-		cancelLookup()
-		if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && held == nil) {
+		var (
+			held     *ledger.Ledger
+			err      error
+			notFound bool
+		)
+		func() {
+			lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
+			defer cancelLookup()
+			releaseAdmission, admissionErr := svc.AcquireStateAdmission(c.lifecycleContext())
+			if admissionErr != nil {
+				err = admissionErr
+				return
+			}
+			defer releaseAdmission()
+			held, err = svc.GetLedgerByHashContext(lookupCtx, target.hash)
+			if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && held == nil) {
+				notFound = true
+				return
+			}
+			if err != nil {
+				return
+			}
+			// Fully acquired ledgers can already be stored by hash without being
+			// adopted into canonical history (e.g. a previous startup candidate).
+			// Preserve that local promotion path; merely cached headers are not
+			// returned by this service lookup. Already-complete history needs no
+			// repeated transaction indexing or persistence enqueue.
+			if svc.HasCompleteLedgerHash(target.seq, target.hash) {
+				return
+			}
+			hdr := held.Header()
+			stateMap, snapshotErr := held.StateMapSnapshot()
+			if snapshotErr != nil {
+				err = snapshotErr
+				return
+			}
+			txMap, snapshotErr := held.TxMapSnapshot()
+			if snapshotErr != nil {
+				err = snapshotErr
+				return
+			}
+			if err = svc.IngestHistoricalLedgerWithState(c.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
+				c.logger.Warn("history backfill: held ledger ingest failed", "error", err, "seq", target.seq)
+			}
+		}()
+		if notFound {
 			break
 		}
 		if err != nil {
@@ -2286,25 +2328,8 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 			// reason to start another full-state network acquisition.
 			return
 		}
-		// Fully acquired ledgers can already be stored by hash without being
-		// adopted into canonical history (e.g. a previous startup candidate).
-		// Preserve that local promotion path; merely cached headers are not
-		// returned by this service lookup. Already-complete history needs no
-		// repeated transaction indexing or persistence enqueue.
-		if !svc.HasCompleteLedgerHash(target.seq, target.hash) {
-			hdr := held.Header()
-			stateMap, err := held.StateMapSnapshot()
-			if err != nil {
-				return
-			}
-			txMap, err := held.TxMapSnapshot()
-			if err != nil {
-				return
-			}
-			if err := svc.IngestHistoricalLedgerWithState(c.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
-				c.logger.Warn("history backfill: held ledger ingest failed", "error", err, "seq", target.seq)
-				return
-			}
+		if held == nil {
+			return
 		}
 		next := catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
 		c.historyMu.Lock()

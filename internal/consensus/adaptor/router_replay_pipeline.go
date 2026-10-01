@@ -1340,34 +1340,6 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 		return header.LedgerHeader{}, false, 0, nil, errors.New("nil standard replay pipeline entry")
 	}
 	h := entry.header
-	defer func() {
-		if retErr == nil || errors.Is(retErr, context.Canceled) || c.replayFaultBlocked() {
-			return
-		}
-		c.acquisitionMu.Lock()
-		current := c.standardReplay.active && c.standardReplay.generation == generation && c.standardReplay.entries[entry.seq] == activeEntry
-		c.acquisitionMu.Unlock()
-		if !current {
-			return
-		}
-		svc := c.adaptor.LedgerService()
-		if svc == nil {
-			return
-		}
-		parent, _ := svc.GetLedgerByHash(h.ParentHash)
-		txMap, _ := c.loadStandardReplayTransactionMap(c.lifecycleContext(), entry)
-		svc.RecordReplayPreparationFailure(c.lifecycleContext(), h, txMap, parent, c.replayTargetAuthenticated(h), retErr)
-	}()
-	if h.Hash != entry.hash {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger hash changed")
-	}
-	if h.LedgerIndex != entry.seq {
-		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepared ledger sequence %d does not match expected %d", h.LedgerIndex, entry.seq)
-	}
-	if h.ParentHash != entry.parentHash {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger no longer attaches to the accepted predecessor")
-	}
-
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
 		return header.LedgerHeader{}, false, 0, nil, errors.New("no ledger service")
@@ -1383,6 +1355,29 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 			releaseAdmission()
 		}
 	}()
+	defer func() {
+		if retErr == nil || errors.Is(retErr, context.Canceled) || c.replayFaultBlocked() {
+			return
+		}
+		c.acquisitionMu.Lock()
+		current := c.standardReplay.active && c.standardReplay.generation == generation && c.standardReplay.entries[entry.seq] == activeEntry
+		c.acquisitionMu.Unlock()
+		if !current {
+			return
+		}
+		parent, _ := svc.GetLedgerByHash(h.ParentHash)
+		txMap, _ := c.loadStandardReplayTransactionMap(c.lifecycleContext(), entry)
+		svc.RecordReplayPreparationFailure(c.lifecycleContext(), h, txMap, parent, c.replayTargetAuthenticated(h), retErr)
+	}()
+	if h.Hash != entry.hash {
+		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger hash changed")
+	}
+	if h.LedgerIndex != entry.seq {
+		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepared ledger sequence %d does not match expected %d", h.LedgerIndex, entry.seq)
+	}
+	if h.ParentHash != entry.parentHash {
+		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger no longer attaches to the accepted predecessor")
+	}
 	parent, err := svc.GetLedgerByHash(entry.parentHash)
 	if err != nil || parent == nil {
 		if err == nil {
