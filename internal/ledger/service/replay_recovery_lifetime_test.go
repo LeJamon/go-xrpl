@@ -348,3 +348,20 @@ func TestReplayRepairCleanupPreservesReservationForNextFault(t *testing.T) {
 	require.Same(t, parent, got)
 	require.True(t, svc.ReplayBlocked())
 }
+
+func TestStateBaseRepairReleasesSupersededParentReservation(t *testing.T) {
+	f, fault, _, repairCalls := prepareStateBaseRepairLifetime(t, filepath.Join(t.TempDir(), "fault.json"))
+	previous := replayRepairReservation{parent: f.validated}
+	f.svc.mu.Lock()
+	f.svc.replayRepairParent = previous.parent
+	f.svc.mu.Unlock()
+	f.svc.releaseReplayRepair(previous)
+	f.svc.mu.RLock()
+	retained := f.svc.replayRepairParent
+	f.svc.mu.RUnlock()
+	require.Same(t, previous.parent, retained)
+
+	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
+	require.Equal(t, 1, *repairCalls)
+	assertRepairReleased(t, f.svc)
+}

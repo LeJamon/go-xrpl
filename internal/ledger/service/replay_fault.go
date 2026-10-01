@@ -509,7 +509,8 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 			return err
 		}
 		s.mu.RLock()
-		acquiredParent := s.replayRepairParent
+		reservation.parent = s.replayRepairParent
+		reservation.target = s.replayRepairTarget
 		s.mu.RUnlock()
 		parent, err := s.loadReplayParent(ctx, fault, evidence)
 		if err != nil {
@@ -582,9 +583,6 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 			return err
 		}
 		if fault.Class == replayfault.MissingState || fault.Class == replayfault.CorruptState || evidence.RepairClass == replayfault.MissingState || evidence.RepairClass == replayfault.CorruptState {
-			if acquiredParent != nil && parent.Hash() == acquiredParent.Hash() {
-				reservation.parent = acquiredParent
-			}
 			return s.restoreReplayParent(ctx, parent)
 		}
 		return nil
@@ -603,6 +601,7 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 		return reservation, errors.New("state base repair identity is invalid")
 	}
 	s.mu.RLock()
+	reservation.parent = s.replayRepairParent
 	repaired := s.replayRepairTarget
 	validated := s.validatedLedger
 	closed := s.closedLedger
