@@ -24,7 +24,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				}
 			}
 
-			// 8 additional accounts
 			bob := jtx.NewAccount("bob")
 			ed := jtx.NewAccount("ed")
 			paul := jtx.NewAccount("paul")
@@ -34,7 +33,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			ben := jtx.NewAccount("ben")
 			nataly := jtx.NewAccount("nataly")
 
-			// Fund with 30,000 XRP + 1,500,000 USD each
 			// Reference: fund(env, gw, accounts, {USD(1'500'000)}, Fund::Acct)
 			accounts := []*jtx.Account{bob, ed, paul, dan, chris, simon, ben, nataly}
 			for _, acct := range accounts {
@@ -53,9 +51,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			xrpAsset := amm.XRP()
 			usdAsset := env.USD
 
-			// 10 iterations of deposit/withdraw cycles
 			for range 10 {
-				// ben: deposit 1e-10 USD
 				mustSubmit(amm.AMMDeposit(ben, xrpAsset, usdAsset).
 					Amount(state.NewIssuedAmountFromValue(1, -10, "USD", env.GW.Address)).
 					SingleAsset().Build())
@@ -63,7 +59,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// simon: deposit 0.1 USD
 				mustSubmit(amm.AMMDeposit(simon, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 0.1)).
 					SingleAsset().Build())
@@ -71,7 +66,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// chris: deposit 1 USD
 				mustSubmit(amm.AMMDeposit(chris, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 1)).
 					SingleAsset().Build())
@@ -79,7 +73,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// dan: deposit 10 USD
 				mustSubmit(amm.AMMDeposit(dan, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 10)).
 					SingleAsset().Build())
@@ -87,7 +80,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// bob: deposit 100 USD
 				mustSubmit(amm.AMMDeposit(bob, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 100)).
 					SingleAsset().Build())
@@ -95,7 +87,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// carol: deposit 1,000 USD
 				mustSubmit(amm.AMMDeposit(env.Carol, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 					SingleAsset().Build())
@@ -103,7 +94,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// ed: deposit 10,000 USD
 				mustSubmit(amm.AMMDeposit(ed, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 10000)).
 					SingleAsset().Build())
@@ -111,7 +101,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// paul: deposit 100,000 USD
 				mustSubmit(amm.AMMDeposit(paul, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 100000)).
 					SingleAsset().Build())
@@ -119,7 +108,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(amm.IOUAmount(env.GW, "USD", 0)).
 					OneAssetWithdrawAll().Build())
 
-				// nataly: deposit 1,000,000 USD
 				mustSubmit(amm.AMMDeposit(nataly, xrpAsset, usdAsset).
 					Amount(amm.IOUAmount(env.GW, "USD", 1000000)).
 					SingleAsset().Build())
@@ -145,7 +133,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					expectedPoolUSD.Mantissa(), expectedPoolUSD.Exponent())
 			}
 
-			// Check individual USD balances
 			// ben, simon, chris, dan: exact 1,500,000 USD
 			for _, acct := range []*jtx.Account{ben, simon, chris, dan} {
 				bal := env.TestEnv.IOUBalance(acct, env.GW, "USD")
@@ -189,7 +176,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				}
 			}
 
-			// alice withdrawAll
 			mustSubmit(amm.AMMWithdraw(env.Alice, xrpAsset, usdAsset).WithdrawAll().Build())
 
 			// AMM should be deleted
@@ -230,7 +216,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				}
 			}
 
-			// 8 additional accounts
 			bob := jtx.NewAccount("bob")
 			ed := jtx.NewAccount("ed")
 			paul := jtx.NewAccount("paul")
@@ -240,7 +225,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			ben := jtx.NewAccount("ben")
 			nataly := jtx.NewAccount("nataly")
 
-			// Fund with 2,000,000 XRP each, no IOUs
 			// Reference: fund(env, gw, accounts, XRP(2'000'000), {}, Fund::Acct)
 			accounts := []*jtx.Account{bob, ed, paul, dan, chris, simon, ben, nataly}
 			for _, acct := range accounts {
@@ -251,7 +235,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			xrpAsset := amm.XRP()
 			usdAsset := env.USD
 
-			// Helper that logs iteration and account on failure
 			submitOp := func(iter int, who string, op string, txn tx.Transaction) {
 				t.Helper()
 				result := env.Submit(txn)
@@ -260,9 +243,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				}
 			}
 
-			// 10 iterations of XRP deposit/withdraw cycles
 			for i := range 10 {
-				// ben: deposit 1 drop
 				submitOp(i, "ben", "deposit", amm.AMMDeposit(ben, xrpAsset, usdAsset).
 					Amount(tx.NewXRPAmount(1)).
 					SingleAsset().Build())
@@ -270,7 +251,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// simon: deposit 1,000 drops
 				submitOp(i, "simon", "deposit", amm.AMMDeposit(simon, xrpAsset, usdAsset).
 					Amount(tx.NewXRPAmount(1000)).
 					SingleAsset().Build())
@@ -278,7 +258,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// chris: deposit 1 XRP
 				submitOp(i, "chris", "deposit", amm.AMMDeposit(chris, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(1)).
 					SingleAsset().Build())
@@ -286,7 +265,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// dan: deposit 10 XRP
 				submitOp(i, "dan", "deposit", amm.AMMDeposit(dan, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(10)).
 					SingleAsset().Build())
@@ -294,7 +272,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// bob: deposit 100 XRP
 				submitOp(i, "bob", "deposit", amm.AMMDeposit(bob, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(100)).
 					SingleAsset().Build())
@@ -302,7 +279,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// carol: deposit 1,000 XRP
 				submitOp(i, "carol", "deposit", amm.AMMDeposit(env.Carol, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(1000)).
 					SingleAsset().Build())
@@ -310,7 +286,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// ed: deposit 10,000 XRP
 				submitOp(i, "ed", "deposit", amm.AMMDeposit(ed, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(10000)).
 					SingleAsset().Build())
@@ -318,7 +293,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// paul: deposit 100,000 XRP
 				submitOp(i, "paul", "deposit", amm.AMMDeposit(paul, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(100000)).
 					SingleAsset().Build())
@@ -326,7 +300,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 					Amount(tx.NewXRPAmount(0)).
 					OneAssetWithdrawAll().Build())
 
-				// nataly: deposit 1,000,000 XRP
 				submitOp(i, "nataly", "deposit", amm.AMMDeposit(nataly, xrpAsset, usdAsset).
 					Amount(amm.XRPAmount(1000000)).
 					SingleAsset().Build())
@@ -344,7 +317,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				t.Errorf("Pool XRP: got %d, want %d", poolXRP, uint64(10_000_000_080))
 			}
 
-			// alice withdrawAll
 			mustSubmit(amm.AMMWithdraw(env.Alice, xrpAsset, usdAsset).WithdrawAll().Build())
 
 			// AMM should be deleted
@@ -352,7 +324,6 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 				t.Error("AMM should be deleted after alice withdrawAll")
 			}
 
-			// Check XRP balances
 			// xrpBalance = XRP(2,000,000) - 20*baseFee - 10 drops rounding
 			xrpBalance := uint64(jtx.XRP(2_000_000)) - 20*baseFee - 10
 
@@ -416,7 +387,6 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 		state.NewIssuedAmountFromValue(8040409987141784, -10, "USD", env.GW.Address))
 	env.Close()
 
-	// Alice creates AMM with precise amounts
 	createTx := amm.AMMCreate(env.Alice,
 		tx.NewXRPAmount(51_600_000_981),
 		state.NewIssuedAmountFromValue(8030409987141784, -10, "USD", env.GW.Address)).
@@ -426,11 +396,9 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 
 	ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
 
-	// Save starting balances
 	xrpBefore := env.AMMPoolXRP(ammAcc)
 	usdBefore := ammHolding(t, env, ammAcc, env.USD)
 
-	// Fund bob
 	env.TestEnv.FundAmount(env.Bob, 1_092_878_933) // ~1092.878933 XRP
 	env.Trust(env.Bob, env.GW, "USD", 1000000)
 	env.PayIOUAmount(env.GW, env.Bob,
@@ -459,7 +427,6 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 	t.Run("LastLP_IssuerOfOneToken", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 
-		// Fund with large amounts
 		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1_000_000_000)))
 		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1_000_000_000)))
 		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(1_000_000_000)))
@@ -473,7 +440,6 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "USD", 1_000_000_000)
 		env.Close()
 
-		// GW creates AMM: XRP(2)/USD(1)
 		createTx := amm.AMMCreate(env.GW,
 			amm.XRPAmount(2),
 			amm.IOUAmount(env.GW, "USD", 1)).Build()
@@ -499,14 +465,12 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(depCarol))
 		env.Close()
 
-		// Alice withdraws all
 		wdAlice := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			WithdrawAll().
 			Build()
 		jtx.RequireTxSuccess(t, env.Submit(wdAlice))
 		env.Close()
 
-		// Carol withdraws all
 		wdCarol := amm.AMMWithdraw(env.Carol, amm.XRP(), env.USD).
 			WithdrawAll().
 			Build()

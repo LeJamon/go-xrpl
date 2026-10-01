@@ -44,7 +44,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 	)
 
 	tests := []testCase{
-		// FailShouldSucceed (12 cases)
 		{"0.001519763260828713", "1558701", paymenttx.Quality{Value: 5414253689393440221}, 1000, FailShouldSucceed},
 		{"0.01099814367603737", "1892611", paymenttx.Quality{Value: 5482264816516900274}, 1000, FailShouldSucceed},
 		{"0.78", "796599", paymenttx.Quality{Value: 5630392334958379008}, 1000, FailShouldSucceed},
@@ -58,7 +57,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		{"7047.112186735699", "1649845866", paymenttx.Quality{Value: 5696855348026306945}, 504, FailShouldSucceed},
 		{"840236.4402981238", "47419053", paymenttx.Quality{Value: 5982561601648018688}, 499, FailShouldSucceed},
 
-		// SucceedShouldSucceedResize (6 cases)
 		{"992715.618909774", "189445631733", paymenttx.Quality{Value: 5697835648288106944}, 815, SucceedShouldSucceedResize},
 		{"504636667521", "185545883.9506651", paymenttx.Quality{Value: 6343802275337659280}, 503, SucceedShouldSucceedResize},
 		{"992706.7218636649", "189447316000", paymenttx.Quality{Value: 5697835648288106944}, 797, SucceedShouldSucceedResize},
@@ -66,7 +64,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		{"17932506.56880419", "189308.6043676173", paymenttx.Quality{Value: 6206460598195440068}, 311, SucceedShouldSucceedResize},
 		{"1.066379294658174", "128042251493", paymenttx.Quality{Value: 5268559341368739328}, 270, SucceedShouldSucceedResize},
 
-		// Fail (14 cases)
 		{"350131413924", "1576879.110907892", paymenttx.Quality{Value: 6487411636539049449}, 650, Fail},
 		{"422093460", "2.731797662057464", paymenttx.Quality{Value: 6702911108534394924}, 1000, Fail},
 		{"76128132223", "367172.7148422662", paymenttx.Quality{Value: 6487263463413514240}, 548, Fail},
@@ -86,7 +83,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		{"10", "10.0", xrpIouQ10_100, 100, Fail},
 		{"10.0", "10", iouXrpQ10_100, 100, Fail},
 
-		// Succeed (15 cases)
 		{"69864389131", "287631.4543025075", paymenttx.Quality{Value: 6487623473313516078}, 451, Succeed},
 		{"4328342973", "12453825.99247381", paymenttx.Quality{Value: 6272522264364865181}, 997, Succeed},
 		{"32347017", "7003.93031579449", paymenttx.Quality{Value: 6347261126087916670}, 1000, Succeed},
@@ -103,7 +99,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		{"6970462.633911943", "57359281", paymenttx.Quality{Value: 6054087899185946624}, 850, Succeed},
 		{"3983448845", "2347.543644281467", paymenttx.Quality{Value: 6558965195382476659}, 856, Succeed},
 
-		// SucceedShouldFail (1 case)
 		{"771493171", "1.243473020567508", paymenttx.Quality{Value: 6707566798038544272}, 100, SucceedShouldFail},
 	}
 
@@ -117,7 +112,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		return len(s) > 0
 	}
 
-	// Helper: parse pool amount from string
 	parsePool := func(t *testing.T, s string, isXRP bool) tx.Amount {
 		t.Helper()
 		if isXRP {
@@ -130,7 +124,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		return amount
 	}
 
-	// Run tests for both amendment states
 	for _, fixAMMv1_1 := range []bool{false, true} {
 		label := "PreFix"
 		if fixAMMv1_1 {
@@ -198,7 +191,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 						t.Errorf("[%d] Fail: expected no offer, got quality q=%d for target=%d", i, offerQ.Value, tc.quality.Value)
 					}
 				} else {
-					// No result
 					switch tc.status {
 					case Fail:
 						// Expected failure — verify tiny offer quality < target if non-zero quality
@@ -229,12 +221,10 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 						if fixAMMv1_1 {
 							t.Errorf("[%d] PostFix FailShouldSucceed: expected success, got failure", i)
 						}
-						// Pre-fix failure is expected
 					case SucceedShouldFail:
 						if !fixAMMv1_1 {
 							t.Errorf("[%d] PreFix SucceedShouldFail: expected success, got failure", i)
 						}
-						// Post-fix failure is expected
 					case SucceedShouldSucceedResize:
 						t.Errorf("[%d] %s SucceedShouldSucceedResize: expected success, got failure", i, label)
 					case Succeed:
@@ -245,7 +235,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		})
 	}
 
-	// Test negative discriminant
 	t.Run("NegativeDiscriminant", func(t *testing.T) {
 		one := tx.NewIssuedAmountFromFloat64(1, "", "")
 		res := paymenttx.SolveQuadraticEqSmallest(one, one, one)
@@ -273,7 +262,6 @@ func TestAMMBookStep_LimitQuality(t *testing.T) {
 	env.PayIOU(env.GW, env.Carol, "USD", 2000)
 	env.Close()
 
-	// Bob creates AMM: XRP(1000)/USD(1050)
 	createTx := amm.AMMCreate(env.Bob,
 		amm.XRPAmount(1000),
 		amm.IOUAmount(env.GW, "USD", 1050)).Build()

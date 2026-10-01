@@ -265,7 +265,7 @@ func TestInvalidWithdraw(t *testing.T) {
 		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
-	// === testMalformed cases (rippled AMM_test.cpp) ===
+	// Reference: rippled AMM_test.cpp testMalformed cases
 
 	// tfSingleAsset flag alone (no Amount) → temMALFORMED
 	t.Run("Malformed_SingleAssetFlagOnly", func(t *testing.T) {

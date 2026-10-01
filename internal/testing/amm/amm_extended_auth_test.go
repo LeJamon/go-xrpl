@@ -26,12 +26,10 @@ func TestAMMExtended_DepositAuth(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 10000)
 		env.Close()
 
-		// Create AMM
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		// Bob sets DepositAuth
 		env.EnableDepositAuth(env.Bob)
 		env.Close()
 
@@ -53,7 +51,6 @@ func TestAMMExtended_DepositAuth(t *testing.T) {
 		env.Trust(env.Bob, env.GW, "USD", 100000)
 		env.Close()
 
-		// Bob sets DepositAuth
 		env.EnableDepositAuth(env.Bob)
 		env.Close()
 
@@ -89,7 +86,6 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.FundWithIOUs(30000, 0)
 
-		// Set up signers for Alice
 		signer1 := jtx.NewAccount("signer1")
 		signer2 := jtx.NewAccount("signer2")
 		env.TestEnv.Fund(signer1, signer2)
@@ -101,7 +97,6 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		})
 		env.Close()
 
-		// Create AMM using multisign
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.SubmitMultiSigned(createTx, []*jtx.Account{signer1, signer2})
 		jtx.RequireTxSuccess(t, result)
@@ -113,12 +108,10 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Create AMM first
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		// Set up signers for Carol
 		signer := jtx.NewAccount("carolsigner")
 		env.TestEnv.Fund(signer)
 		env.Close()
@@ -127,7 +120,6 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		})
 		env.Close()
 
-		// Carol deposits via multisign
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			Amount(amm.XRPAmount(1000)).
 			Amount2(amm.IOUAmount(env.GW, "USD", 1000)).
@@ -142,12 +134,10 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Create AMM
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		// Set up signers for Alice
 		signer := jtx.NewAccount("alicesigner")
 		env.TestEnv.Fund(signer)
 		env.Close()
@@ -156,7 +146,6 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		})
 		env.Close()
 
-		// Alice withdraws via multisign
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			Amount(amm.XRPAmount(100)).
 			SingleAsset().
@@ -170,12 +159,10 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Create AMM
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		// Set up signers for Alice
 		signer := jtx.NewAccount("votersigner")
 		env.TestEnv.Fund(signer)
 		env.Close()
@@ -184,7 +171,6 @@ func TestAMMExtended_Multisign(t *testing.T) {
 		})
 		env.Close()
 
-		// Alice votes via multisign
 		voteTx := amm.AMMVote(env.Alice, amm.XRP(), env.USD, 500).Build()
 		result := env.SubmitMultiSigned(voteTx, []*jtx.Account{signer})
 		jtx.RequireTxSuccess(t, result)
@@ -214,11 +200,9 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
 		env.Close()
 
-		// GW sets RequireAuth
 		env.TestEnv.EnableRequireAuth(env.GW)
 		env.Close()
 
-		// GW authorizes bob
 		env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
 		env.Close()
 		env.Trust(env.Bob, env.GW, "USD", 50)
@@ -239,7 +223,6 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
 		env.Close()
 
-		// GW sets RequireAuth
 		env.TestEnv.EnableRequireAuth(env.GW)
 		env.Close()
 
@@ -261,11 +244,9 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(400000)))
 		env.Close()
 
-		// GW sets RequireAuth
 		env.TestEnv.EnableRequireAuth(env.GW)
 		env.Close()
 
-		// GW authorizes alice
 		env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
 		env.Close()
 		env.Trust(env.Alice, env.GW, "USD", 2000)
@@ -289,11 +270,9 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
 		env.Close()
 
-		// GW sets RequireAuth
 		env.TestEnv.EnableRequireAuth(env.GW)
 		env.Close()
 
-		// Authorize alice
 		env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
 		env.Close()
 		env.Trust(env.Alice, env.GW, "USD", 2000)
@@ -301,7 +280,6 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.PayIOU(env.GW, env.Alice, "USD", 1000)
 		env.Close()
 
-		// Authorize bob
 		env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
 		env.Close()
 		env.Trust(env.Bob, env.GW, "USD", 50)
@@ -309,7 +287,6 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 50)
 		env.Close()
 
-		// Alice creates AMM: USD(1000)/XRP(1050)
 		createTx := amm.AMMCreate(env.Alice,
 			amm.IOUAmount(env.GW, "USD", 1000),
 			amm.XRPAmount(1050)).Build()
@@ -321,7 +298,6 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 			t.Fatal("AMM not found")
 		}
 
-		// Authorize AMM account's trust line with gw
 		env.TestEnv.AuthorizeTrustLine(env.GW, ammAcc, "USD")
 		env.Close()
 
@@ -380,7 +356,6 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.SubmitSignedWith(signerList, alie))
 	env.Close()
 
-	// Multisigned AMMCreate
 	t.Run("Create", func(t *testing.T) {
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.SubmitMultiSigned(createTx, []*jtx.Account{becky, bogie})
@@ -395,7 +370,6 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		require.Equal(t, want, data.LPTokenBalance)
 	})
 
-	// Multisigned AMMDeposit (proportional, 1_000_000 LP tokens)
 	t.Run("Deposit", func(t *testing.T) {
 		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
 			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
@@ -413,7 +387,6 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		require.Equal(t, want, data.LPTokenBalance)
 	})
 
-	// Multisigned AMMWithdraw
 	t.Run("Withdraw", func(t *testing.T) {
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			LPTokenIn(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
@@ -431,7 +404,6 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		require.Equal(t, want, data.LPTokenBalance)
 	})
 
-	// Multisigned AMMVote
 	t.Run("Vote", func(t *testing.T) {
 		voteTx := amm.AMMVote(env.Alice, amm.XRP(), env.USD, 1000).Build()
 		result := env.SubmitMultiSigned(voteTx, []*jtx.Account{becky, bogie})
@@ -440,7 +412,6 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 		require.Equal(t, uint16(1000), env.ReadAMMData(amm.XRP(), env.USD).TradingFee)
 	})
 
-	// Multisigned AMMBid
 	t.Run("Bid", func(t *testing.T) {
 		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
 			BidMin(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).

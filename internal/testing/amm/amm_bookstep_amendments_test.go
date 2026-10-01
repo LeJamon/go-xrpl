@@ -42,7 +42,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 			env.PayIOU(env.GW, env.Alice, "USD", 10)
 			env.Close()
 
-			// gw creates AMM XRP(10)/USD(10)
 			createTx := amm.AMMCreate(env.GW,
 				amm.XRPAmount(10),
 				amm.IOUAmount(env.GW, "USD", 10)).
@@ -54,7 +53,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 
 			usdAsset := tx.Asset{Currency: "USD", Issuer: env.GW.Address}
 
-			// alice deposits USD(10) + XRP(10)
 			depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), usdAsset).
 				Amount(amm.IOUAmount(env.GW, "USD", 10)).
 				Amount2(amm.XRPAmount(10)).
@@ -65,7 +63,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 				env.Close()
 			}
 
-			// alice votes with tradingFee — should succeed (err1)
 			voteTx1 := amm.AMMVote(env.Alice, amm.XRP(), usdAsset, tc.tradingFee).Build()
 			result := env.Submit(voteTx1)
 			if !result.Success {
@@ -75,7 +72,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 				env.Close()
 			}
 
-			// gw withdraws USD(1) — should succeed (err2)
 			withdrawTx1 := amm.AMMWithdraw(env.GW, amm.XRP(), usdAsset).
 				Amount(amm.IOUAmount(env.GW, "USD", 1)).
 				SingleAsset().
@@ -88,7 +84,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 				env.Close()
 			}
 
-			// alice votes with fee=20 — should succeed (err3)
 			voteTx2 := amm.AMMVote(env.Alice, amm.XRP(), usdAsset, 20).Build()
 			result = env.Submit(voteTx2)
 			if !result.Success {
@@ -98,7 +93,6 @@ func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 				env.Close()
 			}
 
-			// gw withdraws USD(2) — should succeed (err4)
 			withdrawTx2 := amm.AMMWithdraw(env.GW, amm.XRP(), usdAsset).
 				Amount(amm.IOUAmount(env.GW, "USD", 2)).
 				SingleAsset().
@@ -131,10 +125,9 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 		lptMant          int64
 		lptAltMant       int64
 		lptExp           int
-		// CLOB offer parameters
-		offer1BtcGH float64
-		offer2BtcGH float64
-		offer2UsdGH float64
+		offer1BtcGH      float64
+		offer2BtcGH      float64
+		offer2UsdGH      float64
 		// Transfer rates (0 = none)
 		rateBIT float64
 		rateGH  float64
@@ -266,13 +259,11 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 				bitstamp := jtx.NewAccount("bitstamp")
 				trader := jtx.NewAccount("trader")
 
-				// Fund accounts with 5000 XRP each
 				for _, acc := range []*jtx.Account{gatehub, bitstamp, trader} {
 					env.TestEnv.FundAmount(acc, uint64(jtx.XRP(5000)))
 				}
 				env.Close()
 
-				// Set transfer rates if specified
 				if tc.rateGH != 0 {
 					rateUint := uint32(tc.rateGH * 1e9) // e.g., 1.2 → 1200000000
 					env.TestEnv.SetTransferRate(gatehub, rateUint)
@@ -282,19 +273,16 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 					env.TestEnv.SetTransferRate(bitstamp, rateUint)
 				}
 
-				// Trust lines: trader trusts all 3 currencies at 10M
 				env.Trust(trader, gatehub, "USD", 10000000)
 				env.Trust(trader, bitstamp, "USD", 10000000)
 				env.Trust(trader, gatehub, "BTC", 10000000)
 				env.Close()
 
-				// Fund trader with 100K of each currency
 				env.PayIOU(gatehub, trader, "USD", 100000)
 				env.PayIOU(gatehub, trader, "BTC", 100000)
 				env.PayIOU(bitstamp, trader, "USD", 100000)
 				env.Close()
 
-				// Create AMM: usdGH / usdBIT
 				ammCreateTx := amm.AMMCreate(trader,
 					amm.IOUAmount(gatehub, "USD", tc.poolUsdGH),
 					amm.IOUAmount(bitstamp, "USD", tc.poolUsdBIT)).
@@ -302,7 +290,6 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 				jtx.RequireTxSuccess(t, env.Submit(ammCreateTx))
 				env.Close()
 
-				// Get AMM account
 				usdGHAsset := tx.Asset{Currency: "USD", Issuer: gatehub.Address}
 				usdBITAsset := tx.Asset{Currency: "USD", Issuer: bitstamp.Address}
 				ammAcc := amm.AMMAccount(t, env, usdGHAsset, usdBITAsset)
@@ -311,7 +298,6 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 					t.Fatal("AMM data is nil before payment")
 				}
 
-				// Create CLOB offers for the alternative path
 				// offer1: trader wants usdBIT(1) for btcGH(offer1BtcGH)
 				offer1Tx := offerbuild.OfferCreate(trader,
 					amm.IOUAmount(bitstamp, "USD", 1),
@@ -327,7 +313,6 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 
 				// Self-payment: trader → trader
 				// send usdGH, sendmax usdBIT, paths: ~usdGH and ~btcGH,~usdGH
-				// partial payment
 				sendAmt := amm.IOUAmount(gatehub, "USD", tc.sendUsdGH)
 				sendMaxAmt := amm.IOUAmount(bitstamp, "USD", tc.sendMax)
 
@@ -353,7 +338,6 @@ func TestAMMBookStep_FixOverflowOffer(t *testing.T) {
 					t.Errorf("trader sequence = %d, want %d", got, sequenceBefore+1)
 				}
 
-				// Check AMM balances (precise mantissa/exponent comparison)
 				ammUsdGH := env.TestEnv.IOUBalance(ammAcc, gatehub, "USD")
 				ammUsdBIT := env.TestEnv.IOUBalance(ammAcc, bitstamp, "USD")
 

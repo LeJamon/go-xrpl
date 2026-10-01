@@ -21,11 +21,9 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(400000)))
 	env.Close()
 
-	// GW requires authorization for holders
 	env.TestEnv.EnableRequireAuth(env.GW)
 	env.Close()
 
-	// Authorize bob and alice trust lines
 	env.TestEnv.AuthorizeTrustLine(env.GW, env.Bob, "USD")
 	env.Trust(env.Bob, env.GW, "USD", 100)
 	env.TestEnv.AuthorizeTrustLine(env.GW, env.Alice, "USD")
@@ -33,7 +31,6 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 	env.PayIOU(env.GW, env.Alice, "USD", 1000)
 	env.Close()
 
-	// Alice creates AMM: USD(1000)/XRP(1050)
 	createTx := amm.AMMCreate(env.Alice,
 		amm.IOUAmount(env.GW, "USD", 1000),
 		amm.XRPAmount(1050)).Build()
@@ -44,11 +41,9 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 		tx.Asset{Currency: "USD", Issuer: env.GW.Address},
 		amm.XRP())
 
-	// Authorize AMM account's trust line
 	env.TestEnv.AuthorizeTrustLine(env.GW, ammAcc, "USD")
 	env.Close()
 
-	// Fund bob with USD
 	env.PayIOU(env.GW, env.Bob, "USD", 50)
 	env.Close()
 
@@ -184,7 +179,6 @@ func TestAMMBookStep_Payment(t *testing.T) {
 	env.PayIOU(env.GW, env.Alice, "USD", 500)
 	env.Close()
 
-	// Alice creates AMM: XRP(100)/USD(140)
 	createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 140)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
@@ -236,18 +230,15 @@ func TestAMMBookStep_PayIOU(t *testing.T) {
 	env.PayIOU(env.GW, env.Carol, "USD", 150)
 	env.Close()
 
-	// Carol creates AMM: USD(100)/XRP(101)
 	createTx := amm.AMMCreate(env.Carol,
 		amm.IOUAmount(env.GW, "USD", 100),
 		amm.XRPAmount(101)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	// alice pays bob USD(50) directly
 	env.PayIOU(env.GW, env.Bob, "USD", 50)
 	env.Close()
 
-	// bob enables DepositAuth
 	env.TestEnv.EnableDepositAuth(env.Bob)
 	env.Close()
 
@@ -263,7 +254,6 @@ func TestAMMBookStep_PayIOU(t *testing.T) {
 	result2 := env.Submit(payTx2)
 	amm.ExpectTER(t, result2, "tecNO_PERMISSION")
 
-	// bob clears DepositAuth
 	env.TestEnv.DisableDepositAuth(env.Bob)
 	env.Close()
 
@@ -286,14 +276,12 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 	env.Trust(env.Alice, g1, "USD", 205)
 	env.Close()
 
-	// Fund
 	payBob := payment.PayIssued(g1, env.Bob, tx.NewIssuedAmountFromFloat64(10, "USD", g1.Address)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(payBob))
 	payAlice := payment.PayIssued(g1, env.Alice, tx.NewIssuedAmountFromFloat64(205, "USD", g1.Address)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(payAlice))
 	env.Close()
 
-	// Alice creates AMM: XRP(500)/USD(105) using G1's USD
 	createTx := amm.AMMCreate(env.Alice,
 		amm.XRPAmount(500),
 		amm.IOUAmount(g1, "USD", 105)).Build()
@@ -311,7 +299,6 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(payTx2))
 	env.Close()
 
-	// G1 freezes bob's trust line
 	env.TestEnv.FreezeTrustLine(g1, env.Bob, "USD")
 	env.Close()
 
@@ -369,7 +356,6 @@ func TestAMMBookStep_OffersWhenFrozen(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(payA4))
 	env.Close()
 
-	// A3 creates AMM: XRP(1000)/USD(1001)
 	createTx := amm.AMMCreate(a3, amm.XRPAmount(1000), g1USD(1001)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
@@ -400,7 +386,6 @@ func TestAMMBookStep_OffersWhenFrozen(t *testing.T) {
 	require.Equal(t, uint64(jtx.XRP(1000)), ammXRP)
 	requireAMMAmount(t, ammUSD, "1001")
 
-	// Freeze AMM's trust line
 	env.TestEnv.FreezeTrustLine(g1, ammAcc, "USD")
 	env.Close()
 

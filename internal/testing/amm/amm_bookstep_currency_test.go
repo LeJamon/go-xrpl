@@ -35,7 +35,6 @@ func TestAMMBookStep_CurrencyConversionEntire(t *testing.T) {
 	env.PayIOU(env.GW, env.Alice, "USD", 100)
 	env.Close()
 
-	// Bob creates AMM: USD(200)/XRP(1500)
 	createTx := amm.AMMCreate(env.Bob, amm.IOUAmount(env.GW, "USD", 200), amm.XRPAmount(1500)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
@@ -113,7 +112,6 @@ func TestAMMBookStep_CrossCurrencyStartXRP(t *testing.T) {
 		amm.IOUAmount(nil, "USD", 10100),
 	}
 	amm.TestAMM(t, &pool, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
-		// Fund bob with 1000 XRP and set up USD trust line
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(1000)))
 		env.Close()
 		env.Trust(env.Bob, env.GW, "USD", 100)
@@ -170,12 +168,10 @@ func TestAMMBookStep_CrossCurrencyEndXRP(t *testing.T) {
 func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 	env := newCalcEnv(t)
 
-	// Create two gateways
 	gw1 := jtx.NewAccount("gateway_1")
 	gw2 := jtx.NewAccount("gateway_2")
 	dan := jtx.NewAccount("dan")
 
-	// Fund all accounts with XRP(60000)
 	env.TestEnv.FundAmount(gw1, uint64(jtx.XRP(60000)))
 	env.TestEnv.FundAmount(gw2, uint64(jtx.XRP(60000)))
 	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(60000)))
@@ -184,7 +180,6 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 	env.TestEnv.FundAmount(dan, uint64(jtx.XRP(60000)))
 	env.Close()
 
-	// Trust lines
 	env.Trust(env.Alice, gw1, "USD", 1000)
 	env.Close()
 	env.Trust(env.Bob, gw2, "EUR", 1000)
@@ -194,14 +189,12 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 	env.Trust(dan, gw2, "EUR", 1000)
 	env.Close()
 
-	// Fund IOUs
 	env.PayIOU(gw1, env.Alice, "USD", 500)
 	env.Close()
 	env.PayIOU(gw1, env.Carol, "USD", 6000)
 	env.PayIOU(gw2, dan, "EUR", 400)
 	env.Close()
 
-	// Carol creates AMM: USD1(5000)/XRP(50000)
 	createTx := amm.AMMCreate(env.Carol,
 		amm.IOUAmount(gw1, "USD", 5000),
 		amm.XRPAmount(50000)).Build()
@@ -326,7 +319,6 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "EUR", 15000)
 		env.Close()
 
-		// Alice creates AMM: XRP(10000)/USD(10100)
 		createTx1 := amm.AMMCreate(env.Alice,
 			amm.XRPAmount(10000),
 			amm.IOUAmount(env.GW, "USD", 10100)).Build()
@@ -336,7 +328,6 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		ammAlice := amm.AMMAccount(t, env, amm.XRP(),
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
-		// Bob creates AMM: EUR(10000)/XRP(10100)
 		createTx2 := amm.AMMCreate(env.Bob,
 			amm.IOUAmount(env.GW, "EUR", 10000),
 			amm.XRPAmount(10100)).Build()
@@ -395,7 +386,6 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "EUR", 15000)
 		env.Close()
 
-		// Alice creates AMM: XRP(10000)/USD(10100)
 		createTx := amm.AMMCreate(env.Alice,
 			amm.XRPAmount(10000),
 			amm.IOUAmount(env.GW, "USD", 10100)).Build()
@@ -405,7 +395,6 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		ammAlice := amm.AMMAccount(t, env, amm.XRP(),
 			tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
-		// Bob creates CLOB offer: buy EUR(100), sell XRP(100)
 		bobOffer := offerbuild.OfferCreate(env.Bob,
 			amm.IOUAmount(env.GW, "EUR", 100),
 			amm.XRPAmount(100)).Build()
@@ -454,14 +443,12 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "EUR", 15000)
 		env.Close()
 
-		// Alice creates CLOB offer: buy XRP(100), sell USD(100)
 		aliceOffer := offerbuild.OfferCreate(env.Alice,
 			amm.XRPAmount(100),
 			amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(aliceOffer))
 		env.Close()
 
-		// Bob creates AMM: EUR(10000)/XRP(10100)
 		createTx := amm.AMMCreate(env.Bob,
 			amm.IOUAmount(env.GW, "EUR", 10000),
 			amm.XRPAmount(10100)).Build()

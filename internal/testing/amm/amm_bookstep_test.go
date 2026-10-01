@@ -321,14 +321,12 @@ func TestAMMBookStep_FalseDry(t *testing.T) {
 	env.PayIOU(env.GW, env.Bob, "USD", 150)
 	env.Close()
 
-	// bob offer: EUR(50) for XRP(50)
 	offerTx := offerbuild.OfferCreate(env.Bob,
 		amm.IOUAmount(env.GW, "EUR", 50),
 		amm.XRPAmount(50)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(offerTx))
 	env.Close()
 
-	// Bob creates AMM: XRP(ammXRPPool)/USD(150)
 	createTx := amm.AMMCreate(env.Bob,
 		amm.XRPAmount(int64(ammXRPPool)/1_000_000),
 		amm.IOUAmount(env.GW, "USD", 150)).Build()
@@ -367,7 +365,6 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(10000)))
 		env.Close()
 
-		// Trust and fund BTC + USD
 		env.Trust(env.Alice, env.GW, "BTC", 200)
 		env.Trust(env.Alice, env.GW, "USD", 200)
 		env.Trust(env.Bob, env.GW, "BTC", 200)
@@ -384,7 +381,6 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "USD", 150)
 		env.Close()
 
-		// Bob creates AMM: BTC(100)/USD(150)
 		createTx := amm.AMMCreate(env.Bob,
 			amm.IOUAmount(env.GW, "BTC", 100),
 			amm.IOUAmount(env.GW, "USD", 150)).Build()
@@ -431,7 +427,6 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "USD", 150)
 		env.Close()
 
-		// Bob creates AMM: XRP(100)/USD(150)
 		createTx := amm.AMMCreate(env.Bob,
 			amm.XRPAmount(100),
 			amm.IOUAmount(env.GW, "USD", 150)).Build()
@@ -475,7 +470,6 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "USD", 100)
 		env.Close()
 
-		// Bob creates AMM: USD(100)/XRP(150)
 		createTx := amm.AMMCreate(env.Bob,
 			amm.IOUAmount(env.GW, "USD", 100),
 			amm.XRPAmount(150)).Build()

@@ -21,12 +21,10 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Create AMM
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		// Freeze Carol's USD line
 		env.FreezeTrustLine(env.GW, env.Carol, "USD")
 		env.Close()
 
@@ -42,7 +40,6 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Freeze Carol's USD line
 		env.FreezeTrustLine(env.GW, env.Carol, "USD")
 		env.Close()
 
@@ -57,14 +54,12 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.FundWithIOUs(30000, 0)
 
-		// Fund Bob for this test
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
 		env.Trust(env.Bob, env.GW, "USD", 100000)
 		env.Close()
 		env.PayIOU(env.GW, env.Bob, "USD", 10000)
 		env.Close()
 
-		// Freeze Carol's USD line
 		env.FreezeTrustLine(env.GW, env.Carol, "USD")
 		env.Close()
 
@@ -83,7 +78,6 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 		env.Trust(env.Bob, env.GW, "USD", 100000)
 		env.Close()
 
-		// Freeze, then unfreeze Carol's USD line
 		env.FreezeTrustLine(env.GW, env.Carol, "USD")
 		env.Close()
 		env.UnfreezeTrustLine(env.GW, env.Carol, "USD")
@@ -103,7 +97,6 @@ func TestAMMExtended_GlobalFreeze(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Enable global freeze on gateway
 		env.EnableGlobalFreeze(env.GW)
 		env.Close()
 
@@ -124,7 +117,6 @@ func TestAMMExtended_GlobalFreeze(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 10000)
 		env.Close()
 
-		// Enable global freeze
 		env.EnableGlobalFreeze(env.GW)
 		env.Close()
 
@@ -178,7 +170,6 @@ func TestAMMExtended_EnforceNoRipple(t *testing.T) {
 		}
 		env.Close()
 
-		// Trust lines — bob uses NoRipple
 		usd1Amt := amm.IOUAmount(gw1, "USD", 20000)
 		usd2Amt := amm.IOUAmount(gw2, "USD", 1000)
 		for _, acc := range []*jtx.Account{env.Alice, env.Carol, dan} {
@@ -187,14 +178,12 @@ func TestAMMExtended_EnforceNoRipple(t *testing.T) {
 			tsTx2 := trustset.TrustSet(acc, usd2Amt).Build()
 			jtx.RequireTxSuccess(t, env.Submit(tsTx2))
 		}
-		// Bob's trust lines with NoRipple
 		tsBob1 := trustset.TrustSet(env.Bob, amm.IOUAmount(gw1, "USD", 1000)).NoRipple().Build()
 		jtx.RequireTxSuccess(t, env.Submit(tsBob1))
 		tsBob2 := trustset.TrustSet(env.Bob, amm.IOUAmount(gw2, "USD", 1000)).NoRipple().Build()
 		jtx.RequireTxSuccess(t, env.Submit(tsBob2))
 		env.Close()
 
-		// Fund IOUs
 		pay1 := payment.PayIssued(gw1, dan, amm.IOUAmount(gw1, "USD", 10000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(pay1))
 		pay2 := payment.PayIssued(gw1, env.Bob, amm.IOUAmount(gw1, "USD", 50)).Build()
@@ -203,7 +192,6 @@ func TestAMMExtended_EnforceNoRipple(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(pay3))
 		env.Close()
 
-		// Dan creates AMM: XRP(10000)/USD1(10000)
 		createTx := amm.AMMCreate(dan,
 			amm.XRPAmount(10000),
 			amm.IOUAmount(gw1, "USD", 10000)).Build()
@@ -248,7 +236,6 @@ func TestAMMExtended_EnforceNoRipple(t *testing.T) {
 		}
 		env.Close()
 
-		// Fund IOUs
 		pay1 := payment.PayIssued(gw1, dan, amm.IOUAmount(gw1, "USD", 10050)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(pay1))
 		pay2 := payment.PayIssued(gw1, env.Bob, amm.IOUAmount(gw1, "USD", 50)).Build()
@@ -257,7 +244,6 @@ func TestAMMExtended_EnforceNoRipple(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(pay3))
 		env.Close()
 
-		// Dan creates AMM: XRP(10000)/USD1(10050)
 		createTx := amm.AMMCreate(dan,
 			amm.XRPAmount(10000),
 			amm.IOUAmount(gw1, "USD", 10050)).Build()

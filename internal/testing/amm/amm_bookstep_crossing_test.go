@@ -105,7 +105,6 @@ func TestAMMBookStep_OfferCrossWithLimitOverride(t *testing.T) {
 	env.PayIOU(env.GW, env.Alice, "USD", 500)
 	env.Close()
 
-	// Alice creates AMM: XRP(150000)/USD(51)
 	createTx := amm.AMMCreate(env.Alice,
 		amm.XRPAmount(150000),
 		amm.IOUAmount(env.GW, "USD", 51)).Build()
@@ -115,7 +114,6 @@ func TestAMMBookStep_OfferCrossWithLimitOverride(t *testing.T) {
 	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: env.GW.Address})
 
-	// Bob offers: buy USD(1), sell XRP(3000)
 	offerTx := offerbuild.OfferCreate(env.Bob,
 		amm.IOUAmount(env.GW, "USD", 1),
 		amm.XRPAmount(3000)).Build()
@@ -233,17 +231,13 @@ func TestAMMBookStep_SellFlagExceedLimit(t *testing.T) {
 	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(2000)))
 	env.Close()
 
-	// Alice trusts GW for USD(150)
 	env.Trust(env.Alice, env.GW, "USD", 150)
-	// Bob trusts GW for USD(4000)
 	env.Trust(env.Bob, env.GW, "USD", 4000)
 	env.Close()
 
-	// Pay bob USD(2200)
 	env.PayIOU(env.GW, env.Bob, "USD", 2200)
 	env.Close()
 
-	// Bob creates AMM: XRP(1000)/USD(2200)
 	createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(1000), amm.IOUAmount(env.GW, "USD", 2200)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
@@ -272,10 +266,6 @@ func TestAMMBookStep_SellFlagExceedLimit(t *testing.T) {
 	requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 200)
 
 	// Alice XRP: should be exactly 250,000,000 drops (= reserve for 1 item)
-	// 350,000,020 - 10(trust) - 10(offer) - 100,000,000(sold) = 249,999,990... hmm
-	// Actually, rippled expects XRP(250) = 250,000,000 drops.
-	// Let's verify: starting=350,000,020, trust fee=10, offer fee=10, sold XRP=100M
-	// 350,000,020 - 10 - 10 - 100,000,000 = 250,000,000. Correct!
 	aliceXRP := env.TestEnv.Balance(env.Alice)
 	expectedAliceXRP := uint64(jtx.XRP(250)) // 250,000,000 drops
 	if aliceXRP != expectedAliceXRP {
@@ -302,7 +292,6 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 20000)
 		env.Close()
 
-		// Bob creates AMM: XRP(20000)/USD(200)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(20000), amm.IOUAmount(env.GW, "USD", 200)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -332,7 +321,6 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 1000)
 		env.Close()
 
-		// Bob creates AMM: XRP(20000)/USD(200)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(20000), amm.IOUAmount(env.GW, "USD", 200)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -370,7 +358,6 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 1000)
 		env.Close()
 
-		// Bob creates AMM: XRP(20000)/USD(200)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(20000), amm.IOUAmount(env.GW, "USD", 200)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -409,7 +396,6 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 10000)
 		env.Close()
 
-		// Bob creates AMM: XRP(5000)/USD(10)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(5000), amm.IOUAmount(env.GW, "USD", 10)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -444,13 +430,11 @@ func TestAMMBookStep_StepLimit(t *testing.T) {
 			}
 			env.Close()
 
-			// Fund accounts with large XRP amounts.
 			for _, account := range []*jtx.Account{env.GW, ed, env.Alice, env.Bob, env.Carol, dan} {
 				env.TestEnv.FundAmount(account, uint64(jtx.XRP(100_000_000)))
 			}
 			env.Close()
 
-			// Trust lines and initial USD balances for Ed, Bob, and Dan.
 			env.Trust(ed, env.GW, "USD", 100)
 			env.Close()
 			env.PayIOU(env.GW, ed, "USD", 11)

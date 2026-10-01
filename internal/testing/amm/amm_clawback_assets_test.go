@@ -26,7 +26,6 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// gw issues USD and EUR (both from same issuer)
 	env.Trust(env.Alice, env.GW, "USD", 100000)
 	env.PayIOU(env.GW, env.Alice, "USD", 10000)
 	env.Trust(env.Bob, env.GW, "USD", 100000)
@@ -43,13 +42,11 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	env.PayIOU(env.GW, env.Carol, "EUR", 8000)
 	env.Close()
 
-	// Alice creates AMM pool of EUR(2000)/USD(8000)
 	createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "EUR", 2000), amm.IOUAmount(env.GW, "USD", 8000)).Build()
 	result = env.Submit(createTx)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Bob deposits USD(4000) + EUR(1000)
 	depositTx := amm.AMMDeposit(env.Bob, env.USD, env.EUR).
 		Amount(amm.IOUAmount(env.GW, "USD", 4000)).
 		Amount2(amm.IOUAmount(env.GW, "EUR", 1000)).
@@ -59,7 +56,6 @@ func TestAMMClawback_SameIssuerAssets(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Carol deposits USD(2000.25) + EUR(500)
 	// With fixAMMv1_3 upward rounding, the exact USD(2000) amount causes the
 	// equalDepositLimit check to fail (rounding makes deposit exceed limit).
 	// rippled's test uses USD(2000.25) with fixAMMv1_3 enabled.
@@ -121,7 +117,6 @@ func TestAMMClawback_SameCurrency(t *testing.T) {
 	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(1000000)))
 	env.Close()
 
-	// Both gateways set asfAllowTrustLineClawback
 	result := env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -132,27 +127,23 @@ func TestAMMClawback_SameCurrency(t *testing.T) {
 	gwUSD := env.USD // gw["USD"]
 	gw2USD := tx.Asset{Currency: "USD", Issuer: gw2.Address}
 
-	// gw issues gw["USD"] to alice(8000) and bob(7000)
 	env.Trust(env.Alice, env.GW, "USD", 100000)
 	env.PayIOU(env.GW, env.Alice, "USD", 8000)
 	env.Trust(env.Bob, env.GW, "USD", 100000)
 	env.PayIOU(env.GW, env.Bob, "USD", 7000)
 	env.Close()
 
-	// gw2 issues gw2["USD"] to alice(6000) and bob(5000)
 	env.Trust(env.Alice, gw2, "USD", 100000)
 	env.PayIOU(gw2, env.Alice, "USD", 6000)
 	env.Trust(env.Bob, gw2, "USD", 100000)
 	env.PayIOU(gw2, env.Bob, "USD", 5000)
 	env.Close()
 
-	// Alice creates AMM pool of gw["USD"](1000) / gw2["USD"](1500)
 	createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.IOUAmount(gw2, "USD", 1500)).Build()
 	result = env.Submit(createTx)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Bob deposits gw["USD"](2000) + gw2["USD"](3000)
 	depositTx := amm.AMMDeposit(env.Bob, gwUSD, gw2USD).
 		Amount(amm.IOUAmount(env.GW, "USD", 2000)).
 		Amount2(amm.IOUAmount(gw2, "USD", 3000)).
@@ -197,7 +188,6 @@ func TestAMMClawback_IssuesEachOther(t *testing.T) {
 	env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000000)))
 	env.Close()
 
-	// Both gateways set asfAllowTrustLineClawback
 	result := env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -207,28 +197,24 @@ func TestAMMClawback_IssuesEachOther(t *testing.T) {
 
 	EUR := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
 
-	// gw issues USD to gw2(5000) and alice(5000)
 	env.Trust(gw2, env.GW, "USD", 100000)
 	env.PayIOU(env.GW, gw2, "USD", 5000)
 	env.Trust(env.Alice, env.GW, "USD", 100000)
 	env.PayIOU(env.GW, env.Alice, "USD", 5000)
 	env.Close()
 
-	// gw2 issues EUR to gw(6000) and alice(6000)
 	env.Trust(env.GW, gw2, "EUR", 100000)
 	env.PayIOU(gw2, env.GW, "EUR", 6000)
 	env.Trust(env.Alice, gw2, "EUR", 100000)
 	env.PayIOU(gw2, env.Alice, "EUR", 6000)
 	env.Close()
 
-	// gw creates AMM pool of USD(1000)/EUR(2000)
 	// Note: gw is the issuer of USD, so USD(1000) is issued directly.
 	// For EUR(2000), gw needs to have EUR from gw2 (which it does: 6000).
 	createTx := amm.AMMCreate(env.GW, amm.IOUAmount(env.GW, "USD", 1000), amm.IOUAmount(gw2, "EUR", 2000)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	// gw2 deposits USD(2000) + EUR(4000)
 	// gw2 is the issuer of EUR — issuer deposits issue from thin air.
 	depositTx := amm.AMMDeposit(gw2, env.USD, EUR).
 		Amount(amm.IOUAmount(env.GW, "USD", 2000)).
@@ -238,7 +224,6 @@ func TestAMMClawback_IssuesEachOther(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	env.Close()
 
-	// alice deposits USD(3000) + EUR(6000)
 	depositTx = amm.AMMDeposit(env.Alice, env.USD, EUR).
 		Amount(amm.IOUAmount(env.GW, "USD", 3000)).
 		Amount2(amm.IOUAmount(gw2, "EUR", 6000)).
@@ -332,13 +317,11 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		env.PayIOU(gw2, env.Alice, "EUR", 3000)
 		env.Close()
 
-		// Alice creates AMM pool of EUR(1000)/USD(2000)
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(gw2, "EUR", 1000), amm.IOUAmount(env.GW, "USD", 2000)).Build()
 		result = env.Submit(createTx)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Freeze gw-alice USD trust line
 		env.FreezeTrustLine(env.GW, env.Alice, "USD")
 		env.Close()
 
@@ -438,7 +421,6 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Global freeze gw
 		result = env.Submit(accountset.AccountSet(env.GW).GlobalFreeze().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -489,7 +471,6 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Bob and Carol deposit
 		depositTx := amm.AMMDeposit(env.Bob, env.USD, env.EUR).
 			Amount(amm.IOUAmount(env.GW, "USD", 4000)).
 			Amount2(amm.IOUAmount(env.GW, "EUR", 1000)).
@@ -508,7 +489,6 @@ func TestAMMClawback_AssetFrozen(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Global freeze
 		result = env.Submit(accountset.AccountSet(env.GW).GlobalFreeze().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()

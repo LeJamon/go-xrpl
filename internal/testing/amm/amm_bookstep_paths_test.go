@@ -43,13 +43,10 @@ func TestAMMBookStep_BadPathAssert(t *testing.T) {
 	env.Trust(bob, dan, "BUX", 200)
 	env.Close()
 
-	// Fund
 	payDanBob := payment.PayIssued(dan, bob, danBUX(100)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(payDanBob))
 	env.Close()
 
-	// bob creates AMM: A_BUX(30)/D_BUX(30)
-	// First, ann pays bob A_BUX
 	payAnnBob := payment.PayIssued(ann, bob, annBUX(72)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(payAnnBob))
 	env.Close()
@@ -58,7 +55,6 @@ func TestAMMBookStep_BadPathAssert(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
-	// ann trusts D_BUX
 	env.Trust(ann, dan, "BUX", 100)
 	env.Close()
 
@@ -129,7 +125,6 @@ func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 			env.TestEnv.FundAmount(cam, reserve4+fee5)
 			env.Close()
 
-			// Trust lines
 			annBUX := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "BUX", ann.Address) }
 			bobBUX := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "BUX", bob.Address) }
 
@@ -141,7 +136,6 @@ func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 			env.Trust(carol, ann, "BUX", 400)
 			env.Close()
 
-			// Fund
 			payTx1 := payment.PayIssued(ann, cam, annBUX(35)).Build()
 			jtx.RequireTxSuccess(t, env.Submit(payTx1))
 			payTx2 := payment.PayIssued(bob, cam, bobBUX(35)).Build()
@@ -152,7 +146,6 @@ func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 			jtx.RequireTxSuccess(t, env.Submit(payTx4))
 			env.Close()
 
-			// Carol creates AMM: A_BUX(300)/B_BUX(330)
 			createTx := amm.AMMCreate(carol, annBUX(300), bobBUX(330)).Build()
 			jtx.RequireTxSuccess(t, env.Submit(createTx))
 			env.Close()
@@ -213,7 +206,6 @@ func TestAMMBookStep_XRPPathLoop(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "EUR", 200)
 		env.Close()
 
-		// Alice creates AMMs
 		createTx1 := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 101)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx1))
 		createTx2 := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "EUR", 101)).Build()
@@ -256,7 +248,6 @@ func TestAMMBookStep_XRPPathLoop(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "EUR", 200)
 		env.Close()
 
-		// Alice creates AMMs
 		createTx1 := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx1))
 		createTx2 := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "EUR", 100)).Build()
@@ -301,7 +292,6 @@ func TestAMMBookStep_XRPPathLoop(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "JPY", 200)
 		env.Close()
 
-		// Alice creates AMMs
 		createTx1 := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx1))
 		createTx2 := amm.AMMCreate(env.Alice, amm.XRPAmount(100), amm.IOUAmount(env.GW, "EUR", 100)).Build()
@@ -351,12 +341,10 @@ func TestAMMBookStep_ToStrand(t *testing.T) {
 	env.PayIOU(env.GW, env.Carol, "EUR", 1000)
 	env.Close()
 
-	// Bob creates AMM: XRP(1000)/USD(1000)
 	createTx1 := amm.AMMCreate(env.Bob, amm.XRPAmount(1000), amm.IOUAmount(env.GW, "USD", 1000)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx1))
 	env.Close()
 
-	// Bob creates AMM: USD(1000)/EUR(1000)
 	createTx2 := amm.AMMCreate(env.Bob, amm.IOUAmount(env.GW, "USD", 1000), amm.IOUAmount(env.GW, "EUR", 1000)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx2))
 	env.Close()
@@ -395,7 +383,6 @@ func TestAMMBookStep_RIPD1373(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 100)
 		env.Close()
 
-		// Bob creates AMM: XRP(100)/USD(100)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -431,7 +418,6 @@ func TestAMMBookStep_RIPD1373(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 100)
 		env.Close()
 
-		// Bob creates AMM: XRP(100)/USD(100)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -471,7 +457,6 @@ func TestAMMBookStep_Loop(t *testing.T) {
 		env.PayIOU(env.GW, env.Alice, "USD", 100)
 		env.Close()
 
-		// Bob creates AMM: XRP(100)/USD(100)
 		createTx := amm.AMMCreate(env.Bob, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
@@ -516,7 +501,6 @@ func TestAMMBookStep_Loop(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "CNY", 100)
 		env.Close()
 
-		// Bob creates AMMs
 		createTx1 := amm.AMMCreate(env.Bob, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx1))
 		createTx2 := amm.AMMCreate(env.Bob, amm.IOUAmount(env.GW, "USD", 100), amm.IOUAmount(env.GW, "EUR", 100)).Build()

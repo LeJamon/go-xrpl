@@ -104,24 +104,20 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000000)))
 		env.Close()
 
-		// gw sets asfAllowTrustLineClawback
 		result := env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		EUR := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
 
-		// gw issues 6000 USD to Alice
 		env.Trust(env.Alice, env.GW, "USD", 100000)
 		env.PayIOU(env.GW, env.Alice, "USD", 6000)
 		env.Close()
 
-		// gw2 issues 6000 EUR to Alice
 		env.Trust(env.Alice, gw2, "EUR", 100000)
 		env.PayIOU(gw2, env.Alice, "EUR", 6000)
 		env.Close()
 
-		// Alice creates AMM pool of EUR(5000)/USD(4000)
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(gw2, "EUR", 5000), amm.IOUAmount(env.GW, "USD", 4000)).Build()
 		result = env.Submit(createTx)
 		jtx.RequireTxSuccess(t, result)
@@ -181,7 +177,6 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(1000000)))
 		env.Close()
 
-		// Both gateways set asfAllowTrustLineClawback
 		result := env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -191,27 +186,23 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 
 		EUR := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
 
-		// gw issues USD to alice(6000) and bob(5000)
 		env.Trust(env.Alice, env.GW, "USD", 100000)
 		env.PayIOU(env.GW, env.Alice, "USD", 6000)
 		env.Trust(env.Bob, env.GW, "USD", 100000)
 		env.PayIOU(env.GW, env.Bob, "USD", 5000)
 		env.Close()
 
-		// gw2 issues EUR to alice(5000) and bob(4000)
 		env.Trust(env.Alice, gw2, "EUR", 100000)
 		env.PayIOU(gw2, env.Alice, "EUR", 5000)
 		env.Trust(env.Bob, gw2, "EUR", 100000)
 		env.PayIOU(gw2, env.Bob, "EUR", 4000)
 		env.Close()
 
-		// gw creates AMM pool of XRP(2000)/USD(1000)
 		createTx := amm.AMMCreate(env.GW, amm.XRPAmount(2000), amm.IOUAmount(env.GW, "USD", 1000)).Build()
 		result = env.Submit(createTx)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// alice deposits USD(1000) + XRP(2000) into XRP/USD AMM
 		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 			Amount2(amm.XRPAmount(2000)).
@@ -221,7 +212,6 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// bob deposits USD(1000) + XRP(2000) into XRP/USD AMM
 		depositTx = amm.AMMDeposit(env.Bob, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 			Amount2(amm.XRPAmount(2000)).
@@ -252,13 +242,11 @@ func TestAMMClawback_ExceedBalance(t *testing.T) {
 		env.Close()
 
 		// gw2 clawback 200 EUR from alice in EUR/XRP amm2
-		// First create EUR/XRP AMM
 		createTx2 := amm.AMMCreate(gw2, amm.XRPAmount(3000), amm.IOUAmount(gw2, "EUR", 1000)).Build()
 		result = env.Submit(createTx2)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// alice deposits EUR(1000) + XRP(3000)
 		depositTx = amm.AMMDeposit(env.Alice, amm.XRP(), EUR).
 			Amount(amm.IOUAmount(gw2, "EUR", 1000)).
 			Amount2(amm.XRPAmount(3000)).
@@ -308,7 +296,6 @@ func TestAMMClawback_All(t *testing.T) {
 		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(1000000)))
 		env.Close()
 
-		// Both gateways set asfAllowTrustLineClawback
 		result := env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -318,7 +305,6 @@ func TestAMMClawback_All(t *testing.T) {
 
 		EUR := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
 
-		// gw issues USD: alice=6000, bob=5000, carol=4000
 		env.Trust(env.Alice, env.GW, "USD", 100000)
 		env.PayIOU(env.GW, env.Alice, "USD", 6000)
 		env.Trust(env.Bob, env.GW, "USD", 100000)
@@ -327,7 +313,6 @@ func TestAMMClawback_All(t *testing.T) {
 		env.PayIOU(env.GW, env.Carol, "USD", 4000)
 		env.Close()
 
-		// gw2 issues EUR: alice=6000, bob=5000, carol=4000
 		env.Trust(env.Alice, gw2, "EUR", 100000)
 		env.PayIOU(gw2, env.Alice, "EUR", 6000)
 		env.Trust(env.Bob, gw2, "EUR", 100000)
@@ -336,13 +321,11 @@ func TestAMMClawback_All(t *testing.T) {
 		env.PayIOU(gw2, env.Carol, "EUR", 4000)
 		env.Close()
 
-		// Alice creates AMM pool of EUR(5000)/USD(4000)
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(gw2, "EUR", 5000), amm.IOUAmount(env.GW, "USD", 4000)).Build()
 		result = env.Submit(createTx)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Bob deposits USD(2000) + EUR(2500)
 		depositTx := amm.AMMDeposit(env.Bob, env.USD, EUR).
 			Amount(amm.IOUAmount(env.GW, "USD", 2000)).
 			Amount2(amm.IOUAmount(gw2, "EUR", 2500)).
@@ -352,7 +335,6 @@ func TestAMMClawback_All(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Carol deposits USD(1000) + EUR(1250)
 		depositTx = amm.AMMDeposit(env.Carol, env.USD, EUR).
 			Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 			Amount2(amm.IOUAmount(gw2, "EUR", 1250)).
@@ -407,13 +389,11 @@ func TestAMMClawback_All(t *testing.T) {
 		env.PayIOU(env.GW, env.Bob, "USD", 500000)
 		env.Close()
 
-		// gw creates AMM pool of XRP(2000)/USD(10000)
 		createTx := amm.AMMCreate(env.GW, amm.XRPAmount(2000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result = env.Submit(createTx)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// alice deposits USD(1000) + XRP(200)
 		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 			Amount2(amm.XRPAmount(200)).
@@ -423,7 +403,6 @@ func TestAMMClawback_All(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// bob deposits USD(2000) + XRP(400)
 		depositTx = amm.AMMDeposit(env.Bob, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 2000)).
 			Amount2(amm.XRPAmount(400)).
@@ -471,13 +450,11 @@ func TestAMMClawback_SingleDepositAndClawback(t *testing.T) {
 	env.PayIOU(env.GW, env.Alice, "USD", 1000)
 	env.Close()
 
-	// gw creates AMM pool of XRP(100)/USD(400)
 	createTx := amm.AMMCreate(env.GW, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 400)).Build()
 	result = env.Submit(createTx)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Alice deposits USD(400) as single-asset deposit
 	depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
 		Amount(amm.IOUAmount(env.GW, "USD", 400)).
 		SingleAsset().
@@ -504,7 +481,6 @@ func TestAMMClawback_SingleDepositAndClawback(t *testing.T) {
 }
 
 func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
-	// Helper: setupAccounts creates gw, alice, bob with clawback enabled and USD funded
 	setupAccounts := func(t *testing.T) (*amm.AMMTestEnv, *jtx.Account, *jtx.Account) {
 		t.Helper()
 

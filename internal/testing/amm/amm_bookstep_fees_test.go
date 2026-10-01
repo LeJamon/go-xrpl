@@ -26,7 +26,6 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			amm.IOUAmount(nil, "EUR", 1010),
 		}
 		amm.TestAMM(t, &pool, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
-			// Fund bob with XRP and EUR
 			env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
 			env.Trust(env.Bob, env.GW, "EUR", 100000)
 			env.Trust(env.Bob, env.GW, "USD", 100000)
@@ -56,7 +55,6 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 29000)
 			requireAMMIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29990)
 
-			// Set fee to 1% (1000 basis points)
 			usdAsset := tx.Asset{Currency: "USD", Issuer: env.GW.Address}
 			eurAsset := tx.Asset{Currency: "EUR", Issuer: env.GW.Address}
 			env.Vote(env.Alice, usdAsset, eurAsset, 1000)
@@ -108,14 +106,12 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			requireAMMIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29990)
 			requireAMMIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 30010)
 
-			// Reverse the pool change
 			offerTx2 := offerbuild.OfferCreate(env.Carol,
 				amm.IOUAmount(env.GW, "USD", 10),
 				amm.IOUAmount(env.GW, "EUR", 10)).Build()
 			jtx.RequireTxSuccess(t, env.Submit(offerTx2))
 			env.Close()
 
-			// Set fee to 0.5% (500 basis points)
 			usdAsset := tx.Asset{Currency: "USD", Issuer: env.GW.Address}
 			eurAsset := tx.Asset{Currency: "EUR", Issuer: env.GW.Address}
 			env.Vote(env.Alice, usdAsset, eurAsset, 500)
@@ -163,20 +159,17 @@ func TestAMMBookStep_OfferFeesConsumeFunds(t *testing.T) {
 	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(2000)))
 	env.Close()
 
-	// Alice creates 3 trust lines → ownerCount=3
 	env.Trust(env.Alice, gw1, "USD", 1000)
 	env.Trust(env.Alice, gw2, "USD", 1000)
 	env.Trust(env.Alice, gw3, "USD", 1000)
 	env.Trust(env.Bob, gw1, "USD", 1200)
 	env.Close()
 
-	// Pay bob 1200 USD from gw1
 	gw1USD := func(amt float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(amt, "USD", gw1.Address) }
 	payTx := payment.PayIssued(gw1, env.Bob, gw1USD(1200)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(payTx))
 	env.Close()
 
-	// Bob creates AMM: XRP(1000)/USD(1200) with gw1's USD
 	createTx := amm.AMMCreate(env.Bob,
 		amm.XRPAmount(1000),
 		gw1USD(1200)).Build()
@@ -274,11 +267,9 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000))+10)
 	env.Close()
 
-	// Alice needs a trust line to Bob's USD
 	env.Trust(env.Alice, env.Bob, "USD", 10000)
 	env.Close()
 
-	// Bob creates AMM: XRP(10000)/USD_bob(10100)
 	// Bob is the issuer of USD_bob, so he can create the trust line implicitly
 	createTx := amm.AMMCreate(env.Bob,
 		amm.XRPAmount(10000),
@@ -289,7 +280,6 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 	ammAcc := amm.AMMAccount(t, env, amm.XRP(),
 		tx.Asset{Currency: "USD", Issuer: env.Bob.Address})
 
-	// Alice creates offer: buy USD_bob(100), sell XRP(100)
 	offerTx := offerbuild.OfferCreate(env.Alice,
 		amm.IOUAmount(env.Bob, "USD", 100),
 		amm.XRPAmount(100)).Build()
@@ -367,7 +357,6 @@ func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 			env.TestEnv.SetTransferRate(env.GW, 1250000000)
 			env.Close()
 
-			// Bob creates AMM: GBP(1000)/USD(1000)
 			createTx := amm.AMMCreate(env.Bob,
 				amm.IOUAmount(env.GW, "GBP", 1000),
 				amm.IOUAmount(env.GW, "USD", 1000)).Build()
