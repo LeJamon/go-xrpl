@@ -231,6 +231,31 @@ func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing
 	require.True(t, found)
 }
 
+func TestStateBaseRecertificationFailureIgnoresSupersededFrontier(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	stateMap, err := f.validated.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := f.validated.TxMapSnapshot()
+	require.NoError(t, err)
+	replacementHeader := f.validated.Header()
+	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
+	replacementHeader.Validated = false
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
+	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, f.validated.Fees())
+	require.NoError(t, err)
+	require.NoError(t, replacement.SetValidated())
+	f.svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool {
+		f.svc.mu.Lock()
+		f.svc.validatedLedger = replacement
+		f.svc.mu.Unlock()
+		return true
+	})
+
+	f.svc.recordStateBaseRecertificationFailure(t.Context(), f.validated.Header(), shamap.TypeState, &shamap.MissingNodeError{Hash: f.childHash})
+	require.False(t, f.svc.ReplayBlocked())
+	require.Same(t, replacement, f.svc.GetValidatedLedger())
+}
+
 type blockingStateBaseRecertificationDatabase struct {
 	*checkpointTrackingDatabase
 	target  nodestore.Hash256

@@ -671,7 +671,15 @@ func (s *Service) recordStateBaseRecertificationFailure(ctx context.Context, h h
 		return
 	}
 	authenticated := authenticate != nil && authenticate(h)
-	s.recordLiveStateVerificationFailure(ctx, h, mapType, cause, authenticated)
+	s.mu.RLock()
+	current = s.validatedLedger != nil && s.validatedLedger.IsValidated() && s.validatedLedger.Hash() == h.Hash
+	if current {
+		s.recordLiveStateVerificationFailure(ctx, h, mapType, cause, authenticated)
+	}
+	s.mu.RUnlock()
+	if !current {
+		return
+	}
 	if !authenticated {
 		return
 	}
