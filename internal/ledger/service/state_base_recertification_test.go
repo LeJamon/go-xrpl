@@ -262,6 +262,7 @@ func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing
 	wrongHeader.Hash[0] ^= 1
 	require.ErrorIs(t, f.svc.StoreLedgerWithState(ctx, &wrongHeader, stateMap, txMap), replayfault.ErrBlocked)
 	targetHeader := f.validated.Header()
+	targetHeader.Validated = false
 	require.NoError(t, f.svc.StoreLedgerWithState(ctx, &targetHeader, stateMap, txMap))
 	require.NoError(t, f.svc.RevalidateReplayFault(ctx, fault.ID))
 	require.False(t, f.svc.ReplayBlocked())
@@ -314,6 +315,7 @@ func TestStateBaseRecertificationRepairSyncFailureRetainsExactTarget(t *testing.
 	txMap, err := f.validated.TxMapSnapshot()
 	require.NoError(t, err)
 	targetHeader := f.validated.Header()
+	targetHeader.Validated = false
 	require.NoError(t, f.svc.StoreLedgerWithState(t.Context(), &targetHeader, stateMap, txMap))
 
 	syncFailure := errors.New("repaired state sync failed")

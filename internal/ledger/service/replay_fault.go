@@ -590,6 +590,12 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 		}
 		return errors.New("state base repair requested; retry explicitly after acquisition")
 	}
+	validatedIdentity := validated != nil && validated.Hash() == evidence.Target.Hash && validated.Sequence() == evidence.Target.LedgerIndex
+	if validatedIdentity && !repaired.IsValidated() {
+		if err := repaired.SetValidated(); err != nil {
+			return fmt.Errorf("mark exact validated repair: %w", err)
+		}
+	}
 	if evidence.Origin == replayFaultOriginExecution {
 		if closed == nil || closed.Hash() != evidence.Target.Hash || closed.Sequence() != evidence.Target.LedgerIndex {
 			return errors.New("closed ledger changed while execution repair was pending")
@@ -602,7 +608,7 @@ func (s *Service) revalidateStateBaseRecertificationFault(ctx context.Context, f
 		}
 		return nil
 	}
-	if validated == nil || validated.Hash() != evidence.Target.Hash || validated.Sequence() != evidence.Target.LedgerIndex {
+	if !validatedIdentity {
 		return errors.New("validated ledger changed while state base repair was pending")
 	}
 	if err := s.restoreReplayParent(ctx, repaired); err != nil {
