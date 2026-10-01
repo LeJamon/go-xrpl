@@ -866,10 +866,14 @@ func (s *Service) SetLastConsensusRoundTime(d time.Duration) {
 // max(loadFactorServer, feeEscalation) so the shared signal never double-counts.
 // Caller must hold s.mu.
 func (s *Service) tickLoadFeeLocked() {
-	if s.feeTrack == nil || s.txQueue == nil || s.openLedger == nil {
+	if s.feeTrack == nil || s.txQueue == nil {
 		return
 	}
-	metrics := s.txQueue.Metrics(s.openLedger.TxCount())
+	current := s.currentOpenLedgerLocked()
+	if current == nil {
+		return
+	}
+	metrics := s.txQueue.Metrics(current.TxCount())
 	if metrics.OpenLedgerFeeLevel > metrics.ReferenceFeeLevel {
 		s.feeTrack.RaiseLocalFee()
 	} else {
@@ -886,6 +890,13 @@ func (s *Service) acceptPreferredOpenLedgerLocked(closed *ledger.Ledger) error {
 // publishes the validated frontier only after preparation succeeds.
 func (s *Service) acceptStandaloneOpenLedgerLocked(ctx context.Context, closed *ledger.Ledger, retriableTxs []openledger.PendingTx) error {
 	pending := s.pendingTxs
+	if s.openLedgerView != nil {
+		var err error
+		pending, err = s.openLedgerView.CurrentTransactions(ctx)
+		if err != nil {
+			return fmt.Errorf("collect open transactions for retry order: %w", err)
+		}
+	}
 	if s.startupReplay != nil {
 		pending = append([]openledger.PendingTx(nil), pending...)
 		for _, replayTx := range s.startupReplay.OrderedTxs() {
@@ -1452,6 +1463,16 @@ func (s *Service) compactRelayCacheOrderLocked() {
 func (s *Service) GetOpenLedger() *ledger.Ledger {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.currentOpenLedgerLocked()
+}
+
+// currentOpenLedgerLocked reads the published view while preserving openLedger
+// as the ledger-frontier identity used by consensus ownership checks.
+// Caller must hold s.mu.
+func (s *Service) currentOpenLedgerLocked() *ledger.Ledger {
+	if s.openLedgerView != nil {
+		return s.openLedgerView.Current()
+	}
 	return s.openLedger
 }
 
@@ -1511,8 +1532,8 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 	s.historyComponent.mu.RLock()
 	history := s.ledgerHistory[seq]
 	var open *ledger.Ledger
-	if s.openLedger != nil && s.openLedger.Sequence() == seq {
-		open = s.openLedger
+	if current := s.currentOpenLedgerLocked(); current != nil && current.Sequence() == seq {
+		open = current
 	}
 	s.historyComponent.mu.RUnlock()
 	s.mu.RUnlock()
@@ -1733,10 +1754,11 @@ func (s *Service) GetCurrentLedgerIndex() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.openLedger == nil {
+	current := s.currentOpenLedgerLocked()
+	if current == nil {
 		return 0
 	}
-	return s.openLedger.Sequence()
+	return current.Sequence()
 }
 
 // GetClosedLedgerIndex returns the last closed ledger index
@@ -1786,6 +1808,28 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 		}
 	}
 	s.completeMu.RUnlock()
+	return min, max, true
+}
+
+// validatedLedgerRange returns the complete range currently safe for indexed
+// transaction lookup. Pending persistence is excluded from the full range
+// used by ledger availability and cleanup.
+func (s *Service) validatedLedgerRange() (min, max uint32, ok bool) {
+	min, max, ok = s.AvailableLedgerRange()
+	if !ok {
+		return 0, 0, false
+	}
+
+	var pending []uint32
+	s.completeMu.RLock()
+	if len(s.completeLedgerTokens) != 0 {
+		pending = make([]uint32, 0, len(s.completeLedgerTokens))
+		for seq := range s.completeLedgerTokens {
+			pending = append(pending, seq)
+		}
+	}
+	s.completeMu.RUnlock()
+	min, max = trimPendingValidatedRange(min, max, pending)
 	return min, max, true
 }
 
@@ -1909,8 +1953,8 @@ func (s *Service) TxQMetrics() txq.Metrics {
 		return txq.Metrics{}
 	}
 	var txInLedger uint32
-	if s.openLedger != nil {
-		txInLedger = s.openLedger.TxCount()
+	if current := s.currentOpenLedgerLocked(); current != nil {
+		txInLedger = current.TxCount()
 	}
 	return s.txQueue.Metrics(txInLedger)
 }
@@ -1949,8 +1993,8 @@ func (s *Service) GetServerInfo() ServerInfo {
 		PublishedLedgerSeq: s.publishedLedgerSeq,
 	}
 
-	if s.openLedger != nil {
-		info.OpenLedgerSeq = s.openLedger.Sequence()
+	if current := s.currentOpenLedgerLocked(); current != nil {
+		info.OpenLedgerSeq = current.Sequence()
 	}
 
 	if s.closedLedger != nil {
@@ -1977,6 +2021,11 @@ func (s *Service) GetServerInfo() ServerInfo {
 		s.clampCompleteLedgers(minimumOnlineFunc())
 	}
 	info.CompleteLedgers = s.completeLedgersString()
+	if min, max, ok := s.validatedLedgerRange(); ok {
+		info.HaveValidatedRange = true
+		info.ValidatedRangeMin = min
+		info.ValidatedRangeMax = max
+	}
 
 	return info
 }
@@ -1997,6 +2046,9 @@ type ServerInfo struct {
 	CompleteLedgers          string
 	HavePublished            bool
 	PublishedLedgerSeq       uint32
+	HaveValidatedRange       bool
+	ValidatedRangeMin        uint32
+	ValidatedRangeMax        uint32
 	NetworkID                uint32
 }
 

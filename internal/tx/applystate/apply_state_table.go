@@ -467,8 +467,7 @@ func (t *ApplyStateTable) Preview() (*tx.Metadata, error) {
 	)
 }
 
-// ApplyUnthreaded commits changes that were already threaded by child
-// transaction state tables.
+// ApplyUnthreaded commits changes without updating transaction threading.
 func (t *ApplyStateTable) ApplyUnthreaded() error {
 	staged := t.clone()
 	_, err := staged.applyOrdered(

@@ -313,9 +313,6 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 				return r
 			}
 		}
-		if r := vault.SendAsset(ctx, accountID, vinfo.Account, asset, toVaultRounded); r != ter.TesSUCCESS {
-			return r
-		}
 	}
 	if toBroker.Signum() != 0 {
 		if brokerPayee == accountID {
@@ -328,9 +325,12 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 				return r
 			}
 		}
-		if r := vault.SendAsset(ctx, accountID, brokerPayee, asset, toBroker); r != ter.TesSUCCESS {
-			return r
-		}
+	}
+	if r := vault.SendAssets(ctx, accountID, asset, []vault.AssetPayment{
+		{Account: vinfo.Account, Amount: toVaultRounded},
+		{Account: brokerPayee, Amount: toBroker},
+	}); r != ter.TesSUCCESS {
+		return r
 	}
 	ctx.SyncSenderOwnerCount()
 	return ter.TesSUCCESS

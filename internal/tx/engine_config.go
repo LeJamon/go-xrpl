@@ -103,22 +103,10 @@ type EngineConfig struct {
 	// a Number scale independently of ledger amendment rules.
 	NumberContextOverride *state.NumberContext
 
-	// OpenLedger controls whether fee adequacy is checked.
-	// When true, the engine verifies that the transaction fee meets the
-	// minimum required fee (including tx-type-specific overrides like
-	// AccountDelete's owner reserve). When false, fee adequacy is
-	// skipped — only basic fee validity (non-negative, legal amount,
-	// sufficient balance) is checked.
-	// Reference: rippled Transactor.cpp checkFee — "Only check fee is
-	// sufficient when the ledger is open."
+	// OpenLedger identifies an open-ledger apply with fee adequacy checks.
 	OpenLedger bool
 
-	// ViewOpen mirrors rippled's view.open() for the open-ledger apply path
-	// that targets an OpenView yet leaves OpenLedger/EnforceLoadFee unset
-	// (the per-tx Submit and held/local replay applies run with tapNONE and
-	// fee adequacy disabled). It carries the view-openness signal that
-	// internal-failure TER guards consult; it does not affect fee handling.
-	// The closed-view consensus build path leaves it false.
+	// ViewOpen identifies an open view on submit and held-transaction replay paths.
 	ViewOpen bool
 
 	// ApplyFlags controls transaction application behavior.
@@ -136,28 +124,11 @@ type EngineConfig struct {
 	// If nil, xrpllog.Discard() is used — safe for tests and zero-value construction.
 	Logger xrpllog.Logger
 
-	// FeeTrack is the node-local LoadFeeTrack snapshot. When set and the
-	// ledger is open, checkFee scales the per-tx base fee by the local /
-	// cluster / global load factor (scaleFeeLoad) before the fee-adequacy
-	// comparison, mirroring rippled's Transactor::minimumFee. When nil,
-	// the open-ledger floor is the raw base fee — feetrack.ScaleFeeLoad
-	// returns its input unchanged for a nil tracker, so paths that do not
-	// plumb it keep their prior behaviour. Consulted when OpenLedger is true,
-	// or (for open-ledger applies flagged OpenLedger=false) when EnforceLoadFee
-	// is set — rippled gates minimumFee on ctx.view.open().
-	// Reference: rippled Transactor.cpp minimumFee → scaleFeeLoad,
-	// LoadFeeTrack.cpp:85.
+	// FeeTrack scales the transaction-specific minimum fee on open views.
+	// A nil tracker leaves the base fee unchanged.
 	FeeTrack *feetrack.LoadFeeTrack
 
-	// EnforceLoadFee makes checkFee apply the load-scaled fee floor even when
-	// OpenLedger is false, but only while the load factor is elevated above the
-	// reference fee. It marks an apply that targets the OPEN ledger yet runs
-	// with the base-fee floor disabled (the TxQ direct-apply / clear-queue /
-	// accept paths, which rippled invokes with tapNONE). Those paths must still
-	// honour rippled's open-ledger floor when server load spikes — view.open()
-	// is true there — without re-enabling the base-fee floor that the OpenLedger
-	// flag controls (so fee=0 / already-validated txns are unaffected at normal
-	// load). Genuinely closed-ledger applies leave this false and never scale.
+	// EnforceLoadFee identifies open-view queue application and admission paths.
 	EnforceLoadFee bool
 }
 

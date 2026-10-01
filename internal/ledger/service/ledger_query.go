@@ -241,10 +241,10 @@ func (q *queryFacade) resolveLedgerForQuery(ctx context.Context, ledgerIndex str
 	}
 	if sequence, ok := selection.Sequence(); ok {
 		s.mu.RLock()
+		current := s.currentOpenLedgerLocked()
 		if q.history.ledgerBySequence(sequence) == nil &&
-			s.openLedger != nil &&
-			s.openLedger.Sequence() == sequence {
-			snapshot, snapshotErr := s.openLedger.Snapshot()
+			current != nil && current.Sequence() == sequence {
+			snapshot, snapshotErr := current.Snapshot()
 			s.mu.RUnlock()
 			if snapshotErr != nil {
 				return nil, false, snapshotErr
@@ -264,7 +264,7 @@ func (q *queryFacade) resolveLedgerForQuery(ctx context.Context, ledgerIndex str
 	defer s.mu.RUnlock()
 
 	current := func() (*ledger.Ledger, bool, error) {
-		l := s.openLedger
+		l := s.currentOpenLedgerLocked()
 		if l == nil {
 			return nil, false, nil
 		}
@@ -286,8 +286,8 @@ func (q *queryFacade) resolveLedgerForQuery(ctx context.Context, ledgerIndex str
 			if l := q.history.ledgerBySequence(sequence); l != nil {
 				return l, true, nil
 			}
-			if s.openLedger != nil && s.openLedger.Sequence() == sequence {
-				snapshot, err := s.openLedger.Snapshot()
+			if current := s.currentOpenLedgerLocked(); current != nil && current.Sequence() == sequence {
+				snapshot, err := current.Snapshot()
 				return snapshot, err == nil, err
 			}
 			return nil, false, nil

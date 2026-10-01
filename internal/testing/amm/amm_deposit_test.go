@@ -5,6 +5,8 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -14,8 +16,17 @@ import (
 // Reference: rippled testAMM helper
 func setupAMM(t *testing.T) *amm.AMMTestEnv {
 	t.Helper()
+	return setupAMMProfile(t, false)
+}
+
+func setupAMMProfile(t *testing.T, smallNumber bool) *amm.AMMTestEnv {
+	t.Helper()
 
 	env := amm.NewAMMTestEnv(t)
+	if smallNumber {
+		env.DisableFeature("SingleAssetVault")
+		env.DisableFeature("LendingProtocol")
+	}
 	env.FundWithIOUs(30000, 0)
 	env.Close()
 
@@ -31,7 +42,7 @@ func setupAMM(t *testing.T) *amm.AMMTestEnv {
 }
 
 // TestInvalidDeposit tests invalid deposit scenarios.
-// Reference: rippled AMM_test.cpp testInvalidDeposit (line 438)
+// Reference: rippled AMM_test.cpp testInvalidDeposit
 func TestInvalidDeposit(t *testing.T) {
 	// Invalid flags
 	// Reference: ammAlice.deposit(alice, 1'000'000, std::nullopt, tfWithdrawAll, ter(temINVALID_FLAG));
@@ -43,11 +54,7 @@ func TestInvalidDeposit(t *testing.T) {
 			Flags(amm.TfWithdrawAll). // Invalid for deposit
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with invalid flags")
-		}
-		amm.ExpectTER(t, result, amm.TemINVALID_FLAG)
+		amm.ExpectTER(t, result, ter.TemINVALID_FLAG.String())
 	})
 
 	// Invalid tokens - zero
@@ -60,11 +67,7 @@ func TestInvalidDeposit(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with zero LP tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Invalid tokens - negative
@@ -77,11 +80,7 @@ func TestInvalidDeposit(t *testing.T) {
 			LPToken().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with negative LP tokens")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Invalid amount - zero
@@ -94,11 +93,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with zero amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Invalid amount - negative
@@ -111,11 +106,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with negative amount")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMOUNT)
+		amm.ExpectTER(t, result, ter.TemBAD_AMOUNT.String())
 	})
 
 	// Invalid Account (non-existent)
@@ -129,11 +120,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.SubmitWithOptions(jtx.WithSeq(depositTx, 1), jtx.SubmitOptions{SkipSignature: true})
-
-		if result.Success {
-			t.Fatal("Should not allow deposit from non-existent account")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_ACCOUNT)
+		amm.ExpectTER(t, result, ter.TerNO_ACCOUNT.String())
 	})
 
 	// Invalid AMM (non-existent)
@@ -147,11 +134,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit to non-existent AMM")
-		}
-		amm.ExpectTER(t, result, amm.TerNO_AMM)
+		amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 	})
 
 	// Depositing mismatched token
@@ -165,11 +148,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with mismatched token")
-		}
-		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+		amm.ExpectTER(t, result, ter.TemBAD_AMM_TOKENS.String())
 	})
 
 	// Deposit non-empty AMM with tfTwoAssetIfEmpty
@@ -183,11 +162,7 @@ func TestInvalidDeposit(t *testing.T) {
 			TwoAssetIfEmpty().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow TwoAssetIfEmpty deposit to non-empty AMM")
-		}
-		amm.ExpectTER(t, result, amm.TecAMM_NOT_EMPTY)
+		amm.ExpectTER(t, result, ter.TecAMM_NOT_EMPTY.String())
 	})
 
 	// Insufficient balance
@@ -206,7 +181,7 @@ func TestInvalidDeposit(t *testing.T) {
 
 		// Create AMM
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
-		env.Submit(createTx)
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
 		// Carol tries to deposit 1000 USD (but only has 100)
@@ -215,11 +190,7 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit with insufficient balance")
-		}
-		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
+		amm.ExpectTER(t, result, ter.TecUNFUNDED_AMM.String())
 	})
 
 	// Globally frozen asset
@@ -237,16 +208,12 @@ func TestInvalidDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-
-		if result.Success {
-			t.Fatal("Should not allow deposit of frozen asset")
-		}
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 }
 
 // TestDeposit tests valid deposit scenarios.
-// Reference: rippled AMM_test.cpp testDeposit (line 1383)
+// Reference: rippled AMM_test.cpp testDeposit
 func TestDeposit(t *testing.T) {
 	// Equal deposit by tokens
 	// Reference: ammAlice.deposit(carol, 1'000'000) - deposits 10% of pool
@@ -367,19 +334,11 @@ func TestDeposit(t *testing.T) {
 		env := setupAMM(t)
 
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-			LPTokenOut(amm.IOUAmount(env.GW, "LPT", 100000)).
+			LPTokenOut(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 100000)).
 			Amount(amm.IOUAmount(env.GW, "USD", 205)).
 			OneAssetLPToken().
 			Build()
-		result := env.Submit(depositTx)
-
-		// May fail due to calculated amount exceeding limit
-		if result.Success {
-			t.Log("Single deposit with token amount succeeded")
-		} else {
-			// tecAMM_FAILED is expected if calculated amount exceeds limit
-			t.Logf("Single deposit with token amount result: %s (may be expected)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 
 	// Deposit with effective price limit (LimitLPToken)
@@ -395,14 +354,7 @@ func TestDeposit(t *testing.T) {
 			EPrice(ePrice).
 			LimitLPToken().
 			Build()
-		result := env.Submit(depositTx)
-
-		// Result depends on whether effective price is within limit
-		if result.Success {
-			t.Log("Deposit with price limit succeeded")
-		} else {
-			t.Logf("Deposit with price limit result: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 }
 
@@ -420,16 +372,12 @@ func TestDepositInvalidAMM(t *testing.T) {
 		SingleAsset().
 		Build()
 	result := env.Submit(depositTx)
-
-	if result.Success {
-		t.Fatal("Should not allow deposit to non-existent AMM")
-	}
-	amm.ExpectTER(t, result, amm.TerNO_AMM)
+	amm.ExpectTER(t, result, ter.TerNO_AMM.String())
 }
 
 // TestAMMDepositWithFrozenAssets tests deposit behavior when one of the AMM
 // assets has a frozen trust line.
-// Reference: rippled AMM_test.cpp testAMMDepositWithFrozenAssets (line 7351)
+// Reference: rippled AMM_test.cpp testAMMDepositWithFrozenAssets
 func TestAMMDepositWithFrozenAssets(t *testing.T) {
 	// Helper that sets up the environment: create AMM(XRP(100)/USD(100)),
 	// then freeze alice's USD trust line, then run the callback.
@@ -464,7 +412,6 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 	}
 
 	// Deposit two assets, one of which is frozen -> tecFROZEN.
-	// Reference: lines 7370-7381
 	t.Run("TwoAsset_FrozenToken", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 
@@ -474,11 +421,10 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 			TwoAsset().
 			Build()
 		result := env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
 	// Deposit single frozen asset -> tecFROZEN.
-	// Reference: lines 7383-7396
 	t.Run("SingleAsset_FrozenToken", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 
@@ -487,12 +433,11 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
 	// With AMMClawback enabled: deposit the non-frozen asset (XRP) when the
 	// other asset is frozen -> tecFROZEN.
-	// Reference: lines 7398-7413
 	t.Run("SingleAsset_NonFrozen_WithAMMClawback", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 		env.EnableFeature("AMMClawback")
@@ -502,10 +447,9 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-		amm.ExpectTER(t, result, amm.TecFROZEN)
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 
-	// Reference: lines 7414-7429
 	t.Run("SingleAsset_NonFrozen_WithoutAMMClawback", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 		env.DisableFeature("AMMClawback")
@@ -526,7 +470,7 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 // sfTradingFee as a value-independent optional, so its mere presence is
 // temMALFORMED; before the fix a zero was indistinguishable from absent and the
 // deposit wrongly proceeded.
-// Reference: rippled AMMDeposit.cpp preflight lines 67-95.
+// Reference: rippled AMMDeposit.cpp preflight.
 func TestDepositTradingFeePresentZero(t *testing.T) {
 	env := setupAMM(t)
 
@@ -536,9 +480,5 @@ func TestDepositTradingFeePresentZero(t *testing.T) {
 		TradingFee(0). // present, value 0
 		Build()
 	result := env.Submit(depositTx)
-
-	if result.Success {
-		t.Fatal("tfSingleAsset deposit carrying TradingFee=0 must be rejected")
-	}
-	amm.ExpectTER(t, result, amm.TemMALFORMED)
+	amm.ExpectTER(t, result, ter.TemMALFORMED.String())
 }

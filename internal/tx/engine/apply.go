@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
@@ -381,6 +380,7 @@ func (e *Engine) ApplyInnerTransaction(
 	innerConfig.ParentBatchID = &parentBatchID
 	innerEngine := NewEngine(atomicView, innerConfig)
 	innerEngine.invariantViolationHook = e.invariantViolationHook
+	innerEngine.applyObserver = e.applyObserver
 	innerEngine.SetBaseTxCount(transactionIndex)
 	return innerEngine.applyWithContext(ctx, innerTx, &parentBatchID)
 }
@@ -663,13 +663,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		return ter.TefEXCEPTION, 0
 	}
 
-	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
-		return ter.TefINTERNAL, 0
-	}
-	if e.stateError() != nil {
-		return ter.TefEXCEPTION, 0
-	}
-	generatedMeta, applyErr := e.applyTable(tecTable)
+	generatedMeta, applyErr := e.applyTable(tecTable, st.chargedFee)
 	if applyErr != nil {
 		return ter.TefINTERNAL, 0
 	}

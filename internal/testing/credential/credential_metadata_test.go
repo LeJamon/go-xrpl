@@ -16,6 +16,7 @@ func TestCredentialLifecycleMetadata(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.Fund(issuer, subject)
 	env.Close()
+	env.SetOpenLedger(false)
 
 	const credentialType = "meta"
 	const credentialTypeHex = "6D657461"

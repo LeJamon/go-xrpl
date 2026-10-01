@@ -57,6 +57,10 @@ tiny
 [peers_max]
 21
 
+[overlay]
+# Four manifest peers and a reconnect can share the Docker NAT address.
+ip_limit=5
+
 [peer_private]
 0
 
@@ -218,6 +222,10 @@ func startRippledInteropContainer(t *testing.T, config string, dockerOptions ...
 	require.NoErrorf(t, err, "docker run: %s", stderr.String())
 	cid := strings.TrimSpace(string(out))
 	t.Cleanup(func() {
+		if t.Failed() {
+			logs, _ := exec.Command("docker", "logs", cid).CombinedOutput()
+			t.Logf("rippled logs:\n%s", logs)
+		}
 		_ = exec.Command("docker", "rm", "-f", cid).Run()
 	})
 	return cid

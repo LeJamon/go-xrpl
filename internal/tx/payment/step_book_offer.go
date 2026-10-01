@@ -629,7 +629,23 @@ func (s *BookStep) isOfferOwnerAuthorized(
 		authFlag = state.LsfLowAuth
 	}
 
-	return (line.Flags & authFlag) != 0, nil
+	if (line.Flags & authFlag) != 0 {
+		return true, nil
+	}
+
+	// Pseudo-accounts cannot authorize their own trust lines. Once the cleanup
+	// amendment is enabled, rippled implicitly authorizes them for held IOUs.
+	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		ownerAccount, err := tx.ReadAccountRoot(view, owner)
+		if err != nil {
+			return false, fmt.Errorf("read offer owner account: %w", err)
+		}
+		if ownerAccount != nil && ownerAccount.IsPseudoAccount() {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // isDeepFrozen checks if an account's trust line for the given currency/issuer
@@ -685,7 +701,9 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 
 	offerTakerGets := s.offerTakerGets(offer)
 
-	if s.book.Out.IsXRP() {
+	// Funding is determined by the asset the offer owner gives (TakerGets),
+	// which is the offer's authoritative balance and freeze context.
+	if offerTakerGets.IsNative {
 		accountKey := keylet.Account(offerOwner)
 		accountData, err := sb.Read(accountKey)
 		if err != nil || accountData == nil {
@@ -740,23 +758,26 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 		return NewXRPEitherAmount(available), nil
 	}
 
-	if s.book.Out.IsMPT {
+	if offerTakerGets.IsMPT {
 		var funds int64
 		var result ter.Result
-		if offerOwner == s.book.Out.Issuer {
-			funds, result = mptutil.IssuerFundsToSelfIssue(sb, s.book.Out.MPTID)
+		if offerOwner == mptIssuer(offerTakerGets.MPTID) {
+			funds, result = mptutil.IssuerFundsToSelfIssue(sb, offerTakerGets.MPTID)
 		} else {
-			funds, result = mptutil.Funds(sb, s.book.Out.MPTID, offerOwner, true)
+			funds, result = mptutil.Funds(sb, offerTakerGets.MPTID, offerOwner, true)
 		}
 		if result != ter.TesSUCCESS || funds <= 0 {
-			return ZeroMPTEitherAmount(s.book.Out.MPTID), nil
+			return ZeroMPTEitherAmount(offerTakerGets.MPTID), nil
 		}
-		return NewMPTEitherAmount(funds, s.book.Out.MPTID), nil
+		return NewMPTEitherAmount(funds, offerTakerGets.MPTID), nil
 	}
 
 	// For IOU TakerGets: check owner's trustline balance with issuer
-	issuer := s.book.Out.Issuer
-	currency := s.book.Out.Currency
+	issuer, err := state.DecodeAccountID(offerTakerGets.IOU.Issuer)
+	if err != nil {
+		return ZeroIOUEitherAmount(offerTakerGets.IOU.Currency, offerTakerGets.IOU.Issuer), nil
+	}
+	currency := offerTakerGets.IOU.Currency
 
 	// Check freeze before returning balance (fhZERO_IF_FROZEN).
 	// If the trust line is frozen or deep frozen, the offer is treated as unfunded.
@@ -773,6 +794,14 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 			}
 		}
 		if frozen {
+			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
+		}
+	}
+	if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
+		switch tx.LPTokenFrozenForIssuer(sb, offerOwner, issuer) {
+		case tx.LPTokenFrozen, tx.LPTokenAMMUnresolvable:
+			// accountHolds() treats frozen or unresolvable LP backing as zero;
+			// OfferStream then grooms the unfunded offer.
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 		}
 	}

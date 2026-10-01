@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -49,6 +50,16 @@ func putAuthorizedTrustLine(t *testing.T, view *paymentMockLedgerView, owner, is
 	require.NoError(t, err)
 	line.Flags |= state.LsfHighAuth
 	view.data[lineKey], err = state.SerializeRippleState(line)
+	require.NoError(t, err)
+}
+
+func putPseudoAccount(t *testing.T, view *paymentMockLedgerView, accountID [20]byte) {
+	t.Helper()
+	view.createAccount(accountID, 1_000_000_000, 0)
+	account, err := state.ParseAccountRoot(view.data[keylet.Account(accountID).Key])
+	require.NoError(t, err)
+	account.AMMID[0] = 1
+	view.data[keylet.Account(accountID).Key], err = state.SerializeAccountRoot(account)
 	require.NoError(t, err)
 }
 
@@ -101,6 +112,7 @@ func TestBookStepIsOfferOwnerAuthorizedPreservesLookupErrors(t *testing.T) {
 	t.Run("missing trust line is unauthorized", func(t *testing.T) {
 		view := newPaymentMockLedgerView()
 		putRequireAuthIssuer(t, view, issuer)
+		view.createAccount(owner, 1_000_000_000, 0)
 		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
 		require.NoError(t, err)
 		require.False(t, authorized)
@@ -138,6 +150,84 @@ func TestBookStepIsOfferOwnerAuthorizedPreservesLookupErrors(t *testing.T) {
 		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
 		require.NoError(t, err)
 		require.True(t, authorized)
+	})
+
+	t.Run("pseudo owner is implicitly authorized with cleanup fix", func(t *testing.T) {
+		view := newPaymentMockLedgerView()
+		putRequireAuthIssuer(t, view, issuer)
+		putPseudoAccount(t, view, owner)
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+
+		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
+		require.NoError(t, err)
+		require.True(t, authorized)
+	})
+
+	t.Run("pseudo owner remains unauthorized before cleanup fix", func(t *testing.T) {
+		view := newPaymentMockLedgerView()
+		view.rules = amendment.NewRulesBuilder().
+			FromPreset(amendment.PresetAllSupported).
+			Disable(amendment.FeatureFixCleanup3_4_0).
+			Build()
+		putRequireAuthIssuer(t, view, issuer)
+		putPseudoAccount(t, view, owner)
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+
+		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
+		require.NoError(t, err)
+		require.False(t, authorized)
+	})
+
+	t.Run("ordinary owner remains unauthorized with an existing trust line", func(t *testing.T) {
+		view := newPaymentMockLedgerView()
+		putRequireAuthIssuer(t, view, issuer)
+		view.createAccount(owner, 1_000_000_000, 0)
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+
+		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
+		require.NoError(t, err)
+		require.False(t, authorized)
+	})
+
+	t.Run("missing owner remains unauthorized with an existing trust line", func(t *testing.T) {
+		view := newPaymentMockLedgerView()
+		putRequireAuthIssuer(t, view, issuer)
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+
+		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
+		require.NoError(t, err)
+		require.False(t, authorized)
+	})
+
+	t.Run("pseudo owner read error is preserved", func(t *testing.T) {
+		base := newPaymentMockLedgerView()
+		putRequireAuthIssuer(t, base, issuer)
+		putPseudoAccount(t, base, owner)
+		base.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+		view := &offerAuthorizationFaultView{
+			paymentMockLedgerView: base,
+			key:                   keylet.Account(owner).Key,
+			failAt:                1,
+			err:                   readSentinel,
+		}
+
+		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
+		require.False(t, authorized)
+		require.ErrorIs(t, err, readSentinel)
+		require.ErrorContains(t, err, "read offer owner account")
+	})
+
+	t.Run("pseudo owner parse error is preserved", func(t *testing.T) {
+		view := newPaymentMockLedgerView()
+		putRequireAuthIssuer(t, view, issuer)
+		putPseudoAccount(t, view, owner)
+		ownerKey := keylet.Account(owner).Key
+		view.data[ownerKey] = view.data[ownerKey][:3]
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+
+		authorized, err := step.isOfferOwnerAuthorized(NewPaymentSandbox(view), owner, issuer, "USD")
+		require.False(t, authorized)
+		require.ErrorContains(t, err, "read offer owner account")
 	})
 }
 

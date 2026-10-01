@@ -29,13 +29,16 @@ type controlledSyncDatabase struct {
 
 type gatedTipDatabase struct {
 	nodestore.Database
-	once    sync.Once
-	entered chan struct{}
-	release chan struct{}
+	once     sync.Once
+	entered  chan struct{}
+	release  chan struct{}
+	blockSeq atomic.Uint32
 }
 
 func (d *gatedTipDatabase) Store(ctx context.Context, node *nodestore.Node) error {
-	if node.Hash == validatedTipKey && node.LedgerSeq != 0 {
+	blockedSequence := d.blockSeq.Load()
+	if node.Hash == validatedTipKey && node.LedgerSeq != 0 &&
+		(blockedSequence == 0 || node.LedgerSeq == blockedSequence) {
 		d.once.Do(func() {
 			close(d.entered)
 			<-d.release

@@ -354,8 +354,7 @@ func newStoredVerificationFixture(
 		data[11] = byte(branch + 1)
 		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	_, err = svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, svc)
 	svc.FlushPersists()
 	root, err := svc.GetValidatedLedger().StateMapHash()
 	require.NoError(t, err)
@@ -531,8 +530,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	rawTx, _ := validRelationalTestTransaction(t, 1)
 	txBlob, txHash := makeTxMetaBlobForTest(t, rawTx, 0)
 	require.NoError(t, first.openLedger.AddTransactionWithMeta(txHash, txBlob))
-	seq, err := first.AcceptLedger(ctx)
-	require.NoError(t, err)
+	seq := closeStoredLedgerFixture(t, first).Sequence()
 	first.FlushPersists()
 	want := first.GetValidatedLedger()
 	require.NotNil(t, want)
@@ -1042,14 +1040,13 @@ func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 		var key [32]byte
 		key[0] = byte(i / shamap.BranchFactor)
 		key[1] = byte((i % shamap.BranchFactor) << 4)
-		key[31] = byte(i)
+		key[31] = byte(i + 1)
 		data := make([]byte, 12)
 		data[10] = byte(i >> 8)
 		data[11] = byte(i)
 		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	_, err = svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	closeStoredLedgerFixture(t, svc)
 	svc.FlushPersists()
 	root, err := svc.GetValidatedLedger().StateMapHash()
 	require.NoError(t, err)
@@ -1213,8 +1210,7 @@ func BenchmarkService_VerifyStoredSHAMapWorkers(b *testing.B) {
 		data[11] = seed[3]
 		require.NoError(b, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
 	}
-	_, err = svc.AcceptLedger(ctx)
-	require.NoError(b, err)
+	closeStoredLedgerFixture(b, svc)
 	svc.FlushPersists()
 	root, err := svc.GetValidatedLedger().StateMapHash()
 	require.NoError(b, err)

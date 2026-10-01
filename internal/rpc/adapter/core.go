@@ -82,6 +82,9 @@ func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 		CompleteLedgers:          info.CompleteLedgers,
 		HavePublished:            info.HavePublished,
 		PublishedLedgerSeq:       info.PublishedLedgerSeq,
+		HaveValidatedRange:       info.HaveValidatedRange,
+		ValidatedRangeMin:        info.ValidatedRangeMin,
+		ValidatedRangeMax:        info.ValidatedRangeMax,
 		NetworkID:                info.NetworkID,
 	}
 }

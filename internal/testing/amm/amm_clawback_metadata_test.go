@@ -26,10 +26,12 @@ func newPinnedAMMTestEnv(t *testing.T) *amm.AMMTestEnv {
 	cfg := genesis.DefaultConfig()
 	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
 	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
-	// These metadata vectors include the retired amendment in their genesis
-	// ledger. It is still active unconditionally; pinning it here preserves the
-	// historical parent hash used to derive the AMM pseudo-account address.
-	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
+	// Preserve the genesis amendment set used by these historical vectors.
+	cfg.Amendments = [][32]byte{
+		amendment.FeatureFixCleanup3_1_3,
+		amendment.FeatureFixRemoveNFTokenAutoTrustLine,
+		amendment.FeatureFixAMMOverflowOffer,
+	}
 
 	testEnv := jtx.NewTestEnvWithConfig(t, cfg)
 	gw := jtx.NewAccount("gw")
@@ -38,7 +40,6 @@ func newPinnedAMMTestEnv(t *testing.T) *amm.AMMTestEnv {
 	bob := jtx.NewAccount("bob")
 	return &amm.AMMTestEnv{
 		TestEnv: testEnv,
-		T:       t,
 		GW:      gw,
 		Alice:   alice,
 		Carol:   carol,

@@ -140,7 +140,7 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 		}
 	}
 
-	if entry.HasAccount() {
+	if entry.HasAccount() && entry.Account != "" {
 		escrow.Account, err = entry.GetAccount()
 		if err != nil {
 			return nil, err

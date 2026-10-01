@@ -132,6 +132,14 @@ func Flow(
 	// Reference: rippled uses flat_multiset for savedIns/savedOuts
 	var savedIns []EitherAmount
 	var savedOuts []EitherAmount
+	aggregateOverflow := func() FlowResult {
+		return FlowResult{
+			In:              zeroCrossAmount(FromEitherAmount(savedIns[0])),
+			Out:             zeroCrossAmount(FromEitherAmount(outReq)),
+			RemovableOffers: allOfrsToRm,
+			Result:          ter.TecPATH_DRY,
+		}
+	}
 
 	// curTry mirrors rippled's loop counter. rippled increments it at the top of
 	// each pass and bails with telFAILED_PROCESSING once it reaches maxTries while
@@ -336,10 +344,17 @@ func Flow(
 			// terminate the loop and surfaces over-delivery via the final
 			// actualOut > outReq → tefEXCEPTION check.
 			// Reference: rippled StrandFlow.h lines 783-785.
-			totalOut = sumAmountsWithNumberContext(savedOuts, numberContext)
-			totalIn = sumAmountsWithNumberContext(savedIns, numberContext)
+			var ok bool
+			totalOut, ok = sumAmountsWithNumberContext(savedOuts, numberContext)
+			if !ok {
+				return aggregateOverflow()
+			}
 			remainingOut = outReq.SubWithNumberContext(totalOut, numberContext)
 			if sendMax != nil {
+				totalIn, ok = sumAmountsWithNumberContext(savedIns, numberContext)
+				if !ok {
+					return aggregateOverflow()
+				}
 				ri := sendMax.SubWithNumberContext(totalIn, numberContext)
 				remainingIn = &ri
 			}
@@ -382,6 +397,14 @@ func Flow(
 
 		if shouldBreak {
 			break
+		}
+	}
+
+	if sendMax == nil && len(savedIns) > 0 {
+		var ok bool
+		totalIn, ok = sumAmountsWithNumberContext(savedIns, numberContext)
+		if !ok {
+			return aggregateOverflow()
 		}
 	}
 
@@ -457,10 +480,14 @@ func Flow(
 		}
 	}
 
+	var resultSandbox *PaymentSandbox
+	if resultCode == ter.TesSUCCESS {
+		resultSandbox = accumSandbox
+	}
 	return FlowResult{
 		In:              totalIn,
 		Out:             totalOut,
-		Sandbox:         accumSandbox,
+		Sandbox:         resultSandbox,
 		RemovableOffers: allOfrsToRm,
 		Result:          resultCode,
 	}
@@ -548,12 +575,12 @@ func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limit
 func sumAmountsWithNumberContext(
 	amounts []EitherAmount,
 	numberContext state.NumberContext,
-) EitherAmount {
+) (EitherAmount, bool) {
 	if len(amounts) == 0 {
-		return ZeroXRPEitherAmount()
+		return ZeroXRPEitherAmount(), true
 	}
 	if len(amounts) == 1 {
-		return amounts[0]
+		return amounts[0], true
 	}
 	// Sort ascending (smallest first) for precision
 	sorted := make([]EitherAmount, len(amounts))
@@ -563,9 +590,13 @@ func sumAmountsWithNumberContext(
 	})
 	result := sorted[0]
 	for i := 1; i < len(sorted); i++ {
-		result = result.AddWithNumberContext(sorted[i], numberContext)
+		var ok bool
+		result, ok = result.checkedAddWithNumberContext(sorted[i], numberContext)
+		if !ok {
+			return EitherAmount{}, false
+		}
 	}
-	return result
+	return result, true
 }
 
 // offerDeleteInSandbox deletes an offer from a PaymentSandbox.

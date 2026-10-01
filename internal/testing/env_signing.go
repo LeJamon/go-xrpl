@@ -183,7 +183,11 @@ func (e *TestEnv) autoFill(txn tx.Transaction, options SubmitOptions) {
 	}
 	common := txn.GetCommon()
 	if !options.SkipFee && common.Fee == "" {
-		common.Fee = formatUint64(e.baseFee)
+		fee, err := sign.CalculateBaseFee(txn, e.ledger, e.engineConfig(e.ledger, engineConfigOpts{}))
+		if err != nil {
+			e.t.Fatalf("autoFillForSigning: failed to calculate fee: %v", err)
+		}
+		common.Fee = formatUint64(fee)
 	}
 	if !options.SkipSequence && common.Sequence == nil {
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
@@ -275,7 +279,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	if e.txQueue != nil && !e.bypassTxQ {
 		return e.submitViaTxQ(txn)
 	}
-	return e.applyDirect(txn)
+	return e.applyDirect(txn, tx.TapNONE)
 }
 
 // findAccountByAddress looks up a registered account by its XRPL address.

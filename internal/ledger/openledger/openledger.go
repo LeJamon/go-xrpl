@@ -451,6 +451,12 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 	return out
 }
 
+// CurrentTransactions returns the canonical outer transactions in the published
+// view and rejects malformed leaves or transaction hash mismatches.
+func (o *OpenLedger) CurrentTransactions(ctx context.Context) ([]PendingTx, error) {
+	return collectTxsContext(ctx, o.Current())
+}
+
 func collectTxsContext(ctx context.Context, v *ledger.Ledger) ([]PendingTx, error) {
 	if v == nil {
 		return nil, nil

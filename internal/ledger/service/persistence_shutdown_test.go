@@ -234,25 +234,47 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 
 func TestService_StandaloneCommitPersistsAfterCancellation(t *testing.T) {
 	store := newGatedStore(t)
-	store.open()
 	cfg := DefaultConfig()
 	cfg.NodeStore = store
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
-	t.Cleanup(svc.Stop)
+	t.Cleanup(func() {
+		store.open()
+		svc.Stop()
+	})
 	blob, _ := startupPaymentBlob(t, "standalone-cancel-commit", 1)
 	outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
 	require.NoError(t, err)
 	require.True(t, outcome.Applied)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	svc.SetTxRelay(func([]byte) { cancel() })
-	seq, err := svc.AcceptLedger(ctx)
-	require.NoError(t, err)
+	type acceptResult struct {
+		seq uint32
+		err error
+	}
+	accepted := make(chan acceptResult, 1)
+	go func() {
+		seq, err := svc.AcceptLedger(ctx)
+		accepted <- acceptResult{seq: seq, err: err}
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("standalone acceptance did not reach persistence")
+	}
+	cancel()
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	store.open()
+	var result acceptResult
+	select {
+	case result = <-accepted:
+		require.NoError(t, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("committed standalone acceptance did not finish after cancellation")
+	}
 	closed := svc.GetClosedLedger()
-	require.Equal(t, seq, closed.Sequence())
+	require.Equal(t, result.seq, closed.Sequence())
 	persisted, err := store.Fetch(t.Context(), nodestore.Hash256(closed.Hash()))
 	require.NoError(t, err)
 	require.NotNil(t, persisted, "committed ledger header must survive caller cancellation")

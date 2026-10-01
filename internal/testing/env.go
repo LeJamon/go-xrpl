@@ -124,6 +124,10 @@ type TestEnv struct {
 	// for every normal submission.
 	invariantViolationHook txengine.InvariantViolationHook
 
+	// applyObserver is a test-only hook used to observe phases during both
+	// direct submission and closed-ledger replay. It is nil for normal tests.
+	applyObserver txengine.ApplyObserver
+
 	// heldTxns stores transactions that hit a retryable (ter*) result because of a
 	// sequence gap. They are retried mid-window once a transaction for the same
 	// account succeeds, mirroring rippled's mHeldTransactions. Keyed by account.
@@ -201,6 +205,11 @@ func NewTestEnvBacked(t testing.TB) *TestEnv {
 	env := NewTestEnv(t)
 	env.enablePebbleBacking(t)
 	return env
+}
+
+// T returns the test handle shared by this environment and its fixtures.
+func (e *TestEnv) T() testing.TB {
+	return e.t
 }
 
 // enablePebbleBacking enables PebbleDB-backed SHAMaps on the environment.

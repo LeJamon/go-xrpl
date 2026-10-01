@@ -103,9 +103,16 @@ func testCheckCashFlowDeletedLine(t *testing.T, issuerSeed, casherSeed, limitFie
 	cfg := genesis.DefaultConfig()
 	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
 	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
-	// These state-root vectors include the retired amendment in their genesis ledger.
-	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
+	// Preserve the genesis amendment set used by these historical vectors.
+	cfg.Amendments = [][32]byte{
+		amendment.FeatureFixCleanup3_1_3,
+		amendment.FeatureFixRemoveNFTokenAutoTrustLine,
+		amendment.FeatureFixAMMOverflowOffer,
+	}
 	env := jtx.NewTestEnvWithConfig(t, cfg)
+	// These historical metadata and root vectors represent closed-ledger
+	// application, where transaction threading is committed immediately.
+	env.SetOpenLedger(false)
 	issuer := jtx.NewAccount(issuerSeed)
 	casher := jtx.NewAccount(casherSeed)
 	env.Fund(issuer, casher)

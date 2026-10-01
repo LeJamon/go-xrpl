@@ -1,0 +1,205 @@
+{
+  "fixture_version": "v4",
+  "oracle_repository": "XRPLF/xrpld-private",
+  "oracle_tag": "3.4.1",
+  "oracle_commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+  "network_id": 0,
+  "scenario_overrides": {
+    "network_id": {
+      "AccountSet/network-id-missing": 1025,
+      "AccountSet/network-id-wrong": 1025
+    },
+    "queue_history": {
+      "AccountSet/queued-low-fee": {
+        "txq_config": {
+          "ledgers_in_queue": 2,
+          "queue_size_min": 2,
+          "minimum_txn_in_ledger_standalone": 2,
+          "normal_consensus_increase_percent": 0
+        },
+        "internal_config": {
+          "min_ledgers_to_compute_size_limit": 3,
+          "max_ledger_counts_to_store": 100
+        },
+        "pre_submit_count": 3,
+        "pre_submit_order": "alice->bob, bob->alice, alice->bob",
+        "primary": {
+          "engine_result": "terQUEUED",
+          "applied": false,
+          "queued": true
+        }
+      },
+      "AccountSet/queue-multi-candidate-eviction-order": {
+        "txq_config": {
+          "ledgers_in_queue": 2,
+          "queue_size_min": 2,
+          "minimum_txn_in_ledger_standalone": 2,
+          "normal_consensus_increase_percent": 0
+        },
+        "internal_config": {
+          "min_ledgers_to_compute_size_limit": 3,
+          "max_ledger_counts_to_store": 100
+        },
+        "history_count": 1,
+        "history_pre_submit_counts": [
+          0
+        ],
+        "history_post_close_queue": "captured after an authenticated empty close and replayed into the successor open view",
+        "pre_submit_count": 8,
+        "pre_submit_order": "alice->bob, bob->alice, alice->bob, charlie fee10, daria fee11, erin fee20, fred fee21, gina fee30",
+        "primary": {
+          "engine_result": "tesSUCCESS",
+          "applied": true,
+          "queued": false
+        },
+        "coverage": "an authenticated empty warmup close establishes the successor open view, then five authenticated low-fee candidates fill and evict within the bounded queue after three applied payments; high-fee primary remains independently applied"
+      },
+      "AccountSet/queue-multi-ledger-history": {
+        "txq_config": {
+          "ledgers_in_queue": 2,
+          "queue_size_min": 2,
+          "minimum_txn_in_ledger_standalone": 2,
+          "normal_consensus_increase_percent": 0
+        },
+        "internal_config": {
+          "min_ledgers_to_compute_size_limit": 3,
+          "max_ledger_counts_to_store": 100
+        },
+        "history_count": 3,
+        "history_pre_submit_counts": [
+          0,
+          8,
+          0
+        ],
+        "history_post_close_queue": "captured after each authenticated close and replayed into successor open view; the first close has no submissions and establishes the queue lifecycle",
+        "primary": {
+          "engine_result": "tesSUCCESS",
+          "applied": true,
+          "queued": false
+        },
+        "coverage": "three linked closes, including an authenticated empty warmup and five ordered low-fee candidates after three applied payments, carry queue state through ProcessClosedLedger and acceptance before primary submit"
+      },
+      "AccountSet/queue-default-network-thresholds": {
+        "txq_config": {
+          "ledgers_in_queue": 20,
+          "queue_size_min": 2000,
+          "minimum_txn_in_ledger_standalone": 1000,
+          "normal_consensus_increase_percent": 20
+        },
+        "primary": {
+          "engine_result": "tesSUCCESS",
+          "applied": true,
+          "queued": false
+        },
+        "coverage": "default network queue thresholds are exercised with authenticated setup and a direct open-ledger submit"
+      }
+    },
+    "persistent_cleanup": {
+      "NFTokenAcceptOffer/expired-sell-offer-cleanup": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tecEXPIRED",
+        "applied": true,
+        "queued": false,
+        "expected_deleted_object": "NFTokenOffer"
+      },
+      "OfferCreate/expired-offer-cleanup": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tecKILLED",
+        "applied": true,
+        "queued": false,
+        "expected_deleted_object": "Offer",
+        "expected_retained_object": "Offer"
+      }
+    },
+    "invariant_recovery": {
+      "EscrowCancel/malformed-escrow-cancel-refund": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tecINVARIANT_FAILED",
+        "applied": true,
+        "queued": false,
+        "coverage": "malformed parent escrow refund reaches fee-only recovery and records invariant failure"
+      },
+      "AccountSet/persistent-fee-invariant-recovery": {
+        "profile": "c1-l1-b1-f1",
+        "engine_result": "tefINVARIANT_FAILED",
+        "applied": false,
+        "queued": false,
+        "coverage": "malformed AccountRoot over-issue persists through fee-only recovery and records fatal invariant failure"
+      }
+    },
+    "transient_open_ledger": {
+      "profile": "c1-l1-b1-f1",
+      "nf_token_auth": [
+        "NFTokenAuth/Unauthorized_buyer_tries_to_create_buy_offer",
+        "NFTokenAuth/Seller_tries_to_accept_buy_offer_from_unauth_buyer",
+        "NFTokenAuth/Unauthorized_buyer_tries_to_accept_sell_offer",
+        "NFTokenAuth/Authorized_broker_tries_to_bridge_offers_from_unauthorized_buyer."
+      ],
+      "escrow_token": [
+        "EscrowToken/MPT_Finish_Preclaim",
+        "EscrowToken/MPT_Cancel_Preclaim"
+      ],
+      "operation": "capture actual rawInsert/rawErase state deltas before one open-ledger submit; close rebuilds from parent and close_input"
+    },
+    "seeded_payments": {
+      "seed": 2016,
+      "profile": "c1-l1-b1-f1",
+      "samples": [
+        "Payment/seed2016-payment-0-valid-base-fee",
+        "Payment/seed2016-payment-1-insufficient-balance",
+        "Payment/seed2016-payment-2-valid-fee-edge",
+        "Payment/seed2016-payment-3-future-sequence"
+      ],
+      "coverage": "deterministic signed XRP payments with base/above-base fee, insufficient balance, and future sequence"
+    }
+  },
+  "apply_flags": 0,
+  "skip_signature_verification": false,
+  "profile_encoding": "c<cleanup>-l<lending>-b<BatchV1_1>-f<fixBatchV1_2>",
+  "profiles": "all 16 boolean combinations",
+  "txq_config": {
+    "ledgers_in_queue": 20,
+    "queue_size_min": 2000,
+    "retry_sequence_percent": 25,
+    "minimum_escalation_multiplier": 128000,
+    "minimum_txn_in_ledger": 32,
+    "minimum_txn_in_ledger_standalone": 1000,
+    "target_txn_in_ledger": 256,
+    "maximum_txn_in_ledger": 0,
+    "maximum_txn_in_ledger_set": false,
+    "normal_consensus_increase_percent": 20,
+    "slow_consensus_decrease_percent": 50,
+    "maximum_txn_per_account": 10,
+    "minimum_last_ledger_buffer": 2,
+    "standalone": true
+  },
+  "fees": {
+    "reference_fee_drops": 10,
+    "account_reserve_drops": 200000000,
+    "owner_reserve_increment_drops": 50000000
+  },
+  "signature_policy": "real canonical signatures with Application::checkSigs(true)",
+  "submission_policy": "one direct submit RPC per signed tx_blob; optional pre_submit history uses the same open ledger and queue; no retries or output-derived setup",
+  "close_policy": {
+    "setup": "Fresh genesis with persisted Amendments singleton; fund named accounts, then close before recording parent",
+    "request_seconds_after_now": 5,
+    "capture": "effective agreed close time computed from the pre-close header and resolution"
+  },
+  "snapshot_policy": "raw ledger header, effective rule IDs, fee schedule, raw SLE bytes, raw transaction and metadata bytes",
+  "families": [
+    "Payment",
+    "AccountSet",
+    "TrustSet",
+    "TicketCreate",
+    "Batch",
+    "VaultCreate",
+    "LoanBrokerSet",
+    "NFTokenAcceptOffer",
+    "NFTokenAuth",
+    "OfferCreate",
+    "EscrowCancel",
+    "EscrowToken"
+  ],
+  "batch_wrapper_policy": "canonical RawTransaction and poisoned CreatedNode wrapper, on both fix sides where BatchV1_1 is enabled",
+  "submit_policy": "open_ledger boundary, engine_result token and numeric TER, applied/queued flags, uint64 fee, complete current open-ledger SLE bytes"
+}

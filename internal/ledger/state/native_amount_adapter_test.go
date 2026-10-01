@@ -1,10 +1,12 @@
 package state
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 const (
@@ -124,5 +126,68 @@ func TestNativeAmountAdaptersRejectNegativeDrops(t *testing.T) {
 				t.Fatalf("parse error = %v, want negative XRP amount", err)
 			}
 		})
+	}
+}
+
+func TestRippleStatePreservesNativeZeroRawLimits(t *testing.T) {
+	fields := map[string]any{
+		"LedgerEntryType":   "RippleState",
+		"Flags":             uint32(0),
+		"Balance":           map[string]any{"value": "0", "currency": "USD", "issuer": AccountOneAddress},
+		"LowLimit":          "0",
+		"HighLimit":         "0",
+		"PreviousTxnID":     nativeAdapterHash,
+		"PreviousTxnLgrSeq": uint32(0),
+	}
+	raw := encodeNativeAdapterEntry(t, fields)
+	parsed, err := ParseRippleState(raw)
+	if err != nil {
+		t.Fatalf("ParseRippleState with native zero limits: %v", err)
+	}
+	if !parsed.LowLimit.IsNative() || parsed.LowLimit.Drops() != 0 || !parsed.HighLimit.IsNative() || parsed.HighLimit.Drops() != 0 {
+		t.Fatalf("native zero limits = low=%+v high=%+v", parsed.LowLimit, parsed.HighLimit)
+	}
+	roundTrip, err := SerializeRippleState(parsed)
+	if err != nil {
+		t.Fatalf("SerializeRippleState with native zero limits: %v", err)
+	}
+	if !bytes.Equal(roundTrip, raw) {
+		t.Fatalf("native zero limits changed on round trip\n got: %X\nwant: %X", roundTrip, raw)
+	}
+}
+
+func TestEscrowAcceptsExplicitEmptyAccountButRejectsMissingOrMalformedAccount(t *testing.T) {
+	base := map[string]any{
+		"LedgerEntryType":   "Escrow",
+		"Account":           "",
+		"Destination":       nativeAdapterAccount,
+		"Amount":            "1",
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     nativeAdapterHash,
+		"PreviousTxnLgrSeq": uint32(0),
+	}
+	raw := encodeNativeAdapterEntry(t, base)
+	parsed, err := ParseEscrow(raw)
+	if err != nil {
+		t.Fatalf("ParseEscrow with explicit empty Account: %v", err)
+	}
+	if parsed.Account != [20]byte{} {
+		t.Fatalf("empty Account decoded as %x", parsed.Account)
+	}
+
+	missing := make(map[string]any, len(base)-1)
+	for name, value := range base {
+		if name != "Account" {
+			missing[name] = value
+		}
+	}
+	if _, err := ParseEscrow(encodeNativeAdapterEntry(t, missing)); err == nil {
+		t.Fatal("ParseEscrow accepted missing required Account")
+	}
+	var malformed entry.Escrow
+	malformed.SetAccount("not-an-account")
+	if _, err := malformed.GetAccount(); err == nil {
+		t.Fatal("GetAccount accepted malformed nonempty Account")
 	}
 }

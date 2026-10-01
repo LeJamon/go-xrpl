@@ -140,12 +140,10 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		// current ledger sequence.
 		// Reference: rippled Payment.cpp:433 (setFieldU32(sfSequence, view().seq())).
 		newAccount := &state.AccountRoot{
-			Account:           p.Destination,
-			Balance:           0,
-			Sequence:          ctx.Config.LedgerSequence,
-			Flags:             0,
-			PreviousTxnID:     ctx.TxHash,
-			PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
+			Account:  p.Destination,
+			Balance:  0,
+			Sequence: ctx.Config.LedgerSequence,
+			Flags:    0,
 		}
 		newAccountData, serErr := state.SerializeAccountRoot(newAccount)
 		if serErr != nil {

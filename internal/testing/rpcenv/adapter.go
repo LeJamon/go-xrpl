@@ -174,6 +174,14 @@ func (a *ledgerAdapter) GetServerInfo() types.LedgerServerInfo {
 		info.HaveValidated = true
 		info.ValidatedLedgerSeq = closed.Sequence()
 		info.ValidatedLedgerHash = closed.Hash()
+		info.HavePublished = true
+		info.PublishedLedgerSeq = closed.Sequence()
+		info.HaveValidatedRange = true
+		info.ValidatedRangeMin = closed.Sequence()
+		for info.ValidatedRangeMin > 0 && a.closedLedger(info.ValidatedRangeMin-1) != nil {
+			info.ValidatedRangeMin--
+		}
+		info.ValidatedRangeMax = closed.Sequence()
 	}
 	return info
 }

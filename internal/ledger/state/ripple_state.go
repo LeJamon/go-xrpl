@@ -103,11 +103,31 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 	if err != nil {
 		return nil, err
 	}
+	decodeLimit := func(field string, value entry.AmountValue) (Amount, error) {
+		amount, err := decodeLedgerAmount("RippleState."+field, value)
+		if err != nil {
+			return Amount{}, err
+		}
+		if amount.IsNative() {
+			if amount.Drops() != 0 {
+				return Amount{}, fmt.Errorf("RippleState.%s: expected issued-currency amount", field)
+			}
+			// A raw ledger insertion can leave the default native zero limit in
+			// place. Preserve that wire value; callers that need an issued limit
+			// must obtain it from an authenticated trust line instead of inferring
+			// an issuer from the balance.
+			return amount, nil
+		}
+		if amount.IsMPT() {
+			return Amount{}, fmt.Errorf("RippleState.%s: expected issued-currency amount", field)
+		}
+		return amount, nil
+	}
 	lowLimitValue, err := decoded.GetLowLimit()
 	if err != nil {
 		return nil, err
 	}
-	lowLimit, err := decodeIssued("LowLimit", lowLimitValue)
+	lowLimit, err := decodeLimit("LowLimit", lowLimitValue)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +135,7 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 	if err != nil {
 		return nil, err
 	}
-	highLimit, err := decodeIssued("HighLimit", highLimitValue)
+	highLimit, err := decodeLimit("HighLimit", highLimitValue)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +248,9 @@ func parseCanonicalAmountBinary(data []byte) (Amount, error) {
 
 func serializeAmountValue(amount Amount, currency string, useAccountOne bool) entry.AmountValue {
 	value := amount.LedgerValue()
+	if amount.IsNative() {
+		return value
+	}
 	if currency != "" {
 		value.Currency = currency
 	}

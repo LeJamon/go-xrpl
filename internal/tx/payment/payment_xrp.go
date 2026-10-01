@@ -135,12 +135,10 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	// ledger sequence. Reference: rippled Payment.cpp:433 (setFieldU32(sfSequence,
 	// view().seq())).
 	newAccount := &state.AccountRoot{
-		Account:           p.Destination,
-		Balance:           amountDrops,
-		Sequence:          ctx.Config.LedgerSequence,
-		Flags:             0,
-		PreviousTxnID:     ctx.TxHash,
-		PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
+		Account:  p.Destination,
+		Balance:  amountDrops,
+		Sequence: ctx.Config.LedgerSequence,
+		Flags:    0,
 	}
 	if sponsorCreated {
 		if ctx.Account.SponsoringAccountCount == math.MaxUint32 {

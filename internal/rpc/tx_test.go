@@ -55,6 +55,7 @@ type mockCTIDLedger struct {
 
 func (m *mockCTIDLedger) Sequence() uint32  { return m.sequence }
 func (m *mockCTIDLedger) Hash() [32]byte    { return m.hash }
+func (m *mockCTIDLedger) IsClosed() bool    { return true }
 func (m *mockCTIDLedger) IsValidated() bool { return true }
 func (m *mockCTIDLedger) CloseTime() int64  { return 0 }
 func (m *mockCTIDLedger) ForEachTransaction(fn func([32]byte, []byte) bool) error {
@@ -2027,6 +2028,7 @@ func TestTxMethodCTIDLookupUsesMetadataTransactionIndex(t *testing.T) {
 	)
 
 	service := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	configureCTIDMockPublishedRange(service.mockLedgerService, 1, 100)
 	service.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		require.Equal(t, uint32(100), seq)
 		return reader, nil
@@ -2059,6 +2061,7 @@ func TestTxMethodCTIDLookupSkipsMalformedLeaf(t *testing.T) {
 	}{hash: txHash, data: []byte{0xFF}})
 
 	service := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	configureCTIDMockPublishedRange(service.mockLedgerService, 1, 100)
 	service.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		if seq == 100 {
 			return reader, nil
@@ -2284,6 +2287,7 @@ func TestTxMethodCTIDCorruptedStoredData(t *testing.T) {
 		sequence: 45,
 		txHash:   [32]byte{1},
 	}
+	configureCTIDMockPublishedRange(base.mockLedgerService, 1, ledger.sequence)
 	mock := &mockCTIDLedgerService{mockLedgerServiceTx: base, ledger: ledger}
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{
@@ -2330,6 +2334,7 @@ func TestTxMethodCTIDStoredDataWithoutMetadata(t *testing.T) {
 		sequence: 45,
 		txHash:   [32]byte{1},
 	}
+	configureCTIDMockPublishedRange(base.mockLedgerService, 1, ledger.sequence)
 	mock := &mockCTIDLedgerService{mockLedgerServiceTx: base, ledger: ledger}
 	method := &handlers.TxMethod{}
 	ctx := &types.RpcContext{

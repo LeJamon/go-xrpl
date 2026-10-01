@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -52,7 +53,10 @@ func TestBookStepMPTFundingAndTransferFee(t *testing.T) {
 	sb := NewPaymentSandbox(view)
 	issue := NewMPTIssue(id)
 	step := NewBookStep(Issue{Currency: "XRP"}, issue, alice, bob, nil, true)
-	offer := &state.LedgerOffer{Account: state.EncodeAccountIDSafe(alice)}
+	offer := &state.LedgerOffer{
+		Account:   state.EncodeAccountIDSafe(alice),
+		TakerGets: state.NewMPTAmountWithIssuanceID(100, state.EncodeAccountIDSafe(issuer), mptutil.EncodeID(id)),
+	}
 
 	funds, err := step.getOfferFundedAmount(sb, offer)
 	require.NoError(t, err)

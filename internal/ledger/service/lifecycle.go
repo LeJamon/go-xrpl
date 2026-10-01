@@ -74,19 +74,28 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	}
 	if replayed {
 		retriableTxs = append(retriableTxs, s.pendingTxs...)
-	} else if len(s.pendingTxs) == 0 {
-		closed, err = s.openLedger.MutableSnapshotUnflushed()
-		if err != nil {
-			return 0, fmt.Errorf("snapshot open ledger for close: %w", err)
-		}
-		if err := s.applyFlagLedgerNegativeUNL(closed); err != nil {
-			return 0, err
-		}
 	} else {
-		closed, retriableTxs, err = s.buildClosedLedgerLocked(ctx, s.pendingTxs, closeTime, s.config.Standalone)
-		if err != nil {
-			failedParent = s.closedLedger
-			return 0, err
+		pending := s.pendingTxs
+		if s.openLedgerView != nil {
+			pending, err = s.openLedgerView.CurrentTransactions(ctx)
+			if err != nil {
+				return 0, fmt.Errorf("collect open transactions for close: %w", err)
+			}
+		}
+		if len(pending) == 0 {
+			closed, err = s.currentOpenLedgerLocked().MutableSnapshotUnflushed()
+			if err != nil {
+				return 0, fmt.Errorf("snapshot open ledger for close: %w", err)
+			}
+			if err := s.applyFlagLedgerNegativeUNL(closed); err != nil {
+				return 0, err
+			}
+		} else {
+			closed, retriableTxs, err = s.buildClosedLedgerLocked(ctx, pending, closeTime, s.config.Standalone)
+			if err != nil {
+				failedParent = s.closedLedger
+				return 0, err
+			}
 		}
 	}
 

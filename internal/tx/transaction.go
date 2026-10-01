@@ -132,7 +132,7 @@ type SigValidatedPreflighter interface {
 // preflight for exactly one inner transaction.
 type BatchInnerPreflightRunner interface {
 	ValidateBatchOuter() error
-	PreflightInnerTransactions(func(Transaction) ter.Result) error
+	PreflightInnerTransactions(*amendment.Rules, func(Transaction) ter.Result) error
 }
 
 // Preclaimer is implemented by transaction types that need additional

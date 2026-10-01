@@ -1,0 +1,87 @@
+--- a/src/test/app/Batch_test.cpp
++++ b/src/test/app/Batch_test.cpp
+@@ -45,0 +46 @@
++#include <xrpl/protocol/LedgerHeader.h>
+@@ -71,0 +73,3 @@
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
+@@ -5903,0 +5908 @@
++
+@@ -5904,0 +5910,37 @@
++        auto snapshot = [](ReadView const& view) {
++            json::Value result;
++            Serializer header;
++            addRaw(view.header(), header, true);
++            result["header"] = strHex(header.slice());
++            result["rules"] = json::Value{json::ValueType::Array};
++            foreachFeature(testableAmendments(), [&](uint256 const& id) {
++                if (view.rules().enabled(id))
++                    result["rules"].append(to_string(id));
++            });
++            result["fees"]["base"] = to_string(view.fees().base);
++            result["fees"]["reserve"] = to_string(view.fees().reserve);
++            result["fees"]["increment"] = to_string(view.fees().increment);
++            result["state"] = json::Value{json::ValueType::Array};
++            for (auto const& sle : view.sles)
++            {
++                json::Value entry;
++                Serializer raw;
++                sle->add(raw);
++                entry["index"] = to_string(sle->key());
++                entry["data"] = strHex(raw.slice());
++                result["state"].append(entry);
++            }
++            result["transactions"] = json::Value{json::ValueType::Array};
++            for (auto const& [transaction, metadata] : view.txs)
++            {
++                json::Value entry;
++                Serializer raw, meta;
++                transaction->add(raw);
++                metadata->add(meta);
++                entry["hash"] = to_string(transaction->getTransactionID());
++                entry["tx_blob"] = strHex(raw.slice());
++                entry["meta_blob"] = strHex(meta.slice());
++                result["transactions"].append(entry);
++            }
++            return result;
++        };
+@@ -5938,0 +5981 @@
++                env.app().checkSigs(true);
+@@ -5950 +5993,14 @@
+-                env(jv, Ter(expected));
++
++                json::Value fixture;
++                fixture["oracle_commit"] = "d147fccf54a500fce586522f28d6044c37fd8d29";
++                fixture["wrapper"] = wrapper->getName();
++                fixture["enabled"] = env.current()->rules().enabled(fixBatchV1_2);
++                fixture["parent"] = snapshot(*env.closed());
++                auto const signedTx = env.jt(jv, Ter(expected));
++                BEAST_EXPECT(signedTx.stx != nullptr);
++                Serializer raw;
++                signedTx.stx->add(raw);
++                fixture["tx_blob"] = strHex(raw.slice());
++                auto const response = env.rpc("submit", strHex(raw.slice()));
++                fixture["submit"] = response["result"];
++                env.postconditions(signedTx, Env::parseResult(response), response);
+@@ -5951,0 +6008,11 @@
++                fixture["closed"] = snapshot(*env.closed());
++                if (auto const directory = std::getenv("GOXRPL_BATCH_FIXTURE_DIR"))
++                {
++                    std::filesystem::create_directories(directory);
++                    auto const filename = wrapper->getName() +
++                        (fixture["enabled"].asBool() ? "-on.json" : "-off.json");
++                    std::ofstream output(std::filesystem::path(directory) / filename);
++                    output << to_string(fixture) << '\n';
++                    BEAST_EXPECT(output.good());
++                }
++
+@@ -6021,0 +6089 @@
++
+@@ -6023 +6091,5 @@
+-        testWithFeats(sa);
++        if (std::getenv("GOXRPL_BATCH_FIXTURE_DIR"))
++            testWrappedInnerSubmission(sa);
++        else
++            testWithFeats(sa);
++

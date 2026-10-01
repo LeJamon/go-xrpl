@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Derive final 3.4.0 server_definitions data from the pinned rippled source tree.
+"""Derive final 3.4.1 server_definitions data from the pinned rippled source tree.
 
 It parses the C++ protocol macros and combines them with construction rules
 transcribed from the pinned final sources, independently of go-xrpl. The input
 must be a clean checkout of the pinned commit.
 
-Regenerate the checked-in fixture from the pinned source checkout with:
+An authorized release job can regenerate and verify the checked-in fixture from
+the clean private source checkout with:
 
     python3 server_definitions_final_oracle.py \
-        /path/to/rippled-worktrees/v3.4.0 --output server_definitions_final_hashes.json
+        /path/to/rippled-worktrees/v3.4.1-oracle --output server_definitions_final_hashes.json
 
-A built final 3.4.0 daemon can independently dump the runtime document with
+The repository, tag, commit, and clean-checkout checks deliberately reject
+public or mixed-release source trees. Ordinary CI verifies the committed
+snapshot and does not attempt this private checkout.
+
+A built final 3.4.1 daemon can independently dump the runtime document with
 `xrpld --definitions`; the source-derived checksums below are kept in the Go
 suite so normal tests do not require a daemon or a C++ build.
 """
@@ -23,7 +28,18 @@ import subprocess
 from pathlib import Path
 
 
-ORACLE_COMMIT = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
+ORACLE_REPOSITORY = "XRPLF/xrpld-private"
+ORACLE_TAG = "3.4.1"
+ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+
+
+def normalize_repository(url):
+    url = url.strip()
+    for prefix in ("https://github.com/", "http://github.com/", "git@github.com:"):
+        if url.startswith(prefix):
+            url = url[len(prefix) :]
+            break
+    return url.rstrip("/").removesuffix(".git").lower()
 
 
 def verify_oracle(root):
@@ -32,8 +48,12 @@ def verify_oracle(root):
 
     if Path(git("rev-parse", "--show-toplevel")).resolve() != root:
         raise ValueError("oracle_root must be the checkout root")
+    if normalize_repository(git("remote", "get-url", "origin")) != ORACLE_REPOSITORY.lower():
+        raise ValueError(f"oracle must come from {ORACLE_REPOSITORY}")
     if git("rev-parse", "HEAD") != ORACLE_COMMIT:
-        raise ValueError(f"oracle must be rippled 3.4.0 at {ORACLE_COMMIT}")
+        raise ValueError(f"oracle must be rippled {ORACLE_TAG} at {ORACLE_COMMIT}")
+    if git("describe", "--tags", "--exact-match", "HEAD") != ORACLE_TAG:
+        raise ValueError(f"oracle must be tagged {ORACLE_TAG}")
     if git("status", "--porcelain", "--untracked-files=normal"):
         raise ValueError("oracle checkout must be clean")
 
@@ -349,12 +369,13 @@ def main():
     full_hash, full_payload = digest(document)
     output = {
         "oracle": {
-            "tag": "3.4.0",
+            "repository": ORACLE_REPOSITORY,
+            "tag": ORACLE_TAG,
             "commit": ORACLE_COMMIT,
         },
         "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
         "regeneration": {
-            "source": "python3 server_definitions_final_oracle.py <rippled-3.4.0> --output server_definitions_final_hashes.json",
+            "source": "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
             "runtime": "xrpld --definitions",
         },
         "transaction_results": {

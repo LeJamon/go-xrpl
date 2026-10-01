@@ -91,7 +91,7 @@ func TestServerStatusPublishesModeAndLoadWithoutLedgerAcceptance(t *testing.T) {
 		svc.SignalServerStatusPublication(status.modePublication(mode.String()))
 	})
 	svc.FeeTrack().SetOnChange(func() {
-		svc.SignalServerStatusPublication(status.statusPublication(nil))
+		svc.SignalServerStatus()
 	})
 
 	status.publish(nil)

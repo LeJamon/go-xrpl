@@ -122,6 +122,7 @@ func (bp *BlockProcessor) applyTransaction(
 	stagedEngine := NewEngine(staged, bp.engine.config)
 	stagedEngine.SetBaseTxCount(bp.engine.TxCount())
 	stagedEngine.invariantViolationHook = bp.engine.invariantViolationHook
+	stagedEngine.applyObserver = bp.engine.applyObserver
 
 	// Pseudo-transactions (Amendment, SetFee, UNLModify) use ApplyPseudo()
 	// since Apply() rejects them (matching rippled's passesLocalChecks).

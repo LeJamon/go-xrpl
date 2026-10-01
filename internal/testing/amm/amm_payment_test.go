@@ -1,15 +1,13 @@
 // Package amm_test contains tests for AMM payment, flags, rippling, and AMMID scenarios.
-// Reference: rippled/src/test/app/AMM_test.cpp
-//   - testInvalidAMMPayment (line 3611)
-//   - testFlags (line 4882)
-//   - testRippling (line 4903)
-//   - testAMMID (line 5769)
 package amm_test
 
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 
 	"github.com/stretchr/testify/require"
 
@@ -22,6 +20,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	"github.com/LeJamon/go-xrpl/internal/testing/paychan"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
@@ -65,9 +64,6 @@ func ammAccount(t *testing.T, env *amm.AMMTestEnv, asset1, asset2 tx.Asset) *jtx
 		ID:      id20,
 	}
 }
-
-// testInvalidAMMPayment
-// Reference: rippled AMM_test.cpp testInvalidAMMPayment (line 3611)
 
 // TestInvalidAMMPayment tests that various payment-like transactions
 // targeting the AMM pseudo-account are rejected with tecNO_PERMISSION.
@@ -115,7 +111,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 					balanceBefore, sequenceBefore := env.Balance(env.Carol), env.Seq(env.Carol)
 					usdBefore := env.IOUBalance(env.Carol, env.GW, "USD")
 					poolBefore := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-					amm.ExpectTER(t, env.Submit(payTx), amm.TecNO_PERMISSION)
+					amm.ExpectTER(t, env.Submit(payTx), ter.TecNO_PERMISSION.String())
 					require.Equal(t, balanceBefore-env.BaseFee(), env.Balance(env.Carol))
 					require.Equal(t, sequenceBefore+1, env.Seq(env.Carol))
 					require.Equal(t, usdBefore, env.IOUBalance(env.Carol, env.GW, "USD"))
@@ -126,7 +122,6 @@ func TestInvalidAMMPayment(t *testing.T) {
 		}
 	}
 
-	// Reference: lines 3651-3660 -- escrow to AMM account -> tecNO_PERMISSION.
 	t.Run("EscrowToAMM", func(t *testing.T) {
 		env := setupAMM(t)
 		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
@@ -142,10 +137,9 @@ func TestInvalidAMMPayment(t *testing.T) {
 										Fee(1500). // baseFee * 150
 										Build()
 		result := env.Submit(escrowTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	})
 
-	// Reference: lines 3662-3676 -- payment channel to AMM account -> tecNO_PERMISSION.
 	t.Run("PayChanToAMM", func(t *testing.T) {
 		env := setupAMM(t)
 		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
@@ -158,17 +152,16 @@ func TestInvalidAMMPayment(t *testing.T) {
 			env.Carol.PublicKeyHex(),
 		).Build()
 		result := env.Submit(channelTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	})
 
-	// Reference: lines 3678-3682 -- check to AMM account -> tecNO_PERMISSION.
 	t.Run("CheckToAMM", func(t *testing.T) {
 		env := setupAMM(t)
 		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
 
 		checkTx := check.CheckCreate(env.Carol, ammAcc, amm.XRPAmount(100)).Build()
 		result := env.Submit(checkTx)
-		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	})
 
 	t.Run("PoolConsumption", func(t *testing.T) {
@@ -208,7 +201,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 				poolXRP := env.AMMPoolXRP(ammAcc)
 				poolUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
 				lpBalance := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
-				amm.ExpectTER(t, env.Submit(payTx), amm.TecPATH_PARTIAL)
+				amm.ExpectTER(t, env.Submit(payTx), ter.TecPATH_PARTIAL.String())
 				require.Equal(t, aliceBalance-env.BaseFee(), env.Balance(env.Alice))
 				require.Equal(t, aliceSequence+1, env.Seq(env.Alice))
 				require.Equal(t, aliceUSD, env.IOUBalance(env.Alice, env.GW, "USD"))
@@ -221,7 +214,6 @@ func TestInvalidAMMPayment(t *testing.T) {
 		}
 	})
 
-	// Reference: lines 3725-3739 -- global freeze tests.
 	t.Run("GlobalFreeze", func(t *testing.T) {
 		env := setupAMM(t)
 
@@ -252,7 +244,6 @@ func TestInvalidAMMPayment(t *testing.T) {
 		amm.ExpectTER(t, result, "tecPATH_DRY")
 	})
 
-	// Reference: lines 3741-3770 -- individual freeze tests.
 	t.Run("IndividualFreeze", func(t *testing.T) {
 		// Freeze AMM's trust line
 		t.Run("FreezeAMMTrustLine", func(t *testing.T) {
@@ -309,9 +300,6 @@ func TestInvalidAMMPayment(t *testing.T) {
 	})
 }
 
-// testFlags
-// Reference: rippled AMM_test.cpp testFlags (line 4882)
-
 // TestAMMFlags verifies that the AMM pseudo-account has the correct flags:
 // lsfDisableMaster | lsfDefaultRipple | lsfDepositAuth (from rippled's
 // createPseudoAccount).
@@ -334,9 +322,6 @@ func TestAMMFlags(t *testing.T) {
 			info.Flags, expectedFlags)
 	}
 }
-
-// testRippling
-// Reference: rippled AMM_test.cpp testRippling (line 4903)
 
 // TestAMMRippling tests that rippling via an AMM fails because the AMM trust
 // line has a 0 limit, and that SetTrust for non-LP tokens is rejected.
@@ -389,7 +374,7 @@ func TestAMMRippling(t *testing.T) {
 	ammIssueAmt := tx.NewIssuedAmountFromFloat64(10000, "TST", ammAcc.Address)
 	trustD := trustset.TrustSet(d, ammIssueAmt).Build()
 	result := env.Submit(trustD)
-	amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
+	amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
 	env.Close()
 
 	// Payment from C to D delivering TST.AMM using SendMax TSTA and path
@@ -407,57 +392,63 @@ func TestAMMRippling(t *testing.T) {
 	amm.ExpectTER(t, result, "tecPATH_DRY")
 }
 
-// testAMMID
-// Reference: rippled AMM_test.cpp testAMMID (line 5769)
-
-// TestAMMID verifies that the AMM account root exists with correct flags
-// after creation and after a deposit operation.
-// Note: The full rippled test also verifies the AMMID field in account_data
-// and in affected nodes metadata. This simplified version verifies the AMM
-// account exists and has the correct flags, since AccountInfo does not
-// currently expose the AMMID field.
+// TestAMMID verifies the AMM pseudo-account identity in its AccountRoot and
+// in the deposit transaction's affected-node metadata.
 func TestAMMID(t *testing.T) {
 	env := setupAMM(t)
 
-	// Compute AMM account address.
 	ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
+	ammID := coreAmm.ComputeAMMKeylet(amm.XRP(), env.USD).Key
+	ammIDHex := strings.ToUpper(hex.EncodeToString(ammID[:]))
 
-	// Verify AMM account exists with correct flags.
-	info := env.AccountInfo(ammAcc)
-	if info == nil {
-		t.Fatal("AMM account not found in ledger")
-	}
+	accountRoot, err := state.ReadAccountRoot(env.Ledger(), ammAcc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, accountRoot)
+	require.True(t, accountRoot.HasAMMID())
+	require.Equal(t, ammID, accountRoot.AMMID)
 
 	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth
-	if info.Flags != expectedFlags {
-		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X",
-			info.Flags, expectedFlags)
-	}
+	require.Equal(t, expectedFlags, accountRoot.Flags)
 
-	// Carol deposits to the AMM.
+	rpc := rpcenv.Wrap(t, env.TestEnv)
+	rpcResult, rpcErr := rpc.RPC("account_info", map[string]any{"account": ammAcc.Address})
+	require.Nil(t, rpcErr)
+	rpcResponse, ok := rpcResult.(map[string]any)
+	require.True(t, ok, "account_info response type = %T", rpcResult)
+	accountData, ok := rpcResponse["account_data"].(map[string]any)
+	require.True(t, ok, "account_info missing account_data: %#v", rpcResponse)
+	require.Equal(t, ammIDHex, accountData["AMMID"])
+
 	depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
-		Amount(amm.IOUAmount(env.GW, "USD", 1000)).
-		SingleAsset().
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000)).
+		LPToken().
 		Build()
 	result := env.Submit(depositTx)
-	if !result.Success {
-		t.Fatalf("Carol deposit should succeed: %s - %s", result.Code, result.Message)
+	jtx.RequireTxSuccess(t, result)
+	require.NotNil(t, result.Metadata)
+
+	var foundAMMAccount bool
+	for _, node := range result.Metadata.AffectedNodes {
+		if node.NodeType != "ModifiedNode" || node.LedgerEntryType != "AccountRoot" {
+			continue
+		}
+		if node.FinalFields == nil || node.FinalFields["Account"] != ammAcc.Address {
+			continue
+		}
+		gotAMMID, ok := node.FinalFields["AMMID"].(string)
+		require.True(t, ok, "AMM AccountRoot metadata missing AMMID: %#v", node.FinalFields)
+		require.Equal(t, ammIDHex, gotAMMID)
+		foundAMMAccount = true
 	}
+	require.True(t, foundAMMAccount, "deposit metadata missing AMM AccountRoot")
 	env.Close()
 
-	// Verify AMM account still exists after deposit.
-	infoAfter := env.AccountInfo(ammAcc)
-	if infoAfter == nil {
-		t.Fatal("AMM account should still exist after deposit")
-	}
-	if infoAfter.Flags != expectedFlags {
-		t.Fatalf("AMM account flags should be unchanged after deposit: got 0x%08X, want 0x%08X",
-			infoAfter.Flags, expectedFlags)
-	}
+	accountRootAfter, err := state.ReadAccountRoot(env.Ledger(), ammAcc.ID)
+	require.NoError(t, err)
+	require.NotNil(t, accountRootAfter)
+	require.Equal(t, ammID, accountRootAfter.AMMID)
+	require.Equal(t, expectedFlags, accountRootAfter.Flags)
 }
-
-// testFailedPseudoAccount
-// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7482)
 
 // TestFailedPseudoAccount tests that AMM creation fails when the pseudo-account
 // address is already taken (address collision).
@@ -466,11 +457,9 @@ func TestAMMID(t *testing.T) {
 // XRP so that the pseudo-account slot is occupied. Creating the AMM then fails
 // with tecDUPLICATE (without featureSingleAssetVault) or terADDRESS_COLLISION
 // (with featureSingleAssetVault).
-// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7482)
 func TestFailedPseudoAccount(t *testing.T) {
 	// tecDUPLICATE: Without featureSingleAssetVault, AMMCreate returns tecDUPLICATE
 	// when the AMM pseudo-account address is already occupied.
-	// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7482)
 	t.Run("tecDUPLICATE", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.DisableFeature("SingleAssetVault")
@@ -478,7 +467,6 @@ func TestFailedPseudoAccount(t *testing.T) {
 		env.Close()
 
 		// Fill all 256 pseudo-account candidate addresses on the same open ledger.
-		// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7499-7508)
 		xrpAsset := amm.XRP()
 		usdAsset := env.USD
 		ammKeylet := coreAmm.ComputeAMMKeylet(xrpAsset, usdAsset)
@@ -499,12 +487,11 @@ func TestFailedPseudoAccount(t *testing.T) {
 		// Now AMMCreate should fail with tecDUPLICATE (all 256 slots occupied)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, amm.TecDUPLICATE)
+		amm.ExpectTER(t, result, ter.TecDUPLICATE.String())
 	})
 
 	// terADDRESS_COLLISION: With featureSingleAssetVault enabled, AMMCreate returns
 	// terADDRESS_COLLISION when all 256 pseudo-account candidate addresses are occupied.
-	// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7482)
 	t.Run("terADDRESS_COLLISION", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.EnableFeature("SingleAssetVault")
@@ -519,7 +506,6 @@ func TestFailedPseudoAccount(t *testing.T) {
 		// Each iteration, pseudoAccountAddress returns the first available slot.
 		// After funding it, the next call skips that address and returns the next candidate.
 		// NOTE: No env.Close() in the loop — all 256 operations use the same parentHash.
-		// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7504-7512)
 		parentHash := env.Ledger().ParentHash()
 		for i := range 256 {
 			accountID := coreAmm.PseudoAccountAddress(env.Ledger(), parentHash, ammKeylet.Key)
@@ -537,12 +523,6 @@ func TestFailedPseudoAccount(t *testing.T) {
 		// Now AMMCreate should fail with terADDRESS_COLLISION
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, amm.TerADDRESS_COLLISION)
+		amm.ExpectTER(t, result, ter.TerADDRESS_COLLISION.String())
 	})
 }
-
-// Suppress unused import warnings.
-var (
-	_ = paymentPkg.PathStep{}
-	_ = trustset.TrustSet
-)

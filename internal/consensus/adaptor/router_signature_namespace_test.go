@@ -132,7 +132,8 @@ func routerRoleSignedLoanSetWithMemo(t *testing.T, cleanup bool, memoData string
 	)
 	sequence := uint32(1)
 	txn.GetCommon().Sequence = &sequence
-	txn.GetCommon().Fee = "10"
+	// LoanSet with a counterparty signature has a two-base-fee minimum.
+	txn.GetCommon().Fee = "20"
 	if memoData != "" {
 		txn.GetCommon().Memos = []tx.MemoWrapper{{Memo: tx.Memo{MemoData: memoData}}}
 	}

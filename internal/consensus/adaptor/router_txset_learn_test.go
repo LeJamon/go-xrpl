@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,6 +96,12 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		return len(engine.txSets) == 1 && engine.txSets[0] == consensus.TxSetID(setID)
 	}, time.Second, 10*time.Millisecond,
 		"tx-set acquisition must deliver the complete set to consensus")
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		exists, err := a.HasTx(consensus.TxID(txHash))
+		require.NoError(collect, err)
+		require.True(collect, exists)
+	}, time.Second, 10*time.Millisecond,
+		"tx-set acquisition must learn the carried transaction into the open ledger")
 	require.Eventually(t, func() bool {
 		router.txSeen.mu.Lock()
 		defer router.txSeen.mu.Unlock()
@@ -102,8 +109,6 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		return entry != nil && len(entry.peers) == 0
 	}, time.Second, 10*time.Millisecond,
 		"acquired relay must consume peers already known to hold the transaction")
-	require.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
-		"tx-set acquisition must learn the carried transaction into the open ledger")
 }
 
 func TestRouterLearnTxFromLeafStopsOnMembershipError(t *testing.T) {

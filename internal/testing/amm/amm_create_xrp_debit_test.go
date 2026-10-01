@@ -49,7 +49,7 @@ func TestAMMCreateChecksPostFeeXRPBalance(t *testing.T) {
 			jtx.RequireTxClaimed(t, result, jtx.TecFAILED_PROCESSING)
 			jtx.RequireBalance(t, env.TestEnv, env.Alice, balanceBefore-feeDrops)
 			jtx.RequireOwnerCount(t, env.TestEnv, env.Alice, ownerCountBefore)
-			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", depositUSD)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", depositUSD)
 			require.Equal(t, sequenceBefore+1, env.Seq(env.Alice))
 			require.Nil(t, env.ReadAMMAccount(amm.XRP(), env.USD))
 		})
@@ -90,11 +90,11 @@ func TestAMMCreateTransfersXRPFromEitherAmountPosition(t *testing.T) {
 			jtx.RequireTxSuccess(t, result)
 			jtx.RequireBalance(t, env.TestEnv, env.Alice, balanceBefore-feeDrops-uint64(depositDrops))
 			jtx.RequireOwnerCount(t, env.TestEnv, env.Alice, ownerCountBefore+1)
-			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1_000-depositUSD)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 1_000-depositUSD)
 			ammAccount := env.ReadAMMAccount(amm.XRP(), env.USD)
 			require.NotNil(t, ammAccount)
 			jtx.RequireBalance(t, env.TestEnv, ammAccount, uint64(depositDrops))
-			require.InDelta(t, depositUSD, env.AMMPoolIOU(ammAccount, env.GW, "USD"), 1e-10)
+			requireAMMIOUBalance(t, env.TestEnv, ammAccount, env.GW, "USD", depositUSD)
 		})
 	}
 }

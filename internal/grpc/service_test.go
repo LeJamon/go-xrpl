@@ -518,6 +518,39 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	}
 }
 
+func TestGRPC_GetLedger_OpenExpandedOmitsMetadata(t *testing.T) {
+	txKey := [32]byte{0xCC}
+	tx, meta := []byte("tx-open-bytes"), []byte("provisional-meta")
+	closed := newTestLedger(t, 200, nil, nil)
+	open, err := ledger.NewOpen(closed, time.Unix(1_700_000_100, 0).UTC())
+	if err != nil {
+		t.Fatalf("ledger.NewOpen: %v", err)
+	}
+	if err := open.AddTransactionWithMeta(txKey, txWithMeta(tx, meta)); err != nil {
+		t.Fatalf("open.AddTransactionWithMeta: %v", err)
+	}
+	srv := NewServer(&fakeLookup{closed: closed, validated: closed, openLedger: open})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Transactions: true,
+		Expand:       true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger open expand: %v", err)
+	}
+	full, ok := resp.Transactions.(*rpcv1.GetLedgerResponse_TransactionsList)
+	if !ok || len(full.TransactionsList.Transactions) != 1 {
+		t.Fatalf("open expanded transactions = %#v, want one transaction list", resp.Transactions)
+	}
+	got := full.TransactionsList.Transactions[0]
+	if string(got.TransactionBlob) != string(tx) {
+		t.Errorf("open transaction_blob=%q, want %q", got.TransactionBlob, tx)
+	}
+	if len(got.MetadataBlob) != 0 {
+		t.Errorf("open metadata_blob=%q, want omitted", got.MetadataBlob)
+	}
+}
+
 func TestGRPC_GetLedger_MalformedExpandedTransactionReturnsPartialSuccess(t *testing.T) {
 	badKey := [32]byte{0xAA}
 	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{badKey: pad("bad", 12)})

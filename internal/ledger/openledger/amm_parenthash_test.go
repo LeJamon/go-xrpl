@@ -1,6 +1,7 @@
 package openledger_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -9,8 +10,25 @@ import (
 	ammtest "github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreamm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+func setAMMCreateFixtureFee(t *testing.T, env *jtx.TestEnv, view tx.LedgerView, transaction tx.Transaction) {
+	t.Helper()
+	config := tx.EngineConfig{
+		BaseFee:          env.BaseFee(),
+		ReserveBase:      env.ReserveBase(),
+		ReserveIncrement: env.ReserveIncrement(),
+		LedgerSequence:   view.LedgerSeq(),
+		Rules:            amendment.AllSupportedRules(),
+	}
+	fee, err := sign.CalculateBaseFee(transaction, view, config)
+	if err != nil {
+		t.Fatalf("CalculateBaseFee: %v", err)
+	}
+	transaction.GetCommon().Fee = strconv.FormatUint(fee, 10)
+}
 
 // TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash is a regression test for
 // the consensus fork where the open-ledger apply path — including
@@ -57,6 +75,7 @@ func TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash(t *testing.T) {
 	aliceSeq := env.Seq(alice)
 	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Build()
 	ammTx.GetCommon().Sequence = &aliceSeq
+	setAMMCreateFixtureFee(t, env, view, ammTx)
 
 	blob := buildSignedBlob(t, env, ammTx, alice)
 	pt, err := openledger.ParsePendingTx(blob)
@@ -129,6 +148,7 @@ func TestTxqAdapter_ApplyTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	aliceSeq := env.Seq(alice)
 	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Build()
 	ammTx.GetCommon().Sequence = &aliceSeq
+	setAMMCreateFixtureFee(t, env, view, ammTx)
 
 	blob := buildSignedBlob(t, env, ammTx, alice)
 	parsed, err := tx.ParseFromBinary(blob)

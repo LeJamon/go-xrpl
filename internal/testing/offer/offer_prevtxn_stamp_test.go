@@ -34,6 +34,7 @@ import (
 // near-maximum magnitude. This test constructs exactly that case.
 func TestOffer_PartialConsumeRoundsBack_NoGhostModifiedNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 
 	gw := jtx.NewAccount("gateway")
 	mm := jtx.NewAccount("marketmaker")
@@ -65,6 +66,8 @@ func TestOffer_PartialConsumeRoundsBack_NoGhostModifiedNode(t *testing.T) {
 	mmOfferSeq := env.Seq(mm)
 	jtx.RequireTxSuccess(t, env.Submit(OfferCreate(mm, maxEUR, maxUSD).Build()))
 	env.Close()
+
+	env.SetOpenLedger(false)
 
 	// taker crosses, taking 100 USD for 100 EUR — a tiny slice of the huge offer.
 	cross := env.Submit(OfferCreate(taker, jtx.USD(gw, 100), jtx.EUR(gw, 100)).Build())

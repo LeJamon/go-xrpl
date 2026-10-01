@@ -1213,7 +1213,12 @@ type LedgerServerInfo struct {
 	CompleteLedgers          string
 	HavePublished            bool
 	PublishedLedgerSeq       uint32
-	NetworkID                uint32
+	// HaveValidatedRange is true when the complete validated lookup range is
+	// available. Its maximum excludes ledgers with pending persistence.
+	HaveValidatedRange bool
+	ValidatedRangeMin  uint32
+	ValidatedRangeMax  uint32
+	NetworkID          uint32
 }
 
 // LoadFactorFees carries rippled's per-source LoadFeeTrack fees used

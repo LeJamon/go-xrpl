@@ -10,12 +10,16 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/stretchr/testify/require"
 )
 
 // setupLPTokenEnv creates an AMM with two liquidity providers holding LP tokens.
@@ -67,82 +71,29 @@ func setupLPTokenEnv(t *testing.T) *amm.AMMTestEnv {
 	}
 	env.Close()
 
+	for _, lp := range []*jtx.Account{env.Alice, env.Bob, env.Carol} {
+		trustTx := trustset.TrustSet(lp, env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 2_000_000)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(trustTx))
+	}
+	env.Close()
+
 	return env
 }
 
 // TestLPTokenTransfer_DirectStep tests direct payment of LP tokens.
 // Reference: rippled LPTokenTransfer_test.cpp testDirectStep
 func TestLPTokenTransfer_DirectStep(t *testing.T) {
-	t.Run("TransferBetweenLPs", func(t *testing.T) {
-		env := setupLPTokenEnv(t)
-
-		// Bob sends LP tokens to Carol (both are LPs)
-		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
-		payTx := payment.PayIssued(env.Bob, env.Carol, lpAmt).Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: LP token direct transfer succeeded")
-		} else {
-			t.Logf("Note: LP token direct transfer got %s (may need LP token payment path support)", result.Code)
-		}
-	})
-
-	t.Run("FrozenUSD_BlocksSender", func(t *testing.T) {
-		// When Carol's USD trust line is frozen, Carol should not be able to
-		// send LP tokens (with fixFrozenLPTokenTransfer).
-		env := setupLPTokenEnv(t)
-
-		// Freeze Carol's USD trust line
-		env.FreezeTrustLine(env.GW, env.Carol, "USD")
-		env.Close()
-
-		// Carol tries to send LP tokens to Bob
-		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
-		payTx := payment.PayIssued(env.Carol, env.Bob, lpAmt).Build()
-		result := env.Submit(payTx)
-		if !result.Success {
-			t.Logf("PASS: frozen Carol cannot send LP tokens (got %s)", result.Code)
-		} else {
-			t.Log("Note: frozen Carol can still send LP tokens - fixFrozenLPTokenTransfer may not be active")
-		}
-	})
-
-	t.Run("FrozenUSD_ReceiveAllowed", func(t *testing.T) {
-		// A frozen account should still be able to receive LP tokens.
-		env := setupLPTokenEnv(t)
-
-		// Freeze Carol's USD trust line
-		env.FreezeTrustLine(env.GW, env.Carol, "USD")
-		env.Close()
-
-		// Bob sends LP tokens to frozen Carol - should succeed
-		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
-		payTx := payment.PayIssued(env.Bob, env.Carol, lpAmt).Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: frozen Carol can receive LP tokens")
-		} else {
-			t.Logf("Note: frozen Carol cannot receive LP tokens (got %s)", result.Code)
-		}
-	})
-
 	t.Run("CannotTransferToAMMAccount", func(t *testing.T) {
-		// Cannot transfer LP tokens to the AMM pseudo-account itself.
-		// The AMM pseudo-account is not a normal account and should reject
-		// direct payments. We verify this by attempting a send.
 		env := setupLPTokenEnv(t)
 
 		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
-		// Attempt to pay to a non-existent account (stand-in for AMM pseudo-account).
-		// In practice, the AMM account rejects direct payments.
-		nonExistent := jtx.NewAccount("amm_pseudo")
-		payTx := payment.PayIssued(env.Bob, nonExistent, lpAmt).Build()
+		ammAccount := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+		before := env.TestEnv.IOUBalance(env.Bob, ammAccount, lpAmt.Currency)
+		payTx := payment.PayIssued(env.Bob, ammAccount, lpAmt).Build()
 		result := env.Submit(payTx)
-		if !result.Success {
-			t.Logf("PASS: cannot send LP tokens to non-existent/AMM account (got %s)", result.Code)
-		} else {
-			t.Log("Note: LP token transfer to non-existent account succeeded")
-		}
+		amm.ExpectTER(t, result, ter.TecNO_PERMISSION.String())
+		after := env.TestEnv.IOUBalance(env.Bob, ammAccount, lpAmt.Currency)
+		require.Equal(t, before, after)
 	})
 }
 
@@ -158,9 +109,7 @@ func TestLPTokenTransfer_BookStep(t *testing.T) {
 		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Carol, amm.XRPAmount(500), lpAmt).Build()
 		result := env.Submit(offerTx)
-		if !result.Success {
-			t.Skipf("Carol offer creation failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Freeze Carol's USD trust line
@@ -170,9 +119,10 @@ func TestLPTokenTransfer_BookStep(t *testing.T) {
 		// Bob tries to buy LP tokens via offer crossing
 		buyTx := offerbuild.OfferCreate(env.Bob, lpAmt, amm.XRPAmount(500)).Build()
 		result = env.Submit(buyTx)
-		// With fix: Carol's offer should not be consumed because her USD is frozen
-		// Without fix: offer crossing proceeds normally
-		t.Logf("Frozen offer crossing result: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, result)
+		// A frozen LP backing makes the offer found-unfunded. The offer stream
+		// permanently grooms it while the crossing remains dry.
+		require.Empty(t, env.AccountOffers(env.Carol))
 	})
 
 	t.Run("BuyingLPTokens_WorksWhenSellerFrozen", func(t *testing.T) {
@@ -184,15 +134,16 @@ func TestLPTokenTransfer_BookStep(t *testing.T) {
 		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(500), lpAmt).Build()
 		result := env.Submit(offerTx)
-		if !result.Success {
-			t.Skipf("Bob offer creation failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Carol tries to buy LP tokens (Carol's USD is NOT frozen)
 		buyTx := offerbuild.OfferCreate(env.Carol, lpAmt, amm.XRPAmount(500)).Build()
 		result = env.Submit(buyTx)
-		t.Logf("Buy LP tokens result: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		env.ExpectLPTokens(env.Bob, amm.XRP(), env.USD, 999_500)
+		env.ExpectLPTokens(env.Carol, amm.XRP(), env.USD, 1_000_500)
 	})
 }
 
@@ -212,11 +163,8 @@ func TestLPTokenTransfer_OfferCreation(t *testing.T) {
 		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Carol, amm.XRPAmount(500), lpAmt).Build()
 		result := env.Submit(offerTx)
-		if !result.Success {
-			t.Logf("PASS: frozen Carol cannot create sell offer for LP tokens (got %s)", result.Code)
-		} else {
-			t.Log("Note: frozen Carol can create LP sell offer - fixFrozenLPTokenTransfer may not be active")
-		}
+		amm.ExpectTER(t, result, jtx.TecUNFUNDED_OFFER)
+		require.Empty(t, env.AccountOffers(env.Carol))
 	})
 
 	t.Run("FrozenCurrency_BuyOfferAllowed", func(t *testing.T) {
@@ -231,7 +179,9 @@ func TestLPTokenTransfer_OfferCreation(t *testing.T) {
 		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
 		offerTx := offerbuild.OfferCreate(env.Carol, lpAmt, amm.XRPAmount(500)).Build()
 		result := env.Submit(offerTx)
-		t.Logf("Frozen Carol buy LP offer: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.Len(t, env.AccountOffers(env.Carol), 1)
 	})
 }
 
@@ -248,9 +198,7 @@ func TestLPTokenTransfer_OfferCrossing(t *testing.T) {
 		// Bob creates an offer selling LP tokens for XRP
 		sellTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(200), lpAmt).Build()
 		result := env.Submit(sellTx)
-		if !result.Success {
-			t.Skipf("Bob sell offer failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Freeze Bob's USD trust line
@@ -260,9 +208,13 @@ func TestLPTokenTransfer_OfferCrossing(t *testing.T) {
 		// Carol creates a crossing offer to buy LP tokens
 		buyTx := offerbuild.OfferCreate(env.Carol, lpAmt, amm.XRPAmount(200)).Build()
 		result = env.Submit(buyTx)
-		// With fix: Bob's offer should NOT be consumed
-		// Without fix: crossing proceeds
-		t.Logf("Crossing with frozen LP result: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		// The frozen LP backing makes Bob's offer found-unfunded and the offer
+		// stream permanently grooms it during the dry crossing.
+		require.Empty(t, env.AccountOffers(env.Bob))
+		env.ExpectLPTokens(env.Bob, amm.XRP(), env.USD, 1_000_000)
+		env.ExpectLPTokens(env.Carol, amm.XRP(), env.USD, 1_000_000)
 	})
 }
 
@@ -280,11 +232,7 @@ func TestLPTokenTransfer_GlobalFreeze(t *testing.T) {
 		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
 		payTx := payment.PayIssued(env.Bob, env.Carol, lpAmt).Build()
 		result := env.Submit(payTx)
-		if !result.Success {
-			t.Logf("PASS: global freeze blocks LP token transfer (got %s)", result.Code)
-		} else {
-			t.Log("Note: LP token transfer succeeded despite global freeze")
-		}
+		amm.ExpectTER(t, result, jtx.TecPATH_DRY)
 	})
 
 	t.Run("GlobalFreezeBlocksWithdrawal", func(t *testing.T) {
@@ -300,11 +248,7 @@ func TestLPTokenTransfer_GlobalFreeze(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-		if !result.Success {
-			t.Logf("PASS: global freeze blocks AMM withdrawal (got %s)", result.Code)
-		} else {
-			t.Log("Note: AMM withdrawal succeeded despite global freeze")
-		}
+		amm.ExpectTER(t, result, ter.TecFROZEN.String())
 	})
 }
 
@@ -331,13 +275,11 @@ func TestLPTokenTransfer_MultipleLPs(t *testing.T) {
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
-		if !result.Success {
-			t.Skipf("Carol deposit failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Both should have LP tokens but neither is the only provider
-		t.Log("PASS: multiple LPs with XRP/IOU AMM")
+		env.ExpectLPTokens(env.Alice, amm.XRP(), env.USD, 10_000)
+		env.ExpectLPTokens(env.Carol, amm.XRP(), env.USD, 1_000)
 	})
 
 	t.Run("IOU_IOU_MultipleLPs", func(t *testing.T) {
@@ -367,12 +309,11 @@ func TestLPTokenTransfer_MultipleLPs(t *testing.T) {
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
-		if !result.Success {
-			t.Skipf("Carol deposit failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		t.Log("PASS: multiple LPs with IOU/IOU AMM")
+		env.ExpectLPTokens(env.Alice, env.EUR, env.USD, 10)
+		env.ExpectLPTokens(env.Carol, env.EUR, env.USD, 100)
 	})
 }
 
@@ -397,11 +338,9 @@ func TestLPTokenTransfer_WithdrawAllAsLastLP(t *testing.T) {
 			WithdrawAll().
 			Build()
 		result = env.Submit(withdrawTx)
-		if result.Success {
-			t.Log("PASS: last LP can withdraw all, AMM should be deleted")
-		} else {
-			t.Logf("Note: last LP withdraw all got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		jtx.RequireLedgerEntryNotExists(t, env.TestEnv, coreAmm.ComputeAMMKeylet(amm.XRP(), env.USD))
 	})
 
 	t.Run("TwoLPsWithdrawSequentially", func(t *testing.T) {
@@ -423,9 +362,7 @@ func TestLPTokenTransfer_WithdrawAllAsLastLP(t *testing.T) {
 			LPToken().
 			Build()
 		result = env.Submit(depositTx)
-		if !result.Success {
-			t.Skipf("Carol deposit failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Carol withdraws all her LP tokens
@@ -433,9 +370,7 @@ func TestLPTokenTransfer_WithdrawAllAsLastLP(t *testing.T) {
 			WithdrawAll().
 			Build()
 		result = env.Submit(withdrawTx1)
-		if !result.Success {
-			t.Logf("Note: Carol withdraw all got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice withdraws all (now she's the last LP)
@@ -443,29 +378,20 @@ func TestLPTokenTransfer_WithdrawAllAsLastLP(t *testing.T) {
 			WithdrawAll().
 			Build()
 		result = env.Submit(withdrawTx2)
-		if result.Success {
-			t.Log("PASS: sequential LP withdrawals succeeded")
-		} else {
-			// With fixAMMv1_1: this should succeed
-			// Without fixAMMv1_1: may get tecAMM_BALANCE
-			t.Logf("Note: last LP withdraw got %s (may depend on fixAMMv1_1)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		jtx.RequireLedgerEntryNotExists(t, env.TestEnv, coreAmm.ComputeAMMKeylet(amm.XRP(), env.USD))
 	})
 }
-
-// ----------------------------------------------------------------
-// testAMMTokens
-// Reference: rippled AMM_test.cpp testAMMTokens (line 4743)
-// ----------------------------------------------------------------
 
 // TestAMMTokens_LPTokenXRPOfferCrossing tests LP token offer crossing with XRP.
 // Carol buys LP tokens with XRP, Alice sells LP tokens for XRP.
 // After crossing, both have LP tokens and can vote, bid, and withdraw.
-// Reference: rippled AMM_test.cpp testAMMTokens block 1 (line 4749-4795)
+// Reference: rippled AMM_test.cpp testAMMTokens block 1
 func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 	t.Run("LPToken_XRP_OfferCross", func(t *testing.T) {
 		// Offer crossing with AMM LPTokens and XRP.
-		// Reference: rippled AMM_test.cpp testAMMTokens block 1 (line 4749-4795)
+		// Reference: rippled AMM_test.cpp testAMMTokens block 1
 		amm.WithDefaultAMM(t, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
 			xrpAsset := amm.XRP()
 			usdAsset := env.USD
@@ -476,8 +402,6 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			lpTotal := amm.LPTokenAmount(env, xrpAsset, usdAsset, 10_000_000)
 			lpHalf := amm.LPTokenAmount(env, xrpAsset, usdAsset, 5_000_000)
 			priceXRP := amm.AMMAssetOut(xrpBalance, lpTotal, lpHalf, 0)
-			t.Logf("priceXRP for 5M LP tokens: %s", priceXRP.Value())
-
 			// Carol places an order to buy LPTokens: she pays priceXRP, receives 5M LP tokens
 			carolOfferTx := offerbuild.OfferCreate(env.Carol, lpHalf, priceXRP).Build()
 			result := env.Submit(carolOfferTx)
@@ -536,6 +460,7 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 
 			// Carol withdraws all (single-asset: XRP only)
 			// Reference: rippled withdrawAll(carol, XRP(0)) → tfOneAssetWithdrawAll
+			beforeWithdraw := actualCarolXRP
 			xrpZero := tx.NewXRPAmount(0)
 			withdrawTx := amm.AMMWithdraw(env.Carol, xrpAsset, usdAsset).
 				Amount(xrpZero).
@@ -551,23 +476,16 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			// priceXRP2 = ammAssetOut(XRP(10B), token1(9999900), token1(4999900), 0)
 			// Expected: ~7,499,950,000 XRP drops returned
 			// Carol XRP ≈ 22.5B - 50 + 7,499,950,000 - 10 = 29,999,949,940
-			// Rippled expects 29,999,949,999 - 5*baseFee (with different setup fees)
-			// Allow ±2 drops tolerance for rounding differences
 			actualCarolXRP2 := env.TestEnv.Balance(env.Carol)
-			// expectedCarolXRP2 is setup-adjusted: 30B - 7.5B + ammAssetOut - 6*baseFee
-			// We compute the expected using ammAssetOut:
 			lpAfterBid := amm.LPTokenAmount(env, xrpAsset, usdAsset, 9_999_900)
 			carolLPAfterBid := amm.LPTokenAmount(env, xrpAsset, usdAsset, 4_999_900)
 			priceXRP2 := amm.AMMAssetOut(xrpBalance, lpAfterBid, carolLPAfterBid, 0)
-			t.Logf("priceXRP2 (carol withdraw): %s", priceXRP2.Value())
-
-			// Carol XRP = beforeWithdraw + priceXRP2 - withdrawFee
-			beforeWithdraw := actualCarolXRP2 // already charged, just check it's reasonable
-			_ = beforeWithdraw
+			expectedCarolXRP2 := beforeWithdraw + uint64(priceXRP2.Drops()) - env.BaseFee()
+			require.Equal(t, expectedCarolXRP2, actualCarolXRP2)
 
 			// Pool should have only alice's LP tokens remaining
 			env.ExpectLPTokens(env.Alice, xrpAsset, usdAsset, 5_000_000)
-			env.ExpectLPTokens(env.Carol, xrpAsset, usdAsset, 0)
+			jtx.RequireTrustLineNotExists(t, env.TestEnv, env.Carol, ammAcc, coreAmm.GenerateAMMLPTCurrencyForAssets(xrpAsset, usdAsset))
 
 			// Verify pool USD is unchanged (OneAssetWithdrawAll takes only XRP)
 			actualUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
@@ -578,18 +496,18 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			// Verify pool XRP decreased by priceXRP2
 			actualPoolXRP := env.AMMPoolXRP(ammAcc)
 			expectedPoolXRP := 10_000_000_000 - uint64(priceXRP2.Drops())
-			t.Logf("Pool XRP: actual=%d, expected≈%d", actualPoolXRP, expectedPoolXRP)
+			require.Equal(t, expectedPoolXRP, actualPoolXRP)
 		})
 	})
 }
 
 // TestAMMTokens_TwoAMMLPTokenOfferCrossing tests offer crossing between two
 // AMMs' LP tokens.
-// Reference: rippled AMM_test.cpp testAMMTokens block 2 (line 4797-4819)
+// Reference: rippled AMM_test.cpp testAMMTokens block 2
 func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 	t.Run("TwoAMM_LPToken_OfferCross", func(t *testing.T) {
 		// Offer crossing with two AMM LPTokens.
-		// Reference: rippled AMM_test.cpp testAMMTokens block 2 (line 4797-4819)
+		// Reference: rippled AMM_test.cpp testAMMTokens block 2
 		amm.WithDefaultAMM(t, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
 			xrpAsset := amm.XRP()
 			usdAsset := env.USD
@@ -684,7 +602,7 @@ func TestAMMTokens_TwoAMMLPTokenOfferCrossing(t *testing.T) {
 
 // TestAMMTokens_DirectLPTokenPayment tests direct LP token payment between LPs.
 // LPs must trust-set first because the auto-created AMM trust line has 0 limit.
-// Reference: rippled AMM_test.cpp testAMMTokens block 3 (line 4821-4851)
+// Reference: rippled AMM_test.cpp testAMMTokens block 3
 func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
 	env.FundWithIOUs(30000, 0)
@@ -701,8 +619,6 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 	// Carol sets trust line for LP tokens (limit 2,000,000) before depositing.
 	// This is required because the AMM auto-created trust line has limit 0,
 	// and payment checks the limit.
-	// NOTE: rippled allows TrustSet for LP tokens to AMM accounts, but go-xrpl
-	// currently blocks all TrustSet to AMM pseudo-accounts with tecNO_PERMISSION.
 	// Use real AMM account address (pseudo-account) for the LP token issuer.
 	lpToken := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 2000000)
 	trustTx := trustset.TrustSet(env.Carol, lpToken).Build()
@@ -718,9 +634,7 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 		LPToken().
 		Build()
 	result = env.Submit(depositTx)
-	if !result.Success {
-		t.Skipf("Carol LP deposit failed: %s - LP token direct payment test needs working LP deposit", result.Code)
-	}
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice pays Carol 100 LP tokens.
@@ -735,7 +649,8 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 
 	// Expected: Alice LP = 10,000,000 - 100 = 9,999,900
 	//           Carol LP = 1,000,000 + 100 = 1,000,100
-	t.Log("Alice -> Carol LP token payment succeeded")
+	env.ExpectLPTokens(env.Alice, amm.XRP(), env.USD, 9_999_900)
+	env.ExpectLPTokens(env.Carol, amm.XRP(), env.USD, 1_000_100)
 
 	// Alice sets trust line for LP tokens (limit 20,000,000) to receive back.
 	// Alice's auto-created trust line from AMMCreate also has limit 0.
@@ -757,12 +672,6 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 	// Expected: back to original balances
 	//   Alice LP = 10,000,000
 	//   Carol LP = 1,000,000
-	t.Log("Carol -> Alice LP token payment succeeded, balances restored")
+	env.ExpectLPTokens(env.Alice, amm.XRP(), env.USD, 10_000_000)
+	env.ExpectLPTokens(env.Carol, amm.XRP(), env.USD, 1_000_000)
 }
-
-// Suppress unused import warnings
-var (
-	_ = offerbuild.OfferCreate
-	_ = payment.Pay
-	_ = trustset.TrustLine
-)

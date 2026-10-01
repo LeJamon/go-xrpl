@@ -340,6 +340,21 @@ func TestPreflightPrecedence_TicketAccountTxnID(t *testing.T) {
 	})
 }
 
+func TestPreflightAccountTxnIDRequiresHashEncoding(t *testing.T) {
+	e := preflightEngine(allRules())
+	for _, accountTxnID := range []string{"0", "not-hex", "0123456789abcdef"} {
+		t.Run(accountTxnID, func(t *testing.T) {
+			tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+			tx.Fee = "10"
+			tx.Sequence = u32(5)
+			tx.AccountTxnID = accountTxnID
+			if got := e.preflight(tx); got != ter.TemINVALID {
+				t.Fatalf("preflight AccountTxnID %q = %v, want temINVALID", accountTxnID, got)
+			}
+		})
+	}
+}
+
 // TestPreflightPrecedence_InnerBatchFlagLast pins finding E-innerbatch: the
 // outer tfInnerBatchTxn rejection is the last preflight1 check, so a malformed
 // fee (Batch disabled) wins over temINVALID_FLAG.

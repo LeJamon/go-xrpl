@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -252,7 +253,9 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		return nil, err
 	}
 	sle := account.decoded
-	if err := sle.SetBalanceValue(entry.AmountValue{Value: strconv.FormatUint(account.Balance, 10)}); err != nil {
+	if account.Balance > binarytypes.MaxDrops {
+		sle.SetBalance(binarytypes.RawXRPAmount{Drops: account.Balance})
+	} else if err := sle.SetBalanceValue(entry.AmountValue{Value: strconv.FormatUint(account.Balance, 10)}); err != nil {
 		return nil, err
 	}
 	sle.SetSequence(account.Sequence)

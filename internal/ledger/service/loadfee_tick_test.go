@@ -2,9 +2,72 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/stretchr/testify/require"
 )
+
+func TestConsensusLoadFeeUsesPublishedSuccessor(t *testing.T) {
+	for _, includeTransactions := range []bool{false, true} {
+		name := "retained transactions raise load"
+		if includeTransactions {
+			name = "closed transactions lower load"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			queueCfg := txq.StandaloneConfig()
+			queueCfg.MinimumTxnInLedger = 1
+			queueCfg.MinimumTxnInLedgerStandalone = 1
+			queueCfg.TargetTxnInLedger = 1
+			queueCfg.MaximumTxnInLedger = 1
+			cfg.TxQ = &queueCfg
+			svc, err := New(cfg)
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+
+			env := jtx.NewTestEnv(t)
+			master, receiver := jtx.MasterAccount(), jtx.NewAccount("load-fee-recipient")
+			var blobs [][]byte
+			for sequence := uint32(1); sequence <= 2; sequence++ {
+				blob, _ := preferredSwitchPaymentBlob(t, env, master, receiver, 20_000_000, 10, sequence)
+				result, err := svc.SubmitOpenLedgerTxDetailed(blob, false)
+				require.NoError(t, err)
+				require.Equal(t, ter.TesSUCCESS, result.Result)
+				require.True(t, result.Applied)
+				blobs = append(blobs, blob)
+			}
+			require.Zero(t, svc.openLedger.TxCount())
+			require.Equal(t, uint32(2), svc.GetOpenLedger().TxCount())
+			require.Greater(t, svc.TxQMetrics().OpenLedgerFeeLevel, svc.TxQMetrics().ReferenceFeeLevel)
+
+			svc.feeTrack.RaiseLocalFee()
+			if includeTransactions {
+				svc.feeTrack.RaiseLocalFee()
+			} else {
+				blobs = nil
+			}
+			before := svc.feeTrack.LocalFee()
+			parent := svc.GetClosedLedger()
+			_, err = svc.AcceptConsensusResult(t.Context(), parent, blobs, nil, parent.CloseTime().Add(time.Second), true)
+			require.NoError(t, err)
+
+			if includeTransactions {
+				require.Equal(t, uint32(2), svc.GetClosedLedger().TxCount())
+				require.Zero(t, svc.GetOpenLedger().TxCount())
+				require.Less(t, svc.feeTrack.LocalFee(), before)
+			} else {
+				require.Zero(t, svc.GetClosedLedger().TxCount())
+				require.Equal(t, uint32(2), svc.GetOpenLedger().TxCount())
+				require.Greater(t, svc.feeTrack.LocalFee(), before)
+			}
+		})
+	}
+}
 
 // TestTickLoadFee_NoOverload_LowersToLoadBase pins the rippled
 // LoadManager.cpp:177-186 lower-branch: when the overload signal is
