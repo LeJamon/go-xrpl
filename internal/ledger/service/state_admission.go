@@ -95,7 +95,7 @@ func (s *Service) verifyDetachedMap(ctx context.Context, name string, source *sh
 	}
 	if len(missing) != 0 {
 		m := missing[0]
-		return fmt.Errorf("state admission: incomplete %s node %x at depth %d: %w", name, m.Hash, m.Depth, shamap.ErrNodeNotInStore)
+		return fmt.Errorf("state admission: incomplete %s tree at depth %d: %w", name, m.Depth, &shamap.MissingNodeError{Hash: m.Hash})
 	}
 	if err := mapToVerify.FinishSyncContext(ctx); err != nil {
 		return fmt.Errorf("state admission: finish %s completeness check: %w", name, err)
