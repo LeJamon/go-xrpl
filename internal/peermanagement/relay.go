@@ -216,6 +216,7 @@ func (s *ValidatorSlot) selectPeers(now time.Time) []squelchCall {
 		return nil
 	}
 
+	// #nosec G404 -- Balance relay load among eligible peers; messages are independently authenticated.
 	rand.Shuffle(len(candidates), func(i, j int) {
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	})

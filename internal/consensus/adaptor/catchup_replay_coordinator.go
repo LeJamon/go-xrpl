@@ -103,6 +103,7 @@ type catchupReplayCoordinator struct {
 	consensusRecovery         consensusRecovery
 	lastHandoffSeq            uint32
 	standardReplay            standardReplayPipeline
+	pendingFrozenPivot        frozenPivotPendingIntent
 
 	standardReplayDrainWake  chan struct{}
 	standardReplayDrainOwner *standardReplayDrainOwner
@@ -269,6 +270,7 @@ func (c *catchupReplayCoordinator) stopAcquisitions() (legacy, replay int) {
 	}
 	retirement := c.cancelStandardReplayPipelineLocked("shutdown")
 	c.consensusRecovery = consensusRecovery{}
+	c.pendingFrozenPivot = frozenPivotPendingIntent{}
 	c.lastHandoffSeq = 0
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()
@@ -489,8 +491,15 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	now := time.Now()
 
 	c.fetchTracker.Sweep()
+	// Retry the actionable standard-replay head before rearming unrelated
+	// acquisitions or extending the prepared suffix.
+	c.retryStandardReplayAvailability(now)
+	if generation, seq, hash, peerID, ok := c.standardReplayAvailabilityExhaustedState(); ok {
+		c.reserveStandardReplayReplacement(generation, seq, hash, peerID, now)
+	}
 	c.retryInboundLedgerAcquisitions(now)
 	c.tickHeaderDiscovery(now)
+	c.retryStandardReplayReplacement(now)
 	c.rebootstrapFrozenPivotIfStalled(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a

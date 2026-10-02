@@ -687,6 +687,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	// Sample down to numberOfEndpointsMax before ingest so an oversized
 	// (but sub-1024) frame cannot enqueue its whole batch.
 	if len(accepted) > endpointsIngestSampleMax {
+		// #nosec G404 -- Sample validated endpoints to cap work; randomness grants no trust.
 		rand.Shuffle(len(accepted), func(i, j int) {
 			accepted[i], accepted[j] = accepted[j], accepted[i]
 		})

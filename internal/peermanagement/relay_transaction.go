@@ -131,6 +131,7 @@ func (o *Overlay) relayTransaction(toSkip map[PeerID]struct{}, hash [32]byte, ha
 	o.txm.addRelayPeers(enabledTarget, suppressed, disabled)
 
 	if enabledTarget > enabledInSkip {
+		// #nosec G404 -- Balance relay load; transaction validation is independent of peer selection.
 		rand.Shuffle(len(candidates), func(i, j int) {
 			candidates[i], candidates[j] = candidates[j], candidates[i]
 		})

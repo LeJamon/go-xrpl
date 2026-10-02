@@ -317,31 +317,20 @@ func TestConsensusCatchupHandsHeldPivotToConsensus(t *testing.T) {
 	assert.Zero(t, r.catchupReplay.consensusRecovery.stepHash)
 }
 
-func TestFrozenPivotFailedStartCannotBeKeptAliveByTargetAdvance(t *testing.T) {
+func TestFrozenPivotRecoveryWaitsForRetryCooldownWithoutGenerationChurn(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	pivotHash := [32]byte{0xc2}
 	r.catchupReplay.markFailedCatchupAcquisition(pivotHash)
 
-	r.catchupReplay.replayCommitMu.Lock()
-	done := make(chan bool, 1)
-	go func() {
-		done <- r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7)
-	}()
-	require.Eventually(t, func() bool {
-		r.catchupReplay.acquisitionMu.Lock()
-		defer r.catchupReplay.acquisitionMu.Unlock()
-		return r.catchupReplay.standardReplay.active && r.catchupReplay.standardReplay.pivotHash == pivotHash
-	}, time.Second, time.Millisecond)
-	require.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
-
-	advancedHash := [32]byte{0xc3}
-	require.True(t, r.catchupReplay.continueFrozenPivotRecovery(pivotSeq+1, advancedHash, 7))
-	r.catchupReplay.replayCommitMu.Unlock()
-
-	require.False(t, <-done)
+	generation := r.catchupReplay.standardReplay.generation
+	assert.False(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	r.catchupReplay.acquisitionMu.Lock()
+	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.False(t, r.catchupReplay.standardReplay.active)
-	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
+	assert.Equal(t, frozenPivotPendingIntent{seq: pivotSeq, hash: pivotHash, peerID: 7}, r.catchupReplay.pendingFrozenPivot)
+	r.catchupReplay.acquisitionMu.Unlock()
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 }
 
 func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) {
@@ -369,21 +358,22 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) 
 
 	assert.True(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(2*standardReplayProgressWindow)))
 	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
-	assert.Equal(t, uint64(5), r.catchupReplay.standardReplay.generation)
-	assert.Equal(t, uint32(200), r.catchupReplay.standardReplay.pivotSeq)
-	assert.Equal(t, targetHash, r.catchupReplay.standardReplay.pivotHash)
+	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.Equal(t, uint64(3), r.catchupReplay.standardReplay.generation)
+	assert.Equal(t, uint32(100), r.catchupReplay.standardReplay.pivotSeq)
+	require.NotNil(t, r.catchupReplay.standardReplay.replacement)
+	assert.Equal(t, targetHash, r.catchupReplay.standardReplay.replacement.hash)
 	pivot := r.catchupReplay.fetchTracker.Find(targetHash)
 	require.NotNil(t, pivot)
 	assert.False(t, pivot.TransactionOnly())
 	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineFallbacks)
 }
 
-func TestFrozenPivotRecoveryRebootstrapRetiresObsoleteProvisionalFullState(t *testing.T) {
+func TestFrozenPivotRecoveryRebootstrapWaitsForProvisionalFullState(t *testing.T) {
 	r, _, svc := makeProvisionalWarmRouter(t)
 	started := time.Unix(100, 0)
-	frontierSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
-	oldPivotHash := [32]byte{0xd1}
+	_, anchor, oldPivotHash, frontierSeq := buildSuccessorAgainstParent(t, svc.GetClosedLedger())
+	storeRecoveryLedger(t, svc, anchor)
 	obsoleteSeq := frontierSeq + 50
 	obsoleteHash := [32]byte{0xd2}
 	targetSeq := obsoleteSeq + 50
@@ -400,6 +390,7 @@ func TestFrozenPivotRecoveryRebootstrapRetiresObsoleteProvisionalFullState(t *te
 		pivotSeq:         frontierSeq,
 		pivotHash:        oldPivotHash,
 		anchorSeq:        frontierSeq,
+		anchorHash:       oldPivotHash,
 		targetSeq:        targetSeq,
 		targetHash:       targetHash,
 		entries:          make(map[uint32]*standardReplayEntry),
@@ -412,21 +403,26 @@ func TestFrozenPivotRecoveryRebootstrapRetiresObsoleteProvisionalFullState(t *te
 
 	require.True(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
 
-	assert.Nil(t, r.catchupReplay.fetchTracker.Find(obsoleteHash))
+	blocker := r.catchupReplay.fetchTracker.Find(obsoleteHash)
+	require.NotNil(t, blocker)
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(targetHash))
+	assert.Equal(t, uint64(3), r.catchupReplay.standardReplay.generation)
+	r.catchupReplay.failInboundAcquisition(blocker)
+	r.catchupReplay.retryStandardReplayReplacement(time.Now())
 	replacement := r.catchupReplay.fetchTracker.Find(targetHash)
 	require.NotNil(t, replacement)
 	assert.False(t, replacement.TransactionOnly())
 	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
-	assert.Equal(t, targetSeq, r.catchupReplay.standardReplay.pivotSeq)
-	assert.Equal(t, targetHash, r.catchupReplay.standardReplay.pivotHash)
+	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.Equal(t, frontierSeq, r.catchupReplay.standardReplay.pivotSeq)
+	assert.Equal(t, oldPivotHash, r.catchupReplay.standardReplay.pivotHash)
 	replacementGeneration := r.catchupReplay.standardReplay.generation
 	assert.False(t, r.completeFrozenPivotAcquisition(&header.LedgerHeader{
 		LedgerIndex: frontierSeq,
 		Hash:        oldPivotHash,
 	}, false))
 	assert.Equal(t, replacementGeneration, r.catchupReplay.standardReplay.generation)
-	assert.Equal(t, targetHash, r.catchupReplay.standardReplay.pivotHash)
+	assert.Equal(t, oldPivotHash, r.catchupReplay.standardReplay.pivotHash)
 }
 
 func TestPendingConsensusLedgerReportsBlockedStart(t *testing.T) {

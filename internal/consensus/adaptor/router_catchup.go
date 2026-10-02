@@ -792,6 +792,9 @@ func (c *catchupReplayCoordinator) armConsensusCatchup() {
 		return
 	}
 	c.retireLocallySatisfiedFrozenPivot("local_frontier")
+	if c.retryPendingFrozenPivot() {
+		return
+	}
 	if c.armPendingConsensusLedger() {
 		return
 	}
@@ -1495,6 +1498,9 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacy(seq uint32, hash
 	if c.stoppedForShutdown() {
 		return
 	}
+	if _, _, _, complete := c.localReplayReplacementCandidate(seq, hash); complete {
+		return
+	}
 	c.acquisitionMu.Lock()
 	defer c.acquisitionMu.Unlock()
 	c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
@@ -1506,7 +1512,7 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 		return nil, false
 	}
 	if c.replayNeedsFullStateLocked(hash) {
-		c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
+		_ = c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, true)
 		return c.fetchTracker.Find(hash), false
 	}
 	if seq != 0 && c.belowFloor(seq) {
@@ -1553,48 +1559,131 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 }
 
 func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
-	c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, false)
+	_ = c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, false)
 }
 
-func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(seq uint32, hash [32]byte, peerID uint64, repair bool) {
-	if c.stoppedForShutdown() {
-		return
+type fullStateAdmissionPurpose uint8
+
+const (
+	fullStateAdmissionCatchup fullStateAdmissionPurpose = iota
+	fullStateAdmissionRepair
+	fullStateAdmissionReplacement
+)
+
+type fullStateAdmissionOutcome uint8
+
+const (
+	fullStateAdmissionRejected fullStateAdmissionOutcome = iota
+	fullStateAdmissionDeferred
+	fullStateAdmissionJoined
+	fullStateAdmissionStarted
+)
+
+type fullStateAdmission struct {
+	outcome     fullStateAdmissionOutcome
+	acquisition *inbound.Ledger
+}
+
+func (p fullStateAdmissionPurpose) bypassesReplayOwnership() bool {
+	return p == fullStateAdmissionRepair || p == fullStateAdmissionReplacement
+}
+
+func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	repair bool,
+) fullStateAdmission {
+	purpose := fullStateAdmissionCatchup
+	if repair {
+		purpose = fullStateAdmissionRepair
 	}
-	repairParent := repair && c.replayFaultBlocked() && c.adaptor.LedgerService().ReplayRecoveryParent(hash)
+	return c.admitFullStateLocked(seq, hash, peerID, purpose)
+}
+
+// Caller holds acquisitionMu. Deferred admission leaves replay ownership intact.
+func (c *catchupReplayCoordinator) admitFullStateLocked(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	purpose fullStateAdmissionPurpose,
+) fullStateAdmission {
+	if c.stoppedForShutdown() {
+		return fullStateAdmission{outcome: fullStateAdmissionRejected}
+	}
+	repair := purpose == fullStateAdmissionRepair || purpose == fullStateAdmissionReplacement
+	repairParent := false
+	if repair && c.replayFaultBlocked() {
+		if svc := c.adaptor.LedgerService(); svc != nil {
+			repairParent = svc.ReplayRecoveryParent(hash)
+		}
+	}
 	if c.replayFaultBlocked() && !repairParent {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionRejected}
 	}
 	if c.catchupRetryBlocked(hash, time.Now()) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 	if !repairParent && seq != 0 && c.belowFloor(seq) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionRejected}
 	}
 	if c.standardReplay.pivotHandoff != nil &&
 		c.standardReplay.pivotHandoff.acquisition.Hash() == hash {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
-	if svc := c.adaptor.LedgerService(); svc != nil && !repairParent {
+	if svc := c.adaptor.LedgerService(); svc != nil && !repairParent && purpose != fullStateAdmissionReplacement {
 		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
-			return
+			heldSeq := seq
+			if heldSeq == 0 {
+				heldSeq = held.Sequence()
+			}
+			if svc.HasCompleteLedgerHash(heldSeq, hash) {
+				return fullStateAdmission{outcome: fullStateAdmissionRejected}
+			}
 		}
 	}
 	// Safety net: if a replay-delta for the same hash is still
 	// registered, don't start a legacy on top of it — one path is
 	// always enough.
 	if c.replayer.Has(hash) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
+	}
+
+	if existing := c.fetchTracker.Find(hash); existing != nil {
+		if existing.Reason() != inbound.ReasonConsensus {
+			return fullStateAdmission{outcome: fullStateAdmissionDeferred}
+		}
+		if seq != 0 && existing.Seq() != 0 && existing.Seq() != seq {
+			return fullStateAdmission{outcome: fullStateAdmissionRejected}
+		}
+		il, _ := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
+			return nil
+		})
+		if il != nil && !il.TransactionOnly() && il.Reason() == inbound.ReasonConsensus {
+			return fullStateAdmission{outcome: fullStateAdmissionJoined, acquisition: il}
+		}
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}
+	}
+
+	// Prepared successors and targets also belong to the replay owner.
+	if c.standardReplay.active && !purpose.bypassesReplayOwnership() {
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 	if !c.canAdmitProvisionalFullStateLocked(hash) {
-		return
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 
 	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, c.logger, c.acquisitionOpts()...)
 	})
 	if !created {
-		// Already acquiring this hash (consensus or a prior arm).
-		return
+		// A concurrent caller may have registered the hash between the policy
+		// check and GetOrCreateWithSequence. Treat the same full-state object
+		// as a join and let transaction-only work wait for its owner.
+		if il != nil && !il.TransactionOnly() && il.Reason() == inbound.ReasonConsensus {
+			return fullStateAdmission{outcome: fullStateAdmissionJoined, acquisition: il}
+		}
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred, acquisition: il}
 	}
 
 	c.logger.Info("starting ledger acquisition (legacy)",
@@ -1613,6 +1702,7 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionLegacyModeLocked(seq ui
 	if !requested {
 		c.requestLedgerBase(il, 0, "failed to request ledger base from peer")
 	}
+	return fullStateAdmission{outcome: fullStateAdmissionStarted, acquisition: il}
 }
 
 // Caller holds acquisitionMu.
@@ -2186,8 +2276,7 @@ func (c *catchupReplayCoordinator) obsoleteCatchupVictimLocked(targetSeq uint32)
 		if candidate.Reason() != inbound.ReasonConsensus || candidate.TransactionOnly() ||
 			seq == 0 || seq >= targetSeq || candidate.Hash() == c.consensusRecovery.targetHash ||
 			candidate.Hash() == c.consensusRecovery.stepHash ||
-			(c.standardReplay.active && !c.standardReplay.pivotReady &&
-				candidate.Hash() == c.standardReplay.pivotHash) {
+			c.standardReplayOwnsLocked(candidate.Hash()) {
 			continue
 		}
 		consecutive := candidate.ConsecutiveTimeouts()
@@ -4039,7 +4128,12 @@ func (c *catchupReplayCoordinator) failInboundAcquisition(il *inbound.Ledger) {
 	if il == nil {
 		return
 	}
-	c.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), inboundAcquisitionTimerFailure(il))
+	c.failInboundAcquisitionWithSnapshot(
+		il,
+		il.Snapshot(),
+		inboundAcquisitionTimerFailure(il),
+		standardReplayFailureAvailability,
+	)
 }
 
 func inboundAcquisitionTimerFailure(il *inbound.Ledger) error {
@@ -4118,6 +4212,7 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	il *inbound.Ledger,
 	snapshot inbound.Snapshot,
 	cause error,
+	failureClass ...standardReplayFailureClass,
 ) {
 	if il == nil {
 		return
@@ -4128,6 +4223,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	if !removed {
 		return
 	}
+	if c.failStandardReplayReplacement(il, cause) {
+		c.retireStandardReplay(retirement)
+		c.retireAcquisitionStore(c.lifecycleContext(), il)
+		return
+	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	c.retireStandardReplay(retirement)
 	c.retireAcquisitionStore(c.lifecycleContext(), il)
@@ -4136,7 +4236,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"timeouts", il.Timeouts(),
 	)
-	if reason == inbound.ReasonConsensus && il.TransactionOnly() && c.failStandardReplayPipelineEntry(il) {
+	class := standardReplayFailureInvalidData
+	if len(failureClass) > 0 {
+		class = failureClass[0]
+	}
+	if reason == inbound.ReasonConsensus && il.TransactionOnly() && c.failStandardReplayPipelineEntry(il, class) {
 		return
 	}
 	if reason == inbound.ReasonConsensus {
@@ -4151,7 +4255,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	}
 }
 
-func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(il *inbound.Ledger, cause error) {
+func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(
+	il *inbound.Ledger,
+	cause error,
+	failureClass ...standardReplayFailureClass,
+) {
 	if il == nil {
 		return
 	}
@@ -4163,13 +4271,15 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(il *inbound.L
 		return
 	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
-	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
+	c.failStandardReplayReplacement(il, cause)
+	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired, failureClass...)
 }
 
 func (c *catchupReplayCoordinator) discardFailedInboundAcquisitionWithSnapshot(
 	il *inbound.Ledger,
 	snapshot inbound.Snapshot,
 	cause error,
+	failureClass ...standardReplayFailureClass,
 ) {
 	if il == nil {
 		return
@@ -4179,13 +4289,15 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisitionWithSnapshot(
 		return
 	}
 	c.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
-	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
+	c.failStandardReplayReplacement(il, cause)
+	c.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired, failureClass...)
 }
 
 func (c *catchupReplayCoordinator) finishDiscardedInboundAcquisitionOwned(
 	il *inbound.Ledger,
 	retirement standardReplayRetirement,
 	pivotRetired bool,
+	failureClass ...standardReplayFailureClass,
 ) {
 	c.retireStandardReplay(retirement)
 	c.retireAcquisitionStore(c.lifecycleContext(), il)
@@ -4193,7 +4305,11 @@ func (c *catchupReplayCoordinator) finishDiscardedInboundAcquisitionOwned(
 		return
 	}
 	if il.TransactionOnly() {
-		c.failStandardReplayPipelineEntry(il)
+		class := standardReplayFailureInvalidData
+		if len(failureClass) > 0 {
+			class = failureClass[0]
+		}
+		c.failStandardReplayPipelineEntry(il, class)
 		return
 	}
 	if pivotRetired {
@@ -4280,7 +4396,7 @@ func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
 	defer releaseAdmission()
 	if err := c.flushAcquisitionStore(c.lifecycleContext(), il); err != nil {
 		c.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
+		c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
 		return
 	}
 	c.completeInboundLedgerReady(il)
@@ -4315,21 +4431,21 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		c.logger.Warn("inbound ledger: failed to get result", "error", err)
-		c.discardFailedInboundAcquisition(il, err)
+		c.discardFailedInboundAcquisition(il, err, standardReplayFailureExecution)
 		return
 	}
 	if c.adaptor == nil {
-		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"))
+		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"), standardReplayFailureExecution)
 		return
 	}
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
-		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: ledger service unavailable"))
+		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: ledger service unavailable"), standardReplayFailureExecution)
 		return
 	}
 	if err = c.promoteAcquisitionStore(c.lifecycleContext(), il); err != nil {
 		c.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
+		c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
 		return
 	}
 	if err = svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
@@ -4360,6 +4476,9 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 			return
 		}
 		c.completeStandardTransactionReplay(h, txMap, peerID)
+		return
+	}
+	if c.completeStandardReplayReplacement(il, h, stateMap, txMap) {
 		return
 	}
 	var handoff standardReplayPivotHandoff

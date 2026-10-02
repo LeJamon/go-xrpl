@@ -13,6 +13,143 @@ type frozenPivotRetargetReason string
 
 const frozenPivotRetargetStalled frozenPivotRetargetReason = "replay_stalled"
 
+type frozenPivotPendingIntent struct {
+	seq    uint32
+	hash   [32]byte
+	peerID uint64
+}
+
+func (c *catchupReplayCoordinator) rememberFrozenPivotPendingLocked(seq uint32, hash [32]byte, peerID uint64) {
+	if seq < c.pendingFrozenPivot.seq {
+		return
+	}
+	if c.pendingFrozenPivot.seq == seq && c.pendingFrozenPivot.hash == hash {
+		if c.pendingFrozenPivot.peerID == 0 && peerID != 0 {
+			c.pendingFrozenPivot.peerID = peerID
+		}
+		return
+	}
+	c.pendingFrozenPivot = frozenPivotPendingIntent{seq: seq, hash: hash, peerID: peerID}
+}
+
+func (c *catchupReplayCoordinator) clearFrozenPivotPendingLocked(seq uint32, hash [32]byte) {
+	if c.pendingFrozenPivot.seq == seq && c.pendingFrozenPivot.hash == hash {
+		c.pendingFrozenPivot = frozenPivotPendingIntent{}
+	}
+}
+
+func (c *catchupReplayCoordinator) retryPendingFrozenPivot() bool {
+	c.acquisitionMu.Lock()
+	intent := c.pendingFrozenPivot
+	c.acquisitionMu.Unlock()
+	if intent.seq == 0 || intent.hash == ([32]byte{}) {
+		return false
+	}
+	if target := c.credibleCatchupFrontier(); target.source != catchupSourcePeer &&
+		target.seq != 0 &&
+		(target.seq != intent.seq || target.hash != intent.hash) {
+		if target.peerID == 0 {
+			target.peerID = intent.peerID
+		}
+		c.acquisitionMu.Lock()
+		if c.pendingFrozenPivot == intent {
+			c.pendingFrozenPivot = frozenPivotPendingIntent{
+				seq:    target.seq,
+				hash:   target.hash,
+				peerID: target.peerID,
+			}
+			intent = c.pendingFrozenPivot
+		} else {
+			intent = c.pendingFrozenPivot
+		}
+		c.acquisitionMu.Unlock()
+	}
+	return c.beginFrozenPivotRecovery(intent.seq, intent.hash, intent.peerID)
+}
+
+// Adoption requires acquired headers linking the survivor to the trusted target.
+func (c *catchupReplayCoordinator) canAdoptKnownFrozenPivot(
+	pivotSeq uint32,
+	pivotHash [32]byte,
+	targetSeq uint32,
+	targetHash [32]byte,
+) bool {
+	if pivotSeq == 0 || pivotHash == ([32]byte{}) || targetSeq <= pivotSeq || targetHash == ([32]byte{}) {
+		return false
+	}
+
+	c.catchupMu.Lock()
+	target := c.catchup
+	c.catchupMu.Unlock()
+	if target.seq != targetSeq || target.hash != targetHash || target.source == catchupSourcePeer {
+		return false
+	}
+
+	c.seqHashMu.Lock()
+	targetEntry, ok := c.seqHash[targetSeq]
+	if !ok || targetEntry.hash != targetHash || targetEntry.source < seqHashSourceAcquired {
+		c.seqHashMu.Unlock()
+		return false
+	}
+
+	current := targetHash
+	for seq := targetSeq; seq > pivotSeq; seq-- {
+		entry, found := c.seqHash[seq]
+		if !found || entry.hash != current || !entry.haveParent ||
+			entry.source < seqHashSourceAcquired || entry.parentFrom < seqHashSourceAcquired {
+			c.seqHashMu.Unlock()
+			return false
+		}
+		current = entry.parentHash
+	}
+	c.seqHashMu.Unlock()
+	if current != pivotHash {
+		return false
+	}
+
+	c.catchupMu.Lock()
+	defer c.catchupMu.Unlock()
+	return c.catchup.seq == targetSeq && c.catchup.hash == targetHash && c.catchup.source != catchupSourcePeer
+}
+
+func (c *catchupReplayCoordinator) knownFrozenPivotCandidate(targetSeq uint32, targetHash [32]byte) (*inbound.Ledger, bool) {
+	c.catchupMu.Lock()
+	target := c.catchup
+	c.catchupMu.Unlock()
+	if target.seq != targetSeq || target.hash != targetHash || target.source == catchupSourcePeer {
+		return nil, false
+	}
+	if c.adaptor == nil || c.adaptor.LedgerService() == nil {
+		return nil, false
+	}
+	closedSeq := c.adaptor.LedgerService().GetClosedLedgerIndex()
+	var best *inbound.Ledger
+	missingAncestry := false
+	for _, candidate := range c.fetchTracker.Active() {
+		if candidate.TransactionOnly() || candidate.Reason() != inbound.ReasonConsensus ||
+			candidate.Seq() <= closedSeq || candidate.Seq() >= targetSeq {
+			continue
+		}
+		if !c.canAdoptKnownFrozenPivot(candidate.Seq(), candidate.Hash(), targetSeq, targetHash) {
+			missingAncestry = true
+			continue
+		}
+		if best == nil || candidate.Seq() > best.Seq() {
+			best = candidate
+		}
+	}
+	return best, missingAncestry
+}
+
+// Caller holds acquisitionMu and has established replacement or rearm ownership.
+func (c *catchupReplayCoordinator) startFrozenPivotReplacementLocked(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+) fullStateAdmission {
+	return c.admitFullStateLocked(seq, hash, peerID, fullStateAdmissionReplacement)
+}
+
 func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint64) bool {
 	if c.stoppedForShutdown() || seq == 0 || hash == ([32]byte{}) {
 		return false
@@ -31,8 +168,12 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 	}
 	c.acquisitionMu.Unlock()
 	if c.locallySatisfiesLedger(seq, hash) {
+		c.acquisitionMu.Lock()
+		c.clearFrozenPivotPendingLocked(seq, hash)
+		c.acquisitionMu.Unlock()
 		return false
 	}
+	survivor, missingAncestry := c.knownFrozenPivotCandidate(seq, hash)
 
 	var baseRoot [32]byte
 	var baseRelease func()
@@ -53,7 +194,22 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 			}
 		}
 	}
+	if survivor == nil && missingAncestry && c.adaptor != nil {
+		if svc := c.adaptor.LedgerService(); svc != nil {
+			if base := svc.GetValidatedLedger(); base != nil {
+				c.catchupMu.Lock()
+				target := c.catchup
+				c.catchupMu.Unlock()
+				if target.seq == seq && target.hash == hash && target.source != catchupSourcePeer {
+					c.startHeaderParentDiscovery(base, seq, hash, peerID, target.source)
+				}
+			}
+		}
+	}
 	if c.locallySatisfiesLedger(seq, hash) {
+		c.acquisitionMu.Lock()
+		c.clearFrozenPivotPendingLocked(seq, hash)
+		c.acquisitionMu.Unlock()
 		if baseRelease != nil {
 			baseRelease()
 		}
@@ -75,63 +231,80 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 		}
 		return c.continueFrozenPivotRecovery(seq, hash, peerID)
 	}
+	pivotSeq, pivotHash, pivotPeerID := seq, hash, peerID
+	var il *inbound.Ledger
+	if survivor != nil && c.fetchTracker.Find(survivor.Hash()) == survivor {
+		c.catchupMu.Lock()
+		target := c.catchup
+		c.catchupMu.Unlock()
+		if target.seq == seq && target.hash == hash && target.source != catchupSourcePeer {
+			pivotSeq, pivotHash, pivotPeerID = survivor.Seq(), survivor.Hash(), survivor.PeerID()
+			admission := c.startLedgerAcquisitionLegacyModeLocked(pivotSeq, pivotHash, pivotPeerID, false)
+			if admission.outcome == fullStateAdmissionJoined && admission.acquisition == survivor {
+				il = survivor
+			}
+		}
+	} else {
+		admission := c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, false)
+		if admission.outcome != fullStateAdmissionStarted && admission.outcome != fullStateAdmissionJoined {
+			if admission.outcome == fullStateAdmissionDeferred {
+				c.rememberFrozenPivotPendingLocked(seq, hash, peerID)
+			}
+			c.acquisitionMu.Unlock()
+			if baseRelease != nil {
+				baseRelease()
+			}
+			return false
+		}
+		il = admission.acquisition
+	}
+	if il == nil || il.TransactionOnly() {
+		c.acquisitionMu.Unlock()
+		if baseRelease != nil {
+			baseRelease()
+		}
+		return false
+	}
 	c.standardReplay.generation++
 	c.standardReplay.active = true
 	c.standardReplay.applying = false
 	c.standardReplay.pivotReady = false
 	c.standardReplay.initialCandidate = false
-	c.standardReplay.pivotSeq = seq
-	c.standardReplay.pivotHash = hash
-	c.standardReplay.anchorSeq = seq
-	c.standardReplay.anchorHash = hash
-	c.standardReplay.collectSeq = seq
-	c.standardReplay.collectHash = hash
+	c.standardReplay.pivotSeq = pivotSeq
+	c.standardReplay.pivotHash = pivotHash
+	c.standardReplay.anchorSeq = pivotSeq
+	c.standardReplay.anchorHash = pivotHash
+	c.standardReplay.collectSeq = pivotSeq
+	c.standardReplay.collectHash = pivotHash
 	c.standardReplay.targetSeq = seq
 	c.standardReplay.targetHash = hash
 	c.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPreparedLimit)
 	c.standardReplay.headBlockedAt = time.Time{}
 	c.standardReplay.pivotStartedAt = time.Now()
 	c.standardReplay.progressSampleAt = time.Time{}
-	c.standardReplay.sampleAnchorSeq = seq
+	c.standardReplay.sampleAnchorSeq = pivotSeq
 	c.standardReplay.stalledSamples = 0
 	c.standardReplay.retargetAttemptAt = time.Time{}
 	c.standardReplay.backpressured = false
 	c.standardReplay.pivotHandoff = nil
 	c.standardReplay.baseRelease = baseRelease
 	if c.consensusRecovery.targetHash != ([32]byte{}) {
-		c.consensusRecovery.stepHash = hash
+		c.consensusRecovery.stepHash = pivotHash
 	}
-	identity := c.standardReplayIdentityLocked()
-	c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
-	il := c.fetchTracker.Find(hash)
-	if il != nil && !il.TransactionOnly() {
-		if baseRoot != ([32]byte{}) {
-			if err := il.SetVerifiedStateBaseContext(baseCtx, baseRoot); err != nil {
-				c.logger.Warn("checkpoint-relative pivot discovery unavailable", "error", err)
-				c.releaseStandardReplayBaseLocked()
-			} else {
-				c.standardReplay.baseLedger = il
-			}
+	if baseRoot != ([32]byte{}) {
+		if err := il.SetVerifiedStateBaseContext(baseCtx, baseRoot); err != nil {
+			c.logger.Warn("checkpoint-relative pivot discovery unavailable", "error", err)
+			c.releaseStandardReplayBaseLocked()
+		} else {
+			c.standardReplay.baseLedger = il
 		}
-		c.acquisitionMu.Unlock()
-		return true
 	}
+	c.clearFrozenPivotPendingLocked(seq, hash)
 	c.acquisitionMu.Unlock()
-
-	c.replayCommitMu.Lock()
-	c.acquisitionMu.Lock()
-	if c.standardReplay.active && c.standardReplay.generation == identity.generation &&
-		!c.standardReplay.pivotReady && c.standardReplay.pivotSeq == identity.pivotSeq &&
-		c.standardReplay.pivotHash == identity.pivotHash {
-		retired := c.cancelStandardReplayPipelineLocked("pivot_start_failed")
-		c.acquisitionMu.Unlock()
-		c.replayCommitMu.Unlock()
-		c.retireStandardReplay(retired)
-		return false
+	if pivotSeq < seq {
+		c.refillStandardReplayCollector(pivotPeerID)
 	}
-	c.acquisitionMu.Unlock()
-	c.replayCommitMu.Unlock()
-	return false
+	return true
 }
 
 // promoteResolvedFrozenPivot turns an already-running hash-only consensus
@@ -229,8 +402,8 @@ func (c *catchupReplayCoordinator) locallySatisfiesLedger(seq uint32, hash [32]b
 			return true
 		}
 	}
-	held, err := svc.GetLedgerByHash(hash)
-	return err == nil && held != nil && held.Sequence() == seq
+	_, _, _, complete := c.localReplayReplacementCandidate(seq, hash)
+	return complete
 }
 
 func (c *catchupReplayCoordinator) consensusHandoffComplete(seq uint32, hash [32]byte) bool {
@@ -271,6 +444,7 @@ func (c *catchupReplayCoordinator) retireLocallySatisfiedLedger(seq uint32, hash
 
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
+	c.clearFrozenPivotPendingLocked(seq, hash)
 	if c.standardReplay.active && c.standardReplay.pivotHandoff != nil &&
 		c.standardReplay.pivotSeq == seq && c.standardReplay.pivotHash == hash {
 		c.acquisitionMu.Unlock()
@@ -438,8 +612,11 @@ func (c *catchupReplayCoordinator) rearmFrozenPivotAcquisition(
 		c.replayCommitMu.Unlock()
 		return false
 	}
-	c.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
-	acquisition := c.fetchTracker.Find(hash)
+	admission := c.startFrozenPivotReplacementLocked(seq, hash, peerID)
+	acquisition := admission.acquisition
+	if admission.outcome != fullStateAdmissionStarted && admission.outcome != fullStateAdmissionJoined {
+		acquisition = nil
+	}
 	if acquisition != nil {
 		c.standardReplay.pivotStartedAt = now
 		c.standardReplay.backpressured = false
@@ -466,7 +643,7 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 		return false
 	}
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active {
+	if !c.standardReplay.active || c.standardReplay.replacement != nil {
 		c.acquisitionMu.Unlock()
 		return false
 	}
@@ -494,6 +671,10 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 	if c.scheduleReadyStandardReplayDrainLocked() {
 		c.acquisitionMu.Unlock()
 		return true
+	}
+	if c.standardReplayAvailabilityRetryActiveLocked(now) {
+		c.acquisitionMu.Unlock()
+		return false
 	}
 	// A flag without an executing owner or a ready head is not progress.
 	// Clear it so a missing-head stall can still reach normal recovery.
@@ -593,48 +774,9 @@ func (c *catchupReplayCoordinator) retargetFrozenPivot(
 		c.replayCommitMu.Unlock()
 		return false
 	}
-	preparedTailSeq := c.standardReplay.collectSeq
-	preparedOccupancy := len(c.standardReplay.entries)
-	pivotHash := c.standardReplay.pivotHash
-	pivotStartedAt := c.standardReplay.pivotStartedAt
-	pivotStateRate := uint64(0)
-	if pivot := c.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
-		elapsed := now.Sub(pivotStartedAt)
-		if elapsed > 0 {
-			pivotStateRate = uint64(float64(pivot.Snapshot().StateUseful) / elapsed.Seconds())
-		}
-	}
-	retired := c.cancelStandardReplayPipelineLocked(string(reason))
-	retired.ledgers = append(retired.ledgers, c.discardSupersededProvisionalFullStateLocked(target.hash)...)
-	c.consensusRecovery.targetHash = target.hash
-	c.consensusRecovery.anchorSeq = 0
-	c.consensusRecovery.anchorHash = [32]byte{}
-	c.consensusRecovery.stepHash = [32]byte{}
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()
-	c.retireStandardReplay(retired)
-	c.replayPipelineFallbacks.Add(1)
-	c.logger.Warn("retargeting frozen recovery to a newer full-state pivot",
-		"reason", string(reason),
-		"pivot_seq", pivotSeq,
-		"frontier_seq", frontierSeq,
-		"prepared_tail_seq", preparedTailSeq,
-		"trusted_head_seq", target.seq,
-		"trusted_head_hash", fmt.Sprintf("%x", target.hash[:8]),
-		"prepared_occupancy", preparedOccupancy,
-		"prepared_limit", standardReplayPreparedLimit,
-		"pivot_state_nodes_per_sec", pivotStateRate,
-	)
-	if c.beginFrozenPivotRecovery(target.seq, target.hash, peerID) {
-		return true
-	}
-	c.replayPipelineRetargetFailures.Add(1)
-	c.logger.Warn("failed to start replacement full-state pivot",
-		"reason", string(reason),
-		"target_seq", target.seq,
-		"target_hash", fmt.Sprintf("%x", target.hash[:8]),
-	)
-	return false
+	return c.reserveStandardReplayReplacement(generation, target.seq, target.hash, peerID, now)
 }
 
 func (c *catchupReplayCoordinator) failFrozenPivotHandoff(handoff standardReplayPivotHandoff) bool {

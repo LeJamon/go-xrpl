@@ -122,10 +122,8 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 	require.True(t, childAcquisition.TransactionOnly())
 	completeStandardReplayTestLink(t, r, child)
 
-	fallback := r.catchupReplay.fetchTracker.Find(child.hash)
-	require.NotNil(t, fallback)
-	require.False(t, fallback.TransactionOnly())
-	require.Equal(t, 2, r.catchupReplay.protectedCatchupInFlight())
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(child.hash))
+	require.Equal(t, 1, r.catchupReplay.protectedCatchupInFlight())
 
 	pivotAcquisition := r.catchupReplay.fetchTracker.Find(pivot.hash)
 	require.NotNil(t, pivotAcquisition)
@@ -143,11 +141,6 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 	require.True(t, r.catchupReplay.standardReplay.active)
 	require.False(t, r.catchupReplay.standardReplay.pivotReady)
 	require.Equal(t, pivot.hash, r.catchupReplay.standardReplay.pivotHash)
-
-	r.catchupReplay.failInboundAcquisition(fallback)
-	require.Same(t, pivotAcquisition, r.catchupReplay.fetchTracker.Find(pivot.hash))
-	require.True(t, r.catchupReplay.standardReplay.active)
-	require.False(t, r.catchupReplay.standardReplay.pivotReady)
 
 	successor := r.catchupReplay.fetchTracker.Find(child.hash)
 	require.NotNil(t, successor)
