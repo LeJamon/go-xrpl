@@ -58,8 +58,8 @@ func TestLocalReplayReplacementRequiresCurrentIdentity(t *testing.T) {
 	require.NotNil(t, replacement)
 	require.Nil(t, replacement.acquisition)
 	storeRecoveryLedger(t, svc, links[0].ledger)
-	h, state, txs, complete := c.localReplayReplacementCandidate(links[0].seq, links[0].hash)
-	require.True(t, complete)
+	h, state, txs, err := c.localReplayReplacementCandidate(links[0].seq, links[0].hash)
+	require.NoError(t, err)
 	stale := *replacement
 	assert.False(t, c.completeLocalStandardReplayReplacement(generation, &stale, h, state, txs))
 	assert.False(t, c.completeLocalStandardReplayReplacement(generation+1, replacement, h, state, txs))

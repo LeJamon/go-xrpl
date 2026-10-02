@@ -402,8 +402,8 @@ func (c *catchupReplayCoordinator) locallySatisfiesLedger(seq uint32, hash [32]b
 			return true
 		}
 	}
-	_, _, _, complete := c.localReplayReplacementCandidate(seq, hash)
-	return complete
+	_, _, _, err := c.localReplayReplacementCandidate(seq, hash)
+	return err == nil
 }
 
 func (c *catchupReplayCoordinator) consensusHandoffComplete(seq uint32, hash [32]byte) bool {

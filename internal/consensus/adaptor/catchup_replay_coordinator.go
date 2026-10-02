@@ -104,6 +104,8 @@ type catchupReplayCoordinator struct {
 	lastHandoffSeq            uint32
 	standardReplay            standardReplayPipeline
 	pendingFrozenPivot        frozenPivotPendingIntent
+	localReplayMu             sync.Mutex
+	localReplayCandidates     []*localReplayCandidate
 
 	standardReplayDrainWake  chan struct{}
 	standardReplayDrainOwner *standardReplayDrainOwner
@@ -274,6 +276,9 @@ func (c *catchupReplayCoordinator) stopAcquisitions() (legacy, replay int) {
 	c.lastHandoffSeq = 0
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()
+	c.localReplayMu.Lock()
+	c.localReplayCandidates = nil
+	c.localReplayMu.Unlock()
 
 	c.catchupMu.Lock()
 	c.catchup = catchupTarget{}
