@@ -154,6 +154,7 @@ func TestReplayRecoveryRetains177AppliedLedgersAndPreparedSuffix(t *testing.T) {
 	generation := c.standardReplay.generation
 	for _, link := range links[:177] {
 		completeStandardReplayTestLink(t, r, link)
+		drainStandardReplayTestPipeline(t, r)
 	}
 	require.Equal(t, uint64(177), c.replayPipelineApplied.Load())
 	completeStandardReplayTestLink(t, r, links[178])
