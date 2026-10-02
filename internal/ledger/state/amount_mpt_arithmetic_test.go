@@ -127,7 +127,6 @@ func TestMPTRoundHelpersUseMPTokensV2NumberArithmetic(t *testing.T) {
 		{name: "down", roundUp: false},
 		{name: "up", roundUp: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, int64(2_000_000_000_000_000_000), MulRoundMPTWithNumberContext(mpt, two, v2, test.roundUp))
 			require.Equal(t, int64(1_000_000_000_000_000_000), DivRoundMPTStrictWithNumberContext(mpt, one, v2, test.roundUp))
