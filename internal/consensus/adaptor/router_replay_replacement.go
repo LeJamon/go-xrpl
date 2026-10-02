@@ -2,11 +2,14 @@ package adaptor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -20,7 +23,21 @@ type standardReplayReplacement struct {
 	installing  bool
 }
 
-const standardReplayLocalCandidateCheckTimeout = time.Second
+const (
+	standardReplayLocalCandidateCheckTimeout = time.Second
+	standardReplayLocalCandidateCheckNodes   = 4096
+	maxLocalReplayCandidates                 = 4
+)
+
+// Candidates retain traversal cursors, but never a storage-generation pin.
+type localReplayCandidate struct {
+	ledger       *ledger.Ledger
+	header       header.LedgerHeader
+	state, txs   *shamap.SHAMap
+	verification *service.DetachedMapVerification
+}
+
+var errLocalReplayCandidateUnavailable = errors.New("local replay candidate unavailable")
 
 // localReplayReplacementCandidate returns a complete, root-checked local
 // ledger suitable for the replacement install path. A hash lookup alone is
@@ -29,57 +46,73 @@ const standardReplayLocalCandidateCheckTimeout = time.Second
 func (c *catchupReplayCoordinator) localReplayReplacementCandidate(
 	seq uint32,
 	hash [32]byte,
-) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap, bool) {
-	if seq == 0 || hash == ([32]byte{}) || c.adaptor == nil {
-		return nil, nil, nil, false
+) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap, error) {
+	if seq == 0 || hash == ([32]byte{}) || c.adaptor == nil || c.stoppedForShutdown() {
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
 	}
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
 	}
-	local, err := svc.GetLedgerByHash(hash)
+	// A concurrent probe must not queue another full interval behind this one.
+	if !c.localReplayMu.TryLock() {
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
+	}
+	defer c.localReplayMu.Unlock()
+	if c.stoppedForShutdown() {
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
+	}
+	ctx, cancel := context.WithTimeout(c.lifecycleContext(), standardReplayLocalCandidateCheckTimeout)
+	defer cancel()
+	ctx = shamap.WithTraversalBudget(ctx, standardReplayLocalCandidateCheckNodes)
+	local, err := svc.GetLedgerByHashContext(ctx, hash)
 	if err != nil || local == nil || !local.IsClosed() || local.Sequence() != seq || local.Hash() != hash {
-		return nil, nil, nil, false
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
 	}
 	h := local.Header()
 	if h.LedgerIndex != seq || h.Hash != hash || header.CalculateHash(h) != hash {
-		return nil, nil, nil, false
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
 	}
-	stateMap, err := local.StateMapSnapshot()
-	if err != nil || stateMap == nil {
-		return nil, nil, nil, false
+	var candidate *localReplayCandidate
+	for i, cached := range c.localReplayCandidates {
+		if cached.ledger == local && cached.header == h {
+			candidate = cached
+			copy(c.localReplayCandidates[1:i+1], c.localReplayCandidates[:i])
+			c.localReplayCandidates[0] = candidate
+			break
+		}
 	}
-	txMap, err := local.TxMapSnapshot()
-	if err != nil || txMap == nil {
-		return nil, nil, nil, false
+	if candidate == nil {
+		stateMap, err := local.StateMapSnapshot()
+		if err != nil || stateMap == nil {
+			return nil, nil, nil, errLocalReplayCandidateUnavailable
+		}
+		txMap, err := local.TxMapSnapshot()
+		if err != nil || txMap == nil {
+			return nil, nil, nil, errLocalReplayCandidateUnavailable
+		}
+		candidate = &localReplayCandidate{
+			ledger: local, header: h, state: stateMap, txs: txMap,
+			verification: svc.NewDetachedMapVerification(stateMap, txMap),
+		}
+		if len(c.localReplayCandidates) < maxLocalReplayCandidates {
+			c.localReplayCandidates = append(c.localReplayCandidates, nil)
+		}
+		copy(c.localReplayCandidates[1:], c.localReplayCandidates)
+		c.localReplayCandidates[0] = candidate
 	}
-
-	ctx := c.lifecycleContext()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, standardReplayLocalCandidateCheckTimeout)
-	defer cancel()
-	if !localReplayMapComplete(ctx, stateMap) || !localReplayMapComplete(ctx, txMap) {
-		return nil, nil, nil, false
-	}
-	stateRoot, err := stateMap.Hash()
+	stateRoot, err := candidate.state.Hash()
 	if err != nil || stateRoot != h.AccountHash {
-		return nil, nil, nil, false
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
 	}
-	txRoot, err := txMap.Hash()
+	txRoot, err := candidate.txs.Hash()
 	if err != nil || txRoot != h.TxHash {
-		return nil, nil, nil, false
+		return nil, nil, nil, errLocalReplayCandidateUnavailable
 	}
-	return &h, stateMap, txMap, true
-}
-
-func localReplayMapComplete(ctx context.Context, m *shamap.SHAMap) bool {
-	if m == nil {
-		return false
+	if err := candidate.verification.Verify(ctx); err != nil {
+		return nil, nil, nil, err
 	}
-	result, err := m.CheckComplete(ctx)
-	return err == nil && result != nil && len(result.Missing) == 0 && len(result.Corrupt) == 0
+	return &h, candidate.state, candidate.txs, nil
 }
 
 func (c *catchupReplayCoordinator) reserveStandardReplayReplacement(generation uint64, seq uint32, hash [32]byte, peerID uint64, now time.Time) bool {
@@ -142,10 +175,12 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 	anchorSeq, targetSeq, targetHash := c.standardReplay.anchorSeq, c.standardReplay.targetSeq, c.standardReplay.targetHash
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()
-	if localHeader, stateMap, txMap, ok := c.localReplayReplacementCandidate(seq, hash); ok {
-		if c.completeLocalStandardReplayReplacement(generation, replacement, localHeader, stateMap, txMap) {
-			return
-		}
+	localHeader, stateMap, txMap, err := c.localReplayReplacementCandidate(seq, hash)
+	if errors.Is(err, shamap.ErrTraversalBudget) {
+		return
+	}
+	if err == nil && c.completeLocalStandardReplayReplacement(generation, replacement, localHeader, stateMap, txMap) {
+		return
 	}
 	var survivor *inbound.Ledger
 	for _, candidate := range c.fetchTracker.Active() {
@@ -295,7 +330,10 @@ func (c *catchupReplayCoordinator) completeLocalStandardReplayReplacement(
 	}
 	replacement.installing = true
 	c.acquisitionMu.Unlock()
-	initial, err := c.adaptor.LedgerService().BootstrapLedgerWithState(c.lifecycleContext(), h, stateMap, txMap)
+	ctx, cancel := context.WithTimeout(c.lifecycleContext(), standardReplayLocalCandidateCheckTimeout)
+	defer cancel()
+	ctx = shamap.WithTraversalBudget(ctx, standardReplayLocalCandidateCheckNodes)
+	initial, err := c.adaptor.LedgerService().BootstrapLedgerWithState(ctx, h, stateMap, txMap)
 	if err != nil {
 		c.acquisitionMu.Lock()
 		if c.standardReplay.active && c.standardReplay.generation == generation &&
