@@ -135,3 +135,50 @@ func TestNativeRoundDropsOutOfRange(t *testing.T) {
 		t.Fatalf("MulRoundNative in-range = %d, want 30864197250000", got)
 	}
 }
+
+func TestNativeRoundLargeIntegralOperand(t *testing.T) {
+	ctx := NewNumberContext(MantissaScaleSmall, true)
+	value := NewXRPAmountFromInt(99_016_193_120_564_081)
+	one := NewIssuedAmountFromValue(1, 0, "USD", "rIssuer")
+	factor := NewIssuedAmountFromValue(9_900_000_000_000_000, -16, "USD", "rIssuer")
+	for _, test := range []struct {
+		name      string
+		operation func(Amount, Amount, NumberContext, bool) int64
+		other     Amount
+		down, up  int64
+	}{
+		{"divide", DivRoundNativeWithNumberContext, one, 99_016_193_120_564_081, 99_016_193_120_564_082},
+		{"divide strict", DivRoundNativeStrictWithNumberContext, one, 99_016_193_120_564_081, 99_016_193_120_564_082},
+		{"multiply", MulRoundNativeWithNumberContext, factor, 98_026_031_189_358_440, 98_026_031_189_358_441},
+		{"multiply strict", MulRoundNativeStrictWithNumberContext, factor, 98_026_031_189_358_440, 98_026_031_189_358_441},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.operation(value, test.other, ctx, false); got != test.down {
+				t.Fatalf("round down: got %d, want %d", got, test.down)
+			}
+			if got := test.operation(value, test.other, ctx, true); got != test.up {
+				t.Fatalf("round up: got %d, want %d", got, test.up)
+			}
+		})
+	}
+}
+
+func TestDivRoundNativeStrictLargeSignedFraction(t *testing.T) {
+	ctx := NewNumberContext(MantissaScaleSmall, true)
+	den := NewIssuedAmountFromValue(1_000_000_000_000_001, -15, "USD", "rIssuer")
+	for _, test := range []struct {
+		num     int64
+		roundUp bool
+		want    int64
+	}{
+		{99_016_193_120_564_081, false, 99_016_193_120_563_981},
+		{99_016_193_120_564_081, true, 99_016_193_120_563_982},
+		{-99_016_193_120_564_081, false, -99_016_193_120_563_982},
+		{-99_016_193_120_564_081, true, -99_016_193_120_563_982},
+	} {
+		got := DivRoundNativeStrictWithNumberContext(NewXRPAmountFromInt(test.num), den, ctx, test.roundUp)
+		if got != test.want {
+			t.Errorf("num=%d roundUp=%v: got %d, want %d", test.num, test.roundUp, got, test.want)
+		}
+	}
+}

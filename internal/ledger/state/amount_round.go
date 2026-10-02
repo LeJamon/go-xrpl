@@ -326,28 +326,36 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 // both truncate.
 func canonicalizeDropsNoRound(amount uint64, offset int, strict bool, ctx NumberContext) int64 {
 	if !strict && ctx.UniversalNumberEnabled() {
-		if amount == 0 || offset <= -20 {
-			return 0
-		}
-		guardNativeOffset(offset)
-		drops := newXRPLNumberRaw(int64(amount), offset).ToInt64WithMode(RoundToNearest)
-		guardNativeDrops(drops)
-		return drops
+		return canonicalizeDropsNumber(amount, offset, RoundToNearest)
 	}
-	drops := int64(amount)
-	if drops == 0 {
+	if amount == 0 || offset <= -20 {
 		return 0
 	}
 	guardNativeOffset(offset)
 	for offset > 0 {
-		guardNativeDrops(drops)
-		drops *= 10
+		if amount > uint64(maxNativeDrops) {
+			panic("Native currency amount out of range")
+		}
+		amount *= 10
 		offset--
 	}
 	for offset < 0 {
-		drops /= 10
+		amount /= 10
 		offset++
 	}
+	if amount > uint64(maxNativeDrops) {
+		panic("Native currency amount out of range")
+	}
+	return int64(amount)
+}
+
+func canonicalizeDropsNumber(amount uint64, offset int, mode RoundingMode) int64 {
+	if amount == 0 || offset <= -20 {
+		return 0
+	}
+	guardNativeOffset(offset)
+	number := XRPLNumber{mantissa: amount, exponent: offset}
+	drops := number.ToInt64WithMode(mode)
 	guardNativeDrops(drops)
 	return drops
 }
@@ -360,11 +368,8 @@ func NativeRoundDropsWithNumberContext(
 ) int64 {
 	var drops int64
 	if addSlop {
-		if strict {
-			drops = CanonicalizeDropsStrict(int64(amount), offset, roundUp)
-		} else {
-			drops = CanonicalizeDrops(int64(amount), offset)
-		}
+		amount, offset = canonicalizeIntegralRound(amount, offset, roundUp, strict)
+		drops = canonicalizeDropsNoRound(amount, offset, true, ctx)
 	} else {
 		drops = canonicalizeDropsNoRound(amount, offset, strict, ctx)
 	}
@@ -595,16 +600,17 @@ func DivRoundNativeStrictWithNumberContext(
 	amount := DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
 	if addSlop {
-		drops := CanonicalizeDrops(int64(amount), offset)
-		if drops == 0 && roundUp && !resultNegative {
-			drops = 1
-		}
-		if resultNegative {
-			drops = -drops
-		}
-		return drops
+		amount, offset = canonicalizeIntegralRound(amount, offset, roundUp, false)
 	}
-	drops := canonicalizeDropsNoRound(amount, offset, true, ctx)
+	var drops int64
+	if !addSlop && resultNegative && ctx.UniversalNumberEnabled() {
+		drops = canonicalizeDropsNumber(amount, offset, RoundUpward)
+	} else {
+		drops = canonicalizeDropsNoRound(amount, offset, true, ctx)
+	}
+	if drops == 0 && roundUp && !resultNegative {
+		drops = 1
+	}
 	if resultNegative {
 		drops = -drops
 	}

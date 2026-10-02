@@ -37,7 +37,7 @@ type AMMOffer struct {
 // NewAMMOffer creates a new AMM offer with quality derived from the offer amounts.
 // Use NewAMMOfferWithBalanceQuality for maxOffer where quality should reflect pool spot price.
 func NewAMMOffer(liq *AMMLiquidity, in, out, balIn, balOut tx.Amount) *AMMOffer {
-	q := QualityFromAmounts(toEitherAmt(in), toEitherAmt(out))
+	q := QualityFromAmountsWithNumberContext(toEitherAmt(in), toEitherAmt(out), liq.ammContext.numberContext)
 	return &AMMOffer{
 		ammLiquidity: liq,
 		amountIn:     in,
@@ -53,7 +53,7 @@ func NewAMMOffer(liq *AMMLiquidity, in, out, balIn, balOut tx.Amount) *AMMOffer 
 // This matches rippled's maxOffer() which uses Quality{balances}.
 // Reference: rippled AMMLiquidity.cpp maxOffer() line 133 and 144
 func NewAMMOfferWithBalanceQuality(liq *AMMLiquidity, in, out, balIn, balOut tx.Amount) *AMMOffer {
-	q := QualityFromAmounts(toEitherAmt(balIn), toEitherAmt(balOut))
+	q := QualityFromAmountsWithNumberContext(toEitherAmt(balIn), toEitherAmt(balOut), liq.ammContext.numberContext)
 	return &AMMOffer{
 		ammLiquidity: liq,
 		amountIn:     in,

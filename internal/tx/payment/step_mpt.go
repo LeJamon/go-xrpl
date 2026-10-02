@@ -261,7 +261,7 @@ func (s *MPTEndpointStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtD
 	}
 	out := NewMPTEitherAmount(int64(QualityOne), s.issue.MPTID)
 	in := NewMPTEitherAmount(int64(srcQOut), s.issue.MPTID)
-	quality := QualityFromAmounts(in, out)
+	quality := QualityFromAmountsWithNumberContext(in, out, v.NumberContext())
 	return &quality, dir
 }
 

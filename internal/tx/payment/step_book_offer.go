@@ -937,7 +937,7 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 		// Adjust amounts by owner funds using ceil_out_strict.
 		// Reference: rippled OfferStream.cpp lines 192-207
 		offerQ := s.offerQuality(offer)
-		effectiveIn, effectiveOut = offerQ.CeilOutStrict(ofrIn, ofrOut, ownerFunds, false)
+		effectiveIn, effectiveOut = offerQ.CeilOutStrictWithNumberContext(ofrIn, ofrOut, ownerFunds, false, sb.NumberContext())
 	}
 
 	// If either effective amount is zero, remove the offer.
@@ -969,7 +969,7 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 
 	// Compare effective quality with the offer's original quality.
 	// If effective quality is worse (higher), remove the offer.
-	effectiveQuality := QualityFromAmounts(effectiveIn, effectiveOut)
+	effectiveQuality := QualityFromAmountsWithNumberContext(effectiveIn, effectiveOut, sb.NumberContext())
 	offerQuality := s.offerQuality(offer)
 	return effectiveQuality.WorseThan(offerQuality)
 }

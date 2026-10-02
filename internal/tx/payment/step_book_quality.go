@@ -223,7 +223,7 @@ func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevSt
 	// q1 = getRate(STAmount(trOut), STAmount(trIn)) = trIn / trOut
 	trOutAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(trOut), 0, "", ""))
 	trInAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(trIn), 0, "", ""))
-	q1 := QualityFromAmounts(trInAmt, trOutAmt)
+	q1 := QualityFromAmountsWithNumberContext(trInAmt, trOutAmt, v.NumberContext())
 
 	return q1.Compose(ofrQ)
 }

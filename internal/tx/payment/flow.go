@@ -303,7 +303,7 @@ func Flow(
 			}
 
 			// Calculate actual quality
-			q := QualityFromAmounts(result.In, result.Out)
+			q := QualityFromAmountsWithNumberContext(result.In, result.Out, numberContext)
 
 			// Check quality limit.
 			// limitOut() finds output to generate exact requested limitQuality.
@@ -754,7 +754,7 @@ func RippleCalculate(
 	// Calculate limit quality if requested
 	var qualityLimit *Quality
 	if limitQuality && sendMax != nil {
-		q := QualityFromAmounts(*sendMax, outReq)
+		q := QualityFromAmountsWithNumberContext(*sendMax, outReq, sandbox.NumberContext())
 		qualityLimit = &q
 	}
 

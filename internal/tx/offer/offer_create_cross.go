@@ -399,9 +399,10 @@ func computePostCrossAmounts(
 		if isAmountNegative(remainingGets) {
 			remainingGets = zeroAmount(saTakerGets)
 		}
-		rate := payment.QualityFromAmounts(
+		rate := payment.QualityFromAmountsWithNumberContext(
 			payment.ToEitherAmount(saTakerGets),
 			payment.ToEitherAmount(saTakerPays),
+			numberContext,
 		).Rate()
 		remainingPays = offerDivRoundStrictLikeWithNumberContext(
 			remainingGets,
@@ -420,9 +421,10 @@ func computePostCrossAmounts(
 	if isAmountNegative(remainingPays) {
 		remainingPays = zeroAmount(saTakerPays)
 	}
-	rate := payment.QualityFromAmounts(
+	rate := payment.QualityFromAmountsWithNumberContext(
 		payment.ToEitherAmount(saTakerGets),
 		payment.ToEitherAmount(saTakerPays),
+		numberContext,
 	).Rate()
 	remainingGets = offerMulRoundLikeWithNumberContext(
 		remainingPays,

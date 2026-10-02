@@ -430,7 +430,7 @@ func (s *BookStep) forEachOffer(
 			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
 				stpOut = MulRatioWithNumberContext(ownerGives, QualityOne, ofrTrOut, false, sb.NumberContext())
-				ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
+				ofrIn, ofrOut = offerQuality.CeilOutStrictWithNumberContext(ofrIn, ofrOut, stpOut, false, sb.NumberContext())
 				stpIn = MulRatioWithNumberContext(ofrIn, ofrTrIn, QualityOne, true, sb.NumberContext())
 			}
 		}
@@ -784,7 +784,7 @@ func (s *BookStep) Rev(
 			if e.isAMM {
 				ofrAdjIn, ofrAdjOut = e.ammOffer.LimitOut(e.ofrIn, e.ofrOut, stpAdjOut, true)
 			} else {
-				ofrAdjIn, ofrAdjOut = e.offerQuality.CeilOutStrict(e.ofrIn, e.ofrOut, stpAdjOut, true)
+				ofrAdjIn, ofrAdjOut = e.offerQuality.CeilOutStrictWithNumberContext(e.ofrIn, e.ofrOut, stpAdjOut, true, sb.NumberContext())
 			}
 			stpAdjIn := MulRatioWithNumberContext(ofrAdjIn, e.ofrTrIn, QualityOne, true, sb.NumberContext())
 			ownerGivesAdj := MulRatioWithNumberContext(stpAdjOut, e.ofrTrOut, QualityOne, s.book.Out.IsMPT, sb.NumberContext())
@@ -925,7 +925,7 @@ func (s *BookStep) Fwd(
 				if e.isAMM {
 					adjOfrIn, adjOfrOut = e.ammOffer.LimitOut(adjOfrIn, adjOfrOut, adjStpOut, true)
 				} else {
-					adjOfrIn, adjOfrOut = e.offerQuality.CeilOutStrict(adjOfrIn, adjOfrOut, adjStpOut, true)
+					adjOfrIn, adjOfrOut = e.offerQuality.CeilOutStrictWithNumberContext(adjOfrIn, adjOfrOut, adjStpOut, true, sb.NumberContext())
 				}
 				adjStpIn := MulRatioWithNumberContext(
 					adjOfrIn,
@@ -1027,7 +1027,7 @@ func (s *BookStep) Fwd(
 				if e.isAMM {
 					revOfrIn, revOfrOut = e.ammOffer.LimitOut(revOfrIn, revOfrOut, revStpOut, true)
 				} else {
-					revOfrIn, revOfrOut = e.offerQuality.CeilOutStrict(revOfrIn, revOfrOut, revStpOut, true)
+					revOfrIn, revOfrOut = e.offerQuality.CeilOutStrictWithNumberContext(revOfrIn, revOfrOut, revStpOut, true, sb.NumberContext())
 				}
 				revStpIn := MulRatioWithNumberContext(
 					revOfrIn,

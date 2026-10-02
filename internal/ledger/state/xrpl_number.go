@@ -425,9 +425,7 @@ func newNumber(mantissa int64, exponent int, scale MantissaScale, mode RoundingM
 }
 
 // newXRPLNumberRaw builds a Number from an external (mantissa, exponent) without
-// normalizing. Used where the caller needs the exact digits preserved before an
-// int64 conversion (canonicalizeDropsNoRound); the scale is irrelevant because
-// the only consumer, ToInt64WithMode, reads the external view.
+// normalizing. The scale is irrelevant because ToInt64WithMode reads the external view.
 func newXRPLNumberRaw(mantissa int64, exponent int) XRPLNumber {
 	neg, m := externalToInternal(mantissa)
 	return XRPLNumber{negative: neg, mantissa: m, exponent: exponent}

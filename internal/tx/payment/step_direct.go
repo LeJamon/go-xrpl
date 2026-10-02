@@ -361,7 +361,7 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 	// getRate(out, in) = divide(in, out) = srcQOut / dstQIn
 	srcQOutAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(srcQOut), 0, "", ""))
 	dstQInAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(dstQIn), 0, "", ""))
-	q := QualityFromAmounts(srcQOutAmt, dstQInAmt)
+	q := QualityFromAmountsWithNumberContext(srcQOutAmt, dstQInAmt, v.NumberContext())
 
 	return &q, srcDebtDir
 }
