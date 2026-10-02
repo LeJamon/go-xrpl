@@ -373,8 +373,9 @@ func (e *TestEnv) SetViewOpen(open bool) {
 	e.viewOpen = open
 }
 
-// SetNumberContextOverride selects a Number context independently of the
-// environment's amendment rules, matching rippled's test scale guard.
+// SetNumberContextOverride selects Number scale and universal arithmetic
+// independently of the environment's amendment rules, matching rippled's
+// test scale guard. Amendment-specific arithmetic still follows the rules.
 func (e *TestEnv) SetNumberContextOverride(numberContext state.NumberContext) {
 	e.numberContextOverride = &numberContext
 }

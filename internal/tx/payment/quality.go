@@ -39,50 +39,15 @@ type Quality struct {
 // single constant instead of re-encoding it.
 var qualityOne = Quality{Value: (uint64(-15+100) << 56) | uint64(1_000_000_000_000_000)}
 
-// QualityFromAmounts creates a Quality from input and output amounts.
-// Quality = in / out, encoded using STAmount-like floating point representation.
-// Reference: rippled's getRate(offerOut, offerIn) in STAmount.cpp calls divide(offerIn, offerOut, noIssue()).
-// Despite the parameter order (out, in), it returns in / out.
-// Lower quality value means you pay less per unit received (better for taker).
+// QualityFromAmounts creates an input/output quality using the small Number scale.
 func QualityFromAmounts(in, out EitherAmount) Quality {
-	if out.IsZero() || in.IsZero() {
-		return Quality{Value: 0}
-	}
+	return QualityFromAmountsWithNumberContext(in, out, state.NewNumberContext(state.MantissaScaleSmall, true))
+}
 
-	// Convert both amounts to IOU-style for precise integer division.
-	// Reference: rippled's getRate() calls divide() which normalizes XRP amounts
-	// to [10^15, 10^16) mantissa range before performing the division.
-	inAmt := toNumberAmount(in)
-	outAmt := toNumberAmount(out)
-
-	if outAmt.IsZero() {
-		return Quality{Value: 0}
-	}
-
-	// Quality = in / out using precise STAmount division
-	// Reference: rippled's getRate() → divide(offerIn, offerOut, noIssue())
-	result := inAmt.Div(outAmt, false)
-
-	mantissa := result.Mantissa()
-	exponent := result.Exponent()
-
-	if mantissa <= 0 {
-		return Quality{Value: 0}
-	}
-
-	// Clamp exponent to valid range [-100, 155]
-	if exponent < -100 {
-		return Quality{Value: 0}
-	}
-	if exponent > 155 {
-		return Quality{Value: ^uint64(0)}
-	}
-
-	storedExponent := uint64(exponent + 100)
-	storedMantissa := uint64(mantissa)
-
-	q := Quality{Value: (storedExponent << 56) | (storedMantissa & 0x00FFFFFFFFFFFFFF)}
-	return q
+// QualityFromAmountsWithNumberContext preserves integral operands while computing
+// the input/output quality under the transaction's Number semantics.
+func QualityFromAmountsWithNumberContext(in, out EitherAmount, numberContext state.NumberContext) Quality {
+	return Quality{Value: state.GetRateWithNumberContext(FromEitherAmount(out), FromEitherAmount(in), numberContext)}
 }
 
 // Compare compares two qualities
@@ -223,11 +188,7 @@ func (q Quality) CeilOutStrictWithNumberContext(
 	// result.in = mulRoundStrict(limit, quality.rate(), amtIn.asset, roundUp)
 	qRate := q.Rate()
 
-	var limitAmt tx.Amount
-	limitAmt = toNumberAmount(limit)
-	if limit.IsMPT {
-		limitAmt = FromEitherAmount(limit)
-	}
+	limitAmt := FromEitherAmount(limit)
 
 	var inCurrency, inIssuer string
 	if amtIn.IsNative || amtIn.IsMPT {
@@ -297,11 +258,7 @@ func (q Quality) CeilInWithNumberContext(
 
 	qRate := q.Rate()
 
-	var limitAmt tx.Amount
-	limitAmt = toNumberAmount(limit)
-	if limit.IsMPT {
-		limitAmt = FromEitherAmount(limit)
-	}
+	limitAmt := FromEitherAmount(limit)
 
 	var outCurrency, outIssuer string
 	if amtOut.IsNative || amtOut.IsMPT {
@@ -373,11 +330,7 @@ func (q Quality) CeilInStrictWithNumberContext(
 
 	qRate := q.Rate()
 
-	var limitAmt tx.Amount
-	limitAmt = toNumberAmount(limit)
-	if limit.IsMPT {
-		limitAmt = FromEitherAmount(limit)
-	}
+	limitAmt := FromEitherAmount(limit)
 
 	var outCurrency, outIssuer string
 	if amtOut.IsNative || amtOut.IsMPT {

@@ -333,7 +333,7 @@ func changeSpotPriceQualityPreFix(m numberMath, poolIn, poolOut tx.Amount, quali
 	// the relative-distance tolerance, rippled Throws rather than returning
 	// nullopt. The throw suppresses the AMM offer entirely (no maxOffer
 	// fallback), leaving the AMM blocked by the LOB tip.
-	offerQ := QualityFromAmounts(toEitherAmt(takerPays), toEitherAmt(takerGets))
+	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 	if offerQ.WorseThan(quality) {
 		rd := RelativeDistance(offerQ, quality)
 		if rd >= 1e-7 {
@@ -398,12 +398,12 @@ func getAMMOfferStartWithTakerGets(m numberMath, poolIn, poolOut tx.Amount, qual
 	takerGets := m.toAmountWithNativeRounding(*nTakerGets, poolOut, state.RoundDownward, state.RoundToNearest)
 	takerPays := swapAssetOut(m, poolIn, poolOut, takerGets, tfee, true)
 
-	offerQ := QualityFromAmounts(toEitherAmt(takerPays), toEitherAmt(takerGets))
+	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 	if offerQ.WorseThan(quality) {
 		reduced := reduceOffer(m, takerGets)
 		takerGets = reduced
 		takerPays = swapAssetOut(m, poolIn, poolOut, takerGets, tfee, true)
-		offerQ = QualityFromAmounts(toEitherAmt(takerPays), toEitherAmt(takerGets))
+		offerQ = QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 		if offerQ.WorseThan(quality) {
 			return tx.Amount{}, tx.Amount{}, false
 		}
@@ -458,12 +458,12 @@ func getAMMOfferStartWithTakerPays(m numberMath, poolIn, poolOut tx.Amount, qual
 	takerPays := m.toAmountWithNativeRounding(*nTakerPays, poolIn, state.RoundDownward, state.RoundToNearest)
 	takerGets := swapAssetIn(m, poolIn, poolOut, takerPays, tfee, true)
 
-	offerQ := QualityFromAmounts(toEitherAmt(takerPays), toEitherAmt(takerGets))
+	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 	if offerQ.WorseThan(quality) {
 		reduced := reduceOffer(m, takerPays)
 		takerPays = reduced
 		takerGets = swapAssetIn(m, poolIn, poolOut, takerPays, tfee, true)
-		offerQ = QualityFromAmounts(toEitherAmt(takerPays), toEitherAmt(takerGets))
+		offerQ = QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 		if offerQ.WorseThan(quality) {
 			return tx.Amount{}, tx.Amount{}, false
 		}

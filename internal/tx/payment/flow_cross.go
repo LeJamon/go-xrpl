@@ -177,7 +177,7 @@ func FlowCross(
 	//   Line 362-364: if passive, ++threshold
 	//   Line 367-368: if (sendMax > inStartBalance) sendMax = inStartBalance  // cap AFTER
 	//   Line 382-401: if (tfSell) deliver = MAX  // AFTER threshold
-	takerQuality := QualityFromAmounts(sendMax, deliver)
+	takerQuality := QualityFromAmountsWithNumberContext(sendMax, deliver, numberContext)
 
 	// For passive offers, increment the quality threshold so we only cross
 	// against offers with STRICTLY better quality (not equal)

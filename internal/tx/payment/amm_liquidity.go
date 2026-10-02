@@ -94,7 +94,7 @@ func (l *AMMLiquidity) GetOffer(view *PaymentSandbox, clobQuality *Quality) (res
 
 	// Check if AMM's Spot Price Quality (SPQ) is worse than CLOB quality
 	if clobQuality != nil {
-		spotPriceQ := QualityFromAmounts(toEitherAmt(poolIn), toEitherAmt(poolOut))
+		spotPriceQ := QualityFromAmountsWithNumberContext(toEitherAmt(poolIn), toEitherAmt(poolOut), l.ammContext.numberContext)
 		if spotPriceQ.WorseThan(*clobQuality) || spotPriceQ.Value == clobQuality.Value {
 			return nil
 		}
@@ -133,7 +133,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 			return nil
 		}
 		if clobQuality != nil {
-			offerQ := QualityFromAmounts(toEitherAmt(offerIn), toEitherAmt(offerOut))
+			offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(offerIn), toEitherAmt(offerOut), l.ammContext.numberContext)
 			if offerQ.WorseThan(*clobQuality) {
 				return nil
 			}
@@ -167,7 +167,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 	if l.fixAMMv1_2 {
 		maxOff := l.safeMaxOffer(poolIn, poolOut)
 		if maxOff != nil {
-			maxQ := QualityFromAmounts(toEitherAmt(maxOff.amountIn), toEitherAmt(maxOff.amountOut))
+			maxQ := QualityFromAmountsWithNumberContext(toEitherAmt(maxOff.amountIn), toEitherAmt(maxOff.amountOut), l.ammContext.numberContext)
 			if maxQ.BetterThan(*clobQuality) {
 				return maxOff
 			}
