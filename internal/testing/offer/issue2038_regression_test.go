@@ -51,7 +51,6 @@ func TestOffer_Issue2038CrossingMetadata(t *testing.T) {
 	counterSeq := env.Seq(counter)
 	jtx.RequireTxSuccess(t, env.Submit(OfferCreate(counter, book(5, -9), tx.NewXRPAmount(527280507)).Build()))
 	require.NotNil(t, GetOffer(env, counter, counterSeq))
-	// Apply the incident issuer's tick size after placing the synthetic counter-offer.
 	setIssue2038Account(t, env, issuer, func(root *state.AccountRoot) {
 		root.TickSize = 6
 	})
