@@ -1672,6 +1672,10 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 	if !c.canAdmitProvisionalFullStateLocked(hash) {
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
+	peerID, found := c.resolveAcquisitionPeer(seq, peerID)
+	if !found {
+		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
+	}
 
 	il, created := c.fetchTracker.GetOrCreateWithSequence(hash, seq, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, c.logger, c.acquisitionOpts()...)

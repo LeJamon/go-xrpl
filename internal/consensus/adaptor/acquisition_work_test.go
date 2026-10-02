@@ -707,6 +707,7 @@ func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing
 	}
 	pivotHeader.Hash = header.CalculateHash(pivotHeader)
 
+	trackCatchupPeer(router, 7, pivotHeader.LedgerIndex)
 	require.NoError(t, router.catchupReplay.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
 	pivotAcquisition := router.catchupReplay.fetchTracker.Find(pivotHeader.Hash)
 	require.NotNil(t, pivotAcquisition)

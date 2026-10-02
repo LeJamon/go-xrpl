@@ -90,6 +90,7 @@ func TestHashOnlyConsensusAcquisitionPromotesAfterHeaderResolution(t *testing.T)
 
 	// Consensus arrives before any hash -> sequence bookkeeping, reproducing
 	// the live startup order. This creates one ordinary hash-only acquisition.
+	trackCatchupPeer(r, 7, pivotHeader.LedgerIndex)
 	require.NoError(t, r.catchupReplay.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
 	pivotAcquisition := r.catchupReplay.fetchTracker.Find(pivotHeader.Hash)
 	require.NotNil(t, pivotAcquisition)
