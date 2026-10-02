@@ -696,7 +696,7 @@ func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testin
 }
 
 func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing.T) {
-	router, _, svc := makeProvisionalWarmRouter(t)
+	router, sender, svc := makeProvisionalWarmRouter(t)
 	closed := svc.GetClosedLedgerIndex()
 	rootHash, rootData, _ := buildSelfHealSourceState(t)
 	pivotHeader := header.LedgerHeader{
@@ -707,7 +707,8 @@ func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing
 	}
 	pivotHeader.Hash = header.CalculateHash(pivotHeader)
 
-	trackCatchupPeer(router, 7, pivotHeader.LedgerIndex)
+	router.setPeerSessionView(&testPeerSessions{connected: map[peermanagement.PeerID]bool{7: true}})
+	sender.acquisitionPeers = []uint64{7}
 	require.NoError(t, router.catchupReplay.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
 	pivotAcquisition := router.catchupReplay.fetchTracker.Find(pivotHeader.Hash)
 	require.NotNil(t, pivotAcquisition)
