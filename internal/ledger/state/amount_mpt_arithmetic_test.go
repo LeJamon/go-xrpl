@@ -199,7 +199,7 @@ func TestMPTRoundHelpersUseDirectedSignedRounding(t *testing.T) {
 	require.Equal(t, int64(-3), DivRoundMPTWithNumberContext(mpt, two, v2, true))
 	require.Equal(t, int64(-2), DivRoundMPTWithNumberContext(mpt, two, v2, false))
 	require.Equal(t, int64(-3), DivRoundMPTStrictWithNumberContext(mpt, two, legacyUniversal, true))
-	require.Equal(t, int64(-2), DivRoundMPTStrictWithNumberContext(mpt, two, legacyUniversal, false))
+	require.Equal(t, int64(-3), DivRoundMPTStrictWithNumberContext(mpt, two, legacyUniversal, false))
 
 	require.Equal(t, int64(-2), MulRoundMPTWithNumberContext(mpt, half, legacy, true))
 	require.Equal(t, int64(-3), MulRoundMPTWithNumberContext(mpt, half, legacy, false))

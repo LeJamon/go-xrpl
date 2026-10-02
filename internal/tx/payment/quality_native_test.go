@@ -122,9 +122,25 @@ func TestQualityMPTokensV2UsesRulesNumberContext(t *testing.T) {
 	output := NewMPTEitherAmount(2_000_000_000_000_000_000, outputID)
 	outputLimit := NewMPTEitherAmount(1_000_000_000_000_000_000, outputID)
 
-	gotIn, gotOut := qualityOne.CeilInStrictWithNumberContext(input, output, limit, false, ctx)
+	gotIn, gotOut := qualityOne.CeilInWithNumberContext(input, output, limit, ctx)
 	require.Equal(t, limit, gotIn)
 	require.Equal(t, outputLimit, gotOut)
+
+	gotIn, gotOut = qualityOne.CeilInStrictWithNumberContext(input, output, limit, false, ctx)
+	require.Equal(t, limit, gotIn)
+	require.Equal(t, outputLimit, gotOut)
+
+	positiveRate := QualityFromAmountsWithNumberContext(
+		NewXRPEitherAmount(2),
+		NewXRPEitherAmount(1),
+		ctx,
+	)
+	negativeRate := QualityFromAmountsWithNumberContext(
+		NewXRPEitherAmount(-2),
+		NewXRPEitherAmount(1),
+		ctx,
+	)
+	require.Equal(t, positiveRate.Value, negativeRate.Value)
 
 	quality := QualityFromAmountsWithNumberContext(
 		NewXRPEitherAmount(2),
