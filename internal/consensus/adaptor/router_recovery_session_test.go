@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestFrozenPivotRecoverySurvivesUnknownSequenceConsensusRequest(t *testing.T
 }
 
 func TestHashOnlyConsensusAcquisitionPromotesAfterHeaderResolution(t *testing.T) {
-	r, _, svc := makeProvisionalWarmRouter(t)
+	r, sender, svc := makeProvisionalWarmRouter(t)
 	closed := svc.GetClosedLedgerIndex()
 	rootHash, rootData, _ := buildSelfHealSourceState(t)
 	pivotHeader := header.LedgerHeader{
@@ -90,6 +91,8 @@ func TestHashOnlyConsensusAcquisitionPromotesAfterHeaderResolution(t *testing.T)
 
 	// Consensus arrives before any hash -> sequence bookkeeping, reproducing
 	// the live startup order. This creates one ordinary hash-only acquisition.
+	r.setPeerSessionView(&testPeerSessions{connected: map[peermanagement.PeerID]bool{7: true}})
+	sender.acquisitionPeers = []uint64{7}
 	require.NoError(t, r.catchupReplay.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
 	pivotAcquisition := r.catchupReplay.fetchTracker.Find(pivotHeader.Hash)
 	require.NotNil(t, pivotAcquisition)
