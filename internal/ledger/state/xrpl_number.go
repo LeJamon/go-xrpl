@@ -112,12 +112,22 @@ func MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol,
 type NumberContext struct {
 	scale           MantissaScale
 	universalNumber bool
+	mptokensV2      bool
 }
 
 // NewNumberContext returns a Number context fixed to scale and arithmetic
 // behavior.
 func NewNumberContext(scale MantissaScale, universalNumber bool) NumberContext {
 	return NumberContext{scale: scale, universalNumber: universalNumber}
+}
+
+// WithMPTokensV2 returns a copy of the context with MPTokensV2 arithmetic
+// selected. The amendment is kept separate from the Number scale so callers
+// that override historical scale behavior still inherit the ledger's feature
+// selection.
+func (c NumberContext) WithMPTokensV2(enabled bool) NumberContext {
+	c.mptokensV2 = enabled
+	return c
 }
 
 // Scale returns the context's mantissa scale.
@@ -129,6 +139,12 @@ func (c NumberContext) Scale() MantissaScale {
 // XRPLNumber arithmetic.
 func (c NumberContext) UniversalNumberEnabled() bool {
 	return c.universalNumber
+}
+
+// MPTokensV2Enabled reports whether MPT integral arithmetic uses the directed
+// Number path introduced by the MPTokensV2 amendment.
+func (c NumberContext) MPTokensV2Enabled() bool {
+	return c.mptokensV2
 }
 
 // Number creates a Number in the context's scale under mode.
@@ -429,6 +445,12 @@ func newNumber(mantissa int64, exponent int, scale MantissaScale, mode RoundingM
 func newXRPLNumberRaw(mantissa int64, exponent int) XRPLNumber {
 	neg, m := externalToInternal(mantissa)
 	return XRPLNumber{negative: neg, mantissa: m, exponent: exponent}
+}
+
+// newXRPLNumberRawUnsigned builds a positive Number from an unsigned mantissa
+// without narrowing it before ToInt64WithMode applies its exponent.
+func newXRPLNumberRawUnsigned(mantissa uint64, exponent int) XRPLNumber {
+	return XRPLNumber{mantissa: mantissa, exponent: exponent}
 }
 
 // intConst builds an integer Number in the receiver's scale (for the curve-fit

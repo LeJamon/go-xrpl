@@ -100,7 +100,8 @@ type EngineConfig struct {
 	Rules *amendment.Rules
 
 	// NumberContextOverride reproduces test and historical contexts that selected
-	// a Number scale independently of ledger amendment rules.
+	// Number scale and universal arithmetic independently of ledger amendment
+	// rules. Amendment-specific arithmetic remains derived from Rules.
 	NumberContextOverride *state.NumberContext
 
 	// OpenLedger identifies an open-ledger apply with fee adequacy checks.
@@ -176,13 +177,14 @@ func NumberContextForRules(rules *amendment.Rules) state.NumberContext {
 		rules.Enabled(amendment.FeatureLendingProtocol),
 		rules.FixCleanup3_2_0Enabled(),
 		rules.FixCleanup3_3_0Enabled(),
-	), true)
+	), true).WithMPTokensV2(rules.MPTokensV2Enabled())
 }
 
 // NumberContext returns the immutable Number context for this transaction.
 func (c EngineConfig) NumberContext() state.NumberContext {
 	if c.NumberContextOverride != nil {
-		return *c.NumberContextOverride
+		mptokensV2 := c.Rules != nil && c.Rules.MPTokensV2Enabled()
+		return c.NumberContextOverride.WithMPTokensV2(mptokensV2)
 	}
 	return NumberContextForRules(c.RequireRules())
 }

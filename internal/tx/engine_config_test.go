@@ -66,6 +66,23 @@ func TestNumberContextForRules(t *testing.T) {
 	}
 }
 
+func TestNumberContextForRulesSelectsMPTokensV2(t *testing.T) {
+	disabled := NumberContextForRules(amendment.EmptyRules())
+	if disabled.MPTokensV2Enabled() {
+		t.Fatal("MPTokensV2 must be disabled when the amendment is absent")
+	}
+
+	enabled := NumberContextForRules(amendment.NewRules([][32]byte{amendment.FeatureMPTokensV2}))
+	if !enabled.MPTokensV2Enabled() {
+		t.Fatal("MPTokensV2 must follow the explicit rules set")
+	}
+
+	outsideLedger := NumberContextForRules(nil)
+	if outsideLedger.MPTokensV2Enabled() {
+		t.Fatal("MPTokensV2 must remain disabled without transaction rules")
+	}
+}
+
 func TestApplyContextNumberContextUsesConfigRules(t *testing.T) {
 	t.Parallel()
 
@@ -89,5 +106,21 @@ func TestEngineConfigNumberContextOverride(t *testing.T) {
 	}
 	if got := cfg.NumberContext().Scale(); got != state.MantissaScaleSmall {
 		t.Fatalf("NumberContext().Scale() = %d, want %d", got, state.MantissaScaleSmall)
+	}
+}
+
+func TestEngineConfigNumberContextOverrideInheritsMPTokensV2(t *testing.T) {
+	override := state.NewNumberContext(state.MantissaScaleSmall, false)
+	cfg := EngineConfig{
+		Rules:                 amendment.NewRules([][32]byte{amendment.FeatureMPTokensV2}),
+		NumberContextOverride: &override,
+	}
+	if !cfg.NumberContext().MPTokensV2Enabled() {
+		t.Fatal("NumberContext override masked enabled MPTokensV2 rules")
+	}
+
+	cfg.Rules = amendment.EmptyRules()
+	if cfg.NumberContext().MPTokensV2Enabled() {
+		t.Fatal("NumberContext override enabled MPTokensV2 without rules")
 	}
 }

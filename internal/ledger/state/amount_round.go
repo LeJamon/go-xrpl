@@ -46,6 +46,15 @@ func mulRoundMPT(v1, v2 Amount, ctx NumberContext, roundUp, strict bool) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
 	}
+	if v1.IsMPT() && v2.IsMPT() {
+		return mulRoundMPTMPT(v1, v2)
+	}
+	if ctx.MPTokensV2Enabled() {
+		resultNegative := v1.IsNegative() != v2.IsNegative()
+		mode := mptRoundMode(resultNegative, roundUp)
+		result := ctx.FromAmount(v1, mode).MulRounded(ctx.FromAmount(v2, mode), mode)
+		return materializeMPTRound(result, mode)
+	}
 	value1, offset1 := PrepareMulDivOperand(v1)
 	value2, offset2 := PrepareMulDivOperand(v2)
 	resultNegative := v1.IsNegative() != v2.IsNegative()
@@ -70,6 +79,12 @@ func divRoundMPT(num, den Amount, ctx NumberContext, roundUp, strict bool) int64
 	if num.IsZero() {
 		return 0
 	}
+	if ctx.MPTokensV2Enabled() {
+		resultNegative := num.IsNegative() != den.IsNegative()
+		mode := mptRoundMode(resultNegative, roundUp)
+		result := ctx.FromAmount(num, mode).DivRounded(ctx.FromAmount(den, mode), mode)
+		return materializeMPTRound(result, mode)
+	}
 	numVal, numOffset := PrepareMulDivOperand(num)
 	denVal, denOffset := PrepareMulDivOperand(den)
 	resultNegative := num.IsNegative() != den.IsNegative()
@@ -93,12 +108,21 @@ func finalizeMPTRound(
 	}
 	if addSlop {
 		amount, offset = canonicalizeIntegralRound(amount, offset, roundUp, strictCanonicalize)
-	} else {
-		amount = canonicalizeMPTNoRound(amount, offset, strict, ctx)
-		offset = 0
 	}
 	if offset > 18 {
 		panic("MPT amount out of range")
+	}
+	if ctx.UniversalNumberEnabled() {
+		mode := mptLegacyRoundMode(strict, strictCanonicalize, roundUp)
+		value := newXRPLNumberRawUnsigned(amount, offset).ToInt64WithMode(mode)
+		if value < 0 {
+			panic("MPT amount out of range")
+		}
+		return materializeMPTMagnitude(uint64(value), resultNegative, roundUp)
+	}
+	if !addSlop {
+		amount = canonicalizeMPTNoRound(amount, offset)
+		offset = 0
 	}
 	for offset > 0 {
 		if amount > maxInt64Value/10 {
@@ -111,6 +135,10 @@ func finalizeMPTRound(
 		amount /= 10
 		offset++
 	}
+	return materializeMPTMagnitude(amount, resultNegative, roundUp)
+}
+
+func materializeMPTMagnitude(amount uint64, resultNegative, roundUp bool) int64 {
 	if amount > maxInt64Value {
 		panic("MPT amount out of range")
 	}
@@ -122,6 +150,62 @@ func finalizeMPTRound(
 		value = -value
 	}
 	return value
+}
+
+func mptLegacyRoundMode(strict, strictCanonicalize, roundUp bool) RoundingMode {
+	if !strict {
+		return RoundToNearest
+	}
+	if strictCanonicalize {
+		return RoundTowardsZero
+	}
+	if roundUp {
+		return RoundUpward
+	}
+	return RoundDownward
+}
+
+// mptRoundMode maps STAmount's roundUp flag, which means away from zero, to
+// Number's directed rounding modes used by the MPTokensV2 arithmetic path.
+func mptRoundMode(resultNegative, roundUp bool) RoundingMode {
+	if roundUp != resultNegative {
+		return RoundUpward
+	}
+	return RoundDownward
+}
+
+func materializeMPTRound(number XRPLNumber, mode RoundingMode) int64 {
+	value := number.ToInt64WithMode(mode)
+	if value == -1<<63 {
+		panic("MPT amount out of range")
+	}
+	return value
+}
+
+// mulRoundMPTMPT reproduces rippled's integral MPT×MPT fast path. It runs
+// before the amendment-specific Number path and rejects negative operands and
+// products that cannot be materialized as MPT amounts.
+func mulRoundMPTMPT(v1, v2 Amount) int64 {
+	value1, ok := v1.MPTRaw()
+	if !ok {
+		panic("MPT value overflow")
+	}
+	value2, ok := v2.MPTRaw()
+	if !ok {
+		panic("MPT value overflow")
+	}
+	if value1 < 0 || value2 < 0 {
+		panic("MPT value overflow")
+	}
+	minValue, maxValue := uint64(value1), uint64(value2)
+	if minValue > maxValue {
+		minValue, maxValue = maxValue, minValue
+	}
+	if minValue > 3_037_000_499 || (maxValue>>32)*minValue > 2_147_483_648 {
+		panic("MPT value overflow")
+	}
+	product := minValue * maxValue
+	return materializeMPTRound(newXRPLNumberRawUnsigned(product, 0), RoundToNearest)
 }
 
 func canonicalizeIntegralRound(amount uint64, offset int, roundUp, strict bool) (uint64, int) {
@@ -149,17 +233,7 @@ func canonicalizeIntegralRound(amount uint64, offset int, roundUp, strict bool) 
 	return (amount + adder) / 10, offset + 1
 }
 
-func canonicalizeMPTNoRound(amount uint64, offset int, strict bool, ctx NumberContext) uint64 {
-	if !strict && ctx.UniversalNumberEnabled() {
-		if amount > maxInt64Value {
-			panic("MPT amount out of range")
-		}
-		value := newXRPLNumberRaw(int64(amount), offset).ToInt64WithMode(RoundToNearest)
-		if value < 0 {
-			panic("MPT amount out of range")
-		}
-		return uint64(value)
-	}
+func canonicalizeMPTNoRound(amount uint64, offset int) uint64 {
 	for offset > 0 {
 		if amount > maxInt64Value/10 {
 			panic("MPT amount out of range")
@@ -183,6 +257,9 @@ func muldivRound(x, y, divisor *big.Int, addSlop bool) uint64 {
 		n.Add(n, new(big.Int).Sub(divisor, bigOne))
 	}
 	n.Div(n, divisor)
+	if n.Sign() < 0 || !n.IsUint64() {
+		panic("muldivRound overflow")
+	}
 	return n.Uint64()
 }
 
