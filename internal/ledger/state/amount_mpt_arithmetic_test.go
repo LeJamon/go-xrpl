@@ -223,6 +223,36 @@ func TestMPTRoundHelpersKeepMPTIntegralFastPath(t *testing.T) {
 	require.Equal(t, int64(9_223_372_036_854_775_800), MulRoundMPTWithNumberContext(a, productOverflow, ctx, false))
 }
 
+func TestMPTRoundCanonicalizesBeforeIntegralUnderflow(t *testing.T) {
+	legacy := NewNumberContext(MantissaScaleSmall, true)
+	v2 := legacy.WithMPTokensV2(true)
+	for _, test := range []struct {
+		name        string
+		round       func(Amount, Amount, NumberContext, bool) int64
+		left, right Amount
+	}{
+		{"multiply", MulRoundMPTWithNumberContext,
+			NewMPTAmountWithIssuanceID(-1_000_000_000_000_000_000, "rIssuer", arithmeticMPTID),
+			NewIssuedAmountFromValue(1, -19, "", "")},
+		{"multiply strict", MulRoundMPTStrictWithNumberContext,
+			NewMPTAmountWithIssuanceID(-1_000_000_000_000_000_000, "rIssuer", arithmeticMPTID),
+			NewIssuedAmountFromValue(1, -19, "", "")},
+		{"divide", DivRoundMPTWithNumberContext,
+			NewMPTAmountWithIssuanceID(-100_000_000_000_000_000, "rIssuer", arithmeticMPTID),
+			NewIssuedAmountFromValue(1, 18, "", "")},
+		{"divide strict", DivRoundMPTStrictWithNumberContext,
+			NewMPTAmountWithIssuanceID(-100_000_000_000_000_000, "rIssuer", arithmeticMPTID),
+			NewIssuedAmountFromValue(1, 18, "", "")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, int64(-1), test.round(test.left, test.right, legacy, false))
+			require.Equal(t, int64(0), test.round(test.left, test.right, legacy, true))
+			require.Equal(t, int64(0), test.round(test.left, test.right, v2, false))
+			require.Equal(t, int64(-1), test.round(test.left, test.right, v2, true))
+		})
+	}
+}
+
 func TestMuldivRoundRejectsUint64Overflow(t *testing.T) {
 	max := new(big.Int).SetUint64(^uint64(0))
 	require.Equal(t, ^uint64(0), muldivRound(max, big.NewInt(1), big.NewInt(1), false))

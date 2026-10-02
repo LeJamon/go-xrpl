@@ -100,7 +100,7 @@ func finalizeMPTRound(
 	resultNegative, roundUp, addSlop, strict, strictCanonicalize bool,
 	ctx NumberContext,
 ) int64 {
-	if amount == 0 || offset <= -20 {
+	if amount == 0 {
 		if roundUp && !resultNegative {
 			return 1
 		}
@@ -108,6 +108,12 @@ func finalizeMPTRound(
 	}
 	if addSlop {
 		amount, offset = canonicalizeIntegralRound(amount, offset, roundUp, strictCanonicalize)
+	}
+	if offset <= -20 {
+		if roundUp && !resultNegative {
+			return 1
+		}
+		return 0
 	}
 	if offset > 18 {
 		panic("MPT amount out of range")
