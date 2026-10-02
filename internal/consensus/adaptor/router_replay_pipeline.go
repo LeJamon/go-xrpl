@@ -290,6 +290,9 @@ func (c *catchupReplayCoordinator) advanceStandardReplayAnchor(
 
 	c.standardReplay.anchorSeq = anchorSeq
 	c.standardReplay.anchorHash = anchorHash
+	if replacement := c.discardObsoleteStandardReplayReplacementLocked(); replacement != nil {
+		retirement.ledgers = append(retirement.ledgers, replacement)
+	}
 	// Recompute the prepared tail after consuming the stored prefix. The old
 	// collector cursor may point into that prefix, while entries beyond it can
 	// already be complete and ready to drain.
@@ -1322,16 +1325,7 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 		delete(c.standardReplay.entries, entry.seq)
 		c.standardReplay.anchorSeq = entry.seq
 		c.standardReplay.anchorHash = entry.hash
-		var supersededReplacement *inbound.Ledger
-		if replacement := c.standardReplay.replacement; replacement != nil && replacement.seq <= entry.seq {
-			if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
-				supersededReplacement = replacement.acquisition
-			}
-			if c.consensusRecovery.stepHash == replacement.hash {
-				c.consensusRecovery.stepHash = [32]byte{}
-			}
-			c.standardReplay.replacement = nil
-		}
+		supersededReplacement := c.discardObsoleteStandardReplayReplacementLocked()
 		c.replayPipelineApplied.Add(1)
 		c.replayPipelineApplyUs.Add(durationMicros(applyDuration))
 		c.replayPipelinePersistUs.Add(durationMicros(persistDuration))
