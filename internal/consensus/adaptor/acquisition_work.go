@@ -40,6 +40,7 @@ const (
 	acquisitionWorkFailure
 	acquisitionWorkAdded
 	acquisitionWorkRetarget
+	acquisitionWorkContinue
 )
 
 type ledgerAcquisitionNetwork interface {
@@ -62,6 +63,8 @@ type acquisitionWorkEvent struct {
 	peerID     uint64
 	resume     bool
 	useful     int
+	consumed   int
+	fulfilled  int
 	fetch      func([32]byte) ([]byte, bool)
 	peers      []uint64
 	added      []uint64
@@ -92,37 +95,41 @@ type acquisitionWorkBatch struct {
 	inFlightData int
 	ctx          context.Context
 	cancel       context.CancelFunc
+	waiting      bool
 }
 
 type acquisitionWorkResult struct {
-	ledger         *inbound.Ledger
-	targets        []uint64
-	stateIDs       [][]byte
-	txIDs          [][]byte
-	requests       []inbound.MissingRequest
-	replies        []acquisitionReplyStat
-	byHashState    [][32]byte
-	byHashTx       [][32]byte
-	badData        []acquisitionBadData
-	remove         bool
-	timerFailure   bool
-	policyFailure  bool
-	failureClass   standardReplayFailureClass
-	yielded        bool
-	memoryWait     bool
-	timerEscalate  bool
-	timerAt        time.Time
-	rearmTimer     bool
-	localFetch     func([32]byte) ([]byte, bool)
-	retryBase      bool
-	retarget       bool
-	queryDepth     uint32
-	complete       bool
-	snapshot       inbound.Snapshot
-	haveSnapshot   bool
-	err            error
-	persistenceErr error
-	ack            chan struct{}
+	ledger           *inbound.Ledger
+	targets          []uint64
+	stateIDs         [][]byte
+	txIDs            [][]byte
+	requests         []inbound.MissingRequest
+	replies          []acquisitionReplyStat
+	byHashState      [][32]byte
+	byHashTx         [][32]byte
+	badData          []acquisitionBadData
+	remove           bool
+	timerFailure     bool
+	policyFailure    bool
+	failureClass     standardReplayFailureClass
+	yielded          bool
+	continueRequests bool
+	pendingReply     bool
+	memoryWait       bool
+	persistenceWait  bool
+	timerEscalate    bool
+	timerAt          time.Time
+	rearmTimer       bool
+	localFetch       func([32]byte) ([]byte, bool)
+	retryBase        bool
+	retarget         bool
+	queryDepth       uint32
+	complete         bool
+	snapshot         inbound.Snapshot
+	haveSnapshot     bool
+	err              error
+	persistenceErr   error
+	ack              chan struct{}
 }
 
 type acquisitionBadData struct {
@@ -205,7 +212,16 @@ func (l *acquisitionWorkLane) cancelLedger(ledger *inbound.Ledger) bool {
 		return false
 	}
 	batch.cancel()
+	l.wakeWaitingLocked(batch)
 	return true
+}
+
+func (l *acquisitionWorkLane) wakeWaitingLocked(batch *acquisitionWorkBatch) {
+	if batch.waiting {
+		batch.waiting = false
+		l.ready = append(l.ready, batch)
+		l.notifyLocked()
+	}
 }
 
 func (l *acquisitionWorkLane) canAcceptNew() bool {
@@ -248,6 +264,7 @@ func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWo
 			for i := range batch.events {
 				if batch.events[i].kind == event.kind {
 					batch.events[i] = event
+					l.wakeWaitingLocked(batch)
 					return true
 				}
 			}
@@ -255,7 +272,14 @@ func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWo
 		if event.kind == acquisitionWorkData && batch.inFlightData+acquisitionDataEvents(batch.events) >= acquisitionWorkBatchLimit {
 			return false
 		}
-		batch.events = append(batch.events, event)
+		if batch.waiting && event.kind == acquisitionWorkData {
+			batch.events = append(batch.events, acquisitionWorkEvent{})
+			copy(batch.events[1:], batch.events[:len(batch.events)-1])
+			batch.events[0] = event
+		} else {
+			batch.events = append(batch.events, event)
+		}
+		l.wakeWaitingLocked(batch)
 		return true
 	}
 	if len(l.pending) >= l.queueDepth+1 {
@@ -322,10 +346,10 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		result.err = nil
 		result.memoryWait = true
 	}
-	if errors.Is(result.err, shamap.ErrTraversalBudget) && batch.ctx.Err() == nil {
+	if (result.continueRequests || errors.Is(result.err, shamap.ErrTraversalBudget)) && batch.ctx.Err() == nil {
 		result.err = nil
 		result.yielded = true
-		result.rearmTimer = batch.ledger.RecordTraversalProgress(previous)
+		result.rearmTimer = batch.ledger.RecordTraversalProgress(previous) || len(result.requests) > 0
 		if !result.rearmTimer {
 			switch batch.ledger.OnTimer(time.Now()) {
 			case inbound.TimerFailed:
@@ -358,8 +382,11 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 			result.persistenceErr = err
 			result.failureClass = standardReplayFailurePersistence
 			result.remove = true
-		} else if result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < before {
+		} else if result.persistenceWait || result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < before {
 			result.yielded = true
+			if result.persistenceWait && !result.pendingReply {
+				result.continueRequests = true
+			}
 		}
 	}
 	var deferred []acquisitionWorkEvent
@@ -368,7 +395,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	timerDone := !result.yielded && slices.ContainsFunc(events, func(event acquisitionWorkEvent) bool {
 		return event.kind == acquisitionWorkTimer
 	})
-	if partialRequests || timerDone {
+	if (partialRequests || timerDone || result.continueRequests) && !result.pendingReply {
 		// Replies resume the walk. Keep independent peer work without resending
 		// the timer or releasing reservations made for an already applied reply.
 		for _, event := range events {
@@ -385,7 +412,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 			}
 		}
 	}
-	if partialRequests {
+	if partialRequests && !result.continueRequests {
 		result.yielded = false
 		result.rearmTimer = true
 	}
@@ -423,6 +450,22 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		batch.cancel()
 		discarded = append(discarded, batch.events...)
 		batch.events = nil
+	} else if result.pendingReply && !result.yielded {
+		wake := len(batch.events) != 0
+		batch.events = append(batch.events, events...)
+		retained = true
+		batch.waiting = true
+		if wake {
+			l.wakeWaitingLocked(batch)
+		}
+	} else if result.continueRequests {
+		if !slices.ContainsFunc(batch.events, func(event acquisitionWorkEvent) bool {
+			return event.kind == acquisitionWorkContinue
+		}) {
+			batch.events = append(batch.events, acquisitionWorkEvent{kind: acquisitionWorkContinue})
+		}
+		l.ready = append(l.ready, batch)
+		l.notifyLocked()
 	} else if result.yielded {
 		batch.events = append(batch.events, events...)
 		retained = true
@@ -499,7 +542,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	usefulByPeer := make(map[uint64]int)
 	var addedPeers []uint64
 	var retargetPeers []uint64
-	var runLocal, runTimerCheck, runTimer, runFailure bool
+	var runLocal, runTimerCheck, runTimer, runFailure, runRequests bool
 	var timerAt time.Time
 	var fetch func([32]byte) ([]byte, bool)
 	for _, event := range events {
@@ -528,11 +571,8 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		}
 		switch event.kind {
 		case acquisitionWorkData:
-			if event.peerID != 0 && event.data != nil &&
-				(event.data.InfoType == message.LedgerInfoAsNode || event.data.InfoType == message.LedgerInfoTxNode) {
-				ledger.ReleaseMissingPeer(event.peerID)
-			}
 			if event.resume {
+				runRequests = runRequests || event.fulfilled > 0
 				if event.useful == 0 {
 					continue
 				}
@@ -551,18 +591,25 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				}
 				continue
 			}
-			useful, badKind, remove, complete, err := applyAcquisitionData(ctx, ledger, event.data)
-			event.resume = true
-			event.useful = useful
+			useful, received, badKind, remove, complete, err := applyAcquisitionReply(ctx, ledger, event)
+			event.resume = !errors.Is(err, shamap.ErrAcquisitionMemory)
+			event.useful += useful
 			if event.data != nil {
 				result.replies = append(result.replies, acquisitionReplyStat{
 					peerID: event.peerID, infoType: event.data.InfoType,
-					received: len(event.data.Nodes), useful: useful,
+					received: received, useful: useful,
 				})
 			}
 			if err != nil {
 				if errors.Is(err, shamap.ErrAcquisitionMemory) {
 					result.err = err
+					result.pendingReply = true
+					return result
+				}
+				if errors.Is(err, inbound.ErrPersistence) {
+					result.persistenceErr = err
+					result.failureClass = standardReplayFailurePersistence
+					result.remove = true
 					return result
 				}
 				if badKind != "" {
@@ -598,8 +645,9 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				}
 				continue
 			}
-			if useful > usefulByPeer[event.peerID] {
-				usefulByPeer[event.peerID] = useful
+			runRequests = runRequests || event.fulfilled > 0
+			if event.useful > usefulByPeer[event.peerID] {
+				usefulByPeer[event.peerID] = event.useful
 			}
 		case acquisitionWorkTimerCheck:
 			runTimerCheck = true
@@ -615,6 +663,8 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 					addedPeers = append(addedPeers, peerID)
 				}
 			}
+		case acquisitionWorkContinue:
+			runRequests = true
 		case acquisitionWorkLocal:
 			runLocal = true
 			fetch = event.fetch
@@ -690,53 +740,56 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		result.localFetch = fetch
 		return result
 	}
-	if preferred := selectUsefulAcquisitionPeers(usefulByPeer); len(preferred) > 0 {
+	preferred := selectUsefulAcquisitionPeers(usefulByPeer)
+	if runRequests || len(preferred) > 0 {
 		peers := acquisitionRequestCandidates(preferred, ledger.Peers())
-		result.requests, result.complete, result.err = ledger.CollectMissingReplyRequestsContext(workCtx, peers)
-		if result.err != nil || result.complete {
+		plan, err := ledger.PlanMissingReplyRequestsContext(workCtx, peers)
+		if result.applyMissingPlan(plan, err) {
 			return result
 		}
 	}
 	if len(retargetPeers) > 0 {
-		requests, complete, err := ledger.CollectMissingReplyRequestsContext(workCtx, retargetPeers)
-		if err != nil {
-			if errors.Is(err, shamap.ErrAcquisitionMemory) || errors.Is(err, shamap.ErrTraversalBudget) {
-				result.requests = append(result.requests, requests...)
-				result.err = err
-				return result
-			}
-			for _, request := range result.requests {
-				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
-			}
-			result.requests = nil
-			result.err = err
-			return result
-		}
-		result.requests = append(result.requests, requests...)
-		if complete {
-			result.complete = true
+		plan, err := ledger.PlanMissingReplyRequestsContext(workCtx, retargetPeers)
+		if result.applyMissingPlan(plan, err) {
 			return result
 		}
 	}
 	if len(addedPeers) > 0 {
-		requests, complete, err := ledger.CollectMissingAddedRequestsContext(workCtx, addedPeers)
-		if err != nil {
-			if errors.Is(err, shamap.ErrAcquisitionMemory) || errors.Is(err, shamap.ErrTraversalBudget) {
-				result.requests = append(result.requests, requests...)
-				result.err = err
-				return result
-			}
-			for _, request := range result.requests {
-				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
-			}
-			result.requests = nil
-			result.err = err
-			return result
-		}
-		result.requests = append(result.requests, requests...)
-		result.complete = complete
+		plan, err := ledger.PlanMissingAddedRequestsContext(workCtx, addedPeers)
+		result.applyMissingPlan(plan, err)
 	}
 	return result
+}
+
+func (r *acquisitionWorkResult) applyMissingPlan(plan inbound.MissingRequestPlan, err error) bool {
+	r.requests = append(r.requests, plan.Requests...)
+	if err != nil {
+		for _, request := range r.requests {
+			r.ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
+		}
+		r.requests = nil
+		r.err = err
+		if errors.Is(err, inbound.ErrPersistence) {
+			r.persistenceErr = err
+			r.failureClass = standardReplayFailurePersistence
+			r.remove = true
+		}
+		return true
+	}
+	switch plan.Outcome {
+	case inbound.MissingRequestContinue:
+		r.continueRequests = true
+		return true
+	case inbound.MissingRequestWaitPersistence:
+		r.memoryWait = true
+		r.persistenceWait = true
+		return true
+	case inbound.MissingRequestComplete:
+		r.complete = true
+		return true
+	default:
+		return false
+	}
 }
 
 func acquisitionRequestCandidates(preferred, available []uint64) []uint64 {
@@ -798,23 +851,50 @@ func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger,
 	}
 	defer event.release()
 	ctx := c.lifecycleContext()
-	result := processAcquisitionWork(ctx, ledger, []acquisitionWorkEvent{event})
-	if errors.Is(result.err, shamap.ErrAcquisitionMemory) && ctx.Err() == nil {
-		result.err = nil
-		result.memoryWait = true
-		if err := ledger.CheckpointMemory(ctx); err != nil {
-			result.persistenceErr = err
-			result.failureClass = standardReplayFailurePersistence
-			result.remove = true
+	events := []acquisitionWorkEvent{event}
+	for {
+		result := processAcquisitionWork(ctx, ledger, events)
+		if errors.Is(result.err, shamap.ErrAcquisitionMemory) && ctx.Err() == nil {
+			result.err = nil
+			result.memoryWait = true
 		}
+		resumeWork := false
+		if result.memoryWait && !result.remove {
+			before := ledger.Snapshot().AcquisitionMemory.Used
+			if err := ledger.CheckpointMemory(ctx); err != nil {
+				result.persistenceErr = err
+				result.failureClass = standardReplayFailurePersistence
+				result.remove = true
+			} else {
+				resumable := result.persistenceWait || ledger.Snapshot().AcquisitionMemory.Used < before
+				resumeWork = resumable
+				result.continueRequests = result.continueRequests || result.persistenceWait && !result.pendingReply
+			}
+		}
+		if errors.Is(result.err, shamap.ErrTraversalBudget) && ctx.Err() == nil {
+			result.err = nil
+			result.yielded = true
+		}
+		if result.complete {
+			result.persistenceErr = ledger.FlushPersistence(ctx)
+			if result.persistenceErr != nil {
+				result.failureClass = standardReplayFailurePersistence
+				result.remove = true
+			}
+		}
+		ledger.SetMemoryWaiting(result.memoryWait && !result.remove)
+		c.handleAcquisitionWorkResult(result)
+		if result.err != nil || result.remove || result.complete || ctx.Err() != nil {
+			return true
+		}
+		if resumeWork && !result.continueRequests {
+			continue
+		}
+		if !result.continueRequests {
+			return true
+		}
+		events = []acquisitionWorkEvent{{kind: acquisitionWorkContinue}}
 	}
-	if errors.Is(result.err, shamap.ErrTraversalBudget) && ctx.Err() == nil {
-		result.err = nil
-		result.yielded = true
-	}
-	ledger.SetMemoryWaiting(result.memoryWait && !result.remove)
-	c.handleAcquisitionWorkResult(result)
-	return true
 }
 
 func (c *catchupReplayCoordinator) currentAcquisitionWork() *acquisitionWorkLane {
@@ -844,6 +924,9 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 	}
 	if ledger == nil || c.fetchTracker.Find(ledger.Hash()) != ledger {
 		if ledger != nil {
+			if lane := c.currentAcquisitionWork(); lane != nil {
+				lane.cancelLedger(ledger)
+			}
 			for _, request := range result.requests {
 				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 			}
@@ -1056,6 +1139,31 @@ func (c *catchupReplayCoordinator) acquisitionPeerConnected(peerID uint64) bool 
 func (c *catchupReplayCoordinator) removeStaleAcquisitionPeer(ledger *inbound.Ledger, peerID uint64) {
 	ledger.RemovePeer(peerID)
 	c.onPeerDisconnect(peermanagement.PeerID(peerID))
+}
+
+func applyAcquisitionReply(ctx context.Context, ledger *inbound.Ledger, event *acquisitionWorkEvent) (useful, received int, badKind string, remove, complete bool, err error) {
+	data := event.data
+	if data == nil {
+		return 0, 0, "", false, false, nil
+	}
+	if data.InfoType != message.LedgerInfoAsNode && data.InfoType != message.LedgerInfoTxNode {
+		useful, badKind, remove, complete, err = applyAcquisitionData(ctx, ledger, data)
+		return useful, len(data.Nodes), badKind, remove, complete, err
+	}
+	if err := inbound.ValidateReplyNodeCount(data.Nodes); err != nil {
+		return 0, len(data.Nodes), "", false, false, err
+	}
+	reply, err := ledger.ApplyMissingReplyContext(ctx, event.peerID, data.InfoType == message.LedgerInfoTxNode, data.Nodes[event.consumed:])
+	event.consumed += reply.Consumed
+	event.fulfilled += reply.Fulfilled
+	if errors.Is(err, inbound.ErrInvalidPeerNode) {
+		badKind = "ledger-data-state"
+		if data.InfoType == message.LedgerInfoTxNode {
+			badKind = "ledger-data-tx"
+		}
+	}
+	remove = errors.Is(err, shamap.ErrNodeSerialization) || errors.Is(err, inbound.ErrPersistence)
+	return reply.Useful, reply.Consumed, badKind, remove, reply.Complete, err
 }
 
 func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *message.LedgerData) (useful int, badKind string, remove, complete bool, err error) {
