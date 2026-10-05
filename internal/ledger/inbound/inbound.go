@@ -1472,7 +1472,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	l.workMu.Lock()
 	defer l.finishWork()
 	l.mu.Lock()
-	if l.state != StateWantState {
+	if l.state != StateWantState || l.retired.Load() {
 		complete = l.state == StateComplete
 		l.mu.Unlock()
 		return nil, nil, complete, nil
@@ -1484,6 +1484,11 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 		stateTree = true
 	} else if l.txMap != nil && !l.haveTx {
 		m = l.txMap
+	}
+	if m != nil && !l.reserveRequestMetadataLocked() {
+		l.lastScanStatus = shamap.MissingNodesMemory
+		l.mu.Unlock()
+		return nil, nil, false, shamap.ErrAcquisitionMemory
 	}
 	l.mu.Unlock()
 	if m == nil {

@@ -68,6 +68,13 @@ func TestRequestWindowMetadataPressureWaitsForMemory(t *testing.T) {
 		require.Empty(t, ledger.requestLeases)
 		require.Zero(t, ledger.requestMetadataBytes)
 		require.True(t, ledger.Snapshot().MemoryWaiting)
+		for _, isReply := range []bool{false, true} {
+			state, tx, complete, err := ledger.CollectMissingRequestContext(t.Context(), isReply)
+			require.ErrorIs(t, err, shamap.ErrAcquisitionMemory)
+			require.Empty(t, state)
+			require.Empty(t, tx)
+			require.False(t, complete)
+		}
 		require.Equal(t, before, ledger.stateMap.BackedWalkStats().NodesDescended)
 	}
 }
