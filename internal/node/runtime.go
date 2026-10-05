@@ -565,9 +565,9 @@ func (r *nodeRuntime) configureConsensus() error {
 		// Back inbound acquisitions with the node store before Start launches the
 		// router loop, so the family is published before any acquisition reads it
 		// (issue #1158).
-		if r.nodeFamily != nil {
-			if router := r.consensus.Router; router != nil {
-				router.SetAcquisitionMemoryLimit(r.appConfig.Acquisition.ResolvedMemoryBytes())
+		if router := r.consensus.Router; router != nil {
+			router.SetAcquisitionMemoryLimit(r.appConfig.Acquisition.ResolvedMemoryBytes())
+			if r.nodeFamily != nil {
 				router.SetAcquisitionFamily(r.nodeFamily)
 			}
 		}

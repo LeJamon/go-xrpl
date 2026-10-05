@@ -493,6 +493,7 @@ func (c *catchupReplayCoordinator) recordAcquiredSeqHashChainLocked(
 		e.parentHash = h.ParentHash
 		e.haveParent = true
 		e.parentFrom = max(e.parentFrom, seqHashSourceAcquired)
+		e.header = &h
 		c.seqHash[h.LedgerIndex] = e
 	}
 	c.seqHashAnchor = anchor
@@ -4193,6 +4194,11 @@ func (c *catchupReplayCoordinator) failInboundAcquisitionWithSnapshot(
 	if il == nil {
 		return
 	}
+	if il.Reason() == inbound.ReasonRecovery {
+		c.failPivotRecoveryAcquisition(il, cause)
+		return
+	}
+
 	hash := il.Hash()
 	reason := il.Reason()
 	retirement, _, removed := c.removeInboundAcquisitionWithSession(il, snapshot, false)
@@ -4239,6 +4245,11 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisition(
 	if il == nil {
 		return
 	}
+	if il.Reason() == inbound.ReasonRecovery {
+		c.failPivotRecoveryAcquisition(il, cause)
+		return
+	}
+
 	if cause == nil {
 		cause = errors.New("transient parent-state acquisition failure")
 	}
@@ -4260,6 +4271,11 @@ func (c *catchupReplayCoordinator) discardFailedInboundAcquisitionWithSnapshot(
 	if il == nil {
 		return
 	}
+	if il.Reason() == inbound.ReasonRecovery {
+		c.failPivotRecoveryAcquisition(il, cause)
+		return
+	}
+
 	retirement, pivotRetired, removed := c.removeInboundAcquisitionWithSession(il, snapshot, false)
 	if !removed {
 		return
@@ -4390,6 +4406,10 @@ func (c *catchupReplayCoordinator) acquireStateAdmission() (func(), error) {
 }
 
 func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger) {
+	if il.Reason() == inbound.ReasonRecovery {
+		c.completePivotRecoveryAcquisition(il)
+		return
+	}
 	if c.stoppedForShutdown() {
 		return
 	}
@@ -4410,6 +4430,7 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		c.discardFailedInboundAcquisition(il, err, standardReplayFailureExecution)
 		return
 	}
+	c.rememberReplayHeader(*h)
 	if c.adaptor == nil {
 		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"), standardReplayFailureExecution)
 		return

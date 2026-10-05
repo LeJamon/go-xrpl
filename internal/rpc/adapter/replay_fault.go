@@ -18,7 +18,7 @@ func (a *LedgerServiceAdapter) ReplayFaultStatus() replayfault.Status {
 			PersistenceError: errors.New("ledger service is unavailable"),
 		}
 	}
-	return a.svc.ReplayFaultStatus()
+	return a.svc.ReplayRecoveryDiagnostics()
 }
 
 // ReplayBlocked reports whether local validator duties are currently gated by
@@ -46,4 +46,12 @@ func (a *LedgerServiceAdapter) RevalidateReplayFault(ctx context.Context, id str
 		return errors.New("ledger service is unavailable")
 	}
 	return a.svc.RevalidateReplayFault(ctx, id)
+}
+
+// StartReplayFaultRecoveryStrategy admits the explicitly selected recovery policy.
+func (a *LedgerServiceAdapter) StartReplayFaultRecoveryStrategy(id, strategy string) error {
+	if a == nil || a.svc == nil {
+		return errors.New("ledger service is unavailable")
+	}
+	return a.svc.StartReplayFaultRecoveryStrategy(id, strategy)
 }

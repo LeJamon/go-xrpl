@@ -28,6 +28,8 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 	switch ledger.Reason() {
 	case inbound.ReasonHistory:
 		purpose = "history"
+	case inbound.ReasonRecovery:
+		purpose = "replay_recovery"
 	case inbound.ReasonGeneric:
 		purpose = "rpc"
 	}

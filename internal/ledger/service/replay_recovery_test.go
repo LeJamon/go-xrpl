@@ -50,6 +50,13 @@ func TestStartReplayFaultRecoveryAdmitsExactIDAndPublishesFailure(t *testing.T) 
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	svc.SetReplayParentAcquirer(func(uint32, [32]byte) error {
 		close(entered)
 		<-release

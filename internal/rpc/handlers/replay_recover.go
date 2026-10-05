@@ -10,16 +10,15 @@ import (
 )
 
 type replayRecoverRequest struct {
-	FaultID string `json:"fault_id"`
+	FaultID  string `json:"fault_id"`
+	Strategy string `json:"strategy"`
 }
 
-// ReplayRecoverMethod handles the admin-only replay_recover RPC. A fault ID is
-// mandatory: the service admits asynchronous verification for the exact
-// persisted transition identified by that ID before returning.
+// ReplayRecoverMethod admits admin recovery bound to the active fault ID.
 type ReplayRecoverMethod struct{ adminHandler }
 
 func (m *ReplayRecoverMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	faultID, err := decodeReplayRecoverRequest(params)
+	request, err := decodeReplayRecoverRequest(params)
 	if err != nil {
 		return nil, rpcerrors.RpcErrorInvalidParams(err.Error())
 	}
@@ -35,13 +34,26 @@ func (m *ReplayRecoverMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if !ok {
 		return nil, rpcerrors.RpcErrorNotEnabled("replay recovery is unavailable")
 	}
-	if err := operator.StartReplayFaultRecovery(faultID); err != nil {
+	var admissionErr error
+	if request.Strategy == "exact_transition" {
+		admissionErr = operator.StartReplayFaultRecovery(request.FaultID)
+	} else {
+		pivotOperator, ok := ctx.Services.Ledger().(interface {
+			StartReplayFaultRecoveryStrategy(string, string) error
+		})
+		if !ok {
+			return nil, rpcerrors.RpcErrorNotEnabled("verified pivot recovery is unavailable")
+		}
+		admissionErr = pivotOperator.StartReplayFaultRecoveryStrategy(request.FaultID, request.Strategy)
+	}
+	if err := admissionErr; err != nil {
 		return nil, rpcInternalError("replay_recover: recovery admission failed", err)
 	}
 
 	response := map[string]any{
 		"accepted": true,
-		"fault_id": faultID,
+		"fault_id": request.FaultID,
+		"strategy": request.Strategy,
 	}
 	if status, available := replayFaultStatus(ctx.Services); available {
 		response["replay_fault"] = status
@@ -54,17 +66,23 @@ func (m *ReplayRecoverMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	return response, nil
 }
 
-func decodeReplayRecoverRequest(params json.RawMessage) (string, error) {
-	if len(params) == 0 || string(params) == "null" {
-		return "", fmt.Errorf("fault_id is required")
-	}
+func decodeReplayRecoverRequest(params json.RawMessage) (replayRecoverRequest, error) {
 	var request replayRecoverRequest
+	if len(params) == 0 || string(params) == "null" {
+		return request, fmt.Errorf("fault_id is required")
+	}
 	if err := json.Unmarshal(params, &request); err != nil {
-		return "", fmt.Errorf("invalid parameters: %w", err)
+		return request, fmt.Errorf("invalid parameters: %w", err)
 	}
 	request.FaultID = strings.TrimSpace(request.FaultID)
 	if request.FaultID == "" {
-		return "", fmt.Errorf("fault_id is required")
+		return request, fmt.Errorf("fault_id is required")
 	}
-	return request.FaultID, nil
+	if request.Strategy == "" {
+		request.Strategy = "exact_transition"
+	}
+	if request.Strategy != "exact_transition" && request.Strategy != "verified_pivot" {
+		return request, fmt.Errorf("strategy must be exact_transition or verified_pivot")
+	}
+	return request, nil
 }

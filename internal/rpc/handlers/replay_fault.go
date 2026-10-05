@@ -43,6 +43,46 @@ func replayFaultStatusJSON(status replayfault.Status, blocked bool) map[string]a
 	recovery := map[string]any{
 		"in_flight": status.Recovery.InFlight,
 	}
+	if status.Recovery.Strategy != "" {
+		recovery["strategy"] = string(status.Recovery.Strategy)
+	}
+	if status.Recovery.Strategy == replayfault.RecoveryStrategyVerifiedPivot {
+		recovery["revision"] = status.Recovery.Revision
+		recovery["evidence_authenticated"] = status.Recovery.EvidenceAuthenticated
+		recovery["state_verified"] = status.Recovery.StateVerified
+		recovery["replay_lag"] = status.Recovery.ReplayLag
+		recovery["reused_node_reads"] = status.Recovery.ReusedNodes
+		recovery["fetched_nodes"] = status.Recovery.FetchedNodes
+		recovery["state_missing_nodes_discovered"] = status.Recovery.MissingNodes
+	}
+	if status.Recovery.Outcome != "" {
+		recovery["outcome"] = string(status.Recovery.Outcome)
+	}
+	if status.Recovery.FailureFingerprint != "" {
+		recovery["failure_fingerprint"] = status.Recovery.FailureFingerprint
+	}
+	if status.Recovery.FailureAttempts != 0 {
+		recovery["failure_attempts"] = status.Recovery.FailureAttempts
+	}
+	if status.Recovery.Phase != "" {
+		recovery["phase"] = string(status.Recovery.Phase)
+	}
+	for _, point := range []struct {
+		name     string
+		sequence uint32
+		hash     [32]byte
+	}{
+		{"pivot", status.Recovery.PivotSequence, status.Recovery.PivotHash},
+		{"verified_successor", status.Recovery.SuccessorSequence, status.Recovery.SuccessorHash},
+		{"frontier", status.Recovery.FrontierSequence, status.Recovery.FrontierHash},
+	} {
+		if point.sequence != 0 {
+			recovery[point.name] = map[string]any{
+				"sequence": point.sequence,
+				"hash":     strings.ToUpper(hex.EncodeToString(point.hash[:])),
+			}
+		}
+	}
 	if status.Recovery.ID != "" {
 		recovery["id"] = status.Recovery.ID
 	}
@@ -81,10 +121,11 @@ func replayFaultStatusJSON(status replayfault.Status, blocked bool) map[string]a
 		}
 	}
 	result := map[string]any{
-		"blocked":                 blocked,
-		"follower_mode":           status.FollowerMode,
-		"transition_verification": verificationState,
-		"recovery":                recovery,
+		"blocked":                  blocked,
+		"validator_duties_blocked": blocked,
+		"follower_mode":            status.FollowerMode,
+		"transition_verification":  verificationState,
+		"recovery":                 recovery,
 	}
 	if status.LastTransitionHash != ([32]byte{}) {
 		result["last_transition_hash"] = strings.ToUpper(hex.EncodeToString(status.LastTransitionHash[:]))

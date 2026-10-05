@@ -95,6 +95,7 @@ type catchupReplayCoordinator struct {
 	replayPipelineApplyUs                atomic.Uint64
 	replayPipelinePersistUs              atomic.Uint64
 
+	pivotRecovery             *pivotRecoveryAcquisition
 	acquisitionMu             sync.Mutex
 	replayFaultBlockWarningMu sync.Mutex
 	replayFaultBlockWarningID string
@@ -325,13 +326,21 @@ func (c *catchupReplayCoordinator) admitInboundHeader(seq uint32) error {
 }
 
 func (c *catchupReplayCoordinator) acquisitionOpts() []inbound.Option {
+	return c.acquisitionOptions(false)
+}
+
+func (c *catchupReplayCoordinator) acquisitionOptions(recovery bool) []inbound.Option {
 	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader)}
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
 	memory := c.acquisitionMemory
 	c.acquisitionWorkMu.RUnlock()
 	if store != nil {
-		opts = append(opts, inbound.WithFamily(store.scope()))
+		family := store.scope()
+		if recovery {
+			family = &recoveryAcquisitionFamily{family.(*acquisitionStoreScope)}
+		}
+		opts = append(opts, inbound.WithFamily(family))
 	}
 	if memory != nil {
 		opts = append(opts, inbound.WithAcquisitionBudget(memory))

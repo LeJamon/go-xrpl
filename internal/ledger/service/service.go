@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -151,12 +152,15 @@ type Service struct {
 	// replayRecoveryCancel is owned by lifecycleMu. It is set before a
 	// recovery worker is launched and canceled when Stop begins so an admitted
 	// recovery cannot outlive the service.
-	replayRecoveryCancel context.CancelFunc
-	replayRepairParent   *ledger.Ledger
-	replayAcquireParent  func(uint32, [32]byte) error
-	lifecycleMu          sync.Mutex
-	lifecycleState       serviceLifecycleState
-	stopDone             chan struct{}
+	replayRecoveryCancel  context.CancelFunc
+	replayRepairParent    *ledger.Ledger
+	replayAcquireParent   func(uint32, [32]byte) error
+	replayPivotBackend    PivotRecoveryBackend
+	replayEvidenceCapture func(header.LedgerHeader) (json.RawMessage, error)
+	replayEvidenceVerify  func(header.LedgerHeader, json.RawMessage) error
+	lifecycleMu           sync.Mutex
+	lifecycleState        serviceLifecycleState
+	stopDone              chan struct{}
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.

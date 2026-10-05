@@ -323,6 +323,24 @@ func TestRevalidateRequiresCallbackAndOnlyOneInflight(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRevalidateAdmissionFailureDoesNotInvokeVerifier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "replay-fault.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, recordTestFault(store, Fault{ID: "fault", Class: ExecutionDisagreement}))
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+	called := false
+	err = store.Revalidate(t.Context(), "fault", func(context.Context, Fault) error {
+		called = true
+		return nil
+	})
+	require.Error(t, err)
+	require.False(t, called)
+	require.True(t, store.Blocked())
+	require.False(t, store.Status().Recovery.InFlight)
+}
+
 func TestUpdatePreservesIdentityAndAttempts(t *testing.T) {
 	store, err := Open("")
 	if err != nil {
@@ -369,6 +387,45 @@ func TestRecoveryBlockerSurvivesRestartUntilVerifiedClear(t *testing.T) {
 	require.False(t, store.Status().Blocked)
 	require.Empty(t, store.Status().Recovery.BlockedReason)
 	require.Empty(t, store.Status().Recovery.OperatorAction)
+}
+
+func TestRecoveryFrontierIsSeparateFromPendingTargetAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, recordTestFault(store, Fault{ID: "fault", Class: ExecutionDisagreement}))
+
+	progress, err := store.BeginRecovery("fault", RecoveryStrategyVerifiedPivot)
+	require.NoError(t, err)
+	pivotHash := [32]byte{1}
+	pivot := json.RawMessage(`{"header":"pivot"}`)
+	progress.PivotSequence = 10
+	progress.PivotHash = pivotHash
+	progress.Phase = RecoveryPhaseCatchingUp
+	progress, err = store.SetRecoveryPivot("fault", progress.Generation, pivot)
+	require.NoError(t, err)
+	targetHash := [32]byte{2}
+	progress.SuccessorSequence = 11
+	progress.SuccessorHash = targetHash
+	progress.FrontierSequence = 11
+	progress.FrontierHash = targetHash
+	target := json.RawMessage(`{"header":"successor"}`)
+	progress, err = store.SetRecoveryTarget("fault", progress.Generation, target)
+	require.NoError(t, err)
+	frontier := json.RawMessage(`{"header":"successor","executed":true}`)
+	_, err = store.UpdateRecoveryWithFrontier("fault", progress.Generation, progress, frontier)
+	require.NoError(t, err)
+
+	snapshot := store.Snapshot()
+	require.JSONEq(t, string(target), string(snapshot.RecoveryTarget))
+	require.JSONEq(t, string(pivot), string(snapshot.RecoveryPivot))
+	require.JSONEq(t, string(frontier), string(snapshot.RecoveryFrontier))
+
+	restarted, err := Open(path)
+	require.NoError(t, err)
+	restartedFault := restarted.Snapshot()
+	require.JSONEq(t, string(target), string(restartedFault.RecoveryTarget))
+	require.JSONEq(t, string(frontier), string(restartedFault.RecoveryFrontier))
 }
 
 func TestRevalidationPanicRemainsBlockedAcrossRestart(t *testing.T) {
