@@ -23,6 +23,7 @@ const (
 	issue2043OutstandingLimit    = 128
 	issue2043StageBatch          = 16
 	issue2043DiscoveryCallsStage = 4
+	issue2043HeapSampleEvery     = 256
 	issue2043HotBranch           = 0
 	issue2043ColdBranch          = BranchFactor - 1
 	issue2043StressEnabled       = "GOXRPL_ISSUE_2043_STRESS"
@@ -500,7 +501,7 @@ func (q *issue2043Outstanding) add(node MissingNode) bool {
 
 func (q *issue2043Outstanding) len() int { return len(q.order) }
 
-func (q *issue2043Outstanding) take(fixture *issue2043Fixture, limit int) []MissingNode {
+func (q *issue2043Outstanding) take(limit int) []MissingNode {
 	if limit <= 0 || len(q.order) == 0 {
 		return nil
 	}
@@ -571,7 +572,9 @@ type issue2043RunStats struct {
 	cursorBudgetPeak  uint64
 	heapBefore        uint64
 	heapPeak          uint64
+	heapRetainedPeak  uint64
 	heapAfter         uint64
+	heapSampledStaged uint64
 }
 
 func issue2043HeapAlloc() uint64 {
@@ -658,6 +661,7 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 	if options.measureHeap {
 		run.heapBefore = issue2043ForceGCHeap()
 		run.heapPeak = run.heapBefore
+		run.heapRetainedPeak = run.heapBefore
 	}
 	outstanding := newIssue2043Outstanding(issue2043OutstandingLimit)
 	noProgress := 0
@@ -665,7 +669,7 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 	maxPasses := fixture.withheld*16 + 1_024
 	for pass := 0; pass < maxPasses; pass++ {
 		stage := func(releaseNodes bool) int {
-			batch := outstanding.take(fixture, options.stageBatch)
+			batch := outstanding.take(options.stageBatch)
 			staged := 0
 			for _, node := range batch {
 				if fixture.stage(t, dest, node) {
@@ -695,6 +699,13 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 					if cache.Has(cache.Generation(), fixture.rootHash) {
 						t.Fatalf("incomplete checkpoint published root after %d/%d staged replies", run.staged, fixture.withheld)
 					}
+				}
+				if options.measureHeap && (releaseNodes || run.staged-run.heapSampledStaged >= issue2043HeapSampleEvery) {
+					heap := issue2043ForceGCHeap()
+					if heap > run.heapRetainedPeak {
+						run.heapRetainedPeak = heap
+					}
+					run.heapSampledStaged = run.staged
 				}
 			}
 			return staged
@@ -766,12 +777,16 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 	issue2043Observe(t, dest, budget, &run)
 	if options.measureHeap {
 		run.heapAfter = issue2043ForceGCHeap()
+		if run.heapAfter > run.heapRetainedPeak {
+			run.heapRetainedPeak = run.heapAfter
+		}
 	}
 	return run
 }
 
 func TestIssue2043BroadMissingFrontierStagesToExactRoot(t *testing.T) {
 	fixture := newIssue2043MemoryFixture(t, issue2043FixtureLeaves)
+	fixtureHeap := issue2043ForceGCHeap()
 	budget := issue2043NewBudget(issue2043BudgetBytes)
 	dest := fixture.newDestination(t, budget)
 	run := issue2043DriveInterleaved(t, fixture, dest, budget, issue2043DriveOptions{
@@ -801,7 +816,7 @@ func TestIssue2043BroadMissingFrontierStagesToExactRoot(t *testing.T) {
 	if metrics.used != 0 || metrics.cursorUsed != 0 {
 		t.Fatalf("completed acquisition retained budget: metrics=%+v", metrics)
 	}
-	t.Logf("issue2043 memory: fixture_leaves=%d hot=%d cold=%d requests=%d staged=%d peak_outstanding=%d cursor_peak=%d blocked_capacity=%d active_capacity=%d proof_capacity=%d budget_peak=%d heap_before=%d heap_peak=%d heap_after=%d reads=%d metrics=%+v", fixture.withheld, fixture.hotLeaves, fixture.coldLeaves, run.requested, run.staged, run.peakOutstanding, run.peakCursorBytes, run.peakBlocked, run.peakActive, run.peakProofs, run.budgetPeak, run.heapBefore, run.heapPeak, run.heapAfter, fixture.family.readCount(), metrics)
+	t.Logf("issue2043 memory: fixture_leaves=%d hot=%d cold=%d requests=%d staged=%d peak_outstanding=%d cursor_peak=%d blocked_capacity=%d active_capacity=%d proof_capacity=%d budget_peak=%d fixture_heap=%d heap_before=%d heap_peak=%d heap_retained_peak=%d heap_after=%d reads=%d metrics=%+v", fixture.withheld, fixture.hotLeaves, fixture.coldLeaves, run.requested, run.staged, run.peakOutstanding, run.peakCursorBytes, run.peakBlocked, run.peakActive, run.peakProofs, run.budgetPeak, fixtureHeap, run.heapBefore, run.heapPeak, run.heapRetainedPeak, run.heapAfter, fixture.family.readCount(), metrics)
 }
 
 type issue2043VerifiedFixture struct {
@@ -868,7 +883,7 @@ func BenchmarkIssue2043Acquisition(b *testing.B) {
 	template := newIssue2043MemoryFixture(b, 512)
 	b.Run("retry-drain", func(b *testing.B) {
 		b.ReportAllocs()
-		var reads, cursorPeak, budgetPeak uint64
+		var calls, reads, cursorPeak, budgetPeak uint64
 		for range b.N {
 			b.StopTimer()
 			fixture := template.cloneMemory(b)
@@ -878,10 +893,12 @@ func BenchmarkIssue2043Acquisition(b *testing.B) {
 			b.StartTimer()
 			run := issue2043DriveInterleaved(b, fixture, dest, budget, issue2043DriveOptions{})
 			b.StopTimer()
+			calls += run.calls
 			reads += fixture.family.readCount()
 			cursorPeak += run.peakCursorBytes
 			budgetPeak += run.budgetPeak
 		}
+		b.ReportMetric(float64(calls)/float64(b.N), "frontier-calls/op")
 		b.ReportMetric(float64(reads)/float64(b.N), "durable-reads/op")
 		b.ReportMetric(float64(cursorPeak)/float64(b.N), "cursor-peak-bytes/op")
 		b.ReportMetric(float64(budgetPeak)/float64(b.N), "budget-peak-bytes/op")
@@ -889,7 +906,7 @@ func BenchmarkIssue2043Acquisition(b *testing.B) {
 
 	b.Run("staged-arrivals", func(b *testing.B) {
 		b.ReportAllocs()
-		var reads, cursorPeak, budgetPeak uint64
+		var calls, reads, cursorPeak, budgetPeak uint64
 		for range b.N {
 			b.StopTimer()
 			fixture := template.cloneMemory(b)
@@ -899,10 +916,12 @@ func BenchmarkIssue2043Acquisition(b *testing.B) {
 			b.StartTimer()
 			run := issue2043DriveInterleaved(b, fixture, dest, budget, issue2043DriveOptions{stageBatch: 4, discoveryCallsStage: 1})
 			b.StopTimer()
+			calls += run.calls
 			reads += fixture.family.readCount()
 			cursorPeak += run.peakCursorBytes
 			budgetPeak += run.budgetPeak
 		}
+		b.ReportMetric(float64(calls)/float64(b.N), "frontier-calls/op")
 		b.ReportMetric(float64(reads)/float64(b.N), "durable-reads/op")
 		b.ReportMetric(float64(cursorPeak)/float64(b.N), "cursor-peak-bytes/op")
 		b.ReportMetric(float64(budgetPeak)/float64(b.N), "budget-peak-bytes/op")
@@ -977,10 +996,9 @@ func TestIssue2043MillionNodeStress(t *testing.T) {
 		leaves = parsed
 	}
 	fixture := newIssue2043DiskFixture(t, leaves)
+	fixtureHeap := issue2043ForceGCHeap()
 	budget := issue2043NewBudget(issue2043BudgetBytes)
 	dest := fixture.newDestination(t, budget)
-	runtime.GC()
-	fixtureHeap := issue2043HeapAlloc()
 	run := issue2043DriveInterleaved(t, fixture, dest, budget, issue2043DriveOptions{
 		logProgress: true,
 		measureHeap: true,
@@ -1001,5 +1019,9 @@ func TestIssue2043MillionNodeStress(t *testing.T) {
 	if got != fixture.rootHash {
 		t.Fatalf("stress completed root = %x, want %x", got[:8], fixture.rootHash[:8])
 	}
-	t.Logf("issue2043 stress: leaves=%d fixture_heap=%d heap_before=%d heap_peak=%d heap_after=%d requests=%d staged=%d peak_outstanding=%d cursor_peak=%d budget_peak=%d reads=%d", leaves, fixtureHeap, run.heapBefore, run.heapPeak, run.heapAfter, run.requested, run.staged, run.peakOutstanding, run.peakCursorBytes, run.budgetPeak, fixture.family.readCount())
+	metrics := issue2043SnapshotMetrics(dest, budget)
+	if metrics.used != 0 || metrics.cursorUsed != 0 {
+		t.Fatalf("stress completed acquisition retained budget: metrics=%+v", metrics)
+	}
+	t.Logf("issue2043 stress: leaves=%d fixture_heap=%d heap_before=%d heap_peak=%d heap_retained_peak=%d heap_after=%d requests=%d staged=%d peak_outstanding=%d cursor_peak=%d budget_peak=%d reads=%d metrics=%+v", leaves, fixtureHeap, run.heapBefore, run.heapPeak, run.heapRetainedPeak, run.heapAfter, run.requested, run.staged, run.peakOutstanding, run.peakCursorBytes, run.budgetPeak, fixture.family.readCount(), metrics)
 }
