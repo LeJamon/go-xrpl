@@ -46,12 +46,33 @@ func (l *Ledger) reserveRequestMetadataLocked() bool {
 	return true
 }
 
+func (l *Ledger) ensureRequestContainersLocked() {
+	if l.requestLeases == nil {
+		l.requestLeases = make(map[[32]byte]missingRequestLease)
+	}
+	if l.requestByNode == nil {
+		l.requestByNode = make(map[requestNodeKey][32]byte)
+	}
+	if l.recentNodes == nil {
+		l.recentNodes = make(map[[32]byte]uint64)
+	}
+	if l.requestPeers == nil {
+		l.requestPeers = make(map[uint64]struct{})
+	}
+	if l.readySet == nil {
+		l.readySet = make(map[[32]byte]struct{})
+	}
+}
+
 func (l *Ledger) releaseRequestMetadataLocked() {
 	// The bounded-window reservation is released only when the acquisition is
 	// retired, after all request maps and slices have become unreachable.
 }
 
 func (l *Ledger) enqueueReadyLocked(node shamap.MissingNode, transaction bool) bool {
+	if l.retired.Load() {
+		return false
+	}
 	if len(l.readyRequests) >= missingRequestReadyReserve {
 		return false
 	}
@@ -60,6 +81,9 @@ func (l *Ledger) enqueueReadyLocked(node shamap.MissingNode, transaction bool) b
 	}
 	if _, queued := l.readySet[node.Hash]; queued {
 		return false
+	}
+	if l.readySet == nil {
+		l.readySet = make(map[[32]byte]struct{})
 	}
 	l.readyRequests = append(l.readyRequests, readyMissingNode{node: node, transaction: transaction})
 	l.readySet[node.Hash] = struct{}{}
@@ -77,6 +101,9 @@ func (l *Ledger) removeReadyLocked(hash [32]byte) {
 }
 
 func (l *Ledger) reserveMissingNodeLocked(node shamap.MissingNode, transaction bool, peerID uint64, now time.Time) bool {
+	if l.retired.Load() {
+		return false
+	}
 	if len(l.requestLeases) >= l.requestReservationLimit() {
 		return false
 	}
@@ -90,6 +117,7 @@ func (l *Ledger) reserveMissingNodeLocked(node shamap.MissingNode, transaction b
 	if !l.reserveRequestMetadataLocked() {
 		return false
 	}
+	l.ensureRequestContainersLocked()
 	l.requestLeases[node.Hash] = missingRequestLease{
 		peerID:      peerID,
 		transaction: transaction,
@@ -188,6 +216,12 @@ func (l *Ledger) refreshPeerLeaseLocked(peerID uint64) {
 }
 
 func (l *Ledger) refreshRequestPeersLocked() {
+	if l.retired.Load() {
+		return
+	}
+	if l.requestPeers == nil {
+		l.requestPeers = make(map[uint64]struct{})
+	}
 	clear(l.requestPeers)
 	for _, lease := range l.requestLeases {
 		if lease.peerID != 0 {
@@ -279,11 +313,14 @@ func (l *Ledger) clearTreeReservationsLocked(transaction bool, now time.Time) {
 func (l *Ledger) releaseAllRequestMetadataLocked() uint64 {
 	bytes := l.requestMetadataBytes
 	l.requestMetadataBytes = 0
-	clear(l.requestLeases)
-	clear(l.requestByNode)
-	clear(l.recentNodes)
-	clear(l.requestPeers)
-	clear(l.readyRequests)
-	clear(l.readySet)
+	// Drop the containers themselves before returning the fixed reservation.
+	// clear leaves map buckets and slice backing arrays reachable through the
+	// Ledger, so releasing the charge at that point would under-account memory.
+	l.requestLeases = nil
+	l.requestByNode = nil
+	l.recentNodes = nil
+	l.requestPeers = nil
+	l.readyRequests = nil
+	l.readySet = nil
 	return bytes
 }

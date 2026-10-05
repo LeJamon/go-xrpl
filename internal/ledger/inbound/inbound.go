@@ -1746,6 +1746,9 @@ func (l *Ledger) CollectMissingCachedAddedRequests(peerIDs []uint64) []MissingRe
 func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs []uint64, batchLimit int, blind, useScanner bool) ([]MissingRequest, bool, error) {
 	l.workMu.Lock()
 	defer l.finishWork()
+	if l.retired.Load() {
+		return nil, l.IsComplete(), nil
+	}
 	if len(peerIDs) == 0 {
 		return nil, l.IsComplete(), nil
 	}
