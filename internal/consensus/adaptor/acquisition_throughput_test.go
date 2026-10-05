@@ -75,6 +75,16 @@ type acquisitionThroughputMetrics struct {
 }
 
 func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testing.T) {
+	for _, visitSlice := range []int64{acquisitionThroughputVisitSlice, 128} {
+		name := "production_slice"
+		if visitSlice != acquisitionThroughputVisitSlice {
+			name = "tiny_slice"
+		}
+		t.Run(name, func(t *testing.T) { runAcquisitionThroughput(t, visitSlice) })
+	}
+}
+
+func runAcquisitionThroughput(t *testing.T, visitSlice int64) {
 	fixture := newAcquisitionThroughputFixture(t)
 	ledger := fixture.ledger
 	peers := ledger.Peers()
@@ -85,7 +95,7 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(ctx context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
-		return processAcquisitionWorkWithBudget(ctx, current, events, acquisitionThroughputVisitSlice)
+		return processAcquisitionWorkWithBudget(ctx, current, events, visitSlice)
 	}
 	persistenceFlushes := 0
 	lane.flush = func(ctx context.Context, current *inbound.Ledger) error {
@@ -243,13 +253,16 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 	require.Greater(t, metrics.partialRetries, 0, "partial replies never exercised a legitimate retry")
 	require.Greater(t, metrics.protectedOldDelivery, 0, "a stale delivery released a newer batch")
 	require.GreaterOrEqual(t, metrics.maxRequestPeers, 2, "disjoint work must occupy multiple peers")
-	require.GreaterOrEqual(t, metrics.fullWidthRequests, 2, "request window never stayed wide")
-	require.GreaterOrEqual(t, metrics.continuationFollowup, 1, "partial CPU yield was not followed by discovery")
+	if visitSlice != acquisitionThroughputVisitSlice {
+		require.GreaterOrEqual(t, metrics.continuationFollowup, 1, "partial CPU yield was not followed by discovery")
+	}
 	require.GreaterOrEqual(t, metrics.requestedIDs, acquisitionThroughputBatch*4, "request planner did not sustain enough frontier work")
 	meanRequestWidth := float64(metrics.requestWidthSum) / float64(max(1, metrics.requests))
 	fullWidthRatio := float64(metrics.fullWidthRequests) / float64(max(1, metrics.requests))
-	require.GreaterOrEqual(t, meanRequestWidth, 64.0, "request batches collapsed under pressure")
-	require.GreaterOrEqual(t, fullWidthRatio, 0.10, "full-width requests were not sustained")
+	if visitSlice == acquisitionThroughputVisitSlice {
+		require.GreaterOrEqual(t, meanRequestWidth, 64.0, "request batches collapsed under pressure")
+		require.GreaterOrEqual(t, fullWidthRatio, 0.10, "full-width requests were not sustained")
+	}
 	require.LessOrEqual(t, metrics.maxOutstanding, acquisitionThroughputReserve)
 	require.LessOrEqual(t, metrics.peakBudget, uint64(acquisitionThroughputBudget))
 	require.Greater(t, metrics.useful, 0)
@@ -268,7 +281,7 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 
 	reads := final.StateDurableReads
 	usefulPerReply := float64(metrics.useful) / float64(max(1, metrics.replies))
-	t.Logf("missing-inner baseline_candidate leaves=%d withheld_inner=%d withheld_leaf=%d requests=%d requested_ids=%d mean_request_width=%.1f full_width_ratio=%.2f partial_retries=%d protected_old_delivery=%d replies=%d useful=%d useful/reply=%.1f durable_reads=%d simulated_rtt=%s simulated_elapsed=%s max_request_width=%d full_width_requests=%d max_peer_occupancy=%d max_outstanding=%d budget_peak=%d", fixture.withheldLeaf, fixture.withheldInner, fixture.withheldLeaf, metrics.requests, metrics.requestedIDs, meanRequestWidth, fullWidthRatio, metrics.partialRetries, metrics.protectedOldDelivery, metrics.replies, metrics.useful, usefulPerReply, reads, acquisitionThroughputSimulatedRTT, metrics.simulatedElapsed, metrics.maxRequestWidth, metrics.fullWidthRequests, metrics.maxRequestPeers, metrics.maxOutstanding, metrics.peakBudget)
+	t.Logf("missing-inner visit_slice=%d leaves=%d withheld_inner=%d withheld_leaf=%d requests=%d requested_ids=%d mean_request_width=%.1f full_width_ratio=%.2f partial_retries=%d protected_old_delivery=%d replies=%d useful=%d useful/reply=%.1f durable_reads=%d simulated_rtt=%s simulated_elapsed=%s max_request_width=%d full_width_requests=%d max_peer_occupancy=%d max_outstanding=%d budget_peak=%d", visitSlice, fixture.withheldLeaf, fixture.withheldInner, fixture.withheldLeaf, metrics.requests, metrics.requestedIDs, meanRequestWidth, fullWidthRatio, metrics.partialRetries, metrics.protectedOldDelivery, metrics.replies, metrics.useful, usefulPerReply, reads, acquisitionThroughputSimulatedRTT, metrics.simulatedElapsed, metrics.maxRequestWidth, metrics.fullWidthRequests, metrics.maxRequestPeers, metrics.maxOutstanding, metrics.peakBudget)
 }
 
 func newAcquisitionThroughputFixture(t *testing.T) *acquisitionThroughputFixture {

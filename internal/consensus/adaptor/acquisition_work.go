@@ -116,7 +116,7 @@ type acquisitionWorkResult struct {
 	continueRequests bool
 	pendingReply     bool
 	memoryWait       bool
-	persistenceWait  bool
+	requestWait      inbound.MissingRequestOutcome
 	timerEscalate    bool
 	timerAt          time.Time
 	rearmTimer       bool
@@ -382,9 +382,9 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 			result.persistenceErr = err
 			result.failureClass = standardReplayFailurePersistence
 			result.remove = true
-		} else if result.persistenceWait || result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < beforeCheckpoint {
+		} else if result.requestWait == inbound.MissingRequestWaitPersistence || result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < beforeCheckpoint {
 			result.yielded = true
-			if result.persistenceWait && !result.pendingReply {
+			if (result.requestWait == inbound.MissingRequestWaitMemory || result.requestWait == inbound.MissingRequestWaitPersistence) && !result.pendingReply {
 				result.continueRequests = true
 			}
 		}
@@ -780,9 +780,9 @@ func (r *acquisitionWorkResult) applyMissingPlan(plan inbound.MissingRequestPlan
 	case inbound.MissingRequestContinue:
 		r.continueRequests = true
 		return true
-	case inbound.MissingRequestWaitPersistence:
+	case inbound.MissingRequestWaitMemory, inbound.MissingRequestWaitPersistence:
 		r.memoryWait = true
-		r.persistenceWait = true
+		r.requestWait = plan.Outcome
 		return true
 	case inbound.MissingRequestComplete:
 		r.complete = true
@@ -866,9 +866,11 @@ func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger,
 				result.failureClass = standardReplayFailurePersistence
 				result.remove = true
 			} else {
-				resumable := result.persistenceWait || ledger.Snapshot().AcquisitionMemory.Used < before
+				resumable := result.requestWait == inbound.MissingRequestWaitPersistence || ledger.Snapshot().AcquisitionMemory.Used < before
 				resumeWork = resumable
-				result.continueRequests = result.continueRequests || result.persistenceWait && !result.pendingReply
+				if resumable && (result.requestWait == inbound.MissingRequestWaitMemory || result.requestWait == inbound.MissingRequestWaitPersistence) && !result.pendingReply {
+					result.continueRequests = true
+				}
 			}
 		}
 		if errors.Is(result.err, shamap.ErrTraversalBudget) && ctx.Err() == nil {

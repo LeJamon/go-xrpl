@@ -101,32 +101,50 @@ func TestAcquisitionDiscoveryYieldPreservesPeerControl(t *testing.T) {
 	require.Equal(t, acquisitionWorkContinue, events[2].kind)
 }
 
-func TestAcquisitionPersistenceWaitResumesAfterBarrier(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
-	ledger := inbound.New([32]byte{8}, 8, 8, serveTestLogger())
-	resumed := make(chan []acquisitionWorkEvent, 1)
-	calls := 0
-	lane.process = func(_ context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
-		calls++
-		if calls == 1 {
-			return acquisitionWorkResult{ledger: current, memoryWait: true, persistenceWait: true}
-		}
-		resumed <- append([]acquisitionWorkEvent(nil), events...)
-		return acquisitionWorkResult{ledger: current}
+func TestAcquisitionDiscoveryWaitResumesAfterCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome inbound.MissingRequestOutcome
+		held    uint64
+	}{
+		{"persistence_without_reclaimed_bytes", inbound.MissingRequestWaitPersistence, 0},
+		{"memory_with_partial_requests", inbound.MissingRequestWaitMemory, 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := shamap.NewAcquisitionBudget(8 << 20)
+			family := &releasingCheckpointFamily{Family: backend.NewMemory(), budget: budget, held: tc.held}
+			require.True(t, budget.TryReserve(tc.held))
+			ledger := inbound.New([32]byte{8}, 8, 8, serveTestLogger(), inbound.WithFamily(family), inbound.WithAcquisitionBudget(budget))
+			lane := newAcquisitionWorkLane(1)
+			resumed := make(chan []acquisitionWorkEvent, 1)
+			calls := 0
+			lane.process = func(_ context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
+				calls++
+				if calls == 1 {
+					return acquisitionWorkResult{ledger: current, memoryWait: true, requestWait: tc.outcome,
+						requests: []inbound.MissingRequest{{PeerID: 8, NodeIDs: [][]byte{{1}}}}}
+				}
+				resumed <- append([]acquisitionWorkEvent(nil), events...)
+				return acquisitionWorkResult{ledger: current}
+			}
+			lane.start(t.Context())
+			t.Cleanup(lane.stop)
+			require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkContinue}))
+			first := <-lane.results()
+			require.NoError(t, first.persistenceErr)
+			require.True(t, first.yielded, "a completed checkpoint must resume eligible discovery")
+			require.Len(t, first.requests, 1)
+			close(first.ack)
+			second := <-lane.results()
+			require.NoError(t, second.err)
+			require.Empty(t, second.requests, "earlier requests must not be emitted again")
+			close(second.ack)
+			events := <-resumed
+			require.Len(t, events, 1)
+			require.Equal(t, acquisitionWorkContinue, events[0].kind)
+			require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+		})
 	}
-	lane.start(t.Context())
-	t.Cleanup(lane.stop)
-	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkContinue}))
-	first := <-lane.results()
-	require.True(t, first.yielded, "a completed durability barrier permits scanning without a byte-count change")
-	close(first.ack)
-	second := <-lane.results()
-	require.NoError(t, second.err)
-	close(second.ack)
-	events := <-resumed
-	require.Len(t, events, 1)
-	require.Equal(t, acquisitionWorkContinue, events[0].kind)
-	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 }
 
 func TestAcquisitionReplyResumesAfterAutomaticCheckpoint(t *testing.T) {
