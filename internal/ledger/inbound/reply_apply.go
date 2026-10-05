@@ -108,7 +108,6 @@ func (l *Ledger) applyMissingReplyNodesLocked(
 ) (MissingReplyResult, []shamap.FlushEntry, bool, error) {
 	result := MissingReplyResult{Received: len(nodes)}
 	stored := make([]shamap.FlushEntry, 0, len(nodes))
-	now := SystemClock.Now()
 	matchedPeer := false
 	for i := range nodes {
 		node := nodes[i]
@@ -153,13 +152,13 @@ func (l *Ledger) applyMissingReplyNodesLocked(
 			}
 			stored = append(stored, entry)
 			if hasLease {
-				l.removeLeaseLocked(leaseHash, false, now)
+				l.removeLeaseLocked(leaseHash)
 				result.Fulfilled++
 			}
 			l.removeMissingNodeLocked(transaction, parsedID)
 		case shamap.NodeDuplicate:
 			if hasLease {
-				l.removeLeaseLocked(leaseHash, false, now)
+				l.removeLeaseLocked(leaseHash)
 				result.Fulfilled++
 			}
 			l.removeMissingNodeLocked(transaction, parsedID)

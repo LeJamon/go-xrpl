@@ -71,30 +71,23 @@ func newPressureAcquisition(t *testing.T, limit uint64) (*Ledger, map[string]mes
 	return ledger, nodes, root, budget
 }
 
-func runDelayedPressure(t *testing.T, limit uint64, saturated bool) pressureThroughput {
+func runDelayedPressure(t *testing.T, limit uint64) pressureThroughput {
 	t.Helper()
 	ledger, wire, root, budget := newPressureAcquisition(t, limit)
 	t.Cleanup(func() { require.NoError(t, ledger.RetirePersistence(context.Background())) })
 	excluded := make(missingNodeExclusionFilter)
-	sawMemory := false
 	for pass := 0; pass < 128; pass++ {
 		missing, err := ledger.stateMap.GetMissingNodesContext(shamap.WithTraversalBudget(t.Context(), 8192), 256, excluded)
 		for _, node := range missing {
 			excluded[node.Hash] = struct{}{}
-		}
-		if errors.Is(err, shamap.ErrAcquisitionMemory) {
-			sawMemory = true
-			break
 		}
 		require.True(t, err == nil || errors.Is(err, shamap.ErrTraversalBudget), "prime frontier: %v", err)
 		if len(excluded) == pressureLeaves {
 			break
 		}
 	}
-	require.Equal(t, saturated, sawMemory)
-	if saturated {
-		require.Greater(t, ledger.stateMap.BackedWalkStats().BlockedItems, uint64(1024))
-	}
+	require.Len(t, excluded, pressureLeaves, "discovery must cover the frontier within its fixed cursor budget")
+	require.Zero(t, ledger.stateMap.BackedWalkStats().BlockedItems)
 	peers := []uint64{11, 12, 13, 14, 15, 16}
 	rtts := [...]int{200, 80, 160, 100, 180, 120}
 	queue := make([]delayedPressureReply, 0, len(peers))
@@ -185,8 +178,8 @@ func runDelayedPressure(t *testing.T, limit uint64, saturated bool) pressureThro
 }
 
 func TestCollectMissingReplyRequests_DelayedRepliesSurvivePressure(t *testing.T) {
-	pressure := runDelayedPressure(t, 8<<20, true)
-	control := runDelayedPressure(t, 512<<20, false)
+	pressure := runDelayedPressure(t, 8<<20)
+	control := runDelayedPressure(t, 512<<20)
 	pressureRate := float64(pressure.nodes) / pressure.elapsed.Seconds()
 	controlRate := float64(control.nodes) / control.elapsed.Seconds()
 	require.GreaterOrEqual(t, pressureRate, controlRate/2, "pressure throughput collapsed")

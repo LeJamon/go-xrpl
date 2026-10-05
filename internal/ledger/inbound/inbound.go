@@ -1143,13 +1143,13 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 			}
 			stored = append(stored, entry)
 			if hash, ok := l.requestByNode[requestNodeKey{transaction: m == l.txMap, nodeID: parsedID}]; ok {
-				l.removeLeaseLocked(hash, false, time.Now())
+				l.removeLeaseLocked(hash)
 			}
 		case shamap.NodeDuplicate:
 			// Already present, or ahead of its frontier: neither progress nor
 			// a reject. A duplicate still validates the requested frontier.
 			if hash, ok := l.requestByNode[requestNodeKey{transaction: m == l.txMap, nodeID: parsedID}]; ok {
-				l.removeLeaseLocked(hash, false, time.Now())
+				l.removeLeaseLocked(hash)
 			}
 		case shamap.NodeReRequest:
 			// The requested frontier remains unresolved and is retried by the
@@ -1982,7 +1982,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 					return requests, false, yieldErr
 				}
 				n := min(batchLimit, len(pending))
-				if traversalExhausted && len(peers) > 0 {
+				if scanStatus == shamap.MissingNodesWaiting && len(peers) > 0 {
 					n = min(n, max(1, (len(pending)+len(peers))/(len(peers)+1)))
 				}
 				if n == 0 {
@@ -2022,7 +2022,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				}
 			}
 			if len(peers) == 0 || (!useScanner && err != nil) ||
-				(useScanner && (scanStatus == shamap.MissingNodesMemory || scanStatus == shamap.MissingNodesPersistence || scanStatus.String() == "persistence")) {
+				(useScanner && (scanStatus == shamap.MissingNodesMemory || scanStatus == shamap.MissingNodesPersistence)) {
 				l.mu.Unlock()
 				return requests, false, yieldErr
 			}
@@ -2065,7 +2065,7 @@ func (l *Ledger) releaseMissingRequests(requests []MissingRequest) {
 	for _, request := range requests {
 		for _, hash := range request.NodeHashes {
 			if lease, ok := l.requestLeases[hash]; ok && lease.peerID == request.PeerID {
-				l.removeLeaseLocked(hash, false, time.Now())
+				l.removeLeaseLocked(hash)
 			}
 		}
 	}
@@ -2083,10 +2083,9 @@ func (l *Ledger) ReleaseMissingRequest(peerID uint64, hashes [][32]byte) {
 func (l *Ledger) ReleaseUnreservedMissingNodes() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
 	for hash, lease := range l.requestLeases {
 		if lease.peerID == 0 && len(l.readyRequests) < missingRequestReadyReserve {
-			if released, ok := l.removeLeaseLocked(hash, false, now); ok {
+			if released, ok := l.removeLeaseLocked(hash); ok {
 				l.enqueueReadyLocked(shamap.MissingNode{Hash: hash, NodeID: released.nodeID}, released.transaction)
 			}
 		}
@@ -2393,7 +2392,7 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 		loadsBefore := stateMap.FamilyLoadCount()
 		stateProgress, stateStored, stateMissing, err = fillFromLocalContext(ctx, stateMap, fetch)
 		stateProgress = stateProgress || stateMap.FamilyLoadCount() > loadsBefore
-		if persistErr := l.persistReceived(ctx, stateStored, "locally recovered state nodes"); persistErr != nil {
+		if persistErr := l.persistLocalNodes(ctx, stateMap, stateStored, "locally recovered state nodes"); persistErr != nil {
 			l.recordLocalProgress(stateMap, txMap, stateProgress)
 			return stateProgress, false, persistErr
 		}
@@ -2415,7 +2414,7 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 		loadsBefore := txMap.FamilyLoadCount()
 		txProgress, txStored, txMissing, err = fillFromLocalContext(ctx, txMap, fetch)
 		txProgress = txProgress || txMap.FamilyLoadCount() > loadsBefore
-		if persistErr := l.persistReceived(ctx, txStored, "locally recovered transaction nodes"); persistErr != nil {
+		if persistErr := l.persistLocalNodes(ctx, txMap, txStored, "locally recovered transaction nodes"); persistErr != nil {
 			progressed = stateProgress || txProgress
 			l.recordLocalProgress(stateMap, txMap, progressed)
 			return progressed, false, persistErr
@@ -2483,12 +2482,29 @@ func (l *Ledger) recordLocalProgress(stateMap, txMap *shamap.SHAMap, progressed 
 	l.markProgressLocked()
 }
 
+func (l *Ledger) persistLocalNodes(ctx context.Context, m *shamap.SHAMap, entries []shamap.FlushEntry, label string) error {
+	if err := l.persistReceived(ctx, entries, label); err != nil {
+		return err
+	}
+	if l.family == nil || len(entries) == 0 {
+		return nil
+	}
+	if err := l.FlushPersistence(ctx); err != nil {
+		return fmt.Errorf("%w: flush %s: %w", ErrPersistence, label, err)
+	}
+	if err := m.AcknowledgePersistedContext(ctx); err != nil {
+		return fmt.Errorf("%w: acknowledge %s: %w", ErrPersistence, label, err)
+	}
+	return nil
+}
+
 func fillFromLocalContext(
 	ctx context.Context,
 	m *shamap.SHAMap,
 	fetch func(hash [32]byte) ([]byte, bool),
 ) (bool, []shamap.FlushEntry, []shamap.MissingNode, error) {
 	added := false
+	passProgress := false
 	var stored []shamap.FlushEntry
 	for {
 		missing, err := m.GetMissingNodesContext(ctx, localFillBatch, nil)
@@ -2496,6 +2512,10 @@ func fillFromLocalContext(
 			return added, stored, nil, err
 		}
 		if len(missing) == 0 {
+			if err == nil && passProgress {
+				passProgress = false
+				continue
+			}
 			return added, stored, nil, err
 		}
 		passAdded := 0
@@ -2514,6 +2534,7 @@ func fillFromLocalContext(
 			}
 		}
 		added = added || passAdded > 0
+		passProgress = passProgress || passAdded > 0
 		if passAdded == 0 || err != nil {
 			return added, stored, missing, err
 		}

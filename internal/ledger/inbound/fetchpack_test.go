@@ -242,3 +242,32 @@ func TestTrackerActive_ReturnsInFlight(t *testing.T) {
 		t.Fatal("removed acquisition is still reported active")
 	}
 }
+
+func TestCheckLocal_FlushFailurePreventsCompletion(t *testing.T) {
+	source, rootHash, rootData := buildSourceStateMap(t)
+	pack, err := source.WalkFetchPackNodes(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := make(map[[32]byte][]byte, len(pack))
+	for _, node := range pack {
+		cache[node.Hash] = node.Data
+	}
+	flushErr := errors.New("flush unavailable")
+	family := &checkpointFamily{Family: backend.NewMemory(), err: flushErr}
+	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 325, AccountHash: rootHash})
+	ledger := New(ledgerHash, 325, 7, discardLogger(), WithFamily(family))
+	if err := ledger.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}); err != nil {
+		t.Fatal(err)
+	}
+	progressed, complete, err := ledger.CheckLocalContext(t.Context(), func(hash [32]byte) ([]byte, bool) {
+		data, ok := cache[hash]
+		return data, ok
+	})
+	if !errors.Is(err, ErrPersistence) || !errors.Is(err, flushErr) {
+		t.Fatalf("local recovery error = %v, want persistence and flush errors", err)
+	}
+	if !progressed || complete || ledger.IsComplete() || family.flushes != 1 {
+		t.Fatalf("progressed=%t complete=%t state=%v flushes=%d", progressed, complete, ledger.State(), family.flushes)
+	}
+}
