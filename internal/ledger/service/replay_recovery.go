@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 )
@@ -62,6 +63,14 @@ func (s *Service) admitReplayRecoveryJob(run func(context.Context) error) (<-cha
 // verification itself continues under the service lifecycle and reports its
 // result through ReplayFaultStatus.
 func (s *Service) StartReplayFaultRecovery(id string) error {
+	return s.StartReplayFaultRecoveryStrategy(id, string(replayfault.RecoveryStrategyExactTransition))
+}
+
+// StartReplayFaultRecoveryStrategy admits an explicit recovery attempt. The
+// legacy exact-transition strategy keeps its original verifier; verified-pivot
+// is a separate staged worker whose durable journal remains blocked through
+// canonical handoff.
+func (s *Service) StartReplayFaultRecoveryStrategy(id, strategy string) error {
 	if s.replayFaults == nil {
 		return replayfault.ErrNoFault
 	}
@@ -72,13 +81,47 @@ func (s *Service) StartReplayFaultRecovery(id string) error {
 	if id == "" || fault.ID != id {
 		return fmt.Errorf("%w: %q", replayfault.ErrFaultIDMismatch, id)
 	}
-
+	recoveryStrategy := replayfault.RecoveryStrategy(strategy)
+	if recoveryStrategy != replayfault.RecoveryStrategyExactTransition && recoveryStrategy != replayfault.RecoveryStrategyVerifiedPivot {
+		return fmt.Errorf("%w: %q", replayfault.ErrRecoveryStrategy, strategy)
+	}
 	started := make(chan struct{})
-	done, err := s.admitReplayRecoveryJob(func(ctx context.Context) error {
-		return s.revalidateReplayFault(ctx, id, func() {
-			close(started)
-		})
-	})
+	run := func(ctx context.Context) error {
+		current := s.replayFaults.Snapshot()
+		if current == nil || current.ID != id {
+			return replayfault.ErrFaultIDMismatch
+		}
+		resumePivot := current.Recovery != nil && current.Recovery.Strategy == replayfault.RecoveryStrategyVerifiedPivot &&
+			current.Recovery.Phase != replayfault.RecoveryPhaseComplete && current.Recovery.Phase != replayfault.RecoveryPhaseExecutionFailed &&
+			current.Recovery.Phase != replayfault.RecoveryPhaseNeedsOperator && current.Recovery.LastError == ""
+		if recoveryStrategy == replayfault.RecoveryStrategyVerifiedPivot && (resumePivot || !s.exactReplayTransitionUsable(ctx, current)) {
+			if s.pivotRecoveryBackend() == nil {
+				return errors.New("verified-pivot replay recovery backend unavailable")
+			}
+			release, err := s.AcquireStateAdmission(ctx)
+			if err != nil {
+				return err
+			}
+			defer release()
+			notify := started
+			for {
+				err := s.recoverVerifiedPivot(ctx, id, notify)
+				if !errors.Is(err, ErrRecoveryUnavailable) {
+					return err
+				}
+				notify = nil
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
+		}
+		return s.revalidateReplayFault(ctx, id, func() { close(started) })
+	}
+	done, err := s.admitReplayRecoveryJob(run)
 	if err != nil {
 		return err
 	}

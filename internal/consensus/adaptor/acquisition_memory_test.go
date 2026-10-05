@@ -321,6 +321,17 @@ func TestAcquisitionMemoryCheckpointFailureIsPersistenceFailure(t *testing.T) {
 }
 
 func TestAcquisitionWorkSharedMemoryResumesWithoutReplacingLedger(t *testing.T) {
+	for _, recovery := range []bool{false, true} {
+		name := "ordinary"
+		if recovery {
+			name = "recovery"
+		}
+		t.Run(name, func(t *testing.T) { testAcquisitionWorkSharedMemoryResume(t, recovery) })
+	}
+}
+
+func testAcquisitionWorkSharedMemoryResume(t *testing.T, recovery bool) {
+	t.Helper()
 	source := newWideWorkSource(t, 1)
 	rootHash, err := source.Hash()
 	require.NoError(t, err)
@@ -335,8 +346,12 @@ func TestAcquisitionWorkSharedMemoryResumesWithoutReplacingLedger(t *testing.T) 
 	store.memory = budget
 	store.start(t.Context())
 	t.Cleanup(store.stopDrain)
-	ledger := inbound.New(ledgerHash, h.LedgerIndex, 7, serveTestLogger(),
-		inbound.WithFamily(store.scope()), inbound.WithAcquisitionBudget(budget))
+	coordinator := &catchupReplayCoordinator{acquisitionStore: store, acquisitionMemory: budget}
+	create := inbound.New
+	if recovery {
+		create = inbound.NewRecovery
+	}
+	ledger := create(ledgerHash, h.LedgerIndex, 7, serveTestLogger(), coordinator.acquisitionOptions(recovery)...)
 	require.NoError(t, ledger.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
 	require.NoError(t, ledger.FlushPersistence(t.Context()))
 	require.False(t, ledger.IsComplete())

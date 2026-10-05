@@ -96,7 +96,8 @@ func TestReplayRecoverRequestRequiresFaultID(t *testing.T) {
 
 	id, err := decodeReplayRecoverRequest(json.RawMessage(`{"fault_id":" fault-1 "}`))
 	require.NoError(t, err)
-	assert.Equal(t, "fault-1", id)
+	assert.Equal(t, "fault-1", id.FaultID)
+	assert.Equal(t, "exact_transition", id.Strategy)
 }
 
 func TestReplayRecoverMethodIsAdminOnly(t *testing.T) {
@@ -136,4 +137,112 @@ func TestReplayRecoverMethodAdmitsCanceledRequestAsInFlight(t *testing.T) {
 	require.Equal(t, true, response["accepted"])
 	require.Equal(t, true, response["in_flight"])
 	require.NotContains(t, response, "recovered")
+}
+
+type replayPivotLedgerFixture struct {
+	*replayRecoverLedgerFixture
+	admit func(string, string) error
+}
+
+func (f *replayPivotLedgerFixture) StartReplayFaultRecoveryStrategy(id, strategy string) error {
+	return f.admit(id, strategy)
+}
+
+func TestReplayRecoverStrategyAdmission(t *testing.T) {
+	for _, strategy := range []string{"", "exact_transition", "verified_pivot", "invalid"} {
+		t.Run(strategy, func(t *testing.T) {
+			exact, pivot := 0, 0
+			ledger := &replayPivotLedgerFixture{
+				replayRecoverLedgerFixture: &replayRecoverLedgerFixture{start: func(id string) error {
+					require.Equal(t, "fault-1", id)
+					exact++
+					return nil
+				}},
+				admit: func(id, selected string) error {
+					require.Equal(t, "fault-1", id)
+					require.Equal(t, "verified_pivot", selected)
+					pivot++
+					return nil
+				},
+			}
+			params, err := json.Marshal(map[string]string{"fault_id": "fault-1", "strategy": strategy})
+			require.NoError(t, err)
+			services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})
+			result, rpcErr := (&ReplayRecoverMethod{}).Handle(&types.RpcContext{Context: context.Background(), Services: services}, params)
+			if strategy == "invalid" {
+				require.NotNil(t, rpcErr)
+				require.Zero(t, exact+pivot)
+				return
+			}
+			require.Nil(t, rpcErr)
+			require.Equal(t, true, result.(map[string]any)["accepted"])
+			if strategy == "verified_pivot" {
+				require.Equal(t, 1, pivot)
+				require.Zero(t, exact)
+			} else {
+				require.Equal(t, 1, exact)
+				require.Zero(t, pivot)
+			}
+		})
+	}
+}
+
+func TestReplayRecoverPivotDoesNotFallBackToExact(t *testing.T) {
+	ledger := &replayRecoverLedgerFixture{start: func(string) error {
+		t.Fatal("pivot request must not invoke an exact-only provider")
+		return nil
+	}}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})
+	_, rpcErr := (&ReplayRecoverMethod{}).Handle(&types.RpcContext{Context: context.Background(), Services: services}, json.RawMessage(`{"fault_id":"fault-1","strategy":"verified_pivot"}`))
+	require.NotNil(t, rpcErr)
+}
+
+func TestReplayRecoverCanceledBeforeAdmission(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	ledger := &replayPivotLedgerFixture{
+		replayRecoverLedgerFixture: &replayRecoverLedgerFixture{start: func(string) error {
+			t.Fatal("canceled request admitted exact recovery")
+			return nil
+		}},
+		admit: func(string, string) error {
+			t.Fatal("canceled request admitted pivot recovery")
+			return nil
+		},
+	}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})
+	for _, strategy := range []string{"exact_transition", "verified_pivot"} {
+		params, err := json.Marshal(map[string]string{"fault_id": "fault-1", "strategy": strategy})
+		require.NoError(t, err)
+		result, rpcErr := (&ReplayRecoverMethod{}).Handle(&types.RpcContext{Context: requestContext, Services: services}, params)
+		require.NotNil(t, rpcErr)
+		require.Nil(t, result)
+	}
+}
+
+func TestReplayFaultStatusJSONShowsPivotRecovery(t *testing.T) {
+	status := replayfault.Status{
+		Blocked: true,
+		Recovery: replayfault.RecoveryProgress{
+			Strategy:          replayfault.RecoveryStrategyVerifiedPivot,
+			Phase:             replayfault.RecoveryPhaseCatchingUp,
+			Generation:        7,
+			PivotSequence:     100,
+			PivotHash:         [32]byte{0xAB},
+			SuccessorSequence: 101,
+			SuccessorHash:     [32]byte{0xCD},
+			FrontierSequence:  105,
+			FrontierHash:      [32]byte{0xEF},
+		},
+	}
+	got := replayFaultStatusJSON(status, true)
+	require.Equal(t, true, got["blocked"])
+	recovery := got["recovery"].(map[string]any)
+	require.Equal(t, "verified_pivot", recovery["strategy"])
+	require.Equal(t, "catching_up", recovery["phase"])
+	require.Equal(t, uint64(7), recovery["generation"])
+	require.Equal(t, uint32(100), recovery["pivot"].(map[string]any)["sequence"])
+	require.Equal(t, uint32(101), recovery["verified_successor"].(map[string]any)["sequence"])
+	require.Equal(t, uint32(105), recovery["frontier"].(map[string]any)["sequence"])
+	require.Equal(t, "AB00000000000000000000000000000000000000000000000000000000000000", recovery["pivot"].(map[string]any)["hash"])
 }

@@ -75,6 +75,8 @@ const (
 	// ReasonHistory is a background backfill of a ledger a jump-adopt skipped
 	// (rippled Reason::HISTORY): store-only ingest, off the catch-up path.
 	ReasonHistory
+	// ReasonRecovery keeps operator recovery inputs outside canonical adoption.
+	ReasonRecovery
 )
 
 // State tracks the acquisition progress.
@@ -297,6 +299,13 @@ func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, o
 		l.peers = nil
 	}
 	l.reason = ReasonGeneric
+	return l
+}
+
+// NewRecovery creates an acquisition owned by an admitted replay recovery.
+func NewRecovery(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
+	l := New(hash, seq, peerID, logger, opts...)
+	l.reason = ReasonRecovery
 	return l
 }
 

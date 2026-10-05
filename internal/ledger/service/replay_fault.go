@@ -22,6 +22,7 @@ import (
 )
 
 type replayEvidence struct {
+	Authentication           json.RawMessage     `json:"authentication,omitempty"`
 	Origin                   string              `json:"origin,omitempty"`
 	RepairClass              replayfault.Class   `json:"repair_class,omitempty"`
 	TransactionMapIncomplete bool                `json:"transaction_map_incomplete,omitempty"`
@@ -179,8 +180,10 @@ func (s *Service) ReplayBlocked() bool { return s.replayFaults != nil && s.repla
 func (s *Service) ReplayFaultStatus() replayfault.Status {
 	status := s.replayFaults.Status()
 	if status.Fault != nil {
-		status.Recovery.AcquisitionAttempts = status.Fault.AcquisitionAttempts
-		status.Recovery.AcquisitionError = status.Fault.AcquisitionError
+		status.Recovery.AcquisitionAttempts = max(status.Recovery.AcquisitionAttempts, status.Fault.AcquisitionAttempts)
+		if status.Recovery.AcquisitionError == "" {
+			status.Recovery.AcquisitionError = status.Fault.AcquisitionError
+		}
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -234,6 +237,17 @@ func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, 
 		return nil, errors.New("replay transition is required")
 	}
 	evidence := replayEvidenceFor(replay, cfg, authenticated)
+	if !lockHeld {
+		s.mu.RLock()
+		capture, verify := s.replayEvidenceCapture, s.replayEvidenceVerify
+		s.mu.RUnlock()
+		if capture != nil && verify != nil {
+			if proof, captureErr := capture(evidence.Target); captureErr == nil && len(proof) != 0 && verify(evidence.Target, proof) == nil {
+				evidence.Authentication = proof
+				evidence.Authenticated = true
+			}
+		}
+	}
 	raw, err := json.Marshal(evidence)
 	if err != nil {
 		return nil, err
@@ -599,7 +613,7 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		if err := json.Unmarshal(fault.Evidence, &evidence); err != nil {
 			return err
 		}
-		if !evidence.Authenticated {
+		if !s.authenticateReplayEvidence(evidence) {
 			s.mu.RLock()
 			authenticate := s.replayAuthenticate
 			s.mu.RUnlock()

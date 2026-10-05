@@ -56,6 +56,7 @@ type Adaptor struct {
 	mu sync.Mutex
 
 	ledgerService *service.Service
+	networkID     uint32
 	txLookup      openLedgerTxLookup
 	sender        consensusNetwork
 	identity      *ValidatorIdentity
@@ -95,6 +96,11 @@ type Adaptor struct {
 	// wired by the engine after the ValidationTracker is built. Nil before
 	// wiring — GenerateNegativeUNLPseudoTx degrades to no vote.
 	validationHistorian consensus.ValidationHistorian
+
+	// validationSignerResolver maps a validation's ephemeral signing key to
+	// its manifest-backed master identity while live evidence is captured. The
+	// resulting signed manifest is persisted with the proof for restart checks.
+	validationSignerResolver func(consensus.SigningPubKey) (consensus.NodeID, [33]byte, []byte, bool)
 
 	// remoteFeeMu serializes validated-ledger callbacks so a delayed older
 	// notification cannot overwrite the fee computed for a newer ledger.
@@ -408,6 +414,10 @@ func New(cfg Config) *Adaptor {
 
 	// Non-validators never emit, so skip the floor read (see maxDisallowedSeq).
 	var maxDisallowedSeq uint32
+	var networkID uint32
+	if cfg.LedgerService != nil {
+		networkID = cfg.LedgerService.GetServerInfo().NetworkID
+	}
 	if cfg.Identity != nil && cfg.LedgerService != nil {
 		maxDisallowedSeq = cfg.LedgerService.MaxPersistedLedgerSeq(context.Background())
 		if maxDisallowedSeq > 0 {
@@ -434,6 +444,7 @@ func New(cfg Config) *Adaptor {
 
 	a := &Adaptor{
 		ledgerService:     cfg.LedgerService,
+		networkID:         networkID,
 		txLookup:          txLookup,
 		sender:            sender,
 		identity:          cfg.Identity,
@@ -515,6 +526,15 @@ func (a *Adaptor) onValidatedLedger(seq uint32, hash, parentHash [32]byte) {
 func (a *Adaptor) SetValidationHistorian(h consensus.ValidationHistorian) {
 	a.mu.Lock()
 	a.validationHistorian = h
+	a.mu.Unlock()
+}
+
+// SetValidationSignerResolver wires the manifest-backed identity resolver used
+// while capturing validation evidence. Passing nil restores the seed-only
+// mapping from an ephemeral key to its node ID.
+func (a *Adaptor) SetValidationSignerResolver(resolve func(consensus.SigningPubKey) (consensus.NodeID, [33]byte, []byte, bool)) {
+	a.mu.Lock()
+	a.validationSignerResolver = resolve
 	a.mu.Unlock()
 }
 

@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"runtime"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -98,12 +101,14 @@ type peerBootstrapAcknowledger interface {
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
-	engine      consensus.RouterEngine
-	adaptor     *Adaptor
-	gossip      gossipNetwork
-	txSetNet    txSetNetwork
-	acquisition ledgerAcquisitionNetwork
-	serve       ledgerServeNetwork
+	engine               consensus.RouterEngine
+	adaptor              *Adaptor
+	pivotRecoveryBackend service.PivotRecoveryBackend
+	pivotRecoveryReady   atomic.Bool
+	gossip               gossipNetwork
+	txSetNet             txSetNetwork
+	acquisition          ledgerAcquisitionNetwork
+	serve                ledgerServeNetwork
 	// inbox is the overlay's bounded, backpressured consensus lane.
 	inbox <-chan *peermanagement.InboundMessage
 	// serviceInbox carries best-effort, recoverable peer traffic. Keeping it
@@ -296,6 +301,7 @@ type consensusRecovery struct {
 // no parent link (hash only); status_change gossip populates both. haveParent
 // distinguishes a real zero parent hash from "not yet learned".
 type ledgerHashEntry struct {
+	header     *header.LedgerHeader
 	hash       [32]byte
 	parentHash [32]byte
 	haveParent bool
@@ -426,8 +432,24 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 	if adaptor != nil && adaptor.LedgerService() != nil {
 		adaptor.LedgerService().SetReplayTargetAuthenticator(r.catchupReplay.replayTargetAuthenticated)
 		adaptor.LedgerService().SetReplayParentAcquirer(coord.acquireReplayParent)
+		backend := &pivotRecoveryBackend{coordinator: coord}
+		r.pivotRecoveryBackend = backend
+		adaptor.LedgerService().SetReplayEvidenceAuthenticator(backend.CaptureReplayEvidence, func(h header.LedgerHeader, proof json.RawMessage) error {
+			return backend.Authenticate(context.Background(), service.RecoveryTarget{Header: h, Evidence: proof})
+		})
 	}
 	return r
+}
+
+func (r *Router) installPivotRecoveryBackend() {
+	if r == nil || r.adaptor == nil || r.pivotRecoveryBackend == nil {
+		return
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil || !r.pivotRecoveryReady.CompareAndSwap(false, true) {
+		return
+	}
+	svc.SetPivotRecoveryBackend(r.pivotRecoveryBackend)
 }
 
 // SetTxInbox installs the overlay's dedicated transaction lane. Run selects
@@ -507,6 +529,17 @@ func (r *Router) belowFloor(seq uint32) bool {
 func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement.Overlay) {
 	r.manifests = cache
 	r.overlay = overlay
+	if r.adaptor != nil {
+		if cache == nil {
+			r.adaptor.SetValidationSignerResolver(nil)
+		} else {
+			r.adaptor.SetValidationSignerResolver(func(signing consensus.SigningPubKey) (consensus.NodeID, [33]byte, []byte, bool) {
+				master := cache.GetMasterKey([33]byte(signing))
+				manifest, _ := cache.GetManifest(master)
+				return consensus.CalcNodeID(master), master, manifest, true
+			})
+		}
+	}
 	if cache != nil && !r.manifestLimitSet {
 		r.manifestUntrustedLimit = cache.MaxUntrustedCount()
 	}
@@ -649,6 +682,9 @@ func (r *Router) Run(ctx context.Context) {
 	if r.catchupReplay != nil {
 		workLane, stopAcquisitionWork = r.catchupReplay.startAcquisitionWork(runCtx)
 	}
+	// Trust setup and acquisition workers must be ready before persisted
+	// recovery can resume.
+	r.installPivotRecoveryBackend()
 	defer stopAcquisitionWork()
 
 	disconnectCtx, stopDisconnectCleanup := context.WithCancel(runCtx)

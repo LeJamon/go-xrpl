@@ -515,8 +515,10 @@ func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
 			a.ledgerService.GetClosedLedger(),
 			a.ledgerService.GetValidatedLedger(),
 		)
-		if err := a.ledgerService.SwitchToPreferredLedger(wrapped.Unwrap()); err != nil {
-			return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+		if !a.ledgerService.RecoveryFrontierReady(selected.Header()) {
+			if err := a.ledgerService.SwitchToPreferredLedger(selected); err != nil {
+				return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+			}
 		}
 		switched = true
 	}

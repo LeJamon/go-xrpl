@@ -147,9 +147,10 @@ func TestStateBaseRepairRetainsExactTargetAfterRecertificationFailure(t *testing
 
 func TestStateBaseRepairRetainsExactTargetAfterDurableFaultFailure(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		block func(*testing.T, string, string)
-		fix   func(*testing.T, string, string)
+		name             string
+		admissionBlocked bool
+		block            func(*testing.T, string, string)
+		fix              func(*testing.T, string, string)
 	}{{
 		name: "archive",
 		block: func(t *testing.T, path, id string) {
@@ -159,7 +160,8 @@ func TestStateBaseRepairRetainsExactTargetAfterDurableFaultFailure(t *testing.T)
 			require.NoError(t, os.Remove(path+"."+id+".resolved"))
 		},
 	}, {
-		name: "clear",
+		name:             "admission",
+		admissionBlocked: true,
 		block: func(t *testing.T, path, _ string) {
 			require.NoError(t, os.Remove(path))
 			require.NoError(t, os.Mkdir(path, 0o700))
@@ -171,13 +173,18 @@ func TestStateBaseRepairRetainsExactTargetAfterDurableFaultFailure(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "fault.json")
 			f, fault, repaired, repairCalls := prepareStateBaseRepairLifetime(t, path)
+			before := f.svc.GetValidatedLedger()
 			test.block(t, path, fault.ID)
 
 			err := f.svc.RevalidateReplayFault(t.Context(), fault.ID)
 			require.ErrorContains(t, err, "publish replay fault")
 			require.True(t, f.svc.ReplayBlocked())
 			require.Equal(t, 1, *repairCalls)
-			require.Same(t, repaired, f.svc.GetValidatedLedger())
+			if test.admissionBlocked {
+				require.Same(t, before, f.svc.GetValidatedLedger(), "failed durable admission must not execute the repair")
+			} else {
+				require.Same(t, repaired, f.svc.GetValidatedLedger())
+			}
 			assertRepairRetained(t, f.svc, repaired)
 
 			test.fix(t, path, fault.ID)
