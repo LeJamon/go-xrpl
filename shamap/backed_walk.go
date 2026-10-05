@@ -75,16 +75,6 @@ func takeTraversalVisit(ctx context.Context) bool {
 	return budget == nil || budget.remaining.Add(-1) >= 0
 }
 
-func traversalBudgetHasAtMost(ctx context.Context, limit int64) bool {
-	budget, ok := ctx.Value(traversalBudgetKey{}).(*traversalBudget)
-	return ok && budget.remaining.Load() <= limit
-}
-
-func hasTraversalBudget(ctx context.Context) bool {
-	_, ok := ctx.Value(traversalBudgetKey{}).(*traversalBudget)
-	return ok
-}
-
 type backedWalkItem struct {
 	hash       [32]byte
 	baseHash   [32]byte
@@ -211,10 +201,6 @@ func (sm *SHAMap) releaseBackedWalkCursorLocked() {
 	sm.acquisition.stats.activeCapacity.Store(0)
 	sm.acquisition.stats.proofEntries.Store(0)
 	sm.acquisition.stats.proofCapacity.Store(0)
-}
-
-func (sm *SHAMap) clearBackedWalkNodeReferencesLocked() {
-	sm.clearBackedScanNodeReferencesLocked()
 }
 
 func (sm *SHAMap) loadTraversalNode(ctx context.Context, access *familyAccess, root *innerNode, item backedWalkItem) (traversalNode, bool, bool, error) {

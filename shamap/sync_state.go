@@ -165,7 +165,7 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 		return errSyncNotInProgress
 	}
 	sm.tree.mu.RUnlock()
-	result, err := sm.ScanMissingNodesContext(ctx, 1, nil)
+	result, err := sm.scanMissingNodesContext(ctx, 1, nil, true)
 	if err != nil {
 		return fmt.Errorf("sync completeness walk: %w", err)
 	}
@@ -176,18 +176,26 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 		if result.reason == missingNodesTraversalYield {
 			return fmt.Errorf("sync completeness walk: %w", ErrTraversalBudget)
 		}
-		return fmt.Errorf("sync incomplete: still have %d missing nodes", len(result.Nodes))
+		return fmt.Errorf("sync incomplete: missing nodes remain")
 	case MissingNodesWaiting:
 		return fmt.Errorf("sync incomplete: unresolved paths remain")
 	case MissingNodesPersistence:
 		return fmt.Errorf("sync incomplete: persistence acknowledgement is pending")
 	}
 
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
 	if sm.tree.state != stateSyncing {
 		return errSyncNotInProgress
 	}
+	// Nodes admitted while syncing are charged to the acquisition owner. A
+	// successful finish transfers ownership to the modifying map, so release
+	// those temporary credits before leaving the syncing state. Backed maps
+	// normally release them at the persistence acknowledgement barrier; the
+	// unbacked path has no such callback.
+	sm.releaseAcquisitionNodesLocked()
 	sm.tree.state = stateModifying
 
 	return nil

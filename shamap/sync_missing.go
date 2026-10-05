@@ -12,6 +12,7 @@ import (
 func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, filter SyncFilter) ([]MissingNode, error) {
 	unlimited := maxMissing <= 0
 	var missing []MissingNode
+	restarted := false
 	for {
 		if !unlimited && len(missing) >= maxMissing {
 			return missing[:maxMissing], nil
@@ -31,6 +32,12 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 				return missing, ErrTraversalBudget
 			}
 			continue
+		case MissingNodesWaiting:
+			if len(missing) == 0 && !restarted {
+				restarted = true
+				continue
+			}
+			return missing, nil
 		case MissingNodesMemory:
 			return missing, ErrAcquisitionMemory
 		default:
@@ -91,11 +98,6 @@ func (sm *SHAMap) acquireBackedWalkGeneration(
 		releaseCache()
 		releaseDurable()
 	}
-}
-
-// markRootFullBelow records the root as full-below at gen.
-func markRootFullBelow(root *innerNode, gen uint32) {
-	root.setFullBelowGen(gen)
 }
 
 // GetMissingNodes returns the nodes referenced by the tree but not

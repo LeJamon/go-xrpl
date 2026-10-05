@@ -50,3 +50,24 @@ func TestRequestWindowMetadataReservationReleasedOnRetirement(t *testing.T) {
 	require.False(t, complete)
 	require.Zero(t, budget.Snapshot().Used)
 }
+
+func TestRequestWindowMetadataPressureWaitsForMemory(t *testing.T) {
+	budget := shamap.NewAcquisitionBudget(8 << 20)
+	ledger := newWideAcquisition(t, WithAcquisitionBudget(budget))
+	t.Cleanup(func() { require.NoError(t, ledger.RetirePersistence(context.Background())) })
+	metadataBytes := uint64(ledger.requestReservationLimit()) * missingRequestMetadataBytes
+	held := budget.Snapshot().Limit - budget.Snapshot().Used - metadataBytes + 1
+	require.True(t, budget.TryReserve(held))
+	defer budget.Release(held)
+	before := ledger.stateMap.BackedWalkStats().NodesDescended
+	for range 2 {
+		plan, err := ledger.PlanMissingReplyRequestsContext(t.Context(), []uint64{11, 12, 13, 14, 15, 16})
+		require.NoError(t, err)
+		require.Equal(t, MissingRequestWaitMemory, plan.Outcome)
+		require.Empty(t, plan.Requests)
+		require.Empty(t, ledger.requestLeases)
+		require.Zero(t, ledger.requestMetadataBytes)
+		require.True(t, ledger.Snapshot().MemoryWaiting)
+		require.Equal(t, before, ledger.stateMap.BackedWalkStats().NodesDescended)
+	}
+}

@@ -7,9 +7,11 @@ import (
 	"unsafe"
 )
 
-// The scanner owns one fixed-depth DFS stack per root lane. A stack frame is
-// retained only while a traversal slice is in progress; unavailable children
-// are reported and the enclosing frame advances to its next sibling.
+// The scanner owns fixed-depth DFS stacks for admitted lanes. A stack frame is
+// retained only while its traversal slice is in progress; unavailable children
+// are reported and the enclosing frame advances to its next sibling. Lanes are
+// admitted lazily so the cursor remains bounded even when every root branch is
+// deep.
 type backedScanFrame struct {
 	item     backedWalkItem
 	view     traversalNode
@@ -26,6 +28,7 @@ type backedScanLane struct {
 	stack      []backedScanFrame
 	complete   bool
 	incomplete bool
+	started    bool
 	durable    bool
 	hint       backedScanHint
 }
@@ -66,9 +69,6 @@ func (sm *SHAMap) newBackedScanCursor(
 	base *verifiedWalkBase,
 	budget *AcquisitionBudget,
 ) (*backedScanCursor, error) {
-	// The cursor and all lane stacks are admitted as one bounded reservation.
-	// This keeps a small budget from partially constructing an unaccounted
-	// frontier while making stack growth independent of the unresolved tree.
 	charge := 2 * uint64(unsafe.Sizeof(backedScanCursor{}))
 	if budget != nil && !budget.tryReserveCursor(charge) {
 		return nil, ErrAcquisitionMemory
@@ -125,12 +125,12 @@ func (sm *SHAMap) releaseBackedScanCursorLocked() {
 		clear(lane.stack)
 		lane.stack = nil
 		if capacity != 0 {
-			sm.releaseCursorBytes(cursorAsWalkCursor(cursor), uint64(capacity)*backedScanFrameBytes)
+			sm.releaseCursorBytes(scanCursorBudget(cursor), uint64(capacity)*backedScanFrameBytes)
 		}
 		lane.root = backedWalkItem{}
 	}
 	if cursor.fixedBytes != 0 {
-		sm.releaseCursorBytes(cursorAsWalkCursor(cursor), cursor.fixedBytes)
+		sm.releaseCursorBytes(scanCursorBudget(cursor), cursor.fixedBytes)
 	}
 	sm.acquisition.scan = nil
 	sm.acquisition.base = nil
@@ -142,10 +142,7 @@ func (sm *SHAMap) releaseBackedScanCursorLocked() {
 	sm.acquisition.stats.proofCapacity.Store(0)
 }
 
-// cursorAsWalkCursor lets the shared cursor accounting release a reservation
-// without retaining a second accounting implementation. It is safe because
-// only budget and no backed-walk lane data are read by releaseCursorBytes.
-func cursorAsWalkCursor(cursor *backedScanCursor) *cursorBudget {
+func scanCursorBudget(cursor *backedScanCursor) *cursorBudget {
 	if cursor == nil {
 		return nil
 	}
@@ -188,7 +185,7 @@ func (sm *SHAMap) updateBackedScanStats(cursor *backedScanCursor) {
 	sm.acquisition.stats.proofCapacity.Store(0)
 }
 
-func (sm *SHAMap) startBackedScanPass(cursor *backedScanCursor) error {
+func startBackedScanPass(cursor *backedScanCursor) {
 	for i := range cursor.lanes {
 		lane := &cursor.lanes[i]
 		if lane.complete {
@@ -197,36 +194,28 @@ func (sm *SHAMap) startBackedScanPass(cursor *backedScanCursor) error {
 		clear(lane.stack)
 		lane.stack = lane.stack[:0]
 		lane.incomplete = false
+		lane.started = false
 		lane.durable = true
 		lane.hint = backedScanHint{}
 		if lane.root.hash == ([32]byte{}) {
 			lane.complete = true
 			continue
 		}
-		if err := sm.pushBackedScanFrame(cursor, lane, backedScanFrame{item: lane.root}); err != nil {
-			return err
-		}
 	}
 	cursor.passActive = true
-	return nil
 }
 
 func (sm *SHAMap) pushBackedScanFrame(cursor *backedScanCursor, lane *backedScanLane, frame backedScanFrame) error {
-	if len(lane.stack) >= cap(lane.stack) {
-		oldCap := cap(lane.stack)
-		newCap := max(1, oldCap*2)
-		newCap = min(newCap, maxDepth+1)
-		if newCap <= oldCap {
-			return errMaxDepthExceeded
-		}
-		charge := uint64(newCap) * backedScanFrameBytes
-		if !sm.reserveCursorBytes(cursorAsWalkCursor(cursor), charge) {
+	if cap(lane.stack) == 0 {
+		const stackCapacity = maxDepth + 1
+		charge := uint64(stackCapacity) * backedScanFrameBytes
+		if !sm.reserveCursorBytes(scanCursorBudget(cursor), charge) {
 			return ErrAcquisitionMemory
 		}
-		next := make([]backedScanFrame, len(lane.stack), newCap)
-		copy(next, lane.stack)
-		lane.stack = next
-		sm.releaseCursorBytes(cursorAsWalkCursor(cursor), uint64(oldCap)*backedScanFrameBytes)
+		lane.stack = make([]backedScanFrame, 0, stackCapacity)
+	}
+	if len(lane.stack) >= cap(lane.stack) {
+		return errMaxDepthExceeded
 	}
 	lane.stack = append(lane.stack, frame)
 	return nil
@@ -256,7 +245,7 @@ func (sm *SHAMap) finishBackedScanFrame(
 		capacity := cap(lane.stack)
 		lane.stack = nil
 		if capacity != 0 {
-			sm.releaseCursorBytes(cursorAsWalkCursor(cursor), uint64(capacity)*backedScanFrameBytes)
+			sm.releaseCursorBytes(scanCursorBudget(cursor), uint64(capacity)*backedScanFrameBytes)
 		}
 		return
 	}
@@ -277,6 +266,7 @@ func (sm *SHAMap) scanBackedLane(
 	filter SyncFilter,
 	missing *[]MissingNode,
 	maxMissing int,
+	probe bool,
 ) (bool, error) {
 	for len(lane.stack) != 0 {
 		if err := ctx.Err(); err != nil {
@@ -302,6 +292,9 @@ func (sm *SHAMap) scanBackedLane(
 				return false, err
 			}
 			if !found {
+				if probe {
+					return true, nil
+				}
 				lane.incomplete = true
 				frame.full, frame.stored, frame.loaded = false, false, true
 				outputFull := false
@@ -384,6 +377,8 @@ func (sm *SHAMap) scanBackedContext(
 	generation uint32,
 	maxMissing int,
 	filter SyncFilter,
+	backed bool,
+	probe bool,
 ) (MissingNodesResult, error) {
 	rootHash := root.Hash()
 	// An empty SHAMap root has no serialized node and therefore no durable
@@ -394,7 +389,10 @@ func (sm *SHAMap) scanBackedContext(
 		sm.releaseBackedScanCursorLocked()
 		return MissingNodesResult{Status: MissingNodesComplete}, nil
 	}
-	base := sm.acquisition.base
+	var base *verifiedWalkBase
+	if backed {
+		base = sm.acquisition.base
+	}
 	baseRoot := [32]byte{}
 	if base != nil {
 		baseRoot = base.rootHash
@@ -425,39 +423,51 @@ func (sm *SHAMap) scanBackedContext(
 	}
 	defer sm.updateBackedScanStats(cursor)
 	if !cursor.passActive {
-		if err := sm.startBackedScanPass(cursor); err != nil {
-			if errors.Is(err, ErrAcquisitionMemory) {
-				return MissingNodesResult{Status: MissingNodesMemory}, nil
-			}
-			return MissingNodesResult{}, err
-		}
+		startBackedScanPass(cursor)
 	}
-	if maxMissing < 0 {
-		maxMissing = 0
-	}
-	missing := make([]MissingNode, 0, min(maxMissing, backedScanDefaultResultLimit))
+	missing := make([]MissingNode, 0, maxMissing)
+	blocked := false
+	releasedStack := false
 	for offset := range BranchFactor {
 		branch := (int(cursor.nextLane) + offset) % BranchFactor
 		lane := &cursor.lanes[branch]
 		if lane.complete {
 			continue
 		}
-		full, err := sm.scanBackedLane(ctx, access, cache, generation, root, cursor, lane, filter, &missing, maxMissing)
+		if !lane.started {
+			if err := sm.pushBackedScanFrame(cursor, lane, backedScanFrame{item: lane.root}); err != nil {
+				if errors.Is(err, ErrAcquisitionMemory) {
+					blocked = true
+					continue
+				}
+				return MissingNodesResult{Nodes: missing}, err
+			}
+			lane.started = true
+		}
+		hadStack := len(lane.stack) != 0
+		full, err := sm.scanBackedLane(ctx, access, cache, generation, root, cursor, lane, filter, &missing, maxMissing, probe)
+		releasedStack = releasedStack || hadStack && len(lane.stack) == 0
 		if err != nil {
 			if errors.Is(err, ErrTraversalBudget) {
 				cursor.nextLane = uint8((branch + 1) % BranchFactor)
 				return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesTraversalYield}, nil
 			}
-			if errors.Is(err, ErrAcquisitionMemory) {
-				return MissingNodesResult{Nodes: missing, Status: MissingNodesMemory}, nil
-			}
 			return MissingNodesResult{Nodes: missing}, err
 		}
 		if full {
-			cursor.nextLane = uint8((branch + 1) % BranchFactor)
-			cursor.passActive = true
+			if probe {
+				cursor.nextLane = uint8(branch)
+			} else {
+				cursor.nextLane = uint8((branch + 1) % BranchFactor)
+			}
 			return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesResultFull}, nil
 		}
+	}
+	if blocked {
+		if releasedStack {
+			return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesTraversalYield}, nil
+		}
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesMemory}, nil
 	}
 
 	allComplete := true
@@ -478,14 +488,20 @@ func (sm *SHAMap) scanBackedContext(
 	if !allComplete {
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesWaiting}, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return MissingNodesResult{Nodes: missing}, err
+	}
+	if !backed {
+		root.setFullBelowGen(generation)
+		cacheFullBelow(cache, generation, rootHash, 0)
+		sm.releaseBackedScanCursorLocked()
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesComplete}, nil
+	}
 	if !allDurable {
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesPersistence}, nil
 	}
 	if root.IsDirty() {
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesPersistence}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return MissingNodesResult{Nodes: missing}, err
 	}
 	if !takeTraversalVisit(ctx) {
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesTraversalYield}, nil
@@ -513,29 +529,11 @@ func (sm *SHAMap) scanUnbackedContext(
 	root *innerNode,
 	maxMissing int,
 	filter SyncFilter,
+	probe bool,
 ) (MissingNodesResult, error) {
 	gen, cache, done := fullBelowContext(sm)
 	defer done()
-	missing := make([]MissingNode, 0, min(maxMissing, backedScanDefaultResultLimit))
-	full, stopped, err := walkFullBelow(
-		ctx, sm, root, newRootNodeID(), root.Hash(), 0, gen, filter, false, cache,
-		func(node MissingNode) bool {
-			missing = append(missing, node)
-			return maxMissing > 0 && len(missing) >= maxMissing
-		}, nil,
-	)
-	if err != nil {
-		return MissingNodesResult{Nodes: missing}, err
-	}
-	if stopped {
-		return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesResultFull}, nil
-	}
-	if !full {
-		// A filtered path is represented by a false full-below result even when
-		// the caller received no request IDs.
-		return MissingNodesResult{Nodes: missing, Status: MissingNodesWaiting}, nil
-	}
-	return MissingNodesResult{Status: MissingNodesComplete}, nil
+	return sm.scanBackedContext(ctx, root, nil, cache, gen, maxMissing, filter, false, probe)
 }
 
 // ScanMissingNodesContext performs one bounded, resumable discovery slice.
@@ -543,6 +541,10 @@ func (sm *SHAMap) scanUnbackedContext(
 // cursor or starts another pass when unresolved paths remain. A non-positive
 // maxNodes selects the bounded default result window.
 func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter) (MissingNodesResult, error) {
+	return sm.scanMissingNodesContext(ctx, maxNodes, filter, false)
+}
+
+func (sm *SHAMap) scanMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter, probe bool) (MissingNodesResult, error) {
 	if err := ctx.Err(); err != nil {
 		return MissingNodesResult{}, err
 	}
@@ -568,7 +570,7 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 		sm.backing.mu.RUnlock()
 		sm.tree.mu.RLock()
 		defer sm.tree.mu.RUnlock()
-		return sm.scanUnbackedContext(ctx, root, maxNodes, filter)
+		return sm.scanUnbackedContext(ctx, root, maxNodes, filter, probe)
 	}
 	defer sm.backing.mu.RUnlock()
 	gen, done, err := sm.acquireBackedWalkGeneration(ctx, access, cache, true)
@@ -576,7 +578,7 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 		return MissingNodesResult{}, err
 	}
 	defer done()
-	return sm.scanBackedContext(ctx, root, access, cache, gen, maxNodes, filter)
+	return sm.scanBackedContext(ctx, root, access, cache, gen, maxNodes, filter, true, probe)
 }
 
 // String is useful in acquisition logs without exposing implementation values.

@@ -357,7 +357,7 @@ func TestAcquisitionWorkSharedMemoryResumesWithoutReplacingLedger(t *testing.T) 
 	}
 	lane.start(t.Context())
 	t.Cleanup(lane.stop)
-	event := acquisitionWorkEvent{kind: acquisitionWorkLocal, fetch: func([32]byte) ([]byte, bool) { return nil, false }}
+	event := acquisitionWorkEvent{kind: acquisitionWorkContinue}
 	require.True(t, lane.submit(ledger, event))
 	first := <-lane.results()
 	require.NoError(t, first.err)
@@ -467,7 +467,7 @@ func newMissingWorkLedger(t *testing.T, memoryLimited bool) *inbound.Ledger {
 	wire, err := source.WalkWireNodes()
 	require.NoError(t, err)
 	for _, node := range wire {
-		if node.NodeID[32] == 1 {
+		if node.NodeID[32] == 1 && node.NodeID[0] == 0x10 {
 			reader, err := shamap.DeserializeFromWire(node.Data)
 			require.NoError(t, err)
 			family.blocked = reader.Hash()

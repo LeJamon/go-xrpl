@@ -1527,6 +1527,10 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	err = scanErr
 	if err == nil {
 		switch scanStatus {
+		case shamap.MissingNodesMore:
+			if len(missing) < missingNodesFind {
+				err = shamap.ErrTraversalBudget
+			}
 		case shamap.MissingNodesMemory, shamap.MissingNodesPersistence:
 			err = shamap.ErrAcquisitionMemory
 		}
@@ -1769,6 +1773,11 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		peers = append(peers, peerID)
 		available--
 	}
+	if len(peers) > 0 && l.state == StateWantState && !l.reserveRequestMetadataLocked() {
+		l.lastScanStatus = shamap.MissingNodesMemory
+		l.mu.Unlock()
+		return nil, false, shamap.ErrAcquisitionMemory
+	}
 	complete := l.state == StateComplete
 	firstTransaction := l.nextRequestTx
 	l.nextRequestTx = !l.nextRequestTx
@@ -1851,6 +1860,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		}
 
 		var filter shamap.SyncFilter
+		restarted := false
 		pending := make([]shamap.MissingNode, 0, min(treeQuota*batchLimit, l.requestReservationLimit()))
 		pendingSet := make(map[[32]byte]struct{}, cap(pending))
 		for len(peers) > 0 && treeAssigned < treeQuota {
@@ -1870,7 +1880,13 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 			}
 			l.mu.Lock()
 			l.lastScanStatus = scanStatus
+			restart := scanStatus == shamap.MissingNodesWaiting && len(missing) == 0 &&
+				len(pending) == 0 && len(l.requestLeases) == 0 && len(l.readyRequests) == 0 && !restarted
 			l.mu.Unlock()
+			if restart && err == nil {
+				restarted = true
+				continue
+			}
 			if err != nil && !missingWalkYield(err) {
 				l.releaseMissingRequests(requests)
 				return nil, false, err

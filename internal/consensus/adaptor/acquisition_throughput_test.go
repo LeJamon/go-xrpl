@@ -252,7 +252,7 @@ func runAcquisitionThroughput(t *testing.T, visitSlice int64) {
 	require.Zero(t, final.RequestPeers, "completion left peer send credit reserved")
 	require.Greater(t, metrics.partialRetries, 0, "partial replies never exercised a legitimate retry")
 	require.Greater(t, metrics.protectedOldDelivery, 0, "a stale delivery released a newer batch")
-	require.GreaterOrEqual(t, metrics.maxRequestPeers, 2, "disjoint work must occupy multiple peers")
+	require.Equal(t, acquisitionThroughputPeers, metrics.maxRequestPeers, "disjoint work must fill the peer request window")
 	if visitSlice != acquisitionThroughputVisitSlice {
 		require.GreaterOrEqual(t, metrics.continuationFollowup, 1, "partial CPU yield was not followed by discovery")
 	}

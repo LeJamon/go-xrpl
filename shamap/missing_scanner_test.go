@@ -3,6 +3,7 @@ package shamap
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -305,5 +306,75 @@ func TestScanMissingNodesTinySlicesAdvanceSiblingLanes(t *testing.T) {
 	}
 	if len(seen) <= BranchFactor {
 		t.Fatalf("tiny slices exposed only %d missing nodes; sibling lanes starved", len(seen))
+	}
+}
+
+func TestFinishSyncProbePreservesMissingPosition(t *testing.T) {
+	for _, backed := range []bool{false, true} {
+		for _, arrived := range []bool{false, true} {
+			t.Run(fmt.Sprintf("backed=%t/arrived=%t", backed, arrived), func(t *testing.T) {
+				source := New(TypeState)
+				for _, key := range [][32]byte{{0x10}, {0x20}} {
+					if err := source.Put(key, make([]byte, 12)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				root, err := source.Hash()
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := source.SerializeRoot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				dest := New(TypeState)
+				if backed {
+					dest, err = NewBacked(TypeState, newMemoryFamily())
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := dest.AddRootNode(root, data); err != nil {
+					t.Fatal(err)
+				}
+				for range 2 {
+					if err := dest.FinishSyncContext(t.Context()); err == nil {
+						t.Fatal("probe completed an incomplete tree")
+					}
+				}
+				if arrived {
+					wire, err := source.WalkWireNodes()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, node := range wire {
+						if node.NodeID[32] == 1 && node.NodeID[0] == 0x10 {
+							id, err := ParseNodeID(node.NodeID)
+							if err != nil {
+								t.Fatal(err)
+							}
+							result, _, err := dest.AddKnownNodeByIDWithEntryContext(t.Context(), id, node.Data)
+							if err != nil || result != NodeUseful {
+								t.Fatalf("attach = %v, %v", result, err)
+							}
+						}
+					}
+				}
+				result, err := dest.ScanMissingNodesContext(t.Context(), 16, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 2
+				if arrived {
+					want = 1
+				}
+				if len(result.Nodes) != want || result.Status != MissingNodesWaiting {
+					t.Fatalf("discovery after probe = %+v, want %d missing nodes", result, want)
+				}
+				if arrived && result.Nodes[0].NodeID.ID()[0] != 0x20 {
+					t.Fatal("probe emitted the node that had already arrived")
+				}
+			})
+		}
 	}
 }

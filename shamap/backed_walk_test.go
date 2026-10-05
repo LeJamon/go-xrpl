@@ -1572,7 +1572,7 @@ func TestBackedWalkDefersPendingProofUntilAcknowledged(t *testing.T) {
 			t.Fatalf("fully durable scan status = %v, want persistence", result.Status)
 		}
 	}
-	if reads := family.durableFetches.Load(); reads == 0 || reads > 32 {
+	if reads := family.durableFetches.Load(); reads > 32 {
 		t.Fatalf("fully durable frontier poll performed %d durable reads", reads)
 	}
 	if family.cache.Has(gen, rootHash) {

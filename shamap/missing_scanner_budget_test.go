@@ -130,3 +130,69 @@ func TestScannerMemoryPressureCannotSkipUnstartedLane(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestScannerDeepRootLanesFitTinyCursorBudget(t *testing.T) {
+	source := New(TypeState)
+	for branch := range BranchFactor {
+		var first, second [32]byte
+		first[0] = byte(branch << 4)
+		first[len(first)-1] = 2
+		second[0] = byte(branch << 4)
+		second[len(second)-1] = 1
+		for _, key := range [][32]byte{first, second} {
+			if err := source.Put(key, make([]byte, 12)); err != nil {
+				t.Fatalf("put branch %d key: %v", branch, err)
+			}
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	family := newMemoryFamily()
+	entries, err := collectDirtyForTest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := family.StoreBatch(t.Context(), entries); err != nil {
+		t.Fatal(err)
+	}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootEntry, err := dest.AddRootNodeWithEntry(rootHash, rootData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := family.StoreBatch(t.Context(), []FlushEntry{rootEntry}); err != nil {
+		t.Fatal(err)
+	}
+	budget := NewAcquisitionBudget(1 << 20)
+	dest.SetAcquisitionBudget(budget)
+
+	for attempt := 0; attempt < 16*(maxDepth+2); attempt++ {
+		result, err := dest.ScanMissingNodesContext(WithTraversalBudget(t.Context(), 1), 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status == MissingNodesMemory {
+			t.Fatalf("deep-lane scan exhausted cursor budget at attempt %d: %+v", attempt, dest.BackedWalkStats())
+		}
+		if got := budget.Snapshot(); got.CursorUsed > got.Limit/acquisitionCursorBudgetFraction {
+			t.Fatalf("deep-lane cursor exceeded partition: %+v", got)
+		}
+		if result.Status == MissingNodesComplete {
+			stats := dest.BackedWalkStats()
+			if stats.CursorBytes != 0 {
+				t.Fatalf("completed deep-lane scan retained cursor bytes: %+v", stats)
+			}
+			return
+		}
+	}
+	t.Fatalf("deep root lanes did not complete under tiny traversal slices: %+v budget=%+v", dest.BackedWalkStats(), budget.Snapshot())
+}
