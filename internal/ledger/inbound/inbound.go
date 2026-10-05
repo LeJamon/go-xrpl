@@ -28,8 +28,8 @@ const (
 	// acquireTimerInterval is how often OnTimer evaluates progress
 	// (rippled ledgerAcquireTimeout).
 	acquireTimerInterval = 3 * time.Second
-	// ledgerTimeoutRetriesMax bounds no-progress timer fires before the
-	// acquisition fails cleanly (rippled ledgerTimeoutRetriesMax).
+	// ledgerTimeoutRetriesMax bounds consecutive no-progress timer fires before
+	// the acquisition fails cleanly (rippled ledgerTimeoutRetriesMax).
 	ledgerTimeoutRetriesMax = 6
 	// ledgerBecomeAggressiveThreshold is the no-progress timeout count past
 	// which the acquisition abandons path-based requests and asks every peer
@@ -153,8 +153,8 @@ type Ledger struct {
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
 	// since then; timeouts is the cumulative no-progress count used for
-	// diagnostics, escalation, and terminal failure; consecutiveTimeouts tracks
-	// the current no-progress streak for diagnostics and victim ranking.
+	// diagnostics and escalation; consecutiveTimeouts bounds the current
+	// no-progress streak for terminal failure, diagnostics, and victim ranking.
 	// byHash latches eligibility for a by-hash escalation on the next aggressive
 	// request. All guarded by mu.
 	lastTimer           time.Time
@@ -484,10 +484,11 @@ func (l *Ledger) TimerDue(now time.Time) bool {
 // acquireTimerInterval has elapsed since the last fire, so it can be polled
 // from the router's maintenance tick. On a due fire it either records that
 // forward progress was made this interval (and keeps relying on the
-// reply-driven path) or counts a no-progress timeout; once the budget is
-// exhausted the acquisition transitions cleanly to StateFailed instead of
-// re-arming the same stall forever. The returned TimerAction tells the router
-// whether to reap (TimerFailed), escalate (TimerEscalate), or do nothing.
+// reply-driven path) or counts a no-progress timeout; once the consecutive
+// no-progress budget is exhausted the acquisition transitions cleanly to
+// StateFailed instead of re-arming the same stall forever. The returned
+// TimerAction tells the router whether to reap (TimerFailed), escalate
+// (TimerEscalate), or do nothing.
 func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -515,10 +516,10 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	l.lastTimer = now
 	l.timeouts++
 	l.consecutiveTimeouts++
-	if l.timeouts > ledgerTimeoutRetriesMax {
+	if l.consecutiveTimeouts > ledgerTimeoutRetriesMax {
 		l.state = StateFailed
-		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d timeouts (%d consecutive; have_state=%t have_tx=%t last_reject=%q)",
-			l.seq, l.timeouts, l.consecutiveTimeouts, l.haveState, l.haveTx, l.lastRejectErr)
+		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d consecutive timeouts (%d total; have_state=%t have_tx=%t last_reject=%q)",
+			l.seq, l.consecutiveTimeouts, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
 		l.logger.Warn("inbound ledger: acquisition failed, retry budget exhausted",
 			"seq", l.seq,
 			"hash", fmt.Sprintf("%x", l.hash[:8]),
