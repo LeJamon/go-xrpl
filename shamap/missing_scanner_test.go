@@ -89,6 +89,11 @@ func TestScanMissingNodesResumesAcrossMissingInnerSiblings(t *testing.T) {
 			}
 			family.release(missing.Hash)
 		}
+		if result.Status == MissingNodesPersistence {
+			if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if result.Status == MissingNodesComplete {
 			got, err := dest.Hash()
 			if err != nil {

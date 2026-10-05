@@ -3,7 +3,6 @@ package shamap
 import (
 	"crypto/sha512"
 	"encoding/binary"
-	"errors"
 	"testing"
 )
 
@@ -74,30 +73,32 @@ func TestBackedWalkFrontierBoundedAndRetired(t *testing.T) {
 
 	budget := NewAcquisitionBudget(2 << 20)
 	dest.SetAcquisitionBudget(budget)
-	sawMemoryWait := false
+	sawWaiting := false
 	requested := make(requestedHashFilter)
-	for i := 0; i < 200; i++ {
-		missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 10_000), 32, requested)
-		for _, node := range missing {
-			requested[node.Hash] = struct{}{}
-		}
-		if errors.Is(err, ErrAcquisitionMemory) {
-			sawMemoryWait = true
-			break
-		}
-		if err != nil && !errors.Is(err, ErrTraversalBudget) {
+	for i := 0; i < 512; i++ {
+		result, err := dest.ScanMissingNodesContext(WithTraversalBudget(t.Context(), 10_000), 32, requested)
+		if err != nil {
 			t.Fatalf("frontier slice %d: %v", i, err)
 		}
+		if result.Status == MissingNodesMemory {
+			t.Fatal("bounded scanner exhausted its fixed metadata budget")
+		}
+		if result.Status == MissingNodesWaiting {
+			sawWaiting = true
+		}
+		for _, node := range result.Nodes {
+			requested[node.Hash] = struct{}{}
+		}
 		stats := dest.BackedWalkStats()
-		if stats.BlockedItems >= leafCount {
-			t.Fatalf("frontier retained all %d missing leaves", stats.BlockedItems)
+		if stats.BlockedItems != 0 {
+			t.Fatalf("scanner retained %d blocked items", stats.BlockedItems)
 		}
 		if got := budget.Snapshot(); got.CursorUsed > got.Limit/4 || stats.CursorBytes > got.Limit/4 {
 			t.Fatalf("cursor exceeded its partition: stats=%+v budget=%+v", stats, got)
 		}
 	}
-	if !sawMemoryWait {
-		t.Fatal("frontier never returned the resumable memory-pressure result")
+	if !sawWaiting {
+		t.Fatal("frontier never returned the resumable waiting result")
 	}
 
 	if err := base.StoreBatch(t.Context(), leafEntries); err != nil {
@@ -114,18 +115,21 @@ func TestBackedWalkFrontierBoundedAndRetired(t *testing.T) {
 
 	replacement := NewAcquisitionBudget(8 << 20)
 	dest.SetAcquisitionBudget(replacement)
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatalf("acknowledge loaded frontier: %v", err)
+	}
 	completed := false
 	for i := 0; i < 8; i++ {
-		missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 50_000), 32, nil)
-		if errors.Is(err, ErrTraversalBudget) {
-			continue
-		}
+		result, err := dest.ScanMissingNodesContext(WithTraversalBudget(t.Context(), 50_000), 32, nil)
 		if err != nil {
 			t.Fatalf("resume slice %d: %v", i, err)
 		}
-		if len(missing) == 0 {
+		if result.Status == MissingNodesComplete {
 			completed = true
 			break
+		}
+		if result.Status == MissingNodesMemory {
+			t.Fatalf("resume slice %d exhausted scanner memory", i)
 		}
 	}
 	if !completed {

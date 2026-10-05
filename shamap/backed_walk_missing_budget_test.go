@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -182,8 +183,9 @@ func TestBackedWalkDeferredMissingNodeCannotFinishSync(t *testing.T) {
 	if err != nil || len(missing) != 1 || missing[0].Hash != absent.Hash {
 		t.Fatalf("initial missing frontier = %v, %v; want missing leaf", missing, err)
 	}
-	if err := dest.FinishSyncContext(WithTraversalBudget(t.Context(), 32)); !errors.Is(err, ErrTraversalBudget) {
-		t.Fatalf("finish with a deferred missing leaf = %v; want another traversal slice", err)
+	if err := dest.FinishSyncContext(WithTraversalBudget(t.Context(), 32)); err == nil ||
+		(!errors.Is(err, ErrTraversalBudget) && !strings.Contains(err.Error(), "sync incomplete: unresolved paths remain")) {
+		t.Fatalf("finish with a deferred missing leaf = %v; want a resumable incomplete result", err)
 	}
 	if dest.tree.state != stateSyncing {
 		t.Fatal("incomplete tree left synchronization")
@@ -195,7 +197,18 @@ func TestBackedWalkDeferredMissingNodeCannotFinishSync(t *testing.T) {
 	if err := base.StoreBatch(t.Context(), []FlushEntry{absent}); err != nil {
 		t.Fatal(err)
 	}
-	if err := dest.FinishSyncContext(WithTraversalBudget(t.Context(), 32)); err != nil {
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		err := dest.FinishSyncContext(WithTraversalBudget(t.Context(), 32))
+		if err == nil {
+			return
+		}
+		if strings.Contains(err.Error(), "sync incomplete: unresolved paths remain") || errors.Is(err, ErrTraversalBudget) {
+			continue
+		}
 		t.Fatalf("finish after storing missing leaf: %v", err)
 	}
+	t.Fatal("finish did not complete after storing missing leaf")
 }

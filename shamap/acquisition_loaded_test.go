@@ -3,6 +3,7 @@ package shamap
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -225,12 +226,13 @@ func TestPressureCheckpointPreservesIncompleteCursor(t *testing.T) {
 	require.Equal(t, NodeUseful, result)
 	require.NoError(t, family.StoreBatch(t.Context(), []FlushEntry{entry}))
 	require.Positive(t, dest.BackedWalkStats().RetainedBytes)
-	cursor := dest.acquisition.cursor
+	scan := dest.acquisition.scan
+	require.NotNil(t, scan)
 	held := budget.Snapshot().Limit - budget.Snapshot().Used
 	require.True(t, budget.TryReserve(held))
 	require.NoError(t, dest.AcknowledgePersistedContext(t.Context()))
 	budget.Release(held)
-	require.Same(t, cursor, dest.acquisition.cursor)
+	require.Same(t, scan, dest.acquisition.scan)
 	require.Zero(t, dest.BackedWalkStats().RetainedBytes)
 	for branch := range BranchFactor {
 		child, _, _ := dest.tree.root.LoadChild(branch)
@@ -246,6 +248,11 @@ func TestPressureCheckpointPreservesIncompleteCursor(t *testing.T) {
 		}
 		if errors.Is(err, ErrAcquisitionMemory) {
 			require.NoError(t, dest.AcknowledgePersistedAndReleaseContext(t.Context()))
+		} else if strings.Contains(err.Error(), "sync incomplete: unresolved paths remain") {
+			// A capped scan may finish its first pass after the previously
+			// missing descendants became durable. The next pass rechecks that
+			// frontier from the root.
+			continue
 		} else {
 			require.ErrorIs(t, err, ErrTraversalBudget)
 		}
@@ -276,12 +283,13 @@ func TestDurableCompletionReleasesCursorBeforeNextRead(t *testing.T) {
 	_, err = dest.descendCtx(t.Context(), dest.tree.root, 1)
 	dest.tree.mu.RUnlock()
 	require.NoError(t, err)
+	require.NoError(t, dest.AcknowledgePersistedContext(t.Context()))
 	budget := dest.acquisition.budget
 	require.Positive(t, budget.Snapshot().LoadedUsed)
 	missing, err := dest.GetMissingNodesContext(t.Context(), 0, nil)
 	require.NoError(t, err)
 	require.Empty(t, missing)
-	require.Nil(t, dest.acquisition.cursor)
+	require.Nil(t, dest.acquisition.scan)
 	require.Zero(t, budget.Snapshot().CursorUsed)
 	require.NoError(t, dest.AcknowledgePersistedContext(t.Context()))
 	require.Zero(t, budget.Snapshot().Used)

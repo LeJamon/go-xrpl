@@ -133,25 +133,23 @@ func (sm *SHAMap) releaseBackedScanCursorLocked() {
 		sm.releaseCursorBytes(cursorAsWalkCursor(cursor), cursor.fixedBytes)
 	}
 	sm.acquisition.scan = nil
-	if sm.acquisition.cursor == nil {
-		sm.acquisition.base = nil
-		sm.acquisition.stats.activeFrames.Store(0)
-		sm.acquisition.stats.activeCapacity.Store(0)
-		sm.acquisition.stats.blockedItems.Store(0)
-		sm.acquisition.stats.blockedCapacity.Store(0)
-		sm.acquisition.stats.proofEntries.Store(0)
-		sm.acquisition.stats.proofCapacity.Store(0)
-	}
+	sm.acquisition.base = nil
+	sm.acquisition.stats.activeFrames.Store(0)
+	sm.acquisition.stats.activeCapacity.Store(0)
+	sm.acquisition.stats.blockedItems.Store(0)
+	sm.acquisition.stats.blockedCapacity.Store(0)
+	sm.acquisition.stats.proofEntries.Store(0)
+	sm.acquisition.stats.proofCapacity.Store(0)
 }
 
 // cursorAsWalkCursor lets the shared cursor accounting release a reservation
 // without retaining a second accounting implementation. It is safe because
 // only budget and no backed-walk lane data are read by releaseCursorBytes.
-func cursorAsWalkCursor(cursor *backedScanCursor) *backedWalkCursor {
+func cursorAsWalkCursor(cursor *backedScanCursor) *cursorBudget {
 	if cursor == nil {
 		return nil
 	}
-	return &backedWalkCursor{budget: cursor.budget}
+	return &cursorBudget{budget: cursor.budget}
 }
 
 func (sm *SHAMap) clearBackedScanNodeReferencesLocked() {
@@ -287,6 +285,7 @@ func (sm *SHAMap) scanBackedLane(
 		frame := &lane.stack[len(lane.stack)-1]
 		if !frame.loaded {
 			if frame.item.baseHash != ([32]byte{}) && frame.item.baseHash == frame.item.hash {
+				sm.acquisition.stats.equalSubtreesSkipped.Add(1)
 				frame.full, frame.stored, frame.usedBase, frame.loaded = true, true, true, true
 				continue
 			}
@@ -328,9 +327,13 @@ func (sm *SHAMap) scanBackedLane(
 			if frame.item.baseHash != ([32]byte{}) {
 				baseView, err := sm.loadVerifiedBaseTraversalNode(ctx, access, frame.item.baseHash)
 				if err != nil {
-					return false, err
+					if !errors.Is(err, errVerifiedBaseUnavailable) {
+						return false, err
+					}
+					sm.acquisition.stats.verifiedBaseFallbacks.Add(1)
+				} else {
+					frame.baseView = baseView
 				}
-				frame.baseView = baseView
 			}
 		}
 
@@ -383,11 +386,19 @@ func (sm *SHAMap) scanBackedContext(
 	filter SyncFilter,
 ) (MissingNodesResult, error) {
 	rootHash := root.Hash()
+	// An empty SHAMap root has no serialized node and therefore no durable
+	// record to await. Treat it as complete once the empty structure is
+	// observed; requiring a store entry for the zero hash would leave empty
+	// transaction maps permanently in the persistence state.
+	if !root.HasChildren() {
+		sm.releaseBackedScanCursorLocked()
+		return MissingNodesResult{Status: MissingNodesComplete}, nil
+	}
 	base := sm.acquisition.base
 	baseRoot := [32]byte{}
 	if base != nil {
 		baseRoot = base.rootHash
-		if baseRoot == rootHash {
+		if baseRoot == rootHash && !root.IsDirty() {
 			sm.acquisition.stats.equalSubtreesSkipped.Add(1)
 			root.setFullBelowGen(generation)
 			cacheFullBelow(cache, generation, rootHash, 0)
@@ -395,7 +406,7 @@ func (sm *SHAMap) scanBackedContext(
 			return MissingNodesResult{Status: MissingNodesComplete}, nil
 		}
 	}
-	if cache.Has(generation, rootHash) {
+	if cache.Has(generation, rootHash) && !root.IsDirty() {
 		sm.releaseBackedScanCursorLocked()
 		return MissingNodesResult{Status: MissingNodesComplete}, nil
 	}
@@ -470,6 +481,9 @@ func (sm *SHAMap) scanBackedContext(
 	if !allDurable {
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesPersistence}, nil
 	}
+	if root.IsDirty() {
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesPersistence}, nil
+	}
 	if err := ctx.Err(); err != nil {
 		return MissingNodesResult{Nodes: missing}, err
 	}
@@ -535,7 +549,7 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 	if filter == nil {
 		filter = &defaultSyncFilter{}
 	}
-	if maxNodes <= 0 {
+	if maxNodes <= 0 || maxNodes > backedScanDefaultResultLimit {
 		maxNodes = backedScanDefaultResultLimit
 	}
 	sm.acquisition.walkMu.Lock()

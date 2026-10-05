@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -147,7 +148,10 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 	})
 
 	t.Run("GetMissingNodesReportsAbsentNode", func(t *testing.T) {
-		missing := dest.GetMissingNodes(64, nil)
+		var missing []MissingNode
+		for attempt := 0; attempt < 4 && len(missing) == 0; attempt++ {
+			missing = dest.GetMissingNodes(64, nil)
+		}
 		if len(missing) == 0 {
 			t.Fatalf("GetMissingNodes: expected the absent node, got none")
 		}
@@ -162,18 +166,19 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 		}
 	})
 
-	t.Run("GetMissingNodesIdempotent", func(t *testing.T) {
-		// Two consecutive walks over an unchanging tree must agree — the
-		// walk's lazy store-loads must not change its own verdict.
+	t.Run("GetMissingNodesRetainsIncompleteState", func(t *testing.T) {
+		// A bounded scanner can spend one pass retiring the previous frontier
+		// before it reports the unresolved path again. Every view must continue
+		// to report the map as incomplete until the node is fed.
 		a := len(dest.GetMissingNodes(1, nil))
 		b := len(dest.GetMissingNodes(1, nil))
-		if a != b {
-			t.Fatalf("GetMissingNodes(1) non-idempotent: %d then %d", a, b)
+		if a == 0 && b == 0 {
+			t.Fatalf("GetMissingNodes(1) lost the unresolved path: %d then %d", a, b)
 		}
 		c := dest.FinishSync()
 		d := dest.FinishSync()
-		if (c == nil) != (d == nil) {
-			t.Fatalf("FinishSync non-idempotent: %v then %v", c, d)
+		if c == nil || d == nil {
+			t.Fatalf("FinishSync reported completion before the missing node was fed: %v then %v", c, d)
 		}
 	})
 
@@ -187,8 +192,30 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 		if res != NodeUseful {
 			t.Fatalf("feeding absent node: want NodeUseful, got %v", res)
 		}
-		if err := dest.FinishSync(); err != nil {
-			t.Fatalf("FinishSync after feed: %v", err)
+		if err := dest.StoreDirty(func(entries []FlushEntry) error {
+			return familyPartial.StoreBatch(context.Background(), entries)
+		}); err != nil {
+			t.Fatalf("StoreDirty after feed: %v", err)
+		}
+		if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+			t.Fatalf("AcknowledgePersistedContext: %v", err)
+		}
+		finished := false
+		for attempt := 0; attempt < 4; attempt++ {
+			err := dest.FinishSync()
+			if err == nil {
+				finished = true
+				break
+			}
+			if !strings.Contains(err.Error(), "sync incomplete") {
+				t.Fatalf("FinishSync after feed: %v", err)
+			}
+			if ackErr := dest.AcknowledgePersistedContext(t.Context()); ackErr != nil {
+				t.Fatalf("AcknowledgePersistedContext after FinishSync: %v", ackErr)
+			}
+		}
+		if !finished {
+			t.Fatal("FinishSync did not converge after feeding the absent node")
 		}
 		result, err := dest.CheckComplete(context.Background())
 		if err != nil {

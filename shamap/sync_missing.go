@@ -5,23 +5,38 @@ import (
 )
 
 // walkMapParallelContext is the legacy slice-returning view of the bounded
-// scanner. Keep its historical error contract for callers that still use the
-// internal helper: traversal and admission yields are returned as errors with
-// any useful IDs preserved in the result.
+// scanner. It collects bounded scanner slices until the requested legacy
+// result window is full or discovery reaches a stable status. A non-positive
+// maxMissing preserves the historical unbounded result window. Traversal and
+// admission yields retain the old error contract, with useful IDs preserved.
 func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, filter SyncFilter) ([]MissingNode, error) {
-	result, err := sm.ScanMissingNodesContext(ctx, maxMissing, filter)
-	if err != nil {
-		return result.Nodes, err
-	}
-	switch result.Status {
-	case MissingNodesMore:
-		if result.reason == missingNodesTraversalYield {
-			return result.Nodes, ErrTraversalBudget
+	unlimited := maxMissing <= 0
+	var missing []MissingNode
+	for {
+		if !unlimited && len(missing) >= maxMissing {
+			return missing[:maxMissing], nil
 		}
-	case MissingNodesMemory:
-		return result.Nodes, ErrAcquisitionMemory
+		limit := backedScanDefaultResultLimit
+		if !unlimited && maxMissing-len(missing) < limit {
+			limit = maxMissing - len(missing)
+		}
+		result, err := sm.ScanMissingNodesContext(ctx, limit, filter)
+		missing = append(missing, result.Nodes...)
+		if err != nil {
+			return missing, err
+		}
+		switch result.Status {
+		case MissingNodesMore:
+			if result.reason == missingNodesTraversalYield {
+				return missing, ErrTraversalBudget
+			}
+			continue
+		case MissingNodesMemory:
+			return missing, ErrAcquisitionMemory
+		default:
+			return missing, nil
+		}
 	}
-	return result.Nodes, nil
 }
 
 // acquireBackedWalkGeneration admits one bounded walk against a stable
@@ -87,9 +102,10 @@ func markRootFullBelow(root *innerNode, gen uint32) {
 // present locally. It is gated on the syncing state — for any other state
 // the map is assumed complete and the result is nil.
 //
-// The actual walk is performed by walkMapParallel so the per-root-branch
-// fan-out is shared with the lower-level walkMap API. maxNodes == 0 is
-// unbounded; a nil filter accepts every missing node.
+// The bounded scanner may use several slices internally; this compatibility
+// wrapper collects them into the requested result window. maxNodes == 0 is
+// unbounded, preserving the historical API. A nil filter accepts every
+// missing node.
 func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode {
 	missing, _ := sm.GetMissingNodesContext(context.Background(), maxNodes, filter)
 	return missing
@@ -97,8 +113,8 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 
 // GetMissingNodesContext may return valid partial results with ErrTraversalBudget
 // or ErrAcquisitionMemory; neither error means the frontier is exhausted.
-// It is GetMissingNodes with cancellation propagated to
-// the parallel traversal and backing Family.
+// It is GetMissingNodes with cancellation propagated to the scanner and
+// backing Family.
 func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter) ([]MissingNode, error) {
 	sm.tree.mu.RLock()
 	state := sm.tree.state
