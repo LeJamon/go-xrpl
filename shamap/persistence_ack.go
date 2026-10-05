@@ -31,34 +31,22 @@ func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes 
 	if err := acknowledgePersistedNode(ctx, sm.tree.root); err != nil {
 		return err
 	}
-	if cursor := sm.acquisition.cursor; !releaseNodes && cursor != nil && cursor.budget != nil {
+	if cursor := sm.acquisition.scan; !releaseNodes && cursor != nil && cursor.budget != nil {
 		entries := uint64(BranchFactor + 1)
-		for i := range cursor.lanes {
-			entries += uint64(cursor.lanes[i].proofs.count() + cursor.lanes[i].retryProofs.count())
-		}
 		if entries > cursor.budget.limit/128 || !cursor.budget.TryReserve(entries*128) {
 			releaseNodes = true
 		} else {
 			defer cursor.budget.Release(entries * 128)
 		}
 	}
-	complete, release := sm.publishAcknowledgedFullBelow(!releaseNodes)
-	scanComplete, scanRelease := sm.publishAcknowledgedScanHints(!releaseNodes)
-	if scanComplete {
-		complete = true
+	if cursor := sm.acquisition.scan; cursor != nil && sm.tree.root != nil && !sm.tree.root.IsDirty() {
+		cursor.rootDurable = true
 	}
-	for hash := range scanRelease {
-		if release == nil {
-			release = make(map[[32]byte]struct{})
-		}
-		release[hash] = struct{}{}
-	}
-	if !releaseNodes {
-		sm.releaseAcknowledgedFullBelow(release)
-		if len(release) != 0 {
-			sm.clearBackedWalkNodeReferencesLocked()
-			sm.clearBackedScanNodeReferencesLocked()
-		}
+	complete, _ := sm.publishAcknowledgedScanHints(false)
+	if !complete && sm.acquisition.scan == nil && sm.tree.root != nil && sm.backing.fullBelow != nil {
+		gen, done := sm.backing.fullBelow.Begin()
+		complete = sm.backing.fullBelow.Has(gen, sm.tree.root.Hash())
+		done()
 	}
 	if releaseNodes || complete {
 		sm.clearBackedWalkNodeReferencesLocked()
@@ -69,9 +57,9 @@ func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes 
 		sm.releaseAcquisitionNodesLocked()
 	}
 	if complete {
-		sm.releaseBackedWalkCursorLocked()
+		sm.releaseBackedScanCursorLocked()
 	} else {
-		sm.updateCursorCapacityStats(sm.acquisition.cursor)
+		sm.updateBackedScanStats(sm.acquisition.scan)
 	}
 	return nil
 }

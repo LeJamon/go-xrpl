@@ -131,7 +131,7 @@ func (sm *SHAMap) SetAcquisitionBudget(budget *AcquisitionBudget) {
 	defer sm.acquisition.walkMu.Unlock()
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
-	if sm.acquisition.cursor != nil || sm.acquisition.retained.bytes.Load() != 0 {
+	if sm.acquisition.cursor != nil || sm.acquisition.scan != nil || sm.acquisition.retained.bytes.Load() != 0 {
 		panic("cannot replace an active acquisition budget")
 	}
 	sm.acquisition.budget = budget
