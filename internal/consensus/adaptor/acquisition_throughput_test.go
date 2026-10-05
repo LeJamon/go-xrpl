@@ -38,17 +38,22 @@ type acquisitionThroughputFixture struct {
 }
 
 type acquisitionThroughputDelivery struct {
-	at     time.Duration
-	peerID uint64
-	hashes [][32]byte
-	nodes  []message.LedgerNode
+	at      time.Duration
+	batchID uint64
+	peerID  uint64
+	nodes   []message.LedgerNode
 }
 
 type acquisitionThroughputFlight struct {
+	batchID   uint64
 	peerID    uint64
-	hashes    [][32]byte
 	nodeCount int
 	consumed  int
+}
+
+type acquisitionThroughputOwner struct {
+	batchID uint64
+	peerID  uint64
 }
 
 type acquisitionThroughputMetrics struct {
@@ -65,6 +70,8 @@ type acquisitionThroughputMetrics struct {
 	maxRequestPeers      int
 	peakBudget           uint64
 	continuationFollowup int
+	partialRetries       int
+	protectedOldDelivery int
 }
 
 func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testing.T) {
@@ -90,13 +97,31 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 
 	metrics := acquisitionThroughputMetrics{}
 	deliveries := make([]acquisitionThroughputDelivery, 0, acquisitionThroughputPeers)
-	outstanding := make(map[[32]byte]uint64, acquisitionThroughputReserve)
+	activeOwners := make(map[[32]byte]acquisitionThroughputOwner, acquisitionThroughputReserve)
+	batchHashes := make(map[uint64][][32]byte)
+	lastReleased := make(map[[32]byte]uint64)
 	requestOrdinal := 0
 	continuationPending := false
 	var flights []acquisitionThroughputFlight
+	steps := 0
+	releaseBatch := func(batchID uint64) {
+		for _, hash := range batchHashes[batchID] {
+			owner, exists := activeOwners[hash]
+			if !exists {
+				continue
+			}
+			if owner.batchID != batchID {
+				metrics.protectedOldDelivery++
+				continue
+			}
+			delete(activeOwners, hash)
+			lastReleased[hash] = batchID
+		}
+	}
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkContinue}))
 
 	for step := 0; step < 20_000; step++ {
+		steps = step + 1
 		var result acquisitionWorkResult
 		select {
 		case result = <-lane.results():
@@ -113,9 +138,7 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 			if flight.consumed < flight.nodeCount && result.pendingReply {
 				break
 			}
-			for _, hash := range flight.hashes {
-				delete(outstanding, hash)
-			}
+			releaseBatch(flight.batchID)
 			flights = flights[1:]
 		}
 
@@ -147,22 +170,27 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 			}
 			metrics.requestedIDs += len(request.NodeIDs)
 			metrics.requestWidthSum += int64(len(request.NodeIDs))
+			batchID := uint64(requestOrdinal + 1)
+			batchHashes[batchID] = slices.Clone(request.NodeHashes)
 			for nodeIndex, hash := range request.NodeHashes {
-				if owner, exists := outstanding[hash]; exists {
-					t.Fatalf("node %x assigned to peers %d and %d at step=%d request=%d request_index=%d node_index=%d flights=%d deliveries=%d", hash[:4], owner, request.PeerID, step, requestOrdinal, requestIndex, nodeIndex, len(flights), len(deliveries))
+				if owner, exists := activeOwners[hash]; exists {
+					t.Fatalf("node %x assigned to peers %d (batch %d) and %d (batch %d) at step=%d request=%d request_index=%d node_index=%d flights=%d deliveries=%d", hash[:4], owner.peerID, owner.batchID, request.PeerID, batchID, step, requestOrdinal, requestIndex, nodeIndex, len(flights), len(deliveries))
 				}
-				outstanding[hash] = request.PeerID
+				if _, released := lastReleased[hash]; released {
+					metrics.partialRetries++
+				}
+				activeOwners[hash] = acquisitionThroughputOwner{batchID: batchID, peerID: request.PeerID}
 			}
-			deliveries = append(deliveries, fixture.deliveries(request, requestOrdinal, metrics.simulatedElapsed)...)
+			deliveries = append(deliveries, fixture.deliveries(request, requestOrdinal, batchID, metrics.simulatedElapsed)...)
 			requestOrdinal++
 		}
-		metrics.maxOutstanding = max(metrics.maxOutstanding, len(outstanding))
+		metrics.maxOutstanding = max(metrics.maxOutstanding, len(activeOwners))
 
 		snapshot := ledger.Snapshot()
 		metrics.maxRequestPeers = max(metrics.maxRequestPeers, snapshot.RequestPeers)
 		metrics.peakBudget = max(metrics.peakBudget, snapshot.AcquisitionMemory.Peak)
 		require.LessOrEqual(t, snapshot.RequestPeers, acquisitionThroughputPeers)
-		require.LessOrEqual(t, len(outstanding), acquisitionThroughputReserve)
+		require.LessOrEqual(t, len(activeOwners), acquisitionThroughputReserve)
 		require.LessOrEqual(t, snapshot.AcquisitionMemory.Used, snapshot.AcquisitionMemory.Limit)
 
 		if result.complete {
@@ -196,7 +224,7 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 				},
 			}))
 			flights = append(flights, acquisitionThroughputFlight{
-				peerID: delivery.peerID, hashes: delivery.hashes, nodeCount: len(delivery.nodes),
+				batchID: delivery.batchID, peerID: delivery.peerID, nodeCount: len(delivery.nodes),
 			})
 		} else if !result.continueRequests && !result.yielded && len(deliveries) == 0 {
 			t.Fatalf("acquisition stalled after step %d: %+v", step, snapshot)
@@ -206,10 +234,14 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 	lane.stop()
 
 	final := ledger.Snapshot()
+	if !final.Complete {
+		t.Logf("incomplete after steps=%d active_owners=%d flights=%d queued_deliveries=%d requests=%d retries=%d protected_old_delivery=%d snapshot=%+v", steps, len(activeOwners), len(flights), len(deliveries), metrics.requests, metrics.partialRetries, metrics.protectedOldDelivery, final)
+	}
 	require.True(t, final.Complete, "acquisition did not complete: %+v", final)
 	require.GreaterOrEqual(t, persistenceFlushes, 1, "completion was reported without the persistence barrier")
-	require.Empty(t, flights, "completion left an unprocessed reply")
-	require.Empty(t, outstanding, "completion left request leases in the virtual network")
+	require.Zero(t, final.RequestPeers, "completion left peer send credit reserved")
+	require.Greater(t, metrics.partialRetries, 0, "partial replies never exercised a legitimate retry")
+	require.Greater(t, metrics.protectedOldDelivery, 0, "a stale delivery released a newer batch")
 	require.GreaterOrEqual(t, metrics.maxRequestPeers, 2, "disjoint work must occupy multiple peers")
 	require.GreaterOrEqual(t, metrics.fullWidthRequests, 2, "request window never stayed wide")
 	require.GreaterOrEqual(t, metrics.continuationFollowup, 1, "partial CPU yield was not followed by discovery")
@@ -236,7 +268,7 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 
 	reads := final.StateDurableReads
 	usefulPerReply := float64(metrics.useful) / float64(max(1, metrics.replies))
-	t.Logf("missing-inner baseline_candidate leaves=%d withheld_inner=%d withheld_leaf=%d requests=%d requested_ids=%d mean_request_width=%.1f full_width_ratio=%.2f replies=%d useful=%d useful/reply=%.1f durable_reads=%d simulated_rtt=%s simulated_elapsed=%s max_request_width=%d full_width_requests=%d max_peer_occupancy=%d max_outstanding=%d budget_peak=%d", fixture.withheldLeaf, fixture.withheldInner, fixture.withheldLeaf, metrics.requests, metrics.requestedIDs, meanRequestWidth, fullWidthRatio, metrics.replies, metrics.useful, usefulPerReply, reads, acquisitionThroughputSimulatedRTT, metrics.simulatedElapsed, metrics.maxRequestWidth, metrics.fullWidthRequests, metrics.maxRequestPeers, metrics.maxOutstanding, metrics.peakBudget)
+	t.Logf("missing-inner baseline_candidate leaves=%d withheld_inner=%d withheld_leaf=%d requests=%d requested_ids=%d mean_request_width=%.1f full_width_ratio=%.2f partial_retries=%d protected_old_delivery=%d replies=%d useful=%d useful/reply=%.1f durable_reads=%d simulated_rtt=%s simulated_elapsed=%s max_request_width=%d full_width_requests=%d max_peer_occupancy=%d max_outstanding=%d budget_peak=%d", fixture.withheldLeaf, fixture.withheldInner, fixture.withheldLeaf, metrics.requests, metrics.requestedIDs, meanRequestWidth, fullWidthRatio, metrics.partialRetries, metrics.protectedOldDelivery, metrics.replies, metrics.useful, usefulPerReply, reads, acquisitionThroughputSimulatedRTT, metrics.simulatedElapsed, metrics.maxRequestWidth, metrics.fullWidthRequests, metrics.maxRequestPeers, metrics.maxOutstanding, metrics.peakBudget)
 }
 
 func newAcquisitionThroughputFixture(t *testing.T) *acquisitionThroughputFixture {
@@ -320,13 +352,13 @@ func newAcquisitionThroughputFixture(t *testing.T) *acquisitionThroughputFixture
 	return fixture
 }
 
-func (f *acquisitionThroughputFixture) deliveries(request inbound.MissingRequest, ordinal int, now time.Duration) []acquisitionThroughputDelivery {
+func (f *acquisitionThroughputFixture) deliveries(request inbound.MissingRequest, ordinal int, batchID uint64, now time.Duration) []acquisitionThroughputDelivery {
 	indices := make([]int, len(request.NodeIDs))
 	for i := range indices {
 		indices[i] = i
 	}
 	if ordinal%3 != 1 || len(indices) < 2 {
-		return []acquisitionThroughputDelivery{f.deliveryPart(request, indices, ordinal, 0, now)}
+		return []acquisitionThroughputDelivery{f.deliveryPart(request, indices, ordinal, batchID, 0, now)}
 	}
 	even := make([]int, 0, (len(indices)+1)/2)
 	odd := make([]int, 0, len(indices)/2)
@@ -338,18 +370,16 @@ func (f *acquisitionThroughputFixture) deliveries(request inbound.MissingRequest
 		}
 	}
 	return []acquisitionThroughputDelivery{
-		f.deliveryPart(request, even, ordinal, 0, now),
-		f.deliveryPart(request, odd, ordinal, 1, now),
+		f.deliveryPart(request, even, ordinal, batchID, 0, now),
+		f.deliveryPart(request, odd, ordinal, batchID, 1, now),
 	}
 }
 
-func (f *acquisitionThroughputFixture) deliveryPart(request inbound.MissingRequest, indices []int, ordinal, part int, now time.Duration) acquisitionThroughputDelivery {
+func (f *acquisitionThroughputFixture) deliveryPart(request inbound.MissingRequest, indices []int, ordinal int, batchID uint64, part int, now time.Duration) acquisitionThroughputDelivery {
 	nodes := make([]message.LedgerNode, 0, len(indices)*2)
-	hashes := make([][32]byte, 0, len(indices))
 	for _, index := range indices {
 		node := f.wireByID[string(request.NodeIDs[index])]
 		nodes = append(nodes, cloneAcquisitionThroughputNode(node))
-		hashes = append(hashes, request.NodeHashes[index])
 		if ordinal%3 == 0 || (ordinal%3 == 1 && part == 0) {
 			descendants := f.descendants[acquisitionThroughputPathKey(node.NodeID, int(node.NodeID[len(node.NodeID)-1]))]
 			for _, descendant := range descendants {
@@ -363,8 +393,12 @@ func (f *acquisitionThroughputFixture) deliveryPart(request inbound.MissingReque
 	if ordinal%5 == 0 && len(nodes) != 0 {
 		nodes = append(nodes, cloneAcquisitionThroughputNode(nodes[0]))
 	}
-	at := now + acquisitionThroughputSimulatedRTT + time.Duration(part)*time.Millisecond
-	return acquisitionThroughputDelivery{at: at, peerID: request.PeerID, hashes: hashes, nodes: nodes}
+	delay := acquisitionThroughputSimulatedRTT
+	if part != 0 {
+		delay += 4 * acquisitionThroughputSimulatedRTT
+	}
+	at := now + delay
+	return acquisitionThroughputDelivery{at: at, batchID: batchID, peerID: request.PeerID, nodes: nodes}
 }
 
 func cloneAcquisitionThroughputNode(node message.LedgerNode) message.LedgerNode {
