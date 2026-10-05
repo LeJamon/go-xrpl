@@ -544,7 +544,7 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 	state := sm.tree.state
 	root := sm.tree.root
 	sm.tree.mu.RUnlock()
-	if state != stateSyncing || root == nil {
+	if state == stateInvalid || root == nil {
 		return MissingNodesResult{Status: MissingNodesComplete}, nil
 	}
 	sm.backing.mu.RLock()

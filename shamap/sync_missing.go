@@ -2,214 +2,26 @@ package shamap
 
 import (
 	"context"
-	"errors"
-	"sync"
-	"sync/atomic"
 )
 
-// walkMapParallelContext fans out across the root branches and lets each
-// bounded worker walk its subtree independently.
-// Results share a single slice guarded by a mutex, and exhausting maxMissing
-// cancels sibling walks before they continue loading unrelated subtrees.
-//
-// Modeled on rippled's SHAMap::walkMapParallel (SHAMapDelta.cpp:282).
-// One intentional divergence: hash-only branches at root depth 1 that
-// the local store cannot satisfy are reported as missing here. Rippled's
-// walkMapParallel silently drops them (its top-children capture at
-// SHAMapDelta.cpp:290-318 skips any nullptr child without emitting a
-// missing entry, which makes its result disagree with rippled's own
-// serial walkMap). This Go walker stays consistent with the serial
-// walkMap so the two produce the same result set. As in walkMap, backed
-// maps lazy-load hash-only branches from the family before declaring
-// them missing.
-//
-// A SHAMap therefore runs at most 16 workers. Store-loaded nodes are retained
-// only along incomplete paths needed to attach later peer responses.
+// walkMapParallelContext is the legacy slice-returning view of the bounded
+// scanner. Keep its historical error contract for callers that still use the
+// internal helper: traversal and admission yields are returned as errors with
+// any useful IDs preserved in the result.
 func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, filter SyncFilter) ([]MissingNode, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if filter == nil {
-		filter = &defaultSyncFilter{}
-	}
-	sm.acquisition.walkMu.Lock()
-	defer sm.acquisition.walkMu.Unlock()
-
-	type subtreeStart struct {
-		node     *innerNode
-		nodeID   NodeID
-		nodeHash [32]byte
-	}
-
-	sm.tree.mu.RLock()
-	sm.backing.mu.RLock()
-	if sm.tree.root == nil || sm.tree.state == stateInvalid {
-		sm.backing.mu.RUnlock()
-		sm.tree.mu.RUnlock()
-		return nil, nil
-	}
-	root := sm.tree.root
-	access := sm.backing.access
-	cache := sm.backing.fullBelow
-	sm.tree.mu.RUnlock()
-	defer sm.backing.mu.RUnlock()
-
-	backed := access.available() && cache != nil
-	gen, done, err := sm.acquireBackedWalkGeneration(ctx, access, cache, backed)
+	result, err := sm.ScanMissingNodesContext(ctx, maxMissing, filter)
 	if err != nil {
-		return nil, err
+		return result.Nodes, err
 	}
-	defer done()
-	rootID := newRootNodeID()
-	rootHash := root.Hash()
-	if backed {
-		missing, err := sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
-		if !errors.Is(err, errVerifiedBaseUnavailable) {
-			return missing, err
+	switch result.Status {
+	case MissingNodesMore:
+		if result.reason == missingNodesTraversalYield {
+			return result.Nodes, ErrTraversalBudget
 		}
-		sm.releaseBackedWalkCursorLocked()
-		sm.acquisition.stats.verifiedBaseFallbacks.Add(1)
-		return sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
+	case MissingNodesMemory:
+		return result.Nodes, ErrAcquisitionMemory
 	}
-
-	if root.isFullBelow(gen) {
-		return nil, nil
-	}
-
-	var (
-		mu           sync.Mutex
-		missing      []MissingNode
-		stopped      bool
-		stopWalk     atomic.Bool
-		rootComplete = true
-		subtrees     = make([]subtreeStart, 0, BranchFactor)
-	)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	reportLocked := func(m MissingNode) bool {
-		mu.Lock()
-		defer mu.Unlock()
-		if stopped {
-			return true
-		}
-		missing = append(missing, m)
-		if maxMissing > 0 && len(missing) >= maxMissing {
-			stopped = true
-			stopWalk.Store(true)
-			return true
-		}
-		return false
-	}
-
-	for branch := range BranchFactor {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if stopWalk.Load() {
-			rootComplete = false
-			break
-		}
-		child, childHash, isSet := root.LoadChild(branch)
-		if !isSet {
-			continue
-		}
-		childNodeID, err := rootID.childNodeID(uint8(branch))
-		if err != nil {
-			continue
-		}
-		if child == nil {
-			rootComplete = false
-			if filter.ShouldFetch(childHash) {
-				if reportLocked(MissingNode{
-					Hash:       childHash,
-					Depth:      1,
-					ParentHash: rootHash,
-					Branch:     branch,
-					NodeID:     childNodeID,
-				}) {
-					break
-				}
-			}
-			continue
-		}
-		inner, ok := child.(*innerNode)
-		if !ok {
-			continue
-		}
-		subtrees = append(subtrees, subtreeStart{
-			node:     inner,
-			nodeID:   childNodeID,
-			nodeHash: childHash,
-		})
-	}
-
-	if len(subtrees) == 0 {
-		// No inner subtrees to fan out. Mark the root complete when every
-		// depth-1 branch was resident-and-full-below and nothing stopped.
-		mu.Lock()
-		markRoot := rootComplete && !stopped
-		mu.Unlock()
-		if markRoot {
-			markRootFullBelow(root, gen)
-		}
-		return missing, ctx.Err()
-	}
-
-	subFull := make([]bool, len(subtrees))
-	var firstErr error
-	var errMu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(len(subtrees))
-	for i, s := range subtrees {
-		go func() {
-			defer wg.Done()
-			result, walkErr := walkFullBelowStateAccess(
-				ctx, sm, nil, s.node, s.nodeID, s.nodeHash, 1, gen, filter, false, cache, false, false, reportLocked,
-				func() bool { return stopWalk.Load() || ctx.Err() != nil },
-			)
-			subFull[i] = result.full
-			if result.stopped {
-				stopWalk.Store(true)
-			}
-			if walkErr != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = walkErr
-				}
-				errMu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	for i := range subtrees {
-		if !subFull[i] {
-			rootComplete = false
-		}
-	}
-
-	// Mark the root full-below only when every branch — those handled
-	// inline and every fanned-out subtree — came back complete and no
-	// worker was cut short by the missing cap.
-	allSub := true
-	for _, f := range subFull {
-		if !f {
-			allSub = false
-			break
-		}
-	}
-	mu.Lock()
-	markRoot := rootComplete && allSub && !stopped && !stopWalk.Load()
-	mu.Unlock()
-	if markRoot {
-		markRootFullBelow(root, gen)
-	}
-
-	return missing, nil
+	return result.Nodes, nil
 }
 
 // acquireBackedWalkGeneration admits one bounded walk against a stable
