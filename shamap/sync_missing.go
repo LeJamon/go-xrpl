@@ -67,8 +67,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 		if !errors.Is(err, errVerifiedBaseUnavailable) {
 			return missing, err
 		}
-		sm.acquisition.base = nil
-		sm.acquisition.cursor = nil
+		sm.releaseBackedWalkCursorLocked()
 		sm.acquisition.stats.verifiedBaseFallbacks.Add(1)
 		return sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
 	}

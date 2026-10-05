@@ -56,7 +56,7 @@ func (sm *SHAMap) publishAcknowledgedFullBelow() (bool, map[[32]byte]struct{}) {
 				cacheFullBelow(cache, gen, proof.hash, int(proof.depth))
 			}
 		}
-		lane.proofs.clear()
+		lane.proofs.clearWithRelease(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
 		if !lane.complete {
 			complete = false
 			continue

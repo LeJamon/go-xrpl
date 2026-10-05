@@ -50,6 +50,7 @@ type acquisitionState struct {
 	attachmentMu sync.Mutex
 	cursor       *backedWalkCursor
 	base         *verifiedWalkBase
+	budget       *AcquisitionBudget
 	stats        backedWalkStats
 }
 
@@ -115,6 +116,25 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 	}
 	sm.tree.cachedSize.Store(-1)
 	return sm, nil
+}
+
+// SetAcquisitionBudget attaches a shared memory budget to this map. Set it
+// before starting an acquisition walk; changing it while a cursor is active
+// only affects subsequent cursor allocations.
+func (sm *SHAMap) SetAcquisitionBudget(budget *AcquisitionBudget) {
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
+	sm.acquisition.budget = budget
+}
+
+// ReleaseAcquisitionBudget retires the resumable walk and returns all cursor
+// reservations to its shared budget. The attached tree is left intact and can
+// still be adopted or read by its owner. Calling this method repeatedly is
+// safe.
+func (sm *SHAMap) ReleaseAcquisitionBudget() {
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
+	sm.releaseBackedWalkCursorLocked()
 }
 
 // SetFamily sets the Family on an existing SHAMap, enabling backed mode.
