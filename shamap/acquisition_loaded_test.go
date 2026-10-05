@@ -82,6 +82,37 @@ func TestConcurrentAcquisitionLoadChargesOnlyInstalledNode(t *testing.T) {
 	require.Zero(t, dest.acquisition.budget.Snapshot().Used)
 }
 
+func TestBackedSnapshotsHaveIndependentBoundedWalkBudgets(t *testing.T) {
+	source := New(TypeState)
+	require.NoError(t, source.Put([32]byte{0x12}, make([]byte, 16)))
+	hash, err := source.Hash()
+	require.NoError(t, err)
+	root, err := source.SerializeRoot()
+	require.NoError(t, err)
+	backed, err := NewBacked(TypeState, newMemoryFamily())
+	require.NoError(t, err)
+	_, err = backed.AddRootNodeWithEntry(hash, root)
+	require.NoError(t, err)
+	for name, snapshot := range map[string]func() (*SHAMap, error){
+		"shared": backed.MutableFork, "detached": backed.DetachedMutable,
+	} {
+		t.Run(name, func(t *testing.T) {
+			copied, err := snapshot()
+			require.NoError(t, err)
+			require.NoError(t, copied.StartSync())
+			missing, err := copied.GetMissingNodesContext(t.Context(), 1, nil)
+			require.NoError(t, err)
+			require.Len(t, missing, 1)
+			budget := copied.acquisition.budget
+			require.Positive(t, budget.Snapshot().Limit)
+			require.Positive(t, budget.Snapshot().CursorUsed)
+			require.Zero(t, backed.acquisition.budget.Snapshot().Used)
+			copied.ReleaseAcquisitionBudget()
+			require.Zero(t, budget.Snapshot().Used)
+		})
+	}
+}
+
 func TestAcquisitionPersistsReplyWithoutRetainingOversizedNode(t *testing.T) {
 	source := New(TypeState)
 	key := [32]byte{0x12, 0x34}

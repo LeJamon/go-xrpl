@@ -306,6 +306,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	l.mu.Lock()
 	events := append([]acquisitionWorkEvent(nil), batch.events...)
 	batch.inFlightData = acquisitionDataEvents(events)
+	clear(batch.events)
 	batch.events = batch.events[:0]
 	l.mu.Unlock()
 	retained := false

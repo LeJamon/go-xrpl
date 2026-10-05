@@ -10,7 +10,7 @@ import (
 	"unsafe"
 )
 
-const backedWalkProofChunkSize = 1024
+const backedWalkProofChunkSize = 128
 
 var errVerifiedBaseUnavailable = errors.New("verified SHAMap base is unavailable")
 
@@ -111,6 +111,7 @@ type backedWalkPendingQueue struct {
 	head   *backedWalkPendingChunk
 	tail   *backedWalkPendingChunk
 	length int
+	chunks int
 }
 
 type backedWalkPendingChunk struct {
@@ -128,10 +129,11 @@ const backedWalkPendingChunkSize = 16
 const backedWalkRetryBatch = 8
 
 const (
-	backedWalkFrameBytes        = uint64(unsafe.Sizeof(backedWalkFrame{}))
-	backedWalkPendingChunkBytes = uint64(unsafe.Sizeof(backedWalkPendingChunk{}))
-	backedWalkProofBytes        = uint64(unsafe.Sizeof(backedWalkProof{}))
-	backedWalkProofSliceBytes   = uint64(unsafe.Sizeof([]backedWalkProof{}))
+	// Cover allocator size classes as well as the fields and backing arrays.
+	backedWalkFrameBytes        = 2 * uint64(unsafe.Sizeof(backedWalkFrame{}))
+	backedWalkPendingChunkBytes = 2 * uint64(unsafe.Sizeof(backedWalkPendingChunk{}))
+	backedWalkProofBytes        = 2 * uint64(unsafe.Sizeof(backedWalkProof{}))
+	backedWalkProofSliceBytes   = 2 * uint64(unsafe.Sizeof([]backedWalkProof{}))
 )
 
 func (proofs *backedWalkProofs) add(hash [32]byte, depth int) {
@@ -287,6 +289,7 @@ func (queue *backedWalkPendingQueue) append(item backedWalkPending, reserve func
 			queue.tail.next = chunk
 		}
 		queue.tail = chunk
+		queue.chunks++
 	}
 	queue.tail.items[queue.tail.end] = item
 	queue.tail.end++
@@ -312,6 +315,7 @@ func (queue *backedWalkPendingQueue) pop(release func(uint64)) (backedWalkPendin
 	queue.length--
 	if chunk.start == chunk.end {
 		queue.head = chunk.next
+		queue.chunks--
 		if queue.head == nil {
 			queue.tail = nil
 		}
@@ -320,30 +324,6 @@ func (queue *backedWalkPendingQueue) pop(release func(uint64)) (backedWalkPendin
 		}
 	}
 	return item, true
-}
-
-func (queue *backedWalkPendingQueue) pushFront(item backedWalkPending, reserve func(uint64) bool) error {
-	if queue.head != nil && queue.head.start > 0 {
-		queue.head.start--
-		queue.head.items[queue.head.start] = item
-		queue.length++
-		return nil
-	}
-	if reserve != nil && !reserve(backedWalkPendingChunkBytes) {
-		return ErrAcquisitionMemory
-	}
-	chunk := &backedWalkPendingChunk{
-		start: backedWalkPendingChunkSize - 1,
-		end:   backedWalkPendingChunkSize,
-		next:  queue.head,
-	}
-	chunk.items[chunk.start] = item
-	queue.head = chunk
-	if queue.tail == nil {
-		queue.tail = chunk
-	}
-	queue.length++
-	return nil
 }
 
 func (queue *backedWalkPendingQueue) clear(release func(uint64)) {
@@ -357,14 +337,11 @@ func (queue *backedWalkPendingQueue) clear(release func(uint64)) {
 	queue.head = nil
 	queue.tail = nil
 	queue.length = 0
+	queue.chunks = 0
 }
 
 func (queue *backedWalkPendingQueue) capacity() int {
-	chunks := 0
-	for chunk := queue.head; chunk != nil; chunk = chunk.next {
-		chunks++
-	}
-	return chunks * backedWalkPendingChunkSize
+	return queue.chunks * backedWalkPendingChunkSize
 }
 
 type backedWalkFrame struct {
@@ -382,22 +359,18 @@ type backedWalkFrame struct {
 }
 
 type backedWalkLane struct {
-	root          backedWalkItem
-	stack         []backedWalkFrame
-	retryStack    []backedWalkFrame
-	pending       backedWalkPendingQueue
-	retryHold     backedWalkPending
-	retryHeld     bool
-	proofs        backedWalkProofs
-	complete      bool
-	durable       bool
-	passDurable   bool
-	started       bool
-	retryTurn     bool
-	activeRetry   bool
-	retrySlot     bool
-	retryUsesSlot bool
-	cursor        *backedWalkCursor
+	root        backedWalkItem
+	stack       []backedWalkFrame
+	retryStack  []backedWalkFrame
+	pending     backedWalkPendingQueue
+	proofs      backedWalkProofs
+	retryProofs backedWalkProofs
+	complete    bool
+	durable     bool
+	passDurable bool
+	started     bool
+	activeRetry bool
+	cursor      *backedWalkCursor
 }
 
 type backedWalkCursor struct {
@@ -405,6 +378,7 @@ type backedWalkCursor struct {
 	rootHash   [32]byte
 	baseRoot   [32]byte
 	budget     *AcquisitionBudget
+	fixedBytes uint64
 	lanes      [BranchFactor]backedWalkLane
 }
 
@@ -480,6 +454,11 @@ func (sm *SHAMap) reserveCursorBytes(cursor *backedWalkCursor, bytes uint64) boo
 	if !cursor.budget.tryReserveCursor(bytes) {
 		return false
 	}
+	sm.recordCursorReservation(bytes)
+	return true
+}
+
+func (sm *SHAMap) recordCursorReservation(bytes uint64) {
 	current := sm.acquisition.stats.cursorBytes.Add(bytes)
 	for {
 		peak := sm.acquisition.stats.cursorPeakBytes.Load()
@@ -487,7 +466,6 @@ func (sm *SHAMap) reserveCursorBytes(cursor *backedWalkCursor, bytes uint64) boo
 			break
 		}
 	}
-	return true
 }
 
 func (sm *SHAMap) releaseCursorBytes(cursor *backedWalkCursor, bytes uint64) {
@@ -506,6 +484,36 @@ func (sm *SHAMap) releaseCursorBytes(cursor *backedWalkCursor, bytes uint64) {
 	}
 }
 
+func (sm *SHAMap) reservePendingBytes(cursor *backedWalkCursor, bytes uint64) bool {
+	budget := cursor.budget
+	if budget == nil {
+		return true
+	}
+	limit := budget.limit / 8
+	for {
+		used := budget.pendingUsed.Load()
+		if bytes > limit || used > limit-bytes {
+			return false
+		}
+		if budget.pendingUsed.CompareAndSwap(used, used+bytes) {
+			break
+		}
+	}
+	if !sm.reserveCursorBytes(cursor, bytes) {
+		budget.pendingUsed.Add(^(bytes - 1))
+		return false
+	}
+	return true
+}
+
+func (sm *SHAMap) releasePendingBytes(cursor *backedWalkCursor, bytes uint64) {
+	if cursor.budget == nil || bytes == 0 {
+		return
+	}
+	cursor.budget.pendingUsed.Add(^(bytes - 1))
+	sm.releaseCursorBytes(cursor, bytes)
+}
+
 func (sm *SHAMap) updateCursorCapacityStats(cursor *backedWalkCursor) {
 	if cursor == nil {
 		return
@@ -515,15 +523,12 @@ func (sm *SHAMap) updateCursorCapacityStats(cursor *backedWalkCursor) {
 	for i := range cursor.lanes {
 		lane := &cursor.lanes[i]
 		blocked += uint64(lane.pending.len())
-		if lane.retryHeld {
-			blocked++
-		}
 		blockedCapacity += uint64(lane.pending.capacity())
 		active += uint64(len(lane.stack) + len(lane.retryStack))
 		activeCapacity += uint64(cap(lane.stack) + cap(lane.retryStack))
-		proofs += uint64(lane.proofs.count())
-		for _, chunk := range lane.proofs.chunks {
-			proofCapacity += uint64(cap(chunk))
+		proofs += uint64(lane.proofs.count() + lane.retryProofs.count())
+		for _, buffer := range []*backedWalkProofs{&lane.proofs, &lane.retryProofs} {
+			proofCapacity += uint64(len(buffer.chunks) * backedWalkProofChunkSize)
 		}
 	}
 	sm.acquisition.stats.blockedItems.Store(blocked)
@@ -537,49 +542,34 @@ func (sm *SHAMap) updateCursorCapacityStats(cursor *backedWalkCursor) {
 func (sm *SHAMap) releaseBackedWalkCursorLocked() {
 	cursor := sm.acquisition.cursor
 	if cursor == nil {
+		sm.acquisition.base = nil
 		return
 	}
 	for i := range cursor.lanes {
 		lane := &cursor.lanes[i]
-		lane.pending.clear(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
-		lane.retryHeld = false
-		lane.retryHold = backedWalkPending{}
+		lane.pending.clear(func(bytes uint64) { sm.releasePendingBytes(cursor, bytes) })
 		for _, stack := range []*[]backedWalkFrame{&lane.stack, &lane.retryStack} {
-			if capacity := cap(*stack); capacity != 0 {
-				for j := range *stack {
-					(*stack)[j] = backedWalkFrame{}
-				}
-				isRetry := stack == &lane.retryStack
-				reserved := uint64(capacity)
-				if isRetry && lane.retryUsesSlot {
-					reserved--
-				}
-				if reserved != 0 {
-					sm.releaseCursorBytes(cursor, reserved*backedWalkFrameBytes)
-				}
-				*stack = nil
-			}
-		}
-		if lane.retrySlot {
-			sm.releaseCursorBytes(cursor, backedWalkFrameBytes)
-			lane.retrySlot = false
-		}
-		if lane.retryUsesSlot {
-			sm.releaseCursorBytes(cursor, backedWalkFrameBytes)
-			lane.retryUsesSlot = false
+			capacity := cap(*stack)
+			clear(*stack)
+			*stack = nil
+			sm.releaseCursorBytes(cursor, uint64(capacity)*backedWalkFrameBytes)
 		}
 		lane.proofs.clearWithRelease(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
+		lane.retryProofs.clearWithRelease(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
+		lane.root = backedWalkItem{}
 		lane.cursor = nil
 	}
-	sm.updateCursorCapacityStats(cursor)
+	sm.releaseCursorBytes(cursor, cursor.fixedBytes)
 	sm.acquisition.cursor = nil
 	sm.acquisition.base = nil
+	sm.acquisition.stats.blockedItems.Store(0)
+	sm.acquisition.stats.blockedCapacity.Store(0)
+	sm.acquisition.stats.activeFrames.Store(0)
+	sm.acquisition.stats.activeCapacity.Store(0)
+	sm.acquisition.stats.proofEntries.Store(0)
+	sm.acquisition.stats.proofCapacity.Store(0)
 }
 
-// clearBackedWalkNodeReferencesLocked drops pointer-bearing traversal state
-// while retaining hashes, paths, branch cursors, and proof metadata needed to
-// resume the walk. The caller must hold acquisition.walkMu. A later traversal
-// reloads any detached node from the backing family before descending it.
 func (sm *SHAMap) clearBackedWalkNodeReferencesLocked() {
 	cursor := sm.acquisition.cursor
 	if cursor == nil {
@@ -629,27 +619,26 @@ func (sm *SHAMap) walkBackedContext(
 	if sm.acquisition.cursor == nil || sm.acquisition.cursor.generation != gen ||
 		sm.acquisition.cursor.rootHash != rootHash || sm.acquisition.cursor.baseRoot != baseRoot {
 		sm.releaseBackedWalkCursorLocked()
-		cursor, err := newBackedWalkCursor(root, rootHash, gen, base, sm.acquisition.budget)
+		cursor, err := sm.newBackedWalkCursor(root, rootHash, gen, base, sm.acquisition.budget)
 		if err != nil {
-			return nil, err
-		}
-		if err := sm.reserveBackedWalkRetrySlots(cursor); err != nil {
 			return nil, err
 		}
 		sm.acquisition.cursor = cursor
 	}
 	cursor := sm.acquisition.cursor
-	sm.updateCursorCapacityStats(cursor)
+	defer sm.updateCursorCapacityStats(cursor)
 
 	var (
-		missing  []MissingNode
-		resultMu sync.Mutex
-		stop     atomic.Bool
-		firstErr error
-		errMu    sync.Mutex
-		wg       sync.WaitGroup
-		reported = make(map[[32]byte]struct{})
+		missing     []MissingNode
+		resultMu    sync.Mutex
+		stop        atomic.Bool
+		firstErr    error
+		errMu       sync.Mutex
+		wg          sync.WaitGroup
+		reported    = make(map[[32]byte]struct{})
+		reportBytes uint64
 	)
+	defer func() { sm.releaseCursorBytes(cursor, reportBytes) }()
 	report := func(item backedWalkItem) {
 		if stop.Load() {
 			return
@@ -662,6 +651,18 @@ func (sm *SHAMap) walkBackedContext(
 		if _, exists := reported[item.hash]; exists {
 			return
 		}
+		// Cover result growth and the deduplication map, including resize overlap.
+		const reportCharge = 1024
+		if !sm.reserveCursorBytes(cursor, reportCharge) {
+			errMu.Lock()
+			if firstErr == nil {
+				firstErr = ErrAcquisitionMemory
+			}
+			errMu.Unlock()
+			stop.Store(true)
+			return
+		}
+		reportBytes += reportCharge
 		reported[item.hash] = struct{}{}
 		sm.acquisition.stats.missingNodes.Add(1)
 		missing = append(missing, MissingNode{
@@ -686,11 +687,14 @@ func (sm *SHAMap) walkBackedContext(
 			defer wg.Done()
 			if err := sm.walkBackedLane(ctx, access, cache, gen, root, cursor, lane, filter, &stop, report); err != nil {
 				errMu.Lock()
-				if firstErr == nil {
+				if firstErr == nil || errors.Is(firstErr, ErrTraversalBudget) ||
+					(errors.Is(firstErr, ErrAcquisitionMemory) && !errors.Is(err, ErrTraversalBudget)) {
 					firstErr = err
 				}
 				errMu.Unlock()
-				stop.Store(true)
+				if !errors.Is(err, ErrAcquisitionMemory) {
+					stop.Store(true)
+				}
 			}
 		}()
 	}
@@ -710,7 +714,6 @@ func (sm *SHAMap) walkBackedContext(
 		}
 		durable = durable && cursor.lanes[i].durable
 	}
-	sm.updateCursorCapacityStats(cursor)
 	if !complete && len(missing) == 0 {
 		return nil, ErrTraversalBudget
 	}
@@ -735,8 +738,16 @@ func (sm *SHAMap) walkBackedContext(
 	return missing, nil
 }
 
-func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32, base *verifiedWalkBase, budget *AcquisitionBudget) (*backedWalkCursor, error) {
+func (sm *SHAMap) newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32, base *verifiedWalkBase, budget *AcquisitionBudget) (*backedWalkCursor, error) {
+	charge := 2 * uint64(unsafe.Sizeof(backedWalkCursor{}))
+	if budget != nil && !budget.tryReserveCursor(charge) {
+		return nil, ErrAcquisitionMemory
+	}
 	cursor := &backedWalkCursor{generation: gen, rootHash: rootHash, budget: budget}
+	if budget != nil {
+		cursor.fixedBytes = charge
+		sm.recordCursorReservation(charge)
+	}
 	if base != nil {
 		cursor.baseRoot = base.rootHash
 	}
@@ -768,45 +779,23 @@ func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32, base *v
 	return cursor, nil
 }
 
-func (sm *SHAMap) reserveBackedWalkRetrySlots(cursor *backedWalkCursor) error {
-	if cursor == nil {
-		return nil
-	}
-	for i := range cursor.lanes {
-		lane := &cursor.lanes[i]
-		if lane.complete || lane.root.hash == ([32]byte{}) {
-			continue
-		}
-		if !sm.reserveCursorBytes(cursor, backedWalkFrameBytes) {
-			for j := range cursor.lanes {
-				if cursor.lanes[j].retrySlot {
-					sm.releaseCursorBytes(cursor, backedWalkFrameBytes)
-					cursor.lanes[j].retrySlot = false
-				}
-			}
-			return ErrAcquisitionMemory
-		}
-		lane.retrySlot = true
-	}
-	return nil
-}
-
 func (sm *SHAMap) pushBackedWalkFrame(cursor *backedWalkCursor, lane *backedWalkLane, frame backedWalkFrame) error {
 	stack := backedWalkActiveStack(lane)
 	if len(*stack) == cap(*stack) {
-		reserved := true
-		if lane.activeRetry && len(*stack) == 0 && lane.retrySlot {
-			lane.retrySlot = false
-			lane.retryUsesSlot = true
-		} else if !sm.reserveCursorBytes(cursor, backedWalkFrameBytes) {
-			reserved = false
+		oldCap := cap(*stack)
+		newCap := max(1, oldCap*2)
+		newCap = min(newCap, maxDepth+1)
+		if newCap <= oldCap {
+			return errMaxDepthExceeded
 		}
-		if !reserved {
+		charge := uint64(newCap) * backedWalkFrameBytes
+		if !sm.reserveCursorBytes(cursor, charge) {
 			return ErrAcquisitionMemory
 		}
-		next := make([]backedWalkFrame, len(*stack), cap(*stack)+1)
+		next := make([]backedWalkFrame, len(*stack), newCap)
 		copy(next, *stack)
 		*stack = next
+		sm.releaseCursorBytes(cursor, uint64(oldCap)*backedWalkFrameBytes)
 	}
 	*stack = append(*stack, frame)
 	return nil
@@ -817,6 +806,13 @@ func backedWalkActiveStack(lane *backedWalkLane) *[]backedWalkFrame {
 		return &lane.retryStack
 	}
 	return &lane.stack
+}
+
+func backedWalkActiveProofs(lane *backedWalkLane) *backedWalkProofs {
+	if lane.activeRetry {
+		return &lane.retryProofs
+	}
+	return &lane.proofs
 }
 
 func (sm *SHAMap) walkBackedLane(
@@ -832,96 +828,55 @@ func (sm *SHAMap) walkBackedLane(
 	report func(backedWalkItem),
 ) error {
 	lane.complete = false
-	preferRetry := lane.retryTurn || lane.retryHeld || lane.pending.len() != 0
-	lane.retryTurn = false
-	suppressRetryReport := len(lane.stack) != 0 && hasTraversalBudget(ctx)
-	if preferRetry && len(lane.stack) != 0 && len(lane.retryStack) == 0 && !lane.retryHeld && traversalBudgetHasAtMost(ctx, 1) {
-		preferRetry = false
+	defer func() { lane.activeRetry = false }()
+	retries := lane.pending.len()
+	if len(lane.stack) != 0 {
+		retries = min(retries, backedWalkRetryBatch)
 	}
-	retryYielded := false
-	memoryWait := false
-	for attempts := 0; attempts < backedWalkRetryBatch && !retryYielded && !memoryWait && !stop.Load(); attempts++ {
+	if len(lane.stack) != 0 && len(lane.retryStack) == 0 && traversalBudgetHasAtMost(ctx, 1) {
+		retries = 0
+	}
+	for len(lane.retryStack) != 0 || retries > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if stop.Load() {
+			return nil
+		}
+		lane.activeRetry = true
 		if len(lane.retryStack) == 0 {
-			if !preferRetry {
+			pending, ok := lane.pending.peek()
+			if !ok {
 				break
 			}
-			if lane.retryHeld {
-				lane.activeRetry = true
-				if err := sm.pushBackedWalkFrame(cursor, lane, backedWalkFrame{
-					item: pendingBackedWalkItem(root, lane.retryHold), topLevel: true, retry: true, proofStart: lane.proofs.count(),
-				}); err != nil {
-					lane.activeRetry = false
-					return err
-				}
-				lane.retryHeld = false
-				lane.retryHold = backedWalkPending{}
-			} else {
-				pending, ok := lane.pending.peek()
-				if !ok {
-					break
-				}
-				lane.activeRetry = true
-				if err := sm.pushBackedWalkFrame(cursor, lane, backedWalkFrame{
-					item: pendingBackedWalkItem(root, pending), topLevel: true, retry: true, proofStart: lane.proofs.count(),
-				}); err != nil {
-					lane.activeRetry = false
-					return err
-				}
-				lane.pending.pop(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
-			}
-		}
-		if len(lane.retryStack) != 0 {
-			lane.activeRetry = true
-		}
-
-		if err := sm.walkBackedLaneStack(ctx, access, cache, gen, root, cursor, lane, filter, stop, report, suppressRetryReport); err != nil {
-			switch {
-			case errors.Is(err, ErrAcquisitionMemory):
-				if !sm.suspendBackedWalkRetry(lane) {
-					lane.activeRetry = false
-					return err
-				}
-				memoryWait = true
-			case errors.Is(err, ErrTraversalBudget):
-				retryYielded = true
-			default:
-				lane.activeRetry = false
+			if err := sm.pushBackedWalkFrame(cursor, lane, backedWalkFrame{
+				item: pendingBackedWalkItem(root, pending), topLevel: true, retry: true, proofStart: lane.retryProofs.count(),
+			}); err != nil {
 				return err
 			}
+			lane.pending.pop(func(bytes uint64) { sm.releasePendingBytes(cursor, bytes) })
+			retries--
 		}
-		lane.activeRetry = false
-		preferRetry = true
+		pendingFull := cursor.budget != nil && cursor.budget.pendingUsed.Load()+backedWalkPendingChunkBytes > cursor.budget.limit/8
+		if err := sm.walkBackedLaneStack(ctx, access, cache, gen, root, cursor, lane, filter, stop, report, len(lane.stack) != 0 && hasTraversalBudget(ctx) && !pendingFull); err != nil {
+			return err
+		}
 	}
 
+	lane.activeRetry = false
 	if !lane.started && len(lane.stack) == 0 && lane.pending.len() == 0 && lane.root.hash != ([32]byte{}) {
 		if err := sm.pushBackedWalkFrame(cursor, lane, backedWalkFrame{
-			item: lane.root, topLevel: true, proofStart: lane.proofs.count(),
+			item: lane.root, topLevel: true, proofStart: backedWalkActiveProofs(lane).count(),
 		}); err != nil {
 			return err
 		}
 		lane.started = true
 	}
-	lane.activeRetry = false
 	if err := sm.walkBackedLaneStack(ctx, access, cache, gen, root, cursor, lane, filter, stop, report, false); err != nil {
 		return err
 	}
-	if memoryWait && len(lane.stack) == 0 && len(lane.retryStack) == 0 && !lane.retryHeld {
-		return ErrAcquisitionMemory
-	}
-	if retryYielded && len(lane.stack) == 0 {
-		return ErrTraversalBudget
-	}
-	if len(lane.stack) == 0 && len(lane.retryStack) == 0 && !lane.retryHeld && lane.pending.len() == 0 {
-		lane.complete = true
-		lane.durable = lane.passDurable
-	} else {
-		lane.complete = false
-		lane.durable = false
-		lane.retryTurn = lane.pending.len() != 0 || lane.retryHeld || len(lane.retryStack) != 0
-	}
+	lane.complete = lane.started && len(lane.stack) == 0 && len(lane.retryStack) == 0 && lane.pending.len() == 0
+	lane.durable = lane.complete && lane.passDurable
 	return nil
 }
 
@@ -974,8 +929,13 @@ func (sm *SHAMap) walkBackedLaneStack(
 			if !found {
 				pending := newBackedWalkPending(frame.item)
 				if err := lane.pending.append(pending, func(bytes uint64) bool {
-					return sm.reserveCursorBytes(cursor, bytes)
+					return sm.reservePendingBytes(cursor, bytes)
 				}); err != nil {
+					// The frame owns this path until queue admission succeeds.
+					// Requesting it here lets a full frontier drain on arrival.
+					if filter.ShouldFetch(frame.item.hash) {
+						report(frame.item)
+					}
 					return err
 				}
 				if filter.ShouldFetch(frame.item.hash) && !(frame.retry && suppressRetryReport) {
@@ -1040,7 +1000,7 @@ func (sm *SHAMap) walkBackedLaneStack(
 				parent:     parent,
 				node:       frame.view.children[branch],
 			},
-			proofStart: lane.proofs.count(),
+			proofStart: backedWalkActiveProofs(lane).count(),
 		}
 		frame.nextBranch++
 		if err := sm.pushBackedWalkFrame(cursor, lane, childFrame); err != nil {
@@ -1050,36 +1010,6 @@ func (sm *SHAMap) walkBackedLaneStack(
 		}
 	}
 	return nil
-}
-
-func (sm *SHAMap) suspendBackedWalkRetry(lane *backedWalkLane) bool {
-	if len(lane.retryStack) == 0 || lane.retryHeld {
-		return false
-	}
-	lane.retryHold = newBackedWalkPending(lane.retryStack[0].item)
-	lane.retryHeld = true
-	proofStart := lane.retryStack[0].proofStart
-	lane.proofs.truncateWithRelease(proofStart, func(bytes uint64) {
-		sm.releaseCursorBytes(lane.cursor, bytes)
-	})
-	for i := range lane.retryStack {
-		lane.retryStack[i] = backedWalkFrame{}
-	}
-	capacity := cap(lane.retryStack)
-	lane.retryStack = nil
-	if capacity != 0 {
-		if lane.retryUsesSlot {
-			if capacity > 1 {
-				sm.releaseCursorBytes(lane.cursor, uint64(capacity-1)*backedWalkFrameBytes)
-			}
-			lane.retrySlot = true
-			lane.retryUsesSlot = false
-		} else {
-			sm.releaseCursorBytes(lane.cursor, uint64(capacity)*backedWalkFrameBytes)
-		}
-	}
-	lane.activeRetry = false
-	return true
 }
 
 func (sm *SHAMap) finishBackedWalkFrame(
@@ -1093,10 +1023,11 @@ func (sm *SHAMap) finishBackedWalkFrame(
 	stack := backedWalkActiveStack(lane)
 	frame := &(*stack)[len(*stack)-1]
 	if full {
-		lane.proofs.truncateWithRelease(frame.proofStart, func(bytes uint64) {
+		proofs := backedWalkActiveProofs(lane)
+		proofs.truncateWithRelease(frame.proofStart, func(bytes uint64) {
 			sm.releaseCursorBytes(lane.cursor, bytes)
 		})
-		if err := lane.proofs.addWithBudget(
+		if err := proofs.addWithBudget(
 			frame.item.hash,
 			frame.item.depth,
 			func(bytes uint64) bool { return sm.reserveCursorBytes(lane.cursor, bytes) },
@@ -1114,22 +1045,8 @@ func (sm *SHAMap) finishBackedWalkFrame(
 	finishBackedWalkFrame(lane, full, stored, usedBase)
 	if len(*stack) == 0 && lane.cursor != nil {
 		capacity := cap(*stack)
-		if lane.activeRetry {
-			if capacity != 0 {
-				if lane.retryUsesSlot {
-					if capacity > 1 {
-						sm.releaseCursorBytes(lane.cursor, uint64(capacity-1)*backedWalkFrameBytes)
-					}
-					lane.retrySlot = true
-					lane.retryUsesSlot = false
-				} else {
-					sm.releaseCursorBytes(lane.cursor, uint64(capacity)*backedWalkFrameBytes)
-				}
-			}
-		} else {
-			sm.releaseCursorBytes(lane.cursor, uint64(capacity)*backedWalkFrameBytes)
-		}
 		*stack = nil
+		sm.releaseCursorBytes(lane.cursor, uint64(capacity)*backedWalkFrameBytes)
 	}
 	return nil
 }

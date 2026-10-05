@@ -720,6 +720,7 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 			}
 			callsSinceStage = 0
 		}
+		beforeWalk := dest.BackedWalkStats()
 		missing, walkErr := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), issue2043TraversalVisits), issue2043RequestLimit, nil)
 		run.calls++
 		if walkErr != nil && !errors.Is(walkErr, ErrTraversalBudget) && !errors.Is(walkErr, ErrAcquisitionMemory) {
@@ -761,13 +762,14 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 			metrics := issue2043SnapshotMetrics(dest, budget)
 			t.Logf("issue2043 pass=%d requested=%d staged=%d outstanding=%d cursor=%d cursor_peak=%d budget_peak=%d reads=%d", pass, run.requested, run.staged, outstanding.len(), metrics.cursorBytes, run.peakCursorBytes, run.budgetPeak, fixture.family.readCount())
 		}
-		if newRequests == 0 && staged == 0 {
+		afterWalk := dest.BackedWalkStats()
+		if newRequests == 0 && staged == 0 && afterWalk.BlockedItems >= beforeWalk.BlockedItems && afterWalk.ActiveFrames >= beforeWalk.ActiveFrames {
 			noProgress++
 		} else {
 			noProgress = 0
 		}
 		if noProgress > 32 {
-			t.Fatalf("frontier discovery made no progress at pass %d: requested=%d staged=%d outstanding=%d walk_error=%v", pass, run.requested, run.staged, outstanding.len(), walkErr)
+			t.Fatalf("frontier discovery made no progress at pass %d: requested=%d staged=%d outstanding=%d walk_error=%v cursor=%+v", pass, run.requested, run.staged, outstanding.len(), walkErr, afterWalk)
 		}
 		if run.staged == uint64(fixture.withheld) && outstanding.len() == 0 {
 			issue2043CompleteWithBudget(t, dest)

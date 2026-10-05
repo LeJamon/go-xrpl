@@ -257,7 +257,9 @@ keys to precede any `[section]` header.
 
 The budget is shared by active state and transaction acquisitions. Cursor and
 retained-node allocations can each use at most one quarter; persistence staging
-can use one eighth. The remaining three eighths provide working room for decoding
+can use one eighth. Pending cursor entries can use at most half of the cursor
+allowance, leaving space for active traversal, retries and proofs. The remaining
+three eighths provide working room for decoding
 and preparing an already received reply. At the minimum, that reserve is 192 MiB
 for the 64 MiB maximum ledger-data payload, decoded nodes, prefix serialization
 and batch metadata. The number of pending requests and queued replies also

@@ -34,7 +34,7 @@ func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes 
 	if cursor := sm.acquisition.cursor; !releaseNodes && cursor != nil && cursor.budget != nil {
 		entries := uint64(BranchFactor + 1)
 		for i := range cursor.lanes {
-			entries += uint64(cursor.lanes[i].proofs.count())
+			entries += uint64(cursor.lanes[i].proofs.count() + cursor.lanes[i].retryProofs.count())
 		}
 		if entries > cursor.budget.limit/128 || !cursor.budget.TryReserve(entries*128) {
 			releaseNodes = true
@@ -86,17 +86,21 @@ func (sm *SHAMap) publishAcknowledgedFullBelow(collectRelease bool) (bool, map[[
 	complete := true
 	for i := range BranchFactor {
 		lane := &cursor.lanes[i]
-		for _, chunk := range lane.proofs.chunks {
-			for _, proof := range chunk {
-				if release != nil {
-					release[proof.hash] = struct{}{}
+		for _, proofs := range []*backedWalkProofs{&lane.proofs, &lane.retryProofs} {
+			for _, chunk := range proofs.chunks {
+				for _, proof := range chunk {
+					if release != nil {
+						release[proof.hash] = struct{}{}
+					}
+					cacheFullBelow(cache, gen, proof.hash, int(proof.depth))
 				}
-				cacheFullBelow(cache, gen, proof.hash, int(proof.depth))
 			}
+			proofs.clearWithRelease(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
 		}
-		lane.proofs.clearWithRelease(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
-		for j := range lane.stack {
-			lane.stack[j].proofStart = 0
+		for _, stack := range [][]backedWalkFrame{lane.stack, lane.retryStack} {
+			for j := range stack {
+				stack[j].proofStart = 0
+			}
 		}
 		if !lane.complete {
 			complete = false

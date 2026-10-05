@@ -114,6 +114,9 @@ func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
 			fullBelow: sm.backing.fullBelow,
 		},
 	}
+	if out.backing.access.available() {
+		out.acquisition.budget = NewAcquisitionBudget(0)
+	}
 	out.tree.cachedSize.Store(-1)
 	return out, nil
 }
@@ -190,6 +193,9 @@ func (sm *SHAMap) snapshotLocked(mutable bool) (*SHAMap, error) {
 			access:    sm.backing.access,
 			fullBelow: sm.backing.fullBelow,
 		},
+	}
+	if out.backing.access.available() {
+		out.acquisition.budget = NewAcquisitionBudget(0)
 	}
 	out.tree.cachedSize.Store(-1)
 	// Immutable→immutable snapshot observes the same leaf set; carry the

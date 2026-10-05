@@ -31,13 +31,14 @@ type AcquisitionBudgetStats struct {
 // callers remain responsible for releasing exactly the bytes they reserved.
 // A zero requested limit is replaced with the bounded default.
 type AcquisitionBudget struct {
-	limit      uint64
-	used       atomic.Uint64
-	peak       atomic.Uint64
-	cursorUsed atomic.Uint64
-	cursorPeak atomic.Uint64
-	loadedUsed atomic.Uint64
-	loadedPeak atomic.Uint64
+	limit       uint64
+	used        atomic.Uint64
+	peak        atomic.Uint64
+	cursorUsed  atomic.Uint64
+	pendingUsed atomic.Uint64
+	cursorPeak  atomic.Uint64
+	loadedUsed  atomic.Uint64
+	loadedPeak  atomic.Uint64
 }
 
 // NewAcquisitionBudget creates a shared byte budget. The limit is immutable so

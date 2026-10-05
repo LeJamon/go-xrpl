@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+type requestedHashFilter map[[32]byte]struct{}
+
+func (f requestedHashFilter) ShouldFetch(hash [32]byte) bool {
+	_, requested := f[hash]
+	return !requested
+}
+
 func TestBackedWalkFrontierBoundedAndRetired(t *testing.T) {
 	const leafCount = 8192
 	source := New(TypeState)
@@ -68,8 +75,12 @@ func TestBackedWalkFrontierBoundedAndRetired(t *testing.T) {
 	budget := NewAcquisitionBudget(2 << 20)
 	dest.SetAcquisitionBudget(budget)
 	sawMemoryWait := false
+	requested := make(requestedHashFilter)
 	for i := 0; i < 200; i++ {
-		missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 10_000), 32, nil)
+		missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 10_000), 32, requested)
+		for _, node := range missing {
+			requested[node.Hash] = struct{}{}
+		}
 		if errors.Is(err, ErrAcquisitionMemory) {
 			if len(missing) != 0 {
 				t.Fatalf("memory wait returned %d missing entries", len(missing))
