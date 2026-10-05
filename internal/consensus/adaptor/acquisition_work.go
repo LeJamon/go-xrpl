@@ -87,10 +87,11 @@ func releaseAcquisitionWorkEvents(events []acquisitionWorkEvent) {
 }
 
 type acquisitionWorkBatch struct {
-	ledger *inbound.Ledger
-	events []acquisitionWorkEvent
-	ctx    context.Context
-	cancel context.CancelFunc
+	ledger       *inbound.Ledger
+	events       []acquisitionWorkEvent
+	inFlightData int
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 type acquisitionWorkResult struct {
@@ -222,11 +223,11 @@ func (l *acquisitionWorkLane) canAcceptData() bool {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.ctx == nil || l.ctx.Err() != nil {
+	if l.ctx == nil || l.ctx.Err() != nil || len(l.pending) >= l.queueDepth+1 {
 		return false
 	}
 	for _, batch := range l.pending {
-		if acquisitionDataEvents(batch.events) >= acquisitionWorkBatchLimit {
+		if batch.inFlightData+acquisitionDataEvents(batch.events) >= acquisitionWorkBatchLimit {
 			return false
 		}
 	}
@@ -251,7 +252,7 @@ func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWo
 				}
 			}
 		}
-		if event.kind == acquisitionWorkData && acquisitionDataEvents(batch.events) >= acquisitionWorkBatchLimit {
+		if event.kind == acquisitionWorkData && batch.inFlightData+acquisitionDataEvents(batch.events) >= acquisitionWorkBatchLimit {
 			return false
 		}
 		batch.events = append(batch.events, event)
@@ -304,6 +305,7 @@ func (l *acquisitionWorkLane) run() {
 func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	l.mu.Lock()
 	events := append([]acquisitionWorkEvent(nil), batch.events...)
+	batch.inFlightData = acquisitionDataEvents(events)
 	batch.events = batch.events[:0]
 	l.mu.Unlock()
 	retained := false
@@ -386,6 +388,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 
 	var discarded []acquisitionWorkEvent
 	l.mu.Lock()
+	batch.inFlightData = 0
 	if result.complete || result.remove || batch.ctx.Err() != nil {
 		delete(l.pending, batch.ledger)
 		batch.cancel()

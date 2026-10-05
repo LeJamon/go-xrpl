@@ -9,12 +9,88 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAcquisitionInboxWaitsForPendingLedgerCapacity(t *testing.T) {
+	ledger, replies := newWideWorkLedger(t)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
+	router.catchupReplay.fetchTracker.Track(ledger)
+	inbox := make(chan *peermanagement.InboundMessage, 1)
+	router.SetAcqInbox(inbox)
+	lane := newAcquisitionWorkLane(1)
+	entered, release := make(chan struct{}), make(chan struct{})
+	first := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
+	second := inbound.New([32]byte{2}, 2, 2, serveTestLogger())
+	lane.process = func(ctx context.Context, current *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		if current == first {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return acquisitionWorkResult{ledger: current}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+	router.catchupReplay.acquisitionWork = lane
+	require.True(t, lane.submit(first, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	<-entered
+	require.True(t, lane.submit(second, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	hash := ledger.Hash()
+	inbox <- &peermanagement.InboundMessage{
+		PeerID: 7, Type: message.TypeLedgerData,
+		Payload: encodePayload(t, &message.LedgerData{
+			LedgerHash: hash[:], InfoType: message.LedgerInfoAsNode, Nodes: replies[:1],
+		}),
+	}
+	require.Zero(t, router.drainAcquisitionInboxBeforeMaintenance(lane))
+	require.Len(t, inbox, 1, "saturated acquisition must retain the owned reply in its inbox")
+	close(release)
+	result := <-lane.results()
+	close(result.ack)
+	require.Eventually(t, func() bool { return !lane.has(first) }, time.Second, time.Millisecond)
+	require.Equal(t, 1, router.drainAcquisitionInboxBeforeMaintenance(lane))
+	require.True(t, lane.has(ledger))
+	require.Empty(t, inbox)
+	for range 2 {
+		result = <-lane.results()
+		close(result.ack)
+	}
+}
+
+func TestAcquisitionWorkCountsRepliesHeldByRunningBatch(t *testing.T) {
+	lane := newAcquisitionWorkLane(1)
+	ledger := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
+	entered, release := make(chan struct{}), make(chan struct{})
+	lane.process = func(ctx context.Context, current *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		close(entered)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return acquisitionWorkResult{ledger: current}
+	}
+	lane.ctx = t.Context()
+	for range acquisitionWorkBatchLimit {
+		require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+	<-entered
+	require.False(t, lane.canAcceptData())
+	require.False(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
+	close(release)
+	result := <-lane.results()
+	close(result.ack)
+	require.Eventually(t, lane.canAcceptData, time.Second, time.Millisecond)
+}
 
 type gatedAcquisitionStoreFamily struct {
 	*acquisitionStoreTestFamily
