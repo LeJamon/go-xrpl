@@ -8,10 +8,11 @@ import (
 )
 
 // Request metadata is deliberately charged to the same acquisition budget as
-// map/cursor state. The request window remains bounded even when no budget is
-// installed, while the charge keeps a shared budget from admitting a large
-// scheduler alongside resident reply nodes.
-const missingRequestMetadataBytes = uint64(128)
+// map/cursor state. A 1 KiB slot charge covers the map bucket slack for the
+// lease, node-index, recent-owner, peer, and ready-set indexes plus the
+// retained ready slice. At the current 896-slot bound this reserves 917,504
+// bytes before any request container grows.
+const missingRequestMetadataBytes = uint64(1024)
 
 func scanMissingNodesContext(ctx context.Context, m *shamap.SHAMap, max int, filter shamap.SyncFilter) ([]shamap.MissingNode, shamap.MissingNodesStatus, error) {
 	result, err := m.ScanMissingNodesContext(ctx, max, filter)
@@ -46,29 +47,6 @@ func (l *Ledger) reserveRequestMetadataLocked() bool {
 	return true
 }
 
-func (l *Ledger) ensureRequestContainersLocked() {
-	if l.requestLeases == nil {
-		l.requestLeases = make(map[[32]byte]missingRequestLease)
-	}
-	if l.requestByNode == nil {
-		l.requestByNode = make(map[requestNodeKey][32]byte)
-	}
-	if l.recentNodes == nil {
-		l.recentNodes = make(map[[32]byte]uint64)
-	}
-	if l.requestPeers == nil {
-		l.requestPeers = make(map[uint64]struct{})
-	}
-	if l.readySet == nil {
-		l.readySet = make(map[[32]byte]struct{})
-	}
-}
-
-func (l *Ledger) releaseRequestMetadataLocked() {
-	// The bounded-window reservation is released only when the acquisition is
-	// retired, after all request maps and slices have become unreachable.
-}
-
 func (l *Ledger) enqueueReadyLocked(node shamap.MissingNode, transaction bool) bool {
 	if l.retired.Load() {
 		return false
@@ -82,8 +60,8 @@ func (l *Ledger) enqueueReadyLocked(node shamap.MissingNode, transaction bool) b
 	if _, queued := l.readySet[node.Hash]; queued {
 		return false
 	}
-	if l.readySet == nil {
-		l.readySet = make(map[[32]byte]struct{})
+	if !l.reserveRequestMetadataLocked() {
+		return false
 	}
 	l.readyRequests = append(l.readyRequests, readyMissingNode{node: node, transaction: transaction})
 	l.readySet[node.Hash] = struct{}{}
@@ -117,7 +95,6 @@ func (l *Ledger) reserveMissingNodeLocked(node shamap.MissingNode, transaction b
 	if !l.reserveRequestMetadataLocked() {
 		return false
 	}
-	l.ensureRequestContainersLocked()
 	l.requestLeases[node.Hash] = missingRequestLease{
 		peerID:      peerID,
 		transaction: transaction,
@@ -163,7 +140,7 @@ func (l *Ledger) claimReadyNodeLocked(transaction bool, peerID uint64, now time.
 	return shamap.MissingNode{}, false
 }
 
-func (l *Ledger) removeLeaseLocked(hash [32]byte, _ bool, _ time.Time) (missingRequestLease, bool) {
+func (l *Ledger) removeLeaseLocked(hash [32]byte) (missingRequestLease, bool) {
 	lease, ok := l.requestLeases[hash]
 	if !ok {
 		return missingRequestLease{}, false
@@ -174,7 +151,6 @@ func (l *Ledger) removeLeaseLocked(hash [32]byte, _ bool, _ time.Time) (missingR
 	if current, exists := l.requestByNode[key]; exists && current == hash {
 		delete(l.requestByNode, key)
 	}
-	l.releaseRequestMetadataLocked()
 	return lease, true
 }
 
@@ -196,7 +172,7 @@ func (l *Ledger) requeueLeaseLocked(hash [32]byte, now time.Time) {
 	l.recentNodes[hash] = 0
 	l.refreshPeerLeaseLocked(oldPeer)
 	if len(l.readyRequests) < missingRequestReadyReserve {
-		if removed, ok := l.removeLeaseLocked(hash, false, now); ok {
+		if removed, ok := l.removeLeaseLocked(hash); ok {
 			l.enqueueReadyLocked(shamap.MissingNode{Hash: hash, NodeID: removed.nodeID}, removed.transaction)
 		}
 	}
@@ -219,9 +195,6 @@ func (l *Ledger) refreshRequestPeersLocked() {
 	if l.retired.Load() {
 		return
 	}
-	if l.requestPeers == nil {
-		l.requestPeers = make(map[uint64]struct{})
-	}
 	clear(l.requestPeers)
 	for _, lease := range l.requestLeases {
 		if lease.peerID != 0 {
@@ -234,7 +207,7 @@ func (l *Ledger) expireMissingLeasesLocked(now time.Time, force bool) {
 	for hash, lease := range l.requestLeases {
 		if lease.peerID == 0 {
 			if force || !now.Before(lease.expires) {
-				l.removeLeaseLocked(hash, false, now)
+				l.removeLeaseLocked(hash)
 			}
 			continue
 		}
@@ -296,7 +269,7 @@ func (l *Ledger) releaseRequestSlotLocked(peerID uint64, transaction bool, now t
 func (l *Ledger) clearTreeReservationsLocked(transaction bool, now time.Time) {
 	for hash, lease := range l.requestLeases {
 		if lease.transaction == transaction {
-			l.removeLeaseLocked(hash, false, now)
+			l.removeLeaseLocked(hash)
 		}
 	}
 	for i := 0; i < len(l.readyRequests); {

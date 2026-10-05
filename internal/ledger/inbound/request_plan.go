@@ -54,7 +54,7 @@ func (l *Ledger) missingRequestPlan(requests []MissingRequest, complete bool, er
 		plan.Outcome = MissingRequestWaitMemory
 		return plan
 	}
-	if l.lastScanStatus == shamap.MissingNodesPersistence || l.lastScanStatus.String() == "persistence" {
+	if l.lastScanStatus == shamap.MissingNodesPersistence {
 		plan.Outcome = MissingRequestWaitPersistence
 		return plan
 	}
