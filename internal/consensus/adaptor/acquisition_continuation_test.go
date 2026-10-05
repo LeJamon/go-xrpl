@@ -129,6 +129,42 @@ func TestAcquisitionPersistenceWaitResumesAfterBarrier(t *testing.T) {
 	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 }
 
+func TestAcquisitionReplyResumesAfterAutomaticCheckpoint(t *testing.T) {
+	budget := shamap.NewAcquisitionBudget(8 << 20)
+	family := &releasingCheckpointFamily{Family: backend.NewMemory(), budget: budget, held: 1024}
+	require.True(t, budget.TryReserve(family.held))
+	ledger := inbound.New([32]byte{9}, 9, 9, serveTestLogger(),
+		inbound.WithFamily(family), inbound.WithAcquisitionBudget(budget))
+	require.NoError(t, ledger.CheckpointPersistence(t.Context(), 32*1024-1))
+	require.Equal(t, uint64(1024), budget.Snapshot().Used)
+	lane := newAcquisitionWorkLane(1)
+	calls := 0
+	lane.process = func(_ context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
+		calls++
+		if calls == 1 {
+			events[0].consumed = 1
+			return acquisitionWorkResult{ledger: current, pendingReply: true, err: shamap.ErrAcquisitionMemory,
+				replies: []acquisitionReplyStat{{useful: 1}}}
+		}
+		return acquisitionWorkResult{ledger: current}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
+	first := <-lane.results()
+	require.NoError(t, first.persistenceErr)
+	require.True(t, first.yielded, "credits reclaimed by the automatic checkpoint must wake the remaining reply")
+	require.Zero(t, budget.Snapshot().Used)
+	close(first.ack)
+	select {
+	case next := <-lane.results():
+		require.NoError(t, next.err)
+		close(next.ack)
+	case <-time.After(time.Second):
+		t.Fatal("remaining reply was parked despite reclaimed memory")
+	}
+}
+
 type failingAcquisitionWriteFamily struct {
 	shamap.Family
 	err error

@@ -364,6 +364,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 			}
 		}
 	}
+	beforeCheckpoint := batch.ledger.Snapshot().AcquisitionMemory.Used
 	if result.err == nil && !result.complete && !result.remove {
 		useful := 0
 		for _, reply := range result.replies {
@@ -377,12 +378,11 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	}
 	pressure := batch.ledger.Snapshot()
 	if (result.memoryWait || pressure.StateWalk.RetentionPressure || pressure.TxWalk.RetentionPressure) && !result.remove && !result.complete {
-		before := pressure.AcquisitionMemory.Used
 		if err := batch.ledger.CheckpointMemory(batch.ctx); err != nil {
 			result.persistenceErr = err
 			result.failureClass = standardReplayFailurePersistence
 			result.remove = true
-		} else if result.persistenceWait || result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < before {
+		} else if result.persistenceWait || result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < beforeCheckpoint {
 			result.yielded = true
 			if result.persistenceWait && !result.pendingReply {
 				result.continueRequests = true
