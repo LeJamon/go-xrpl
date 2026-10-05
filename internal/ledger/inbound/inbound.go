@@ -479,16 +479,8 @@ func (l *Ledger) TimerDue(now time.Time) bool {
 	return l.state != StateComplete && l.state != StateFailed && now.Sub(l.lastTimer) >= acquireTimerInterval
 }
 
-// OnTimer advances the acquisition's retry loop, mirroring rippled's
-// TimeoutCounter::invokeOnTimer + InboundLedger::onTimer. It is a no-op until
-// acquireTimerInterval has elapsed since the last fire, so it can be polled
-// from the router's maintenance tick. On a due fire it either records that
-// forward progress was made this interval (and keeps relying on the
-// reply-driven path) or counts a no-progress timeout; once the consecutive
-// no-progress budget is exhausted the acquisition transitions cleanly to
-// StateFailed instead of re-arming the same stall forever. The returned
-// TimerAction tells the router whether to reap (TimerFailed), escalate
-// (TimerEscalate), or do nothing.
+// OnTimer escalates due no-progress intervals and fails after the consecutive
+// timeout budget is exhausted. Useful progress resets the failure streak.
 func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -645,6 +637,9 @@ func (l *Ledger) TakeByHashRequestContext(ctx context.Context, max int) (state, 
 		state, err = neededHashesContext(ctx, stateMap, max)
 		if err != nil {
 			l.restoreByHashAfterInterruptedWalk()
+			if missingWalkYield(err) {
+				return state, nil, err
+			}
 			return nil, nil, err
 		}
 	}
@@ -652,25 +647,32 @@ func (l *Ledger) TakeByHashRequestContext(ctx context.Context, max int) (state, 
 		tx, err = neededHashesContext(ctx, txMap, max)
 		if err != nil {
 			l.restoreByHashAfterInterruptedWalk()
+			if missingWalkYield(err) {
+				return state, tx, err
+			}
 			return nil, nil, err
 		}
 	}
 	return state, tx, nil
 }
 
+func missingWalkYield(err error) bool {
+	return errors.Is(err, shamap.ErrAcquisitionMemory) || errors.Is(err, shamap.ErrTraversalBudget)
+}
+
 func neededHashesContext(ctx context.Context, m *shamap.SHAMap, max int) ([][32]byte, error) {
 	missing, err := m.GetMissingNodesContext(ctx, max, nil)
-	if err != nil {
+	if err != nil && !missingWalkYield(err) {
 		return nil, err
 	}
 	if len(missing) == 0 {
-		return nil, nil
+		return nil, err
 	}
 	out := make([][32]byte, 0, len(missing))
 	for i := range missing {
 		out = append(out, missing[i].Hash)
 	}
-	return out, nil
+	return out, err
 }
 
 func (l *Ledger) restoreByHashAfterInterruptedWalk() {
@@ -1367,7 +1369,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 
 	started := time.Now()
 	missing, err := m.GetMissingNodesContext(ctx, missingNodesFind, nil)
-	if err != nil {
+	if err != nil && (!missingWalkYield(err) || len(missing) == 0) {
 		return nil, nil, false, err
 	}
 	if elapsed := time.Since(started); elapsed >= time.Second {
@@ -1377,7 +1379,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	var finishErr error
 	if len(missing) == 0 {
 		finishErr = m.FinishSyncContext(ctx)
-		if errors.Is(finishErr, shamap.ErrAcquisitionMemory) {
+		if missingWalkYield(finishErr) {
 			return nil, nil, false, finishErr
 		}
 	}
@@ -1415,10 +1417,10 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	nodeIDs := l.filterMissingResultLocked(missing, isReply)
 	if stateTree {
 		l.cacheMissingLocked(false, missing)
-		return nodeIDs, nil, false, nil
+		return nodeIDs, nil, false, err
 	}
 	l.cacheMissingLocked(true, missing)
-	return nil, nodeIDs, false, nil
+	return nil, nodeIDs, false, err
 }
 
 // filterMissingResultLocked applies the request throttle to a frontier already
@@ -1575,6 +1577,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		return nil, complete, nil
 	}
 	requests := make([]MissingRequest, 0, len(peers))
+	var yieldErr error
 	for _, transaction := range []bool{false, true} {
 		if len(peers) == 0 {
 			break
@@ -1602,20 +1605,23 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		var filter shamap.SyncFilter
 		for len(peers) > 0 {
 			missing, err := m.GetMissingNodesContext(ctx, missingNodesFind, filter)
-			if err != nil {
-				if errors.Is(err, shamap.ErrAcquisitionMemory) {
-					return requests, false, err
-				}
+			if err != nil && !missingWalkYield(err) {
 				l.releaseMissingRequests(requests)
 				return nil, false, err
 			}
-			traversalExhausted := len(missing) < missingNodesFind
+			if err != nil && (yieldErr == nil || errors.Is(err, shamap.ErrAcquisitionMemory)) {
+				yieldErr = err
+			}
+			if err != nil && len(missing) == 0 {
+				return requests, false, yieldErr
+			}
+			traversalExhausted := err == nil && len(missing) < missingNodesFind
 			if len(missing) == 0 {
 				if filter != nil {
 					break
 				}
 				finishErr := m.FinishSyncContext(ctx)
-				if errors.Is(finishErr, shamap.ErrAcquisitionMemory) {
+				if missingWalkYield(finishErr) {
 					return requests, false, finishErr
 				}
 				l.mu.Lock()
@@ -1627,7 +1633,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				}
 				if finishErr != nil {
 					l.mu.Unlock()
-					return requests, false, nil
+					return requests, false, yieldErr
 				}
 				if transaction {
 					l.haveTx = true
@@ -1678,10 +1684,10 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				}
 				if len(l.requestPeers) >= requestPeerLimit {
 					l.mu.Unlock()
-					return requests, false, nil
+					return requests, false, yieldErr
 				}
 				n := min(batchLimit, len(fresh))
-				if !blind || traversalExhausted {
+				if traversalExhausted {
 					n = min(n, (len(fresh)+len(peers))/(len(peers)+1))
 				}
 				batch := fresh[:n]
@@ -1701,9 +1707,9 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				requests = append(requests, request)
 				fresh = fresh[n:]
 			}
-			if len(peers) == 0 {
+			if len(peers) == 0 || (err != nil && len(missing) < missingNodesFind) {
 				l.mu.Unlock()
-				return requests, false, nil
+				return requests, false, yieldErr
 			}
 			if traversalExhausted {
 				l.mu.Unlock()
@@ -1717,7 +1723,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 			l.mu.Unlock()
 		}
 	}
-	return requests, false, nil
+	return requests, false, yieldErr
 }
 
 func (l *Ledger) releaseMissingRequests(requests []MissingRequest) {
@@ -2143,11 +2149,11 @@ func fillFromLocalContext(
 	var stored []shamap.FlushEntry
 	for {
 		missing, err := m.GetMissingNodesContext(ctx, localFillBatch, nil)
-		if err != nil {
+		if err != nil && !missingWalkYield(err) {
 			return added, stored, nil, err
 		}
 		if len(missing) == 0 {
-			return added, stored, nil, nil
+			return added, stored, nil, err
 		}
 		passAdded := 0
 		for i := range missing {
@@ -2164,9 +2170,9 @@ func fillFromLocalContext(
 				stored = append(stored, entry)
 			}
 		}
-		if passAdded == 0 {
-			return added, stored, missing, nil
+		added = added || passAdded > 0
+		if passAdded == 0 || err != nil {
+			return added, stored, missing, err
 		}
-		added = true
 	}
 }

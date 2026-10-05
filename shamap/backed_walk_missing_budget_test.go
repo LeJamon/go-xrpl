@@ -46,10 +46,10 @@ func TestBackedWalkBudgetReturnsPartialMissingFrontier(t *testing.T) {
 	}
 	for range len(batch) + 1 {
 		missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 1), 32, nil)
-		if errors.Is(err, ErrTraversalBudget) {
+		if errors.Is(err, ErrTraversalBudget) && len(missing) == 0 {
 			continue
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrTraversalBudget) {
 			t.Fatal(err)
 		}
 		if len(missing) == 0 {

@@ -362,6 +362,33 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 			result.yielded = true
 		}
 	}
+	var deferred []acquisitionWorkEvent
+	partialRequests := (result.yielded || result.memoryWait) && (len(result.requests) > 0 || len(result.stateIDs) > 0 || len(result.txIDs) > 0 ||
+		len(result.byHashState) > 0 || len(result.byHashTx) > 0)
+	timerDone := !result.yielded && slices.ContainsFunc(events, func(event acquisitionWorkEvent) bool {
+		return event.kind == acquisitionWorkTimer
+	})
+	if partialRequests || timerDone {
+		// Replies resume the walk. Keep independent peer work without resending
+		// the timer or releasing reservations made for an already applied reply.
+		for _, event := range events {
+			switch event.kind {
+			case acquisitionWorkAdded:
+				deferred = append(deferred, event)
+			case acquisitionWorkRetarget:
+				if event.resume {
+					event.stateIDs, event.txIDs = nil, nil
+				}
+				if event.collect || len(event.stateIDs) > 0 || len(event.txIDs) > 0 {
+					deferred = append(deferred, event)
+				}
+			}
+		}
+	}
+	if partialRequests {
+		result.yielded = false
+		result.rearmTimer = true
+	}
 	batch.ledger.SetMemoryWaiting(result.memoryWait && !result.yielded && !result.remove)
 	for i := range events {
 		if !result.yielded && !result.timerEscalate && events[i].kind == acquisitionWorkTimer {
@@ -390,6 +417,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	var discarded []acquisitionWorkEvent
 	l.mu.Lock()
 	batch.inFlightData = 0
+	batch.events = append(batch.events, deferred...)
 	if result.complete || result.remove || batch.ctx.Err() != nil {
 		delete(l.pending, batch.ledger)
 		batch.cancel()
@@ -475,6 +503,9 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	var timerAt time.Time
 	var fetch func([32]byte) ([]byte, bool)
 	for _, event := range events {
+		if event.kind == acquisitionWorkTimer {
+			runTimer = true
+		}
 		if event.kind == acquisitionWorkFailure {
 			runFailure = true
 			break
@@ -591,6 +622,9 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		case acquisitionWorkAdded:
 			addedPeers = append(addedPeers, event.peerID)
 		case acquisitionWorkRetarget:
+			if runTimer {
+				continue
+			}
 			result.retarget = true
 			if len(result.stateIDs) == 0 && len(result.txIDs) == 0 &&
 				len(event.peers) > 0 && (len(event.stateIDs) > 0 || len(event.txIDs) > 0) {
@@ -598,6 +632,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				result.stateIDs = event.stateIDs
 				result.txIDs = event.txIDs
 				result.queryDepth = event.queryDepth
+				event.resume = true
 			}
 			if event.collect {
 				retargetPeers = append(retargetPeers, event.peers...)
@@ -665,7 +700,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	if len(retargetPeers) > 0 {
 		requests, complete, err := ledger.CollectMissingReplyRequestsContext(workCtx, retargetPeers)
 		if err != nil {
-			if errors.Is(err, shamap.ErrAcquisitionMemory) {
+			if errors.Is(err, shamap.ErrAcquisitionMemory) || errors.Is(err, shamap.ErrTraversalBudget) {
 				result.requests = append(result.requests, requests...)
 				result.err = err
 				return result
@@ -686,7 +721,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	if len(addedPeers) > 0 {
 		requests, complete, err := ledger.CollectMissingAddedRequestsContext(workCtx, addedPeers)
 		if err != nil {
-			if errors.Is(err, shamap.ErrAcquisitionMemory) {
+			if errors.Is(err, shamap.ErrAcquisitionMemory) || errors.Is(err, shamap.ErrTraversalBudget) {
 				result.requests = append(result.requests, requests...)
 				result.err = err
 				return result
@@ -772,6 +807,10 @@ func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger,
 			result.failureClass = standardReplayFailurePersistence
 			result.remove = true
 		}
+	}
+	if errors.Is(result.err, shamap.ErrTraversalBudget) && ctx.Err() == nil {
+		result.err = nil
+		result.yielded = true
 	}
 	ledger.SetMemoryWaiting(result.memoryWait && !result.remove)
 	c.handleAcquisitionWorkResult(result)

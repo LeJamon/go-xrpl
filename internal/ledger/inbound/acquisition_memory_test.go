@@ -88,3 +88,60 @@ func TestRetirementDefersMemoryReleaseWithoutWaitingForTraversal(t *testing.T) {
 	require.NoError(t, ledger.RetirePersistence(t.Context()))
 	require.Zero(t, budget.Snapshot().Used)
 }
+
+func TestPartialTraversalKeepsPeerRequestOwnership(t *testing.T) {
+	ledger := newWideAcquisition(t, WithFamily(backend.NewMemory()))
+	peers := []uint64{11, 12, 13, 14, 15, 16}
+	requests, complete, err := ledger.CollectMissingReplyRequestsContext(shamap.WithTraversalBudget(t.Context(), 128), peers)
+	require.ErrorIs(t, err, shamap.ErrTraversalBudget)
+	require.False(t, complete)
+	require.Len(t, requests, 1, "a limited frontier should fill one request before adding peers")
+	require.NotEmpty(t, requests[0].NodeIDs)
+	require.LessOrEqual(t, len(requests[0].NodeIDs), reqNodesReply)
+	seen := make(map[[32]byte]struct{})
+	for _, request := range requests {
+		require.Contains(t, ledger.requestPeers, request.PeerID)
+		for _, hash := range request.NodeHashes {
+			require.Equal(t, request.PeerID, ledger.recentNodes[hash])
+			seen[hash] = struct{}{}
+		}
+	}
+	next, complete, err := ledger.CollectMissingReplyRequestsContext(t.Context(), peers)
+	require.NoError(t, err)
+	require.False(t, complete)
+	require.Len(t, next, len(peers)-len(requests))
+	for _, request := range next {
+		require.Len(t, request.NodeIDs, reqNodesReply)
+		for _, hash := range request.NodeHashes {
+			require.NotContains(t, seen, hash)
+			seen[hash] = struct{}{}
+		}
+	}
+	ledger.releaseMissingRequests(append(requests, next...))
+	require.Empty(t, ledger.requestPeers)
+	require.Empty(t, ledger.recentNodes)
+}
+
+func TestPartialTraversalKeepsTimerAndByHashRequests(t *testing.T) {
+	t.Run("timer", func(t *testing.T) {
+		ledger := newWideAcquisition(t, WithFamily(backend.NewMemory()))
+		state, tx, complete, err := ledger.CollectMissingRequestContext(shamap.WithTraversalBudget(t.Context(), 128), true)
+		require.ErrorIs(t, err, shamap.ErrTraversalBudget)
+		require.NotEmpty(t, state)
+		require.Empty(t, tx)
+		require.False(t, complete)
+		require.False(t, ledger.haveState)
+		require.NotEmpty(t, ledger.missingState)
+	})
+	t.Run("by hash", func(t *testing.T) {
+		ledger := newWideAcquisition(t, WithFamily(backend.NewMemory()))
+		ledger.byHash = true
+		ledger.timeouts = ledgerBecomeAggressiveThreshold + 1
+		state, tx, err := ledger.TakeByHashRequestContext(shamap.WithTraversalBudget(t.Context(), 128), missingNodesFind)
+		require.ErrorIs(t, err, shamap.ErrTraversalBudget)
+		require.NotEmpty(t, state)
+		require.Empty(t, tx)
+		require.True(t, ledger.byHash)
+		require.False(t, ledger.haveState)
+	})
+}

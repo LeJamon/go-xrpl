@@ -283,7 +283,9 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 	return missing
 }
 
-// GetMissingNodesContext is GetMissingNodes with cancellation propagated to
+// GetMissingNodesContext may return valid partial results with ErrTraversalBudget
+// or ErrAcquisitionMemory; neither error means the frontier is exhausted.
+// It is GetMissingNodes with cancellation propagated to
 // the parallel traversal and backing Family.
 func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter) ([]MissingNode, error) {
 	sm.tree.mu.RLock()

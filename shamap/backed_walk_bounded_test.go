@@ -82,9 +82,6 @@ func TestBackedWalkFrontierBoundedAndRetired(t *testing.T) {
 			requested[node.Hash] = struct{}{}
 		}
 		if errors.Is(err, ErrAcquisitionMemory) {
-			if len(missing) != 0 {
-				t.Fatalf("memory wait returned %d missing entries", len(missing))
-			}
 			sawMemoryWait = true
 			break
 		}

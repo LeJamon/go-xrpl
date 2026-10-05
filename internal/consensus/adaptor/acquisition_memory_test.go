@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -386,4 +387,159 @@ func TestAcquisitionWorkSharedMemoryResumesWithoutReplacingLedger(t *testing.T) 
 	require.NoError(t, ledger.RetirePersistence(t.Context()))
 	require.Zero(t, budget.Snapshot().Used)
 	require.LessOrEqual(t, budget.Snapshot().Peak, budget.Snapshot().Limit)
+}
+
+type releasingCheckpointFamily struct {
+	shamap.Family
+	budget *shamap.AcquisitionBudget
+	held   uint64
+}
+
+func (f *releasingCheckpointFamily) Flush(context.Context) error {
+	f.budget.Release(f.held)
+	f.held = 0
+	return nil
+}
+
+func TestAcquisitionWorkPartialRequestWaitsForReply(t *testing.T) {
+	for _, walkErr := range []error{shamap.ErrAcquisitionMemory, shamap.ErrTraversalBudget} {
+		t.Run(walkErr.Error(), func(t *testing.T) {
+			budget := shamap.NewAcquisitionBudget(8 << 20)
+			family := &releasingCheckpointFamily{Family: backend.NewMemory(), budget: budget, held: 1024}
+			require.True(t, budget.TryReserve(family.held))
+			ledger := inbound.New([32]byte{0xC4}, 2043, 7, serveTestLogger(), inbound.WithFamily(family), inbound.WithAcquisitionBudget(budget))
+			lane := newAcquisitionWorkLane(1)
+			lane.process = func(_ context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
+				if events[0].kind == acquisitionWorkTimer {
+					return acquisitionWorkResult{ledger: current, err: walkErr, stateIDs: [][]byte{{1}}}
+				}
+				return acquisitionWorkResult{ledger: current}
+			}
+			lane.start(t.Context())
+			t.Cleanup(lane.stop)
+			require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkTimer}))
+			first := <-lane.results()
+			require.NoError(t, first.err)
+			require.NoError(t, first.persistenceErr)
+			require.NotEmpty(t, first.stateIDs)
+			require.False(t, first.yielded, "network output must not replay the timer event")
+			require.True(t, first.rearmTimer)
+			if errors.Is(walkErr, shamap.ErrAcquisitionMemory) {
+				require.Zero(t, budget.Snapshot().Used, "checkpoint should recover pressure before waiting for the reply")
+			}
+			close(first.ack)
+			require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+			require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
+			next := <-lane.results()
+			require.Empty(t, next.stateIDs, "the old timer output must not be sent again")
+			require.NoError(t, next.err)
+			close(next.ack)
+			require.NoError(t, ledger.RetirePersistence(t.Context()))
+		})
+	}
+}
+
+type partialMemoryFamily struct {
+	shamap.Family
+	blocked [32]byte
+}
+
+func (f *partialMemoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if hash == f.blocked {
+		return nil, shamap.ErrAcquisitionMemory
+	}
+	return f.Family.Fetch(ctx, hash)
+}
+
+func newMissingWorkLedger(t *testing.T, memoryLimited bool) *inbound.Ledger {
+	t.Helper()
+	source := newWideWorkSource(t, 4)
+	root, err := source.Hash()
+	require.NoError(t, err)
+	rootData, err := source.SerializeRoot()
+	require.NoError(t, err)
+	h := header.LedgerHeader{LedgerIndex: 2043, AccountHash: root}
+	headerData := header.AddRaw(h, false)
+	hash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	family := &partialMemoryFamily{Family: backend.NewMemory()}
+	ledger := inbound.New(hash, h.LedgerIndex, 7, serveTestLogger(), inbound.WithFamily(family))
+	require.NoError(t, ledger.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
+	wire, err := source.WalkWireNodes()
+	require.NoError(t, err)
+	for _, node := range wire {
+		if node.NodeID[32] == 1 {
+			reader, err := shamap.DeserializeFromWire(node.Data)
+			require.NoError(t, err)
+			family.blocked = reader.Hash()
+			break
+		}
+	}
+	require.NotEqual(t, [32]byte{}, family.blocked)
+	if !memoryLimited {
+		family.blocked = [32]byte{}
+	}
+	return ledger
+}
+
+func TestSynchronousMissingRequestsKeepMemoryPartial(t *testing.T) {
+	for _, mode := range []string{"reply", "timer", "added peer"} {
+		t.Run(mode, func(t *testing.T) {
+			ledger := newMissingWorkLedger(t, true)
+			sender := &acqRecordingSender{}
+			router := newTestRouter(&mockEngine{}, New(Config{LedgerService: newTestLedgerService(t), Sender: sender}), nil)
+			switch mode {
+			case "reply":
+				router.catchupReplay.requestMissingAcquisitionNodes(ledger, 7)
+			case "timer":
+				router.catchupReplay.requestMissingAcquisitionNodes(ledger, 0)
+			case "added peer":
+				router.catchupReplay.requestMissingAcquisitionNodesFromAddedPeer(ledger, 7)
+			}
+			require.Len(t, sender.stateIndirects(), 1, "resource yield must not discard the partial request")
+			require.False(t, ledger.IsComplete())
+		})
+	}
+}
+
+func TestAcquisitionWorkPartialTimerPreservesRetarget(t *testing.T) {
+	for _, memoryLimited := range []bool{false, true} {
+		t.Run(fmt.Sprint(memoryLimited), func(t *testing.T) {
+			ledger := newMissingWorkLedger(t, memoryLimited)
+			lane := newAcquisitionWorkLane(1)
+			lane.process = processAcquisitionWork
+			lane.ctx = t.Context()
+			retryIDs := [][]byte{{42}}
+			require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkTimer, peers: []uint64{7}}))
+			require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkRetarget, peers: []uint64{8}, stateIDs: retryIDs, collect: true}))
+			if memoryLimited {
+				require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkAdded, peerID: 9}))
+			}
+			lane.start(t.Context())
+			t.Cleanup(lane.stop)
+			first := <-lane.results()
+			require.NoError(t, first.err)
+			require.NotEmpty(t, first.stateIDs)
+			require.NotEqual(t, retryIDs, first.stateIDs)
+			require.False(t, first.retarget)
+			require.False(t, first.yielded)
+			ledger.ReleaseUnreservedMissingNodes() // The timer fan-out failed to send.
+			close(first.ack)
+			second := <-lane.results()
+			require.NoError(t, second.err)
+			require.True(t, second.retarget)
+			require.Equal(t, []uint64{8}, second.targets)
+			require.Equal(t, retryIDs, second.stateIDs)
+			require.Len(t, second.requests, 1)
+			require.Equal(t, uint64(8), second.requests[0].PeerID)
+			require.Equal(t, 1, ledger.Snapshot().RequestPeers)
+			close(second.ack)
+			if memoryLimited {
+				third := <-lane.results()
+				require.NoError(t, third.err)
+				require.Empty(t, third.stateIDs, "retarget payload must not be resent")
+				require.Equal(t, 1, ledger.Snapshot().RequestPeers, "independent peer work must preserve the live request")
+				close(third.ack)
+			}
+		})
+	}
 }

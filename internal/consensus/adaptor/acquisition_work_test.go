@@ -235,7 +235,7 @@ func TestProcessAcquisitionWork_PlansSixDisjointPeerRequests(t *testing.T) {
 			seen[key] = request.PeerID
 		}
 	}
-	require.Len(t, seen, 256)
+	require.Len(t, seen, acquisitionMaxUsefulPeers*128)
 }
 
 func TestProcessAcquisitionWork_AddedPeerGetsBlindFrontier(t *testing.T) {
@@ -1555,9 +1555,11 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	router.catchupReplay.fetchTracker.Track(ledger)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(ctx context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
-		// Force the yield boundary after discovery so worker scheduling cannot return a partial batch instead.
+		// Force a yield without network output to check that discovery is not useful progress.
 		result := processAcquisitionWork(ctx, current, events)
 		if result.err == nil && !result.complete && !result.remove && !result.timerEscalate {
+			result.stateIDs, result.txIDs = nil, nil
+			current.ReleaseUnreservedMissingNodes()
 			result.err = shamap.ErrTraversalBudget
 		}
 		return result

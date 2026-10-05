@@ -149,7 +149,7 @@ func TestCollectMissingReplyRequests_SixDisjointFrontiers(t *testing.T) {
 				if request.PeerID != uint64(11+i) {
 					t.Fatalf("request %d peer=%d, want %d", i, request.PeerID, 11+i)
 				}
-				if request.Transaction || len(request.NodeIDs) == 0 || len(request.NodeIDs) > reqNodesReply {
+				if request.Transaction || len(request.NodeIDs) != reqNodesReply {
 					t.Fatalf("request %d transaction=%t nodes=%d", i, request.Transaction, len(request.NodeIDs))
 				}
 				for _, nodeID := range request.NodeIDs {
@@ -160,8 +160,8 @@ func TestCollectMissingReplyRequests_SixDisjointFrontiers(t *testing.T) {
 					seen[key] = request.PeerID
 				}
 			}
-			if len(seen) != missingNodesFind {
-				t.Fatalf("assigned nodes=%d, want bounded frontier %d", len(seen), missingNodesFind)
+			if len(seen) != requestPeerLimit*reqNodesReply {
+				t.Fatalf("assigned nodes=%d, want %d full batches", len(seen), requestPeerLimit)
 			}
 
 			if next, _ := il.CollectMissingReplyRequests([]uint64{17}); len(next) != 0 {

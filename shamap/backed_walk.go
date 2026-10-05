@@ -110,6 +110,7 @@ type backedWalkPending struct {
 type backedWalkPendingQueue struct {
 	head   *backedWalkPendingChunk
 	tail   *backedWalkPendingChunk
+	spare  *backedWalkPendingChunk
 	length int
 	chunks int
 }
@@ -278,17 +279,30 @@ func (queue *backedWalkPendingQueue) len() int {
 }
 
 func (queue *backedWalkPendingQueue) append(item backedWalkPending, reserve func(uint64) bool) error {
+	// Keep a chunk of free slots so rotating existing work never needs admission.
+	free := queue.capacity() - queue.length
+	needed := max(0, (2*backedWalkPendingChunkSize-free)/backedWalkPendingChunkSize)
+	if needed != 0 && reserve != nil && !reserve(uint64(needed)*backedWalkPendingChunkBytes) {
+		return ErrAcquisitionMemory
+	}
 	if queue.tail == nil || int(queue.tail.end) == backedWalkPendingChunkSize {
-		if reserve != nil && !reserve(backedWalkPendingChunkBytes) {
-			return ErrAcquisitionMemory
+		var chunk *backedWalkPendingChunk
+		if needed > 0 {
+			chunk = &backedWalkPendingChunk{}
+			queue.chunks++
+			needed--
+		} else {
+			chunk, queue.spare = queue.spare, nil
 		}
-		chunk := &backedWalkPendingChunk{}
 		if queue.tail == nil {
 			queue.head = chunk
 		} else {
 			queue.tail.next = chunk
 		}
 		queue.tail = chunk
+	}
+	if needed > 0 {
+		queue.spare = &backedWalkPendingChunk{}
 		queue.chunks++
 	}
 	queue.tail.items[queue.tail.end] = item
@@ -315,15 +329,66 @@ func (queue *backedWalkPendingQueue) pop(release func(uint64)) (backedWalkPendin
 	queue.length--
 	if chunk.start == chunk.end {
 		queue.head = chunk.next
-		queue.chunks--
 		if queue.head == nil {
 			queue.tail = nil
+			queue.chunks--
+			if release != nil {
+				release(backedWalkPendingChunkBytes)
+			}
+			if queue.spare != nil {
+				queue.spare = nil
+				queue.chunks--
+				if release != nil {
+					release(backedWalkPendingChunkBytes)
+				}
+			}
+		} else {
+			chunk.start, chunk.end, chunk.next = 0, 0, nil
+			queue.retainSpare(chunk, release)
 		}
+	}
+	return item, true
+}
+
+func (queue *backedWalkPendingQueue) rotate(release func(uint64)) {
+	if queue.length < 2 {
+		return
+	}
+	chunk := queue.head
+	item := chunk.items[chunk.start]
+	chunk.items[chunk.start] = backedWalkPending{}
+	chunk.start++
+	var emptied *backedWalkPendingChunk
+	if chunk.start == chunk.end {
+		queue.head = chunk.next
+		chunk.start, chunk.end, chunk.next = 0, 0, nil
+		emptied = chunk
+	}
+	if int(queue.tail.end) == backedWalkPendingChunkSize {
+		if emptied != nil {
+			chunk, emptied = emptied, nil
+		} else {
+			chunk, queue.spare = queue.spare, nil
+		}
+		queue.tail.next = chunk
+		queue.tail = chunk
+	}
+	queue.tail.items[queue.tail.end] = item
+	queue.tail.end++
+	if emptied != nil {
+		queue.retainSpare(emptied, release)
+	}
+}
+
+func (queue *backedWalkPendingQueue) retainSpare(chunk *backedWalkPendingChunk, release func(uint64)) {
+	if queue.spare == nil {
+		queue.spare = chunk
+	} else {
+		queue.chunks--
 		if release != nil {
 			release(backedWalkPendingChunkBytes)
 		}
 	}
-	return item, true
 }
 
 func (queue *backedWalkPendingQueue) clear(release func(uint64)) {
@@ -334,6 +399,10 @@ func (queue *backedWalkPendingQueue) clear(release func(uint64)) {
 		}
 		chunk = next
 	}
+	if queue.spare != nil && release != nil {
+		release(backedWalkPendingChunkBytes)
+	}
+	queue.spare = nil
 	queue.head = nil
 	queue.tail = nil
 	queue.length = 0
@@ -359,18 +428,19 @@ type backedWalkFrame struct {
 }
 
 type backedWalkLane struct {
-	root        backedWalkItem
-	stack       []backedWalkFrame
-	retryStack  []backedWalkFrame
-	pending     backedWalkPendingQueue
-	proofs      backedWalkProofs
-	retryProofs backedWalkProofs
-	complete    bool
-	durable     bool
-	passDurable bool
-	started     bool
-	activeRetry bool
-	cursor      *backedWalkCursor
+	root             backedWalkItem
+	stack            []backedWalkFrame
+	retryStack       []backedWalkFrame
+	pending          backedWalkPendingQueue
+	proofs           backedWalkProofs
+	retryProofs      backedWalkProofs
+	complete         bool
+	durable          bool
+	passDurable      bool
+	started          bool
+	activeRetry      bool
+	retryPassLimited bool
+	cursor           *backedWalkCursor
 }
 
 type backedWalkCursor struct {
@@ -679,6 +749,7 @@ func (sm *SHAMap) walkBackedContext(
 
 	for i := range BranchFactor {
 		lane := &cursor.lanes[i]
+		lane.retryPassLimited = false
 		if lane.complete {
 			continue
 		}
@@ -701,18 +772,23 @@ func (sm *SHAMap) walkBackedContext(
 	wg.Wait()
 	if firstErr != nil {
 		if (errors.Is(firstErr, ErrTraversalBudget) || errors.Is(firstErr, ErrAcquisitionMemory)) && len(missing) != 0 {
-			return missing, nil
+			return missing, firstErr
 		}
 		return nil, firstErr
 	}
 
 	complete := true
 	durable := true
+	retryPassLimited := false
 	for i := range BranchFactor {
 		if !cursor.lanes[i].complete {
 			complete = false
 		}
 		durable = durable && cursor.lanes[i].durable
+		retryPassLimited = retryPassLimited || cursor.lanes[i].retryPassLimited
+	}
+	if retryPassLimited && (maxMissing <= 0 || len(missing) < maxMissing) {
+		return missing, ErrTraversalBudget
 	}
 	if !complete && len(missing) == 0 {
 		return nil, ErrTraversalBudget
@@ -831,12 +907,14 @@ func (sm *SHAMap) walkBackedLane(
 	lane.complete = false
 	defer func() { lane.activeRetry = false }()
 	retries := lane.pending.len()
-	if len(lane.stack) != 0 {
+	pendingFull := cursor.budget != nil && cursor.budget.pendingUsed.Load()+backedWalkPendingChunkBytes > cursor.budget.limit/8
+	if len(lane.stack) != 0 && !pendingFull {
 		retries = min(retries, backedWalkRetryBatch)
 	}
 	if len(lane.stack) != 0 && len(lane.retryStack) == 0 && traversalBudgetHasAtMost(ctx, 1) {
 		retries = 0
 	}
+	lane.retryPassLimited = retries < lane.pending.len()
 	for len(lane.retryStack) != 0 || retries > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -855,7 +933,6 @@ func (sm *SHAMap) walkBackedLane(
 			}); err != nil {
 				return err
 			}
-			lane.pending.pop(func(bytes uint64) { sm.releasePendingBytes(cursor, bytes) })
 			retries--
 		}
 		pendingFull := cursor.budget != nil && cursor.budget.pendingUsed.Load()+backedWalkPendingChunkBytes > cursor.budget.limit/8
@@ -929,7 +1006,9 @@ func (sm *SHAMap) walkBackedLaneStack(
 			}
 			if !found {
 				pending := newBackedWalkPending(frame.item)
-				if err := lane.pending.append(pending, func(bytes uint64) bool {
+				if frame.retry {
+					lane.pending.rotate(func(bytes uint64) { sm.releasePendingBytes(cursor, bytes) })
+				} else if err := lane.pending.append(pending, func(bytes uint64) bool {
 					return sm.reservePendingBytes(cursor, bytes)
 				}); err != nil {
 					// The frame owns this path until queue admission succeeds.
@@ -939,8 +1018,12 @@ func (sm *SHAMap) walkBackedLaneStack(
 					}
 					return err
 				}
-				if filter.ShouldFetch(frame.item.hash) && !(frame.retry && suppressRetryReport) {
-					report(frame.item)
+				if filter.ShouldFetch(frame.item.hash) {
+					if frame.retry && suppressRetryReport {
+						lane.retryPassLimited = true
+					} else {
+						report(frame.item)
+					}
 				}
 				if err := sm.finishBackedWalkFrame(lane, cache, gen, false, false, false); err != nil {
 					return err
@@ -961,6 +1044,7 @@ func (sm *SHAMap) walkBackedLaneStack(
 				}
 				frame.baseView = baseView
 			}
+			sm.consumeRetriedPending(lane, frame)
 			frame.full = true
 			frame.stored = stored
 			frame.loaded = true
@@ -1013,6 +1097,13 @@ func (sm *SHAMap) walkBackedLaneStack(
 	return nil
 }
 
+func (sm *SHAMap) consumeRetriedPending(lane *backedWalkLane, frame *backedWalkFrame) {
+	if frame.retry {
+		lane.pending.pop(func(bytes uint64) { sm.releasePendingBytes(lane.cursor, bytes) })
+		frame.retry = false
+	}
+}
+
 func (sm *SHAMap) finishBackedWalkFrame(
 	lane *backedWalkLane,
 	cache *FullBelowCache,
@@ -1024,6 +1115,7 @@ func (sm *SHAMap) finishBackedWalkFrame(
 	stack := backedWalkActiveStack(lane)
 	frame := &(*stack)[len(*stack)-1]
 	if full {
+		sm.consumeRetriedPending(lane, frame)
 		proofs := backedWalkActiveProofs(lane)
 		proofs.truncateWithRelease(frame.proofStart, func(bytes uint64) {
 			sm.releaseCursorBytes(lane.cursor, bytes)

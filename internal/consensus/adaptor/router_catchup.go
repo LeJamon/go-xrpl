@@ -3924,7 +3924,7 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
 	if target != 0 {
 		requests, complete, err := il.CollectMissingReplyRequestsContext(context.Background(), []uint64{target})
-		if err != nil {
+		if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 			c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 			return
 		}
@@ -3943,7 +3943,7 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 	}
 
 	stateIDs, txIDs, complete, err := il.CollectMissingRequestContext(context.Background(), false)
-	if err != nil {
+	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 		return
 	}
@@ -3961,7 +3961,7 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger, peerID uint64) {
 	requests, complete, err := il.CollectMissingAddedRequestsContext(context.Background(), []uint64{peerID})
-	if err != nil {
+	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes for added peer", "error", err)
 		return
 	}
