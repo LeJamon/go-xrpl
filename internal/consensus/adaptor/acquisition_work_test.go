@@ -1680,7 +1680,6 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 	assert.NotEqual(t, inbound.StateFailed, ledger.State())
 	assert.Same(t, ledger, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
-
 }
 
 func TestRouter_MaintenanceRunsUnderSustainedAcquisitionInput(t *testing.T) {
