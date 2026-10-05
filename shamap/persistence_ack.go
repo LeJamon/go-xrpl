@@ -65,17 +65,17 @@ func (sm *SHAMap) publishAcknowledgedFullBelow(collectRelease bool) (bool, map[[
 	cache := sm.backing.fullBelow
 	cursor := sm.acquisition.cursor
 	root := sm.tree.root
-	if cache == nil || cursor == nil || root == nil {
+	if cache == nil || root == nil {
 		return false, nil
 	}
 	rootHash := root.Hash()
-	if cursor.rootHash != rootHash {
-		return false, nil
-	}
 
 	gen, done := cache.Begin()
 	defer done()
-	if cursor.generation != gen {
+	if cursor == nil {
+		return cache.Has(gen, rootHash), nil
+	}
+	if cursor.rootHash != rootHash || cursor.generation != gen {
 		return false, nil
 	}
 

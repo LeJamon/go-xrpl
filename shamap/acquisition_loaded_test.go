@@ -257,3 +257,32 @@ func TestPressureCheckpointPreservesIncompleteCursor(t *testing.T) {
 	dest.ReleaseAcquisitionBudget()
 	require.Zero(t, budget.Snapshot().Used)
 }
+
+func TestDurableCompletionReleasesCursorBeforeNextRead(t *testing.T) {
+	source := New(TypeState)
+	require.NoError(t, source.Put([32]byte{0x12}, make([]byte, 128)))
+	hash, err := source.Hash()
+	require.NoError(t, err)
+	root, err := source.SerializeRoot()
+	require.NoError(t, err)
+	entries, err := collectDirtyForTest(source)
+	require.NoError(t, err)
+	family := newMemoryFamily()
+	require.NoError(t, family.StoreBatch(t.Context(), entries))
+	dest, err := NewBacked(TypeState, family)
+	require.NoError(t, err)
+	require.NoError(t, dest.AddRootNode(hash, root))
+	dest.tree.mu.RLock()
+	_, err = dest.descendCtx(t.Context(), dest.tree.root, 1)
+	dest.tree.mu.RUnlock()
+	require.NoError(t, err)
+	budget := dest.acquisition.budget
+	require.Positive(t, budget.Snapshot().LoadedUsed)
+	missing, err := dest.GetMissingNodesContext(t.Context(), 0, nil)
+	require.NoError(t, err)
+	require.Empty(t, missing)
+	require.Nil(t, dest.acquisition.cursor)
+	require.Zero(t, budget.Snapshot().CursorUsed)
+	require.NoError(t, dest.AcknowledgePersistedContext(t.Context()))
+	require.Zero(t, budget.Snapshot().Used)
+}

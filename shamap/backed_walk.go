@@ -733,6 +733,7 @@ func (sm *SHAMap) walkBackedContext(
 				return nil, err
 			}
 			cacheFullBelow(cache, gen, rootHash, 0)
+			sm.releaseBackedWalkCursorLocked()
 		}
 	}
 	return missing, nil
