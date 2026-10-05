@@ -391,7 +391,7 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		"state_verified_base_fallbacks":  snap.StateVerifiedBaseFallbacks,
 		"acquisition_memory_limit":       snap.AcquisitionMemory.Limit,
 		"acquisition_cursor_limit":       snap.AcquisitionMemory.Limit / 4,
-		"acquisition_reply_reserve":      snap.AcquisitionMemory.Limit / 4,
+		"acquisition_reply_reserve":      snap.AcquisitionMemory.Limit / 8 * 3,
 		"acquisition_memory_used":        snap.AcquisitionMemory.Used,
 		"acquisition_memory_peak":        snap.AcquisitionMemory.Peak,
 		"acquisition_cursor_bytes":       snap.AcquisitionMemory.CursorUsed,

@@ -190,8 +190,9 @@ type acquisitionStoreLane struct {
 	nextScope    atomic.Uint64
 	unscoped     *acquisitionStoreScope
 
-	pendingMu sync.RWMutex
-	pending   map[pendingAcquisitionKey]pendingAcquisitionNode
+	pendingMu       sync.RWMutex
+	pending         map[pendingAcquisitionKey]pendingAcquisitionNode
+	pendingReleased uint64
 }
 
 func newAcquisitionStoreLane(base shamap.Family, logger *slog.Logger, queueDepth int) *acquisitionStoreLane {
@@ -323,13 +324,11 @@ func (l *acquisitionStoreLane) storeBatch(ctx context.Context, owner *acquisitio
 		l.lifecycleMu.RUnlock()
 		return nil
 	case <-ctx.Done():
-		l.removePending(owner.id, job.entries)
-		l.releaseBytes(job.bytes)
+		l.releaseBytes(l.removePending(owner.id, job.entries, job.bytes))
 		l.lifecycleMu.RUnlock()
 		return ctx.Err()
 	case <-laneCtx.Done():
-		l.removePending(owner.id, job.entries)
-		l.releaseBytes(job.bytes)
+		l.releaseBytes(l.removePending(owner.id, job.entries, job.bytes))
 		l.lifecycleMu.RUnlock()
 		return laneCtx.Err()
 	}
@@ -503,8 +502,7 @@ func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionS
 
 func (l *acquisitionStoreLane) finishJob(job acquisitionStoreJob, err error) {
 	if job.bytes != 0 {
-		l.removePending(job.owner.id, job.entries)
-		l.releaseBytes(job.bytes)
+		l.releaseBytes(l.removePending(job.owner.id, job.entries, job.bytes))
 	}
 	if job.completion != nil {
 		job.completion <- err
@@ -515,7 +513,7 @@ func (l *acquisitionStoreLane) reserveBytes(size uint64) bool {
 	l.memoryMu.Lock()
 	defer l.memoryMu.Unlock()
 	used := l.bytes.Load()
-	limit := l.memory.Snapshot().Limit / 4
+	limit := l.memory.Snapshot().Limit / 8
 	if size > limit || used > limit-size || !l.memory.TryReserve(size) {
 		return false
 	}
@@ -563,7 +561,7 @@ func (l *acquisitionStoreLane) addPending(scope uint64, entries []shamap.FlushEn
 	}
 }
 
-func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.FlushEntry) {
+func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.FlushEntry, charge uint64) uint64 {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
 	for i := range entries {
@@ -579,9 +577,16 @@ func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.Flus
 		pending.refs--
 		l.pending[key] = pending
 	}
-	if len(l.pending) == 0 {
-		l.pending = make(map[pendingAcquisitionKey]pendingAcquisitionNode)
+	// Go maps retain their buckets after deletion. Keep completed jobs charged
+	// until the index can be discarded; reaching the staging cap forces a flush.
+	l.pendingReleased += charge
+	if len(l.pending) != 0 {
+		return 0
 	}
+	l.pending = make(map[pendingAcquisitionKey]pendingAcquisitionNode)
+	released := l.pendingReleased
+	l.pendingReleased = 0
+	return released
 }
 
 func cloneAcquisitionEntries(entries []shamap.FlushEntry) []shamap.FlushEntry {

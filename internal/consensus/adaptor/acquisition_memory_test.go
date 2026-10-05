@@ -16,13 +16,69 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type gatedAcquisitionStoreFamily struct {
+	*acquisitionStoreTestFamily
+	entered chan [32]byte
+	gates   map[[32]byte]chan struct{}
+}
+
+func (f *gatedAcquisitionStoreFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	if len(entries) > 0 {
+		if gate := f.gates[entries[0].Hash]; gate != nil {
+			f.entered <- entries[0].Hash
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return f.acquisitionStoreTestFamily.StoreBatch(ctx, entries)
+}
+
+func TestAcquisitionStoreRetainsIndexChargeUntilDrained(t *testing.T) {
+	bulk := make([]shamap.FlushEntry, 128)
+	for i := range bulk {
+		bulk[i] = acquisitionEntry(byte(i))
+	}
+	last := []shamap.FlushEntry{acquisitionEntry(250)}
+	base := &gatedAcquisitionStoreFamily{
+		acquisitionStoreTestFamily: newAcquisitionStoreTestFamily(),
+		entered:                    make(chan [32]byte, 2),
+		gates: map[[32]byte]chan struct{}{
+			bulk[0].Hash: make(chan struct{}), last[0].Hash: make(chan struct{}),
+		},
+	}
+	lane := newAcquisitionStoreLane(base, serveTestLogger(), 2)
+	charge := acquisitionEntryBytes(bulk) + acquisitionEntryBytes(last)
+	lane.memory = shamap.NewAcquisitionBudget(8 * charge)
+	lane.start(t.Context())
+	t.Cleanup(lane.stopDrain)
+	require.NoError(t, lane.StoreBatch(t.Context(), bulk))
+	require.Equal(t, bulk[0].Hash, <-base.entered)
+	require.NoError(t, lane.StoreBatch(t.Context(), last))
+	close(base.gates[bulk[0].Hash])
+	require.Equal(t, last[0].Hash, <-base.entered)
+	lane.pendingMu.RLock()
+	remaining := len(lane.pending)
+	lane.pendingMu.RUnlock()
+	require.Equal(t, 1, remaining)
+	require.Equal(t, charge, lane.bytes.Load())
+	require.Equal(t, charge, lane.memory.Snapshot().Used)
+	require.False(t, lane.reserveBytes(1))
+	close(base.gates[last[0].Hash])
+	require.NoError(t, lane.flush(t.Context()))
+	require.Zero(t, lane.memory.Snapshot().Used)
+	require.Zero(t, lane.bytes.Load())
+}
+
 func TestAcquisitionStoreMemoryBackpressure(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	base.blockFirst = make(chan struct{})
 	lane := newAcquisitionStoreLane(base, serveTestLogger(), 2)
 	first := []shamap.FlushEntry{acquisitionEntry(1)}
 	charge := acquisitionEntryBytes(first)
-	lane.memory = shamap.NewAcquisitionBudget(4 * charge)
+	lane.memory = shamap.NewAcquisitionBudget(8 * charge)
 	lane.start(t.Context())
 	t.Cleanup(lane.stopDrain)
 	require.NoError(t, lane.StoreBatch(t.Context(), first))

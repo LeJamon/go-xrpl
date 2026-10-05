@@ -43,7 +43,7 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 		"state_missing_discovered", snapshot.StateMissingDiscovered,
 		"acquisition_memory_limit", snapshot.AcquisitionMemory.Limit,
 		"acquisition_cursor_limit", snapshot.AcquisitionMemory.Limit/4,
-		"acquisition_reply_reserve", snapshot.AcquisitionMemory.Limit/4,
+		"acquisition_reply_reserve", snapshot.AcquisitionMemory.Limit/8*3,
 		"acquisition_memory_used", snapshot.AcquisitionMemory.Used,
 		"acquisition_memory_peak", snapshot.AcquisitionMemory.Peak,
 		"acquisition_cursor_bytes", snapshot.AcquisitionMemory.CursorUsed,

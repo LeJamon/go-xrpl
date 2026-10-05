@@ -575,6 +575,7 @@ type issue2043RunStats struct {
 	heapRetainedPeak  uint64
 	heapAfter         uint64
 	heapSampledStaged uint64
+	heapPressureSeen  bool
 }
 
 func issue2043HeapAlloc() uint64 {
@@ -664,6 +665,7 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 		run.heapRetainedPeak = run.heapBefore
 	}
 	outstanding := newIssue2043Outstanding(issue2043OutstandingLimit)
+	heapSampleEvery := uint64(max(issue2043HeapSampleEvery, fixture.withheld/128))
 	noProgress := 0
 	callsSinceStage := 0
 	maxPasses := fixture.withheld*16 + 1_024
@@ -700,12 +702,13 @@ func issue2043DriveInterleaved(t testing.TB, fixture *issue2043Fixture, dest *SH
 						t.Fatalf("incomplete checkpoint published root after %d/%d staged replies", run.staged, fixture.withheld)
 					}
 				}
-				if options.measureHeap && (releaseNodes || run.staged-run.heapSampledStaged >= issue2043HeapSampleEvery) {
+				if options.measureHeap && ((releaseNodes && !run.heapPressureSeen) || run.staged-run.heapSampledStaged >= heapSampleEvery) {
 					heap := issue2043ForceGCHeap()
 					if heap > run.heapRetainedPeak {
 						run.heapRetainedPeak = heap
 					}
 					run.heapSampledStaged = run.staged
+					run.heapPressureSeen = run.heapPressureSeen || releaseNodes
 				}
 			}
 			return staged
