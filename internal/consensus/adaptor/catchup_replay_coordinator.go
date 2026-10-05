@@ -66,6 +66,7 @@ type catchupReplayCoordinator struct {
 
 	acquisitionWorkMu sync.RWMutex
 	acquisitionFamily shamap.Family
+	acquisitionMemory *shamap.AcquisitionBudget
 	acquisitionStore  *acquisitionStoreLane
 	acquisitionWork   *acquisitionWorkLane
 
@@ -151,7 +152,20 @@ func (c *catchupReplayCoordinator) setAcquisitionFamily(family shamap.Family) {
 		return
 	}
 	c.acquisitionStore = newAcquisitionStoreLane(family, c.logger, acquisitionStoreQueueDepth)
+	if c.acquisitionMemory == nil {
+		c.acquisitionMemory = shamap.NewAcquisitionBudget(0)
+	}
+	c.acquisitionStore.memory = c.acquisitionMemory
 	c.acquisitionFamily = c.acquisitionStore
+}
+
+func (c *catchupReplayCoordinator) setAcquisitionMemoryLimit(limit uint64) {
+	c.acquisitionWorkMu.Lock()
+	defer c.acquisitionWorkMu.Unlock()
+	c.acquisitionMemory = shamap.NewAcquisitionBudget(limit)
+	if c.acquisitionStore != nil {
+		c.acquisitionStore.memory = c.acquisitionMemory
+	}
 }
 
 func (c *catchupReplayCoordinator) setFloor(floor MinimumOnlineFloor) {
@@ -314,9 +328,13 @@ func (c *catchupReplayCoordinator) acquisitionOpts() []inbound.Option {
 	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader)}
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
+	memory := c.acquisitionMemory
 	c.acquisitionWorkMu.RUnlock()
 	if store != nil {
 		opts = append(opts, inbound.WithFamily(store.scope()))
+	}
+	if memory != nil {
+		opts = append(opts, inbound.WithAcquisitionBudget(memory))
 	}
 	return opts
 }

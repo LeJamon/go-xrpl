@@ -473,6 +473,13 @@ func (r *Router) SetAcquisitionFamily(family shamap.Family) {
 	}
 }
 
+// SetAcquisitionMemoryLimit sets the shared acquisition budget before Run.
+func (r *Router) SetAcquisitionMemoryLimit(limit uint64) {
+	if r.catchupReplay != nil {
+		r.catchupReplay.setAcquisitionMemoryLimit(limit)
+	}
+}
+
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
 // the router refuses to acquire or serve ledgers below it. A nil floor leaves
 // both paths unrestricted, so the disabled / standalone case is unchanged.

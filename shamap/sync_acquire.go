@@ -215,7 +215,14 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 					return NodeInvalid, errUnexpectedNode
 				}
 			}
+			if !sm.retainAcquisitionNode(newNode) {
+				if markDirty || !access.available() {
+					return NodeInvalid, ErrAcquisitionMemory
+				}
+				return NodeUseful, nil
+			}
 			if parent.SetChildIfNil(branch, newNode) != newNode {
+				sm.releaseAcquisitionNode(newNode)
 				return NodeDuplicate, nil
 			}
 			if markDirty {
@@ -238,7 +245,17 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 			if loaded == nil {
 				return NodeReRequest, nil
 			}
-			child = parent.SetChildIfNil(branch, loaded)
+			if sm.retainAcquisitionNode(loaded) {
+				child = parent.SetChildIfNil(branch, loaded)
+				if child != loaded {
+					sm.releaseAcquisitionNode(loaded)
+				}
+			} else {
+				if markDirty {
+					return NodeInvalid, ErrAcquisitionMemory
+				}
+				child = loaded
+			}
 		}
 		nextInner, ok := child.(*innerNode)
 		if !ok {
@@ -285,6 +302,9 @@ func (sm *SHAMap) insertNodeRecursive(current mapNode, targetHash [32]byte, newN
 		}
 
 		if bytes.Equal(childHash[:], targetHash[:]) {
+			if !sm.retainAcquisitionNode(newNode) {
+				return ErrAcquisitionMemory
+			}
 			// Found the branch - insert the node here
 			newNode.SetDirty(true)
 			return inner.SetChild(branch, newNode)
@@ -293,6 +313,9 @@ func (sm *SHAMap) insertNodeRecursive(current mapNode, targetHash [32]byte, newN
 		if _, isInner := child.(*innerNode); isInner {
 			// Recurse into this inner node
 			err := sm.insertNodeRecursive(child, targetHash, newNode, depth+1)
+			if errors.Is(err, ErrAcquisitionMemory) {
+				return err
+			}
 			if err == nil {
 				inner.SetDirty(true)
 				return nil // Successfully inserted

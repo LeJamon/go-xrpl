@@ -163,7 +163,7 @@ func TestAdaptorRequestLedgerKeepsActiveStepAndQueuesLatestTarget(t *testing.T) 
 	assert.Equal(t, queuedHash, sender.legacyCalls()[1].hash)
 }
 
-func TestConsensusRecoveryHonorsCumulativeTimeoutBudgetAcrossIntermittentStalls(t *testing.T) {
+func TestConsensusRecoveryHonorsConsecutiveTimeoutBudgetAcrossIntermittentStalls(t *testing.T) {
 	r, a, sender, _ := makeRouter(t)
 	source := newWideWorkSource(t, 4)
 	ledger, baseNodes := newWantBaseWorkLedger(t, source, []uint64{7})
@@ -220,8 +220,21 @@ func TestConsensusRecoveryHonorsCumulativeTimeoutBudgetAcrossIntermittentStalls(
 	}
 
 	now = now.Add(time.Minute)
-	require.Equal(t, inbound.TimerFailed, ledger.OnTimer(now), "quiet interval after cumulative budget")
+	require.Equal(t, inbound.TimerEscalate, ledger.OnTimer(now), "first quiet interval after useful progress")
 	assert.Equal(t, quietIntervals+1, ledger.Timeouts())
+	assert.Equal(t, 1, ledger.ConsecutiveTimeouts())
+	assert.Equal(t, inbound.StateWantState, ledger.State())
+
+	for timeout := 2; timeout <= quietIntervals+1; timeout++ {
+		now = now.Add(time.Minute)
+		action := ledger.OnTimer(now)
+		if timeout == quietIntervals+1 {
+			require.Equal(t, inbound.TimerFailed, action, "consecutive stall %d", timeout)
+		} else {
+			require.Equal(t, inbound.TimerEscalate, action, "consecutive stall %d", timeout)
+		}
+	}
+	assert.Equal(t, quietIntervals+1+quietIntervals, ledger.Timeouts())
 	assert.Equal(t, inbound.StateFailed, ledger.State())
 	assert.Empty(t, sender.legacyCalls())
 }

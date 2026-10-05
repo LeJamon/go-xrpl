@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // reacquireInterval bounds how long a failed acquisition is remembered, so
@@ -375,18 +377,29 @@ func acquisitionKey(seq uint32, hash [32]byte) string {
 // scanned at least once.
 func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
-		"hash":                          fmt.Sprintf("%X", snap.Hash),
-		"have_header":                   snap.HaveHeader,
-		"request_peers":                 snap.RequestPeers,
-		"state_received_total":          snap.StateReceived,
-		"state_useful_total":            snap.StateUseful,
-		"tx_received_total":             snap.TxReceived,
-		"tx_useful_total":               snap.TxUseful,
-		"state_equal_subtrees_skipped":  snap.StateEqualSubtreesSkipped,
-		"state_nodes_descended":         snap.StateNodesDescended,
-		"state_durable_reads":           snap.StateDurableReads,
-		"state_missing_discovered":      snap.StateMissingDiscovered,
-		"state_verified_base_fallbacks": snap.StateVerifiedBaseFallbacks,
+		"hash":                           fmt.Sprintf("%X", snap.Hash),
+		"have_header":                    snap.HaveHeader,
+		"request_peers":                  snap.RequestPeers,
+		"state_received_total":           snap.StateReceived,
+		"state_useful_total":             snap.StateUseful,
+		"tx_received_total":              snap.TxReceived,
+		"tx_useful_total":                snap.TxUseful,
+		"state_equal_subtrees_skipped":   snap.StateEqualSubtreesSkipped,
+		"state_nodes_descended":          snap.StateNodesDescended,
+		"state_durable_reads":            snap.StateDurableReads,
+		"state_missing_discovered":       snap.StateMissingDiscovered,
+		"state_verified_base_fallbacks":  snap.StateVerifiedBaseFallbacks,
+		"acquisition_memory_limit":       snap.AcquisitionMemory.Limit,
+		"acquisition_cursor_limit":       snap.AcquisitionMemory.Limit / 4,
+		"acquisition_reply_reserve":      snap.AcquisitionMemory.Limit / 8 * 3,
+		"acquisition_memory_used":        snap.AcquisitionMemory.Used,
+		"acquisition_memory_peak":        snap.AcquisitionMemory.Peak,
+		"acquisition_cursor_bytes":       snap.AcquisitionMemory.CursorUsed,
+		"acquisition_cursor_peak_bytes":  snap.AcquisitionMemory.CursorPeak,
+		"acquisition_memory_wait":        snap.MemoryWaiting,
+		"acquisition_memory_checkpoints": snap.MemoryCheckpoints,
+		"state_cursor":                   cursorMemoryJSON(snap.StateWalk),
+		"tx_cursor":                      cursorMemoryJSON(snap.TxWalk),
 		// Live no-progress retry count, mirroring InboundLedger::getJson's
 		// timeouts_ now that the acquisition runs a timer-driven retry loop.
 		"timeouts": snap.Timeouts,
@@ -412,6 +425,22 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		}
 	}
 	return entry
+}
+
+func cursorMemoryJSON(stats shamap.BackedWalkStats) map[string]any {
+	return map[string]any{
+		"blocked_items":             stats.BlockedItems,
+		"blocked_capacity":          stats.BlockedCapacity,
+		"active_frames":             stats.ActiveFrames,
+		"active_capacity":           stats.ActiveCapacity,
+		"proof_entries":             stats.ProofEntries,
+		"proof_capacity":            stats.ProofCapacity,
+		"bytes":                     stats.CursorBytes,
+		"peak_bytes":                stats.CursorPeakBytes,
+		"loaded_nodes_charged":      stats.RetainedNodes,
+		"loaded_bytes_charged":      stats.RetainedBytes,
+		"loaded_peak_bytes_charged": stats.RetainedPeakBytes,
+	}
 }
 
 func hashList(hs [][32]byte) []any {

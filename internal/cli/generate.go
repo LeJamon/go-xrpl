@@ -323,6 +323,9 @@ back_off_milliseconds = 100
 age_threshold_seconds = 60
 recovery_wait_seconds = 5
 
+[acquisition]
+memory_mb = 0 # 0 = bounded default (512 MiB); explicit values must be at least 512
+
 [sqlite]
 journal_mode = "wal"
 synchronous = "normal"

@@ -103,6 +103,38 @@ type MissingNode struct {
 	NodeID NodeID
 }
 
+// MissingNodesStatus describes the amount of discovery work left after a
+// resumable missing-node scan. The acquisition owner decides whether to call
+// again immediately or wait for an external event.
+type MissingNodesStatus uint8
+
+const (
+	// MissingNodesMore means the caller's result window or traversal slice was
+	// exhausted while useful discovery work remains.
+	MissingNodesMore MissingNodesStatus = iota
+	// MissingNodesWaiting means a complete pass found unresolved or filtered
+	// paths and is waiting for attachments, persistence, or a later retry.
+	MissingNodesWaiting
+	// MissingNodesComplete means every referenced descendant is verified and
+	// the durable completion barrier has been satisfied.
+	MissingNodesComplete
+	// MissingNodesMemory means the scanner could not admit bounded state under
+	// the shared acquisition byte budget.
+	MissingNodesMemory
+	// MissingNodesPersistence means the tree was discovered completely but its
+	// attached nodes still need the caller's persistence acknowledgement.
+	MissingNodesPersistence
+)
+
+// MissingNodesResult is the bounded output and progress state of one scanner
+// slice. Nodes is owned by the caller and may be empty for More, Waiting or
+// Complete outcomes.
+type MissingNodesResult struct {
+	Nodes  []MissingNode
+	Status MissingNodesStatus
+	reason missingNodesMoreReason
+}
+
 // StartSync prepares the SHAMap for synchronization.
 // This sets the state to syncing and allows nodes to be added.
 func (sm *SHAMap) StartSync() error {
@@ -133,19 +165,37 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 		return errSyncNotInProgress
 	}
 	sm.tree.mu.RUnlock()
-	missingNodes, err := sm.walkMapParallelContext(ctx, 1, nil)
+	result, err := sm.scanMissingNodesContext(ctx, 1, nil, true)
 	if err != nil {
 		return fmt.Errorf("sync completeness walk: %w", err)
 	}
-	if len(missingNodes) > 0 {
-		return fmt.Errorf("sync incomplete: still have %d missing nodes", len(missingNodes))
+	switch result.Status {
+	case MissingNodesMemory:
+		return fmt.Errorf("sync completeness walk: %w", ErrAcquisitionMemory)
+	case MissingNodesMore:
+		if result.reason == missingNodesTraversalYield {
+			return fmt.Errorf("sync completeness walk: %w", ErrTraversalBudget)
+		}
+		return fmt.Errorf("sync incomplete: missing nodes remain")
+	case MissingNodesWaiting:
+		return fmt.Errorf("sync incomplete: unresolved paths remain")
+	case MissingNodesPersistence:
+		return fmt.Errorf("sync incomplete: persistence acknowledgement is pending")
 	}
 
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
 	if sm.tree.state != stateSyncing {
 		return errSyncNotInProgress
 	}
+	// Nodes admitted while syncing are charged to the acquisition owner. A
+	// successful finish transfers ownership to the modifying map, so release
+	// those temporary credits before leaving the syncing state. Backed maps
+	// normally release them at the persistence acknowledgement barrier; the
+	// unbacked path has no such callback.
+	sm.releaseAcquisitionNodesLocked()
 	sm.tree.state = stateModifying
 
 	return nil

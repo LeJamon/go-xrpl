@@ -249,6 +249,40 @@ keys to precede any `[section]` header.
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
 | `genesis_file` | — | Custom genesis; omit for built-in defaults. Optional. |
 
+### `[acquisition]`
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `memory_mb` | `0` | Acquisition working-set budget in MiB. Omission or `0` uses 512 MiB; explicit values must be at least 512 MiB. |
+
+The budget is shared by active state and transaction acquisitions. Cursor and
+retained-node allocations can each use at most one quarter; persistence staging
+can use one eighth. Pending cursor entries can use at most half of the cursor
+allowance, leaving space for active traversal, retries and proofs. The remaining
+three eighths provide working room for decoding
+and preparing an already received reply. At the minimum, that reserve is 192 MiB
+for the 64 MiB maximum ledger-data payload, decoded nodes, prefix serialization
+and batch metadata. The number of pending requests and queued replies also
+remains bounded by the acquisition worker and overlay limits.
+
+When memory is tight, acquisition flushes received nodes and releases acknowledged
+nodes while preserving its traversal position. A reply node that cannot be cached
+is still verified and passed to persistence. Large persistence batches can use a
+synchronous worker job that borrows the caller's buffer instead of cloning it.
+
+`fetch_info` and acquisition progress logs report current and peak cursor charges,
+loaded-node charges, memory waits and pressure checkpoints. Progress logs also
+report persistence staging. Charges conservatively include allocator padding;
+loaded-node credits are held until a checkpoint clears all traversal references,
+so their reported usage can exceed the currently reachable node payloads.
+Persistence credits remain charged until the pending index is empty, accounting
+for its retained capacity after individual writes finish.
+
+This is an application allocation budget, not an RSS or cgroup limit. Allow
+separate memory for the Pebble cache and memtables, the bounded full-below cache,
+fixed map metadata, replay staging, network buffers, Go runtime and GC overhead,
+and native/OS memory.
+
 ### `[server]` and `[port_*]`
 
 `[server].ports` lists the named port sections to open. Each named

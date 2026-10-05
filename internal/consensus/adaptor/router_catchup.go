@@ -3844,7 +3844,9 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			c.logger.Warn("inbound ledger: GotBase failed", "error", err)
-			if errors.Is(err, inbound.ErrHeaderRejected) {
+			if errors.Is(err, inbound.ErrPersistence) {
+				c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
+			} else if errors.Is(err, inbound.ErrHeaderRejected) {
 				c.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), err)
 			} else {
 				c.acquisition.IncPeerBadData(peerID, "ledger-data-base")
@@ -3864,45 +3866,11 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 		c.requestMissingAcquisitionNodes(il, peerID)
 		return true, false
 
-	case message.LedgerInfoAsNode:
-		il.ReleaseMissingPeer(peerID)
-		useful, err := il.GotStateNodesUseful(ld.Nodes)
-		if err != nil {
-			c.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
-			if errors.Is(err, inbound.ErrInvalidPeerNode) {
-				c.acquisition.IncPeerBadData(peerID, "ledger-data-state")
-			}
-			return true, false
-		}
-
-		if il.IsComplete() {
-			c.completeInboundLedger(il)
-			return true, false
-		}
-
-		if useful > 0 {
-			c.requestMissingAcquisitionNodes(il, peerID)
-		}
-		return true, false
-
-	case message.LedgerInfoTxNode:
-		il.ReleaseMissingPeer(peerID)
-		useful, err := il.GotTransactionNodesUseful(ld.Nodes)
-		if err != nil {
-			c.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
-			if errors.Is(err, inbound.ErrInvalidPeerNode) {
-				c.acquisition.IncPeerBadData(peerID, "ledger-data-tx")
-			}
-			return true, false
-		}
-
-		if il.IsComplete() {
-			c.completeInboundLedger(il)
-			return true, false
-		}
-
-		if useful > 0 {
-			c.requestMissingAcquisitionNodes(il, peerID)
+	case message.LedgerInfoAsNode, message.LedgerInfoTxNode:
+		if c.submitAcquisitionWork(il, acquisitionWorkEvent{
+			kind: acquisitionWorkData, data: ld, owner: owner, peerID: peerID,
+		}) {
+			return true, owner != nil
 		}
 		return true, false
 	}
@@ -3924,7 +3892,7 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
 	if target != 0 {
 		requests, complete, err := il.CollectMissingReplyRequestsContext(context.Background(), []uint64{target})
-		if err != nil {
+		if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 			c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 			return
 		}
@@ -3943,7 +3911,7 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 	}
 
 	stateIDs, txIDs, complete, err := il.CollectMissingRequestContext(context.Background(), false)
-	if err != nil {
+	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 		return
 	}
@@ -3961,7 +3929,7 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger, peerID uint64) {
 	requests, complete, err := il.CollectMissingAddedRequestsContext(context.Background(), []uint64{peerID})
-	if err != nil {
+	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes for added peer", "error", err)
 		return
 	}

@@ -7,6 +7,17 @@ import "context"
 // Nodes are cleared post-order so cancellation always leaves a dirty ancestor
 // and a later StoreDirty cannot skip an unacknowledged descendant.
 func (sm *SHAMap) AcknowledgePersistedContext(ctx context.Context) error {
+	return sm.acknowledgePersistedContext(ctx, false)
+}
+
+// AcknowledgePersistedAndReleaseContext also drops acknowledged acquisition
+// nodes whose subtrees are incomplete. Their hashes and cursor positions are
+// retained; subsequent attachment hydrates ancestors from durable storage.
+func (sm *SHAMap) AcknowledgePersistedAndReleaseContext(ctx context.Context) error {
+	return sm.acknowledgePersistedContext(ctx, true)
+}
+
+func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -20,98 +31,88 @@ func (sm *SHAMap) AcknowledgePersistedContext(ctx context.Context) error {
 	if err := acknowledgePersistedNode(ctx, sm.tree.root); err != nil {
 		return err
 	}
-	complete, release := sm.publishAcknowledgedFullBelow()
-	sm.releaseAcknowledgedFullBelow(release)
+	if cursor := sm.acquisition.scan; !releaseNodes && cursor != nil && cursor.budget != nil {
+		entries := uint64(BranchFactor + 1)
+		if entries > cursor.budget.limit/128 || !cursor.budget.TryReserve(entries*128) {
+			releaseNodes = true
+		} else {
+			defer cursor.budget.Release(entries * 128)
+		}
+	}
+	if cursor := sm.acquisition.scan; cursor != nil && sm.tree.root != nil && !sm.tree.root.IsDirty() {
+		cursor.rootDurable = true
+	}
+	complete, _ := sm.publishAcknowledgedScanHints(false)
+	if !complete && sm.acquisition.scan == nil && sm.tree.root != nil && sm.backing.fullBelow != nil {
+		gen, done := sm.backing.fullBelow.Begin()
+		complete = sm.backing.fullBelow.Has(gen, sm.tree.root.Hash())
+		done()
+	}
+	if releaseNodes || complete {
+		sm.clearBackedScanNodeReferencesLocked()
+		if sm.tree.root != nil {
+			sm.tree.root.ReleaseChildren()
+		}
+		sm.releaseAcquisitionNodesLocked()
+	}
 	if complete {
-		sm.acquisition.cursor = nil
+		sm.releaseBackedScanCursorLocked()
+	} else {
+		sm.updateBackedScanStats(sm.acquisition.scan)
 	}
 	return nil
 }
 
-func (sm *SHAMap) publishAcknowledgedFullBelow() (bool, map[[32]byte]struct{}) {
+// publishAcknowledgedScanHints publishes at most one maximal completion hint
+// per lane. A hint is only an optimization: if it cannot be retained, the
+// next scan can prove the same subtree again from durable storage.
+func (sm *SHAMap) publishAcknowledgedScanHints(collectRelease bool) (bool, map[[32]byte]struct{}) {
 	cache := sm.backing.fullBelow
-	cursor := sm.acquisition.cursor
+	cursor := sm.acquisition.scan
 	root := sm.tree.root
 	if cache == nil || cursor == nil || root == nil {
 		return false, nil
 	}
-	rootHash := root.Hash()
-	if cursor.rootHash != rootHash {
-		return false, nil
-	}
-
 	gen, done := cache.Begin()
 	defer done()
-	if cursor.generation != gen {
+	rootHash := root.Hash()
+	if cursor.rootHash != rootHash || cursor.generation != gen {
 		return false, nil
 	}
-
-	release := make(map[[32]byte]struct{})
-	complete := true
-	for i := range BranchFactor {
+	var release map[[32]byte]struct{}
+	if collectRelease {
+		release = make(map[[32]byte]struct{})
+	}
+	for i := range cursor.lanes {
 		lane := &cursor.lanes[i]
-		for _, chunk := range lane.proofs.chunks {
-			for _, proof := range chunk {
-				release[proof.hash] = struct{}{}
-				cacheFullBelow(cache, gen, proof.hash, int(proof.depth))
-			}
-		}
-		lane.proofs.clear()
-		if !lane.complete {
-			complete = false
+		if !lane.hint.pending {
 			continue
 		}
-		lane.durable = true
-		if lane.root.hash != ([32]byte{}) {
-			release[lane.root.hash] = struct{}{}
-			cacheFullBelow(cache, gen, lane.root.hash, lane.root.depth)
+		cacheFullBelow(cache, gen, lane.hint.hash, lane.hint.depth)
+		if release != nil {
+			release[lane.hint.hash] = struct{}{}
 		}
+		lane.hint.pending = false
+		lane.durable = true
 		lane.root.node = nil
 		lane.root.parent = nil
 	}
-	if complete {
-		root.setFullBelowGen(gen)
+	complete := true
+	for i := range cursor.lanes {
+		if !cursor.lanes[i].complete || !cursor.lanes[i].durable {
+			complete = false
+			break
+		}
+	}
+	if !complete || !cursor.rootDurable {
+		return false, release
+	}
+	root.setFullBelowGen(gen)
+	cacheFullBelow(cache, gen, rootHash, 0)
+	if release != nil {
 		release[rootHash] = struct{}{}
-		cacheFullBelow(cache, gen, rootHash, 0)
 	}
-	return complete, release
-}
-
-func (sm *SHAMap) releaseAcknowledgedFullBelow(release map[[32]byte]struct{}) {
-	cache := sm.backing.fullBelow
-	root := sm.tree.root
-	if cache == nil || root == nil {
-		return
-	}
-	gen, done := cache.Begin()
-	defer done()
-	rootHash := root.Hash()
-	if _, ok := release[rootHash]; ok || cache.Has(gen, rootHash) {
-		root.ReleaseChildren()
-		return
-	}
-	sm.releaseAcknowledgedChildren(root, cache, gen, release)
-}
-
-func (sm *SHAMap) releaseAcknowledgedChildren(
-	parent *innerNode,
-	cache *FullBelowCache,
-	generation uint32,
-	release map[[32]byte]struct{},
-) {
-	for branch := range BranchFactor {
-		child, hash, set := parent.LoadChild(branch)
-		if !set || child == nil {
-			continue
-		}
-		if _, ok := release[hash]; ok || cache.Has(generation, hash) {
-			sm.releaseChild(parent, branch, child)
-			continue
-		}
-		if inner, ok := child.(*innerNode); ok {
-			sm.releaseAcknowledgedChildren(inner, cache, generation, release)
-		}
-	}
+	return true, release
 }
 
 func acknowledgePersistedNode(ctx context.Context, node mapNode) error {

@@ -25,6 +25,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 	if err := validateManifestCounts(v); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
+	if err := validateAcquisitionMemory(v); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
 	if v.IsSet("backfill") {
 		if _, ok := v.Get("backfill").(bool); !ok {
 			return nil, fmt.Errorf("backfill must be a boolean")
@@ -105,6 +108,33 @@ func validateManifestCounts(v *viper.Viper) error {
 		if err := validateIntegerSetting(v, key, MinManifestCount, MaxManifestCount); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateAcquisitionMemory(v *viper.Viper) error {
+	const key = "acquisition.memory_mb"
+	if !v.IsSet(key) {
+		return nil
+	}
+
+	value := reflect.ValueOf(v.Get(key))
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		memoryMB := value.Int()
+		if memoryMB < 0 {
+			return fmt.Errorf("%s must be non-negative, got %d", key, memoryMB)
+		}
+		if uint64(memoryMB) > maxAcquisitionMemoryMB {
+			return fmt.Errorf("%s is too large: %d MiB overflows bytes", key, memoryMB)
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		memoryMB := value.Uint()
+		if memoryMB > maxAcquisitionMemoryMB {
+			return fmt.Errorf("%s is too large: %d MiB overflows bytes", key, memoryMB)
+		}
+	default:
+		return fmt.Errorf("%s must be an integer count", key)
 	}
 	return nil
 }

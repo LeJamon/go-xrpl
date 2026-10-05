@@ -75,7 +75,7 @@ func incompleteStateAcquisitionFixture(t *testing.T) (*Ledger, []message.LedgerN
 	return il, nodes
 }
 
-func TestLedger_OnTimer_FailsAfterSevenCumulativeQuietIntervals(t *testing.T) {
+func TestLedger_OnTimer_FailsAfterSevenConsecutiveQuietIntervals(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0xAB}, 42, 1, discardLogger())
 	il.state = StateWantState
@@ -99,8 +99,11 @@ func TestLedger_OnTimer_FailsAfterSevenCumulativeQuietIntervals(t *testing.T) {
 	if il.State() != StateFailed {
 		t.Fatalf("state = %v, want StateFailed", il.State())
 	}
-	if err := il.Err(); err == nil || !strings.Contains(err.Error(), "7 timeouts") {
-		t.Fatalf("terminal error = %v, want seven cumulative timeouts", err)
+	if err := il.Err(); err == nil || !strings.Contains(err.Error(), "7 consecutive timeouts") {
+		t.Fatalf("terminal error = %v, want seven consecutive timeouts", err)
+	}
+	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax+1 {
+		t.Fatalf("cumulative timeouts = %d, want %d", got, ledgerTimeoutRetriesMax+1)
 	}
 }
 
@@ -132,7 +135,7 @@ func TestLedger_OnTimer_ReportsIntervalStallWithLifetimeTotals(t *testing.T) {
 	}
 }
 
-func TestLedger_OnTimer_AlternatingProgressAndQuietHitsCumulativeBudget(t *testing.T) {
+func TestLedger_OnTimer_AlternatingProgressAndQuietSurvivesCumulativeBudget(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0x01}, 7, 1, discardLogger())
 	il.state = StateWantState
@@ -140,7 +143,8 @@ func TestLedger_OnTimer_AlternatingProgressAndQuietHitsCumulativeBudget(t *testi
 	il.lastTimer = base
 
 	now := base
-	for i := 1; i <= ledgerTimeoutRetriesMax; i++ {
+	progressIntervals := ledgerTimeoutRetriesMax + 2
+	for i := 1; i <= progressIntervals; i++ {
 		now = now.Add(acquireTimerInterval)
 		if got := il.OnTimer(now); got != TimerEscalate {
 			t.Fatalf("quiet interval %d: got %v, want TimerEscalate", i, got)
@@ -162,19 +166,21 @@ func TestLedger_OnTimer_AlternatingProgressAndQuietHitsCumulativeBudget(t *testi
 		}
 	}
 
-	now = now.Add(acquireTimerInterval)
-	if got := il.OnTimer(now); got != TimerFailed {
-		t.Fatalf("quiet interval after intermittent progress: got %v, want TimerFailed", got)
+	if il.State() == StateFailed {
+		t.Fatal("intermittent useful progress must keep the acquisition active")
 	}
-	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax+1 {
-		t.Fatalf("timeouts after terminal interval = %d, want %d", got, ledgerTimeoutRetriesMax+1)
+	if got := il.Timeouts(); got != progressIntervals {
+		t.Fatalf("timeouts after progress intervals = %d, want %d", got, progressIntervals)
+	}
+	if got := il.ConsecutiveTimeouts(); got != 0 {
+		t.Fatalf("consecutive timeouts after progress intervals = %d, want 0", got)
 	}
 }
 
-func TestLedger_OnTimer_UsefulProgressBeforeCumulativeBudgetCompletes(t *testing.T) {
+func TestLedger_OnTimer_UsefulProgressSurvivesCumulativeBudget(t *testing.T) {
 	t.Parallel()
 	il, nodes := incompleteStateAcquisitionFixture(t)
-	progressIntervals := ledgerTimeoutRetriesMax
+	progressIntervals := ledgerTimeoutRetriesMax + 2
 	if len(nodes) <= progressIntervals {
 		t.Fatalf("fixture has %d nodes, need more than %d", len(nodes), progressIntervals)
 	}
@@ -206,6 +212,15 @@ func TestLedger_OnTimer_UsefulProgressBeforeCumulativeBudgetCompletes(t *testing
 		if got := il.OnTimer(now); got != TimerRefresh {
 			t.Fatalf("progress interval %d: got %v, want TimerRefresh", i+1, got)
 		}
+		if il.State() == StateFailed {
+			t.Fatalf("useful progress interval %d failed the acquisition", i+1)
+		}
+	}
+	if got := il.Timeouts(); got != progressIntervals {
+		t.Fatalf("cumulative timeouts = %d, want %d", got, progressIntervals)
+	}
+	if got := il.ConsecutiveTimeouts(); got != 0 {
+		t.Fatalf("consecutive timeouts after useful progress = %d, want 0", got)
 	}
 
 	if err := il.GotStateNodes(nodes[progressIntervals:]); err != nil {
@@ -217,7 +232,7 @@ func TestLedger_OnTimer_UsefulProgressBeforeCumulativeBudgetCompletes(t *testing
 	}
 }
 
-func TestLedger_OnTimer_ProgressDoesNotResetCumulativeFailureBudget(t *testing.T) {
+func TestLedger_OnTimer_ProgressResetsConsecutiveFailureBudget(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0xAD}, 44, 1, discardLogger())
 	il.state = StateWantState
@@ -249,12 +264,22 @@ func TestLedger_OnTimer_ProgressDoesNotResetCumulativeFailureBudget(t *testing.T
 	if got := il.ConsecutiveTimeouts(); got != 0 {
 		t.Fatalf("progress interval streak = %d, want 0", got)
 	}
+	for i := 1; i <= ledgerTimeoutRetriesMax; i++ {
+		now = now.Add(acquireTimerInterval)
+		if got := il.OnTimer(now); got != TimerEscalate {
+			t.Fatalf("quiet interval after reset %d: got %v, want TimerEscalate", i, got)
+		}
+		if il.State() == StateFailed {
+			t.Fatalf("progress reset did not refresh the consecutive budget at interval %d", i)
+		}
+		il.RearmTimer(now)
+	}
 	now = now.Add(acquireTimerInterval)
 	if got := il.OnTimer(now); got != TimerFailed {
-		t.Fatalf("quiet interval after progress: got %v, want TimerFailed", got)
+		t.Fatalf("seventh consecutive timeout after reset: got %v, want TimerFailed", got)
 	}
-	if got := il.Timeouts(); got != ledgerTimeoutRetriesMax+1 {
-		t.Fatalf("cumulative timeouts = %d, want %d", got, ledgerTimeoutRetriesMax+1)
+	if got := il.Timeouts(); got != 2*ledgerTimeoutRetriesMax+1 {
+		t.Fatalf("cumulative timeouts = %d, want %d", got, 2*ledgerTimeoutRetriesMax+1)
 	}
 }
 
