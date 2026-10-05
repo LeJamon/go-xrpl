@@ -103,6 +103,34 @@ type MissingNode struct {
 	NodeID NodeID
 }
 
+// MissingNodesStatus describes the amount of discovery work left after a
+// resumable missing-node scan. The acquisition owner decides whether to call
+// again immediately or wait for an external event.
+type MissingNodesStatus uint8
+
+const (
+	// MissingNodesMore means the caller's result window or traversal slice was
+	// exhausted while useful discovery work remains.
+	MissingNodesMore MissingNodesStatus = iota
+	// MissingNodesWaiting means a complete pass found unresolved or filtered
+	// paths and is waiting for attachments, persistence, or a later retry.
+	MissingNodesWaiting
+	// MissingNodesComplete means every referenced descendant is verified and
+	// the durable completion barrier has been satisfied.
+	MissingNodesComplete
+	// MissingNodesMemory means the scanner could not admit bounded state under
+	// the shared acquisition byte budget.
+	MissingNodesMemory
+)
+
+// MissingNodesResult is the bounded output and progress state of one scanner
+// slice. Nodes is owned by the caller and may be empty for More, Waiting or
+// Complete outcomes.
+type MissingNodesResult struct {
+	Nodes  []MissingNode
+	Status MissingNodesStatus
+}
+
 // StartSync prepares the SHAMap for synchronization.
 // This sets the state to syncing and allows nodes to be added.
 func (sm *SHAMap) StartSync() error {

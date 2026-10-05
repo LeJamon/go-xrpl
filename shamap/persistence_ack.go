@@ -43,11 +43,22 @@ func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes 
 		}
 	}
 	complete, release := sm.publishAcknowledgedFullBelow(!releaseNodes)
+	scanComplete, scanRelease := sm.publishAcknowledgedScanHints(!releaseNodes)
+	if scanComplete {
+		complete = true
+	}
+	for hash := range scanRelease {
+		if release == nil {
+			release = make(map[[32]byte]struct{})
+		}
+		release[hash] = struct{}{}
+	}
 	if !releaseNodes {
 		sm.releaseAcknowledgedFullBelow(release)
 	}
 	if releaseNodes || complete {
 		sm.clearBackedWalkNodeReferencesLocked()
+		sm.clearBackedScanNodeReferencesLocked()
 		if sm.tree.root != nil {
 			sm.tree.root.ReleaseChildren()
 		}
@@ -59,6 +70,58 @@ func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes 
 		sm.updateCursorCapacityStats(sm.acquisition.cursor)
 	}
 	return nil
+}
+
+// publishAcknowledgedScanHints publishes at most one maximal completion hint
+// per lane. A hint is only an optimization: if it cannot be retained, the
+// next scan can prove the same subtree again from durable storage.
+func (sm *SHAMap) publishAcknowledgedScanHints(collectRelease bool) (bool, map[[32]byte]struct{}) {
+	cache := sm.backing.fullBelow
+	cursor := sm.acquisition.scan
+	root := sm.tree.root
+	if cache == nil || cursor == nil || root == nil {
+		return false, nil
+	}
+	gen, done := cache.Begin()
+	defer done()
+	rootHash := root.Hash()
+	if cursor.rootHash != rootHash || cursor.generation != gen {
+		return false, nil
+	}
+	var release map[[32]byte]struct{}
+	if collectRelease {
+		release = make(map[[32]byte]struct{})
+	}
+	for i := range cursor.lanes {
+		lane := &cursor.lanes[i]
+		if !lane.hint.pending {
+			continue
+		}
+		cacheFullBelow(cache, gen, lane.hint.hash, lane.hint.depth)
+		if release != nil {
+			release[lane.hint.hash] = struct{}{}
+		}
+		lane.hint.pending = false
+		lane.durable = true
+		lane.root.node = nil
+		lane.root.parent = nil
+	}
+	complete := true
+	for i := range cursor.lanes {
+		if !cursor.lanes[i].complete || !cursor.lanes[i].durable {
+			complete = false
+			break
+		}
+	}
+	if !complete {
+		return false, release
+	}
+	root.setFullBelowGen(gen)
+	cacheFullBelow(cache, gen, rootHash, 0)
+	if release != nil {
+		release[rootHash] = struct{}{}
+	}
+	return true, release
 }
 
 func (sm *SHAMap) publishAcknowledgedFullBelow(collectRelease bool) (bool, map[[32]byte]struct{}) {

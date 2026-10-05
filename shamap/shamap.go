@@ -49,6 +49,7 @@ type acquisitionState struct {
 	walkMu       sync.Mutex
 	attachmentMu sync.Mutex
 	cursor       *backedWalkCursor
+	scan         *backedScanCursor
 	base         *verifiedWalkBase
 	budget       *AcquisitionBudget
 	stats        backedWalkStats

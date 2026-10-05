@@ -610,6 +610,7 @@ func (sm *SHAMap) updateCursorCapacityStats(cursor *backedWalkCursor) {
 }
 
 func (sm *SHAMap) releaseBackedWalkCursorLocked() {
+	sm.releaseBackedScanCursorLocked()
 	cursor := sm.acquisition.cursor
 	if cursor == nil {
 		sm.acquisition.base = nil
