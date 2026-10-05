@@ -121,6 +121,9 @@ const (
 	// MissingNodesMemory means the scanner could not admit bounded state under
 	// the shared acquisition byte budget.
 	MissingNodesMemory
+	// MissingNodesPersistence means the tree was discovered completely but its
+	// attached nodes still need the caller's persistence acknowledgement.
+	MissingNodesPersistence
 )
 
 // MissingNodesResult is the bounded output and progress state of one scanner
@@ -129,6 +132,7 @@ const (
 type MissingNodesResult struct {
 	Nodes  []MissingNode
 	Status MissingNodesStatus
+	reason missingNodesMoreReason
 }
 
 // StartSync prepares the SHAMap for synchronization.
@@ -161,12 +165,22 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 		return errSyncNotInProgress
 	}
 	sm.tree.mu.RUnlock()
-	missingNodes, err := sm.walkMapParallelContext(ctx, 1, nil)
+	result, err := sm.ScanMissingNodesContext(ctx, 1, nil)
 	if err != nil {
 		return fmt.Errorf("sync completeness walk: %w", err)
 	}
-	if len(missingNodes) > 0 {
-		return fmt.Errorf("sync incomplete: still have %d missing nodes", len(missingNodes))
+	switch result.Status {
+	case MissingNodesMemory:
+		return fmt.Errorf("sync completeness walk: %w", ErrAcquisitionMemory)
+	case MissingNodesMore:
+		if result.reason == missingNodesTraversalYield {
+			return fmt.Errorf("sync completeness walk: %w", ErrTraversalBudget)
+		}
+		return fmt.Errorf("sync incomplete: still have %d missing nodes", len(result.Nodes))
+	case MissingNodesWaiting:
+		return fmt.Errorf("sync incomplete: unresolved paths remain")
+	case MissingNodesPersistence:
+		return fmt.Errorf("sync incomplete: persistence acknowledgement is pending")
 	}
 
 	sm.tree.mu.Lock()

@@ -55,6 +55,10 @@ func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes 
 	}
 	if !releaseNodes {
 		sm.releaseAcknowledgedFullBelow(release)
+		if len(release) != 0 {
+			sm.clearBackedWalkNodeReferencesLocked()
+			sm.clearBackedScanNodeReferencesLocked()
+		}
 	}
 	if releaseNodes || complete {
 		sm.clearBackedWalkNodeReferencesLocked()
@@ -113,7 +117,7 @@ func (sm *SHAMap) publishAcknowledgedScanHints(collectRelease bool) (bool, map[[
 			break
 		}
 	}
-	if !complete {
+	if !complete || !cursor.rootDurable {
 		return false, release
 	}
 	root.setFullBelowGen(gen)

@@ -37,17 +37,27 @@ type backedScanHint struct {
 }
 
 type backedScanCursor struct {
-	generation uint32
-	rootHash   [32]byte
-	baseRoot   [32]byte
-	budget     *AcquisitionBudget
-	fixedBytes uint64
-	nextLane   uint8
-	passActive bool
-	lanes      [BranchFactor]backedScanLane
+	generation  uint32
+	rootHash    [32]byte
+	baseRoot    [32]byte
+	budget      *AcquisitionBudget
+	fixedBytes  uint64
+	nextLane    uint8
+	passActive  bool
+	rootDurable bool
+	lanes       [BranchFactor]backedScanLane
 }
 
 const backedScanFrameBytes = uint64(unsafe.Sizeof(backedScanFrame{}))
+
+type missingNodesMoreReason uint8
+
+const (
+	missingNodesResultFull missingNodesMoreReason = iota
+	missingNodesTraversalYield
+)
+
+const backedScanDefaultResultLimit = 256
 
 func (sm *SHAMap) newBackedScanCursor(
 	root *innerNode,
@@ -59,8 +69,7 @@ func (sm *SHAMap) newBackedScanCursor(
 	// The cursor and all lane stacks are admitted as one bounded reservation.
 	// This keeps a small budget from partially constructing an unaccounted
 	// frontier while making stack growth independent of the unresolved tree.
-	frameCount := uint64(BranchFactor * (maxDepth + 1))
-	charge := 2*uint64(unsafe.Sizeof(backedScanCursor{})) + frameCount*backedScanFrameBytes
+	charge := 2 * uint64(unsafe.Sizeof(backedScanCursor{}))
 	if budget != nil && !budget.tryReserveCursor(charge) {
 		return nil, ErrAcquisitionMemory
 	}
@@ -77,7 +86,6 @@ func (sm *SHAMap) newBackedScanCursor(
 	for branch := range BranchFactor {
 		child, hash, set := root.LoadChild(branch)
 		lane := &cursor.lanes[branch]
-		lane.stack = make([]backedScanFrame, 0, maxDepth+1)
 		if !set {
 			lane.complete = true
 			lane.durable = true
@@ -113,14 +121,27 @@ func (sm *SHAMap) releaseBackedScanCursorLocked() {
 	}
 	for i := range cursor.lanes {
 		lane := &cursor.lanes[i]
+		capacity := cap(lane.stack)
 		clear(lane.stack)
 		lane.stack = nil
+		if capacity != 0 {
+			sm.releaseCursorBytes(cursorAsWalkCursor(cursor), uint64(capacity)*backedScanFrameBytes)
+		}
 		lane.root = backedWalkItem{}
 	}
 	if cursor.fixedBytes != 0 {
 		sm.releaseCursorBytes(cursorAsWalkCursor(cursor), cursor.fixedBytes)
 	}
 	sm.acquisition.scan = nil
+	if sm.acquisition.cursor == nil {
+		sm.acquisition.base = nil
+		sm.acquisition.stats.activeFrames.Store(0)
+		sm.acquisition.stats.activeCapacity.Store(0)
+		sm.acquisition.stats.blockedItems.Store(0)
+		sm.acquisition.stats.blockedCapacity.Store(0)
+		sm.acquisition.stats.proofEntries.Store(0)
+		sm.acquisition.stats.proofCapacity.Store(0)
+	}
 }
 
 // cursorAsWalkCursor lets the shared cursor accounting release a reservation
@@ -152,7 +173,24 @@ func (sm *SHAMap) clearBackedScanNodeReferencesLocked() {
 	}
 }
 
-func (sm *SHAMap) startBackedScanPass(cursor *backedScanCursor) {
+func (sm *SHAMap) updateBackedScanStats(cursor *backedScanCursor) {
+	if cursor == nil {
+		return
+	}
+	var active, capacity uint64
+	for i := range cursor.lanes {
+		active += uint64(len(cursor.lanes[i].stack))
+		capacity += uint64(cap(cursor.lanes[i].stack))
+	}
+	sm.acquisition.stats.blockedItems.Store(0)
+	sm.acquisition.stats.blockedCapacity.Store(0)
+	sm.acquisition.stats.activeFrames.Store(active)
+	sm.acquisition.stats.activeCapacity.Store(capacity)
+	sm.acquisition.stats.proofEntries.Store(0)
+	sm.acquisition.stats.proofCapacity.Store(0)
+}
+
+func (sm *SHAMap) startBackedScanPass(cursor *backedScanCursor) error {
 	for i := range cursor.lanes {
 		lane := &cursor.lanes[i]
 		if lane.complete {
@@ -167,14 +205,30 @@ func (sm *SHAMap) startBackedScanPass(cursor *backedScanCursor) {
 			lane.complete = true
 			continue
 		}
-		lane.stack = append(lane.stack, backedScanFrame{item: lane.root})
+		if err := sm.pushBackedScanFrame(cursor, lane, backedScanFrame{item: lane.root}); err != nil {
+			return err
+		}
 	}
 	cursor.passActive = true
+	return nil
 }
 
-func (sm *SHAMap) pushBackedScanFrame(lane *backedScanLane, frame backedScanFrame) error {
+func (sm *SHAMap) pushBackedScanFrame(cursor *backedScanCursor, lane *backedScanLane, frame backedScanFrame) error {
 	if len(lane.stack) >= cap(lane.stack) {
-		return errMaxDepthExceeded
+		oldCap := cap(lane.stack)
+		newCap := max(1, oldCap*2)
+		newCap = min(newCap, maxDepth+1)
+		if newCap <= oldCap {
+			return errMaxDepthExceeded
+		}
+		charge := uint64(newCap) * backedScanFrameBytes
+		if !sm.reserveCursorBytes(cursorAsWalkCursor(cursor), charge) {
+			return ErrAcquisitionMemory
+		}
+		next := make([]backedScanFrame, len(lane.stack), newCap)
+		copy(next, lane.stack)
+		lane.stack = next
+		sm.releaseCursorBytes(cursorAsWalkCursor(cursor), uint64(oldCap)*backedScanFrameBytes)
 	}
 	lane.stack = append(lane.stack, frame)
 	return nil
@@ -201,6 +255,11 @@ func (sm *SHAMap) finishBackedScanFrame(
 	}
 	if len(lane.stack) == 0 {
 		lane.durable = lane.durable && frame.full && frame.stored
+		capacity := cap(lane.stack)
+		lane.stack = nil
+		if capacity != 0 {
+			sm.releaseCursorBytes(cursorAsWalkCursor(cursor), uint64(capacity)*backedScanFrameBytes)
+		}
 		return
 	}
 	parent := &lane.stack[len(lane.stack)-1]
@@ -248,6 +307,7 @@ func (sm *SHAMap) scanBackedLane(
 				frame.full, frame.stored, frame.loaded = false, false, true
 				outputFull := false
 				if filter.ShouldFetch(frame.item.hash) {
+					sm.acquisition.stats.missingNodes.Add(1)
 					*missing = append(*missing, MissingNode{
 						Hash: frame.item.hash, Depth: frame.item.depth,
 						ParentHash: frame.item.parentHash, Branch: frame.item.branch,
@@ -301,7 +361,7 @@ func (sm *SHAMap) scanBackedLane(
 			parent: parent, node: frame.view.children[branch],
 		}}
 		frame.next++
-		if err := sm.pushBackedScanFrame(lane, child); err != nil {
+		if err := sm.pushBackedScanFrame(cursor, lane, child); err != nil {
 			frame.next--
 			return false, err
 		}
@@ -352,13 +412,19 @@ func (sm *SHAMap) scanBackedContext(
 		}
 		sm.acquisition.scan = cursor
 	}
+	defer sm.updateBackedScanStats(cursor)
 	if !cursor.passActive {
-		sm.startBackedScanPass(cursor)
+		if err := sm.startBackedScanPass(cursor); err != nil {
+			if errors.Is(err, ErrAcquisitionMemory) {
+				return MissingNodesResult{Status: MissingNodesMemory}, nil
+			}
+			return MissingNodesResult{}, err
+		}
 	}
 	if maxMissing < 0 {
 		maxMissing = 0
 	}
-	missing := make([]MissingNode, 0, min(maxMissing, 256))
+	missing := make([]MissingNode, 0, min(maxMissing, backedScanDefaultResultLimit))
 	for offset := range BranchFactor {
 		branch := (int(cursor.nextLane) + offset) % BranchFactor
 		lane := &cursor.lanes[branch]
@@ -368,21 +434,29 @@ func (sm *SHAMap) scanBackedContext(
 		full, err := sm.scanBackedLane(ctx, access, cache, generation, root, cursor, lane, filter, &missing, maxMissing)
 		if err != nil {
 			if errors.Is(err, ErrTraversalBudget) {
-				return MissingNodesResult{Nodes: missing, Status: MissingNodesMore}, nil
+				cursor.nextLane = uint8((branch + 1) % BranchFactor)
+				return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesTraversalYield}, nil
+			}
+			if errors.Is(err, ErrAcquisitionMemory) {
+				return MissingNodesResult{Nodes: missing, Status: MissingNodesMemory}, nil
 			}
 			return MissingNodesResult{Nodes: missing}, err
 		}
 		if full {
+			cursor.nextLane = uint8((branch + 1) % BranchFactor)
 			cursor.passActive = true
-			return MissingNodesResult{Nodes: missing, Status: MissingNodesMore}, nil
+			return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesResultFull}, nil
 		}
 	}
 
 	allComplete := true
+	allDurable := true
 	for i := range cursor.lanes {
 		if !cursor.lanes[i].complete {
 			allComplete = false
-			break
+		}
+		if !cursor.lanes[i].durable {
+			allDurable = false
 		}
 	}
 	cursor.passActive = false
@@ -393,11 +467,14 @@ func (sm *SHAMap) scanBackedContext(
 	if !allComplete {
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesWaiting}, nil
 	}
+	if !allDurable {
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesPersistence}, nil
+	}
 	if err := ctx.Err(); err != nil {
 		return MissingNodesResult{Nodes: missing}, err
 	}
 	if !takeTraversalVisit(ctx) {
-		return MissingNodesResult{Nodes: missing, Status: MissingNodesMore}, nil
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesTraversalYield}, nil
 	}
 	sm.acquisition.stats.durableReads.Add(1)
 	data, stored, err := access.fetchPreferDurable(ctx, rootHash)
@@ -405,20 +482,52 @@ func (sm *SHAMap) scanBackedContext(
 		return MissingNodesResult{Nodes: missing}, err
 	}
 	if !stored || len(data) == 0 {
-		return MissingNodesResult{Nodes: missing, Status: MissingNodesWaiting}, nil
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesPersistence}, nil
 	}
 	if _, err := decodeTraversalNode(data, rootHash); err != nil {
 		return MissingNodesResult{Nodes: missing}, err
 	}
+	cursor.rootDurable = true
 	root.setFullBelowGen(generation)
 	cacheFullBelow(cache, generation, rootHash, 0)
 	sm.releaseBackedScanCursorLocked()
 	return MissingNodesResult{Nodes: missing, Status: MissingNodesComplete}, nil
 }
 
+func (sm *SHAMap) scanUnbackedContext(
+	ctx context.Context,
+	root *innerNode,
+	maxMissing int,
+	filter SyncFilter,
+) (MissingNodesResult, error) {
+	gen, cache, done := fullBelowContext(sm)
+	defer done()
+	missing := make([]MissingNode, 0, min(maxMissing, backedScanDefaultResultLimit))
+	full, stopped, err := walkFullBelow(
+		ctx, sm, root, newRootNodeID(), root.Hash(), 0, gen, filter, false, cache,
+		func(node MissingNode) bool {
+			missing = append(missing, node)
+			return maxMissing > 0 && len(missing) >= maxMissing
+		}, nil,
+	)
+	if err != nil {
+		return MissingNodesResult{Nodes: missing}, err
+	}
+	if stopped {
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesMore, reason: missingNodesResultFull}, nil
+	}
+	if !full {
+		// A filtered path is represented by a false full-below result even when
+		// the caller received no request IDs.
+		return MissingNodesResult{Nodes: missing, Status: MissingNodesWaiting}, nil
+	}
+	return MissingNodesResult{Status: MissingNodesComplete}, nil
+}
+
 // ScanMissingNodesContext performs one bounded, resumable discovery slice.
 // Missing children never stop sibling discovery; a later call resumes the
-// cursor or starts another pass when unresolved paths remain.
+// cursor or starts another pass when unresolved paths remain. A non-positive
+// maxNodes selects the bounded default result window.
 func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter) (MissingNodesResult, error) {
 	if err := ctx.Err(); err != nil {
 		return MissingNodesResult{}, err
@@ -426,6 +535,11 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 	if filter == nil {
 		filter = &defaultSyncFilter{}
 	}
+	if maxNodes <= 0 {
+		maxNodes = backedScanDefaultResultLimit
+	}
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
 	sm.tree.mu.RLock()
 	state := sm.tree.state
 	root := sm.tree.root
@@ -433,27 +547,16 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 	if state != stateSyncing || root == nil {
 		return MissingNodesResult{Status: MissingNodesComplete}, nil
 	}
-	sm.acquisition.walkMu.Lock()
-	defer sm.acquisition.walkMu.Unlock()
 	sm.backing.mu.RLock()
 	access, cache := sm.backing.access, sm.backing.fullBelow
-	sm.backing.mu.RUnlock()
 	backed := access.available() && cache != nil
 	if !backed {
+		sm.backing.mu.RUnlock()
 		sm.tree.mu.RLock()
 		defer sm.tree.mu.RUnlock()
-		missing, err := sm.missingNodesLocked(maxNodes, filter, false)
-		if err != nil {
-			return MissingNodesResult{}, err
-		}
-		if maxNodes > 0 && len(missing) >= maxNodes {
-			return MissingNodesResult{Nodes: missing, Status: MissingNodesMore}, nil
-		}
-		if len(missing) != 0 {
-			return MissingNodesResult{Nodes: missing, Status: MissingNodesWaiting}, nil
-		}
-		return MissingNodesResult{Status: MissingNodesComplete}, nil
+		return sm.scanUnbackedContext(ctx, root, maxNodes, filter)
 	}
+	defer sm.backing.mu.RUnlock()
 	gen, done, err := sm.acquireBackedWalkGeneration(ctx, access, cache, true)
 	if err != nil {
 		return MissingNodesResult{}, err
@@ -473,6 +576,8 @@ func (s MissingNodesStatus) String() string {
 		return "complete"
 	case MissingNodesMemory:
 		return "memory"
+	case MissingNodesPersistence:
+		return "persistence"
 	default:
 		return fmt.Sprintf("missing-nodes-status(%d)", s)
 	}
