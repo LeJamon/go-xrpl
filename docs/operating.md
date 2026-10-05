@@ -251,21 +251,32 @@ keys to precede any `[section]` header.
 
 ### `[acquisition]`
 
-| Key | Example | Meaning |
+| Key | Default | Meaning |
 |-----|---------|---------|
-| `memory_mb` | `0` | Application-owned acquisition working-set budget in MiB. `0` or omission uses the initial bounded 512 MiB default; explicit values must be at least 256 MiB. |
+| `memory_mb` | `0` | Acquisition working-set budget in MiB. Omission or `0` uses 512 MiB; explicit values must be at least 512 MiB. |
 
-The acquisition budget covers the bounded traversal cursor, decoded reply
-headroom, and persistence staging owned by acquisition. The 256 MiB floor is a
-provisional sizing allowance around the 64 MiB protocol maximum for one
-`LedgerData` reply plus decoded/store working data and cursor progress. It is
-separate from the Pebble block cache (`node_db.cache_mb`), replay staging,
-inbound and outbound message-retention budgets, the Go runtime and garbage
-collector, native allocations, and operating-system memory. It is therefore an
-allocation budget rather than an RSS or cgroup limit. Runtime diagnostics are
-intended to report current and peak acquisition high-water usage as the
-bounded cursor implementation is integrated; the setting alone is not
-bootstrap acceptance evidence for a 16 GiB container.
+The budget is shared by active state and transaction acquisitions. Each of the
+cursor, retained-node and persistence-staging allocations can use at most one
+quarter. The remaining quarter provides working room for decoding and preparing
+an already received reply. At the minimum, that reserve is 128 MiB around the
+64 MiB maximum ledger-data payload. The number of pending requests and queued
+replies also remains bounded by the acquisition worker and overlay limits.
+
+When memory is tight, acquisition flushes received nodes and releases acknowledged
+nodes while preserving its traversal position. A reply node that cannot be cached
+is still verified and passed to persistence. Large persistence batches can use a
+synchronous worker job that borrows the caller's buffer instead of cloning it.
+
+`fetch_info` and acquisition progress logs report current and peak cursor charges,
+loaded-node charges, memory waits and pressure checkpoints. Progress logs also
+report persistence staging. Charges conservatively include allocator padding;
+loaded-node credits are held until a checkpoint clears all traversal references,
+so their reported usage can exceed the currently reachable node payloads.
+
+This is an application allocation budget, not an RSS or cgroup limit. Allow
+separate memory for the Pebble cache and memtables, the bounded full-below cache,
+fixed map metadata, replay staging, network buffers, Go runtime and GC overhead,
+and native/OS memory.
 
 ### `[server]` and `[port_*]`
 

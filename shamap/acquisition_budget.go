@@ -22,6 +22,8 @@ type AcquisitionBudgetStats struct {
 	Peak       uint64
 	CursorUsed uint64
 	CursorPeak uint64
+	LoadedUsed uint64
+	LoadedPeak uint64
 }
 
 // AcquisitionBudget coordinates bounded resident memory across maps and their
@@ -34,6 +36,8 @@ type AcquisitionBudget struct {
 	peak       atomic.Uint64
 	cursorUsed atomic.Uint64
 	cursorPeak atomic.Uint64
+	loadedUsed atomic.Uint64
+	loadedPeak atomic.Uint64
 }
 
 // NewAcquisitionBudget creates a shared byte budget. The limit is immutable so
@@ -96,6 +100,8 @@ func (b *AcquisitionBudget) Snapshot() AcquisitionBudgetStats {
 		Peak:       b.peak.Load(),
 		CursorUsed: b.cursorUsed.Load(),
 		CursorPeak: b.cursorPeak.Load(),
+		LoadedUsed: b.loadedUsed.Load(),
+		LoadedPeak: b.loadedPeak.Load(),
 	}
 }
 
@@ -119,7 +125,7 @@ func (b *AcquisitionBudget) tryReserveCursor(bytes uint64) bool {
 			continue
 		}
 		if !b.used.CompareAndSwap(used, used+bytes) {
-			b.cursorUsed.Add(^uint64(bytes - 1))
+			b.cursorUsed.Add(^(bytes - 1))
 			continue
 		}
 		for {

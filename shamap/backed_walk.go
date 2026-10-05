@@ -21,6 +21,10 @@ type BackedWalkStats struct {
 	DurableReads          uint64
 	MissingNodes          uint64
 	VerifiedBaseFallbacks uint64
+	RetainedNodes         uint64
+	RetainedBytes         uint64
+	RetainedPeakBytes     uint64
+	RetentionPressure     bool
 	BlockedItems          uint64
 	BlockedCapacity       uint64
 	ActiveFrames          uint64
@@ -392,6 +396,10 @@ func (sm *SHAMap) BackedWalkStats() BackedWalkStats {
 		DurableReads:          sm.acquisition.stats.durableReads.Load(),
 		MissingNodes:          sm.acquisition.stats.missingNodes.Load(),
 		VerifiedBaseFallbacks: sm.acquisition.stats.verifiedBaseFallbacks.Load(),
+		RetainedNodes:         sm.acquisition.retained.nodes.Load(),
+		RetainedBytes:         sm.acquisition.retained.bytes.Load(),
+		RetainedPeakBytes:     sm.acquisition.retained.peak.Load(),
+		RetentionPressure:     sm.acquisition.retained.pressure.Load(),
 		BlockedItems:          sm.acquisition.stats.blockedItems.Load(),
 		BlockedCapacity:       sm.acquisition.stats.blockedCapacity.Load(),
 		ActiveFrames:          sm.acquisition.stats.activeFrames.Load(),

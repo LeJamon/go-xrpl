@@ -567,6 +567,7 @@ func (r *nodeRuntime) configureConsensus() error {
 		// (issue #1158).
 		if r.nodeFamily != nil {
 			if router := r.consensus.Router; router != nil {
+				router.SetAcquisitionMemoryLimit(r.appConfig.Acquisition.ResolvedMemoryBytes())
 				router.SetAcquisitionFamily(r.nodeFamily)
 			}
 		}

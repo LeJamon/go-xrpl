@@ -1607,7 +1607,7 @@ func TestPublishAcknowledgedFullBelowPreservesProofDepthAdmission(t *testing.T) 
 	lane.proofs.add(shallow, FullBelowCacheMaxDepth)
 	lane.proofs.add(deep, FullBelowCacheMaxDepth+1)
 
-	complete, release := sm.publishAcknowledgedFullBelow()
+	complete, release := sm.publishAcknowledgedFullBelow(true)
 	if complete {
 		t.Fatal("incomplete cursor reported complete")
 	}

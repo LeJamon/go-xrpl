@@ -7,6 +7,17 @@ import "context"
 // Nodes are cleared post-order so cancellation always leaves a dirty ancestor
 // and a later StoreDirty cannot skip an unacknowledged descendant.
 func (sm *SHAMap) AcknowledgePersistedContext(ctx context.Context) error {
+	return sm.acknowledgePersistedContext(ctx, false)
+}
+
+// AcknowledgePersistedAndReleaseContext also drops acknowledged acquisition
+// nodes whose subtrees are incomplete. Their hashes and cursor positions are
+// retained; subsequent attachment hydrates ancestors from durable storage.
+func (sm *SHAMap) AcknowledgePersistedAndReleaseContext(ctx context.Context) error {
+	return sm.acknowledgePersistedContext(ctx, true)
+}
+
+func (sm *SHAMap) acknowledgePersistedContext(ctx context.Context, releaseNodes bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -20,15 +31,37 @@ func (sm *SHAMap) AcknowledgePersistedContext(ctx context.Context) error {
 	if err := acknowledgePersistedNode(ctx, sm.tree.root); err != nil {
 		return err
 	}
-	complete, release := sm.publishAcknowledgedFullBelow()
-	sm.releaseAcknowledgedFullBelow(release)
+	if cursor := sm.acquisition.cursor; !releaseNodes && cursor != nil && cursor.budget != nil {
+		entries := uint64(BranchFactor + 1)
+		for i := range cursor.lanes {
+			entries += uint64(cursor.lanes[i].proofs.count())
+		}
+		if entries > cursor.budget.limit/128 || !cursor.budget.TryReserve(entries*128) {
+			releaseNodes = true
+		} else {
+			defer cursor.budget.Release(entries * 128)
+		}
+	}
+	complete, release := sm.publishAcknowledgedFullBelow(!releaseNodes)
+	if !releaseNodes {
+		sm.releaseAcknowledgedFullBelow(release)
+	}
+	if releaseNodes || complete {
+		sm.clearBackedWalkNodeReferencesLocked()
+		if sm.tree.root != nil {
+			sm.tree.root.ReleaseChildren()
+		}
+		sm.releaseAcquisitionNodesLocked()
+	}
 	if complete {
-		sm.acquisition.cursor = nil
+		sm.releaseBackedWalkCursorLocked()
+	} else {
+		sm.updateCursorCapacityStats(sm.acquisition.cursor)
 	}
 	return nil
 }
 
-func (sm *SHAMap) publishAcknowledgedFullBelow() (bool, map[[32]byte]struct{}) {
+func (sm *SHAMap) publishAcknowledgedFullBelow(collectRelease bool) (bool, map[[32]byte]struct{}) {
 	cache := sm.backing.fullBelow
 	cursor := sm.acquisition.cursor
 	root := sm.tree.root
@@ -46,24 +79,34 @@ func (sm *SHAMap) publishAcknowledgedFullBelow() (bool, map[[32]byte]struct{}) {
 		return false, nil
 	}
 
-	release := make(map[[32]byte]struct{})
+	var release map[[32]byte]struct{}
+	if collectRelease {
+		release = make(map[[32]byte]struct{})
+	}
 	complete := true
 	for i := range BranchFactor {
 		lane := &cursor.lanes[i]
 		for _, chunk := range lane.proofs.chunks {
 			for _, proof := range chunk {
-				release[proof.hash] = struct{}{}
+				if release != nil {
+					release[proof.hash] = struct{}{}
+				}
 				cacheFullBelow(cache, gen, proof.hash, int(proof.depth))
 			}
 		}
 		lane.proofs.clearWithRelease(func(bytes uint64) { sm.releaseCursorBytes(cursor, bytes) })
+		for j := range lane.stack {
+			lane.stack[j].proofStart = 0
+		}
 		if !lane.complete {
 			complete = false
 			continue
 		}
 		lane.durable = true
 		if lane.root.hash != ([32]byte{}) {
-			release[lane.root.hash] = struct{}{}
+			if release != nil {
+				release[lane.root.hash] = struct{}{}
+			}
 			cacheFullBelow(cache, gen, lane.root.hash, lane.root.depth)
 		}
 		lane.root.node = nil
@@ -71,7 +114,9 @@ func (sm *SHAMap) publishAcknowledgedFullBelow() (bool, map[[32]byte]struct{}) {
 	}
 	if complete {
 		root.setFullBelowGen(gen)
-		release[rootHash] = struct{}{}
+		if release != nil {
+			release[rootHash] = struct{}{}
+		}
 		cacheFullBelow(cache, gen, rootHash, 0)
 	}
 	return complete, release

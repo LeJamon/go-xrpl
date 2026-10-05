@@ -108,6 +108,7 @@ type acquisitionWorkResult struct {
 	policyFailure  bool
 	failureClass   standardReplayFailureClass
 	yielded        bool
+	memoryWait     bool
 	timerEscalate  bool
 	timerAt        time.Time
 	rearmTimer     bool
@@ -314,6 +315,10 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 
 	previous := batch.ledger.Snapshot()
 	result := l.process(batch.ctx, batch.ledger, events)
+	if errors.Is(result.err, shamap.ErrAcquisitionMemory) && batch.ctx.Err() == nil {
+		result.err = nil
+		result.memoryWait = true
+	}
 	if errors.Is(result.err, shamap.ErrTraversalBudget) && batch.ctx.Err() == nil {
 		result.err = nil
 		result.yielded = true
@@ -343,6 +348,18 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 			result.remove = true
 		}
 	}
+	pressure := batch.ledger.Snapshot()
+	if (result.memoryWait || pressure.StateWalk.RetentionPressure || pressure.TxWalk.RetentionPressure) && !result.remove && !result.complete {
+		before := pressure.AcquisitionMemory.Used
+		if err := batch.ledger.CheckpointMemory(batch.ctx); err != nil {
+			result.persistenceErr = err
+			result.failureClass = standardReplayFailurePersistence
+			result.remove = true
+		} else if result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < before {
+			result.yielded = true
+		}
+	}
+	batch.ledger.SetMemoryWaiting(result.memoryWait && !result.yielded && !result.remove)
 	for i := range events {
 		if !result.yielded && !result.timerEscalate && events[i].kind == acquisitionWorkTimer {
 			result.rearmTimer = true
@@ -509,6 +526,10 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				})
 			}
 			if err != nil {
+				if errors.Is(err, shamap.ErrAcquisitionMemory) {
+					result.err = err
+					return result
+				}
 				if badKind != "" {
 					result.badData = append(result.badData, acquisitionBadData{peerID: event.peerID, kind: badKind})
 				}
@@ -640,6 +661,11 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	if len(retargetPeers) > 0 {
 		requests, complete, err := ledger.CollectMissingReplyRequestsContext(workCtx, retargetPeers)
 		if err != nil {
+			if errors.Is(err, shamap.ErrAcquisitionMemory) {
+				result.requests = append(result.requests, requests...)
+				result.err = err
+				return result
+			}
 			for _, request := range result.requests {
 				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 			}
@@ -656,6 +682,11 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	if len(addedPeers) > 0 {
 		requests, complete, err := ledger.CollectMissingAddedRequestsContext(workCtx, addedPeers)
 		if err != nil {
+			if errors.Is(err, shamap.ErrAcquisitionMemory) {
+				result.requests = append(result.requests, requests...)
+				result.err = err
+				return result
+			}
 			for _, request := range result.requests {
 				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 			}
@@ -726,7 +757,19 @@ func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger,
 		}
 		return false
 	}
-	result := processAcquisitionWork(context.Background(), ledger, []acquisitionWorkEvent{event})
+	defer event.release()
+	ctx := c.lifecycleContext()
+	result := processAcquisitionWork(ctx, ledger, []acquisitionWorkEvent{event})
+	if errors.Is(result.err, shamap.ErrAcquisitionMemory) && ctx.Err() == nil {
+		result.err = nil
+		result.memoryWait = true
+		if err := ledger.CheckpointMemory(ctx); err != nil {
+			result.persistenceErr = err
+			result.failureClass = standardReplayFailurePersistence
+			result.remove = true
+		}
+	}
+	ledger.SetMemoryWaiting(result.memoryWait && !result.remove)
 	c.handleAcquisitionWorkResult(result)
 	return true
 }
@@ -982,7 +1025,7 @@ func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *mes
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
 		policyFailure := errors.Is(err, inbound.ErrHeaderRejected)
 		badKind := "ledger-data-base"
-		if localFailure || policyFailure {
+		if localFailure || policyFailure || errors.Is(err, shamap.ErrAcquisitionMemory) {
 			badKind = ""
 		}
 		return useful, badKind, localFailure || policyFailure, ledger.IsComplete(), err

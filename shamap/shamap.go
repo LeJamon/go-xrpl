@@ -52,6 +52,7 @@ type acquisitionState struct {
 	base         *verifiedWalkBase
 	budget       *AcquisitionBudget
 	stats        backedWalkStats
+	retained     acquisitionRetention
 }
 
 // Type defines the SHAMap type
@@ -113,17 +114,25 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 			access:    access,
 			fullBelow: familyFullBelowCache(family),
 		},
+		acquisition: acquisitionState{budget: NewAcquisitionBudget(0)},
 	}
 	sm.tree.cachedSize.Store(-1)
 	return sm, nil
 }
 
 // SetAcquisitionBudget attaches a shared memory budget to this map. Set it
-// before starting an acquisition walk; changing it while a cursor is active
-// only affects subsequent cursor allocations.
+// before attaching acquisition nodes or starting a walk.
 func (sm *SHAMap) SetAcquisitionBudget(budget *AcquisitionBudget) {
+	if budget == nil {
+		budget = NewAcquisitionBudget(0)
+	}
 	sm.acquisition.walkMu.Lock()
 	defer sm.acquisition.walkMu.Unlock()
+	sm.tree.mu.Lock()
+	defer sm.tree.mu.Unlock()
+	if sm.acquisition.cursor != nil || sm.acquisition.retained.bytes.Load() != 0 {
+		panic("cannot replace an active acquisition budget")
+	}
 	sm.acquisition.budget = budget
 }
 
@@ -134,7 +143,11 @@ func (sm *SHAMap) SetAcquisitionBudget(budget *AcquisitionBudget) {
 func (sm *SHAMap) ReleaseAcquisitionBudget() {
 	sm.acquisition.walkMu.Lock()
 	defer sm.acquisition.walkMu.Unlock()
+	sm.tree.mu.Lock()
+	defer sm.tree.mu.Unlock()
 	sm.releaseBackedWalkCursorLocked()
+	sm.releaseAcquisitionNodesLocked()
+	sm.acquisition.budget = nil
 }
 
 // SetFamily sets the Family on an existing SHAMap, enabling backed mode.
@@ -150,9 +163,12 @@ func (sm *SHAMap) SetFamily(family Family) {
 	sm.tree.mu.Lock()
 	sm.backing.mu.Lock()
 	sm.backing.access = access
-	sm.acquisition.cursor = nil
+	sm.releaseBackedWalkCursorLocked()
 	sm.acquisition.base = nil
 	if family != nil {
+		if sm.acquisition.budget == nil {
+			sm.acquisition.budget = NewAcquisitionBudget(0)
+		}
 		sm.backing.fullBelow = fullBelow
 	}
 	sm.backing.mu.Unlock()
@@ -204,6 +220,7 @@ func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte
 			access:    access,
 			fullBelow: familyFullBelowCache(family),
 		},
+		acquisition: acquisitionState{budget: NewAcquisitionBudget(0)},
 	}
 	sm.tree.cachedSize.Store(-1)
 	return sm, nil
@@ -254,9 +271,14 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 
 	// If another reader installed a child while we were fetching, return
 	// theirs and let ours be GC'd.
+	if !sm.retainAcquisitionNode(node) {
+		return node, nil
+	}
 	installed := inner.SetChildIfNil(branch, node)
 	if installed == node {
 		sm.backing.loads.Add(1)
+	} else {
+		sm.releaseAcquisitionNode(node)
 	}
 	return installed, nil
 }

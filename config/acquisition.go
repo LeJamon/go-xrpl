@@ -11,7 +11,7 @@ const (
 	DefaultAcquisitionMemoryMB = 512
 	// MinAcquisitionMemoryMB is the smallest budget accepted for bounded
 	// traversal progress plus acquisition-owned reply and persistence headroom.
-	MinAcquisitionMemoryMB = 256
+	MinAcquisitionMemoryMB = 512
 
 	maxAcquisitionMemoryMB = math.MaxUint64 / uint64(bytesPerMiB)
 )
