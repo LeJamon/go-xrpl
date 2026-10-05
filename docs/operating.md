@@ -249,6 +249,24 @@ keys to precede any `[section]` header.
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
 | `genesis_file` | — | Custom genesis; omit for built-in defaults. Optional. |
 
+### `[acquisition]`
+
+| Key | Example | Meaning |
+|-----|---------|---------|
+| `memory_mb` | `0` | Application-owned acquisition working-set budget in MiB. `0` or omission uses the initial bounded 512 MiB default; explicit values must be at least 256 MiB. |
+
+The acquisition budget covers the bounded traversal cursor, decoded reply
+headroom, and persistence staging owned by acquisition. The 256 MiB floor is a
+provisional sizing allowance around the 64 MiB protocol maximum for one
+`LedgerData` reply plus decoded/store working data and cursor progress. It is
+separate from the Pebble block cache (`node_db.cache_mb`), replay staging,
+inbound and outbound message-retention budgets, the Go runtime and garbage
+collector, native allocations, and operating-system memory. It is therefore an
+allocation budget rather than an RSS or cgroup limit. Runtime diagnostics are
+intended to report current and peak acquisition high-water usage as the
+bounded cursor implementation is integrated; the setting alone is not
+bootstrap acceptance evidence for a 16 GiB container.
+
 ### `[server]` and `[port_*]`
 
 `[server].ports` lists the named port sections to open. Each named

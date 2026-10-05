@@ -52,6 +52,9 @@ func ValidateConfig(config *Config) error {
 	if err := config.ValidationArchive.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("validation_archive: %w", err))
 	}
+	if err := config.Acquisition.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("acquisition: %w", err))
+	}
 
 	// 6. Validate diagnostics configuration
 	if err := config.Logging.Validate(); err != nil {
