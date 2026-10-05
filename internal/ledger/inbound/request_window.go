@@ -31,22 +31,24 @@ func (l *Ledger) requestAvailableLocked() int {
 }
 
 func (l *Ledger) reserveRequestMetadataLocked() bool {
-	if l.memory != nil && !l.memory.TryReserve(missingRequestMetadataBytes) {
+	if l.requestMetadataBytes != 0 {
+		return true
+	}
+	metadataBytes := uint64(l.requestReservationLimit()) * missingRequestMetadataBytes
+	if l.memory != nil && !l.memory.TryReserve(metadataBytes) {
 		l.memoryWaiting = true
 		return false
 	}
-	l.requestMetadataBytes += missingRequestMetadataBytes
+	// Keep one reservation for the complete bounded window. Go map and slice
+	// buckets retain their high-water capacity after entries are deleted, so
+	// releasing one charge per lease would under-account that resident memory.
+	l.requestMetadataBytes = metadataBytes
 	return true
 }
 
 func (l *Ledger) releaseRequestMetadataLocked() {
-	if l.requestMetadataBytes < missingRequestMetadataBytes {
-		return
-	}
-	l.requestMetadataBytes -= missingRequestMetadataBytes
-	if l.memory != nil {
-		l.memory.Release(missingRequestMetadataBytes)
-	}
+	// The bounded-window reservation is released only when the acquisition is
+	// retired, after all request maps and slices have become unreachable.
 }
 
 func (l *Ledger) enqueueReadyLocked(node shamap.MissingNode, transaction bool) bool {
@@ -103,7 +105,7 @@ func (l *Ledger) reserveMissingNodeLocked(node shamap.MissingNode, transaction b
 // claimReadyNodeLocked claims either a prefetched node or an orphaned lease.
 // Orphaned leases are retained when the small ready reserve is full, so expiry
 // and partial replies cannot lose the unresolved frontier.
-func (l *Ledger) claimReadyNodeLocked(transaction bool, peerID uint64, now time.Time) (shamap.MissingNode, bool) {
+func (l *Ledger) claimReadyNodeLocked(transaction bool, peerID uint64, now time.Time, claimOrphan bool) (shamap.MissingNode, bool) {
 	for i := range l.readyRequests {
 		ready := l.readyRequests[i]
 		if ready.transaction != transaction {
@@ -115,6 +117,9 @@ func (l *Ledger) claimReadyNodeLocked(transaction bool, peerID uint64, now time.
 			return ready.node, true
 		}
 		l.enqueueReadyLocked(ready.node, transaction)
+		return shamap.MissingNode{}, false
+	}
+	if !claimOrphan {
 		return shamap.MissingNode{}, false
 	}
 	for hash, lease := range l.requestLeases {
@@ -193,7 +198,13 @@ func (l *Ledger) refreshRequestPeersLocked() {
 
 func (l *Ledger) expireMissingLeasesLocked(now time.Time, force bool) {
 	for hash, lease := range l.requestLeases {
-		if lease.peerID == 0 || (!force && now.Before(lease.expires)) {
+		if lease.peerID == 0 {
+			if force || !now.Before(lease.expires) {
+				l.removeLeaseLocked(hash, false, now)
+			}
+			continue
+		}
+		if !force && now.Before(lease.expires) {
 			continue
 		}
 		l.requeueLeaseLocked(hash, now)
@@ -214,7 +225,7 @@ func (l *Ledger) releasePeerLeaseLocked(peerID uint64, hashes [][32]byte, now ti
 		// The caller has observed the peer's reply boundary. Keep its unresolved
 		// IDs reserved, but free the peer send credit for another batch.
 		lease.peerID = 0
-		lease.expires = now
+		lease.expires = now.Add(missingRequestLeaseTTL)
 		l.requestLeases[hash] = lease
 		l.recentNodes[hash] = 0
 	}

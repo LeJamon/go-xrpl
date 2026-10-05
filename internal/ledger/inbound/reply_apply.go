@@ -76,6 +76,9 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 		l.mu.Unlock()
 		return result, applyErr
 	}
+	if result.Useful > 0 && applyErr == nil {
+		l.finishReceivedTree(ctx, m, transaction)
+	}
 
 	l.mu.Lock()
 	if applyErr == nil && result.Consumed == len(nodes) && matchedPeer {
@@ -84,6 +87,7 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 	} else {
 		result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
 	}
+	l.refreshRequestPeersLocked()
 	l.recomputeComplete()
 	result.Complete = l.state == StateComplete
 	l.mu.Unlock()
@@ -152,11 +156,13 @@ func (l *Ledger) applyMissingReplyNodesLocked(
 				l.removeLeaseLocked(leaseHash, false, now)
 				result.Fulfilled++
 			}
+			l.removeMissingNodeLocked(transaction, parsedID)
 		case shamap.NodeDuplicate:
 			if hasLease {
 				l.removeLeaseLocked(leaseHash, false, now)
 				result.Fulfilled++
 			}
+			l.removeMissingNodeLocked(transaction, parsedID)
 		case shamap.NodeReRequest:
 			// This is a valid node ahead of a hash-only ancestor. It was
 			// processed, but the requested frontier remains unfulfilled and is

@@ -479,6 +479,7 @@ type MissingRequestOutcome uint8
 const (
 	MissingRequestContinue MissingRequestOutcome = iota
 	MissingRequestWaitReply
+	MissingRequestWaitMemory
 	MissingRequestWaitPersistence
 	MissingRequestComplete
 )
@@ -559,10 +560,10 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 
 	requestPeerCount := len(l.requestPeers)
 
-	// Expire only leases that are due, or all leases on a no-progress retry.
-	// Expired hashes move into the bounded ready reserve and retain a short
-	// same-peer quarantine because the wire reply has no request token.
-	l.expireMissingLeasesLocked(now, !l.progress)
+	// Advance the request interval together with the legacy recent-node
+	// throttle. Every active send slot becomes eligible for the next bounded
+	// window; unresolved IDs remain retained in the ready/orphan reserve.
+	l.expireMissingLeasesLocked(now, true)
 
 	if l.progress || (l.memoryWaiting && requestPeerCount == 0) {
 		l.lastTimer = now
@@ -990,7 +991,8 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	l.mu.Lock()
 	defer func() {
 		l.mu.Unlock()
-		if persistErr := l.persistReceived(ctx, stored, "state nodes"); persistErr != nil {
+		persistErr := l.persistReceived(ctx, stored, "state nodes")
+		if persistErr != nil {
 			if err == nil {
 				err = persistErr
 			} else {
@@ -1022,6 +1024,7 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	if added > 0 {
 		l.markProgressLocked()
 	}
+	l.refreshRequestPeersLocked()
 	l.publishSnapshotLocked()
 	l.logger.Debug("inbound ledger: added state nodes",
 		"added", added,
@@ -1058,7 +1061,8 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	l.mu.Lock()
 	defer func() {
 		l.mu.Unlock()
-		if persistErr := l.persistReceived(ctx, stored, "transaction nodes"); persistErr != nil {
+		persistErr := l.persistReceived(ctx, stored, "transaction nodes")
+		if persistErr != nil {
 			if err == nil {
 				err = persistErr
 			} else {
@@ -1086,6 +1090,7 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	if added > 0 {
 		l.markProgressLocked()
 	}
+	l.refreshRequestPeersLocked()
 	l.publishSnapshotLocked()
 	l.logger.Debug("inbound ledger: added tx nodes",
 		"added", added,
@@ -1137,9 +1142,18 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 				return added, stored, fmt.Errorf("prepare verified %s node for persistence: %w", label, err)
 			}
 			stored = append(stored, entry)
-		case shamap.NodeDuplicate, shamap.NodeReRequest:
+			if hash, ok := l.requestByNode[requestNodeKey{transaction: m == l.txMap, nodeID: parsedID}]; ok {
+				l.removeLeaseLocked(hash, false, time.Now())
+			}
+		case shamap.NodeDuplicate:
 			// Already present, or ahead of its frontier: neither progress nor
-			// a reject. Re-requested by the next missing-node walk.
+			// a reject. A duplicate still validates the requested frontier.
+			if hash, ok := l.requestByNode[requestNodeKey{transaction: m == l.txMap, nodeID: parsedID}]; ok {
+				l.removeLeaseLocked(hash, false, time.Now())
+			}
+		case shamap.NodeReRequest:
+			// The requested frontier remains unresolved and is retried by the
+			// next missing-node walk.
 		default: // NodeInvalid, or any unrecognized result — reject conservatively.
 			l.rejectCount++
 			if err != nil {
@@ -1322,6 +1336,37 @@ func (l *Ledger) recomputeComplete() {
 	l.publishSnapshotLocked()
 }
 
+func (l *Ledger) finishReceivedTree(ctx context.Context, m *shamap.SHAMap, transaction bool) {
+	if m == nil {
+		return
+	}
+	if err := m.FinishSyncContext(ctx); err != nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state != StateWantState && l.state != StateComplete {
+		return
+	}
+	if transaction {
+		if l.txMap != m || l.haveTx {
+			return
+		}
+		l.haveTx = true
+		l.missingTx = nil
+		l.neededTx = nil
+	} else {
+		if l.stateMap != m || l.haveState {
+			return
+		}
+		l.haveState = true
+		l.missingState = nil
+		l.neededState = nil
+	}
+	l.clearTreeReservationsLocked(transaction, SystemClock.Now())
+	l.recomputeComplete()
+}
+
 // missingNodeBatch caps NodeIDs per TMGetLedger request on the inspection
 // queries. Sits between rippled's blind-request cap (reqNodes=12) and reply
 // cap (reqNodesReply=128, InboundLedger.cpp).
@@ -1464,12 +1509,27 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	}
 
 	started := time.Now()
-	missing, err := m.GetMissingNodesContext(ctx, missingNodesFind, nil)
-	scanStatus := shamap.MissingNodesWaiting
-	if err == nil && len(missing) >= missingNodesFind {
-		scanStatus = shamap.MissingNodesMore
-	} else if err == nil && len(missing) == 0 {
-		scanStatus = shamap.MissingNodesComplete
+	missing, scanStatus, scanErr := scanMissingNodesContext(ctx, m, missingNodesFind, nil)
+	if scanErr == nil && scanStatus == shamap.MissingNodesWaiting && len(missing) == 0 {
+		// A backed scanner pass can finish with no IDs while it is still
+		// materializing a blocked lane. The legacy timer contract must still
+		// expose the bounded frontier, so use the existing bounded walk as a
+		// compatibility fallback for this transient status.
+		fallback, fallbackErr := m.GetMissingNodesContext(ctx, missingNodesFind, nil)
+		missing = fallback
+		scanErr = fallbackErr
+		if fallbackErr == nil && len(fallback) >= missingNodesFind {
+			scanStatus = shamap.MissingNodesMore
+		} else if fallbackErr == nil && len(fallback) == 0 {
+			scanStatus = shamap.MissingNodesComplete
+		}
+	}
+	err = scanErr
+	if err == nil {
+		switch scanStatus {
+		case shamap.MissingNodesMemory, shamap.MissingNodesPersistence:
+			err = shamap.ErrAcquisitionMemory
+		}
 	}
 	l.mu.Lock()
 	l.lastScanStatus = scanStatus
@@ -1482,7 +1542,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	}
 
 	var finishErr error
-	if len(missing) == 0 && scanStatus != shamap.MissingNodesMore && scanStatus != shamap.MissingNodesWaiting {
+	if len(missing) == 0 && scanStatus == shamap.MissingNodesComplete {
 		finishErr = m.FinishSyncContext(ctx)
 		if missingWalkYield(finishErr) {
 			return nil, nil, false, finishErr
@@ -1508,6 +1568,16 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 				l.haveState = true
 				l.missingState = nil
 				l.neededState = nil
+				if l.txMap != nil && !l.haveTx && l.txRecv > 0 && len(l.missingTx) == 0 {
+					txMap := l.txMap
+					l.mu.Unlock()
+					txFinishErr := txMap.FinishSyncContext(ctx)
+					l.mu.Lock()
+					if txFinishErr == nil && l.txMap == txMap && !l.haveTx {
+						l.haveTx = true
+						l.neededTx = nil
+					}
+				}
 			} else {
 				l.haveTx = true
 				l.missingTx = nil
@@ -1556,26 +1626,19 @@ func (l *Ledger) filterMissingResultLocked(missing []shamap.MissingNode, isReply
 	if len(use) > limit {
 		use = use[:limit]
 	}
-	if !isReply {
-		// Timeout fan-out intentionally retries the direct path frontier. Release
-		// only owner-zero leases; peer-owned replies remain reserved until their
-		// own expiry or an explicit send failure.
-		for i := range use {
-			if lease, ok := l.requestLeases[use[i].Hash]; ok && lease.peerID == 0 {
-				l.removeLeaseLocked(use[i].Hash, false, time.Now())
-			}
-		}
-	}
-	if len(use) > l.requestAvailableLocked() {
-		use = use[:l.requestAvailableLocked()]
-	}
 	nodeIDs := make([][]byte, 0, len(use))
 	for i := range use {
-		nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
-		if !l.reserveMissingNodeLocked(use[i], transaction, 0, time.Now()) {
-			nodeIDs = nodeIDs[:len(nodeIDs)-1]
+		if _, reserved := l.requestLeases[use[i].Hash]; reserved {
+			if isReply {
+				continue
+			}
+			nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
+			continue
+		}
+		if l.requestAvailableLocked() == 0 || !l.reserveMissingNodeLocked(use[i], transaction, 0, time.Now()) {
 			break
 		}
+		nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
 	}
 	return nodeIDs
 }
@@ -1710,6 +1773,9 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 	txPending := l.txMap != nil && !l.haveTx
 	l.mu.Unlock()
 	if len(peers) == 0 {
+		l.mu.Lock()
+		l.lastScanStatus = shamap.MissingNodesWaiting
+		l.mu.Unlock()
 		return nil, complete, nil
 	}
 	requests := make([]MissingRequest, 0, len(peers))
@@ -1750,17 +1816,30 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		for len(peers) > 0 && treeAssigned < treeQuota {
 			l.mu.Lock()
 			peerID := peers[0]
-			node, ok := l.claimReadyNodeLocked(transaction, peerID, time.Now())
-			if !ok {
+			ready := make([]shamap.MissingNode, 0, batchLimit)
+			for len(ready) < batchLimit {
+				node, ok := l.claimReadyNodeLocked(transaction, peerID, time.Now(), useScanner)
+				if !ok {
+					break
+				}
+				ready = append(ready, node)
+			}
+			if len(ready) == 0 {
 				l.mu.Unlock()
 				break
 			}
 			peers = peers[1:]
 			l.requestPeers[peerID] = struct{}{}
+			nodeIDs := make([][]byte, 0, len(ready))
+			nodeHashes := make([][32]byte, 0, len(ready))
+			for _, node := range ready {
+				nodeIDs = append(nodeIDs, node.NodeID.Bytes())
+				nodeHashes = append(nodeHashes, node.Hash)
+			}
 			requests = append(requests, MissingRequest{
 				PeerID:      peerID,
-				NodeIDs:     [][]byte{node.NodeID.Bytes()},
-				NodeHashes:  [][32]byte{node.Hash},
+				NodeIDs:     nodeIDs,
+				NodeHashes:  nodeHashes,
 				Transaction: transaction,
 				Blind:       blind,
 			})
@@ -1769,6 +1848,8 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		}
 
 		var filter shamap.SyncFilter
+		pending := make([]shamap.MissingNode, 0, min(treeQuota*batchLimit, l.requestReservationLimit()))
+		pendingSet := make(map[[32]byte]struct{}, cap(pending))
 		for len(peers) > 0 && treeAssigned < treeQuota {
 			var missing []shamap.MissingNode
 			var scanStatus shamap.MissingNodesStatus
@@ -1780,6 +1861,8 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				scanStatus = shamap.MissingNodesWaiting
 				if err == nil && len(missing) >= missingNodesFind {
 					scanStatus = shamap.MissingNodesMore
+				} else if err == nil && len(missing) == 0 {
+					scanStatus = shamap.MissingNodesComplete
 				}
 			}
 			l.mu.Lock()
@@ -1792,11 +1875,12 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 			if err != nil && (yieldErr == nil || errors.Is(err, shamap.ErrAcquisitionMemory)) {
 				yieldErr = err
 			}
-			if err != nil && len(missing) == 0 {
+			if err != nil && len(missing) == 0 && len(pending) == 0 {
 				return requests, false, yieldErr
 			}
-			traversalExhausted := scanStatus != shamap.MissingNodesMore
-			if len(missing) == 0 {
+			traversalExhausted := scanStatus != shamap.MissingNodesMore ||
+				(scanStatus == shamap.MissingNodesMore && len(missing) == 0 && len(pending) > 0)
+			if len(missing) == 0 && len(pending) == 0 && scanStatus != shamap.MissingNodesWaiting {
 				if filter != nil || scanStatus == shamap.MissingNodesWaiting {
 					break
 				}
@@ -1846,7 +1930,25 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 			if filter == nil && ((!transaction && len(l.missingState) == 0) || (transaction && len(l.missingTx) == 0)) {
 				l.cacheMissingLocked(transaction, missing)
 			}
-			fresh := missing[:0]
+			if len(missing) == 0 && scanStatus == shamap.MissingNodesWaiting && len(pending) == 0 {
+				cached := l.missingState
+				if transaction {
+					cached = l.missingTx
+				}
+				for _, node := range cached {
+					if _, exists := l.requestLeases[node.Hash]; exists {
+						continue
+					}
+					if _, queued := l.readySet[node.Hash]; queued {
+						continue
+					}
+					if _, queued := pendingSet[node.Hash]; queued {
+						continue
+					}
+					pending = append(pending, node)
+					pendingSet[node.Hash] = struct{}{}
+				}
+			}
 			for i := range missing {
 				if _, exists := l.requestLeases[missing[i].Hash]; exists {
 					continue
@@ -1854,9 +1956,16 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				if _, queued := l.readySet[missing[i].Hash]; queued {
 					continue
 				}
-				fresh = append(fresh, missing[i])
+				if _, queued := pendingSet[missing[i].Hash]; queued {
+					continue
+				}
+				pending = append(pending, missing[i])
+				pendingSet[missing[i].Hash] = struct{}{}
 			}
-			for len(peers) > 0 && len(fresh) > 0 {
+			for len(peers) > 0 && len(pending) > 0 {
+				if !traversalExhausted && len(pending) < batchLimit && len(peers) > 1 {
+					break
+				}
 				peerID := peers[0]
 				peers = peers[1:]
 				if peerID == 0 {
@@ -1869,11 +1978,14 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 					l.mu.Unlock()
 					return requests, false, yieldErr
 				}
-				n := min(batchLimit, len(fresh))
-				if traversalExhausted {
-					n = min(n, (len(fresh)+len(peers))/(len(peers)+1))
+				n := min(batchLimit, len(pending))
+				if traversalExhausted && len(peers) > 0 {
+					n = min(n, max(1, (len(pending)+len(peers))/(len(peers)+1)))
 				}
-				batch := fresh[:n]
+				if n == 0 {
+					break
+				}
+				batch := pending[:n]
 				request := MissingRequest{
 					PeerID:      peerID,
 					NodeIDs:     make([][]byte, 0, n),
@@ -1881,6 +1993,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 					Transaction: transaction,
 					Blind:       blind,
 				}
+				assigned := 0
 				for i := range batch {
 					request.NodeIDs = append(request.NodeIDs, batch[i].NodeID.Bytes())
 					request.NodeHashes = append(request.NodeHashes, batch[i].Hash)
@@ -1889,16 +2002,24 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 						request.NodeHashes = request.NodeHashes[:len(request.NodeHashes)-1]
 						break
 					}
+					assigned++
 				}
 				if len(request.NodeHashes) == 0 {
-					continue
+					break
 				}
 				l.requestPeers[request.PeerID] = struct{}{}
 				requests = append(requests, request)
 				treeAssigned++
-				fresh = fresh[n:]
+				for i := 0; i < assigned; i++ {
+					delete(pendingSet, pending[i].Hash)
+				}
+				pending = pending[assigned:]
+				if !useScanner && err != nil {
+					break
+				}
 			}
-			if len(peers) == 0 || (err != nil && len(missing) < missingNodesFind) {
+			if len(peers) == 0 || (!useScanner && err != nil) ||
+				(useScanner && (scanStatus == shamap.MissingNodesMemory || scanStatus == shamap.MissingNodesPersistence || scanStatus.String() == "persistence")) {
 				l.mu.Unlock()
 				return requests, false, yieldErr
 			}
@@ -1906,8 +2027,26 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				l.mu.Unlock()
 				break
 			}
-			excluded := make(missingNodeExclusionFilter, len(l.recentNodes))
+			if len(pending) > 0 && len(pending) < batchLimit && len(peers) > 1 {
+				// A resumable walk may expose the tail of one slice. Keep that
+				// tail local until another filtered slice can fill a full wire
+				// batch, reserving underfilled requests for the final peer only.
+				excluded := make(missingNodeExclusionFilter, len(l.recentNodes)+len(pending))
+				for hash := range l.recentNodes {
+					excluded[hash] = struct{}{}
+				}
+				for hash := range pendingSet {
+					excluded[hash] = struct{}{}
+				}
+				filter = excluded
+				l.mu.Unlock()
+				continue
+			}
+			excluded := make(missingNodeExclusionFilter, len(l.recentNodes)+len(pending))
 			for hash := range l.recentNodes {
+				excluded[hash] = struct{}{}
+			}
+			for hash := range pendingSet {
 				excluded[hash] = struct{}{}
 			}
 			filter = excluded
@@ -1920,10 +2059,14 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 func (l *Ledger) releaseMissingRequests(requests []MissingRequest) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
 	for _, request := range requests {
-		l.releasePeerLeaseLocked(request.PeerID, request.NodeHashes, now, true)
+		for _, hash := range request.NodeHashes {
+			if lease, ok := l.requestLeases[hash]; ok && lease.peerID == request.PeerID {
+				l.removeLeaseLocked(hash, false, time.Now())
+			}
+		}
 	}
+	l.refreshRequestPeersLocked()
 }
 
 // ReleaseMissingRequest makes a failed peer assignment immediately eligible
@@ -1939,7 +2082,7 @@ func (l *Ledger) ReleaseUnreservedMissingNodes() {
 	defer l.mu.Unlock()
 	now := time.Now()
 	for hash, lease := range l.requestLeases {
-		if lease.peerID == 0 {
+		if lease.peerID == 0 && len(l.readyRequests) < missingRequestReadyReserve {
 			if released, ok := l.removeLeaseLocked(hash, false, now); ok {
 				l.enqueueReadyLocked(shamap.MissingNode{Hash: hash, NodeID: released.nodeID}, released.transaction)
 			}
