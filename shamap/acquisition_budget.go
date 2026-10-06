@@ -409,6 +409,32 @@ func (b *AcquisitionBudget) TryReserveReplayHead(bytes uint64) bool {
 	return b.tryReserveCategory(acquisitionCategoryReplayHead, bytes)
 }
 
+// PromoteReplayHead transfers an existing future reservation to the replay
+// head without temporarily charging both owners. Total retained bytes do not
+// change; entering protected head capacity can return parent credits.
+func (b *AcquisitionBudget) PromoteReplayHead(bytes uint64) bool {
+	if b == nil || bytes == 0 {
+		return b != nil || bytes == 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	future, head := b.replayFutureUsed.Load(), b.replayHeadUsed.Load()
+	if b.closed || bytes > future || bytes > ^uint64(0)-head {
+		return false
+	}
+	before := b.effectiveUsedLocked()
+	b.replayFutureUsed.Store(future - bytes)
+	b.replayHeadUsed.Store(head + bytes)
+	after := b.effectiveUsedLocked()
+	if before > after {
+		if b.parent != nil {
+			b.parent.Release(before - after)
+		}
+		b.signalChangedLocked()
+	}
+	return true
+}
+
 // ReleaseReplayHead returns replay-head bytes to the acquisition budget.
 func (b *AcquisitionBudget) ReleaseReplayHead(bytes uint64) {
 	b.releaseCategory(acquisitionCategoryReplayHead, bytes)

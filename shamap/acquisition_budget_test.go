@@ -164,3 +164,42 @@ func TestAcquisitionBudgetLocalAndParentWakeOnProtectedRelease(t *testing.T) {
 		t.Fatal("close rejected after protected release")
 	}
 }
+
+func TestAcquisitionBudgetPromotesReplayAtCapacity(t *testing.T) {
+	const mib = uint64(1 << 20)
+	parent := NewAcquisitionBudget(768 * mib)
+	child, err := NewAcquisitionBudgetWithParent(768*mib, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !child.TryReserveReplay(256*mib) || child.TryReserveReplayHead(256*mib) {
+		t.Fatal("fixture must fill the pool and reject duplicate ownership")
+	}
+	before := child.Snapshot()
+	wake := child.Changed()
+	if !child.PromoteReplayHead(256 * mib) {
+		t.Fatal("promotion of existing ownership must fit at full capacity")
+	}
+	if got := child.Snapshot(); got != before {
+		t.Fatalf("ownership transfer changed retained bytes: before=%+v after=%+v", before, got)
+	}
+	if got := parent.Snapshot().Used; got != 640*mib {
+		t.Fatalf("parent committed %d bytes after head promotion, want640MiB", got)
+	}
+	select {
+	case <-wake:
+	default:
+		t.Fatal("promotion did not wake shared-capacity waiters")
+	}
+	if child.PromoteReplayHead(1) {
+		t.Fatal("promotion accepted bytes absent from future ownership")
+	}
+	if !child.TryReserveReplay(128 * mib) {
+		t.Fatal("unused head protection was not returned to shared capacity")
+	}
+	child.ReleaseReplay(128 * mib)
+	child.ReleaseReplayHead(256 * mib)
+	if !child.Close() || parent.Snapshot().Used != 0 {
+		t.Fatal("promotion leaked ownership")
+	}
+}
