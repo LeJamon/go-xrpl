@@ -94,6 +94,51 @@ func TestFullBelowCacheBudgetDeniesAdmissionWithoutChangingGeneration(t *testing
 	}
 }
 
+func TestFullBelowCacheMemoryCommitmentAdmitsSameShardRoots(t *testing.T) {
+	if want := uint64(fullBelowCacheTarget) * (fullBelowEntryBytes + fullBelowStructuralBytes); FullBelowCacheMemoryBytes != want {
+		t.Fatalf("default FullBelow commitment = %d, want %d", FullBelowCacheMemoryBytes, want)
+	}
+
+	defaultBudget := &fullBelowTestBudget{limit: FullBelowCacheMemoryBytes}
+	defaultCache := NewFullBelowCacheWithBudget(defaultBudget)
+	defaultGeneration := defaultCache.Generation()
+	stateRoot := [32]byte{0x00, 0x01}
+	txRoot := [32]byte{0x00, 0x02}
+	defaultCache.Insert(defaultGeneration, stateRoot)
+	defaultCache.Insert(defaultGeneration, txRoot)
+	if !defaultCache.Has(defaultGeneration, stateRoot) || !defaultCache.Has(defaultGeneration, txRoot) {
+		t.Fatal("default FullBelow commitment denied same-shard proof roots")
+	}
+	defaultCache.Close()
+	if got := defaultBudget.Used(); got != 0 {
+		t.Fatalf("default FullBelow commitment leaked charge: %d", got)
+	}
+
+	const targetSize = 8
+	rotationBudget := &fullBelowTestBudget{
+		limit: uint64(targetSize) * (fullBelowEntryBytes + fullBelowStructuralBytes),
+	}
+	cache := newFullBelowCacheWithClockAndBudget(targetSize, time.Hour, time.Now, rotationBudget)
+	generation := cache.Generation()
+	for index := range 4 * targetSize {
+		hash := [32]byte{0x00, byte(index + 3)}
+		cache.Insert(generation, hash)
+		if got := cache.Size(); got > targetSize {
+			t.Fatalf("rotating cache exceeded target after mark %d: %d", index, got)
+		}
+	}
+	if got := rotationBudget.Used(); got > rotationBudget.limit {
+		t.Fatalf("rotating cache exceeded exact commitment: %d > %d", got, rotationBudget.limit)
+	}
+	if got := cache.Stats().Inserts; got != 4*targetSize {
+		t.Fatalf("exact commitment denied a rotation mark: inserts=%d, want %d", got, 4*targetSize)
+	}
+	cache.Close()
+	if got := rotationBudget.Used(); got != 0 {
+		t.Fatalf("rotating cache leaked charge: %d", got)
+	}
+}
+
 func TestFullBelowCacheBudgetConcurrentLifecycle(t *testing.T) {
 	budget := &fullBelowTestBudget{limit: 1 << 20}
 	cache := newFullBelowCacheWithClockAndBudget(512, time.Hour, time.Now, budget)

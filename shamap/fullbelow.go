@@ -12,6 +12,10 @@ const (
 	fullBelowCacheShards     = 16
 	fullBelowEntryBytes      = uint64(64)
 	fullBelowStructuralBytes = uint64(128)
+	// FullBelowCacheMemoryBytes is the fixed working-set commitment for the
+	// default cache, including one structural reservation per retained mark.
+	FullBelowCacheMemoryBytes = uint64(fullBelowCacheTarget) *
+		(fullBelowEntryBytes + fullBelowStructuralBytes)
 	// FullBelowCacheMaxDepth is the deepest level at which durable subtree
 	// completeness proofs are retained. Startup verification uses the same
 	// bound when warming the cache for the first network acquisition.
