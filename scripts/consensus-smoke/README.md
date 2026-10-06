@@ -42,6 +42,11 @@ bash scripts/consensus-smoke/smoke.sh
 The script tears the topology down on exit. Set `KEEP_RUNNING=1` to leave
 containers up after a failure for inspection.
 
+The goxrpl fixture uses a fixed 3 GiB managed-memory allowance. This covers
+its storage and progress reserves independently of runner memory available
+after image builds and startup of the two rippled containers. The allowance
+does not preallocate 3 GiB or cap total process RSS.
+
 ## Knobs
 
 | env var          | default                            | meaning                                       |
