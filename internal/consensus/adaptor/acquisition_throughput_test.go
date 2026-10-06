@@ -2,17 +2,22 @@ package adaptor
 
 import (
 	"context"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,12 +85,53 @@ func TestAcquisitionThroughput_MissingInnerDelayedRepliesKeepWindowFull(t *testi
 		if visitSlice != acquisitionThroughputVisitSlice {
 			name = "tiny_slice"
 		}
-		t.Run(name, func(t *testing.T) { runAcquisitionThroughput(t, visitSlice) })
+		t.Run(name, func(t *testing.T) { runAcquisitionThroughput(t, visitSlice, nil, false) })
 	}
 }
 
-func runAcquisitionThroughput(t *testing.T, visitSlice int64) {
-	fixture := newAcquisitionThroughputFixture(t)
+func TestAcquisitionThroughput_SharedPoolSaturation(t *testing.T) {
+	storageBytes, err := (kvpebble.Options{}).MemoryCommitment(3)
+	require.NoError(t, err)
+	fixedBytes := storageBytes + shamap.DirtyWorkspaceBytes + shamap.FullBelowCacheMemoryBytes +
+		uint64(peermanagement.DefaultInboundRetainedBytes) +
+		uint64(peermanagement.MinimumOutboundRetainedBytes(peermanagement.DefaultConfig().MaxPeers))
+	automatic, err := (config.ResourcesConfig{}).Resolve(11 << 30)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name              string
+		pool, acquisition uint64
+	}{
+		{"512MiB", 4 << 30, 512 << 20},
+		{"2GiB", 4 << 30, 2 << 30},
+		{"automatic", automatic, automatic},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pool := membudget.New(test.pool)
+			fixed, err := pool.NewAccount("fixed_working_sets", fixedBytes, fixedBytes)
+			require.NoError(t, err)
+			require.True(t, fixed.TryReserve(fixedBytes))
+			parent, err := pool.NewAccount("acquisition", 512<<20, test.acquisition)
+			require.NoError(t, err)
+			cache, err := pool.NewAccount("optional_cache", 0, test.pool)
+			require.NoError(t, err)
+			cacheBytes := pool.Snapshot().SharedAvailable
+			require.True(t, cache.TryReserve(cacheBytes))
+			require.Zero(t, pool.Snapshot().SharedAvailable)
+			budget, err := shamap.NewAcquisitionBudgetWithParent(test.acquisition, parent)
+			require.NoError(t, err)
+			runAcquisitionThroughput(t, acquisitionThroughputVisitSlice, budget, true)
+			require.True(t, budget.Close())
+			cache.Release(cacheBytes)
+			fixed.Release(fixedBytes)
+			require.Zero(t, pool.Snapshot().Used)
+			require.Zero(t, pool.Snapshot().InvalidReleases)
+		})
+	}
+}
+
+func runAcquisitionThroughput(t *testing.T, visitSlice int64, budget *shamap.AcquisitionBudget, realDelays bool) {
+	fixture := newAcquisitionThroughputFixture(t, budget)
+	started := time.Now()
 	ledger := fixture.ledger
 	peers := ledger.Peers()
 	require.Len(t, peers, acquisitionThroughputPeers)
@@ -224,6 +270,9 @@ func runAcquisitionThroughput(t *testing.T, visitSlice int64) {
 			})
 			delivery := deliveries[0]
 			deliveries = deliveries[1:]
+			if realDelays && delivery.at > metrics.simulatedElapsed {
+				time.Sleep(delivery.at - metrics.simulatedElapsed)
+			}
 			metrics.simulatedElapsed = delivery.at
 			require.True(t, lane.submit(ledger, acquisitionWorkEvent{
 				kind:   acquisitionWorkData,
@@ -264,7 +313,7 @@ func runAcquisitionThroughput(t *testing.T, visitSlice int64) {
 		require.GreaterOrEqual(t, fullWidthRatio, 0.10, "full-width requests were not sustained")
 	}
 	require.LessOrEqual(t, metrics.maxOutstanding, acquisitionThroughputReserve)
-	require.LessOrEqual(t, metrics.peakBudget, uint64(acquisitionThroughputBudget))
+	require.LessOrEqual(t, metrics.peakBudget, fixture.budget.Snapshot().Limit)
 	require.Greater(t, metrics.useful, 0)
 
 	headerResult, state, tx, err := ledger.Result()
@@ -279,12 +328,16 @@ func runAcquisitionThroughput(t *testing.T, visitSlice int64) {
 	require.Zero(t, fixture.budget.Snapshot().Used)
 	require.LessOrEqual(t, fixture.budget.Snapshot().Peak, fixture.budget.Snapshot().Limit)
 
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	elapsed := time.Since(started)
+	t.Logf("wall_elapsed=%s useful_nodes_per_second=%.0f traversal_visits=%d heap_alloc_bytes=%d heap_sys_bytes=%d", elapsed, float64(metrics.useful)/elapsed.Seconds(), final.StateNodesDescended, memory.HeapAlloc, memory.HeapSys)
 	reads := final.StateDurableReads
 	usefulPerReply := float64(metrics.useful) / float64(max(1, metrics.replies))
 	t.Logf("missing-inner visit_slice=%d leaves=%d withheld_inner=%d withheld_leaf=%d requests=%d requested_ids=%d mean_request_width=%.1f full_width_ratio=%.2f partial_retries=%d protected_old_delivery=%d replies=%d useful=%d useful/reply=%.1f durable_reads=%d simulated_rtt=%s simulated_elapsed=%s max_request_width=%d full_width_requests=%d max_peer_occupancy=%d max_outstanding=%d budget_peak=%d", visitSlice, fixture.withheldLeaf, fixture.withheldInner, fixture.withheldLeaf, metrics.requests, metrics.requestedIDs, meanRequestWidth, fullWidthRatio, metrics.partialRetries, metrics.protectedOldDelivery, metrics.replies, metrics.useful, usefulPerReply, reads, acquisitionThroughputSimulatedRTT, metrics.simulatedElapsed, metrics.maxRequestWidth, metrics.fullWidthRequests, metrics.maxRequestPeers, metrics.maxOutstanding, metrics.peakBudget)
 }
 
-func newAcquisitionThroughputFixture(t *testing.T) *acquisitionThroughputFixture {
+func newAcquisitionThroughputFixture(t *testing.T, budget *shamap.AcquisitionBudget) *acquisitionThroughputFixture {
 	t.Helper()
 	source := shamap.New(shamap.TypeState)
 	for first := byte(0); first < 16; first++ {
@@ -339,6 +392,7 @@ func newAcquisitionThroughputFixture(t *testing.T) *acquisitionThroughputFixture
 	require.Greater(t, fixture.withheldInner, acquisitionThroughputPeers)
 
 	base := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	var stored []shamap.FlushEntry
 	require.NoError(t, source.StoreDirty(func(entries []shamap.FlushEntry) error {
 		for _, entry := range entries {
@@ -353,7 +407,10 @@ func newAcquisitionThroughputFixture(t *testing.T) *acquisitionThroughputFixture
 	h := header.LedgerHeader{LedgerIndex: 2043, AccountHash: root}
 	headerData := header.AddRaw(h, false)
 	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
-	fixture.budget = shamap.NewAcquisitionBudget(acquisitionThroughputBudget)
+	fixture.budget = budget
+	if fixture.budget == nil {
+		fixture.budget = shamap.NewAcquisitionBudget(acquisitionThroughputBudget)
+	}
 	peers := []uint64{11, 12, 13, 14, 15, 16}
 	fixture.ledger = inbound.New(ledgerHash, h.LedgerIndex, peers[0], serveTestLogger(),
 		inbound.WithFamily(base), inbound.WithAcquisitionBudget(fixture.budget))
