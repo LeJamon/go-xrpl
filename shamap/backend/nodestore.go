@@ -27,53 +27,81 @@ type NodeStore struct {
 	minimum   atomic.Uint32
 }
 
+// NodeStoreOptions configures optional node-owned cache admission. A nil
+// account preserves the standalone cache defaults used by existing callers.
+type NodeStoreOptions struct {
+	CacheMemoryBudget shamap.CacheMemoryBudget
+}
+
 var _ shamap.Family = (*NodeStore)(nil)
 
 // New returns a SHAMap backend backed by db.
-func New(db nodestore.Database) *NodeStore {
-	return &NodeStore{db: db, fullBelow: shamap.NewFullBelowCache()}
+func New(db nodestore.Database, options ...NodeStoreOptions) *NodeStore {
+	var budget shamap.CacheMemoryBudget
+	if len(options) != 0 {
+		budget = options[0].CacheMemoryBudget
+	}
+	return &NodeStore{db: db, fullBelow: shamap.NewFullBelowCacheWithBudget(budget)}
 }
 
 // NewMemory returns a backend backed by an in-memory NodeStore.
-func NewMemory() *NodeStore {
+func NewMemory(options ...NodeStoreOptions) *NodeStore {
 	store := memorydb.New()
+	var cacheBudget shamap.CacheMemoryBudget
+	if len(options) != 0 {
+		cacheBudget = options[0].CacheMemoryBudget
+	}
 	db, err := nodestore.NewKVDatabase(store, nodestore.DatabaseConfig{
 		PositiveCache: nodestore.CacheConfig{
-			Enabled:    true,
-			MaxEntries: 2000,
-			TTL:        time.Hour,
+			Enabled:      true,
+			MaxEntries:   2000,
+			TTL:          time.Hour,
+			MemoryBudget: cacheBudget,
 		},
 	})
 	if err != nil {
 		panic("construct in-memory nodestore: " + err.Error())
 	}
-	return New(db)
+	return New(db, options...)
 }
 
 // OpenPebble opens a persistent Pebble-backed NodeStore.
 //
 // blockCacheMB sizes Pebble's block cache in MiB. nodeCacheItems bounds the
 // decoded-node cache by entry count.
-func OpenPebble(path string, blockCacheMB, nodeCacheItems int) (*NodeStore, error) {
-	return openPebble(path, blockCacheMB, nodeCacheItems, false)
+func OpenPebble(
+	path string,
+	blockCacheMB, nodeCacheItems int,
+	options ...NodeStoreOptions,
+) (*NodeStore, error) {
+	return openPebble(path, blockCacheMB, nodeCacheItems, false, options...)
 }
 
 // OpenPebbleReadOnly opens an existing persistent Pebble-backed NodeStore for
 // concurrent readers.
-func OpenPebbleReadOnly(path string, blockCacheMB, nodeCacheItems int) (*NodeStore, error) {
-	return openPebble(path, blockCacheMB, nodeCacheItems, true)
+func OpenPebbleReadOnly(
+	path string,
+	blockCacheMB, nodeCacheItems int,
+	options ...NodeStoreOptions,
+) (*NodeStore, error) {
+	return openPebble(path, blockCacheMB, nodeCacheItems, true, options...)
 }
 
-func openPebble(path string, blockCacheMB, nodeCacheItems int, readOnly bool) (*NodeStore, error) {
-	options, err := kvpebble.OptionsFromMiB(int64(blockCacheMB), kvpebble.DefaultMaxOpenFiles)
+func openPebble(
+	path string,
+	blockCacheMB, nodeCacheItems int,
+	readOnly bool,
+	options ...NodeStoreOptions,
+) (*NodeStore, error) {
+	pebbleOptions, err := kvpebble.OptionsFromMiB(int64(blockCacheMB), kvpebble.DefaultMaxOpenFiles)
 	if err != nil {
 		return nil, err
 	}
 	var store *kvpebble.Store
 	if readOnly {
-		store, err = kvpebble.NewReadOnly(path, options)
+		store, err = kvpebble.NewReadOnly(path, pebbleOptions)
 	} else {
-		store, err = kvpebble.New(path, options)
+		store, err = kvpebble.New(path, pebbleOptions)
 	}
 	if err != nil {
 		return nil, err
@@ -85,11 +113,18 @@ func openPebble(path string, blockCacheMB, nodeCacheItems int, readOnly bool) (*
 	} else {
 		dbConfig.PositiveCache = nodestore.CacheConfig{}
 	}
+	var cacheBudget shamap.CacheMemoryBudget
+	if len(options) != 0 {
+		cacheBudget = options[0].CacheMemoryBudget
+		if dbConfig.PositiveCache.Enabled {
+			dbConfig.PositiveCache.MemoryBudget = cacheBudget
+		}
+	}
 	db, err := nodestore.NewKVDatabase(store, dbConfig)
 	if err != nil {
 		return nil, errors.Join(err, store.Close())
 	}
-	return New(db), nil
+	return New(db, NodeStoreOptions{CacheMemoryBudget: cacheBudget}), nil
 }
 
 // FullBelowCache returns the cache shared by every SHAMap using this backend.
@@ -216,5 +251,6 @@ func (f *NodeStore) BeginPrune() func() {
 
 // Close closes the underlying NodeStore.
 func (f *NodeStore) Close() error {
+	f.fullBelow.Close()
 	return f.db.Close()
 }

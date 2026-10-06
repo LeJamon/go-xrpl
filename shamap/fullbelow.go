@@ -10,6 +10,8 @@ const (
 	fullBelowCacheTarget     = 1 << 19
 	fullBelowCacheExpiration = 10 * time.Minute
 	fullBelowCacheShards     = 16
+	fullBelowEntryBytes      = uint64(64)
+	fullBelowStructuralBytes = uint64(128)
 	// FullBelowCacheMaxDepth is the deepest level at which durable subtree
 	// completeness proofs are retained. Startup verification uses the same
 	// bound when warming the cache for the first network acquisition.
@@ -27,16 +29,28 @@ type FullBelowStats struct {
 	Sweeps     uint64
 }
 
-type fullBelowShard struct {
-	mu           sync.Mutex
-	targetSize   int
-	currentLimit int
-	current      map[[32]byte]struct{}
-	previous     map[[32]byte]struct{}
-	lastRotation time.Time
+// CacheMemoryBudget is the narrow admission contract used by the optional
+// shared FullBelow cache. The cache owns a reservation while it retains a
+// completeness mark and releases it when that mark is evicted or the cache is
+// closed.
+type CacheMemoryBudget interface {
+	TryReserve(uint64) bool
+	Release(uint64)
 }
 
-func newFullBelowShard(targetSize int, now time.Time) fullBelowShard {
+type fullBelowShard struct {
+	mu               sync.Mutex
+	targetSize       int
+	currentLimit     int
+	current          map[[32]byte]struct{}
+	previous         map[[32]byte]struct{}
+	lastRotation     time.Time
+	budget           CacheMemoryBudget
+	structuralSlots  int
+	structuralCharge uint64
+}
+
+func newFullBelowShard(targetSize int, now time.Time, budget CacheMemoryBudget) fullBelowShard {
 	limit := targetSize / 2
 	if limit == 0 {
 		limit = 1
@@ -47,7 +61,49 @@ func newFullBelowShard(targetSize int, now time.Time) fullBelowShard {
 		current:      make(map[[32]byte]struct{}),
 		previous:     make(map[[32]byte]struct{}),
 		lastRotation: now,
+		budget:       budget,
 	}
+}
+
+func (s *fullBelowShard) releaseEntriesLocked(count int) {
+	if s.budget != nil && count > 0 {
+		s.budget.Release(uint64(count) * fullBelowEntryBytes)
+	}
+}
+
+func (s *fullBelowShard) clearMapLocked(entries map[[32]byte]struct{}) int {
+	count := len(entries)
+	clear(entries)
+	s.releaseEntriesLocked(count)
+	return count
+}
+
+func (s *fullBelowShard) dropMapsLocked() {
+	entries := len(s.current) + len(s.previous)
+	s.releaseEntriesLocked(entries)
+	if s.budget != nil && s.structuralCharge != 0 {
+		s.budget.Release(s.structuralCharge)
+	}
+	s.current = nil
+	s.previous = nil
+	s.structuralSlots = 0
+	s.structuralCharge = 0
+}
+
+func (s *fullBelowShard) reserveEntryLocked() bool {
+	charge := fullBelowEntryBytes
+	structural := uint64(0)
+	if s.structuralSlots < s.targetSize {
+		structural = fullBelowStructuralBytes
+	}
+	if s.budget != nil && !s.budget.TryReserve(charge+structural) {
+		return false
+	}
+	if structural != 0 {
+		s.structuralSlots++
+		s.structuralCharge += structural
+	}
+	return true
 }
 
 func (s *fullBelowShard) advance(now time.Time, targetAge time.Duration) int {
@@ -57,8 +113,8 @@ func (s *fullBelowShard) advance(now time.Time, targetAge time.Duration) int {
 	}
 	if now.Sub(s.lastRotation) >= targetAge {
 		evicted := len(s.current) + len(s.previous)
-		clear(s.current)
-		clear(s.previous)
+		s.clearMapLocked(s.current)
+		s.clearMapLocked(s.previous)
 		s.lastRotation = now
 		return evicted
 	}
@@ -69,7 +125,7 @@ func (s *fullBelowShard) advance(now time.Time, targetAge time.Duration) int {
 		return 0
 	}
 	evicted := len(s.previous)
-	clear(s.previous)
+	s.clearMapLocked(s.previous)
 	s.previous, s.current = s.current, s.previous
 	s.lastRotation = now
 	return evicted
@@ -81,12 +137,12 @@ func (s *fullBelowShard) makeRoom(now time.Time) int {
 	}
 	if s.targetSize == 1 {
 		evicted := len(s.current)
-		clear(s.current)
+		s.clearMapLocked(s.current)
 		s.lastRotation = now
 		return evicted
 	}
 	evicted := len(s.previous)
-	clear(s.previous)
+	s.clearMapLocked(s.previous)
 	s.previous, s.current = s.current, s.previous
 	s.lastRotation = now
 	return evicted
@@ -97,7 +153,8 @@ func (s *fullBelowShard) makeRoom(now time.Time) int {
 // rippled's soft proportional-age target permits a fresh acquisition burst to
 // retain millions of entries before they become old enough to sweep.
 type FullBelowCache struct {
-	gen atomic.Uint32
+	gen    atomic.Uint32
+	closed atomic.Bool
 
 	// walks prevents a generation reset from overtaking an in-flight walk.
 	walks   sync.RWMutex
@@ -123,10 +180,23 @@ type FullBelowCache struct {
 // NewFullBelowCache returns a cache at generation 1. Generation 0 is reserved
 // for nodes that have never been proven full-below.
 func NewFullBelowCache() *FullBelowCache {
-	return newFullBelowCacheWithClock(
+	return newFullBelowCacheWithClockAndBudget(
 		fullBelowCacheTarget,
 		fullBelowCacheExpiration,
 		time.Now,
+		nil,
+	)
+}
+
+// NewFullBelowCacheWithBudget constructs the default cache with an optional
+// node-wide admission account. Admission failures simply leave a subtree
+// eligible for recomputation; they never affect map correctness.
+func NewFullBelowCacheWithBudget(budget CacheMemoryBudget) *FullBelowCache {
+	return newFullBelowCacheWithClockAndBudget(
+		fullBelowCacheTarget,
+		fullBelowCacheExpiration,
+		time.Now,
+		budget,
 	)
 }
 
@@ -134,6 +204,15 @@ func newFullBelowCacheWithClock(
 	targetSize int,
 	targetAge time.Duration,
 	now func() time.Time,
+) *FullBelowCache {
+	return newFullBelowCacheWithClockAndBudget(targetSize, targetAge, now, nil)
+}
+
+func newFullBelowCacheWithClockAndBudget(
+	targetSize int,
+	targetAge time.Duration,
+	now func() time.Time,
+	budget CacheMemoryBudget,
 ) *FullBelowCache {
 	if targetSize <= 0 {
 		panic("shamap: FullBelowCache target size must be positive")
@@ -154,7 +233,7 @@ func newFullBelowCacheWithClock(
 		if i < remainder {
 			shardTarget++
 		}
-		shards[i] = newFullBelowShard(shardTarget, createdAt)
+		shards[i] = newFullBelowShard(shardTarget, createdAt, budget)
 	}
 
 	c := &FullBelowCache{
@@ -197,8 +276,8 @@ func (c *FullBelowCache) BeginMutation() func() {
 	for i := range c.shards {
 		shard := &c.shards[i]
 		shard.mu.Lock()
-		clear(shard.current)
-		clear(shard.previous)
+		shard.clearMapLocked(shard.current)
+		shard.clearMapLocked(shard.previous)
 		shard.lastRotation = resetAt
 		shard.mu.Unlock()
 	}
@@ -232,8 +311,8 @@ func (c *FullBelowCache) EnsureDurableFingerprint(fingerprint [32]byte) uint32 {
 	for i := range c.shards {
 		shard := &c.shards[i]
 		shard.mu.Lock()
-		clear(shard.current)
-		clear(shard.previous)
+		shard.clearMapLocked(shard.current)
+		shard.clearMapLocked(shard.previous)
 		shard.lastRotation = resetAt
 		shard.mu.Unlock()
 	}
@@ -288,8 +367,14 @@ func (c *FullBelowCache) shard(hash [32]byte) *fullBelowShard {
 
 // Has reports whether hash is proven full-below and refreshes its recency.
 func (c *FullBelowCache) Has(generation uint32, hash [32]byte) bool {
+	if c == nil {
+		return false
+	}
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
+	if c.closed.Load() {
+		return false
+	}
 	if c.gen.Load() != generation {
 		return false
 	}
@@ -326,8 +411,14 @@ func (c *FullBelowCache) Has(generation uint32, hash [32]byte) bool {
 // Insert records hash as full-below. Existing marks are promoted to the
 // current generation and scan-cold marks are discarded on rotation.
 func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
+	if c == nil {
+		return
+	}
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
+	if c.closed.Load() {
+		return
+	}
 	if c.gen.Load() != generation {
 		return
 	}
@@ -347,11 +438,18 @@ func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
 	}
 	if _, ok := shard.previous[hash]; ok {
 		delete(shard.previous, hash)
+		if evicted := shard.makeRoom(now); evicted != 0 {
+			c.evictions.Add(uint64(evicted))
+		}
 	} else {
+		if evicted := shard.makeRoom(now); evicted != 0 {
+			c.evictions.Add(uint64(evicted))
+		}
+		if !shard.reserveEntryLocked() {
+			shard.mu.Unlock()
+			return
+		}
 		c.inserts.Add(1)
-	}
-	if evicted := shard.makeRoom(now); evicted != 0 {
-		c.evictions.Add(uint64(evicted))
 	}
 	shard.current[hash] = struct{}{}
 	shard.mu.Unlock()
@@ -363,9 +461,37 @@ func cacheFullBelow(c *FullBelowCache, generation uint32, hash [32]byte, depth i
 	}
 }
 
+// Close drops both map generations and returns all cache-owned reservations.
+// It is idempotent and safe to call after Clear or a prior Close.
+func (c *FullBelowCache) Close() {
+	if c == nil {
+		return
+	}
+	c.walks.Lock()
+	c.stateMu.Lock()
+	if !c.closed.Load() {
+		for i := range c.shards {
+			shard := &c.shards[i]
+			shard.mu.Lock()
+			shard.dropMapsLocked()
+			shard.mu.Unlock()
+		}
+		c.closed.Store(true)
+	}
+	c.stateMu.Unlock()
+	c.walks.Unlock()
+}
+
 // Sweep advances the time-based generations without scanning every entry.
 func (c *FullBelowCache) Sweep() {
+	if c == nil {
+		return
+	}
 	c.stateMu.RLock()
+	if c.closed.Load() {
+		c.stateMu.RUnlock()
+		return
+	}
 	now := c.now()
 	for i := range c.shards {
 		shard := &c.shards[i]
@@ -381,8 +507,14 @@ func (c *FullBelowCache) Sweep() {
 
 // Size reports the number of recorded hashes.
 func (c *FullBelowCache) Size() int {
+	if c == nil {
+		return 0
+	}
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
+	if c.closed.Load() {
+		return 0
+	}
 	size := 0
 	for i := range c.shards {
 		shard := &c.shards[i]
@@ -395,6 +527,9 @@ func (c *FullBelowCache) Size() int {
 
 // Stats returns cache size, target and cumulative activity counters.
 func (c *FullBelowCache) Stats() FullBelowStats {
+	if c == nil {
+		return FullBelowStats{}
+	}
 	return FullBelowStats{
 		Size:       c.Size(),
 		TargetSize: c.targetSize,

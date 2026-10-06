@@ -16,6 +16,10 @@ type CacheConfig struct {
 	Enabled    bool
 	MaxEntries int
 	TTL        time.Duration
+	// MemoryBudget optionally accounts for positive-cache residency in a
+	// node-owned shared allowance. It is valid only for PositiveCache. A nil
+	// budget preserves standalone bounded cache behavior.
+	MemoryBudget MemoryBudget
 }
 
 // DatabaseConfig configures the positive and negative NodeStore caches.
@@ -27,9 +31,10 @@ type DatabaseConfig struct {
 type nodeCacheAccess interface {
 	Get(Hash256) (*Node, bool)
 	Put(*Node)
-	putOwned(*Node)
+	putOwned(*Node) bool
 	Remove(Hash256)
 	Clear()
+	Close()
 	Size() int
 	Sweep() int
 }
@@ -58,8 +63,11 @@ func (c DatabaseConfig) validate() error {
 }
 
 func validateCacheConfig(name string, config CacheConfig) error {
+	if name != "positive" && config.MemoryBudget != nil {
+		return fmt.Errorf("%w: %s cache does not support memory admission", ErrInvalidConfig, name)
+	}
 	if !config.Enabled {
-		if config.MaxEntries != 0 || config.TTL != 0 {
+		if config.MaxEntries != 0 || config.TTL != 0 || config.MemoryBudget != nil {
 			return fmt.Errorf("%w: %s cache is disabled but configured", ErrInvalidConfig, name)
 		}
 		return nil
@@ -147,7 +155,11 @@ func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatab
 	}
 	database.syncGate <- struct{}{}
 	if config.PositiveCache.Enabled {
-		database.cache = newNodeCache(config.PositiveCache.MaxEntries, config.PositiveCache.TTL)
+		database.cache = newNodeCache(
+			config.PositiveCache.MaxEntries,
+			config.PositiveCache.TTL,
+			config.PositiveCache.MemoryBudget,
+		)
 	}
 	if config.NegativeCache.Enabled {
 		database.negativeCache = newNegativeCache(config.NegativeCache.TTL, config.NegativeCache.MaxEntries)
@@ -481,7 +493,7 @@ func (d *KVDatabase) Close() error {
 	}
 	d.closed = true
 	if d.cache != nil {
-		d.cache.Clear()
+		d.cache.Close()
 	}
 	if d.negativeCache != nil {
 		d.negativeCache.Clear()
