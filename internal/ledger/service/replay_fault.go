@@ -206,7 +206,7 @@ func (s *Service) WithValidatorDuty(fn func() error) error {
 // ApplyReplay keeps failures out of the canonical ledger and latches the duty
 // gate before returning control to an acquisition fallback.
 func (s *Service) ApplyReplay(ctx context.Context, replay *inbound.ReplayDelta, cfg tx.EngineConfig, authenticated bool) (*ledger.Ledger, error) {
-	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return nil, err
 	}

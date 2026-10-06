@@ -289,6 +289,7 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
 	s.lifecycleMu.Unlock()
+	s.persistenceWorker.stopAdmissions()
 	if replayRecoveryCancel != nil {
 		replayRecoveryCancel()
 	}
@@ -305,6 +306,7 @@ func (s *Service) Stop() {
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()
+	s.clearRelayCache()
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()
 	s.mu.Unlock()
@@ -332,6 +334,7 @@ func (p *persistenceWorker) runPersistWorker() {
 			p.service.runPersistJob(job)
 			p.persistMu.Lock()
 			p.persistActive = nil
+			p.signalCapacityLocked()
 			p.persistMu.Unlock()
 			continue
 		}
@@ -498,11 +501,17 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		}
 	}
 
-	if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
-		return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
-	}
-	if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
-		return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
+	if s.config.PersistenceMemory != nil {
+		if err := l.StoreDirtyBatched(ctx, s.config.PersistenceMemory, store(nodestore.NodeAccount), store(nodestore.NodeTransaction)); err != nil {
+			return fmt.Errorf("store ledger %d delta: %w", seq, err)
+		}
+	} else {
+		if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
+			return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
+		}
+		if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
+			return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
+		}
 	}
 
 	headerData := l.SerializeHeader()

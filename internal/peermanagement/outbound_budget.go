@@ -3,7 +3,9 @@ package peermanagement
 import "sync"
 
 type outboundBudget struct {
-	mu sync.Mutex
+	mu             sync.Mutex
+	parent         MemoryBudget
+	criticalParent MemoryBudget
 
 	maxBytes            int64
 	generalLimit        int64
@@ -68,6 +70,15 @@ func (a *outboundBudgetAccount) reserve(bytes int64, critical bool) bool {
 	if generalDelta > b.generalLimit-b.generalBytes {
 		return false
 	}
+	if b.parent != nil && !b.parent.TryReserve(uint64(generalDelta)) {
+		return false
+	}
+	if b.criticalParent != nil && !b.criticalParent.TryReserve(uint64(bytes-generalDelta)) {
+		if b.parent != nil {
+			b.parent.Release(uint64(generalDelta))
+		}
+		return false
+	}
 
 	b.retainedBytes += bytes
 	b.generalBytes += generalDelta
@@ -94,6 +105,10 @@ func (a *outboundBudgetAccount) release(bytes int64, critical bool) {
 
 func (a *outboundBudgetAccount) releaseLocked(bytes int64, critical bool) {
 	b := a.budget
+	if bytes < 0 || (critical && bytes > a.criticalBytes) || (!critical && bytes > a.nonCriticalBytes) {
+		panic("peermanagement: outbound release exceeds reservation")
+	}
+	previousGeneral := b.generalBytes
 	if critical && a.hasReserve {
 		oldOverflow := max(int64(0), a.criticalBytes-int64(outboundCriticalByteReserve))
 		a.criticalBytes -= bytes
@@ -107,6 +122,13 @@ func (a *outboundBudgetAccount) releaseLocked(bytes int64, critical bool) {
 		b.generalBytes -= bytes
 	}
 	b.retainedBytes -= bytes
+	general := previousGeneral - b.generalBytes
+	if b.parent != nil {
+		b.parent.Release(uint64(general))
+	}
+	if b.criticalParent != nil {
+		b.criticalParent.Release(uint64(bytes - general))
+	}
 }
 
 func (a *outboundBudgetAccount) close() {

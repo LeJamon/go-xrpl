@@ -22,7 +22,7 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
-	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return 0, err
 	}

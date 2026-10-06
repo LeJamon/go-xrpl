@@ -72,9 +72,11 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 
 // Config holds configuration for the LedgerService
 type Config struct {
-	ReplayFaultPath string
-	Standalone      bool
-	Startup         StartupConfig
+	RelayMemory       MemoryBudget
+	PersistenceMemory shamap.DirtyMemoryBudget
+	ReplayFaultPath   string
+	Standalone        bool
+	Startup           StartupConfig
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string
@@ -290,13 +292,14 @@ type Service struct {
 	// current open ledger or transaction queue. Reduce-relay announcements may
 	// arrive during that handoff, so the cache spans the request horizon while
 	// remaining explicitly bounded.
-	relayTxCacheMu    sync.Mutex
-	relayTxCache      map[[32]byte]relayTxRecord
-	relayTxCacheOrder []relayTxOrderEntry
-	relayTxCacheHead  int
-	relayTxCacheBytes int64
-	relayTxCacheLimit int64
-	relayTxCacheNext  uint64
+	relayTxCacheMu                sync.Mutex
+	relayTxCache                  map[[32]byte]relayTxRecord
+	relayTxCacheOrder             []relayTxOrderEntry
+	relayTxCacheHead              int
+	relayTxCacheBytes             int64
+	relayTxCacheLimit             int64
+	relayTxCacheNext              uint64
+	relayTxCacheStructureReserved bool
 
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
@@ -1384,12 +1387,16 @@ func (s *Service) rememberRelayTransaction(hash [32]byte, blob []byte, deferred 
 	if int64(len(blob)) > limit {
 		return
 	}
+	if !s.reserveRelayCacheLocked(uint64(len(blob))) {
+		return
+	}
 	if s.relayTxCache == nil {
 		s.relayTxCache = make(map[[32]byte]relayTxRecord)
 	}
 	orderID := uint64(0)
 	if existing, exists := s.relayTxCache[hash]; exists {
 		s.relayTxCacheBytes -= int64(len(existing.blob))
+		s.releaseRelayCachePayloadLocked(uint64(len(existing.blob)))
 		orderID = existing.orderID
 	} else {
 		s.relayTxCacheNext++
@@ -1413,6 +1420,7 @@ func (s *Service) rememberRelayTransaction(hash [32]byte, blob []byte, deferred 
 		if record, stillPresent := s.relayTxCache[old.hash]; stillPresent && record.orderID == old.id {
 			s.relayTxCacheBytes -= int64(len(record.blob))
 			delete(s.relayTxCache, old.hash)
+			s.releaseRelayCachePayloadLocked(uint64(len(record.blob)))
 		}
 	}
 	s.compactRelayCacheOrderLocked()
@@ -1428,6 +1436,7 @@ func (s *Service) relayCacheGet(hash [32]byte) (blob []byte, included, deferred,
 	if time.Since(record.seenAt) >= relayTxCacheTTL {
 		delete(s.relayTxCache, hash)
 		s.relayTxCacheBytes -= int64(len(record.blob))
+		s.releaseRelayCachePayloadLocked(uint64(len(record.blob)))
 		s.compactRelayCacheOrderLocked()
 		return nil, false, false, false
 	}
@@ -1439,9 +1448,14 @@ func (s *Service) relayCacheGet(hash [32]byte) (blob []byte, included, deferred,
 
 func (s *Service) compactRelayCacheOrderLocked() {
 	if len(s.relayTxCache) == 0 {
+		s.relayTxCache = nil
 		s.relayTxCacheOrder = nil
 		s.relayTxCacheHead = 0
 		s.relayTxCacheBytes = 0
+		if s.relayTxCacheStructureReserved {
+			s.config.RelayMemory.Release(relayCacheStructureBytes)
+			s.relayTxCacheStructureReserved = false
+		}
 		return
 	}
 	activeOrder := len(s.relayTxCacheOrder) - s.relayTxCacheHead

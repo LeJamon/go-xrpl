@@ -1,9 +1,31 @@
 package ledger
 
 import (
+	"context"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+// StoreDirtyBatched bounds temporary copies while persisting both ledger trees.
+func (l *Ledger) StoreDirtyBatched(ctx context.Context, budget shamap.DirtyMemoryBudget, stateStore, txStore func([]shamap.FlushEntry) error) error {
+	l.mu.RLock()
+	stateMap, txMap := l.stateMap, l.txMap
+	if l.state != StateOpen {
+		l.mu.RUnlock()
+	} else {
+		defer l.mu.RUnlock()
+	}
+	if stateMap != nil {
+		if err := stateMap.StoreDirtyBatched(ctx, budget, stateStore); err != nil {
+			return err
+		}
+	}
+	if txMap != nil {
+		return txMap.StoreDirtyBatched(ctx, budget, txStore)
+	}
+	return nil
+}
 
 // StateMapSnapshot returns a mutable snapshot of the state map (e.g. for chaining
 // one block's output into the next during continuous replay).

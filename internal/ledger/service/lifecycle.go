@@ -26,7 +26,7 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
 func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (sequence uint32, retErr error) {
-	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -422,7 +422,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 }
 
 func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func()) error {
-	releaseAdmission, err := s.AcquireStateAdmission(context.Background())
+	releaseAdmission, err := s.acquireLedgerWork(context.Background())
 	if err != nil {
 		return err
 	}
@@ -612,7 +612,7 @@ func (s *Service) PromoteStoredValidatedLedgerAt(seq uint32, expectedHash [32]by
 }
 
 func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
-	releaseAdmission, err := s.AcquireStateAdmission(context.Background())
+	releaseAdmission, err := s.acquireLedgerWork(context.Background())
 	if err != nil {
 		return
 	}
@@ -960,7 +960,7 @@ func (s *Service) IsFastLoadProvisional() bool {
 // changing the node's closed/open ledger frontier. Consensus may later select
 // the stored ledger as its preferred parent.
 func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return err
 	}
@@ -987,7 +987,7 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 // BootstrapLedgerWithState stores an acquired ledger and reports whether the
 // node still needs an initial network-ledger switch. Consensus owns that switch.
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
-	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -1010,7 +1010,7 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated
 // history without changing the node's current ledger frontiers.
 func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	releaseAdmission, err := s.AcquireStateAdmission(ctx)
+	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return err
 	}
