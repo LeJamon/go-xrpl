@@ -195,9 +195,8 @@ func (a *Account) Release(bytes uint64) {
 	}
 }
 
-// TransferTo atomically moves bytes between accounts in one pool. It avoids a
-// transient parent-capacity failure and wakes no waiters because total pool
-// usage is unchanged.
+// TransferTo atomically moves bytes between accounts in one pool and wakes
+// waiters if the transfer frees shared capacity.
 func (a *Account) TransferTo(dst *Account, bytes uint64) bool {
 	if a == nil || dst == nil || a.pool == nil || dst.pool != a.pool {
 		return false
@@ -258,11 +257,7 @@ type AccountSnapshot struct {
 	InvalidReleases uint64
 }
 
-// AccountStats is a descriptive alias for AccountSnapshot used by node
-// diagnostics.
-type AccountStats = AccountSnapshot
-
-// Snapshot is a point-in-time view of a Pool. Accounts are sorted by name and
+// PoolSnapshot is a point-in-time view of a Pool. Accounts are sorted by name and
 // limited by the construction-time account bound, making diagnostic output
 // deterministic and bounded.
 type PoolSnapshot struct {
@@ -282,7 +277,7 @@ type PoolSnapshot struct {
 	Subscriptions   uint64
 	Released        uint64
 	InvalidReleases uint64
-	Accounts        []AccountStats
+	Accounts        []AccountSnapshot
 }
 
 // Snapshot returns a consistent copy of the pool and all currently registered
@@ -341,10 +336,8 @@ func (a *Account) snapshotLocked() AccountSnapshot {
 	if a.minimum > a.used {
 		unused = a.minimum - a.used
 	}
-	available := uint64(0)
-	if a.maximum >= a.used {
-		available = a.maximum - a.used
-	}
+	shared := a.pool.limit - a.pool.used - a.pool.unusedMinimum
+	available := min(a.maximum-a.used, unused+shared)
 	return AccountSnapshot{
 		Name:            a.name,
 		Minimum:         a.minimum,

@@ -8,7 +8,7 @@ import (
 
 func runtimeMemoryLimit() (uint64, bool) {
 	limit := debug.SetMemoryLimit(-1)
-	if limit <= 0 {
+	if limit < 0 {
 		return 0, false
 	}
 	value := uint64(limit)

@@ -17,7 +17,7 @@ func TestResourcesConfigResolve(t *testing.T) {
 	}{
 		{name: "fixed takes precedence", config: ResourcesConfig{MemoryMB: 64, AvailableMemoryPercent: 90}, available: 1, want: 64 * 1 << 20},
 		{name: "automatic percentage", config: ResourcesConfig{AvailableMemoryPercent: 25}, available: 101, want: 25},
-		{name: "zero uses default", config: ResourcesConfig{}, available: 105, want: 21},
+		{name: "zero uses default", config: ResourcesConfig{}, available: 105, want: 34},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

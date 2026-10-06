@@ -43,17 +43,17 @@ func parseMemAvailable(data []byte) (uint64, error) {
 		if len(fields) < 2 || strings.TrimSuffix(fields[0], ":") != "MemAvailable" {
 			continue
 		}
+		if len(fields) != 3 || fields[2] != "kB" {
+			return 0, errors.New("MemAvailable must contain a count in kB")
+		}
 		value, err := parseUint(fields[1], "MemAvailable")
 		if err != nil {
 			return 0, err
 		}
-		if len(fields) >= 3 && strings.EqualFold(fields[2], "kb") {
-			if value > math.MaxUint64/1024 {
-				return 0, fmt.Errorf("MemAvailable overflows bytes: %s", fields[1])
-			}
-			value *= 1024
+		if value > math.MaxUint64/1024 {
+			return 0, fmt.Errorf("MemAvailable overflows bytes: %s", fields[1])
 		}
-		return value, nil
+		return value * 1024, nil
 	}
 	return 0, errors.New("MemAvailable is missing from /proc/meminfo")
 }
@@ -279,7 +279,7 @@ func cgroupLevelV2(options ProbeOptions, directory string) (uint64, bool, error)
 		remaining = high
 	}
 	if remaining == math.MaxUint64 {
-		return 0, false, nil
+		return remaining, true, nil
 	}
 	if current >= remaining {
 		return 0, true, nil
@@ -314,7 +314,7 @@ func cgroupLevelV1(options ProbeOptions, directory string) (uint64, bool, error)
 		remaining = soft
 	}
 	if remaining == math.MaxUint64 {
-		return 0, false, nil
+		return remaining, true, nil
 	}
 	if current >= remaining {
 		return 0, true, nil

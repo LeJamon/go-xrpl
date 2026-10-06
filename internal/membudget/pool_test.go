@@ -40,6 +40,9 @@ func TestPoolProtectsAccountMinimums(t *testing.T) {
 		t.Fatalf("unexpected availability: %+v", snapshot)
 	}
 	second.Release(30)
+	if first.Snapshot().Available != 0 || second.Snapshot().Available != 30 {
+		t.Fatal("account availability must include only its protected minimum and shared capacity")
+	}
 	if first.TryReserve(1) {
 		t.Fatal("first borrowed second's still-protected minimum")
 	}

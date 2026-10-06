@@ -8,7 +8,7 @@ import (
 const (
 	// DefaultAvailableMemoryPercent is the startup share of measured available
 	// memory used when resources.memory_mb is zero.
-	DefaultAvailableMemoryPercent = 20
+	DefaultAvailableMemoryPercent = 33
 	maxResourcesMemoryMB          = math.MaxUint64 / uint64(bytesPerMiB)
 )
 
