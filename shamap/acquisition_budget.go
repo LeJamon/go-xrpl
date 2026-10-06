@@ -409,6 +409,7 @@ func (b *AcquisitionBudget) TryReserveReplayHead(bytes uint64) bool {
 	return b.tryReserveCategory(acquisitionCategoryReplayHead, bytes)
 }
 
+// ReleaseReplayHead returns replay-head bytes to the acquisition budget.
 func (b *AcquisitionBudget) ReleaseReplayHead(bytes uint64) {
 	b.releaseCategory(acquisitionCategoryReplayHead, bytes)
 }
@@ -418,6 +419,7 @@ func (b *AcquisitionBudget) TryReserveReplayProcessing(bytes uint64) bool {
 	return b.tryReserveCategory(acquisitionCategoryProcessing, bytes)
 }
 
+// ReleaseReplayProcessing returns replay-processing bytes to the acquisition budget.
 func (b *AcquisitionBudget) ReleaseReplayProcessing(bytes uint64) {
 	b.releaseCategory(acquisitionCategoryProcessing, bytes)
 }
@@ -429,6 +431,7 @@ func (b *AcquisitionBudget) TryReserveReplay(bytes uint64) bool {
 	return b.tryReserveCategory(acquisitionCategoryReplayFuture, bytes)
 }
 
+// ReleaseReplay returns retained replay bytes to the acquisition budget.
 func (b *AcquisitionBudget) ReleaseReplay(bytes uint64) {
 	b.releaseCategory(acquisitionCategoryReplayFuture, bytes)
 }

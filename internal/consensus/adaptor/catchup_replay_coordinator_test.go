@@ -8,8 +8,55 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
+
+type countingAcquisitionMemoryAccount struct {
+	mu            sync.Mutex
+	changed       chan struct{}
+	subscriptions int
+}
+
+func (a *countingAcquisitionMemoryAccount) TryReserve(uint64) bool { return true }
+
+func (a *countingAcquisitionMemoryAccount) Release(uint64) {}
+
+func (a *countingAcquisitionMemoryAccount) Changed() <-chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.changed == nil {
+		a.changed = make(chan struct{})
+	}
+	a.subscriptions++
+	return a.changed
+}
+
+func (a *countingAcquisitionMemoryAccount) subscriptionsCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.subscriptions
+}
+
+func TestAcquisitionMemoryChannelsAreCached(t *testing.T) {
+	parent := &countingAcquisitionMemoryAccount{}
+	budget, err := shamap.NewAcquisitionBudgetWithParent(512<<20, parent)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.True(t, budget.Close()) })
+	c := &catchupReplayCoordinator{acquisitionMemory: budget}
+
+	changed := c.acquisitionMemoryChangedChannel()
+	require.NotNil(t, changed)
+	require.Equal(t, changed, c.acquisitionMemoryChangedChannel())
+	local := c.acquisitionMemoryLocalChangedChannel()
+	require.NotNil(t, local)
+	require.Equal(t, local, c.acquisitionMemoryLocalChangedChannel())
+	require.Equal(t, 1, parent.subscriptionsCount(), "parent Changed must be called once while the channel is cached")
+
+	c.notifyAcquisitionMemoryAvailable()
+	require.Equal(t, 2, parent.subscriptionsCount(), "a wake must refresh the parent channel before retry work")
+	require.Equal(t, changed, c.acquisitionMemoryChangedChannel(), "the refreshed channel remains cached for the next select")
+}
 
 func TestCatchupCoordinatorRejectsSameHashRetiredCompletion(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)

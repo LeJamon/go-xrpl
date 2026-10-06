@@ -705,6 +705,11 @@ func (r *Router) Run(ctx context.Context) {
 		if !workLane.canAcceptData() {
 			acqInbox = nil
 		}
+		// Capture the level-triggered channels once per select iteration. The
+		// coordinator replaces them after a wake; calling Changed on every
+		// iteration would register another parent watcher each time.
+		memoryChanged := r.catchupReplay.acquisitionMemoryChangedChannel()
+		memoryLocalChanged := r.catchupReplay.acquisitionMemoryLocalChangedChannel()
 		select {
 		case <-runCtx.Done():
 			return
@@ -759,15 +764,14 @@ func (r *Router) Run(ctx context.Context) {
 			}
 		case <-r.catchupReplay.standardReplayDrainWakeChannel():
 			r.catchupReplay.drainStandardReplayPipeline()
-		case <-r.catchupReplay.acquisitionMemoryChangedChannel():
-			// Shared acquisition capacity is level-triggered. A release wakes
-			// the serialized maintenance path so deferred replay and legacy
-			// work can retry without waiting for the periodic tick.
+		case <-memoryChanged:
+			// Shared acquisition capacity is level-triggered. Retry only work
+			// parked on memory; timer and peer housekeeping stay periodic.
 			r.catchupReplay.notifyAcquisitionMemoryAvailable()
-			r.maintenanceTick()
-		case <-r.catchupReplay.acquisitionMemoryLocalChangedChannel():
+			r.catchupReplay.retryAcquisitionMemoryWaiters()
+		case <-memoryLocalChanged:
 			r.catchupReplay.notifyAcquisitionMemoryAvailable()
-			r.maintenanceTick()
+			r.catchupReplay.retryAcquisitionMemoryWaiters()
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:

@@ -649,6 +649,14 @@ func (l *Ledger) SetMemoryWaiting(waiting bool) {
 	l.mu.Unlock()
 }
 
+// AcquisitionMemoryWaiting reports a retryable wait caused by the shared
+// acquisition byte budget. Persistence waits use a separate terminal path.
+func (l *Ledger) AcquisitionMemoryWaiting() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.memoryWaiting && l.lastScanStatus == shamap.MissingNodesMemory
+}
+
 // markProgressLocked records that a fresh node was attached this interval, so
 // the next OnTimer fire treats the acquisition as progressing rather than
 // timing out (rippled sets progress_ on a useful received node). The

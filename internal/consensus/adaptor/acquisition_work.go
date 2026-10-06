@@ -224,6 +224,30 @@ func (l *acquisitionWorkLane) wakeWaitingLocked(batch *acquisitionWorkBatch) {
 	}
 }
 
+// wakeMemoryWaiters requeues batches whose last reply was retained because
+// applying it exhausted the acquisition memory budget. Other ready or waiting
+// work is left untouched so a budget release cannot trigger unrelated scans.
+func (l *acquisitionWorkLane) wakeMemoryWaiters() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	woken := 0
+	for _, batch := range l.pending {
+		if !batch.waiting {
+			continue
+		}
+		batch.waiting = false
+		l.ready = append(l.ready, batch)
+		woken++
+	}
+	if woken != 0 {
+		l.notifyLocked()
+	}
+	return woken
+}
+
 func (l *acquisitionWorkLane) canAcceptNew() bool {
 	if l == nil {
 		return true

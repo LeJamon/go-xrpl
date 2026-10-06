@@ -64,13 +64,15 @@ type catchupReplayCoordinator struct {
 	fetchTracker *inbound.Tracker
 	fetchPacks   *fetchPackCache
 
-	acquisitionWorkMu       sync.RWMutex
-	acquisitionFamily       shamap.Family
-	acquisitionMemory       *shamap.AcquisitionBudget
-	acquisitionStore        *acquisitionStoreLane
-	acquisitionWork         *acquisitionWorkLane
-	acquisitionMemoryWakeMu sync.RWMutex
-	acquisitionMemoryWake   func()
+	acquisitionWorkMu        sync.RWMutex
+	acquisitionFamily        shamap.Family
+	acquisitionMemory        *shamap.AcquisitionBudget
+	acquisitionMemoryCh      <-chan struct{}
+	acquisitionMemoryLocalCh <-chan struct{}
+	acquisitionStore         *acquisitionStoreLane
+	acquisitionWork          *acquisitionWorkLane
+	acquisitionMemoryWakeMu  sync.RWMutex
+	acquisitionMemoryWake    func()
 
 	catchupMu          sync.Mutex
 	catchup            catchupTarget
@@ -190,6 +192,8 @@ func (c *catchupReplayCoordinator) setAcquisitionMemoryBudgetValue(budget *shama
 		return errors.New("acquisition memory budget still has active owners")
 	}
 	c.acquisitionMemory = budget
+	c.acquisitionMemoryCh = nil
+	c.acquisitionMemoryLocalCh = nil
 	if c.acquisitionStore != nil {
 		c.acquisitionStore.memory = c.acquisitionMemory
 	}
@@ -209,33 +213,48 @@ func (c *catchupReplayCoordinator) closeAcquisitionMemoryBudget() bool {
 	if budget == nil {
 		return true
 	}
-	return budget.Close()
+	if !budget.Close() {
+		return false
+	}
+	c.acquisitionWorkMu.Lock()
+	if c.acquisitionMemory == budget {
+		c.acquisitionMemoryCh = nil
+		c.acquisitionMemoryLocalCh = nil
+	}
+	c.acquisitionWorkMu.Unlock()
+	return true
 }
 
 func (c *catchupReplayCoordinator) acquisitionMemoryChangedChannel() <-chan struct{} {
 	if c == nil {
 		return nil
 	}
-	c.acquisitionWorkMu.RLock()
+	c.acquisitionWorkMu.Lock()
+	defer c.acquisitionWorkMu.Unlock()
 	budget := c.acquisitionMemory
-	c.acquisitionWorkMu.RUnlock()
 	if budget == nil {
 		return nil
 	}
-	return budget.Changed()
+	if c.acquisitionMemoryCh == nil {
+		c.acquisitionMemoryCh = budget.Changed()
+	}
+	return c.acquisitionMemoryCh
 }
 
 func (c *catchupReplayCoordinator) acquisitionMemoryLocalChangedChannel() <-chan struct{} {
 	if c == nil {
 		return nil
 	}
-	c.acquisitionWorkMu.RLock()
+	c.acquisitionWorkMu.Lock()
+	defer c.acquisitionWorkMu.Unlock()
 	budget := c.acquisitionMemory
-	c.acquisitionWorkMu.RUnlock()
 	if budget == nil {
 		return nil
 	}
-	return budget.LocalChanged()
+	if c.acquisitionMemoryLocalCh == nil {
+		c.acquisitionMemoryLocalCh = budget.LocalChanged()
+	}
+	return c.acquisitionMemoryLocalCh
 }
 
 // setAcquisitionMemoryWake installs the serialized callback used by replay
@@ -254,11 +273,49 @@ func (c *catchupReplayCoordinator) notifyAcquisitionMemoryAvailable() {
 	if c == nil {
 		return
 	}
+	// The selected channel has been closed and must not be reused in the next
+	// select. Refresh both views before invoking retry work: a release during
+	// that work must have a channel to close or it could be lost between select
+	// iterations. A single release may close the parent and local channels
+	// together, so refresh both even when only one case was selected.
+	c.acquisitionWorkMu.Lock()
+	c.acquisitionMemoryCh = nil
+	c.acquisitionMemoryLocalCh = nil
+	if budget := c.acquisitionMemory; budget != nil {
+		c.acquisitionMemoryCh = budget.Changed()
+		c.acquisitionMemoryLocalCh = budget.LocalChanged()
+	}
+	c.acquisitionWorkMu.Unlock()
 	c.acquisitionMemoryWakeMu.RLock()
 	wake := c.acquisitionMemoryWake
 	c.acquisitionMemoryWakeMu.RUnlock()
 	if wake != nil {
 		wake()
+	}
+}
+
+// retryAcquisitionMemoryWaiters wakes only inbound work that retained a
+// reply after an acquisition-memory admission miss. Timer and housekeeping
+// work remains on the periodic maintenance path.
+func (c *catchupReplayCoordinator) retryAcquisitionMemoryWaiters() {
+	if c == nil || c.stoppedForShutdown() {
+		return
+	}
+	lane := c.currentAcquisitionWork()
+	if lane != nil {
+		lane.wakeMemoryWaiters()
+	}
+	if c.fetchTracker == nil {
+		return
+	}
+	for _, ledger := range c.fetchTracker.Active() {
+		if !ledger.AcquisitionMemoryWaiting() {
+			continue
+		}
+		if lane != nil && lane.has(ledger) {
+			continue
+		}
+		c.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkContinue})
 	}
 }
 

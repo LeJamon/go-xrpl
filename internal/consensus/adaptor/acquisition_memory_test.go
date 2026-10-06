@@ -298,6 +298,48 @@ func TestAcquisitionWorkMemoryWaitLetsRepliesResume(t *testing.T) {
 	require.False(t, ledger.Snapshot().MemoryWaiting)
 }
 
+func TestAcquisitionWorkMemoryWakeResumesWithoutTimer(t *testing.T) {
+	lane := newAcquisitionWorkLane(1)
+	ledger := inbound.New([32]byte{0xA6}, 16, 7, serveTestLogger())
+	budget := shamap.NewAcquisitionBudget(1)
+	require.True(t, budget.TryReserve(1))
+	calls := 0
+	lane.process = func(_ context.Context, current *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		calls++
+		if calls == 1 {
+			return acquisitionWorkResult{ledger: current, pendingReply: true, err: shamap.ErrAcquisitionMemory}
+		}
+		return acquisitionWorkResult{ledger: current}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
+	first := <-lane.results()
+	require.True(t, first.memoryWait)
+	require.False(t, first.yielded)
+	close(first.ack)
+	require.Eventually(t, func() bool {
+		lane.mu.Lock()
+		defer lane.mu.Unlock()
+		batch := lane.pending[ledger]
+		return batch != nil && batch.waiting
+	}, time.Second, time.Millisecond)
+
+	coordinator := &catchupReplayCoordinator{acquisitionWork: lane, acquisitionMemory: budget}
+	budget.Release(1)
+	require.True(t, budget.Close())
+	coordinator.notifyAcquisitionMemoryAvailable()
+	coordinator.retryAcquisitionMemoryWaiters()
+	select {
+	case next := <-lane.results():
+		require.NoError(t, next.err)
+		require.Same(t, ledger, next.ledger)
+		close(next.ack)
+	case <-time.After(time.Second):
+		t.Fatal("memory release did not resume the retained reply")
+	}
+}
+
 func TestAcquisitionMemoryCheckpointFailureIsPersistenceFailure(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	base.failAll = true
