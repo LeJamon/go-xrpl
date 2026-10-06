@@ -1,5 +1,3 @@
-//go:build linux
-
 package membudget
 
 import (
@@ -12,7 +10,7 @@ import (
 	"strings"
 )
 
-func probePlatform(options ProbeOptions) (Headroom, error) {
+func probeLinux(options ProbeOptions) (Headroom, error) {
 	meminfoPath := options.path("/proc/meminfo", options.MemInfoPath)
 	meminfo, err := options.readFile(meminfoPath)
 	if err != nil {
@@ -94,7 +92,7 @@ func cgroupHeadroom(options ProbeOptions) (uint64, bool, error) {
 	mountInfo, err := options.readFile(mountInfoPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return 0, false, nil
+			return 0, false, fmt.Errorf("cgroup membership exists but %s is missing", mountInfoPath)
 		}
 		return 0, false, fmt.Errorf("read %s: %w", mountInfoPath, err)
 	}
@@ -106,25 +104,32 @@ func cgroupHeadroom(options ProbeOptions) (uint64, bool, error) {
 	var minimum uint64
 	applied := false
 	for _, membership := range memberships {
+		matched := false
+		matchedPath := false
 		for _, mount := range mounts {
 			if !membershipMatchesMount(membership, mount) {
 				continue
 			}
+			matched = true
 			directory, ok := cgroupDirectory(mount, membership.path)
 			if !ok {
 				continue
 			}
+			matchedPath = true
 			value, found, err := cgroupMountHeadroom(options, mount, directory)
 			if err != nil {
 				return 0, false, err
 			}
 			if !found {
-				continue
+				return 0, false, fmt.Errorf("cgroup membership %s has no readable memory limits", membership.path)
 			}
 			if !applied || value < minimum {
 				minimum = value
 			}
 			applied = true
+		}
+		if (!matched || !matchedPath) && (membership.v2 || membership.controllers["memory"]) {
+			return 0, false, fmt.Errorf("cgroup membership %s has no matching memory mount", membership.path)
 		}
 	}
 	return minimum, applied, nil

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"math"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -67,7 +66,7 @@ func TestPoolRejectsOverflowAndInvalidRelease(t *testing.T) {
 		t.Fatalf("invalid release changed usage: %d", got)
 	}
 	snapshot := p.Snapshot()
-	if snapshot.InvalidReleases != 1 || snapshot.Denied != 1 {
+	if snapshot.InvalidReleases != 1 || snapshot.Denied != 1 || snapshot.Released != math.MaxUint64 {
 		t.Fatalf("invalid operation counters missing: %+v", snapshot)
 	}
 	a.Release(1)
@@ -182,10 +181,52 @@ func TestPoolTransferIsAtomic(t *testing.T) {
 	}
 }
 
-func TestProbeLinuxNestedCgroupFixture(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux cgroup fixture")
+func TestPoolRejectsMinimumRegistrationWithoutSharedCapacity(t *testing.T) {
+	p := New(100)
+	first, err := p.NewAccount("first", 0, 100)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if !first.TryReserve(90) {
+		t.Fatal("initial reservation failed")
+	}
+	if _, err := p.NewAccount("late", 20, 100); err == nil {
+		t.Fatal("minimum registration consumed already-used shared capacity")
+	}
+}
+
+func TestPoolTransferWakesWhenProtectedFloorIsFilled(t *testing.T) {
+	p := New(100)
+	source, err := p.NewAccount("source", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := p.NewAccount("destination", 50, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := p.NewAccount("waiter", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !source.TryReserve(50) {
+		t.Fatal("source reservation failed")
+	}
+	changed := waiter.Changed()
+	if !source.TransferTo(destination, 50) {
+		t.Fatal("transfer failed")
+	}
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("transfer did not wake shared-capacity waiter")
+	}
+	if !waiter.TryReserve(50) {
+		t.Fatal("waiter could not use shared capacity after transfer")
+	}
+}
+
+func TestProbeLinuxNestedCgroupFixture(t *testing.T) {
 	files := map[string]string{
 		"/proc/meminfo":                            "MemTotal: 4096000 kB\nMemAvailable: 1000 kB\n",
 		"/proc/self/cgroup":                        "0::/slice/leaf\n",
@@ -207,7 +248,7 @@ func TestProbeLinuxNestedCgroupFixture(t *testing.T) {
 		}
 		return []byte(value), nil
 	}
-	headroom, err := ProbeWithOptions(ProbeOptions{
+	headroom, err := probeLinux(ProbeOptions{
 		ReadFile:       read,
 		DisableRuntime: true,
 	})
@@ -220,9 +261,6 @@ func TestProbeLinuxNestedCgroupFixture(t *testing.T) {
 }
 
 func TestProbeLinuxFixtureErrorsAndRuntimeCap(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux probe fixture")
-	}
 	files := map[string]string{"/proc/meminfo": "MemAvailable: 10 kB\n"}
 	read := func(path string) ([]byte, error) {
 		if value, ok := files[path]; ok {
@@ -230,7 +268,7 @@ func TestProbeLinuxFixtureErrorsAndRuntimeCap(t *testing.T) {
 		}
 		return nil, fs.ErrNotExist
 	}
-	headroom, err := ProbeWithOptions(ProbeOptions{
+	headroom, err := probeLinux(ProbeOptions{
 		ReadFile: read,
 		RuntimeMemoryLimit: func() (uint64, bool) {
 			return 8192, true
@@ -245,8 +283,67 @@ func TestProbeLinuxFixtureErrorsAndRuntimeCap(t *testing.T) {
 	if headroom.Available != 4096 || headroom.Source != "linux:MemAvailable+GOMEMLIMIT" {
 		t.Fatalf("unexpected runtime-capped headroom: %+v", headroom)
 	}
+	zeroLimit, err := probeLinux(ProbeOptions{
+		ReadFile: read,
+		RuntimeMemoryLimit: func() (uint64, bool) {
+			return 0, true
+		},
+		RuntimeManagedBytes: func() (uint64, error) {
+			return 0, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zeroLimit.Available != 0 {
+		t.Fatalf("zero GOMEMLIMIT was treated as unlimited: %+v", zeroLimit)
+	}
 	files["/proc/meminfo"] = "MemAvailable: -1 kB\n"
-	if _, err := ProbeWithOptions(ProbeOptions{ReadFile: read, DisableRuntime: true}); err == nil {
+	if _, err := probeLinux(ProbeOptions{ReadFile: read, DisableRuntime: true}); err == nil {
 		t.Fatal("negative MemAvailable was accepted")
+	}
+}
+
+func TestProbeLinuxCgroupMembershipRequiresMount(t *testing.T) {
+	read := func(path string) ([]byte, error) {
+		switch path {
+		case "/proc/meminfo":
+			return []byte("MemAvailable: 10 kB\n"), nil
+		case "/proc/self/cgroup":
+			return []byte("0::/slice\n"), nil
+		default:
+			return nil, fs.ErrNotExist
+		}
+	}
+	if _, err := probeLinux(ProbeOptions{ReadFile: read, DisableRuntime: true}); err == nil {
+		t.Fatal("missing cgroup mount was accepted")
+	}
+}
+
+func TestProbeLinuxV1CgroupFixture(t *testing.T) {
+	files := map[string]string{
+		"/proc/meminfo":        "MemAvailable: 1000 kB\n",
+		"/proc/self/cgroup":    "5:memory:/docker/leaf\n",
+		"/proc/self/mountinfo": "12 1 0:42 / /sys/fs/cgroup/memory rw,relatime - cgroup cgroup rw,memory\n",
+		"/sys/fs/cgroup/memory/docker/leaf/memory.limit_in_bytes":      "1000\n",
+		"/sys/fs/cgroup/memory/docker/leaf/memory.soft_limit_in_bytes": "0\n",
+		"/sys/fs/cgroup/memory/docker/leaf/memory.usage_in_bytes":      "400\n",
+		"/sys/fs/cgroup/memory/memory.limit_in_bytes":                  "2000\n",
+		"/sys/fs/cgroup/memory/memory.soft_limit_in_bytes":             "0\n",
+		"/sys/fs/cgroup/memory/memory.usage_in_bytes":                  "500\n",
+	}
+	read := func(path string) ([]byte, error) {
+		value, ok := files[path]
+		if !ok {
+			return nil, fs.ErrNotExist
+		}
+		return []byte(value), nil
+	}
+	headroom, err := probeLinux(ProbeOptions{ReadFile: read, DisableRuntime: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headroom.Available != 600 || headroom.Source != "linux:MemAvailable+cgroup" {
+		t.Fatalf("unexpected v1 headroom: %+v", headroom)
 	}
 }

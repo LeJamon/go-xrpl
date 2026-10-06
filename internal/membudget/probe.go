@@ -24,6 +24,7 @@ type ProbeOptions struct {
 	SelfCgroupPath string
 	MountInfoPath  string
 	ReadFile       func(string) ([]byte, error)
+	ReadVMStat     func() ([]byte, error)
 	DisableCgroup  bool
 	DisableRuntime bool
 
@@ -95,5 +96,5 @@ func runtimeManaged(options ProbeOptions) (uint64, error) {
 }
 
 func finiteLimit(value uint64) bool {
-	return value > 0 && value < math.MaxInt64
+	return value < math.MaxInt64
 }

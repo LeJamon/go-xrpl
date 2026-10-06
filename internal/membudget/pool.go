@@ -45,7 +45,8 @@ type Pool struct {
 	minimum       uint64
 	unusedMinimum uint64
 	denied        uint64
-	waits         uint64
+	subscriptions uint64
+	released      uint64
 	invalid       uint64
 
 	accounts map[string]*Account
@@ -58,13 +59,14 @@ type Account struct {
 	pool *Pool
 	name string
 
-	minimum uint64
-	maximum uint64
-	used    uint64
-	peak    uint64
-	denied  uint64
-	waits   uint64
-	invalid uint64
+	minimum       uint64
+	maximum       uint64
+	used          uint64
+	peak          uint64
+	denied        uint64
+	subscriptions uint64
+	released      uint64
+	invalid       uint64
 }
 
 // New creates a byte admission pool. A zero limit is valid and simply rejects
@@ -106,6 +108,10 @@ func (p *Pool) NewAccount(name string, minimum, maximum uint64) (*Account, error
 	if minimum > p.limit-p.minimum {
 		return nil, fmt.Errorf("%w: %s minimum=%d protected=%d pool=%d", ErrMinimumExceedsLimit, name, minimum, p.minimum, p.limit)
 	}
+	available := p.limit - p.used - p.unusedMinimum
+	if minimum > available {
+		return nil, fmt.Errorf("%w: %s minimum=%d shared=%d", ErrMinimumExceedsLimit, name, minimum, available)
+	}
 
 	a := &Account{
 		pool:    p,
@@ -131,7 +137,7 @@ func (p *Pool) Changed() <-chan struct{} {
 	if p.changed == nil {
 		p.changed = make(chan struct{})
 	}
-	p.waits++
+	p.subscriptions++
 	ch := p.changed
 	p.mu.Unlock()
 	return ch
@@ -180,6 +186,8 @@ func (a *Account) Release(bytes uint64) {
 		return
 	}
 	p.releaseUsedLocked(a, bytes)
+	p.released = saturatingAdd(p.released, bytes)
+	a.released = saturatingAdd(a.released, bytes)
 	ch = p.takeChangedLocked()
 	p.mu.Unlock()
 	if ch != nil {
@@ -196,20 +204,31 @@ func (a *Account) TransferTo(dst *Account, bytes uint64) bool {
 	}
 	p := a.pool
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if bytes > a.used {
+		p.mu.Unlock()
 		return false
 	}
 	if bytes == 0 || a == dst {
+		p.mu.Unlock()
 		return bytes == 0 || a == dst
 	}
 
+	beforeUnused := p.unusedMinimum
 	p.releaseUsedLocked(a, bytes)
 	if !p.canReserveLocked(dst, bytes) {
 		p.adjustUsedLocked(a, bytes)
+		p.mu.Unlock()
 		return false
 	}
 	p.adjustUsedLocked(dst, bytes)
+	var ch chan struct{}
+	if p.unusedMinimum < beforeUnused {
+		ch = p.takeChangedLocked()
+	}
+	p.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
 	return true
 }
 
@@ -234,7 +253,8 @@ type AccountSnapshot struct {
 	Available       uint64
 	Peak            uint64
 	Denied          uint64
-	Waits           uint64
+	Subscriptions   uint64
+	Released        uint64
 	InvalidReleases uint64
 }
 
@@ -259,7 +279,8 @@ type PoolSnapshot struct {
 	SharedAvailable uint64
 
 	Denied          uint64
-	Waits           uint64
+	Subscriptions   uint64
+	Released        uint64
 	InvalidReleases uint64
 	Accounts        []AccountStats
 }
@@ -296,7 +317,8 @@ func (p *Pool) Snapshot() PoolSnapshot {
 		Available:       available,
 		SharedAvailable: shared,
 		Denied:          p.denied,
-		Waits:           p.waits,
+		Subscriptions:   p.subscriptions,
+		Released:        p.released,
 		InvalidReleases: p.invalid,
 		Accounts:        accounts,
 	}
@@ -333,7 +355,8 @@ func (a *Account) snapshotLocked() AccountSnapshot {
 		Available:       available,
 		Peak:            a.peak,
 		Denied:          a.denied,
-		Waits:           a.waits,
+		Subscriptions:   a.subscriptions,
+		Released:        a.released,
 		InvalidReleases: a.invalid,
 	}
 }
@@ -350,8 +373,8 @@ func (p *Pool) changedForAccount(a *Account) <-chan struct{} {
 	if p.changed == nil {
 		p.changed = make(chan struct{})
 	}
-	p.waits++
-	a.waits++
+	p.subscriptions++
+	a.subscriptions++
 	ch := p.changed
 	p.mu.Unlock()
 	return ch
@@ -427,4 +450,11 @@ func (p *Pool) takeChangedLocked() chan struct{} {
 	ch := p.changed
 	p.changed = nil
 	return ch
+}
+
+func saturatingAdd(current, amount uint64) uint64 {
+	if ^uint64(0)-current < amount {
+		return ^uint64(0)
+	}
+	return current + amount
 }
