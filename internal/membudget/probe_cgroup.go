@@ -310,7 +310,7 @@ func cgroupLevelV1(options ProbeOptions, directory string) (uint64, bool, error)
 	if limitPresent && limit < remaining {
 		remaining = limit
 	}
-	if softPresent && soft < remaining {
+	if softPresent && soft != 0 && soft < remaining {
 		remaining = soft
 	}
 	if remaining == math.MaxUint64 {
@@ -332,17 +332,14 @@ func readCgroupLimit(options ProbeOptions, path string, legacy bool) (uint64, bo
 	}
 	value := strings.TrimSpace(string(data))
 	if value == "max" {
-		return 0, false, nil
+		return math.MaxUint64, true, nil
 	}
 	parsed, err := parseUint(value, path)
 	if err != nil {
 		return 0, false, err
 	}
-	if legacy && parsed == 0 {
-		return 0, false, nil
-	}
-	if parsed >= uint64(math.MaxInt64)-1<<20 {
-		return 0, false, nil
+	if legacy && parsed >= uint64(math.MaxInt64)-1<<20 {
+		return math.MaxUint64, true, nil
 	}
 	return parsed, true, nil
 }

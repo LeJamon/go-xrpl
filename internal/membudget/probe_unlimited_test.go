@@ -46,3 +46,21 @@ func TestMemAvailableRejectsMalformedUnitsAndOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestCgroupV1ZeroHardLimitDoesNotMeanUnlimited(t *testing.T) {
+	files := map[string]string{
+		"/group/memory.limit_in_bytes":      "0",
+		"/group/memory.soft_limit_in_bytes": "0",
+		"/group/memory.usage_in_bytes":      "0",
+	}
+	available, present, err := cgroupLevelV1(ProbeOptions{ReadFile: func(path string) ([]byte, error) {
+		value, ok := files[path]
+		if !ok {
+			return nil, fs.ErrNotExist
+		}
+		return []byte(value), nil
+	}}, "/group")
+	if err != nil || !present || available != 0 {
+		t.Fatalf("zero hard limit returned available=%d present=%v err=%v", available, present, err)
+	}
+}
