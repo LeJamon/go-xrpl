@@ -483,11 +483,23 @@ func (r *Router) SetAcquisitionMemoryLimit(limit uint64) {
 // SetAcquisitionMemoryBudget attaches the acquisition child budget to a
 // node-owned parent account. It must be called before Run; the existing local
 // limit remains an immutable acquisition ceiling while parent admission covers
-// all node-owned consumers.
-func (r *Router) SetAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) {
-	if r.catchupReplay != nil {
-		r.catchupReplay.setAcquisitionMemoryBudget(limit, parent)
+// all node-owned consumers. It returns an error if the protected progress
+// minimum cannot be committed.
+func (r *Router) SetAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) error {
+	if r == nil || r.catchupReplay == nil {
+		return nil
 	}
+	return r.catchupReplay.setAcquisitionMemoryBudget(limit, parent)
+}
+
+// CloseAcquisitionMemoryBudget releases the protected parent commitment after
+// acquisition work and persistence owners have drained. It returns false if
+// any owner still holds a reservation.
+func (r *Router) CloseAcquisitionMemoryBudget() bool {
+	if r == nil || r.catchupReplay == nil {
+		return true
+	}
+	return r.catchupReplay.closeAcquisitionMemoryBudget()
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
@@ -747,6 +759,15 @@ func (r *Router) Run(ctx context.Context) {
 			}
 		case <-r.catchupReplay.standardReplayDrainWakeChannel():
 			r.catchupReplay.drainStandardReplayPipeline()
+		case <-r.catchupReplay.acquisitionMemoryChangedChannel():
+			// Shared acquisition capacity is level-triggered. A release wakes
+			// the serialized maintenance path so deferred replay and legacy
+			// work can retry without waiting for the periodic tick.
+			r.catchupReplay.notifyAcquisitionMemoryAvailable()
+			r.maintenanceTick()
+		case <-r.catchupReplay.acquisitionMemoryLocalChangedChannel():
+			r.catchupReplay.notifyAcquisitionMemoryAvailable()
+			r.maintenanceTick()
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:

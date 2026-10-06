@@ -73,7 +73,7 @@ func (b *AcquisitionBudget) tryReserveLoaded(bytes uint64) bool {
 	if bytes > b.limit/4 || used > b.limit/4-bytes {
 		return false
 	}
-	if !b.tryReserveGeneralLocked(bytes) {
+	if !b.reserveCategoryLocked(acquisitionCategoryLoaded, bytes) {
 		return false
 	}
 	b.loadedUsed.Store(used + bytes)
@@ -88,18 +88,5 @@ func (b *AcquisitionBudget) releaseLoaded(bytes uint64) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	loadedUsed := b.loadedUsed.Load()
-	if bytes > loadedUsed {
-		panic("acquisition loaded-node reservation underflow")
-	}
-	used := b.used.Load()
-	if bytes > used {
-		panic("acquisition loaded-node reservation underflow")
-	}
-	b.loadedUsed.Store(loadedUsed - bytes)
-	b.used.Store(used - bytes)
-	if b.parent != nil {
-		b.parent.Release(bytes)
-	}
-	b.signalChangedLocked()
+	b.releaseCategoryLocked(acquisitionCategoryLoaded, bytes)
 }

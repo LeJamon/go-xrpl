@@ -31,24 +31,27 @@ func TestAcquisitionBudgetReserveRelease(t *testing.T) {
 }
 
 func TestAcquisitionBudgetChargesParentAndRollsBack(t *testing.T) {
-	parent := NewAcquisitionBudget(512)
-	child := NewAcquisitionBudgetWithParent(1024, parent)
-	if !child.TryReserve(400) {
+	parent := NewAcquisitionBudget(128)
+	child, err := NewAcquisitionBudgetWithParent(256, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !child.TryReserve(100) {
 		t.Fatal("child reservation was rejected")
 	}
-	if got := parent.Snapshot().Used; got != 400 {
-		t.Fatalf("parent used = %d, want 400", got)
+	if got := parent.Snapshot().Used; got != 100 {
+		t.Fatalf("parent used = %d, want 100", got)
 	}
-	if child.TryReserve(200) {
+	if child.TryReserve(100) {
 		t.Fatal("child admitted beyond parent capacity")
 	}
-	if got := child.Snapshot().Used; got != 400 {
+	if got := child.Snapshot().Used; got != 100 {
 		t.Fatalf("failed parent admission changed child usage: %d", got)
 	}
-	if got := parent.Snapshot().Used; got != 400 {
+	if got := parent.Snapshot().Used; got != 100 {
 		t.Fatalf("failed parent admission changed parent usage: %d", got)
 	}
-	child.Release(400)
+	child.Release(100)
 	if got := parent.Snapshot().Used; got != 0 {
 		t.Fatalf("parent usage after child release = %d", got)
 	}
@@ -56,24 +59,27 @@ func TestAcquisitionBudgetChargesParentAndRollsBack(t *testing.T) {
 
 func TestAcquisitionBudgetCursorAndLoadedChargeParentOnce(t *testing.T) {
 	parent := NewAcquisitionBudget(4096)
-	child := NewAcquisitionBudgetWithParent(4096, parent)
-	if !child.tryReserveCursor(256) {
+	child, err := NewAcquisitionBudgetWithParent(256, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !child.tryReserveCursor(64) {
 		t.Fatal("cursor reservation was rejected")
 	}
-	if got := parent.Snapshot().Used; got != 256 {
-		t.Fatalf("parent usage after cursor reservation = %d, want 256", got)
+	if got := parent.Snapshot().Used; got != 64 {
+		t.Fatalf("parent usage after cursor reservation = %d, want 64", got)
 	}
-	child.releaseCursor(256)
+	child.releaseCursor(64)
 	if got := parent.Snapshot().Used; got != 0 {
 		t.Fatalf("parent usage after cursor release = %d", got)
 	}
-	if !child.tryReserveLoaded(256) {
+	if !child.tryReserveLoaded(64) {
 		t.Fatal("loaded reservation was rejected")
 	}
-	if got := parent.Snapshot().Used; got != 256 {
-		t.Fatalf("parent usage after loaded reservation = %d, want 256", got)
+	if got := parent.Snapshot().Used; got != 64 {
+		t.Fatalf("parent usage after loaded reservation = %d, want 64", got)
 	}
-	child.releaseLoaded(256)
+	child.releaseLoaded(64)
 	if got := parent.Snapshot().Used; got != 0 {
 		t.Fatalf("parent usage after loaded release = %d", got)
 	}
@@ -81,7 +87,10 @@ func TestAcquisitionBudgetCursorAndLoadedChargeParentOnce(t *testing.T) {
 
 func TestAcquisitionBudgetChangedWakesParentBackedWaiters(t *testing.T) {
 	parent := NewAcquisitionBudget(128)
-	child := NewAcquisitionBudgetWithParent(128, parent)
+	child, err := NewAcquisitionBudgetWithParent(128, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !parent.TryReserve(128) {
 		t.Fatal("parent reservation was rejected")
 	}
@@ -91,5 +100,67 @@ func TestAcquisitionBudgetChangedWakesParentBackedWaiters(t *testing.T) {
 	case <-changed:
 	default:
 		t.Fatal("parent-backed Changed channel did not wake after release")
+	}
+}
+
+func TestAcquisitionBudgetProtectedCategoriesKeepParentFloor(t *testing.T) {
+	parent := NewAcquisitionBudget(4 << 30)
+	child, err := NewAcquisitionBudgetWithParent(4<<30, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const protected = 512 << 20
+	if got := parent.Snapshot().Used; got != protected {
+		t.Fatalf("parent protected usage = %d, want %d", got, protected)
+	}
+
+	if !child.TryReserveReplayHead(8<<20) || !child.TryReserveReplayProcessing(8<<20) {
+		t.Fatal("protected replay categories rejected their reserved workspace")
+	}
+	if !child.tryReserveCursor(128 << 20) {
+		t.Fatal("cursor reservation was rejected")
+	}
+	if got := parent.Snapshot().Used; got != protected+(64<<20) {
+		t.Fatalf("parent usage after category excess = %d, want %d", got, protected+(64<<20))
+	}
+	child.releaseCursor(128 << 20)
+	child.ReleaseReplayProcessing(8 << 20)
+	child.ReleaseReplayHead(8 << 20)
+	if got := parent.Snapshot().Used; got != protected {
+		t.Fatalf("parent usage after category release = %d, want %d", got, protected)
+	}
+	if !child.Close() {
+		t.Fatal("close rejected after all category owners drained")
+	}
+	if got := parent.Snapshot().Used; got != 0 {
+		t.Fatalf("parent usage after close = %d, want 0", got)
+	}
+}
+
+func TestAcquisitionBudgetProtectedMinimumAdmissionError(t *testing.T) {
+	parent := NewAcquisitionBudget(256 << 20)
+	if _, err := NewAcquisitionBudgetWithParent(4<<30, parent); err == nil {
+		t.Fatal("expected protected-minimum admission error")
+	}
+}
+
+func TestAcquisitionBudgetLocalAndParentWakeOnProtectedRelease(t *testing.T) {
+	parent := NewAcquisitionBudget(4 << 30)
+	child, err := NewAcquisitionBudgetWithParent(4<<30, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !child.TryReserveReplayHead(8 << 20) {
+		t.Fatal("replay-head reservation was rejected")
+	}
+	localChanged := child.LocalChanged()
+	child.ReleaseReplayHead(8 << 20)
+	select {
+	case <-localChanged:
+	default:
+		t.Fatal("LocalChanged channel did not wake on child release")
+	}
+	if !child.Close() {
+		t.Fatal("close rejected after protected release")
 	}
 }

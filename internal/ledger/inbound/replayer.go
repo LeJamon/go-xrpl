@@ -111,6 +111,13 @@ func (r *Replayer) currentMemoryBudget() shamap.AcquisitionMemoryAccount {
 	return r.memory
 }
 
+func reserveReplayHead(account shamap.AcquisitionMemoryAccount, bytes uint64) bool {
+	if replay, ok := account.(interface{ TryReserveReplayHead(uint64) bool }); ok {
+		return replay.TryReserveReplayHead(bytes)
+	}
+	return account.TryReserve(bytes)
+}
+
 // NewReplayer returns a Replayer configured with the given concurrency
 // cap. maxInFlight <= 0 defaults to DefaultMaxInFlightReplays.
 // A nil logger defaults to slog.Default(); a nil clock defaults to
@@ -168,7 +175,7 @@ func (r *Replayer) currentClock() Clock {
 // acquisition via its ledger hash.
 func (r *Replayer) Acquire(hash [32]byte, peerID uint64, parent *ledger.Ledger) (*ReplayDelta, error) {
 	account := r.currentMemoryBudget()
-	if account != nil && !account.TryReserve(replayDeltaAdmissionBytes) {
+	if account != nil && !reserveReplayHead(account, replayDeltaAdmissionBytes) {
 		return nil, ErrReplayMemory
 	}
 	rd, err := r.delta.add(hash, peerID, func() *ReplayDelta {
@@ -176,7 +183,11 @@ func (r *Replayer) Acquire(hash [32]byte, peerID uint64, parent *ledger.Ledger) 
 	})
 	if err != nil {
 		if account != nil {
-			account.Release(replayDeltaAdmissionBytes)
+			if replay, ok := account.(interface{ ReleaseReplayHead(uint64) }); ok {
+				replay.ReleaseReplayHead(replayDeltaAdmissionBytes)
+			} else {
+				account.Release(replayDeltaAdmissionBytes)
+			}
 		}
 		return nil, err
 	}

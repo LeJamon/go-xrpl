@@ -64,11 +64,13 @@ type catchupReplayCoordinator struct {
 	fetchTracker *inbound.Tracker
 	fetchPacks   *fetchPackCache
 
-	acquisitionWorkMu sync.RWMutex
-	acquisitionFamily shamap.Family
-	acquisitionMemory *shamap.AcquisitionBudget
-	acquisitionStore  *acquisitionStoreLane
-	acquisitionWork   *acquisitionWorkLane
+	acquisitionWorkMu       sync.RWMutex
+	acquisitionFamily       shamap.Family
+	acquisitionMemory       *shamap.AcquisitionBudget
+	acquisitionStore        *acquisitionStoreLane
+	acquisitionWork         *acquisitionWorkLane
+	acquisitionMemoryWakeMu sync.RWMutex
+	acquisitionMemoryWake   func()
 
 	catchupMu          sync.Mutex
 	catchup            catchupTarget
@@ -163,22 +165,100 @@ func (c *catchupReplayCoordinator) setAcquisitionFamily(family shamap.Family) {
 }
 
 func (c *catchupReplayCoordinator) setAcquisitionMemoryLimit(limit uint64) {
-	c.setAcquisitionMemoryBudget(limit, nil)
+	_ = c.setAcquisitionMemoryBudget(limit, nil)
 }
 
-func (c *catchupReplayCoordinator) setAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) {
+func (c *catchupReplayCoordinator) setAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) error {
+	var budget *shamap.AcquisitionBudget
+	if parent == nil {
+		budget = shamap.NewAcquisitionBudget(limit)
+	} else {
+		var err error
+		budget, err = shamap.NewAcquisitionBudgetWithParent(limit, parent)
+		if err != nil {
+			return err
+		}
+	}
+	return c.setAcquisitionMemoryBudgetValue(budget)
+}
+
+func (c *catchupReplayCoordinator) setAcquisitionMemoryBudgetValue(budget *shamap.AcquisitionBudget) error {
 	c.acquisitionWorkMu.Lock()
 	defer c.acquisitionWorkMu.Unlock()
-	if parent == nil {
-		c.acquisitionMemory = shamap.NewAcquisitionBudget(limit)
-	} else {
-		c.acquisitionMemory = shamap.NewAcquisitionBudgetWithParent(limit, parent)
+	if c.acquisitionMemory != nil && !c.acquisitionMemory.Close() {
+		_ = budget.Close()
+		return errors.New("acquisition memory budget still has active owners")
 	}
+	c.acquisitionMemory = budget
 	if c.acquisitionStore != nil {
 		c.acquisitionStore.memory = c.acquisitionMemory
 	}
 	if c.replayer != nil {
 		c.replayer.SetMemoryBudget(c.acquisitionMemory)
+	}
+	return nil
+}
+
+func (c *catchupReplayCoordinator) closeAcquisitionMemoryBudget() bool {
+	if c == nil {
+		return true
+	}
+	c.acquisitionWorkMu.RLock()
+	budget := c.acquisitionMemory
+	c.acquisitionWorkMu.RUnlock()
+	if budget == nil {
+		return true
+	}
+	return budget.Close()
+}
+
+func (c *catchupReplayCoordinator) acquisitionMemoryChangedChannel() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	c.acquisitionWorkMu.RLock()
+	budget := c.acquisitionMemory
+	c.acquisitionWorkMu.RUnlock()
+	if budget == nil {
+		return nil
+	}
+	return budget.Changed()
+}
+
+func (c *catchupReplayCoordinator) acquisitionMemoryLocalChangedChannel() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	c.acquisitionWorkMu.RLock()
+	budget := c.acquisitionMemory
+	c.acquisitionWorkMu.RUnlock()
+	if budget == nil {
+		return nil
+	}
+	return budget.LocalChanged()
+}
+
+// setAcquisitionMemoryWake installs the serialized callback used by replay
+// pipeline owners that retain work after an admission miss. The callback runs
+// on the Router loop after a budget wake; it must not start its own goroutine.
+func (c *catchupReplayCoordinator) setAcquisitionMemoryWake(wake func()) {
+	if c == nil {
+		return
+	}
+	c.acquisitionMemoryWakeMu.Lock()
+	c.acquisitionMemoryWake = wake
+	c.acquisitionMemoryWakeMu.Unlock()
+}
+
+func (c *catchupReplayCoordinator) notifyAcquisitionMemoryAvailable() {
+	if c == nil {
+		return
+	}
+	c.acquisitionMemoryWakeMu.RLock()
+	wake := c.acquisitionMemoryWake
+	c.acquisitionMemoryWakeMu.RUnlock()
+	if wake != nil {
+		wake()
 	}
 }
 

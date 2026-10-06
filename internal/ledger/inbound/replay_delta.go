@@ -106,9 +106,9 @@ const subTaskRetryMax = 10
 
 // replayDeltaAdmissionBytes protects the processing headroom for each
 // in-flight replay before a peer response arrives. Sixteen concurrent
-// acquisitions therefore retain 192 MiB of admission capacity for response
-// decode and persistence progress under the default 512 MiB child budget.
-const replayDeltaAdmissionBytes = 12 << 20
+// acquisitions therefore retain 128 MiB of replay-head capacity; response
+// decoding uses its separate protected processing category.
+const replayDeltaAdmissionBytes = 8 << 20
 
 const (
 	replayDeltaResponseFixedBytes = 64 << 10
@@ -171,9 +171,10 @@ type ReplayDelta struct {
 	// memory and memoryBytes cover the base in-flight admission plus the
 	// response-owned copies retained through Apply. releaseMemory is idempotent
 	// because Complete, Abandon and shutdown cleanup may race with late replies.
-	memory        shamap.AcquisitionMemoryAccount
-	memoryBytes   uint64
-	memoryRelease sync.Once
+	memory                shamap.AcquisitionMemoryAccount
+	memoryHeadBytes       uint64
+	memoryProcessingBytes uint64
+	memoryRelease         sync.Once
 
 	// subTaskStart is the time of the last wire request (initial send
 	// or peer rotation). Drives IsSubTaskTimedOut without touching
@@ -230,7 +231,7 @@ func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger
 func (r *ReplayDelta) attachMemory(account shamap.AcquisitionMemoryAccount, bytes uint64) {
 	r.mu.Lock()
 	r.memory = account
-	r.memoryBytes = bytes
+	r.memoryHeadBytes = bytes
 	r.mu.Unlock()
 }
 
@@ -243,23 +244,50 @@ func (r *ReplayDelta) reserveResponseMemory(resp *message.ReplayDeltaResponse) e
 		return nil
 	}
 	bytes := replayDeltaResponseBytes(resp)
-	if bytes == 0 || r.memory.TryReserve(bytes) {
-		r.memoryBytes += bytes
+	if bytes == 0 {
 		return nil
 	}
-	return ErrReplayMemory
+	reserve := r.memory.TryReserve
+	if account, ok := r.memory.(interface{ TryReserveReplayProcessing(uint64) bool }); ok {
+		if !account.TryReserveReplayProcessing(bytes) {
+			return ErrReplayMemory
+		}
+		r.memoryProcessingBytes += bytes
+		return nil
+	}
+	if !reserve(bytes) {
+		return ErrReplayMemory
+	}
+	r.memoryProcessingBytes += bytes
+	return nil
 }
 
 func (r *ReplayDelta) releaseMemory() {
 	r.memoryRelease.Do(func() {
 		r.mu.Lock()
 		account := r.memory
-		bytes := r.memoryBytes
+		headBytes := r.memoryHeadBytes
+		processingBytes := r.memoryProcessingBytes
 		r.memory = nil
-		r.memoryBytes = 0
+		r.memoryHeadBytes = 0
+		r.memoryProcessingBytes = 0
 		r.mu.Unlock()
-		if account != nil && bytes != 0 {
-			account.Release(bytes)
+		if account == nil {
+			return
+		}
+		if processingBytes != 0 {
+			if replay, ok := account.(interface{ ReleaseReplayProcessing(uint64) }); ok {
+				replay.ReleaseReplayProcessing(processingBytes)
+			} else {
+				account.Release(processingBytes)
+			}
+		}
+		if headBytes != 0 {
+			if replay, ok := account.(interface{ ReleaseReplayHead(uint64) }); ok {
+				replay.ReleaseReplayHead(headBytes)
+			} else {
+				account.Release(headBytes)
+			}
 		}
 	})
 }

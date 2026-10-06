@@ -83,14 +83,6 @@ func (r *inFlightRegistry[T]) get(hash [32]byte) (T, bool) {
 	return it, ok
 }
 
-// remove drops the acquisition for hash. No-op on an unknown hash, so
-// callers can call it unconditionally at the end of a handle path.
-func (r *inFlightRegistry[T]) remove(hash [32]byte) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.items, hash)
-}
-
 // removeItem removes hash and returns the item that owned its admission. The
 // caller uses the returned item to release any ownership charged outside the
 // registry. Unknown hashes remain a no-op.
@@ -117,19 +109,6 @@ func (r *inFlightRegistry[T]) removeMatchingItems(match func([32]byte, T) bool) 
 	return removed
 }
 
-func (r *inFlightRegistry[T]) removeMatching(match func([32]byte, T) bool) [][32]byte {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	removed := make([][32]byte, 0)
-	for hash, item := range r.items {
-		if match(hash, item) {
-			delete(r.items, hash)
-			removed = append(removed, hash)
-		}
-	}
-	return removed
-}
-
 func (r *inFlightRegistry[T]) has(hash [32]byte) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -141,17 +120,6 @@ func (r *inFlightRegistry[T]) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.items)
-}
-
-// stop terminally empties the registry and returns the number of entries
-// removed, so a shutdown caller has an observable pending count.
-func (r *inFlightRegistry[T]) stop() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := len(r.items)
-	r.items = make(map[[32]byte]T)
-	r.stopped = true
-	return n
 }
 
 func (r *inFlightRegistry[T]) stopItems() map[[32]byte]T {
