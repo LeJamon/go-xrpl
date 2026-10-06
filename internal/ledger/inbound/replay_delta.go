@@ -84,6 +84,22 @@ var (
 	ErrReplayLeafInstall = errors.New("replay delta: install tx leaf failed")
 )
 
+// ReplayMemoryError records the minimum processing reservation that was
+// denied. Callers can wait for that exact amount of external capacity without
+// treating local resource pressure as peer misconduct.
+type ReplayMemoryError struct {
+	Required uint64
+}
+
+func (e *ReplayMemoryError) Error() string {
+	if e == nil {
+		return ErrReplayMemory.Error()
+	}
+	return fmt.Sprintf("%s: required %d bytes", ErrReplayMemory, e.Required)
+}
+
+func (e *ReplayMemoryError) Unwrap() error { return ErrReplayMemory }
+
 // replayDeltaTimeout caps the TOTAL budget a replay-delta acquisition
 // is allowed across its entire retry loop (sub-task timeouts +
 // peer-swaps + legacy fallback). Crossing this budget triggers the
@@ -235,28 +251,38 @@ func (r *ReplayDelta) attachMemory(account shamap.AcquisitionMemoryAccount, byte
 	r.mu.Unlock()
 }
 
+func (r *ReplayDelta) attachProcessingMemory(account shamap.AcquisitionMemoryAccount) {
+	r.mu.Lock()
+	r.memory = account
+	r.mu.Unlock()
+}
+
 // reserveResponseMemory admits the retained response representation while the
 // caller holds r.mu. The wire response itself is decoded outside this type, so
 // the estimate includes the original blobs, SHAMap leaf copies and decoded
 // transaction slice overhead that remain reachable after GotResponse returns.
 func (r *ReplayDelta) reserveResponseMemory(resp *message.ReplayDeltaResponse) error {
-	if r.memory == nil {
-		return nil
-	}
 	bytes := replayDeltaResponseBytes(resp)
-	if bytes == 0 {
+	return r.reserveProcessingMemory(bytes)
+}
+
+// reserveProcessingMemory charges decoded replay payloads to the processing
+// category while the caller is retaining them. The charge is released by the
+// replay owner after use or on any construction/abandonment error.
+func (r *ReplayDelta) reserveProcessingMemory(bytes uint64) error {
+	if r == nil || r.memory == nil || bytes == 0 {
 		return nil
 	}
-	reserve := r.memory.TryReserve
+	required := r.memoryProcessingBytes + bytes
+	if required < r.memoryProcessingBytes {
+		return &ReplayMemoryError{Required: ^uint64(0)}
+	}
 	if account, ok := r.memory.(interface{ TryReserveReplayProcessing(uint64) bool }); ok {
 		if !account.TryReserveReplayProcessing(bytes) {
-			return ErrReplayMemory
+			return &ReplayMemoryError{Required: required}
 		}
-		r.memoryProcessingBytes += bytes
-		return nil
-	}
-	if !reserve(bytes) {
-		return ErrReplayMemory
+	} else if !r.memory.TryReserve(bytes) {
+		return &ReplayMemoryError{Required: required}
 	}
 	r.memoryProcessingBytes += bytes
 	return nil
@@ -292,6 +318,13 @@ func (r *ReplayDelta) releaseMemory() {
 	})
 }
 
+// ReleaseMemory ends ownership of decoded replay payloads for a locally
+// constructed stored replay. It is idempotent, so callers can use it from both
+// success and error cleanup without coordinating a second owner.
+func (r *ReplayDelta) ReleaseMemory() {
+	r.releaseMemory()
+}
+
 func replayDeltaResponseBytes(resp *message.ReplayDeltaResponse) uint64 {
 	if resp == nil {
 		return 0
@@ -306,10 +339,47 @@ func replayDeltaResponseBytes(resp *message.ReplayDeltaResponse) uint64 {
 	return bytes
 }
 
+const replayStoredWorkspaceBytes = (128 << 20) + (256 << 10)
+
+func replayStoredEntryBytes(payload int) (uint64, bool) {
+	const overhead = uint64(1024)
+	if payload < 0 || uint64(payload) > (^uint64(0)-overhead)/4 {
+		return 0, false
+	}
+	// Payload copies, derived leaves and allocator rounding; decoded slice
+	// entries, transaction-index buckets and tree bookkeeping.
+	return 4*uint64(payload) + overhead, true
+}
+
 // NewStoredLedgerReplay creates a complete replay from locally stored parent
 // and target ledgers. The target's transaction leaves are decoded and ordered
 // by sfTransactionIndex so Apply can rebuild the target deterministically.
 func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (*ReplayDelta, error) {
+	return NewStoredLedgerReplayWithMemory(parent, target, logger, nil)
+}
+
+// NewStoredLedgerReplayWithMemory is NewStoredLedgerReplay with an optional
+// processing-memory owner. Call ReleaseMemory after the replay and its
+// diagnostics no longer need the decoded transaction data.
+func NewStoredLedgerReplayWithMemory(
+	parent, target *ledger.Ledger,
+	logger *slog.Logger,
+	account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	return NewStoredLedgerReplayWithMemoryContext(context.Background(), parent, target, logger, account)
+}
+
+// NewStoredLedgerReplayWithMemoryContext bounds and cancels stored transaction
+// decoding before admitting retained payloads. The caller owns ReleaseMemory.
+func NewStoredLedgerReplayWithMemoryContext(
+	ctx context.Context,
+	parent, target *ledger.Ledger,
+	logger *slog.Logger,
+	account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if parent == nil {
 		return nil, errors.New("stored replay parent is nil")
 	}
@@ -382,10 +452,52 @@ func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (
 		)
 	}
 
-	decoded := make([]DecodedTx, 0, target.TxCount())
-	seenIndices := make(map[uint32][32]byte)
+	replay := NewReplayDelta(targetHash, 0, parent, logger)
+	if account != nil {
+		replay.attachProcessingMemory(account)
+	}
+	retainMemory := false
+	defer func() {
+		if !retainMemory {
+			replay.releaseMemory()
+		}
+	}()
+
+	// A backed walk holds at most one payload and its decode copy, plus the
+	// bounded inner path. Reserve that workspace before reading cold nodes.
+	if err := replay.reserveProcessingMemory(replayStoredWorkspaceBytes); err != nil {
+		return nil, err
+	}
+	txMap, err := target.TxMapSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	var count int
+	var decodedBytes uint64
 	var decodeErr error
-	err = target.ForEachTransaction(func(itemHash [32]byte, leafBlob []byte) bool {
+	err = txMap.ForEachCtxReleasing(ctx, func(item *shamap.Item) bool {
+		charge, ok := replayStoredEntryBytes(item.DataSize())
+		if !ok || decodedBytes > ^uint64(0)-charge || count == int(^uint(0)>>1) {
+			decodeErr = &ReplayMemoryError{Required: ^uint64(0)}
+			return false
+		}
+		decodedBytes += charge
+		count++
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("measure stored replay transactions: %w", err)
+	}
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	if err := replay.reserveProcessingMemory(decodedBytes); err != nil {
+		return nil, err
+	}
+	decoded := make([]DecodedTx, 0, count)
+	seenIndices := make(map[uint32][32]byte, count)
+	err = txMap.ForEachCtxReleasing(ctx, func(item *shamap.Item) bool {
+		itemHash, leafBlob := item.Key(), item.Data()
 		txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(leafBlob)
 		if err != nil {
 			decodeErr = fmt.Errorf("stored replay tx %x: split leaf: %w", itemHash[:8], err)
@@ -447,10 +559,10 @@ func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (
 		}
 	}
 
-	replay := NewReplayDelta(targetHash, 0, parent, logger)
 	replay.result = target
 	replay.txs = decoded
 	replay.state = StateReplayReady
+	retainMemory = true
 	return replay, nil
 }
 
@@ -664,6 +776,7 @@ func (r *ReplayDelta) Retry(parent *ledger.Ledger) (*ReplayDelta, error) {
 	state := r.state
 	target := r.result
 	logger := r.logger
+	account := r.memory
 	peerID := r.peerID
 	requestedHash := r.hash
 	r.mu.Unlock()
@@ -680,7 +793,7 @@ func (r *ReplayDelta) Retry(parent *ledger.Ledger) (*ReplayDelta, error) {
 			ErrReplayHeaderDiverged, targetHash[:8], requestedHash[:8])
 	}
 
-	retry, err := NewStoredLedgerReplay(parent, target, logger)
+	retry, err := NewStoredLedgerReplayWithMemory(parent, target, logger, account)
 	if err != nil {
 		return nil, err
 	}

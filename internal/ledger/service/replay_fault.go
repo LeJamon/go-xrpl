@@ -367,6 +367,7 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 		evidence.ParentSnapshot = s.config.ReplayFaultPath != ""
 		retry, retryErr := replay.Retry(verified)
 		if retryErr == nil {
+			defer retry.ReleaseMemory()
 			_, retryErr = retry.Apply(cfg)
 		}
 		if !replayFaultStateClass(fault.Class) && evidence.Authenticated && retryErr != nil && sameReplayFailure(retryErr, cause) && replayExecutionDisagreement(retryErr) {

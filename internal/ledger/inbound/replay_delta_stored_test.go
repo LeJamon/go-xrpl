@@ -1,7 +1,9 @@
 package inbound
 
 import (
+	"context"
 	"encoding/hex"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -135,6 +138,91 @@ func TestNewStoredLedgerReplayIsReadyToApply(t *testing.T) {
 	assert.Equal(t, target.Hash(), derived.Hash())
 	assert.Equal(t, target.Header().AccountHash, derived.Header().AccountHash)
 	assert.Equal(t, target.Header().TxHash, derived.Header().TxHash)
+}
+
+func TestStoredReplayMemorySurvivesCancellationAndDiagnosticRetry(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	blob, txID := makeTxWithMetaBlob(t, []byte("stored-replay-memory-charge"), 0)
+	target := makeStoredReplayTarget(t, parent, [][]byte{blob}, [][32]byte{txID}, nil)
+	budget := shamap.NewAcquisitionBudget(512 << 20)
+	replay, err := NewStoredLedgerReplayWithMemory(parent, target, nil, budget)
+	require.NoError(t, err)
+	charge := budget.Snapshot().Used
+	require.Greater(t, charge, uint64(replayStoredWorkspaceBytes))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = replay.ApplyContext(ctx, tx.EngineConfig{})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, StateReplayReady, replay.State())
+	require.Equal(t, charge, budget.Snapshot().Used)
+	_, err = replay.Apply(tx.EngineConfig{})
+	require.Error(t, err)
+	require.NotEmpty(t, replay.OrderedTxs(), "failed replay must retain diagnostic evidence")
+	require.Equal(t, charge, budget.Snapshot().Used)
+	retry, err := replay.Retry(parent)
+	require.NoError(t, err)
+	require.Equal(t, 2*charge, budget.Snapshot().Used)
+	retry.ReleaseMemory()
+	require.Equal(t, charge, budget.Snapshot().Used)
+	replay.ReleaseMemory()
+	replay.ReleaseMemory()
+	require.Zero(t, budget.Snapshot().Used)
+}
+
+type storedReplayReadProbe struct {
+	shamap.Family
+	reads int
+}
+
+func (f *storedReplayReadProbe) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	f.reads++
+	return f.Family.Fetch(ctx, hash)
+}
+
+func TestStoredReplayColdWalkAdmitsBeforeDecodeAndReleasesLoads(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	const count = 32
+	blobs := make([][]byte, count)
+	hashes := make([][32]byte, count)
+	for i := range count {
+		blobs[i], hashes[i] = makeTxWithMetaBlob(t, []byte(fmt.Sprintf("stored-memory-leaf-%d", i)), uint32(i))
+	}
+	source := makeStoredReplayTarget(t, parent, blobs, hashes, nil)
+	base := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	family := &storedReplayReadProbe{Family: base}
+	txMap, err := source.TxMapSnapshot()
+	require.NoError(t, err)
+	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return family.StoreBatch(t.Context(), entries)
+	}))
+	cold, err := shamap.NewFromRootHash(shamap.TypeTransaction, source.Header().TxHash, family)
+	require.NoError(t, err)
+	stateMap, err := source.StateMapSnapshot()
+	require.NoError(t, err)
+	target, err := ledger.NewFromHeader(source.Header(), stateMap, cold, source.Fees())
+	require.NoError(t, err)
+
+	before := family.reads
+	_, err = NewStoredLedgerReplayWithMemory(parent, target, nil, shamap.NewAcquisitionBudget(1))
+	require.ErrorIs(t, err, ErrReplayMemory)
+	require.Equal(t, before, family.reads, "admission failure must not read cold children")
+	limited := shamap.NewAcquisitionBudget(replayStoredWorkspaceBytes)
+	_, err = NewStoredLedgerReplayWithMemory(parent, target, nil, limited)
+	var pressure *ReplayMemoryError
+	require.ErrorAs(t, err, &pressure)
+	require.Greater(t, pressure.Required, uint64(replayStoredWorkspaceBytes))
+	require.Zero(t, limited.Snapshot().Used)
+
+	budget := shamap.NewAcquisitionBudget(512 << 20)
+	before = family.reads
+	replay, err := NewStoredLedgerReplayWithMemoryContext(t.Context(), parent, target, nil, budget)
+	require.NoError(t, err)
+	require.Len(t, replay.OrderedTxs(), count)
+	require.GreaterOrEqual(t, family.reads-before, 2*count, "both bounded walks should release cold children")
+	replay.ReleaseMemory()
+	require.Zero(t, budget.Snapshot().Used)
 }
 
 func TestNewStoredLedgerReplayRejectsInvalidLinkage(t *testing.T) {
