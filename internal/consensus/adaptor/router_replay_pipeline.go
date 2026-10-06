@@ -22,30 +22,43 @@ const (
 	standardReplayApplyBudget    = 25 * time.Millisecond
 )
 
+type standardReplayLegacyMemoryWait struct {
+	ledger   *inbound.Ledger
+	required uint64
+}
+
 type standardReplayPipeline struct {
-	generation        uint64
-	active            bool
-	applying          bool
-	pivotReady        bool
-	initialCandidate  bool
-	pivotSeq          uint32
-	pivotHash         [32]byte
-	anchorSeq         uint32
-	anchorHash        [32]byte
-	collectSeq        uint32
-	collectHash       [32]byte
-	targetSeq         uint32
-	targetHash        [32]byte
-	entries           map[uint32]*standardReplayEntry
-	headBlockedAt     time.Time
-	pivotStartedAt    time.Time
-	progressSampleAt  time.Time
-	sampleAnchorSeq   uint32
-	stalledSamples    uint8
-	retargetAttemptAt time.Time
-	backpressured     bool
-	baseLedger        *inbound.Ledger
-	baseRelease       func()
+	generation              uint64
+	active                  bool
+	applying                bool
+	pivotReady              bool
+	initialCandidate        bool
+	pivotSeq                uint32
+	pivotHash               [32]byte
+	anchorSeq               uint32
+	anchorHash              [32]byte
+	collectSeq              uint32
+	collectHash             [32]byte
+	targetSeq               uint32
+	targetHash              [32]byte
+	entries                 map[uint32]*standardReplayEntry
+	entriesMemory           *shamap.AcquisitionBudget
+	headBlockedAt           time.Time
+	pivotStartedAt          time.Time
+	progressSampleAt        time.Time
+	sampleAnchorSeq         uint32
+	stalledSamples          uint8
+	retargetAttemptAt       time.Time
+	backpressured           bool
+	memoryWait              bool
+	memoryWaitKind          standardReplayMemoryWaitKind
+	memoryWaitBytes         uint64
+	memoryFutureWait        bool
+	memoryCollectorBlocked  bool
+	memoryCollectorPeerHint uint64
+	legacyMemoryWait        []*standardReplayLegacyMemoryWait
+	baseLedger              *inbound.Ledger
+	baseRelease             func()
 	// acquisitionMu protects the owner retained between tracker removal and installation.
 	pivotHandoff *standardReplayPivotHandoff
 	replacement  *standardReplayReplacement
@@ -81,26 +94,31 @@ type standardReplayTarget struct {
 }
 
 type standardReplayEntry struct {
-	generation              uint64
-	seq                     uint32
-	hash                    [32]byte
-	parentHash              [32]byte
-	peerID                  uint64
-	requestedAt             time.Time
-	readyAt                 time.Time
-	header                  header.LedgerHeader
-	txMap                   *shamap.SHAMap
-	acquisition             *inbound.Ledger
-	durable                 bool
-	failed                  bool
-	failureClass            standardReplayFailureClass
-	availabilityPending     bool
-	availabilityRetrying    bool
-	availabilityExhausted   bool
-	availabilityRetries     uint8
-	availabilityNextRetryAt time.Time
-	availabilityDeadlineAt  time.Time
-	availabilityTriedPeers  []uint64
+	generation                 uint64
+	seq                        uint32
+	hash                       [32]byte
+	parentHash                 [32]byte
+	peerID                     uint64
+	requestedAt                time.Time
+	readyAt                    time.Time
+	header                     header.LedgerHeader
+	txMap                      *shamap.SHAMap
+	acquisition                *inbound.Ledger
+	durable                    bool
+	failed                     bool
+	failureClass               standardReplayFailureClass
+	availabilityPending        bool
+	availabilityRetrying       bool
+	availabilityExhausted      bool
+	availabilityRetries        uint8
+	availabilityNextRetryAt    time.Time
+	availabilityDeadlineAt     time.Time
+	availabilityTriedPeers     []uint64
+	replayMemory               standardReplayMemoryReservation
+	replayPayloadBytes         uint64
+	replayMemoryPending        bool
+	replayMemoryActive         uint32
+	replayMemoryReleasePending bool
 }
 
 type standardReplayLink struct {
@@ -276,9 +294,10 @@ func (c *catchupReplayCoordinator) advanceStandardReplayAnchor(
 	var retirement standardReplayRetirement
 	for _, link := range links {
 		if entry := c.standardReplay.entries[link.seq]; entry != nil {
-			if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
-				retirement.ledgers = append(retirement.ledgers, entry.acquisition)
+			if acquisition := c.retireOrRetainStandardReplayAcquisitionLocked(entry); acquisition != nil {
+				retirement.ledgers = append(retirement.ledgers, acquisition)
 			}
+			c.releaseStandardReplayEntryMemoryLocked(entry)
 			if c.consensusRecovery.stepHash == entry.hash {
 				c.consensusRecovery.stepHash = [32]byte{}
 			}
@@ -290,6 +309,9 @@ func (c *catchupReplayCoordinator) advanceStandardReplayAnchor(
 
 	c.standardReplay.anchorSeq = anchorSeq
 	c.standardReplay.anchorHash = anchorHash
+	if head := c.standardReplay.entries[anchorSeq+1]; head != nil {
+		c.promoteStandardReplayHeadLocked(head)
+	}
 	if replacement := c.discardObsoleteStandardReplayReplacementLocked(); replacement != nil {
 		retirement.ledgers = append(retirement.ledgers, replacement)
 	}
@@ -530,9 +552,10 @@ func (c *catchupReplayCoordinator) reconcileStandardReplayAfterHeaderDiscovery(
 			if seq < firstDiscard {
 				continue
 			}
-			if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
-				retirement.ledgers = append(retirement.ledgers, entry.acquisition)
+			if acquisition := c.retireOrRetainStandardReplayAcquisitionLocked(entry); acquisition != nil {
+				retirement.ledgers = append(retirement.ledgers, acquisition)
 			}
+			c.releaseStandardReplayEntryMemoryLocked(entry)
 			if c.consensusRecovery.stepHash == entry.hash {
 				c.consensusRecovery.stepHash = [32]byte{}
 			}
@@ -556,6 +579,9 @@ func (c *catchupReplayCoordinator) reconcileStandardReplayAfterHeaderDiscovery(
 		c.standardReplay.targetHash = targetHash
 	}
 	c.recomputeStandardReplayCollectorLocked()
+	if head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]; head != nil {
+		c.promoteStandardReplayHeadLocked(head)
+	}
 	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
 	if startDrain {
 		head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
@@ -618,6 +644,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 	if c.stoppedForShutdown() || c.replayFaultBlocked() {
 		return false
 	}
+	c.installStandardReplayMemoryWake()
 	// Retire superseded walkers only after releasing acquisitionMu: their
 	// cancellation/cleanup may need locks owned by acquisition workers.
 	var superseded []*inbound.Ledger
@@ -695,16 +722,33 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		c.standardReplay.anchorHash = anchor.Hash()
 		c.standardReplay.collectSeq = anchor.Sequence()
 		c.standardReplay.collectHash = anchor.Hash()
-		c.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPreparedLimit)
 		c.standardReplay.progressSampleAt = time.Now()
 		c.standardReplay.sampleAnchorSeq = anchor.Sequence()
 		c.standardReplay.stalledSamples = 0
 		c.standardReplay.backpressured = false
+		c.standardReplay.memoryWait = false
+		c.standardReplay.memoryWaitKind = 0
+		c.standardReplay.memoryWaitBytes = 0
+		c.standardReplay.memoryFutureWait = false
+		c.standardReplay.memoryCollectorBlocked = false
+		c.standardReplay.memoryCollectorPeerHint = 0
 	}
 	if targetSeq > c.standardReplay.targetSeq ||
 		(targetSeq == c.standardReplay.targetSeq && targetHash == c.standardReplay.targetHash) {
 		c.standardReplay.targetSeq = targetSeq
 		c.standardReplay.targetHash = targetHash
+	}
+	if c.standardReplay.memoryWait {
+		c.acquisitionMu.Unlock()
+		return true
+	}
+	c.standardReplay.memoryCollectorBlocked = false
+	c.standardReplay.memoryCollectorPeerHint = 0
+	if !c.prepareStandardReplayEntriesLocked() {
+		c.standardReplay.memoryCollectorBlocked = true
+		c.standardReplay.memoryCollectorPeerHint = peerHint
+		c.acquisitionMu.Unlock()
+		return true
 	}
 	if !initial && c.standardReplayHasAvailabilityBlockLocked() {
 		c.acquisitionMu.Unlock()
@@ -741,6 +785,15 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 			c.startLedgerAcquisitionLegacyLocked(link.seq, link.hash, peerID)
 			break
 		}
+		replayMemory, admitted := c.reserveStandardReplayEntryMemory(link.seq == c.standardReplay.anchorSeq+1)
+		if !admitted {
+			// Local replay memory pressure is a transient admission wait. Keep
+			// the verified chain and let the current head drain before retrying;
+			// it must not be reported as a peer failure.
+			c.standardReplay.memoryCollectorBlocked = true
+			c.standardReplay.memoryCollectorPeerHint = peerID
+			break
+		}
 		// Consensus may have started a full-state fetch before replay proved
 		// this successor chain. The hash-keyed tracker would return that fetch
 		// to the tx-only collector forever. Once the pivot is verified, replay
@@ -755,6 +808,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		}
 		il, created := c.startLedgerReplayAcquisitionLegacyLocked(link.seq, link.hash, peerID)
 		if il == nil || !il.TransactionOnly() {
+			replayMemory.release()
 			break
 		}
 		c.standardReplay.entries[link.seq] = &standardReplayEntry{
@@ -766,6 +820,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 			requestedAt:            now,
 			acquisition:            il,
 			availabilityTriedPeers: append([]uint64(nil), il.Peers()...),
+			replayMemory:           replayMemory,
 		}
 		c.standardReplay.collectSeq = link.seq
 		c.standardReplay.collectHash = link.hash
@@ -792,7 +847,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 			c.consensusRecovery.stepHash = head.hash
 		}
 	}
-	armed := !initial || len(c.standardReplay.entries) > 0
+	armed := !initial || len(c.standardReplay.entries) > 0 || c.standardReplay.memoryCollectorBlocked
 	if !armed {
 		cancelIdentity := c.standardReplayIdentityLocked()
 		c.acquisitionMu.Unlock()
@@ -938,7 +993,7 @@ func (c *catchupReplayCoordinator) logStandardReplayCancellation(
 }
 
 func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason string) standardReplayRetirement {
-	if !c.standardReplay.active && len(c.standardReplay.entries) == 0 && c.standardReplay.baseRelease == nil {
+	if !c.standardReplay.active && len(c.standardReplay.entries) == 0 && c.standardReplay.baseRelease == nil && len(c.standardReplay.legacyMemoryWait) == 0 {
 		return standardReplayRetirement{}
 	}
 	generation := c.standardReplay.generation
@@ -948,6 +1003,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	targetHash := c.standardReplay.targetHash
 	discardedEntries := len(c.standardReplay.entries)
 	var retired []*inbound.Ledger
+	legacyMemoryWait := c.standardReplay.legacyMemoryWait
 	if replacement := c.standardReplay.replacement; replacement != nil {
 		if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
 			retired = append(retired, replacement.acquisition)
@@ -967,9 +1023,10 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 		if entry.failed && entry.failureClass != standardReplayFailureAvailability {
 			c.requireReplayFullStateLocked(entry.seq, entry.hash)
 		}
-		if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
-			retired = append(retired, entry.acquisition)
+		if acquisition := c.retireOrRetainStandardReplayAcquisitionLocked(entry); acquisition != nil {
+			retired = append(retired, acquisition)
 		}
+		c.releaseStandardReplayEntryMemoryLocked(entry)
 		if c.consensusRecovery.stepHash == entry.hash {
 			c.consensusRecovery.stepHash = [32]byte{}
 		}
@@ -977,6 +1034,11 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	}
 	if c.consensusRecovery.stepHash == c.standardReplay.pivotHash {
 		c.consensusRecovery.stepHash = [32]byte{}
+	}
+	for _, wait := range legacyMemoryWait {
+		if wait != nil && wait.ledger != nil {
+			retired = append(retired, wait.ledger)
+		}
 	}
 	c.standardReplay.generation++
 	c.standardReplay.active = false
@@ -991,7 +1053,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	c.standardReplay.collectHash = [32]byte{}
 	c.standardReplay.targetSeq = 0
 	c.standardReplay.targetHash = [32]byte{}
-	c.standardReplay.entries = nil
+	c.dropStandardReplayEntriesLocked()
 	c.standardReplay.headBlockedAt = time.Time{}
 	c.standardReplay.pivotStartedAt = time.Time{}
 	c.standardReplay.progressSampleAt = time.Time{}
@@ -999,6 +1061,13 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	c.standardReplay.stalledSamples = 0
 	c.standardReplay.retargetAttemptAt = time.Time{}
 	c.standardReplay.backpressured = false
+	c.standardReplay.memoryWait = false
+	c.standardReplay.memoryWaitKind = 0
+	c.standardReplay.memoryWaitBytes = 0
+	c.standardReplay.memoryFutureWait = false
+	c.standardReplay.memoryCollectorBlocked = false
+	c.standardReplay.memoryCollectorPeerHint = 0
+	c.standardReplay.legacyMemoryWait = nil
 	c.standardReplay.pivotHandoff = nil
 	baseLedger := c.standardReplay.baseLedger
 	c.standardReplay.baseLedger = nil
@@ -1064,30 +1133,84 @@ func (c *catchupReplayCoordinator) standardReplayOwnsLocked(hash [32]byte) bool 
 	return false
 }
 
+func (c *catchupReplayCoordinator) retireOrRetainStandardReplayAcquisitionLocked(entry *standardReplayEntry) *inbound.Ledger {
+	if entry == nil || entry.acquisition == nil {
+		return nil
+	}
+	acquisition := entry.acquisition
+	if c.discardInboundAcquisitionLocked(acquisition) || entry.replayMemoryPending {
+		return acquisition
+	}
+	return nil
+}
+
 func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	il *inbound.Ledger,
 	h *header.LedgerHeader,
 	txMap *shamap.SHAMap,
 	peerID uint64,
-) (bool, bool) {
+) (bool, bool, bool) {
 	if il == nil || h == nil {
-		return false, false
+		return false, false, false
 	}
 	now := time.Now()
 	entry := c.standardReplay.entries[h.LedgerIndex]
 	if !c.standardReplay.active || entry == nil || entry.seq != h.LedgerIndex || entry.hash != h.Hash ||
 		entry.generation != c.standardReplay.generation || entry.acquisition != il {
-		return false, false
+		return false, false, false
+	}
+	durable := c.acquisitionStore != nil && c.acquisitionFamily != nil
+	if !durable && txMap != nil {
+		payloadBytes := standardReplayTransactionMapBytes(txMap)
+		if payloadBytes == standardReplayUnknownMapBytes {
+			return c.blockStandardReplayEntryForMemoryLocked(entry, h, il, txMap, peerID, now)
+		}
+		if payloadBytes > entry.replayMemory.payloadBytes {
+			extra := payloadBytes - entry.replayMemory.payloadBytes
+			if !entry.replayMemory.add(entry.replayMemory.account, extra) {
+				entry.header = *h
+				entry.txMap = txMap
+				entry.durable = false
+				entry.peerID = peerID
+				entry.replayPayloadBytes = payloadBytes
+				entry.replayMemoryPending = true
+				entry.readyAt = time.Time{}
+				if c.logger != nil {
+					configured := entry.replayMemory.bytes
+					limit := uint64(0)
+					if entry.replayMemory.account != nil {
+						limit = entry.replayMemory.account.Snapshot().Limit
+					}
+					c.logger.Warn("standard transaction replay entry is waiting for local memory capacity",
+						"seq", entry.seq,
+						"hash", fmt.Sprintf("%x", entry.hash[:8]),
+						"peer", peerID,
+						"required_bytes", payloadBytes,
+						"reserved_bytes", configured,
+						"configured_limit", limit,
+					)
+				}
+				c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitFuture, extra)
+				c.updateStandardReplayHeadBlockLocked(now)
+				return true, false, true
+			}
+			entry.replayMemory.payloadBytes = payloadBytes
+		} else {
+			entry.replayMemory.trimPayload(payloadBytes)
+		}
 	}
 	entry.header = *h
 	entry.txMap = txMap
-	if c.acquisitionStore != nil && c.acquisitionFamily != nil {
+	if durable {
 		entry.durable = true
+		entry.replayMemory.releasePayload()
 		entry.txMap = nil
 	}
 	entry.peerID = peerID
 	entry.readyAt = now
 	entry.acquisition = nil
+	entry.replayPayloadBytes = 0
+	entry.replayMemoryPending = false
 	entry.failed = false
 	entry.failureClass = standardReplayFailureNone
 	entry.availabilityPending = false
@@ -1105,7 +1228,75 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 		c.standardReplay.applying = true
 	}
 	c.updateStandardReplayHeadBlockLocked(now)
-	return true, startDrain
+	return true, startDrain, false
+}
+
+func (c *catchupReplayCoordinator) retryStandardReplayMemoryEntriesLocked() []*inbound.Ledger {
+	if !c.standardReplay.active {
+		return nil
+	}
+	now := time.Now()
+	var retired []*inbound.Ledger
+	head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
+	headOnly := c.standardReplay.pivotReady && head != nil && head.replayMemoryPending
+	if headOnly {
+		c.promoteStandardReplayHeadLocked(head)
+	}
+	for _, entry := range c.standardReplay.entries {
+		if headOnly && entry != head {
+			continue
+		}
+		if entry == nil || !entry.replayMemoryPending || entry.txMap == nil {
+			continue
+		}
+		required := entry.replayPayloadBytes
+		if required == standardReplayUnknownMapBytes {
+			required = standardReplayTransactionMapBytes(entry.txMap)
+			if required == standardReplayUnknownMapBytes {
+				c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitFuture, standardReplayPreparedPayloadReserveBytes)
+				continue
+			}
+		}
+		if required > entry.replayMemory.payloadBytes {
+			extra := required - entry.replayMemory.payloadBytes
+			if !entry.replayMemory.add(entry.replayMemory.account, extra) {
+				c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitFuture, extra)
+				continue
+			}
+			entry.replayMemory.payloadBytes = required
+		} else {
+			entry.replayMemory.trimPayload(required)
+		}
+		entry.replayMemoryPending = false
+		entry.readyAt = now
+		entry.replayPayloadBytes = 0
+		acquisition := entry.acquisition
+		entry.acquisition = nil
+		entry.failed = false
+		entry.failureClass = standardReplayFailureNone
+		entry.availabilityPending = false
+		entry.availabilityRetrying = false
+		entry.availabilityExhausted = false
+		entry.availabilityRetries = 0
+		entry.availabilityNextRetryAt = time.Time{}
+		entry.availabilityDeadlineAt = time.Time{}
+		entry.availabilityTriedPeers = nil
+		c.replayPipelineReady.Add(1)
+		if acquisition != nil {
+			c.replayPipelineRetried.Add(uint64(acquisition.Timeouts()))
+			retired = append(retired, acquisition)
+		}
+		c.replayPipelineAcquireUs.Add(durationMicros(now.Sub(entry.requestedAt)))
+	}
+	c.standardReplay.memoryFutureWait = false
+	for _, entry := range c.standardReplay.entries {
+		if entry != nil && entry.replayMemoryPending {
+			c.standardReplay.memoryFutureWait = true
+			break
+		}
+	}
+	c.updateStandardReplayHeadBlockLocked(now)
+	return retired
 }
 
 func (c *catchupReplayCoordinator) refillStandardReplayCollector(peerHint uint64) bool {
@@ -1264,6 +1455,21 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 			c.acquisitionMu.Unlock()
 			return
 		}
+		if entry.replayMemory.kind != standardReplayMemoryHead && !c.promoteStandardReplayHeadLocked(entry) {
+			c.standardReplay.applying = false
+			c.updateStandardReplayHeadBlockLocked(time.Now())
+			c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitHead, entry.replayMemory.bytes)
+			owner.memoryWait = true
+			c.acquisitionMu.Unlock()
+			return
+		}
+		if entry.replayMemoryPending {
+			c.standardReplay.applying = false
+			c.updateStandardReplayHeadBlockLocked(time.Now())
+			owner.memoryWait = true
+			c.acquisitionMu.Unlock()
+			return
+		}
 		if entry.failed {
 			retired, target, current := c.discardStandardReplayHeadLocked(entry, generation)
 			c.acquisitionMu.Unlock()
@@ -1275,17 +1481,83 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 			}
 			return
 		}
+		processingAccount := c.standardReplayMemoryAccount()
+		if !reserveStandardReplayProcessing(processingAccount, standardReplayProcessingBytes) {
+			c.standardReplay.applying = false
+			c.updateStandardReplayHeadBlockLocked(time.Now())
+			c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, standardReplayProcessingBytes)
+			owner.memoryWait = true
+			c.acquisitionMu.Unlock()
+			return
+		}
+		c.standardReplay.memoryWait = false
+		c.standardReplay.memoryWaitKind = 0
+		c.standardReplay.memoryWaitBytes = 0
+		if !c.retainStandardReplayEntryMemoryLocked(entry) {
+			releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
+			c.standardReplay.applying = false
+			c.updateStandardReplayHeadBlockLocked(time.Now())
+			c.acquisitionMu.Unlock()
+			return
+		}
 		copyEntry := *entry
 		c.acquisitionMu.Unlock()
 
 		applyStarted := time.Now()
-		hdr, initialCandidate, persistDuration, releaseCommit, err := c.applyStandardReplayEntry(&copyEntry, entry, generation)
+		var (
+			hdr              header.LedgerHeader
+			initialCandidate bool
+			persistDuration  time.Duration
+			releaseCommit    func()
+			err              error
+		)
+		func() {
+			defer releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
+			defer c.releaseStandardReplayEntryMemory(entry)
+			hdr, initialCandidate, persistDuration, releaseCommit, err = c.applyStandardReplayEntry(&copyEntry, entry, generation)
+		}()
 		applyDuration := time.Since(applyStarted) - persistDuration
 		if applyDuration < 0 {
 			applyDuration = 0
 		}
 		if err != nil {
 			if c.stoppedForShutdown() {
+				return
+			}
+			if errors.Is(err, inbound.ErrReplayMemory) {
+				if releaseCommit != nil {
+					releaseCommit()
+				}
+				c.acquisitionMu.Lock()
+				current := c.standardReplay.active && c.standardReplay.generation == generation &&
+					c.standardReplay.entries[entry.seq] == entry && c.standardReplay.anchorSeq+1 == entry.seq
+				if current {
+					c.standardReplay.applying = false
+					required := uint64(standardReplayProcessingBytes)
+					var memoryErr *inbound.ReplayMemoryError
+					if errors.As(err, &memoryErr) && memoryErr.Required != 0 {
+						if memoryErr.Required > ^uint64(0)-required {
+							required = ^uint64(0)
+						} else {
+							required += memoryErr.Required
+						}
+					}
+					wasWaiting := c.standardReplay.memoryWait &&
+						c.standardReplay.memoryWaitKind == standardReplayMemoryWaitProcessing &&
+						c.standardReplay.memoryWaitBytes >= required
+					c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, required)
+					if !wasWaiting && c.logger != nil {
+						c.logger.Warn("standard transaction replay head is waiting for local memory capacity",
+							"seq", entry.seq,
+							"hash", fmt.Sprintf("%x", entry.hash[:8]),
+							"required_bytes", required,
+							"error", err,
+						)
+					}
+					owner.memoryWait = true
+					c.updateStandardReplayHeadBlockLocked(time.Now())
+				}
+				c.acquisitionMu.Unlock()
 				return
 			}
 			c.acquisitionMu.Lock()
@@ -1323,8 +1595,12 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 			return
 		}
 		delete(c.standardReplay.entries, entry.seq)
+		c.releaseStandardReplayEntryMemoryLocked(entry)
 		c.standardReplay.anchorSeq = entry.seq
 		c.standardReplay.anchorHash = entry.hash
+		if next := c.standardReplay.entries[entry.seq+1]; next != nil {
+			c.promoteStandardReplayHeadLocked(next)
+		}
 		supersededReplacement := c.discardObsoleteStandardReplayReplacementLocked()
 		c.replayPipelineApplied.Add(1)
 		c.replayPipelineApplyUs.Add(durationMicros(applyDuration))
@@ -1359,7 +1635,10 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 		if current && reachedTarget && c.standardReplay.targetSeq == entry.seq && c.standardReplay.targetHash == entry.hash {
 			c.standardReplay.active = false
 			c.standardReplay.applying = false
-			c.standardReplay.entries = nil
+			for _, remaining := range c.standardReplay.entries {
+				c.releaseStandardReplayEntryMemoryLocked(remaining)
+			}
+			c.dropStandardReplayEntriesLocked()
 			c.standardReplay.headBlockedAt = time.Time{}
 			c.standardReplay.backpressured = false
 			c.releaseStandardReplayBaseLocked()
@@ -1433,7 +1712,8 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 		}
 	}()
 	defer func() {
-		if retErr == nil || errors.Is(retErr, context.Canceled) || c.replayFaultBlocked() {
+		if retErr == nil || errors.Is(retErr, context.Canceled) ||
+			errors.Is(retErr, inbound.ErrReplayMemory) || c.replayFaultBlocked() {
 			return
 		}
 		c.acquisitionMu.Lock()
@@ -1482,10 +1762,21 @@ func (c *catchupReplayCoordinator) applyStandardReplayEntry(
 	if err != nil {
 		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("construct transaction-only replay target: %w", err)
 	}
-	replay, err := inbound.NewStoredLedgerReplay(parent, target, c.logger)
+	processingAccount := c.standardReplayMemoryAccount()
+	var replayAccount shamap.AcquisitionMemoryAccount
+	if processingAccount != nil {
+		replayAccount = processingAccount
+	}
+	replay, err := inbound.NewStoredLedgerReplayWithMemoryContext(c.lifecycleContext(),
+		parent,
+		target,
+		c.logger,
+		replayAccount,
+	)
 	if err != nil {
 		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepare transaction-only replay: %w", err)
 	}
+	defer replay.ReleaseMemory()
 	derived, err := svc.ApplyReplay(c.lifecycleContext(), replay, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(h))
 	if err != nil {
 		return header.LedgerHeader{}, false, 0, nil, err

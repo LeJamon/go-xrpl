@@ -4453,21 +4453,29 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 			c.retireAcquisitionStore(c.lifecycleContext(), il)
 			return
 		}
-		handled, startDrain := c.completeStandardReplayPipelineEntryLocked(il, h, txMap, peerID)
+		handled, startDrain, retainAcquisition := c.completeStandardReplayPipelineEntryLocked(il, h, txMap, peerID)
 		c.acquisitionMu.Unlock()
 		// The tracker handoff transfers the verified transaction map to the
 		// replay pipeline, regardless of whether the entry was already in its
 		// prepared window. Retire the acquisition scope after releasing the
 		// coordinator lock so its request and SHAMap charges cannot plateau.
-		c.retireAcquisitionStore(c.lifecycleContext(), il)
 		if handled {
+			if !retainAcquisition {
+				c.retireAcquisitionStore(c.lifecycleContext(), il)
+			}
 			c.refillStandardReplayCollector(peerID)
 			if startDrain {
 				c.drainStandardReplayPipeline()
 			}
 			return
 		}
-		c.completeStandardTransactionReplay(h, txMap, peerID)
+		c.completeStandardTransactionReplay(il, h, txMap, peerID)
+		c.acquisitionMu.Lock()
+		legacyMemoryWait := c.retainsStandardReplayLegacyLocked(il)
+		c.acquisitionMu.Unlock()
+		if !legacyMemoryWait {
+			c.retireAcquisitionStore(c.lifecycleContext(), il)
+		}
 		return
 	}
 	if c.completeStandardReplayReplacement(il, h, stateMap, txMap) {
@@ -4566,6 +4574,7 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 }
 
 func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
+	il *inbound.Ledger,
 	h *header.LedgerHeader,
 	txMap *shamap.SHAMap,
 	peerID uint64,
@@ -4580,6 +4589,7 @@ func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
 	if svc == nil {
 		return
 	}
+	c.installStandardReplayMemoryWake()
 	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
 	if err != nil {
 		c.logger.Warn("standard transaction replay state admission failed", "error", err, "seq", h.LedgerIndex)
@@ -4646,11 +4656,49 @@ func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
 		fallback(fmt.Errorf("construct transaction-only replay target: %w", err))
 		return
 	}
-	replay, err := inbound.NewStoredLedgerReplay(parent, target, c.logger)
+	processingAccount := c.standardReplayMemoryAccount()
+	var replayAccount shamap.AcquisitionMemoryAccount
+	if processingAccount != nil {
+		replayAccount = processingAccount
+	}
+	replay, err := inbound.NewStoredLedgerReplayWithMemoryContext(c.lifecycleContext(), parent, target, c.logger, replayAccount)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		if errors.Is(err, inbound.ErrReplayMemory) && il != nil {
+			required := uint64(0)
+			var memoryErr *inbound.ReplayMemoryError
+			if errors.As(err, &memoryErr) {
+				required = memoryErr.Required
+			}
+			c.installStandardReplayMemoryWake()
+			c.acquisitionMu.Lock()
+			if c.stoppedForShutdown() {
+				c.acquisitionMu.Unlock()
+				return
+			}
+			if !c.retainsStandardReplayLegacyLocked(il) {
+				c.standardReplay.legacyMemoryWait = append(c.standardReplay.legacyMemoryWait, &standardReplayLegacyMemoryWait{
+					ledger: il, required: required,
+				})
+			}
+			c.acquisitionMu.Unlock()
+			if c.logger != nil {
+				c.logger.Warn("standard transaction replay is waiting for local memory capacity",
+					"seq", h.LedgerIndex,
+					"hash", fmt.Sprintf("%x", h.Hash[:8]),
+					"peer", peerID,
+					"required_bytes", required,
+					"error", err,
+				)
+			}
+			return
+		}
 		fallback(fmt.Errorf("prepare standard transaction replay: %w", err))
 		return
 	}
+	defer replay.ReleaseMemory()
 	derived, err := svc.ApplyReplay(c.lifecycleContext(), replay, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(*h))
 	if err != nil {
 		c.logger.Error("standard transaction replay apply failed; validator duties blocked",

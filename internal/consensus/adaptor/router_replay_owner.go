@@ -8,6 +8,10 @@ type standardReplayDrainOwner struct {
 	// Written only by this drain, read by its deferred release. Preserve the
 	// router-loop yield even if the next acquisition is not ready yet.
 	yielded bool
+	// Memory admission is level-triggered by the coordinator's shared budget
+	// watcher. Do not immediately re-arm the same ready head while waiting for
+	// that wakeup.
+	memoryWait bool
 }
 
 func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDrainOwner {
@@ -21,7 +25,7 @@ func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDra
 		// also handles a wake consumed during a concurrent/reentrant drain.
 		return nil
 	}
-	if !c.standardReplay.active || !c.standardReplay.pivotReady {
+	if !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
 		c.standardReplay.applying = false
 		return nil
 	}
@@ -51,13 +55,16 @@ func (c *catchupReplayCoordinator) finishStandardReplayDrain(owner *standardRepl
 		c.scheduleStandardReplayDrain()
 		return
 	}
+	if owner.memoryWait {
+		return
+	}
 	c.scheduleReadyStandardReplayDrainLocked()
 }
 
 // Caller holds acquisitionMu. A pending wake is not an executing applier.
 // Re-sending an edge-triggered wake is safe and repairs an orphaned reservation.
 func (c *catchupReplayCoordinator) scheduleReadyStandardReplayDrainLocked() bool {
-	if c.stoppedForShutdown() || c.standardReplayDrainOwner != nil || !c.standardReplay.active || !c.standardReplay.pivotReady {
+	if c.stoppedForShutdown() || c.standardReplayDrainOwner != nil || !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
 		return false
 	}
 	head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]

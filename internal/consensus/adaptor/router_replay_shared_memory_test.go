@@ -38,6 +38,7 @@ func completePaymentReplayTestLink(t *testing.T, r *Router, link standardReplayT
 	}))
 
 	for !il.IsComplete() {
+		require.NoError(t, il.FlushPersistence(t.Context()))
 		_, ids := il.CollectMissingRequest(false)
 		if il.IsComplete() {
 			break
@@ -143,10 +144,10 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 	r.catchupReplay.standardReplay.pivotReady = false
 	r.catchupReplay.standardReplay.applying = true
 	preparedHead := r.catchupReplay.standardReplay.entries[head.seq]
+	r.catchupReplay.acquisitionMu.Unlock()
 	require.NotNil(t, preparedHead)
 	require.Equal(t, head.hash, preparedHead.hash)
 	require.Same(t, r.catchupReplay.fetchTracker.Find(head.hash), preparedHead.acquisition)
-	r.catchupReplay.acquisitionMu.Unlock()
 	completePaymentReplayTestLink(t, r, head, sourceTarget)
 	r.catchupReplay.acquisitionMu.Lock()
 	r.catchupReplay.standardReplay.applying = false
@@ -163,11 +164,11 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 
 	r.catchupReplay.acquisitionMu.Lock()
 	readyHead := r.catchupReplay.standardReplay.entries[head.seq]
+	r.catchupReplay.standardReplay.pivotReady = true
+	r.catchupReplay.acquisitionMu.Unlock()
 	require.NotNil(t, readyHead)
 	require.False(t, readyHead.readyAt.IsZero())
 	require.NotNil(t, readyHead.txMap)
-	r.catchupReplay.standardReplay.pivotReady = true
-	r.catchupReplay.acquisitionMu.Unlock()
 
 	r.catchupReplay.drainStandardReplayPipeline()
 	parkedMetrics := r.FastSyncMetrics()
@@ -177,9 +178,16 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 		"memory pressure must not enter the replay fault or peer fallback path")
 	require.False(t, svc.ReplayBlocked(), "a transient memory wait must keep validator duties healthy")
 	r.catchupReplay.acquisitionMu.Lock()
-	require.False(t, r.catchupReplay.standardReplay.applying)
-	require.False(t, r.catchupReplay.standardReplay.headBlockedAt.IsZero())
+	applying := r.catchupReplay.standardReplay.applying
+	memoryWait := r.catchupReplay.standardReplay.memoryWait
 	r.catchupReplay.acquisitionMu.Unlock()
+	require.False(t, applying)
+	require.True(t, memoryWait)
+
+	r.catchupReplay.notifyAcquisitionMemoryAvailable()
+	require.Empty(t, r.catchupReplay.standardReplayDrainWake,
+		"rolling back the small processing reservation must not retry the larger denied admission")
+	require.Zero(t, r.FastSyncMetrics().ReplayPipelineApplied)
 
 	usedBeforeRelease := budget.Snapshot().Used
 	cache.Release(cacheBytes)
@@ -213,4 +221,59 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 	require.Zero(t, budget.Snapshot().Used)
 	require.Zero(t, pool.Snapshot().Used)
 	require.Zero(t, pool.Snapshot().InvalidReleases)
+}
+
+func TestLegacyReplayMemoryWaitPreservesPaymentAndAvoidsSelfWake(t *testing.T) {
+	source := closedLedgerWithPayment(t)
+	t.Cleanup(source.Stop)
+	target := source.GetClosedLedger()
+	hash := target.Hash()
+	r, _, _, svc := makeRouter(t)
+	pool := membudget.New(2 << 30)
+	parent, err := pool.NewAccount("acquisition", 512<<20, 2<<30)
+	require.NoError(t, err)
+	cache, err := pool.NewAccount("cache", 0, 2<<30)
+	require.NoError(t, err)
+	require.NoError(t, r.SetAcquisitionMemoryBudget(2<<30, parent))
+	budget := r.catchupReplay.acquisitionMemory
+	const held = 512 << 20
+	require.True(t, budget.TryReserveReplayProcessing(held))
+	cacheBytes := uint64(0)
+	defer func() {
+		r.StopAcquisitions()
+		budget.ReleaseReplayProcessing(held)
+		cache.Release(cacheBytes)
+		require.True(t, r.CloseAcquisitionMemoryBudget())
+		require.Zero(t, pool.Snapshot().Used)
+	}()
+	trackCatchupPeer(r, 7, target.Sequence(), hash)
+	r.catchupReplay.acquisitionMu.Lock()
+	il, _ := r.catchupReplay.startLedgerReplayAcquisitionLegacyLocked(target.Sequence(), hash, 7)
+	r.catchupReplay.acquisitionMu.Unlock()
+	require.NotNil(t, il)
+	// Leave the cold-walk workspace available, forcing the decoded payload's
+	// second admission to fail and roll that workspace back.
+	const workspace = (128 << 20) + (256 << 10)
+	cacheBytes = pool.Snapshot().SharedAvailable - workspace
+	require.True(t, cache.TryReserve(cacheBytes))
+	link := standardReplayTestLink{seq: target.Sequence(), hash: hash, ledger: target,
+		response: &message.ReplayDeltaResponse{LedgerHeader: header.AddRaw(target.Header(), false)}}
+	completePaymentReplayTestLink(t, r, link, target)
+	require.Len(t, r.catchupReplay.standardReplay.legacyMemoryWait, 1)
+	require.False(t, svc.ReplayBlocked())
+	before := budget.Snapshot().Used
+	r.catchupReplay.notifyAcquisitionMemoryAvailable()
+	require.Len(t, r.catchupReplay.standardReplay.legacyMemoryWait, 1)
+	require.Equal(t, before, budget.Snapshot().Used)
+	require.Empty(t, r.catchupReplay.standardReplayDrainWake)
+	require.NotEqual(t, target.Hash(), svc.GetClosedLedger().Hash())
+	cache.Release(cacheBytes)
+	cacheBytes = 0
+	r.catchupReplay.notifyAcquisitionMemoryAvailable()
+	require.Empty(t, r.catchupReplay.standardReplay.legacyMemoryWait)
+	require.False(t, svc.ReplayBlocked())
+	stored, err := svc.GetLedgerByHash(hash)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.Equal(t, hash, stored.Hash())
 }

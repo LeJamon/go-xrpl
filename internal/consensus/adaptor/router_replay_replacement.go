@@ -379,18 +379,22 @@ func (c *catchupReplayCoordinator) installStandardReplayReplacementLocked(
 		}
 		for seq, entry := range c.standardReplay.entries {
 			if seq <= h.LedgerIndex || seq > lastSeq {
-				if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
-					retired = append(retired, entry.acquisition)
+				if acquisition := c.retireOrRetainStandardReplayAcquisitionLocked(entry); acquisition != nil {
+					retired = append(retired, acquisition)
 				}
 				if c.consensusRecovery.stepHash == entry.hash {
 					c.consensusRecovery.stepHash = [32]byte{}
 				}
+				c.releaseStandardReplayEntryMemoryLocked(entry)
 				delete(c.standardReplay.entries, seq)
 				c.replayPipelineDiscarded.Add(1)
 			}
 		}
 		c.standardReplay.pivotSeq, c.standardReplay.pivotHash = h.LedgerIndex, h.Hash
 		c.standardReplay.anchorSeq, c.standardReplay.anchorHash = h.LedgerIndex, h.Hash
+		if next := c.standardReplay.entries[h.LedgerIndex+1]; next != nil {
+			c.promoteStandardReplayHeadLocked(next)
+		}
 		c.standardReplay.collectSeq, c.standardReplay.collectHash = lastSeq, lastHash
 		c.standardReplay.initialCandidate = initial
 		c.standardReplay.progressSampleAt = time.Now()
@@ -413,7 +417,10 @@ func (c *catchupReplayCoordinator) installStandardReplayReplacementLocked(
 		c.standardReplay.active = false
 		c.standardReplay.applying = false
 		c.standardReplay.backpressured = false
-		c.standardReplay.entries = nil
+		for _, entry := range c.standardReplay.entries {
+			c.releaseStandardReplayEntryMemoryLocked(entry)
+		}
+		c.dropStandardReplayEntriesLocked()
 	}
 	return retirement, true
 }
