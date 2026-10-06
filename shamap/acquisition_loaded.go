@@ -64,33 +64,42 @@ func (sm *SHAMap) releaseAcquisitionNodesLocked() {
 }
 
 func (b *AcquisitionBudget) tryReserveLoaded(bytes uint64) bool {
-	for {
-		used := b.loadedUsed.Load()
-		if bytes > b.limit/4 || used > b.limit/4-bytes {
-			return false
-		}
-		if !b.loadedUsed.CompareAndSwap(used, used+bytes) {
-			continue
-		}
-		if !b.TryReserve(bytes) {
-			b.loadedUsed.Add(^(bytes - 1))
-			return false
-		}
-		for peak := b.loadedPeak.Load(); used+bytes > peak && !b.loadedPeak.CompareAndSwap(peak, used+bytes); peak = b.loadedPeak.Load() {
-		}
-		return true
+	if b == nil || bytes == 0 {
+		return b == nil || bytes == 0
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	used := b.loadedUsed.Load()
+	if bytes > b.limit/4 || used > b.limit/4-bytes {
+		return false
+	}
+	if !b.tryReserveGeneralLocked(bytes) {
+		return false
+	}
+	b.loadedUsed.Store(used + bytes)
+	for peak := b.loadedPeak.Load(); used+bytes > peak && !b.loadedPeak.CompareAndSwap(peak, used+bytes); peak = b.loadedPeak.Load() {
+	}
+	return true
 }
 
 func (b *AcquisitionBudget) releaseLoaded(bytes uint64) {
-	for {
-		used := b.loadedUsed.Load()
-		if bytes > used {
-			panic("acquisition loaded-node reservation underflow")
-		}
-		if b.loadedUsed.CompareAndSwap(used, used-bytes) {
-			b.Release(bytes)
-			return
-		}
+	if b == nil || bytes == 0 {
+		return
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	loadedUsed := b.loadedUsed.Load()
+	if bytes > loadedUsed {
+		panic("acquisition loaded-node reservation underflow")
+	}
+	used := b.used.Load()
+	if bytes > used {
+		panic("acquisition loaded-node reservation underflow")
+	}
+	b.loadedUsed.Store(loadedUsed - bytes)
+	b.used.Store(used - bytes)
+	if b.parent != nil {
+		b.parent.Release(bytes)
+	}
+	b.signalChangedLocked()
 }

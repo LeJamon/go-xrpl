@@ -480,6 +480,16 @@ func (r *Router) SetAcquisitionMemoryLimit(limit uint64) {
 	}
 }
 
+// SetAcquisitionMemoryBudget attaches the acquisition child budget to a
+// node-owned parent account. It must be called before Run; the existing local
+// limit remains an immutable acquisition ceiling while parent admission covers
+// all node-owned consumers.
+func (r *Router) SetAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) {
+	if r.catchupReplay != nil {
+		r.catchupReplay.setAcquisitionMemoryBudget(limit, parent)
+	}
+}
+
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
 // the router refuses to acquire or serve ledgers below it. A nil floor leaves
 // both paths unrestricted, so the disabled / standalone case is unchanged.

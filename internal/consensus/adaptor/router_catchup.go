@@ -2849,6 +2849,17 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 		}
 		return
 	}
+	if errors.Is(err, inbound.ErrReplayMemory) {
+		// Keep the acquisition registered. Its base admission remains owned
+		// while the maintenance loop rotates to another peer or retries after a
+		// sibling owner returns response capacity.
+		hash := rd.Hash()
+		c.logger.Debug("replay delta response deferred by memory budget",
+			"peer", msg.PeerID,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+		)
+		return
+	}
 	if err != nil {
 		// Verification failed. rd is still registered in the Replayer so
 		// we can read its provenance before abandoning the slot.
@@ -4444,6 +4455,11 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		}
 		handled, startDrain := c.completeStandardReplayPipelineEntryLocked(il, h, txMap, peerID)
 		c.acquisitionMu.Unlock()
+		// The tracker handoff transfers the verified transaction map to the
+		// replay pipeline, regardless of whether the entry was already in its
+		// prepared window. Retire the acquisition scope after releasing the
+		// coordinator lock so its request and SHAMap charges cannot plateau.
+		c.retireAcquisitionStore(c.lifecycleContext(), il)
 		if handled {
 			c.refillStandardReplayCollector(peerID)
 			if startDrain {

@@ -91,6 +91,32 @@ func (r *inFlightRegistry[T]) remove(hash [32]byte) {
 	delete(r.items, hash)
 }
 
+// removeItem removes hash and returns the item that owned its admission. The
+// caller uses the returned item to release any ownership charged outside the
+// registry. Unknown hashes remain a no-op.
+func (r *inFlightRegistry[T]) removeItem(hash [32]byte) (T, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[hash]
+	if ok {
+		delete(r.items, hash)
+	}
+	return item, ok
+}
+
+func (r *inFlightRegistry[T]) removeMatchingItems(match func([32]byte, T) bool) map[[32]byte]T {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := make(map[[32]byte]T)
+	for hash, item := range r.items {
+		if match(hash, item) {
+			delete(r.items, hash)
+			removed[hash] = item
+		}
+	}
+	return removed
+}
+
 func (r *inFlightRegistry[T]) removeMatching(match func([32]byte, T) bool) [][32]byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -126,6 +152,15 @@ func (r *inFlightRegistry[T]) stop() int {
 	r.items = make(map[[32]byte]T)
 	r.stopped = true
 	return n
+}
+
+func (r *inFlightRegistry[T]) stopItems() map[[32]byte]T {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := r.items
+	r.items = make(map[[32]byte]T)
+	r.stopped = true
+	return removed
 }
 
 // snapshot returns a freshly-allocated copy of the hash→item map. The

@@ -156,15 +156,29 @@ func (c *catchupReplayCoordinator) setAcquisitionFamily(family shamap.Family) {
 		c.acquisitionMemory = shamap.NewAcquisitionBudget(0)
 	}
 	c.acquisitionStore.memory = c.acquisitionMemory
+	if c.replayer != nil {
+		c.replayer.SetMemoryBudget(c.acquisitionMemory)
+	}
 	c.acquisitionFamily = c.acquisitionStore
 }
 
 func (c *catchupReplayCoordinator) setAcquisitionMemoryLimit(limit uint64) {
+	c.setAcquisitionMemoryBudget(limit, nil)
+}
+
+func (c *catchupReplayCoordinator) setAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) {
 	c.acquisitionWorkMu.Lock()
 	defer c.acquisitionWorkMu.Unlock()
-	c.acquisitionMemory = shamap.NewAcquisitionBudget(limit)
+	if parent == nil {
+		c.acquisitionMemory = shamap.NewAcquisitionBudget(limit)
+	} else {
+		c.acquisitionMemory = shamap.NewAcquisitionBudgetWithParent(limit, parent)
+	}
 	if c.acquisitionStore != nil {
 		c.acquisitionStore.memory = c.acquisitionMemory
+	}
+	if c.replayer != nil {
+		c.replayer.SetMemoryBudget(c.acquisitionMemory)
 	}
 }
 

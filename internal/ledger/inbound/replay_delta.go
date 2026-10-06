@@ -28,6 +28,11 @@ import (
 // callers use errors.Is for matching so the wording can evolve
 // without breaking test assertions on string contents.
 var (
+	// ErrReplayMemory means the response's retained transaction and metadata
+	// working set could not be admitted. The acquisition remains registered so
+	// the caller can retry after another owner returns memory.
+	ErrReplayMemory = errors.New("replay delta memory budget exhausted")
+
 	// ErrReplayParentMismatch means the requested ledger is not a child of the selected replay parent.
 	ErrReplayParentMismatch = errors.New("replay delta: parent hash mismatch")
 	// ErrReplaySequenceMismatch means the response is not the selected parent's direct successor.
@@ -99,6 +104,17 @@ const subTaskRetryInterval = 250 * time.Millisecond
 // rippled's LedgerReplayer.h:51 SUB_TASK_MAX_TIMEOUTS.
 const subTaskRetryMax = 10
 
+// replayDeltaAdmissionBytes protects the processing headroom for each
+// in-flight replay before a peer response arrives. Sixteen concurrent
+// acquisitions therefore retain 192 MiB of admission capacity for response
+// decode and persistence progress under the default 512 MiB child budget.
+const replayDeltaAdmissionBytes = 12 << 20
+
+const (
+	replayDeltaResponseFixedBytes = 64 << 10
+	replayDeltaDecodedTxBytes     = 256
+)
+
 // DecodedTx pairs a verified transaction with its metadata-derived index.
 // Returned (in TransactionIndex order) by ReplayDelta.OrderedTxs() once
 // verification has succeeded — so consumers that re-apply the txs against
@@ -152,6 +168,13 @@ type ReplayDelta struct {
 	derived *ledger.Ledger // post-apply: state map re-derived by the engine
 	txs     []DecodedTx
 
+	// memory and memoryBytes cover the base in-flight admission plus the
+	// response-owned copies retained through Apply. releaseMemory is idempotent
+	// because Complete, Abandon and shutdown cleanup may race with late replies.
+	memory        shamap.AcquisitionMemoryAccount
+	memoryBytes   uint64
+	memoryRelease sync.Once
+
 	// subTaskStart is the time of the last wire request (initial send
 	// or peer rotation). Drives IsSubTaskTimedOut without touching
 	// `created` (which bounds the outer budget).
@@ -202,6 +225,57 @@ func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger
 		logger:       logger,
 		triedPeers:   []uint64{peerID},
 	}
+}
+
+func (r *ReplayDelta) attachMemory(account shamap.AcquisitionMemoryAccount, bytes uint64) {
+	r.mu.Lock()
+	r.memory = account
+	r.memoryBytes = bytes
+	r.mu.Unlock()
+}
+
+// reserveResponseMemory admits the retained response representation while the
+// caller holds r.mu. The wire response itself is decoded outside this type, so
+// the estimate includes the original blobs, SHAMap leaf copies and decoded
+// transaction slice overhead that remain reachable after GotResponse returns.
+func (r *ReplayDelta) reserveResponseMemory(resp *message.ReplayDeltaResponse) error {
+	if r.memory == nil {
+		return nil
+	}
+	bytes := replayDeltaResponseBytes(resp)
+	if bytes == 0 || r.memory.TryReserve(bytes) {
+		r.memoryBytes += bytes
+		return nil
+	}
+	return ErrReplayMemory
+}
+
+func (r *ReplayDelta) releaseMemory() {
+	r.memoryRelease.Do(func() {
+		r.mu.Lock()
+		account := r.memory
+		bytes := r.memoryBytes
+		r.memory = nil
+		r.memoryBytes = 0
+		r.mu.Unlock()
+		if account != nil && bytes != 0 {
+			account.Release(bytes)
+		}
+	})
+}
+
+func replayDeltaResponseBytes(resp *message.ReplayDeltaResponse) uint64 {
+	if resp == nil {
+		return 0
+	}
+	bytes := uint64(replayDeltaResponseFixedBytes + len(resp.LedgerHeader))
+	for _, blob := range resp.Transactions {
+		// GotResponse keeps a slice into the decoded wire blob and copies the
+		// complete leaf into the transaction SHAMap. The extra fixed charge
+		// covers DecodedTx and map-node bookkeeping for each retained entry.
+		bytes += uint64(2*len(blob) + replayDeltaDecodedTxBytes)
+	}
+	return bytes
 }
 
 // NewStoredLedgerReplay creates a complete replay from locally stored parent
@@ -611,6 +685,9 @@ func (r *ReplayDelta) GotResponse(resp *message.ReplayDeltaResponse) error {
 		return r.err
 	}
 
+	if err := r.reserveResponseMemory(resp); err != nil {
+		return err
+	}
 	if err := r.verifyAndBuild(resp); err != nil {
 		r.state = StateFailed
 		r.err = err

@@ -349,7 +349,11 @@ func (l *Ledger) newSyncMap(ctx context.Context, t shamap.Type) (*shamap.SHAMap,
 		}
 		return m, nil
 	}
-	return shamap.New(t), nil
+	m := shamap.New(t)
+	if l.memory != nil {
+		m.SetAcquisitionBudget(l.memory)
+	}
+	return m, nil
 }
 
 // SetVerifiedStateBaseContext installs a base before or during account-state

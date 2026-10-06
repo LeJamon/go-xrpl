@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound/inboundtest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,63 @@ func TestReplayer_Acquire_Unique(t *testing.T) {
 	got := map[[32]byte]bool{in[0]: true, in[1]: true}
 	assert.True(t, got[h1])
 	assert.True(t, got[h2])
+}
+
+func TestReplayer_MemoryAdmissionAndTerminalRelease(t *testing.T) {
+	t.Parallel()
+	parent := makeGenesisLedger(t)
+	budget := shamap.NewAcquisitionBudget(replayDeltaAdmissionBytes)
+	rep := NewReplayer(nil, nil, 2)
+	rep.SetMemoryBudget(budget)
+
+	h := hashN(101)
+	rd, err := rep.Acquire(h, 7, parent)
+	require.NoError(t, err)
+	require.NotNil(t, rd)
+	assert.Equal(t, uint64(replayDeltaAdmissionBytes), budget.Snapshot().Used)
+
+	_, err = rep.Acquire(hashN(102), 8, parent)
+	assert.ErrorIs(t, err, ErrReplayMemory)
+	assert.Equal(t, 1, rep.Count(), "memory rejection must not register an acquisition")
+
+	rep.Complete(h)
+	assert.Equal(t, uint64(0), budget.Snapshot().Used)
+
+	_, err = rep.Acquire(hashN(103), 8, parent)
+	require.NoError(t, err)
+	rep.Stop()
+	assert.Equal(t, uint64(0), budget.Snapshot().Used, "shutdown must release replay admission")
+}
+
+func TestReplayer_ResponseMemoryAdmissionAndRelease(t *testing.T) {
+	t.Parallel()
+	parent := makeGenesisLedger(t)
+	blob, txID := makeTxWithMetaBlob(t, []byte("replay-memory-charge-padding"), 0)
+	resp, hash := buildDeltaResponse(t, parent, [][]byte{blob}, [][32]byte{txID})
+	extra := replayDeltaResponseBytes(resp)
+
+	budget := shamap.NewAcquisitionBudget(replayDeltaAdmissionBytes + extra)
+	rep := NewReplayer(nil, nil, 2)
+	rep.SetMemoryBudget(budget)
+	_, err := rep.Acquire(hash, 7, parent)
+	require.NoError(t, err)
+	_, err = rep.HandleResponse(resp)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(replayDeltaAdmissionBytes)+extra, budget.Snapshot().Used)
+
+	rep.Complete(hash)
+	assert.Equal(t, uint64(0), budget.Snapshot().Used)
+
+	limited := shamap.NewAcquisitionBudget(replayDeltaAdmissionBytes + extra - 1)
+	retry := NewReplayer(nil, nil, 1)
+	retry.SetMemoryBudget(limited)
+	_, err = retry.Acquire(hash, 7, parent)
+	require.NoError(t, err)
+	_, err = retry.HandleResponse(resp)
+	assert.ErrorIs(t, err, ErrReplayMemory)
+	assert.Equal(t, uint64(replayDeltaAdmissionBytes), limited.Snapshot().Used)
+	retry.Abandon(hash)
+	assert.Equal(t, uint64(0), limited.Snapshot().Used)
 }
 
 // TestReplayer_Acquire_Duplicate_Rejected verifies that a second
