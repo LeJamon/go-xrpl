@@ -445,6 +445,28 @@ func (b *AcquisitionBudget) TryReserveReplayProcessing(bytes uint64) bool {
 	return b.tryReserveCategory(acquisitionCategoryProcessing, bytes)
 }
 
+// ReplayProcessingCapacity returns the processing ceiling after accounting
+// for the other protected working sets and a parent's known capacity.
+func (b *AcquisitionBudget) ReplayProcessingCapacity() uint64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	capacity := b.limit
+	if parent, ok := b.parent.(interface{ Capacity() uint64 }); ok {
+		capacity = min(capacity, parent.Capacity())
+	}
+	if b.protected {
+		const others = defaultAcquisitionBudgetBytes - acquisitionProcessingMinimumBytes
+		if capacity < others {
+			return 0
+		}
+		capacity -= others
+	}
+	return capacity
+}
+
 // ReleaseReplayProcessing returns replay-processing bytes to the acquisition budget.
 func (b *AcquisitionBudget) ReleaseReplayProcessing(bytes uint64) {
 	b.releaseCategory(acquisitionCategoryProcessing, bytes)

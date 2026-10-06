@@ -350,3 +350,28 @@ func TestProbeLinuxV1CgroupFixture(t *testing.T) {
 		t.Fatalf("unexpected v1 headroom: %+v", headroom)
 	}
 }
+
+func TestAccountCapacityExcludesSiblingMinimums(t *testing.T) {
+	p := New(100)
+	a, err := p.NewAccount("processing", 20, 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := p.NewAccount("cache", 30, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Capacity(); got != 70 {
+		t.Fatalf("capacity = %d, want 70", got)
+	}
+	if !b.TryReserve(60) {
+		t.Fatal("cache reservation failed")
+	}
+	if got := a.Capacity(); got != 70 {
+		t.Fatalf("elastic use changed capacity to %d", got)
+	}
+	if got := b.Capacity(); got != 60 {
+		t.Fatalf("maximum lost: capacity = %d", got)
+	}
+	b.Release(60)
+}

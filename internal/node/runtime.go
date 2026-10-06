@@ -1420,10 +1420,6 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		return errors.Join(errs...)
 	}
 
-	if r.consensus != nil && r.consensus.Router != nil && !r.consensus.Router.CloseAcquisitionMemoryBudget() {
-		errs = append(errs, errors.New("shutdown incomplete: acquisition memory owners did not drain"))
-	}
-
 	serviceStopped := true
 	if r.ledger != nil {
 		completed, err := runShutdownPhase(ctx, "stop ledger service", func() error {
@@ -1441,6 +1437,10 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		errs = append(errs, errors.New("shutdown incomplete: stores left open because ledger service did not stop"))
 		return errors.Join(errs...)
 	}
+	if r.consensus != nil && r.consensus.Router != nil && !r.consensus.Router.CloseAcquisitionMemoryBudget() {
+		errs = append(errs, errors.New("shutdown incomplete: acquisition memory owners did not drain"))
+	}
+
 	prepareCheckpoint := r.prepareFastLoadCheckpoint
 	if prepareCheckpoint == nil && r.ledger != nil {
 		prepareCheckpoint = r.ledger.PrepareFastLoadCheckpoint

@@ -233,6 +233,11 @@ func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, 
 	if replay == nil {
 		return nil, errors.New("replay transition is required")
 	}
+	releaseReplay := replay.RetainMemory()
+	if releaseReplay == nil {
+		return nil, errors.New("replay transition ownership has ended")
+	}
+	defer releaseReplay()
 	evidence := replayEvidenceFor(replay, cfg, authenticated)
 	raw, err := json.Marshal(evidence)
 	if err != nil {
@@ -326,7 +331,13 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 	// consensus thread while a large parent state is traversed. It shares the
 	// same admitted worker as explicit recovery, so the two operations cannot
 	// overlap or outlive the service lifecycle.
+	releaseReplay := replay.RetainMemory()
+	if releaseReplay == nil {
+		s.logger.Error("start replay evidence capture: replay ownership has ended")
+		return
+	}
 	_, err = s.admitReplayRecoveryJob(func(workerCtx context.Context) error {
+		defer releaseReplay()
 		captureCtx, cancel := context.WithTimeout(workerCtx, 5*time.Minute)
 		defer cancel()
 		releaseAdmission, admissionErr := s.AcquireStateAdmission(captureCtx)
@@ -337,8 +348,11 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 		s.diagnoseReplayFault(captureCtx, *fault, evidence, parent, replay, cfg, cause)
 		return nil
 	})
-	if err != nil && !errors.Is(err, errReplayRecoveryWorkerRunning) {
-		s.logger.Error("start replay evidence capture", "error", err)
+	if err != nil {
+		releaseReplay()
+		if !errors.Is(err, errReplayRecoveryWorkerRunning) {
+			s.logger.Error("start replay evidence capture", "error", err)
+		}
 	}
 }
 
@@ -365,10 +379,10 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 		fault.Message += "; parent verification: " + err.Error()
 	} else {
 		evidence.ParentSnapshot = s.config.ReplayFaultPath != ""
-		retry, retryErr := replay.Retry(verified)
+		retry, retryErr := replay.RetryContext(ctx, verified)
 		if retryErr == nil {
 			defer retry.ReleaseMemory()
-			_, retryErr = retry.Apply(cfg)
+			_, retryErr = retry.ApplyContext(ctx, cfg)
 		}
 		if !replayFaultStateClass(fault.Class) && evidence.Authenticated && retryErr != nil && sameReplayFailure(retryErr, cause) && replayExecutionDisagreement(retryErr) {
 			fault.Class = replayfault.ExecutionDisagreement

@@ -239,6 +239,18 @@ func (a *Account) Limit() uint64 {
 	return a.maximum
 }
 
+// Capacity returns the maximum charge possible while every other account's
+// protected minimum remains reserved, regardless of current elastic usage.
+func (a *Account) Capacity() uint64 {
+	if a == nil || a.pool == nil {
+		return 0
+	}
+	p := a.pool
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return min(a.maximum, p.limit-(p.minimum-a.minimum))
+}
+
 // AccountSnapshot is a point-in-time account view. Reserved is the protected
 // minimum; UnusedReserved is the currently unborrowable part of that minimum.
 type AccountSnapshot struct {

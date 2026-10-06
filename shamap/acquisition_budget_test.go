@@ -203,3 +203,24 @@ func TestAcquisitionBudgetPromotesReplayAtCapacity(t *testing.T) {
 		t.Fatal("promotion leaked ownership")
 	}
 }
+
+func TestAcquisitionBudgetProcessingCapacity(t *testing.T) {
+	parent := NewAcquisitionBudget(1 << 30)
+	budget, err := NewAcquisitionBudgetWithParent(512<<20, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := budget.ReplayProcessingCapacity(); got != 192<<20 {
+		t.Fatalf("processing capacity = %d, want 192 MiB", got)
+	}
+	if !budget.TryReserveReplayProcessing(1) {
+		t.Fatal("processing admission failed")
+	}
+	if got := budget.ReplayProcessingCapacity(); got != 192<<20 {
+		t.Fatalf("processing use changed processing ceiling: %d", got)
+	}
+	budget.ReleaseReplayProcessing(1)
+	if !budget.Close() {
+		t.Fatal("budget failed to close")
+	}
+}
