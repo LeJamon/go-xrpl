@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,4 +126,44 @@ func TestPersistenceAdmissionShutdownUnblocksProducer(t *testing.T) {
 	s.persistenceWorker.stopAdmissions()
 	require.ErrorIs(t, <-result, errServiceNotRunning)
 	require.Zero(t, s.persistAdmissions)
+}
+
+func TestLedgerWorkDrainsBeforeServiceStop(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "standalone budget", true: "shared budget"}[managed], func(t *testing.T) {
+			cfg := Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
+			if managed {
+				cfg.PersistenceMemory = &relayTestMemory{limit: shamap.DirtyWorkspaceBytes}
+			}
+			svc, err := New(cfg)
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+			release, err := svc.acquireLedgerWork(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(release)
+			stopped := make(chan struct{})
+			go func() { svc.Stop(); close(stopped) }()
+			require.Eventually(t, func() bool {
+				svc.lifecycleMu.Lock()
+				defer svc.lifecycleMu.Unlock()
+				return svc.lifecycleState == serviceStopping
+			}, time.Second, time.Millisecond)
+			select {
+			case <-stopped:
+				t.Fatal("Stop returned while ledger work still owned memory")
+			default:
+			}
+			release()
+			select {
+			case <-stopped:
+			case <-time.After(time.Second):
+				t.Fatal("Stop did not drain released ledger work")
+			}
+			require.ErrorIs(t, svc.StoreLedgerWithState(t.Context(), nil, nil, nil), errServiceNotRunning)
+			_, err = svc.BootstrapLedgerWithState(t.Context(), nil, nil, nil)
+			require.ErrorIs(t, err, errServiceNotRunning)
+			require.ErrorIs(t, svc.IngestHistoricalLedgerWithState(t.Context(), nil, nil, nil), errServiceNotRunning)
+		})
+	}
 }

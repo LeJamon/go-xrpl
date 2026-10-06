@@ -301,6 +301,7 @@ func (s *Service) Stop() {
 	// mutate state, regardless of which side of this barrier they acquire it on.
 	s.validationWG.Wait()
 	s.consensusWG.Wait()
+	s.ledgerWorkWG.Wait()
 	s.openLedgerMu.LockRole(openLedgerShutdown)
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()

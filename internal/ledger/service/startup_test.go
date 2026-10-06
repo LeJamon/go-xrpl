@@ -23,6 +23,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
@@ -350,24 +351,34 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 }
 
 func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	db, rm := newStartupTestStorage(t, ctx)
 	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
 	targetHash := target.Hash()
 	extraBlob, extraHash := startupPaymentBlob(t, "startup-replay-extra", 2)
 
 	svc, err := New(Config{
-		Standalone:    false,
-		Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
-		RelationalDB:  rm,
+		Standalone:        false,
+		PersistenceMemory: &relayTestMemory{limit: shamap.DirtyWorkspaceBytes},
+		Startup:           StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+		GenesisConfig:     genesis.DefaultConfig(),
+		NodeStore:         db,
+		SHAMapFamily:      backend.New(db),
+		RelationalDB:      rm,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
+	// Leave exactly one slot for consensus, including its nested startup replay.
+	releases := make([]func(), 0, persistenceAdmissionLimit-1)
+	for range persistenceAdmissionLimit - 1 {
+		release, err := svc.acquirePersistenceAdmission(ctx)
+		require.NoError(t, err)
+		t.Cleanup(release)
+		releases = append(releases, release)
+	}
 	parent := svc.GetClosedLedger()
 	seq, err := svc.AcceptConsensusResult(
 		ctx,
@@ -378,6 +389,9 @@ func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
+	for _, release := range releases {
+		release()
+	}
 	require.Equal(t, target.Sequence(), seq)
 	require.Equal(t, targetHash, svc.GetClosedLedger().Hash())
 	hasExtra, err := svc.OpenLedgerHasTx(extraHash)

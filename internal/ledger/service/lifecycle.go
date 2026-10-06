@@ -446,6 +446,7 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
 		s.openLedgerMu.Unlock()
+		releaseAdmission()
 		notification.notify()
 	}()
 
@@ -922,6 +923,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 
 	s.validationWG.Done()
 	updateFinished = true
+	releaseAdmission()
 	notification.notify()
 }
 

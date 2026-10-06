@@ -51,6 +51,7 @@ func (s *Service) acceptConsensusResult(
 		}
 		s.consensusWG.Done()
 		callbackStarted := time.Now()
+		releaseAdmission()
 		notification.notify()
 		timings.callback = time.Since(callbackStarted)
 		timings.log(s, time.Since(started))
@@ -118,7 +119,7 @@ func (s *Service) acceptConsensusResult(
 		replayParent := replay.Parent()
 		if replayParent != nil && replayParent.Sequence() == expectedClosed.Sequence() && replayParent.Hash() == expectedClosed.Hash() {
 			replayed = true
-			closed, err = s.ApplyReplay(ctx, replay, s.EngineConfigForReplay(expectedClosed), false)
+			closed, err = s.applyReplay(ctx, replay, s.EngineConfigForReplay(expectedClosed), false, false)
 			if err != nil {
 				return 0, fmt.Errorf("apply startup replay: %w", err)
 			}
