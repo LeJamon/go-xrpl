@@ -10,9 +10,10 @@ import (
 // cacheShardCount must be a power of two so shardFor can mask cheaply.
 const cacheShardCount = 16
 
-// Cache charges are deliberately conservative. They cover the retained node,
-// the cache entry and the list/heap bookkeeping; map bucket capacity is held
-// separately until the shard is cleared and its maps are dropped.
+// Cache charges are deliberately conservative. They cover the retained node
+// backing array, the cache entry and the list/heap bookkeeping; map bucket
+// capacity is held separately until the shard is cleared and its maps are
+// dropped.
 const (
 	nodeCacheEntryOverhead   = uint64(256)
 	nodeCacheStructuralBytes = uint64(128)
@@ -147,7 +148,7 @@ func (c *nodeCache) Put(node *Node) {
 	}
 	s := c.shardFor(node.Hash)
 	s.mu.Lock()
-	if !s.reserveForNodeLocked(node) {
+	if !s.reserveForNodeLocked(node, nodeCacheCloneCharge(node)) {
 		s.mu.Unlock()
 		return
 	}
@@ -166,14 +167,25 @@ func (c *nodeCache) putOwned(node *Node) bool {
 	s := c.shardFor(node.Hash)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.reserveForNodeLocked(node) {
+	if !s.reserveForNodeLocked(node, nodeCacheCharge(node)) {
 		return false
 	}
 	s.putOwnedWithTTLLocked(node, c.ttl)
 	return true
 }
 
+// nodeCacheCharge accounts the retained backing capacity. putOwned aliases
+// decoded payloads, so len(node.Data) would undercount a subslice.
 func nodeCacheCharge(node *Node) uint64 {
+	if node == nil {
+		return 0
+	}
+	return nodeCacheEntryOverhead + uint64(cap(node.Data))
+}
+
+// nodeCacheCloneCharge accounts for the exact payload capacity allocated by
+// Node.Clone. Put reserves this amount before allocating the defensive copy.
+func nodeCacheCloneCharge(node *Node) uint64 {
 	if node == nil {
 		return 0
 	}
@@ -183,23 +195,29 @@ func nodeCacheCharge(node *Node) uint64 {
 // reserveForNodeLocked reserves the replacement before the caller allocates or
 // transfers a node into the cache. It may shed this shard's expired/LRU values
 // to make room, but it never evicts another shard or calls user code.
-func (s *cacheShard) reserveForNodeLocked(node *Node) bool {
+func (s *cacheShard) reserveForNodeLocked(node *Node, charge uint64) bool {
 	now := time.Now()
+	if s.currentSize >= s.maxItems {
+		s.sweepExpiredLocked(now)
+		if s.currentSize == 0 {
+			s.rebuildEmptyLocked()
+		}
+	}
 	_, found := s.items[node.Hash]
 	if found {
-		if s.tryReserveLocked(nodeCacheCharge(node)) {
+		if s.tryReserveLocked(charge) {
 			return true
 		}
 		// Keep a useful hit if a replacement cannot be admitted. Expired
 		// entries elsewhere in this shard are still safe to discard.
 		s.sweepExpiredLocked(now)
 		if _, stillPresent := s.items[node.Hash]; stillPresent {
-			return s.tryReserveLocked(nodeCacheCharge(node))
+			return s.tryReserveLocked(charge)
 		}
-		return s.tryReserveNodeLocked(node)
+		return s.tryReserveNodeLocked(charge)
 	}
 
-	if s.tryReserveNodeLocked(node) {
+	if s.tryReserveNodeLocked(charge) {
 		return true
 	}
 
@@ -207,19 +225,27 @@ func (s *cacheShard) reserveForNodeLocked(node *Node) bool {
 	// only local entries and retry; if the parent budget is full elsewhere the
 	// retry still fails and the new node remains caller-owned.
 	s.sweepExpiredLocked(now)
+	if s.currentSize == 0 {
+		s.rebuildEmptyLocked()
+		if s.tryReserveNodeLocked(charge) {
+			return true
+		}
+	}
 	for s.currentSize > 0 {
 		if !s.evictOldestLocked() {
 			break
 		}
-		if s.tryReserveNodeLocked(node) {
+		if s.currentSize == 0 {
+			s.rebuildEmptyLocked()
+		}
+		if s.tryReserveNodeLocked(charge) {
 			return true
 		}
 	}
 	return false
 }
 
-func (s *cacheShard) tryReserveNodeLocked(node *Node) bool {
-	charge := nodeCacheCharge(node)
+func (s *cacheShard) tryReserveNodeLocked(charge uint64) bool {
 	if s.structuralSlots < s.maxItems {
 		charge += nodeCacheStructuralBytes
 	}
@@ -254,10 +280,6 @@ func (s *cacheShard) putOwnedWithTTLLocked(node *Node, ttl time.Duration) {
 		s.releaseChargeLocked(oldCharge)
 		return
 	}
-	if s.currentSize >= s.maxItems {
-		s.sweepExpiredLocked(now)
-	}
-
 	if s.structuralSlots < s.maxItems {
 		s.structuralSlots++
 		s.structuralCharge += nodeCacheStructuralBytes
@@ -379,6 +401,17 @@ func (s *cacheShard) removeElementWithoutExpiryLocked(element *list.Element) {
 	delete(s.items, entry.key)
 	s.lru.Remove(element)
 	s.currentSize--
+}
+
+func (s *cacheShard) rebuildEmptyLocked() {
+	if s.budget != nil && s.structuralCharge != 0 {
+		s.budget.Release(s.structuralCharge)
+	}
+	s.items = make(map[Hash256]*list.Element)
+	s.lru.Init()
+	s.expiry = nil
+	s.structuralSlots = 0
+	s.structuralCharge = 0
 }
 
 // evictOldestLocked evicts the LRU entry; returns false on empty shard.

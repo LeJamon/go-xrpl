@@ -105,6 +105,54 @@ func TestNodeCachePutDefensiveCopyAndFetchAlias(t *testing.T) {
 	}
 }
 
+func TestNodeCacheOwnedAdmissionChargesBackingCapacity(t *testing.T) {
+	budget := &cacheTestBudget{limit: 1 << 20}
+	cache := newNodeCache(1, time.Hour, budget)
+	backing := make([]byte, 64)
+	node := &Node{
+		Hash: Hash256{0x42},
+		Type: NodeTransaction,
+		Data: backing[:8],
+	}
+	if !cache.putOwned(node) {
+		t.Fatal("owned node was not admitted")
+	}
+	want := nodeCacheEntryOverhead + uint64(cap(node.Data)) + nodeCacheStructuralBytes
+	if got := budget.Used(); got != want {
+		t.Fatalf("owned backing charge = %d, want %d", got, want)
+	}
+	cache.Close()
+	if got := budget.Used(); got != 0 {
+		t.Fatalf("owned backing charge leaked: %d", got)
+	}
+}
+
+func TestNodeCacheBudgetRebuildsEmptyShardUnderChurn(t *testing.T) {
+	payload := []byte("churn")
+	charge := nodeCacheEntryOverhead + uint64(len(payload)) + nodeCacheStructuralBytes
+	budget := &cacheTestBudget{limit: charge}
+	cache := newNodeCache(cacheShardCount*1024, time.Hour, budget)
+	for index := range 1_000 {
+		node := &Node{
+			Hash: Hash256{0x01, byte(index), byte(index >> 8)},
+			Type: NodeTransaction,
+			Data: payload,
+		}
+		cache.Put(node)
+		if _, ok := cache.Get(node.Hash); !ok {
+			t.Fatalf("churn mark %d was not admitted", index)
+		}
+		cache.Remove(node.Hash)
+		if got := budget.Used(); got != nodeCacheStructuralBytes {
+			t.Fatalf("empty shard retained charge after churn mark %d: %d", index, got)
+		}
+	}
+	cache.Close()
+	if got := budget.Used(); got != 0 {
+		t.Fatalf("churn cache leaked charge: %d", got)
+	}
+}
+
 func TestNodeCacheExpiryReturnsPayloadBeforeClose(t *testing.T) {
 	budget := &cacheTestBudget{limit: 1 << 20}
 	cache := newNodeCache(1, time.Nanosecond, budget)
