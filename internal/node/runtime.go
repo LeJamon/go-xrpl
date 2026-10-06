@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
@@ -49,6 +50,7 @@ type nodeRuntime struct {
 	nodeStore  nodestore.Database
 	repo       relationaldb.RepositoryManager
 	nodeFamily *backend.NodeStore
+	memory     *nodeMemory
 
 	ledger        *service.Service
 	cleaner       *cleaner.Cleaner
@@ -76,6 +78,7 @@ type nodeRuntime struct {
 	shutdowner                types.Shutdowner
 	stopSampler               func()
 	stopWatchdog              func()
+	stopMemoryMetrics         func()
 }
 
 func newNodeRuntime(
@@ -134,9 +137,13 @@ func (r *nodeRuntime) run() (runErr error) {
 		if shutdownErr := r.shutdown(); shutdownErr != nil {
 			runErr = errors.Join(runErr, shutdownErr)
 		}
+		if r.stopMemoryMetrics != nil {
+			r.stopMemoryMetrics()
+		}
 	}()
 
 	stages := []func() error{
+		r.configureMemory,
 		r.configureStorage,
 		r.configureLedger,
 		r.configureMaintenance,
@@ -156,17 +163,34 @@ func (r *nodeRuntime) run() (runErr error) {
 }
 
 func (r *nodeRuntime) configureStorage() error {
-	nodeStore, repo, err := setupStorage(r.ctx, r.appConfig, r.serverLog)
+	var cacheMemory nodestore.MemoryBudget
+	if r.memory != nil {
+		cacheMemory = r.memory.nodes
+		if r.memory.storage != nil {
+			if !r.memory.storage.TryReserve(r.memory.storageBytes) {
+				return errors.New("resources: storage commitment unavailable")
+			}
+			r.memory.releaseStorage = sync.OnceFunc(func() { r.memory.storage.Release(r.memory.storageBytes) })
+		}
+	}
+	nodeStore, repo, err := setupStorage(r.ctx, r.appConfig, r.serverLog, cacheMemory)
 	r.nodeStore = nodeStore
 	r.repo = repo
 	if err != nil {
+		if r.memory != nil && r.memory.releaseStorage != nil {
+			r.memory.releaseStorage()
+		}
 		return err
 	}
 	if err := context.Cause(r.ctx); err != nil {
 		return err
 	}
 	if r.nodeStore != nil {
-		r.nodeFamily = backend.New(r.nodeStore)
+		var options backend.NodeStoreOptions
+		if r.memory != nil {
+			options.CacheMemoryBudget = r.memory.fullBelow
+		}
+		r.nodeFamily = backend.New(r.nodeStore, options)
 	}
 	return nil
 }
@@ -252,6 +276,12 @@ func (r *nodeRuntime) configureLedger() error {
 		Table:           amendmentTable,
 		TxQ:             &txqCfg,
 		Startup:         r.startup,
+	}
+	if r.memory != nil {
+		cfg.RelayMemory = r.memory.relay
+		if r.memory.persistence != nil {
+			cfg.PersistenceMemory = r.memory.persistence
+		}
 	}
 	cfg.GenesisConfig = genesisConfig
 	configuredFees := configuredLedgerLoadFees(r.appConfig)
@@ -543,6 +573,11 @@ func (r *nodeRuntime) configureConsensus() error {
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
+		if r.memory != nil {
+			if err := r.consensus.Overlay.SetMemoryBudgets(r.memory.inbound, r.memory.outbound, r.memory.outboundCritical); err != nil {
+				return fmt.Errorf("configure peer memory: %w", err)
+			}
+		}
 		r.resourceManager = r.consensus.Overlay.ResourceManager()
 		if r.rotator != nil {
 			ageThreshold := 60 * time.Second
@@ -565,9 +600,15 @@ func (r *nodeRuntime) configureConsensus() error {
 		// Back inbound acquisitions with the node store before Start launches the
 		// router loop, so the family is published before any acquisition reads it
 		// (issue #1158).
-		if r.nodeFamily != nil {
-			if router := r.consensus.Router; router != nil {
+		if router := r.consensus.Router; router != nil {
+			if r.memory != nil {
+				if err := router.SetAcquisitionMemoryBudget(r.memory.acquisition.Limit(), r.memory.acquisition); err != nil {
+					return fmt.Errorf("configure acquisition memory: %w", err)
+				}
+			} else {
 				router.SetAcquisitionMemoryLimit(r.appConfig.Acquisition.ResolvedMemoryBytes())
+			}
+			if r.nodeFamily != nil {
 				router.SetAcquisitionFamily(r.nodeFamily)
 			}
 		}
@@ -1379,6 +1420,10 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		return errors.Join(errs...)
 	}
 
+	if r.consensus != nil && r.consensus.Router != nil && !r.consensus.Router.CloseAcquisitionMemoryBudget() {
+		errs = append(errs, errors.New("shutdown incomplete: acquisition memory owners did not drain"))
+	}
+
 	serviceStopped := true
 	if r.ledger != nil {
 		completed, err := runShutdownPhase(ctx, "stop ledger service", func() error {
@@ -1443,8 +1488,17 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		}
 	}
 
+	if r.nodeFamily != nil {
+		r.nodeFamily.FullBelowCache().Close()
+	}
 	if r.nodeStore != nil {
-		_, err := runShutdownPhaseWithin(ctx, storeShutdownGrace, "close node store", r.nodeStore.Close)
+		_, err := runShutdownPhaseWithin(ctx, storeShutdownGrace, "close node store", func() error {
+			err := r.nodeStore.Close()
+			if r.memory != nil && r.memory.releaseStorage != nil {
+				r.memory.releaseStorage()
+			}
+			return err
+		})
 		if err != nil {
 			errs = append(errs, err)
 		}

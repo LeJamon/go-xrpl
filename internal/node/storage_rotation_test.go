@@ -19,14 +19,14 @@ func TestSetupStorageKeepsGenerationManifestWhenOnlineDeleteIsDisabled(t *testin
 			OnlineDelete: 256,
 		},
 	}
-	db, _, err := setupStorage(context.Background(), cfg, xrpllog.Discard())
+	db, _, err := setupStorage(context.Background(), cfg, xrpllog.Discard(), nil)
 	require.NoError(t, err)
 	_, ok := db.(nodestore.GenerationDatabase)
 	require.True(t, ok)
 	require.NoError(t, db.Close())
 
 	cfg.NodeDB.OnlineDelete = 0
-	reopened, _, err := setupStorage(context.Background(), cfg, xrpllog.Discard())
+	reopened, _, err := setupStorage(context.Background(), cfg, xrpllog.Discard(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	_, ok = reopened.(nodestore.GenerationDatabase)

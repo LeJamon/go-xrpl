@@ -7,7 +7,7 @@ import (
 
 const (
 	// DefaultAcquisitionMemoryMB is the bounded acquisition working-set budget
-	// used when the operator omits acquisition.memory_mb or sets it to zero.
+	// used by standalone acquisition constructors without a node-wide parent.
 	DefaultAcquisitionMemoryMB = 512
 	// MinAcquisitionMemoryMB is the smallest budget accepted for bounded
 	// traversal progress plus acquisition-owned reply and persistence headroom.
@@ -19,14 +19,15 @@ const (
 // AcquisitionConfig represents the [acquisition] section.
 //
 // MemoryMB bounds the application-owned acquisition working set, including
-// cursor state and its reserved reply/persistence headroom. It does not
-// include the Pebble cache, replay staging, network buffers, Go runtime, or
+// cursor state, replay staging and reply/persistence headroom. It does not
+// include the Pebble cache, network buffers, Go runtime, or
 // other process and operating-system memory.
 type AcquisitionConfig struct {
 	MemoryMB int64 `toml:"memory_mb" mapstructure:"memory_mb"`
 }
 
-// ResolvedMemoryBytes returns the configured acquisition budget in bytes.
+// ResolvedMemoryBytes returns the acquisition ceiling for independent callers.
+// The node uses its shared pool when MemoryMB is zero.
 // Invalid negative or overflowing values return zero; configuration loading
 // and ValidateConfig report those values as errors before this accessor is
 // used by the node.

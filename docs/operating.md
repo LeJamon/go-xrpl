@@ -249,39 +249,71 @@ keys to precede any `[section]` header.
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
 | `genesis_file` | — | Custom genesis; omit for built-in defaults. Optional. |
 
-### `[acquisition]`
+### `[resources]` and `[acquisition]`
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `memory_mb` | `0` | Acquisition working-set budget in MiB. Omission or `0` uses 512 MiB; explicit values must be at least 512 MiB. |
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `resources.memory_mb` | `0` | Total managed-memory allowance in MiB; positive values select a fixed allowance. |
+| `resources.available_memory_percent` | `33` | Percentage of available memory sampled at startup when `memory_mb = 0`. |
+| `acquisition.memory_mb` | `0` | Optional acquisition/replay ceiling inside the shared allowance. Zero uses the shared pool; positive values must be at least 512 MiB. |
 
-The budget is shared by active state and transaction acquisitions. Cursor and
-retained-node allocations can each use at most one quarter; persistence staging
-can use one eighth. Pending cursor entries can use at most half of the cursor
-allowance, leaving space for active traversal, retries and proofs. The remaining
-three eighths provide working room for decoding
-and preparing an already received reply. At the minimum, that reserve is 192 MiB
-for the 64 MiB maximum ledger-data payload, decoded nodes, prefix serialization
-and batch metadata. The number of pending requests and queued replies also
-remains bounded by the acquisition worker and overlay limits.
+Automatic sizing uses currently available memory, not total installed RAM. On
+Linux it uses `MemAvailable`, constrained by remaining cgroup memory limits
+(including ancestor limits). A finite Go memory limit also constrains headroom.
+The allowance stays fixed until restart: consumers reserve credits as they grow
+and return credits when they release owned data. The node does not change
+`GOMEMLIMIT`. Automatic sizing supports Linux and macOS; unsupported platforms or
+failed probes require an explicit `resources.memory_mb`.
 
-When memory is tight, acquisition flushes received nodes and releases acknowledged
-nodes while preserving its traversal position. A reply node that cannot be cached
-is still verified and passed to persistence. Large persistence batches can use a
-synchronous worker job that borrows the caller's buffer instead of cloning it.
+For example, 11 GiB available at startup with the default 33% gives a shared
+allowance of about 3.63 GiB. This is the total across participating consumers,
+including storage, rather than an additional 3.63 GiB solely for acquisition.
+Use a fixed allowance when an operator or orchestrator already sizes the node:
 
-`fetch_info` and acquisition progress logs report current and peak cursor charges,
-loaded-node charges, memory waits and pressure checkpoints. Progress logs also
-report persistence staging. Charges conservatively include allocator padding;
-loaded-node credits are held until a checkpoint clears all traversal references,
-so their reported usage can exceed the currently reachable node payloads.
-Persistence credits remain charged until the pending index is empty, accounting
-for its retained capacity after individual writes finish.
+```toml
+[resources]
+memory_mb = 4096
 
-This is an application allocation budget, not an RSS or cgroup limit. Allow
-separate memory for the Pebble cache and memtables, the bounded full-below cache,
-fixed map metadata, replay staging, network buffers, Go runtime and GC overhead,
-and native/OS memory.
+[acquisition]
+memory_mb = 0
+```
+
+The pool covers acquisition/replay working data, node-object and FullBelow caches,
+transaction relay cache, retained peer payloads and ledger-persistence workspace.
+Pebble's block cache and memtable capacities are reserved before storage opens;
+rotation includes the temporary third generation and charges the shared block
+cache once. Progress reserves protect acquisition, inbound decoding, critical
+peer traffic and durable writes from optional caches. The default 96 MiB
+FullBelow working set is protected because state-base admission requires its
+root completeness marks. Cache entry counts and TTLs
+remain additional bounds. The node rejects an allowance that cannot fit its
+configured fixed commitments and minimum working sets, with a configuration
+error identifying the consumer that does not fit.
+
+`acquisition.memory_mb` remains compatible as a child ceiling. Existing explicit
+512 MiB settings still constrain acquisition/replay to that amount; remove the
+setting or set it to zero to allow elastic use of the shared pool. Optional
+prefetch backs off before required work, and persistence admission slows ledger
+production while committed writes drain. Memory-limited traversal remains a
+partial result and does not imply a complete state tree.
+
+This allowance is conservative accounting of participating allocations and fixed
+capacities, not a process RSS limit. Live ledger/history trees with shared
+ownership, bounded auxiliary indexes, Go runtime overhead, native allocations,
+SQLite and OS page cache still need headroom. Immutable cache payloads retained
+by a managed caller may be charged to both owners; these counters do not claim
+unique physical-byte measurement. Independent offline replay commands keep their
+own storage ownership.
+
+Startup logs show the sizing source, available bytes, total allowance and each
+consumer's reserved minimum and ceiling. Prometheus reports
+`goxrpl_memory_budget_bytes{consumer,state}` and
+`goxrpl_memory_budget_denied_total{consumer}`, released-byte and invalid-release
+counters separately from process RSS and Go
+heap metrics. Acquisition diagnostics continue to report useful nodes, traversal
+visits, request occupancy, memory waits and pressure checkpoints. Bounded memory
+alone does not prove that sync is progressing: monitor both state acquisition and
+prepared/applied replay ledgers.
 
 ### `[server]` and `[port_*]`
 
@@ -312,7 +344,7 @@ the remaining shutdown phases can finish.
 | `path` | `/var/lib/goxrpl/db/pebble` | Node-store directory. |
 | `online_delete` | `512` | Keep this many recent ledgers online (`0` disables online delete). |
 | `advisory_delete` | `0` | `1` = only delete on an explicit trigger. |
-| `cache_mb` | `2048` | Pebble block-cache capacity in MiB (`0` = 256 MiB). The writable and archive generations share this total. |
+| `cache_mb` | `256` | Pebble block-cache capacity in MiB (`0` = 256 MiB). The writable and archive generations share this total. |
 | `open_files` | `1000` | Pebble open-file soft limit (`0` = 500). Single stores require at least 74; rotating stores require an even value of at least 148 and split it between generations. A rotation briefly opens a third generation and may use another half-limit. |
 | `cache_size` | `16384` | Decoded node-object cache entries (`0` = the `node_size` profile). This is independent of `cache_mb`. |
 | `cache_age` | `5` | Decoded node-object cache age in minutes (`0` = the `node_size` profile). |

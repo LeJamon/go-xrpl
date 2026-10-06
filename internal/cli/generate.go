@@ -323,8 +323,12 @@ back_off_milliseconds = 100
 age_threshold_seconds = 60
 recovery_wait_seconds = 5
 
+[resources]
+memory_mb = 0 # 0 = automatic startup share; positive = fixed total managed MiB
+available_memory_percent = 33
+
 [acquisition]
-memory_mb = 0 # 0 = bounded default (512 MiB); explicit values must be at least 512
+memory_mb = 0 # 0 = shared pool; positive = child ceiling of at least 512 MiB
 
 [sqlite]
 journal_mode = "wal"

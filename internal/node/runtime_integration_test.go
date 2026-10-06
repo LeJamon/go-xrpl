@@ -22,6 +22,7 @@ func TestRunWithOptionsStandaloneReadyThenStopping(t *testing.T) {
 	err := RunWithOptions(
 		ctx,
 		&config.Config{
+			Resources: config.ResourcesConfig{MemoryMB: 2048},
 			NetworkID: config.NetworkID{Set: true, ID: 0},
 			NodeDB:    config.NodeDBConfig{Path: filepath.Join(t.TempDir(), "node-store")},
 			Ports: map[string]config.PortConfig{
@@ -58,6 +59,7 @@ func TestRunWithOptionsBindFailureSuppressesReadyAndClosesStorage(t *testing.T) 
 	require.NoError(t, err)
 
 	cfg := &config.Config{
+		Resources: config.ResourcesConfig{MemoryMB: 2048},
 		NetworkID: config.NetworkID{Set: true, ID: 0},
 		NodeDB:    config.NodeDBConfig{Path: filepath.Join(t.TempDir(), "node-store")},
 		Ports: map[string]config.PortConfig{
@@ -88,7 +90,7 @@ func TestRunWithOptionsBindFailureSuppressesReadyAndClosesStorage(t *testing.T) 
 	require.True(t, stopping)
 	require.NoError(t, reserved.Close())
 
-	reopened, repo, reopenErr := setupStorage(context.Background(), cfg, xrpllog.Discard())
+	reopened, repo, reopenErr := setupStorage(context.Background(), cfg, xrpllog.Discard(), nil)
 	require.NoError(t, reopenErr)
 	require.Nil(t, repo)
 	require.NotNil(t, reopened)
