@@ -2,15 +2,14 @@ package inbound
 
 import "time"
 
-// RecordTraversalProgress credits completed discovery work, rather than scheduling
-// activity. Failed reads and repeated missing paths do not establish progress.
+// RecordTraversalProgress credits newly discovered data and completed phases.
+// Repeated reads or cache hits on unresolved paths do not establish progress.
 func (l *Ledger) RecordTraversalProgress(previous Snapshot) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	current := l.snapshotLocked()
-	progressed := current.StateNodesLoaded > previous.StateNodesLoaded ||
-		current.StateEqualSubtreesSkipped > previous.StateEqualSubtreesSkipped ||
-		current.TxNodesLoaded > previous.TxNodesLoaded ||
+	progressed := current.StateWalk.TraversalDiscoveries > previous.StateWalk.TraversalDiscoveries ||
+		current.TxWalk.TraversalDiscoveries > previous.TxWalk.TraversalDiscoveries ||
 		current.StateUseful > previous.StateUseful || current.TxUseful > previous.TxUseful ||
 		current.HaveHeader && !previous.HaveHeader ||
 		current.HaveState && !previous.HaveState ||

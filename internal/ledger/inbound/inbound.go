@@ -2422,9 +2422,9 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	var stateStored []shamap.FlushEntry
 	var stateMissing []shamap.MissingNode
 	if stateMap != nil {
-		loadsBefore := stateMap.FamilyLoadCount()
+		discoveriesBefore := stateMap.BackedWalkStats().TraversalDiscoveries
 		stateProgress, stateStored, stateMissing, err = fillFromLocalContext(ctx, stateMap, fetch)
-		stateProgress = stateProgress || stateMap.FamilyLoadCount() > loadsBefore
+		stateProgress = stateProgress || stateMap.BackedWalkStats().TraversalDiscoveries > discoveriesBefore
 		if persistErr := l.persistLocalNodes(ctx, stateMap, stateStored, "locally recovered state nodes"); persistErr != nil {
 			l.recordLocalProgress(stateMap, txMap, stateProgress)
 			return stateProgress, false, persistErr
@@ -2444,9 +2444,9 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	var txStored []shamap.FlushEntry
 	var txMissing []shamap.MissingNode
 	if txMap != nil {
-		loadsBefore := txMap.FamilyLoadCount()
+		discoveriesBefore := txMap.BackedWalkStats().TraversalDiscoveries
 		txProgress, txStored, txMissing, err = fillFromLocalContext(ctx, txMap, fetch)
-		txProgress = txProgress || txMap.FamilyLoadCount() > loadsBefore
+		txProgress = txProgress || txMap.BackedWalkStats().TraversalDiscoveries > discoveriesBefore
 		if persistErr := l.persistLocalNodes(ctx, txMap, txStored, "locally recovered transaction nodes"); persistErr != nil {
 			progressed = stateProgress || txProgress
 			l.recordLocalProgress(stateMap, txMap, progressed)

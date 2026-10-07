@@ -1108,36 +1108,6 @@ func TestFullBelowCache_ZeroGenNeverMatches(t *testing.T) {
 	}
 }
 
-func TestFullBelowCache_DeepProofStreamDoesNotEvictShallowProof(t *testing.T) {
-	const target = 64
-	c := newFullBelowCacheWithClock(target, time.Hour, time.Now)
-	gen := c.Generation()
-	shallow := [32]byte{0, 0xff}
-	cacheFullBelow(c, gen, shallow, FullBelowCacheMaxDepth)
-
-	var lastDeep [32]byte
-	for i := range 10_000 {
-		var hash [32]byte
-		binary.BigEndian.PutUint64(hash[8:], uint64(i+1))
-		cacheFullBelow(c, gen, hash, FullBelowCacheMaxDepth+1)
-		lastDeep = hash
-	}
-
-	if got := c.Size(); got != 1 {
-		t.Fatalf("cache size = %d, want only the shallow proof", got)
-	}
-	if !c.Has(gen, shallow) {
-		t.Fatal("deep proof stream evicted the shallow reusable proof")
-	}
-	if c.Has(gen, lastDeep) {
-		t.Fatal("deep proof was admitted to the reusable cache")
-	}
-	stats := c.Stats()
-	if stats.Inserts != 1 || stats.Evictions != 0 {
-		t.Fatalf("unexpected admission stats: %+v", stats)
-	}
-}
-
 func TestFullBelowCache_StrictTargetBoundsAcquisitionBurst(t *testing.T) {
 	const target = 64
 	now := time.Unix(1_000, 0)

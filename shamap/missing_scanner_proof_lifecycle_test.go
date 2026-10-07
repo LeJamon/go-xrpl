@@ -138,6 +138,9 @@ func TestMissingScannerReleaseAfterAcknowledgementCancellationReleasesProofs(t *
 	if err := fixture.dest.AcknowledgePersistedAndReleaseContext(t.Context()); err != nil {
 		t.Fatalf("acknowledge and release: %v", err)
 	}
+	if after := fixture.dest.BackedWalkStats(); after.ProofEntries != before.ProofEntries {
+		t.Fatalf("payload release discarded active proof records: before=%+v after=%+v", before, after)
+	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := fixture.dest.ScanMissingNodesContext(canceled, 256, filter); !errors.Is(err, context.Canceled) {

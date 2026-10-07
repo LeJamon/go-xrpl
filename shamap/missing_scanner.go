@@ -7,16 +7,19 @@ import (
 	"unsafe"
 )
 
-// The scanner owns fixed-depth DFS stacks for admitted lanes. A stack frame is
-// retained only while its traversal slice is in progress; unavailable children
-// are reported and the enclosing frame advances to its next sibling. Lanes are
-// admitted lazily so the cursor remains bounded even when every root branch is
-// deep.
+// Lanes own fixed-depth DFS stacks, admitted lazily. Missing children are
+// reported without blocking sibling discovery. Stacks survive yielded slices;
+// compact proofs retain completed child branches across passes independently
+// of node payloads.
 type backedScanFrame struct {
 	item     backedWalkItem
 	view     traversalNode
+	proof    *backedScanProof
 	baseView traversalNode
 	next     int
+	complete uint16
+	seen     uint16
+	fresh    bool
 	full     bool
 	stored   bool
 	loaded   bool
@@ -25,17 +28,18 @@ type backedScanFrame struct {
 
 type backedScanLane struct {
 	root       backedWalkItem
+	proof      *backedScanProof
 	stack      []backedScanFrame
 	complete   bool
 	incomplete bool
 	started    bool
+	seen       bool
 	durable    bool
 	hint       backedScanHint
 }
 
 type backedScanHint struct {
 	hash    [32]byte
-	depth   int
 	pending bool
 }
 
@@ -45,6 +49,7 @@ type backedScanCursor struct {
 	baseRoot    [32]byte
 	budget      *AcquisitionBudget
 	fixedBytes  uint64
+	proofCount  uint64
 	nextLane    uint8
 	passActive  bool
 	rootDurable bool
@@ -127,6 +132,8 @@ func (sm *SHAMap) releaseBackedScanCursorLocked() {
 		if capacity != 0 {
 			sm.releaseCursorBytes(scanCursorBudget(cursor), uint64(capacity)*backedScanFrameBytes)
 		}
+		sm.releaseBackedScanProof(cursor, lane.proof)
+		lane.proof = nil
 		lane.root = backedWalkItem{}
 	}
 	if cursor.fixedBytes != 0 {
@@ -181,8 +188,8 @@ func (sm *SHAMap) updateBackedScanStats(cursor *backedScanCursor) {
 	sm.acquisition.stats.blockedCapacity.Store(0)
 	sm.acquisition.stats.activeFrames.Store(active)
 	sm.acquisition.stats.activeCapacity.Store(capacity)
-	sm.acquisition.stats.proofEntries.Store(0)
-	sm.acquisition.stats.proofCapacity.Store(0)
+	sm.acquisition.stats.proofEntries.Store(cursor.proofCount)
+	sm.acquisition.stats.proofCapacity.Store(cursor.proofCount)
 }
 
 func startBackedScanPass(cursor *backedScanCursor) {
@@ -233,9 +240,10 @@ func (sm *SHAMap) finishBackedScanFrame(
 	lane.stack[last] = backedScanFrame{}
 	lane.stack = stack[:last]
 	if frame.full {
-		if frame.stored && !frame.usedBase {
-			cacheFullBelow(cache, generation, frame.item.hash, frame.item.depth)
+		if frame.stored && !frame.usedBase && frame.view.inner {
+			cache.Insert(generation, frame.item.hash)
 		}
+		sm.completeBackedScanProof(cursor, lane, &frame)
 		if frame.stored && frame.item.parent != nil && frame.item.node != nil {
 			sm.releaseChild(frame.item.parent, frame.item.branch, frame.item.node)
 		}
@@ -277,10 +285,12 @@ func (sm *SHAMap) scanBackedLane(
 			if frame.item.baseHash != ([32]byte{}) && frame.item.baseHash == frame.item.hash {
 				sm.acquisition.stats.equalSubtreesSkipped.Add(1)
 				frame.full, frame.stored, frame.usedBase, frame.loaded = true, true, true, true
+				sm.observeBackedScanFrame(lane, frame)
 				continue
 			}
 			if cache.Has(generation, frame.item.hash) {
 				frame.full, frame.stored, frame.loaded = true, true, true
+				sm.observeBackedScanFrame(lane, frame)
 				continue
 			}
 			if !takeTraversalVisit(ctx) {
@@ -295,6 +305,7 @@ func (sm *SHAMap) scanBackedLane(
 				if probe {
 					return true, nil
 				}
+				sm.retainBackedScanProofs(cursor, lane)
 				lane.incomplete = true
 				frame.full, frame.stored, frame.loaded = false, false, true
 				outputFull := false
@@ -316,7 +327,12 @@ func (sm *SHAMap) scanBackedLane(
 				continue
 			}
 			frame.view = view
+			if frame.proof != nil {
+				frame.complete = frame.proof.complete
+				frame.seen = frame.proof.seen
+			}
 			frame.full, frame.stored, frame.loaded = true, stored, true
+			sm.observeBackedScanFrame(lane, frame)
 			if frame.item.baseHash != ([32]byte{}) {
 				baseView, err := sm.loadVerifiedBaseTraversalNode(ctx, access, frame.item.baseHash)
 				if err != nil {
@@ -330,7 +346,8 @@ func (sm *SHAMap) scanBackedLane(
 			}
 		}
 
-		for frame.next < BranchFactor && frame.view.branches&(1<<frame.next) == 0 {
+		for frame.next < BranchFactor && (frame.view.branches&(1<<frame.next) == 0 ||
+			frame.complete&(1<<frame.next) != 0) {
 			frame.next++
 		}
 		if frame.next == BranchFactor {
@@ -356,6 +373,11 @@ func (sm *SHAMap) scanBackedLane(
 			depth: frame.item.depth + 1, branch: branch,
 			parent: parent, node: frame.view.children[branch],
 		}}
+		child.fresh = frame.fresh
+		if frame.proof != nil {
+			child.proof = frame.proof.children[branch]
+			child.fresh = child.fresh || frame.seen&(1<<branch) == 0
+		}
 		frame.next++
 		if err := sm.pushBackedScanFrame(cursor, lane, child); err != nil {
 			frame.next--
@@ -364,7 +386,7 @@ func (sm *SHAMap) scanBackedLane(
 	}
 	lane.complete = !lane.incomplete
 	if lane.complete && !lane.durable && lane.root.hash != ([32]byte{}) {
-		lane.hint = backedScanHint{hash: lane.root.hash, depth: lane.root.depth, pending: true}
+		lane.hint = backedScanHint{hash: lane.root.hash, pending: true}
 	}
 	return false, nil
 }
@@ -399,7 +421,7 @@ func (sm *SHAMap) scanBackedContext(
 		if baseRoot == rootHash && !root.IsDirty() {
 			sm.acquisition.stats.equalSubtreesSkipped.Add(1)
 			root.setFullBelowGen(generation)
-			cacheFullBelow(cache, generation, rootHash, 0)
+			cache.Insert(generation, rootHash)
 			sm.releaseBackedScanCursorLocked()
 			return MissingNodesResult{Status: MissingNodesComplete}, nil
 		}
@@ -435,7 +457,7 @@ func (sm *SHAMap) scanBackedContext(
 			continue
 		}
 		if !lane.started {
-			if err := sm.pushBackedScanFrame(cursor, lane, backedScanFrame{item: lane.root}); err != nil {
+			if err := sm.pushBackedScanFrame(cursor, lane, backedScanFrame{item: lane.root, proof: lane.proof, fresh: !lane.seen}); err != nil {
 				if errors.Is(err, ErrAcquisitionMemory) {
 					blocked = true
 					continue
@@ -493,7 +515,7 @@ func (sm *SHAMap) scanBackedContext(
 	}
 	if !backed {
 		root.setFullBelowGen(generation)
-		cacheFullBelow(cache, generation, rootHash, 0)
+		cache.Insert(generation, rootHash)
 		sm.releaseBackedScanCursorLocked()
 		return MissingNodesResult{Nodes: missing, Status: MissingNodesComplete}, nil
 	}
@@ -519,7 +541,7 @@ func (sm *SHAMap) scanBackedContext(
 	}
 	cursor.rootDurable = true
 	root.setFullBelowGen(generation)
-	cacheFullBelow(cache, generation, rootHash, 0)
+	cache.Insert(generation, rootHash)
 	sm.releaseBackedScanCursorLocked()
 	return MissingNodesResult{Nodes: missing, Status: MissingNodesComplete}, nil
 }

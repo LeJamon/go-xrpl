@@ -12,6 +12,9 @@ var errVerifiedBaseUnavailable = errors.New("verified SHAMap base is unavailable
 
 // BackedWalkStats reports local discovery work performed by a backed SHAMap.
 type BackedWalkStats struct {
+	// TraversalDiscoveries counts first observations on paths retained by the
+	// cursor. Repeated reads are excluded; untracked retries are conservative.
+	TraversalDiscoveries  uint64
 	EqualSubtreesSkipped  uint64
 	NodesDescended        uint64
 	DurableReads          uint64
@@ -32,6 +35,7 @@ type BackedWalkStats struct {
 }
 
 type backedWalkStats struct {
+	traversalDiscoveries  atomic.Uint64
 	equalSubtreesSkipped  atomic.Uint64
 	nodesDescended        atomic.Uint64
 	durableReads          atomic.Uint64
@@ -131,6 +135,7 @@ func (sm *SHAMap) SetVerifiedBaseContext(ctx context.Context, rootHash [32]byte)
 // BackedWalkStats returns a consistent snapshot of the acquisition counters.
 func (sm *SHAMap) BackedWalkStats() BackedWalkStats {
 	return BackedWalkStats{
+		TraversalDiscoveries:  sm.acquisition.stats.traversalDiscoveries.Load(),
 		EqualSubtreesSkipped:  sm.acquisition.stats.equalSubtreesSkipped.Load(),
 		NodesDescended:        sm.acquisition.stats.nodesDescended.Load(),
 		DurableReads:          sm.acquisition.stats.durableReads.Load(),

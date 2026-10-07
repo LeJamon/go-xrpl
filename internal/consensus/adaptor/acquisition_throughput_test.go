@@ -186,6 +186,9 @@ func runAcquisitionThroughput(t *testing.T, visitSlice int64, budget *shamap.Acq
 		}
 		require.NoError(t, result.err)
 		require.NoError(t, result.persistenceErr)
+		if result.rearmTimer {
+			ledger.RearmTimer(time.Now())
+		}
 		for _, reply := range result.replies {
 			require.NotEmpty(t, flights, "reply arrived without a submitted delivery")
 			flight := &flights[0]

@@ -49,7 +49,7 @@ type fastLoadCheckpoint struct {
 func maxFastLoadProofs() int {
 	total := 0
 	level := 1
-	for depth := 0; depth <= shamap.FullBelowCacheMaxDepth; depth++ {
+	for depth := 0; depth <= storedSHAMapProofMaxDepth; depth++ {
 		total += level
 		level *= shamap.BranchFactor
 	}
@@ -277,7 +277,7 @@ func (s *Service) collectFastLoadProofs(
 			return nil, err
 		}
 		proofs = append(proofs, pending.hash)
-		if pending.depth == shamap.FullBelowCacheMaxDepth {
+		if pending.depth == storedSHAMapProofMaxDepth {
 			continue
 		}
 		inner, ok := node.(shamap.InnerNodeReader)

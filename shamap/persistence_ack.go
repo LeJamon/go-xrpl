@@ -88,7 +88,7 @@ func (sm *SHAMap) publishAcknowledgedScanHints(collectRelease bool) (bool, map[[
 		if !lane.hint.pending {
 			continue
 		}
-		cacheFullBelow(cache, gen, lane.hint.hash, lane.hint.depth)
+		cache.Insert(gen, lane.hint.hash)
 		if release != nil {
 			release[lane.hint.hash] = struct{}{}
 		}
@@ -108,7 +108,7 @@ func (sm *SHAMap) publishAcknowledgedScanHints(collectRelease bool) (bool, map[[
 		return false, release
 	}
 	root.setFullBelowGen(gen)
-	cacheFullBelow(cache, gen, rootHash, 0)
+	cache.Insert(gen, rootHash)
 	if release != nil {
 		release[rootHash] = struct{}{}
 	}

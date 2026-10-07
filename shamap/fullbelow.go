@@ -12,14 +12,14 @@ const (
 	fullBelowCacheShards     = 16
 	fullBelowEntryBytes      = uint64(64)
 	fullBelowStructuralBytes = uint64(128)
+	// FullBelowCacheMaxDepth is the legacy cache-admission depth.
+	//
+	// Deprecated: completeness marks are now bounded by cache size, not depth.
+	FullBelowCacheMaxDepth = 4
 	// FullBelowCacheMemoryBytes is the fixed working-set commitment for the
 	// default cache, including one structural reservation per retained mark.
 	FullBelowCacheMemoryBytes = uint64(fullBelowCacheTarget) *
 		(fullBelowEntryBytes + fullBelowStructuralBytes)
-	// FullBelowCacheMaxDepth is the deepest level at which durable subtree
-	// completeness proofs are retained. Startup verification uses the same
-	// bound when warming the cache for the first network acquisition.
-	FullBelowCacheMaxDepth = 4
 )
 
 // FullBelowStats is a point-in-time cache snapshot.
@@ -457,12 +457,6 @@ func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
 	}
 	shard.current[hash] = struct{}{}
 	shard.mu.Unlock()
-}
-
-func cacheFullBelow(c *FullBelowCache, generation uint32, hash [32]byte, depth int) {
-	if c != nil && depth <= FullBelowCacheMaxDepth {
-		c.Insert(generation, hash)
-	}
 }
 
 // Close drops both map generations and returns all cache-owned reservations.

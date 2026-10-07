@@ -417,15 +417,37 @@ func TestCheckLocal_PartialRetainedStoreResetsNoProgressInterval(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, retained.Hash)
 	require.NoError(t, family.StoreBatch(t.Context(), []shamap.FlushEntry{retained}))
 
+	beforeTraversal := acquisition.Snapshot()
 	progressed, complete, err := acquisition.CheckLocalContext(t.Context(), func([32]byte) ([]byte, bool) {
 		return nil, false
 	})
 	require.NoError(t, err)
 	require.True(t, progressed)
+	require.True(t, acquisition.RecordTraversalProgress(beforeTraversal))
 	require.False(t, complete)
 	require.Equal(t, TimerRefresh, acquisition.OnTimer(base.Add(2*time.Hour)),
 		"retained-store hydration must prevent a no-progress strike")
 	require.Zero(t, acquisition.Timeouts())
+
+	loadsBeforeQuiet := acquisition.Snapshot().StateNodesLoaded
+	for quiet := 1; quiet <= ledgerTimeoutRetriesMax+1; quiet++ {
+		before := acquisition.Snapshot()
+		progressed, complete, err = acquisition.CheckLocalContext(t.Context(), func([32]byte) ([]byte, bool) {
+			return nil, false
+		})
+		require.NoError(t, err)
+		require.False(t, progressed, "rereading an incomplete ancestor is not new local work")
+		require.False(t, complete)
+		after := acquisition.Snapshot()
+		require.Equal(t, before.StateWalk.TraversalDiscoveries, after.StateWalk.TraversalDiscoveries)
+		require.False(t, acquisition.RecordTraversalProgress(before))
+		want := TimerEscalate
+		if quiet > ledgerTimeoutRetriesMax {
+			want = TimerFailed
+		}
+		require.Equal(t, want, acquisition.OnTimer(base.Add(time.Duration(quiet+2)*time.Hour)))
+	}
+	require.Greater(t, acquisition.Snapshot().StateNodesLoaded, loadsBeforeQuiet)
 }
 
 func TestGotStateNodes_PartialWorkSurvivesDifferentRootAcquisition(t *testing.T) {

@@ -1024,7 +1024,7 @@ func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 	}
 }
 
-func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
+func TestBackedWalkCachesProofsAcrossLedgerRoots(t *testing.T) {
 	build := func(changed bool) (*SHAMap, [32]byte, []byte, []FlushEntry) {
 		sm := New(TypeState)
 		for i := range 4096 {
@@ -1118,8 +1118,8 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 	if !base.fullBelow.Has(gen, shallowHash) {
 		t.Fatal("depth-four complete subtree was not cached")
 	}
-	if base.fullBelow.Has(gen, deepHash) {
-		t.Fatal("complete subtree deeper than depth four was cached")
+	if !base.fullBelow.Has(gen, deepHash) {
+		t.Fatal("complete subtree deeper than depth four was not cached")
 	}
 
 	second, err := NewBacked(TypeState, family)

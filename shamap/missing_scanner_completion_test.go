@@ -237,6 +237,16 @@ func repeatedReadsOutsideTargetPath(before, after map[[32]byte]int, pathHashes m
 
 func TestMissingScannerSkipsCompletedDeepSiblingsAcrossPasses(t *testing.T) {
 	fixture := newMissingScannerCompletionFixture(t, NewFullBelowCache())
+	for range 2 {
+		before := fixture.dest.BackedWalkStats().TraversalDiscoveries
+		result, err := fixture.dest.ScanMissingNodesContext(WithTraversalBudget(t.Context(), 2048), 256, nil)
+		if err != nil || result.Status != MissingNodesMore {
+			t.Fatalf("initial traversal slice = %+v, error=%v", result, err)
+		}
+		if got := fixture.dest.BackedWalkStats().TraversalDiscoveries; got <= before {
+			t.Fatal("first traversal slice did not credit newly discovered local nodes")
+		}
+	}
 	filter := missingScannerCompletionFilter{hash: fixture.target.hash}
 	if err := scanMissingScannerCompletionPass(t, fixture.dest, filter); err != nil {
 		t.Fatal(err)
@@ -252,10 +262,14 @@ func TestMissingScannerSkipsCompletedDeepSiblingsAcrossPasses(t *testing.T) {
 		t.Fatalf("fixture did not traverse enough completed deep siblings: %d reads", completedReads)
 	}
 
+	discoveries := fixture.dest.BackedWalkStats().TraversalDiscoveries
 	if err := scanMissingScannerCompletionPass(t, fixture.dest, filter); err != nil {
 		t.Fatal(err)
 	}
 	secondReads := fixture.family.snapshotReads()
+	if got := fixture.dest.BackedWalkStats().TraversalDiscoveries; got != discoveries {
+		t.Fatalf("retry credited %d repeated observations as discoveries", got-discoveries)
+	}
 	if repeated := repeatedReadsOutsideTargetPath(firstReads, secondReads, fixture.pathHashes); repeated != 0 {
 		t.Fatalf("second incomplete pass reread %d completed deep-sibling nodes", repeated)
 	}
@@ -344,6 +358,7 @@ func TestMissingScannerDelayedArrivalCompletesAndRetiresCursor(t *testing.T) {
 		}
 	}
 
+	discoveriesBeforeArrival := fixture.dest.BackedWalkStats().TraversalDiscoveries
 	attached, entry, err := fixture.dest.AddKnownNodeByIDWithEntryContext(t.Context(), fixture.target.nodeID, fixture.target.wire)
 	if err != nil {
 		t.Fatalf("attach delayed subtree: %v", err)
@@ -383,6 +398,9 @@ func TestMissingScannerDelayedArrivalCompletesAndRetiresCursor(t *testing.T) {
 		t.Fatalf("completed root = %x, want %x (err=%v)", got[:4], fixture.rootHash[:4], err)
 	}
 	stats := fixture.dest.BackedWalkStats()
+	if stats.TraversalDiscoveries <= discoveriesBeforeArrival {
+		t.Fatal("arrival did not credit discovery of the newly available subtree")
+	}
 	if stats.CursorBytes != 0 || stats.ActiveFrames != 0 || stats.BlockedItems != 0 || stats.ProofEntries != 0 {
 		t.Fatalf("completed scanner retained cursor work: %+v", stats)
 	}
