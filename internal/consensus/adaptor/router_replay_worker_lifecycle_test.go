@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
@@ -210,4 +212,76 @@ func TestReplayWorkerClaimedResultRetainsResourcesDuringCancellation(t *testing.
 	}
 	require.Nil(t, result.prepared)
 	require.False(t, result.processingReserved)
+}
+
+type replayDiagnosticBarrierFamily struct {
+	shamap.Family
+	root    [32]byte
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (f *replayDiagnosticBarrierFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if hash != f.root {
+		f.once.Do(func() { close(f.entered) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return f.Family.Fetch(ctx, hash)
+}
+
+func TestReplayWorkerFailureDiagnosticsDoNotHoldPublicationLock(t *testing.T) {
+	router, _, _, svc := makeRouter(t)
+	c := router.catchupReplay
+	parent := svc.GetClosedLedger()
+	base := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	source := shamap.New(shamap.TypeTransaction)
+	for _, first := range []byte{0x10, 0x90} {
+		require.NoError(t, source.PutWithNodeType([32]byte{first}, []byte("diagnostic-leaf"), shamap.NodeTypeTransactionWithMeta))
+	}
+	require.NoError(t, source.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return base.StoreBatch(t.Context(), entries)
+	}))
+	root, err := source.Hash()
+	require.NoError(t, err)
+	family := &replayDiagnosticBarrierFamily{Family: base, root: root, entered: make(chan struct{})}
+	txMap, err := shamap.NewFromRootHashContext(t.Context(), shamap.TypeTransaction, root, family)
+	require.NoError(t, err)
+	h := parent.Header()
+	h.ParentHash = parent.Hash()
+	h.LedgerIndex++
+	h.TxHash = root
+	h.Hash = header.CalculateHash(h)
+	entry := &standardReplayEntry{seq: h.LedgerIndex, hash: h.Hash, parentHash: h.ParentHash, header: h, readyAt: time.Now()}
+	c.standardReplay.active = true
+	c.standardReplay.pivotReady = true
+	c.standardReplay.anchorSeq = parent.Sequence()
+	c.standardReplay.entries = map[uint32]*standardReplayEntry{entry.seq: entry}
+	owner := c.beginStandardReplayDrain()
+	require.NotNil(t, owner)
+	t.Cleanup(owner.cancelWork)
+	result := &standardReplayDrainResult{
+		owner: owner, generation: owner.generation, entry: entry, err: errors.New("replay preparation failure"),
+	}
+	done := make(chan struct{})
+	go func() {
+		c.finishStandardReplayWorkerFailure(result, *entry, parent, txMap)
+		close(done)
+	}()
+	select {
+	case <-family.entered:
+	case <-time.After(time.Second):
+		t.Fatal("failure diagnostics did not walk the cold transaction tree")
+	}
+	require.True(t, c.replayCommitMu.TryLock(), "failure diagnostics held the publication lock")
+	c.replayCommitMu.Unlock()
+	owner.cancelWork()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled failure diagnostics did not return")
+	}
+	c.finishStandardReplayDrain(owner)
+	require.False(t, svc.ReplayBlocked())
 }
