@@ -49,6 +49,21 @@ func (s *Service) verifyReplaySnapshot(
 	if snapshot == nil {
 		return ReplayAdmissionMapStats{}, nil
 	}
+	if baseRoot != ([32]byte{}) && snapshot.IsBacked() {
+		startedAt := time.Now()
+		root, err := snapshot.Hash()
+		if err != nil {
+			return ReplayAdmissionMapStats{}, fmt.Errorf("state admission: hash %s root: %w", name, err)
+		}
+		if root == baseRoot {
+			return ReplayAdmissionMapStats{
+				Elapsed:              time.Since(startedAt),
+				EqualSubtreesSkipped: 1,
+				UsedVerifiedBase:     true,
+				Workers:              1,
+			}, nil
+		}
+	}
 	if baseRoot == ([32]byte{}) && snapshot.IsBacked() && s.hasDurableFamily() {
 		root, err := snapshot.Hash()
 		if err != nil {
@@ -150,24 +165,10 @@ func (s *Service) acquireReplayColdWorkspace(ctx context.Context) (int, uint64, 
 				}), nil
 			}
 		}
-		timer := time.NewTimer(10 * time.Millisecond)
 		select {
 		case <-ctx.Done():
-			stopReplayAdmissionTimer(timer)
 			return 0, 0, nil, ctx.Err()
 		case <-wake:
-			stopReplayAdmissionTimer(timer)
-		case <-timer.C:
 		}
-	}
-}
-
-func stopReplayAdmissionTimer(timer *time.Timer) {
-	if timer == nil || timer.Stop() {
-		return
-	}
-	select {
-	case <-timer.C:
-	default:
 	}
 }

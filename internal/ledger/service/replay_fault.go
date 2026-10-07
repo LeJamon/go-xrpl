@@ -1068,6 +1068,12 @@ func stateBaseMapName(mapType shamap.Type) string {
 }
 
 func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.LedgerHeader, txMap *shamap.SHAMap, parent *ledger.Ledger, authenticated bool, cause error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil || s.replayFaults == nil {
+		return
+	}
 	if s.ReplayBlocked() {
 		return
 	}
@@ -1104,8 +1110,17 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 		s.logger.Error("persist replay preparation intent", "error", err)
 		return
 	}
+	clearIntent := func() {
+		if cancelErr := s.replayFaults.CancelReplay(id); cancelErr != nil {
+			s.logger.Error("clear canceled replay preparation intent", "error", cancelErr)
+		}
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			if ctx.Err() != nil {
+				clearIntent()
+				return
+			}
 			s.mu.Lock()
 			err := s.replayFaults.FailReplay(id, replayfault.Fault{Class: replayfault.Unclassified, Message: fmt.Sprintf("replay preparation panic: %v", recovered)})
 			s.mu.Unlock()
@@ -1114,12 +1129,20 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 			}
 		}
 	}()
+	if ctx.Err() != nil {
+		clearIntent()
+		return
+	}
 	if txMap != nil {
 		evidence.TransactionMapIncomplete = false
 		if err := txMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
 			evidence.TransactionLeaves = append(evidence.TransactionLeaves, replayStateItem{item.Key(), item.Data()})
 			return true
 		}); err != nil {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				clearIntent()
+				return
+			}
 			if diagnosed := replayStateFailureClass(err); diagnosed != replayfault.Unclassified || !replayFaultStateClass(class) {
 				class = diagnosed
 			}
@@ -1135,8 +1158,17 @@ func (s *Service) RecordReplayPreparationFailure(ctx context.Context, h header.L
 		class = replayfault.MissingState
 		evidence.TransactionMapIncomplete = true
 	}
+	if ctx.Err() != nil {
+		clearIntent()
+		return
+	}
 	raw, _ = json.Marshal(evidence)
 	s.mu.Lock()
+	if ctx.Err() != nil {
+		s.mu.Unlock()
+		clearIntent()
+		return
+	}
 	message := "replay preparation failed"
 	if cause != nil {
 		message = cause.Error()

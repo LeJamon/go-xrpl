@@ -20,7 +20,17 @@ type replayAdmissionFamily struct {
 	mu          sync.Mutex
 	fingerprint [32]byte
 	hidden      map[[32]byte]bool
+	readHashes  map[[32]byte]int
 	reads       int
+}
+
+type delayedReplayAdmissionFamily struct {
+	*replayAdmissionFamily
+
+	delay  time.Duration
+	mu     sync.Mutex
+	active int
+	peak   int
 }
 
 type replaySnapshotOnlyFamily struct {
@@ -70,6 +80,7 @@ func newReplayAdmissionFamily(t *testing.T) *replayAdmissionFamily {
 		NodeStore:   backend.New(db),
 		fingerprint: [32]byte{1},
 		hidden:      make(map[[32]byte]bool),
+		readHashes:  make(map[[32]byte]int),
 	}
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	return family
@@ -78,6 +89,7 @@ func newReplayAdmissionFamily(t *testing.T) *replayAdmissionFamily {
 func (f *replayAdmissionFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
 	f.mu.Lock()
 	f.reads++
+	f.readHashes[hash]++
 	hidden := f.hidden[hash]
 	f.mu.Unlock()
 	if hidden {
@@ -116,6 +128,48 @@ func (f *replayAdmissionFamily) hide(hash [32]byte) {
 	f.hidden[hash] = true
 	f.fingerprint[0]++
 	f.mu.Unlock()
+}
+
+func (f *replayAdmissionFamily) hideWithoutGeneration(hash [32]byte) {
+	f.mu.Lock()
+	f.hidden[hash] = true
+	f.mu.Unlock()
+}
+
+func (f *replayAdmissionFamily) bumpFingerprint() {
+	f.mu.Lock()
+	f.fingerprint[0]++
+	f.mu.Unlock()
+}
+
+func (f *delayedReplayAdmissionFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	f.mu.Lock()
+	f.active++
+	if f.active > f.peak {
+		f.peak = f.active
+	}
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.active--
+		f.mu.Unlock()
+	}()
+	timer := time.NewTimer(f.delay)
+	select {
+	case <-ctx.Done():
+		if !timer.Stop() {
+			<-timer.C
+		}
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
+	return f.replayAdmissionFamily.FetchDurable(ctx, hash)
+}
+
+func (f *delayedReplayAdmissionFamily) peakReaders() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peak
 }
 
 func persistedReplayAdmissionState(t *testing.T, family *replayAdmissionFamily, count int) *shamap.SHAMap {
@@ -172,6 +226,33 @@ func replayAdmissionFirstChildHash(t *testing.T, family *replayAdmissionFamily, 
 	return [32]byte{}
 }
 
+func replayAdmissionPathDescendantHash(
+	t *testing.T,
+	family *replayAdmissionFamily,
+	root, key [32]byte,
+	depth int,
+) [32]byte {
+	t.Helper()
+	current := root
+	for level := 0; level < depth; level++ {
+		data, err := family.FetchDurable(t.Context(), current)
+		require.NoError(t, err)
+		node, err := shamap.DeserializeFromPrefix(data)
+		require.NoError(t, err)
+		inner, ok := node.(shamap.InnerNodeReader)
+		require.True(t, ok)
+		branch := int(key[level/2] >> 4)
+		if level%2 == 1 {
+			branch = int(key[level/2] & 0x0f)
+		}
+		child, err := inner.ChildHash(branch)
+		require.NoError(t, err)
+		require.NotZero(t, child)
+		current = child
+	}
+	return current
+}
+
 func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
 	svc, err := New(Config{SHAMapFamily: family})
@@ -192,12 +273,16 @@ func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *test
 	unchangedState, err := parent.StateMapSnapshotContext(t.Context())
 	require.NoError(t, err)
 	unchanged := replayAdmissionLedger(t, 101, [32]byte{0x11}, parentHash, unchangedState, shamap.New(shamap.TypeTransaction))
+	family.resetReads()
 	unchangedPrepared, err := svc.PrepareReplayLedger(t.Context(), unchanged, parentProof)
 	require.NoError(t, err)
 	unchangedStats := unchangedPrepared.Stats()
 	require.True(t, unchangedStats.ParentProofUsed)
 	require.True(t, unchangedStats.State.UsedVerifiedBase)
 	require.Less(t, unchangedStats.State.NodesLoaded, parentStats.State.NodesLoaded/100)
+	unchangedReads := family.readCount()
+	t.Logf("replay admission unchanged: parent nodes=%d durable reads=%d, child nodes=%d durable reads=%d, family reads=%d", parentStats.State.NodesLoaded, parentStats.State.DurableReads, unchangedStats.State.NodesLoaded, unchangedStats.State.DurableReads, unchangedReads)
+	require.LessOrEqual(t, unchangedReads, 1)
 	unchangedPrepared.Release()
 
 	childState, err := parent.StateMapSnapshotContext(t.Context())
@@ -215,7 +300,10 @@ func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *test
 	require.True(t, childStats.State.UsedVerifiedBase)
 	require.Positive(t, childStats.State.EqualSubtreesSkipped)
 	require.Less(t, childStats.State.NodesLoaded, parentStats.State.NodesLoaded/4)
-	require.Positive(t, family.readCount(), "the changed path must be checked against durable storage")
+	changedReads := family.readCount()
+	t.Logf("replay admission changed: parent nodes=%d durable reads=%d, child nodes=%d durable reads=%d, family reads=%d", parentStats.State.NodesLoaded, parentStats.State.DurableReads, childStats.State.NodesLoaded, childStats.State.DurableReads, changedReads)
+	require.Positive(t, changedReads, "the changed path must be checked against durable storage")
+	require.Less(t, changedReads, 128, "changed-path verification must not refetch the full tree")
 	prepared.Release()
 	family.FullBelowCache().Bump()
 	refreshedProof, err := svc.PrepareReplayParent(t.Context(), parent)
@@ -278,6 +366,38 @@ func TestReplayAdmissionRejectsMissingChangedRootBeforePreparation(t *testing.T)
 	require.ErrorIs(t, err, shamap.ErrNodeNotInStore)
 }
 
+func TestReplayAdmissionRejectsMissingChangedDescendantWithWarmAlias(t *testing.T) {
+	family := newReplayAdmissionFamily(t)
+	svc, err := New(Config{SHAMapFamily: family})
+	require.NoError(t, err)
+	parentState := persistedReplayAdmissionState(t, family, 1024)
+	parentHash := [32]byte{0x78}
+	parent := replayAdmissionLedger(t, 780, parentHash, [32]byte{0x07}, parentState, shamap.New(shamap.TypeTransaction))
+	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
+	require.NoError(t, err)
+	defer parentProof.Release()
+
+	changedKey := [32]byte{0xf0, 1}
+	changedState, err := parent.StateMapSnapshotContext(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, changedState.PutWithNodeType(changedKey, []byte("missing-changed-descendant"), shamap.NodeTypeAccountState))
+	changed := replayAdmissionLedger(t, 781, [32]byte{0x79}, parentHash, changedState, shamap.New(shamap.TypeTransaction))
+	root, err := parentState.Hash()
+	require.NoError(t, err)
+	changedRoot, err := changedState.Hash()
+	require.NoError(t, err)
+	missingDescendant := replayAdmissionPathDescendantHash(t, family, changedRoot, changedKey, 1)
+	family.hideWithoutGeneration(missingDescendant)
+	prepared, err := svc.PrepareReplayLedger(t.Context(), changed, parentProof)
+	family.mu.Lock()
+	requestedHidden := family.readHashes[missingDescendant]
+	family.mu.Unlock()
+	t.Logf("missing changed descendant root=%x parent=%x requested=%d", changedRoot[:8], root[:8], requestedHidden)
+	require.Positive(t, requestedHidden)
+	require.ErrorIs(t, err, shamap.ErrNodeNotInStore)
+	require.Nil(t, prepared)
+}
+
 func TestReplayAdmissionPreparedLedgerIsOneShotAndGenerationBound(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
 	svc, err := New(Config{SHAMapFamily: family})
@@ -294,8 +414,10 @@ func TestReplayAdmissionPreparedLedgerIsOneShotAndGenerationBound(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, childState.PutWithNodeType([32]byte{0xf1}, []byte("child-replay-value"), shamap.NodeTypeAccountState))
 	child := replayAdmissionLedger(t, 201, [32]byte{0x21}, parentHash, childState, shamap.New(shamap.TypeTransaction))
+	family.bumpFingerprint()
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
 	require.NoError(t, err)
+	require.True(t, prepared.Stats().GenerationChanged)
 	otherSvc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	_, err = otherSvc.BootstrapPreparedLedger(t.Context(), prepared)
@@ -379,6 +501,47 @@ func TestReplayAdmissionColdWalkUsesAdmittedWorkersAndReleasesWorkspace(t *testi
 	require.Equal(t, uint64(replayAdmissionColdWorkspaceBytes*2), stats.State.WorkspaceBytes)
 	require.Zero(t, budget.used)
 	proof.Release()
+}
+
+func TestReplayAdmissionColdWalkReaderCapAndWorkspace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		workers int
+	}{
+		{name: "one worker", workers: 1},
+		{name: "two workers", workers: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := newReplayAdmissionFamily(t)
+			family := &delayedReplayAdmissionFamily{
+				replayAdmissionFamily: base,
+				delay:                 500 * time.Microsecond,
+			}
+			budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * uint64(tc.workers)}
+			svc, err := New(Config{
+				SHAMapFamily:      family,
+				PersistenceMemory: budget,
+				FastLoadWorkers:   2,
+			})
+			require.NoError(t, err)
+			state := persistedReplayAdmissionState(t, base, 1024)
+			parent := replayAdmissionLedger(t, 460+uint32(tc.workers), [32]byte{byte(0x46 + tc.workers)}, [32]byte{0x04}, state, shamap.New(shamap.TypeTransaction))
+			proof, err := svc.PrepareReplayParent(t.Context(), parent)
+			require.NoError(t, err)
+			stats := proof.Stats()
+			peak := family.peakReaders()
+			t.Logf("cold walk workers=%d workspace=%d peak durable readers=%d budget used=%d", stats.State.Workers, stats.State.WorkspaceBytes, peak, budget.used)
+			require.Equal(t, tc.workers, stats.State.Workers)
+			require.Equal(t, uint64(tc.workers)*replayAdmissionColdWorkspaceBytes, stats.State.WorkspaceBytes)
+			require.GreaterOrEqual(t, peak, 1)
+			if tc.workers > 1 {
+				require.GreaterOrEqual(t, peak, 2)
+			}
+			require.LessOrEqual(t, peak, tc.workers)
+			require.Zero(t, budget.used)
+			proof.Release()
+		})
+	}
 }
 
 func TestReplayAdmissionWorkspaceRejectsInsufficientCapacityAndHonorsCancellation(t *testing.T) {

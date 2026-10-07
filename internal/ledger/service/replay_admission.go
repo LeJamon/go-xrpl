@@ -586,14 +586,19 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 	}
 	reusable := pinned && stateMap.IsBacked() && s.hasDurableFamily()
 	baseRoot, parentFingerprint, useBase := parent.baseRoot(s, h)
-	if useBase && (!reusable || parentFingerprint != pin.fingerprint) {
-		useBase = false
-	}
+	parentProofAvailable := useBase
 	stats := ReplayAdmissionStats{
 		GenerationPinned: pinned,
-		ParentProofUsed:  useBase,
 		SnapshotElapsed:  time.Since(snapshotStartedAt),
 	}
+	if parentProofAvailable {
+		generationChanged := pinned && pin != nil && parentFingerprint != pin.fingerprint
+		if generationChanged {
+			stats.GenerationChanged = true
+		}
+		useBase = reusable && !generationChanged
+	}
+	stats.ParentProofUsed = useBase
 	var stateStats ReplayAdmissionMapStats
 	if useBase {
 		stateStats, err = s.verifyReplaySnapshot(ctx, "replay derived state", stateMap, baseRoot)

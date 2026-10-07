@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -486,6 +487,21 @@ type replayUnavailableFamily struct {
 
 func (f replayUnavailableFamily) Fetch(context.Context, [32]byte) ([]byte, error) { return f.data, nil }
 
+type blockingReplayPreparationFamily struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (f *blockingReplayPreparationFamily) Fetch(ctx context.Context, _ [32]byte) ([]byte, error) {
+	f.once.Do(func() { close(f.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (f *blockingReplayPreparationFamily) StoreBatch(context.Context, []shamap.FlushEntry) error {
+	return nil
+}
+
 func TestReplayFaultClassifiesIncompleteTransactionInputs(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -526,7 +542,7 @@ func TestReplayFaultClassifiesIncompleteTransactionInputs(t *testing.T) {
 	}
 }
 
-func TestReplayPreparationKeepsKnownMissingClassAfterCanceledInputWalk(t *testing.T) {
+func TestReplayPreparationCanceledInputWalkClearsIntent(t *testing.T) {
 	svc := replayFaultService(t, "")
 	parent := svc.GetClosedLedger()
 	target := replayFaultTarget(t, parent, false)
@@ -538,11 +554,43 @@ func TestReplayPreparationKeepsKnownMissingClassAfterCanceledInputWalk(t *testin
 
 	svc.RecordReplayPreparationFailure(ctx, target.Header(), txMap, parent, true, shamap.ErrNodeNotInStore)
 	fault := svc.replayFaults.Snapshot()
-	require.NotNil(t, fault)
-	require.Equal(t, replayfault.MissingState, fault.Class)
-	var evidence replayEvidence
-	require.NoError(t, json.Unmarshal(fault.Evidence, &evidence))
-	require.Equal(t, replayfault.MissingState, evidence.RepairClass)
+	require.Nil(t, fault)
+	require.False(t, svc.ReplayBlocked())
+}
+
+func TestReplayPreparationCancellationDuringInputWalkClearsIntent(t *testing.T) {
+	svc := replayFaultService(t, "")
+	parent := svc.GetClosedLedger()
+	target := replayFaultTarget(t, parent, false)
+	full := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, full.PutWithNodeType([32]byte{0x43}, []byte("transaction bytes fixture"), shamap.NodeTypeTransactionWithMeta))
+	txHash, err := full.Hash()
+	require.NoError(t, err)
+	root, err := full.SerializeRoot()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, txMap.AddRootNode(txHash, root))
+	family := &blockingReplayPreparationFamily{started: make(chan struct{})}
+	txMap.SetFamily(family)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.RecordReplayPreparationFailure(ctx, target.Header(), txMap, parent, true, shamap.ErrNodeNotInStore)
+		close(done)
+	}()
+	select {
+	case <-family.started:
+	case <-time.After(time.Second):
+		t.Fatal("transaction walk did not reach the blocking family")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled transaction walk did not return")
+	}
+	require.Nil(t, svc.replayFaults.Snapshot())
+	require.False(t, svc.ReplayBlocked())
 }
 
 func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {
