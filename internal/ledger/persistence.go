@@ -30,18 +30,28 @@ func (l *Ledger) StoreDirtyBatched(ctx context.Context, budget shamap.DirtyMemor
 // StateMapSnapshot returns a mutable snapshot of the state map (e.g. for chaining
 // one block's output into the next during continuous replay).
 func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
+	return l.StateMapSnapshotContext(context.Background())
+}
+
+// StateMapSnapshotContext propagates cancellation through dirty-node persistence.
+func (l *Ledger) StateMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.SnapshotMutable()
+	return l.stateMap.SnapshotMutableContext(ctx)
 }
 
 // TxMapSnapshot returns a mutable snapshot of the transaction map.
 func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
+	return l.TxMapSnapshotContext(context.Background())
+}
+
+// TxMapSnapshotContext propagates cancellation through dirty-node persistence.
+func (l *Ledger) TxMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.SnapshotMutable()
+	return l.txMap.SnapshotMutableContext(ctx)
 }
 
 // Mutable ledgers may have temporary SHAMap forks in flight, so retain the

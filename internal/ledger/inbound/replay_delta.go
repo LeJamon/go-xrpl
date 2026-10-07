@@ -504,7 +504,7 @@ func NewStoredLedgerReplayWithMemoryContext(
 	if err := replay.reserveProcessingMemory(replayStoredWorkspaceBytes); err != nil {
 		return nil, err
 	}
-	txMap, err := target.TxMapSnapshot()
+	txMap, err := target.TxMapSnapshotContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1098,7 +1098,7 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	// rippled's Ledger(parent, closeTime) constructor: child inherits
 	// the parent's totalCoins and chains its parent linkage from the
 	// parent rather than the deserialized response header.
-	stateMap, err := r.parent.StateMapSnapshot()
+	stateMap, err := r.parent.StateMapSnapshotContext(ctx)
 	if err != nil {
 		return nil, newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
 	}

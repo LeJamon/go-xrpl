@@ -9,7 +9,13 @@ import (
 // SnapshotMutable returns a structurally-shared copy that may be modified.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotMutable() (*SHAMap, error) {
-	return sm.snapshot(context.Background(), true, nil)
+	return sm.SnapshotMutableContext(context.Background())
+}
+
+// SnapshotMutableContext is SnapshotMutable with caller-controlled
+// cancellation for dirty-node persistence.
+func (sm *SHAMap) SnapshotMutableContext(ctx context.Context) (*SHAMap, error) {
+	return sm.snapshot(ctx, true, nil)
 }
 
 // SnapshotImmutable returns a read-only structurally-shared copy.
