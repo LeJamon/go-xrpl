@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -160,7 +161,7 @@ func TestRouterReplayPublicationKeepsMessageLanesResponsive(t *testing.T) {
 			require.False(t, svc.ReplayBlocked())
 			if shutdown {
 				stored, err := svc.GetLedgerByHash(links[0].hash)
-				require.NoError(t, err)
+				require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 				require.Nil(t, stored, "canceled replay published its prepared ledger")
 			}
 		})
