@@ -13,7 +13,10 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
-const replayProofCacheLimit = 4
+const (
+	replayProofCacheLimit        = 4
+	replayPreparedProofSlotLimit = 8
+)
 
 var (
 	errReplayAdmissionService = errors.New("replay admission belongs to another ledger service")
@@ -45,6 +48,22 @@ func (r replayCompletenessRecord) matchesHeader(h header.LedgerHeader, fingerpri
 		return r.transactionComplete && r.txRoot == h.TxHash
 	}
 	return true
+}
+
+func (r replayCompletenessRecord) matchesExactHeader(h header.LedgerHeader, fingerprint [32]byte, transaction bool) bool {
+	return r.matchesHeader(h, fingerprint, transaction) && r.txRoot == h.TxHash
+}
+
+// replayPreparedProof is the service-owned activation certificate for a
+// prepared result. It deliberately retains no map or node payload; the token
+// owns those resources and remains responsible for releasing the generation
+// pin and slot.
+type replayPreparedProof struct {
+	owner       *PreparedLedger
+	record      replayCompletenessRecord
+	pin         *replaySnapshotPin
+	releaseSlot func()
+	published   bool
 }
 
 type replaySnapshotProvider interface {
@@ -154,20 +173,21 @@ func (p *PreparedReplayParent) baseRoot(service *Service, target header.LedgerHe
 }
 
 // PreparedLedger is an opaque detached ledger prepared for short publication.
-// It owns immutable map snapshots, a durable pin, and the persistence-work
-// admission acquired before the caller enters its commit lock.
+// It owns immutable map snapshots, a durable pin, and the persistence and
+// lifecycle admissions acquired before the caller enters its commit lock.
 type PreparedLedger struct {
-	service      *Service
-	header       header.LedgerHeader
-	stateMap     *shamap.SHAMap
-	txMap        *shamap.SHAMap
-	fingerprint  [32]byte
-	pin          *replaySnapshotPin
-	releaseWork  func()
-	stats        ReplayAdmissionStats
-	state        preparedLedgerState
-	releaseAfter bool
-	mu           sync.Mutex
+	service          *Service
+	header           header.LedgerHeader
+	stateMap         *shamap.SHAMap
+	txMap            *shamap.SHAMap
+	fingerprint      [32]byte
+	pin              *replaySnapshotPin
+	releaseWork      func()
+	releaseLifecycle func()
+	stats            ReplayAdmissionStats
+	state            preparedLedgerState
+	releaseAfter     bool
+	mu               sync.Mutex
 }
 
 type preparedLedgerState uint8
@@ -180,8 +200,9 @@ const (
 )
 
 // Release releases all resources owned by a prepared ledger. A successfully
-// published token keeps only its durable snapshot pin until this method is
-// called, allowing the caller to cover the subsequent activation step.
+// published token keeps its durable snapshot pin and lifecycle admission until
+// this method is called, allowing the caller to cover the subsequent
+// activation step.
 func (p *PreparedLedger) Release() {
 	if p == nil {
 		return
@@ -193,17 +214,26 @@ func (p *PreparedLedger) Release() {
 		p.releaseAfter = true
 		releaseWork := p.releaseWork
 		pin := p.pin
+		releaseLifecycle := p.releaseLifecycle
 		p.releaseWork = nil
+		p.releaseLifecycle = nil
 		p.pin = nil
 		p.stateMap = nil
 		p.txMap = nil
 		p.header = header.LedgerHeader{}
+		service := p.service
 		p.mu.Unlock()
+		if service != nil {
+			service.unregisterReplayPrepared(p)
+		}
 		if releaseWork != nil {
 			releaseWork()
 		}
 		if pin != nil {
 			pin.Release()
+		}
+		if releaseLifecycle != nil {
+			releaseLifecycle()
 		}
 		return
 	case preparedLedgerConsuming:
@@ -217,9 +247,18 @@ func (p *PreparedLedger) Release() {
 		p.stateMap = nil
 		p.txMap = nil
 		p.header = header.LedgerHeader{}
+		releaseLifecycle := p.releaseLifecycle
+		p.releaseLifecycle = nil
+		service := p.service
 		p.mu.Unlock()
+		if service != nil {
+			service.unregisterReplayPrepared(p)
+		}
 		if pin != nil {
 			pin.Release()
+		}
+		if releaseLifecycle != nil {
+			releaseLifecycle()
 		}
 		return
 	default:
@@ -266,8 +305,14 @@ func (p *PreparedLedger) finishConsume(published bool) {
 	}
 	releaseWork := p.releaseWork
 	p.releaseWork = nil
-	releasePin := !published || p.releaseAfter
-	if published {
+	releaseAfter := p.releaseAfter
+	releasePin := !published || releaseAfter
+	releaseLifecycle := p.releaseLifecycle
+	if !published || releaseAfter {
+		p.releaseLifecycle = nil
+	}
+	service := p.service
+	if published && !releaseAfter {
 		p.state = preparedLedgerPublished
 	} else {
 		p.state = preparedLedgerReleased
@@ -281,11 +326,21 @@ func (p *PreparedLedger) finishConsume(published bool) {
 		p.pin = nil
 	}
 	p.mu.Unlock()
+	if service != nil {
+		if published && !releasePin {
+			service.markReplayPreparedPublished(p)
+		} else {
+			service.unregisterReplayPrepared(p)
+		}
+	}
 	if releaseWork != nil {
 		releaseWork()
 	}
 	if pin != nil {
 		pin.Release()
+	}
+	if releaseLifecycle != nil && (!published || releaseAfter) {
+		releaseLifecycle()
 	}
 }
 
@@ -354,8 +409,130 @@ func currentReplayFingerprint(ctx context.Context, pin *replaySnapshotPin) ([32]
 	return fingerprint, err == nil, err
 }
 
+func (s *Service) acquireReplayPreparedSlot(ctx context.Context) (func(), error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s.lifecycleMu.Lock()
+		if s.lifecycleState == serviceStopping || s.lifecycleState == serviceStopped {
+			s.lifecycleMu.Unlock()
+			return nil, errServiceNotRunning
+		}
+		s.replayProofMu.Lock()
+		if s.replayPreparedSlotCount < replayPreparedProofSlotLimit {
+			s.replayPreparedSlotCount++
+			s.replayProofMu.Unlock()
+			s.lifecycleMu.Unlock()
+			return sync.OnceFunc(s.releaseReplayPreparedSlot), nil
+		}
+		if s.replayPreparedProofWake == nil {
+			s.replayPreparedProofWake = make(chan struct{})
+		}
+		wake := s.replayPreparedProofWake
+		s.replayProofMu.Unlock()
+		s.lifecycleMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+func (s *Service) releaseReplayPreparedSlot() {
+	s.replayProofMu.Lock()
+	if s.replayPreparedSlotCount > 0 {
+		s.replayPreparedSlotCount--
+	}
+	wake := s.replayPreparedProofWake
+	if wake != nil {
+		s.replayPreparedProofWake = make(chan struct{})
+	}
+	s.replayProofMu.Unlock()
+	if wake != nil {
+		close(wake)
+	}
+}
+
+func (s *Service) signalReplayPreparedSlots() {
+	s.replayProofMu.Lock()
+	wake := s.replayPreparedProofWake
+	s.replayPreparedProofWake = nil
+	s.replayProofMu.Unlock()
+	if wake != nil {
+		close(wake)
+	}
+}
+
+func (s *Service) registerReplayPrepared(
+	prepared *PreparedLedger,
+	record replayCompletenessRecord,
+	pin *replaySnapshotPin,
+	releaseSlot func(),
+) error {
+	s.lifecycleMu.Lock()
+	if s.lifecycleState == serviceStopping || s.lifecycleState == serviceStopped {
+		s.lifecycleMu.Unlock()
+		return errServiceNotRunning
+	}
+	s.replayProofMu.Lock()
+	s.replayPreparedProofs = append(s.replayPreparedProofs, &replayPreparedProof{
+		owner:       prepared,
+		record:      record,
+		pin:         pin,
+		releaseSlot: releaseSlot,
+	})
+	s.replayProofMu.Unlock()
+	s.lifecycleMu.Unlock()
+	return nil
+}
+
+func (s *Service) unregisterReplayPrepared(prepared *PreparedLedger) {
+	if prepared == nil {
+		return
+	}
+	var releaseSlot func()
+	s.replayProofMu.Lock()
+	for i, proof := range s.replayPreparedProofs {
+		if proof.owner != prepared {
+			continue
+		}
+		releaseSlot = proof.releaseSlot
+		copy(s.replayPreparedProofs[i:], s.replayPreparedProofs[i+1:])
+		s.replayPreparedProofs[len(s.replayPreparedProofs)-1] = nil
+		s.replayPreparedProofs = s.replayPreparedProofs[:len(s.replayPreparedProofs)-1]
+		break
+	}
+	s.replayProofMu.Unlock()
+	if releaseSlot != nil {
+		releaseSlot()
+	}
+}
+
+func (s *Service) markReplayPreparedPublished(prepared *PreparedLedger) {
+	if prepared == nil {
+		return
+	}
+	s.replayProofMu.Lock()
+	for _, proof := range s.replayPreparedProofs {
+		if proof.owner == prepared {
+			proof.published = true
+			break
+		}
+	}
+	s.replayProofMu.Unlock()
+}
+
 func (s *Service) lookupReplayProof(h header.LedgerHeader, fingerprint [32]byte, transaction bool) bool {
 	s.replayProofMu.Lock()
+	for _, proof := range s.replayPreparedProofs {
+		if proof.published && proof.pin != nil && proof.pin.active() &&
+			proof.record.matchesExactHeader(h, fingerprint, transaction) {
+			s.replayProofMu.Unlock()
+			return true
+		}
+	}
 	for i, record := range s.replayProofs {
 		if !record.matchesHeader(h, fingerprint, transaction) {
 			continue
@@ -562,11 +739,26 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	releasePreparedSlot, err := s.acquireReplayPreparedSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	preparedSlotOwned := true
+	defer func() {
+		if preparedSlotOwned {
+			releasePreparedSlot()
+		}
+	}()
 	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer releasePreparation()
+	preparationOwned := true
+	defer func() {
+		if preparationOwned {
+			releasePreparation()
+		}
+	}()
 	startedAt := time.Now()
 	snapshotStartedAt := time.Now()
 	h, stateMap, txMap, err := s.snapshotPreparedLedger(ctx, derived)
@@ -638,21 +830,40 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 		return nil, fmt.Errorf("replay admission: acquire publication work: %w", err)
 	}
 	stats.Elapsed = time.Since(startedAt)
-	return &PreparedLedger{
-		service:  s,
-		header:   h,
-		stateMap: stateMap,
-		txMap:    txMap,
-		fingerprint: func() [32]byte {
-			if pin == nil {
-				return [32]byte{}
-			}
-			return pin.fingerprint
-		}(),
-		pin:         pin,
-		releaseWork: releaseWork,
-		stats:       stats,
-	}, nil
+	fingerprint := [32]byte{}
+	if pin != nil {
+		fingerprint = pin.fingerprint
+	}
+	prepared := &PreparedLedger{
+		service:          s,
+		header:           h,
+		stateMap:         stateMap,
+		txMap:            txMap,
+		fingerprint:      fingerprint,
+		pin:              pin,
+		releaseWork:      releaseWork,
+		releaseLifecycle: releasePreparation,
+		stats:            stats,
+	}
+	preparedRecord := replayCompletenessRecord{
+		sequence:             h.LedgerIndex,
+		ledgerHash:           h.Hash,
+		parentHash:           h.ParentHash,
+		stateRoot:            h.AccountHash,
+		txRoot:               h.TxHash,
+		nodeStoreFingerprint: fingerprint,
+		transactionComplete:  txMap.IsBacked() && s.hasDurableFamily(),
+	}
+	if err := s.registerReplayPrepared(prepared, preparedRecord, pin, releasePreparedSlot); err != nil {
+		releaseWork()
+		if pin != nil {
+			pin.Release()
+		}
+		return nil, fmt.Errorf("replay admission: retain prepared proof: %w", err)
+	}
+	preparedSlotOwned = false
+	preparationOwned = false
+	return prepared, nil
 }
 
 func (s *Service) verifyReplayProof(

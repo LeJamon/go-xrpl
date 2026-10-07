@@ -190,10 +190,13 @@ type Service struct {
 
 	// replayProofMu protects the bounded in-memory certificates used by
 	// generation-bound replay admission. The records contain only ledger and
-	// durable-generation identities; the durable snapshot pin lives on the
-	// short-lived preparation token.
-	replayProofMu sync.Mutex
-	replayProofs  []replayCompletenessRecord
+	// durable-generation identities; an active prepared proof also retains its
+	// opaque token owner and generation pin until publication activation ends.
+	replayProofMu           sync.Mutex
+	replayProofs            []replayCompletenessRecord
+	replayPreparedProofs    []*replayPreparedProof
+	replayPreparedSlotCount int
+	replayPreparedProofWake chan struct{}
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager

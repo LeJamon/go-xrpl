@@ -289,6 +289,7 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
 	s.lifecycleMu.Unlock()
+	s.signalReplayPreparedSlots()
 	s.persistenceWorker.stopAdmissions()
 	if replayRecoveryCancel != nil {
 		replayRecoveryCancel()

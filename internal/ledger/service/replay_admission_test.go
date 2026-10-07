@@ -396,6 +396,10 @@ func TestReplayAdmissionRejectsMissingChangedDescendantWithWarmAlias(t *testing.
 	require.Positive(t, requestedHidden)
 	require.ErrorIs(t, err, shamap.ErrNodeNotInStore)
 	require.Nil(t, prepared)
+	svc.replayProofMu.Lock()
+	require.Zero(t, svc.replayPreparedSlotCount)
+	require.Empty(t, svc.replayPreparedProofs)
+	svc.replayProofMu.Unlock()
 }
 
 func TestReplayAdmissionPreparedLedgerIsOneShotAndGenerationBound(t *testing.T) {
@@ -430,6 +434,10 @@ func TestReplayAdmissionPreparedLedgerIsOneShotAndGenerationBound(t *testing.T) 
 	require.Error(t, err)
 	require.True(t, prepared.Stats().GenerationChanged)
 	prepared.Release()
+	svc.replayProofMu.Lock()
+	require.Zero(t, svc.replayPreparedSlotCount)
+	require.Empty(t, svc.replayPreparedProofs)
+	svc.replayProofMu.Unlock()
 
 	// The failed one-shot token cannot be consumed again, and Release remains
 	// idempotent after the failed publication.
@@ -666,4 +674,178 @@ func TestReplayAdmissionBootstrapSuccessConsumesAndClearsPreparedLedger(t *testi
 	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)
 	require.ErrorIs(t, err, errReplayAdmissionState)
 	prepared.Release()
+}
+
+func TestReplayAdmissionPublishedProofSurvivesLRUEvictionUntilRelease(t *testing.T) {
+	family := newReplayAdmissionFamily(t)
+	svc, err := New(Config{SHAMapFamily: family})
+	require.NoError(t, err)
+	parentState := persistedReplayAdmissionState(t, family, 64)
+	parentHash := [32]byte{0x90}
+	parent := replayAdmissionLedger(t, 900, parentHash, [32]byte{0x09}, parentState, shamap.New(shamap.TypeTransaction))
+	svc.genesisLedger = parent
+	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
+	require.NoError(t, err)
+	defer parentProof.Release()
+
+	childState, err := parent.StateMapSnapshotContext(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, childState.PutWithNodeType([32]byte{0xf9}, []byte("activation-proof"), shamap.NodeTypeAccountState))
+	txMap := shamap.New(shamap.TypeTransaction)
+	stateRoot, err := childState.Hash()
+	require.NoError(t, err)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	constructedHeader := header.LedgerHeader{LedgerIndex: 901, ParentHash: parentHash, AccountHash: stateRoot, TxHash: txRoot}
+	constructedHeader.Hash = header.CalculateHash(constructedHeader)
+	child := replayAdmissionLedger(t, constructedHeader.LedgerIndex, constructedHeader.Hash, parentHash, childState, txMap)
+	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
+	require.NoError(t, err)
+	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)
+	require.NoError(t, err)
+
+	// Fill the ordinary four-entry LRU with unrelated certificates, then force
+	// a FullBelow generation so the active prepared proof is the only shortcut.
+	family.mu.Lock()
+	fingerprint := family.fingerprint
+	family.mu.Unlock()
+	childHeader := child.Header()
+	for i := 0; i <= replayProofCacheLimit; i++ {
+		fake := childHeader
+		fake.LedgerIndex += uint32(i + 1)
+		fake.Hash = [32]byte{byte(0xa0 + i)}
+		svc.rememberReplayProof(fake, fingerprint, true)
+	}
+	family.FullBelowCache().Bump()
+	family.resetReads()
+	require.NoError(t, svc.VerifyDetachedLedger(t.Context(), child))
+	require.Zero(t, family.readCount(), "published active proof should avoid durable reads after LRU eviction")
+
+	prepared.Release()
+	family.FullBelowCache().Bump()
+	family.resetReads()
+	require.NoError(t, svc.VerifyDetachedLedger(t.Context(), child))
+	require.Positive(t, family.readCount(), "releasing the prepared token must restore cold verification")
+}
+
+func TestReplayAdmissionPreparedProofRejectsGenerationChange(t *testing.T) {
+	family := newReplayAdmissionFamily(t)
+	svc, err := New(Config{SHAMapFamily: family})
+	require.NoError(t, err)
+	parentState := persistedReplayAdmissionState(t, family, 64)
+	parentHash := [32]byte{0x92}
+	parent := replayAdmissionLedger(t, 920, parentHash, [32]byte{0x29}, parentState, shamap.New(shamap.TypeTransaction))
+	svc.genesisLedger = parent
+	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
+	require.NoError(t, err)
+	defer parentProof.Release()
+	childState, err := parent.StateMapSnapshotContext(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, childState.PutWithNodeType([32]byte{0xfa}, []byte("generation-bound"), shamap.NodeTypeAccountState))
+	txMap := shamap.New(shamap.TypeTransaction)
+	stateRoot, err := childState.Hash()
+	require.NoError(t, err)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	childHeader := header.LedgerHeader{LedgerIndex: 921, ParentHash: parentHash, AccountHash: stateRoot, TxHash: txRoot}
+	childHeader.Hash = header.CalculateHash(childHeader)
+	child := replayAdmissionLedger(t, childHeader.LedgerIndex, childHeader.Hash, parentHash, childState, txMap)
+	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
+	require.NoError(t, err)
+	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)
+	require.NoError(t, err)
+
+	family.mu.Lock()
+	fingerprint := family.fingerprint
+	family.mu.Unlock()
+	for i := 0; i <= replayProofCacheLimit; i++ {
+		fake := child.Header()
+		fake.LedgerIndex += uint32(i + 1)
+		fake.Hash = [32]byte{byte(0xb0 + i)}
+		svc.rememberReplayProof(fake, fingerprint, true)
+	}
+	family.bumpFingerprint()
+	family.FullBelowCache().Bump()
+	family.resetReads()
+	require.NoError(t, svc.VerifyDetachedLedger(t.Context(), child))
+	require.Positive(t, family.readCount(), "a changed durable generation must bypass the retained proof")
+	prepared.Release()
+}
+
+func TestReplayAdmissionStopWaitsForPublishedProofRelease(t *testing.T) {
+	family := newReplayAdmissionFamily(t)
+	svc, err := New(Config{SHAMapFamily: family})
+	require.NoError(t, err)
+	parentState := persistedReplayAdmissionState(t, family, 16)
+	parentHash := [32]byte{0x94}
+	parent := replayAdmissionLedger(t, 940, parentHash, [32]byte{0x49}, parentState, shamap.New(shamap.TypeTransaction))
+	svc.genesisLedger = parent
+	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
+	require.NoError(t, err)
+	childState, err := parent.StateMapSnapshotContext(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, childState.PutWithNodeType([32]byte{0xfb}, []byte("stop-lifetime"), shamap.NodeTypeAccountState))
+	txMap := shamap.New(shamap.TypeTransaction)
+	stateRoot, err := childState.Hash()
+	require.NoError(t, err)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	childHeader := header.LedgerHeader{LedgerIndex: 941, ParentHash: parentHash, AccountHash: stateRoot, TxHash: txRoot}
+	childHeader.Hash = header.CalculateHash(childHeader)
+	child := replayAdmissionLedger(t, childHeader.LedgerIndex, childHeader.Hash, parentHash, childState, txMap)
+	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
+	require.NoError(t, err)
+	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)
+	require.NoError(t, err)
+	parentProof.Release()
+
+	stopped := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while the published proof was still owned")
+	case <-time.After(20 * time.Millisecond):
+	}
+	prepared.Release()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not drain the published proof lifetime")
+	}
+	svc.replayProofMu.Lock()
+	require.Zero(t, svc.replayPreparedSlotCount)
+	require.Empty(t, svc.replayPreparedProofs)
+	svc.replayProofMu.Unlock()
+}
+
+func TestReplayAdmissionPreparedProofSlotsAreBoundedAndReleased(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	releases := make([]func(), 0, replayPreparedProofSlotLimit)
+	for range replayPreparedProofSlotLimit {
+		release, acquireErr := svc.acquireReplayPreparedSlot(t.Context())
+		require.NoError(t, acquireErr)
+		releases = append(releases, release)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	_, err = svc.acquireReplayPreparedSlot(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	svc.replayProofMu.Lock()
+	require.Equal(t, replayPreparedProofSlotLimit, svc.replayPreparedSlotCount)
+	svc.replayProofMu.Unlock()
+	releases[0]()
+	release, err := svc.acquireReplayPreparedSlot(t.Context())
+	require.NoError(t, err)
+	release()
+	for _, release = range releases[1:] {
+		release()
+	}
+	svc.replayProofMu.Lock()
+	require.Zero(t, svc.replayPreparedSlotCount)
+	require.Empty(t, svc.replayPreparedProofs)
+	svc.replayProofMu.Unlock()
 }
