@@ -412,21 +412,7 @@ func (c *catchupReplayCoordinator) finishStandardReplayWorkerFailure(
 	if !current {
 		return result
 	}
-	if !c.lockReplayCommitContext(result.owner.workCtx) {
-		return result
-	}
-	defer c.replayCommitMu.Unlock()
-	if result.owner.workCtx.Err() != nil {
-		return result
-	}
-	c.acquisitionMu.Lock()
-	current = c.standardReplayDrainOwner == result.owner && c.standardReplay.active &&
-		c.standardReplay.generation == result.generation &&
-		c.standardReplay.entries[entry.seq] == result.entry && c.standardReplay.anchorSeq+1 == entry.seq
-	c.acquisitionMu.Unlock()
-	if !current {
-		return result
-	}
+
 	svc := c.adaptor.LedgerService()
 	if svc != nil {
 		svc.RecordReplayPreparationFailure(result.owner.workCtx, entry.header, txMap, parent,
@@ -487,35 +473,46 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 	}
 	owner := result.owner
 	defer c.finishStandardReplayDrain(owner)
+	defer result.releaseResources()
+	c.replayCommitMu.Lock()
+	c.acquisitionMu.Lock()
+	current := c.standardReplayDrainOwner == owner && c.standardReplay.active &&
+		c.standardReplay.generation == result.generation &&
+		c.standardReplay.entries[result.entry.seq] == result.entry &&
+		c.standardReplay.anchorSeq+1 == result.entry.seq
+	if !current || owner.workCtx.Err() != nil || c.stoppedForShutdown() {
+		c.acquisitionMu.Unlock()
+		c.replayCommitMu.Unlock()
+		return
+	}
+	// Cancellation owns queued results; this handler owns a claimed result
+	// through activation, including its durable generation pin.
+	owner.result = nil
 	if result.err != nil {
-		result.releaseResources()
-		if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) || c.stoppedForShutdown() {
+		if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
+			c.acquisitionMu.Unlock()
+			c.replayCommitMu.Unlock()
 			return
 		}
 		if errors.Is(result.err, inbound.ErrReplayMemory) {
-			c.acquisitionMu.Lock()
-			current := c.standardReplayDrainOwner == owner && c.standardReplay.active &&
-				c.standardReplay.generation == result.generation &&
-				c.standardReplay.entries[result.entry.seq] == result.entry &&
-				c.standardReplay.anchorSeq+1 == result.entry.seq
-			if current {
-				c.standardReplay.applying = false
-				required := uint64(standardReplayProcessingBytes)
-				if result.memoryRequired > ^uint64(0)-required {
-					required = ^uint64(0)
-				} else {
-					required += result.memoryRequired
-				}
-				c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, required)
-				owner.memoryWait = true
-				c.updateStandardReplayHeadBlockLocked(time.Now())
+			c.standardReplay.applying = false
+			required := uint64(standardReplayProcessingBytes)
+			if result.memoryRequired > ^uint64(0)-required {
+				required = ^uint64(0)
+			} else {
+				required += result.memoryRequired
 			}
+			c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, required)
+			owner.memoryWait = true
+			c.updateStandardReplayHeadBlockLocked(time.Now())
 			c.acquisitionMu.Unlock()
+			c.replayCommitMu.Unlock()
 			return
 		}
-		c.acquisitionMu.Lock()
 		retired, target, current := c.discardStandardReplayHeadLocked(result.entry, result.generation)
 		c.acquisitionMu.Unlock()
+		c.replayCommitMu.Unlock()
+		result.releaseResources()
 		c.retireStandardReplay(retired)
 		if current {
 			c.replayPipelineFallbacks.Add(1)
@@ -528,16 +525,6 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 		return
 	}
 
-	c.acquisitionMu.Lock()
-	current := c.standardReplayDrainOwner == owner && c.standardReplay.active &&
-		c.standardReplay.generation == result.generation &&
-		c.standardReplay.entries[result.entry.seq] == result.entry &&
-		c.standardReplay.anchorSeq+1 == result.entry.seq
-	if !current {
-		c.acquisitionMu.Unlock()
-		result.releaseResources()
-		return
-	}
 	delete(c.standardReplay.entries, result.entry.seq)
 	result.dropEntryPayload = true
 	c.releaseStandardReplayEntryMemoryLocked(result.entry)
@@ -557,6 +544,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 		initialCandidate = initialCandidate || c.standardReplay.initialCandidate
 	}
 	c.acquisitionMu.Unlock()
+	c.replayCommitMu.Unlock()
 	if supersededReplacement != nil {
 		c.retireLegacyAcquisitions([]*inbound.Ledger{supersededReplacement})
 	}

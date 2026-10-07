@@ -3,6 +3,8 @@ package adaptor
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -151,4 +153,61 @@ func TestReplayWorkerRechecksFaultGateBeforePublication(t *testing.T) {
 	_, err := svc.GetLedgerByHash(link.hash)
 	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 	require.Zero(t, c.replayPipelineApplied.Load())
+}
+
+type replayResultLogBarrier struct {
+	slog.Handler
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (h *replayResultLogBarrier) Handle(ctx context.Context, record slog.Record) error {
+	if record.Message == "applied standard transaction replay pipeline entry" {
+		close(h.entered)
+		<-h.resume
+	}
+	return h.Handler.Handle(ctx, record)
+}
+
+func TestReplayWorkerClaimedResultRetainsResourcesDuringCancellation(t *testing.T) {
+	router, _, _, resume := newBlockedReplayWorker(t)
+	c := router.catchupReplay
+	resume()
+	var result *standardReplayDrainResult
+	select {
+	case result = <-c.standardReplayResults:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not finish preparation")
+	}
+	require.NoError(t, result.err)
+	barrier := &replayResultLogBarrier{
+		Handler: slog.NewTextHandler(io.Discard, nil),
+		entered: make(chan struct{}), resume: make(chan struct{}),
+	}
+	c.logger = slog.New(barrier)
+	release := sync.OnceFunc(func() { close(barrier.resume) })
+	t.Cleanup(release)
+	done := make(chan struct{})
+	go func() { c.handleStandardReplayDrainResult(result); close(done) }()
+	select {
+	case <-barrier.entered:
+	case <-time.After(time.Second):
+		t.Fatal("result handler did not reach activation")
+	}
+	c.acquisitionMu.Lock()
+	identity := c.standardReplayIdentityLocked()
+	c.acquisitionMu.Unlock()
+	_, canceled := c.cancelStandardReplayPipelineIdentity(identity, "test_claimed_superseded")
+	require.True(t, canceled)
+	require.NotNil(t, result.prepared, "cancellation released the handler's durable pin")
+	require.True(t, result.processingReserved)
+	require.GreaterOrEqual(t, c.acquisitionMemory.Snapshot().Used, uint64(standardReplayProcessingBytes))
+	release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("claimed result did not retire")
+	}
+	require.Nil(t, result.prepared)
+	require.False(t, result.processingReserved)
 }
