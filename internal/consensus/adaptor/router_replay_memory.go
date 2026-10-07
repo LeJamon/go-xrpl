@@ -365,21 +365,6 @@ func (c *catchupReplayCoordinator) retainStandardReplayEntryMemoryLocked(entry *
 	return true
 }
 
-func (c *catchupReplayCoordinator) releaseStandardReplayEntryMemory(entry *standardReplayEntry) {
-	if entry == nil {
-		return
-	}
-	c.acquisitionMu.Lock()
-	if entry.replayMemoryActive != 0 {
-		entry.replayMemoryActive--
-	}
-	if entry.replayMemoryActive == 0 && entry.replayMemoryReleasePending {
-		entry.replayMemory.release()
-		entry.replayMemoryReleasePending = false
-	}
-	c.acquisitionMu.Unlock()
-}
-
 func (c *catchupReplayCoordinator) blockStandardReplayEntryForMemoryLocked(
 	entry *standardReplayEntry,
 	h *header.LedgerHeader,

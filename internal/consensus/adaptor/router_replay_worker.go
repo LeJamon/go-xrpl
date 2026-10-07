@@ -17,25 +17,30 @@ import (
 var errStandardReplayHeadFailed = errors.New("standard replay head failed")
 
 type standardReplayDrainResult struct {
-	coordinator        *catchupReplayCoordinator
-	owner              *standardReplayDrainOwner
-	generation         uint64
-	entry              *standardReplayEntry
-	startedAt          time.Time
-	applyDuration      time.Duration
-	persistDuration    time.Duration
-	header             header.LedgerHeader
-	initialCandidate   bool
-	prepared           *service.PreparedLedger
-	replayRelease      func()
-	err                error
-	failed             bool
-	processingAccount  *shamap.AcquisitionBudget
-	processingReserved bool
-	entryRetained      bool
-	memoryRequired     uint64
-	dropEntryPayload   bool
-	releaseOnce        sync.Once
+	coordinator         *catchupReplayCoordinator
+	owner               *standardReplayDrainOwner
+	generation          uint64
+	entry               *standardReplayEntry
+	startedAt           time.Time
+	applyDuration       time.Duration
+	persistDuration     time.Duration
+	preparationDuration time.Duration
+	lockWaitDuration    time.Duration
+	queueDuration       time.Duration
+	enqueuedAt          time.Time
+	parentStats         service.ReplayAdmissionStats
+	ledgerStats         service.ReplayAdmissionStats
+	header              header.LedgerHeader
+	initialCandidate    bool
+	prepared            *service.PreparedLedger
+	replayRelease       func()
+	err                 error
+	processingAccount   *shamap.AcquisitionBudget
+	processingReserved  bool
+	entryRetained       bool
+	memoryRequired      uint64
+	dropEntryPayload    bool
+	releaseOnce         sync.Once
 }
 
 func (r *standardReplayDrainResult) releaseResources() {
@@ -240,17 +245,15 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		entryRetained:      claim.entryRetained,
 	}
 	if claim.entry == nil {
-		result.failed = true
 		result.err = errStandardReplayHeadFailed
 		return result
 	}
 	if claim.entry.failed {
-		result.failed = true
 		result.err = errStandardReplayHeadFailed
 		return result
 	}
 
-	applyStarted := time.Now()
+	preparationStarted := time.Now()
 	var (
 		parent      *ledger.Ledger
 		parentProof *service.PreparedReplayParent
@@ -266,9 +269,10 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 				result.memoryRequired = memoryErr.Required
 			}
 		}
-		result.applyDuration = time.Since(applyStarted) - result.persistDuration
-		if result.applyDuration < 0 {
-			result.applyDuration = 0
+		result.preparationDuration = time.Since(preparationStarted) - result.applyDuration -
+			result.persistDuration - result.lockWaitDuration - result.parentStats.Elapsed - result.ledgerStats.Elapsed
+		if result.preparationDuration < 0 {
+			result.preparationDuration = 0
 		}
 	}()
 
@@ -308,6 +312,7 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		result.err = err
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
+	result.parentStats = parentProof.Stats()
 	stateMap, err := parent.StateMapSnapshotContext(ctx)
 	if err != nil {
 		result.err = fmt.Errorf("snapshot replay predecessor state: %w", err)
@@ -334,7 +339,9 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
 	result.replayRelease = replay.ReleaseMemory
+	applyStarted := time.Now()
 	derived, err := svc.ApplyReplay(ctx, replay, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(h))
+	result.applyDuration = time.Since(applyStarted)
 	if err != nil {
 		result.err = err
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
@@ -349,8 +356,12 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
 	result.prepared = prepared
+	result.ledgerStats = prepared.Stats()
 	result.header = derived.Header()
-	if !c.lockReplayCommitContext(ctx) {
+	lockStarted := time.Now()
+	locked := c.lockReplayCommitContext(ctx)
+	result.lockWaitDuration = time.Since(lockStarted)
+	if !locked {
 		result.err = ctx.Err()
 		if result.err == nil {
 			result.err = context.Canceled
@@ -371,6 +382,7 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		return result
 	}
 	initialCandidate, err := svc.BootstrapPreparedLedger(ctx, prepared)
+	result.ledgerStats = prepared.Stats()
 	result.persistDuration = time.Since(persistStarted)
 	c.replayCommitMu.Unlock()
 	result.initialCandidate = initialCandidate
@@ -452,6 +464,7 @@ func (c *catchupReplayCoordinator) enqueueStandardReplayDrainResult(
 		c.acquisitionMu.Unlock()
 		return false
 	}
+	result.enqueuedAt = time.Now()
 	owner.result = result
 	c.acquisitionMu.Unlock()
 	select {
@@ -468,6 +481,9 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 			result.releaseResources()
 		}
 		return
+	}
+	if !result.enqueuedAt.IsZero() {
+		result.queueDuration = time.Since(result.enqueuedAt)
 	}
 	owner := result.owner
 	defer c.finishStandardReplayDrain(owner)
@@ -549,16 +565,8 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 		return
 	}
 
-	if c.logger != nil {
-		c.logger.Info("applied standard transaction replay pipeline entry",
-			"seq", result.entry.seq,
-			"hash", fmt.Sprintf("%x", result.entry.hash[:8]),
-			"acquire_us", durationMicros(result.entry.readyAt.Sub(result.entry.requestedAt)),
-			"ready_wait_us", durationMicros(result.startedAt.Sub(result.entry.readyAt)),
-			"apply_us", durationMicros(result.applyDuration),
-			"persist_us", durationMicros(result.persistDuration),
-		)
-	}
+	c.logStandardReplayDrainResult(result)
+
 	c.completeStoredConsensusRecovery(result.header.LedgerIndex, result.header.Hash, result.header.ParentHash, initialCandidate)
 
 	c.acquisitionMu.Lock()

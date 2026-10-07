@@ -1132,11 +1132,6 @@ func (c *catchupReplayCoordinator) releaseStandardReplayBaseLocked() {
 	}
 }
 
-func (c *catchupReplayCoordinator) waitStandardReplayCommit() {
-	c.replayCommitMu.Lock()
-	c.replayCommitMu.Unlock()
-}
-
 func (c *catchupReplayCoordinator) standardReplayOwnsLocked(hash [32]byte) bool {
 	if replacement := c.standardReplay.replacement; c.standardReplay.active && replacement != nil && replacement.hash == hash {
 		return true

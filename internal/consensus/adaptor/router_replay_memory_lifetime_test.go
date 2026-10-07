@@ -26,11 +26,8 @@ type blockedReplayRootFamily struct {
 func (f *blockedReplayRootFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	if f.blocked.Load() && hash == f.root {
 		f.once.Do(func() { close(f.entered) })
-		select {
-		case <-f.resume:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		// Keep the read alive after cancellation to check ownership until I/O returns.
+		<-f.resume
 	}
 	return f.Family.Fetch(ctx, hash)
 }

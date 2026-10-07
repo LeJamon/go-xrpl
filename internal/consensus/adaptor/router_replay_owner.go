@@ -6,10 +6,10 @@ import "context"
 // outside standardReplay: cancellation must reset session state without
 // allowing another applier to overlap an old worker still unwinding.
 type standardReplayDrainOwner struct {
-	generation uint64
-	workCtx    context.Context
-	cancel     context.CancelFunc
-	result     *standardReplayDrainResult
+	generation  uint64
+	workCtx     context.Context
+	cancel      context.CancelFunc
+	result      *standardReplayDrainResult
 	synchronous bool
 	// Written only by this drain, read by its deferred release. Preserve the
 	// router-loop yield even if the next acquisition is not ready yet.

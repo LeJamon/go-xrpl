@@ -22,8 +22,9 @@ import (
 //
 // acquisitionMu guards replay generations, retries, recovery, and drain ownership.
 // Canonical publication and cancellation take replayCommitMu before acquisitionMu;
-// publication keeps replayCommitMu through storage and anchor advancement.
-// Acquisition retirement and worker waits occur after releasing these locks.
+// publication holds replayCommitMu only through storage. Router-side completion
+// rechecks the generation before advancing the anchor. Acquisition retirement
+// and worker waits occur after releasing these locks.
 // catchupMu protects the target and cooldowns, seqHashMu protects ancestry,
 // historyMu protects backfill, and peersMu protects peer ledger observations.
 // Header discovery takes headerDiscoveryMu before catchupMu or seqHashMu.
