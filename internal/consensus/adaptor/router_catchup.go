@@ -3000,8 +3000,8 @@ func (c *catchupReplayCoordinator) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if err != nil {
 		return err
 	}
+	defer prepared.Release()
 	if !c.lockReplayCommitContext(ctx) {
-		prepared.Release()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -3009,13 +3009,11 @@ func (c *catchupReplayCoordinator) adoptVerifiedLedger(l *ledger.Ledger) error {
 	}
 	if c.stoppedForShutdown() {
 		c.replayCommitMu.Unlock()
-		prepared.Release()
 		return context.Canceled
 	}
 	storedHeader := l.Header()
 	initialCandidate, err := svc.BootstrapPreparedLedger(ctx, prepared)
 	c.replayCommitMu.Unlock()
-	prepared.Release()
 	if err != nil {
 		return err
 	}
