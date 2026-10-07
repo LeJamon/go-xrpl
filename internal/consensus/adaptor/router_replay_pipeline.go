@@ -962,9 +962,10 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineIdentity(
 }
 
 type standardReplayRetirement struct {
-	ledgers    []*inbound.Ledger
-	baseLedger *inbound.Ledger
-	release    func()
+	ledgers       []*inbound.Ledger
+	baseLedger    *inbound.Ledger
+	release       func()
+	resultRelease []func()
 }
 
 func (c *catchupReplayCoordinator) logStandardReplayCancellation(
@@ -993,7 +994,7 @@ func (c *catchupReplayCoordinator) logStandardReplayCancellation(
 }
 
 func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason string) standardReplayRetirement {
-	if !c.standardReplay.active && len(c.standardReplay.entries) == 0 && c.standardReplay.baseRelease == nil && len(c.standardReplay.legacyMemoryWait) == 0 {
+	if !c.standardReplay.active && len(c.standardReplay.entries) == 0 && c.standardReplay.baseRelease == nil && len(c.standardReplay.legacyMemoryWait) == 0 && c.standardReplayDrainOwner == nil {
 		return standardReplayRetirement{}
 	}
 	generation := c.standardReplay.generation
@@ -1004,6 +1005,15 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	discardedEntries := len(c.standardReplay.entries)
 	var retired []*inbound.Ledger
 	legacyMemoryWait := c.standardReplay.legacyMemoryWait
+	var resultRelease []func()
+	if owner := c.standardReplayDrainOwner; owner != nil {
+		owner.cancelWork()
+		if result := owner.result; result != nil {
+			result.dropEntryPayload = true
+			owner.result = nil
+			resultRelease = append(resultRelease, result.releaseResources)
+		}
+	}
 	if replacement := c.standardReplay.replacement; replacement != nil {
 		if replacement.acquisition != nil && c.discardInboundAcquisitionLocked(replacement.acquisition) {
 			retired = append(retired, replacement.acquisition)
@@ -1083,11 +1093,21 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 		discardedEntries,
 		len(retired),
 	)
-	return standardReplayRetirement{ledgers: retired, baseLedger: baseLedger, release: release}
+	return standardReplayRetirement{
+		ledgers:       retired,
+		baseLedger:    baseLedger,
+		release:       release,
+		resultRelease: resultRelease,
+	}
 }
 
 func (c *catchupReplayCoordinator) retireStandardReplay(retirement standardReplayRetirement) <-chan struct{} {
 	c.retireLegacyAcquisitions(retirement.ledgers)
+	for _, release := range retirement.resultRelease {
+		if release != nil {
+			release()
+		}
+	}
 	if retirement.release == nil {
 		return nil
 	}
@@ -1381,7 +1401,7 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntryAt(
 	c.updateStandardReplayHeadBlockLocked(now)
 	c.acquisitionMu.Unlock()
 	if startDrain {
-		c.drainStandardReplayPipeline()
+		c.startStandardReplayDrain()
 	}
 	return true
 }
@@ -1420,242 +1440,43 @@ func (c *catchupReplayCoordinator) scheduleStandardReplayDrain() {
 }
 
 func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
-	owner := c.beginStandardReplayDrain()
-	if owner == nil {
-		return
-	}
-	defer c.finishStandardReplayDrain(owner)
 	batchStarted := time.Now()
-	applied := 0
-	for {
-		if c.stoppedForShutdown() {
+	for applied := 0; applied < standardReplayApplyBatch && time.Since(batchStarted) < standardReplayApplyBudget; applied++ {
+		owner := c.beginStandardReplayDrain()
+		if owner == nil {
+			return
+		}
+		owner.synchronous = true
+		claim := c.claimStandardReplayWorker(owner)
+		switch claim.status {
+		case standardReplayWorkerIdle, standardReplayWorkerMemoryWait, standardReplayWorkerCanceled:
+			c.finishStandardReplayDrain(owner)
+			return
+		}
+		result := c.prepareStandardReplayDrainResult(owner, claim)
+		if result == nil {
+			c.finishStandardReplayDrain(owner)
 			return
 		}
 		c.acquisitionMu.Lock()
-		if c.standardReplay.generation != owner.generation {
+		if c.standardReplayDrainOwner != owner {
 			c.acquisitionMu.Unlock()
+			result.releaseResources()
 			return
 		}
-		if !c.standardReplay.active {
-			c.standardReplay.applying = false
-			c.acquisitionMu.Unlock()
-			return
-		}
-		entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
-		if entry == nil || (entry.readyAt.IsZero() && !entry.failed) {
-			c.standardReplay.applying = false
-			c.updateStandardReplayHeadBlockLocked(time.Now())
-			c.acquisitionMu.Unlock()
-			return
-		}
-		generation := c.standardReplay.generation
-		if entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted {
-			c.standardReplay.applying = false
-			c.updateStandardReplayHeadBlockLocked(time.Now())
-			c.acquisitionMu.Unlock()
-			return
-		}
-		if entry.replayMemory.kind != standardReplayMemoryHead && !c.promoteStandardReplayHeadLocked(entry) {
-			c.standardReplay.applying = false
-			c.updateStandardReplayHeadBlockLocked(time.Now())
-			c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitHead, entry.replayMemory.bytes)
-			owner.memoryWait = true
-			c.acquisitionMu.Unlock()
-			return
-		}
-		if entry.replayMemoryPending {
-			c.standardReplay.applying = false
-			c.updateStandardReplayHeadBlockLocked(time.Now())
-			owner.memoryWait = true
-			c.acquisitionMu.Unlock()
-			return
-		}
-		if entry.failed {
-			retired, target, current := c.discardStandardReplayHeadLocked(entry, generation)
-			c.acquisitionMu.Unlock()
-			c.waitStandardReplayCommit()
-			c.retireStandardReplay(retired)
-			if current {
-				c.replayPipelineFallbacks.Add(1)
-				c.fallbackStandardReplayAcquisition(entry.seq, entry.hash, entry.peerID, target)
-			}
-			return
-		}
-		processingAccount := c.standardReplayMemoryAccount()
-		if !reserveStandardReplayProcessing(processingAccount, standardReplayProcessingBytes) {
-			c.standardReplay.applying = false
-			c.updateStandardReplayHeadBlockLocked(time.Now())
-			c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, standardReplayProcessingBytes)
-			owner.memoryWait = true
-			c.acquisitionMu.Unlock()
-			return
-		}
-		c.standardReplay.memoryWait = false
-		c.standardReplay.memoryWaitKind = 0
-		c.standardReplay.memoryWaitBytes = 0
-		if !c.retainStandardReplayEntryMemoryLocked(entry) {
-			releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
-			c.standardReplay.applying = false
-			c.updateStandardReplayHeadBlockLocked(time.Now())
-			c.acquisitionMu.Unlock()
-			return
-		}
-		copyEntry := *entry
+		owner.result = result
+		owner.yielded = applied+1 >= standardReplayApplyBatch ||
+			time.Since(batchStarted) >= standardReplayApplyBudget
 		c.acquisitionMu.Unlock()
-
-		applyStarted := time.Now()
-		var (
-			hdr              header.LedgerHeader
-			initialCandidate bool
-			persistDuration  time.Duration
-			releaseCommit    func()
-			err              error
-		)
-		func() {
-			defer releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
-			defer c.releaseStandardReplayEntryMemory(entry)
-			hdr, initialCandidate, persistDuration, releaseCommit, err = c.applyStandardReplayEntry(&copyEntry, entry, generation)
-		}()
-		applyDuration := time.Since(applyStarted) - persistDuration
-		if applyDuration < 0 {
-			applyDuration = 0
-		}
-		if err != nil {
-			if c.stoppedForShutdown() {
-				return
-			}
-			if errors.Is(err, inbound.ErrReplayMemory) {
-				if releaseCommit != nil {
-					releaseCommit()
-				}
-				c.acquisitionMu.Lock()
-				current := c.standardReplay.active && c.standardReplay.generation == generation &&
-					c.standardReplay.entries[entry.seq] == entry && c.standardReplay.anchorSeq+1 == entry.seq
-				if current {
-					c.standardReplay.applying = false
-					required := uint64(standardReplayProcessingBytes)
-					var memoryErr *inbound.ReplayMemoryError
-					if errors.As(err, &memoryErr) && memoryErr.Required != 0 {
-						if memoryErr.Required > ^uint64(0)-required {
-							required = ^uint64(0)
-						} else {
-							required += memoryErr.Required
-						}
-					}
-					wasWaiting := c.standardReplay.memoryWait &&
-						c.standardReplay.memoryWaitKind == standardReplayMemoryWaitProcessing &&
-						c.standardReplay.memoryWaitBytes >= required
-					c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, required)
-					if !wasWaiting && c.logger != nil {
-						c.logger.Warn("standard transaction replay head is waiting for local memory capacity",
-							"seq", entry.seq,
-							"hash", fmt.Sprintf("%x", entry.hash[:8]),
-							"required_bytes", required,
-							"error", err,
-						)
-					}
-					owner.memoryWait = true
-					c.updateStandardReplayHeadBlockLocked(time.Now())
-				}
-				c.acquisitionMu.Unlock()
-				return
-			}
-			c.acquisitionMu.Lock()
-			retired, target, current := c.discardStandardReplayHeadLocked(entry, generation)
-			continueDrain := !current && c.standardReplay.active && c.standardReplay.generation == owner.generation
-			c.acquisitionMu.Unlock()
-			c.waitStandardReplayCommit()
-			c.retireStandardReplay(retired)
-			if current {
-				c.replayPipelineFallbacks.Add(1)
-				c.logger.Error("standard transaction replay pipeline apply failed; recovery gated",
-					"seq", entry.seq,
-					"hash", fmt.Sprintf("%x", entry.hash[:8]),
-					"error", err,
-				)
-				c.fallbackStandardReplayAcquisition(entry.seq, entry.hash, entry.peerID, target)
-			}
-			if continueDrain {
-				continue
-			}
+		before := c.replayPipelineApplied.Load()
+		c.handleStandardReplayDrainResult(result)
+		if c.replayPipelineApplied.Load() == before {
 			return
 		}
-
 		c.acquisitionMu.Lock()
-		current := c.standardReplay.active && c.standardReplay.generation == generation &&
-			c.standardReplay.entries[entry.seq] == entry && c.standardReplay.anchorSeq+1 == entry.seq
-		if !current {
-			if c.standardReplay.active && c.standardReplay.generation == owner.generation {
-				c.acquisitionMu.Unlock()
-				releaseCommit()
-				continue
-			}
-			c.acquisitionMu.Unlock()
-			releaseCommit()
-			return
-		}
-		delete(c.standardReplay.entries, entry.seq)
-		c.releaseStandardReplayEntryMemoryLocked(entry)
-		c.standardReplay.anchorSeq = entry.seq
-		c.standardReplay.anchorHash = entry.hash
-		if next := c.standardReplay.entries[entry.seq+1]; next != nil {
-			c.promoteStandardReplayHeadLocked(next)
-		}
-		supersededReplacement := c.discardObsoleteStandardReplayReplacementLocked()
-		c.replayPipelineApplied.Add(1)
-		c.replayPipelineApplyUs.Add(durationMicros(applyDuration))
-		c.replayPipelinePersistUs.Add(durationMicros(persistDuration))
-		c.replayPipelineReadyWaitUs.Add(durationMicros(applyStarted.Sub(entry.readyAt)))
-		reachedTarget := entry.seq == c.standardReplay.targetSeq && entry.hash == c.standardReplay.targetHash
-		if reachedTarget {
-			initialCandidate = initialCandidate || c.standardReplay.initialCandidate
-		}
-		c.acquisitionMu.Unlock()
-		releaseCommit()
-		if supersededReplacement != nil {
-			c.retireLegacyAcquisitions([]*inbound.Ledger{supersededReplacement})
-		}
-		if c.stoppedForShutdown() {
-			return
-		}
-
-		c.logger.Info("applied standard transaction replay pipeline entry",
-			"seq", entry.seq,
-			"hash", fmt.Sprintf("%x", entry.hash[:8]),
-			"acquire_us", durationMicros(entry.readyAt.Sub(entry.requestedAt)),
-			"ready_wait_us", durationMicros(applyStarted.Sub(entry.readyAt)),
-			"apply_us", durationMicros(applyDuration),
-			"persist_us", durationMicros(persistDuration),
-		)
-		c.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, initialCandidate)
-
-		c.acquisitionMu.Lock()
-		current = c.standardReplay.active && c.standardReplay.generation == generation &&
-			c.standardReplay.anchorSeq == entry.seq && c.standardReplay.anchorHash == entry.hash
-		if current && reachedTarget && c.standardReplay.targetSeq == entry.seq && c.standardReplay.targetHash == entry.hash {
-			c.standardReplay.active = false
-			c.standardReplay.applying = false
-			for _, remaining := range c.standardReplay.entries {
-				c.releaseStandardReplayEntryMemoryLocked(remaining)
-			}
-			c.dropStandardReplayEntriesLocked()
-			c.standardReplay.headBlockedAt = time.Time{}
-			c.standardReplay.backpressured = false
-			c.releaseStandardReplayBaseLocked()
-		}
 		active := c.standardReplay.active
 		c.acquisitionMu.Unlock()
-		if !current {
-			return
-		}
-		if active {
-			c.refillStandardReplayCollector(entry.peerID)
-		}
-		applied++
-		if active && (applied >= standardReplayApplyBatch || time.Since(batchStarted) >= standardReplayApplyBudget) {
-			// Release actual execution ownership before the next router-loop
-			// batch. A replacement generation is re-armed only if ready.
-			owner.yielded = true
+		if !active {
 			return
 		}
 	}
@@ -1683,133 +1504,6 @@ func (c *catchupReplayCoordinator) discardStandardReplayHeadLocked(
 	}
 	c.standardReplay.applying = false
 	return retired, target, true
-}
-
-func (c *catchupReplayCoordinator) applyStandardReplayEntry(
-	entry, activeEntry *standardReplayEntry,
-	generation uint64,
-) (out header.LedgerHeader, initial bool, duration time.Duration, release func(), retErr error) {
-	if c.stoppedForShutdown() {
-		return header.LedgerHeader{}, false, 0, nil, context.Canceled
-	}
-	if entry == nil {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("nil standard replay pipeline entry")
-	}
-	h := entry.header
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("no ledger service")
-	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
-	if err != nil {
-		return header.LedgerHeader{}, false, 0, nil, err
-	}
-	// Keep the durable generation pinned through replay diagnostics as well as
-	// publication. The successful return transfers release ownership below.
-	defer func() {
-		if releaseAdmission != nil {
-			releaseAdmission()
-		}
-	}()
-	defer func() {
-		if retErr == nil || errors.Is(retErr, context.Canceled) ||
-			errors.Is(retErr, inbound.ErrReplayMemory) || c.replayFaultBlocked() {
-			return
-		}
-		c.acquisitionMu.Lock()
-		current := c.standardReplay.active && c.standardReplay.generation == generation && c.standardReplay.entries[entry.seq] == activeEntry
-		c.acquisitionMu.Unlock()
-		if !current {
-			return
-		}
-		parent, _ := svc.GetLedgerByHash(h.ParentHash)
-		txMap, _ := c.loadStandardReplayTransactionMap(c.lifecycleContext(), entry)
-		svc.RecordReplayPreparationFailure(c.lifecycleContext(), h, txMap, parent, c.replayTargetAuthenticated(h), retErr)
-	}()
-	if h.Hash != entry.hash {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger hash changed")
-	}
-	if h.LedgerIndex != entry.seq {
-		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepared ledger sequence %d does not match expected %d", h.LedgerIndex, entry.seq)
-	}
-	if h.ParentHash != entry.parentHash {
-		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger no longer attaches to the accepted predecessor")
-	}
-	parent, err := svc.GetLedgerByHash(entry.parentHash)
-	if err != nil || parent == nil {
-		if err == nil {
-			err = errors.New("accepted replay predecessor is unavailable")
-		}
-		return header.LedgerHeader{}, false, 0, nil, err
-	}
-	if parent.Sequence()+1 != entry.seq {
-		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("replay predecessor sequence %d is not before %d", parent.Sequence(), entry.seq)
-	}
-
-	stateMap, err := parent.StateMapSnapshot()
-	if err != nil {
-		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("snapshot replay predecessor state: %w", err)
-	}
-	txMap, err := c.loadStandardReplayTransactionMap(c.lifecycleContext(), entry)
-	if err != nil {
-		return header.LedgerHeader{}, false, 0, nil, err
-	}
-	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
-		return header.LedgerHeader{}, false, 0, nil, err
-	}
-
-	target, err := ledger.NewFromHeader(h, stateMap, txMap, parent.Fees())
-	if err != nil {
-		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("construct transaction-only replay target: %w", err)
-	}
-	processingAccount := c.standardReplayMemoryAccount()
-	var replayAccount shamap.AcquisitionMemoryAccount
-	if processingAccount != nil {
-		replayAccount = processingAccount
-	}
-	replay, err := inbound.NewStoredLedgerReplayWithMemoryContext(c.lifecycleContext(),
-		parent,
-		target,
-		c.logger,
-		replayAccount,
-	)
-	if err != nil {
-		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepare transaction-only replay: %w", err)
-	}
-	defer replay.ReleaseMemory()
-	derived, err := svc.ApplyReplay(c.lifecycleContext(), replay, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(h))
-	if err != nil {
-		return header.LedgerHeader{}, false, 0, nil, err
-	}
-
-	c.replayCommitMu.Lock()
-	if c.stoppedForShutdown() {
-		c.replayCommitMu.Unlock()
-		return header.LedgerHeader{}, false, 0, nil, context.Canceled
-	}
-	c.acquisitionMu.Lock()
-	current := c.standardReplay.active && c.standardReplay.generation == generation &&
-		c.standardReplay.entries[activeEntry.seq] == activeEntry && c.standardReplay.anchorSeq+1 == activeEntry.seq
-	if !current {
-		c.acquisitionMu.Unlock()
-		c.replayCommitMu.Unlock()
-		return header.LedgerHeader{}, false, 0, nil, errors.New("standard replay pipeline entry was superseded")
-	}
-	c.acquisitionMu.Unlock()
-	persistStarted := time.Now()
-	storedHeader, initialCandidate, err := c.storeVerifiedLedgerLocked(derived)
-	persistDuration := time.Since(persistStarted)
-	if err != nil {
-		c.replayCommitMu.Unlock()
-		return header.LedgerHeader{}, false, persistDuration, nil, err
-	}
-	commitRelease := c.replayCommitMu.Unlock
-	admissionRelease := releaseAdmission
-	releaseAdmission = nil
-	return storedHeader, initialCandidate, persistDuration, func() {
-		commitRelease()
-		admissionRelease()
-	}, nil
 }
 
 func (c *catchupReplayCoordinator) loadStandardReplayTransactionMap(ctx context.Context, entry *standardReplayEntry) (*shamap.SHAMap, error) {

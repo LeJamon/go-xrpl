@@ -581,7 +581,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 	}
 	c.refillStandardReplayCollector(0)
 	if startDrain {
-		c.drainStandardReplayPipeline()
+		c.startStandardReplayDrain()
 	}
 	return true
 }

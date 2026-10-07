@@ -1842,7 +1842,7 @@ func (c *catchupReplayCoordinator) fallbackReplayAcquisitionForTargetMode(
 			c.clearReplayAvailabilityRetryLocked(hash)
 			c.acquisitionMu.Unlock()
 			if startDrain {
-				c.drainStandardReplayPipeline()
+				c.startStandardReplayDrain()
 			}
 			return
 		}
@@ -2995,21 +2995,27 @@ func (c *catchupReplayCoordinator) adoptVerifiedLedger(l *ledger.Ledger) error {
 	if svc == nil {
 		return errors.New("no ledger service")
 	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	ctx := c.lifecycleContext()
+	prepared, err := c.prepareReplayLedgerForPublication(ctx, l)
 	if err != nil {
 		return err
 	}
-	defer releaseAdmission()
-	if err := svc.VerifyDetachedLedger(c.lifecycleContext(), l); err != nil {
-		return err
-	}
-	c.replayCommitMu.Lock()
-	if c.stoppedForShutdown() {
-		c.replayCommitMu.Unlock()
+	if !c.lockReplayCommitContext(ctx) {
+		prepared.Release()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return context.Canceled
 	}
-	storedHeader, initialCandidate, err := c.storeVerifiedLedgerLocked(l)
+	if c.stoppedForShutdown() {
+		c.replayCommitMu.Unlock()
+		prepared.Release()
+		return context.Canceled
+	}
+	storedHeader := l.Header()
+	initialCandidate, err := svc.BootstrapPreparedLedger(ctx, prepared)
 	c.replayCommitMu.Unlock()
+	prepared.Release()
 	if err != nil {
 		return err
 	}
@@ -3030,49 +3036,53 @@ func (c *catchupReplayCoordinator) storeVerifiedLedger(l *ledger.Ledger) (header
 	if svc == nil {
 		return header.LedgerHeader{}, false, errors.New("no ledger service")
 	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	ctx := c.lifecycleContext()
+	prepared, err := c.prepareReplayLedgerForPublication(ctx, l)
 	if err != nil {
 		return header.LedgerHeader{}, false, err
 	}
-	defer releaseAdmission()
-	if err := svc.VerifyDetachedLedger(c.lifecycleContext(), l); err != nil {
-		return header.LedgerHeader{}, false, err
+	if !c.lockReplayCommitContext(ctx) {
+		prepared.Release()
+		if err := ctx.Err(); err != nil {
+			return header.LedgerHeader{}, false, err
+		}
+		return header.LedgerHeader{}, false, context.Canceled
 	}
-	c.replayCommitMu.Lock()
 	defer c.replayCommitMu.Unlock()
+	defer prepared.Release()
 	if c.stoppedForShutdown() {
 		return header.LedgerHeader{}, false, context.Canceled
 	}
-	return c.storeVerifiedLedgerLocked(l)
+	initialCandidate, err := svc.BootstrapPreparedLedger(ctx, prepared)
+	if err != nil {
+		return header.LedgerHeader{}, false, err
+	}
+	return l.Header(), initialCandidate, nil
 }
 
-// storeVerifiedLedgerLocked publishes a verified ledger while replayCommitMu
-// is held. Standard replay calls this locked form after rechecking its active
-// generation; other replay paths use storeVerifiedLedger so publication is
-// serialized at the coordinator boundary.
-func (c *catchupReplayCoordinator) storeVerifiedLedgerLocked(l *ledger.Ledger) (header.LedgerHeader, bool, error) {
+// prepareReplayLedgerForPublication performs parent and detached-map
+// admission before replayCommitMu is acquired. A parent proof is an
+// optimization; generic publication remains correct when the parent is not
+// available and the service performs a complete child walk.
+func (c *catchupReplayCoordinator) prepareReplayLedgerForPublication(
+	ctx context.Context,
+	l *ledger.Ledger,
+) (*service.PreparedLedger, error) {
+	if l == nil {
+		return nil, errors.New("nil ledger")
+	}
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
-		return header.LedgerHeader{}, false, errors.New("no ledger service")
+		return nil, errors.New("no ledger service")
 	}
-	hdr := l.Header()
-	stateMap, err := l.StateMapSnapshot()
-	if err != nil {
-		return header.LedgerHeader{}, false, fmt.Errorf("snapshot state map: %w", err)
+	var parentProof *service.PreparedReplayParent
+	if parent, err := svc.GetLedgerByHash(l.ParentHash()); err == nil && parent != nil {
+		parentProof, _ = svc.PrepareReplayParent(ctx, parent)
 	}
-	// Pass the verified tx map through so the stored ledger carries
-	// real transactions — without this, tx/tx_history/account_tx RPCs
-	// can't answer for replay-delta ledgers and we can't
-	// re-serve the replay-delta to other peers.
-	txMap, err := l.TxMapSnapshot()
-	if err != nil {
-		return header.LedgerHeader{}, false, fmt.Errorf("snapshot tx map: %w", err)
+	if parentProof != nil {
+		defer parentProof.Release()
 	}
-	initialCandidate, err := svc.BootstrapLedgerWithState(c.lifecycleContext(), &hdr, stateMap, txMap)
-	if err != nil {
-		return header.LedgerHeader{}, false, fmt.Errorf("store replay-delta ledger: %w", err)
-	}
-	return hdr, initialCandidate, nil
+	return svc.PrepareReplayLedger(ctx, l, parentProof)
 }
 
 func (c *catchupReplayCoordinator) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, initialCandidate bool) bool {
@@ -4465,7 +4475,7 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 			}
 			c.refillStandardReplayCollector(peerID)
 			if startDrain {
-				c.drainStandardReplayPipeline()
+				c.startStandardReplayDrain()
 			}
 			return
 		}

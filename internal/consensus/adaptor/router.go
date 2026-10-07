@@ -762,8 +762,10 @@ func (r *Router) Run(ctx context.Context) {
 			if !r.handleUntrustedValidationWorkResult(runCtx, result) {
 				return
 			}
+		case result := <-r.catchupReplay.standardReplayResultChannel():
+			r.catchupReplay.handleStandardReplayDrainResult(result)
 		case <-r.catchupReplay.standardReplayDrainWakeChannel():
-			r.catchupReplay.drainStandardReplayPipeline()
+			r.catchupReplay.startStandardReplayDrain()
 		case <-memoryChanged:
 			// Shared acquisition capacity is level-triggered. Retry only work
 			// parked on memory; timer and peer housekeeping stay periodic.

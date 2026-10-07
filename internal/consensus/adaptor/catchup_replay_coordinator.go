@@ -113,6 +113,7 @@ type catchupReplayCoordinator struct {
 	localReplayCandidates     []*localReplayCandidate
 
 	standardReplayDrainWake  chan struct{}
+	standardReplayResults    chan *standardReplayDrainResult
 	standardReplayDrainOwner *standardReplayDrainOwner
 	stopped                  atomic.Bool
 
@@ -417,6 +418,13 @@ func (c *catchupReplayCoordinator) standardReplayDrainWakeChannel() <-chan struc
 	return c.standardReplayDrainWake
 }
 
+func (c *catchupReplayCoordinator) standardReplayResultChannel() <-chan *standardReplayDrainResult {
+	if c == nil {
+		return nil
+	}
+	return c.standardReplayResults
+}
+
 // stopAcquisitions is the sole terminal transition for acquisition state. It
 // takes the publication lock before the acquisition lock so no replay apply or
 // canonical store can race retirement, then releases both before waiting for
@@ -456,7 +464,13 @@ func (c *catchupReplayCoordinator) stopAcquisitions() (legacy, replay int) {
 	if releaseDone := c.retireStandardReplay(retirement); releaseDone != nil {
 		<-releaseDone
 	}
-	return legacy, replay
+	for {
+		select {
+		case <-c.standardReplayDrainWake:
+		default:
+			return legacy, replay
+		}
+	}
 }
 
 func (c *catchupReplayCoordinator) belowFloor(seq uint32) bool {
@@ -577,6 +591,7 @@ func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor
 		replayAvailabilityRetries: make(map[[32]byte]replayAvailabilityRetryState),
 		replayFallbackRequired:    make(map[[32]byte]uint32),
 		standardReplayDrainWake:   make(chan struct{}, 1),
+		standardReplayResults:     make(chan *standardReplayDrainResult, 1),
 		seqHash:                   make(map[uint32]ledgerHashEntry),
 		lifecycleCtx:              context.Background(),
 	}
