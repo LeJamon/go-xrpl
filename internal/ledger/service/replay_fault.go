@@ -254,11 +254,24 @@ func (s *Service) applyReplay(ctx context.Context, replay *inbound.ReplayDelta, 
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			derived = nil
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				err = ctxErr
+				if cancelErr := s.replayFaults.CancelReplay(id); cancelErr != nil {
+					err = errors.Join(ctxErr, fmt.Errorf("clear canceled replay intent: %w", cancelErr))
+				}
+				return
+			}
 			err = fmt.Errorf("replay panic: %v", recovered)
 			s.recordReplayFailure(ctx, id, replay, cfg, evidence, err, lockHeld)
 		}
 	}()
 	derived, err = replay.ApplyContext(ctx, cfg)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if cancelErr := s.replayFaults.CancelReplay(id); cancelErr != nil {
+			return nil, errors.Join(ctxErr, fmt.Errorf("clear canceled replay intent: %w", cancelErr))
+		}
+		return nil, ctxErr
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			if cancelErr := s.replayFaults.CancelReplay(id); cancelErr != nil {

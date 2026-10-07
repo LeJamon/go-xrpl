@@ -188,6 +188,13 @@ type Service struct {
 	nodeStore    nodestore.Database
 	shamapFamily shamap.Family
 
+	// replayProofMu protects the bounded in-memory certificates used by
+	// generation-bound replay admission. The records contain only ledger and
+	// durable-generation identities; the durable snapshot pin lives on the
+	// short-lived preparation token.
+	replayProofMu sync.Mutex
+	replayProofs  []replayCompletenessRecord
+
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
 

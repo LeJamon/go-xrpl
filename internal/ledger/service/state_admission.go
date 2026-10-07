@@ -49,13 +49,21 @@ func (s *Service) VerifyDetachedLedger(ctx context.Context, l *ledger.Ledger) er
 	if l == nil {
 		return errors.New("state admission: nil ledger")
 	}
-	stateMap, err := l.StateMapSnapshot()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stateMap, err := l.StateMapSnapshotContext(ctx)
 	if err != nil {
 		return fmt.Errorf("state admission: snapshot state map: %w", err)
 	}
-	txMap, err := l.TxMapSnapshot()
+	txMap, err := l.TxMapSnapshotContext(ctx)
 	if err != nil {
 		return fmt.Errorf("state admission: snapshot transaction map: %w", err)
+	}
+	if verified, err := s.verifyReplayProof(ctx, l.Header(), stateMap, txMap); err != nil {
+		return err
+	} else if verified {
+		return nil
 	}
 	return s.VerifyDetachedMaps(ctx, stateMap, txMap)
 }
@@ -82,9 +90,29 @@ func (s *Service) verifyDetachedMap(ctx context.Context, name string, source *sh
 	if err != nil {
 		return fmt.Errorf("state admission: snapshot %s map: %w", name, err)
 	}
+	return s.verifyDetachedSnapshot(ctx, name, snapshot, [32]byte{})
+}
+
+// verifyDetachedSnapshot verifies a snapshot without changing the caller's
+// map state. When baseRoot is present, equal subtrees are skipped only after
+// the caller has independently established a generation-bound complete base.
+// Any base-loading failure falls back to a strict walk of the target tree.
+func (s *Service) verifyDetachedSnapshot(ctx context.Context, name string, snapshot *shamap.SHAMap, baseRoot [32]byte) error {
+	if snapshot == nil {
+		return nil
+	}
 	mapToVerify, err := s.coldDetachedMap(ctx, snapshot)
 	if err != nil {
 		return fmt.Errorf("state admission: load %s root: %w", name, err)
+	}
+	if baseRoot != ([32]byte{}) {
+		if err := mapToVerify.SetVerifiedBaseContext(ctx, baseRoot); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			// A missing or expired base is an optimization failure. The target
+			// still receives a complete cold walk below.
+		}
 	}
 	if err := mapToVerify.StartSync(); err != nil {
 		return fmt.Errorf("state admission: start %s completeness check: %w", name, err)
