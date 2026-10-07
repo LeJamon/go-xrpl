@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -98,37 +99,56 @@ func (s *Service) verifyDetachedMap(ctx context.Context, name string, source *sh
 // the caller has independently established a generation-bound complete base.
 // Any base-loading failure falls back to a strict walk of the target tree.
 func (s *Service) verifyDetachedSnapshot(ctx context.Context, name string, snapshot *shamap.SHAMap, baseRoot [32]byte) error {
+	_, err := s.verifyReplaySnapshot(ctx, name, snapshot, baseRoot)
+	return err
+}
+
+func (s *Service) verifyDetachedSnapshotStats(ctx context.Context, name string, snapshot *shamap.SHAMap, baseRoot [32]byte) (stats ReplayAdmissionMapStats, err error) {
 	if snapshot == nil {
-		return nil
+		return stats, nil
 	}
+	startedAt := time.Now()
+	defer func() {
+		stats.Elapsed = time.Since(startedAt)
+	}()
 	mapToVerify, err := s.coldDetachedMap(ctx, snapshot)
 	if err != nil {
-		return fmt.Errorf("state admission: load %s root: %w", name, err)
+		return stats, fmt.Errorf("state admission: load %s root: %w", name, err)
 	}
+	before := mapToVerify.BackedWalkStats()
+	usedVerifiedBase := false
 	if baseRoot != ([32]byte{}) {
 		if err := mapToVerify.SetVerifiedBaseContext(ctx, baseRoot); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
+				return stats, ctxErr
 			}
 			// A missing or expired base is an optimization failure. The target
 			// still receives a complete cold walk below.
+		} else {
+			usedVerifiedBase = true
 		}
 	}
 	if err := mapToVerify.StartSync(); err != nil {
-		return fmt.Errorf("state admission: start %s completeness check: %w", name, err)
+		return stats, fmt.Errorf("state admission: start %s completeness check: %w", name, err)
 	}
 	missing, err := mapToVerify.GetMissingNodesContext(ctx, 1, nil)
 	if err != nil {
-		return fmt.Errorf("state admission: walk %s tree: %w", name, err)
+		return stats, fmt.Errorf("state admission: walk %s tree: %w", name, err)
 	}
 	if len(missing) != 0 {
 		m := missing[0]
-		return fmt.Errorf("state admission: incomplete %s tree at depth %d: %w", name, m.Depth, &shamap.MissingNodeError{Hash: m.Hash})
+		return stats, fmt.Errorf("state admission: incomplete %s tree at depth %d: %w", name, m.Depth, &shamap.MissingNodeError{Hash: m.Hash})
 	}
 	if err := mapToVerify.FinishSyncContext(ctx); err != nil {
-		return fmt.Errorf("state admission: finish %s completeness check: %w", name, err)
+		return stats, fmt.Errorf("state admission: finish %s completeness check: %w", name, err)
 	}
-	return nil
+	after := mapToVerify.BackedWalkStats()
+	stats.NodesLoaded = after.TraversalDiscoveries - before.TraversalDiscoveries
+	stats.DurableReads = after.DurableReads - before.DurableReads
+	stats.EqualSubtreesSkipped = after.EqualSubtreesSkipped - before.EqualSubtreesSkipped
+	stats.UsedVerifiedBase = usedVerifiedBase
+	stats.Workers = 1
+	return stats, nil
 }
 
 // coldDetachedMap removes attached warm descendants before verification. A

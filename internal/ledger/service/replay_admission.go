@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -56,14 +57,15 @@ type replayFingerprintProvider interface {
 
 type replaySnapshotPin struct {
 	fingerprint [32]byte
+	provider    replaySnapshotProvider
 	releaseOnce sync.Once
 	released    bool
 	mu          sync.Mutex
 	release     func()
 }
 
-func newReplaySnapshotPin(fingerprint [32]byte, release func()) *replaySnapshotPin {
-	return &replaySnapshotPin{fingerprint: fingerprint, release: release}
+func newReplaySnapshotPin(provider replaySnapshotProvider, fingerprint [32]byte, release func()) *replaySnapshotPin {
+	return &replaySnapshotPin{provider: provider, fingerprint: fingerprint, release: release}
 }
 
 func (p *replaySnapshotPin) Release() {
@@ -101,6 +103,7 @@ type PreparedReplayParent struct {
 	fingerprint [32]byte
 	reusable    bool
 	pin         *replaySnapshotPin
+	stats       ReplayAdmissionStats
 	released    bool
 	releaseOnce sync.Once
 	stateMu     sync.Mutex
@@ -116,11 +119,23 @@ func (p *PreparedReplayParent) Release() {
 		p.stateMu.Lock()
 		p.released = true
 		pin := p.pin
+		p.pin = nil
 		p.stateMu.Unlock()
 		if pin != nil {
 			pin.Release()
 		}
 	})
+}
+
+// Stats returns the immutable work counters recorded while preparing the
+// parent proof.
+func (p *PreparedReplayParent) Stats() ReplayAdmissionStats {
+	if p == nil {
+		return ReplayAdmissionStats{}
+	}
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return p.stats
 }
 
 func (p *PreparedReplayParent) baseRoot(service *Service, target header.LedgerHeader) ([32]byte, [32]byte, bool) {
@@ -149,6 +164,7 @@ type PreparedLedger struct {
 	fingerprint  [32]byte
 	pin          *replaySnapshotPin
 	releaseWork  func()
+	stats        ReplayAdmissionStats
 	state        preparedLedgerState
 	releaseAfter bool
 	mu           sync.Mutex
@@ -179,6 +195,9 @@ func (p *PreparedLedger) Release() {
 		pin := p.pin
 		p.releaseWork = nil
 		p.pin = nil
+		p.stateMap = nil
+		p.txMap = nil
+		p.header = header.LedgerHeader{}
 		p.mu.Unlock()
 		if releaseWork != nil {
 			releaseWork()
@@ -195,6 +214,9 @@ func (p *PreparedLedger) Release() {
 		p.state = preparedLedgerReleased
 		pin := p.pin
 		p.pin = nil
+		p.stateMap = nil
+		p.txMap = nil
+		p.header = header.LedgerHeader{}
 		p.mu.Unlock()
 		if pin != nil {
 			pin.Release()
@@ -204,6 +226,17 @@ func (p *PreparedLedger) Release() {
 		p.mu.Unlock()
 		return
 	}
+}
+
+// Stats returns the immutable work counters recorded while preparing the
+// detached ledger.
+func (p *PreparedLedger) Stats() ReplayAdmissionStats {
+	if p == nil {
+		return ReplayAdmissionStats{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stats
 }
 
 func (p *PreparedLedger) beginConsume(service *Service) error {
@@ -239,6 +272,9 @@ func (p *PreparedLedger) finishConsume(published bool) {
 	} else {
 		p.state = preparedLedgerReleased
 	}
+	p.stateMap = nil
+	p.txMap = nil
+	p.header = header.LedgerHeader{}
 	var pin *replaySnapshotPin
 	if releasePin {
 		pin = p.pin
@@ -284,7 +320,10 @@ func (s *Service) acquireReplaySnapshot(ctx context.Context) (*replaySnapshotPin
 		}
 		return nil, false, nil
 	}
-	return newReplaySnapshotPin(fingerprint, release), true, nil
+	if release == nil {
+		return nil, false, nil
+	}
+	return newReplaySnapshotPin(provider, fingerprint, release), true, nil
 }
 
 func (s *Service) hasDurableFamily() bool {
@@ -297,38 +336,22 @@ func (s *Service) hasDurableFamily() bool {
 	return ok
 }
 
-func (s *Service) currentReplayFingerprint(ctx context.Context) ([32]byte, bool, error) {
-	if provider, ok := s.replaySnapshotProvider().(replayFingerprintProvider); ok {
-		fingerprint, err := provider.DurableFingerprint(ctx)
-		if errors.Is(err, errors.ErrUnsupported) {
-			return [32]byte{}, false, nil
-		}
-		if err == nil && fingerprint == ([32]byte{}) {
-			return [32]byte{}, false, nil
-		}
-		return fingerprint, true, err
+func currentReplayFingerprint(ctx context.Context, pin *replaySnapshotPin) ([32]byte, bool, error) {
+	if pin == nil || pin.provider == nil {
+		return [32]byte{}, false, nil
 	}
-	if durable, ok := s.nodeStore.(replayFingerprintProvider); ok {
-		fingerprint, err := durable.DurableFingerprint(ctx)
-		if errors.Is(err, errors.ErrUnsupported) {
-			return [32]byte{}, false, nil
-		}
-		if err == nil && fingerprint == ([32]byte{}) {
-			return [32]byte{}, false, nil
-		}
-		return fingerprint, true, err
+	provider, ok := pin.provider.(replayFingerprintProvider)
+	if !ok {
+		return [32]byte{}, false, nil
 	}
-	if provider, ok := s.shamapFamily.(replayFingerprintProvider); ok {
-		fingerprint, err := provider.DurableFingerprint(ctx)
-		if errors.Is(err, errors.ErrUnsupported) {
-			return [32]byte{}, false, nil
-		}
-		if err == nil && fingerprint == ([32]byte{}) {
-			return [32]byte{}, false, nil
-		}
-		return fingerprint, true, err
+	fingerprint, err := provider.DurableFingerprint(ctx)
+	if errors.Is(err, errors.ErrUnsupported) {
+		return [32]byte{}, false, nil
 	}
-	return [32]byte{}, false, nil
+	if err == nil && fingerprint == ([32]byte{}) {
+		return [32]byte{}, false, nil
+	}
+	return fingerprint, err == nil, err
 }
 
 func (s *Service) lookupReplayProof(h header.LedgerHeader, fingerprint [32]byte, transaction bool) bool {
@@ -399,6 +422,20 @@ func (s *Service) acquireReplayPublicationWork(ctx context.Context) (func(), err
 	}), nil
 }
 
+func (s *Service) acquireReplayPreparationWork(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.lifecycleMu.Lock()
+	if s.lifecycleState == serviceStopping || s.lifecycleState == serviceStopped {
+		s.lifecycleMu.Unlock()
+		return nil, errServiceNotRunning
+	}
+	s.ledgerWorkWG.Add(1)
+	s.lifecycleMu.Unlock()
+	return sync.OnceFunc(s.ledgerWorkWG.Done), nil
+}
+
 // PrepareReplayParent verifies a replay parent outside the service lifecycle
 // locks and returns a proof that can be used for a sparse child verification.
 // The proof is intentionally state-only: the replay child has a separately
@@ -407,10 +444,17 @@ func (s *Service) PrepareReplayParent(ctx context.Context, parent *ledger.Ledger
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePreparation()
+	startedAt := time.Now()
 	if parent == nil {
 		return nil, errors.New("replay admission: nil parent ledger")
 	}
 	parentHeader := parent.Header()
+	snapshotStartedAt := time.Now()
 	stateMap, err := parent.StateMapSnapshotContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("replay admission: snapshot parent state: %w", err)
@@ -444,16 +488,28 @@ func (s *Service) PrepareReplayParent(ctx context.Context, parent *ledger.Ledger
 	if pinned {
 		proof.fingerprint = pin.fingerprint
 	}
+	proof.stats.GenerationPinned = pinned
+	proof.stats.SnapshotElapsed = time.Since(snapshotStartedAt)
 	if reusable && s.lookupReplayProof(parentHeader, pin.fingerprint, false) {
+		proof.stats.ProofCacheChecked = true
+		proof.stats.ProofCacheHit = true
+		proof.stats.Elapsed = time.Since(startedAt)
 		return proof, nil
 	}
-	if err := s.verifyDetachedSnapshot(ctx, "replay parent state", stateMap, [32]byte{}); err != nil {
+	if reusable {
+		proof.stats.ProofCacheChecked = true
+		proof.stats.ProofCacheMiss = true
+	}
+	stateStats, err := s.verifyReplaySnapshot(ctx, "replay parent state", stateMap, [32]byte{})
+	proof.stats.State = stateStats
+	if err != nil {
 		proof.Release()
 		return nil, err
 	}
 	if reusable {
 		s.rememberReplayProof(parentHeader, pin.fingerprint, false)
 	}
+	proof.stats.Elapsed = time.Since(startedAt)
 	return proof, nil
 }
 
@@ -506,6 +562,13 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePreparation()
+	startedAt := time.Now()
+	snapshotStartedAt := time.Now()
 	h, stateMap, txMap, err := s.snapshotPreparedLedger(ctx, derived)
 	if err != nil {
 		return nil, err
@@ -526,25 +589,38 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 	if useBase && (!reusable || parentFingerprint != pin.fingerprint) {
 		useBase = false
 	}
+	stats := ReplayAdmissionStats{
+		GenerationPinned: pinned,
+		ParentProofUsed:  useBase,
+		SnapshotElapsed:  time.Since(snapshotStartedAt),
+	}
+	var stateStats ReplayAdmissionMapStats
 	if useBase {
-		if err := s.verifyDetachedSnapshot(ctx, "replay derived state", stateMap, baseRoot); err != nil {
+		stateStats, err = s.verifyReplaySnapshot(ctx, "replay derived state", stateMap, baseRoot)
+		if err != nil {
 			if pin != nil {
 				pin.Release()
 			}
 			return nil, err
 		}
-	} else if err := s.verifyDetachedSnapshot(ctx, "replay derived state", stateMap, [32]byte{}); err != nil {
+	} else {
+		stateStats, err = s.verifyReplaySnapshot(ctx, "replay derived state", stateMap, [32]byte{})
+		if err != nil {
+			if pin != nil {
+				pin.Release()
+			}
+			return nil, err
+		}
+	}
+	stats.State = stateStats
+	txStats, err := s.verifyReplaySnapshot(ctx, "replay derived transactions", txMap, [32]byte{})
+	if err != nil {
 		if pin != nil {
 			pin.Release()
 		}
 		return nil, err
 	}
-	if err := s.verifyDetachedSnapshot(ctx, "replay derived transactions", txMap, [32]byte{}); err != nil {
-		if pin != nil {
-			pin.Release()
-		}
-		return nil, err
-	}
+	stats.Transactions = txStats
 
 	if pinned && reusable {
 		s.rememberReplayProof(h, pin.fingerprint, txMap.IsBacked() && s.hasDurableFamily())
@@ -556,6 +632,7 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 		}
 		return nil, fmt.Errorf("replay admission: acquire publication work: %w", err)
 	}
+	stats.Elapsed = time.Since(startedAt)
 	return &PreparedLedger{
 		service:  s,
 		header:   h,
@@ -569,6 +646,7 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 		}(),
 		pin:         pin,
 		releaseWork: releaseWork,
+		stats:       stats,
 	}, nil
 }
 
@@ -641,11 +719,14 @@ func (s *Service) BootstrapPreparedLedger(ctx context.Context, prepared *Prepare
 		return false, errReplayAdmissionState
 	}
 	if fingerprint != ([32]byte{}) {
-		current, available, err := s.currentReplayFingerprint(ctx)
+		current, available, err := currentReplayFingerprint(ctx, pin)
 		if err != nil {
 			return false, fmt.Errorf("replay admission: recheck publication generation: %w", err)
 		}
 		if available && current != fingerprint {
+			prepared.mu.Lock()
+			prepared.stats.GenerationChanged = true
+			prepared.mu.Unlock()
 			return false, errors.New("replay admission: publication generation changed")
 		}
 	}
