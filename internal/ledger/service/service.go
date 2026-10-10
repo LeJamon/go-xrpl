@@ -202,6 +202,11 @@ type Service struct {
 	replayPreparedProofs    []*replayPreparedProof
 	replayPreparedSlotCount int
 	replayPreparedProofWake chan struct{}
+	// One foreground state verifier at a time. Transaction verification has
+	// independent admission and background re-certification yields between batches.
+	stateVerificationMu     sync.Mutex
+	stateVerificationActive bool
+	stateVerificationWake   chan struct{}
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager

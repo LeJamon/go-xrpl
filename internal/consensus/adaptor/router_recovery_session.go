@@ -160,6 +160,12 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 	if c.retireLocallySatisfiedFrozenPivot("local_frontier") {
 		return false
 	}
+	if c.localForwardReplayOwnsRecovery(seq, hash) {
+		// A growing gap while our verifier is busy is not peer failure.
+		// Keep the next-ledger owner instead of starting a competing full
+		// state walk. Completion/failure releases ownership normally.
+		return true
+	}
 
 	c.acquisitionMu.Lock()
 	if c.standardReplay.active {

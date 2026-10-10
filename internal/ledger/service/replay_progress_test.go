@@ -99,8 +99,8 @@ func TestColdVerificationCannotConsumePersistenceProgressReserve(t *testing.T) {
 	workers, _, release, err := svc.acquireReplayColdWorkspace(t.Context())
 	require.NoError(t, err)
 	defer release()
-	require.Equal(t, 2, workers)
-	// Execute actual persistence while both cold-walk reservations remain held.
+	require.Equal(t, 1, workers, "leave a workspace for transaction completion")
+	// Execute actual persistence while the cold-walk reservation remains held.
 	state := buildStateForPersistenceProgress(t)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()

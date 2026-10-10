@@ -79,6 +79,13 @@ func (s *Service) verifyReplaySnapshot(
 			}
 		}
 	}
+	if snapshot.Type() == shamap.TypeState {
+		release, err := s.acquireForegroundStateVerification(ctx)
+		if err != nil {
+			return ReplayAdmissionMapStats{}, err
+		}
+		defer release()
+	}
 	return s.verifyDetachedSnapshotStats(ctx, name, snapshot, baseRoot)
 }
 
@@ -95,7 +102,14 @@ func (s *Service) verifyStoredReplaySnapshot(
 		return ReplayAdmissionMapStats{}, false, nil
 	}
 	startedAt := time.Now()
-	workers, workspaceBytes, releaseWorkspace, err := s.acquireReplayColdWorkspace(ctx)
+	if mapType == shamap.TypeState {
+		release, err := s.acquireForegroundStateVerification(ctx)
+		if err != nil {
+			return ReplayAdmissionMapStats{Elapsed: time.Since(startedAt)}, true, err
+		}
+		defer release()
+	}
+	workers, workspaceBytes, releaseWorkspace, err := s.acquireReplayWorkspace(ctx, mapType)
 	if err != nil {
 		return ReplayAdmissionMapStats{Elapsed: time.Since(startedAt), Workers: workers, WorkspaceBytes: workspaceBytes}, true, err
 	}
@@ -152,6 +166,10 @@ func (s *Service) verifyStoredReplaySnapshot(
 }
 
 func (s *Service) acquireReplayColdWorkspace(ctx context.Context) (int, uint64, func(), error) {
+	return s.acquireReplayWorkspace(ctx, shamap.TypeState)
+}
+
+func (s *Service) acquireReplayWorkspace(ctx context.Context, kind shamap.Type) (int, uint64, func(), error) {
 	desired := resolveStoredSHAMapWorkers(s.config.FastLoadWorkers)
 	if desired <= 0 {
 		desired = 1
@@ -171,7 +189,15 @@ func (s *Service) acquireReplayColdWorkspace(ctx context.Context) (int, uint64, 
 		}
 	}
 	maxWorkers := desired
-	if byBytes := capacity / replayAdmissionColdWorkspaceBytes; byBytes < uint64(maxWorkers) {
+	byBytes := capacity / replayAdmissionColdWorkspaceBytes
+	if kind == shamap.TypeTransaction {
+		maxWorkers = 1
+	} else if byBytes > 1 {
+		// Only one state walk is admitted by the service gate. Leave one
+		// workspace for transaction completion, even while the walk is cold.
+		byBytes--
+	}
+	if byBytes < uint64(maxWorkers) {
 		maxWorkers = int(byBytes)
 	}
 	if maxWorkers < 1 {

@@ -55,6 +55,36 @@ func (r replayCompletenessRecord) matchesExactHeader(h header.LedgerHeader, fing
 	return r.matchesHeader(h, fingerprint, transaction) && r.txRoot == h.TxHash
 }
 
+// Persistence owns a copy, independent of the prepared token's lifetime and
+// the small replay LRU. This is not publication: the durable generation,
+// header, roots and canonical tip must still be checked after persistence.
+func (s *Service) replayPersistenceProof(h header.LedgerHeader) *replayCompletenessRecord {
+	s.replayProofMu.Lock()
+	defer s.replayProofMu.Unlock()
+	usable := func(record replayCompletenessRecord) bool {
+		return record.nodeStoreFingerprint != ([32]byte{}) &&
+			record.matchesExactHeader(h, record.nodeStoreFingerprint, h.TxHash != ([32]byte{}))
+	}
+	for _, proof := range s.replayPreparedProofs {
+		if proof.pin != nil && proof.pin.active() && proof.record.nodeStoreFingerprint != ([32]byte{}) &&
+			proof.record.matchesExactHeader(h, proof.record.nodeStoreFingerprint, false) {
+			record := proof.record
+			// Preparation verified both immutable maps, including an in-memory
+			// transaction tree. The persistence job writes that tree before
+			// this certificate can be promoted; the ordinary replay LRU must
+			// not treat a state-only record as a transaction proof.
+			record.transactionComplete = true
+			return &record
+		}
+	}
+	for _, record := range s.replayProofs {
+		if usable(record) {
+			return &record
+		}
+	}
+	return nil
+}
+
 // replayPreparedProof is the service-owned activation certificate for a
 // prepared result. It deliberately retains no map or node payload; the token
 // owns those resources and remains responsible for releasing the generation
@@ -705,6 +735,16 @@ func (s *Service) verifyReplayParentWithRefresh(ctx context.Context, h header.Le
 		return stats, false, err
 	}
 	walkCtx, cancel := context.WithCancelCause(ctx)
+	var baseRoot [32]byte
+	if base, ok := s.currentValidatedStateBaseProof(); ok && base.nodeStoreFingerprint == proof.fingerprint {
+		// Completeness is a property of a Merkle root, not adjacency. A
+		// certified older state also safely skips equal parent subtrees.
+		baseRoot = base.stateRoot
+	}
+	if s.logger != nil {
+		s.logger.Info("Replay parent verification selected", "sequence", h.LedgerIndex,
+			"verified_base", baseRoot != ([32]byte{}), "reason", "exact completeness proof unavailable")
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -722,7 +762,7 @@ func (s *Service) verifyReplayParentWithRefresh(ctx context.Context, h header.Le
 			}
 		}
 	}()
-	stats, err := s.verifyReplaySnapshot(walkCtx, "replay parent state", stateMap, [32]byte{})
+	stats, err := s.verifyReplaySnapshot(walkCtx, "replay parent state", stateMap, baseRoot)
 	cancel(nil)
 	<-done
 	if (errors.Is(err, context.Canceled) || errors.Is(err, errReplayParentProofAvailable)) && ctx.Err() == nil &&

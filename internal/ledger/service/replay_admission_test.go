@@ -482,8 +482,8 @@ func TestReplayAdmissionWorkspaceUsesSharedBudget(t *testing.T) {
 	svc := &Service{config: Config{PersistenceMemory: budget, FastLoadWorkers: 4}}
 	workers, workspace, release, err := svc.acquireReplayColdWorkspace(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, 4, workers)
-	require.Equal(t, uint64(replayAdmissionColdWorkspaceBytes*4), workspace)
+	require.Equal(t, 3, workers, "one workspace remains reserved for transactions")
+	require.Equal(t, uint64(replayAdmissionColdWorkspaceBytes*3), workspace)
 	require.Equal(t, workspace, budget.used)
 	require.NotNil(t, release)
 	release()
@@ -493,7 +493,7 @@ func TestReplayAdmissionWorkspaceUsesSharedBudget(t *testing.T) {
 
 func TestReplayAdmissionColdWalkUsesAdmittedWorkersAndReleasesWorkspace(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * 2}
+	budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * 3}
 	svc, err := New(Config{
 		SHAMapFamily:      family,
 		PersistenceMemory: budget,
@@ -525,7 +525,7 @@ func TestReplayAdmissionColdWalkReaderCapAndWorkspace(t *testing.T) {
 				replayAdmissionFamily: base,
 				delay:                 500 * time.Microsecond,
 			}
-			budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * uint64(tc.workers)}
+			budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * uint64(tc.workers+1)}
 			svc, err := New(Config{
 				SHAMapFamily:      family,
 				PersistenceMemory: budget,

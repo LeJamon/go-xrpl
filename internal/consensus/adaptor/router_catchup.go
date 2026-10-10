@@ -979,7 +979,7 @@ func (c *catchupReplayCoordinator) recoveryForwardStep(
 	discardAnchor := false
 	if recovery.anchorHash != ([32]byte{}) {
 		anchor, held := svc.GetCachedLedgerByHash(recovery.anchorHash)
-		anchorUsable := recovery.anchorSeq > parent.Sequence() && recovery.anchorSeq < targetSeq &&
+		anchorUsable := recovery.anchorSeq >= parent.Sequence() && recovery.anchorSeq < targetSeq &&
 			targetSeq-recovery.anchorSeq <= seqHashRetain &&
 			c.recoveryAnchorReachesTarget(recovery.anchorSeq, recovery.anchorHash, targetHash) &&
 			held && anchor.Sequence() == recovery.anchorSeq &&
@@ -1128,7 +1128,11 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 	c.acquisitionMu.Lock()
 	recovery := c.consensusRecovery
 	if recovery.targetHash != tHash {
-		recovery = consensusRecovery{}
+		// A moving network tip is not a new recovery session. Keep the
+		// committed anchor; recoveryForwardStep independently authenticates
+		// its linkage to the new target before using the extended window.
+		recovery.targetHash = tHash
+		recovery.stepHash = [32]byte{}
 	}
 	c.acquisitionMu.Unlock()
 	if seq, hash, parent, replay, _ := c.recoveryForwardStep(svc, tSeq, tHash, recovery); replay && parent != nil {
@@ -2393,7 +2397,7 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 		func() {
 			lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
 			defer cancelLookup()
-			releaseAdmission, admissionErr := svc.AcquireStateAdmission(c.lifecycleContext())
+			releaseAdmission, admissionErr := svc.AcquireStateAdmission(lookupCtx)
 			if admissionErr != nil {
 				err = admissionErr
 				return
@@ -2416,17 +2420,20 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 				return
 			}
 			hdr := held.Header()
-			stateMap, snapshotErr := held.StateMapSnapshot()
+			stateMap, snapshotErr := held.StateMapSnapshotContext(lookupCtx)
 			if snapshotErr != nil {
 				err = snapshotErr
 				return
 			}
-			txMap, snapshotErr := held.TxMapSnapshot()
+			txMap, snapshotErr := held.TxMapSnapshotContext(lookupCtx)
 			if snapshotErr != nil {
 				err = snapshotErr
 				return
 			}
-			if err = svc.IngestHistoricalLedgerWithState(c.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
+			// History is optional background work. Its local verification must
+			// honor the same bounded admission as the lookup, rather than park
+			// Router.Run behind a foreground state-verification lease.
+			if err = svc.IngestHistoricalLedgerWithState(lookupCtx, &hdr, stateMap, txMap); err != nil {
 				c.logger.Warn("history backfill: held ledger ingest failed", "error", err, "seq", target.seq)
 			}
 		}()

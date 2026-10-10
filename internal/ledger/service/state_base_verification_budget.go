@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -21,8 +22,60 @@ func (s *Service) backgroundStateVerificationPolicy() storedSHAMapVerificationPo
 	return storedSHAMapVerificationPolicy{
 		workers: backgroundVerificationWorkers(runtime.GOMAXPROCS(0)),
 		pause: func(ctx context.Context, work time.Duration) error {
+			if err := s.waitForForegroundStateVerification(ctx); err != nil {
+				return err
+			}
 			return paceBackgroundVerification(ctx, work, s.openLedgerMu.Snapshot)
 		},
+	}
+}
+
+// A long parent/pivot verification must not multiply full-state readers or
+// consume the transaction lane's reserved workspace. Never wait under ledger
+// or storage locks; cancellation wakes both admission and background waiters.
+func (s *Service) acquireForegroundStateVerification(ctx context.Context) (func(), error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s.stateVerificationMu.Lock()
+		if !s.stateVerificationActive {
+			s.stateVerificationActive = true
+			s.stateVerificationWake = make(chan struct{})
+			s.stateVerificationMu.Unlock()
+			return sync.OnceFunc(func() {
+				s.stateVerificationMu.Lock()
+				s.stateVerificationActive = false
+				close(s.stateVerificationWake)
+				s.stateVerificationMu.Unlock()
+			}), nil
+		}
+		wake := s.stateVerificationWake
+		s.stateVerificationMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+func (s *Service) waitForForegroundStateVerification(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s.stateVerificationMu.Lock()
+		active, wake := s.stateVerificationActive, s.stateVerificationWake
+		s.stateVerificationMu.Unlock()
+		if !active {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
 	}
 }
 
