@@ -183,6 +183,130 @@ func (n *NFTokenMint) RequiredAmendments() [][32]byte {
 	return nil
 }
 
+// Preclaim must reject an expired mint offer before the engine's TapRETRY gate.
+// Returning tecEXPIRED from Apply commits it even during a retry pass (the
+// engine preserves work-on-tec cleanup). That changes TransactionIndex for this
+// and subsequent transactions although the final state can be identical.
+// Reference: rippled NFTokenMint::preclaim; testnet divergence at 21403321.
+func (n *NFTokenMint) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(n.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	issuerID := accountID
+	if n.Issuer != "" {
+		issuerID, err = state.DecodeAccountID(n.Issuer)
+		if err != nil {
+			return ter.TemINVALID
+		}
+		issuer, err := tx.ReadAccountRoot(view, issuerID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if issuer == nil {
+			return ter.TecNO_ISSUER
+		}
+		if issuer.NFTokenMinter != n.Account {
+			return ter.TecNO_PERMISSION
+		}
+	}
+	rules := config.RequireRules()
+	// Preclaim checks for the combined mint+offer path.
+	// Reference: rippled NFTokenMint.cpp preclaim → tokenOfferCreatePreclaim
+	if n.Amount != nil {
+		// The negative-amount tem* check runs in preflight (PreflightRules →
+		// tokenOfferCreatePreflight), before this point.
+
+		if tx.HasExpired(n.Expiration, config.ParentCloseTime) {
+			return ter.TecEXPIRED
+		}
+
+		// Extract NFToken flags from transaction flags (lower 16 bits)
+		// These are the flags that will be embedded in the minted token.
+		nftFlags := uint16(n.GetFlags() & 0xFFFF)
+
+		var transferFee uint16
+		if n.TransferFee != nil {
+			transferFee = *n.TransferFee
+		}
+
+		// IOU-specific preclaim checks
+		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreclaim
+		if !n.Amount.IsNative() {
+			iouIssuerID, err := state.DecodeAccountID(n.Amount.Issuer)
+			if err != nil {
+				return ter.TemINVALID
+			}
+
+			// NFT issuer trust line check when transfer fee is set and no auto-trust-line flag
+			// Reference: rippled tokenOfferCreatePreclaim lines 909-929
+			if nftFlags&NFTokenFlagTrustLine == 0 && transferFee > 0 {
+				issuerExists, _ := view.Exists(keylet.Account(issuerID))
+				if !issuerExists {
+					return ter.TecNO_ISSUER
+				}
+
+				// With featureNFTokenMintOffer: skip trust line check when NFT issuer == IOU issuer
+				if rules.Enabled(amendment.FeatureNFTokenMintOffer) {
+					if issuerID != iouIssuerID {
+						trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
+						trustLineData, err := view.Read(trustLineKey)
+						if err != nil || trustLineData == nil {
+							return ter.TecNO_LINE
+						}
+					}
+				} else {
+					trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
+					exists, _ := view.Exists(trustLineKey)
+					if !exists {
+						return ter.TecNO_LINE
+					}
+				}
+
+				if tx.IsGlobalFrozen(view, n.Amount.Issuer) || tx.IsTrustlineFrozen(view, issuerID, iouIssuerID, n.Amount.Currency) {
+					return ter.TecFROZEN
+				}
+			}
+
+			// Check if the minting account is frozen for this IOU
+			// Reference: rippled tokenOfferCreatePreclaim line 941
+			if !(rules.Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == iouIssuerID) &&
+				(tx.IsGlobalFrozen(view, n.Amount.Issuer) || tx.IsTrustlineFrozen(view, accountID, iouIssuerID, n.Amount.Currency)) {
+				return ter.TecFROZEN
+			}
+
+			// Trust line authorization check (with fixEnforceNFTokenTrustlineV2)
+			// Reference: rippled tokenOfferCreatePreclaim lines 1007-1018
+			if rules.Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+				if r := checkNFTTrustlineAuthorized(view, accountID, n.Amount.Currency, iouIssuerID); r != ter.TesSUCCESS {
+					return r
+				}
+			}
+		}
+
+		// Destination check
+		// Reference: rippled tokenOfferCreatePreclaim lines 970-988
+		if n.Destination != "" {
+			destID, err := state.DecodeAccountID(n.Destination)
+			if err != nil {
+				return ter.TemINVALID
+			}
+			destAccount, err := tx.ReadAccountRoot(view, destID)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if destAccount == nil {
+				return ter.TecNO_DST
+			}
+			if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+				return ter.TecNO_PERMISSION
+			}
+		}
+	}
+
+	return ter.TesSUCCESS
+}
+
 // Reference: rippled NFTokenMint.cpp doApply
 func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken mint apply",
@@ -239,92 +363,6 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 	} else {
 		issuerID = accountID
 		issuerAccount = ctx.Account
-	}
-
-	// Preclaim checks for the combined mint+offer path.
-	// Reference: rippled NFTokenMint.cpp preclaim → tokenOfferCreatePreclaim
-	if n.Amount != nil {
-		// The negative-amount tem* check runs in preflight (PreflightRules →
-		// tokenOfferCreatePreflight), before this point.
-
-		if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
-			return ter.TecEXPIRED
-		}
-
-		// Extract NFToken flags from transaction flags (lower 16 bits)
-		// These are the flags that will be embedded in the minted token.
-		nftFlags := uint16(n.GetFlags() & 0xFFFF)
-
-		var transferFee uint16
-		if n.TransferFee != nil {
-			transferFee = *n.TransferFee
-		}
-
-		// IOU-specific preclaim checks
-		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreclaim
-		if !n.Amount.IsNative() {
-			iouIssuerID, err := state.DecodeAccountID(n.Amount.Issuer)
-			if err != nil {
-				return ter.TemINVALID
-			}
-
-			// NFT issuer trust line check when transfer fee is set and no auto-trust-line flag
-			// Reference: rippled tokenOfferCreatePreclaim lines 909-929
-			if nftFlags&NFTokenFlagTrustLine == 0 && transferFee > 0 {
-				issuerExists, _ := ctx.View.Exists(keylet.Account(issuerID))
-				if !issuerExists {
-					return ter.TecNO_ISSUER
-				}
-
-				// With featureNFTokenMintOffer: skip trust line check when NFT issuer == IOU issuer
-				if ctx.Rules().Enabled(amendment.FeatureNFTokenMintOffer) {
-					if issuerID != iouIssuerID {
-						trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
-						trustLineData, err := ctx.View.Read(trustLineKey)
-						if err != nil || trustLineData == nil {
-							return ter.TecNO_LINE
-						}
-					}
-				} else {
-					trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
-					exists, _ := ctx.View.Exists(trustLineKey)
-					if !exists {
-						return ter.TecNO_LINE
-					}
-				}
-
-				if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, issuerID, iouIssuerID, n.Amount.Currency) {
-					return ter.TecFROZEN
-				}
-			}
-
-			// Check if the minting account is frozen for this IOU
-			// Reference: rippled tokenOfferCreatePreclaim line 941
-			if !(ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == iouIssuerID) &&
-				(tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency)) {
-				return ter.TecFROZEN
-			}
-
-			// Trust line authorization check (with fixEnforceNFTokenTrustlineV2)
-			// Reference: rippled tokenOfferCreatePreclaim lines 1007-1018
-			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != ter.TesSUCCESS {
-					return r
-				}
-			}
-		}
-
-		// Destination check
-		// Reference: rippled tokenOfferCreatePreclaim lines 970-988
-		if n.Destination != "" {
-			destAccount, _, result := ctx.LookupAccount(n.Destination)
-			if result != ter.TesSUCCESS {
-				return result
-			}
-			if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return ter.TecNO_PERMISSION
-			}
-		}
 	}
 
 	// The token's unique sequence is FirstNFTokenSequence + MintedNFTokens.

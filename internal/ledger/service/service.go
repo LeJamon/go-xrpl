@@ -74,9 +74,14 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 type Config struct {
 	RelayMemory       MemoryBudget
 	PersistenceMemory shamap.DirtyMemoryBudget
-	ReplayFaultPath   string
-	Standalone        bool
-	Startup           StartupConfig
+	// ReplayVerificationMemory isolates long-running cold reads from ledger
+	// persistence. Node wiring must provide a separate shared-pool account so a
+	// verifier cannot consume the workspace needed to persist its own parent.
+	// Nil retains the legacy PersistenceMemory accounting for embedded callers.
+	ReplayVerificationMemory shamap.DirtyMemoryBudget
+	ReplayFaultPath          string
+	Standalone               bool
+	Startup                  StartupConfig
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string

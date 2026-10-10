@@ -1024,7 +1024,10 @@ func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
+	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap)
+}
 
+func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

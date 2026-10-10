@@ -756,6 +756,10 @@ func (r *Router) Run(ctx context.Context) {
 			r.submitTxJob(msg)
 		case result := <-workLane.results():
 			r.catchupReplay.handleAcquisitionWorkResult(result)
+		case result := <-r.catchupReplay.completionResults:
+			r.catchupReplay.handleAcquisitionCompletion(result)
+		case <-r.catchupReplay.completionWake:
+			r.catchupReplay.retryAcquisitionCompletions()
 		case result := <-r.trustedValidationWorkResults():
 			r.handleValidationWorkResult(result)
 		case result := <-r.untrustedValidationWorkResults():

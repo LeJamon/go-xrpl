@@ -382,6 +382,11 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		"request_peers":                  snap.RequestPeers,
 		"state_received_total":           snap.StateReceived,
 		"state_useful_total":             snap.StateUseful,
+		"state_cache_useful_total":       snap.StateCacheUseful,
+		"tx_cache_useful_total":          snap.TxCacheUseful,
+		"by_hash_mode":                   snap.ByHashMode,
+		"outstanding_nodes":              snap.OutstandingNodes,
+		"consecutive_timeouts":           snap.ConsecutiveTimeouts,
 		"tx_received_total":              snap.TxReceived,
 		"tx_useful_total":                snap.TxUseful,
 		"state_equal_subtrees_skipped":   snap.StateEqualSubtreesSkipped,
@@ -403,6 +408,9 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		// Live no-progress retry count, mirroring InboundLedger::getJson's
 		// timeouts_ now that the acquisition runs a timer-driven retry loop.
 		"timeouts": snap.Timeouts,
+	}
+	if !snap.LastUsefulProgress.IsZero() {
+		entry["last_useful_progress"] = snap.LastUsefulProgress.UTC().Format(time.RFC3339Nano)
 	}
 	switch {
 	case snap.Complete:

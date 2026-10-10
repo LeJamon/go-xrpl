@@ -638,11 +638,23 @@ func (e *Engine) SetInMemoryLedgers(n uint32) {
 // SetLedgerAncestryProvider installs the trie's ancestry provider.
 // Safe before or after Start; nil reverts to flat-count support.
 func (e *Engine) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	old, _ := e.ledgerAncestry.(*AncestryProvider)
+	managed, _ := p.(*AncestryProvider)
+	if e.stopped {
+		e.mu.Unlock()
+		managed.stop()
+		return
+	}
 	e.ledgerAncestry = p
 	if e.validationTracker != nil {
 		e.validationTracker.setLedgerAncestryProvider(p)
+	}
+	e.mu.Unlock()
+	if old != managed {
+		old.stop()
 	}
 }
 
@@ -802,6 +814,10 @@ func (e *Engine) Stop() error {
 		e.cancel()
 	}
 	e.wg.Wait()
+	e.mu.Lock()
+	ancestry, _ := e.ledgerAncestry.(*AncestryProvider)
+	e.mu.Unlock()
+	ancestry.stop()
 	var cause error
 	if e.ctx != nil {
 		cause = context.Cause(e.ctx)

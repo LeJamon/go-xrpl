@@ -402,6 +402,12 @@ func (c *catchupReplayCoordinator) locallySatisfiesLedger(seq uint32, hash [32]b
 			return true
 		}
 	}
+	// This is a scheduling shortcut, including on the validation router. Do
+	// not query SQLite for an unknown hash; acquisition can reuse stored nodes
+	// and the detached admission path still checks completeness before install.
+	if _, held := svc.GetCachedLedgerByHash(hash); !held {
+		return false
+	}
 	_, _, _, err := c.localReplayReplacementCandidate(seq, hash)
 	return err == nil
 }

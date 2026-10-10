@@ -10,14 +10,18 @@ import (
 
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
-// One stored-node verification worker can retain the largest accepted replay
-// payload plus its serialized and decoded copies. Shared persistence memory is
+// ReplayVerificationWorkspaceBytes bounds one stored-node verification worker,
+// which can retain the largest accepted replay payload plus its serialized and
+// decoded copies. Shared verification memory is
 // reserved per worker before a cold walk starts; the limit keeps this path from
 // multiplying the replay payload by the machine's CPU count.
-const replayAdmissionColdWorkspaceBytes = (128 << 20) + (256 << 10)
+const ReplayVerificationWorkspaceBytes = (128 << 20) + (256 << 10)
+
+const replayAdmissionColdWorkspaceBytes = ReplayVerificationWorkspaceBytes
 
 // ErrReplayAdmissionWorkspace marks a persistence configuration that cannot
 // admit even one bounded cold-walk worker. It is distinct from replay payload
@@ -102,6 +106,8 @@ func (s *Service) verifyStoredReplaySnapshot(
 		logger = xrpllog.Discard()
 	}
 	progress := newStoredSHAMapVerificationProgress(logger, s.nodeStore, root, mapType, startedAt)
+	progress.operation = "replay admission verification"
+	progress.extraFields = []any{"purpose", name}
 	var reads atomic.Uint64
 	fetch := func(fetchCtx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
 		reads.Add(1)
@@ -111,7 +117,26 @@ func (s *Service) verifyStoredReplaySnapshot(
 		}
 		return &nodestore.Node{Hash: hash, Data: data}, nil
 	}
-	control := storedSHAMapWalkControl{progress: progress}
+	ticker := time.NewTicker(storedSHAMapVerificationLogInterval)
+	defer ticker.Stop()
+	defer func() {
+		if (errors.Is(err, context.Canceled) || errors.Is(err, errReplayParentProofAvailable)) &&
+			errors.Is(context.Cause(ctx), errReplayParentProofAvailable) {
+			logger.Info("replay admission verification superseded by exact completeness proof", progress.fields(time.Now())...)
+			return
+		}
+		progress.finish(time.Now(), err)
+	}()
+	control := storedSHAMapWalkControl{progress: progress, progressTicks: ticker.C, now: time.Now}
+	if batchFetch := s.storedSHAMapVerificationBatchFetch(); batchFetch != nil {
+		control.batchFetch = func(ctx context.Context, hashes []nodestore.Hash256, maxBytes int) ([]*nodestore.Node, kvstore.PromotionStats, error) {
+			nodes, metrics, err := batchFetch(ctx, hashes, maxBytes)
+			reads.Add(uint64(len(nodes)))
+			return nodes, metrics, err
+		}
+		control.batchNodes = storedSHAMapVerificationBatchNodes
+		control.batchBytes = storedSHAMapVerificationBatchBytes
+	}
 	err = s.walkStoredSHAMapConcurrentWithFetch(ctx, root, mapType, fetch, workers, control, nil)
 	stats := ReplayAdmissionMapStats{
 		Elapsed:        time.Since(startedAt),
@@ -131,7 +156,10 @@ func (s *Service) acquireReplayColdWorkspace(ctx context.Context) (int, uint64, 
 	if desired <= 0 {
 		desired = 1
 	}
-	budget := s.config.PersistenceMemory
+	budget := s.config.ReplayVerificationMemory
+	if budget == nil {
+		budget = s.config.PersistenceMemory
+	}
 	if budget == nil {
 		return 1, 0, func() {}, nil
 	}

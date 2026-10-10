@@ -271,7 +271,7 @@ func (c *catchupReplayCoordinator) failStandardReplayReplacement(il *inbound.Led
 	return true
 }
 
-func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound.Ledger, h *header.LedgerHeader, stateMap, txMap *shamap.SHAMap) bool {
+func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound.Ledger, h *header.LedgerHeader, prepared *service.PreparedLedger) bool {
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
 	replacement := c.standardReplay.replacement
@@ -290,7 +290,8 @@ func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound
 	}
 	replacement.installing = true
 	c.acquisitionMu.Unlock()
-	initial, err := c.adaptor.LedgerService().BootstrapLedgerWithState(c.lifecycleContext(), h, stateMap, txMap)
+	defer il.ReleaseAcquisitionMemory()
+	initial, err := c.adaptor.LedgerService().BootstrapPreparedLedger(c.lifecycleContext(), prepared)
 	if err != nil {
 		c.replayCommitMu.Unlock()
 		c.recordReplayAcquisitionFailure(il, err)

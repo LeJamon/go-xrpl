@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -677,7 +678,7 @@ func (s *Service) PrepareReplayParent(ctx context.Context, parent *ledger.Ledger
 		proof.stats.ProofCacheChecked = true
 		proof.stats.ProofCacheMiss = true
 	}
-	stateStats, err := s.verifyReplaySnapshot(ctx, "replay parent state", stateMap, [32]byte{})
+	stateStats, refreshedProof, err := s.verifyReplayParentWithRefresh(ctx, parentHeader, stateMap, proof)
 	proof.stats.State = stateStats
 	if err != nil {
 		proof.Release()
@@ -686,8 +687,50 @@ func (s *Service) PrepareReplayParent(ctx context.Context, parent *ledger.Ledger
 	if reusable {
 		s.rememberReplayProof(parentHeader, pin.fingerprint, false)
 	}
+	if refreshedProof {
+		proof.stats.ProofCacheHit = true
+	}
 	proof.stats.Elapsed = time.Since(startedAt)
 	return proof, nil
+}
+
+var errReplayParentProofAvailable = errors.New("replay parent completeness proof became available")
+
+// Persistence or background re-certification can certify this exact parent
+// while a cold scan is running. Recheck the generation-bound proof instead of
+// finishing millions of redundant reads. No proof means no early admission.
+func (s *Service) verifyReplayParentWithRefresh(ctx context.Context, h header.LedgerHeader, stateMap *shamap.SHAMap, proof *PreparedReplayParent) (ReplayAdmissionMapStats, bool, error) {
+	if !proof.reusable {
+		stats, err := s.verifyReplaySnapshot(ctx, "replay parent state", stateMap, [32]byte{})
+		return stats, false, err
+	}
+	walkCtx, cancel := context.WithCancelCause(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-walkCtx.Done():
+				return
+			case <-ticker.C:
+				if s.lookupReplayProof(h, proof.fingerprint, false) {
+					cancel(errReplayParentProofAvailable)
+					return
+				}
+			}
+		}
+	}()
+	stats, err := s.verifyReplaySnapshot(walkCtx, "replay parent state", stateMap, [32]byte{})
+	cancel(nil)
+	<-done
+	if (errors.Is(err, context.Canceled) || errors.Is(err, errReplayParentProofAvailable)) && ctx.Err() == nil &&
+		errors.Is(context.Cause(walkCtx), errReplayParentProofAvailable) &&
+		s.lookupReplayProof(h, proof.fingerprint, false) {
+		return stats, true, nil
+	}
+	return stats, false, err
 }
 
 func (s *Service) snapshotPreparedLedger(ctx context.Context, source *ledger.Ledger) (header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap, error) {
@@ -736,6 +779,12 @@ func (s *Service) snapshotPreparedLedger(ctx context.Context, source *ledger.Led
 // publication lock. A non-nil parent proof enables the verified-base sparse
 // walk; a nil proof safely performs the existing cold verification.
 func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent) (*PreparedLedger, error) {
+	return s.prepareLedger(ctx, derived, parent, false)
+}
+
+// Acquisition may compare against a nonconsecutive checkpoint/validated base.
+// Keep that choice separate from replay's strict parent-identity requirement.
+func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent, acquired bool) (*PreparedLedger, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -791,23 +840,36 @@ func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledge
 		useBase = reusable && !generationChanged
 	}
 	stats.ParentProofUsed = useBase
-	var stateStats ReplayAdmissionMapStats
-	if useBase {
-		stateStats, err = s.verifyReplaySnapshot(ctx, "replay derived state", stateMap, baseRoot)
-		if err != nil {
-			if pin != nil {
-				pin.Release()
+	if !useBase {
+		baseRoot = [32]byte{}
+	}
+	statePurpose := "replay derived state"
+	if acquired {
+		statePurpose = "acquired state"
+		var baseSequence uint32
+		if reusable {
+			// Read the service-owned certificate only after pinning this
+			// generation. Never trust acquisition's map flags or an unpinned
+			// root supplied by its caller. The certificate proves the entire
+			// base tree, independently of shallow FullBelow cache residency.
+			if proof, ok := s.currentValidatedStateBaseProof(); ok {
+				if proof.nodeStoreFingerprint == pin.fingerprint {
+					baseRoot, baseSequence = proof.stateRoot, proof.sequence
+				} else {
+					stats.GenerationChanged = true
+				}
 			}
-			return nil, err
 		}
-	} else {
-		stateStats, err = s.verifyReplaySnapshot(ctx, "replay derived state", stateMap, [32]byte{})
-		if err != nil {
-			if pin != nil {
-				pin.Release()
-			}
-			return nil, err
+		s.logger.Info("Acquired ledger verification selected",
+			"sequence", h.LedgerIndex, "base_sequence", baseSequence,
+			"verified_base", baseRoot != ([32]byte{}), "generation_changed", stats.GenerationChanged)
+	}
+	stateStats, err := s.verifyReplaySnapshot(ctx, statePurpose, stateMap, baseRoot)
+	if err != nil {
+		if pin != nil {
+			pin.Release()
 		}
+		return nil, err
 	}
 	stats.State = stateStats
 	txStats, err := s.verifyReplaySnapshot(ctx, "replay derived transactions", txMap, [32]byte{})
@@ -908,10 +970,62 @@ func (s *Service) verifyReplayProof(
 	return true, nil
 }
 
+// PrepareAcquiredLedger binds a complete acquired state to its header and
+// durable generation. It compares against a service-certified complete base
+// from the same generation when available, otherwise falling back to a full
+// cold walk. It must run on a worker, never on the consensus router.
+func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*PreparedLedger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if h == nil || stateMap == nil {
+		return nil, errors.New("acquired ledger requires a header and state map")
+	}
+	if header.CalculateHash(*h) != h.Hash {
+		return nil, errors.New("acquired ledger header hash mismatch")
+	}
+	if txMap == nil {
+		if h.TxHash != ([32]byte{}) {
+			return nil, errors.New("nil transaction map for non-empty transaction root")
+		}
+		txMap = shamap.New(shamap.TypeTransaction)
+	}
+	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return nil, err
+	}
+	return s.prepareLedger(ctx, source, nil, true)
+}
+
 // BootstrapPreparedLedger publishes a prepared ledger without re-running a
 // detached tree walk. Preparation owns the persistence-work admission, so
 // this method must remain short and must not call acquireLedgerWork.
 func (s *Service) BootstrapPreparedLedger(ctx context.Context, prepared *PreparedLedger) (bool, error) {
+	return s.publishPreparedLedger(ctx, prepared, preparedAcquisitionConsensus)
+}
+
+// StorePreparedLedger stores a verified acquisition without moving consensus.
+func (s *Service) StorePreparedLedger(ctx context.Context, prepared *PreparedLedger) error {
+	_, err := s.publishPreparedLedger(ctx, prepared, preparedAcquisitionGeneric)
+	return err
+}
+
+// IngestHistoricalPreparedLedger retains the canonical-history checks while
+// reusing the worker's completeness proof instead of walking the state again.
+func (s *Service) IngestHistoricalPreparedLedger(ctx context.Context, prepared *PreparedLedger) error {
+	_, err := s.publishPreparedLedger(ctx, prepared, preparedAcquisitionHistory)
+	return err
+}
+
+type preparedAcquisitionMode uint8
+
+const (
+	preparedAcquisitionConsensus preparedAcquisitionMode = iota
+	preparedAcquisitionGeneric
+	preparedAcquisitionHistory
+)
+
+func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedLedger, mode preparedAcquisitionMode) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -955,8 +1069,12 @@ func (s *Service) BootstrapPreparedLedger(ctx context.Context, prepared *Prepare
 		s.historyComponent.mu.Lock()
 		defer s.historyComponent.mu.Unlock()
 		initialCandidate = s.networkLedgerState != networkLedgerReady
+		if mode == preparedAcquisitionHistory {
+			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+			return
+		}
 		err = s.storeLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
-		if err == nil && initialCandidate && !s.ReplayBlocked() {
+		if err == nil && (initialCandidate || mode == preparedAcquisitionGeneric) && !s.ReplayBlocked() {
 			s.rememberValidatedStateBaseCandidate(prepared.header)
 		}
 	}()

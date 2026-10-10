@@ -281,9 +281,20 @@ func (c *catchupReplayCoordinator) retryStandardReplayLegacyMemory(il *inbound.L
 		}
 		return
 	}
-	h, _, txMap, err := il.Result()
+	h, _, _, err := il.Result()
 	if err == nil && h != nil {
-		c.completeStandardTransactionReplay(il, h, txMap, il.PeerID())
+		// Return the retained acquisition to the bounded completion lane. A
+		// memory wake runs on Router.Run and must not do cold verification.
+		c.acquisitionMu.Lock()
+		current := c.fetchTracker.Find(il.Hash())
+		if current == nil {
+			c.fetchTracker.Track(il)
+		}
+		c.acquisitionMu.Unlock()
+		if current == nil || current == il {
+			c.completeInboundLedgerReady(il)
+			return
+		}
 	}
 	c.acquisitionMu.Lock()
 	retained := c.retainsStandardReplayLegacyLocked(il)

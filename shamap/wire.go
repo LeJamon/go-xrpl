@@ -1,6 +1,7 @@
 package shamap
 
 import (
+	"context"
 	"errors"
 )
 
@@ -42,7 +43,8 @@ func wireNodeAt(node mapNode, path [32]byte, depth int) (WireNode, error) {
 
 // WalkWireNodes performs a pre-order traversal returning every node as
 // wire data. Each NodeID is 33 bytes per SHAMapNodeID::getRawString.
-// For backed maps, hash-only branches are lazy-loaded from the family.
+// For backed maps, hash-only branches are read from the family without
+// attaching them to the shared tree. Retention belongs to the bounded cache.
 func (sm *SHAMap) WalkWireNodes() ([]WireNode, error) {
 	sm.tree.mu.RLock()
 	defer sm.tree.mu.RUnlock()
@@ -73,7 +75,7 @@ func (sm *SHAMap) walkWireNodesRec(node mapNode, path [32]byte, depth int, out *
 		return nil
 	}
 	for branch := range BranchFactor {
-		child, err := sm.descend(inner, branch)
+		child, err := sm.readChild(context.Background(), inner, branch, false)
 		if err != nil {
 			return err
 		}
@@ -96,7 +98,8 @@ func (sm *SHAMap) walkWireNodesRec(node mapNode, path [32]byte, depth int, out *
 // by node hash. Single-child chains follow
 // without spending budget. Leaves at the budget boundary are included
 // only when fatLeaves is true (liTS_CANDIDATE callers pass false).
-// For backed maps, hash-only branches are lazy-loaded from the family.
+// For backed maps, hash-only branches are read without attaching them to the
+// shared tree, both when locating the requested subtree and serving its nodes.
 func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
 	sm.tree.mu.RLock()
 	defer sm.tree.mu.RUnlock()
@@ -116,7 +119,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 			return nil, nil
 		}
 		branch := selectBranchForPath(wantedPath, curDepth)
-		child, err := sm.descend(inner, branch)
+		child, err := sm.readChild(context.Background(), inner, branch, false)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +176,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 		}
 		// Reverse iteration → ascending-branch pop order.
 		for i := BranchFactor - 1; i >= 0; i-- {
-			child, err := sm.descend(inner, i)
+			child, err := sm.readChild(context.Background(), inner, i, false)
 			if err != nil {
 				return nil, err
 			}

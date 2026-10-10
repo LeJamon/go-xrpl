@@ -55,6 +55,12 @@ func (sm *SHAMap) AddKnownNodeFromPrefixWithEntry(nodeID NodeID, data []byte) (A
 	return sm.addKnownNodeFromPrefix(context.Background(), nodeID, data, true)
 }
 
+// AddKnownNodeFromPrefixWithEntryContext propagates cancellation through any
+// durable ancestor reads needed to place a content-addressed reply.
+func (sm *SHAMap) AddKnownNodeFromPrefixWithEntryContext(ctx context.Context, nodeID NodeID, data []byte) (AddNodeResult, FlushEntry, error) {
+	return sm.addKnownNodeFromPrefix(ctx, nodeID, data, true)
+}
+
 func (sm *SHAMap) addKnownNodeFromPrefix(ctx context.Context, nodeID NodeID, data []byte, withEntry bool) (AddNodeResult, FlushEntry, error) {
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()

@@ -14,7 +14,7 @@ import (
 // checkNFTTrustlineAuthorized checks if an account is authorized for an IOU currency.
 // Returns tesSUCCESS if authorized, or tecNO_LINE/tecNO_AUTH if not.
 // Reference: rippled NFTokenUtils.cpp checkTrustlineAuthorized
-func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte) ter.Result {
+func checkNFTTrustlineAuthorized(view tx.ReadOnlyLedgerView, accountID [20]byte, currency string, issuerID [20]byte) ter.Result {
 	// Issuer is always authorized for their own currency
 	if accountID == issuerID {
 		return ter.TesSUCCESS

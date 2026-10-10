@@ -797,6 +797,18 @@ func (r *ReplayDelta) TargetHeader() header.LedgerHeader {
 	return r.result.Header()
 }
 
+// TransactionMapSnapshotContext shares the verified, admission-accounted map
+// with a detached worker without rebuilding a second uncharged transaction tree.
+func (r *ReplayDelta) TransactionMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
+	r.mu.Lock()
+	target := r.result
+	r.mu.Unlock()
+	if target == nil {
+		return nil, errors.New("replay delta verified target is unavailable")
+	}
+	return target.TxMapSnapshotContext(ctx)
+}
+
 // Retry creates a fresh replay in StateReplayReady using the authenticated
 // target and a newly supplied parent. It never mutates the failed replay or
 // retries Apply itself; callers own the policy and must bound how often this

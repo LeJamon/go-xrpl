@@ -32,6 +32,10 @@ func (l *Ledger) PlanMissingAddedRequestsContext(ctx context.Context, peerIDs []
 }
 
 func (l *Ledger) missingRequestPlan(requests []MissingRequest, complete bool, err error, peerIDs []uint64) MissingRequestPlan {
+	byHash := l.ByHashMode()
+	for i := range requests {
+		requests[i].ByHash = byHash
+	}
 	plan := MissingRequestPlan{Requests: requests, Outcome: MissingRequestContinue}
 	if complete {
 		plan.Outcome = MissingRequestComplete

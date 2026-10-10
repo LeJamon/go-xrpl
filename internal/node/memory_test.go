@@ -43,6 +43,8 @@ func TestNodeMemoryAutomaticSizingAndProgressReserves(t *testing.T) {
 			target = memory.storage
 		case "persistence":
 			target = memory.persistence
+		case "replay_verification":
+			target = memory.replayVerification
 		case "peer_inbound":
 			target = memory.inbound
 		case "peer_outbound":

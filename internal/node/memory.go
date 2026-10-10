@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -13,19 +14,20 @@ import (
 )
 
 type nodeMemory struct {
-	pool             *membudget.Pool
-	acquisition      *membudget.Account
-	nodes            *membudget.Account
-	fullBelow        *membudget.Account
-	relay            *membudget.Account
-	persistence      *membudget.Account
-	inbound          *membudget.Account
-	outbound         *membudget.Account
-	outboundCritical *membudget.Account
-	storage          *membudget.Account
-	storageBytes     uint64
-	releaseStorage   func()
-	headroom         membudget.Headroom
+	pool               *membudget.Pool
+	acquisition        *membudget.Account
+	nodes              *membudget.Account
+	fullBelow          *membudget.Account
+	relay              *membudget.Account
+	persistence        *membudget.Account
+	replayVerification *membudget.Account
+	inbound            *membudget.Account
+	outbound           *membudget.Account
+	outboundCritical   *membudget.Account
+	storage            *membudget.Account
+	storageBytes       uint64
+	releaseStorage     func()
+	headroom           membudget.Headroom
 }
 
 func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.Headroom, error)) (*nodeMemory, error) {
@@ -74,6 +76,13 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 			return nil, err
 		}
 		m.persistence, err = account("persistence", shamap.DirtyWorkspaceBytes, shamap.DirtyWorkspaceBytes)
+		if err != nil {
+			return nil, err
+		}
+		// Cold verification must never occupy persistence's progress reserve.
+		// Account for two bounded readers inside the existing global allowance.
+		verificationBytes := uint64(2 * service.ReplayVerificationWorkspaceBytes)
+		m.replayVerification, err = account("replay_verification", verificationBytes, verificationBytes)
 		if err != nil {
 			return nil, err
 		}

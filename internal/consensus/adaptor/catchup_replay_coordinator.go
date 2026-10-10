@@ -74,6 +74,12 @@ type catchupReplayCoordinator struct {
 	acquisitionWork          *acquisitionWorkLane
 	acquisitionMemoryWakeMu  sync.RWMutex
 	acquisitionMemoryWake    func()
+	completionMu             sync.Mutex
+	completionTasks          [2]*acquisitionCompletionTask
+	legacyDeltaTask          *legacyDeltaTask
+	legacyDeltaRetryAt       time.Time
+	completionResults        chan *acquisitionCompletionResult
+	completionWake           chan struct{}
 
 	catchupMu          sync.Mutex
 	catchup            catchupTarget
@@ -364,6 +370,8 @@ func (c *catchupReplayCoordinator) startTasks(parent context.Context) {
 		return
 	}
 	c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(parent)
+	c.completionResults = make(chan *acquisitionCompletionResult)
+	c.completionWake = make(chan struct{}, 1)
 	if c.stopped.Load() {
 		c.lifecycleCancel()
 		c.lifecycleCancel = nil
@@ -613,6 +621,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 		return
 	}
 	c.expireReplayAvailabilityRetries()
+	c.retryAcquisitionCompletions()
 
 	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
 	// the outer budget kicks in (250ms × 10 rotations inside a larger

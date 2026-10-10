@@ -281,6 +281,7 @@ func (r *nodeRuntime) configureLedger() error {
 		cfg.RelayMemory = r.memory.relay
 		if r.memory.persistence != nil {
 			cfg.PersistenceMemory = r.memory.persistence
+			cfg.ReplayVerificationMemory = r.memory.replayVerification
 		}
 	}
 	cfg.GenesisConfig = genesisConfig

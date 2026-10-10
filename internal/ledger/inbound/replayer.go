@@ -373,3 +373,10 @@ func (r *Replayer) Count() int {
 func (r *Replayer) Has(hash [32]byte) bool {
 	return r.delta.has(hash)
 }
+
+// Find preserves acquisition identity across detached preparation. Callers that
+// retain the result asynchronously must also retain its memory ownership.
+func (r *Replayer) Find(hash [32]byte) *ReplayDelta {
+	rd, _ := r.delta.get(hash)
+	return rd
+}

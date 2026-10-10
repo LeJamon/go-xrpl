@@ -239,6 +239,13 @@ func (sm *SHAMap) descend(inner *innerNode, branch int) (mapNode, error) {
 // so concurrent readers racing on the same branch all return the same
 // installed child. Each SHAMap retains its own deserialised subtree.
 func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) (mapNode, error) {
+	return sm.readChild(ctx, inner, branch, true)
+}
+
+// readChild can fetch a child without attaching it to a shared tree. Serving
+// peers uses this mode: a read-only request must not grow all snapshots that
+// share the node, bypassing the bounded NodeStore cache and acquisition budget.
+func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, retain bool) (mapNode, error) {
 	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
 		return child, nil
@@ -267,6 +274,9 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 	node, err := decodeAndVerifyPrefixNode(data, hash)
 	if err != nil {
 		return nil, err
+	}
+	if !retain {
+		return node, nil
 	}
 
 	// If another reader installed a child while we were fetching, return

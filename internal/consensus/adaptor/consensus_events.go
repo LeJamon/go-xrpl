@@ -352,8 +352,10 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 		a.ledgerService.IsFastLoadProvisional()
 	a.ledgerService.SetValidatedLedgerAt(seq, hash, a.validatedSignTime(ledgerID, seq))
 	if startupConfirmation {
-		held, err := a.ledgerService.GetLedgerByHash(hash)
-		if err != nil {
+		// This callback runs on validation dispatch. The acquisition callback
+		// above owns missing data; confirmation must not wait for a SQL reader.
+		held, cached := a.ledgerService.GetCachedLedgerByHash(hash)
+		if !cached {
 			a.sender.CheckTracking(seq)
 		} else if closed := a.ledgerService.GetClosedLedger(); held != nil && closed != nil &&
 			held.Sequence() == seq && held.Sequence() == closed.Sequence() &&

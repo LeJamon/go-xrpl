@@ -215,8 +215,8 @@ func (c *catchupReplayCoordinator) standardReplayBase(
 		if nextSeq == targetSeq && link.hash != targetHash {
 			break
 		}
-		next, err := svc.GetLedgerByHash(link.hash)
-		if err != nil || next == nil || next.Sequence() != nextSeq || next.ParentHash() != base.Hash() {
+		next, held := svc.GetCachedLedgerByHash(link.hash)
+		if !held || next.Sequence() != nextSeq || next.ParentHash() != base.Hash() {
 			break
 		}
 		advancedLinks = append(advancedLinks, standardReplayLink{
@@ -1148,6 +1148,22 @@ func (c *catchupReplayCoordinator) standardReplayOwnsLocked(hash [32]byte) bool 
 	return false
 }
 
+// A collected entry remains owned after its fetch leaves the tracker and until
+// the replay result advances the anchor. In particular, worker preparation and
+// publication are not gaps in ownership. Availability/memory retries also belong
+// to the pipeline, not to speculative recovery. Caller holds acquisitionMu.
+func (c *catchupReplayCoordinator) standardReplayEntryOwnedLocked(hash [32]byte) bool {
+	if !c.standardReplay.active {
+		return false
+	}
+	for _, entry := range c.standardReplay.entries {
+		if entry != nil && entry.generation == c.standardReplay.generation && entry.hash == hash {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *catchupReplayCoordinator) retireOrRetainStandardReplayAcquisitionLocked(entry *standardReplayEntry) *inbound.Ledger {
 	if entry == nil || entry.acquisition == nil {
 		return nil
@@ -1171,8 +1187,13 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	now := time.Now()
 	entry := c.standardReplay.entries[h.LedgerIndex]
 	if !c.standardReplay.active || entry == nil || entry.seq != h.LedgerIndex || entry.hash != h.Hash ||
-		entry.generation != c.standardReplay.generation || entry.acquisition != il {
+		entry.generation != c.standardReplay.generation {
 		return false, false, false
+	}
+	if entry.acquisition != il {
+		// A late duplicate must not fall through to legacy replay while the
+		// real owner is preparing or publishing this exact child.
+		return true, false, false
 	}
 	durable := c.acquisitionStore != nil && c.acquisitionFamily != nil
 	if !durable && txMap != nil {

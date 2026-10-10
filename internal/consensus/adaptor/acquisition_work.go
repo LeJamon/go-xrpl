@@ -394,6 +394,8 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		for _, reply := range result.replies {
 			useful += reply.useful
 		}
+		current := batch.ledger.Snapshot()
+		useful += int(current.StateCacheUseful - previous.StateCacheUseful + current.TxCacheUseful - previous.TxCacheUseful)
 		if err := batch.ledger.CheckpointPersistence(batch.ctx, useful); err != nil {
 			result.persistenceErr = err
 			result.failureClass = standardReplayFailurePersistence
@@ -749,6 +751,17 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		}
 	}
 
+	// Once a pivot needs content-addressed recovery, use the same bounded,
+	// disjoint peer windows as normal acquisition. Cache placement fulfills the
+	// leases; a reply (or resumable discovery pass) refills them immediately.
+	// Timers only retry expired work, rather than pacing every four hashes.
+	if ledger.ByHashMode() && (runTimer || runLocal || runRequests || len(addedPeers) > 0 || len(usefulByPeer) > 0) {
+		peers := acquisitionRequestCandidates(selectUsefulAcquisitionPeers(usefulByPeer), ledger.Peers())
+		plan, err := ledger.PlanMissingReplyRequestsContext(workCtx, peers)
+		result.applyMissingPlan(plan, err)
+		return result
+	}
+
 	if runTimer {
 		result.stateIDs, result.txIDs, result.complete, result.err = ledger.CollectMissingRequestContext(workCtx, false)
 		if result.err != nil || result.complete {
@@ -1092,7 +1105,17 @@ func (c *catchupReplayCoordinator) sendMissingReplyRequest(ledger *inbound.Ledge
 		return true
 	}
 	var err error
-	if request.Transaction {
+	if request.ByHash {
+		objType := message.ObjectTypeStateNode
+		if request.Transaction {
+			objType = message.ObjectTypeTransactionNode
+		}
+		var frame []byte
+		frame, err = encodeNodesByHash(ledger.Hash(), ledger.Seq(), request.NodeHashes, objType)
+		if err == nil {
+			err = c.acquisition.SendPriorityToPeer(request.PeerID, frame)
+		}
+	} else if request.Transaction {
 		err = c.acquisition.RequestTransactionNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
 	} else {
 		err = c.acquisition.RequestStateNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
