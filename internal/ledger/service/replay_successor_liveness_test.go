@@ -75,7 +75,7 @@ func TestReplaySuccessorRepairPublishesAndRetainsLocalTransaction(t *testing.T) 
 	require.NoError(t, err)
 	txMap, err := closed.TxMapSnapshot()
 	require.NoError(t, err)
-	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees())
+	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees(), closed.ExecutionStore())
 	require.NoError(t, err)
 	require.NotSame(t, closed, repaired)
 	fault := latchReplaySuccessorFault(t, svc, repaired)
@@ -98,7 +98,7 @@ func TestReplaySuccessorRepairRejectsStaleFaultAndClosedIdentity(t *testing.T) {
 	require.NoError(t, err)
 	txMap, err := closed.TxMapSnapshot()
 	require.NoError(t, err)
-	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees())
+	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees(), closed.ExecutionStore())
 	require.NoError(t, err)
 	latchReplaySuccessorFault(t, svc, repaired)
 
@@ -139,13 +139,12 @@ func replaySuccessorLivenessFixture(t *testing.T) (*Service, *ledger.Ledger, *re
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	repaired, backing := coldAcceptanceParent(t, svc.GetClosedLedger())
 	family := &replaySuccessorBlockingFamily{
-		Family:  backing.Family,
+		Family:  svc.shamapFamily,
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	repaired.SetStateMapFamily(family)
+	repaired := coldLedgerWithFamily(t, svc.GetClosedLedger(), family)
 	require.NoError(t, repaired.SetValidated())
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()

@@ -35,24 +35,36 @@ func (f *acceptanceBlockingFamily) unblock() { f.once.Do(func() { close(f.releas
 
 func coldAcceptanceParent(t testing.TB, parent *ledger.Ledger, base shamap.Family) (*ledger.Ledger, *acceptanceBlockingFamily) {
 	t.Helper()
+	family := &acceptanceBlockingFamily{Family: base, entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(family.unblock)
+	loaded := coldLedgerWithFamily(t, parent, family)
+	return loaded, family
+}
+
+func coldParentDescriptor(t testing.TB, parent *ledger.Ledger) (*ledger.Ledger, [32]byte) {
+	t.Helper()
 	child, err := ledger.NewOpen(parent, parent.CloseTime().Add(10*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, child.Close(parent.CloseTime().Add(10*time.Second), 0))
-	parent = child
-	state, err := parent.StateMapSnapshot()
+	state, err := child.StateMapSnapshot()
 	require.NoError(t, err)
 	root, err := state.Hash()
 	require.NoError(t, err)
-	family := &acceptanceBlockingFamily{Family: base, entered: make(chan struct{}), release: make(chan struct{})}
-	t.Cleanup(family.unblock)
+	return child, root
+}
+
+func coldLedgerWithFamily(t testing.TB, parent *ledger.Ledger, family shamap.Family) *ledger.Ledger {
+	t.Helper()
+	descriptor, root := coldParentDescriptor(t, parent)
+	defer descriptor.Discard()
 	execution := newTestExecutionStore(t, family)
 	cold, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
 	require.NoError(t, err)
 	txMap := shamap.New(shamap.TypeTransaction)
-	require.Zero(t, parent.TxCount())
-	loaded, err := ledger.NewFromHeader(parent.Header(), cold, txMap, parent.Fees(), execution)
+	require.Zero(t, descriptor.TxCount())
+	loaded, err := ledger.NewFromHeader(descriptor.Header(), cold, txMap, descriptor.Fees(), execution)
 	require.NoError(t, err)
-	return loaded, family
+	return loaded
 }
 
 func TestConsensusAcceptanceDetachedBuildRejectsReplacedParent(t *testing.T) {

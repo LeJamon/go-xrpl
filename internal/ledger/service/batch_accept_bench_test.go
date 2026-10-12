@@ -21,6 +21,7 @@ import (
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/log"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
@@ -401,11 +402,13 @@ func newBatchBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
+	family := shamapbackend.New(db)
+	execution := newTestExecutionStore(b, family)
 	initial, err := genesis.Create(batchBenchmarkGenesisConfig())
 	require.NoError(b, err)
-	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, execution)
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: base, shamapFamily: family, config: Config{Execution: execution, SHAMapFamily: family}}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)
@@ -426,6 +429,7 @@ func newBatchBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64
 	fixture.rotation = seq
 	fixture.template, err = validated.Snapshot()
 	require.NoError(b, err)
+	fixture.execution = execution
 	committed, err := db.RotateGeneration(b.Context(), fixture.rotation, 1)
 	require.True(b, committed)
 	require.NoError(b, err)
