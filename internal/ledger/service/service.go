@@ -175,6 +175,17 @@ type Service struct {
 	// never blocks closed-ledger readers. Priority roles pass queued ingress.
 	openLedgerMu priorityGate
 
+	// preferredTransitionMu owns the detached successor transition. Preparation
+	// releases openLedgerMu after capturing the published input view, so ingress
+	// must wait on this owner separately rather than entering the old view while
+	// it is being replaced. The owner is cleared before any post-publication
+	// callback or relay work runs.
+	preferredTransitionMu     sync.Mutex
+	preferredTransitionActive bool
+	preferredTransitionWake   chan struct{}
+	preferredTransitionCancel context.CancelFunc
+	preferredTransitionOwner  *PreparedPreferredLedger
+
 	// mu guards the lifecycle frontier and cross-component state. Lock ordering
 	// is openLedgerMu, mu, historyComponent.mu, then component-specific locks
 	// such as TxQ.
@@ -383,36 +394,58 @@ func (s *Service) lockOpenLedgerIfRunning(role openLedgerRole) error {
 }
 
 func (s *Service) lockOpenLedgerIfRunningTimed(ctx context.Context, role openLedgerRole) (openLedgerGateWait, error) {
-	if err := ctx.Err(); err != nil {
-		return openLedgerGateWait{}, err
-	}
-	lifecycleStarted := time.Now()
-	s.lifecycleMu.Lock()
-	if s.lifecycleState != serviceRunning {
+	var totalLifecycleWait time.Duration
+	for {
+		if err := ctx.Err(); err != nil {
+			return openLedgerGateWait{}, err
+		}
+		lifecycleStarted := time.Now()
+		s.lifecycleMu.Lock()
+		if s.lifecycleState != serviceRunning {
+			s.lifecycleMu.Unlock()
+			return openLedgerGateWait{}, errServiceNotRunning
+		}
+		totalLifecycleWait += time.Since(lifecycleStarted)
 		s.lifecycleMu.Unlock()
-		return openLedgerGateWait{}, errServiceNotRunning
-	}
-	lifecycleWait := time.Since(lifecycleStarted)
-	s.lifecycleMu.Unlock()
 
-	wait, err := s.openLedgerMu.LockRoleContext(ctx, role)
-	if err != nil {
-		return wait, err
+		waitStarted := time.Now()
+		if err := s.waitPreferredTransition(ctx); err != nil {
+			return openLedgerGateWait{Role: role, Wait: time.Since(waitStarted)}, err
+		}
+		totalLifecycleWait += time.Since(waitStarted)
+
+		wait, err := s.openLedgerMu.LockRoleContext(ctx, role)
+		if err != nil {
+			wait.LifecycleWait += totalLifecycleWait
+			return wait, err
+		}
+		// A waiter can have entered the gate before a preferred transition
+		// marked its owner. Release that handoff and observe the transition
+		// outside the gate; otherwise it could mutate the retired view while
+		// detached preparation is in flight.
+		if s.preferredTransitionIsActive() {
+			s.openLedgerMu.Unlock()
+			if err := s.waitPreferredTransition(ctx); err != nil {
+				wait.LifecycleWait += totalLifecycleWait
+				return wait, err
+			}
+			continue
+		}
+		lifecycleStarted = time.Now()
+		s.lifecycleMu.Lock()
+		wait.LifecycleWait = totalLifecycleWait + time.Since(lifecycleStarted)
+		running := s.lifecycleState == serviceRunning
+		s.lifecycleMu.Unlock()
+		if !running {
+			s.openLedgerMu.Unlock()
+			return wait, errServiceNotRunning
+		}
+		if err := ctx.Err(); err != nil {
+			s.openLedgerMu.Unlock()
+			return wait, err
+		}
+		return wait, nil
 	}
-	lifecycleStarted = time.Now()
-	s.lifecycleMu.Lock()
-	wait.LifecycleWait = lifecycleWait + time.Since(lifecycleStarted)
-	running := s.lifecycleState == serviceRunning
-	s.lifecycleMu.Unlock()
-	if !running {
-		s.openLedgerMu.Unlock()
-		return wait, errServiceNotRunning
-	}
-	if err := ctx.Err(); err != nil {
-		s.openLedgerMu.Unlock()
-		return wait, err
-	}
-	return wait, nil
 }
 
 func (s *Service) beginValidatedLedgerUpdate() bool {
