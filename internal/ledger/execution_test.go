@@ -499,6 +499,39 @@ func TestBoundedReadsCountsColdTransactionsOnce(t *testing.T) {
 	historical.Discard()
 }
 
+func TestBoundedTxCountConcurrentMutation(t *testing.T) {
+	store, _ := testExecutionStore(t)
+	parent := newOpenChild(t)
+	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	open, err := NewOpen(parent, time.Unix(1700000004, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer open.Discard()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 256 {
+			_ = open.TxCount()
+		}
+	}()
+	for i := byte(0); i != 0xff; i++ {
+		key := mutAcct(i)
+		if err := open.Insert(key, mutData(i)); err != nil {
+			t.Fatal(err)
+		}
+		if err := open.Erase(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+}
+
 func TestExecutionBuildAdmissionRequiresDestinationHandoff(t *testing.T) {
 	store, _ := testExecutionStore(t)
 	parent := rootlease.Root{Hash: [32]byte{1}, Kind: shamap.TypeState}
@@ -697,6 +730,13 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	}
 	if err := open.FreezeExecution(); err != nil {
 		t.Fatal(err)
+	}
+	borrowersAfterFreeze := store.Stats().RootBorrowers
+	if err := open.FreezeExecution(); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Stats().RootBorrowers; got != borrowersAfterFreeze {
+		t.Fatalf("repeated FreezeExecution changed root borrowers: got %d, want %d", got, borrowersAfterFreeze)
 	}
 	fork, err := open.MutableSnapshot()
 	if err != nil {

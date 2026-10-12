@@ -346,18 +346,20 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 }
 
 func (t *executionTree) newMutable(sequence uint32) (*executionTree, error) {
-	if t.kind == shamap.TypeTransaction && !t.countKnown {
+	_, countKnown := t.countSnapshot()
+	if t.kind == shamap.TypeTransaction && !countKnown {
 		if _, err := t.countLeaves(context.Background()); err != nil {
 			return nil, err
 		}
 	}
-	base := executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: t.sequence, count: t.count, countKnown: t.countKnown}
+	count, countKnown := t.countSnapshot()
+	base := executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: t.sequence, count: count, countKnown: countKnown}
 	closure := t.closure
 	if t.root == ([32]byte{}) && closure == executionClosureUnknown {
 		closure = executionClosureVerified
 	}
-	out := &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: sequence, count: t.count,
-		countKnown: t.countKnown, closure: closure, parentClosure: closure == executionClosureVerified || closure == executionClosurePending}
+	out := &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: sequence, count: count,
+		countKnown: countKnown, closure: closure, parentClosure: closure == executionClosureVerified || closure == executionClosurePending}
 	lease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		return nil, err
@@ -384,8 +386,9 @@ func (t *executionTree) fork() (*executionTree, error) {
 		_ = changes.Close()
 		return nil, err
 	}
+	count, countKnown := t.countSnapshot()
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root,
-		sequence: t.sequence, changes: changes, lease: lease, release: lease.Release, count: t.count, countKnown: t.countKnown,
+		sequence: t.sequence, changes: changes, lease: lease, release: lease.Release, count: count, countKnown: countKnown,
 		closure: t.closure, parentClosure: t.parentClosure}, nil
 }
 
@@ -441,12 +444,41 @@ func (t *executionTree) takeResultLease() *rootlease.Lease {
 	return resultLease
 }
 
-func (t *executionTree) countLeaves(ctx context.Context) (uint32, error) {
+func (t *executionTree) countSnapshot() (uint32, bool) {
 	t.hashMu.Lock()
 	defer t.hashMu.Unlock()
-	if t.countKnown {
-		return t.count, nil
+	return t.count, t.countKnown
+}
+
+func (t *executionTree) countLeaves(ctx context.Context) (uint32, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	t.hashMu.Lock()
+	if t.countKnown {
+		count := t.count
+		t.hashMu.Unlock()
+		return count, nil
+	}
+	root := t.root
+	t.hashMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if root == ([32]byte{}) {
+		t.hashMu.Lock()
+		if !t.countKnown {
+			t.count, t.countKnown = 0, true
+		}
+		count := t.count
+		t.hashMu.Unlock()
+		return count, nil
+	}
+	release, err := t.store.AcquireRoot(rootlease.Root{Hash: root, Kind: t.kind})
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	count, err := t.reader().Count(ctx)
 	if err != nil {
 		return 0, err
@@ -454,8 +486,13 @@ func (t *executionTree) countLeaves(ctx context.Context) (uint32, error) {
 	if count > uint64(^uint32(0)) {
 		return 0, errors.New("transaction leaf count exceeds uint32")
 	}
-	t.count, t.countKnown = uint32(count), true
-	return t.count, nil
+	t.hashMu.Lock()
+	if !t.countKnown {
+		t.count, t.countKnown = uint32(count), true
+	}
+	result := t.count
+	t.hashMu.Unlock()
+	return result, nil
 }
 
 func (t *executionTree) get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
@@ -518,9 +555,11 @@ func (t *executionTree) PutWithNodeType(key [32]byte, data []byte, kind shamap.N
 	if err := t.changes.Set(key, data); err != nil {
 		return err
 	}
+	t.hashMu.Lock()
 	if !found {
 		t.count++
 	}
+	t.hashMu.Unlock()
 	t.invalidateHash()
 	return nil
 }
@@ -539,9 +578,11 @@ func (t *executionTree) Delete(key [32]byte) error {
 	if err := t.changes.Delete(key); err != nil {
 		return err
 	}
+	t.hashMu.Lock()
 	if t.count > 0 {
 		t.count--
 	}
+	t.hashMu.Unlock()
 	t.invalidateHash()
 	return nil
 }
@@ -560,9 +601,12 @@ func (t *executionTree) PutItemsAtomically(items ...*shamap.Item) error {
 			return err
 		}
 	}
+	count, countKnown := fork.countSnapshot()
 	t.close()
-	t.changes, t.lease, t.release, t.count, t.closure, t.parentClosure = fork.changes, fork.lease, fork.release, fork.count, fork.closure, fork.parentClosure
-	t.countKnown = fork.countKnown
+	t.changes, t.lease, t.release, t.closure, t.parentClosure = fork.changes, fork.lease, fork.release, fork.closure, fork.parentClosure
+	t.hashMu.Lock()
+	t.count, t.countKnown = count, countKnown
+	t.hashMu.Unlock()
 	fork.changes, fork.lease, fork.release = nil, nil, nil
 	t.invalidateHash()
 	return nil
@@ -749,13 +793,14 @@ func (t *executionTree) rooted(ctx context.Context, transferBuildLease bool) (*e
 	if t.changes != nil && transferBuildLease {
 		resultLease = t.takeResultLease()
 	}
+	count, countKnown := t.countSnapshot()
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: root, sequence: t.sequence,
-		count: t.count, countKnown: t.countKnown, closure: closure, resultLease: resultLease}, nil
+		count: count, countKnown: countKnown, closure: closure, resultLease: resultLease}, nil
 }
 
-func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
+func countExecutionRoot(ctx context.Context, tree *executionTree) (uint64, error) {
 	if tree == nil || tree.root == ([32]byte{}) {
-		return nil
+		return 0, nil
 	}
 	family := tree.store.config.Family
 	if durable, ok := family.(interface {
@@ -765,7 +810,11 @@ func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
 	}
 	reader := shamap.NewRootReader(tree.kind, tree.root, family,
 		shamap.WithCommitmentBudget(tree.store.config.Workspace))
-	_, err := reader.Count(ctx)
+	return reader.Count(ctx)
+}
+
+func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
+	_, err := countExecutionRoot(ctx, tree)
 	return err
 }
 
@@ -977,6 +1026,9 @@ func (l *Ledger) FreezeExecution() error {
 	if l.execution == nil || !l.writable {
 		return nil
 	}
+	if l.execution.state.changes == nil && l.execution.transactions.changes == nil {
+		return nil
+	}
 	view, err := l.execution.rooted(context.Background(), true)
 	if err != nil {
 		return err
@@ -1094,14 +1146,19 @@ func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionSto
 	}
 	view := &executionView{
 		state:        &executionTree{store: store, kind: shamap.TypeState, base: h, root: stateRoot, sequence: h.LedgerIndex, closure: executionClosureUnknown},
-		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: txRoot, sequence: h.LedgerIndex, count: uint32(txMap.Size()), countKnown: true, closure: executionClosureUnknown},
+		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: txRoot, sequence: h.LedgerIndex, closure: executionClosureUnknown},
 	}
 	if err := verifyExecutionRoot(ctx, view.state); err != nil {
 		return fmt.Errorf("verify imported state closure: %w", err)
 	}
-	if err := verifyExecutionRoot(ctx, view.transactions); err != nil {
+	txCount, err := countExecutionRoot(ctx, view.transactions)
+	if err != nil {
 		return fmt.Errorf("verify imported transaction closure: %w", err)
 	}
+	if txCount > uint64(^uint32(0)) {
+		return errors.New("transaction leaf count exceeds uint32")
+	}
+	view.transactions.count, view.transactions.countKnown = uint32(txCount), true
 	view.state.closure = executionClosureVerified
 	view.transactions.closure = executionClosureVerified
 	l.mu.Lock()
