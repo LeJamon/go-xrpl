@@ -1,10 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,8 +16,11 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgerpkg "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	batchtest "github.com/LeJamon/go-xrpl/internal/testing/batch"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
@@ -21,11 +28,14 @@ import (
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
 )
+
+var batchBenchmarkFlatStateID atomic.Uint64
 
 type serviceBatchAcceptanceCase struct {
 	name         string
@@ -75,6 +85,8 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				parse         = make([]time.Duration, 0, b.N)
 				apply         = make([]time.Duration, 0, b.N)
 				nextOpen      = make([]time.Duration, 0, b.N)
+				flatHits      uint64
+				flatFallbacks uint64
 				wantHash      [32]byte
 				wantStateRoot [32]byte
 				wantTxRoot    [32]byte
@@ -85,7 +97,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			for round := range b.N {
 				b.StopTimer()
 				logger := &batchAcceptanceBenchmarkLogger{}
-				svc, parent := newBatchConsensusAcceptanceService(b, fixture, logger)
+				svc, parent, cleanup := newBatchConsensusAcceptanceService(b, fixture, logger)
 				if tc.withRetry {
 					outcome, err := svc.SubmitOpenLedgerTxDetailed(tc.local, true)
 					require.NoError(b, err)
@@ -93,6 +105,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 					require.NotEqual(b, openledger.ResultFailure, outcome.Class)
 				}
 
+				beforeStats := svc.config.Execution.Stats()
 				b.StartTimer()
 				_, err := svc.AcceptConsensusResult(
 					b.Context(),
@@ -104,6 +117,14 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				)
 				b.StopTimer()
 				require.NoError(b, err)
+				afterStats := svc.config.Execution.Stats()
+				if benchmarkFlatStateEnabled() {
+					hits := afterStats.FlatHits - beforeStats.FlatHits
+					fallbacks := afterStats.FlatFallbacks - beforeStats.FlatFallbacks
+					require.Positive(b, hits, "flat benchmark acceptance did not read the seeded flat state")
+					flatHits += hits
+					flatFallbacks += fallbacks
+				}
 				sample, ok := logger.latest()
 				if !ok {
 					b.Fatal("acceptance did not emit consensus acceptance timings")
@@ -133,13 +154,17 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 					require.True(b, exists, "successor transaction was not prepared in next open ledger")
 				}
 				// Stop and database cleanup remain outside the timed region.
-				svc.Stop()
+				cleanup()
 			}
 
 			reportConsensusAcceptanceQuantiles(b, "accept-total", total)
 			reportConsensusAcceptanceQuantiles(b, "parse", parse)
 			reportConsensusAcceptanceQuantiles(b, "transaction-apply", apply)
 			reportConsensusAcceptanceQuantiles(b, "next-open", nextOpen)
+			if benchmarkFlatStateEnabled() {
+				b.ReportMetric(float64(flatHits)/float64(b.N), "flat-hits/op")
+				b.ReportMetric(float64(flatFallbacks)/float64(b.N), "root-fallbacks/op")
+			}
 		})
 	}
 }
@@ -360,26 +385,121 @@ func newBatchConsensusAcceptanceService(
 	b *testing.B,
 	fixture *benchmarkRefreshFixture,
 	logger log.Logger,
-) (*Service, *ledgerpkg.Ledger) {
+) (*Service, *ledgerpkg.Ledger, func()) {
 	b.Helper()
+	var (
+		execution         *ledgerpkg.ExecutionStore
+		flat              *flatstate.Store
+		persistenceMemory shamap.DirtyMemoryBudget
+	)
+	if benchmarkFlatStateEnabled() {
+		execution, flat, persistenceMemory = newBatchBenchmarkFlatExecution(b, fixture)
+	}
 	cfg := Config{
 		Standalone: true,
 		Startup: StartupConfig{
 			Mode:   StartupLoad,
 			Ledger: fmt.Sprintf("%X", fixture.template.Hash()),
 		},
-		GenesisConfig: batchBenchmarkGenesisConfig(),
-		Logger:        logger,
-		NodeStore:     fixture.db,
-		SHAMapFamily:  fixture.svc.shamapFamily,
+		GenesisConfig:     batchBenchmarkGenesisConfig(),
+		Logger:            logger,
+		NodeStore:         fixture.db,
+		SHAMapFamily:      fixture.svc.shamapFamily,
+		Execution:         execution,
+		FlatState:         flat,
+		PersistenceMemory: persistenceMemory,
 	}
-	svc, err := New(cfg)
+	var svc *Service
+	var closeOnce sync.Once
+	cleanup := func() {
+		closeOnce.Do(func() {
+			if svc != nil {
+				svc.Stop()
+			}
+			if execution != nil {
+				if err := execution.Close(); err != nil {
+					b.Errorf("close benchmark execution store: %v", err)
+				}
+			}
+			if flat != nil {
+				if err := flat.Close(); err != nil {
+					b.Errorf("close benchmark flat state: %v", err)
+				}
+			}
+		})
+	}
+	b.Cleanup(cleanup)
+	var err error
+	svc, err = New(cfg)
 	require.NoError(b, err)
 	require.NoError(b, svc.Start())
 	parent := svc.GetClosedLedger()
 	require.NotNil(b, parent)
 	require.Equal(b, fixture.template.Hash(), parent.Hash())
-	return svc, parent
+	return svc, parent, cleanup
+}
+
+func benchmarkFlatStateEnabled() bool {
+	return os.Getenv("STATE_BENCH_FLAT") == "1"
+}
+
+func newBatchBenchmarkFlatExecution(
+	b *testing.B,
+	fixture *benchmarkRefreshFixture,
+) (*ledgerpkg.ExecutionStore, *flatstate.Store, shamap.DirtyMemoryBudget) {
+	b.Helper()
+	flatPath := filepath.Join(
+		b.TempDir(),
+		fmt.Sprintf("flat-%d", batchBenchmarkFlatStateID.Add(1)),
+	)
+	pool := membudget.New(1 << 30)
+	workspace, err := pool.NewAccount("batch_benchmark_workspace", 128<<20, 128<<20)
+	require.NoError(b, err)
+	memory, err := pool.NewAccount("batch_benchmark_overlay", 0, 256<<20)
+	require.NoError(b, err)
+	disk, err := pool.NewAccount("batch_benchmark_spill", 0, 512<<20)
+	require.NoError(b, err)
+	flat, err := flatstate.Open(flatPath, flatstate.Options{
+		CacheBytes:   16 << 20,
+		MemTableSize: 8 << 20,
+		MemoryBudget: workspace,
+	})
+	require.NoError(b, err)
+	execution, err := ledgerpkg.NewExecutionStore(ledgerpkg.ExecutionConfig{
+		Family:    fixture.svc.shamapFamily,
+		Workspace: workspace,
+		Flat:      flat,
+		Overlay: overlay.Config{
+			MemoryBudget:   memory,
+			DiskBudget:     disk,
+			MaxMemoryBytes: 16 << 20,
+			MaxDiskBytes:   512 << 20,
+			SpillDir:       filepath.Join(flatPath, "scratch"),
+		},
+	})
+	require.NoError(b, err)
+
+	changes := make([]flatstate.Change, 0, 4096)
+	reader := shamap.NewRootReader(shamap.TypeState, fixture.root, fixture.svc.shamapFamily)
+	err = reader.IterateLeaves(b.Context(), nil, func(item *shamap.Item, _ shamap.NodeType) bool {
+		changes = append(changes, flatstate.Change{Key: item.Key(), Value: item.Data()})
+		return true
+	})
+	require.NoError(b, err)
+	sort.Slice(changes, func(i, j int) bool {
+		return bytes.Compare(changes[i].Key[:], changes[j].Key[:]) < 0
+	})
+	target := flatDescriptor(fixture.template.Header(), 1)
+	require.NoError(b, flat.Advance(b.Context(), flatstate.AdvanceRequest{
+		Target: target,
+		Authorization: flatstate.RootClosureAuthorization{
+			TargetRoot: target.StateRoot,
+			Token:      []byte("batch-benchmark-seed"),
+		},
+		Changes:         flatstate.NewSliceChangeIterator(changes),
+		PublicationKind: ledgerPublication,
+	}))
+	return execution, flat, workspace
 }
 
 func batchBenchmarkGenesisConfig() genesis.Config {
