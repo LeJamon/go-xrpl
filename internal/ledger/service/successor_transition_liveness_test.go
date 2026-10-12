@@ -91,21 +91,21 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 	svc.localTxs.PushBack(svc.openLedgerView.Current().Sequence(), priorTx)
 
 	family.armed.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	accepted := make(chan error, 1)
 	go func() {
 		_, acceptErr := svc.AcceptConsensusResult(
-			t.Context(), parent, nil, nil, parent.CloseTime().Add(time.Second), true,
+			ctx, parent, nil, nil, parent.CloseTime().Add(time.Second), true,
 		)
 		accepted <- acceptErr
 	}()
 	awaitSuccessorPreparation(t, family.entered, family.unblock, &family.fetches)
 	assertSuccessorReadersAndGate(t, svc, svc.GetClosedLedger(), family.unblock)
 
-	fetchErr := errors.New("successor cold read failed")
-	family.err = fetchErr
-	family.fail.Store(true)
+	cancel()
 	family.unblock()
-	require.ErrorIs(t, <-accepted, fetchErr)
+	require.ErrorIs(t, <-accepted, context.Canceled)
 
 	submitted := make(chan error, 1)
 	go func() {
@@ -145,9 +145,12 @@ func (f *successorPreparationParentFamily) Fetch(ctx context.Context, hash [32]b
 	if _, ok := f.blocked[hash]; ok && f.armed.CompareAndSwap(true, false) {
 		close(f.entered)
 		<-f.release
-		if f.fail.Load() {
-			return nil, f.err
-		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if f.fail.Load() {
+		return nil, f.err
 	}
 	return f.Family.Fetch(ctx, hash)
 }

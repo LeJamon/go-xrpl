@@ -186,7 +186,10 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Owner == openLedgerIngress && snapshot.QueuedPriority == 1 && snapshot.QueuedIngress == 1
+		svc.preferredTransitionMu.Lock()
+		transitionActive := svc.preferredTransitionActive
+		svc.preferredTransitionMu.Unlock()
+		return snapshot.Owner == openLedgerIngress && snapshot.QueuedPriority == 1 && transitionActive
 	}, time.Second, time.Millisecond)
 
 	stopDone := make(chan struct{})
