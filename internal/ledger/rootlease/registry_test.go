@@ -11,36 +11,6 @@ func testRoot(value byte) Root {
 	return Root{Hash: [32]byte{value}, Kind: shamap.TypeState}
 }
 
-func TestLeaseRebindKeepsOneCapacitySlot(t *testing.T) {
-	r, err := New(nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldRoot, newRoot := testRoot(1), testRoot(2)
-	lease, err := r.AcquireLease(oldRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := lease.Rebind(newRoot); err != nil {
-		t.Fatal(err)
-	}
-	if got := r.Roots(); len(got) != 1 || got[0] != newRoot {
-		t.Fatalf("roots after rebind = %v, want %v", got, []Root{newRoot})
-	}
-	if _, err := r.Acquire(oldRoot); err != ErrCapacity {
-		t.Fatalf("Acquire while rebound lease is active = %v, want ErrCapacity", err)
-	}
-	lease.Release()
-	release, err := r.Acquire(oldRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	release()
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestGuardPreservedMapBlocksNewLeases(t *testing.T) {
 	r, err := New(nil, 2)
 	if err != nil {

@@ -97,8 +97,6 @@ const (
 var (
 	// ErrClosed means the overlay or snapshot no longer owns its state.
 	ErrClosed = errors.New("ledger overlay is closed")
-	// ErrSealed means a mutation was attempted after Seal.
-	ErrSealed = errors.New("ledger overlay is sealed")
 	// ErrMemoryBudget is returned when managed memory admission is denied.
 	ErrMemoryBudget = errors.New("ledger overlay memory budget exhausted")
 	// ErrDiskBudget is returned when a spill or compaction cannot be admitted.

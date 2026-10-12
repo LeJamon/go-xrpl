@@ -164,7 +164,7 @@ func TestOverlayForkSnapshotAndCloseAccounting(t *testing.T) {
 	if _, ok, err := child.Get(context.Background(), testKey(2)); err != nil || ok {
 		t.Fatalf("child observed parent mutation: %v, %v", ok, err)
 	}
-	snapshot, err := o.Retain()
+	snapshot, err := o.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestOverlaySpillCompactsAndChangesAreCoalesced(t *testing.T) {
 	defer o.Close()
 	for i := byte(1); i < 25; i++ {
 		if err := o.Set(testKey(i), []byte{'a' + i, 'b' + i}); err != nil {
-			t.Fatalf("Set %d: %v stats=%+v", i, err, o.Stats())
+			t.Fatalf("Set %d: %v", i, err)
 		}
 	}
 	if err := o.Delete(testKey(3)); err != nil {
@@ -229,11 +229,11 @@ func TestOverlaySpillCompactsAndChangesAreCoalesced(t *testing.T) {
 	if err := o.Delete(testKey(4)); err != nil {
 		t.Fatal(err)
 	}
-	if o.Stats().Segments > 2 {
-		t.Fatalf("spill segment bound exceeded: %+v", o.Stats())
+	if len(o.segments) > 2 {
+		t.Fatalf("spill segment bound exceeded: %d", len(o.segments))
 	}
-	if o.Stats().Segments == 0 {
-		t.Fatalf("test did not exercise spilling: %+v", o.Stats())
+	if len(o.segments) == 0 {
+		t.Fatal("test did not exercise spilling")
 	}
 	value, ok, err := o.Get(context.Background(), testKey(3))
 	if err != nil || !ok || string(value) != "replacement" {
@@ -299,7 +299,7 @@ func TestOverlayNoSpillFilesOnClose(t *testing.T) {
 	}
 	for i := byte(0); i < 20; i++ {
 		if err := o.Set(testKey(i), []byte("value")); err != nil {
-			t.Fatalf("set %d: %v stats=%+v", i, err, o.Stats())
+			t.Fatalf("set %d: %v", i, err)
 		}
 	}
 	if err := o.Close(); err != nil {

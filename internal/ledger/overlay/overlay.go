@@ -8,7 +8,7 @@ import (
 )
 
 // Overlay is a mutable change layer over an immutable Reader. It is safe to
-// read, fork, seal, and close concurrently. Set and Delete operations are
+// read, fork, and close concurrently. Set and Delete operations are
 // serialized with one another; callers may use a fork for independent writers.
 type Overlay struct {
 	mu sync.RWMutex
@@ -18,7 +18,6 @@ type Overlay struct {
 	budget   *budget
 	root     *treeNode
 	segments []*spillSegment // newest first
-	sealed   bool
 	closed   bool
 }
 
@@ -93,9 +92,6 @@ func (o *Overlay) mutate(ctx context.Context, key [32]byte, value []byte, delete
 	if o.closed {
 		return ErrClosed
 	}
-	if o.sealed {
-		return ErrSealed
-	}
 	if existing := findTreeNode(o.root, key); existing != nil && sameTreeValue(existing, value, deleted) {
 		return nil
 	}
@@ -158,8 +154,8 @@ func (o *Overlay) canFitOneValue(value []byte) bool {
 	if !ok {
 		return false
 	}
-	stats := o.budget.stats()
-	return o.cfg.MaxMemoryBytes == 0 || (stats.MemoryBytes <= o.cfg.MaxMemoryBytes && charge <= o.cfg.MaxMemoryBytes-stats.MemoryBytes)
+	memoryUsed := o.budget.memoryUsed()
+	return o.cfg.MaxMemoryBytes == 0 || (memoryUsed <= o.cfg.MaxMemoryBytes && charge <= o.cfg.MaxMemoryBytes-memoryUsed)
 }
 
 func (o *Overlay) shouldSpillBeforeMutation(key [32]byte, value []byte, deleted bool) bool {
@@ -198,8 +194,8 @@ func (o *Overlay) shouldSpillBeforeMutation(key [32]byte, value []byte, deleted 
 			return true
 		}
 	}
-	stats := o.budget.stats()
-	return needed > o.cfg.MaxMemoryBytes || stats.MemoryBytes > o.cfg.MaxMemoryBytes-needed
+	memoryUsed := o.budget.memoryUsed()
+	return needed > o.cfg.MaxMemoryBytes || memoryUsed > o.cfg.MaxMemoryBytes-needed
 }
 
 // Get resolves the newest change, then the immutable base. Returned bytes are
@@ -279,25 +275,6 @@ func (o *Overlay) Iterate(ctx context.Context, after *[32]byte, fn func([32]byte
 	})
 }
 
-// IterateChanges walks the sorted, coalesced final overlay delta. It excludes
-// the base state and includes tombstones.
-func (o *Overlay) IterateChanges(ctx context.Context, after *[32]byte, fn func(Change) bool) error {
-	if fn == nil {
-		return errors.New("ledger overlay: nil change callback")
-	}
-	v, err := o.capture()
-	if err != nil {
-		return err
-	}
-	defer v.release()
-	return v.iterate(ctx, after, false, func(key [32]byte, value []byte, deleted bool) bool {
-		if deleted {
-			return fn(Change{Key: key, Deleted: true})
-		}
-		return fn(Change{Key: key, Value: value})
-	})
-}
-
 // Fork creates a mutable child sharing immutable tree nodes and spill runs.
 // Later changes in either overlay use copy-on-write and cannot alter the other
 // overlay's captured snapshot.
@@ -307,7 +284,7 @@ func (o *Overlay) Fork() (*Overlay, error) {
 	if o.closed {
 		return nil, ErrClosed
 	}
-	child := &Overlay{base: o.base, cfg: o.cfg, budget: o.budget, root: retainTreeNode(o.root), sealed: false}
+	child := &Overlay{base: o.base, cfg: o.cfg, budget: o.budget, root: retainTreeNode(o.root)}
 	child.segments = make([]*spillSegment, len(o.segments))
 	for i, segment := range o.segments {
 		child.segments[i] = retainSegment(segment)
@@ -315,25 +292,8 @@ func (o *Overlay) Fork() (*Overlay, error) {
 	return child, nil
 }
 
-// Seal prevents further mutation while retaining the current read view for
-// explicit Snapshot/Retain leases.
-func (o *Overlay) Seal() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.closed {
-		return ErrClosed
-	}
-	o.sealed = true
-	return nil
-}
-
 // Snapshot captures an immutable read lease of the current state.
 func (o *Overlay) Snapshot() (*Snapshot, error) {
-	return o.Retain()
-}
-
-// Retain captures an immutable read lease. Close the returned lease explicitly.
-func (o *Overlay) Retain() (*Snapshot, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	if o.closed {
@@ -426,22 +386,4 @@ func (v *view) release() {
 	}
 	v.root = nil
 	v.segments = nil
-}
-
-func (o *Overlay) Stats() Stats {
-	o.mu.RLock()
-	segments, rootHeight, closed, sealed := len(o.segments), int(nodeHeight(o.root)), o.closed, o.sealed
-	o.mu.RUnlock()
-	budget := o.budget.stats()
-	return Stats{Budget: budget, Segments: segments, RootHeight: rootHeight, Closed: closed, Sealed: sealed}
-}
-
-// Stats reports bounded ownership counters. Values are diagnostic and do not
-// expose ledger keys or hashes.
-type Stats struct {
-	Budget     BudgetStats
-	Segments   int
-	RootHeight int
-	Closed     bool
-	Sealed     bool
 }

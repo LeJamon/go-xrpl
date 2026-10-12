@@ -10,8 +10,6 @@ import (
 
 var ErrCapacity = errors.New("ledger root lease capacity exhausted")
 
-var ErrReleased = errors.New("ledger root lease is released")
-
 var ErrBuildActive = errors.New("ledger root build is still active")
 
 type Root struct {
@@ -33,9 +31,7 @@ type Registry struct {
 	closed bool
 }
 
-// Lease owns one root entry until Release. Rebind changes the authenticated
-// root covered by the same ownership slot, which lets a sealed builder hand
-// its dependency lease to the newly emitted root without a capacity gap.
+// Lease owns one root entry until Release.
 type Lease struct {
 	registry *Registry
 	root     Root
@@ -84,32 +80,22 @@ func (r *Registry) BeginBuild() (*BuildLease, error) {
 	return &BuildLease{registry: r}, nil
 }
 
-// EndBuild releases a build admission token. It is safe to call more than
-// once, including from cleanup paths that race a cancellation path.
-func (r *Registry) EndBuild(build *BuildLease) {
-	if build == nil || build.registry != r {
-		return
-	}
-	build.once.Do(func() {
-		r.mu.Lock()
-		if r.builds > 0 {
-			r.builds--
-		}
-		r.mu.Unlock()
-	})
-}
-
 // End releases a build admission token through its owning registry.
 func (b *BuildLease) End() {
 	if b == nil || b.registry == nil {
 		return
 	}
-	b.registry.EndBuild(b)
+	b.once.Do(func() {
+		b.registry.mu.Lock()
+		if b.registry.builds > 0 {
+			b.registry.builds--
+		}
+		b.registry.mu.Unlock()
+	})
 }
 
 // AcquireLease reserves one registry slot for root. Zero roots are represented
-// by a lease without an active slot so a builder can later rebind its parent
-// lease when the first non-empty root is emitted.
+// by a lease without an active slot so empty mutable trees have uniform cleanup.
 func (r *Registry) AcquireLease(root Root) (*Lease, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -137,45 +123,6 @@ func (l *Lease) Release() {
 	}
 	l.released = true
 	r.removeLocked(l.root)
-}
-
-// Rebind atomically moves this lease to root without consuming another
-// registry slot. It is used only after a builder has successfully emitted all
-// nodes for its replacement root.
-func (l *Lease) Rebind(root Root) error {
-	if l == nil || l.registry == nil {
-		return ErrReleased
-	}
-	r := l.registry
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if l.released {
-		return ErrReleased
-	}
-	if l.root == root {
-		return nil
-	}
-	if root.Hash != ([32]byte{}) && r.closed {
-		return ErrCapacity
-	}
-	if l.root.Hash == ([32]byte{}) {
-		if root.Hash != ([32]byte{}) {
-			if r.active >= r.limit {
-				return ErrCapacity
-			}
-			r.active++
-			r.roots[root]++
-		}
-	} else {
-		if root.Hash != ([32]byte{}) {
-			r.roots[root]++
-		} else {
-			r.active--
-		}
-		r.removeRootLocked(l.root)
-	}
-	l.root = root
-	return nil
 }
 
 func (r *Registry) removeLocked(root Root) {

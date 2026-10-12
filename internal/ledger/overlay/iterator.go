@@ -355,16 +355,6 @@ func (o *Overlay) Changes(ctx context.Context, after *[32]byte) (*ChangeIterator
 	return newChangeIterator(ctx, v, after, false)
 }
 
-// Changes returns an explicit pull iterator over final coalesced overlay
-// changes for a snapshot.
-func (s *Snapshot) Changes(ctx context.Context, after *[32]byte) (*ChangeIterator, error) {
-	v, err := s.capture()
-	if err != nil {
-		return nil, err
-	}
-	return newChangeIterator(ctx, v, after, false)
-}
-
 // Iterate implements Reader for Snapshot.
 func (s *Snapshot) Get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
 	v, err := s.capture()
@@ -389,23 +379,6 @@ func (s *Snapshot) Iterate(ctx context.Context, after *[32]byte, fn func([32]byt
 			return true
 		}
 		return fn(key, value)
-	})
-}
-
-func (s *Snapshot) IterateChanges(ctx context.Context, after *[32]byte, fn func(Change) bool) error {
-	if fn == nil {
-		return errors.New("ledger overlay: nil change callback")
-	}
-	v, err := s.capture()
-	if err != nil {
-		return err
-	}
-	defer v.release()
-	return v.iterate(ctx, after, false, func(key [32]byte, value []byte, deleted bool) bool {
-		if deleted {
-			return fn(Change{Key: key, Deleted: true})
-		}
-		return fn(Change{Key: key, Value: value})
 	})
 }
 

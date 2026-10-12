@@ -665,7 +665,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		t.store.stats.buildErrors.Add(1)
 		return [32]byte{}, err
 	}
-	defer t.store.roots.EndBuild(build)
+	defer build.End()
 	changes, err := t.changes.Changes(ctx, nil)
 	if err != nil {
 		return [32]byte{}, err

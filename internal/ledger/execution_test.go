@@ -472,7 +472,7 @@ func TestExecutionBuildAdmissionRequiresDestinationHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	parentLease.Release()
-	store.roots.EndBuild(build)
+	build.End()
 	guardRelease, ok := store.GuardPreservedRoots(map[rootlease.Root]struct{}{destination: {}})
 	if !ok {
 		t.Fatal("retirement rejected after destination handoff")

@@ -95,19 +95,12 @@ func (b *budget) releaseDisk(bytes uint64) {
 	}
 }
 
-type BudgetStats struct {
-	MemoryBytes uint64
-	DiskBytes   uint64
-	MaxMemory   uint64
-	MaxDisk     uint64
-}
-
-func (b *budget) stats() BudgetStats {
+func (b *budget) memoryUsed() uint64 {
 	if b == nil {
-		return BudgetStats{}
+		return 0
 	}
 	b.mu.Lock()
-	s := BudgetStats{MemoryBytes: b.memory, DiskBytes: b.disk, MaxMemory: b.maxMemory, MaxDisk: b.maxDisk}
+	used := b.memory
 	b.mu.Unlock()
-	return s
+	return used
 }
