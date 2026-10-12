@@ -190,7 +190,7 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 		state:   preferredTransitionPreparing,
 		timings: preferredTransitionTimings{started: time.Now()},
 	}
-	p.ctx, p.cancel = context.WithCancel(ctx)
+	p.ctx, p.cancel = context.WithCancel(ctx) //nolint:gosec // G118: preparation owns cancellation until failure, Release, or service shutdown.
 	if err := s.beginPreferredTransition(p); err != nil {
 		p.cancel()
 		return fail(err)
