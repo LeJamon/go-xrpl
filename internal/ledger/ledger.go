@@ -92,6 +92,9 @@ type AtomicWriter interface {
 // Ledger represents a single ledger in the chain
 type Ledger struct {
 	mu sync.RWMutex
+	// rulesMu keeps immutable amendment snapshots available while a mutable
+	// execution operation holds mu across a cold SHAMap read.
+	rulesMu sync.RWMutex
 
 	execution *executionView
 
@@ -299,8 +302,12 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 }
 
 func (l *Ledger) Rules() *amendment.Rules {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	return l.rulesSnapshot()
+}
+
+func (l *Ledger) rulesSnapshot() *amendment.Rules {
+	l.rulesMu.RLock()
+	defer l.rulesMu.RUnlock()
 	return l.rules
 }
 

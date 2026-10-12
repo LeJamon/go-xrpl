@@ -64,13 +64,13 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 		parent.mu.RUnlock()
 		return nil, fmt.Errorf("parent ledger sequence %d has no successor", seq)
 	}
-	if parent.rules == nil && rulesOverride == nil {
+	if parent.rulesSnapshot() == nil && rulesOverride == nil {
 		parent.mu.RUnlock()
 		return nil, errors.New("parent ledger has no amendment rules")
 	}
 	parentHeader := parent.header
 	parentFees := parent.fees
-	parentRules := parent.rules
+	parentRules := parent.rulesSnapshot()
 	if rulesOverride != nil {
 		parentRules = rulesOverride
 	}
