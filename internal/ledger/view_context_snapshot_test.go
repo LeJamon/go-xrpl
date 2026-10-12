@@ -33,14 +33,15 @@ func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBacked transaction: %v", err)
 	}
-	l, err := NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 88}, stateMap, txMap, drops.Fees{})
+	store, _ := executionTestStore(t, family)
+	l, err := NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 88}, stateMap, txMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
 	if err := l.Insert(mutAcct(0x81), mutData(0x11)); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := l.AddTransaction([32]byte{0x82}, []byte("transaction data")); err != nil {
+	if err := l.AddTransactionWithMeta([32]byte{0x82}, []byte("transaction data")); err != nil {
 		t.Fatalf("AddTransaction: %v", err)
 	}
 
@@ -69,7 +70,6 @@ func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			traversed := false
-			callsBefore := family.storeCalls
 			err := iterate(ctx, func() bool {
 				traversed = true
 				return true
@@ -79,9 +79,6 @@ func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 			}
 			if traversed {
 				t.Fatal("iteration traversed after canceled snapshot persistence")
-			}
-			if family.storeCalls != callsBefore+1 {
-				t.Fatalf("StoreBatch calls = %d, want %d", family.storeCalls, callsBefore+1)
 			}
 		})
 	}

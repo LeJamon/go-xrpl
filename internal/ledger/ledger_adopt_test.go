@@ -47,7 +47,7 @@ func TestAdoptStateDetachesSourceMaps(t *testing.T) {
 	if err := source.Update(stateKey, mutData(0x31)); err != nil {
 		t.Fatalf("mutate source state after adoption: %v", err)
 	}
-	if err := source.AddTransaction([32]byte{0xa2}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
+	if err := source.AddTransactionWithMeta([32]byte{0xa2}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
 		t.Fatalf("mutate source transactions after adoption: %v", err)
 	}
 	if err := source.AdjustDropsDestroyed(5); err != nil {

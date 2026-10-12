@@ -21,7 +21,8 @@ func TestUpdateNegativeUNL_StampsFlagLedgerSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestUpdateNegativeUNL_StampsFlagLedgerSeq(t *testing.T) {
 		t.Fatalf("serialize seed SLE: %v", err)
 	}
 	key := keylet.NegativeUNL().Key
-	if err := l.stateMap.Put(key, seed); err != nil {
+	if err := l.stateTree().Put(key, seed); err != nil {
 		t.Fatalf("seed stateMap: %v", err)
 	}
 
@@ -56,7 +57,7 @@ func TestUpdateNegativeUNL_StampsFlagLedgerSeq(t *testing.T) {
 		t.Fatalf("UpdateNegativeUNL: %v", err)
 	}
 
-	item, ok, err := l.stateMap.Get(key)
+	item, ok, err := l.stateTree().Get(key)
 	if err != nil || !ok {
 		t.Fatalf("read back SLE: ok=%v err=%v", ok, err)
 	}

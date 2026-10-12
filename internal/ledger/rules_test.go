@@ -20,7 +20,8 @@ func ledgerWithAmendments(t *testing.T, enabled [][32]byte) *Ledger {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}
@@ -103,7 +104,8 @@ func TestCloseRejectsMalformedAmendmentsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}
@@ -153,6 +155,7 @@ func TestHeaderConstructorsRejectMalformedAmendments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
+	store, _ := testExecutionStore(t)
 	stateMap, err := result.StateMap.SnapshotMutable()
 	if err != nil {
 		t.Fatalf("snapshot state map: %v", err)
@@ -163,14 +166,14 @@ func TestHeaderConstructorsRejectMalformedAmendments(t *testing.T) {
 	if err := stateMap.SetImmutable(); err != nil {
 		t.Fatalf("freeze state map: %v", err)
 	}
-	parent, err := NewFromHeader(result.Header, stateMap, result.TxMap, drops.Fees{})
+	parent, err := NewFromHeader(result.Header, stateMap, result.TxMap, drops.Fees{}, store)
 	if err == nil {
 		t.Fatal("NewFromHeader accepted malformed Amendments entry")
 	}
 	if parent != nil {
 		t.Fatal("NewFromHeader returned a ledger for malformed Amendments state")
 	}
-	if _, err := NewOpenWithHeader(result.Header, stateMap, result.TxMap, drops.Fees{}); err == nil {
+	if _, err := NewOpenWithHeader(result.Header, stateMap, result.TxMap, drops.Fees{}, store); err == nil {
 		t.Fatal("NewOpenWithHeader accepted malformed Amendments entry")
 	}
 }
@@ -180,11 +183,12 @@ func TestNewFromHeaderOwnsImmutableState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
+	store, _ := testExecutionStore(t)
 	stateMap, err := result.StateMap.SnapshotMutable()
 	if err != nil {
 		t.Fatalf("snapshot state map: %v", err)
 	}
-	l, err := NewFromHeader(result.Header, stateMap, result.TxMap, drops.Fees{})
+	l, err := NewFromHeader(result.Header, stateMap, result.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}

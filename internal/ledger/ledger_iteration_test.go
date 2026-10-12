@@ -47,7 +47,7 @@ func TestForEachTransactionUsesPointInTimeSnapshotAndAllowsMutation(t *testing.T
 	l := newOpenChild(t)
 	var seed [32]byte
 	seed[0] = 0xe1
-	if err := l.AddTransaction(seed, bytes.Repeat([]byte{0x11}, 16)); err != nil {
+	if err := l.AddTransactionWithMeta(seed, bytes.Repeat([]byte{0x11}, 16)); err != nil {
 		t.Fatalf("seed transaction: %v", err)
 	}
 	var insertedDuringCallback [32]byte
@@ -60,7 +60,7 @@ func TestForEachTransactionUsesPointInTimeSnapshotAndAllowsMutation(t *testing.T
 		}
 		if !mutated {
 			mutated = true
-			if err := l.AddTransaction(insertedDuringCallback, bytes.Repeat([]byte{0x21}, 16)); err != nil {
+			if err := l.AddTransactionWithMeta(insertedDuringCallback, bytes.Repeat([]byte{0x21}, 16)); err != nil {
 				t.Errorf("AddTransaction from callback: %v", err)
 				return false
 			}

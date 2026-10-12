@@ -2,38 +2,12 @@ package ledger
 
 import (
 	"context"
-
-	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func (l *Ledger) Snapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-
-	if l.execution != nil {
-		return l.executionSnapshot(context.Background(), false)
-	}
-
-	stateMapCopy, err := l.stateMap.SnapshotImmutable()
-	if err != nil {
-		return nil, err
-	}
-
-	txMapCopy, err := l.txMap.SnapshotImmutable()
-	if err != nil {
-		return nil, err
-	}
-
-	return &Ledger{
-		stateMap:       stateMapCopy,
-		txMap:          txMapCopy,
-		header:         l.header,
-		fees:           l.fees,
-		state:          l.state,
-		writable:       false,
-		dropsDestroyed: l.dropsDestroyed,
-		rules:          l.rules,
-	}, nil
+	return l.executionSnapshot(context.Background(), false)
 }
 
 // MutableSnapshot returns a mutable deep copy suitable for further apply
@@ -46,28 +20,7 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 		return nil, ErrLedgerImmutable
 	}
 
-	if l.execution != nil {
-		return l.executionSnapshot(context.Background(), true)
-	}
-
-	stateMapCopy, err := l.stateMap.SnapshotMutable()
-	if err != nil {
-		return nil, err
-	}
-	txMapCopy, err := l.txMap.SnapshotMutable()
-	if err != nil {
-		return nil, err
-	}
-	return &Ledger{
-		stateMap:       stateMapCopy,
-		txMap:          txMapCopy,
-		header:         l.header,
-		fees:           l.fees,
-		state:          l.state,
-		writable:       true,
-		dropsDestroyed: l.dropsDestroyed,
-		rules:          l.rules,
-	}, nil
+	return l.executionSnapshot(context.Background(), true)
 }
 
 // MutableSnapshotUnflushed returns a mutable copy without persisting dirty
@@ -80,46 +33,19 @@ func (l *Ledger) MutableSnapshotUnflushed() (*Ledger, error) {
 		return nil, ErrLedgerImmutable
 	}
 
-	if l.execution != nil {
-		return l.executionSnapshot(context.Background(), true)
-	}
-
-	stateMapCopy, err := l.stateMap.MutableFork()
-	if err != nil {
-		return nil, err
-	}
-	txMapCopy, err := l.txMap.MutableFork()
-	if err != nil {
-		return nil, err
-	}
-	return &Ledger{
-		stateMap:       stateMapCopy,
-		txMap:          txMapCopy,
-		header:         l.header,
-		fees:           l.fees,
-		state:          l.state,
-		writable:       true,
-		dropsDestroyed: l.dropsDestroyed,
-		rules:          l.rules,
-	}, nil
+	return l.executionSnapshot(context.Background(), true)
 }
 
 func (l *Ledger) StateMapHash() ([32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	if l.execution != nil {
-		return l.execution.state.hash(context.Background())
-	}
-	return l.stateMap.Hash()
+	return l.execution.state.hash(context.Background())
 }
 
 func (l *Ledger) TxMapHash() ([32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	if l.execution != nil {
-		return l.execution.transactions.hash(context.Background())
-	}
-	return l.txMap.Hash()
+	return l.execution.transactions.hash(context.Background())
 }
 
 // ForEach calls fn for each state entry (key, data); return false to stop early.
@@ -131,23 +57,13 @@ func (l *Ledger) ForEach(fn func(key [32]byte, data []byte) bool) error {
 // between leaf callbacks (the SHAMap descent observes ctx).
 func (l *Ledger) ForEachContext(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
-	if l.execution != nil {
-		read, release, err := l.execution.state.readSnapshot()
-		l.mu.RUnlock()
-		if err != nil {
-			return err
-		}
-		defer release()
-		return read.Iterate(ctx, nil, fn)
-	}
-	stateMap, err := l.stateMap.SnapshotImmutableContext(ctx)
+	read, release, err := l.execution.state.readSnapshot()
 	l.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	return stateMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
-		return fn(item.Key(), item.Data())
-	})
+	defer release()
+	return read.Iterate(ctx, nil, fn)
 }
 
 // Succ returns the first state entry with key > the given key (O(log n) UpperBound).
@@ -159,27 +75,14 @@ func (l *Ledger) SuccContext(ctx context.Context, key [32]byte) ([32]byte, []byt
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	if l.execution != nil {
-		var next [32]byte
-		var value []byte
-		found := false
-		err := l.execution.state.iterate(ctx, &key, func(k [32]byte, data []byte) bool {
-			next, value, found = k, append([]byte(nil), data...), true
-			return false
-		})
-		return next, value, found, err
-	}
-	it := l.stateMap.UpperBoundContext(ctx, key)
-	if it.Valid() {
-		item := it.Item()
-		if item != nil {
-			return item.Key(), item.Data(), true, nil
-		}
-	}
-	if err := it.Err(); err != nil {
-		return [32]byte{}, nil, false, err
-	}
-	return [32]byte{}, nil, false, nil
+	var next [32]byte
+	var value []byte
+	found := false
+	err := l.execution.state.iterate(ctx, &key, func(k [32]byte, data []byte) bool {
+		next, value, found = k, append([]byte(nil), data...), true
+		return false
+	})
+	return next, value, found, err
 }
 
 // IterateStateFrom walks state entries in ascending key order starting strictly
@@ -188,35 +91,13 @@ func (l *Ledger) SuccContext(ctx context.Context, key [32]byte) ([32]byte, []byt
 // entry continues from the next entry instead of rescanning or yielding nothing.
 func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
-	if l.execution != nil {
-		read, release, err := l.execution.state.readSnapshot()
-		l.mu.RUnlock()
-		if err != nil {
-			return err
-		}
-		defer release()
-		return read.Iterate(ctx, &after, fn)
-	}
-	stateMap, err := l.stateMap.SnapshotImmutableContext(ctx)
+	read, release, err := l.execution.state.readSnapshot()
 	l.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	it := stateMap.UpperBoundContext(ctx, after)
-	for it.Valid() {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		item := it.Item()
-		if item == nil {
-			break
-		}
-		if !fn(item.Key(), item.Data()) {
-			return nil
-		}
-		it.Next()
-	}
-	return it.Err()
+	defer release()
+	return read.Iterate(ctx, &after, fn)
 }
 
 // DecrementKey returns key-1 as a big-endian 32-byte integer (wrapping at zero).
@@ -241,32 +122,17 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 
 func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
 	l.mu.RLock()
-	if l.execution != nil {
-		read, release, err := l.execution.transactions.readSnapshot()
-		l.mu.RUnlock()
-		if err != nil {
-			return err
-		}
-		defer release()
-		return read.Iterate(ctx, nil, func(k [32]byte, data []byte) bool { return fn(k, data[1:]) })
-	}
-	txMap, err := l.txMap.SnapshotImmutableContext(ctx)
+	read, release, err := l.execution.transactions.readSnapshot()
 	l.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	return txMap.ForEachCtx(ctx, func(item *shamap.Item) bool {
-		return fn(item.Key(), item.Data())
-	})
+	defer release()
+	return read.Iterate(ctx, nil, func(k [32]byte, data []byte) bool { return fn(k, data[1:]) })
 }
 
 func (l *Ledger) TxCount() uint32 {
 	l.mu.RLock()
-	if l.execution == nil {
-		count := uint32(l.txMap.Size())
-		l.mu.RUnlock()
-		return count
-	}
 	tree := l.execution.transactions
 	l.mu.RUnlock()
 	count, err := tree.countLeaves(context.Background())

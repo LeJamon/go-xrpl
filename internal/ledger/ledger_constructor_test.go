@@ -53,15 +53,15 @@ func (f *constructorRecordingFamily) takeEntries() []shamap.FlushEntry {
 }
 
 func TestLedgerConstructorsRejectNilAndWrongMapTypes(t *testing.T) {
-	constructors := map[string]func(*shamap.SHAMap, *shamap.SHAMap) (*Ledger, error){
-		"genesis": func(stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
-			return FromGenesis(header.LedgerHeader{}, stateMap, txMap, drops.Fees{})
+	constructors := map[string]func(*shamap.SHAMap, *shamap.SHAMap, *ExecutionStore) (*Ledger, error){
+		"genesis": func(stateMap, txMap *shamap.SHAMap, store *ExecutionStore) (*Ledger, error) {
+			return FromGenesis(header.LedgerHeader{}, stateMap, txMap, drops.Fees{}, store)
 		},
-		"header": func(stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
-			return NewFromHeader(header.LedgerHeader{}, stateMap, txMap, drops.Fees{})
+		"header": func(stateMap, txMap *shamap.SHAMap, store *ExecutionStore) (*Ledger, error) {
+			return NewFromHeader(header.LedgerHeader{}, stateMap, txMap, drops.Fees{}, store)
 		},
-		"open": func(stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
-			return NewOpenWithHeader(header.LedgerHeader{}, stateMap, txMap, drops.Fees{})
+		"open": func(stateMap, txMap *shamap.SHAMap, store *ExecutionStore) (*Ledger, error) {
+			return NewOpenWithHeader(header.LedgerHeader{}, stateMap, txMap, drops.Fees{}, store)
 		},
 	}
 	cases := map[string]func() (*shamap.SHAMap, *shamap.SHAMap){
@@ -86,7 +86,8 @@ func TestLedgerConstructorsRejectNilAndWrongMapTypes(t *testing.T) {
 		for caseName, maps := range cases {
 			t.Run(constructorName+"/"+caseName, func(t *testing.T) {
 				stateMap, txMap := maps()
-				if _, err := construct(stateMap, txMap); err == nil {
+				store, _ := testExecutionStore(t)
+				if _, err := construct(stateMap, txMap, store); err == nil {
 					t.Fatal("constructor accepted invalid maps")
 				}
 			})
@@ -95,6 +96,7 @@ func TestLedgerConstructorsRejectNilAndWrongMapTypes(t *testing.T) {
 }
 
 func TestFromGenesisRejectsMalformedAmendments(t *testing.T) {
+	store, _ := testExecutionStore(t)
 	stateMap := shamap.New(shamap.TypeState)
 	if err := stateMap.Put(keylet.Amendments().Key, bytes.Repeat([]byte{0xff}, 16)); err != nil {
 		t.Fatalf("seed malformed Amendments: %v", err)
@@ -104,12 +106,14 @@ func TestFromGenesisRejectsMalformedAmendments(t *testing.T) {
 		stateMap,
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
+		store,
 	); err == nil {
 		t.Fatal("FromGenesis accepted malformed Amendments")
 	}
 }
 
 func TestNewOpenWithHeaderDetachesReplayInputs(t *testing.T) {
+	store, _ := testExecutionStore(t)
 	stateMap := shamap.New(shamap.TypeState)
 	txMap := shamap.New(shamap.TypeTransaction)
 	stateKey := mutAcct(0x51)
@@ -120,7 +124,7 @@ func TestNewOpenWithHeaderDetachesReplayInputs(t *testing.T) {
 	var txID [32]byte
 	txID[0] = 0x61
 	originalTx := bytes.Repeat([]byte{0x21}, 16)
-	if err := txMap.Put(txID, originalTx); err != nil {
+	if err := txMap.PutWithNodeType(txID, originalTx, shamap.NodeTypeTransactionWithMeta); err != nil {
 		t.Fatalf("seed transaction: %v", err)
 	}
 
@@ -129,6 +133,7 @@ func TestNewOpenWithHeaderDetachesReplayInputs(t *testing.T) {
 		stateMap,
 		txMap,
 		drops.Fees{},
+		store,
 	)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
@@ -168,24 +173,25 @@ func TestNewOpenWithHeaderDetachesReplayInputs(t *testing.T) {
 	if err := l.Insert(mutAcct(0x53), mutData(0x44)); err != nil {
 		t.Fatalf("detached ledger state is not writable: %v", err)
 	}
-	if err := l.AddTransaction([32]byte{0x63}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
+	if err := l.AddTransactionWithMeta([32]byte{0x63}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
 		t.Fatalf("detached ledger transaction map is not writable: %v", err)
 	}
 }
 
 func TestHeaderConstructorsSnapshotAtHeaderSequenceWithoutMutatingInputs(t *testing.T) {
-	constructors := map[string]func(header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) (*Ledger, error){
-		"closed": func(hdr header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
-			return NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
+	constructors := map[string]func(header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap, *ExecutionStore) (*Ledger, error){
+		"closed": func(hdr header.LedgerHeader, stateMap, txMap *shamap.SHAMap, store *ExecutionStore) (*Ledger, error) {
+			return NewFromHeader(hdr, stateMap, txMap, drops.Fees{}, store)
 		},
-		"open": func(hdr header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
-			return NewOpenWithHeader(hdr, stateMap, txMap, drops.Fees{})
+		"open": func(hdr header.LedgerHeader, stateMap, txMap *shamap.SHAMap, store *ExecutionStore) (*Ledger, error) {
+			return NewOpenWithHeader(hdr, stateMap, txMap, drops.Fees{}, store)
 		},
 	}
 
 	for name, construct := range constructors {
 		t.Run(name, func(t *testing.T) {
 			family := newConstructorRecordingFamily()
+			store, _ := executionTestStore(t, family)
 			stateMap, err := shamap.NewBacked(shamap.TypeState, family)
 			if err != nil {
 				t.Fatalf("NewBacked state: %v", err)
@@ -199,12 +205,22 @@ func TestHeaderConstructorsSnapshotAtHeaderSequenceWithoutMutatingInputs(t *test
 			if err := stateMap.Put(mutAcct(0x71).Key, mutData(0x11)); err != nil {
 				t.Fatalf("seed state: %v", err)
 			}
-			if err := txMap.Put([32]byte{0x72}, bytes.Repeat([]byte{0x22}, 16)); err != nil {
+			if err := txMap.PutWithNodeType([32]byte{0x72}, bytes.Repeat([]byte{0x22}, 16), shamap.NodeTypeTransactionWithMeta); err != nil {
 				t.Fatalf("seed transaction: %v", err)
+			}
+			stateRoot, err := stateMap.Hash()
+			if err != nil {
+				t.Fatalf("hash state: %v", err)
+			}
+			txRoot, err := txMap.Hash()
+			if err != nil {
+				t.Fatalf("hash transactions: %v", err)
 			}
 
 			const targetSeq = uint32(600)
-			if _, err := construct(header.LedgerHeader{LedgerIndex: targetSeq}, stateMap, txMap); err != nil {
+			hdr := header.LedgerHeader{LedgerIndex: targetSeq, AccountHash: stateRoot, TxHash: txRoot}
+			hdr.Hash = header.CalculateHash(hdr)
+			if _, err := construct(hdr, stateMap, txMap, store); err != nil {
 				t.Fatalf("construct ledger: %v", err)
 			}
 			entries := family.takeEntries()
@@ -225,7 +241,7 @@ func TestHeaderConstructorsSnapshotAtHeaderSequenceWithoutMutatingInputs(t *test
 			if err := stateMap.Put(mutAcct(0x73).Key, mutData(0x33)); err != nil {
 				t.Fatalf("mutate caller state: %v", err)
 			}
-			if err := txMap.Put([32]byte{0x74}, bytes.Repeat([]byte{0x44}, 16)); err != nil {
+			if err := txMap.PutWithNodeType([32]byte{0x74}, bytes.Repeat([]byte{0x44}, 16), shamap.NodeTypeTransactionWithMeta); err != nil {
 				t.Fatalf("mutate caller transaction: %v", err)
 			}
 			if _, err := stateMap.SnapshotImmutable(); err != nil {

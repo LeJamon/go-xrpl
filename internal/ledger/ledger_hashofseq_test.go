@@ -17,7 +17,8 @@ func TestLedger_HashOfSeq(t *testing.T) {
 		t.Fatalf("genesis.Create: %v", err)
 	}
 
-	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}
@@ -79,7 +80,8 @@ func TestLedger_HashOfSeq_DeepSkipList(t *testing.T) {
 		t.Fatalf("genesis.Create: %v", err)
 	}
 
-	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}

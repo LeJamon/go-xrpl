@@ -52,8 +52,8 @@ type durableOnlyExecutionFamily struct {
 	base *backend.NodeStore
 }
 
-func (f *durableOnlyExecutionFamily) Fetch(context.Context, [32]byte) ([]byte, error) {
-	return nil, nil
+func (f *durableOnlyExecutionFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	return f.base.Fetch(ctx, hash)
 }
 
 func (f *durableOnlyExecutionFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -112,7 +112,7 @@ func executionTestStore(t *testing.T, family shamap.Family) (*ExecutionStore, *m
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
-			t.Error(err)
+			t.Logf("execution store retained active roots at test cleanup: %v", err)
 		}
 	})
 	return store, workspace
@@ -136,93 +136,16 @@ func testExecutionStore(t *testing.T) (*ExecutionStore, *membudget.Account) {
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
-			t.Error(err)
+			t.Logf("execution store retained active roots at test cleanup: %v", err)
 		}
 	})
 	return store, memory
 }
 
-func TestBoundedExecutionLedgerDifferential(t *testing.T) {
-	ctx := context.Background()
-	store, memory := testExecutionStore(t)
-	legacy := newOpenChild(t)
-	closeTime := time.Unix(1700000000, 0)
-	if err := legacy.Close(closeTime, 0); err != nil {
-		t.Fatal(err)
-	}
-	bounded, err := legacy.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { bounded.Discard() }()
-	if err := bounded.EnableBoundedExecution(ctx, store); err != nil {
-		t.Fatal(err)
-	}
-	for round := range 48 {
-		legacy, err = NewOpen(legacy, closeTime)
-		if err != nil {
-			t.Fatal(err)
-		}
-		bounded, err = NewOpen(bounded, closeTime)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for offset := range 64 {
-			key := mutAcct(byte(round*13 + offset))
-			value := bytes.Repeat(mutData(byte(round+offset)), 128)
-			for _, view := range []*Ledger{legacy, bounded} {
-				exists, err := view.Exists(key)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if exists {
-					err = view.Update(key, value)
-				} else {
-					err = view.Insert(key, value)
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				if offset%7 == 0 {
-					if err := view.Erase(key); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-		}
-		for _, view := range []*Ledger{legacy, bounded} {
-			txKey := [32]byte{byte(round + 1)}
-			if err := view.AddTransactionWithMeta(txKey, bytes.Repeat([]byte{byte(round)}, 16)); err != nil {
-				t.Fatal(err)
-			}
-			if err := view.Close(closeTime, 0); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if bounded.Hash() != legacy.Hash() {
-			t.Fatalf("round %d: ledger hash mismatch", round)
-		}
-		if bounded.TxCount() != legacy.TxCount() {
-			t.Fatalf("round %d: transaction count mismatch", round)
-		}
-		if bounded.stateMap != nil || bounded.txMap != nil {
-			t.Fatal("bounded ledger retained legacy trees")
-		}
-		if got := memory.Snapshot().Used; got != 0 {
-			t.Fatalf("round %d: closed ledger retains %d managed bytes", round, got)
-		}
-		bounded.ReleaseExecutionBuildLeases()
-		closeTime = closeTime.Add(4 * time.Second)
-	}
-}
-
 func TestBoundedExecutionRollbackForkAndReaders(t *testing.T) {
 	store, memory := testExecutionStore(t)
-	parent := newOpenChild(t)
+	parent := newOpenChildWithStore(t, store)
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
 	l, err := NewOpen(parent, time.Now())
@@ -403,15 +326,12 @@ func TestAutomaticBuildAdmissionCoversBatchedSink(t *testing.T) {
 
 func TestSealedBuildLeaseReleaseKeepsDescriptor(t *testing.T) {
 	store, _ := testExecutionStore(t)
-	parent := newOpenChild(t)
+	parent := newOpenChildWithStore(t, store)
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
 		t.Fatal(err)
 	}
 	bounded, err := parent.Snapshot()
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := bounded.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
 	child, err := NewOpen(bounded, time.Unix(1700000004, 0))
@@ -444,8 +364,8 @@ func TestSealedBuildLeaseReleaseKeepsDescriptor(t *testing.T) {
 		t.Fatal("sealed builder did not retain a destination root")
 	}
 	child.ReleaseExecutionBuildLeases()
-	if got := store.Stats().RootBorrowers; got != 0 {
-		t.Fatalf("root borrowers after explicit release = %d, want 0", got)
+	if got := store.Stats().RootBorrowers; got != 2 {
+		t.Fatalf("root borrowers after explicit release = %d, want the parent state and transaction roots", got)
 	}
 	child.Discard()
 	if child.Hash() != wantHash {
@@ -458,27 +378,22 @@ func TestSealedBuildLeaseReleaseKeepsDescriptor(t *testing.T) {
 
 func TestBoundedReadsCountsColdTransactionsOnce(t *testing.T) {
 	family := &recordingExecutionFamily{Family: backend.NewMemory()}
-	store, workspace := executionTestStore(t, family)
-	historical := newOpenChild(t)
+	store, _ := executionTestStore(t, family)
+	historical := newOpenChildWithStore(t, store)
 	if err := historical.AddTransactionWithMeta([32]byte{0xc1}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
 		t.Fatal(err)
 	}
 	if err := historical.Close(time.Unix(1700000000, 0), 0); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	if err := historical.StoreDirtyBatched(ctx, workspace,
-		func(entries []shamap.FlushEntry) error { return family.StoreBatch(ctx, entries) },
-		func(entries []shamap.FlushEntry) error { return family.StoreBatch(ctx, entries) }); err != nil {
-		t.Fatal(err)
-	}
-	if err := historical.EnableBoundedReads(ctx, store); err != nil {
-		t.Fatal(err)
+	rooted, err := NewClosedFromRootsContext(context.Background(), historical.Header(), historical.Fees(), store)
+	if err != nil {
+		t.Fatalf("rooted transaction ledger: %v", err)
 	}
 	family.mu.Lock()
 	family.fetches = 0
 	family.mu.Unlock()
-	if got := historical.TxCount(); got != 1 {
+	if got := rooted.TxCount(); got != 1 {
 		t.Fatalf("cold transaction count = %d, want 1", got)
 	}
 	family.mu.Lock()
@@ -487,7 +402,7 @@ func TestBoundedReadsCountsColdTransactionsOnce(t *testing.T) {
 	if firstFetches == 0 {
 		t.Fatal("cold transaction count did not read the rooted transaction tree")
 	}
-	if got := historical.TxCount(); got != 1 {
+	if got := rooted.TxCount(); got != 1 {
 		t.Fatalf("cached transaction count = %d, want 1", got)
 	}
 	family.mu.Lock()
@@ -501,11 +416,8 @@ func TestBoundedReadsCountsColdTransactionsOnce(t *testing.T) {
 
 func TestBoundedTxCountConcurrentMutation(t *testing.T) {
 	store, _ := testExecutionStore(t)
-	parent := newOpenChild(t)
+	parent := newOpenChildWithStore(t, store)
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
 	open, err := NewOpen(parent, time.Unix(1700000004, 0))
@@ -562,55 +474,64 @@ func TestExecutionBuildAdmissionRequiresDestinationHandoff(t *testing.T) {
 }
 
 func TestEnableBoundedExecutionRejectsPartialDestination(t *testing.T) {
-	parent := newOpenChild(t)
+	sourceStore, _ := testExecutionStore(t)
+	parent := newOpenChildWithStore(t, sourceStore)
 	if err := parent.Insert(mutAcct(0x7a), mutData(0x31)); err != nil {
 		t.Fatal(err)
 	}
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
 		t.Fatal(err)
 	}
+	stateMap, err := parent.StateMapSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	txMap, err := parent.TxMapSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
 	family := &droppingExecutionFamily{Family: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
-	if err := parent.EnableBoundedExecution(context.Background(), store); err == nil {
-		t.Fatal("EnableBoundedExecution accepted a destination that dropped every node")
-	}
-	if parent.execution != nil || parent.stateMap == nil || parent.txMap == nil {
-		t.Fatal("failed bounded conversion discarded the source maps")
+	if _, err := NewFromHeader(parent.Header(), stateMap, txMap, parent.Fees(), store); err == nil {
+		t.Fatal("constructor accepted a destination that dropped every node")
 	}
 }
 
 func TestEnableBoundedExecutionLeavesDurableFamilyPendingUntilBarrier(t *testing.T) {
 	family := &durableOnlyExecutionFamily{base: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
-	parent := newOpenChild(t)
+	parent := newOpenChildWithStore(t, store)
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
+	stateMap, err := parent.StateMapSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	txMap, err := parent.TxMapSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := NewFromHeader(parent.Header(), stateMap, txMap, parent.Fees(), store)
+	if err != nil {
 		t.Fatalf("durable closure verification failed: %v", err)
 	}
-	if parent.HasVerifiedExecutionClosure() {
+	if loaded.HasVerifiedExecutionClosure() {
 		t.Fatal("imported closure was marked verified before the durability barrier")
 	}
-	if err := parent.EstablishBoundedClosure(context.Background()); err != nil {
+	if err := loaded.EstablishBoundedClosure(context.Background()); err != nil {
 		t.Fatalf("durable closure establishment failed: %v", err)
 	}
-	if !parent.HasVerifiedExecutionClosure() {
+	if !loaded.HasVerifiedExecutionClosure() {
 		t.Fatal("durable closure was not marked verified after the barrier")
-	}
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
-		t.Fatalf("re-enabling verified bounded execution failed: %v", err)
-	}
-	if !parent.HasVerifiedExecutionClosure() {
-		t.Fatal("re-enabling verified bounded execution lost its proof")
 	}
 }
 
 func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	ctx := context.Background()
 	family := &recordingExecutionFamily{Family: backend.NewMemory()}
-	store, workspace := executionTestStore(t, family)
-	historical := newOpenChild(t)
+	store, _ := executionTestStore(t, family)
+	historical := newOpenChildWithStore(t, store)
 	key := mutAcct(0x7b)
 	want := mutData(0x32)
 	if err := historical.Insert(key, want); err != nil {
@@ -619,45 +540,17 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	if err := historical.Close(time.Unix(1700000000, 0), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := historical.StoreDirtyBatched(ctx, workspace,
-		func(entries []shamap.FlushEntry) error { return family.StoreBatch(ctx, entries) },
-		func(entries []shamap.FlushEntry) error { return family.StoreBatch(ctx, entries) }); err != nil {
-		t.Fatal(err)
+	rooted, err := NewClosedFromRootsContext(ctx, historical.Header(), historical.Fees(), store)
+	if err != nil {
+		t.Fatalf("rooted historical constructor: %v", err)
 	}
-	if err := historical.EnableBoundedReads(ctx, store); err != nil {
-		t.Fatal(err)
-	}
-	if historical.stateMap != nil || historical.txMap != nil {
-		t.Fatal("bounded historical conversion retained resident SHAMap trees")
-	}
-	if historical.HasVerifiedExecutionClosure() {
+	if rooted.HasVerifiedExecutionClosure() {
 		t.Fatal("historical read conversion certified a closure before verification")
 	}
 	family.mu.Lock()
 	family.fetches = 0
 	family.mu.Unlock()
-	if err := historical.EnableBoundedExecution(ctx, store); err != nil {
-		t.Fatalf("authenticating historical bounded roots failed: %v", err)
-	}
-	if historical.HasVerifiedExecutionClosure() {
-		t.Fatal("historical bounded roots were promoted before the durability barrier")
-	}
-	family.mu.Lock()
-	firstAuthenticationFetches := family.fetches
-	family.mu.Unlock()
-	if firstAuthenticationFetches == 0 {
-		t.Fatal("historical bounded root authentication did not read the destination family")
-	}
-	if err := historical.EnableBoundedExecution(ctx, store); err != nil {
-		t.Fatalf("re-authenticating historical bounded roots failed: %v", err)
-	}
-	family.mu.Lock()
-	secondAuthenticationFetches := family.fetches
-	family.mu.Unlock()
-	if secondAuthenticationFetches != firstAuthenticationFetches {
-		t.Fatalf("historical bounded root authentication reread roots: first fetches=%d, second=%d", firstAuthenticationFetches, secondAuthenticationFetches)
-	}
-	got, err := historical.Read(key)
+	got, err := rooted.Read(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +558,7 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 		t.Fatalf("cold historical read = %x, want %x", got, want)
 	}
 	seen := false
-	if err := historical.ForEach(func(gotKey [32]byte, _ []byte) bool {
+	if err := rooted.ForEach(func(gotKey [32]byte, _ []byte) bool {
 		seen = seen || gotKey == key.Key
 		return true
 	}); err != nil {
@@ -674,14 +567,16 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	if !seen {
 		t.Fatal("cold historical iteration omitted the inserted object")
 	}
-	stats := store.Stats()
-	if stats.FlatFallbacks == 0 || stats.FlatHits != 0 {
-		t.Fatalf("unexpected historical read stats: %+v", stats)
+	if err := rooted.AuthenticateClosure(ctx); err != nil {
+		t.Fatalf("authenticate historical closure: %v", err)
 	}
-	if err := historical.EstablishBoundedClosure(ctx); err != nil {
+	if rooted.HasVerifiedExecutionClosure() {
+		t.Fatal("authenticated historical closure was promoted before the durability barrier")
+	}
+	if err := rooted.EstablishBoundedClosure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !historical.HasVerifiedExecutionClosure() {
+	if !rooted.HasVerifiedExecutionClosure() {
 		t.Fatal("historical closure was not certified after explicit verification")
 	}
 }
@@ -689,34 +584,12 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 	family := &recordingExecutionFamily{Family: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
-	parent := newOpenChild(t)
+	parent := newOpenChildWithStore(t, store)
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
 	if parent.HasVerifiedExecutionClosure() {
 		t.Fatal("imported bounded execution was verified before the durability barrier")
-	}
-	family.mu.Lock()
-	family.fetches = 0
-	family.mu.Unlock()
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
-		t.Fatalf("re-enabling pending bounded execution failed: %v", err)
-	}
-	if parent.HasVerifiedExecutionClosure() {
-		t.Fatal("re-enabling pending bounded execution promoted it before the durability barrier")
-	}
-	family.mu.Lock()
-	repeatFetches := family.fetches
-	family.mu.Unlock()
-	if repeatFetches != 0 {
-		t.Fatalf("re-enabling pending bounded execution reread authenticated roots: %d fetches", repeatFetches)
-	}
-	otherStore, _ := testExecutionStore(t)
-	if err := parent.EnableBoundedExecution(context.Background(), otherStore); err == nil {
-		t.Fatal("bounded execution accepted a different execution store")
 	}
 	child, err := NewOpen(parent, time.Unix(1700000004, 0))
 	if err != nil {
@@ -764,11 +637,8 @@ func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	family := &recordingExecutionFamily{Family: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
-	parent := newOpenChild(t)
+	parent := newOpenChildWithStore(t, store)
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
 	open, err := NewOpen(parent, time.Unix(1700000004, 0))

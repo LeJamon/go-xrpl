@@ -74,6 +74,7 @@ func lifecycleLazyMap(t *testing.T, source *shamap.SHAMap, family *lifecycleMemo
 }
 
 func TestLedgerCloseFailureAtSkipListBoundaryIsAtomicAndRetryable(t *testing.T) {
+	store, _ := testExecutionStore(t)
 	stateMap := shamap.New(shamap.TypeState)
 	rolling := keylet.LedgerHashes()
 	malformed := bytes.Repeat([]byte{0xff}, 16)
@@ -87,7 +88,7 @@ func TestLedgerCloseFailureAtSkipListBoundaryIsAtomicAndRetryable(t *testing.T) 
 		LedgerIndex: 257,
 		ParentHash:  parentHash,
 		Drops:       1_000,
-	}, stateMap, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	}, stateMap, shamap.New(shamap.TypeTransaction), drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestLedgerCloseFailureAtSkipListBoundaryIsAtomicAndRetryable(t *testing.T) 
 	if l.rules != beforeRules || l.dropsDestroyed != beforeDestroyed || !l.IsOpen() || l.IsImmutable() {
 		t.Fatal("failed close changed rules, destroyed drops, lifecycle, or writability")
 	}
-	item, found, err := l.stateMap.Get(rolling.Key)
+	item, found, err := l.stateTree().Get(rolling.Key)
 	if err != nil {
 		t.Fatalf("read rolling skip list after failed close: %v", err)
 	}
@@ -163,16 +164,16 @@ func TestLedgerCloseBackendFailureIsAtomicAndRetryable(t *testing.T) {
 	}
 	family := newLifecycleMemoryFamily()
 	lazyState := lifecycleLazyMap(t, stateMap, family)
+	store, _ := executionTestStore(t, family)
 
 	l, err := NewOpenWithHeader(header.LedgerHeader{
 		LedgerIndex: 3,
 		ParentHash:  [32]byte{2},
 		Drops:       100,
-	}, shamap.New(shamap.TypeState), shamap.New(shamap.TypeTransaction), drops.Fees{})
+	}, lazyState, shamap.New(shamap.TypeTransaction), drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
-	l.stateMap = lazyState
 
 	beforeHeader := l.Header()
 	beforeRoot, err := l.StateMapHash()

@@ -170,17 +170,11 @@ type transactionTree interface {
 }
 
 func (l *Ledger) stateTree() stateTree {
-	if l.execution != nil {
-		return l.execution.state
-	}
-	return l.stateMap
+	return l.execution.state
 }
 
 func (l *Ledger) transactionTree() transactionTree {
-	if l.execution != nil {
-		return l.execution.transactions
-	}
-	return l.txMap
+	return l.execution.transactions
 }
 
 type executionView struct {
@@ -884,6 +878,28 @@ func (l *Ledger) EstablishBoundedClosure(ctx context.Context) error {
 	return nil
 }
 
+// AuthenticateClosure verifies an immutable root view against its configured
+// Family and records the result as pending. The caller must complete the
+// corresponding durability barrier before promoting it with
+// EstablishBoundedClosure.
+func (l *Ledger) AuthenticateClosure(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.RLock()
+	if l.execution == nil {
+		l.mu.RUnlock()
+		return ErrInvalidState
+	}
+	if l.writable || l.state == StateOpen {
+		l.mu.RUnlock()
+		return ErrLedgerImmutable
+	}
+	view, h := l.execution, l.header
+	l.mu.RUnlock()
+	return l.authenticateUnknownBoundedClosure(ctx, view, h)
+}
+
 // authenticateUnknownBoundedClosure verifies only roots that have not already
 // been authenticated and records that proof as pending. Pending roots are
 // promoted by EstablishBoundedClosure after the caller's storage durability
@@ -1112,157 +1128,33 @@ func (l *Ledger) ReleaseExecutionBuildLeases() {
 	}
 }
 
-// EnableBoundedReads replaces an immutable ledger's resident maps with
-// authenticated-root descriptors. The target Family is intentionally checked
-// lazily: this is the historical/read path and its closure is uncertified until
-// EstablishBoundedClosure is called.
-func (l *Ledger) EnableBoundedReads(ctx context.Context, store *ExecutionStore) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	l.mu.RLock()
-	if l.execution != nil {
-		sameStore := store != nil && l.execution.state.store == store
-		l.mu.RUnlock()
-		if !sameStore {
-			return errors.New("bounded execution is already attached to a different store")
-		}
-		return nil
-	}
-	if l.writable || l.state == StateOpen || store == nil || l.stateMap == nil || l.txMap == nil {
-		l.mu.RUnlock()
-		return ErrInvalidState
-	}
-	h := l.header
-	stateMap, txMap := l.stateMap, l.txMap
-	l.mu.RUnlock()
-	if header.CalculateHash(h) != h.Hash {
-		return errors.New("bounded read roots have an invalid ledger header")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	view := &executionView{
-		state: &executionTree{store: store, kind: shamap.TypeState, base: h, root: h.AccountHash, sequence: h.LedgerIndex},
-		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: h.TxHash,
-			sequence: h.LedgerIndex},
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.execution != nil || l.stateMap != stateMap || l.txMap != txMap || l.header.Hash != h.Hash {
-		return ErrInvalidState
-	}
-	l.execution = view
-	l.stateMap, l.txMap = nil, nil
-	return nil
-}
-
-// EnableBoundedExecution persists the imported maps before replacing them with
-// root descriptors, then authenticates the complete destination closure once.
-// The imported proof remains pending until the caller's durability barrier and
-// an explicit EstablishBoundedClosure call. An already bounded view only
-// authenticates unknown roots; existing pending or verified proofs are kept.
-func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionStore) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	l.mu.RLock()
-	if l.execution != nil {
-		view := l.execution
-		h := l.header
-		writable := l.writable
-		sameStore := store != nil && view.state.store == store
-		l.mu.RUnlock()
-		if !sameStore {
-			return errors.New("bounded execution is already attached to a different store")
-		}
-		if writable {
-			return ErrInvalidState
-		}
-		return l.authenticateUnknownBoundedClosure(ctx, view, h)
-	}
-	if l.writable || l.state == StateOpen || store == nil || l.stateMap == nil || l.txMap == nil {
-		l.mu.RUnlock()
-		return ErrInvalidState
-	}
-	h := l.header
-	stateMap, txMap := l.stateMap, l.txMap
-	l.mu.RUnlock()
-	if header.CalculateHash(h) != h.Hash {
-		return errors.New("bounded execution header is invalid")
-	}
-	stateRoot, err := stateMap.Hash()
-	if err != nil {
-		return fmt.Errorf("hash imported state tree: %w", err)
-	}
-	txRoot, err := txMap.Hash()
-	if err != nil {
-		return fmt.Errorf("hash imported transaction tree: %w", err)
-	}
-	if stateRoot != h.AccountHash || txRoot != h.TxHash {
-		return errors.New("bounded execution roots do not match ledger header")
-	}
-	for _, tree := range []*shamap.SHAMap{stateMap, txMap} {
-		if err := tree.StoreDirtyBatched(ctx, store.config.Workspace, func(entries []shamap.FlushEntry) error {
-			return store.config.Family.StoreBatch(ctx, entries)
-		}); err != nil {
-			return fmt.Errorf("persist imported execution tree: %w", err)
-		}
-	}
-	view := &executionView{
-		state:        &executionTree{store: store, kind: shamap.TypeState, base: h, root: stateRoot, sequence: h.LedgerIndex, closure: executionClosureUnknown},
-		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: txRoot, sequence: h.LedgerIndex, closure: executionClosureUnknown},
-	}
-	if err := verifyExecutionRoot(ctx, view.state); err != nil {
-		return fmt.Errorf("verify imported state closure: %w", err)
-	}
-	txCount, err := countExecutionRoot(ctx, view.transactions)
-	if err != nil {
-		return fmt.Errorf("verify imported transaction closure: %w", err)
-	}
-	if txCount > uint64(^uint32(0)) {
-		return errors.New("transaction leaf count exceeds uint32")
-	}
-	view.transactions.count, view.transactions.countKnown = uint32(txCount), true
-	view.state.closure = executionClosurePending
-	view.transactions.closure = executionClosurePending
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.execution != nil || l.stateMap != stateMap || l.txMap != txMap || l.header.Hash != h.Hash {
-		return ErrInvalidState
-	}
-	l.execution = view
-	l.stateMap, l.txMap = nil, nil
-	return nil
-}
-
 // Discard releases an abandoned mutable execution view. It is harmless after
-// ConsumeState and for legacy in-memory ledgers.
 func (l *Ledger) Discard() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.execution != nil && l.writable {
-		l.execution.close()
-		l.execution = nil
 		l.invalidateMutableStateLocked()
 	} else if l.execution != nil {
 		l.execution.releaseBuildLeases()
 	}
 }
 
-func (l *Ledger) ExecutionJournalConfig() (overlay.Config, bool) {
+func (l *Ledger) ExecutionJournalConfig() overlay.Config {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	if l.execution == nil {
-		return overlay.Config{}, false
-	}
-	return l.execution.state.store.config.Overlay, true
+	return l.execution.state.store.config.Overlay
 }
 
-func (l *Ledger) UsesBoundedExecution() bool {
+// ExecutionStore returns the bounded execution store shared by this ledger's
+// roots and mutable overlays. The store is owned by the service or fixture
+// that created the ledger and must outlive every ledger using it.
+func (l *Ledger) ExecutionStore() *ExecutionStore {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.execution != nil
+	if l.execution == nil || l.execution.state == nil {
+		return nil
+	}
+	return l.execution.state.store
 }
 
 func NewOpenFromParentHeader(ctx context.Context, parent *Ledger, hdr header.LedgerHeader) (*Ledger, error) {
@@ -1270,21 +1162,13 @@ func NewOpenFromParentHeader(ctx context.Context, parent *Ledger, hdr header.Led
 		return nil, errors.New("nil replay parent")
 	}
 	parent.mu.RLock()
-	if parent.execution != nil {
-		defer parent.mu.RUnlock()
-		if parent.writable || parent.state == StateOpen {
-			return nil, ErrInvalidState
-		}
-		view, err := parent.execution.successor(hdr.LedgerIndex)
-		if err != nil {
-			return nil, err
-		}
-		return &Ledger{execution: view, header: hdr, fees: parent.fees, rules: parent.rules, writable: true, state: StateOpen}, nil
+	defer parent.mu.RUnlock()
+	if parent.writable || parent.state == StateOpen {
+		return nil, ErrInvalidState
 	}
-	parent.mu.RUnlock()
-	state, err := parent.StateMapSnapshotContext(ctx)
+	view, err := parent.execution.successor(hdr.LedgerIndex)
 	if err != nil {
 		return nil, err
 	}
-	return NewOpenWithHeader(hdr, state, shamap.New(shamap.TypeTransaction), parent.Fees())
+	return &Ledger{execution: view, header: hdr, fees: parent.fees, rules: parent.rules, writable: true, state: StateOpen}, nil
 }

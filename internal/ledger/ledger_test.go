@@ -9,16 +9,23 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
+	result, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatalf("genesis.Create: %v", err)
+	}
+	store, _ := testExecutionStore(t)
+	hdr := result.Header
+	hdr.Validated = false
 	closed, err := NewClosedFromHeaderContext(
 		context.Background(),
-		header.LedgerHeader{},
-		shamap.New(shamap.TypeState),
-		shamap.New(shamap.TypeTransaction),
+		hdr,
+		result.StateMap,
+		result.TxMap,
 		drops.Fees{},
+		store,
 	)
 	if err != nil {
 		t.Fatalf("NewClosedFromHeaderContext: %v", err)
@@ -34,10 +41,11 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 	}
 
 	unvalidated, err := NewFromHeader(
-		header.LedgerHeader{},
-		shamap.New(shamap.TypeState),
-		shamap.New(shamap.TypeTransaction),
+		hdr,
+		result.StateMap,
+		result.TxMap,
 		drops.Fees{},
+		store,
 	)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
@@ -47,10 +55,11 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 	}
 
 	validated, err := NewFromHeader(
-		header.LedgerHeader{Validated: true},
-		shamap.New(shamap.TypeState),
-		shamap.New(shamap.TypeTransaction),
+		func() header.LedgerHeader { h := hdr; h.Validated = true; h.Hash = header.CalculateHash(h); return h }(),
+		result.StateMap,
+		result.TxMap,
 		drops.Fees{},
+		store,
 	)
 	if err != nil {
 		t.Fatalf("NewFromHeader validated: %v", err)
@@ -71,12 +80,18 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 // step boundary.
 func newParentAt(t *testing.T, parentSeq uint32, resolution uint32, closeAgree bool) *Ledger {
 	t.Helper()
+	store, _ := testExecutionStore(t)
+	return newParentAtWithStore(t, parentSeq, resolution, closeAgree, store)
+}
+
+func newParentAtWithStore(t *testing.T, parentSeq uint32, resolution uint32, closeAgree bool, store *ExecutionStore) *Ledger {
+	t.Helper()
 
 	res, err := genesis.Create(genesis.DefaultConfig())
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}
@@ -105,6 +120,7 @@ func newParentAt(t *testing.T, parentSeq uint32, resolution uint32, closeAgree b
 		h.CloseFlags |= header.LCFNoConsensusTime
 	}
 	parent.header = h
+	t.Cleanup(func() { parent.Discard() })
 	return parent
 }
 
@@ -245,7 +261,8 @@ func TestNewOpenRejectsParentWithoutSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}
@@ -331,10 +348,22 @@ func TestLedger_Close_DynamicResolution_DisagreeSaturatedAtCoarsest(t *testing.T
 func newOpenChild(t *testing.T) *Ledger {
 	t.Helper()
 	parent := newParentAt(t, 2, 30, true)
+	return newOpenChildFromParent(t, parent)
+}
+
+func newOpenChildWithStore(t *testing.T, store *ExecutionStore) *Ledger {
+	t.Helper()
+	parent := newParentAtWithStore(t, 2, 30, true, store)
+	return newOpenChildFromParent(t, parent)
+}
+
+func newOpenChildFromParent(t *testing.T, parent *Ledger) *Ledger {
+	t.Helper()
 	child, err := NewOpen(parent, parent.CloseTime().Add(10*time.Second))
 	if err != nil {
 		t.Fatalf("NewOpen: %v", err)
 	}
+	t.Cleanup(func() { child.Discard() })
 	return child
 }
 

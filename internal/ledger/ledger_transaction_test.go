@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -30,10 +33,9 @@ func TestTransactionInsertionIsAddOnly(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newOpenChild(t)
-			var txID [32]byte
-			txID[0] = byte(0xb0 + i)
 			original := bytes.Repeat([]byte{byte(0x10 + i)}, 16)
 			replacement := bytes.Repeat([]byte{byte(0x80 + i)}, 16)
+			txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), original)
 			if err := tc.first(l, txID, original); err != nil {
 				t.Fatalf("first insertion: %v", err)
 			}
@@ -68,8 +70,16 @@ func TestTxExistsPreservesBackingStoreFailure(t *testing.T) {
 	family := newLifecycleMemoryFamily()
 	lazyTx := lifecycleLazyMap(t, source, family)
 
-	l := newOpenChild(t)
-	l.txMap = lazyTx
+	store, _ := executionTestStore(t, family)
+	parent := newOpenChildWithStore(t, store)
+	stateMap, err := parent.StateMapSnapshot()
+	if err != nil {
+		t.Fatalf("state snapshot: %v", err)
+	}
+	l, err := NewOpenWithHeader(parent.Header(), stateMap, lazyTx, drops.Fees{}, store)
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
 	wantErr := errors.New("injected transaction membership failure")
 	family.setFetchError(wantErr)
 	exists, err := l.TxExists(txID)

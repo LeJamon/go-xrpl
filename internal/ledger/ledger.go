@@ -13,7 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // Common errors for ledger operations
@@ -95,8 +94,6 @@ type Ledger struct {
 	mu sync.RWMutex
 
 	execution *executionView
-	stateMap  *shamap.SHAMap
-	txMap     *shamap.SHAMap
 
 	header header.LedgerHeader
 

@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
-	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 )
 
 func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
@@ -29,57 +27,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 			l.header.LedgerIndex, int64(l.dropsDestroyed), l.header.Drops)
 	}
 
-	if l.execution != nil {
-		return l.closeExecution(closeTime, closeFlags)
-	}
-
-	stateMap, err := l.stateMap.MutableFork()
-	if err != nil {
-		return fmt.Errorf("failed to fork state map: %w", err)
-	}
-	txMap, err := l.txMap.MutableFork()
-	if err != nil {
-		return fmt.Errorf("failed to fork transaction map: %w", err)
-	}
-	if err := skiplist.UpdateOnMap(stateMap, l.header.LedgerIndex, l.header.ParentHash); err != nil {
-		return fmt.Errorf("failed to update skip list: %w", err)
-	}
-	rules, err := loadAmendmentsFromSHAMap(stateMap)
-	if err != nil {
-		return fmt.Errorf("failed to load amendment rules: %w", err)
-	}
-	if err := stateMap.SetImmutable(); err != nil {
-		return fmt.Errorf("failed to make state map immutable: %w", err)
-	}
-	if err := txMap.SetImmutable(); err != nil {
-		return fmt.Errorf("failed to make tx map immutable: %w", err)
-	}
-	accountHash, err := stateMap.Hash()
-	if err != nil {
-		return fmt.Errorf("failed to get state map hash: %w", err)
-	}
-	txHash, err := txMap.Hash()
-	if err != nil {
-		return fmt.Errorf("failed to get tx map hash: %w", err)
-	}
-
-	hdr := l.header
-	hdr.Drops -= uint64(l.dropsDestroyed)
-	hdr.AccountHash = accountHash
-	hdr.TxHash = txHash
-	hdr.CloseTime = closeTime
-	hdr.CloseFlags = closeFlags
-	hdr.Accepted = true
-	hdr.Hash = header.CalculateHash(hdr)
-
-	l.stateMap = stateMap
-	l.txMap = txMap
-	l.header = hdr
-	l.rules = rules
-	l.state = StateClosed
-	l.writable = false
-
-	return nil
+	return l.closeExecution(closeTime, closeFlags)
 }
 
 // UpdateNegativeUNL applies pending ValidatorToDisable / ValidatorToReEnable
