@@ -331,7 +331,8 @@ func TestBoundedExecutionInterruptedRebaseResumesFromDurableRoots(t *testing.T) 
 	paths := newBoundedTestPaths(t)
 	firstRepository := newBoundedTestRepository(t, paths)
 	first := newBoundedTestRuntime(t, paths, firstRepository, boundedFlatOptions())
-	runtimes := []*boundedTestRuntime{first}
+	runtimes := make([]*boundedTestRuntime, 1, 3)
+	runtimes[0] = first
 	t.Cleanup(func() {
 		for _, runtime := range runtimes {
 			runtime.close(t)
@@ -482,7 +483,8 @@ func TestBoundedExecutionOutboxReplaysAfterRestart(t *testing.T) {
 	baseRepository := newBoundedTestRepository(t, paths)
 	failingRepository := &boundedFailingRepository{RepositoryManager: baseRepository}
 	first := newBoundedTestRuntime(t, paths, failingRepository, boundedFlatOptions())
-	runtimes := []*boundedTestRuntime{first}
+	runtimes := make([]*boundedTestRuntime, 1, 2)
+	runtimes[0] = first
 	t.Cleanup(func() {
 		for _, runtime := range runtimes {
 			runtime.close(t)
@@ -532,7 +534,8 @@ func TestBoundedExecutionOutboxReplayAfterCommittedReceipt(t *testing.T) {
 	baseRepository := newBoundedTestRepository(t, paths)
 	failingRepository := &boundedFailingRepository{RepositoryManager: baseRepository}
 	first := newBoundedTestRuntime(t, paths, failingRepository, boundedFlatOptions())
-	runtimes := []*boundedTestRuntime{first}
+	runtimes := make([]*boundedTestRuntime, 1, 2)
+	runtimes[0] = first
 	t.Cleanup(func() {
 		for _, runtime := range runtimes {
 			runtime.close(t)

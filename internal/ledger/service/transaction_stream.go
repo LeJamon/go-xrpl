@@ -118,6 +118,7 @@ func newLedgerTransactionPull(ctx context.Context, l *ledger.Ledger, seq relatio
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// #nosec G118 -- The returned pull owns cancellation; its close method is deferred by the consumer.
 	sourceCtx, cancel := context.WithCancel(ctx)
 	pull := &ledgerTransactionPull{cancel: cancel, sequence: seq}
 	pull.nextRaw, pull.stopRaw = iter.Pull2(func(yield func([32]byte, []byte) bool) {

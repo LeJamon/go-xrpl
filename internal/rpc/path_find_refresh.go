@@ -127,6 +127,7 @@ func (m *pathFindRefreshManager) enqueueContext(getView func(context.Context) (t
 	if m.activeCancel != nil {
 		m.activeCancel()
 	}
+	// #nosec G118 -- The queued update owns cancellation through completion, replacement, or shutdown.
 	updateContext, cancel := context.WithCancel(context.Background())
 	m.generation++
 	targets = rotatePathFindTargets(targets, m.fairCursor)
