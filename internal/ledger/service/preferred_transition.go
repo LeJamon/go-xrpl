@@ -79,8 +79,9 @@ type PreparedPreferredLedger struct {
 	provisionalReplace bool
 	keepOpen           bool
 
-	prior  []openledger.PendingTx
-	locals []openledger.PendingTx
+	prior        []openledger.PendingTx
+	locals       []openledger.PendingTx
+	previousOpen []*ledger.Ledger
 
 	networkID     uint32
 	lastRoundSlow bool
@@ -217,6 +218,9 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 			return failPrepared(fmt.Errorf("preferred ledger state admission: %w", err))
 		}
 	}
+	if err := parent.AuthenticateClosure(p.ctx); err != nil {
+		return failPrepared(fmt.Errorf("preferred ledger closure authentication: %w", err))
+	}
 	gateWait, err := s.openLedgerMu.LockRoleContext(p.ctx, openLedgerPreferredSwitch)
 	if err != nil {
 		return failPrepared(err)
@@ -286,6 +290,12 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	openView := s.openLedgerView
 	queue := s.txQueue
 	localsPool := s.localTxs
+	if !p.keepOpen {
+		p.previousOpen = appendUniqueLedgers(p.previousOpen, p.expectedOpen)
+		if current := openView.Current(); current != nil {
+			p.previousOpen = appendUniqueLedgers(p.previousOpen, current)
+		}
+	}
 	s.mu.RUnlock()
 	s.openLedgerMu.Unlock()
 	gateHeld = false
@@ -503,10 +513,15 @@ func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error
 			return p.abortLocked(ErrPreferredTransitionStale)
 		}
 	}
+	if !p.keepOpen && p.openView == nil {
+		s.mu.Unlock()
+		return p.abortLocked(errors.New("preferred ledger transition has no prepared open view"))
+	}
 	if err := publication(); err != nil {
 		s.mu.Unlock()
 		return p.abortLocked(err)
 	}
+	releasePrevious := !p.keepOpen
 	if !p.keepOpen {
 		s.openLedgerView = p.openView
 		s.openLedger = p.openView.Current()
@@ -516,6 +531,9 @@ func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error
 		s.tickLoadFeeLocked()
 	}
 	s.mu.Unlock()
+	if releasePrevious {
+		p.releasePreviousOpenViews()
+	}
 	p.stateMu.Lock()
 	p.state = preferredTransitionPublished
 	p.stateMu.Unlock()
@@ -657,9 +675,26 @@ func (p *PreparedPreferredLedger) Release() {
 			p.state = preferredTransitionReleased
 		}
 		p.stateMu.Unlock()
+		p.discardUnpublishedOpenView()
 		p.releaseRetainedMemory()
 		p.releaseWorkAdmission()
 	})
+}
+
+func (p *PreparedPreferredLedger) discardUnpublishedOpenView() {
+	p.stateMu.Lock()
+	if p.state == preferredTransitionPublished {
+		p.stateMu.Unlock()
+		return
+	}
+	view := p.openView
+	p.openView = nil
+	p.stateMu.Unlock()
+	if view != nil {
+		if current := view.Current(); current != nil {
+			current.Discard()
+		}
+	}
 }
 
 func (p *PreparedPreferredLedger) releaseWorkAdmission() {
@@ -682,6 +717,40 @@ func (p *PreparedPreferredLedger) releaseRetainedMemory() {
 	}
 }
 
+func appendUniqueLedgers(ledgers []*ledger.Ledger, candidate *ledger.Ledger) []*ledger.Ledger {
+	if candidate == nil {
+		return ledgers
+	}
+	for _, existing := range ledgers {
+		if existing == candidate {
+			return ledgers
+		}
+	}
+	return append(ledgers, candidate)
+}
+
+func (p *PreparedPreferredLedger) freezePreviousOpenViews() error {
+	for _, previous := range p.previousOpen {
+		if err := p.ctx.Err(); err != nil {
+			return err
+		}
+		if err := previous.FreezeExecution(); err != nil {
+			return fmt.Errorf("freeze previous open ledger: %w", err)
+		}
+	}
+	return p.ctx.Err()
+}
+
+func (p *PreparedPreferredLedger) releasePreviousOpenViews() {
+	p.stateMu.Lock()
+	previous := p.previousOpen
+	p.previousOpen = nil
+	p.stateMu.Unlock()
+	for _, old := range previous {
+		old.ReleaseExecutionBuildLeases()
+	}
+}
+
 func (p *PreparedPreferredLedger) markReady(err error) {
 	p.stateMu.Lock()
 	p.runErr = err
@@ -691,6 +760,9 @@ func (p *PreparedPreferredLedger) markReady(err error) {
 		p.state = preferredTransitionReady
 	}
 	p.stateMu.Unlock()
+	if err != nil {
+		p.discardUnpublishedOpenView()
+	}
 	p.readyOnce.Do(func() { close(p.ready) })
 	if err != nil {
 		p.service.endPreferredTransition(p)
@@ -705,6 +777,11 @@ func (p *PreparedPreferredLedger) run() {
 		return
 	}
 	var err error
+	if err = p.freezePreviousOpenViews(); err != nil {
+		p.timings.preparation = time.Since(started)
+		p.markReady(err)
+		return
+	}
 	stageStarted := time.Now()
 	if !p.options.allowReplayFault {
 		p.staged, err = stageTransactionResultsContext(p.ctx, p.parent, p.parent.Sequence(), p.parent.Hash())
@@ -818,6 +895,7 @@ func (p *PreparedPreferredLedger) abortLocked(err error) (bool, error) {
 	p.state = preferredTransitionReleased
 	p.runErr = err
 	p.stateMu.Unlock()
+	p.discardUnpublishedOpenView()
 	p.service.endPreferredTransitionLocked(p)
 	return false, err
 }
