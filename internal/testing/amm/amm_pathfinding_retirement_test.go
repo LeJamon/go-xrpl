@@ -52,8 +52,10 @@ func TestAMMPathfinderFixAMMOverflowOfferRetirement(t *testing.T) {
 
 		withRetiredLedger, err := ledger.NewOpenWithRules(closed, closeTime, withRules)
 		require.NoError(t, err)
+		defer withRetiredLedger.Discard()
 		withoutRetiredLedger, err := ledger.NewOpenWithRules(closed, closeTime, withoutRules)
 		require.NoError(t, err)
+		defer withoutRetiredLedger.Discard()
 
 		quote := func(view *ledger.Ledger, retiredEnabled bool) pathfinder.PathAlternative {
 			require.Equal(t, retiredEnabled, view.Rules().Enabled(amendment.FeatureFixAMMOverflowOffer),
