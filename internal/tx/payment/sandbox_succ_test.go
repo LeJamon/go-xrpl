@@ -2,8 +2,9 @@ package payment
 
 import (
 	"errors"
-	"github.com/LeJamon/go-xrpl/keylet"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 type sandboxSuccErrorView struct {

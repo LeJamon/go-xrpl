@@ -253,18 +253,10 @@ func (s *Service) prepareValidatedStateBaseCache(fingerprint [32]byte) bool {
 	return cache.EnsureDurableFingerprint(fingerprint) != 0
 }
 
-// advanceValidatedStateBaseProof extends an existing complete-tree proof over
+// advanceValidatedStateBaseProofWithReplay extends an existing complete-tree proof over
 // one consecutive persisted ledger, or promotes a fully fetched initial-sync
 // candidate. It deliberately declines when neither exists: a full tree walk
 // belongs to startup, acquisition or background verification, never to ordinary persistence.
-func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) error {
-	var proof *replayCompletenessRecord
-	if l != nil {
-		proof = s.replayPersistenceProof(l.Header())
-	}
-	return s.advanceValidatedStateBaseProofWithReplay(ctx, l, proof)
-}
-
 func (s *Service) advanceValidatedStateBaseProofWithReplay(ctx context.Context, l *ledger.Ledger, admitted *replayCompletenessRecord) error {
 	if l == nil || !l.IsValidated() || s.nodeStore == nil || s.shamapFamily == nil {
 		return nil
@@ -303,9 +295,6 @@ func (s *Service) advanceValidatedStateBaseProofWithReplay(ctx context.Context, 
 	if !proofMatches && candidateFound && s.validatedStateBaseCandidateComplete(ctx, h) {
 		candidate.nodeStoreFingerprint = fingerprint
 		proofMatches = validatedStateBaseProofMatchesLedger(candidate, h, fingerprint)
-		if proofMatches {
-			proof = candidate
-		}
 	}
 	if !proofMatches {
 		s.validatedStateBaseMu.Lock()

@@ -4287,17 +4287,6 @@ func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
 	c.completeInboundLedgerReady(il)
 }
 
-func (c *catchupReplayCoordinator) acquireStateAdmission() (func(), error) {
-	if c.adaptor == nil {
-		return func() {}, nil
-	}
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return func() {}, nil
-	}
-	return svc.AcquireStateAdmission(c.lifecycleContext())
-}
-
 // publishInboundLedger runs only after worker-side persistence and verification.
 // The result owns its generation pin through publication and consensus handoff.
 func (c *catchupReplayCoordinator) publishInboundLedger(result *acquisitionCompletionResult) {

@@ -151,15 +151,19 @@ func TestBackgroundAncestryProvider_EngineOwnsReplacementAndShutdown(t *testing.
 	e.SetLedgerAncestryProvider(p)
 	e.SetLedgerAncestryProvider(p) // Reinstalling the same instance must not stop it.
 	require.False(t, p.background.stopped)
+	require.NoError(t, p.background.ctx.Err())
 	e.SetLedgerAncestryProvider(nil)
 	require.True(t, p.background.stopped)
+	require.ErrorIs(t, p.background.ctx.Err(), context.Canceled)
 	q := newBackgroundAncestryProvider(nil)
 	e.SetLedgerAncestryProvider(q)
 	require.NoError(t, e.Stop())
 	require.True(t, q.background.stopped)
+	require.ErrorIs(t, q.background.ctx.Err(), context.Canceled)
 	r := newBackgroundAncestryProvider(nil)
 	e.SetLedgerAncestryProvider(r)
 	require.True(t, r.background.stopped, "stopped engine must reject and close new providers")
+	require.ErrorIs(t, r.background.ctx.Err(), context.Canceled)
 }
 
 func TestBackgroundAncestryProvider_TrackerProgressesDuringBlockedRead(t *testing.T) {

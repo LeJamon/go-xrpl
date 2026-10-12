@@ -31,6 +31,13 @@ type ancestryBackground struct {
 	stopped bool
 }
 
+// stop releases the owned context. The caller must hold the provider's mutex
+// and join the workers after releasing it.
+func (b *ancestryBackground) stop() {
+	b.stopped = true
+	b.cancel()
+}
+
 func newBackgroundAncestryProvider(lookup func(context.Context, [32]byte) (ledgerHeader, error)) *AncestryProvider {
 	p := newAncestryProviderFromLookup(nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -117,8 +124,7 @@ func (p *AncestryProvider) stop() {
 	}
 	p.mu.Lock()
 	b := p.background
-	b.stopped = true
-	b.cancel()
+	b.stop()
 	p.mu.Unlock()
 	b.wg.Wait()
 	p.mu.Lock()
