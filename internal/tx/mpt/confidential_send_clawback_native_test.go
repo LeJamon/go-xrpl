@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
@@ -29,6 +30,10 @@ type confidentialPreclaimView struct {
 	rules          *amendment.Rules
 	failMutationAt int
 	mutations      int
+}
+
+func (*confidentialPreclaimView) ExecutionJournalConfig() overlay.Config {
+	return overlay.Config{MaxMemoryBytes: 1 << 20}
 }
 
 func cloneConfidentialView(view *confidentialPreclaimView) *confidentialPreclaimView {
@@ -1097,6 +1102,7 @@ func TestConfidentialMPTClawbackCommitFailureRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	table := applystate.NewApplyStateTable(fixture.view, [32]byte{1}, 2, fixture.view.rules)
+	defer table.Close()
 	ctx := &tx.ApplyContext{
 		View: table, Account: issuerRoot, AccountID: fixture.issuer,
 		Config: tx.EngineConfig{Rules: fixture.view.rules}, Metadata: &tx.Metadata{}, Log: xrpllog.Discard(), Ctx: context.Background(),
