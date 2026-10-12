@@ -74,6 +74,7 @@ func TestReplayDelta_Apply_EmptyTxSet(t *testing.T) {
 	derived, err := rd.Apply(tx.EngineConfig{})
 	require.NoError(t, err)
 	require.NotNil(t, derived)
+	t.Cleanup(derived.Discard)
 
 	assert.Equal(t, hdr.Hash, derived.Hash(), "derived ledger hash must match verified header")
 	assert.Equal(t, hdr.LedgerIndex, derived.Sequence())
@@ -241,6 +242,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 		Build()
 	preview, err := ledger.NewOpen(parent, resHdr.CloseTime)
 	require.NoError(t, err)
+	t.Cleanup(preview.Discard)
 	previewConfig := tx.EngineConfig{
 		BaseFee:                   10,
 		ReserveBase:               200_000_000,
@@ -327,6 +329,7 @@ func TestReplayDelta_Apply_RejectsBatchInnerMetadataMismatch(t *testing.T) {
 		Build()
 	preview, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(preview.Discard)
 	previewConfig := tx.EngineConfig{
 		BaseFee:                   10,
 		ReserveBase:               200_000_000,
@@ -416,6 +419,7 @@ func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(open.Discard)
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -464,6 +468,7 @@ func TestReplayDelta_RetryUsesFreshVerifiedReplay(t *testing.T) {
 
 	retry, err := rd.Retry(parent)
 	require.NoError(t, err)
+	t.Cleanup(retry.ReleaseMemory)
 	require.NotNil(t, retry)
 	assert.NotSame(t, rd, retry)
 	assert.Equal(t, StateReplayReady, retry.State())
@@ -473,6 +478,7 @@ func TestReplayDelta_RetryUsesFreshVerifiedReplay(t *testing.T) {
 
 	derived, err := retry.Apply(tx.EngineConfig{})
 	require.NoError(t, err)
+	t.Cleanup(derived.Discard)
 	assert.Equal(t, hdr.Hash, derived.Hash())
 }
 

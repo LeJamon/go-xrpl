@@ -32,6 +32,7 @@ func makeGenesisWithStore(t *testing.T, store *ledger.ExecutionStore) *ledger.Le
 	require.NoError(t, err)
 	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	require.NoError(t, err)
+	t.Cleanup(l.Discard)
 	return l
 }
 
@@ -411,6 +412,7 @@ func TestInboundReplayDelta_ParentHashMismatch(t *testing.T) {
 	require.NoError(t, txSnap.SetImmutable())
 	wrong, err := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{}, other.ExecutionStore())
 	require.NoError(t, err)
+	t.Cleanup(wrong.Discard)
 
 	rd := NewReplayDelta(expectedHash, 42, wrong, nil)
 	err = rd.GotResponse(resp)

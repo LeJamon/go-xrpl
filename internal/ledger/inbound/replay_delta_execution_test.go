@@ -32,6 +32,7 @@ func TestReplayDeltaRetainsBuiltRootUntilLastOwnerReleases(t *testing.T) {
 	replay := armReplayDeltaWith(t, parent, resp, hdr)
 	derived, err := replay.Apply(tx.EngineConfig{})
 	require.NoError(t, err)
+	t.Cleanup(derived.Discard)
 	require.Equal(t, hdr.Hash, derived.Hash())
 	want := rootlease.Root{Hash: hdr.AccountHash, Kind: shamap.TypeState}
 	require.Contains(t, store.Roots(), want)
