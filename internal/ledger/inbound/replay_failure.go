@@ -114,9 +114,7 @@ func (r *ReplayDelta) Evidence() ReplayEvidence {
 		evidence.ParentHash = r.parent.Hash()
 		evidence.ParentSequence = r.parent.Sequence()
 	}
-	if r.result != nil {
-		evidence.TargetHeader = r.result.Header()
-	}
+	evidence.TargetHeader = r.target
 	if r.err != nil {
 		evidence.Error = r.err.Error()
 		var failure *ReplayFailure

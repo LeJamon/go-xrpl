@@ -165,7 +165,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	// the loop in Apply we need them in that sorted order; the test
 	// asserts the FIRST tx encountered is the one with Index 0 (whose
 	// TxBytes is a unique sentinel).
-	// Stitch a minimal valid result header into r.result so Apply has
+	// Stitch a minimal valid result header into the replay so Apply has
 	// the seq / parent-linkage / closeTime fields it needs. Reuse
 	// parent's values; the successor is a notional seq = parent.seq+1.
 	resHdr := parent.Header()
@@ -177,12 +177,9 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateReplayReady
-	stateMap, err := parent.StateMapSnapshot()
-	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
 	require.NoError(t, err)
-	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.Fees())
-	require.NoError(t, err)
+	rd.target, rd.targetTx = resHdr, txMap
 	// Purposely-malformed TxBytes — distinguishable per index so the
 	// returned error tells us which tx Apply tried first.
 	rd.txs = []DecodedTx{
@@ -235,8 +232,6 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	resHdr.ParentHash = parent.Hash()
 	resHdr.ParentCloseTime = parent.CloseTime()
 	resHdr.CloseTime = parent.CloseTime().Add(10 * time.Second)
-	stateMap, err := parent.StateMapSnapshot()
-	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
 	require.NoError(t, err)
 
@@ -274,8 +269,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateReplayReady
-	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.Fees())
-	require.NoError(t, err)
+	rd.target, rd.targetTx = resHdr, txMap
 	rd.txs = []DecodedTx{{
 		Index:     0,
 		Hash:      outerHash,

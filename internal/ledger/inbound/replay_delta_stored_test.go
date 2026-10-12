@@ -60,7 +60,7 @@ func makeStoredReplayTarget(
 	}
 	hdr.Hash = header.CalculateHash(hdr)
 
-	target, err := ledger.NewFromHeader(hdr, stateMap, txMap, parent.Fees())
+	target, err := ledger.NewFromHeader(hdr, stateMap, txMap, parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
 	return target
 }
@@ -212,7 +212,7 @@ func TestStoredReplayColdWalkAdmitsBeforeDecodeAndReleasesLoads(t *testing.T) {
 	require.NoError(t, err)
 	stateMap, err := source.StateMapSnapshot()
 	require.NoError(t, err)
-	target, err := ledger.NewFromHeader(source.Header(), stateMap, cold, source.Fees())
+	target, err := ledger.NewFromHeader(source.Header(), stateMap, cold, source.Fees(), source.ExecutionStore())
 	require.NoError(t, err)
 
 	before := family.reads
@@ -357,14 +357,8 @@ func TestNewStoredLedgerReplayRejectsInvalidHeaderHash(t *testing.T) {
 	hdr := target.Header()
 	hdr.Hash[0] ^= 0xff
 
-	stateMap, err := target.StateMapSnapshot()
+	txRoot, err := target.TxMapHash()
 	require.NoError(t, err)
-	txMap, err := target.TxMapSnapshot()
-	require.NoError(t, err)
-	target, err = ledger.NewFromHeader(hdr, stateMap, txMap, target.Fees())
-	require.NoError(t, err)
-
-	_, err = NewStoredLedgerReplay(parent, target, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "header hash mismatch")
+	_, err = newStoredReplay(t.Context(), parent, hdr, txRoot, target.TxMapSnapshotContext, nil, nil)
+	require.ErrorContains(t, err, "header hash mismatch")
 }
