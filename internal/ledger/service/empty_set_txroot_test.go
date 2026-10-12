@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +23,9 @@ func TestAcceptConsensusResult_EmptySetClosesWithZeroTxRoot(t *testing.T) {
 	// Dirty the ingress open ledger's tx map — the node-local traffic no
 	// other validator saw.
 	svc.mu.Lock()
-	require.NoError(t, svc.openLedger.AddTransaction([32]byte{0xD1}, []byte{0x12, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}))
+	txData := []byte{0x12, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}
+	txHash := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txData)
+	require.NoError(t, svc.openLedger.AddTransaction(txHash, txData))
 	svc.mu.Unlock()
 
 	parent := svc.GetClosedLedger()
