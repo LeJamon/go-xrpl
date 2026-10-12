@@ -505,20 +505,54 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 
 // OnLedgerSwitched tells peers we abandoned our previous LCL for ledger.
 func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
+	return a.emitLedgerSwitched(ledger, true)
+}
+
+// OnPreferredLedgerSwitched emits the relay and status side effects after a
+// prepared preferred-ledger transition has already published its canonical
+// frontier. It deliberately does not call SwitchToPreferredLedger again.
+func (a *Adaptor) OnPreferredLedgerSwitched(ledger consensus.Ledger) error {
+	if err := a.emitLedgerSwitched(ledger, false); err != nil {
+		return err
+	}
+	a.promoteAfterPreferredLedgerSwitch()
+	return nil
+}
+
+func (a *Adaptor) promoteAfterPreferredLedgerSwitch() {
+	switch a.GetOperatingMode() {
+	case consensus.OpModeConnected, consensus.OpModeSyncing:
+		a.SetOperatingMode(consensus.OpModeTracking)
+	}
+}
+
+func (a *Adaptor) emitLedgerSwitched(ledger consensus.Ledger, publishCanonical bool) error {
+	return a.emitLedgerSwitchedWithHistoryFloor(ledger, publishCanonical, 0, false)
+}
+
+func (a *Adaptor) emitLedgerSwitchedWithHistoryFloor(
+	ledger consensus.Ledger,
+	publishCanonical bool,
+	historyFloor uint32,
+	historyFloorCaptured bool,
+) error {
 	if ledger == nil {
 		return nil
 	}
-	var historyFloor uint32
 	switched := false
 	if wrapped, ok := ledger.(*LedgerWrapper); ok {
 		selected := wrapped.Unwrap()
-		historyFloor = switchedLedgerHistoryFloor(
-			selected,
-			a.ledgerService.GetClosedLedger(),
-			a.ledgerService.GetValidatedLedger(),
-		)
-		if err := a.ledgerService.SwitchToPreferredLedger(wrapped.Unwrap()); err != nil {
-			return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+		if !historyFloorCaptured {
+			historyFloor = switchedLedgerHistoryFloor(
+				selected,
+				a.ledgerService.GetClosedLedger(),
+				a.ledgerService.GetValidatedLedger(),
+			)
+		}
+		if publishCanonical {
+			if err := a.ledgerService.SwitchToPreferredLedger(selected); err != nil {
+				return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+			}
 		}
 		switched = true
 	}

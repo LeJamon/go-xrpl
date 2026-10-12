@@ -384,8 +384,10 @@ func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 	}
 }
 
-// TrySwitchToLedger synchronously evaluates and adopts a locally-held ledger
-// selected by consensus recovery, validation, or the current network view.
+// TrySwitchToLedger evaluates a locally-held ledger selected by consensus
+// recovery, validation, or the current network view. Production adaptors may
+// return Busy after admitting detached preferred-ledger preparation; adoption
+// is reported only by the subsequent engine state transition.
 func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
 	e.mu.Lock()
 	e.deferPostUnlock++
@@ -424,6 +426,15 @@ func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitc
 		}
 		return consensus.LedgerSwitchBusy, nil
 	}
+	if e.mode != consensus.ModeWrongLedger && e.prevLedger != nil && e.prevLedger.ID() == l.ID() {
+		return consensus.LedgerSwitchAccepted, nil
+	}
+	if !e.canSwitchToLedgerLocked(l) {
+		return consensus.LedgerSwitchRejected, nil
+	}
+	if e.preparePreferredSwitchLocked(id, l, false) {
+		return consensus.LedgerSwitchBusy, nil
+	}
 	if !e.switchToLedgerLocked(id, l) {
 		return consensus.LedgerSwitchRejected, nil
 	}
@@ -456,17 +467,6 @@ func (e *Engine) isQuorumValidatedCandidateLocked(l consensus.Ledger) bool {
 }
 
 func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
-	// A validated-ledger completion can race with the normal consensus commit:
-	// by the time the router hands the locally-held ledger back to us, it may
-	// already be our current LCL. Treat that handoff as successfully satisfied.
-	// Restarting it as a recovery round would unnecessarily enter
-	// switchedLedger and turn the next validation into a partial validation.
-	// Keep the WrongLedger case active: even an equal hash must restart that
-	// pinned recovery state so consensus can leave WrongLedger safely.
-	if e.mode != consensus.ModeWrongLedger && e.prevLedger != nil && e.prevLedger.ID() == l.ID() {
-		return true
-	}
-
 	if !e.canSwitchToLedgerLocked(l) {
 		if e.lastRefusedSwitch != id {
 			e.lastRefusedSwitch = id
@@ -482,6 +482,46 @@ func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger)
 		}
 		return false
 	}
+	return e.switchToLedgerStateLocked(id, l)
+}
+
+// switchToLedgerStateLocked applies the engine half of a preferred-ledger
+// transition after the adaptor's detached service publication has succeeded.
+// The caller must have already performed all eligibility checks under e.mu.
+func (e *Engine) switchToLedgerStateLocked(id consensus.LedgerID, l consensus.Ledger) bool {
+	return e.switchToLedgerStateLockedWithNotification(id, l, false, nil)
+}
+
+// switchToLedgerStatePreparedLocked applies a prepared preferred-ledger
+// transition. Its switched-ledger notification is staged until the service
+// publication fence and e.mu have both been released.
+func (e *Engine) switchToLedgerStatePreparedLocked(
+	id consensus.LedgerID,
+	l consensus.Ledger,
+	preparation consensus.PreferredLedgerPreparation,
+) {
+	// Once TryPublish succeeds, this path has no fallible callback or service
+	// operation left. The shared helper retains a bool for the synchronous
+	// compatibility path, but a prepared publication cannot be rolled back.
+	_ = e.switchToLedgerStateLockedWithNotification(id, l, true, preparation)
+}
+
+func (e *Engine) switchToLedgerStateLockedWithNotification(
+	id consensus.LedgerID,
+	l consensus.Ledger,
+	prepared bool,
+	preparation consensus.PreferredLedgerPreparation,
+) bool {
+	// A validated-ledger completion can race with the normal consensus commit:
+	// by the time the router hands the locally-held ledger back to us, it may
+	// already be our current LCL. Treat that handoff as successfully satisfied.
+	// Restarting it as a recovery round would unnecessarily enter
+	// switchedLedger and turn the next validation into a partial validation.
+	// Keep the WrongLedger case active: even an equal hash must restart that
+	// pinned recovery state so consensus can leave WrongLedger safely.
+	if e.mode != consensus.ModeWrongLedger && e.prevLedger != nil && e.prevLedger.ID() == l.ID() {
+		return true
+	}
 
 	lID := l.ID()
 	slog.Info("Acquired missing ledger, restarting round",
@@ -492,7 +532,9 @@ func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger)
 	nextRound := consensus.RoundID{Seq: l.Seq() + 1, ParentHash: l.ID()}
 	proposing := e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull
-	if err := e.startRoundLocked(nextRound, proposing, true); err != nil {
+	if prepared {
+		e.startRoundPreparedLocked(nextRound, proposing, true, preparation)
+	} else if err := e.startRoundLocked(nextRound, proposing, true); err != nil {
 		e.prevLedger = previousLedger
 		e.wrongLedgerID = previousWrongLedgerID
 		slog.Error("Failed to switch to acquired ledger",

@@ -176,7 +176,7 @@ func (o *OpenLedger) Accept(
 	modifier func(*ledger.Ledger),
 	relay func(hash [32]byte, blob []byte),
 ) error {
-	return o.accept(context.Background(), newLCL, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay, nil)
+	return o.accept(context.Background(), newLCL, nil, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay, nil)
 }
 
 // AcceptWithPrecommit runs precommit after every fallible rebuild step has
@@ -215,12 +215,39 @@ func (o *OpenLedger) AcceptWithPrecommitContext(
 	relay func(hash [32]byte, blob []byte),
 	publication func(publish func()),
 ) error {
-	return o.accept(ctx, newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
+	return o.accept(ctx, newLCL, nil, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
+}
+
+// AcceptWithPrecommitContextFrom is the detached successor form of
+// AcceptWithPrecommitContext. prior is an owned snapshot of the transactions
+// that were visible in the previous open-ledger view. Supplying it keeps the
+// preparation independent from the live OpenLedger pointer, so callers can
+// build a successor while ingress continues to read the old frontier. The
+// snapshot is consumed only by this call and is never retained.
+func (o *OpenLedger) AcceptWithPrecommitContextFrom(
+	ctx context.Context,
+	newLCL *ledger.Ledger,
+	prior []PendingTx,
+	locals []PendingTx,
+	retriesFirst bool,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+	queue *txq.TxQ,
+	precommit func(),
+	modifier func(*ledger.Ledger),
+	relay func(hash [32]byte, blob []byte),
+	publication func(publish func()),
+) error {
+	if prior == nil {
+		prior = make([]PendingTx, 0)
+	}
+	return o.accept(ctx, newLCL, prior, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
 }
 
 func (o *OpenLedger) accept(
 	ctx context.Context,
 	newLCL *ledger.Ledger,
+	prior []PendingTx,
 	locals []PendingTx,
 	retriesFirst bool,
 	retries *[]PendingTx,
@@ -276,12 +303,17 @@ func (o *OpenLedger) accept(
 		return err
 	}
 
-	// 2. Replay prior current's txs.
-	o.currentMu.RLock()
-	curTxs, err := collectTxsContext(ctx, o.current)
-	o.currentMu.RUnlock()
-	if err != nil {
-		return err
+	// 2. Replay the captured prior view when supplied. The ordinary path reads
+	// the current pointer here; detached preparation supplies an owned snapshot
+	// so it never touches the live OpenLedger while rebuilding a successor.
+	curTxs := prior
+	if prior == nil {
+		o.currentMu.RLock()
+		curTxs, err = collectTxsContext(ctx, o.current)
+		o.currentMu.RUnlock()
+		if err != nil {
+			return err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -457,6 +489,22 @@ func (o *OpenLedger) CurrentTransactions(ctx context.Context) ([]PendingTx, erro
 	return collectTxsContext(ctx, o.Current())
 }
 
+// TransactionSnapshotStats sizes accepted leaves, including metadata and
+// inner Batch records, without parsing or retaining transaction objects.
+type TransactionSnapshotStats struct {
+	Bytes uint64
+	Count uint64
+}
+
+// CurrentTransactionStats sizes the current leaves before private replay
+// allocation. CurrentTransactions performs canonical validation after admission.
+func (o *OpenLedger) CurrentTransactionStats(ctx context.Context) (TransactionSnapshotStats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return collectTransactionStatsContext(ctx, o.Current())
+}
+
 func collectTxsContext(ctx context.Context, v *ledger.Ledger) ([]PendingTx, error) {
 	if v == nil {
 		return nil, nil
@@ -508,6 +556,38 @@ func collectTxsContext(ctx context.Context, v *ledger.Ledger) ([]PendingTx, erro
 		return nil, visitErr
 	}
 	return out, nil
+}
+
+func collectTransactionStatsContext(ctx context.Context, v *ledger.Ledger) (TransactionSnapshotStats, error) {
+	var stats TransactionSnapshotStats
+	if v == nil {
+		return stats, nil
+	}
+	var visitErr error
+	err := v.ForEachTransactionContext(ctx, func(_ [32]byte, data []byte) bool {
+		if err := ctx.Err(); err != nil {
+			visitErr = err
+			return false
+		}
+		blobBytes := uint64(len(data))
+		if ^uint64(0)-stats.Bytes < blobBytes || stats.Count == ^uint64(0) {
+			visitErr = errors.New("openledger: transaction snapshot size overflow")
+			return false
+		}
+		stats.Bytes += blobBytes
+		stats.Count++
+		return true
+	})
+	if err != nil {
+		return stats, err
+	}
+	if visitErr != nil {
+		return stats, visitErr
+	}
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
+	return stats, nil
 }
 
 // Submit is the convenience entry point for tx ingress, wrapping Modify with a

@@ -175,6 +175,17 @@ type Service struct {
 	// never blocks closed-ledger readers. Priority roles pass queued ingress.
 	openLedgerMu priorityGate
 
+	// preferredTransitionMu owns the detached successor transition. Preparation
+	// releases openLedgerMu after capturing the published input view, so ingress
+	// must wait on this owner separately rather than entering the old view while
+	// it is being replaced. The owner is cleared before any post-publication
+	// callback or relay work runs.
+	preferredTransitionMu     sync.Mutex
+	preferredTransitionActive bool
+	preferredTransitionWake   chan struct{}
+	preferredTransitionCancel context.CancelFunc
+	preferredTransitionOwner  *PreparedPreferredLedger
+
 	// mu guards the lifecycle frontier and cross-component state. Lock ordering
 	// is openLedgerMu, mu, historyComponent.mu, then component-specific locks
 	// such as TxQ.
@@ -383,36 +394,58 @@ func (s *Service) lockOpenLedgerIfRunning(role openLedgerRole) error {
 }
 
 func (s *Service) lockOpenLedgerIfRunningTimed(ctx context.Context, role openLedgerRole) (openLedgerGateWait, error) {
-	if err := ctx.Err(); err != nil {
-		return openLedgerGateWait{}, err
-	}
-	lifecycleStarted := time.Now()
-	s.lifecycleMu.Lock()
-	if s.lifecycleState != serviceRunning {
+	var totalLifecycleWait time.Duration
+	for {
+		if err := ctx.Err(); err != nil {
+			return openLedgerGateWait{}, err
+		}
+		lifecycleStarted := time.Now()
+		s.lifecycleMu.Lock()
+		if s.lifecycleState != serviceRunning {
+			s.lifecycleMu.Unlock()
+			return openLedgerGateWait{}, errServiceNotRunning
+		}
+		totalLifecycleWait += time.Since(lifecycleStarted)
 		s.lifecycleMu.Unlock()
-		return openLedgerGateWait{}, errServiceNotRunning
-	}
-	lifecycleWait := time.Since(lifecycleStarted)
-	s.lifecycleMu.Unlock()
 
-	wait, err := s.openLedgerMu.LockRoleContext(ctx, role)
-	if err != nil {
-		return wait, err
+		waitStarted := time.Now()
+		if err := s.waitPreferredTransition(ctx); err != nil {
+			return openLedgerGateWait{Role: role, Wait: time.Since(waitStarted)}, err
+		}
+		totalLifecycleWait += time.Since(waitStarted)
+
+		wait, err := s.openLedgerMu.LockRoleContext(ctx, role)
+		if err != nil {
+			wait.LifecycleWait += totalLifecycleWait
+			return wait, err
+		}
+		// A waiter can have entered the gate before a preferred transition
+		// marked its owner. Release that handoff and observe the transition
+		// outside the gate; otherwise it could mutate the retired view while
+		// detached preparation is in flight.
+		if s.preferredTransitionIsActive() {
+			s.openLedgerMu.Unlock()
+			if err := s.waitPreferredTransition(ctx); err != nil {
+				wait.LifecycleWait += totalLifecycleWait
+				return wait, err
+			}
+			continue
+		}
+		lifecycleStarted = time.Now()
+		s.lifecycleMu.Lock()
+		wait.LifecycleWait = totalLifecycleWait + time.Since(lifecycleStarted)
+		running := s.lifecycleState == serviceRunning
+		s.lifecycleMu.Unlock()
+		if !running {
+			s.openLedgerMu.Unlock()
+			return wait, errServiceNotRunning
+		}
+		if err := ctx.Err(); err != nil {
+			s.openLedgerMu.Unlock()
+			return wait, err
+		}
+		return wait, nil
 	}
-	lifecycleStarted = time.Now()
-	s.lifecycleMu.Lock()
-	wait.LifecycleWait = lifecycleWait + time.Since(lifecycleStarted)
-	running := s.lifecycleState == serviceRunning
-	s.lifecycleMu.Unlock()
-	if !running {
-		s.openLedgerMu.Unlock()
-		return wait, errServiceNotRunning
-	}
-	if err := ctx.Err(); err != nil {
-		s.openLedgerMu.Unlock()
-		return wait, err
-	}
-	return wait, nil
 }
 
 func (s *Service) beginValidatedLedgerUpdate() bool {
@@ -905,11 +938,6 @@ func (s *Service) tickLoadFeeLocked() {
 	}
 }
 
-// Caller must hold openLedgerMu and s.mu.
-func (s *Service) acceptPreferredOpenLedgerLocked(closed *ledger.Ledger) error {
-	return s.openLedgerAcceptanceForValidatedLocked(context.Background(), nil, nil, nil, true)(closed, nil, false, nil)
-}
-
 // Standalone validates the closed ledger before preparing its successor, but
 // publishes the validated frontier only after preparation succeeds.
 func (s *Service) acceptStandaloneOpenLedgerLocked(ctx context.Context, closed *ledger.Ledger, retriableTxs []openledger.PendingTx) error {
@@ -931,32 +959,21 @@ func (s *Service) acceptStandaloneOpenLedgerLocked(ctx context.Context, closed *
 	if err != nil {
 		return err
 	}
-	return s.openLedgerAcceptanceForValidatedLocked(ctx, nil, &salt, closed, false)(closed, retriableTxs, false, nil)
-}
-
-// openLedgerAcceptanceLocked captures service configuration under mu. The returned
-// operation requires openLedgerMu, but runs storage reads and replay without mu.
-func (s *Service) openLedgerAcceptanceLocked(ctx context.Context, relayDuration *time.Duration, retrySalt *[32]byte) func(*ledger.Ledger, []openledger.PendingTx, bool, func(func())) error {
-	return s.openLedgerAcceptanceForValidatedLocked(ctx, relayDuration, retrySalt, nil, false)
+	return s.openLedgerAcceptanceForValidatedLocked(ctx, &salt, closed)(closed, retriableTxs, false, nil)
 }
 
 func (s *Service) openLedgerAcceptanceForValidatedLocked(
 	ctx context.Context,
-	relayDuration *time.Duration,
 	retrySalt *[32]byte,
 	validatedOverride *ledger.Ledger,
-	preferredSwitch bool,
 ) func(*ledger.Ledger, []openledger.PendingTx, bool, func(func())) error {
-	if preferredSwitch {
-		retrySalt = &[32]byte{}
-	}
 	view, queue, localsPool := s.openLedgerView, s.txQueue, s.localTxs
 	networkID, logger, feeTrack := s.config.NetworkID, s.config.Logger, s.feeTrack
 	validatedLedger := s.validatedLedger
 	if validatedOverride != nil {
 		validatedLedger = validatedOverride
 	}
-	relay, slowRound := s.txRelay, preferredSwitch || s.lastConsensusRoundTime > slowConsensusThreshold
+	relay, slowRound := s.txRelay, s.lastConsensusRoundTime > slowConsensusThreshold
 	return func(closed *ledger.Ledger, retriableTxs []openledger.PendingTx, anyDisputes bool, publication func(func())) error {
 		if closed == nil {
 			return nil
@@ -989,27 +1006,10 @@ func (s *Service) openLedgerAcceptanceForValidatedLocked(
 			locals = localsPool.GetTxSet()
 		}
 		retries := append([]openledger.PendingTx(nil), retriableTxs...)
-		if preferredSwitch {
-			for _, local := range locals {
-				prepared, err := openledger.ParsePendingTx(local.Blob)
-				if err != nil {
-					return fmt.Errorf("parse preferred-ledger local transaction %x: %w", local.Hash, err)
-				}
-				if prepared.Hash != local.Hash || prepared.Account != local.Account {
-					return fmt.Errorf("preferred-ledger local transaction identity does not match blob %x", local.Hash)
-				}
-			}
-			retries = append(retries, locals...)
-			locals = nil
-		}
 		relayCB := func(hash [32]byte, blob []byte) {
 			s.rememberRelayTransaction(hash, blob, false)
 			if relay != nil {
-				relayStarted := time.Now()
 				relay(blob)
-				if relayDuration != nil {
-					*relayDuration += time.Since(relayStarted)
-				}
 			}
 		}
 		processClosed := func() {

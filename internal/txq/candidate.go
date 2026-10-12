@@ -116,6 +116,19 @@ func (c *candidate) rawBlob() []byte {
 	return nil
 }
 
+func (c *candidate) rawBlobSize() uint64 {
+	if c == nil {
+		return 0
+	}
+	if len(c.blob) > 0 {
+		return uint64(len(c.blob))
+	}
+	if c.Txn != nil {
+		return uint64(len(c.Txn.GetRawBytes()))
+	}
+	return 0
+}
+
 // AccountQueue tracks queued transactions for a single account.
 type accountQueue struct {
 	Account      [20]byte

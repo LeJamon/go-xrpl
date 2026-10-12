@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -69,13 +68,7 @@ func TestOpenLedgerAcceptanceUsesLastValidatedRules(t *testing.T) {
 	require.False(t, svc.TransactionRules().Enabled(amendment.FeatureBatchV1_1),
 		"TransactionRules must match the open-ledger admission rules")
 
-	svc.openLedgerMu.Lock()
-	svc.mu.Lock()
-	accept := svc.openLedgerAcceptanceLocked(context.Background(), nil, nil)
-	svc.mu.Unlock()
-	err = accept(localClosed, nil, false, nil)
-	svc.openLedgerMu.Unlock()
-	require.NoError(t, err)
+	require.NoError(t, svc.SwitchToPreferredLedger(localClosed))
 
 	current := svc.openLedgerView.Current()
 	require.NotNil(t, current)

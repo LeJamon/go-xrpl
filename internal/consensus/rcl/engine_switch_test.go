@@ -1,11 +1,21 @@
 package rcl
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
+
+type switchedLedgerErrorAdaptor struct {
+	*mockAdaptor
+	err error
+}
+
+func (a *switchedLedgerErrorAdaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
+	return a.err
+}
 
 // chainLedger builds a mockLedger at seq with id first-byte idb and parent
 // id first-byte pb, so a chain can be wired by matching child.parentID to
@@ -123,6 +133,32 @@ func TestEngine_TrySwitchToLedger_AcceptsEligibleLedger(t *testing.T) {
 				t.Fatalf("switched ledgers = %v, want target", a.switchedLedgers)
 			}
 		})
+	}
+}
+
+func TestEngine_TrySwitchToLedger_RestoresStateWhenSynchronousNotificationFails(t *testing.T) {
+	base := newMockAdaptor()
+	a := &switchedLedgerErrorAdaptor{mockAdaptor: base, err: errors.New("notify failed")}
+	e := NewEngine(a, DefaultConfig())
+	initial := base.ledgers[consensus.LedgerID{1}]
+	target := chainLedger(101, 101, 1)
+	base.ledgers[target.ID()] = target
+	e.prevLedger = initial
+	e.mode = consensus.ModeWrongLedger
+	e.wrongLedgerID = target.ID()
+
+	got, err := e.TrySwitchToLedger(target.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if got != consensus.LedgerSwitchRejected {
+		t.Fatalf("result = %v, want Rejected", got)
+	}
+	if e.prevLedger.ID() != initial.ID() {
+		t.Fatal("failed synchronous switch changed the consensus parent")
+	}
+	if e.wrongLedgerID != target.ID() {
+		t.Fatal("failed synchronous switch cleared the recovery target")
 	}
 }
 
