@@ -113,6 +113,33 @@ func (s *ExecutionStore) AcquireRoot(root rootlease.Root) (func(), error) {
 	return s.roots.Acquire(root)
 }
 
+// BeginBuild admits a bounded commitment build without pinning a durable
+// generation. The caller must register any destination root ownership before
+// ending the returned token.
+func (s *ExecutionStore) BeginBuild() (*rootlease.BuildLease, error) {
+	return s.roots.BeginBuild()
+}
+
+// EndBuild ends a bounded commitment build admission. It is idempotent for a
+// token and safe from deferred cleanup paths.
+func (s *ExecutionStore) EndBuild(build *rootlease.BuildLease) {
+	s.roots.EndBuild(build)
+}
+
+// AcquireExecutionLease registers a sealed root that must survive storage
+// rotation until its owner transfers or releases it.
+func (s *ExecutionStore) AcquireExecutionLease(root rootlease.Root) (*rootlease.Lease, error) {
+	return s.roots.AcquireLease(root)
+}
+
+// ReleaseExecutionLease releases ownership after the sealed root has been
+// transferred to history, flat outbox, or another retention owner.
+func (s *ExecutionStore) ReleaseExecutionLease(lease *rootlease.Lease) {
+	if lease != nil {
+		lease.Release()
+	}
+}
+
 func (s *ExecutionStore) GuardRoots(preserved func(rootlease.Root) bool) (func(), bool) {
 	return s.roots.GuardFunc(preserved)
 }

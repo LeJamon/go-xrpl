@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
+	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -327,6 +328,35 @@ func TestExecutionCommitmentSinkFailureReleasesWorkspace(t *testing.T) {
 	if used := workspace.Snapshot().Used; used != 0 {
 		t.Fatalf("workspace retained %d bytes after failed commitment: %d", used, used)
 	}
+}
+
+func TestExecutionBuildAdmissionRequiresDestinationHandoff(t *testing.T) {
+	store, _ := testExecutionStore(t)
+	parent := rootlease.Root{Hash: [32]byte{1}, Kind: shamap.TypeState}
+	destination := rootlease.Root{Hash: [32]byte{2}, Kind: shamap.TypeState}
+	build, err := store.BeginBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentLease, err := store.AcquireExecutionLease(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release, ok := store.GuardPreservedRoots(map[rootlease.Root]struct{}{parent: {}}); ok || release != nil {
+		t.Fatal("retirement admitted while bounded build was active")
+	}
+	destinationLease, err := store.AcquireExecutionLease(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.ReleaseExecutionLease(parentLease)
+	store.EndBuild(build)
+	guardRelease, ok := store.GuardPreservedRoots(map[rootlease.Root]struct{}{destination: {}})
+	if !ok {
+		t.Fatal("retirement rejected after destination handoff")
+	}
+	guardRelease()
+	store.ReleaseExecutionLease(destinationLease)
 }
 
 func TestEnableBoundedExecutionRejectsPartialDestination(t *testing.T) {

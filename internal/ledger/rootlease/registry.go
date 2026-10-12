@@ -12,6 +12,8 @@ var ErrCapacity = errors.New("ledger root lease capacity exhausted")
 
 var ErrReleased = errors.New("ledger root lease is released")
 
+var ErrBuildActive = errors.New("ledger root build is still active")
+
 type Root struct {
 	Hash [32]byte
 	Kind shamap.Type
@@ -27,6 +29,7 @@ type Registry struct {
 	budget *membudget.Account
 	limit  int
 	active int
+	builds int
 	closed bool
 }
 
@@ -39,9 +42,18 @@ type Lease struct {
 	released bool
 }
 
+// BuildLease prevents destructive root retirement while a bounded builder is
+// emitting its replacement nodes. It does not hold the registry mutex or a
+// durable-generation snapshot while the build is running.
+type BuildLease struct {
+	registry *Registry
+	once     sync.Once
+}
+
 type Stats struct {
-	Active   int
-	Distinct int
+	Active       int
+	Distinct     int
+	ActiveBuilds int
 }
 
 func New(budget *membudget.Account, limit int) (*Registry, error) {
@@ -57,6 +69,42 @@ func (r *Registry) Acquire(root Root) (func(), error) {
 		return nil, err
 	}
 	return lease.Release, nil
+}
+
+// BeginBuild admits one bounded builder. Guard rejects retirement while any
+// build is active; the returned token must be ended after the destination root
+// lease has been registered or the build has been handed off for retry.
+func (r *Registry) BeginBuild() (*BuildLease, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return nil, ErrCapacity
+	}
+	r.builds++
+	return &BuildLease{registry: r}, nil
+}
+
+// EndBuild releases a build admission token. It is safe to call more than
+// once, including from cleanup paths that race a cancellation path.
+func (r *Registry) EndBuild(build *BuildLease) {
+	if build == nil || build.registry != r {
+		return
+	}
+	build.once.Do(func() {
+		r.mu.Lock()
+		if r.builds > 0 {
+			r.builds--
+		}
+		r.mu.Unlock()
+	})
+}
+
+// End releases a build admission token through its owning registry.
+func (b *BuildLease) End() {
+	if b == nil || b.registry == nil {
+		return
+	}
+	b.registry.EndBuild(b)
 }
 
 // AcquireLease reserves one registry slot for root. Zero roots are represented
@@ -152,6 +200,9 @@ func (r *Registry) Close() error {
 	if r.active != 0 {
 		return errors.New("ledger root leases are still active")
 	}
+	if r.builds != 0 {
+		return ErrBuildActive
+	}
 	if !r.closed {
 		r.closed = true
 		r.roots = nil
@@ -175,7 +226,7 @@ func (r *Registry) Roots() []Root {
 func (r *Registry) Stats() Stats {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return Stats{Active: r.active, Distinct: len(r.roots)}
+	return Stats{Active: r.active, Distinct: len(r.roots), ActiveBuilds: r.builds}
 }
 
 // Guard admits retirement only when every current lease appears in preserved.
@@ -186,6 +237,10 @@ func (r *Registry) Stats() Stats {
 func (r *Registry) Guard(preserved map[Root]struct{}) (release func(), admitted bool) {
 	r.mu.Lock()
 	if r.closed {
+		r.mu.Unlock()
+		return nil, false
+	}
+	if r.builds != 0 {
 		r.mu.Unlock()
 		return nil, false
 	}

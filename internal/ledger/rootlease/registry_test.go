@@ -84,6 +84,66 @@ func TestGuardPreservedMapBlocksNewLeases(t *testing.T) {
 	}
 }
 
+func TestBuildAdmissionBlocksRetirementUntilDestinationIsRegistered(t *testing.T) {
+	r, err := New(nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, destination := testRoot(7), testRoot(8)
+	parentLease, err := r.AcquireLease(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, err := r.BeginBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Stats().ActiveBuilds; got != 1 {
+		t.Fatalf("active builds = %d, want 1", got)
+	}
+	if release, ok := r.Guard(map[Root]struct{}{parent: {}}); ok || release != nil {
+		t.Fatal("Guard admitted retirement during an active build")
+	}
+
+	destinationLease, err := r.AcquireLease(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build.End()
+	build.End()
+	if got := r.Stats().ActiveBuilds; got != 0 {
+		t.Fatalf("active builds after End = %d, want 0", got)
+	}
+	guardRelease, ok := r.Guard(map[Root]struct{}{parent: {}, destination: {}})
+	if !ok {
+		t.Fatal("Guard rejected registered destination after build completion")
+	}
+	guardRelease()
+	destinationLease.Release()
+	parentLease.Release()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseRejectsActiveBuild(t *testing.T) {
+	r, err := New(nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, err := r.BeginBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != ErrBuildActive {
+		t.Fatalf("Close with active build = %v, want %v", err, ErrBuildActive)
+	}
+	build.End()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGuardFuncCallbackRunsOutsideRegistryLock(t *testing.T) {
 	r, err := New(nil, 1)
 	if err != nil {
