@@ -1281,14 +1281,23 @@ func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Le
 		return errors.New("closed ledger changed before repaired execution state could be installed")
 	}
 	if s.closedLedger != nil && s.closedLedger.Hash() == repaired.Hash() {
+		if s.openLedger != nil {
+			if err := s.openLedger.FreezeExecution(); err != nil {
+				return err
+			}
+		}
 		newOpen, err := ledger.NewOpen(repaired, time.Now())
 		if err != nil {
 			return err
 		}
 		if err := s.acceptPreferredOpenLedgerLocked(repaired); err != nil {
+			newOpen.Discard()
 			return err
 		}
 		s.closedLedger = repaired
+		if s.openLedger != nil {
+			s.openLedger.ReleaseExecutionBuildLeases()
+		}
 		s.openLedger = newOpen
 	}
 	if s.validatedLedger != nil && s.validatedLedger.Hash() == repaired.Hash() {
