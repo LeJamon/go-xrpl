@@ -97,11 +97,18 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		return err
 	}
 	stopMetrics := r.installExecutionMetrics(execution, flat, r.memory.stateDisk)
-	r.executionCleanup = sync.OnceValue(func() error {
-		defer stopMetrics()
+	var cleanupMu sync.Mutex
+	cleaned := false
+	r.executionCleanup = func() error {
+		cleanupMu.Lock()
+		defer cleanupMu.Unlock()
+		if cleaned {
+			return nil
+		}
 		if err := execution.Close(); err != nil {
 			return err
 		}
+		stopMetrics()
 		var errs []error
 		if flat != nil {
 			errs = append(errs, flat.Close())
@@ -111,9 +118,12 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		}
 		if storageReserved {
 			r.memory.stateStorage.Release(storageBytes)
+			storageReserved = false
 		}
-		return errors.Join(errs...)
-	})
+		err := errors.Join(errs...)
+		cleaned = err == nil
+		return err
+	}
 	cfg.Execution, cfg.FlatState = execution, flat
 	r.serverLog.Info("Bounded execution store opened", "overlay_mb", state.MemoryMB,
 		"scratch_mb", state.ScratchMB, "flat_path", flatPath)
