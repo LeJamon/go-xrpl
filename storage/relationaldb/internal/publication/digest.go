@@ -8,6 +8,7 @@ import (
 	"hash"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -31,8 +32,12 @@ func NewDigest(ledger relationaldb.LedgerInfo, commitID [32]byte, publicationKin
 	d.writeBytes(ledger.AccountHash[:])
 	d.writeBytes(ledger.TransactionHash[:])
 	d.writeInt64(int64(ledger.TotalCoins))
-	d.writeInt64(ledger.CloseTime.UTC().UnixNano())
-	d.writeInt64(ledger.ParentCloseTime.UTC().UnixNano())
+	// Ledger headers encode close times as whole XRPL-epoch seconds. Hash the
+	// persisted representation so a retry built from a durable header has the
+	// same receipt as the original in-memory ledger, even when the latter
+	// carried sub-second wall-clock precision.
+	d.writeInt64(protocol.RippleSeconds(ledger.CloseTime))
+	d.writeInt64(protocol.RippleSeconds(ledger.ParentCloseTime))
 	d.writeInt32(ledger.CloseTimeRes)
 	d.writeUint32(ledger.CloseFlags)
 	return d

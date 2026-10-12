@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -62,6 +63,37 @@ func TestPersistLedgerStreamReplayIsIdempotentAndConflictsOnDescriptorChange(t *
 	err := rm.PersistLedgerStream(ctx, conflictingLedger, commitID, "sql-publication", streamFor(value.Transactions))
 	if !errors.Is(err, relationaldb.ErrCommitConflict) {
 		t.Fatalf("descriptor conflict error = %v, want ErrCommitConflict", err)
+	}
+}
+
+func TestPersistLedgerStreamReplayCanonicalizesHeaderTimes(t *testing.T) {
+	rm := setupTestDB(t)
+	ctx := context.Background()
+	value := publicationValue(97, 0x97, 0x98, publicationAccount(0x16, 0x26))
+	value.Ledger.CloseTime = time.Unix(1_700_000_097, 750_000_000).UTC()
+	value.Ledger.ParentCloseTime = time.Unix(1_700_000_096, 250_000_000).UTC()
+	var commitID [32]byte
+	commitID[0] = 8
+
+	if err := rm.PersistLedgerStream(ctx, value.Ledger, commitID, "sql-publication", streamFor(value.Transactions)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A ledger reconstructed from a durable header carries the exact XRPL
+	// whole-second values, while the original in-memory wall clock may retain
+	// sub-second precision. The semantic receipt must still replay exactly.
+	replayed := value.Ledger
+	replayed.CloseTime = time.Unix(replayed.CloseTime.Unix(), 0).UTC()
+	replayed.ParentCloseTime = time.Unix(replayed.ParentCloseTime.Unix(), 0).UTC()
+	if err := rm.PersistLedgerStream(ctx, replayed, commitID, "sql-publication", streamFor(value.Transactions)); err != nil {
+		t.Fatalf("canonical-time replay: %v", err)
+	}
+
+	changed := value.Transactions[0]
+	changed.Transaction.RawTxn = append(changed.Transaction.RawTxn, 0xff)
+	err := rm.PersistLedgerStream(ctx, replayed, commitID, "sql-publication", streamFor([]relationaldb.IndexedTransaction{changed}))
+	if !errors.Is(err, relationaldb.ErrCommitConflict) {
+		t.Fatalf("semantic stream conflict = %v, want ErrCommitConflict", err)
 	}
 }
 
