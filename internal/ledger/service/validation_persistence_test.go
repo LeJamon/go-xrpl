@@ -1,19 +1,62 @@
 package service
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
 )
 
+type validationPersistenceGate struct {
+	nodestore.Database
+	block       atomic.Bool
+	entered     chan struct{}
+	release     chan struct{}
+	enteredOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func (g *validationPersistenceGate) Store(ctx context.Context, node *nodestore.Node) error {
+	if g.block.Load() {
+		g.enteredOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
+	return g.Database.Store(ctx, node)
+}
+
+func (g *validationPersistenceGate) Sync(ctx context.Context) error {
+	if g.block.Load() {
+		g.enteredOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
+	return g.Database.Sync(ctx)
+}
+
+func (g *validationPersistenceGate) unblock() {
+	g.releaseOnce.Do(func() { close(g.release) })
+}
+
 func TestValidationProgressesDuringTransactionPersistence(t *testing.T) {
-	svc, err := New(DefaultConfig())
+	base := newTestNodeStore(t, 10000)
+	gate := &validationPersistenceGate{Database: base, entered: make(chan struct{}), release: make(chan struct{})}
+	family := backend.New(gate)
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{
+		Standalone:    true,
+		GenesisConfig: DefaultConfig().GenesisConfig,
+		NodeStore:     gate,
+		SHAMapFamily:  family,
+		Execution:     execution,
+	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	t.Cleanup(gate.unblock)
 	parent := svc.GetClosedLedger()
 	blob, _ := startupPaymentBlob(t, "validation-persistence", 1)
 	_, err = svc.AcceptConsensusResult(t.Context(), parent, [][]byte{blob}, nil, parent.CloseTime().Add(time.Second), true)
@@ -22,20 +65,13 @@ func TestValidationProgressesDuringTransactionPersistence(t *testing.T) {
 	closed := svc.GetClosedLedger()
 	seq, hash := closed.Sequence(), closed.Hash()
 
-	entered, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	unblock := func() { once.Do(func() { close(release) }) }
-	defer unblock()
+	gate.block.Store(true)
 	persisted := make(chan error, 1)
 	go func() {
-		persisted <- closed.StoreTransactionDirty(func([]shamap.FlushEntry) error {
-			close(entered)
-			<-release
-			return nil
-		})
+		persisted <- svc.persistToNodeStore(t.Context(), closed, seq)
 	}()
 	select {
-	case <-entered:
+	case <-gate.entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("transaction persistence did not reach storage")
 	}
@@ -69,7 +105,7 @@ func TestValidationProgressesDuringTransactionPersistence(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("consensus admission blocked behind transaction persistence")
 	}
-	unblock()
+	gate.unblock()
 	select {
 	case err := <-persisted:
 		require.NoError(t, err)

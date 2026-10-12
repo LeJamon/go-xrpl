@@ -279,7 +279,7 @@ func TestStateBaseRecertificationFailureIgnoresSupersededFrontier(t *testing.T) 
 	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
 	replacementHeader.Validated = false
 	replacementHeader.Hash = header.CalculateHash(replacementHeader)
-	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, f.validated.Fees())
+	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, f.validated.Fees(), f.svc.config.Execution)
 	require.NoError(t, err)
 	require.NoError(t, replacement.SetValidated())
 	f.svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool {
@@ -554,7 +554,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 		require.NoError(t, err)
 		txMap, err := f.validated.TxMapSnapshot()
 		require.NoError(t, err)
-		alternate, err := ledger.NewFromHeader(alternateHeader, stateMap, txMap, drops.Fees{})
+		alternate, err := ledger.NewFromHeader(alternateHeader, stateMap, txMap, drops.Fees{}, f.svc.config.Execution)
 		require.NoError(t, err)
 		require.NoError(t, alternate.SetValidated())
 

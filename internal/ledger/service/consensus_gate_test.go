@@ -14,7 +14,8 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger(), svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	svc.mu.RLock()
 	_, err = svc.applyConfigLocked()
@@ -131,7 +132,8 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger(), svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	svc.mu.RLock()
 	_, err = svc.applyConfigLocked()

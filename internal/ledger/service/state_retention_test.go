@@ -43,7 +43,7 @@ func retentionTestLedger(t *testing.T, tree *shamap.SHAMap, seq uint32) *ledger.
 	require.NoError(t, err)
 	h := header.LedgerHeader{LedgerIndex: seq, AccountHash: root}
 	h.Hash = header.CalculateHash(h)
-	l, err := ledger.NewFromHeader(h, tree, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	l, err := ledger.NewFromHeader(h, tree, shamap.New(shamap.TypeTransaction), drops.Fees{}, newTestExecutionStore(t))
 	require.NoError(t, err)
 	return l
 }
@@ -107,7 +107,7 @@ func TestStateRetentionReconcilesOpenIngressAtAdmission(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, tree.Put([32]byte{0x30}, []byte("original-state")))
 			svc.validatedLedger = retentionTestLedger(t, tree, 20)
-			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{})
+			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{}, svc.config.Execution)
 			require.NoError(t, err)
 			seq, guard, err := svc.PrepareStateRetention(t.Context(), 20, nil)
 			require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestStateRetentionReconcilesOpenIngressAtAdmission(t *testing.T) {
 				key[31] = 1
 				require.NoError(t, tree.Put(key, []byte("new-open-state")))
 			}
-			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{})
+			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{}, svc.config.Execution)
 			require.NoError(t, err)
 			committed, err := db.RotateGenerationWithRetention(t.Context(), seq, 11, guard, family.BeginPrune)
 			if size > stateRetentionCatchupNodes {
@@ -258,7 +258,7 @@ func TestStateRetentionRestampsLegacyStateAndTransactions(t *testing.T) {
 	require.NoError(t, err)
 	h := header.LedgerHeader{LedgerIndex: 20, AccountHash: stateRoot, TxHash: txRoot}
 	h.Hash = header.CalculateHash(h)
-	svc.validatedLedger, err = ledger.NewFromHeader(h, state, txs, drops.Fees{})
+	svc.validatedLedger, err = ledger.NewFromHeader(h, state, txs, drops.Fees{}, svc.config.Execution)
 	require.NoError(t, err)
 	orphan := nodestore.Hash256{0xfe}
 	require.NoError(t, db.Store(ctx, &nodestore.Node{Type: nodestore.NodeLedger, Hash: orphan, Data: []byte("obsolete header"), LedgerSeq: 1}))

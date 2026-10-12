@@ -10,7 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,25 +33,24 @@ func (f *acceptanceBlockingFamily) Fetch(ctx context.Context, hash [32]byte) ([]
 
 func (f *acceptanceBlockingFamily) unblock() { f.once.Do(func() { close(f.release) }) }
 
-func coldAcceptanceParent(t testing.TB, parent *ledger.Ledger) (*ledger.Ledger, *acceptanceBlockingFamily) {
+func coldAcceptanceParent(t testing.TB, parent *ledger.Ledger, base shamap.Family) (*ledger.Ledger, *acceptanceBlockingFamily) {
 	t.Helper()
 	child, err := ledger.NewOpen(parent, parent.CloseTime().Add(10*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, child.Close(parent.CloseTime().Add(10*time.Second), 0))
 	parent = child
-	memory := backend.NewMemory()
 	state, err := parent.StateMapSnapshot()
 	require.NoError(t, err)
-	require.NoError(t, state.StoreDirty(func(entries []shamap.FlushEntry) error { return memory.StoreBatch(t.Context(), entries) }))
 	root, err := state.Hash()
 	require.NoError(t, err)
-	family := &acceptanceBlockingFamily{Family: memory, entered: make(chan struct{}), release: make(chan struct{})}
+	family := &acceptanceBlockingFamily{Family: base, entered: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(family.unblock)
+	execution := newTestExecutionStore(t, family)
 	cold, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
 	require.NoError(t, err)
 	txMap := shamap.New(shamap.TypeTransaction)
 	require.Zero(t, parent.TxCount())
-	loaded, err := ledger.NewFromHeader(parent.Header(), cold, txMap, parent.Fees())
+	loaded, err := ledger.NewFromHeader(parent.Header(), cold, txMap, parent.Fees(), execution)
 	require.NoError(t, err)
 	return loaded, family
 }
@@ -66,7 +64,8 @@ func TestConsensusAcceptanceDetachedBuildRejectsReplacedParent(t *testing.T) {
 	preferred, err := ledger.NewOpen(warm, warm.CloseTime().Add(time.Second))
 	require.NoError(t, err)
 	require.NoError(t, preferred.Close(warm.CloseTime().Add(time.Second), 0))
-	cold, family := coldAcceptanceParent(t, warm)
+	cold, family := coldAcceptanceParent(t, warm, svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	blob, _ := startupPaymentBlob(t, "detached-build", 1)
 	family.armed.Store(true)
@@ -106,7 +105,8 @@ func TestConsensusAcceptanceCancellationDuringDetachedBuildDoesNotPublish(t *tes
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger(), svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	blob, _ := startupPaymentBlob(t, "canceled-detached-build", 1)
 	family.armed.Store(true)
@@ -166,7 +166,8 @@ func TestConsensusAcceptanceStopDrainsDetachedBuild(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger(), svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	blob, _ := startupPaymentBlob(t, "detached-stop", 1)
 	family.armed.Store(true)
@@ -274,7 +275,8 @@ func TestConsensusAcceptanceCarriesRPCIngressDuringDetachedBuild(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger(), svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	agreed, _ := startupPaymentBlob(t, "detached-rpc-agreed", 1)
 	ingress, ingressHash := startupPaymentBlob(t, "detached-rpc-ingress", 2)

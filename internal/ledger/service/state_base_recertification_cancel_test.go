@@ -72,7 +72,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 				require.NoError(t, err)
 				txs, err := f.validated.TxMapSnapshot()
 				require.NoError(t, err)
-				next, err := ledger.NewFromHeader(h, state, txs, drops.Fees{})
+				next, err := ledger.NewFromHeader(h, state, txs, drops.Fees{}, f.svc.config.Execution)
 				require.NoError(t, err)
 				require.NoError(t, next.SetValidated())
 				f.svc.canonicalPersistMu.Lock()

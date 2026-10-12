@@ -231,6 +231,8 @@ func newConsensusAcceptanceBenchmarkService(
 	round int,
 ) (*Service, *ledger.Ledger, []byte, *delayedConsensusAcceptanceFamily) {
 	b.Helper()
+	delayedFamily := &delayedConsensusAcceptanceFamily{Family: fixture.svc.shamapFamily, delay: delay}
+	execution := newTestExecutionStore(b, delayedFamily)
 	cfg := Config{
 		Standalone: true,
 		Startup: StartupConfig{
@@ -239,7 +241,8 @@ func newConsensusAcceptanceBenchmarkService(
 		},
 		Logger:       logger,
 		NodeStore:    fixture.db,
-		SHAMapFamily: fixture.svc.shamapFamily,
+		SHAMapFamily: delayedFamily,
+		Execution:    execution,
 	}
 	svc, err := New(cfg)
 	require.NoError(b, err)
@@ -247,8 +250,6 @@ func newConsensusAcceptanceBenchmarkService(
 	parent := svc.GetClosedLedger()
 	require.NotNil(b, parent)
 	require.Equal(b, fixture.template.Hash(), parent.Hash())
-	delayedFamily := &delayedConsensusAcceptanceFamily{Family: svc.shamapFamily, delay: delay}
-	parent.SetStateMapFamily(delayedFamily)
 	blob, _ := startupPaymentBlob(b, fmt.Sprintf("consensus-accept-bench-%d", round), 1)
 	return svc, parent, blob, delayedFamily
 }

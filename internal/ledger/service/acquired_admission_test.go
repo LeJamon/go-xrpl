@@ -54,7 +54,8 @@ func TestAcquiredAdmissionCertifiedBaseSafety(t *testing.T) {
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			family := &acquiredAdmissionFamily{replayAdmissionFamily: newReplayAdmissionFamily(t)}
-			svc, err := New(Config{SHAMapFamily: family})
+			execution := newTestExecutionStore(t, family)
+			svc, err := New(Config{SHAMapFamily: family, Execution: execution})
 			require.NoError(t, err)
 			base := persistedReplayAdmissionState(t, family.replayAdmissionFamily, 4096)
 			root, err := base.Hash()
@@ -200,7 +201,6 @@ func TestAcquiredAdmissionReusesLoadedCheckpointForNonconsecutivePivot(t *testin
 	require.Positive(t, stats.State.EqualSubtreesSkipped)
 	require.Positive(t, stats.State.DurableReads, "changed paths still require durable verification")
 	require.Less(t, tracked.uncachedReads(), 128, "admission must not re-walk the entire checkpoint state")
-	t.Logf("checkpoint-relative admission: reads=%d loaded=%d skipped=%d", tracked.uncachedReads(), stats.State.NodesLoaded, stats.State.EqualSubtreesSkipped)
 }
 
 func TestAcquiredAdmissionPublishesWithoutRepeatingColdWalk(t *testing.T) {
@@ -213,6 +213,7 @@ func TestAcquiredAdmissionPublishesWithoutRepeatingColdWalk(t *testing.T) {
 			family := newReplayAdmissionFamily(t)
 			cfg := DefaultConfig()
 			cfg.SHAMapFamily = family
+			cfg.Execution = newTestExecutionStore(t, family)
 			svc, err := New(cfg)
 			require.NoError(t, err)
 			require.NoError(t, svc.Start())
@@ -250,7 +251,8 @@ func TestAcquiredAdmissionPublishesWithoutRepeatingColdWalk(t *testing.T) {
 
 func TestAcquiredAdmissionRejectsMissingStateAndChangedGeneration(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{SHAMapFamily: family, Execution: execution})
 	require.NoError(t, err)
 	state := persistedReplayAdmissionState(t, family, 128)
 	root, err := state.Hash()

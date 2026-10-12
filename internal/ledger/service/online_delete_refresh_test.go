@@ -882,15 +882,16 @@ func TestService_RefreshValidatedStateHandlesPartialPromotionBatches(t *testing.
 }
 
 type benchmarkRefreshFixture struct {
-	path     string
-	options  kvpebble.Options
-	template *ledgerpkg.Ledger
-	root     [32]byte
-	seq      uint32
-	rotation uint32
-	svc      *Service
-	db       *countingGenerationDatabase
-	base     *nodestore.RotatingKVDatabase
+	path      string
+	options   kvpebble.Options
+	template  *ledgerpkg.Ledger
+	root      [32]byte
+	seq       uint32
+	rotation  uint32
+	svc       *Service
+	execution *ledgerpkg.ExecutionStore
+	db        *countingGenerationDatabase
+	base      *nodestore.RotatingKVDatabase
 }
 
 func addBenchmarkIOMetrics(total *kvstore.IOMetrics, delta kvstore.IOMetrics) {
@@ -936,11 +937,13 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *be
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
+	family := shamapbackend.New(db)
+	execution := newTestExecutionStore(b, family)
 	initial, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(b, err)
-	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, execution)
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: base, shamapFamily: family, config: Config{Execution: execution, SHAMapFamily: family}}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)
@@ -961,6 +964,9 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *be
 	fixture.rotation = seq
 	fixture.template, err = validated.Snapshot()
 	require.NoError(b, err)
+	fixture.execution = execution
+	validated.Discard()
+	parent.Discard()
 	committed, err := db.RotateGeneration(b.Context(), fixture.rotation, 1)
 	require.True(b, committed)
 	require.NoError(b, err)
@@ -997,12 +1003,20 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	family := shamapbackend.New(db)
+	execution := newTestExecutionStore(b, family)
+	oldTemplate := f.template
+	oldExecution := f.execution
 	svc := &Service{
 		nodeStore:    db,
 		shamapFamily: family,
+		config:       Config{Execution: execution, SHAMapFamily: family},
 		logger:       xrpllog.Discard(),
 	}
-	f.template.SetSHAMapFamily(family)
+	f.template, err = ledgerpkg.NewClosedFromRootsContext(b.Context(), oldTemplate.Header(), oldTemplate.Fees(), execution)
+	require.NoError(b, err)
+	oldTemplate.Discard()
+	require.NoError(b, oldExecution.Close())
+	f.execution = execution
 	svc.validatedLedger = f.template
 	svc.validatedSignTime = f.template.CloseTime()
 	gotRoot, err := f.template.StateMapHash()
@@ -1019,6 +1033,14 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 func (f *benchmarkRefreshFixture) close(b *testing.B) {
 	b.Helper()
 	f.svc = nil
+	if f.template != nil {
+		f.template.Discard()
+		f.template = nil
+	}
+	if f.execution != nil {
+		require.NoError(b, f.execution.Close())
+		f.execution = nil
+	}
 	if f.db != nil {
 		require.NoError(b, f.db.Close())
 		f.db = nil

@@ -219,7 +219,7 @@ func TestBoundedExecutionServicePebbleSQLiteAcceptPersist(t *testing.T) {
 	require.NoError(t, runtime.service.Start())
 	initial := runtime.service.GetClosedLedger()
 	require.NotNil(t, initial)
-	require.True(t, initial.UsesBoundedExecution())
+	require.Same(t, runtime.execution, initial.ExecutionStore())
 
 	descriptor, found, err := runtime.flat.Current()
 	require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestBoundedExecutionServicePebbleSQLiteAcceptPersist(t *testing.T) {
 	runtime.service.FlushPersists()
 	closed := runtime.service.GetClosedLedger()
 	require.NotNil(t, closed)
-	require.True(t, closed.UsesBoundedExecution())
+	require.Same(t, runtime.execution, closed.ExecutionStore())
 
 	descriptor, found, err = runtime.flat.Current()
 	require.NoError(t, err)
@@ -277,7 +277,7 @@ func TestBoundedExecutionSelectedSiblingRebasesFlatState(t *testing.T) {
 	siblingHeader := current.Header()
 	siblingHeader.CloseTime = siblingHeader.CloseTime.Add(time.Second)
 	siblingHeader.Hash = ledgerheader.CalculateHash(siblingHeader)
-	sibling, err := ledger.NewClosedFromHeaderContext(ctx, siblingHeader, stateMap, txMap, current.Fees())
+	sibling, err := ledger.NewClosedFromHeaderContext(ctx, siblingHeader, stateMap, txMap, current.Fees(), runtime.execution)
 	require.NoError(t, err)
 	defer sibling.Discard()
 	require.NoError(t, runtime.service.persistToNodeStore(ctx, sibling, sibling.Sequence()))
@@ -313,7 +313,7 @@ func TestBoundedExecutionSkippedPivotRebasesFlatState(t *testing.T) {
 	targetHeader.LedgerIndex = current.Sequence() + 2
 	targetHeader.CloseTime = targetHeader.CloseTime.Add(2 * time.Second)
 	targetHeader.Hash = ledgerheader.CalculateHash(targetHeader)
-	target, err := ledger.NewClosedFromHeaderContext(ctx, targetHeader, stateMap, txMap, current.Fees())
+	target, err := ledger.NewClosedFromHeaderContext(ctx, targetHeader, stateMap, txMap, current.Fees(), runtime.execution)
 	require.NoError(t, err)
 	defer target.Discard()
 	require.NoError(t, runtime.service.persistToNodeStore(ctx, target, target.Sequence()))
@@ -497,7 +497,7 @@ func TestBoundedExecutionOutboxReplaysAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	target := first.service.GetClosedLedger()
 	require.NotNil(t, target)
-	require.True(t, target.UsesBoundedExecution())
+	require.Same(t, first.execution, target.ExecutionStore())
 
 	pending, err := first.flat.PendingOutbox(t.Context(), 0)
 	require.NoError(t, err)

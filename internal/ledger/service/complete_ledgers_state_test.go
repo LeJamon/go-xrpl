@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -60,6 +61,7 @@ func makeStubLedgerWithTransaction(
 	hash, parentHash [32]byte,
 	account string,
 	accountSequence uint32,
+	stores ...*ledger.ExecutionStore,
 ) (*ledger.Ledger, [32]byte) {
 	t.Helper()
 
@@ -80,12 +82,24 @@ func makeStubLedgerWithTransaction(
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	hdr := makeStubLedger(t, seq, hash, parentHash).Header()
-	hdr.TxHash = txRoot
 	stateMap, stateRoot := makeStubStateMap(t, seq)
-	hdr.AccountHash = stateRoot
-	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
+	hdr := header.LedgerHeader{
+		LedgerIndex:         seq,
+		ParentHash:          parentHash,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		Validated:           true,
+		CloseTime:           time.Unix(int64(seq)*1000+int64(hash[0]), 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	store := newTestExecutionStore(t)
+	if len(stores) != 0 && stores[0] != nil {
+		store = stores[0]
+	}
+	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{}, store)
 	require.NoError(t, err)
+	t.Cleanup(l.Discard)
 	return l, txID
 }
 
@@ -119,7 +133,7 @@ func TestCompleteLedgers_PreservesHoles(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, seq := range []uint32{10, 11, 13, 16, 17} {
-		l := makeStubLedger(t, seq, [32]byte{byte(seq)}, [32]byte{})
+		l := makeStubLedger(t, seq, [32]byte{byte(seq)}, [32]byte{}, svc.config.Execution)
 		require.NoError(t, svc.persistValidatedLedger(context.Background(), l, false))
 	}
 
@@ -136,7 +150,7 @@ func TestCompleteLedgers_FailedValidatedPersistenceRemovesSequence(t *testing.T)
 	svc, err := New(cfg)
 	require.NoError(t, err)
 
-	l := makeStubLedger(t, 20, [32]byte{0x20}, [32]byte{0x19})
+	l := makeStubLedger(t, 20, [32]byte{0x20}, [32]byte{0x19}, svc.config.Execution)
 	db.fail.Store(true)
 	require.Error(t, svc.persistValidatedLedger(context.Background(), l, false))
 	assert.Equal(t, "empty", svc.GetServerInfo().CompleteLedgers)
@@ -149,7 +163,7 @@ func TestCompleteLedgers_DeduplicatesPendingValidatedPersistence(t *testing.T) {
 	svc.persistStarted = true
 	svc.persistMu.Unlock()
 
-	l := makeStubLedger(t, 25, [32]byte{0x25}, [32]byte{0x24})
+	l := makeStubLedger(t, 25, [32]byte{0x25}, [32]byte{0x24}, svc.config.Execution)
 	svc.enqueueValidatedHistoryPersist(l)
 	svc.enqueuePersist(l)
 
@@ -160,7 +174,7 @@ func TestCompleteLedgers_DeduplicatesPendingValidatedPersistence(t *testing.T) {
 	svc.persistMu.Unlock()
 
 	svc.invalidateCompleteLedger(25)
-	replacement := makeStubLedger(t, 25, [32]byte{0x26}, [32]byte{0x24})
+	replacement := makeStubLedger(t, 25, [32]byte{0x26}, [32]byte{0x24}, svc.config.Execution)
 	svc.enqueuePersist(replacement)
 
 	svc.persistMu.Lock()
@@ -176,8 +190,8 @@ func TestCompleteLedgers_HistoryPersistenceDoesNotDisplaceCanonicalJob(t *testin
 	svc.persistStarted = true
 	svc.persistMu.Unlock()
 
-	canonical := makeStubLedger(t, 25, [32]byte{0x25}, [32]byte{0x24})
-	sibling := makeStubLedger(t, 25, [32]byte{0x26}, [32]byte{0x24})
+	canonical := makeStubLedger(t, 25, [32]byte{0x25}, [32]byte{0x24}, svc.config.Execution)
+	sibling := makeStubLedger(t, 25, [32]byte{0x26}, [32]byte{0x24}, svc.config.Execution)
 	svc.enqueuePersist(canonical)
 	svc.enqueueValidatedHistoryPersist(sibling)
 
@@ -204,8 +218,8 @@ func TestCompleteLedgers_InvalidatedQueuedPersistenceSkipsAbandonedFork(t *testi
 	svc.persistMu.Unlock()
 
 	const seq uint32 = 26
-	abandoned := makeStubLedger(t, seq, [32]byte{0x25}, [32]byte{0x24})
-	replacement := makeStubLedger(t, seq, [32]byte{0x26}, [32]byte{0x24})
+	abandoned := makeStubLedger(t, seq, [32]byte{0x25}, [32]byte{0x24}, svc.config.Execution)
+	replacement := makeStubLedger(t, seq, [32]byte{0x26}, [32]byte{0x24}, svc.config.Execution)
 	require.NoError(t, svc.persistValidatedTip(ctx, abandoned))
 	svc.enqueuePersist(abandoned)
 	svc.invalidateCompleteLedger(seq)
@@ -256,9 +270,9 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 
 	seq := svc.GetClosedLedgerIndex()
 	parentHash := svc.GetClosedLedger().ParentHash()
-	abandoned := makeStubLedger(t, seq, [32]byte{0xA1}, parentHash)
-	preferred := makeStubLedger(t, seq, [32]byte{0xB1}, parentHash)
-	unrelated := makeStubLedger(t, seq, [32]byte{0xC1}, parentHash)
+	abandoned := makeStubLedger(t, seq, [32]byte{0xA1}, parentHash, svc.config.Execution)
+	preferred := makeStubLedger(t, seq, [32]byte{0xB1}, parentHash, svc.config.Execution)
+	unrelated := makeStubLedger(t, seq, [32]byte{0xC1}, parentHash, svc.config.Execution)
 	require.NoError(t, svc.persistValidatedLedger(ctx, abandoned, true))
 
 	svc.mu.Lock()
@@ -320,10 +334,10 @@ func TestCompleteLedgers_SameSequenceReplacementRebuildsTransactionIndexes(t *te
 	)
 	parentHash := [32]byte{0x26}
 	abandoned, abandonedTx := makeStubLedgerWithTransaction(
-		t, seq, [32]byte{0xA1}, parentHash, abandonedAccount, 1,
+		t, seq, [32]byte{0xA1}, parentHash, abandonedAccount, 1, svc.config.Execution,
 	)
 	replacement, replacementTx := makeStubLedgerWithTransaction(
-		t, seq, [32]byte{0xB1}, parentHash, replacementAccount, 2,
+		t, seq, [32]byte{0xB1}, parentHash, replacementAccount, 2, svc.config.Execution,
 	)
 
 	queryAccount := func(address string) []relationaldb.TransactionInfo {
@@ -394,8 +408,8 @@ func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {
 	svc.persistMu.Unlock()
 
 	const seq uint32 = 27
-	abandoned := makeStubLedger(t, seq, [32]byte{0x27}, [32]byte{0x26})
-	replacement := makeStubLedger(t, seq, [32]byte{0x28}, [32]byte{0x26})
+	abandoned := makeStubLedger(t, seq, [32]byte{0x27}, [32]byte{0x26}, svc.config.Execution)
+	replacement := makeStubLedger(t, seq, [32]byte{0x28}, [32]byte{0x26}, svc.config.Execution)
 	svc.enqueuePersist(abandoned)
 	svc.persistMu.Lock()
 	require.Len(t, svc.persistQueue, 1)

@@ -28,7 +28,7 @@ func closeStoredLedgerFixtureWithValidation(t testing.TB, svc *Service, validate
 	var closed *ledger.Ledger
 	var err error
 	if raw != nil {
-		closed, err = raw.MutableSnapshotUnflushed()
+		closed, err = raw.MutableSnapshot()
 	}
 	svc.mu.RUnlock()
 	svc.openLedgerMu.Unlock()

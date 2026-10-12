@@ -44,7 +44,7 @@ func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 			t.Cleanup(family.unblock)
 			coldState, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
 			require.NoError(t, err)
-			cold, err = ledger.NewFromHeader(cold.Header(), coldState, shamap.New(shamap.TypeTransaction), cold.Fees())
+			cold, err = ledger.NewFromHeader(cold.Header(), coldState, shamap.New(shamap.TypeTransaction), cold.Fees(), svc.config.Execution)
 			require.NoError(t, err)
 			require.NoError(t, svc.SwitchToPreferredLedger(cold))
 			svc.mu.RLock()

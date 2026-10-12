@@ -3,6 +3,7 @@ package service
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -12,28 +13,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// makeStubLedger constructs a Ledger with an explicit seq/hash/parentHash
-// triple, backed by an empty state and tx map. The hash does not need to
-// match the canonical computed hash for this test — we exercise the
-// parent-hash chain check, which consumes the *stored* header values.
-func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger.Ledger {
+// makeStubLedger constructs a canonical Ledger from a deterministic seed and
+// parent link, backed by a small state and transaction tree.
+func makeStubLedger(t *testing.T, seq uint32, seed, parentHash [32]byte, stores ...*ledger.ExecutionStore) *ledger.Ledger {
 	t.Helper()
 	stateMap, stateRoot := makeStubStateMap(t, seq)
 	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
-	hdr := header.LedgerHeader{
-		LedgerIndex: seq,
-		Hash:        hash,
-		ParentHash:  parentHash,
-		AccountHash: stateRoot,
-		TxHash:      txRoot,
-		Validated:   true,
+	var store *ledger.ExecutionStore
+	if len(stores) != 0 && stores[0] != nil {
+		store = stores[0]
+	} else {
+		store = newTestExecutionStore(t)
 	}
-	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
+	hdr := header.LedgerHeader{
+		LedgerIndex:         seq,
+		ParentHash:          parentHash,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		Validated:           true,
+		CloseTime:           time.Unix(int64(seq)*1000+int64(seed[0]), 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}
+	t.Cleanup(l.Discard)
 	return l
 }
 
@@ -61,9 +69,9 @@ func TestSwitchToPreferredLedger_FixMismatchInvalidatesDivergedTail(t *testing.T
 	hashC[0] = 0xCC
 
 	var zero [32]byte
-	ledA := makeStubLedger(t, baseSeq, hashA, zero)
-	ledB := makeStubLedger(t, baseSeq+1, hashB, hashA)
-	ledC := makeStubLedger(t, baseSeq+2, hashC, hashB)
+	ledA := makeStubLedger(t, baseSeq, hashA, zero, svc.config.Execution)
+	ledB := makeStubLedger(t, baseSeq+1, hashB, ledA.Hash(), svc.config.Execution)
+	ledC := makeStubLedger(t, baseSeq+2, hashC, ledB.Hash(), svc.config.Execution)
 
 	svc.mu.Lock()
 	svc.ledgerHistory[ledA.Sequence()] = ledA
@@ -77,7 +85,7 @@ func TestSwitchToPreferredLedger_FixMismatchInvalidatesDivergedTail(t *testing.T
 	hashD[0] = 0xDD
 	var divergentParent [32]byte
 	divergentParent[0] = 0xFF
-	preferred := makeStubLedger(t, baseSeq+1, hashD, divergentParent)
+	preferred := makeStubLedger(t, baseSeq+1, hashD, divergentParent, svc.config.Execution)
 	require.NoError(t, svc.SwitchToPreferredLedger(preferred))
 
 	svc.mu.RLock()
@@ -85,13 +93,13 @@ func TestSwitchToPreferredLedger_FixMismatchInvalidatesDivergedTail(t *testing.T
 
 	gotD, okD := svc.ledgerHistory[baseSeq+1]
 	require.True(t, okD, "preferred ledger D must be installed at its seq")
-	assert.Equal(t, hashD, gotD.Hash(), "seq S+1 must now hold D, not the purged B")
+	assert.Equal(t, preferred.Hash(), gotD.Hash(), "seq S+1 must now hold D, not the purged B")
 
 	_, okC := svc.ledgerHistory[baseSeq+2]
 	assert.False(t, okC, "orphaned forward ledger C must be purged by fixMismatch")
 
 	require.NotNil(t, svc.closedLedger)
-	assert.Equal(t, hashD, svc.closedLedger.Hash(),
+	assert.Equal(t, preferred.Hash(), svc.closedLedger.Hash(),
 		"closedLedger must track the preferred ledger after a fork switch")
 	assert.Equal(t, strconv.FormatUint(uint64(baseSeq+1), 10), svc.completeLedgersString(),
 		"fork invalidation must retain only the preferred ledger in complete_ledgers")
@@ -109,8 +117,8 @@ func TestSwitchToPreferredLedger_NoMismatchNoOp(t *testing.T) {
 	hashA[0] = 0xA1
 	hashB[0] = 0xB1
 	var zero [32]byte
-	ledA := makeStubLedger(t, baseSeq, hashA, zero)
-	ledB := makeStubLedger(t, baseSeq+1, hashB, hashA)
+	ledA := makeStubLedger(t, baseSeq, hashA, zero, svc.config.Execution)
+	ledB := makeStubLedger(t, baseSeq+1, hashB, ledA.Hash(), svc.config.Execution)
 
 	svc.mu.Lock()
 	svc.ledgerHistory[ledA.Sequence()] = ledA
@@ -121,7 +129,7 @@ func TestSwitchToPreferredLedger_NoMismatchNoOp(t *testing.T) {
 	var hashD [32]byte
 	hashD[0] = 0xD1
 
-	preferred := makeStubLedger(t, baseSeq+2, hashD, hashB)
+	preferred := makeStubLedger(t, baseSeq+2, hashD, ledB.Hash(), svc.config.Execution)
 	require.NoError(t, svc.SwitchToPreferredLedger(preferred))
 
 	svc.mu.RLock()
@@ -129,15 +137,15 @@ func TestSwitchToPreferredLedger_NoMismatchNoOp(t *testing.T) {
 
 	gotA, okA := svc.ledgerHistory[baseSeq]
 	require.True(t, okA, "A must remain when the preferred ledger does not invalidate history")
-	assert.Equal(t, hashA, gotA.Hash())
+	assert.Equal(t, ledA.Hash(), gotA.Hash())
 
 	gotB, okB := svc.ledgerHistory[baseSeq+1]
 	require.True(t, okB, "B must remain: its hash matches D.parentHash")
-	assert.Equal(t, hashB, gotB.Hash())
+	assert.Equal(t, ledB.Hash(), gotB.Hash())
 
 	gotD, okD := svc.ledgerHistory[baseSeq+2]
 	require.True(t, okD)
-	assert.Equal(t, hashD, gotD.Hash())
+	assert.Equal(t, preferred.Hash(), gotD.Hash())
 }
 
 func TestSwitchToPreferredLedger_FixMismatchValidatedLedgerInvalidationLogsError(t *testing.T) {
@@ -151,7 +159,7 @@ func TestSwitchToPreferredLedger_FixMismatchValidatedLedgerInvalidationLogsError
 	var hashB [32]byte
 	hashB[0] = 0x42
 	var zero [32]byte
-	ledB := makeStubLedger(t, baseSeq, hashB, zero)
+	ledB := makeStubLedger(t, baseSeq, hashB, zero, svc.config.Execution)
 	require.True(t, ledB.IsValidated(),
 		"stub ledger via NewFromHeader must be in validated state")
 
@@ -165,7 +173,7 @@ func TestSwitchToPreferredLedger_FixMismatchValidatedLedgerInvalidationLogsError
 	divergentParent[0] = 0xAB
 	var hashD [32]byte
 	hashD[0] = 0xDD
-	preferred := makeStubLedger(t, baseSeq+1, hashD, divergentParent)
+	preferred := makeStubLedger(t, baseSeq+1, hashD, divergentParent, svc.config.Execution)
 	require.NoError(t, svc.SwitchToPreferredLedger(preferred))
 
 	svc.mu.RLock()
@@ -189,9 +197,9 @@ func TestSwitchToPreferredLedger_FixMismatchPurgesTxIndex(t *testing.T) {
 	hashB[0] = 0x1B
 	hashC[0] = 0x1C
 	var zero [32]byte
-	ledA := makeStubLedger(t, baseSeq, hashA, zero)
-	ledB := makeStubLedger(t, baseSeq+1, hashB, hashA)
-	ledC := makeStubLedger(t, baseSeq+2, hashC, hashB)
+	ledA := makeStubLedger(t, baseSeq, hashA, zero, svc.config.Execution)
+	ledB := makeStubLedger(t, baseSeq+1, hashB, ledA.Hash(), svc.config.Execution)
+	ledC := makeStubLedger(t, baseSeq+2, hashC, ledB.Hash(), svc.config.Execution)
 
 	var txInB, txInC [32]byte
 	txInB[0] = 0x0B
@@ -212,7 +220,7 @@ func TestSwitchToPreferredLedger_FixMismatchPurgesTxIndex(t *testing.T) {
 	divergentParent[0] = 0xEE
 	var hashD [32]byte
 	hashD[0] = 0xDD
-	preferred := makeStubLedger(t, baseSeq+1, hashD, divergentParent)
+	preferred := makeStubLedger(t, baseSeq+1, hashD, divergentParent, svc.config.Execution)
 	require.NoError(t, svc.SwitchToPreferredLedger(preferred))
 
 	svc.mu.RLock()

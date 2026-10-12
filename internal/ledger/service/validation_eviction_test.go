@@ -40,7 +40,7 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	require.NoError(t, err)
 	state, err := old.StateMapSnapshot()
 	require.NoError(t, err)
-	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees())
+	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees(), svc.config.Execution)
 	require.NoError(t, err)
 
 	latest := old

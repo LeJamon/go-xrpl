@@ -13,12 +13,17 @@ import (
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
-func mustNewOpenWithHeader(t *testing.T, h header.LedgerHeader, stateMap, txMap *shamap.SHAMap) *ledger.Ledger {
+func mustNewOpenWithHeader(t *testing.T, h header.LedgerHeader, stateMap, txMap *shamap.SHAMap, stores ...*ledger.ExecutionStore) *ledger.Ledger {
 	t.Helper()
-	l, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+	store := newTestExecutionStore(t)
+	if len(stores) > 0 && stores[0] != nil {
+		store = stores[0]
+	}
+	l, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
+	t.Cleanup(l.Discard)
 	return l
 }
 
@@ -163,7 +168,7 @@ func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StateMapSnapshot: %v", err)
 	}
-	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees())
+	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees(), svc.config.Execution)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}
@@ -419,7 +424,7 @@ func TestSetValidatedLedgerRejectsRetainedCandidateOnConflictingHistory(t *testi
 	candidate := svc.GetClosedLedger()
 	candidateHash := candidate.Hash()
 	h, stateMap, txMap := acquiredLedgerFixture(t, seq, 0xF1)
-	conflicting, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	conflicting, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}
@@ -474,7 +479,7 @@ func TestForkCleanupDropsEvictedValidationCandidate(t *testing.T) {
 	svc.mu.Unlock()
 
 	replacementHeader, stateMap, txMap := acquiredLedgerFixture(t, staleSeq, 0xF2)
-	replacement, err := ledger.NewFromHeader(*replacementHeader, stateMap, txMap, drops.Fees{})
+	replacement, err := ledger.NewFromHeader(*replacementHeader, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}

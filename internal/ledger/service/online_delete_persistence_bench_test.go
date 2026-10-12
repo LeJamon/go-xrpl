@@ -100,7 +100,7 @@ func benchmarkPersistenceLedgers(b *testing.B, count int) []*ledger.Ledger {
 	b.Helper()
 	initial, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(b, err)
-	parent, err := ledger.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, newTestExecutionStore(b))
 	require.NoError(b, err)
 	closed := make([]*ledger.Ledger, 0, count)
 	for i := range count {

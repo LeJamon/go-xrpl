@@ -610,7 +610,7 @@ func TestService_StateAdmissionRejectsWarmAliasAfterDurableDeletion(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, stateMap.StartSync())
 	require.NoError(t, stateMap.FinishSyncContext(ctx))
-	preferred, err := ledger.NewFromHeader(candidateHeader, stateMap, shamap.New(shamap.TypeTransaction), reader.GetClosedLedger().Fees())
+	preferred, err := ledger.NewFromHeader(candidateHeader, stateMap, shamap.New(shamap.TypeTransaction), reader.GetClosedLedger().Fees(), reader.config.Execution)
 	require.NoError(t, err)
 
 	deleted, err := db.DeleteBefore(ctx, candidateHeader.LedgerIndex, 1)
@@ -936,9 +936,12 @@ func newFastLoadCheckpointService(
 	standalone bool,
 ) *Service {
 	t.Helper()
+	family := backend.New(db)
+	execution := newTestExecutionStore(t, family)
 	svc, err := New(Config{
 		Standalone: standalone, GenesisConfig: genesis.DefaultConfig(),
-		NodeStore: db, SHAMapFamily: backend.New(db), RelationalDB: repositories, FastLoad: true,
+		NodeStore: db, SHAMapFamily: family, Execution: execution,
+		RelationalDB: repositories, FastLoad: true,
 	})
 	require.NoError(t, err)
 	return svc

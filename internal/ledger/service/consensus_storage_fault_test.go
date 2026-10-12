@@ -104,7 +104,7 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				require.NoError(t, err)
 				txMap, err := f.validated.TxMapSnapshot()
 				require.NoError(t, err)
-				parent, err := ledger.NewFromHeader(f.validated.Header(), stateMap, txMap, f.validated.Fees())
+				parent, err := ledger.NewFromHeader(f.validated.Header(), stateMap, txMap, f.validated.Fees(), f.svc.config.Execution)
 				require.NoError(t, err)
 				if applyPhase {
 					for _, account := range []*jtx.Account{master, jtx.NewAccount(destinationName)} {

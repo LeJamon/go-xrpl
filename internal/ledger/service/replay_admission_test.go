@@ -189,19 +189,37 @@ func persistedReplayAdmissionState(t *testing.T, family *replayAdmissionFamily, 
 	return loaded
 }
 
-func replayAdmissionLedger(t *testing.T, sequence uint32, hash, parentHash [32]byte, state, tx *shamap.SHAMap) *ledger.Ledger {
+func replayAdmissionLedger(t *testing.T, sequence uint32, seed, parentHash [32]byte, state, tx *shamap.SHAMap, stores ...*ledger.ExecutionStore) *ledger.Ledger {
 	t.Helper()
 	stateRoot, err := state.Hash()
 	require.NoError(t, err)
 	txRoot, err := tx.Hash()
 	require.NoError(t, err)
+	store := newTestExecutionStore(t)
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	baseTime := time.Unix(1_000_000+int64(sequence)*10+int64(seed[0]), 0).UTC()
+	hdr := header.LedgerHeader{
+		LedgerIndex:         sequence,
+		ParentHash:          parentHash,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		ParentCloseTime:     baseTime.Add(-10 * time.Second),
+		CloseTime:           baseTime,
+		CloseTimeResolution: 10,
+	}
+	hdr.Hash = header.CalculateHash(hdr)
 	result, err := ledger.NewFromHeader(header.LedgerHeader{
-		LedgerIndex: sequence,
-		Hash:        hash,
-		ParentHash:  parentHash,
-		AccountHash: stateRoot,
-		TxHash:      txRoot,
-	}, state, tx, drops.Fees{})
+		LedgerIndex:         hdr.LedgerIndex,
+		Hash:                hdr.Hash,
+		ParentHash:          hdr.ParentHash,
+		AccountHash:         hdr.AccountHash,
+		TxHash:              hdr.TxHash,
+		ParentCloseTime:     hdr.ParentCloseTime,
+		CloseTime:           hdr.CloseTime,
+		CloseTimeResolution: hdr.CloseTimeResolution,
+	}, state, tx, drops.Fees{}, store)
 	require.NoError(t, err)
 	return result
 }
@@ -255,12 +273,14 @@ func replayAdmissionPathDescendantHash(
 
 func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 
 	parentState := persistedReplayAdmissionState(t, family, 4096)
 	parentHash := [32]byte{0x10}
-	parent := replayAdmissionLedger(t, 100, parentHash, [32]byte{0x01}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 100, parentHash, [32]byte{0x01}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
 	require.NotNil(t, parentProof)
@@ -272,7 +292,7 @@ func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *test
 
 	unchangedState, err := parent.StateMapSnapshotContext(t.Context())
 	require.NoError(t, err)
-	unchanged := replayAdmissionLedger(t, 101, [32]byte{0x11}, parentHash, unchangedState, shamap.New(shamap.TypeTransaction))
+	unchanged := replayAdmissionLedger(t, 101, [32]byte{0x11}, parentHash, unchangedState, shamap.New(shamap.TypeTransaction), execution)
 	family.resetReads()
 	unchangedPrepared, err := svc.PrepareReplayLedger(t.Context(), unchanged, parentProof)
 	require.NoError(t, err)
@@ -289,7 +309,7 @@ func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *test
 	require.NoError(t, err)
 	changedKey := [32]byte{0xf0, 1}
 	require.NoError(t, childState.PutWithNodeType(changedKey, []byte("changed-replay-value"), shamap.NodeTypeAccountState))
-	child := replayAdmissionLedger(t, 102, [32]byte{0x12}, parentHash, childState, shamap.New(shamap.TypeTransaction))
+	child := replayAdmissionLedger(t, 102, [32]byte{0x12}, parentHash, childState, shamap.New(shamap.TypeTransaction), execution)
 
 	family.resetReads()
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
@@ -327,31 +347,36 @@ func TestReplayAdmissionUsesGenerationBoundParentProofAfterCacheEviction(t *test
 
 func TestReplayAdmissionRejectsReclaimedWarmDescendantAfterGenerationChange(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 1024)
 	parentHash := [32]byte{0x60}
-	parent := replayAdmissionLedger(t, 600, parentHash, [32]byte{0x06}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 600, parentHash, [32]byte{0x06}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
 	defer parentProof.Release()
 	root, err := parentState.Hash()
 	require.NoError(t, err)
-	family.hide(replayAdmissionFirstChildHash(t, family, root))
+	missingDescendant := replayAdmissionFirstChildHash(t, family, root)
 	unchangedState, err := parent.StateMapSnapshotContext(t.Context())
 	require.NoError(t, err)
-	unchanged := replayAdmissionLedger(t, 601, [32]byte{0x61}, parentHash, unchangedState, shamap.New(shamap.TypeTransaction))
+	unchanged := replayAdmissionLedger(t, 601, [32]byte{0x61}, parentHash, unchangedState, shamap.New(shamap.TypeTransaction), execution)
+	family.hide(missingDescendant)
 	_, err = svc.PrepareReplayLedger(t.Context(), unchanged, parentProof)
 	require.ErrorIs(t, err, shamap.ErrNodeNotInStore)
 }
 
 func TestReplayAdmissionRejectsMissingChangedRootBeforePreparation(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 1024)
 	parentHash := [32]byte{0x70}
-	parent := replayAdmissionLedger(t, 700, parentHash, [32]byte{0x07}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 700, parentHash, [32]byte{0x07}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
 	defer parentProof.Release()
@@ -360,19 +385,21 @@ func TestReplayAdmissionRejectsMissingChangedRootBeforePreparation(t *testing.T)
 	require.NoError(t, changedState.PutWithNodeType([32]byte{0xf7, 1}, []byte("missing-changed-root"), shamap.NodeTypeAccountState))
 	changedRoot, err := changedState.Hash()
 	require.NoError(t, err)
+	changed := replayAdmissionLedger(t, 701, [32]byte{0x71}, parentHash, changedState, shamap.New(shamap.TypeTransaction), execution)
 	family.hide(changedRoot)
-	changed := replayAdmissionLedger(t, 701, [32]byte{0x71}, parentHash, changedState, shamap.New(shamap.TypeTransaction))
 	_, err = svc.PrepareReplayLedger(t.Context(), changed, parentProof)
 	require.ErrorIs(t, err, shamap.ErrNodeNotInStore)
 }
 
 func TestReplayAdmissionRejectsMissingChangedDescendantWithWarmAlias(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 1024)
 	parentHash := [32]byte{0x78}
-	parent := replayAdmissionLedger(t, 780, parentHash, [32]byte{0x07}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 780, parentHash, [32]byte{0x07}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
 	defer parentProof.Release()
@@ -381,7 +408,7 @@ func TestReplayAdmissionRejectsMissingChangedDescendantWithWarmAlias(t *testing.
 	changedState, err := parent.StateMapSnapshotContext(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, changedState.PutWithNodeType(changedKey, []byte("missing-changed-descendant"), shamap.NodeTypeAccountState))
-	changed := replayAdmissionLedger(t, 781, [32]byte{0x79}, parentHash, changedState, shamap.New(shamap.TypeTransaction))
+	changed := replayAdmissionLedger(t, 781, [32]byte{0x79}, parentHash, changedState, shamap.New(shamap.TypeTransaction), execution)
 	root, err := parentState.Hash()
 	require.NoError(t, err)
 	changedRoot, err := changedState.Hash()
@@ -404,12 +431,14 @@ func TestReplayAdmissionRejectsMissingChangedDescendantWithWarmAlias(t *testing.
 
 func TestReplayAdmissionPreparedLedgerIsOneShotAndGenerationBound(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 
 	parentState := persistedReplayAdmissionState(t, family, 8)
 	parentHash := [32]byte{0x20}
-	parent := replayAdmissionLedger(t, 200, parentHash, [32]byte{0x02}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 200, parentHash, [32]byte{0x02}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
 	defer parentProof.Release()
@@ -417,7 +446,7 @@ func TestReplayAdmissionPreparedLedgerIsOneShotAndGenerationBound(t *testing.T) 
 	childState, err := parent.StateMapSnapshotContext(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, childState.PutWithNodeType([32]byte{0xf1}, []byte("child-replay-value"), shamap.NodeTypeAccountState))
-	child := replayAdmissionLedger(t, 201, [32]byte{0x21}, parentHash, childState, shamap.New(shamap.TypeTransaction))
+	child := replayAdmissionLedger(t, 201, [32]byte{0x21}, parentHash, childState, shamap.New(shamap.TypeTransaction), execution)
 	family.bumpFingerprint()
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
 	require.NoError(t, err)
@@ -450,7 +479,7 @@ func TestReplayAdmissionFallsBackWithoutDurableSnapshotSupport(t *testing.T) {
 	family := newVerifierFamily()
 	service := newVerifierService(t, family)
 	parentState := newPersistedVerifierMap(t, family, shamap.TypeState, 16)
-	parent := replayAdmissionLedger(t, 250, [32]byte{0x25}, [32]byte{0x05}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 250, [32]byte{0x25}, [32]byte{0x05}, parentState, shamap.New(shamap.TypeTransaction), service.config.Execution)
 
 	parentProof, err := service.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
@@ -458,7 +487,7 @@ func TestReplayAdmissionFallsBackWithoutDurableSnapshotSupport(t *testing.T) {
 	childState, err := parent.StateMapSnapshotContext(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, childState.PutWithNodeType([32]byte{0xf2}, []byte("cold-fallback-value"), shamap.NodeTypeAccountState))
-	child := replayAdmissionLedger(t, 251, [32]byte{0x26}, [32]byte{0x25}, childState, shamap.New(shamap.TypeTransaction))
+	child := replayAdmissionLedger(t, 251, [32]byte{0x26}, parent.Hash(), childState, shamap.New(shamap.TypeTransaction), service.config.Execution)
 	prepared, err := service.PrepareReplayLedger(t.Context(), child, parentProof)
 	require.NoError(t, err)
 	prepared.Release()
@@ -466,10 +495,11 @@ func TestReplayAdmissionFallsBackWithoutDurableSnapshotSupport(t *testing.T) {
 
 func TestReplayAdmissionPreparationPropagatesCancellation(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 8)
-	parent := replayAdmissionLedger(t, 300, [32]byte{0x30}, [32]byte{0x03}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 300, [32]byte{0x30}, [32]byte{0x03}, parentState, shamap.New(shamap.TypeTransaction), execution)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -494,14 +524,16 @@ func TestReplayAdmissionWorkspaceUsesSharedBudget(t *testing.T) {
 func TestReplayAdmissionColdWalkUsesAdmittedWorkersAndReleasesWorkspace(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
 	budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * 3}
+	execution := newTestExecutionStore(t, family)
 	svc, err := New(Config{
+		Execution:         execution,
 		SHAMapFamily:      family,
 		PersistenceMemory: budget,
 		FastLoadWorkers:   2,
 	})
 	require.NoError(t, err)
 	state := persistedReplayAdmissionState(t, family, 512)
-	parent := replayAdmissionLedger(t, 450, [32]byte{0x45}, [32]byte{0x04}, state, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 450, [32]byte{0x45}, [32]byte{0x04}, state, shamap.New(shamap.TypeTransaction), execution)
 	proof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
 	stats := proof.Stats()
@@ -526,14 +558,16 @@ func TestReplayAdmissionColdWalkReaderCapAndWorkspace(t *testing.T) {
 				delay:                 500 * time.Microsecond,
 			}
 			budget := &relayTestMemory{limit: replayAdmissionColdWorkspaceBytes * uint64(tc.workers+1)}
+			execution := newTestExecutionStore(t, family)
 			svc, err := New(Config{
+				Execution:         execution,
 				SHAMapFamily:      family,
 				PersistenceMemory: budget,
 				FastLoadWorkers:   2,
 			})
 			require.NoError(t, err)
 			state := persistedReplayAdmissionState(t, base, 1024)
-			parent := replayAdmissionLedger(t, 460+uint32(tc.workers), [32]byte{byte(0x46 + tc.workers)}, [32]byte{0x04}, state, shamap.New(shamap.TypeTransaction))
+			parent := replayAdmissionLedger(t, 460+uint32(tc.workers), [32]byte{byte(0x46 + tc.workers)}, [32]byte{0x04}, state, shamap.New(shamap.TypeTransaction), execution)
 			proof, err := svc.PrepareReplayParent(t.Context(), parent)
 			require.NoError(t, err)
 			stats := proof.Stats()
@@ -599,10 +633,11 @@ func TestReplayAdmissionPreparationKeepsStopBehindColdWalk(t *testing.T) {
 		entered:               make(chan struct{}),
 		release:               make(chan struct{}),
 	}
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family.replayAdmissionFamily, 8)
-	parent := replayAdmissionLedger(t, 400, [32]byte{0x40}, [32]byte{0x04}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 400, [32]byte{0x40}, [32]byte{0x04}, parentState, shamap.New(shamap.TypeTransaction), execution)
 
 	prepared := make(chan *PreparedReplayParent, 1)
 	prepErr := make(chan error, 1)
@@ -635,11 +670,13 @@ func TestReplayAdmissionPreparationKeepsStopBehindColdWalk(t *testing.T) {
 
 func TestReplayAdmissionBootstrapSuccessConsumesAndClearsPreparedLedger(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 16)
 	parentHash := [32]byte{0x50}
-	parent := replayAdmissionLedger(t, 500, parentHash, [32]byte{0x05}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 500, parentHash, [32]byte{0x05}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	svc.genesisLedger = parent
 	proof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
@@ -659,7 +696,7 @@ func TestReplayAdmissionBootstrapSuccessConsumesAndClearsPreparedLedger(t *testi
 		TxHash:      txRoot,
 	}
 	childHeader.Hash = header.CalculateHash(childHeader)
-	child, err := ledger.NewFromHeader(childHeader, childState, txMap, drops.Fees{})
+	child, err := ledger.NewFromHeader(childHeader, childState, txMap, drops.Fees{}, svc.config.Execution)
 	require.NoError(t, err)
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, proof)
 	require.NoError(t, err)
@@ -678,11 +715,13 @@ func TestReplayAdmissionBootstrapSuccessConsumesAndClearsPreparedLedger(t *testi
 
 func TestReplayAdmissionPublishedProofSurvivesLRUEvictionUntilRelease(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 64)
 	parentHash := [32]byte{0x90}
-	parent := replayAdmissionLedger(t, 900, parentHash, [32]byte{0x09}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 900, parentHash, [32]byte{0x09}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	svc.genesisLedger = parent
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
@@ -698,7 +737,7 @@ func TestReplayAdmissionPublishedProofSurvivesLRUEvictionUntilRelease(t *testing
 	require.NoError(t, err)
 	constructedHeader := header.LedgerHeader{LedgerIndex: 901, ParentHash: parentHash, AccountHash: stateRoot, TxHash: txRoot}
 	constructedHeader.Hash = header.CalculateHash(constructedHeader)
-	child := replayAdmissionLedger(t, constructedHeader.LedgerIndex, constructedHeader.Hash, parentHash, childState, txMap)
+	child := replayAdmissionLedger(t, constructedHeader.LedgerIndex, constructedHeader.Hash, parentHash, childState, txMap, execution)
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
 	require.NoError(t, err)
 	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)
@@ -730,11 +769,13 @@ func TestReplayAdmissionPublishedProofSurvivesLRUEvictionUntilRelease(t *testing
 
 func TestReplayAdmissionPreparedProofRejectsGenerationChange(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 64)
 	parentHash := [32]byte{0x92}
-	parent := replayAdmissionLedger(t, 920, parentHash, [32]byte{0x29}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 920, parentHash, [32]byte{0x29}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	svc.genesisLedger = parent
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
@@ -749,7 +790,7 @@ func TestReplayAdmissionPreparedProofRejectsGenerationChange(t *testing.T) {
 	require.NoError(t, err)
 	childHeader := header.LedgerHeader{LedgerIndex: 921, ParentHash: parentHash, AccountHash: stateRoot, TxHash: txRoot}
 	childHeader.Hash = header.CalculateHash(childHeader)
-	child := replayAdmissionLedger(t, childHeader.LedgerIndex, childHeader.Hash, parentHash, childState, txMap)
+	child := replayAdmissionLedger(t, childHeader.LedgerIndex, childHeader.Hash, parentHash, childState, txMap, execution)
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
 	require.NoError(t, err)
 	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)
@@ -774,11 +815,13 @@ func TestReplayAdmissionPreparedProofRejectsGenerationChange(t *testing.T) {
 
 func TestReplayAdmissionStopWaitsForPublishedProofRelease(t *testing.T) {
 	family := newReplayAdmissionFamily(t)
-	svc, err := New(Config{SHAMapFamily: family})
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{Execution: execution, SHAMapFamily: family})
 	require.NoError(t, err)
 	parentState := persistedReplayAdmissionState(t, family, 16)
 	parentHash := [32]byte{0x94}
-	parent := replayAdmissionLedger(t, 940, parentHash, [32]byte{0x49}, parentState, shamap.New(shamap.TypeTransaction))
+	parent := replayAdmissionLedger(t, 940, parentHash, [32]byte{0x49}, parentState, shamap.New(shamap.TypeTransaction), execution)
+	parentHash = parent.Hash()
 	svc.genesisLedger = parent
 	parentProof, err := svc.PrepareReplayParent(t.Context(), parent)
 	require.NoError(t, err)
@@ -792,7 +835,7 @@ func TestReplayAdmissionStopWaitsForPublishedProofRelease(t *testing.T) {
 	require.NoError(t, err)
 	childHeader := header.LedgerHeader{LedgerIndex: 941, ParentHash: parentHash, AccountHash: stateRoot, TxHash: txRoot}
 	childHeader.Hash = header.CalculateHash(childHeader)
-	child := replayAdmissionLedger(t, childHeader.LedgerIndex, childHeader.Hash, parentHash, childState, txMap)
+	child := replayAdmissionLedger(t, childHeader.LedgerIndex, childHeader.Hash, parentHash, childState, txMap, execution)
 	prepared, err := svc.PrepareReplayLedger(t.Context(), child, parentProof)
 	require.NoError(t, err)
 	_, err = svc.BootstrapPreparedLedger(t.Context(), prepared)

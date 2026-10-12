@@ -46,7 +46,7 @@ func replayFaultTarget(t *testing.T, parent *ledger.Ledger, divergent bool) *led
 	h.Hash = header.CalculateHash(h)
 	state, err := parent.StateMapSnapshot()
 	require.NoError(t, err)
-	target, err = ledger.NewFromHeader(h, state, shamap.New(shamap.TypeTransaction), parent.Fees())
+	target, err = ledger.NewFromHeader(h, state, shamap.New(shamap.TypeTransaction), parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
 	return target
 }
@@ -197,7 +197,7 @@ func TestReplayFaultMissingParentRequiresVerifiedRepairAndExplicitResume(t *test
 func TestReplayFaultCorruptParentIsNotExecutionDisagreement(t *testing.T) {
 	svc := replayFaultService(t, filepath.Join(t.TempDir(), "fault.json"))
 	parent := svc.GetClosedLedger()
-	broken, err := ledger.NewFromHeader(parent.Header(), shamap.New(shamap.TypeState), shamap.New(shamap.TypeTransaction), parent.Fees())
+	broken, err := ledger.NewFromHeader(parent.Header(), shamap.New(shamap.TypeState), shamap.New(shamap.TypeTransaction), parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
 	_, err = svc.captureReplayParent(context.Background(), "corrupt", broken)
 	require.ErrorIs(t, err, errReplayParentCorrupt)
@@ -432,7 +432,7 @@ func TestExecutionStateFailureIgnoresSupersededClosedFrontier(t *testing.T) {
 	replacementHeader := closed.Header()
 	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
 	replacementHeader.Hash = header.CalculateHash(replacementHeader)
-	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, closed.Fees())
+	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, closed.Fees(), svc.config.Execution)
 	require.NoError(t, err)
 
 	svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool {
@@ -459,7 +459,7 @@ func TestReplayFaultRestoresNonemptyParentTransactionsAfterRestart(t *testing.T)
 	h.TxHash, err = txMap.Hash()
 	require.NoError(t, err)
 	h.Hash = header.CalculateHash(h)
-	parent, err := ledger.NewFromHeader(h, state, txMap, original.Fees())
+	parent, err := ledger.NewFromHeader(h, state, txMap, original.Fees(), original.ExecutionStore())
 	require.NoError(t, err)
 	target := replayFaultTarget(t, parent, false)
 	evidence := replayEvidence{Parent: h, Target: target.Header(), Fees: parent.Fees(), Authenticated: true, ParentSnapshot: true}
@@ -635,7 +635,7 @@ func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {
 	h.Hash = header.CalculateHash(h)
 	state, err := parent.StateMapSnapshot()
 	require.NoError(t, err)
-	target, err := ledger.NewFromHeader(h, state, targetMap, parent.Fees())
+	target, err := ledger.NewFromHeader(h, state, targetMap, parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
 	replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
 	require.NoError(t, err)

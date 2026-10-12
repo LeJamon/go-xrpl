@@ -249,7 +249,7 @@ func TestService_StartupLoadRejectsLedgerWithoutSuccessor(t *testing.T) {
 	hdr := source.Header()
 	hdr.LedgerIndex = ^uint32(0)
 	hdr.Hash = header.CalculateHash(hdr)
-	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.Fees())
+	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.Fees(), source.ExecutionStore())
 	require.NoError(t, err)
 
 	persister, err := New(Config{

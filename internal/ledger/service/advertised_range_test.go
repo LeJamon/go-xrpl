@@ -25,8 +25,9 @@ func newRangeTestService(t *testing.T, lo, hi, validated, closed, fetchDepth uin
 	var parent [32]byte
 	for seq := lo; seq <= hi; seq++ {
 		hash := rangeTestHash(seq)
-		svc.putHistoryLocked(makeStubLedger(t, seq, hash, parent))
-		parent = hash
+		l := makeStubLedger(t, seq, hash, parent, svc.config.Execution)
+		svc.putHistoryLocked(l)
+		parent = l.Hash()
 	}
 	if validated != 0 {
 		svc.validatedLedger = svc.ledgerHistory[validated]
@@ -72,8 +73,8 @@ func TestAdvertisableLedgerRange_UsesContiguousSuffix(t *testing.T) {
 	t.Run("parent mismatch", func(t *testing.T) {
 		svc := newRangeTestService(t, 10, 100, 100, 100, 0)
 		hash := svc.ledgerHistory[80].Hash()
-		svc.putHistoryLocked(makeStubLedger(t, 80, hash, [32]byte{0xFF}))
-		requireAdvertisableRange(t, svc, 80, 100, true)
+		svc.putHistoryLocked(makeStubLedger(t, 80, hash, [32]byte{0xFF}, svc.config.Execution))
+		requireAdvertisableRange(t, svc, 81, 100, true)
 	})
 }
 
@@ -86,7 +87,7 @@ func TestAdvertisableLedgerRange_RequiresValidatedTipInHistory(t *testing.T) {
 
 	t.Run("different hash", func(t *testing.T) {
 		svc := newRangeTestService(t, 10, 100, 100, 100, 0)
-		svc.putHistoryLocked(makeStubLedger(t, 100, [32]byte{0xFF}, rangeTestHash(99)))
+		svc.putHistoryLocked(makeStubLedger(t, 100, [32]byte{0xFF}, rangeTestHash(99), svc.config.Execution))
 		requireAdvertisableRange(t, svc, 0, 0, false)
 	})
 }

@@ -245,7 +245,7 @@ func relationalTestLedgerWithTransactions(t *testing.T, count int) *ledger.Ledge
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := ledger.FromGenesis(g.Header, g.StateMap, g.TxMap, drops.DefaultFees())
+	parent, err := ledger.FromGenesis(g.Header, g.StateMap, g.TxMap, drops.DefaultFees(), newTestExecutionStore(t))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}

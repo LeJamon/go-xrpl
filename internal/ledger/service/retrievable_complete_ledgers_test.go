@@ -99,20 +99,20 @@ func TestCompleteLedgers_EvictionCancelsPendingPersistence(t *testing.T) {
 func TestSwitchToPreferredLedger_PreservesValidatedFrontier(t *testing.T) {
 	tests := []struct {
 		name      string
-		candidate func(t *testing.T, validatedSeq uint32, validatedHash [32]byte) *ledger.Ledger
+		candidate func(t *testing.T, validatedSeq uint32, validatedHash [32]byte, store *ledger.ExecutionStore) *ledger.Ledger
 	}{
 		{
 			name: "below validated sequence",
-			candidate: func(t *testing.T, validatedSeq uint32, _ [32]byte) *ledger.Ledger {
-				return makeStubLedger(t, validatedSeq-1, [32]byte{0xA1}, [32]byte{})
+			candidate: func(t *testing.T, validatedSeq uint32, _ [32]byte, store *ledger.ExecutionStore) *ledger.Ledger {
+				return makeStubLedger(t, validatedSeq-1, [32]byte{0xA1}, [32]byte{}, store)
 			},
 		},
 		{
 			name: "same sequence sibling",
-			candidate: func(t *testing.T, validatedSeq uint32, validatedHash [32]byte) *ledger.Ledger {
+			candidate: func(t *testing.T, validatedSeq uint32, validatedHash [32]byte, store *ledger.ExecutionStore) *ledger.Ledger {
 				hash := validatedHash
 				hash[0] ^= 0xFF
-				return makeStubLedger(t, validatedSeq, hash, [32]byte{})
+				return makeStubLedger(t, validatedSeq, hash, [32]byte{}, store)
 			},
 		},
 	}
@@ -129,7 +129,7 @@ func TestSwitchToPreferredLedger_PreservesValidatedFrontier(t *testing.T) {
 			validatedBefore := svc.GetValidatedLedger()
 			require.NotNil(t, validatedBefore)
 			require.NotZero(t, validatedBefore.Sequence())
-			candidate := test.candidate(t, validatedBefore.Sequence(), validatedBefore.Hash())
+			candidate := test.candidate(t, validatedBefore.Sequence(), validatedBefore.Hash(), svc.config.Execution)
 
 			err = svc.SwitchToPreferredLedger(candidate)
 			require.ErrorIs(t, err, ErrPreferredChainSwitch)
