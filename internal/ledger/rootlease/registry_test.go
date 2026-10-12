@@ -144,29 +144,6 @@ func TestCloseRejectsActiveBuild(t *testing.T) {
 	}
 }
 
-func TestGuardFuncCallbackRunsOutsideRegistryLock(t *testing.T) {
-	r, err := New(nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := testRoot(5)
-	releaseLease, err := r.Acquire(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	guardRelease, ok := r.GuardFunc(func(got Root) bool {
-		return got == root && len(r.Roots()) == 1
-	})
-	if !ok {
-		t.Fatal("GuardFunc rejected a preserved root")
-	}
-	guardRelease()
-	releaseLease()
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestLeaseReleaseIsConcurrentAndIdempotent(t *testing.T) {
 	r, err := New(nil, 1)
 	if err != nil {

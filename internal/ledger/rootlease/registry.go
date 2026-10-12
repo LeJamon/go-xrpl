@@ -252,22 +252,3 @@ func (r *Registry) Guard(preserved map[Root]struct{}) (release func(), admitted 
 	}
 	return sync.OnceFunc(r.mu.Unlock), true
 }
-
-// GuardFunc is a compatibility adapter for callers that still derive their
-// preservation set from a predicate. The predicate runs without the registry
-// mutex; Guard rechecks the resulting immutable set before admitting
-// retirement.
-func (r *Registry) GuardFunc(preserve func(Root) bool) (func(), bool) {
-	if preserve == nil {
-		return nil, false
-	}
-	roots := r.Roots()
-	preserved := make(map[Root]struct{}, len(roots))
-	for _, root := range roots {
-		if !preserve(root) {
-			return nil, false
-		}
-		preserved[root] = struct{}{}
-	}
-	return r.Guard(preserved)
-}
