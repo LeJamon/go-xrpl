@@ -822,6 +822,7 @@ func (b *Batch) applyAllOrNothing(
 		return ter.TefINTERNAL, nil
 	}
 	batchTable := applystate.NewApplyStateTable(base, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
+	defer func() { _ = batchTable.Close() }()
 
 	batchCtx := &tx.ApplyContext{
 		View:                   batchTable,
