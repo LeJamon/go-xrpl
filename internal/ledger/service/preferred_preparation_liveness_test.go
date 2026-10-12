@@ -101,6 +101,7 @@ func TestPreferredPreparationRejectsChangedOwnership(t *testing.T) {
 			case "closed":
 				svc.closedLedger = preferred
 			case "open":
+				t.Cleanup(svc.openLedger.Discard)
 				svc.openLedger, err = ledger.NewOpen(preferred, time.Now())
 			case "queue":
 				svc.txQueue, err = svc.txQueue.Fork()

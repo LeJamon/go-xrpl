@@ -28,14 +28,14 @@ func (b *preferredMemoryBudget) Capacity() uint64 { return b.capacity }
 func (b *preferredMemoryBudget) Changed() <-chan struct{} { return b.changed }
 
 func (b *preferredMemoryBudget) TryReserve(bytes uint64) bool {
-	b.attemptOnce.Do(func() {
-		if b.attempted != nil {
-			close(b.attempted)
-		}
-	})
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if bytes > b.bytesAvailable() {
+		b.attemptOnce.Do(func() {
+			if b.attempted != nil {
+				close(b.attempted)
+			}
+		})
 		return false
 	}
 	b.used += bytes
@@ -140,11 +140,19 @@ func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) 
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
 
 	parent := svc.GetClosedLedger()
 	preferred, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, preferred.Close(time.Now(), 0))
+	require.NoError(t, preferred.SetValidated())
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.putHistoryLocked(preferred)
+	svc.validatedLedger = preferred
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
 	budget.mu.Lock()
 	budget.used = budget.limit
 	budget.mu.Unlock()
@@ -160,6 +168,11 @@ func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) 
 	}()
 	select {
 	case <-budget.attempted:
+	case result := <-preparedDone:
+		if result.prepared != nil {
+			result.prepared.Release()
+		}
+		t.Fatalf("preparation returned before memory admission: %v", result.err)
 	case <-time.After(time.Second):
 		t.Fatal("preferred preparation did not reach memory admission")
 	}
@@ -176,7 +189,7 @@ func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) 
 	}
 	select {
 	case result := <-preparedDone:
-		require.ErrorIs(t, result.err, errServiceNotRunning)
+		require.ErrorIs(t, result.err, context.Canceled)
 		if result.prepared != nil {
 			result.prepared.Release()
 		}
