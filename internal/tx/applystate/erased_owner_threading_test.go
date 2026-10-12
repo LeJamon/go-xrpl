@@ -54,7 +54,7 @@ func TestEraseThreadsOwnersFromOriginalEntry(t *testing.T) {
 
 	txHash := [32]byte{0xaa}
 	const ledgerSequence = uint32(123)
-	table := NewApplyStateTable(base, txHash, ledgerSequence, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, txHash, ledgerSequence, amendment.AllSupportedRules())
 	if err := table.Update(lineKey, currentData); err != nil {
 		t.Fatalf("update ripple state: %v", err)
 	}

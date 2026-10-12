@@ -60,7 +60,7 @@ func applyModify(t *testing.T, bookKey [32]byte, orig, cur []byte, txHash [32]by
 	base := newMockBaseView()
 	base.data[bookKey] = orig
 
-	table := NewApplyStateTable(base, txHash, txSeq, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, txHash, txSeq, amendment.AllSupportedRules())
 	if _, err := table.Read(keylet.Keylet{Key: bookKey}); err != nil {
 		t.Fatalf("Read: %v", err)
 	}

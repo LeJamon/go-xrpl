@@ -35,7 +35,9 @@ func persistentTestOffer(t *testing.T, pays int64) []byte {
 }
 
 func TestCollectPersistentDeletionsResultMatrix(t *testing.T) {
-	table := applystate.NewApplyStateTable(newRecordingBaseView(), [32]byte{}, 1, nil)
+	base := newRecordingBaseView()
+	table := applystate.NewApplyStateTable(base, [32]byte{}, 1, nil)
+	t.Cleanup(func() { _ = table.Close() })
 	keys := struct {
 		unfundedOffer [32]byte
 		fundedOffer   [32]byte
@@ -51,20 +53,30 @@ func TestCollectPersistentDeletionsResultMatrix(t *testing.T) {
 		credential:    [32]byte{5},
 		mpt:           [32]byte{6},
 	}
-	items := table.GetItems()
 	unchangedOffer := persistentTestOffer(t, 100)
-	items[keys.unfundedOffer] = &applystate.TrackedEntry{
-		Action: applystate.ActionErase, Original: unchangedOffer, Current: unchangedOffer,
+	base.data[keys.unfundedOffer] = unchangedOffer
+	if err := table.Erase(keylet.Keylet{Key: keys.unfundedOffer}); err != nil {
+		t.Fatalf("erase unfunded offer: %v", err)
 	}
-	items[keys.fundedOffer] = &applystate.TrackedEntry{
-		Action:   applystate.ActionErase,
-		Original: persistentTestOffer(t, 100),
-		Current:  persistentTestOffer(t, 50),
+	fundedOriginal := persistentTestOffer(t, 100)
+	base.data[keys.fundedOffer] = fundedOriginal
+	if err := table.Update(keylet.Keylet{Key: keys.fundedOffer}, persistentTestOffer(t, 50)); err != nil {
+		t.Fatalf("update funded offer: %v", err)
 	}
-	items[keys.trustLine] = erasedType(ledgerentry.TypeRippleState)
-	items[keys.nftOffer] = erasedType(ledgerentry.TypeNFTokenOffer)
-	items[keys.credential] = erasedType(ledgerentry.TypeCredential)
-	items[keys.mpt] = erasedType(ledgerentry.TypeMPToken)
+	if err := table.Erase(keylet.Keylet{Key: keys.fundedOffer}); err != nil {
+		t.Fatalf("erase funded offer: %v", err)
+	}
+	for key, entryType := range map[[32]byte]ledgerentry.Type{
+		keys.trustLine:  ledgerentry.TypeRippleState,
+		keys.nftOffer:   ledgerentry.TypeNFTokenOffer,
+		keys.credential: ledgerentry.TypeCredential,
+		keys.mpt:        ledgerentry.TypeMPToken,
+	} {
+		base.data[key] = ledgerTypeBytes(entryType)
+		if err := table.Erase(keylet.Keylet{Key: key}); err != nil {
+			t.Fatalf("erase %s: %v", entryType, err)
+		}
+	}
 
 	tests := []struct {
 		name        string
@@ -143,17 +155,20 @@ func TestCollectPersistentDeletionsSortsAllReplayCandidates(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			table := applystate.NewApplyStateTable(newRecordingBaseView(), [32]byte{}, 1, nil)
+			base := newRecordingBaseView()
+			table := applystate.NewApplyStateTable(base, [32]byte{}, 1, nil)
+			t.Cleanup(func() { _ = table.Close() })
 			for i := tc.count; i > 0; i-- {
 				var key [32]byte
 				binary.BigEndian.PutUint32(key[28:], uint32(i))
 				if tc.entryType == ledgerentry.TypeOffer {
 					offer := persistentTestOffer(t, 100)
-					table.GetItems()[key] = &applystate.TrackedEntry{
-						Action: applystate.ActionErase, Original: offer, Current: offer,
-					}
+					base.data[key] = offer
 				} else {
-					table.GetItems()[key] = erasedType(tc.entryType)
+					base.data[key] = ledgerTypeBytes(tc.entryType)
+				}
+				if err := table.Erase(keylet.Keylet{Key: key}); err != nil {
+					t.Fatalf("erase candidate %d: %v", i, err)
 				}
 			}
 
@@ -218,6 +233,7 @@ func TestRemoveDeletedTrustLinesPreservesLineWhenAccountMissing(t *testing.T) {
 	}
 
 	table := applystate.NewApplyStateTable(view, [32]byte{}, 1, amendment.AllSupportedRules())
+	t.Cleanup(func() { _ = table.Close() })
 	recoveryEngine(view, txcore.TapNONE).removeDeletedTrustLines(table, [][32]byte{lineKey.Key})
 	got, err := table.Read(lineKey)
 	if err != nil {
@@ -376,11 +392,6 @@ func TestWorkOnTecOfferReplayPropagatesCleanupFailure(t *testing.T) {
 		t.Fatalf("sponsor state = count %d balance %d sequence %d, want 1/1000000/1",
 			sponsor.SponsoringOwnerCount, sponsor.Balance, sponsor.Sequence)
 	}
-}
-
-func erasedType(t ledgerentry.Type) *applystate.TrackedEntry {
-	data := ledgerTypeBytes(t)
-	return &applystate.TrackedEntry{Action: applystate.ActionErase, Original: data, Current: data}
 }
 
 func assertKeysEqual(t *testing.T, name string, got, want [][32]byte) {

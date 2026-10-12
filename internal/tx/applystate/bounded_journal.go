@@ -12,13 +12,6 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// ExecutionJournalConfigProvider lets an immutable ledger view opt an
-// ApplyStateTable into the bounded journal path. The ledger owns the shared
-// admission accounts and scratch directory; a table only owns its overlay.
-type ExecutionJournalConfigProvider interface {
-	ExecutionJournalConfig() (overlay.Config, bool)
-}
-
 type boundedJournal struct {
 	overlay *overlay.Overlay
 	err     error
@@ -49,15 +42,12 @@ func newBoundedJournal(cfg overlay.Config) *boundedJournal {
 }
 
 func (j *boundedJournal) fork() *boundedJournal {
-	if j == nil {
-		return nil
-	}
 	if j.err != nil {
 		return &boundedJournal{err: j.err, cfg: j.cfg}
 	}
 	child, err := j.overlay.Fork()
 	if err != nil {
-		return &boundedJournal{err: err}
+		return &boundedJournal{err: err, cfg: j.cfg}
 	}
 	return &boundedJournal{overlay: child, cfg: j.cfg}
 }
@@ -66,24 +56,18 @@ func (j *boundedJournal) fork() *boundedJournal {
 // path when their base is an outer ApplyStateTable (for example Batch's
 // all-or-nothing table). The shared admission accounts in cfg prevent this
 // forwarding from multiplying the ledger's memory or disk ceiling.
-func (t *ApplyStateTable) ExecutionJournalConfig() (overlay.Config, bool) {
-	if t == nil || t.journal == nil {
-		return overlay.Config{}, false
-	}
-	return t.journal.cfg, true
+func (t *ApplyStateTable) ExecutionJournalConfig() overlay.Config {
+	return t.journal.cfg
 }
 
 func (j *boundedJournal) close() error {
-	if j == nil || j.overlay == nil {
+	if j.err != nil {
 		return nil
 	}
 	return j.overlay.Close()
 }
 
 func (j *boundedJournal) get(ctx context.Context, key [32]byte) (journalRecord, bool, error) {
-	if j == nil {
-		return journalRecord{}, false, nil
-	}
 	if j.err != nil {
 		return journalRecord{}, false, j.err
 	}
@@ -99,9 +83,6 @@ func (j *boundedJournal) get(ctx context.Context, key [32]byte) (journalRecord, 
 }
 
 func (j *boundedJournal) put(ctx context.Context, key [32]byte, record journalRecord) error {
-	if j == nil {
-		return nil
-	}
 	if j.err != nil {
 		return j.err
 	}
@@ -150,9 +131,6 @@ func (j *boundedJournal) iterate(ctx context.Context, fn func([32]byte, journalR
 }
 
 func (j *boundedJournal) iterateAfter(ctx context.Context, after *[32]byte, fn func([32]byte, journalRecord) bool) error {
-	if j == nil {
-		return nil
-	}
 	if j.err != nil {
 		return j.err
 	}

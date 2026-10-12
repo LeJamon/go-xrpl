@@ -6,17 +6,24 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // mockBaseView implements tx.LedgerView for engine tests.
 type mockBaseView struct {
 	data map[[32]byte][]byte
+	cfg  overlay.Config
 }
 
 func newMockBaseView() *mockBaseView {
-	return &mockBaseView{data: make(map[[32]byte][]byte)}
+	return &mockBaseView{
+		data: make(map[[32]byte][]byte),
+		cfg:  overlay.Config{MaxMemoryBytes: 1 << 20},
+	}
 }
+
+func (m *mockBaseView) ExecutionJournalConfig() overlay.Config { return m.cfg }
 
 func (m *mockBaseView) Read(k keylet.Keylet) ([]byte, error) {
 	return m.data[k.Key], nil
@@ -46,6 +53,7 @@ func (m *mockBaseView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil 
 
 func (m *mockBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := newMockBaseView()
+	staged.cfg = m.cfg
 	for key, data := range m.data {
 		staged.data[key] = bytes.Clone(data)
 	}

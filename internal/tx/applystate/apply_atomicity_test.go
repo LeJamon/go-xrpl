@@ -78,6 +78,7 @@ func (m *recordingBaseView) AdjustDropsDestroyed(amount drops.XRPAmount) error {
 
 func (m *recordingBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := newRecordingBaseView()
+	staged.cfg = m.cfg
 	for key, data := range m.data {
 		staged.data[key] = bytes.Clone(data)
 	}
@@ -135,7 +136,7 @@ func TestPreviewBuildsMetadataWithoutMutatingBase(t *testing.T) {
 	original := encodeApplyTestEntry(t, originalFields)
 	base.data[accountKey.Key] = original
 
-	table := NewApplyStateTable(base, [32]byte{2}, 3, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{2}, 3, amendment.AllSupportedRules())
 	updatedFields := applyTestAccountRootFields()
 	updatedFields["PreviousTxnID"] = hex.EncodeToString(make([]byte, 32))
 	updatedFields["PreviousTxnLgrSeq"] = uint32(1)
@@ -167,7 +168,7 @@ func TestApplyMetadataBuildErrorDoesNotMutateBase(t *testing.T) {
 	invalid := encodeApplyTestEntry(t, invalidFields)
 
 	base := newRecordingBaseView()
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	if err := table.Insert(kl(1), valid); err != nil {
 		t.Fatalf("insert valid entry: %v", err)
 	}
@@ -203,11 +204,11 @@ func TestApplyMetadataBuildErrorDoesNotMutateBase(t *testing.T) {
 	if !base.destroyed.IsZero() {
 		t.Fatalf("destroyed %s before returning the build error", base.destroyed)
 	}
-	if got := table.items[key(1)].Current; !bytes.Equal(got, valid) {
+	if got := trackedCurrent(t, table, key(1)); !bytes.Equal(got, valid) {
 		t.Fatalf("failed apply changed valid tracked entry: got %x want %x", got, valid)
 	}
-	if len(table.threadOnlyOwners) != 0 {
-		t.Fatalf("failed apply retained %d threaded owners", len(table.threadOnlyOwners))
+	if got := threadedOwnerCount(t, table); got != 0 {
+		t.Fatalf("failed apply retained %d threaded owners", got)
 	}
 }
 
@@ -215,7 +216,7 @@ func TestApplyBaseWriteErrorRollsBackAndCanRetry(t *testing.T) {
 	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	base := newRecordingBaseView()
 	base.failAt = 2
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	if err := table.Insert(kl(1), entry); err != nil {
 		t.Fatalf("insert first entry: %v", err)
 	}
@@ -246,12 +247,9 @@ func TestApplyBaseWriteErrorRollsBackAndCanRetry(t *testing.T) {
 		t.Fatalf("destroyed %s after write failure", base.destroyed)
 	}
 	for _, k := range [][32]byte{key(1), key(2)} {
-		if got := table.items[k].Current; !bytes.Equal(got, entry) {
+		if got := trackedCurrent(t, table, k); !bytes.Equal(got, entry) {
 			t.Fatalf("failed apply changed tracked entry %x: got %x want %x", k, got, entry)
 		}
-	}
-	if len(table.threadOnlyOwners) != 0 {
-		t.Fatalf("failed apply retained %d threaded owners", len(table.threadOnlyOwners))
 	}
 
 	metadata, err = table.Apply()
@@ -278,7 +276,7 @@ func TestApplyDestroyedDropsErrorRollsBackAndCanRetry(t *testing.T) {
 	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	base := newRecordingBaseView()
 	base.adjustErr = errors.New("destroyed drops commit failed")
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	if err := table.Insert(kl(1), entry); err != nil {
 		t.Fatalf("insert entry: %v", err)
 	}
@@ -308,7 +306,7 @@ func TestApplyDestroyedDropsErrorRollsBackAndCanRetry(t *testing.T) {
 
 func TestApplyStateTableAtomicFailureDoesNotMutateTable(t *testing.T) {
 	base := newMockBaseView()
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	if err := table.Insert(kl(1), []byte{1}); err != nil {
 		t.Fatalf("seed table: %v", err)
 	}
@@ -345,7 +343,7 @@ func TestApplyStateTableAtomicFailureDoesNotMutateTable(t *testing.T) {
 
 func TestApplyStateTableAtomicSuccessCopiesCallbackData(t *testing.T) {
 	base := newMockBaseView()
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	data := []byte{1}
 
 	err := table.ApplyAtomically(func(view ledgercore.Writer) error {
@@ -368,7 +366,7 @@ func TestApplyStateTableAtomicSuccessCopiesCallbackData(t *testing.T) {
 func TestApplyFlushesTrackedItemsInKeyOrder(t *testing.T) {
 	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	base := newRecordingBaseView()
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 
 	for i := 32; i >= 1; i-- {
 		if err := table.Insert(kl(byte(i)), entry); err != nil {
@@ -400,7 +398,7 @@ func TestApplyFlushesTrackedItemsInKeyOrder(t *testing.T) {
 
 func TestApplyThreadsTrackedItemsInKeyOrder(t *testing.T) {
 	base := newRecordingBaseView()
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	wantReads := make([][32]byte, 8)
 
 	for i := 8; i >= 1; i-- {
@@ -444,11 +442,13 @@ func TestApplyThreadsTrackedItemsInKeyOrder(t *testing.T) {
 
 func TestApplyFlushesThreadOnlyOwnersInKeyOrder(t *testing.T) {
 	base := newRecordingBaseView()
-	table := NewApplyStateTable(base, [32]byte{}, 2, amendment.AllSupportedRules())
+	table := newTestApplyStateTable(t, base, [32]byte{}, 2, amendment.AllSupportedRules())
 
 	for i := 32; i >= 1; i-- {
 		ownerKey := key(byte(i))
-		table.threadOnlyOwners[ownerKey] = &ThreadedOwner{Updated: []byte{byte(i)}}
+		if err := table.journal.putOwner(backgroundContext, ownerKey, &ThreadedOwner{Updated: []byte{byte(i)}}); err != nil {
+			t.Fatalf("seed owner %d: %v", i, err)
+		}
 	}
 
 	if _, err := table.Apply(); err != nil {

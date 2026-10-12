@@ -43,6 +43,7 @@ func (r *recordingBaseView) AdjustDropsDestroyed(d drops.XRPAmount) error {
 
 func (r *recordingBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := newRecordingBaseView()
+	staged.cfg = r.cfg
 	for key, data := range r.data {
 		staged.data[key] = bytes.Clone(data)
 	}

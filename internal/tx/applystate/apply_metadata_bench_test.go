@@ -16,7 +16,8 @@ func BenchmarkBuildModifiedNode_AccountRoot(b *testing.B) {
 }
 
 func runBuildModifiedBench(b *testing.B, key [32]byte, original, current []byte) {
-	tbl := &ApplyStateTable{}
+	tbl := NewApplyStateTable(newMockBaseView(), [32]byte{}, 0, nil)
+	b.Cleanup(func() { _ = tbl.Close() })
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

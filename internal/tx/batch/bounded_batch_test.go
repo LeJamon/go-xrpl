@@ -30,8 +30,8 @@ func newBoundedBatchBase(cfg overlay.Config) *boundedBatchBase {
 	return &boundedBatchBase{data: make(map[[32]byte][]byte), cfg: cfg}
 }
 
-func (v *boundedBatchBase) ExecutionJournalConfig() (overlay.Config, bool) {
-	return v.cfg, true
+func (v *boundedBatchBase) ExecutionJournalConfig() overlay.Config {
+	return v.cfg
 }
 
 func (v *boundedBatchBase) Read(k keylet.Keylet) ([]byte, error) {
@@ -167,9 +167,7 @@ func (e *boundedBatchInnerEngine) apply(
 	}
 	inner := applystate.NewApplyStateTable(atomicView, parentBatchID, transactionIndex, amendment.AllSupportedRules())
 	defer func() { _ = inner.Close() }()
-	if _, bounded := inner.ExecutionJournalConfig(); !bounded {
-		return txcore.ApplyResult{Result: ter.TefINTERNAL, Cause: errors.New("nested batch table was not bounded")}
-	}
+	_ = inner.ExecutionJournalConfig()
 	if err := inner.Insert(e.key, e.value); err != nil {
 		return txcore.ApplyResult{Result: ter.TefEXCEPTION, Cause: err}
 	}

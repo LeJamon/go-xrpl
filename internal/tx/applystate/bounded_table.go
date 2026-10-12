@@ -241,35 +241,9 @@ func (t *ApplyStateTable) ForEachTracked(fn func([32]byte, *TrackedEntry) bool) 
 	if fn == nil {
 		return nil
 	}
-	if t.journal != nil {
-		return t.record(t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
-			return record.item == nil || fn(key, record.item)
-		}))
-	}
-	for _, key := range sortedLedgerKeys(t.items) {
-		if !fn(key, t.items[key]) {
-			break
-		}
-	}
-	return nil
-}
-
-// ForEachThreadedOwner streams thread-only owner records in key order.
-func (t *ApplyStateTable) ForEachThreadedOwner(fn func([32]byte, *ThreadedOwner) bool) error {
-	if fn == nil {
-		return nil
-	}
-	if t.journal != nil {
-		return t.record(t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
-			return record.owner == nil || fn(key, record.owner)
-		}))
-	}
-	for _, key := range sortedLedgerKeys(t.threadOnlyOwners) {
-		if !fn(key, t.threadOnlyOwners[key]) {
-			break
-		}
-	}
-	return nil
+	return t.record(t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
+		return record.item == nil || fn(key, record.item)
+	}))
 }
 
 func (t *ApplyStateTable) applyThreadingBounded() error {
@@ -578,20 +552,6 @@ func (t *ApplyStateTable) sizeBounded() int {
 		t.record(err)
 	}
 	return count
-}
-
-func (t *ApplyStateTable) itemsBounded() map[[32]byte]*TrackedEntry {
-	items := make(map[[32]byte]*TrackedEntry)
-	err := t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
-		if record.item != nil {
-			items[key] = record.item
-		}
-		return true
-	})
-	if err != nil {
-		t.record(err)
-	}
-	return items
 }
 
 func (t *ApplyStateTable) modifiedNodePrevTxnBounded(key [32]byte, entryType entry.Type, origEntry entry.Entry) (string, uint32) {

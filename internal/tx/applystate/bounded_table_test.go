@@ -3,7 +3,6 @@ package applystate
 import (
 	"bytes"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -13,35 +12,10 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-type boundedMockBase struct {
-	*mockBaseView
-	cfg overlay.Config
-}
-
-type boundedRecordingBase struct {
-	*recordingBaseView
-	cfg overlay.Config
-}
-
-func (b *boundedRecordingBase) ExecutionJournalConfig() (overlay.Config, bool) {
-	return b.cfg, true
-}
-
-func (b *boundedMockBase) ExecutionJournalConfig() (overlay.Config, bool) {
-	return b.cfg, true
-}
-
 func TestBoundedTableMatchesOverlaySemantics(t *testing.T) {
-	base := &boundedMockBase{
-		mockBaseView: newMockBaseView(),
-		cfg:          overlay.Config{MaxMemoryBytes: 256 << 10},
-	}
+	base := newMockBaseView()
 	base.data[key(1)] = []byte("one")
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
-	if table.journal == nil {
-		t.Fatal("provider did not select bounded journal")
-	}
-	defer table.Close()
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 
 	if got, err := table.Read(keylet.Keylet{Key: key(1)}); err != nil || !bytes.Equal(got, []byte("one")) {
 		t.Fatalf("Read = %q, %v", got, err)
@@ -73,29 +47,22 @@ func TestBoundedTableMatchesOverlaySemantics(t *testing.T) {
 	if seen != 1 {
 		t.Fatalf("ForEach yielded %d records", seen)
 	}
-	if err := table.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestBoundedTableForwardsConfigToNestedTable(t *testing.T) {
-	base := &boundedMockBase{
-		mockBaseView: newMockBaseView(),
-		cfg:          overlay.Config{MaxMemoryBytes: 256 << 10},
-	}
-	outer := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
-	defer outer.Close()
-	inner := NewApplyStateTable(outer, [32]byte{2}, 3, amendment.AllSupportedRules())
-	defer inner.Close()
-	if inner.journal == nil {
-		t.Fatal("nested table did not inherit bounded journal configuration")
+	base := newMockBaseView()
+	base.cfg = overlay.Config{MaxMemoryBytes: 256 << 10}
+	outer := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	inner := newTestApplyStateTable(t, outer, [32]byte{2}, 3, amendment.AllSupportedRules())
+	if got := inner.ExecutionJournalConfig(); got.MaxMemoryBytes != base.cfg.MaxMemoryBytes {
+		t.Fatalf("nested journal config = %+v, want %+v", got, base.cfg)
 	}
 }
 
 func TestBoundedTableForkAtomicFailurePreservesParent(t *testing.T) {
-	base := &boundedMockBase{mockBaseView: newMockBaseView(), cfg: overlay.Config{MaxMemoryBytes: 256 << 10}}
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
-	defer table.Close()
+	base := newMockBaseView()
+	base.cfg = overlay.Config{MaxMemoryBytes: 256 << 10}
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	if err := table.Insert(kl(1), []byte("parent")); err != nil {
 		t.Fatal(err)
 	}
@@ -114,17 +81,15 @@ func TestBoundedTableForkAtomicFailurePreservesParent(t *testing.T) {
 }
 
 func TestBoundedTableSpillsLargeRecords(t *testing.T) {
-	base := &boundedMockBase{
-		mockBaseView: newMockBaseView(),
-		cfg: overlay.Config{
-			MaxMemoryBytes: 16 << 10,
-			MaxDiskBytes:   4 << 20,
-			SpillDir:       t.TempDir(),
-			MaxSegments:    2,
-			MaxMergeFanIn:  2,
-		},
+	base := newMockBaseView()
+	base.cfg = overlay.Config{
+		MaxMemoryBytes: 16 << 10,
+		MaxDiskBytes:   4 << 20,
+		SpillDir:       t.TempDir(),
+		MaxSegments:    2,
+		MaxMergeFanIn:  2,
 	}
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	for i := byte(0); i < 32; i++ {
 		if err := table.Insert(kl(i), bytes.Repeat([]byte{i}, 1024)); err != nil {
 			t.Fatalf("Insert %d: %v stats=%+v", i, err, table.journal.overlay.Stats())
@@ -140,51 +105,38 @@ func TestBoundedTableSpillsLargeRecords(t *testing.T) {
 		}
 		t.Fatalf("spilled Read = len(%d), first(%d), err(%v)", len(got), first, err)
 	}
-	if err := table.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestBoundedPreviewMatchesLegacyMetadata(t *testing.T) {
+func TestBoundedPreviewPreservesBase(t *testing.T) {
 	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	updatedFields := applyTestAccountRootFields()
 	updatedFields["Balance"] = "999990"
 	updated := encodeApplyTestEntry(t, updatedFields)
 
-	legacyBase := newRecordingBaseView()
-	boundedBase := &boundedRecordingBase{recordingBaseView: newRecordingBaseView(), cfg: overlay.Config{MaxMemoryBytes: 256 << 10}}
+	base := newRecordingBaseView()
+	base.cfg = overlay.Config{MaxMemoryBytes: 256 << 10}
 	accountKey := keylet.Keylet{Key: key(1)}
-	legacyBase.data[accountKey.Key] = bytes.Clone(entry)
-	boundedBase.data[accountKey.Key] = bytes.Clone(entry)
-	legacy := NewApplyStateTable(legacyBase, [32]byte{2}, 3, amendment.AllSupportedRules())
-	bounded := NewApplyStateTable(boundedBase, [32]byte{2}, 3, amendment.AllSupportedRules())
-	defer bounded.Close()
-	if err := legacy.Update(accountKey, updated); err != nil {
+	base.data[accountKey.Key] = bytes.Clone(entry)
+	table := newTestApplyStateTable(t, base, [32]byte{2}, 3, amendment.AllSupportedRules())
+	if err := table.Update(accountKey, updated); err != nil {
 		t.Fatal(err)
 	}
-	if err := bounded.Update(accountKey, updated); err != nil {
-		t.Fatal(err)
-	}
-	legacyMetadata, err := legacy.Preview()
+	metadata, err := table.Preview()
 	if err != nil {
-		t.Fatalf("legacy Preview: %v", err)
+		t.Fatalf("Preview: %v", err)
 	}
-	boundedMetadata, err := bounded.Preview()
-	if err != nil {
-		t.Fatalf("bounded Preview: %v", err)
+	if len(metadata.AffectedNodes) != 1 {
+		t.Fatalf("Preview metadata nodes = %d, want 1", len(metadata.AffectedNodes))
 	}
-	if !reflect.DeepEqual(legacyMetadata, boundedMetadata) {
-		t.Fatalf("metadata differs\\nlegacy=%+v\\nbounded=%+v", legacyMetadata, boundedMetadata)
-	}
-	if !bytes.Equal(legacyBase.data[accountKey.Key], boundedBase.data[accountKey.Key]) {
-		t.Fatal("Preview changed one base view")
+	if !bytes.Equal(base.data[accountKey.Key], entry) {
+		t.Fatal("Preview changed the base view")
 	}
 }
 
-func TestBoundedApplyThreadsOwnersLikeLegacy(t *testing.T) {
-	base := &boundedRecordingBase{recordingBaseView: newRecordingBaseView(), cfg: overlay.Config{MaxMemoryBytes: 256 << 10}}
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
-	defer table.Close()
+func TestBoundedApplyThreadsOwners(t *testing.T) {
+	base := newRecordingBaseView()
+	base.cfg = overlay.Config{MaxMemoryBytes: 256 << 10}
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	for i := byte(1); i <= 8; i++ {
 		var accountID [20]byte
 		accountID[19] = i
@@ -227,10 +179,10 @@ func TestBoundedApplyThreadsOwnersLikeLegacy(t *testing.T) {
 
 func TestBoundedApplyFailureCanRetry(t *testing.T) {
 	entry := encodeApplyTestEntry(t, applyTestAccountRootFields())
-	base := &boundedRecordingBase{recordingBaseView: newRecordingBaseView(), cfg: overlay.Config{MaxMemoryBytes: 256 << 10}}
+	base := newRecordingBaseView()
+	base.cfg = overlay.Config{MaxMemoryBytes: 256 << 10}
 	base.failAt = 2
-	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
-	defer table.Close()
+	table := newTestApplyStateTable(t, base, [32]byte{1}, 2, amendment.AllSupportedRules())
 	if err := table.Insert(kl(1), entry); err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -16,6 +17,7 @@ import (
 // mockBaseView implements LedgerView for ApplyStateTable tests.
 type mockBaseView struct {
 	data map[[32]byte][]byte
+	cfg  overlay.Config
 }
 
 type succErrorBaseView struct {
@@ -26,8 +28,13 @@ type succErrorBaseView struct {
 }
 
 func newMockBaseView() *mockBaseView {
-	return &mockBaseView{data: make(map[[32]byte][]byte)}
+	return &mockBaseView{
+		data: make(map[[32]byte][]byte),
+		cfg:  overlay.Config{MaxMemoryBytes: 1 << 20},
+	}
 }
+
+func (m *mockBaseView) ExecutionJournalConfig() overlay.Config { return m.cfg }
 
 func (m *mockBaseView) Read(k keylet.Keylet) ([]byte, error) {
 	return m.data[k.Key], nil
@@ -57,6 +64,7 @@ func (m *mockBaseView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil 
 
 func (m *mockBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := newMockBaseView()
+	staged.cfg = m.cfg
 	for key, data := range m.data {
 		staged.data[key] = bytes.Clone(data)
 	}
@@ -65,6 +73,45 @@ func (m *mockBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) erro
 	}
 	m.data = staged.data
 	return nil
+}
+
+func newTestApplyStateTable(
+	t *testing.T,
+	base AtomicLedgerView,
+	txHash [32]byte,
+	txSeq uint32,
+	rules *amendment.Rules,
+) *ApplyStateTable {
+	t.Helper()
+	table := NewApplyStateTable(base, txHash, txSeq, rules)
+	t.Cleanup(func() { _ = table.Close() })
+	return table
+}
+
+func trackedCurrent(t *testing.T, table *ApplyStateTable, key [32]byte) []byte {
+	t.Helper()
+	record, found, err := table.journal.get(backgroundContext, key)
+	if err != nil {
+		t.Fatalf("journal get %x: %v", key, err)
+	}
+	if !found || record.item == nil {
+		t.Fatalf("journal item %x missing", key)
+	}
+	return record.item.Current
+}
+
+func threadedOwnerCount(t *testing.T, table *ApplyStateTable) int {
+	t.Helper()
+	count := 0
+	if err := table.journal.iterate(backgroundContext, func(_ [32]byte, record journalRecord) bool {
+		if record.owner != nil {
+			count++
+		}
+		return true
+	}); err != nil {
+		t.Fatalf("iterate threaded owners: %v", err)
+	}
+	return count
 }
 
 func (m *mockBaseView) TxExists([32]byte) (bool, error) { return false, nil }
@@ -130,7 +177,7 @@ func TestSuccPropagatesBaseErrorWithLocalCandidate(t *testing.T) {
 		err:          sentinel,
 		failOnCall:   1,
 	}
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	if err := table.Insert(kl(2), []byte{2}); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -152,7 +199,7 @@ func TestSuccPropagatesBaseErrorAfterErasedEntry(t *testing.T) {
 		failOnCall:   2,
 	}
 	base.data[key(1)] = []byte{1}
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	if err := table.Erase(kl(1)); err != nil {
 		t.Fatalf("Erase: %v", err)
 	}
@@ -192,7 +239,7 @@ func TestSuccCombinesBaseAndLocalCandidates(t *testing.T) {
 			if !test.baseEmpty {
 				base.data[key(test.baseKey)] = []byte("base")
 			}
-			table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+			table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 			if err := table.Insert(kl(test.localKey), []byte("local")); err != nil {
 				t.Fatalf("Insert: %v", err)
 			}
@@ -209,7 +256,7 @@ func TestSuccCombinesBaseAndLocalCandidates(t *testing.T) {
 }
 
 func TestSuccReturnsNormalExhaustion(t *testing.T) {
-	table := NewApplyStateTable(newMockBaseView(), [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, newMockBaseView(), [32]byte{}, 0, nil)
 
 	gotKey, gotData, found, err := table.Succ(key(0))
 	if err != nil {
@@ -225,7 +272,7 @@ func TestReadChecksKeyletTypeForBaseAndTrackedEntries(t *testing.T) {
 	baseKey := key(1)
 	baseData := typedEntryData(entry.TypeAccountRoot, 1)
 	base.data[baseKey] = baseData
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	wrongBase := keylet.Keylet{Type: entry.TypePermissionedDomain, Key: baseKey}
 
 	if got, err := table.Read(wrongBase); err != nil || got != nil {
@@ -283,7 +330,7 @@ func TestForEach_BaseOnly(t *testing.T) {
 	base.data[key(1)] = []byte("a")
 	base.data[key(2)] = []byte("b")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	results := collectForEach(t, table)
 
 	if len(results) != 2 {
@@ -301,7 +348,7 @@ func TestForEach_InsertedEntry(t *testing.T) {
 	base := newMockBaseView()
 	base.data[key(1)] = []byte("a")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	if err := table.Insert(kl(2), []byte("new")); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +367,7 @@ func TestForEach_ModifiedEntry(t *testing.T) {
 	base := newMockBaseView()
 	base.data[key(1)] = []byte("old")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	// Read first to track it
 	if _, err := table.Read(kl(1)); err != nil {
 		t.Fatal(err)
@@ -344,7 +391,7 @@ func TestForEach_ErasedEntry(t *testing.T) {
 	base.data[key(1)] = []byte("a")
 	base.data[key(2)] = []byte("b")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	if err := table.Erase(kl(1)); err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +412,7 @@ func TestCollectEntries_RetainsDeleteFinalImage(t *testing.T) {
 	final := typedEntryData(entry.TypeAccountRoot, 2)
 	base.data[key(1)] = original
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	if _, err := table.Read(kl(1)); err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +444,7 @@ func TestForEach_CombinedOperations(t *testing.T) {
 	base.data[key(2)] = []byte("base2")
 	base.data[key(3)] = []byte("base3")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 
 	// Erase key(1)
 	if err := table.Erase(kl(1)); err != nil {
@@ -447,7 +494,7 @@ func TestForEach_EarlyStop(t *testing.T) {
 	base.data[key(2)] = []byte("b")
 	base.data[key(3)] = []byte("c")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 
 	count := 0
 	err := table.ForEach(func(k [32]byte, data []byte) bool {
@@ -466,7 +513,7 @@ func TestForEach_NoDuplicates(t *testing.T) {
 	base := newMockBaseView()
 	base.data[key(1)] = []byte("base")
 
-	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	table := newTestApplyStateTable(t, base, [32]byte{}, 0, nil)
 	// Read key(1) to cache it — it should appear exactly once
 	if _, err := table.Read(kl(1)); err != nil {
 		t.Fatal(err)
