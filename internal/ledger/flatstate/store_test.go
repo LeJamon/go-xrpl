@@ -33,6 +33,42 @@ func testAuthorization(source, target Descriptor) RootClosureAuthorization {
 	return RootClosureAuthorization{SourceRoot: source.StateRoot, TargetRoot: target.StateRoot, Token: []byte("retention-certificate")}
 }
 
+type flatTestBudget struct {
+	limit atomic.Uint64
+	used  atomic.Uint64
+}
+
+func newFlatTestBudget(limit uint64) *flatTestBudget {
+	budget := &flatTestBudget{}
+	budget.limit.Store(limit)
+	return budget
+}
+
+func (b *flatTestBudget) TryReserve(bytes uint64) bool {
+	for {
+		used := b.used.Load()
+		if bytes > b.limit.Load()-minUint64(b.limit.Load(), used) {
+			return false
+		}
+		if b.used.CompareAndSwap(used, used+bytes) {
+			return true
+		}
+	}
+}
+
+func (b *flatTestBudget) Release(bytes uint64) { b.used.Add(^uint64(bytes - 1)) }
+func (b *flatTestBudget) Limit() uint64        { return b.limit.Load() }
+func (b *flatTestBudget) Changed() <-chan struct{} {
+	return nil
+}
+
+func minUint64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func importInitial(t *testing.T, store *Store, target Descriptor, changes []Change) {
 	t.Helper()
 	if err := store.Advance(context.Background(), AdvanceRequest{
@@ -215,6 +251,82 @@ func TestStoreDeleteAndOversizedRecordStreaming(t *testing.T) {
 	if err != nil || !found || string(value) != "keep" {
 		t.Fatalf("kept object = %q, %v, %v", value, found, err)
 	}
+}
+
+func TestStoreMemoryBudgetAdmitsOversizedRecordAsSingleBatch(t *testing.T) {
+	budget := newFlatTestBudget(512)
+	store, err := Open(t.TempDir(), Options{
+		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchBytes: 32,
+		MemoryBudget: budget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	value := make([]byte, 256)
+	importInitial(t, store, target, []Change{{Key: testHash(1), Value: value}})
+	if got := budget.used.Load(); got != 0 {
+		t.Fatalf("batch reservation leaked: %d", got)
+	}
+	view, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	got, found, err := view.Get(testHash(1))
+	if err != nil || !found || len(got) != len(value) {
+		t.Fatalf("oversized value = %d bytes, found %v, err %v", len(got), found, err)
+	}
+}
+
+func TestStoreMemoryBudgetRejectsRecordOverAccount(t *testing.T) {
+	budget := newFlatTestBudget(64)
+	store, err := Open(t.TempDir(), Options{
+		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchBytes: 32,
+		MemoryBudget: budget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	err = store.Advance(context.Background(), AdvanceRequest{
+		Target:        target,
+		Changes:       NewSliceChangeIterator([]Change{{Key: testHash(1), Value: make([]byte, 256)}}),
+		Authorization: RootClosureAuthorization{TargetRoot: target.StateRoot, Token: []byte("genesis-closure")},
+	})
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("oversized admission error = %v", err)
+	}
+	if got := budget.used.Load(); got != 0 {
+		t.Fatalf("failed admission leaked: %d", got)
+	}
+}
+
+func TestStoreActiveViewLimit(t *testing.T) {
+	store, err := Open(t.TempDir(), Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	importInitial(t, store, target, nil)
+	first, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.OpenView(context.Background()); !errors.Is(err, ErrLimit) {
+		t.Fatalf("second view error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
 }
 
 func TestStoreOutboxLimitsBlockAdvanceButAllowAck(t *testing.T) {

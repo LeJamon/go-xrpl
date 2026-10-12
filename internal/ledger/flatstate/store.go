@@ -32,17 +32,18 @@ const (
 	outboxVersion     uint32 = 1
 	changeAlgorithm   uint32 = 1
 
-	defaultCacheBytes    int64 = 64 << 20
-	defaultMemTableSize  int64 = 16 << 20
-	defaultBatchBytes          = 4 << 20
-	defaultBatchRecords        = 4096
-	defaultOutboxCount         = 1024
-	defaultOutboxBytes   int64 = 64 << 20
-	defaultOutboxAge           = 24 * time.Hour
-	maxIntentBytes             = 4 << 10
-	maxMarkerBytes             = 16 << 10
-	maxDescriptorBytes         = 256
-	maxOutboxRecordBytes       = 32 << 10
+	defaultCacheBytes     int64 = 64 << 20
+	defaultMemTableSize   int64 = 16 << 20
+	defaultBatchBytes           = 4 << 20
+	defaultBatchRecords         = 4096
+	defaultOutboxCount          = 1024
+	defaultOutboxBytes    int64 = 64 << 20
+	defaultOutboxAge            = 24 * time.Hour
+	defaultMaxActiveViews       = 256
+	maxIntentBytes              = 4 << 10
+	maxMarkerBytes              = 16 << 10
+	maxDescriptorBytes          = 256
+	maxOutboxRecordBytes        = 32 << 10
 )
 
 var (
@@ -79,6 +80,16 @@ var (
 // ledger packages.  It is an alias so existing [32]byte hashes pass through
 // the flat-state API without conversion.
 type Hash = [32]byte
+
+// MemoryBudget is the shared byte-admission contract used for transition
+// batches.  Store operations never wait on the budget; a failed admission is
+// returned as ErrLimit so the caller can release or retry its reservation.
+type MemoryBudget interface {
+	TryReserve(uint64) bool
+	Release(uint64)
+	Limit() uint64
+	Changed() <-chan struct{}
+}
 
 // Descriptor identifies an exact durable ledger version and its flat-state
 // schema identity.  The full descriptor, rather than sequence or state root
@@ -227,6 +238,12 @@ func SemanticCommitID(ledger Hash, publicationKind string) CommitID {
 type Options struct {
 	CacheBytes   int64
 	MemTableSize int64
+	// MemoryBudget optionally accounts for temporary bytes retained by a
+	// transition batch. The caller owns the budget's policy and lifecycle.
+	MemoryBudget MemoryBudget
+
+	// MaxActiveViews bounds point-in-time snapshots retained by this store.
+	MaxActiveViews int
 
 	MaxBatchBytes   int
 	MaxBatchRecords int
@@ -246,7 +263,7 @@ type Options struct {
 }
 
 func (o Options) withDefaults() (Options, error) {
-	if o.CacheBytes < 0 || o.MemTableSize < 0 || o.MaxBatchBytes < 0 || o.MaxBatchRecords < 0 ||
+	if o.CacheBytes < 0 || o.MemTableSize < 0 || o.MaxActiveViews < 0 || o.MaxBatchBytes < 0 || o.MaxBatchRecords < 0 ||
 		o.OutboxMaxCount < 0 || o.OutboxMaxBytes < 0 || o.OutboxMaxAge < 0 {
 		return Options{}, fmt.Errorf("%w: negative option", ErrLimit)
 	}
@@ -271,7 +288,10 @@ func (o Options) withDefaults() (Options, error) {
 	if o.OutboxMaxAge == 0 {
 		o.OutboxMaxAge = defaultOutboxAge
 	}
-	if o.MaxBatchBytes < 1 || o.MaxBatchRecords < 1 || o.OutboxMaxCount < 1 || o.OutboxMaxBytes < 1 || o.MemTableSize < 1 {
+	if o.MaxActiveViews == 0 {
+		o.MaxActiveViews = defaultMaxActiveViews
+	}
+	if o.MaxBatchBytes < 1 || o.MaxBatchRecords < 1 || o.OutboxMaxCount < 1 || o.OutboxMaxBytes < 1 || o.MemTableSize < 1 || o.MaxActiveViews < 1 {
 		return Options{}, fmt.Errorf("%w: limits must be positive", ErrLimit)
 	}
 	if o.Clock == nil {
@@ -394,11 +414,6 @@ func (s *Store) Current() (Descriptor, bool, error) {
 	return s.descriptor, s.hasDescriptor, nil
 }
 
-// CurrentDescriptor is an integration-friendly spelling of Current.
-func (s *Store) CurrentDescriptor() (Descriptor, bool, error) {
-	return s.Current()
-}
-
 // Marker returns a copy of the durable advancing marker, if one is present.
 // It is useful to a recovery coordinator that is preparing a root-backed
 // replay.  Marker visibility does not make the flat base readable.
@@ -429,6 +444,10 @@ func (s *Store) OpenView(ctx context.Context) (*View, error) {
 	if !s.ready || s.uncertain || s.marker != nil || s.writerActive {
 		s.mu.Unlock()
 		return nil, ErrUnavailable
+	}
+	if len(s.activeViews) >= s.opts.MaxActiveViews {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("%w: active view limit", ErrLimit)
 	}
 	expected := s.descriptor
 	hasExpected := s.hasDescriptor
@@ -469,15 +488,6 @@ func (s *Store) OpenView(ctx context.Context) (*View, error) {
 	}
 	view.end()
 	return view, nil
-}
-
-// Snapshot is an alias for the scoped stable View name used by storage
-// callers.
-type Snapshot = View
-
-// Snapshot captures one stable point-in-time view.
-func (s *Store) Snapshot(ctx context.Context) (*Snapshot, error) {
-	return s.OpenView(ctx)
 }
 
 // Advance applies a sorted delta in bounded batches and publishes Target in
@@ -661,7 +671,15 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 	defer changes.Close()
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	batchBytes := 0
+	batchBytes := uint64(0)
+	reservedBytes := uint64(0)
+	releaseReserved := func() {
+		if s.opts.MemoryBudget != nil && reservedBytes != 0 {
+			s.opts.MemoryBudget.Release(reservedBytes)
+			reservedBytes = 0
+		}
+	}
+	defer releaseReserved()
 	batchRecords := 0
 	var previous Hash
 	havePrevious := false
@@ -678,10 +696,33 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 		if err := s.sync(); err != nil {
 			return fmt.Errorf("%w: object chunk sync: %v", errSyncUncertain, err)
 		}
+		releaseReserved()
 		batch.Reset()
 		batchBytes = 0
 		batchRecords = 0
 		return nil
+	}
+	reserve := func(bytes uint64) error {
+		if s.opts.MemoryBudget == nil {
+			return nil
+		}
+		if s.opts.MemoryBudget.TryReserve(bytes) {
+			reservedBytes += bytes
+			return nil
+		}
+		// A full local batch may be released before retrying admission. This
+		// keeps the transition bounded by the shared account without waiting
+		// while holding the writer lease.
+		if batchRecords > 0 {
+			if err := flush(); err != nil {
+				return err
+			}
+			if s.opts.MemoryBudget.TryReserve(bytes) {
+				reservedBytes += bytes
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: transition record requires %d bytes", ErrLimit, bytes)
 	}
 	for {
 		if err := contextErr(ctx); err != nil {
@@ -699,14 +740,17 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 		}
 		previous, havePrevious = change.Key, true
 		key := objectKey(change.Key)
-		recordBytes := len(key) + len(change.Value)
+		recordBytes := uint64(len(key)) + uint64(len(change.Value))
 		if change.Delete {
-			recordBytes = len(key)
+			recordBytes = uint64(len(key))
 		}
-		if batchRecords > 0 && (batchRecords >= s.opts.MaxBatchRecords || batchBytes+recordBytes > s.opts.MaxBatchBytes) {
+		if batchRecords > 0 && (batchRecords >= s.opts.MaxBatchRecords || batchBytes+recordBytes > uint64(s.opts.MaxBatchBytes)) {
 			if err := flush(); err != nil {
 				return err
 			}
+		}
+		if err := reserve(recordBytes); err != nil {
+			return err
 		}
 		if err := s.checkWriter(ctx, epoch); err != nil {
 			return err
@@ -725,7 +769,7 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 		// A valid value larger than the regular batch ceiling gets a one-record
 		// streaming batch.  It is admitted explicitly rather than silently
 		// changing protocol semantics or buffering a complete transition.
-		if batchRecords == 1 && (batchBytes > s.opts.MaxBatchBytes || len(change.Value) > s.opts.MaxBatchBytes) {
+		if batchRecords == 1 && batchBytes > uint64(s.opts.MaxBatchBytes) {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -907,11 +951,6 @@ func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]OutboxRecord, e
 	return result, iterator.Error()
 }
 
-// Outbox is an alias for PendingOutbox.
-func (s *Store) Outbox(ctx context.Context, limit int) ([]OutboxRecord, error) {
-	return s.PendingOutbox(ctx, limit)
-}
-
 // AckOutbox durably removes one publication obligation.  A missing ID is an
 // idempotent success.
 func (s *Store) AckOutbox(ctx context.Context, commitID CommitID) error {
@@ -953,11 +992,6 @@ func (s *Store) AckOutbox(ctx context.Context, commitID CommitID) error {
 		return fmt.Errorf("%w: outbox ack sync: %v", errSyncUncertain, err)
 	}
 	return nil
-}
-
-// Ack is an alias for AckOutbox.
-func (s *Store) Ack(ctx context.Context, commitID CommitID) error {
-	return s.AckOutbox(ctx, commitID)
 }
 
 // Close closes all open views after their in-flight operations finish, then
@@ -1057,17 +1091,6 @@ func (v *View) Get(key Hash) ([]byte, bool, error) {
 	return append([]byte(nil), value...), true, nil
 }
 
-// Exists reports whether key is present in the captured snapshot.
-func (v *View) Exists(key Hash) (bool, error) {
-	_, found, err := v.Get(key)
-	return found, err
-}
-
-// Lookup is an integration-friendly spelling of Get.
-func (v *View) Lookup(key Hash) ([]byte, bool, error) {
-	return v.Get(key)
-}
-
 // Succ returns the smallest visible key strictly greater than after.
 func (v *View) Succ(after Hash) (Hash, []byte, bool, error) {
 	if err := v.begin(); err != nil {
@@ -1096,11 +1119,6 @@ func (v *View) Succ(after Hash) (Hash, []byte, bool, error) {
 		return Hash{}, nil, false, err
 	}
 	return key, append([]byte(nil), value...), true, nil
-}
-
-// Successor is an integration-friendly spelling of Succ.
-func (v *View) Successor(after Hash) (Hash, []byte, bool, error) {
-	return v.Succ(after)
 }
 
 // ForEach iterates all objects in ascending ledger-key order.  Returning
