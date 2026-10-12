@@ -190,6 +190,14 @@ func (o *Overlay) shouldSpillBeforeMutation(key [32]byte, value []byte, deleted 
 	if !ok {
 		return true
 	}
+	// Larger values need descriptor headroom before the old tree can be
+	// released. Small records have enough slack for the descriptor already.
+	if o.cfg.MaxDiskBytes > 0 && o.cfg.SpillDir != "" && newBlob >= segmentOverhead {
+		needed, ok = addCharge(needed, segmentOverhead)
+		if !ok {
+			return true
+		}
+	}
 	stats := o.budget.stats()
 	return needed > o.cfg.MaxMemoryBytes || stats.MemoryBytes > o.cfg.MaxMemoryBytes-needed
 }

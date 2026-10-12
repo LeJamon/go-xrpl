@@ -84,6 +84,8 @@ type ApplyStateTable struct {
 	txHash           [32]byte
 	txSeq            uint32
 	rules            *amendment.Rules
+	journal          *boundedJournal
+	cloneErr         error
 }
 
 type AtomicLedgerView interface {
@@ -120,18 +122,55 @@ func newApplyStateTable(
 	rules *amendment.Rules,
 	record func(error),
 ) *ApplyStateTable {
+	var journal *boundedJournal
+	if provider, ok := any(base).(ExecutionJournalConfigProvider); ok {
+		if cfg, enabled := provider.ExecutionJournalConfig(); enabled {
+			journal = newBoundedJournal(cfg)
+		}
+	}
 	return &ApplyStateTable{
-		base:             base,
-		items:            make(map[[32]byte]*TrackedEntry),
-		threadOnlyOwners: make(map[[32]byte]*ThreadedOwner),
-		recordError:      record,
-		txHash:           txHash,
-		txSeq:            txSeq,
-		rules:            rules,
+		base: base,
+		items: func() map[[32]byte]*TrackedEntry {
+			if journal == nil {
+				return make(map[[32]byte]*TrackedEntry)
+			}
+			return nil
+		}(),
+		threadOnlyOwners: func() map[[32]byte]*ThreadedOwner {
+			if journal == nil {
+				return make(map[[32]byte]*ThreadedOwner)
+			}
+			return nil
+		}(),
+		recordError: record,
+		txHash:      txHash,
+		txSeq:       txSeq,
+		rules:       rules,
+		journal:     journal,
 	}
 }
 
 func (t *ApplyStateTable) clone() *ApplyStateTable {
+	if t.journal != nil {
+		return &ApplyStateTable{
+			base:        t.base,
+			recordError: t.recordError,
+			drops:       t.drops,
+			txHash:      t.txHash,
+			txSeq:       t.txSeq,
+			rules:       t.rules,
+			journal:     t.journal.fork(),
+			cloneErr: func() error {
+				if t.journal.err != nil {
+					return t.journal.err
+				}
+				if t.journal.overlay == nil {
+					return errors.New("applystate: bounded journal unavailable")
+				}
+				return nil
+			}(),
+		}
+	}
 	items := make(map[[32]byte]*TrackedEntry, len(t.items))
 	for key, entry := range t.items {
 		cloned := *entry
@@ -168,15 +207,34 @@ func (t *ApplyStateTable) record(err error) error {
 }
 
 func (t *ApplyStateTable) adopt(staged *ApplyStateTable) {
+	if t.journal != nil {
+		_ = t.journal.close()
+		t.journal = staged.journal
+		staged.journal = nil
+	}
 	t.items = staged.items
 	t.insertedKeys = staged.insertedKeys
 	t.threadOnlyOwners = staged.threadOnlyOwners
 	t.drops = staged.drops
+	t.cloneErr = staged.cloneErr
+}
+
+// Close releases all bounded journal state. It is safe to call repeatedly.
+func (t *ApplyStateTable) Close() error {
+	if t == nil || t.journal == nil {
+		return nil
+	}
+	return t.journal.close()
 }
 
 func (t *ApplyStateTable) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := t.clone()
+	if staged.cloneErr != nil {
+		_ = staged.Close()
+		return t.record(staged.cloneErr)
+	}
 	if err := apply(staged); err != nil {
+		_ = staged.Close()
 		return err
 	}
 	t.adopt(staged)
@@ -185,6 +243,9 @@ func (t *ApplyStateTable) ApplyAtomically(apply func(ledgercore.Writer) error) e
 
 // Read reads a ledger entry, tracking it as cached
 func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
+	if t.journal != nil {
+		return t.readBounded(k)
+	}
 	// Check if already tracked
 	if entry, exists := t.items[k.Key]; exists {
 		if entry.Action == ActionErase {
@@ -219,6 +280,9 @@ func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
 
 // Exists checks if an entry exists
 func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
+	if t.journal != nil {
+		return t.existsBounded(k)
+	}
 	if entry, exists := t.items[k.Key]; exists {
 		return entry.Action != ActionErase && state.MatchesKeyletType(k, entry.Current), nil
 	}
@@ -228,6 +292,9 @@ func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
 
 // Insert adds a new entry
 func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
+	if t.journal != nil {
+		return t.insertBounded(k, data)
+	}
 	// Check if already exists in tracking
 	if entry, exists := t.items[k.Key]; exists {
 		if entry.Action != ActionErase {
@@ -265,6 +332,9 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 
 // Update modifies an existing entry
 func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
+	if t.journal != nil {
+		return t.updateBounded(k, data)
+	}
 	// Check if tracked
 	if entry, exists := t.items[k.Key]; exists {
 		if entry.Action == ActionErase {
@@ -308,6 +378,9 @@ func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 
 // Erase removes an entry
 func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
+	if t.journal != nil {
+		return t.eraseBounded(k)
+	}
 	t.insertedKeys.Remove(k.Key)
 	// Check if tracked
 	if entry, exists := t.items[k.Key]; exists {
@@ -344,6 +417,9 @@ func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
 
 // IsErased returns true if the entry at the given key has been erased.
 func (t *ApplyStateTable) IsErased(k keylet.Keylet) bool {
+	if t.journal != nil {
+		return t.isErasedBounded(k.Key)
+	}
 	if entry, exists := t.items[k.Key]; exists {
 		return entry.Action == ActionErase
 	}
@@ -361,6 +437,9 @@ func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 // Locally erased entries are skipped.
 // Base entries not touched locally are passed through unchanged.
 func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error {
+	if t.journal != nil {
+		return t.forEachBounded(fn)
+	}
 	// First, yield all locally tracked entries (inserts, modifications, cached reads)
 	for key, entry := range t.items {
 		if entry.Action == ActionErase {
@@ -385,6 +464,9 @@ func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error
 // Combines local items with the base view's Succ.
 // Reference: rippled ReadView::succ()
 func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	if t.journal != nil {
+		return t.succBounded(key)
+	}
 	var bestKey [32]byte
 	var bestData []byte
 	found := false
@@ -444,13 +526,21 @@ func sortedLedgerKeys[V any](entries map[[32]byte]V) [][32]byte {
 // Reference: rippled ApplyStateTable.cpp apply() lines 113-292
 func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	staged := t.clone()
-	staged.applyThreading()
+	if staged.cloneErr != nil {
+		_ = staged.Close()
+		return nil, t.record(staged.cloneErr)
+	}
+	if err := staged.applyThreading(); err != nil {
+		_ = staged.Close()
+		return nil, err
+	}
 	metadata, err := staged.applyOrdered(
 		staged.base,
 		sortedLedgerKeys(staged.items),
 		sortedLedgerKeys(staged.threadOnlyOwners),
 	)
 	if err != nil {
+		_ = staged.Close()
 		return nil, err
 	}
 	t.adopt(staged)
@@ -460,23 +550,37 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 // Preview generates the same metadata as Apply without mutating the base view.
 func (t *ApplyStateTable) Preview() (*tx.Metadata, error) {
 	staged := t.clone()
-	staged.applyThreading()
-	return staged.applyOrdered(
+	if staged.cloneErr != nil {
+		_ = staged.Close()
+		return nil, t.record(staged.cloneErr)
+	}
+	if err := staged.applyThreading(); err != nil {
+		_ = staged.Close()
+		return nil, err
+	}
+	metadata, err := staged.applyOrdered(
 		nil,
 		sortedLedgerKeys(staged.items),
 		sortedLedgerKeys(staged.threadOnlyOwners),
 	)
+	_ = staged.Close()
+	return metadata, err
 }
 
 // ApplyUnthreaded commits changes without updating transaction threading.
 func (t *ApplyStateTable) ApplyUnthreaded() error {
 	staged := t.clone()
+	if staged.cloneErr != nil {
+		_ = staged.Close()
+		return t.record(staged.cloneErr)
+	}
 	_, err := staged.applyOrdered(
 		staged.base,
 		sortedLedgerKeys(staged.items),
 		sortedLedgerKeys(staged.threadOnlyOwners),
 	)
 	if err != nil {
+		_ = staged.Close()
 		return err
 	}
 	t.adopt(staged)
@@ -487,6 +591,9 @@ func (t *ApplyStateTable) applyOrdered(
 	atomicBase ledgercore.AtomicWriter,
 	itemKeys, ownerKeys [][32]byte,
 ) (*tx.Metadata, error) {
+	if t.journal != nil {
+		return t.applyOrderedBounded(atomicBase)
+	}
 	metadata := &tx.Metadata{
 		AffectedNodes: make([]tx.AffectedNode, 0),
 	}
@@ -629,7 +736,10 @@ func (t *ApplyStateTable) effectiveRules() *amendment.Rules {
 
 // applyThreading updates PreviousTxnID/PreviousTxnLgrSeq on affected entries
 // and their owner accounts. This matches rippled's ApplyStateTable threading logic.
-func (t *ApplyStateTable) applyThreading() {
+func (t *ApplyStateTable) applyThreading() error {
+	if t.journal != nil {
+		return t.applyThreadingBounded()
+	}
 	// Collect keys to process (avoid modifying map during iteration)
 	type threadWork struct {
 		key   [32]byte
@@ -702,6 +812,7 @@ func (t *ApplyStateTable) applyThreading() {
 			t.threadOwners(w.key, data, entryType)
 		}
 	}
+	return nil
 }
 
 // threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
@@ -842,6 +953,9 @@ func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 // CollectEntries returns all modified ledger entries (Insert/Modify/Erase) for invariant checking.
 // Must be called BEFORE Apply() — entries are still in the table at this point.
 func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
+	if t.journal != nil {
+		return t.collectEntriesBounded()
+	}
 	var entries []invariants.InvariantEntry
 	for key, entry := range t.items {
 		if entry.Action == ActionCache {
@@ -888,6 +1002,9 @@ func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 // Used for the oversizeMetaDataCap check (tecOVERSIZE when size > 5200).
 // Reference: rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp
 func (t *ApplyStateTable) Size() int {
+	if t.journal != nil {
+		return t.sizeBounded()
+	}
 	count := 0
 	for _, entry := range t.items {
 		switch entry.Action {
@@ -899,8 +1016,13 @@ func (t *ApplyStateTable) Size() int {
 }
 
 // GetItems returns the tracked entries map for inspection.
-// Used by the engine to collect deleted offers for tecOVERSIZE handling.
+// Used by legacy callers to collect deleted offers for tecOVERSIZE handling.
+// Bounded tables materialize this compatibility view; use ForEachTracked for
+// a streaming traversal.
 func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
+	if t.journal != nil {
+		return t.itemsBounded()
+	}
 	return t.items
 }
 
@@ -973,6 +1095,9 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.Affect
 // only ever modified in place and several drop PreviousTxnID from Current, so
 // they must source the pointer from the original node.
 func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType entry.Type, origEntry entry.Entry) (string, uint32) {
+	if t.journal != nil {
+		return t.modifiedNodePrevTxnBounded(key, entryType, origEntry)
+	}
 	if e, ok := t.items[key]; ok && (e.reinserted || entryType == entry.TypeDirectoryNode) {
 		if !e.hasThreadPrev || e.threadPrevTxnID == ([32]byte{}) {
 			return "", 0
