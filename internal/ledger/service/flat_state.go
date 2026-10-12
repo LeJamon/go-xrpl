@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
@@ -169,7 +170,7 @@ func (s *Service) advanceFlatState(ctx context.Context, l *ledger.Ledger) error 
 	if err != nil {
 		return err
 	}
-	if found && flatMatchesHeader(source, l.Header()) {
+	if found && (source.Sequence > l.Sequence() || flatMatchesHeader(source, l.Header())) {
 		return nil
 	}
 	if found && source.Epoch == ^uint64(0) {
@@ -242,6 +243,7 @@ func (s *Service) replayFlatOutbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Descriptor.Epoch < records[j].Descriptor.Epoch })
 	for _, record := range records {
 		if record.Intent != ledgerPublication {
 			return errors.New("unsupported flat publication intent")

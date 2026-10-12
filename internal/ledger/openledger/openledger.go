@@ -140,14 +140,20 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 		return false
 	}
 
+	published := false
+	defer func() {
+		if !published {
+			next.Discard()
+		}
+	}()
 	changed := fn(next)
 	if !changed {
-		next.Discard()
 		return false
 	}
 
 	o.currentMu.Lock()
 	o.current = next
+	published = true
 	o.cachedTxs = nil
 	o.currentMu.Unlock()
 	return true

@@ -363,7 +363,24 @@ func (p *persistenceWorker) runPersistWorker() {
 			p.persistQueue = p.persistQueue[1:]
 			p.persistActive = job
 			p.persistMu.Unlock()
-			p.service.runPersistJob(job)
+			for {
+				err := p.service.runPersistJob(job)
+				if err == nil || p.service.config.FlatState == nil {
+					break
+				}
+				p.persistMu.Lock()
+				stopping := p.persistStopping
+				p.persistMu.Unlock()
+				if stopping {
+					break
+				}
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-timer.C:
+				case <-p.persistWake:
+				}
+				timer.Stop()
+			}
 			p.persistMu.Lock()
 			p.persistActive = nil
 			p.signalCapacityLocked()
@@ -379,9 +396,9 @@ func (p *persistenceWorker) runPersistWorker() {
 	}
 }
 
-func (s *Service) runPersistJob(job *persistJob) {
+func (s *Service) runPersistJob(job *persistJob) error {
 	if job == nil {
-		return
+		return nil
 	}
 	if job.evictedTip != nil {
 		s.invalidateEvictedValidatedTip(*job.evictedTip)
@@ -414,7 +431,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 		s.persistMu.Lock()
 		lateTip := job.validated && !job.tipOnly && !job.canceled.Load() &&
 			!updateTip && job.updatesTip.Load()
-		if !lateTip && job.validated && s.validatedPersistJobs[job.l.Sequence()] == job {
+		if !lateTip && (err == nil || s.config.FlatState == nil) && job.validated && s.validatedPersistJobs[job.l.Sequence()] == job {
 			delete(s.validatedPersistJobs, job.l.Sequence())
 		}
 		s.persistMu.Unlock()
@@ -427,7 +444,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 				job.proof,
 			)
 		}
-		if lateTip {
+		if lateTip && (err == nil || s.config.FlatState == nil) {
 			s.persistMu.Lock()
 			if s.validatedPersistJobs[job.l.Sequence()] == job {
 				delete(s.validatedPersistJobs, job.l.Sequence())
@@ -435,13 +452,18 @@ func (s *Service) runPersistJob(job *persistJob) {
 			s.persistMu.Unlock()
 		}
 		if err != nil {
-			s.logger.Error("failed to persist ledger; chain advance continues",
-				"seq", job.l.Sequence(), "err", err)
+			if s.config.FlatState != nil {
+				s.logger.Error("ledger persistence failed; admission waits for retry", "seq", job.l.Sequence(), "err", err)
+			} else {
+				s.logger.Error("failed to persist ledger; chain advance continues", "seq", job.l.Sequence(), "err", err)
+			}
+			return err
 		}
 	}
 	if job.done != nil {
 		close(job.done)
 	}
+	return nil
 }
 
 func (s *Service) persistLedgerJob(
@@ -578,6 +600,9 @@ func (s *Service) persistValidatedTipJob(
 	canceled func() bool,
 	proof *replayCompletenessRecord,
 ) error {
+	if s.config.FlatState != nil {
+		return s.persistValidatedLedgerAtToken(ctx, l, true, 0, allowSameSequenceReplacement, canceled, proof)
+	}
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
 	if canceled != nil && canceled() {

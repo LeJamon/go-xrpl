@@ -179,11 +179,15 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 					return nil, fmt.Errorf("%w: open state reconciliation: %w", errStateRetentionChanged, err)
 				}
 				bases[root.kind] = root.hash
+				preserved[root] = struct{}{}
 			}
 			if err := s.nodeStore.Sync(catchupCtx); err != nil {
 				return nil, err
 			}
 		}
+		validated := s.validatedLedger
+		h := validated.Header()
+		wasValidated := validated.IsValidated()
 		releaseRoots := func() {}
 		if s.config.Execution != nil {
 			var ok bool
@@ -199,18 +203,16 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 		// Both validated trees are now completely verified and preserved in
 		// the surviving storage generation. Transfer that fact after mutation
 		// instead of asking a background verifier to read them all again.
-		validated := s.validatedLedger
 		return func() {
 			defer unlock()
 			defer releaseRoots()
-			if validated == nil || !validated.IsValidated() || ctx.Err() != nil {
+			if !wasValidated || ctx.Err() != nil {
 				return
 			}
 			next, err := durable.DurableFingerprint(ctx)
 			if err != nil || next == fingerprint {
 				return
 			}
-			h := validated.Header()
 			if _, ok := preserved[retainedStateRoot{h.AccountHash, shamap.TypeState}]; !ok {
 				return
 			}

@@ -88,6 +88,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 				return 0, fmt.Errorf("snapshot open ledger for close: %w", err)
 			}
 			if err := s.applyFlagLedgerNegativeUNL(closed); err != nil {
+				closed.Discard()
 				return 0, err
 			}
 		} else {
@@ -199,6 +200,12 @@ func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, 
 		return nil, nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
 	}
 
+	complete := false
+	defer func() {
+		if !complete {
+			freshLedger.Discard()
+		}
+	}()
 	// On a flag ledger the NegativeUNL transition must be applied before any txs.
 	if err := s.applyFlagLedgerNegativeUNL(freshLedger); err != nil {
 		return nil, nil, err
@@ -233,6 +240,7 @@ func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, 
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	complete = true
 	return freshLedger, retriableTxs, nil
 }
 
@@ -500,6 +508,12 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 		return fmt.Errorf("failed to create open ledger after preferred chain switch: %w", err)
 	}
 
+	published := false
+	defer func() {
+		if !published {
+			newOpen.Discard()
+		}
+	}()
 	stagedResults, err := stageTransactionResults(parent, parent.Sequence(), parentHash)
 	if err != nil {
 		return fmt.Errorf("collect transaction results: %w", err)
@@ -514,6 +528,7 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 	s.cachePersistedLedgerLocked(parent)
 	s.closedLedger = parent
 	s.openLedger = newOpen
+	published = true
 	s.tickLoadFeeLocked()
 	if replacingProvisional {
 		s.ledgerEventMu.Lock()

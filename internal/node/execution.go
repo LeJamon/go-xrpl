@@ -32,17 +32,23 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		r.memory.stateStorage.Release(storageBytes)
 		return err
 	}
-	scratch, err := os.MkdirTemp(dir, "execution-scratch-")
-	if err != nil {
-		r.memory.stateStorage.Release(storageBytes)
-		return err
-	}
 	flat, err := flatstate.Open(filepath.Join(dir, "execution-state"), flatstate.Options{
 		CacheBytes: state.CacheMB << 20, MemTableSize: state.MemTableMB << 20,
 		OutboxMaxCount: 64, OutboxMaxBytes: 1 << 20, MemoryBudget: r.memory.persistence,
 	})
 	if err != nil {
-		_ = os.Remove(scratch)
+		r.memory.stateStorage.Release(storageBytes)
+		return err
+	}
+	scratch := filepath.Join(dir, "execution-state", "scratch")
+	// The Pebble lock excludes another owner before abandoned runs are removed.
+	if err := os.RemoveAll(scratch); err != nil {
+		_ = flat.Close()
+		r.memory.stateStorage.Release(storageBytes)
+		return err
+	}
+	if err := os.MkdirAll(scratch, 0700); err != nil {
+		_ = flat.Close()
 		r.memory.stateStorage.Release(storageBytes)
 		return err
 	}
@@ -58,17 +64,13 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		r.memory.stateStorage.Release(storageBytes)
 		return err
 	}
-	r.executionCleanup = sync.OnceFunc(func() {
+	r.executionCleanup = sync.OnceValue(func() error {
 		if err := execution.Close(); err != nil {
-			r.serverLog.Error("close execution root leases", "err", err)
+			return err
 		}
-		if err := flat.Close(); err != nil {
-			r.serverLog.Error("close flat state", "err", err)
-		}
-		if err := os.Remove(scratch); err != nil {
-			r.serverLog.Error("remove execution scratch directory", "err", err)
-		}
+		err := errors.Join(flat.Close(), os.RemoveAll(scratch))
 		r.memory.stateStorage.Release(storageBytes)
+		return err
 	})
 	cfg.Execution, cfg.FlatState = execution, flat
 	r.serverLog.Info("Bounded state execution enabled", "overlay_mb", state.MemoryMB,

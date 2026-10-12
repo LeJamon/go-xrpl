@@ -431,6 +431,9 @@ func (s *Service) beginValidatedLedgerUpdate() bool {
 
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
+	if cfg.FlatState != nil && (cfg.Execution == nil || cfg.NodeStore == nil || cfg.PersistenceMemory == nil) {
+		return nil, errors.New("flat state requires bounded execution, durable storage, and persistence memory admission")
+	}
 	if err := cfg.Startup.validateMode(); err != nil {
 		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
 	}

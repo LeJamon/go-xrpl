@@ -65,7 +65,7 @@ type nodeRuntime struct {
 	services         *types.ServiceGraphBuilder
 	serviceGraph     *types.ServiceGraph
 	ledgerAdapter    *rpcadapter.LedgerServiceAdapter
-	executionCleanup func()
+	executionCleanup func() error
 	httpServer       *rpc.Server
 	wsServer         *rpc.WebSocketServer
 	publisher        *rpc.Publisher
@@ -1429,9 +1429,6 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 	if r.ledger != nil {
 		completed, err := runShutdownPhase(ctx, "stop ledger service", func() error {
 			r.ledger.Stop()
-			if r.executionCleanup != nil {
-				r.executionCleanup()
-			}
 			return nil
 		})
 		serviceStopped = completed
@@ -1493,6 +1490,12 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 			} else {
 				r.serverLog.Info("Fast-load checkpoint preparation skipped", "prepared", false)
 			}
+		}
+	}
+
+	if r.executionCleanup != nil {
+		if err := r.executionCleanup(); err != nil {
+			errs = append(errs, fmt.Errorf("close execution store: %w", err))
 		}
 	}
 
