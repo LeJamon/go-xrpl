@@ -26,7 +26,7 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
 func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (sequence uint32, retErr error) {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	releaseAdmission, err := s.acquireExecutionWork(ctx)
 	if err != nil {
 		return 0, err
 	}
