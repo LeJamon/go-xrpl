@@ -153,6 +153,8 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 // Service manages the ledger lifecycle
 type Service struct {
 	flatPins           flatRootPins
+	flatHeadersMu      sync.Mutex
+	flatHeaders        map[[32]byte]*nodestore.Node
 	replayRepairTarget *ledger.Ledger
 	replayAuthenticate func(header.LedgerHeader) bool
 	replayAcquiredHash [32]byte

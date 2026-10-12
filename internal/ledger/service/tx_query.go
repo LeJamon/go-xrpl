@@ -765,6 +765,9 @@ func (s *Service) getHistoricalTransaction(txHash [32]byte) (*TransactionResult,
 		return nil, svcerr.ErrLedgerNotFound
 	}
 
+	if s.config.FlatState != nil && l.IsValidated() && !s.hasCompleteLedger(l) {
+		return nil, svcerr.ErrLedgerNotFound
+	}
 	// Get the transaction data
 	txData, found, err := l.GetTransaction(txHash)
 	if err != nil {

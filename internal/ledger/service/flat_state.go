@@ -33,7 +33,11 @@ func (s *Service) refreshFlatRootPins(ctx context.Context) error {
 		return nil
 	}
 	wanted := make(map[rootlease.Root]struct{})
+	headers := make(map[[32]byte]struct{})
 	add := func(d flatstate.Descriptor) {
+		if d.LedgerHash != ([32]byte{}) {
+			headers[d.LedgerHash] = struct{}{}
+		}
 		if d.StateRoot != ([32]byte{}) {
 			wanted[rootlease.Root{Hash: d.StateRoot, Kind: shamap.TypeState}] = struct{}{}
 		}
@@ -76,6 +80,20 @@ func (s *Service) refreshFlatRootPins(ctx context.Context) error {
 		}
 		s.flatPins[root] = release
 	}
+	retained := make(map[[32]byte]*nodestore.Node, len(headers))
+	for hash := range headers {
+		node, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
+		if err != nil {
+			return err
+		}
+		if node == nil || node.Type != nodestore.NodeLedger {
+			return errors.New("flat version header is unavailable")
+		}
+		retained[hash] = node
+	}
+	s.flatHeadersMu.Lock()
+	s.flatHeaders = retained
+	s.flatHeadersMu.Unlock()
 	for root, release := range s.flatPins {
 		if _, exists := wanted[root]; !exists {
 			release()

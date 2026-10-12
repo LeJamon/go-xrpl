@@ -331,6 +331,17 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 			roots = append(roots, retainedStateRoot{txs, shamap.TypeTransaction})
 		}
 	}
+	if persist && s.config.FlatState != nil {
+		s.flatHeadersMu.Lock()
+		headers := make([]*nodestore.Node, 0, len(s.flatHeaders))
+		for _, node := range s.flatHeaders {
+			headers = append(headers, node)
+		}
+		s.flatHeadersMu.Unlock()
+		if err := s.nodeStore.StoreBatch(ctx, headers); err != nil {
+			return nil, err
+		}
+	}
 	if s.config.Execution != nil {
 		for _, root := range s.config.Execution.Roots() {
 			roots = append(roots, retainedStateRoot{hash: root.Hash, kind: root.Kind})
