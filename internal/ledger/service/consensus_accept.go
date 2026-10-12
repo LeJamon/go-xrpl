@@ -192,15 +192,6 @@ func (s *Service) acceptConsensusResult(
 	closedSeq := closed.Sequence()
 	closedLedgerHash := closed.Hash()
 	closedTxCount := closed.TxCount()
-	stageStarted := time.Now()
-	stagedResults, err := stageTransactionResultsContext(ctx, closed, closedSeq, closedLedgerHash)
-	if err != nil {
-		return 0, fmt.Errorf("collect transaction results: %w", err)
-	}
-	timings.stage = time.Since(stageStarted)
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
 	nextStarted := time.Now()
 	successor, err = s.prepareSuccessor(ctx, closed, successorOptions{
 		admitted: true, retries: retriableTxs, retrySalt: &salt, anyDisputes: anyDisputes,
@@ -218,6 +209,8 @@ func (s *Service) acceptConsensusResult(
 		return 0, err
 	}
 	timings.nextOpen = time.Since(nextStarted)
+	timings.stage = successor.timings.stageResults
+	stagedResults := successor.staged
 	timings.gateWait = successor.timings.openLedgerWait
 	timings.gateHold = successor.timings.openLedgerHold
 	_, err = successor.publish(func() error {

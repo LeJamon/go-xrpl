@@ -938,11 +938,6 @@ func (s *Service) tickLoadFeeLocked() {
 	}
 }
 
-// Caller must hold openLedgerMu and s.mu.
-func (s *Service) acceptPreferredOpenLedgerLocked(closed *ledger.Ledger) error {
-	return s.openLedgerAcceptanceForValidatedLocked(context.Background(), nil, nil, nil, true)(closed, nil, false, nil)
-}
-
 // Standalone validates the closed ledger before preparing its successor, but
 // publishes the validated frontier only after preparation succeeds.
 func (s *Service) acceptStandaloneOpenLedgerLocked(ctx context.Context, closed *ledger.Ledger, retriableTxs []openledger.PendingTx) error {
@@ -964,32 +959,21 @@ func (s *Service) acceptStandaloneOpenLedgerLocked(ctx context.Context, closed *
 	if err != nil {
 		return err
 	}
-	return s.openLedgerAcceptanceForValidatedLocked(ctx, nil, &salt, closed, false)(closed, retriableTxs, false, nil)
-}
-
-// openLedgerAcceptanceLocked captures service configuration under mu. The returned
-// operation requires openLedgerMu, but runs storage reads and replay without mu.
-func (s *Service) openLedgerAcceptanceLocked(ctx context.Context, relayDuration *time.Duration, retrySalt *[32]byte) func(*ledger.Ledger, []openledger.PendingTx, bool, func(func())) error {
-	return s.openLedgerAcceptanceForValidatedLocked(ctx, relayDuration, retrySalt, nil, false)
+	return s.openLedgerAcceptanceForValidatedLocked(ctx, &salt, closed)(closed, retriableTxs, false, nil)
 }
 
 func (s *Service) openLedgerAcceptanceForValidatedLocked(
 	ctx context.Context,
-	relayDuration *time.Duration,
 	retrySalt *[32]byte,
 	validatedOverride *ledger.Ledger,
-	preferredSwitch bool,
 ) func(*ledger.Ledger, []openledger.PendingTx, bool, func(func())) error {
-	if preferredSwitch {
-		retrySalt = &[32]byte{}
-	}
 	view, queue, localsPool := s.openLedgerView, s.txQueue, s.localTxs
 	networkID, logger, feeTrack := s.config.NetworkID, s.config.Logger, s.feeTrack
 	validatedLedger := s.validatedLedger
 	if validatedOverride != nil {
 		validatedLedger = validatedOverride
 	}
-	relay, slowRound := s.txRelay, preferredSwitch || s.lastConsensusRoundTime > slowConsensusThreshold
+	relay, slowRound := s.txRelay, s.lastConsensusRoundTime > slowConsensusThreshold
 	return func(closed *ledger.Ledger, retriableTxs []openledger.PendingTx, anyDisputes bool, publication func(func())) error {
 		if closed == nil {
 			return nil
@@ -1022,27 +1006,10 @@ func (s *Service) openLedgerAcceptanceForValidatedLocked(
 			locals = localsPool.GetTxSet()
 		}
 		retries := append([]openledger.PendingTx(nil), retriableTxs...)
-		if preferredSwitch {
-			for _, local := range locals {
-				prepared, err := openledger.ParsePendingTx(local.Blob)
-				if err != nil {
-					return fmt.Errorf("parse preferred-ledger local transaction %x: %w", local.Hash, err)
-				}
-				if prepared.Hash != local.Hash || prepared.Account != local.Account {
-					return fmt.Errorf("preferred-ledger local transaction identity does not match blob %x", local.Hash)
-				}
-			}
-			retries = append(retries, locals...)
-			locals = nil
-		}
 		relayCB := func(hash [32]byte, blob []byte) {
 			s.rememberRelayTransaction(hash, blob, false)
 			if relay != nil {
-				relayStarted := time.Now()
 				relay(blob)
-				if relayDuration != nil {
-					*relayDuration += time.Since(relayStarted)
-				}
 			}
 		}
 		processClosed := func() {

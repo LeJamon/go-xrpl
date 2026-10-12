@@ -74,7 +74,10 @@ func benchmarkPreferredSwitchBatch(b *testing.B, count int) {
 	salt, err := openledger.ComputeSalt(closedTxs)
 	require.NoError(b, err)
 	ingressBlob, ingressHash := preferredSwitchPaymentBlob(b, env, ingress, receiver, 1, 100000, 1)
-	var switches, readWaits, gateHolds, ingressWaits []time.Duration
+	switches := make([]time.Duration, 0, b.N)
+	readWaits := make([]time.Duration, 0, b.N)
+	gateHolds := make([]time.Duration, 0, b.N)
+	ingressWaits := make([]time.Duration, 0, b.N)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {

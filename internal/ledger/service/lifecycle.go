@@ -792,17 +792,14 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.dispatchLedgerEvent(event)
 	s.historyComponent.mu.Unlock()
 	s.mu.Unlock()
-	s.openLedgerMu.Unlock()
-	gateHeld = false
-
-	// Fold into the amendment table outside the lock (it has its own mutex).
-	s.syncTable(l)
-
 	if pool != nil {
 		if err := pool.Sweep(l); err != nil {
 			s.logger.Warn("failed to sweep local transactions", "ledger_seq", l.Sequence(), "err", err)
 		}
 	}
+	s.openLedgerMu.Unlock()
+	gateHeld = false
+	s.syncTable(l)
 
 	s.validationWG.Done()
 	updateFinished = true

@@ -324,7 +324,7 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	privateBytes := preferredTransitionEstimate(stats, localSnapshot, queueSnapshot)
 	// Accepted leaves include inner Batch transactions and metadata, even when
 	// none of their outer transactions remain in the current open ledger.
-	if options.preferred {
+	if !options.allowReplayFault {
 		err = parent.ForEachTransactionContext(p.ctx, func(_ [32]byte, data []byte) bool {
 			size := uint64(len(data))
 			if size > (^uint64(0)-preferredTransitionResultBytes)/32 {
@@ -510,7 +510,7 @@ func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error
 		s.openLedger = p.openView.Current()
 		s.txQueue = p.queue
 	}
-	if !p.options.allowReplayFault {
+	if !p.options.allowReplayFault && !p.keepOpen {
 		s.tickLoadFeeLocked()
 	}
 	s.mu.Unlock()
@@ -607,7 +607,7 @@ func (p *PreparedPreferredLedger) Finish() {
 		p.stateMu.Lock()
 		published := p.state == preferredTransitionPublished
 		notify := p.notify
-		relay := append([]preferredRelay(nil), p.relay...)
+		relay := p.relay
 		relayFn := p.relayFn
 		p.stateMu.Unlock()
 		if !published {
@@ -704,7 +704,7 @@ func (p *PreparedPreferredLedger) run() {
 	}
 	var err error
 	stageStarted := time.Now()
-	if p.options.preferred {
+	if !p.options.allowReplayFault {
 		p.staged, err = stageTransactionResultsContext(p.ctx, p.parent, p.parent.Sequence(), p.parent.Hash())
 	}
 	p.timings.stageResults = time.Since(stageStarted)
@@ -976,11 +976,7 @@ func preferredTransitionEstimate(
 	}
 	// The private open ledger and relay staging can retain a second copy of
 	// every input blob while the publication fence still owns the first.
-	var inputBytes uint64
-	if !add(0) {
-		return bytes
-	}
-	inputBytes = bytes - preferredTransitionBaseBytes
+	inputBytes := bytes - preferredTransitionBaseBytes
 	if !add(inputBytes) {
 		return bytes
 	}

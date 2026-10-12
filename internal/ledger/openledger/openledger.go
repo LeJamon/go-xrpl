@@ -489,18 +489,15 @@ func (o *OpenLedger) CurrentTransactions(ctx context.Context) ([]PendingTx, erro
 	return collectTxsContext(ctx, o.Current())
 }
 
-// TransactionSnapshotStats describes the outer transaction leaves in a
-// published open-ledger view. Bytes is the sum of their canonical raw blobs;
-// inner batch leaves are omitted, matching CurrentTransactions.
+// TransactionSnapshotStats sizes accepted leaves, including metadata and
+// inner Batch records, without parsing or retaining transaction objects.
 type TransactionSnapshotStats struct {
 	Bytes uint64
 	Count uint64
 }
 
-// CurrentTransactionStats validates and sizes the current transaction leaves
-// without retaining parsed transaction objects. The walk is cancellable so a
-// detached successor can abandon admission before allocating its private
-// replay inputs.
+// CurrentTransactionStats sizes the current leaves before private replay
+// allocation. CurrentTransactions performs canonical validation after admission.
 func (o *OpenLedger) CurrentTransactionStats(ctx context.Context) (TransactionSnapshotStats, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -567,40 +564,12 @@ func collectTransactionStatsContext(ctx context.Context, v *ledger.Ledger) (Tran
 		return stats, nil
 	}
 	var visitErr error
-	err := v.ForEachTransactionContext(ctx, func(itemKey [32]byte, data []byte) bool {
+	err := v.ForEachTransactionContext(ctx, func(_ [32]byte, data []byte) bool {
 		if err := ctx.Err(); err != nil {
 			visitErr = err
 			return false
 		}
-		raw, _, splitErr := tx.SplitTxWithMetaBlobStrict(data)
-		if splitErr != nil {
-			raw = data
-		}
-		ptx, parseErr := ParsePendingTx(raw)
-		if parseErr != nil {
-			visitErr = fmt.Errorf("openledger: parse replay transaction %x: %w", itemKey, parseErr)
-			return false
-		}
-		if splitErr != nil {
-			ptx.Parsed.SetRawBytes(nil)
-			canonical, serializeErr := tx.SerializeTransaction(ptx.Parsed)
-			if serializeErr != nil {
-				visitErr = fmt.Errorf("openledger: serialize replay transaction %x: %w", itemKey, serializeErr)
-				return false
-			}
-			if !bytes.Equal(canonical, data) {
-				visitErr = fmt.Errorf("openledger: replay transaction %x is not canonical raw data", itemKey)
-				return false
-			}
-		}
-		if ptx.Hash != itemKey {
-			visitErr = fmt.Errorf("openledger: replay transaction key %x does not match hash %x", itemKey, ptx.Hash)
-			return false
-		}
-		if ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
-			return true
-		}
-		blobBytes := uint64(len(raw))
+		blobBytes := uint64(len(data))
 		if ^uint64(0)-stats.Bytes < blobBytes || stats.Count == ^uint64(0) {
 			visitErr = errors.New("openledger: transaction snapshot size overflow")
 			return false
