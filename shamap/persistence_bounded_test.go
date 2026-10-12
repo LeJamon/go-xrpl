@@ -200,6 +200,39 @@ func TestStoreAllBatchedReleasesColdBackedChildren(t *testing.T) {
 	}
 }
 
+func TestStoreAllBatchedRejectsIncompleteUnbackedTree(t *testing.T) {
+	source := newStoreAllTestMap(t, TypeState)
+	wantRoot := mustMapHash(t, source)
+	rootData, err := source.SerializeRoot()
+	require.NoError(t, err)
+
+	partial := New(TypeState)
+	_, err = partial.AddRootNodeWithEntry(wantRoot, rootData)
+	require.NoError(t, err)
+	var wantMissing [32]byte
+	for branch := range BranchFactor {
+		_, childHash, present := partial.tree.root.LoadChild(branch)
+		if present {
+			wantMissing = childHash
+			break
+		}
+	}
+	require.NotEqual(t, [32]byte{}, wantMissing)
+
+	budget := &dirtyTestBudget{limit: 64 << 10}
+	storeCalls := 0
+	err = partial.StoreAllBatched(context.Background(), budget, func([]FlushEntry) error {
+		storeCalls++
+		return nil
+	})
+	var missing *MissingNodeError
+	require.True(t, errors.As(err, &missing), "StoreAllBatched error = %v", err)
+	require.Equal(t, wantMissing, missing.Hash)
+	require.Zero(t, storeCalls)
+	require.Zero(t, budget.used)
+	require.Equal(t, wantRoot, mustMapHash(t, partial))
+}
+
 func TestStoreAllBatchedCancellationAndStoreFailureReleaseBudget(t *testing.T) {
 	for _, test := range []struct {
 		name string

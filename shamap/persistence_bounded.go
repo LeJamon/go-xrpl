@@ -98,13 +98,16 @@ func (sm *SHAMap) storeBatched(ctx context.Context, budget DirtyMemoryBudget, st
 		switch n := node.(type) {
 		case *innerNode:
 			for branch := range BranchFactor {
-				child, _, present := n.LoadChild(branch)
+				child, childHash, present := n.LoadChild(branch)
 				loaded := all && present && child == nil
 				if loaded {
 					var err error
 					child, err = sm.descendCtx(ctx, n, branch)
 					if err != nil {
 						return err
+					}
+					if child == nil {
+						return &MissingNodeError{Hash: childHash}
 					}
 				}
 				err := visit(child)
