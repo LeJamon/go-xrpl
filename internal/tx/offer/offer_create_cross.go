@@ -456,12 +456,12 @@ func offerDisallowUnfunded(amount tx.Amount, account [20]byte) bool {
 //
 // Reference: rippled CreateOffer.cpp lines 419-426; StrandFlow.h removableOffers.
 func removeRemovableOffers(sb, sbCancel *payment.PaymentSandbox, removable, permRemovable map[[32]byte]bool) error {
-	for offerKey := range removable {
+	for _, offerKey := range state.SortedLedgerKeys(removable) {
 		if err := payment.DeleteOfferAtomically(sb, offerKey); err != nil {
 			return err
 		}
 	}
-	for offerKey := range permRemovable {
+	for _, offerKey := range state.SortedLedgerKeys(permRemovable) {
 		if err := payment.DeleteOfferAtomically(sbCancel, offerKey); err != nil {
 			return err
 		}

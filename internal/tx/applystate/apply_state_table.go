@@ -73,8 +73,11 @@ type ThreadedOwner struct {
 // ApplyStateTable wraps a LedgerView and tracks all modifications
 // for automatic metadata generation, similar to rippled's ApplyStateTable
 type ApplyStateTable struct {
-	base             AtomicLedgerView
-	items            map[[32]byte]*TrackedEntry
+	base  AtomicLedgerView
+	items map[[32]byte]*TrackedEntry
+	// Only locally introduced keys need a successor index. Cached reads and
+	// modified base entries are already ordered by base.Succ.
+	insertedKeys     state.OrderedLedgerKeys
 	threadOnlyOwners map[[32]byte]*ThreadedOwner
 	recordError      func(error)
 	drops            drops.XRPAmount
@@ -147,6 +150,7 @@ func (t *ApplyStateTable) clone() *ApplyStateTable {
 	return &ApplyStateTable{
 		base:             t.base,
 		items:            items,
+		insertedKeys:     slices.Clone(t.insertedKeys),
 		threadOnlyOwners: threadOnlyOwners,
 		recordError:      t.recordError,
 		drops:            t.drops,
@@ -165,6 +169,7 @@ func (t *ApplyStateTable) record(err error) error {
 
 func (t *ApplyStateTable) adopt(staged *ApplyStateTable) {
 	t.items = staged.items
+	t.insertedKeys = staged.insertedKeys
 	t.threadOnlyOwners = staged.threadOnlyOwners
 	t.drops = staged.drops
 }
@@ -232,6 +237,9 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 		entry.Action = ActionModify
 		entry.Current = bytes.Clone(data)
 		entry.reinserted = true
+		if entry.Original == nil {
+			t.insertedKeys.Add(k.Key)
+		}
 		return nil
 	}
 
@@ -245,6 +253,7 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 	}
 
 	// Track as insert
+	t.insertedKeys.Add(k.Key)
 	t.items[k.Key] = &TrackedEntry{
 		Action:   ActionInsert,
 		Original: nil,
@@ -276,6 +285,7 @@ func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 	}
 
 	if original == nil {
+		t.insertedKeys.Add(k.Key)
 		// Entry doesn't exist in base — treat as insert.
 		// This happens when a prior transaction in the same ledger erased
 		// the entry, then a subsequent operation re-creates it via Update().
@@ -298,6 +308,7 @@ func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 
 // Erase removes an entry
 func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
+	t.insertedKeys.Remove(k.Key)
 	// Check if tracked
 	if entry, exists := t.items[k.Key]; exists {
 		if entry.Action == ActionErase {
@@ -378,18 +389,8 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	var bestData []byte
 	found := false
 
-	// Check local items for entries with key > the given key
-	for k, entry := range t.items {
-		if entry.Action == ActionErase {
-			continue
-		}
-		if bytes.Compare(k[:], key[:]) > 0 {
-			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
-				bestKey = k
-				bestData = entry.Current
-				found = true
-			}
-		}
+	if k, ok := t.insertedKeys.Successor(key); ok {
+		bestKey, bestData, found = k, t.items[k].Current, true
 	}
 
 	// Check base view, looping past locally-deleted entries.

@@ -351,14 +351,14 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 	}
 	_, err = s.admitReplayRecoveryJob(func(workerCtx context.Context) error {
 		defer releaseReplay()
-		captureCtx, cancel := context.WithTimeout(workerCtx, 5*time.Minute)
-		defer cancel()
-		releaseAdmission, admissionErr := s.AcquireStateAdmission(captureCtx)
+		// The service lifecycle cancels and drains this worker on shutdown.
+		// A fixed wall-clock timeout repeatedly abandoned large valid parents.
+		releaseAdmission, admissionErr := s.AcquireStateAdmission(workerCtx)
 		if admissionErr != nil {
 			return admissionErr
 		}
 		defer releaseAdmission()
-		s.diagnoseReplayFault(captureCtx, *fault, evidence, parent, replay, cfg, cause)
+		s.diagnoseReplayFault(workerCtx, *fault, evidence, parent, replay, cfg, cause)
 		return nil
 	})
 	if err != nil {
@@ -370,6 +370,8 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 }
 
 func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fault, evidence replayEvidence, parent *ledger.Ledger, replay *inbound.ReplayDelta, cfg tx.EngineConfig, cause error) {
+	started := time.Now()
+	s.logger.Info("Replay fault diagnosis started", "fault_id", fault.ID, "sequence", fault.Sequence)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			if !replayFaultStateClass(fault.Class) {
@@ -382,7 +384,13 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 		}
 	}()
 
-	verified, err := s.captureReplayParent(ctx, fault.ID, parent)
+	verified, release, durable, err := s.prepareReplayDiagnosticParent(ctx, evidence.Parent, evidence.Fees, !replayFaultStateClass(fault.Class))
+	if release != nil {
+		defer release()
+	}
+	if !durable && err == nil {
+		verified, err = s.captureReplayParent(ctx, fault.ID, parent)
+	}
 	if err != nil {
 		if diagnosed := replayStateFailureClass(err); diagnosed != replayfault.Unclassified {
 			fault.Class = diagnosed
@@ -391,7 +399,7 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 		}
 		fault.Message += "; parent verification: " + err.Error()
 	} else {
-		evidence.ParentSnapshot = s.config.ReplayFaultPath != ""
+		evidence.ParentSnapshot = !durable && s.config.ReplayFaultPath != ""
 		retry, retryErr := replay.RetryContext(ctx, verified)
 		if retryErr == nil {
 			defer retry.ReleaseMemory()
@@ -405,6 +413,8 @@ func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fau
 	if err := s.replayFaults.Update(fault.ID, fault); err != nil {
 		s.logger.Error("update replay fault evidence", "error", err)
 	}
+	s.logger.Info("Replay fault diagnosis completed", "fault_id", fault.ID, "sequence", fault.Sequence,
+		"class", fault.Class, "elapsed", time.Since(started), "error", err)
 	if replayFaultStateClass(fault.Class) {
 		_ = s.requestReplayParentRepair(fault, evidence)
 	}
@@ -648,7 +658,34 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		reservation.parent = s.replayRepairParent
 		reservation.target = s.replayRepairTarget
 		s.mu.RUnlock()
-		parent, err := s.loadReplayParent(ctx, fault, evidence)
+		// Preparation faults may have no saved parent header yet. A verified
+		// repair can supply it; ordinary replay faults already carry it.
+		if evidence.Parent.Hash == ([32]byte{}) {
+			candidate := reservation.parent
+			if candidate == nil || candidate.Hash() != fault.ParentHash {
+				candidate, _ = s.GetLedgerByHashContext(ctx, fault.ParentHash)
+			}
+			if candidate != nil && candidate.Hash() == fault.ParentHash {
+				evidence.Parent, evidence.Fees = candidate.Header(), candidate.Fees()
+			}
+		}
+		if evidence.Parent.Hash != ([32]byte{}) && (evidence.Parent.Hash != fault.ParentHash || header.CalculateHash(evidence.Parent) != fault.ParentHash) {
+			return errReplayParentCorrupt
+		}
+		var parent *ledger.Ledger
+		var release func()
+		var durable bool
+		var err error
+		if !evidence.ParentSnapshot && evidence.Parent.Hash != ([32]byte{}) {
+			parent, release, durable, err = s.prepareReplayDiagnosticParent(ctx, evidence.Parent, evidence.Fees,
+				!replayFaultStateClass(fault.Class) && !replayFaultStateClass(evidence.RepairClass))
+		}
+		if release != nil {
+			defer release()
+		}
+		if !durable && err == nil {
+			parent, err = s.loadReplayParent(ctx, fault, evidence)
+		}
 		if err != nil {
 			class := replayStateFailureClass(err)
 			if class == replayfault.MissingState || class == replayfault.CorruptState {
@@ -712,7 +749,8 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		if err != nil {
 			return err
 		}
-		if _, err := replay.Apply(s.EngineConfigForReplay(parent)); err != nil {
+		defer replay.ReleaseMemory()
+		if _, err := replay.ApplyContext(ctx, s.EngineConfigForReplay(parent)); err != nil {
 			return fmt.Errorf("failed transition still disagrees: %w", err)
 		}
 		if err := ctx.Err(); err != nil {

@@ -39,6 +39,10 @@ type PaymentSandbox struct {
 	// deletions holds deleted ledger entry keys
 	deletions map[[32]byte]bool
 
+	// Ordered union of live insertions and modifications; avoids rescanning
+	// every overlay map at each step of an offer-book walk.
+	succKeys state.OrderedLedgerKeys
+
 	// deletedFinalStates holds the final state of modified entries before deletion
 	// This is needed for correct metadata generation (PreviousFields/FinalFields in DeletedNode)
 	deletedFinalStates map[[32]byte][]byte
@@ -332,6 +336,7 @@ func (s *PaymentSandbox) Insert(k keylet.Keylet, data []byte) error {
 			return err
 		}
 		delete(s.deletions, key)
+		s.succKeys.Add(key)
 		if origData != nil {
 			// Entry exists in base → treat as modification
 			s.modifications[key] = dataCopy
@@ -342,6 +347,7 @@ func (s *PaymentSandbox) Insert(k keylet.Keylet, data []byte) error {
 		return nil
 	}
 
+	s.succKeys.Add(key)
 	s.insertions[key] = dataCopy
 	return nil
 }
@@ -355,6 +361,7 @@ func (s *PaymentSandbox) Update(k keylet.Keylet, data []byte) error {
 
 	// If it was an insertion, update the insertion
 	if _, ok := s.insertions[key]; ok {
+		s.succKeys.Add(key)
 		s.insertions[key] = dataCopy
 		return nil
 	}
@@ -373,6 +380,7 @@ func (s *PaymentSandbox) Update(k keylet.Keylet, data []byte) error {
 		}
 	}
 
+	s.succKeys.Add(key)
 	s.modifications[key] = dataCopy
 	return nil
 }
@@ -394,6 +402,7 @@ func (s *PaymentSandbox) readOriginal(k keylet.Keylet) ([]byte, error) {
 // Erase marks a ledger entry for deletion
 func (s *PaymentSandbox) Erase(k keylet.Keylet) error {
 	key := k.Key
+	s.succKeys.Remove(key)
 	if _, inserted := s.insertions[key]; inserted {
 		delete(s.insertions, key)
 		return nil
@@ -534,32 +543,21 @@ func (s *PaymentSandbox) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	var bestData []byte
 	found := false
 
-	// Check local insertions
-	for k, data := range s.insertions {
+	searchLocal := key
+	for {
+		k, ok := s.succKeys.Successor(searchLocal)
+		if !ok {
+			break
+		}
 		if s.deletions[k] {
+			searchLocal = k
 			continue
 		}
-		if bytes.Compare(k[:], key[:]) > 0 {
-			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
-				bestKey = k
-				bestData = data
-				found = true
-			}
+		bestKey, bestData, found = k, s.modifications[k], true
+		if data, ok := s.insertions[k]; ok {
+			bestData = data
 		}
-	}
-
-	// Check local modifications
-	for k, data := range s.modifications {
-		if s.deletions[k] {
-			continue
-		}
-		if bytes.Compare(k[:], key[:]) > 0 {
-			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
-				bestKey = k
-				bestData = data
-				found = true
-			}
-		}
+		break
 	}
 
 	// Delegate to parent or view, looping past deleted entries.
@@ -992,6 +990,7 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 
 	// Apply ledger item changes
 	for key := range s.deletions {
+		to.succKeys.Remove(key)
 		if _, inserted := to.insertions[key]; inserted {
 			delete(to.insertions, key)
 			delete(to.modifications, key)
@@ -1023,6 +1022,7 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 	}
 
 	for key, data := range s.insertions {
+		to.succKeys.Add(key)
 		if existed, wasDeleted := reinserted[key]; wasDeleted {
 			delete(to.deletions, key)
 			if existed {
@@ -1044,6 +1044,7 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 		if to.deletions[key] {
 			continue
 		}
+		to.succKeys.Add(key)
 		if _, inserted := to.insertions[key]; inserted {
 			to.insertions[key] = data
 		} else {
@@ -1125,6 +1126,7 @@ func (s *PaymentSandbox) ApplyToView(view tx.LedgerView) error {
 
 // Reset clears all changes from this sandbox
 func (s *PaymentSandbox) Reset() {
+	s.succKeys = nil
 	s.modifications = make(map[[32]byte][]byte)
 	s.preImages = make(map[[32]byte][]byte)
 	s.insertions = make(map[[32]byte][]byte)
