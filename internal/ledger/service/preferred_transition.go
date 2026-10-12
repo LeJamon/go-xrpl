@@ -30,6 +30,17 @@ const (
 	preferredTransitionBaseBytes = 1 << 20
 )
 
+type successorOptions struct {
+	preferred          bool
+	admitted           bool
+	allowReplayFault   bool
+	onlyMatchingParent bool
+	retries            []openledger.PendingTx
+	retrySalt          *[32]byte
+	anyDisputes        bool
+	check              func(*Service) error
+}
+
 type preferredRelay struct {
 	hash [32]byte
 	blob []byte
@@ -52,7 +63,9 @@ const (
 // mutex while invoking it. Finish performs relay and notifications after that
 // mutex and the service publication locks have been released.
 type PreparedPreferredLedger struct {
-	service *Service
+	service     *Service
+	options     successorOptions
+	replayFault *replayfault.Fault
 
 	parent         *ledger.Ledger
 	expectedClosed *ledger.Ledger
@@ -64,7 +77,7 @@ type PreparedPreferredLedger struct {
 
 	validatedAtPrepare *ledger.Ledger
 	provisionalReplace bool
-	sameLedger         bool
+	keepOpen           bool
 
 	prior  []openledger.PendingTx
 	locals []openledger.PendingTx
@@ -146,6 +159,10 @@ func (p *PreparedPreferredLedger) Wait(ctx context.Context) error {
 // successor preparation. It holds the ledger-work admission and the explicit
 // transition owner until TryPublish or Release completes.
 func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Ledger) (*PreparedPreferredLedger, error) {
+	return s.prepareSuccessor(ctx, parent, successorOptions{preferred: true})
+}
+
+func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, options successorOptions) (*PreparedPreferredLedger, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -164,6 +181,7 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 
 	p := &PreparedPreferredLedger{
 		service: s,
+		options: options,
 		parent:  parent,
 		ready:   make(chan struct{}),
 		state:   preferredTransitionPreparing,
@@ -175,6 +193,9 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 		return fail(err)
 	}
 	failPrepared := func(err error) (*PreparedPreferredLedger, error) {
+		if errors.Is(err, context.Canceled) && !s.preferredLifecycleRunning() {
+			err = errServiceNotRunning
+		}
 		if p.cancel != nil {
 			p.cancel()
 		}
@@ -182,12 +203,14 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 		p.markReady(err)
 		return nil, err
 	}
-	releaseWork, err := s.acquireLedgerWork(p.ctx)
-	if err != nil {
-		return failPrepared(err)
+	var err error
+	if !options.admitted {
+		p.releaseWork, err = s.acquireLedgerWork(p.ctx)
+		if err != nil {
+			return failPrepared(err)
+		}
 	}
-	p.releaseWork = releaseWork
-	if !s.isServiceOwnedLedger(parent) {
+	if !options.admitted && !options.allowReplayFault && !s.isServiceOwnedLedger(parent) {
 		if err := s.VerifyDetachedLedger(p.ctx, parent); err != nil {
 			return failPrepared(fmt.Errorf("preferred ledger state admission: %w", err))
 		}
@@ -212,7 +235,7 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 	}
 
 	s.mu.RLock()
-	if s.ReplayBlocked() {
+	if !options.allowReplayFault && s.ReplayBlocked() {
 		s.mu.RUnlock()
 		return failPrepared(replayfault.ErrBlocked)
 	}
@@ -224,6 +247,15 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 		s.mu.RUnlock()
 		return failPrepared(svcerr.ErrNoOpenLedger)
 	}
+	if options.check != nil {
+		if err := options.check(s); err != nil {
+			s.mu.RUnlock()
+			return failPrepared(err)
+		}
+	}
+	if options.allowReplayFault && s.replayFaults != nil {
+		p.replayFault = s.replayFaults.Snapshot()
+	}
 	p.expectedClosed = s.closedLedger
 	p.expectedOpen = s.openLedger
 	p.expectedView = s.openLedgerView
@@ -232,11 +264,11 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 	p.expectedReplay = s.startupReplay
 	p.validatedAtPrepare = s.validatedLedger
 	p.networkID = s.config.NetworkID
-	p.lastRoundSlow = true
+	p.lastRoundSlow = options.preferred || options.allowReplayFault || s.lastConsensusRoundTime > slowConsensusThreshold
 	p.relayFn = s.txRelay
 	p.provisionalReplace = s.networkLedgerState == networkLedgerFastLoadProvisional &&
 		parent.Sequence() == s.closedLedger.Sequence() && parent.Hash() != s.closedLedger.Hash()
-	if s.validatedLedger != nil {
+	if options.preferred && s.validatedLedger != nil {
 		validatedSeq := s.validatedLedger.Sequence()
 		parentHash := parent.Hash()
 		if parent.Sequence() < validatedSeq ||
@@ -248,7 +280,7 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 		p.provisionalReplace = p.provisionalReplace ||
 			parent.Sequence() == validatedSeq && parentHash != s.validatedLedger.Hash()
 	}
-	p.sameLedger = parent.Sequence() == s.closedLedger.Sequence() && parent.Hash() == s.closedLedger.Hash()
+	p.keepOpen = (options.preferred && parent.Sequence() == s.closedLedger.Sequence() && parent.Hash() == s.closedLedger.Hash()) || (options.onlyMatchingParent && parent.Hash() != s.closedLedger.Hash())
 	openView := s.openLedgerView
 	queue := s.txQueue
 	localsPool := s.localTxs
@@ -257,7 +289,7 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 	gateHeld = false
 	p.timings.openLedgerHold = time.Since(gateAcquired)
 
-	if p.sameLedger {
+	if p.keepOpen {
 		p.timings.openLedgerHold = time.Since(gateAcquired)
 		p.timings.preparation = time.Since(p.timings.started)
 		p.markReady(nil)
@@ -290,6 +322,28 @@ func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Led
 		queueSnapshot = queue.AllTxs()
 	}
 	privateBytes := preferredTransitionEstimate(stats, localSnapshot, queueSnapshot)
+	// Accepted leaves include inner Batch transactions and metadata, even when
+	// none of their outer transactions remain in the current open ledger.
+	if options.preferred {
+		err = parent.ForEachTransactionContext(p.ctx, func(_ [32]byte, data []byte) bool {
+			size := uint64(len(data))
+			if size > (^uint64(0)-preferredTransitionResultBytes)/32 {
+				privateBytes = ^uint64(0)
+				return false
+			}
+			size = size*32 + preferredTransitionResultBytes
+			if privateBytes > ^uint64(0)-size {
+				privateBytes = ^uint64(0)
+				return false
+			}
+			privateBytes += size
+			return true
+		})
+		if err != nil {
+			return cleanupPrepared(err)
+		}
+	}
+
 	p.privateBytes = privateBytes
 	p.releaseMemory, err = s.acquirePreferredTransitionMemory(p.ctx, privateBytes)
 	if err != nil {
@@ -362,6 +416,10 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 // TryPublish performs only the short service publication fence. It never
 // acquires openLedgerMu, waits for ingress, or calls relay/notification code.
 func (p *PreparedPreferredLedger) TryPublish() (bool, error) {
+	return p.publish(p.publishPreferredLocked)
+}
+
+func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error) {
 	if p == nil || p.service == nil {
 		return false, ErrPreferredTransitionStale
 	}
@@ -415,7 +473,7 @@ func (p *PreparedPreferredLedger) TryPublish() (bool, error) {
 	serviceStarted := time.Now()
 	s.mu.Lock()
 	p.timings.serviceWait = time.Since(serviceStarted)
-	if s.ReplayBlocked() {
+	if !p.options.allowReplayFault && s.ReplayBlocked() {
 		s.mu.Unlock()
 		return p.abortLocked(replayfault.ErrBlocked)
 	}
@@ -430,28 +488,57 @@ func (p *PreparedPreferredLedger) TryPublish() (bool, error) {
 		s.mu.Unlock()
 		return p.abortLocked(ErrPreferredChainSwitch)
 	}
+	if p.options.check != nil {
+		if err := p.options.check(s); err != nil {
+			s.mu.Unlock()
+			return p.abortLocked(err)
+		}
+	}
+	if p.options.allowReplayFault && s.replayFaults != nil {
+		fault := s.replayFaults.Snapshot()
+		if (fault == nil) != (p.replayFault == nil) || (fault != nil && fault.ID != p.replayFault.ID) {
+			s.mu.Unlock()
+			return p.abortLocked(ErrPreferredTransitionStale)
+		}
+	}
+	if err := publication(); err != nil {
+		s.mu.Unlock()
+		return p.abortLocked(err)
+	}
+	if !p.keepOpen {
+		s.openLedgerView = p.openView
+		s.openLedger = p.openView.Current()
+		s.txQueue = p.queue
+	}
+	if !p.options.allowReplayFault {
+		s.tickLoadFeeLocked()
+	}
+	s.mu.Unlock()
+	p.stateMu.Lock()
+	p.state = preferredTransitionPublished
+	p.stateMu.Unlock()
+	s.endPreferredTransitionLocked(p)
+	return true, nil
+}
+
+func (p *PreparedPreferredLedger) publishPreferredLocked() error {
+	s := p.service
 	if s.validatedLedger != nil {
 		validatedSeq := s.validatedLedger.Sequence()
 		if p.parent.Sequence() < validatedSeq ||
 			(p.parent.Sequence() == validatedSeq && p.parent.Hash() != s.validatedLedger.Hash() &&
 				s.networkLedgerState != networkLedgerFastLoadProvisional) {
-			s.mu.Unlock()
-			return p.abortLocked(ErrPreferredChainSwitch)
+			return ErrPreferredChainSwitch
 		}
 	}
-	if p.sameLedger {
+	if p.keepOpen {
 		publicationStarted := time.Now()
 		s.completeInitialSyncLocked()
 		if p.parent.IsValidated() {
 			s.confirmFastLoadLocked(p.parent.Sequence(), p.parent.Hash())
 		}
-		p.stateMu.Lock()
-		p.state = preferredTransitionPublished
-		p.stateMu.Unlock()
-		s.mu.Unlock()
 		p.timings.publication = time.Since(publicationStarted)
-		s.endPreferredTransitionLocked(p)
-		return true, nil
+		return nil
 	}
 
 	previousValidated := s.validatedLedger
@@ -504,16 +591,10 @@ func (p *PreparedPreferredLedger) TryPublish() (bool, error) {
 		}
 	}
 	p.notify = s.validatedLedgerNotificationLocked(previousValidated)
-	s.tickLoadFeeLocked()
 	s.historyComponent.mu.Unlock()
-	s.mu.Unlock()
 	p.timings.publication = time.Since(publicationStarted)
 
-	p.stateMu.Lock()
-	p.state = preferredTransitionPublished
-	p.stateMu.Unlock()
-	s.endPreferredTransitionLocked(p)
-	return true, nil
+	return nil
 }
 
 // Finish runs observable side effects after TryPublish has released all
@@ -616,14 +697,16 @@ func (p *PreparedPreferredLedger) markReady(err error) {
 
 func (p *PreparedPreferredLedger) run() {
 	started := time.Now()
-	if p.sameLedger {
+	if p.keepOpen {
 		p.timings.preparation = time.Since(started)
 		p.markReady(nil)
 		return
 	}
 	var err error
 	stageStarted := time.Now()
-	p.staged, err = stageTransactionResultsContext(p.ctx, p.parent, p.parent.Sequence(), p.parent.Hash())
+	if p.options.preferred {
+		p.staged, err = stageTransactionResultsContext(p.ctx, p.parent, p.parent.Sequence(), p.parent.Hash())
+	}
 	p.timings.stageResults = time.Since(stageStarted)
 	if err == nil {
 		var rules = openLedgerRules(p.validatedAtPrepare, p.service.logger)
@@ -640,7 +723,10 @@ func (p *PreparedPreferredLedger) run() {
 			FeeTrack:         p.service.feeTrack,
 		}
 		var retrySalt [32]byte
-		cfg.RetrySalt = &retrySalt
+		cfg.RetrySalt = p.options.retrySalt
+		if p.options.preferred || p.options.allowReplayFault {
+			cfg.RetrySalt = &retrySalt
+		}
 		private, privateErr := openledger.New(p.parent, openledger.Config{
 			NetworkID: p.networkID,
 			Logger:    p.service.logger,
@@ -651,16 +737,21 @@ func (p *PreparedPreferredLedger) run() {
 		} else {
 			p.openView = private
 			retryStarted := time.Now()
-			retries := append([]openledger.PendingTx(nil), p.locals...)
-			for _, local := range p.locals {
-				prepared, parseErr := openledger.ParsePendingTx(local.Blob)
-				if parseErr != nil {
-					err = fmt.Errorf("parse preferred-ledger local transaction %x: %w", local.Hash, parseErr)
-					break
-				}
-				if prepared.Hash != local.Hash || prepared.Account != local.Account {
-					err = fmt.Errorf("preferred-ledger local transaction identity does not match blob %x", local.Hash)
-					break
+			retries := append([]openledger.PendingTx(nil), p.options.retries...)
+			locals := p.locals
+			if p.options.preferred || p.options.allowReplayFault {
+				retries = append(retries, locals...)
+				locals = nil
+				for _, local := range p.locals {
+					prepared, parseErr := openledger.ParsePendingTx(local.Blob)
+					if parseErr != nil {
+						err = fmt.Errorf("parse preferred-ledger local transaction %x: %w", local.Hash, parseErr)
+						break
+					}
+					if prepared.Hash != local.Hash || prepared.Account != local.Account {
+						err = fmt.Errorf("preferred-ledger local transaction identity does not match blob %x", local.Hash)
+						break
+					}
 				}
 			}
 			if err != nil {
@@ -675,8 +766,8 @@ func (p *PreparedPreferredLedger) run() {
 				p.ctx,
 				p.parent,
 				p.prior,
-				nil,
-				false,
+				locals,
+				p.options.anyDisputes,
 				&retries,
 				cfg,
 				p.queue,

@@ -1274,39 +1274,45 @@ func (s *Service) restoreReplayParentAt(ctx context.Context, verified *ledger.Le
 	if err := s.VerifyDetachedLedger(ctx, repaired); err != nil {
 		return fmt.Errorf("verify repaired state: %w", err)
 	}
-	if err := s.lockOpenLedgerIfRunning(openLedgerPreferredSwitch); err != nil {
+	prepared, err := s.prepareSuccessor(ctx, repaired, successorOptions{
+		preferred: false, allowReplayFault: true, onlyMatchingParent: true,
+		check: func(s *Service) error {
+			if expectedClosedHash != ([32]byte{}) && (s.closedLedger == nil || s.closedLedger.Hash() != expectedClosedHash) {
+				return errors.New("closed ledger changed before repaired execution state could be installed")
+			}
+			return nil
+		},
+	})
+	if err != nil {
 		return err
 	}
-	defer s.openLedgerMu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	if expectedClosedHash != ([32]byte{}) &&
-		(s.closedLedger == nil || s.closedLedger.Hash() != expectedClosedHash) {
-		return errors.New("closed ledger changed before repaired execution state could be installed")
+	defer prepared.Release()
+	if err := prepared.Wait(ctx); err != nil {
+		return err
 	}
-	if s.closedLedger != nil && s.closedLedger.Hash() == repaired.Hash() {
-		newOpen, err := ledger.NewOpen(repaired, time.Now())
-		if err != nil {
-			return err
-		}
-		if err := s.acceptPreferredOpenLedgerLocked(repaired); err != nil {
-			return err
-		}
-		s.closedLedger = repaired
-		s.openLedger = newOpen
-	}
-	if s.validatedLedger != nil && s.validatedLedger.Hash() == repaired.Hash() {
-		if !repaired.IsValidated() {
-			if err := repaired.SetValidated(); err != nil {
-				return err
+	_, err = prepared.publish(func() error {
+		if s.validatedLedger != nil && s.validatedLedger.Hash() == repaired.Hash() {
+			if !repaired.IsValidated() {
+				if err := repaired.SetValidated(); err != nil {
+					return err
+				}
 			}
+			s.validatedLedger = repaired
 		}
-		s.validatedLedger = repaired
+		if s.closedLedger != nil && s.closedLedger.Hash() == repaired.Hash() {
+			s.closedLedger = repaired
+		}
+		s.historyComponent.mu.Lock()
+		defer s.historyComponent.mu.Unlock()
+		s.putHistoryLocked(repaired)
+		s.cachePersistedLedgerLocked(repaired)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	s.putHistoryLocked(repaired)
-	s.cachePersistedLedgerLocked(repaired)
+	releaseAdmission()
+	prepared.Finish()
 	return nil
 }
 

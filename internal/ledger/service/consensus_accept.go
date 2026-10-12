@@ -42,16 +42,16 @@ func (s *Service) acceptConsensusResult(
 	s.consensusWG.Add(1)
 	s.lifecycleMu.Unlock()
 	var notification validatedLedgerNotification
-	gateHeld := false
-	var gateAcquiredAt time.Time
+	var successor *PreparedPreferredLedger
 	defer func() {
-		if gateHeld {
-			timings.gateHold = time.Since(gateAcquiredAt)
-			s.openLedgerMu.Unlock()
-		}
+
 		s.consensusWG.Done()
 		callbackStarted := time.Now()
 		releaseAdmission()
+		if successor != nil {
+			successor.Finish()
+			successor.Release()
+		}
 		notification.notify()
 		timings.callback = time.Since(callbackStarted)
 		timings.log(s, time.Since(started))
@@ -201,44 +201,26 @@ func (s *Service) acceptConsensusResult(
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	gateWait, gateErr := s.lockOpenLedgerIfRunningTimed(ctx, openLedgerConsensus)
-	timings.gateWait = gateWait.Wait
-	timings.lifecycleWait += gateWait.LifecycleWait
-	if gateErr != nil {
-		return 0, gateErr
-	}
-	gateAcquiredAt = gateWait.AcquiredAt
-	gateHeld = true
-	if err := ctx.Err(); err != nil {
+	nextStarted := time.Now()
+	successor, err = s.prepareSuccessor(ctx, closed, successorOptions{
+		admitted: true, retries: retriableTxs, retrySalt: &salt, anyDisputes: anyDisputes,
+		check: func(s *Service) error {
+			if s.closedLedger != expectedClosed || s.openLedger != expectedOpen || s.startupReplay != replay {
+				return fmt.Errorf("%w: ledger ownership changed during build", ErrConsensusParentMismatch)
+			}
+			return nil
+		},
+	})
+	if err != nil {
 		return 0, err
 	}
-	lockStarted = time.Now()
-	s.mu.Lock()
-	timings.serviceWait += time.Since(lockStarted)
-	if s.ReplayBlocked() {
-		s.mu.Unlock()
-		return 0, replayfault.ErrBlocked
+	if err := successor.Wait(ctx); err != nil {
+		return 0, err
 	}
-	if s.closedLedger != expectedClosed || s.openLedger != expectedOpen || s.startupReplay != replay {
-		s.mu.Unlock()
-		return 0, fmt.Errorf("%w: ledger ownership changed during build", ErrConsensusParentMismatch)
-	}
-	acceptOpen := s.openLedgerAcceptanceLocked(ctx, &timings.relay, &salt)
-	s.mu.Unlock()
-	nextStarted := time.Now()
-	newOpen, err := ledger.NewOpen(closed, time.Now())
-	if err != nil {
-		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
-	}
-	err = acceptOpen(closed, retriableTxs, anyDisputes, func(publish func()) {
-		timings.nextOpen = time.Since(nextStarted)
-		lockStarted = time.Now()
-		s.mu.Lock()
-		timings.serviceWait += time.Since(lockStarted)
-		defer s.mu.Unlock()
-		if s.ReplayBlocked() {
-			return
-		}
+	timings.nextOpen = time.Since(nextStarted)
+	timings.gateWait = successor.timings.openLedgerWait
+	timings.gateHold = successor.timings.openLedgerHold
+	_, err = successor.publish(func() error {
 		previousValidated := s.validatedLedger
 		historyStarted := time.Now()
 		s.historyComponent.mu.Lock()
@@ -278,7 +260,6 @@ func (s *Service) acceptConsensusResult(
 		}
 
 		timings.persist = time.Since(persistStarted)
-		s.openLedger = newOpen
 
 		// Quorum validation publishes the event, rather than the speculative close.
 		event := &LedgerAcceptedEvent{
@@ -298,8 +279,7 @@ func (s *Service) acceptConsensusResult(
 		)
 
 		notification = s.validatedLedgerNotificationLocked(previousValidated)
-		publish()
-		s.tickLoadFeeLocked()
+		return nil
 	})
 	if err != nil {
 		return 0, err
@@ -308,9 +288,7 @@ func (s *Service) acceptConsensusResult(
 	if s.ReplayBlocked() {
 		return 0, replayfault.ErrBlocked
 	}
-	timings.gateHold = time.Since(gateAcquiredAt)
-	s.openLedgerMu.Unlock()
-	gateHeld = false
+
 	{
 		closedHeader := closed.Header()
 		stateRoot, txRoot := closedHeader.AccountHash, closedHeader.TxHash
