@@ -134,6 +134,9 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	if err := s.persistLedger(context.WithoutCancel(ctx), closed); err != nil {
 		s.logger.Error("failed to persist closed ledger; chain advance continues",
 			"seq", closed.Sequence(), "err", err)
+		if s.config.FlatState != nil {
+			s.enqueuePersist(closed)
+		}
 	}
 
 	s.closedLedger = closed
