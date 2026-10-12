@@ -349,7 +349,6 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	if err != nil {
 		return cleanupPrepared(err)
 	}
-	queueSnapshot = nil
 
 	// Parse the old view only after admission has covered the retained
 	// successor. The service gate is free, but the owner keeps all mutating
@@ -605,14 +604,14 @@ func (p *PreparedPreferredLedger) Finish() {
 	}
 	p.finishOnce.Do(func() {
 		p.stateMu.Lock()
-		published := p.state == preferredTransitionPublished
+		if p.state != preferredTransitionPublished {
+			p.stateMu.Unlock()
+			return
+		}
 		notify := p.notify
 		relay := p.relay
 		relayFn := p.relayFn
 		p.stateMu.Unlock()
-		if !published {
-			return
-		}
 		// Complete all service-owned relay-cache mutations before invoking any
 		// external callback. A callback may synchronously stop the service, which
 		// clears the cache and waits for ledger-work admission to drain.

@@ -44,7 +44,6 @@ func (s *Service) acceptConsensusResult(
 	var notification validatedLedgerNotification
 	var successor *PreparedPreferredLedger
 	defer func() {
-
 		s.consensusWG.Done()
 		callbackStarted := time.Now()
 		releaseAdmission()

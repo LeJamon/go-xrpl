@@ -83,7 +83,7 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	sender, destination := jtx.MasterAccount(), jtx.NewAccount("consensus-failure")
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
-	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 1_000_000, 100, 1)
+	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 21_000_000, 100, 1)
 	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), sender.AccountID())
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	priorTx, err := openledger.ParsePendingTx(prior)
