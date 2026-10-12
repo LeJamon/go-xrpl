@@ -54,13 +54,13 @@ type TrackedEntry struct {
 	threadPrevTxnLgrSq uint32
 }
 
-// ThreadedOwner: thread-only modification to an SLE (PreviousTxnID /
+// threadedOwner: thread-only modification to an SLE (PreviousTxnID /
 // PreviousTxnLgrSeq bumped, business fields unchanged). Mirrors
 // rippled's `Mods` table at ApplyStateTable.cpp:584-633 — kept out of
 // items_ (Action::cache, skipped by apply loop :141-143) so the
 // emitted AffectedNode carries only {LedgerIndex, LedgerEntryType,
 // PreviousTxnID, PreviousTxnLgrSeq}, no FinalFields / PreviousFields.
-type ThreadedOwner struct {
+type threadedOwner struct {
 	EntryType            entry.Type
 	OldPreviousTxnID     [32]byte
 	OldPreviousTxnLgrSeq uint32
@@ -262,11 +262,6 @@ func (t *ApplyStateTable) Rules() *amendment.Rules {
 // Reference: rippled ReadView::seq().
 func (t *ApplyStateTable) LedgerSeq() uint32 {
 	return t.txSeq
-}
-
-// DropsDestroyed returns the amount of XRP destroyed
-func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
-	return t.drops
 }
 
 var errUnregisteredLedgerEntryType = errors.New("applystate: unregistered ledger entry type")

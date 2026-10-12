@@ -446,7 +446,7 @@ func TestApplyFlushesThreadOnlyOwnersInKeyOrder(t *testing.T) {
 
 	for i := 32; i >= 1; i-- {
 		ownerKey := key(byte(i))
-		if err := table.journal.putOwner(backgroundContext, ownerKey, &ThreadedOwner{Updated: []byte{byte(i)}}); err != nil {
+		if err := table.journal.putOwner(backgroundContext, ownerKey, &threadedOwner{Updated: []byte{byte(i)}}); err != nil {
 			t.Fatalf("seed owner %d: %v", i, err)
 		}
 	}

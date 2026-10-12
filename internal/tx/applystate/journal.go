@@ -20,7 +20,7 @@ type journal struct {
 
 type journalRecord struct {
 	item  *TrackedEntry
-	owner *ThreadedOwner
+	owner *threadedOwner
 }
 
 const (
@@ -114,7 +114,7 @@ func (j *journal) deleteItem(ctx context.Context, key [32]byte) error {
 	return j.put(ctx, key, record)
 }
 
-func (j *journal) putOwner(ctx context.Context, key [32]byte, owner *ThreadedOwner) error {
+func (j *journal) putOwner(ctx context.Context, key [32]byte, owner *threadedOwner) error {
 	record, _, err := j.get(ctx, key)
 	if err != nil {
 		return err
@@ -359,7 +359,7 @@ func decodeJournalRecord(value []byte) (journalRecord, error) {
 		if err != nil {
 			return journalRecord{}, err
 		}
-		owner := &ThreadedOwner{EntryType: entryTypeFromUint16(typeValue), OldPreviousTxnLgrSeq: seq, Updated: updated}
+		owner := &threadedOwner{EntryType: entryTypeFromUint16(typeValue), OldPreviousTxnLgrSeq: seq, Updated: updated}
 		copy(owner.OldPreviousTxnID[:], prev)
 		record.owner = owner
 	}

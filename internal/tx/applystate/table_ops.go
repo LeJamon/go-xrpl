@@ -345,7 +345,7 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 					if decodeErr != nil {
 						continue
 					}
-					if err := t.journal.putOwner(backgroundContext, ownerKey.Key, &ThreadedOwner{EntryType: ownerType, OldPreviousTxnID: oldPrev, OldPreviousTxnLgrSeq: oldPrevSeq, Updated: updated}); err != nil {
+					if err := t.journal.putOwner(backgroundContext, ownerKey.Key, &threadedOwner{EntryType: ownerType, OldPreviousTxnID: oldPrev, OldPreviousTxnLgrSeq: oldPrevSeq, Updated: updated}); err != nil {
 						return err
 					}
 					continue
@@ -367,7 +367,7 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 			if decodeErr != nil {
 				continue
 			}
-			if err := t.journal.putOwner(backgroundContext, ownerKey.Key, &ThreadedOwner{EntryType: ownerType, OldPreviousTxnID: oldPrev, OldPreviousTxnLgrSeq: oldPrevSeq, Updated: updated}); err != nil {
+			if err := t.journal.putOwner(backgroundContext, ownerKey.Key, &threadedOwner{EntryType: ownerType, OldPreviousTxnID: oldPrev, OldPreviousTxnLgrSeq: oldPrevSeq, Updated: updated}); err != nil {
 				return err
 			}
 			continue
@@ -394,7 +394,7 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 		if decodeErr != nil {
 			continue
 		}
-		if err := t.journal.putOwner(backgroundContext, ownerKey.Key, &ThreadedOwner{EntryType: ownerType, OldPreviousTxnID: oldPrev, OldPreviousTxnLgrSeq: oldPrevSeq, Updated: updated}); err != nil {
+		if err := t.journal.putOwner(backgroundContext, ownerKey.Key, &threadedOwner{EntryType: ownerType, OldPreviousTxnID: oldPrev, OldPreviousTxnLgrSeq: oldPrevSeq, Updated: updated}); err != nil {
 			return err
 		}
 	}
