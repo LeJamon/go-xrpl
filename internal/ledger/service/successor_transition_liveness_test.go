@@ -26,7 +26,7 @@ func TestConsensusSuccessorPreparationKeepsReadersAndIngressResponsive(t *testin
 	env := jtx.NewTestEnv(t)
 	sender, destination := jtx.MasterAccount(), jtx.NewAccount("consensus-successor")
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
-	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 1_000_000, 100, 2)
+	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 1_000_000, 100, 1)
 	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), sender.AccountID())
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	oldClosed := svc.GetClosedLedger()
@@ -118,11 +118,13 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 	require.NoError(t, <-submitted)
 	require.Same(t, parent, svc.GetClosedLedger())
 	current := svc.openLedgerView.Current()
-	for _, hash := range [][32]byte{priorHash, lateHash} {
+	for _, hash := range [][32]byte{lateHash} {
 		present, txErr := current.TxExists(hash)
 		require.NoError(t, txErr)
 		require.True(t, present, "failed successor must leave ingress on original view: %x", hash)
 	}
+	_, held := svc.localTxs.Get(priorHash)
+	require.True(t, held, "failed successor must retain the held local transaction")
 }
 
 type successorPreparationParentFamily struct {
