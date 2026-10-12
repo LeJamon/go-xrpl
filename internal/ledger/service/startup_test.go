@@ -544,16 +544,20 @@ func persistStartupTargetWithGenesis(
 	genesisConfig genesis.Config,
 ) *ledger.Ledger {
 	t.Helper()
+	family := backend.New(db)
+	execution := newTestExecutionStore(t, family)
 	writer, err := New(Config{
 		Standalone:    true,
 		Startup:       StartupConfig{Mode: StartupFresh},
 		GenesisConfig: genesisConfig,
 		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
+		SHAMapFamily:  family,
+		Execution:     execution,
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
 	require.NoError(t, writer.Start())
+	t.Cleanup(writer.Stop)
 	_, err = writer.AcceptLedger(ctx)
 	require.NoError(t, err)
 	writer.FlushPersists()
@@ -569,15 +573,19 @@ func persistStartupReplayChain(
 	rm *sqlitedb.RepositoryManager,
 ) (*ledger.Ledger, *ledger.Ledger, [32]byte) {
 	t.Helper()
+	family := backend.New(db)
+	execution := newTestExecutionStore(t, family)
 	writer, err := New(Config{
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
+		SHAMapFamily:  family,
+		Execution:     execution,
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
 	require.NoError(t, writer.Start())
+	t.Cleanup(writer.Stop)
 	parent := writer.GetClosedLedger()
 	require.NoError(t, writer.persistValidatedLedger(ctx, parent, false))
 

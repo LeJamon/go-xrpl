@@ -109,8 +109,7 @@ func (r *Registry) AcquireLease(root Root) (*Lease, error) {
 	return &Lease{registry: r, root: root}, nil
 }
 
-// Release relinquishes the lease. It is safe to call more than once and from
-// a different goroutine than Rebind.
+// Release relinquishes the lease. It is safe to call more than once.
 func (l *Lease) Release() {
 	if l == nil || l.registry == nil {
 		return
