@@ -727,6 +727,7 @@ func (s *Service) Start() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create initial closed ledger: %w", err)
 	}
+	defer initialClosed.Discard()
 	if err := initialClosed.Close(time.Now(), 0); err != nil {
 		return fmt.Errorf("failed to close initial ledger: %w", err)
 	}
