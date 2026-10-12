@@ -676,7 +676,6 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 	epoch := s.writerEpoch
 	s.mu.Unlock()
 
-	markerWritten := resuming
 	if !resuming {
 		marker := newAdvanceMarker(expected, target, intent, epoch)
 		if err := s.writeMarker(ctx, epoch, marker); err != nil {
@@ -687,21 +686,14 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 			}
 			return err
 		}
-		markerWritten = true
 		s.mu.Lock()
 		s.marker = &marker
 		s.mu.Unlock()
 	}
 
-	if err := s.applyChanges(ctx, epoch, changes); err != nil {
-		if markerWritten {
-			s.finishWriter(epoch, false, false, Descriptor{})
-		} else {
-			s.finishWriter(epoch, false, false, Descriptor{})
-		}
-		return err
-	}
-	if err := s.finalize(ctx, epoch, target, intent); err != nil {
+	if err := s.applyChanges(ctx, epoch, changes, func(batch *pebble.Batch) error {
+		return s.finalize(ctx, epoch, target, intent, batch)
+	}); err != nil {
 		s.finishWriter(epoch, false, false, Descriptor{})
 		return err
 	}
@@ -735,7 +727,7 @@ func (s *Store) writeMarker(ctx context.Context, epoch uint64, marker advanceMar
 	return nil
 }
 
-func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIterator) error {
+func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIterator, finalize func(*pebble.Batch) error) error {
 	defer changes.Close()
 	batch := s.db.NewBatch()
 	defer batch.Close()
@@ -761,9 +753,8 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 		if err := batch.Commit(pebble.NoSync); err != nil {
 			return err
 		}
-		if err := s.sync(); err != nil {
-			return fmt.Errorf("%w: object chunk sync: %v", errSyncUncertain, err)
-		}
+		// The durable marker fences these chunks until final publication syncs
+		// all preceding WAL records. Interrupted transitions replay from zero.
 		releaseReserved()
 		batch.Reset()
 		batchBytes = 0
@@ -801,7 +792,7 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 			return err
 		}
 		if !ok {
-			return flush()
+			return finalize(batch)
 		}
 		if havePrevious && bytes.Compare(previous[:], change.Key[:]) >= 0 {
 			return ErrInvalidChangeOrder
@@ -845,7 +836,7 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 	}
 }
 
-func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, intent string) error {
+func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, intent string, batch *pebble.Batch) error {
 	if err := s.checkWriter(ctx, epoch); err != nil {
 		return err
 	}
@@ -863,8 +854,6 @@ func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, i
 		}
 		encodedOutbox = encodeOutboxUnchecked(existing)
 	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
 	if err := batch.Set([]byte(metaCurrent), encodeDescriptor(target), nil); err != nil {
 		return err
 	}

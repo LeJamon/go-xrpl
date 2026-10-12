@@ -3,6 +3,7 @@ package flatstate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -417,21 +418,10 @@ func TestStoreOutboxLimitsBlockAdvanceButAllowAck(t *testing.T) {
 	}
 }
 
-func TestStoreCrashMarkerResumesFromZero(t *testing.T) {
+func TestStoreInterruptedChunksResumeFromZero(t *testing.T) {
 	path := t.TempDir()
-	var syncCalls atomic.Int32
 	store, err := Open(path, Options{
 		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
-		Sync: func(db *pebble.DB) error {
-			call := syncCalls.Add(1)
-			if err := db.LogData(nil, pebble.Sync); err != nil {
-				return err
-			}
-			if call == 5 {
-				return errors.New("injected uncertain chunk sync")
-			}
-			return nil
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -441,10 +431,10 @@ func TestStoreCrashMarkerResumesFromZero(t *testing.T) {
 	second := testDescriptor(2, first.LedgerHash, testHash(4), testHash(5), testHash(6))
 	changes := []Change{{Key: testHash(1), Value: []byte("one")}, {Key: testHash(2), Value: []byte("two")}}
 	err = store.Advance(context.Background(), AdvanceRequest{
-		Expected: &first, Target: second, Changes: NewSliceChangeIterator(changes), Authorization: testAuthorization(first, second),
+		Expected: &first, Target: second, Changes: &interruptedChanges{NewSliceChangeIterator(changes)}, Authorization: testAuthorization(first, second),
 	})
 	if err == nil {
-		t.Fatal("expected injected chunk sync failure")
+		t.Fatal("expected interrupted changes")
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -480,21 +470,10 @@ func TestStoreCrashMarkerResumesFromZero(t *testing.T) {
 	}
 }
 
-func TestStoreCrashMarkerResumesRebaseFromZero(t *testing.T) {
+func TestStoreInterruptedRebaseChunksResumeFromZero(t *testing.T) {
 	path := t.TempDir()
-	var syncCalls atomic.Int32
 	store, err := Open(path, Options{
 		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
-		Sync: func(db *pebble.DB) error {
-			call := syncCalls.Add(1)
-			if err := db.LogData(nil, pebble.Sync); err != nil {
-				return err
-			}
-			if call == 5 {
-				return errors.New("injected rebase chunk sync failure")
-			}
-			return nil
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -505,11 +484,11 @@ func TestStoreCrashMarkerResumesRebaseFromZero(t *testing.T) {
 	target.Epoch = first.Epoch + 1
 	changes := []Change{{Key: testHash(1), Value: []byte("one")}, {Key: testHash(2), Value: []byte("two")}}
 	err = store.Rebase(context.Background(), RebaseRequest{
-		Expected: &first, Target: target, Changes: NewSliceChangeIterator(changes),
+		Expected: &first, Target: target, Changes: &interruptedChanges{NewSliceChangeIterator(changes)},
 		Authorization: testAuthorization(first, target),
 	})
 	if err == nil {
-		t.Fatal("expected injected rebase chunk sync failure")
+		t.Fatal("expected interrupted rebase changes")
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -620,5 +599,136 @@ func TestStorePathIsCreated(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The first chunk has been applied by the time the caller requests EOF.
+type interruptedChanges struct{ *SliceChangeIterator }
+
+func (i *interruptedChanges) Next(ctx context.Context) (Change, bool, error) {
+	change, ok, err := i.SliceChangeIterator.Next(ctx)
+	if err == nil && !ok {
+		return Change{}, false, errors.New("interrupted change stream")
+	}
+	return change, ok, err
+}
+
+func TestStorePublicationSyncsAllChunks(t *testing.T) {
+	for _, records := range []int{1, 8} {
+		t.Run(fmt.Sprint(records), func(t *testing.T) {
+			var syncs int
+			store, err := Open(t.TempDir(), Options{
+				CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
+				Sync: func(db *pebble.DB) error {
+					syncs++
+					return db.LogData(nil, pebble.Sync)
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+			changes := make([]Change, records)
+			for i := range changes {
+				changes[i] = Change{Key: testHash(byte(i + 1)), Value: []byte("value")}
+			}
+			importInitial(t, store, target, changes)
+			if syncs != 2 {
+				t.Fatalf("transition used %d syncs; want marker and final publication barriers", syncs)
+			}
+			view, err := store.OpenView(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer view.Close()
+			for _, change := range changes {
+				value, found, err := view.Get(change.Key)
+				if err != nil || !found || string(value) != "value" {
+					t.Fatalf("published key %x = %q, %v, %v", change.Key, value, found, err)
+				}
+			}
+			if _, advancing, err := store.Marker(); err != nil || advancing {
+				t.Fatalf("completed transition marker: advancing=%v err=%v", advancing, err)
+			}
+		})
+	}
+}
+
+func TestStoreUncertainTransitionReopensConsistently(t *testing.T) {
+	for _, failSync := range []int{1, 2} {
+		t.Run(fmt.Sprint(failSync), func(t *testing.T) {
+			path := t.TempDir()
+			var armed bool
+			var syncs int
+			store, err := Open(path, Options{
+				CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
+				Sync: func(db *pebble.DB) error {
+					if err := db.LogData(nil, pebble.Sync); err != nil {
+						return err
+					}
+					if armed {
+						syncs++
+						if syncs == failSync {
+							return errors.New("uncertain sync outcome")
+						}
+					}
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+			importInitial(t, store, first, []Change{{Key: testHash(1), Value: []byte("old")}})
+			target := testDescriptor(2, first.LedgerHash, testHash(4), testHash(5), testHash(6))
+			changes := []Change{{Key: testHash(1), Value: []byte("new")}, {Key: testHash(2), Value: []byte("added")}}
+			armed = true
+			err = store.Advance(context.Background(), AdvanceRequest{
+				Expected: &first, Target: target, Changes: NewSliceChangeIterator(changes),
+				Authorization: testAuthorization(first, target),
+			})
+			if !errors.Is(err, errSyncUncertain) {
+				t.Fatalf("uncertain transition: %v", err)
+			}
+			if view, err := store.OpenView(context.Background()); !errors.Is(err, ErrUnavailable) {
+				if view != nil {
+					_ = view.Close()
+				}
+				t.Fatalf("uncertain transition exposed a new view: %v", err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = Open(path, Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if failSync == 1 {
+				if err := store.Resume(context.Background(), ResumeRequest{
+					Authorization: testAuthorization(first, target), Changes: NewSliceChangeIterator(changes),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			view, err := store.OpenView(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer view.Close()
+			if current, found, err := store.Current(); err != nil || !found || current != target {
+				t.Fatalf("recovered descriptor = %+v, %v, %v", current, found, err)
+			}
+			for _, change := range changes {
+				value, found, err := view.Get(change.Key)
+				if err != nil || !found || string(value) != string(change.Value) {
+					t.Fatalf("recovered key %x = %q, %v, %v", change.Key, value, found, err)
+				}
+			}
+			if stats := store.Stats(); stats.OutboxCount != 2 {
+				t.Fatalf("publication obligation missing: %+v", stats)
+			}
+		})
 	}
 }
