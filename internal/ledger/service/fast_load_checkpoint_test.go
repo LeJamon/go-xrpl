@@ -138,7 +138,13 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	require.Equal(t, want.Hash(), reader.GetValidatedLedger().Hash())
 	require.Equal(t, checkpoint.strictNodes, reader.fastLoadStrictNodes.Load())
 	require.Equal(t, checkpoint.strictElapsed, reader.fastLoadStrictElapsed.Load())
-	require.Equal(t, len(checkpoint.stateProofs)+len(checkpoint.txProofs), tracked.uncachedReads())
+	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Amendments = nil
+	genesisResult, err := genesis.Create(genesisConfig)
+	require.NoError(t, err)
+	genesisNodes, err := genesisResult.StateMap.WalkWireNodes()
+	require.NoError(t, err)
+	require.Equal(t, len(genesisNodes)+len(checkpoint.stateProofs)+len(checkpoint.txProofs), tracked.uncachedReads())
 	baseRoot, releaseBase, available, err := reader.AcquireValidatedStateBase(ctx)
 	require.NoError(t, err)
 	require.True(t, available)
@@ -944,6 +950,7 @@ func newFastLoadCheckpointService(
 		RelationalDB: repositories, FastLoad: true,
 	})
 	require.NoError(t, err)
+	t.Cleanup(svc.Stop)
 	return svc
 }
 
