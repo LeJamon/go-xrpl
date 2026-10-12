@@ -121,7 +121,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 				indexCount++
 			}
 			recordBytes, valid := recordSize(value)
-			if !valid || recordBytes > uint64(^uint64(0)>>1)-uint64(offset) {
+			if !valid || recordBytes > (^uint64(0)>>1)-uint64(offset) {
 				writeErr = ErrDiskBudget
 			} else {
 				offset += int64(recordBytes)

@@ -78,6 +78,20 @@ func TestBoundedTableMatchesOverlaySemantics(t *testing.T) {
 	}
 }
 
+func TestBoundedTableForwardsConfigToNestedTable(t *testing.T) {
+	base := &boundedMockBase{
+		mockBaseView: newMockBaseView(),
+		cfg:          overlay.Config{MaxMemoryBytes: 256 << 10},
+	}
+	outer := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	defer outer.Close()
+	inner := NewApplyStateTable(outer, [32]byte{2}, 3, amendment.AllSupportedRules())
+	defer inner.Close()
+	if inner.journal == nil {
+		t.Fatal("nested table did not inherit bounded journal configuration")
+	}
+}
+
 func TestBoundedTableForkAtomicFailurePreservesParent(t *testing.T) {
 	base := &boundedMockBase{mockBaseView: newMockBaseView(), cfg: overlay.Config{MaxMemoryBytes: 256 << 10}}
 	table := NewApplyStateTable(base, [32]byte{}, 0, nil)

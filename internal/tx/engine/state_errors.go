@@ -3,6 +3,7 @@ package engine
 import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -41,6 +42,18 @@ func (e *Engine) stateError() error {
 type recordingAtomicView struct {
 	applystate.AtomicLedgerView
 	recorder *stateErrorRecorder
+}
+
+// ExecutionJournalConfig forwards the optional bounded journal configuration
+// through the error-recording wrapper. The wrapper must remain transparent to
+// ApplyStateTable's capability detection or transaction-local state silently
+// falls back to an unbounded map.
+func (v *recordingAtomicView) ExecutionJournalConfig() (overlay.Config, bool) {
+	provider, ok := v.AtomicLedgerView.(applystate.ExecutionJournalConfigProvider)
+	if !ok {
+		return overlay.Config{}, false
+	}
+	return provider.ExecutionJournalConfig()
 }
 
 func (v *recordingAtomicView) Read(k keylet.Keylet) ([]byte, error) {

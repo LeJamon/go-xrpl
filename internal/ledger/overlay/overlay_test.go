@@ -17,7 +17,6 @@ type testBase struct {
 	mu     sync.RWMutex
 	values map[[32]byte][]byte
 	err    error
-	mutate bool
 }
 
 func newTestBase(values map[[32]byte][]byte) *testBase {
@@ -72,18 +71,6 @@ func testKey(n byte) [32]byte {
 	var key [32]byte
 	key[31] = n
 	return key
-}
-
-func collectReader(t *testing.T, reader Reader) map[[32]byte][]byte {
-	t.Helper()
-	values := make(map[[32]byte][]byte)
-	if err := reader.Iterate(context.Background(), nil, func(key [32]byte, value []byte) bool {
-		values[key] = append([]byte(nil), value...)
-		return true
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return values
 }
 
 func TestOverlayReadsMergesAndOwnsValues(t *testing.T) {
@@ -229,7 +216,7 @@ func TestOverlaySpillCompactsAndChangesAreCoalesced(t *testing.T) {
 	}
 	defer o.Close()
 	for i := byte(1); i < 25; i++ {
-		if err := o.Set(testKey(i), []byte{byte('a' + i), byte('b' + i)}); err != nil {
+		if err := o.Set(testKey(i), []byte{'a' + i, 'b' + i}); err != nil {
 			t.Fatalf("Set %d: %v stats=%+v", i, err, o.Stats())
 		}
 	}

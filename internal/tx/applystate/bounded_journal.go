@@ -22,6 +22,7 @@ type ExecutionJournalConfigProvider interface {
 type boundedJournal struct {
 	overlay *overlay.Overlay
 	err     error
+	cfg     overlay.Config
 }
 
 type journalRecord struct {
@@ -42,9 +43,9 @@ const (
 func newBoundedJournal(cfg overlay.Config) *boundedJournal {
 	o, err := overlay.New(nil, cfg)
 	if err != nil {
-		return &boundedJournal{err: err}
+		return &boundedJournal{err: err, cfg: cfg}
 	}
-	return &boundedJournal{overlay: o}
+	return &boundedJournal{overlay: o, cfg: cfg}
 }
 
 func (j *boundedJournal) fork() *boundedJournal {
@@ -52,13 +53,24 @@ func (j *boundedJournal) fork() *boundedJournal {
 		return nil
 	}
 	if j.err != nil {
-		return &boundedJournal{err: j.err}
+		return &boundedJournal{err: j.err, cfg: j.cfg}
 	}
 	child, err := j.overlay.Fork()
 	if err != nil {
 		return &boundedJournal{err: err}
 	}
-	return &boundedJournal{overlay: child}
+	return &boundedJournal{overlay: child, cfg: j.cfg}
+}
+
+// ExecutionJournalConfig keeps nested transaction tables on the same bounded
+// path when their base is an outer ApplyStateTable (for example Batch's
+// all-or-nothing table). The shared admission accounts in cfg prevent this
+// forwarding from multiplying the ledger's memory or disk ceiling.
+func (t *ApplyStateTable) ExecutionJournalConfig() (overlay.Config, bool) {
+	if t == nil || t.journal == nil {
+		return overlay.Config{}, false
+	}
+	return t.journal.cfg, true
 }
 
 func (j *boundedJournal) close() error {

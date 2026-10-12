@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"path/filepath"
 	"sync/atomic"
 )
 
@@ -475,11 +474,4 @@ func maxInt() int {
 
 func (s *spillSegment) cursor(ctx context.Context, owner *budget, after *[32]byte) (*segmentCursor, error) {
 	return openSegmentCursor(ctx, owner, s, after)
-}
-
-func (s *spillSegment) validatePath() error {
-	if s == nil || s.path == "" || filepath.Base(s.path) == "." {
-		return fmt.Errorf("%w: empty segment path", ErrCorruptSegment)
-	}
-	return nil
 }

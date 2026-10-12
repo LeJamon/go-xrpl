@@ -530,6 +530,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 
 	// Create ApplyStateTable to track changes
 	table := applystate.NewApplyStateTableWithErrorRecorder(snapshot, txHash, e.config.LedgerSequence, rules, e.stateErrors.record)
+	defer func() { _ = table.Close() }()
 
 	// Create a minimal ApplyContext for pseudo-transactions
 	ctx := &txcore.ApplyContext{
@@ -636,6 +637,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 	}
 
 	tecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
+	defer func() { _ = tecTable.Close() }()
 
 	if st.isTicket {
 		if r := e.consumeTicketForRecovery(st, tecTable); r != ter.TesSUCCESS {
