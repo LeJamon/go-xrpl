@@ -27,6 +27,23 @@ type droppingExecutionFamily struct {
 	shamap.Family
 }
 
+type blockingExecutionFamily struct {
+	shamap.Family
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (f *blockingExecutionFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	f.once.Do(func() { close(f.entered) })
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return f.Family.StoreBatch(ctx, entries)
+}
+
 func (f *droppingExecutionFamily) StoreBatch(context.Context, []shamap.FlushEntry) error {
 	return nil
 }
@@ -194,6 +211,7 @@ func TestBoundedExecutionLedgerDifferential(t *testing.T) {
 		if got := memory.Snapshot().Used; got != 0 {
 			t.Fatalf("round %d: closed ledger retains %d managed bytes", round, got)
 		}
+		bounded.ReleaseExecutionBuildLeases()
 		closeTime = closeTime.Add(4 * time.Second)
 	}
 }
@@ -212,6 +230,7 @@ func TestBoundedExecutionRollbackForkAndReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Discard()
+	parent.ReleaseExecutionBuildLeases()
 	key := mutAcct(55)
 	if err := l.Insert(key, mutData(3)); err != nil {
 		t.Fatal(err)
@@ -220,6 +239,7 @@ func TestBoundedExecutionRollbackForkAndReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer before.Discard()
 	failure := errors.New("rollback")
 	err = l.ApplyAtomically(func(writer Writer) error {
 		if err := writer.Update(key, mutData(4)); err != nil {
@@ -328,6 +348,155 @@ func TestExecutionCommitmentSinkFailureReleasesWorkspace(t *testing.T) {
 	if used := workspace.Snapshot().Used; used != 0 {
 		t.Fatalf("workspace retained %d bytes after failed commitment: %d", used, used)
 	}
+}
+
+func TestAutomaticBuildAdmissionCoversBatchedSink(t *testing.T) {
+	family := &blockingExecutionFamily{Family: backend.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	store, _ := executionTestStore(t, family)
+	base := &executionTree{store: store, kind: shamap.TypeState, sequence: 1}
+	tree, err := base.newMutable(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.close()
+	for seed := byte(1); seed != 0; seed++ {
+		if err := tree.Put(mutAcct(seed).Key, bytes.Repeat(mutData(seed), 4)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type buildResult struct {
+		root [32]byte
+		err  error
+	}
+	done := make(chan buildResult, 1)
+	go func() {
+		root, err := tree.hash(context.Background())
+		done <- buildResult{root: root, err: err}
+	}()
+	select {
+	case <-family.entered:
+	case <-time.After(time.Second):
+		t.Fatal("commitment build did not reach its storage sink")
+	}
+	for rotation := 0; rotation < 2; rotation++ {
+		if release, ok := store.GuardPreservedRoots(nil); ok || release != nil {
+			t.Fatalf("retirement %d admitted while commitment sink was active", rotation)
+		}
+	}
+	close(family.release)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	found := false
+	for _, root := range store.Roots() {
+		found = found || (root.Hash == result.root && root.Kind == shamap.TypeState)
+	}
+	if !found {
+		t.Fatalf("destination root %x was not retained after build", result.root)
+	}
+	tree.close()
+	if got := store.Stats().RootBorrowers; got != 0 {
+		t.Fatalf("root borrowers after tree close = %d, want 0", got)
+	}
+}
+
+func TestSealedBuildLeaseReleaseKeepsDescriptor(t *testing.T) {
+	store, _ := testExecutionStore(t)
+	parent := newOpenChild(t)
+	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
+		t.Fatal(err)
+	}
+	bounded, err := parent.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bounded.EnableBoundedExecution(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	child, err := NewOpen(bounded, time.Unix(1700000004, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := mutAcct(0xf1)
+	value := mutData(0x51)
+	if err := child.Insert(key, value); err != nil {
+		t.Fatal(err)
+	}
+	readSnapshot, err := child.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	borrowersBeforeSnapshotDiscard := store.Stats().RootBorrowers
+	readSnapshot.Discard()
+	if got := store.Stats().RootBorrowers; got != borrowersBeforeSnapshotDiscard {
+		t.Fatalf("read snapshot changed root borrowers on discard: got %d, want %d", got, borrowersBeforeSnapshotDiscard)
+	}
+	if err := child.Close(time.Unix(1700000004, 0), 0); err != nil {
+		t.Fatal(err)
+	}
+	wantHash := child.Hash()
+	wantRoot, err := child.StateMapHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Stats().RootBorrowers; got == 0 {
+		t.Fatal("sealed builder did not retain a destination root")
+	}
+	child.ReleaseExecutionBuildLeases()
+	if got := store.Stats().RootBorrowers; got != 0 {
+		t.Fatalf("root borrowers after explicit release = %d, want 0", got)
+	}
+	child.Discard()
+	if child.Hash() != wantHash {
+		t.Fatalf("descriptor hash changed after discard: %x, want %x", child.Hash(), wantHash)
+	}
+	if got, err := child.StateMapHash(); err != nil || got != wantRoot {
+		t.Fatalf("descriptor root after discard = %x, %v, want %x", got, err, wantRoot)
+	}
+}
+
+func TestBoundedReadsCountsColdTransactionsOnce(t *testing.T) {
+	family := &recordingExecutionFamily{Family: backend.NewMemory()}
+	store, workspace := executionTestStore(t, family)
+	historical := newOpenChild(t)
+	if err := historical.AddTransactionWithMeta([32]byte{0xc1}, bytes.Repeat([]byte{0x41}, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := historical.Close(time.Unix(1700000000, 0), 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := historical.StoreDirtyBatched(ctx, workspace,
+		func(entries []shamap.FlushEntry) error { return family.StoreBatch(ctx, entries) },
+		func(entries []shamap.FlushEntry) error { return family.StoreBatch(ctx, entries) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := historical.EnableBoundedReads(ctx, store); err != nil {
+		t.Fatal(err)
+	}
+	family.mu.Lock()
+	family.fetches = 0
+	family.mu.Unlock()
+	if got := historical.TxCount(); got != 1 {
+		t.Fatalf("cold transaction count = %d, want 1", got)
+	}
+	family.mu.Lock()
+	firstFetches := family.fetches
+	family.mu.Unlock()
+	if firstFetches == 0 {
+		t.Fatal("cold transaction count did not read the rooted transaction tree")
+	}
+	if got := historical.TxCount(); got != 1 {
+		t.Fatalf("cached transaction count = %d, want 1", got)
+	}
+	family.mu.Lock()
+	secondFetches := family.fetches
+	family.mu.Unlock()
+	if secondFetches != firstFetches {
+		t.Fatalf("transaction count reread root: first fetches=%d, second=%d", firstFetches, secondFetches)
+	}
+	historical.Discard()
 }
 
 func TestExecutionBuildAdmissionRequiresDestinationHandoff(t *testing.T) {
@@ -469,6 +638,7 @@ func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parent.ReleaseExecutionBuildLeases()
 	if err := child.Insert(mutAcct(0xef), mutData(9)); err != nil {
 		t.Fatal(err)
 	}
@@ -521,6 +691,7 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parent.ReleaseExecutionBuildLeases()
 	if err := open.Insert(mutAcct(0xed), mutData(7)); err != nil {
 		t.Fatal(err)
 	}
@@ -531,6 +702,7 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	open.ReleaseExecutionBuildLeases()
 	if err := fork.Insert(mutAcct(0xee), mutData(8)); err != nil {
 		t.Fatal(err)
 	}

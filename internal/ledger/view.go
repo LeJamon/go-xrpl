@@ -262,9 +262,16 @@ func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [
 
 func (l *Ledger) TxCount() uint32 {
 	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if l.execution != nil {
-		return l.execution.transactions.count
+	if l.execution == nil {
+		count := uint32(l.txMap.Size())
+		l.mu.RUnlock()
+		return count
 	}
-	return uint32(l.txMap.Size())
+	tree := l.execution.transactions
+	l.mu.RUnlock()
+	count, err := tree.countLeaves(context.Background())
+	if err != nil {
+		return 0
+	}
+	return count
 }

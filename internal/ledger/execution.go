@@ -206,11 +206,13 @@ type executionTree struct {
 	lease         *rootlease.Lease
 	release       func()
 	count         uint32
+	countKnown    bool
 	closure       executionClosureState
 	parentClosure bool
 	hashMu        sync.Mutex
 	cached        [32]byte
 	haveHash      bool
+	resultLease   *rootlease.Lease
 }
 
 type durableExecutionFamily struct {
@@ -344,13 +346,18 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 }
 
 func (t *executionTree) newMutable(sequence uint32) (*executionTree, error) {
-	base := executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: t.sequence, count: t.count}
+	if t.kind == shamap.TypeTransaction && !t.countKnown {
+		if _, err := t.countLeaves(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+	base := executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: t.sequence, count: t.count, countKnown: t.countKnown}
 	closure := t.closure
 	if t.root == ([32]byte{}) && closure == executionClosureUnknown {
 		closure = executionClosureVerified
 	}
 	out := &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: sequence, count: t.count,
-		closure: closure, parentClosure: closure == executionClosureVerified || closure == executionClosurePending}
+		countKnown: t.countKnown, closure: closure, parentClosure: closure == executionClosureVerified || closure == executionClosurePending}
 	lease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		return nil, err
@@ -378,11 +385,18 @@ func (t *executionTree) fork() (*executionTree, error) {
 		return nil, err
 	}
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root,
-		sequence: t.sequence, changes: changes, lease: lease, release: lease.Release, count: t.count,
+		sequence: t.sequence, changes: changes, lease: lease, release: lease.Release, count: t.count, countKnown: t.countKnown,
 		closure: t.closure, parentClosure: t.parentClosure}, nil
 }
 
 func (t *executionTree) close() {
+	t.hashMu.Lock()
+	resultLease := t.resultLease
+	t.resultLease = nil
+	t.hashMu.Unlock()
+	if resultLease != nil {
+		t.store.ReleaseExecutionLease(resultLease)
+	}
 	if t.changes != nil {
 		_ = t.changes.Close()
 		t.changes = nil
@@ -395,6 +409,53 @@ func (t *executionTree) close() {
 		t.release = nil
 	}
 	t.release = nil
+}
+
+func (t *executionTree) invalidateHash() {
+	t.hashMu.Lock()
+	resultLease := t.resultLease
+	t.resultLease = nil
+	t.haveHash = false
+	t.cached = [32]byte{}
+	t.hashMu.Unlock()
+	if resultLease != nil {
+		t.store.ReleaseExecutionLease(resultLease)
+	}
+}
+
+func (t *executionTree) releaseBuildLease() {
+	t.hashMu.Lock()
+	resultLease := t.resultLease
+	t.resultLease = nil
+	t.hashMu.Unlock()
+	if resultLease != nil {
+		t.store.ReleaseExecutionLease(resultLease)
+	}
+}
+
+func (t *executionTree) takeResultLease() *rootlease.Lease {
+	t.hashMu.Lock()
+	defer t.hashMu.Unlock()
+	resultLease := t.resultLease
+	t.resultLease = nil
+	return resultLease
+}
+
+func (t *executionTree) countLeaves(ctx context.Context) (uint32, error) {
+	t.hashMu.Lock()
+	defer t.hashMu.Unlock()
+	if t.countKnown {
+		return t.count, nil
+	}
+	count, err := t.reader().Count(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if count > uint64(^uint32(0)) {
+		return 0, errors.New("transaction leaf count exceeds uint32")
+	}
+	t.count, t.countKnown = uint32(count), true
+	return t.count, nil
 }
 
 func (t *executionTree) get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
@@ -460,7 +521,7 @@ func (t *executionTree) PutWithNodeType(key [32]byte, data []byte, kind shamap.N
 	if !found {
 		t.count++
 	}
-	t.haveHash = false
+	t.invalidateHash()
 	return nil
 }
 
@@ -481,7 +542,7 @@ func (t *executionTree) Delete(key [32]byte) error {
 	if t.count > 0 {
 		t.count--
 	}
-	t.haveHash = false
+	t.invalidateHash()
 	return nil
 }
 
@@ -501,8 +562,9 @@ func (t *executionTree) PutItemsAtomically(items ...*shamap.Item) error {
 	}
 	t.close()
 	t.changes, t.lease, t.release, t.count, t.closure, t.parentClosure = fork.changes, fork.lease, fork.release, fork.count, fork.closure, fork.parentClosure
+	t.countKnown = fork.countKnown
 	fork.changes, fork.lease, fork.release = nil, nil, nil
-	t.haveHash = false
+	t.invalidateHash()
 	return nil
 }
 
@@ -593,8 +655,24 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 	t.hashMu.Lock()
 	defer t.hashMu.Unlock()
 	if t.haveHash {
+		if err := ctx.Err(); err != nil {
+			return [32]byte{}, err
+		}
+		if t.resultLease == nil {
+			lease, err := t.store.AcquireExecutionLease(rootlease.Root{Hash: t.cached, Kind: t.kind})
+			if err != nil {
+				return [32]byte{}, err
+			}
+			t.resultLease = lease
+		}
 		return t.cached, ctx.Err()
 	}
+	build, err := t.store.BeginBuild()
+	if err != nil {
+		t.store.stats.buildErrors.Add(1)
+		return [32]byte{}, err
+	}
+	defer t.store.EndBuild(build)
 	changes, err := t.changes.Changes(ctx, nil)
 	if err != nil {
 		return [32]byte{}, err
@@ -633,15 +711,24 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		sink.abort()
 		return [32]byte{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		t.store.stats.buildErrors.Add(1)
+		return [32]byte{}, err
+	}
+	resultLease, err := t.store.AcquireExecutionLease(rootlease.Root{Hash: result.Root, Kind: t.kind})
+	if err != nil {
+		t.store.stats.buildErrors.Add(1)
+		return [32]byte{}, err
+	}
 	t.store.stats.buildNodes.Add(result.Nodes)
 	t.store.stats.buildLeaves.Add(result.Leaves)
 	t.store.stats.buildBytes.Add(result.Bytes)
 	updateExecutionMax(&t.store.stats.maxFrontier, result.MaxFrontier)
-	t.cached, t.haveHash = result.Root, true
+	t.cached, t.haveHash, t.resultLease = result.Root, true, resultLease
 	return result.Root, nil
 }
 
-func (t *executionTree) rooted(ctx context.Context) (*executionTree, error) {
+func (t *executionTree) rooted(ctx context.Context, transferBuildLease bool) (*executionTree, error) {
 	root, err := t.hash(ctx)
 	if err != nil {
 		return nil, err
@@ -655,8 +742,15 @@ func (t *executionTree) rooted(ctx context.Context) (*executionTree, error) {
 			closure = executionClosureVerified
 		}
 	}
+	// A read snapshot is deliberately non-owning. The mutable source retains
+	// the build lease for its cached root; explicit close/freeze paths transfer
+	// that lease to the sealed descriptor instead.
+	var resultLease *rootlease.Lease
+	if t.changes != nil && transferBuildLease {
+		resultLease = t.takeResultLease()
+	}
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: root, sequence: t.sequence,
-		count: t.count, closure: closure}, nil
+		count: t.count, countKnown: t.countKnown, closure: closure, resultLease: resultLease}, nil
 }
 
 func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
@@ -754,12 +848,12 @@ func (v *executionView) fork() (*executionView, error) {
 	return &executionView{state: state, transactions: txs}, nil
 }
 
-func (v *executionView) rooted(ctx context.Context) (*executionView, error) {
-	state, err := v.state.rooted(ctx)
+func (v *executionView) rooted(ctx context.Context, transferBuildLease bool) (*executionView, error) {
+	state, err := v.state.rooted(ctx, transferBuildLease)
 	if err != nil {
 		return nil, err
 	}
-	txs, err := v.transactions.rooted(ctx)
+	txs, err := v.transactions.rooted(ctx, transferBuildLease)
 	if err != nil {
 		state.close()
 		return nil, err
@@ -768,6 +862,11 @@ func (v *executionView) rooted(ctx context.Context) (*executionView, error) {
 }
 
 func (v *executionView) close() { v.state.close(); v.transactions.close() }
+
+func (v *executionView) releaseBuildLeases() {
+	v.state.releaseBuildLease()
+	v.transactions.releaseBuildLease()
+}
 
 func (t *executionTree) readSnapshot() (overlay.Reader, func(), error) {
 	release, err := t.store.roots.Acquire(rootlease.Root{Hash: t.root, Kind: t.kind})
@@ -800,7 +899,7 @@ func (l *Ledger) executionSnapshot(ctx context.Context, mutable bool) (*Ledger, 
 	if mutable {
 		view, err = l.execution.fork()
 	} else {
-		view, err = l.execution.rooted(ctx)
+		view, err = l.execution.rooted(ctx, false)
 	}
 	if err != nil {
 		return nil, err
@@ -814,7 +913,7 @@ func (v *executionView) successor(sequence uint32) (*executionView, error) {
 	if err != nil {
 		return nil, err
 	}
-	empty := &executionTree{store: v.state.store, kind: shamap.TypeTransaction, sequence: sequence}
+	empty := &executionTree{store: v.state.store, kind: shamap.TypeTransaction, sequence: sequence, countKnown: true}
 	txs, err := empty.newMutable(sequence)
 	if err != nil {
 		state.close()
@@ -836,7 +935,7 @@ func (l *Ledger) closeExecution(closeTime time.Time, closeFlags uint8) error {
 	if err != nil {
 		return err
 	}
-	rooted, err := staged.rooted(context.Background())
+	rooted, err := staged.rooted(context.Background(), true)
 	if err != nil {
 		return err
 	}
@@ -878,13 +977,25 @@ func (l *Ledger) FreezeExecution() error {
 	if l.execution == nil || !l.writable {
 		return nil
 	}
-	view, err := l.execution.rooted(context.Background())
+	view, err := l.execution.rooted(context.Background(), true)
 	if err != nil {
 		return err
 	}
 	l.execution.close()
 	l.execution = view
 	return nil
+}
+
+// ReleaseExecutionBuildLeases releases pending construction ownership after a
+// sealed ledger has been transferred to history, an outbox, or another
+// retention owner. It leaves the authenticated descriptor and read paths
+// unchanged.
+func (l *Ledger) ReleaseExecutionBuildLeases() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.execution != nil {
+		l.execution.releaseBuildLeases()
+	}
 }
 
 // EnableBoundedReads replaces an immutable ledger's resident maps with
@@ -920,7 +1031,7 @@ func (l *Ledger) EnableBoundedReads(ctx context.Context, store *ExecutionStore) 
 	view := &executionView{
 		state: &executionTree{store: store, kind: shamap.TypeState, base: h, root: h.AccountHash, sequence: h.LedgerIndex},
 		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: h.TxHash,
-			sequence: h.LedgerIndex, count: uint32(txMap.Size())},
+			sequence: h.LedgerIndex},
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -983,7 +1094,7 @@ func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionSto
 	}
 	view := &executionView{
 		state:        &executionTree{store: store, kind: shamap.TypeState, base: h, root: stateRoot, sequence: h.LedgerIndex, closure: executionClosureUnknown},
-		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: txRoot, sequence: h.LedgerIndex, count: uint32(txMap.Size()), closure: executionClosureUnknown},
+		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: txRoot, sequence: h.LedgerIndex, count: uint32(txMap.Size()), countKnown: true, closure: executionClosureUnknown},
 	}
 	if err := verifyExecutionRoot(ctx, view.state); err != nil {
 		return fmt.Errorf("verify imported state closure: %w", err)
@@ -1012,6 +1123,8 @@ func (l *Ledger) Discard() {
 		l.execution.close()
 		l.execution = nil
 		l.invalidateMutableStateLocked()
+	} else if l.execution != nil {
+		l.execution.releaseBuildLeases()
 	}
 }
 
