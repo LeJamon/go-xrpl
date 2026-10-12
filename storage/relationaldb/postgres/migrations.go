@@ -222,4 +222,15 @@ var postgresMigrations = []migration{
 				ON ledger_publication_receipts(ledger_seq)`,
 		)
 	}},
+	{version: 7, apply: func(ctx context.Context, tx *sql.Tx) error {
+		return execAll(ctx, tx,
+			`CREATE TABLE IF NOT EXISTS xrpl_publication_stream_indexes (
+				stream_id BYTEA NOT NULL CHECK(octet_length(stream_id) = 32),
+				txn_seq BIGINT NOT NULL CHECK(txn_seq BETWEEN 0 AND 4294967295),
+				trans_id BYTEA NOT NULL CHECK(octet_length(trans_id) = 32),
+				PRIMARY KEY(stream_id, txn_seq),
+				UNIQUE(stream_id, trans_id)
+			)`,
+		)
+	}},
 }

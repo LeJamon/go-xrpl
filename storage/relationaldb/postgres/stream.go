@@ -26,12 +26,6 @@ type publicationReceipt struct {
 	digest          [32]byte
 }
 
-const publicationStreamIndexTable = `
-CREATE TEMP TABLE IF NOT EXISTS xrpl_publication_stream_indexes (
-	txn_seq BIGINT PRIMARY KEY CHECK(txn_seq BETWEEN 0 AND 4294967295),
-	trans_id BYTEA NOT NULL UNIQUE CHECK(octet_length(trans_id) = 32)
-) ON COMMIT DELETE ROWS`
-
 // PersistLedgerStream atomically publishes a ledger from a bounded callback.
 // The callback's true result supplies one transaction; false ends the stream.
 func (rm *RepositoryManager) PersistLedgerStream(
@@ -82,7 +76,7 @@ func (rm *RepositoryManager) PersistLedgerStream(
 		}
 	}
 
-	if err := initializePublicationIndexes(ctx, tx); err != nil {
+	if err := initializePublicationIndexes(ctx, tx, commitID); err != nil {
 		return relationaldb.NewTransactionError("persist_ledger_stream", "initialize stream indexes", err)
 	}
 	if !found {
@@ -92,12 +86,15 @@ func (rm *RepositoryManager) PersistLedgerStream(
 	}
 
 	digest := publication.NewDigest(ledger, commitID, publicationKind)
-	count, err := streamTransactions(ctx, tx, ledger, next, digest, !found, rm.persistHook)
+	count, err := streamTransactions(ctx, tx, ledger, commitID, next, digest, !found, rm.persistHook)
 	if err != nil {
 		return err
 	}
-	if err := finishStreamValidation(ctx, ledger, tx, count); err != nil {
+	if err := finishStreamValidation(ctx, ledger, tx, commitID, count); err != nil {
 		return err
+	}
+	if err := clearPublicationIndexes(ctx, tx, commitID); err != nil {
+		return relationaldb.NewTransactionError("persist_ledger_stream", "clear stream indexes", err)
 	}
 	if found {
 		if digest.Sum() != receipt.digest {
@@ -192,14 +189,19 @@ func lookupPublicationReceipt(ctx context.Context, tx *sqlutil.Tx, commitID [32]
 	return receipt, true, nil
 }
 
-func initializePublicationIndexes(ctx context.Context, tx *sqlutil.Tx) error {
-	if _, err := tx.ExecContext(ctx, publicationStreamIndexTable); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM xrpl_publication_stream_indexes"); err != nil {
+func initializePublicationIndexes(ctx context.Context, tx *sqlutil.Tx, commitID [32]byte) error {
+	// The migration creates a persistent workspace. Rows are scoped by commit
+	// ID and deleted before commit, so disk allocation is bounded by the active
+	// publication and does not accumulate across retries.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM xrpl_publication_stream_indexes WHERE stream_id = $1", commitID[:]); err != nil {
 		return err
 	}
 	return nil
+}
+
+func clearPublicationIndexes(ctx context.Context, tx *sqlutil.Tx, commitID [32]byte) error {
+	_, err := tx.ExecContext(ctx, "DELETE FROM xrpl_publication_stream_indexes WHERE stream_id = $1", commitID[:])
+	return err
 }
 
 func deleteLedgerPublication(ctx context.Context, tx *sqlutil.Tx, sequence relationaldb.LedgerIndex) error {
@@ -209,6 +211,9 @@ func deleteLedgerPublication(ctx context.Context, tx *sqlutil.Tx, sequence relat
 	if _, err := tx.ExecContext(ctx, "DELETE FROM transactions WHERE ledger_seq = $1", sequence); err != nil {
 		return relationaldb.NewQueryError("persist_ledger_stream", "delete transactions for ledger", err)
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM ledger_publication_receipts WHERE ledger_seq = $1", sequence); err != nil {
+		return relationaldb.NewQueryError("persist_ledger_stream", "delete publication receipts for ledger", err)
+	}
 	return nil
 }
 
@@ -216,6 +221,7 @@ func streamTransactions(
 	ctx context.Context,
 	tx *sqlutil.Tx,
 	ledger relationaldb.LedgerInfo,
+	commitID [32]byte,
 	next relationaldb.IndexedTransactionStream,
 	digest *publication.Digest,
 	writeRows bool,
@@ -244,7 +250,7 @@ func streamTransactions(
 				return 0, relationaldb.NewDataError("persist_ledger_stream", fmt.Sprintf("transaction %d has duplicated account", transactionCount), relationaldb.ErrInvalidData)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO xrpl_publication_stream_indexes(txn_seq, trans_id) VALUES ($1, $2)`, indexed.Transaction.TxnSeq, indexed.Transaction.Hash[:]); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xrpl_publication_stream_indexes(stream_id, txn_seq, trans_id) VALUES ($1, $2, $3)`, commitID[:], indexed.Transaction.TxnSeq, indexed.Transaction.Hash[:]); err != nil {
 			return 0, relationaldb.NewDataError("persist_ledger_stream", fmt.Sprintf("transaction %d has duplicate index or hash", transactionCount), errors.Join(relationaldb.ErrInvalidData, err))
 		}
 		digest.Add(indexed)
@@ -316,11 +322,11 @@ func validateIndexedTransaction(ledger relationaldb.LedgerInfo, indexed relation
 	return nil
 }
 
-func finishStreamValidation(ctx context.Context, ledger relationaldb.LedgerInfo, tx *sqlutil.Tx, count int) error {
+func finishStreamValidation(ctx context.Context, ledger relationaldb.LedgerInfo, tx *sqlutil.Tx, commitID [32]byte, count int) error {
 	var rows int64
 	var minimum, maximum sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), MIN(txn_seq), MAX(txn_seq)
-		FROM xrpl_publication_stream_indexes`).Scan(&rows, &minimum, &maximum); err != nil {
+		FROM xrpl_publication_stream_indexes WHERE stream_id = $1`, commitID[:]).Scan(&rows, &minimum, &maximum); err != nil {
 		return relationaldb.NewQueryError("persist_ledger_stream", "validate transaction indexes", err)
 	}
 	if rows != int64(count) {

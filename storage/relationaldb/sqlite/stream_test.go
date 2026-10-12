@@ -29,6 +29,19 @@ func TestPersistLedgerStreamReplayIsIdempotentAndConflictsOnDescriptorChange(t *
 	if transactions != 1 || receipts != 1 {
 		t.Fatalf("initial publication rows = transactions %d receipts %d, want 1 and 1", transactions, receipts)
 	}
+	var tableType string
+	if err := rm.txDB.QueryRowContext(ctx, `SELECT type FROM sqlite_master WHERE name = 'xrpl_publication_stream_indexes'`).Scan(&tableType); err != nil {
+		t.Fatal(err)
+	}
+	if tableType != "table" {
+		t.Fatalf("stream uniqueness workspace type = %q, want persistent table", tableType)
+	}
+	if err := rm.txDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM xrpl_publication_stream_indexes").Scan(&transactions); err != nil {
+		t.Fatal(err)
+	}
+	if transactions != 0 {
+		t.Fatalf("stream uniqueness rows after commit = %d, want 0", transactions)
+	}
 
 	rm.persistHook = func(string, int) error {
 		return errors.New("duplicate replay wrote rows")
@@ -49,6 +62,27 @@ func TestPersistLedgerStreamReplayIsIdempotentAndConflictsOnDescriptorChange(t *
 	err := rm.PersistLedgerStream(ctx, conflictingLedger, commitID, "sql-publication", streamFor(value.Transactions))
 	if !errors.Is(err, relationaldb.ErrCommitConflict) {
 		t.Fatalf("descriptor conflict error = %v, want ErrCommitConflict", err)
+	}
+}
+
+func TestPublicationReceiptsPruneWithLedgers(t *testing.T) {
+	rm := setupTestDB(t)
+	ctx := context.Background()
+	value := publicationValue(96, 0x96, 0x97, publicationAccount(0x15, 0x25))
+	var commitID [32]byte
+	commitID[0] = 7
+	if err := rm.PersistLedgerStream(ctx, value.Ledger, commitID, "sql-publication", streamFor(value.Transactions)); err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.Ledger().DeleteLedgersBySeq(ctx, value.Ledger.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	var receipts int
+	if err := rm.txDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM ledger_publication_receipts").Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if receipts != 0 {
+		t.Fatalf("publication receipts after ledger prune = %d, want 0", receipts)
 	}
 }
 
