@@ -11,11 +11,9 @@ import (
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
@@ -946,82 +944,13 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 		CloseFlags:      uint32(h.CloseFlags),
 	}
 
-	seq := relationaldb.LedgerIndex(l.Sequence())
-
-	indexed := make([]relationaldb.IndexedTransaction, 0)
-	var loopErr error
-	err = l.ForEachTransactionContext(ctx, func(txHashBytes [32]byte, txData []byte) bool {
-		txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
-		if err != nil {
-			loopErr = fmt.Errorf("split transaction %x: %w", txHashBytes[:8], err)
-			return false
-		}
-
-		var accountID relationaldb.AccountID
-		parsedTransaction, err := tx.ParseFromBinary(txBlob)
-		if err != nil {
-			loopErr = fmt.Errorf("decode transaction %x: %w", txHashBytes[:8], err)
-			return false
-		}
-		computedHash, err := tx.ComputeTransactionHash(parsedTransaction)
-		if err != nil {
-			loopErr = fmt.Errorf("hash transaction %x: %w", txHashBytes[:8], err)
-			return false
-		}
-		if computedHash != txHashBytes {
-			loopErr = fmt.Errorf("transaction hash %x does not match map key %x", computedHash, txHashBytes)
-			return false
-		}
-		account := parsedTransaction.GetCommon().Account
-		if account != "" {
-			_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
-			if err != nil || len(accountBytes) != len(accountID) {
-				loopErr = fmt.Errorf("decode transaction %x Account: %w", txHashBytes[:8], errors.Join(err, relationaldb.ErrInvalidData))
-				return false
-			}
-			copy(accountID[:], accountBytes)
-		}
-
-		affected := map[relationaldb.AccountID]struct{}{}
-
-		txnSeq, ok := tx.TransactionIndexFromMetadata(metaBlob)
-		if !ok {
-			loopErr = fmt.Errorf("decode transaction metadata %x: missing or invalid TransactionIndex", txHashBytes[:8])
-			return false
-		}
-		metaJSON, err := binarycodec.Decode(hex.EncodeToString(metaBlob))
-		if err != nil {
-			loopErr = fmt.Errorf("decode transaction metadata %x: %w", txHashBytes[:8], err)
-			return false
-		}
-		if result, ok := metaJSON["TransactionResult"].(string); !ok || result == "" {
-			loopErr = fmt.Errorf("decode transaction metadata %x: missing or invalid TransactionResult", txHashBytes[:8])
-			return false
-		}
-		if err := addMetaAffectedAccounts(metaJSON, affected); err != nil {
-			loopErr = fmt.Errorf("decode transaction metadata %x: %w", txHashBytes[:8], err)
-			return false
-		}
-
-		indexed = append(indexed, relationaldb.IndexedTransaction{
-			Transaction: relationaldb.TransactionInfo{
-				Hash:      relationaldb.Hash(txHashBytes),
-				LedgerSeq: seq,
-				TxnSeq:    txnSeq,
-				Status:    "validated",
-				RawTxn:    txBlob,
-				TxnMeta:   metaBlob,
-				Account:   accountID,
-			},
-			Accounts: sortedAccountIDs(affected),
-		})
-		return true
-	})
-	if err != nil {
-		return fmt.Errorf("iterate transaction map: %w", err)
+	if publisher, ok := s.relationalDB.(relationaldb.StreamingLedgerPublisher); ok {
+		return persistLedgerTransactionStream(ctx, publisher, l, ledgerInfo)
 	}
-	if loopErr != nil {
-		return loopErr
+
+	indexed, err := collectIndexedTransactions(ctx, l, relationaldb.LedgerIndex(l.Sequence()))
+	if err != nil {
+		return err
 	}
 	return s.relationalDB.PersistValidatedLedger(ctx, relationaldb.ValidatedLedger{
 		Ledger:       ledgerInfo,
