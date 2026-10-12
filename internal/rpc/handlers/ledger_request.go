@@ -93,6 +93,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		copy(targetHash[:], hb)
 
 		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger(), targetHash)
+		defer closeLedgerLease(l)
 		if err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
 		}
@@ -129,12 +130,10 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		targetSeq = uint32(idx)
 
 		l, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), targetSeq)
+		defer closeLedgerLease(l)
 		if err == nil && l != nil {
-			response := ledgerRequestSuccess(l)
-			closeLedgerLease(l)
-			return response, nil
+			return ledgerRequestSuccess(l), nil
 		}
-		closeLedgerLease(l)
 	}
 
 	// Not local — trigger (or join) a generic acquisition from peers. When no

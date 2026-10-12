@@ -238,6 +238,7 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 			var h [32]byte
 			copy(h[:], hb)
 			lr, lerr := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger(), h)
+			defer closeLedgerLease(lr)
 			if errors.Is(lerr, svcerr.ErrLedgerNotFound) || (lerr == nil && lr == nil) {
 				return 0, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 			}
