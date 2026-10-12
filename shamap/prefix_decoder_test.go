@@ -147,3 +147,81 @@ func TestPrefixMaterializationAndTraversalParity(t *testing.T) {
 		}
 	}
 }
+
+func TestCommitmentPrefixViewParityAndProofValidation(t *testing.T) {
+	compressedSource := newInnerNode()
+	compressedSource.hashes[2][0] = 0xA5
+	compressedSource.isBranch = 1 << 2
+	if err := compressedSource.UpdateHash(); err != nil {
+		t.Fatalf("compressed source hash: %v", err)
+	}
+	wire, err := compressedSource.SerializeForWire()
+	if err != nil {
+		t.Fatalf("serialize compressed inner: %v", err)
+	}
+	canonical, err := FlushEntryFromWire(wire, 1, TypeState)
+	if err != nil {
+		t.Fatalf("canonicalize compressed inner: %v", err)
+	}
+	sourceHash := compressedSource.Hash()
+	if canonical.Hash != sourceHash {
+		t.Fatalf("compressed inner hash = %x, canonical hash = %x", sourceHash[:8], canonical.Hash[:8])
+	}
+	inner := canonical.Data
+	tests := [][]byte{
+		inner,
+		prefixedTestNode(protocol.HashPrefixLeafNode(), 12, true),
+		prefixedTestNode(protocol.HashPrefixTransactionID(), 12, false),
+		prefixedTestNode(protocol.HashPrefixTxNode(), 12, true),
+	}
+	for _, data := range tests {
+		digest := sha512.Sum512(data)
+		var expected [32]byte
+		copy(expected[:], digest[:32])
+
+		node, err := deserializeFromPrefix(data)
+		if err != nil {
+			t.Fatalf("deserializeFromPrefix: %v", err)
+		}
+		view, err := decodeCommitmentNode(data, expected)
+		if err != nil {
+			t.Fatalf("decodeCommitmentNode: %v", err)
+		}
+		if got := node.Hash(); got != expected {
+			t.Fatalf("materialized hash = %x, want %x", got[:8], expected[:8])
+		}
+		if view.inner {
+			innerNode := node.(*innerNode)
+			if view.branches != innerNode.isBranch || view.hashes != innerNode.hashes {
+				t.Fatal("commitment and materialized inner branches differ")
+			}
+			continue
+		}
+		leafNode := node.(*leafNode)
+		item := leafNode.Item()
+		if item == nil || view.key != item.Key() || view.leafType != leafNode.Type() || string(view.data) != string(item.dataBytes()) {
+			t.Fatalf("commitment leaf differs from materialized leaf: view=%v item=%v", view, item)
+		}
+	}
+
+	badHash := append([]byte(nil), tests[0]...)
+	badHash[4] ^= 1
+	digest := sha512.Sum512(tests[0])
+	var expected [32]byte
+	copy(expected[:], digest[:32])
+	if _, err := decodeCommitmentNode(badHash, expected); err == nil {
+		t.Fatal("commitment decoder accepted a proof with the wrong hash")
+	}
+
+	shortLeaf := prefixedTestNode(protocol.HashPrefixLeafNode(), 11, true)
+	digest = sha512.Sum512(shortLeaf)
+	copy(expected[:], digest[:32])
+	if _, err := decodeCommitmentNode(shortLeaf, expected); err == nil {
+		t.Fatal("commitment decoder accepted a short leaf payload")
+	}
+
+	trailingInner := append(append([]byte(nil), tests[0]...), 0)
+	if _, err := decodeCommitmentNode(trailingInner, expected); err == nil {
+		t.Fatal("commitment decoder accepted trailing bytes on an inner node")
+	}
+}

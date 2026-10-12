@@ -445,34 +445,23 @@ func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
 	if err := reserveCommitmentMemory(b.ctx, b.budget, charge); err != nil {
 		return commitmentBase{}, err
 	}
-	node, err := decodeAndVerifyPrefixNode(data, hash)
+	node, err := decodeCommitmentNode(data, hash)
 	if err != nil {
 		releaseCommitmentMemory(b.budget, charge)
 		return commitmentBase{}, fmt.Errorf("shamap: decode parent node %x: %w", hash[:8], err)
 	}
 	base := commitmentBase{commitmentRef: commitmentRef{hash: hash}, charge: charge}
-	switch n := node.(type) {
-	case *innerNode:
-		n.mu.RLock()
+	if node.inner {
 		base.kind = NodeTypeInner
-		base.branches = n.isBranch
-		base.hashes = n.hashes
-		n.mu.RUnlock()
-	case *leafNode:
-		item := n.Item()
-		if item == nil {
-			base.release(b.budget)
-			return commitmentBase{}, errors.New("shamap: decoded parent leaf has no item")
-		}
-		base.kind = n.Type()
+		base.branches = node.branches
+		base.hashes = node.hashes
+	} else {
+		base.kind = node.leafType
 		if err := validateCommitmentLeafType(b.mapType, base.kind); err != nil {
 			base.release(b.budget)
 			return commitmentBase{}, err
 		}
-		base.key = item.Key()
-	default:
-		base.release(b.budget)
-		return commitmentBase{}, fmt.Errorf("shamap: unsupported parent node type %T", node)
+		base.key = node.key
 	}
 	return base, nil
 }

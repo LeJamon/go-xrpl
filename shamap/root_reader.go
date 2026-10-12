@@ -41,7 +41,8 @@ type rootReaderNode struct {
 	inner    bool
 	branches uint16
 	hashes   [BranchFactor][32]byte
-	leaf     *Item
+	leafKey  [32]byte
+	leafData []byte
 	leafType NodeType
 	charge   uint64
 }
@@ -68,42 +69,30 @@ func (r *RootReader) read(ctx context.Context, hash [32]byte) (rootReaderNode, e
 	if err := reserveCommitmentMemory(ctx, r.budget, charge); err != nil {
 		return rootReaderNode{}, err
 	}
-	node, err := decodeAndVerifyPrefixNode(data, hash)
+	node, err := decodeCommitmentNode(data, hash)
 	if err != nil {
 		releaseCommitmentMemory(r.budget, charge)
 		return rootReaderNode{}, fmt.Errorf("shamap: decode node %x: %w", hash[:8], err)
 	}
 
-	switch n := node.(type) {
-	case *innerNode:
-		n.mu.RLock()
-		view := rootReaderNode{
-			inner:    true,
-			branches: n.isBranch,
-			hashes:   n.hashes,
-			charge:   charge,
-		}
-		n.mu.RUnlock()
-		return view, nil
-	case *leafNode:
-		item := n.Item()
-		if item == nil {
-			releaseCommitmentMemory(r.budget, charge)
-			return rootReaderNode{}, errors.New("shamap: decoded leaf has no item")
-		}
-		if err := validateCommitmentLeafType(r.mapType, n.Type()); err != nil {
-			releaseCommitmentMemory(r.budget, charge)
-			return rootReaderNode{}, err
-		}
+	if node.inner {
 		return rootReaderNode{
-			leaf:     NewItem(item.Key(), item.dataBytes()),
-			leafType: n.Type(),
+			inner:    true,
+			branches: node.branches,
+			hashes:   node.hashes,
 			charge:   charge,
 		}, nil
-	default:
-		releaseCommitmentMemory(r.budget, charge)
-		return rootReaderNode{}, fmt.Errorf("shamap: unsupported node type %T", node)
 	}
+	if err := validateCommitmentLeafType(r.mapType, node.leafType); err != nil {
+		releaseCommitmentMemory(r.budget, charge)
+		return rootReaderNode{}, err
+	}
+	return rootReaderNode{
+		leafKey:  node.key,
+		leafData: bytes.Clone(node.data),
+		leafType: node.leafType,
+		charge:   charge,
+	}, nil
 }
 
 func (n *rootReaderNode) release(budget CommitmentBudget) {
@@ -119,13 +108,6 @@ func (n rootReaderNode) childHash(branch int) ([32]byte, bool) {
 		return [32]byte{}, false
 	}
 	return n.hashes[branch], true
-}
-
-func cloneReaderItem(item *Item) *Item {
-	if item == nil {
-		return nil
-	}
-	return NewItem(item.Key(), item.Data())
 }
 
 // GetLeaf returns the item and its authenticated SHAMap leaf type at key. The
@@ -165,15 +147,15 @@ func (r *RootReader) GetLeaf(ctx context.Context, key [32]byte) (*Item, NodeType
 		}
 		depth++
 	}
-	if err := validateCommitmentLeafPath(node.leaf, key, depth); err != nil {
+	if err := validateCommitmentKeyPath(node.leafKey, key, depth); err != nil {
 		node.release(r.budget)
 		return nil, NodeType(0), false, err
 	}
-	if node.leaf.Key() != key {
+	if node.leafKey != key {
 		node.release(r.budget)
 		return nil, NodeType(0), false, nil
 	}
-	item := cloneReaderItem(node.leaf)
+	item := NewItem(node.leafKey, node.leafData)
 	node.release(r.budget)
 	return item, node.leafType, true, nil
 }
@@ -252,15 +234,11 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 				top = &stack[len(stack)-1]
 				continue
 			}
-			if child.leaf == nil {
-				child.release(r.budget)
-				return errors.New("shamap: decoded branch has no leaf or inner node")
-			}
-			if err := validateCommitmentLeafPath(child.leaf, childPath, childDepth); err != nil {
+			if err := validateCommitmentKeyPath(child.leafKey, childPath, childDepth); err != nil {
 				child.release(r.budget)
 				return err
 			}
-			item := cloneReaderItem(child.leaf)
+			item := NewItem(child.leafKey, child.leafData)
 			childType := child.leafType
 			child.release(r.budget)
 			if hasAfter && top.seek {
@@ -355,10 +333,10 @@ func (r *RootReader) diffNodes(ctx context.Context, oldHash, newHash, path [32]b
 			return fmt.Errorf("shamap: root diff exceeded maximum depth")
 		}
 	} else {
-		if err := validateCommitmentLeafPath(oldNode.leaf, path, depth); err != nil && !isZeroHash(oldHash) {
+		if err := validateCommitmentKeyPath(oldNode.leafKey, path, depth); err != nil && !isZeroHash(oldHash) {
 			return err
 		}
-		if err := validateCommitmentLeafPath(newNode.leaf, path, depth); err != nil && !isZeroHash(newHash) {
+		if err := validateCommitmentKeyPath(newNode.leafKey, path, depth); err != nil && !isZeroHash(newHash) {
 			return err
 		}
 	}
@@ -429,10 +407,10 @@ func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, path [32
 		}
 		top := &stack[len(stack)-1]
 		if !top.node.inner {
-			if err := validateCommitmentLeafPath(top.node.leaf, top.path, top.depth); err != nil {
+			if err := validateCommitmentKeyPath(top.node.leafKey, top.path, top.depth); err != nil {
 				return err
 			}
-			item := cloneReaderItem(top.node.leaf)
+			item := NewItem(top.node.leafKey, top.node.leafData)
 			nodeType := top.node.leafType
 			if top.owned {
 				top.node.release(r.budget)
@@ -486,14 +464,14 @@ func emitRootChange(ctx context.Context, emit func(Change) error, item *Item, no
 }
 
 func diffReaderLeaves(ctx context.Context, emit func(Change) error, oldNode, newNode rootReaderNode, path [32]byte, depth int) error {
-	if err := validateCommitmentLeafPath(oldNode.leaf, path, depth); err != nil {
+	if err := validateCommitmentKeyPath(oldNode.leafKey, path, depth); err != nil {
 		return err
 	}
-	if err := validateCommitmentLeafPath(newNode.leaf, path, depth); err != nil {
+	if err := validateCommitmentKeyPath(newNode.leafKey, path, depth); err != nil {
 		return err
 	}
-	oldItem := oldNode.leaf
-	newItem := newNode.leaf
+	oldItem := NewItem(oldNode.leafKey, oldNode.leafData)
+	newItem := NewItem(newNode.leafKey, newNode.leafData)
 	oldKey := oldItem.Key()
 	newKey := newItem.Key()
 	if oldKey != newKey {
@@ -518,10 +496,10 @@ func diffReaderLeaves(ctx context.Context, emit func(Change) error, oldNode, new
 // If leafIsOld is true, the leaf is removed/replaced and the subtree is the
 // target; otherwise the subtree is the old side and the leaf is the target.
 func (r *RootReader) diffLeafAndSubtree(ctx context.Context, leafNode, subtreeNode rootReaderNode, path [32]byte, depth int, leafIsOld bool, emit func(Change) error) error {
-	if err := validateCommitmentLeafPath(leafNode.leaf, path, depth); err != nil {
+	if err := validateCommitmentKeyPath(leafNode.leafKey, path, depth); err != nil {
 		return err
 	}
-	leaf := leafNode.leaf
+	leaf := NewItem(leafNode.leafKey, leafNode.leafData)
 	leafKey := leaf.Key()
 	matched := false
 	err := r.walkNode(ctx, subtreeNode, path, depth, func(item *Item, nodeType NodeType) error {
