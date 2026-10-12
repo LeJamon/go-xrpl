@@ -497,15 +497,20 @@ func (t *executionTree) PutWithNodeType(key [32]byte, data []byte, kind shamap.N
 	} else if kind != shamap.NodeTypeAccountState {
 		return errors.New("invalid state leaf type")
 	}
-	found, err := t.Has(key)
-	if err != nil {
-		return err
+	_, countKnown := t.countSnapshot()
+	found := false
+	if countKnown {
+		var err error
+		found, err = t.Has(key)
+		if err != nil {
+			return err
+		}
 	}
 	if err := t.changes.Set(key, data); err != nil {
 		return err
 	}
 	t.hashMu.Lock()
-	if !found {
+	if countKnown && !found {
 		t.count++
 	}
 	t.hashMu.Unlock()
@@ -562,7 +567,6 @@ func (t *executionTree) PutItemsAtomically(items ...*shamap.Item) error {
 }
 
 const (
-	executionCommitmentBatchEntries  = 64
 	executionCommitmentBatchBytes    = 1 << 20
 	executionCommitmentEntryOverhead = 128
 )
@@ -587,7 +591,7 @@ func newExecutionCommitmentSink(ctx context.Context, family shamap.Family, budge
 		ctx:     ctx,
 		family:  family,
 		budget:  budget,
-		entries: make([]shamap.FlushEntry, 0, executionCommitmentBatchEntries),
+		entries: make([]shamap.FlushEntry, 0, 64),
 	}
 }
 
@@ -596,14 +600,18 @@ func (s *executionCommitmentSink) add(entry shamap.FlushEntry) error {
 		return err
 	}
 	charge := uint64(len(entry.Data)) + executionCommitmentEntryOverhead
-	if len(s.entries) >= executionCommitmentBatchEntries ||
-		(len(s.entries) > 0 && s.charged+charge > executionCommitmentBatchBytes) {
+	if len(s.entries) > 0 && s.charged+charge > executionCommitmentBatchBytes {
 		if err := s.flush(); err != nil {
 			return err
 		}
 	}
 	if s.budget != nil && !s.budget.TryReserve(charge) {
-		return fmt.Errorf("bounded execution node batch needs %d bytes: %w", charge, shamap.ErrCommitmentBudget)
+		if err := s.flush(); err != nil {
+			return err
+		}
+		if !s.budget.TryReserve(charge) {
+			return fmt.Errorf("bounded execution node batch needs %d bytes: %w", charge, shamap.ErrCommitmentBudget)
+		}
 	}
 	entry.Data = bytes.Clone(entry.Data)
 	s.entries = append(s.entries, entry)

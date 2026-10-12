@@ -20,6 +20,7 @@ type recordingExecutionFamily struct {
 	shamap.Family
 	mu      sync.Mutex
 	batches []int
+	charges []uint64
 	fetches int
 	fail    error
 }
@@ -91,6 +92,11 @@ func (f *recordingExecutionFamily) FetchDurable(ctx context.Context, hash [32]by
 func (f *recordingExecutionFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
 	f.mu.Lock()
 	f.batches = append(f.batches, len(entries))
+	var charge uint64
+	for _, entry := range entries {
+		charge += uint64(len(entry.Data)) + executionCommitmentEntryOverhead
+	}
+	f.charges = append(f.charges, charge)
 	fail := f.fail
 	f.mu.Unlock()
 	if fail != nil {
@@ -248,13 +254,8 @@ func TestExecutionCommitmentSinkBatchesBorrowedNodes(t *testing.T) {
 	family.mu.Lock()
 	batches := append([]int(nil), family.batches...)
 	family.mu.Unlock()
-	if len(batches) < 2 {
-		t.Fatalf("commitment batches = %v, want bounded multi-batch output", batches)
-	}
-	for _, entries := range batches {
-		if entries == 0 || entries > executionCommitmentBatchEntries {
-			t.Fatalf("batch entry count = %d", entries)
-		}
+	if len(batches) != 1 || batches[0] < 255 {
+		t.Fatalf("small commitment fragmented into batches %v", batches)
 	}
 	if used := workspace.Snapshot().Used; used != 0 {
 		t.Fatalf("workspace retained %d bytes after commitment", used)
@@ -283,6 +284,55 @@ func TestExecutionCommitmentSinkFailureReleasesWorkspace(t *testing.T) {
 	}
 	if used := workspace.Snapshot().Used; used != 0 {
 		t.Fatalf("workspace retained %d bytes after failed commitment: %d", used, used)
+	}
+}
+
+func TestExecutionCommitmentSinkBoundsAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget uint64
+		bytes  int
+	}{
+		{name: "account-pressure", budget: 1024, bytes: 200},
+		{name: "batch-ceiling", budget: 4 << 20, bytes: 128 << 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			family := &recordingExecutionFamily{Family: backend.NewMemory()}
+			account, err := membudget.New(tc.budget).NewAccount("sink", 0, tc.budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink := newExecutionCommitmentSink(context.Background(), family, account)
+			defer sink.abort()
+			data := make([]byte, tc.bytes)
+			for i := range 20 {
+				data[0] = byte(i)
+				if err := sink.add(shamap.FlushEntry{Hash: [32]byte{byte(i + 1)}, Data: data, MapType: shamap.TypeState}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			clear(data)
+			if err := sink.flush(); err != nil {
+				t.Fatal(err)
+			}
+			if len(family.batches) < 2 {
+				t.Fatalf("unbounded batch: %v", family.batches)
+			}
+			for _, charge := range family.charges {
+				if charge > min(tc.budget, executionCommitmentBatchBytes) {
+					t.Fatalf("batch charge %d exceeds allowance", charge)
+				}
+			}
+			for i := range 20 {
+				stored, err := family.Fetch(context.Background(), [32]byte{byte(i + 1)})
+				if err != nil || len(stored) != len(data) || stored[0] != byte(i) {
+					t.Fatalf("borrowed node %d was not copied before reuse: %v", i, err)
+				}
+			}
+			if snapshot := account.Snapshot(); snapshot.Used != 0 || snapshot.Peak > tc.budget {
+				t.Fatalf("sink admission: %+v", snapshot)
+			}
+		})
 	}
 }
 

@@ -74,14 +74,6 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.execution.state.Has(k.Key)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return ErrEntryNotFound
-	}
-
 	return l.execution.state.Delete(k.Key)
 }
 
