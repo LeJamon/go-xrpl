@@ -24,13 +24,13 @@ func (r *nodeRuntime) installExecutionMetrics(
 		provider.Execution = func() observability.ExecutionSnapshot {
 			stats := execution.Stats()
 			return observability.ExecutionSnapshot{
-				RootBorrowers:  uint64(stats.ActiveRootLeases),
-				BuildTimeNanos: stats.BuildNanos,
-				BuildNodes:     stats.BuildNodes,
+				RootBorrowers:  stats.RootBorrowers,
+				BuildTimeNanos: uint64(stats.RootBuildTime),
+				BuildNodes:     stats.RootNodes,
 				BuildErrors:    stats.BuildErrors,
-				Frontier:       stats.MaxFrontier,
+				Frontier:       stats.Frontier,
 				FlatHits:       stats.FlatHits,
-				RootFallbacks:  stats.RootFallbacks,
+				RootFallbacks:  stats.FlatFallbacks,
 			}
 		}
 	}

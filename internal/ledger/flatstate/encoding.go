@@ -71,7 +71,7 @@ func newAdvanceMarker(source *Descriptor, target Descriptor, intent string, epoc
 }
 
 func descriptorDigest(descriptor Descriptor) Hash {
-	return Hash(sha256.Sum256(encodeDescriptor(descriptor)))
+	return sha256.Sum256(encodeDescriptor(descriptor))
 }
 
 func encodeDescriptor(descriptor Descriptor) []byte {

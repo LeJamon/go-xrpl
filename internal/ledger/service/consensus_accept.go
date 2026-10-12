@@ -139,6 +139,7 @@ func (s *Service) acceptConsensusResult(
 		closeTime = closed.CloseTime()
 		closeTimeCorrect = closed.Header().CloseFlags&header.LCFNoConsensusTime == 0
 	}
+	defer closed.Discard()
 
 	timings.build = time.Since(buildStarted)
 

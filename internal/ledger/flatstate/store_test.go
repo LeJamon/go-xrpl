@@ -56,7 +56,7 @@ func (b *flatTestBudget) TryReserve(bytes uint64) bool {
 	}
 }
 
-func (b *flatTestBudget) Release(bytes uint64) { b.used.Add(^uint64(bytes - 1)) }
+func (b *flatTestBudget) Release(bytes uint64) { b.used.Add(^(bytes - 1)) }
 func (b *flatTestBudget) Limit() uint64        { return b.limit.Load() }
 func (b *flatTestBudget) Changed() <-chan struct{} {
 	return nil

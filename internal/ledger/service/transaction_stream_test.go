@@ -196,7 +196,7 @@ func TestPersistToRelationalDBStreamingCommitIDIsStableAcrossReplay(t *testing.T
 	if publisher.commitIDs[0] != publisher.commitIDs[1] {
 		t.Fatalf("replay commit IDs differ: %x and %x", publisher.commitIDs[0], publisher.commitIDs[1])
 	}
-	wantCommitID := flatstate.SemanticCommitID(flatstate.Hash(l.Hash()), validatedLedgerPublicationKind)
+	wantCommitID := flatstate.SemanticCommitID(l.Hash(), validatedLedgerPublicationKind)
 	if publisher.commitIDs[0] != [32]byte(wantCommitID) {
 		t.Fatalf("commit ID = %x, want %x", publisher.commitIDs[0], wantCommitID)
 	}
