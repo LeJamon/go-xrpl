@@ -22,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -79,8 +80,10 @@ func makeImmutableLedger(t *testing.T, txCount int) (parent, child *ledger.Ledge
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	parent, err = ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	store := ledgertestutil.NewExecutionStore(t, nil)
+	parent, err = ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	require.NoError(t, err)
+	t.Cleanup(parent.Discard)
 
 	open, err := ledger.NewOpen(parent, time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC))
 	require.NoError(t, err)
@@ -91,6 +94,7 @@ func makeImmutableLedger(t *testing.T, txCount int) (parent, child *ledger.Ledge
 	}
 	require.NoError(t, open.Close(time.Date(2025, 1, 2, 3, 4, 15, 0, time.UTC), 0))
 	child = open
+	t.Cleanup(child.Discard)
 	return
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
@@ -260,8 +261,10 @@ func loadBatchOracleLedger(t *testing.T, snapshot batchOracleLedger) loadedBatch
 	rules := amendment.NewRules(ids)
 	require.Equal(t, len(ids), rules.EnabledCount(), "duplicate amendment IDs")
 	fees := parseBatchOracleFees(t, snapshot.Fees)
-	l, err := ledger.NewFromHeader(*hdr, state, txs, fees)
+	store := ledgertestutil.NewExecutionStore(t, nil)
+	l, err := ledger.NewFromHeader(*hdr, state, txs, fees, store)
 	require.NoError(t, err)
+	t.Cleanup(l.Discard)
 	for _, id := range l.Rules().EnabledIDs() {
 		require.True(t, rules.Enabled(id), "ledger amendment missing from effective rules: %x", id)
 	}

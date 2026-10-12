@@ -61,23 +61,38 @@ type SnapshotHistoryCase struct {
 type PinnedFixturePin = pinnedFixturePin
 
 // LoadSnapshotCases resolves and validates the required pinned corpus, then
-// prepares the signed submission and independent consensus close set.
-func LoadSnapshotCases() ([]SnapshotCase, error) {
+// prepares the signed submission and independent consensus close set. The
+// caller owns store and must keep it alive until all returned ledgers are
+// discarded.
+func LoadSnapshotCases(store *ledger.ExecutionStore) (result []SnapshotCase, err error) {
+	if store == nil {
+		return nil, fmt.Errorf("snapshot execution store cannot be nil")
+	}
+	var loaded []*ledger.Ledger
+	defer func() {
+		if err != nil {
+			for _, l := range loaded {
+				l.Discard()
+			}
+		}
+	}()
 	corpus, err := resolvePinnedCorpus(false)
 	if err != nil {
 		return nil, err
 	}
 	all.RegisterAll()
-	result := make([]SnapshotCase, 0, len(corpus.Cases))
+	result = make([]SnapshotCase, 0, len(corpus.Cases))
 	for _, pinned := range corpus.Cases {
-		parent, err := loadSnapshotLedger(pinned.Fixture.Parent)
+		parent, err := loadSnapshotLedger(pinned.Fixture.Parent, store)
 		if err != nil {
 			return nil, fmt.Errorf("%s parent: %w", pinned.Name, err)
 		}
-		closed, err := loadSnapshotLedger(pinned.Fixture.Closed)
+		loaded = append(loaded, parent.Ledger)
+		closed, err := loadSnapshotLedger(pinned.Fixture.Closed, store)
 		if err != nil {
 			return nil, fmt.Errorf("%s closed: %w", pinned.Name, err)
 		}
+		loaded = append(loaded, closed.Ledger)
 		if err := validateSnapshotLineage(parent, closed, pinned.Fixture.CloseInput); err != nil {
 			return nil, fmt.Errorf("%s lineage: %w", pinned.Name, err)
 		}
@@ -120,14 +135,16 @@ func LoadSnapshotCases() ([]SnapshotCase, error) {
 		}
 		history := make([]SnapshotHistoryCase, 0, len(pinned.Fixture.History))
 		for historyIndex, item := range pinned.Fixture.History {
-			historyParent, err := loadSnapshotLedger(item.Parent)
+			historyParent, err := loadSnapshotLedger(item.Parent, store)
 			if err != nil {
 				return nil, fmt.Errorf("%s history[%d] parent: %w", pinned.Name, historyIndex, err)
 			}
-			historyClosed, err := loadSnapshotLedger(item.Closed)
+			loaded = append(loaded, historyParent.Ledger)
+			historyClosed, err := loadSnapshotLedger(item.Closed, store)
 			if err != nil {
 				return nil, fmt.Errorf("%s history[%d] closed: %w", pinned.Name, historyIndex, err)
 			}
+			loaded = append(loaded, historyClosed.Ledger)
 			historyClosePending, err := parseSnapshotCloseSet(item.CloseInput.TxBlobs)
 			if err != nil {
 				return nil, fmt.Errorf("%s history[%d] close_input: %w", pinned.Name, historyIndex, err)
@@ -177,6 +194,31 @@ func LoadSnapshotCases() ([]SnapshotCase, error) {
 		})
 	}
 	return result, nil
+}
+
+// DiscardSnapshotCases releases every ledger view returned by
+// LoadSnapshotCases. The caller remains responsible for closing the shared
+// execution store after this function returns.
+func DiscardSnapshotCases(cases []SnapshotCase) {
+	seen := make(map[*ledger.Ledger]struct{})
+	discard := func(l *ledger.Ledger) {
+		if l == nil {
+			return
+		}
+		if _, ok := seen[l]; ok {
+			return
+		}
+		seen[l] = struct{}{}
+		l.Discard()
+	}
+	for _, c := range cases {
+		discard(c.Parent.Ledger)
+		discard(c.Closed.Ledger)
+		for _, history := range c.History {
+			discard(history.Parent.Ledger)
+			discard(history.Closed.Ledger)
+		}
+	}
 }
 
 // AssertSnapshotLedger compares protocol header bytes, roots, fees, and every

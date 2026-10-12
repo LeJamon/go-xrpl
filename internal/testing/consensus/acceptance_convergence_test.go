@@ -12,6 +12,7 @@ import (
 	ledgerpkg "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/stretchr/testify/require"
 )
@@ -27,12 +28,15 @@ func TestConsensusAcceptanceConvergesAcrossFullValidators(t *testing.T) {
 	genesisConfig.Amendments = nil
 	initial, err := genesis.Create(genesisConfig)
 	require.NoError(t, err)
-	genesisLedger, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	store := ledgertestutil.NewExecutionStore(t, nil)
+	genesisLedger, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, store)
 	require.NoError(t, err)
+	t.Cleanup(genesisLedger.Discard)
 	fixedTime := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 	parent, err := ledgerpkg.NewOpen(genesisLedger, fixedTime)
 	require.NoError(t, err)
 	require.NoError(t, parent.Close(fixedTime, 0))
+	t.Cleanup(parent.Discard)
 	for _, node := range cluster.Nodes {
 		snapshot, err := parent.Snapshot()
 		require.NoError(t, err)
