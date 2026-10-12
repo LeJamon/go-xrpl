@@ -151,6 +151,12 @@ type ValidatedLedger struct {
 	Transactions []IndexedTransaction
 }
 
+// IndexedTransactionStream yields one indexed transaction at a time. A true
+// value reports a transaction; false reports end of stream. The callback must
+// return a zero value with false. Implementations consume the stream inside
+// the publication transaction and never retain the complete transaction set.
+type IndexedTransactionStream = func(context.Context) (IndexedTransaction, bool, error)
+
 // Validate checks the invariants required for atomic ledger persistence.
 func (v ValidatedLedger) Validate() error {
 	if v.Ledger.Hash.IsZero() {
@@ -261,6 +267,14 @@ type RepositoryManager interface {
 	// atomically. A failed call is safe to retry and leaves any previously
 	// published ledger and its indexes unchanged.
 	PersistValidatedLedger(ctx context.Context, ledger ValidatedLedger) error
+}
+
+// StreamingLedgerPublisher atomically publishes a ledger from a bounded
+// transaction stream. commitID identifies the semantic publication attempt;
+// retries with the same commit ID are no-ops only when their complete input
+// digest matches the committed receipt.
+type StreamingLedgerPublisher interface {
+	PersistLedgerStream(ctx context.Context, ledger LedgerInfo, commitID [32]byte, publicationKind string, next IndexedTransactionStream) error
 }
 
 // SchemaFingerprinter exposes a stable database identity bound to its live

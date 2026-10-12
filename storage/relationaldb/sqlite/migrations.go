@@ -237,6 +237,20 @@ var transactionMigrations = []migration{
 	{version: 4, apply: migrateTransactionWidths},
 	{version: 5, apply: func(context.Context, *sql.Tx) error { return nil }},
 	{version: 6, apply: migrateLedgerPublication},
+	{version: 7, apply: func(ctx context.Context, tx *sql.Tx) error {
+		return execAll(ctx, tx,
+			`CREATE TABLE IF NOT EXISTS ledger_publication_receipts (
+				commit_id BLOB PRIMARY KEY CHECK(length(commit_id) = 32),
+				ledger_hash BLOB NOT NULL CHECK(length(ledger_hash) = 32),
+				ledger_seq INTEGER NOT NULL CHECK(ledger_seq BETWEEN 0 AND 4294967295),
+				publication_kind TEXT NOT NULL CHECK(length(publication_kind) > 0),
+				digest BLOB NOT NULL CHECK(length(digest) = 32),
+				created_at INTEGER NOT NULL DEFAULT (unixepoch())
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_ledger_publication_receipts_seq
+				ON ledger_publication_receipts(ledger_seq)`,
+		)
+	}},
 }
 
 func migrateTransactionWidths(ctx context.Context, tx *sql.Tx) error {

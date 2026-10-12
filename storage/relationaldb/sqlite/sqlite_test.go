@@ -631,13 +631,20 @@ func TestEveryRecordedSchemaVersionUpgrades(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer upgraded.Close()
-			for _, db := range []executor{upgraded.ledgerDB, upgraded.txDB} {
+			for _, db := range []struct {
+				name    string
+				exec    executor
+				version int
+			}{
+				{name: "ledger", exec: upgraded.ledgerDB, version: len(ledgerMigrations)},
+				{name: "transaction", exec: upgraded.txDB, version: len(transactionMigrations)},
+			} {
 				var got int
-				if err := db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&got); err != nil {
+				if err := db.exec.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&got); err != nil {
 					t.Fatal(err)
 				}
-				if got != len(ledgerMigrations) {
-					t.Fatalf("schema version = %d, want %d", got, len(ledgerMigrations))
+				if got != db.version {
+					t.Fatalf("%s schema version = %d, want %d", db.name, got, db.version)
 				}
 			}
 			if version == 0 {
