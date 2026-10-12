@@ -27,7 +27,7 @@ import (
 // Reference: rippled src/test/jtx/impl/directory.cpp bumpLastPage()
 func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustField string) error {
 	e.t.Helper()
-	staged, err := e.ledger.MutableSnapshotUnflushed()
+	staged, err := e.ledger.MutableSnapshot()
 	if err != nil {
 		return fmt.Errorf("snapshot directory mutation: %w", err)
 	}

@@ -44,6 +44,7 @@ func runSnapshotReplayTransactions(
 		response.Transactions = append(response.Transactions, leaf)
 	}
 	replay := inbound.NewReplayDelta(closed.Header.Hash, 1, parent.Ledger, nil)
+	defer replay.ReleaseMemory()
 	if err := replay.GotResponse(response); err != nil {
 		return fmt.Errorf("verify response: %w", err)
 	}
@@ -61,6 +62,7 @@ func runSnapshotReplayTransactions(
 	if err != nil {
 		return fmt.Errorf("apply verified response: %w", err)
 	}
+	defer derived.Discard()
 	if !replay.IsComplete() {
 		return errors.New("successful replay did not complete")
 	}

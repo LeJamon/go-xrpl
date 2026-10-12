@@ -80,7 +80,7 @@ type Config struct {
 	// ReplayVerificationMemory isolates long-running cold reads from ledger
 	// persistence. Node wiring must provide a separate shared-pool account so a
 	// verifier cannot consume the workspace needed to persist its own parent.
-	// Nil retains the legacy PersistenceMemory accounting for embedded callers.
+	// Embedded callers may share PersistenceMemory by leaving this nil.
 	ReplayVerificationMemory shamap.DirtyMemoryBudget
 	ReplayFaultPath          string
 	Standalone               bool

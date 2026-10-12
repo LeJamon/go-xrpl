@@ -83,7 +83,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			}
 		}
 		if len(pending) == 0 {
-			closed, err = s.currentOpenLedgerLocked().MutableSnapshotUnflushed()
+			closed, err = s.currentOpenLedgerLocked().MutableSnapshot()
 			if err != nil {
 				return 0, fmt.Errorf("snapshot open ledger for close: %w", err)
 			}

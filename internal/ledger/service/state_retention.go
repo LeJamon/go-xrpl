@@ -188,17 +188,13 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 		validated := s.validatedLedger
 		h := validated.Header()
 		wasValidated := validated.IsValidated()
-		releaseRoots := func() {}
-		if s.config.Execution != nil {
-			var ok bool
-			retained := make(map[rootlease.Root]struct{}, len(preserved))
-			for root := range preserved {
-				retained[rootlease.Root{Hash: root.hash, Kind: root.kind}] = struct{}{}
-			}
-			releaseRoots, ok = s.config.Execution.GuardPreservedRoots(retained)
-			if !ok {
-				return nil, errStateRetentionChanged
-			}
+		retained := make(map[rootlease.Root]struct{}, len(preserved))
+		for root := range preserved {
+			retained[rootlease.Root{Hash: root.hash, Kind: root.kind}] = struct{}{}
+		}
+		releaseRoots, ok := s.config.Execution.GuardPreservedRoots(retained)
+		if !ok {
+			return nil, errStateRetentionChanged
 		}
 		admitted = true
 		// Both validated trees are now completely verified and preserved in
@@ -322,10 +318,8 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 			return nil, err
 		}
 	}
-	if s.config.Execution != nil {
-		for _, root := range s.config.Execution.Roots() {
-			roots = append(roots, retainedStateRoot{hash: root.Hash, kind: root.Kind})
-		}
+	for _, root := range s.config.Execution.Roots() {
+		roots = append(roots, retainedStateRoot{hash: root.Hash, kind: root.Kind})
 	}
 	return roots, nil
 }

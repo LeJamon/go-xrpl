@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -105,14 +106,16 @@ func TestBlockProcessor_ApplyPanic_BecomesErrorAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatalf("create genesis ledger: %v", err)
 	}
+	t.Cleanup(parent.Discard)
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
 	}
+	t.Cleanup(view.Discard)
 
 	bp := NewBlockProcessor(recoveryEngine(view, txcore.TapNONE))
 

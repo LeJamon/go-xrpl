@@ -178,14 +178,13 @@ type loadedSnapshotLedger struct {
 // decodeSnapshotFixture decodes exactly one v4 fixture and rejects unknown
 // fields at every level. The explicit shape pass also rejects omitted required
 // fields whose Go zero value could otherwise look valid (for example TER 0).
-func decodeSnapshotFixture(data []byte) (snapshotFixture, error) {
+func decodeSnapshotFixture(data []byte) (fixture snapshotFixture, err error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return snapshotFixture{}, errors.New("snapshot fixture is empty")
 	}
 	if err := validateSnapshotJSONShape(data); err != nil {
 		return snapshotFixture{}, err
 	}
-	var fixture snapshotFixture
 	if err := decodeStrictJSON(data, &fixture); err != nil {
 		return snapshotFixture{}, fmt.Errorf("decode snapshot fixture: %w", err)
 	}
@@ -196,7 +195,7 @@ func decodeSnapshotFixture(data []byte) (snapshotFixture, error) {
 	if err != nil {
 		return snapshotFixture{}, fmt.Errorf("create execution store: %w", err)
 	}
-	defer cleanup()
+	defer func() { err = errors.Join(err, cleanup()) }()
 	if err := validateSnapshotSemanticInputs(&fixture, store); err != nil {
 		return snapshotFixture{}, err
 	}
@@ -646,7 +645,7 @@ func validateSnapshotSLEBytes(name string, data []byte) error {
 // runSnapshotFixture executes one fixture exactly once. It does not construct
 // setup state, repair sequences, rewrite blobs, infer close inputs, or retry a
 // submission based on its result.
-func runSnapshotFixture(fixture snapshotFixture) error {
+func runSnapshotFixture(fixture snapshotFixture) (err error) {
 	if err := validateSnapshotFixture(&fixture); err != nil {
 		return err
 	}
@@ -654,7 +653,7 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	if err != nil {
 		return fmt.Errorf("create execution store: %w", err)
 	}
-	defer cleanup()
+	defer func() { err = errors.Join(err, cleanup()) }()
 	if err := validateSnapshotSemanticInputs(&fixture, store); err != nil {
 		return err
 	}
@@ -707,25 +706,26 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		return fmt.Errorf("replay ledger history: %w", err)
 	}
 	var view *openledger.OpenLedger
+	defer func() {
+		if view != nil && view.Current() != nil {
+			view.Current().Discard()
+		}
+	}()
 	if historyReplay != nil {
+		defer historyReplay.Closed.Discard()
+		view = historyReplay.Open
 		if err := assertSnapshotLedger(historyReplay.Closed, parent); err != nil {
 			return fmt.Errorf("history latest parent mismatch: %w", err)
 		}
 		parent.Ledger = historyReplay.Closed
 		parent.Header = historyReplay.Closed.Header()
-		defer historyReplay.Closed.Discard()
-		view = historyReplay.Open
 	} else {
 		view, err = openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
 		if err != nil {
 			return fmt.Errorf("create open ledger: %w", err)
 		}
 	}
-	defer func() {
-		if view != nil && view.Current() != nil {
-			view.Current().Discard()
-		}
-	}()
+
 	for i, prior := range fixture.PreSubmit {
 		blob, err := decodeSnapshotBytes("pre_submit.tx_blob", prior.TxBlob)
 		if err != nil {
@@ -757,6 +757,7 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	if err != nil {
 		return fmt.Errorf("build closed ledger from close_input: %w", err)
 	}
+	defer built.Ledger.Discard()
 	if len(built.Retries) != 0 {
 		return fmt.Errorf("closed ledger left %d retriable transactions", len(built.Retries))
 	}
@@ -1117,7 +1118,7 @@ func replaySnapshotHistory(
 	networkID uint32,
 	flags tx.ApplyFlags,
 	store *ledger.ExecutionStore,
-) (*snapshotHistoryReplay, error) {
+) (result *snapshotHistoryReplay, err error) {
 	if len(history) == 0 {
 		return nil, nil
 	}
@@ -1126,7 +1127,12 @@ func replaySnapshotHistory(
 	var loaded []*ledger.Ledger
 	defer func() {
 		for _, l := range loaded {
-			l.Discard()
+			if result == nil || l != result.Closed {
+				l.Discard()
+			}
+		}
+		if err != nil && view != nil && view.Current() != nil {
+			view.Current().Discard()
 		}
 	}()
 	heldLocals := localtxs.New()
@@ -1188,6 +1194,7 @@ func replaySnapshotHistory(
 		if err != nil {
 			return nil, fmt.Errorf("%s build closed ledger: %w", name, err)
 		}
+		loaded = append(loaded, built.Ledger)
 		if len(built.Retries) != 0 {
 			return nil, fmt.Errorf("%s closed ledger left %d retriable transactions", name, len(built.Retries))
 		}

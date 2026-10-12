@@ -14,7 +14,6 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
@@ -26,7 +25,7 @@ func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
 	source := shamap.New(shamap.TypeTransaction)
 	for branch := range byte(16) {
 		key := [32]byte{branch << 4}
-		if err := source.Put(key, []byte{branch, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}); err != nil {
+		if err := source.PutWithNodeType(key, []byte{branch, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, shamap.NodeTypeTransactionWithMeta); err != nil {
 			t.Fatalf("build transaction map: %v", err)
 		}
 	}
@@ -41,22 +40,9 @@ func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("flush transaction map: %v", err)
 	}
-	var rootData []byte
-	for _, entry := range entries {
-		if entry.Hash == rootHash {
-			rootData = entry.Data
-			break
-		}
-	}
-	if rootData == nil {
-		t.Fatal("transaction map root not flushed")
-	}
-
-	family := backend.NewMemory()
-	if err := family.StoreBatch(context.Background(), []shamap.FlushEntry{{
-		Hash: rootHash, Data: rootData, MapType: shamap.TypeTransaction,
-	}}); err != nil {
-		t.Fatalf("store transaction root: %v", err)
+	family := make(membershipFamily)
+	if err := family.StoreBatch(context.Background(), entries); err != nil {
+		t.Fatal(err)
 	}
 	partial, err := shamap.NewFromRootHash(shamap.TypeTransaction, rootHash, family)
 	if err != nil {
@@ -66,7 +52,12 @@ func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create partial ledger view: %v", err)
 	}
-	t.Cleanup(func() { view.Discard() })
+	t.Cleanup(view.Discard)
+	for hash := range family {
+		if hash != rootHash {
+			delete(family, hash)
+		}
+	}
 	before, err := view.TxMapHash()
 	if err != nil {
 		t.Fatalf("transaction root before apply: %v", err)
@@ -89,4 +80,17 @@ func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
 	if after != before {
 		t.Fatalf("transaction root changed after membership error: %x -> %x", before, after)
 	}
+}
+
+type membershipFamily map[[32]byte][]byte
+
+func (f membershipFamily) Fetch(_ context.Context, hash [32]byte) ([]byte, error) {
+	return f[hash], nil
+}
+
+func (f membershipFamily) StoreBatch(_ context.Context, entries []shamap.FlushEntry) error {
+	for _, entry := range entries {
+		f[entry.Hash] = entry.Data
+	}
+	return nil
 }

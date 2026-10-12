@@ -115,7 +115,7 @@ func (bp *BlockProcessor) applyTransaction(
 		return result, fmt.Errorf("block processor requires a ledger-backed engine view")
 	}
 
-	staged, err := base.MutableSnapshotUnflushed()
+	staged, err := base.MutableSnapshot()
 	if err != nil {
 		return result, fmt.Errorf("snapshot ledger for transaction apply: %w", err)
 	}

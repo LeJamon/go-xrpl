@@ -58,22 +58,20 @@ func (s *Service) AcquireLedgerRead(ctx context.Context, selector string) (*Ledg
 	if l == nil {
 		return nil, svcerr.ErrLedgerNotFound
 	}
-	if s.config.Execution != nil {
-		state, err := l.StateMapHash()
+	state, err := l.StateMapHash()
+	if err != nil {
+		return nil, err
+	}
+	txs, err := l.TxMapHash()
+	if err != nil {
+		return nil, err
+	}
+	for _, root := range []rootlease.Root{{Hash: state, Kind: shamap.TypeState}, {Hash: txs, Kind: shamap.TypeTransaction}} {
+		done, err := s.config.Execution.AcquireRoot(root)
 		if err != nil {
 			return nil, err
 		}
-		txs, err := l.TxMapHash()
-		if err != nil {
-			return nil, err
-		}
-		for _, root := range []rootlease.Root{{Hash: state, Kind: shamap.TypeState}, {Hash: txs, Kind: shamap.TypeTransaction}} {
-			done, err := s.config.Execution.AcquireRoot(root)
-			if err != nil {
-				return nil, err
-			}
-			releases = append(releases, done)
-		}
+		releases = append(releases, done)
 	}
 	complete = true
 	return &LedgerReadLease{Ledger: l, Validated: validated, release: release}, nil

@@ -59,6 +59,7 @@ func pendingFromPay(t *testing.T, env *jtx.TestEnv, alice, bob *jtx.Account, seq
 	if err != nil {
 		t.Fatalf("ledger.NewOpen: %v", err)
 	}
+	t.Cleanup(view.Discard)
 	return ptx, view
 }
 

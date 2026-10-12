@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/engine"
@@ -586,4 +587,8 @@ func applyContext(view tx.LedgerView, accountID [20]byte, ownerCount uint32) *tx
 		},
 		Log: xrpllog.Discard(),
 	}
+}
+
+func (*faultView) ExecutionJournalConfig() overlay.Config {
+	return overlay.Config{MaxMemoryBytes: 1 << 20}
 }

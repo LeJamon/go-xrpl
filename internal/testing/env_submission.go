@@ -368,7 +368,7 @@ func (e *TestEnv) applyStaged(
 	var observed stagedApplyResult
 	blob, err := tx.SerializeTransaction(txn)
 	if err != nil {
-		staged, snapshotErr := e.ledger.MutableSnapshotUnflushed()
+		staged, snapshotErr := e.ledger.MutableSnapshot()
 		if snapshotErr != nil {
 			e.t.Fatalf("snapshot malformed transaction apply: %v", snapshotErr)
 		}

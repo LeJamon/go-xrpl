@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -74,8 +75,9 @@ func TestApplyPseudoIgnoredStorageErrorDoesNotCommitSnapshot(t *testing.T) {
 	delete(family, missingHash)
 	stateMap, err := shamap.NewFromRootHash(shamap.TypeState, rootHash, family)
 	require.NoError(t, err)
-	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 100}, stateMap, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 100}, stateMap, shamap.New(shamap.TypeTransaction), drops.Fees{}, ledgertestutil.NewExecutionStore(t, family))
 	require.NoError(t, err)
+	t.Cleanup(view.Discard)
 	account.Balance++
 	changedData, err := state.SerializeAccountRoot(account)
 	require.NoError(t, err)

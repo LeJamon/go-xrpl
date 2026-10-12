@@ -1,8 +1,8 @@
 package conformance
 
 import (
+	"errors"
 	"os"
-	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
@@ -10,7 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
-func newSnapshotExecutionStore() (*ledger.ExecutionStore, func(), error) {
+func newSnapshotExecutionStore() (*ledger.ExecutionStore, func() error, error) {
 	family := backend.NewMemory()
 	spillDir, err := os.MkdirTemp("", "goxrpl-conformance-execution-")
 	if err != nil {
@@ -48,13 +48,11 @@ func newSnapshotExecutionStore() (*ledger.ExecutionStore, func(), error) {
 		return nil, nil, err
 	}
 
-	var once sync.Once
-	cleanup := func() {
-		once.Do(func() {
-			_ = store.Close()
-			_ = family.Close()
-			_ = os.RemoveAll(spillDir)
-		})
+	cleanup := func() error {
+		if err := store.Close(); err != nil {
+			return err
+		}
+		return errors.Join(family.Close(), os.RemoveAll(spillDir))
 	}
 	return store, cleanup, nil
 }

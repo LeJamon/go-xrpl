@@ -67,7 +67,7 @@ func (s *Service) acceptConsensusResult(
 	// and back to the same parent. Its identity fences detached publication.
 	expectedClosed, expectedOpen, replay := s.closedLedger, s.openLedger, s.startupReplay
 	var releaseParent func()
-	if expectedClosed != nil && s.config.Execution != nil {
+	if expectedClosed != nil {
 		releaseParent, err = s.config.Execution.AcquireRoot(rootlease.Root{Hash: expectedClosed.Header().AccountHash, Kind: shamap.TypeState})
 	}
 	s.mu.RUnlock()

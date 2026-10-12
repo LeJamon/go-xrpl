@@ -109,6 +109,7 @@ func TestSubmitQueueEnforcesContextualBaseFee(t *testing.T) {
 			rules := amendment.AllSupportedRules()
 			view, err := openledger.New(parent, openledger.Config{Rules: rules})
 			require.NoError(t, err)
+			t.Cleanup(func() { view.Current().Discard() })
 			queue, err := txq.New(txq.DefaultConfig())
 			require.NoError(t, err)
 			var transaction tx.Transaction = account.NewAccountSet(alice.Address)
