@@ -58,12 +58,15 @@ func TestMakeFetchPack_DiffsHaveAndTraversesHistory(t *testing.T) {
 	genesisLedger := makeGenesisLedger(t)
 	first, err := ledger.NewOpen(genesisLedger, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { first.Discard() })
 	require.NoError(t, first.Close(time.Now(), 0))
 	second, err := ledger.NewOpen(first, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { second.Discard() })
 	require.NoError(t, second.Close(time.Now(), 0))
 	have, err := ledger.NewOpen(second, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { have.Discard() })
 	require.NoError(t, have.Close(time.Now(), 0))
 
 	lookup := newFakeLookup()
@@ -90,6 +93,7 @@ func TestMakeFetchPack_GuardsAndCancellation(t *testing.T) {
 	want := makeGenesisLedger(t)
 	have, err := ledger.NewOpen(want, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { have.Discard() })
 	require.NoError(t, have.Close(time.Now(), 0))
 	lookup := newFakeLookup()
 	lookup.add(want)
@@ -132,6 +136,7 @@ func TestMakeFetchPack_ExactObjectCap(t *testing.T) {
 	want := makeGenesisLedger(t)
 	have, err := ledger.NewOpen(want, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { have.Discard() })
 	require.NoError(t, have.Close(time.Now(), 0))
 	lookup := newFakeLookup()
 	lookup.add(want)
@@ -328,6 +333,7 @@ func TestMakeFetchPack_PacksParentTree(t *testing.T) {
 	want := makeGenesisLedger(t) // the ledger we expect to be packed
 	open, err := ledger.NewOpen(want, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	require.NoError(t, open.Close(time.Now(), 0))
 	have := open // child of want
 	require.True(t, have.IsImmutable())
@@ -386,8 +392,9 @@ func TestMakeFetchPack_TargetStateCapDoesNotLimitTargetTxOrHistory(t *testing.T)
 	}
 	txMap, err := genesis.TxMapSnapshot()
 	require.NoError(t, err)
-	want, err := ledger.NewOpenWithHeader(genesis.Header(), state, txMap, genesis.Fees())
+	want, err := ledger.NewOpenWithHeader(genesis.Header(), state, txMap, genesis.Fees(), genesis.ExecutionStore())
 	require.NoError(t, err)
+	t.Cleanup(func() { want.Discard() })
 	require.NoError(t, want.Close(time.Now(), 0))
 	haveHeader := want.Header()
 	haveHeader.ParentHash = want.Hash()
@@ -397,8 +404,10 @@ func TestMakeFetchPack_TargetStateCapDoesNotLimitTargetTxOrHistory(t *testing.T)
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		want.Fees(),
+		want.ExecutionStore(),
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() { have.Discard() })
 	require.NoError(t, have.Close(time.Now(), 0))
 
 	lookup := newFakeLookup()
@@ -418,6 +427,7 @@ func TestMakeFetchPack_RespectsConfiguredFetchDepth(t *testing.T) {
 	want := makeGenesisLedger(t)
 	have, err := ledger.NewOpen(want, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { have.Discard() })
 	require.NoError(t, have.Close(time.Now(), 0))
 
 	lookup := newFakeLookup()

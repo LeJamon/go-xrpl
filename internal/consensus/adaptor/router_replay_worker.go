@@ -323,11 +323,12 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		result.err = err
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
-	target, err := ledger.NewFromHeader(h, stateMap, txMap, parent.Fees())
+	target, err := ledger.NewFromHeader(h, stateMap, txMap, parent.Fees(), parent.ExecutionStore())
 	if err != nil {
 		result.err = fmt.Errorf("construct transaction-only replay target: %w", err)
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
+	defer target.Discard()
 	processingAccount := c.standardReplayMemoryAccount()
 	var replayAccount shamap.AcquisitionMemoryAccount
 	if processingAccount != nil {

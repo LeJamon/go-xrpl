@@ -323,6 +323,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, svc *service.Service) (*mes
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -699,6 +700,7 @@ func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC).Add(time.Duration(parent.Sequence()) * time.Second)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -1130,6 +1132,7 @@ func TestSwitchedLedgerHistoryFloorFallsBackFromForkedClosedLedger(t *testing.T)
 	forkTime := canonicalChild.CloseTime().Add(time.Hour)
 	forkedClosed, err := ledger.NewOpen(validated, forkTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { forkedClosed.Discard() })
 	require.NoError(t, forkedClosed.Close(forkTime, 0))
 	require.NotEqual(t, canonicalChild.Hash(), forkedClosed.Hash())
 	_, forkedGrandchild, _, _ := buildSuccessorAgainstParent(t, forkedClosed)

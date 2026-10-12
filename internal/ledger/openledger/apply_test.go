@@ -62,6 +62,7 @@ func freshView(t *testing.T, env *jtx.TestEnv) *ledger.Ledger {
 	if err != nil {
 		t.Fatalf("ledger.NewOpen: %v", err)
 	}
+	t.Cleanup(func() { view.Discard() })
 	return view
 }
 

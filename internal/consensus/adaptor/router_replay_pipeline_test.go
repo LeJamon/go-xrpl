@@ -44,6 +44,7 @@ func buildAlternativeReplaySuccessor(t *testing.T, parent *ledger.Ledger, salt t
 		Add(salt)
 	child, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { child.Discard() })
 	require.NoError(t, child.Close(closeTime, 0))
 	h := child.Header()
 	return standardReplayTestLink{
@@ -813,8 +814,9 @@ func TestReplayFaultBlocksMismatchFallback(t *testing.T) {
 			h.AccountHash, err = state.Hash()
 			require.NoError(t, err)
 			h.Hash = header.CalculateHash(h)
-			child, err = ledger.NewFromHeader(h, state, shamap.New(shamap.TypeTransaction), parent.Fees())
+			child, err = ledger.NewFromHeader(h, state, shamap.New(shamap.TypeTransaction), parent.Fees(), parent.ExecutionStore())
 			require.NoError(t, err)
+			t.Cleanup(func() { child.Discard() })
 			first := standardReplayTestLink{
 				response: &message.ReplayDeltaResponse{LedgerHash: h.Hash[:], LedgerHeader: header.AddRaw(h, false)},
 				ledger:   child, hash: h.Hash, seq: h.LedgerIndex,

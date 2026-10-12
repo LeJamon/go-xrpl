@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -61,10 +62,11 @@ func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load backed transaction map: %v", err)
 	}
-	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 1}, shamap.New(shamap.TypeState), partial, drops.Fees{})
+	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 1}, shamap.New(shamap.TypeState), partial, drops.Fees{}, ledgertestutil.NewExecutionStore(t, family))
 	if err != nil {
 		t.Fatalf("create partial ledger view: %v", err)
 	}
+	t.Cleanup(func() { view.Discard() })
 	before, err := view.TxMapHash()
 	if err != nil {
 		t.Fatalf("transaction root before apply: %v", err)

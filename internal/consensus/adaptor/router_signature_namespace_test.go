@@ -92,6 +92,7 @@ func routerSuccessorWithCleanupRules(t *testing.T, parent *ledger.Ledger, cleanu
 	t.Helper()
 	next, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { next.Discard() })
 
 	ids := parent.Rules().EnabledIDs()
 	filtered := make([][32]byte, 0, len(ids)+1)

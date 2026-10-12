@@ -58,10 +58,11 @@ func (c *catchupReplayCoordinator) prepareLegacyReplay(ctx context.Context, resu
 			}
 			txMap = shamap.New(shamap.TypeTransaction)
 		}
-		target, err := ledger.NewFromHeader(result.header, state, txMap, parent.Fees())
+		target, err := ledger.NewFromHeader(result.header, state, txMap, parent.Fees(), parent.ExecutionStore())
 		if err != nil {
 			return err
 		}
+		defer target.Discard()
 		var account shamap.AcquisitionMemoryAccount
 		if budget := c.standardReplayMemoryAccount(); budget != nil {
 			account = budget

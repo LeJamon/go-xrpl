@@ -125,6 +125,7 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewOpen[%d]: %v", i, err)
 		}
+		t.Cleanup(func() { view.Discard() })
 		var retries []openledger.PendingTx
 		if err := openledger.ApplyTxs(view, pending, &retries, cfg); err != nil {
 			t.Fatalf("ApplyTxs[%d]: %v", i, err)

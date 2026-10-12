@@ -65,8 +65,9 @@ func buildBackedLargeReplayTarget(t *testing.T, parent *ledger.Ledger) standardR
 	h.AccountHash, err = stateMap.Hash()
 	require.NoError(t, err)
 	h.Hash = header.CalculateHash(h)
-	child, err = ledger.NewFromHeader(h, stateMap, txMap, parent.Fees())
+	child, err = ledger.NewFromHeader(h, stateMap, txMap, parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
+	t.Cleanup(func() { child.Discard() })
 	response.LedgerHash = h.Hash[:]
 	response.LedgerHeader = header.AddRaw(h, false)
 	return standardReplayTestLink{response: response, ledger: child, hash: h.Hash, seq: seq}
