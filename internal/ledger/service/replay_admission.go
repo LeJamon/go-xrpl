@@ -926,6 +926,9 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 			err = errors.New("replay admission: imported execution roots do not match prepared header")
 		} else {
 			immutable, err = ledger.NewClosedFromRootsContext(ctx, h, derived.Fees(), s.config.Execution)
+			if err == nil {
+				_, stateMap, txMap, err = s.snapshotPreparedLedger(ctx, immutable)
+			}
 		}
 	}
 	if err != nil {

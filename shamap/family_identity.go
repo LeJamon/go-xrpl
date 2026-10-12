@@ -2,11 +2,11 @@ package shamap
 
 import "reflect"
 
-// BackingFamily returns the persistent Family used by this map. A Family
+// backingFamily returns the persistent Family used by this map. A Family
 // wrapper may expose the durable Family it has promoted into; before that
 // promotion the wrapper itself remains the identity so clean nodes are copied
 // into the destination.
-func (sm *SHAMap) BackingFamily() Family {
+func (sm *SHAMap) backingFamily() Family {
 	if sm == nil {
 		return nil
 	}
@@ -32,7 +32,7 @@ func (sm *SHAMap) UsesFamily(family Family) bool {
 	if sm == nil || !sm.IsBacked() {
 		return false
 	}
-	return sameFamily(sm.BackingFamily(), family)
+	return sameFamily(sm.backingFamily(), family)
 }
 
 func sameFamily(left, right Family) bool {
