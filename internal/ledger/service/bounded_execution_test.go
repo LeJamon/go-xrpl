@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -586,9 +587,26 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotations(t *testing.T) {
 
 	// Close several service windows first so the retention path sees a real
 	// bounded execution history rather than a hand-built SHAMap fixture.
-	for range 3 {
-		_, err := runtime.service.AcceptLedger(ctx)
-		require.NoError(t, err)
+	for rotation := range 3 {
+		for step := range 32 {
+			require.True(t, runtime.service.openLedgerView.Modify(func(view *ledger.Ledger) bool {
+				for offset := range 32 {
+					key := keylet.Keylet{Key: [32]byte{0x39, byte(step), byte(offset)}}
+					value := bytes.Repeat([]byte{byte(rotation + 1)}, 512)
+					exists, err := view.Exists(key)
+					require.NoError(t, err)
+					if exists {
+						err = view.Update(key, value)
+					} else {
+						err = view.Insert(key, value)
+					}
+					require.NoError(t, err)
+				}
+				return true
+			}))
+			_, err := runtime.service.AcceptLedger(ctx)
+			require.NoError(t, err)
+		}
 		validated := runtime.service.GetValidatedLedger()
 		require.NotNil(t, validated)
 		seq, guard, err := runtime.service.PrepareStateRetention(ctx, validated.Sequence(), nil)
