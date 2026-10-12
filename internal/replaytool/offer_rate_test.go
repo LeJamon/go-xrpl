@@ -69,6 +69,7 @@ func TestIssue2003HistoricalOfferRateMatchesPeer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fixture.Parent.LedgerHash, fixture.Target.ParentHash)
 	require.Equal(t, fixture.Parent.LedgerIndex+1, fixture.Target.LedgerIndex)
+	store := newTestExecutionStore(t)
 	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{
 		LedgerIndex:         fixture.Target.LedgerIndex,
 		ParentHash:          parentHash,
@@ -76,8 +77,9 @@ func TestIssue2003HistoricalOfferRateMatchesPeer(t *testing.T) {
 		CloseTime:           protocol.FromRippleTime(fixture.Target.CloseTime),
 		CloseTimeResolution: fixture.Target.CloseTimeResolution,
 		Drops:               fixture.Parent.TotalCoins,
-	}, stateMap, shamap.New(shamap.TypeTransaction), fees)
+	}, stateMap, shamap.New(shamap.TypeTransaction), fees, store)
 	require.NoError(t, err)
+	defer view.Discard()
 	engine := txengine.NewEngine(view, tx.EngineConfig{
 		BaseFee:                 uint64(fees.Base),
 		ReserveBase:             uint64(fees.Reserve),

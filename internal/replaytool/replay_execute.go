@@ -29,6 +29,7 @@ type blockTransaction struct {
 
 type blockExecution struct {
 	StateMap                             *shamap.SHAMap
+	Store                                *ledger.ExecutionStore
 	LedgerIndex                          uint32
 	ParentHash                           [32]byte
 	ParentCloseTime                      time.Time
@@ -63,6 +64,9 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 	if input.StateMap == nil {
 		return nil, fmt.Errorf("block state map is nil")
 	}
+	if input.Store == nil {
+		return nil, fmt.Errorf("bounded execution store is nil")
+	}
 	if input.Rules == nil {
 		return nil, fmt.Errorf("block amendment rules are nil")
 	}
@@ -86,10 +90,12 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 		input.StateMap,
 		shamap.New(shamap.TypeTransaction),
 		input.Fees,
+		input.Store,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating replay ledger: %w", err)
 	}
+	defer openLedger.Discard()
 	if protocol.IsFlagLedger(input.LedgerIndex) {
 		if err := openLedger.UpdateNegativeUNL(); err != nil {
 			return nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
@@ -255,6 +261,7 @@ func (r *replayRangeRunner) processBlockShared(
 	preSnapshot *statecompare.LedgerSnapshot,
 	targetLedger uint32,
 	fees drops.Fees,
+	store *ledger.ExecutionStore,
 ) (*blockResult, *shamap.SHAMap, error) {
 	postSnapshot, err := client.Snapshot(ctx, targetLedger)
 	if err != nil {
@@ -323,6 +330,7 @@ func (r *replayRangeRunner) processBlockShared(
 	preFixPayChanRecipientOwnerDir := replayPreFixPayChanRecipientOwnerDir(targetLedger, r.legacyPayChanDirGate, r.payChanDirFirstFixed)
 	executed, err := executeBlock(ctx, blockExecution{
 		StateMap:                             preStateMap,
+		Store:                                store,
 		LedgerIndex:                          targetLedger,
 		ParentHash:                           preSnapshot.LedgerHash,
 		ParentCloseTime:                      parentCloseTime,

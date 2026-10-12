@@ -101,11 +101,26 @@ func TestFillExpectedBatchInnerValidatesCanonicalLeaf(t *testing.T) {
 	})
 }
 
+func TestExecuteBlockRequiresBoundedExecutionStore(t *testing.T) {
+	seed, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executeBlock(context.Background(), blockExecution{
+		StateMap: seed.StateMap,
+		Rules:    amendment.EmptyRules(),
+	})
+	if err == nil || err.Error() != "bounded execution store is nil" {
+		t.Fatalf("executeBlock nil store error = %v, want bounded execution store error", err)
+	}
+}
+
 func TestExecuteBlockRejectsCanonicalTransactionDivergence(t *testing.T) {
 	seed, err := genesis.Create(genesis.DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := newTestExecutionStore(t)
 	makeInput := func(t *testing.T, sequence uint32, index int) blockTransaction {
 		t.Helper()
 		transaction := account.NewAccountSet(seed.GenesisAddress)
@@ -128,6 +143,7 @@ func TestExecuteBlockRejectsCanonicalTransactionDivergence(t *testing.T) {
 		}
 		_, err = executeBlock(context.Background(), blockExecution{
 			StateMap:            stateMap,
+			Store:               store,
 			LedgerIndex:         2,
 			ParentCloseTime:     time.Unix(10, 0),
 			CloseTime:           time.Unix(20, 0),
@@ -161,6 +177,7 @@ func TestExecuteBlockSkipsRecordedBatchInnerLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := newTestExecutionStore(t)
 	outer := batchtx.NewBatch(seed.GenesisAddress)
 	outer.Fee = "40"
 	outer.SetSequence(1)
@@ -201,6 +218,7 @@ func TestExecuteBlockSkipsRecordedBatchInnerLeaves(t *testing.T) {
 		}
 		return executeBlock(context.Background(), blockExecution{
 			StateMap:            stateMap,
+			Store:               store,
 			LedgerIndex:         2,
 			ParentCloseTime:     time.Unix(10, 0),
 			CloseTime:           time.Unix(20, 0),
@@ -252,6 +270,7 @@ func TestExecuteBlockCarriesParentHash(t *testing.T) {
 	parentHash := [32]byte{1, 2, 3}
 	result, err := executeBlock(context.Background(), blockExecution{
 		StateMap:            seed.StateMap,
+		Store:               newTestExecutionStore(t),
 		LedgerIndex:         2,
 		ParentHash:          parentHash,
 		ParentCloseTime:     time.Unix(10, 0),
@@ -293,6 +312,7 @@ func TestExecuteBlockAppliesNegativeUNLTransitionBeforeTransactions(t *testing.T
 	const flagLedger = uint32(256)
 	result, err := executeBlock(context.Background(), blockExecution{
 		StateMap:            stateMap,
+		Store:               newTestExecutionStore(t),
 		LedgerIndex:         flagLedger,
 		ParentCloseTime:     time.Unix(10, 0),
 		CloseTime:           time.Unix(20, 0),
