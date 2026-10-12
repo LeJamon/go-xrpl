@@ -74,7 +74,7 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 	if rulesOverride != nil {
 		parentRules = rulesOverride
 	}
-	execution, err := parent.execution.successor(parentHeader.LedgerIndex + 1)
+	execution, err := parent.execution.successor(context.Background(), parentHeader.LedgerIndex+1)
 	parent.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
@@ -314,11 +314,11 @@ func importExecution(
 		}
 		return view, rules, nil
 	}
-	state, err := view.state.newMutable(hdr.LedgerIndex)
+	state, err := view.state.newMutableContext(ctx, hdr.LedgerIndex)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open imported state tree: %w", err)
 	}
-	txs, err := view.transactions.newMutable(hdr.LedgerIndex)
+	txs, err := view.transactions.newMutableContext(ctx, hdr.LedgerIndex)
 	if err != nil {
 		state.close()
 		return nil, nil, fmt.Errorf("open imported transaction tree: %w", err)

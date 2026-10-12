@@ -285,9 +285,19 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 }
 
 func (t *executionTree) newMutable(sequence uint32) (*executionTree, error) {
+	return t.newMutableContext(context.Background(), sequence)
+}
+
+func (t *executionTree) newMutableContext(ctx context.Context, sequence uint32) (*executionTree, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	_, countKnown := t.countSnapshot()
 	if t.kind == shamap.TypeTransaction && !countKnown {
-		if _, err := t.countLeaves(context.Background()); err != nil {
+		if _, err := t.countLeaves(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -967,13 +977,16 @@ func (l *Ledger) executionSnapshot(ctx context.Context, mutable bool) (*Ledger, 
 		writable: mutable, dropsDestroyed: l.dropsDestroyed, rules: l.rules}, nil
 }
 
-func (v *executionView) successor(sequence uint32) (*executionView, error) {
-	state, err := v.state.newMutable(sequence)
+func (v *executionView) successor(ctx context.Context, sequence uint32) (*executionView, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state, err := v.state.newMutableContext(ctx, sequence)
 	if err != nil {
 		return nil, err
 	}
 	empty := &executionTree{store: v.state.store, kind: shamap.TypeTransaction, sequence: sequence, countKnown: true}
-	txs, err := empty.newMutable(sequence)
+	txs, err := empty.newMutableContext(ctx, sequence)
 	if err != nil {
 		state.close()
 		return nil, err
@@ -1093,12 +1106,18 @@ func NewOpenFromParentHeader(ctx context.Context, parent *Ledger, hdr header.Led
 	if parent == nil {
 		return nil, errors.New("nil replay parent")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	parent.mu.RLock()
 	defer parent.mu.RUnlock()
 	if parent.writable || parent.state == StateOpen {
 		return nil, ErrInvalidState
 	}
-	view, err := parent.execution.successor(hdr.LedgerIndex)
+	view, err := parent.execution.successor(ctx, hdr.LedgerIndex)
 	if err != nil {
 		return nil, err
 	}

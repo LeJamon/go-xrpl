@@ -289,7 +289,9 @@ func (p *persistenceWorker) flushPersists(ctx context.Context) error {
 // Stop drains the persistence queue and joins the worker, guaranteeing every
 // ledger persist enqueued before Stop is durable before the caller
 // closes the underlying node/relational stores. Idempotent and safe on a
-// never-started Service. Must be called before those stores are closed.
+// never-started Service. Must be called before those stores are closed. If an
+// external ledger view still owns an execution root, call Stop again after
+// releasing that view to finish owned execution cleanup.
 func (s *Service) Stop() {
 	s.lifecycleMu.Lock()
 	switch s.lifecycleState {
@@ -299,6 +301,17 @@ func (s *Service) Stop() {
 		<-done
 		return
 	case serviceStopped:
+		// Stop may have completed its worker drain while an external ledger
+		// view still held an execution root lease. Keep the owned close callback
+		// until it succeeds so a later Stop after that view is released retries
+		// the resource cleanup.
+		if s.closeExecution != nil {
+			if err := s.closeExecution(); err != nil {
+				s.logger.Error("close execution store", "error", err)
+			} else {
+				s.closeExecution = nil
+			}
+		}
 		s.lifecycleMu.Unlock()
 		return
 	}
@@ -345,13 +358,14 @@ func (s *Service) Stop() {
 	s.validatedStateBaseCandidate = nil
 	s.validatedStateBaseMu.Unlock()
 
+	s.lifecycleMu.Lock()
 	if s.closeExecution != nil {
 		if err := s.closeExecution(); err != nil {
 			s.logger.Error("close execution store", "error", err)
+		} else {
+			s.closeExecution = nil
 		}
 	}
-
-	s.lifecycleMu.Lock()
 	s.lifecycleState = serviceStopped
 	close(done)
 	s.lifecycleMu.Unlock()
