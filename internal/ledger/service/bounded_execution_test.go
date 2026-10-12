@@ -259,7 +259,7 @@ func TestBoundedExecutionServicePebbleSQLiteAcceptPersist(t *testing.T) {
 	require.Zero(t, runtime.workspace.Snapshot().Used)
 }
 
-func TestBoundedExecutionSelectedSiblingUsesRootFallback(t *testing.T) {
+func TestBoundedExecutionSelectedSiblingRebasesFlatState(t *testing.T) {
 	paths := newBoundedTestPaths(t)
 	repository := newBoundedTestRepository(t, paths)
 	runtime := newBoundedTestRuntime(t, paths, repository, boundedFlatOptions())
@@ -280,15 +280,117 @@ func TestBoundedExecutionSelectedSiblingUsesRootFallback(t *testing.T) {
 	sibling, err := ledger.NewClosedFromHeaderContext(ctx, siblingHeader, stateMap, txMap, current.Fees())
 	require.NoError(t, err)
 	defer sibling.Discard()
+	require.NoError(t, runtime.service.persistToNodeStore(ctx, sibling, sibling.Sequence()))
 
 	// The sibling shares the selected ledger's sequence and roots but has a
-	// different ledger identity. It must remain root-backed while the flat base
-	// stays on the previously selected version.
+	// different ledger identity. Rebase must publish its exact descriptor even
+	// though it is not a direct flat-state successor.
 	require.NoError(t, runtime.service.advanceFlatState(ctx, sibling))
 	descriptor, found, err := runtime.flat.Current()
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, current.Hash(), descriptor.LedgerHash)
+	require.Equal(t, sibling.Hash(), descriptor.LedgerHash)
+	require.Equal(t, sibling.Header().ParentHash, descriptor.ParentHash)
+	require.Equal(t, sibling.Sequence(), descriptor.Sequence)
+}
+
+func TestBoundedExecutionSkippedPivotRebasesFlatState(t *testing.T) {
+	paths := newBoundedTestPaths(t)
+	repository := newBoundedTestRepository(t, paths)
+	runtime := newBoundedTestRuntime(t, paths, repository, boundedFlatOptions())
+	t.Cleanup(func() { runtime.close(t) })
+	ctx := t.Context()
+	require.NoError(t, runtime.service.Start())
+
+	current := runtime.service.GetClosedLedger()
+	require.NotNil(t, current)
+	stateMap, err := current.StateMapSnapshotContext(ctx)
+	require.NoError(t, err)
+	txMap, err := current.TxMapSnapshotContext(ctx)
+	require.NoError(t, err)
+	targetHeader := current.Header()
+	targetHeader.ParentHash = [32]byte{0xee}
+	targetHeader.LedgerIndex = current.Sequence() + 2
+	targetHeader.CloseTime = targetHeader.CloseTime.Add(2 * time.Second)
+	targetHeader.Hash = ledgerheader.CalculateHash(targetHeader)
+	target, err := ledger.NewClosedFromHeaderContext(ctx, targetHeader, stateMap, txMap, current.Fees())
+	require.NoError(t, err)
+	defer target.Discard()
+	require.NoError(t, runtime.service.persistToNodeStore(ctx, target, target.Sequence()))
+
+	require.NoError(t, runtime.service.advanceFlatState(ctx, target))
+	descriptor, found, err := runtime.flat.Current()
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, target.Hash(), descriptor.LedgerHash)
+	require.Equal(t, target.Header().ParentHash, descriptor.ParentHash)
+	require.Equal(t, target.Sequence(), descriptor.Sequence)
+}
+
+func TestBoundedExecutionInterruptedRebaseResumesFromDurableRoots(t *testing.T) {
+	paths := newBoundedTestPaths(t)
+	firstRepository := newBoundedTestRepository(t, paths)
+	first := newBoundedTestRuntime(t, paths, firstRepository, boundedFlatOptions())
+	runtimes := []*boundedTestRuntime{first}
+	t.Cleanup(func() {
+		for _, runtime := range runtimes {
+			runtime.close(t)
+		}
+	})
+	require.NoError(t, first.service.Start())
+	parent := first.service.GetClosedLedger()
+	require.NotNil(t, parent)
+	ctx := t.Context()
+
+	branchA, err := ledger.NewOpen(parent, parent.CloseTime().Add(time.Second))
+	require.NoError(t, err)
+	require.NoError(t, branchA.Close(parent.CloseTime().Add(2*time.Second), 0))
+	require.NoError(t, first.service.persistToNodeStore(ctx, branchA, branchA.Sequence()))
+	require.NoError(t, first.service.advanceFlatState(ctx, branchA))
+	require.NoError(t, first.flat.AckOutbox(ctx, flatstate.SemanticCommitID(branchA.Hash(), ledgerPublication)))
+	branchA.Discard()
+
+	branchB, err := ledger.NewOpen(parent, parent.CloseTime().Add(3*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, branchB.Close(parent.CloseTime().Add(4*time.Second), 0))
+	require.NoError(t, first.service.persistToNodeStore(ctx, branchB, branchB.Sequence()))
+	branchBHash := branchB.Hash()
+	branchB.Discard()
+	first.close(t)
+
+	var syncCalls atomic.Int32
+	flatOptions := boundedFlatOptions()
+	flatOptions.Sync = func(*pebble.DB) error {
+		if syncCalls.Add(1) == 2 {
+			return errBoundedPublication
+		}
+		return nil
+	}
+	thirdRepository := newBoundedTestRepository(t, paths)
+	third := newBoundedTestRuntime(t, paths, thirdRepository, flatOptions)
+	runtimes = append(runtimes, third)
+	loaded, err := third.service.loadStoredLedgerByHash(ctx, branchBHash)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	err = third.service.advanceFlatState(ctx, loaded)
+	require.Error(t, err)
+	marker, advancing, err := third.flat.Marker()
+	require.NoError(t, err)
+	require.True(t, advancing)
+	require.Equal(t, branchBHash, marker.Target.LedgerHash)
+	third.close(t)
+
+	fourthRepository := newBoundedTestRepository(t, paths)
+	fourth := newBoundedTestRuntime(t, paths, fourthRepository, boundedFlatOptions())
+	runtimes = append(runtimes, fourth)
+	require.NoError(t, fourth.service.recoverFlatState(ctx))
+	marker, advancing, err = fourth.flat.Marker()
+	require.NoError(t, err)
+	require.False(t, advancing)
+	descriptor, found, err := fourth.flat.Current()
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, branchBHash, descriptor.LedgerHash)
 }
 
 func TestBoundedExecutionRefreshPinsRollsBackOnHeaderFailure(t *testing.T) {

@@ -172,6 +172,60 @@ func TestStoreAdvancingKeepsSnapshotStable(t *testing.T) {
 	}
 }
 
+func TestStoreRebaseKeepsSnapshotStable(t *testing.T) {
+	store, err := Open(t.TempDir(), Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	importInitial(t, store, first, []Change{{Key: testHash(1), Value: []byte("old")}, {Key: testHash(3), Value: []byte("stale")}})
+	view, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+
+	target := testDescriptor(1, testHash(99), testHash(4), testHash(5), testHash(6))
+	target.Epoch = first.Epoch + 1
+	changes := []Change{
+		{Key: testHash(1), Value: []byte("new")},
+		{Key: testHash(2), Value: []byte("added")},
+		{Key: testHash(3), Delete: true},
+	}
+	if err := store.Rebase(context.Background(), RebaseRequest{
+		Expected: &first, Target: target, Changes: NewSliceChangeIterator(changes),
+		Authorization: testAuthorization(first, target),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old, found, err := view.Get(testHash(1))
+	if err != nil || !found || string(old) != "old" {
+		t.Fatalf("old rebase view = %q, %v, %v", old, found, err)
+	}
+	if _, found, err := view.Get(testHash(2)); err != nil || found {
+		t.Fatalf("old rebase view unexpectedly contains new key: found %v err %v", found, err)
+	}
+	current, found, err := store.Current()
+	if err != nil || !found || !current.Equal(target) {
+		t.Fatalf("rebased current = %#v, %v, %v", current, found, err)
+	}
+	newView, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newView.Close()
+	for key, expected := range map[Hash]string{testHash(1): "new", testHash(2): "added"} {
+		value, found, err := newView.Get(key)
+		if err != nil || !found || string(value) != expected {
+			t.Fatalf("rebased %x = %q, %v, %v", key, value, found, err)
+		}
+	}
+	if _, found, err := newView.Get(testHash(3)); err != nil || found {
+		t.Fatalf("rebased stale key = found %v err %v", found, err)
+	}
+}
+
 func TestStoreRejectsAuthorizationAndParentMismatch(t *testing.T) {
 	store, err := Open(t.TempDir(), Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20})
 	if err != nil {
@@ -191,6 +245,15 @@ func TestStoreRejectsAuthorizationAndParentMismatch(t *testing.T) {
 	})
 	if !errors.Is(err, ErrParentMismatch) {
 		t.Fatalf("wrong parent error = %v", err)
+	}
+	wrongExpected := first
+	wrongExpected.Epoch++
+	err = store.Rebase(context.Background(), RebaseRequest{
+		Expected: &wrongExpected, Target: second, Changes: NewSliceChangeIterator(nil),
+		Authorization: testAuthorization(first, second),
+	})
+	if !errors.Is(err, ErrParentMismatch) {
+		t.Fatalf("rebase compare-and-swap error = %v", err)
 	}
 }
 
@@ -413,6 +476,68 @@ func TestStoreCrashMarkerResumesFromZero(t *testing.T) {
 		value, found, err := view.Get(key)
 		if err != nil || !found || string(value) != expected {
 			t.Fatalf("recovered %x = %q, %v, %v", key, value, found, err)
+		}
+	}
+}
+
+func TestStoreCrashMarkerResumesRebaseFromZero(t *testing.T) {
+	path := t.TempDir()
+	var syncCalls atomic.Int32
+	store, err := Open(path, Options{
+		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
+		Sync: func(db *pebble.DB) error {
+			call := syncCalls.Add(1)
+			if err := db.LogData(nil, pebble.Sync); err != nil {
+				return err
+			}
+			if call == 5 {
+				return errors.New("injected rebase chunk sync failure")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	importInitial(t, store, first, nil)
+	target := testDescriptor(1, testHash(99), testHash(4), testHash(5), testHash(6))
+	target.Epoch = first.Epoch + 1
+	changes := []Change{{Key: testHash(1), Value: []byte("one")}, {Key: testHash(2), Value: []byte("two")}}
+	err = store.Rebase(context.Background(), RebaseRequest{
+		Expected: &first, Target: target, Changes: NewSliceChangeIterator(changes),
+		Authorization: testAuthorization(first, target),
+	})
+	if err == nil {
+		t.Fatal("expected injected rebase chunk sync failure")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path, Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, ok, err := store.Marker()
+	if err != nil || !ok || !marker.Target.Equal(target) {
+		t.Fatalf("rebase marker = %#v, %v, %v", marker, ok, err)
+	}
+	if err := store.Resume(context.Background(), ResumeRequest{
+		Authorization: testAuthorization(first, target), Changes: NewSliceChangeIterator(changes),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	view, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	for key, expected := range map[Hash]string{testHash(1): "one", testHash(2): "two"} {
+		value, found, err := view.Get(key)
+		if err != nil || !found || string(value) != expected {
+			t.Fatalf("recovered rebased %x = %q, %v, %v", key, value, found, err)
 		}
 	}
 }

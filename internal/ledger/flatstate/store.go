@@ -192,6 +192,18 @@ type AdvanceRequest struct {
 	PublicationKind string
 }
 
+// RebaseRequest describes a source-to-target transition that is authorized to
+// replace the current lineage. Expected must identify the exact current
+// descriptor; unlike Advance, the target need not name the current ledger as
+// its parent. Changes remains a sorted, unique source-to-target diff.
+type RebaseRequest struct {
+	Expected        *Descriptor
+	Target          Descriptor
+	Changes         ChangeIterator
+	Authorization   RootClosureAuthorization
+	PublicationKind string
+}
+
 // ResumeRequest supplies the deterministic source-to-target replay required
 // after reopening a store with an advancing marker.
 type ResumeRequest struct {
@@ -528,7 +540,30 @@ func (s *Store) Advance(ctx context.Context, request AdvanceRequest) error {
 	if request.PublicationKind == "" {
 		request.PublicationKind = "flat-state"
 	}
-	err := s.advance(ctx, request.Expected, request.Target, request.Authorization, request.PublicationKind, request.Changes, false)
+	err := s.advance(ctx, request.Expected, request.Target, request.Authorization, request.PublicationKind, request.Changes, false, false)
+	if err != nil {
+		s.recordFailure()
+	}
+	return err
+}
+
+// Rebase applies a bounded, fully authorized source-to-target diff when the
+// selected ledger is on a different lineage or skips a flat-state version.
+// Ordinary Advance remains strict about direct descriptor successors.
+func (s *Store) Rebase(ctx context.Context, request RebaseRequest) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if request.Expected == nil {
+		return ErrParentMismatch
+	}
+	if request.Changes == nil {
+		return errors.New("flatstate: nil change iterator")
+	}
+	if request.PublicationKind == "" {
+		request.PublicationKind = "flat-state"
+	}
+	err := s.advance(ctx, request.Expected, request.Target, request.Authorization, request.PublicationKind, request.Changes, false, true)
 	if err != nil {
 		s.recordFailure()
 	}
@@ -564,14 +599,14 @@ func (s *Store) Resume(ctx context.Context, request ResumeRequest) error {
 			return fmt.Errorf("%w: recovery publication intent mismatch", ErrParentMismatch)
 		}
 	}
-	err := s.advance(ctx, &marker.Source, marker.Target, request.Authorization, intent, request.Changes, true)
+	err := s.advance(ctx, &marker.Source, marker.Target, request.Authorization, intent, request.Changes, true, false)
 	if err != nil {
 		s.recordFailure()
 	}
 	return err
 }
 
-func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descriptor, authorization RootClosureAuthorization, intent string, changes ChangeIterator, resuming bool) error {
+func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descriptor, authorization RootClosureAuthorization, intent string, changes ChangeIterator, resuming, rebase bool) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
@@ -611,7 +646,7 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 			s.mu.Unlock()
 			return ErrParentMismatch
 		}
-		if s.hasDescriptor && target.ParentHash != s.descriptor.LedgerHash {
+		if !rebase && s.hasDescriptor && target.ParentHash != s.descriptor.LedgerHash {
 			s.mu.Unlock()
 			return ErrParentMismatch
 		}

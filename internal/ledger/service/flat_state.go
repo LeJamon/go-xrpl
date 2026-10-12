@@ -208,13 +208,7 @@ func (s *Service) advanceFlatState(ctx context.Context, l *ledger.Ledger) error 
 	if found && (source.Sequence > l.Sequence() || flatMatchesHeader(source, l.Header())) {
 		return nil
 	}
-	if found && source.LedgerHash != l.Header().ParentHash {
-		// The selected ledger is on a different lineage (or skips a missing
-		// intermediate). FlatState only accepts a direct descriptor successor;
-		// keep the existing base and let the authenticated root view serve this
-		// version until a rebuild or a matching successor is selected.
-		return nil
-	}
+	rebase := found && source.LedgerHash != l.Header().ParentHash
 	if found && source.Epoch == ^uint64(0) {
 		return errors.New("flat state epoch exhausted")
 	}
@@ -239,8 +233,13 @@ func (s *Service) advanceFlatState(ctx context.Context, l *ledger.Ledger) error 
 	if found {
 		expected = &source
 	}
-	err = s.config.FlatState.Advance(ctx, flatstate.AdvanceRequest{Expected: expected, Target: target,
-		Authorization: authorization, PublicationKind: ledgerPublication, Changes: changes})
+	if rebase {
+		err = s.config.FlatState.Rebase(ctx, flatstate.RebaseRequest{Expected: expected, Target: target,
+			Authorization: authorization, PublicationKind: ledgerPublication, Changes: changes})
+	} else {
+		err = s.config.FlatState.Advance(ctx, flatstate.AdvanceRequest{Expected: expected, Target: target,
+			Authorization: authorization, PublicationKind: ledgerPublication, Changes: changes})
+	}
 	return errors.Join(err, s.refreshFlatRootPins(context.WithoutCancel(ctx)))
 }
 
