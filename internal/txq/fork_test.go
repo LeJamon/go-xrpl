@@ -57,7 +57,9 @@ func TestTxQForkCopiesQueueStateAndAliases(t *testing.T) {
 
 	forkCandidate.RetriesRemaining = 1
 	forkCandidate.blob[0] ^= 0xff
-	forkCandidate.Txn.SetRawBytes([]byte{0xaa})
+	forkRaw := forkCandidate.Txn.GetRawBytes()
+	forkRaw[0] ^= 0xff
+	forkCandidate.Txn.SetRawBytes(forkRaw)
 	fork.byAccount[accountID].RetryPenalty = false
 	*fork.maxSize = 1
 	fork.feeMetrics.recentTxnCounts[0]++
@@ -85,6 +87,37 @@ func TestTxQForkCopiesQueueStateAndAliases(t *testing.T) {
 	}
 	if got := q.Metrics(0); !reflect.DeepEqual(got, originalMetrics) {
 		t.Fatalf("source metrics changed through fork mutation: got %#v, want %#v", got, originalMetrics)
+	}
+}
+
+func TestTxQForkRejectsMalformedSyntheticCandidate(t *testing.T) {
+	q := mustNew(DefaultConfig())
+	accountID := [20]byte{1}
+	accountQueue := newAccountQueue(accountID)
+	sourceTxn := &seqTx{seq: 1, fee: "10"}
+	candidate := &candidate{
+		Txn:              sourceTxn,
+		blob:             []byte{0x01},
+		TxID:             [32]byte{1},
+		Account:          accountID,
+		FeeLevel:         FeeLevel(BaseLevel),
+		SeqProxy:         NewSeqProxySequence(1),
+		RetriesRemaining: RetriesAllowed,
+	}
+	accountQueue.Add(candidate)
+	q.byAccount[accountID] = accountQueue
+	q.insertByFee(candidate)
+	originalBlob := bytes.Clone(candidate.blob)
+
+	fork, err := q.Fork()
+	if err == nil || fork != nil {
+		t.Fatalf("Fork = (%p, %v), want no fork and a malformed-transaction error", fork, err)
+	}
+	if q.Size() != 1 || q.byFee[0] != candidate || q.byID[candidate.TxID] != candidate {
+		t.Fatal("source indexes changed after rejected fork")
+	}
+	if !bytes.Equal(candidate.blob, originalBlob) || candidate.Txn != sourceTxn {
+		t.Fatal("source candidate changed after rejected fork")
 	}
 }
 

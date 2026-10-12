@@ -35,18 +35,30 @@ func forkTxQ(q *TxQ) (*TxQ, error) {
 	}
 
 	cloner := txQForkCloner{
-		candidates:       make(map[*candidate]*candidate, len(q.byFee)),
-		candidateErrs:    make(map[*candidate]error),
-		accountQueues:    make(map[*accountQueue]*accountQueue, len(q.byAccount)),
-		accountQueueErrs: make(map[*accountQueue]error),
+		candidates: make(map[*candidate]*candidate, len(q.byFee)),
 	}
 
 	if q.byAccount != nil {
 		fork.byAccount = make(map[[20]byte]*accountQueue, len(q.byAccount))
-		for account, queue := range q.byAccount {
-			cloned, err := cloner.accountQueue(queue)
-			if err != nil {
-				return nil, err
+		for account, source := range q.byAccount {
+			if source == nil {
+				fork.byAccount[account] = nil
+				continue
+			}
+			cloned := &accountQueue{
+				Account:      source.Account,
+				RetryPenalty: source.RetryPenalty,
+				DropPenalty:  source.DropPenalty,
+			}
+			if source.Transactions != nil {
+				cloned.Transactions = make(map[SeqProxy]*candidate, len(source.Transactions))
+				for seqProxy, sourceCandidate := range source.Transactions {
+					candidate, err := cloner.candidate(sourceCandidate)
+					if err != nil {
+						return nil, err
+					}
+					cloned.Transactions[seqProxy] = candidate
+				}
 			}
 			fork.byAccount[account] = cloned
 		}
@@ -78,10 +90,7 @@ func forkTxQ(q *TxQ) (*TxQ, error) {
 }
 
 type txQForkCloner struct {
-	candidates       map[*candidate]*candidate
-	candidateErrs    map[*candidate]error
-	accountQueues    map[*accountQueue]*accountQueue
-	accountQueueErrs map[*accountQueue]error
+	candidates map[*candidate]*candidate
 }
 
 func (c *txQForkCloner) candidate(source *candidate) (*candidate, error) {
@@ -89,77 +98,33 @@ func (c *txQForkCloner) candidate(source *candidate) (*candidate, error) {
 		return nil, nil
 	}
 	if cloned, ok := c.candidates[source]; ok {
-		return cloned, c.candidateErrs[source]
+		return cloned, nil
 	}
 
 	cloned := *source
 	cloned.blob = bytes.Clone(source.blob)
 	c.candidates[source] = &cloned
 
-	if len(source.blob) > 0 {
-		parsed, err := tx.ParseFromBinary(source.blob)
+	if len(cloned.blob) > 0 {
+		parsed, err := tx.ParseFromBinary(cloned.blob)
 		if err != nil {
-			// Synthetic transactions are private test fixtures that deliberately
-			// do not have a wire representation. Production candidates always
-			// retain a canonical blob and take the parsed branch above.
-			if _, synthetic := source.Txn.(syntheticTransaction); !synthetic {
-				wrapped := fmt.Errorf("transaction queue: fork candidate %x: clone transaction: %w", source.TxID, err)
-				c.candidateErrs[source] = wrapped
-				return nil, wrapped
-			}
-		} else {
-			cloned.Txn = parsed
+			return nil, fmt.Errorf("transaction queue: fork candidate %x: parse blob: %w", source.TxID, err)
 		}
+		cloned.Txn = parsed
 	} else if source.Txn != nil {
 		serialized, err := tx.SerializeTransaction(source.Txn)
-		if err == nil {
-			parsed, parseErr := tx.ParseFromBinary(serialized)
-			if parseErr == nil {
-				cloned.Txn = parsed
-				cloned.blob = bytes.Clone(serialized)
-			} else if _, synthetic := source.Txn.(syntheticTransaction); !synthetic {
-				wrapped := fmt.Errorf("transaction queue: fork candidate %x: parse cloned transaction: %w", source.TxID, parseErr)
-				c.candidateErrs[source] = wrapped
-				return nil, wrapped
-			}
-		} else if _, synthetic := source.Txn.(syntheticTransaction); !synthetic {
-			wrapped := fmt.Errorf("transaction queue: fork candidate %x: serialize transaction: %w", source.TxID, err)
-			c.candidateErrs[source] = wrapped
-			return nil, wrapped
+		if err != nil {
+			return nil, fmt.Errorf("transaction queue: fork candidate %x: serialize transaction: %w", source.TxID, err)
 		}
+		cloned.blob = bytes.Clone(serialized)
+		parsed, err := tx.ParseFromBinary(cloned.blob)
+		if err != nil {
+			return nil, fmt.Errorf("transaction queue: fork candidate %x: parse serialized transaction: %w", source.TxID, err)
+		}
+		cloned.Txn = parsed
 	}
 
 	return &cloned, nil
-}
-
-func (c *txQForkCloner) accountQueue(source *accountQueue) (*accountQueue, error) {
-	if source == nil {
-		return nil, nil
-	}
-	if cloned, ok := c.accountQueues[source]; ok {
-		return cloned, c.accountQueueErrs[source]
-	}
-
-	cloned := &accountQueue{
-		Account:      source.Account,
-		RetryPenalty: source.RetryPenalty,
-		DropPenalty:  source.DropPenalty,
-	}
-	c.accountQueues[source] = cloned
-
-	if source.Transactions != nil {
-		cloned.Transactions = make(map[SeqProxy]*candidate, len(source.Transactions))
-		for seqProxy, candidate := range source.Transactions {
-			clonedCandidate, err := c.candidate(candidate)
-			if err != nil {
-				c.accountQueueErrs[source] = err
-				return nil, err
-			}
-			cloned.Transactions[seqProxy] = clonedCandidate
-		}
-	}
-
-	return cloned, nil
 }
 
 func forkFeeMetrics(source *feeMetrics) *feeMetrics {
