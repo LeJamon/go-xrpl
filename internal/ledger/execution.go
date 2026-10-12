@@ -55,15 +55,15 @@ type executionStatsCounters struct {
 type ExecutionStats struct {
 	Builds           uint64
 	BuildErrors      uint64
-	BuildNodes       uint64
 	BuildLeaves      uint64
 	BuildBytes       uint64
-	BuildNanos       uint64
-	MaxFrontier      uint64
+	RootBorrowers    uint64
+	RootBuildTime    time.Duration
+	RootNodes        uint64
+	Frontier         uint64
 	FlatHits         uint64
-	RootFallbacks    uint64
-	ActiveRootLeases int
-	DistinctRootKeys int
+	FlatFallbacks    uint64
+	DistinctRootKeys uint64
 }
 
 func (s *ExecutionStore) Stats() ExecutionStats {
@@ -71,15 +71,15 @@ func (s *ExecutionStore) Stats() ExecutionStats {
 	return ExecutionStats{
 		Builds:           s.stats.builds.Load(),
 		BuildErrors:      s.stats.buildErrors.Load(),
-		BuildNodes:       s.stats.buildNodes.Load(),
 		BuildLeaves:      s.stats.buildLeaves.Load(),
 		BuildBytes:       s.stats.buildBytes.Load(),
-		BuildNanos:       s.stats.buildNanos.Load(),
-		MaxFrontier:      s.stats.maxFrontier.Load(),
+		RootBorrowers:    uint64(rootStats.Active),
+		RootBuildTime:    time.Duration(s.stats.buildNanos.Load()),
+		RootNodes:        s.stats.buildNodes.Load(),
+		Frontier:         s.stats.maxFrontier.Load(),
 		FlatHits:         s.stats.flatHits.Load(),
-		RootFallbacks:    s.stats.rootFallbacks.Load(),
-		ActiveRootLeases: rootStats.Active,
-		DistinctRootKeys: rootStats.Distinct,
+		FlatFallbacks:    s.stats.rootFallbacks.Load(),
+		DistinctRootKeys: uint64(rootStats.Distinct),
 	}
 }
 

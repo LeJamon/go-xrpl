@@ -275,7 +275,7 @@ func TestExecutionCommitmentSinkBatchesBorrowedNodes(t *testing.T) {
 		t.Fatalf("workspace retained %d bytes after commitment", used)
 	}
 	stats := store.Stats()
-	if stats.Builds != 1 || stats.BuildErrors != 0 || stats.BuildNodes == 0 || stats.MaxFrontier == 0 || stats.BuildNanos == 0 {
+	if stats.Builds != 1 || stats.BuildErrors != 0 || stats.RootNodes == 0 || stats.Frontier == 0 || stats.RootBuildTime == 0 {
 		t.Fatalf("unexpected execution stats: %+v", stats)
 	}
 }
