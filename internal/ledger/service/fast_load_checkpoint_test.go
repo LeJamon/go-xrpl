@@ -940,9 +940,14 @@ func newFastLoadCheckpointService(
 	db nodestore.Database,
 	repositories relationaldb.RepositoryManager,
 	standalone bool,
+	families ...shamap.Family,
 ) *Service {
 	t.Helper()
-	family := backend.New(db)
+	family := shamap.Family(backend.New(db))
+	if len(families) > 0 {
+		family = families[0]
+		require.NotNil(t, family)
+	}
 	execution := newTestExecutionStore(t, family)
 	svc, err := New(Config{
 		Standalone: standalone, GenesisConfig: genesis.DefaultConfig(),
