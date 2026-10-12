@@ -128,7 +128,6 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 		t.Fatal("second publication was not delivered")
 	}
 	assert.Equal(t, uint32(21), svc.GetServerInfo().PublishedLedgerSeq)
-
 }
 
 func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
