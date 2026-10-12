@@ -155,7 +155,7 @@ func (r *RootReader) GetLeaf(ctx context.Context, key [32]byte) (*Item, NodeType
 		node.release(r.budget)
 		return nil, NodeType(0), false, nil
 	}
-	item := NewItem(node.leafKey, node.leafData)
+	item := takeRootReaderItem(&node)
 	node.release(r.budget)
 	return item, node.leafType, true, nil
 }
@@ -238,15 +238,15 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 				child.release(r.budget)
 				return err
 			}
-			item := NewItem(child.leafKey, child.leafData)
-			childType := child.leafType
-			child.release(r.budget)
 			if hasAfter && top.seek {
-				itemKey := item.Key()
-				if bytes.Compare(itemKey[:], afterKey[:]) <= 0 {
+				if bytes.Compare(child.leafKey[:], afterKey[:]) <= 0 {
+					child.release(r.budget)
 					continue
 				}
 			}
+			item := takeRootReaderItem(&child)
+			childType := child.leafType
+			child.release(r.budget)
 			if !fn(item, childType) {
 				return nil
 			}
@@ -343,12 +343,12 @@ func (r *RootReader) diffNodes(ctx context.Context, oldHash, newHash, path [32]b
 
 	switch {
 	case isZeroHash(oldHash):
-		return r.walkNode(ctx, newNode, path, depth, func(item *Item, nodeType NodeType) error {
-			return emitRootChange(ctx, emit, item, nodeType, false)
+		return r.walkNode(ctx, newNode, path, depth, func(key [32]byte, data []byte, nodeType NodeType) error {
+			return emitRootChange(ctx, emit, key, data, nodeType, false)
 		})
 	case isZeroHash(newHash):
-		return r.walkNode(ctx, oldNode, path, depth, func(item *Item, nodeType NodeType) error {
-			return emitRootChange(ctx, emit, item, nodeType, true)
+		return r.walkNode(ctx, oldNode, path, depth, func(key [32]byte, data []byte, nodeType NodeType) error {
+			return emitRootChange(ctx, emit, key, data, nodeType, true)
 		})
 	case !oldNode.inner && !newNode.inner:
 		return diffReaderLeaves(ctx, emit, oldNode, newNode, path, depth)
@@ -392,7 +392,7 @@ type diffWalkFrame struct {
 // walkNode visits an already decoded subtree in ascending key order. The root
 // view is borrowed from its caller; descendants fetched during the walk are
 // released as soon as their branch is complete.
-func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, path [32]byte, depth int, emit func(*Item, NodeType) error) error {
+func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, path [32]byte, depth int, emit func([32]byte, []byte, NodeType) error) error {
 	stack := []diffWalkFrame{{node: root, path: path, depth: depth}}
 	defer func() {
 		for i := range stack {
@@ -410,13 +410,14 @@ func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, path [32
 			if err := validateCommitmentKeyPath(top.node.leafKey, top.path, top.depth); err != nil {
 				return err
 			}
-			item := NewItem(top.node.leafKey, top.node.leafData)
+			key := top.node.leafKey
+			data := top.node.leafData
 			nodeType := top.node.leafType
 			if top.owned {
 				top.node.release(r.budget)
 			}
 			stack = stack[:len(stack)-1]
-			if err := emit(item, nodeType); err != nil {
+			if err := emit(key, data, nodeType); err != nil {
 				return err
 			}
 			continue
@@ -452,13 +453,13 @@ func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, path [32
 	return nil
 }
 
-func emitRootChange(ctx context.Context, emit func(Change) error, item *Item, nodeType NodeType, deleted bool) error {
+func emitRootChange(ctx context.Context, emit func(Change) error, key [32]byte, data []byte, nodeType NodeType, deleted bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	change := Change{Key: item.Key(), Delete: deleted, Type: nodeType}
+	change := Change{Key: key, Delete: deleted, Type: nodeType}
 	if !deleted {
-		change.Data = item.Data()
+		change.Data = bytes.Clone(data)
 	}
 	return emit(change)
 }
@@ -470,26 +471,24 @@ func diffReaderLeaves(ctx context.Context, emit func(Change) error, oldNode, new
 	if err := validateCommitmentKeyPath(newNode.leafKey, path, depth); err != nil {
 		return err
 	}
-	oldItem := NewItem(oldNode.leafKey, oldNode.leafData)
-	newItem := NewItem(newNode.leafKey, newNode.leafData)
-	oldKey := oldItem.Key()
-	newKey := newItem.Key()
+	oldKey := oldNode.leafKey
+	newKey := newNode.leafKey
 	if oldKey != newKey {
 		if bytes.Compare(oldKey[:], newKey[:]) < 0 {
-			if err := emitRootChange(ctx, emit, oldItem, oldNode.leafType, true); err != nil {
+			if err := emitRootChange(ctx, emit, oldKey, nil, oldNode.leafType, true); err != nil {
 				return err
 			}
-			return emitRootChange(ctx, emit, newItem, newNode.leafType, false)
+			return emitRootChange(ctx, emit, newKey, newNode.leafData, newNode.leafType, false)
 		}
-		if err := emitRootChange(ctx, emit, newItem, newNode.leafType, false); err != nil {
+		if err := emitRootChange(ctx, emit, newKey, newNode.leafData, newNode.leafType, false); err != nil {
 			return err
 		}
-		return emitRootChange(ctx, emit, oldItem, oldNode.leafType, true)
+		return emitRootChange(ctx, emit, oldKey, nil, oldNode.leafType, true)
 	}
-	if oldNode.leafType == newNode.leafType && bytes.Equal(oldItem.dataBytes(), newItem.dataBytes()) {
+	if oldNode.leafType == newNode.leafType && bytes.Equal(oldNode.leafData, newNode.leafData) {
 		return nil
 	}
-	return emitRootChange(ctx, emit, newItem, newNode.leafType, false)
+	return emitRootChange(ctx, emit, newKey, newNode.leafData, newNode.leafType, false)
 }
 
 // diffLeafAndSubtree compares one leaf with the leaves under the other node.
@@ -499,49 +498,48 @@ func (r *RootReader) diffLeafAndSubtree(ctx context.Context, leafNode, subtreeNo
 	if err := validateCommitmentKeyPath(leafNode.leafKey, path, depth); err != nil {
 		return err
 	}
-	leaf := NewItem(leafNode.leafKey, leafNode.leafData)
-	leafKey := leaf.Key()
+	leafKey := leafNode.leafKey
+	leafData := leafNode.leafData
 	matched := false
-	err := r.walkNode(ctx, subtreeNode, path, depth, func(item *Item, nodeType NodeType) error {
+	err := r.walkNode(ctx, subtreeNode, path, depth, func(key [32]byte, data []byte, nodeType NodeType) error {
 		if matched {
 			if leafIsOld {
-				return emitRootChange(ctx, emit, item, nodeType, false)
+				return emitRootChange(ctx, emit, key, data, nodeType, false)
 			}
-			return emitRootChange(ctx, emit, item, nodeType, true)
+			return emitRootChange(ctx, emit, key, nil, nodeType, true)
 		}
-		itemKey := item.Key()
-		cmp := bytes.Compare(itemKey[:], leafKey[:])
+		cmp := bytes.Compare(key[:], leafKey[:])
 		if cmp == 0 {
 			matched = true
 			if leafIsOld {
-				if leafNode.leafType == nodeType && bytes.Equal(leaf.dataBytes(), item.dataBytes()) {
+				if leafNode.leafType == nodeType && bytes.Equal(leafData, data) {
 					return nil
 				}
-				return emitRootChange(ctx, emit, item, nodeType, false)
+				return emitRootChange(ctx, emit, key, data, nodeType, false)
 			}
-			if leafNode.leafType == nodeType && bytes.Equal(leaf.dataBytes(), item.dataBytes()) {
+			if leafNode.leafType == nodeType && bytes.Equal(leafData, data) {
 				return nil
 			}
-			return emitRootChange(ctx, emit, leaf, leafNode.leafType, false)
+			return emitRootChange(ctx, emit, leafKey, leafData, leafNode.leafType, false)
 		}
 		if leafIsOld {
 			if cmp < 0 {
-				return emitRootChange(ctx, emit, item, nodeType, false)
+				return emitRootChange(ctx, emit, key, data, nodeType, false)
 			}
 			matched = true
-			if err := emitRootChange(ctx, emit, leaf, leafNode.leafType, true); err != nil {
+			if err := emitRootChange(ctx, emit, leafKey, nil, leafNode.leafType, true); err != nil {
 				return err
 			}
-			return emitRootChange(ctx, emit, item, nodeType, false)
+			return emitRootChange(ctx, emit, key, data, nodeType, false)
 		}
 		if cmp < 0 {
-			return emitRootChange(ctx, emit, item, nodeType, true)
+			return emitRootChange(ctx, emit, key, nil, nodeType, true)
 		}
 		matched = true
-		if err := emitRootChange(ctx, emit, leaf, leafNode.leafType, false); err != nil {
+		if err := emitRootChange(ctx, emit, leafKey, leafData, leafNode.leafType, false); err != nil {
 			return err
 		}
-		return emitRootChange(ctx, emit, item, nodeType, true)
+		return emitRootChange(ctx, emit, key, nil, nodeType, true)
 	})
 	if err != nil {
 		return err
@@ -549,5 +547,11 @@ func (r *RootReader) diffLeafAndSubtree(ctx context.Context, leafNode, subtreeNo
 	if matched {
 		return nil
 	}
-	return emitRootChange(ctx, emit, leaf, leafNode.leafType, leafIsOld)
+	return emitRootChange(ctx, emit, leafKey, leafData, leafNode.leafType, leafIsOld)
+}
+
+func takeRootReaderItem(node *rootReaderNode) *Item {
+	item := &Item{key: node.leafKey, data: node.leafData}
+	node.leafData = nil
+	return item
 }
