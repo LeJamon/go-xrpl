@@ -157,12 +157,6 @@ func (l *Ledger) ConsumeState(src *Ledger) error {
 	return nil
 }
 
-func (l *Ledger) invalidateMutableState() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.invalidateMutableStateLocked()
-}
-
 func (l *Ledger) invalidateMutableStateLocked() {
 	var store *ExecutionStore
 	if l.execution != nil {

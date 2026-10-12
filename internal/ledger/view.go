@@ -10,9 +10,7 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 	return l.executionSnapshot(context.Background(), false)
 }
 
-// MutableSnapshot returns a mutable deep copy suitable for further apply
-// operations (unlike the immutable Snapshot). The clone inherits state from the
-// parent; callers applying txs must ensure the parent was open (see OpenLedger.Modify).
+// MutableSnapshot forks an open ledger with independent mutable changes.
 func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

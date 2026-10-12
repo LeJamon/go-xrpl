@@ -287,9 +287,9 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		}
 		execution, err = newReplayExecutionSession(nil)
 	} else {
-		source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
-		if err != nil {
-			return fmt.Errorf("initializing state source: %w", err)
+		source, sourceErr := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
+		if sourceErr != nil {
+			return fmt.Errorf("initializing state source: %w", sourceErr)
 		}
 		defer func() {
 			if err := source.Close(); err != nil {

@@ -1106,7 +1106,7 @@ func (l *Ledger) ReleaseExecutionBuildLeases() {
 	}
 }
 
-// Discard releases an abandoned mutable execution view. It is harmless after
+// Discard releases an abandoned view and its construction leases.
 func (l *Ledger) Discard() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

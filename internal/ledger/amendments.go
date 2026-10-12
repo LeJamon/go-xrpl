@@ -33,10 +33,6 @@ func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
 	return loadAmendmentsFromData(data)
 }
 
-func loadAmendmentsFromSHAMap(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
-	return LoadAmendmentsFromSHAMapContext(context.Background(), stateMap)
-}
-
 func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMap) (*amendment.Rules, error) {
 	return loadAmendmentsFromTree(ctx, stateMap)
 }
