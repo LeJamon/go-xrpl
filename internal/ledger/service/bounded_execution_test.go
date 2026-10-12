@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -27,6 +28,7 @@ import (
 )
 
 var errBoundedPublication = errors.New("bounded test publication failure")
+var errBoundedHeaderFetch = errors.New("bounded test header fetch failure")
 
 type boundedTestPaths struct {
 	nodes string
@@ -47,6 +49,19 @@ type boundedFailingRepository struct {
 	relationaldb.RepositoryManager
 	failPublication atomic.Bool
 	failAfterCommit atomic.Bool
+}
+
+type boundedFetchGate struct {
+	nodestore.Database
+	failHash nodestore.Hash256
+	fail     atomic.Bool
+}
+
+func (d *boundedFetchGate) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+	if d.fail.Load() && hash == d.failHash {
+		return nil, errBoundedHeaderFetch
+	}
+	return d.Database.Fetch(ctx, hash)
 }
 
 func (r *boundedFailingRepository) PersistLedgerStream(
@@ -242,6 +257,122 @@ func TestBoundedExecutionServicePebbleSQLiteAcceptPersist(t *testing.T) {
 	runtime.service.Stop()
 	require.NoError(t, runtime.execution.Close())
 	require.Zero(t, runtime.workspace.Snapshot().Used)
+}
+
+func TestBoundedExecutionSelectedSiblingUsesRootFallback(t *testing.T) {
+	paths := newBoundedTestPaths(t)
+	repository := newBoundedTestRepository(t, paths)
+	runtime := newBoundedTestRuntime(t, paths, repository, boundedFlatOptions())
+	t.Cleanup(func() { runtime.close(t) })
+	ctx := t.Context()
+	require.NoError(t, runtime.service.Start())
+
+	current := runtime.service.GetClosedLedger()
+	require.NotNil(t, current)
+	stateMap, err := current.StateMapSnapshotContext(ctx)
+	require.NoError(t, err)
+	txMap, err := current.TxMapSnapshotContext(ctx)
+	require.NoError(t, err)
+
+	siblingHeader := current.Header()
+	siblingHeader.CloseTime = siblingHeader.CloseTime.Add(time.Second)
+	siblingHeader.Hash = ledgerheader.CalculateHash(siblingHeader)
+	sibling, err := ledger.NewClosedFromHeaderContext(ctx, siblingHeader, stateMap, txMap, current.Fees())
+	require.NoError(t, err)
+	defer sibling.Discard()
+
+	// The sibling shares the selected ledger's sequence and roots but has a
+	// different ledger identity. It must remain root-backed while the flat base
+	// stays on the previously selected version.
+	require.NoError(t, runtime.service.advanceFlatState(ctx, sibling))
+	descriptor, found, err := runtime.flat.Current()
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, current.Hash(), descriptor.LedgerHash)
+}
+
+func TestBoundedExecutionRefreshPinsRollsBackOnHeaderFailure(t *testing.T) {
+	paths := newBoundedTestPaths(t)
+	repository := newBoundedTestRepository(t, paths)
+	runtime := newBoundedTestRuntime(t, paths, repository, boundedFlatOptions())
+	t.Cleanup(func() { runtime.close(t) })
+	ctx := t.Context()
+
+	database := &boundedFetchGate{Database: runtime.service.nodeStore}
+	runtime.service.nodeStore = database
+	storeHeader := func(hash [32]byte) {
+		t.Helper()
+		require.NoError(t, database.Store(ctx, &nodestore.Node{
+			Type: nodestore.NodeLedger,
+			Hash: nodestore.Hash256(hash),
+			Data: []byte{1},
+		}))
+	}
+
+	aLedger := [32]byte{0xa1}
+	aState := [32]byte{0xa2}
+	aTx := [32]byte{0xa3}
+	bLedger := [32]byte{0xb1}
+	bState := [32]byte{0xb2}
+	bTx := [32]byte{0xb3}
+	storeHeader(aLedger)
+	storeHeader(bLedger)
+
+	a := flatstate.Descriptor{LedgerHash: aLedger, StateRoot: aState, TxRoot: aTx, Schema: 1, Epoch: 1}
+	require.NoError(t, runtime.flat.Advance(ctx, flatstate.AdvanceRequest{
+		Target: a,
+		Authorization: flatstate.RootClosureAuthorization{
+			TargetRoot: aState,
+			Token:      []byte("a"),
+		},
+		Changes: flatstate.NewSliceChangeIterator(nil), PublicationKind: ledgerPublication,
+	}))
+	require.NoError(t, runtime.flat.AckOutbox(ctx, flatstate.SemanticCommitID(aLedger, ledgerPublication)))
+	require.NoError(t, runtime.service.refreshFlatRootPins(ctx))
+
+	containsRoot := func(hash [32]byte, kind shamap.Type) bool {
+		for _, root := range runtime.execution.Roots() {
+			if root.Hash == hash && root.Kind == kind {
+				return true
+			}
+		}
+		return false
+	}
+	require.True(t, containsRoot(aState, shamap.TypeState))
+	require.True(t, containsRoot(aTx, shamap.TypeTransaction))
+
+	b := flatstate.Descriptor{LedgerHash: bLedger, ParentHash: aLedger, Sequence: 2, StateRoot: bState, TxRoot: bTx, Schema: 1, Epoch: 2}
+	database.failHash = nodestore.Hash256(bLedger)
+	database.fail.Store(true)
+	require.NoError(t, runtime.flat.Advance(ctx, flatstate.AdvanceRequest{
+		Expected: &a, Target: b,
+		Authorization: flatstate.RootClosureAuthorization{
+			SourceRoot: aState,
+			TargetRoot: bState,
+			Token:      []byte("b"),
+		},
+		Changes: flatstate.NewSliceChangeIterator(nil), PublicationKind: ledgerPublication,
+	}))
+	require.ErrorIs(t, runtime.service.refreshFlatRootPins(ctx), errBoundedHeaderFetch)
+	// The failed refresh must not publish B's leases or discard A's existing
+	// leases; a later retry can complete the inventory transactionally.
+	require.True(t, containsRoot(aState, shamap.TypeState))
+	require.True(t, containsRoot(aTx, shamap.TypeTransaction))
+	require.False(t, containsRoot(bState, shamap.TypeState))
+	require.False(t, containsRoot(bTx, shamap.TypeTransaction))
+	runtime.service.flatHeadersMu.Lock()
+	_, retainedA := runtime.service.flatHeaders[aLedger]
+	_, retainedB := runtime.service.flatHeaders[bLedger]
+	runtime.service.flatHeadersMu.Unlock()
+	require.True(t, retainedA)
+	require.False(t, retainedB)
+
+	database.fail.Store(false)
+	require.NoError(t, runtime.service.refreshFlatRootPins(ctx))
+	require.True(t, containsRoot(bState, shamap.TypeState))
+	require.True(t, containsRoot(bTx, shamap.TypeTransaction))
+	require.False(t, containsRoot(aState, shamap.TypeState))
+	require.False(t, containsRoot(aTx, shamap.TypeTransaction))
 }
 
 func TestBoundedExecutionOutboxReplaysAfterRestart(t *testing.T) {

@@ -70,26 +70,39 @@ func (s *Service) refreshFlatRootPins(ctx context.Context) error {
 	if s.flatPins == nil {
 		s.flatPins = make(flatRootPins)
 	}
+	newPins := make(flatRootPins)
 	for root := range wanted {
 		if _, exists := s.flatPins[root]; exists {
 			continue
 		}
 		release, err := s.config.Execution.AcquireRoot(root)
 		if err != nil {
+			for _, release := range newPins {
+				release()
+			}
 			return err
 		}
-		s.flatPins[root] = release
+		newPins[root] = release
 	}
 	retained := make(map[[32]byte]*nodestore.Node, len(headers))
 	for hash := range headers {
 		node, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
 		if err != nil {
+			for _, release := range newPins {
+				release()
+			}
 			return err
 		}
 		if node == nil || node.Type != nodestore.NodeLedger {
+			for _, release := range newPins {
+				release()
+			}
 			return errors.New("flat version header is unavailable")
 		}
 		retained[hash] = node
+	}
+	for root, release := range newPins {
+		s.flatPins[root] = release
 	}
 	s.flatHeadersMu.Lock()
 	s.flatHeaders = retained
@@ -193,6 +206,13 @@ func (s *Service) advanceFlatState(ctx context.Context, l *ledger.Ledger) error 
 		return err
 	}
 	if found && (source.Sequence > l.Sequence() || flatMatchesHeader(source, l.Header())) {
+		return nil
+	}
+	if found && source.LedgerHash != l.Header().ParentHash {
+		// The selected ledger is on a different lineage (or skips a missing
+		// intermediate). FlatState only accepts a direct descriptor successor;
+		// keep the existing base and let the authenticated root view serve this
+		// version until a rebuild or a matching successor is selected.
 		return nil
 	}
 	if found && source.Epoch == ^uint64(0) {
