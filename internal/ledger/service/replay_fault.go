@@ -734,25 +734,19 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 				return err
 			}
 		}
-		state, err := parent.StateMapSnapshot()
-		if err != nil {
-			return err
-		}
-		target, err := ledger.NewFromHeader(evidence.Target, state, txMap, parent.Fees(), s.config.Execution)
-		if err != nil {
-			return err
-		}
-		if target.Hash() != fault.TargetHash {
+		if evidence.Target.Hash != fault.TargetHash {
 			return errors.New("replay evidence target mismatch")
 		}
-		replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
+		replay, err := inbound.NewTransactionReplayContext(ctx, parent, evidence.Target, txMap, nil, nil)
 		if err != nil {
 			return err
 		}
 		defer replay.ReleaseMemory()
-		if _, err := replay.ApplyContext(ctx, s.EngineConfigForReplay(parent)); err != nil {
+		derived, err := replay.ApplyContext(ctx, s.EngineConfigForReplay(parent))
+		if err != nil {
 			return fmt.Errorf("failed transition still disagrees: %w", err)
 		}
+		defer derived.Discard()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
