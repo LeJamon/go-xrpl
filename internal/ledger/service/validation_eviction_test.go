@@ -13,6 +13,10 @@ import (
 func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.LedgerCacheSize = 64
+	serviceFamily := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, serviceFamily.Close()) })
+	cfg.SHAMapFamily = serviceFamily
+	cfg.Execution = newTestExecutionStore(t, serviceFamily)
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -21,6 +25,7 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	parent := svc.GetClosedLedger()
 	old, err := ledger.NewOpen(parent, parent.CloseTime().Add(time.Second))
 	require.NoError(t, err)
+	t.Cleanup(old.Discard)
 	txHash := [32]byte{0x51}
 	movedTxHash := [32]byte{0x52}
 	require.NoError(t, old.AddTransactionWithMeta(txHash, make([]byte, 16)))
@@ -29,7 +34,14 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	txMap, err := old.TxMapSnapshot()
 	require.NoError(t, err)
 	memory := backend.NewMemory()
-	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+	t.Cleanup(func() { require.NoError(t, memory.Close()) })
+	copyBudget := &relayTestMemory{limit: 512 << 20}
+	require.NoError(t, txMap.StoreAllBatched(t.Context(), copyBudget, func(entries []shamap.FlushEntry) error {
+		return memory.StoreBatch(t.Context(), entries)
+	}))
+	state, err := old.StateMapSnapshot()
+	require.NoError(t, err)
+	require.NoError(t, state.StoreAllBatched(t.Context(), copyBudget, func(entries []shamap.FlushEntry) error {
 		return memory.StoreBatch(t.Context(), entries)
 	}))
 	root, err := txMap.Hash()
@@ -38,18 +50,22 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	defer family.unblock()
 	coldTx, err := shamap.NewFromRootHash(shamap.TypeTransaction, root, family)
 	require.NoError(t, err)
-	state, err := old.StateMapSnapshot()
+	coldExecution := newTestExecutionStore(t, family)
+	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees(), coldExecution)
 	require.NoError(t, err)
-	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees(), svc.config.Execution)
-	require.NoError(t, err)
+	t.Cleanup(coldOld.Discard)
 
 	latest := old
 	for range cfg.LedgerCacheSize {
 		next, buildErr := ledger.NewOpen(latest, latest.CloseTime().Add(time.Second))
 		require.NoError(t, buildErr)
 		require.NoError(t, next.Close(latest.CloseTime().Add(time.Second), 0))
+		if latest != old {
+			latest.Discard()
+		}
 		latest = next
 	}
+	t.Cleanup(latest.Discard)
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()
 	svc.putHistoryLocked(coldOld)

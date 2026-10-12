@@ -249,10 +249,12 @@ func relationalTestLedgerWithTransactions(t *testing.T, count int) *ledger.Ledge
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}
+	t.Cleanup(parent.Discard)
 	l, err := ledger.NewOpen(parent, g.Header.CloseTime.Add(time.Second))
 	if err != nil {
 		t.Fatalf("ledger.NewOpen: %v", err)
 	}
+	t.Cleanup(l.Discard)
 	for i := 0; i < count; i++ {
 		raw, hash := validRelationalTestTransaction(t, uint32(i+1))
 		combined, err := tx.CreateTxWithMetaBlob(raw, &tx.Metadata{
