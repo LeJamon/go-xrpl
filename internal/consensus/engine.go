@@ -271,6 +271,15 @@ type PreferredLedgerNotifier interface {
 	OnPreferredLedgerSwitched(Ledger) error
 }
 
+// PreferredLedgerPreparationNotifier is an optional preparation-owned
+// notification hook. It lets an adaptor retain metadata captured before the
+// service publication fence, such as the history floor for a switched ledger.
+// The engine invokes it only after Finish and Release have run and while the
+// engine mutex is released.
+type PreferredLedgerPreparationNotifier interface {
+	NotifyPreferredLedgerSwitched(Ledger) error
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 

@@ -97,8 +97,8 @@ func (w *preferredRecoveryWorker) submitLocked(request preferredRecoveryRequest)
 }
 
 func (w *preferredRecoveryWorker) newJobLocked(request preferredRecoveryRequest) *preferredRecoveryJob {
-	ctx, cancel := context.WithCancel(request.parent)
-	job := &preferredRecoveryJob{request: request, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	job := &preferredRecoveryJob{request: request, done: make(chan struct{})}
+	job.ctx, job.cancel = context.WithCancel(request.parent) //nolint:gosec // G118: the job owns cancellation and finish/stop always call it
 	job.resetRoundState.Store(request.resetRoundState)
 	return job
 }
@@ -334,7 +334,7 @@ func (e *Engine) commitPreparedRecovery(
 	// TryPublish and this state adoption share e.mu. The prepared path has no
 	// fallible callback after publication, so the engine cannot leave the
 	// service frontier committed while abandoning its consensus parent.
-	e.switchToLedgerStatePreparedLocked(job.request.id, l)
+	e.switchToLedgerStatePreparedLocked(job.request.id, l, prepared)
 	pending := e.takePendingPostUnlockLocked()
 	e.mu.Unlock()
 	return preferredCommitResult{status: preferredCommitPublished, pending: pending}
@@ -377,7 +377,6 @@ func (e *Engine) resetWrongLedgerStateLocked(target consensus.LedgerID) {
 		if !trusted(proposal.NodeID) {
 			continue
 		}
-		proposal := proposal
 		e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
 			_ = e.adaptor.RelayProposal(proposal, 0)
 		})

@@ -423,17 +423,24 @@ func (e *Engine) enqueueValidationBroadcastLocked(v *consensus.Validation) {
 // both released. Generic adaptors use their existing callback as a fallback;
 // production adaptors provide the notify-only callback so no second service
 // publication can move the canonical frontier backwards.
-func (e *Engine) enqueuePreferredLedgerSwitchedLocked(ledger consensus.Ledger) {
+func (e *Engine) enqueuePreferredLedgerSwitchedLocked(
+	ledger consensus.Ledger,
+	preparation consensus.PreferredLedgerPreparation,
+) {
 	if ledger == nil {
 		return
 	}
 	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
-		notifier, ok := e.adaptor.(consensus.PreferredLedgerNotifier)
 		var err error
-		if ok {
-			err = notifier.OnPreferredLedgerSwitched(ledger)
+		if notifier, ok := preparation.(consensus.PreferredLedgerPreparationNotifier); ok {
+			err = notifier.NotifyPreferredLedgerSwitched(ledger)
 		} else {
-			err = e.adaptor.OnLedgerSwitched(ledger)
+			notifier, ok := e.adaptor.(consensus.PreferredLedgerNotifier)
+			if ok {
+				err = notifier.OnPreferredLedgerSwitched(ledger)
+			} else {
+				err = e.adaptor.OnLedgerSwitched(ledger)
+			}
 		}
 		if err != nil {
 			slog.Warn("failed to notify switched ledger", "t", "consensus", "seq", ledger.Seq(), "err", err)
@@ -951,25 +958,33 @@ func (e *Engine) RestartRound(proposing bool) error {
 // path preserves the synchronous switched-ledger callback and its error
 // ordering for generic adaptors.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
-	return e.startRoundLockedWithPreferredNotification(round, proposing, recovering, false)
+	return e.startRoundLockedWithPreferredNotification(round, proposing, recovering, false, nil)
 }
 
 // startRoundPreparedLocked is used only after a detached preferred-ledger
 // publication has committed. Its switched-ledger notification is queued for
 // after e.mu, because the service fence must be released before callbacks or
 // relay work run.
-func (e *Engine) startRoundPreparedLocked(round consensus.RoundID, proposing, recovering bool) {
+func (e *Engine) startRoundPreparedLocked(
+	round consensus.RoundID,
+	proposing, recovering bool,
+	preparation consensus.PreferredLedgerPreparation,
+) {
 	// The prepared branch only queues the notify-only callback, so the shared
 	// body has no fallible operation after publication. Keep the error-bearing
 	// return for the synchronous compatibility path above.
-	_ = e.startRoundLockedWithPreferredNotification(round, proposing, recovering, true)
+	_ = e.startRoundLockedWithPreferredNotification(round, proposing, recovering, true, preparation)
 }
 
 // startRoundLockedWithPreferredNotification is the shared round-start body;
 // caller must hold e.mu. A prepared preferred switch uses the notify-only
 // post-unlock callback while the synchronous compatibility path invokes the
 // adaptor callback in its original position and propagates its error.
-func (e *Engine) startRoundLockedWithPreferredNotification(round consensus.RoundID, proposing, recovering, prepared bool) error {
+func (e *Engine) startRoundLockedWithPreferredNotification(
+	round consensus.RoundID,
+	proposing, recovering, prepared bool,
+	preparation consensus.PreferredLedgerPreparation,
+) error {
 	// First round after boot has no prior round to measure; seed prevRoundTime
 	// to the idle interval so round-1 convergePercent uses the 15s divisor, not
 	// the 5s floor (else avalanche state escalates ~3x faster than rippled).
@@ -985,7 +1000,7 @@ func (e *Engine) startRoundLockedWithPreferredNotification(round consensus.Round
 	// via SWITCHED_LEDGER so their tallies drop our abandoned ledger.
 	if recovering && e.prevLedger != nil {
 		if prepared {
-			e.enqueuePreferredLedgerSwitchedLocked(e.prevLedger)
+			e.enqueuePreferredLedgerSwitchedLocked(e.prevLedger, preparation)
 		} else if err := e.adaptor.OnLedgerSwitched(e.prevLedger); err != nil {
 			return fmt.Errorf("switch ledger: %w", err)
 		}

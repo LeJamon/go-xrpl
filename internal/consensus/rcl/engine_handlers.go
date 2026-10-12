@@ -489,20 +489,29 @@ func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger)
 // transition after the adaptor's detached service publication has succeeded.
 // The caller must have already performed all eligibility checks under e.mu.
 func (e *Engine) switchToLedgerStateLocked(id consensus.LedgerID, l consensus.Ledger) bool {
-	return e.switchToLedgerStateLockedWithNotification(id, l, false)
+	return e.switchToLedgerStateLockedWithNotification(id, l, false, nil)
 }
 
 // switchToLedgerStatePreparedLocked applies a prepared preferred-ledger
 // transition. Its switched-ledger notification is staged until the service
 // publication fence and e.mu have both been released.
-func (e *Engine) switchToLedgerStatePreparedLocked(id consensus.LedgerID, l consensus.Ledger) {
+func (e *Engine) switchToLedgerStatePreparedLocked(
+	id consensus.LedgerID,
+	l consensus.Ledger,
+	preparation consensus.PreferredLedgerPreparation,
+) {
 	// Once TryPublish succeeds, this path has no fallible callback or service
 	// operation left. The shared helper retains a bool for the synchronous
 	// compatibility path, but a prepared publication cannot be rolled back.
-	_ = e.switchToLedgerStateLockedWithNotification(id, l, true)
+	_ = e.switchToLedgerStateLockedWithNotification(id, l, true, preparation)
 }
 
-func (e *Engine) switchToLedgerStateLockedWithNotification(id consensus.LedgerID, l consensus.Ledger, prepared bool) bool {
+func (e *Engine) switchToLedgerStateLockedWithNotification(
+	id consensus.LedgerID,
+	l consensus.Ledger,
+	prepared bool,
+	preparation consensus.PreferredLedgerPreparation,
+) bool {
 	// A validated-ledger completion can race with the normal consensus commit:
 	// by the time the router hands the locally-held ledger back to us, it may
 	// already be our current LCL. Treat that handoff as successfully satisfied.
@@ -524,7 +533,7 @@ func (e *Engine) switchToLedgerStateLockedWithNotification(id consensus.LedgerID
 	proposing := e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull
 	if prepared {
-		e.startRoundPreparedLocked(nextRound, proposing, true)
+		e.startRoundPreparedLocked(nextRound, proposing, true, preparation)
 	} else if err := e.startRoundLocked(nextRound, proposing, true); err != nil {
 		e.prevLedger = previousLedger
 		e.wrongLedgerID = previousWrongLedgerID
