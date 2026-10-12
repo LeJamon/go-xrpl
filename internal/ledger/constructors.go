@@ -345,7 +345,11 @@ func importMap(ctx context.Context, source *shamap.SHAMap, kind shamap.Type, seq
 	if err != nil {
 		return [32]byte{}, err
 	}
-	if err := copy.StoreDirtyBatched(ctx, store.config.Workspace, func(entries []shamap.FlushEntry) error {
+	persist := copy.StoreDirtyBatched
+	if !source.IsBacked() {
+		persist = copy.StoreAllBatched
+	}
+	if err := persist(ctx, store.config.Workspace, func(entries []shamap.FlushEntry) error {
 		return store.config.Family.StoreBatch(ctx, entries)
 	}); err != nil {
 		return [32]byte{}, err

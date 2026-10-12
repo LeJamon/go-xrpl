@@ -440,6 +440,29 @@ func NewStoredLedgerReplayWithMemoryContext(
 	return newStoredReplay(ctx, parent, target.Header(), txRoot, target.TxMapSnapshotContext, logger, account)
 }
 
+// NewTransactionReplayContext prepares replay from an authenticated target header
+// and transaction tree. Its state root is verified against execution output.
+func NewTransactionReplayContext(
+	ctx context.Context,
+	parent *ledger.Ledger,
+	target header.LedgerHeader,
+	txMap *shamap.SHAMap,
+	logger *slog.Logger,
+	account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if txMap == nil || txMap.Type() != shamap.TypeTransaction {
+		return nil, errors.New("replay requires a transaction map")
+	}
+	root, err := txMap.Hash()
+	if err != nil {
+		return nil, err
+	}
+	return newStoredReplay(ctx, parent, target, root, txMap.SnapshotMutableContext, logger, account)
+}
+
 func newStoredReplay(ctx context.Context, parent *ledger.Ledger, targetHeader header.LedgerHeader, txRoot [32]byte,
 	snapshot func(context.Context) (*shamap.SHAMap, error), logger *slog.Logger, account shamap.AcquisitionMemoryAccount,
 ) (*ReplayDelta, error) {

@@ -293,4 +293,3 @@ func (s *Service) replayFlatOutbox(ctx context.Context) error {
 	}
 	return s.refreshFlatRootPins(ctx)
 }
-

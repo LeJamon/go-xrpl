@@ -209,6 +209,7 @@ func (p *PreparedReplayParent) baseRoot(service *Service, target header.LedgerHe
 type PreparedLedger struct {
 	service          *Service
 	header           header.LedgerHeader
+	ledger           *ledger.Ledger
 	stateMap         *shamap.SHAMap
 	txMap            *shamap.SHAMap
 	fingerprint      [32]byte
@@ -249,6 +250,7 @@ func (p *PreparedLedger) Release() {
 		p.releaseWork = nil
 		p.releaseLifecycle = nil
 		p.pin = nil
+		p.ledger = nil
 		p.stateMap = nil
 		p.txMap = nil
 		p.header = header.LedgerHeader{}
@@ -275,6 +277,7 @@ func (p *PreparedLedger) Release() {
 		p.state = preparedLedgerReleased
 		pin := p.pin
 		p.pin = nil
+		p.ledger = nil
 		p.stateMap = nil
 		p.txMap = nil
 		p.header = header.LedgerHeader{}
@@ -348,6 +351,7 @@ func (p *PreparedLedger) finishConsume(published bool) {
 	} else {
 		p.state = preparedLedgerReleased
 	}
+	p.ledger = nil
 	p.stateMap = nil
 	p.txMap = nil
 	p.header = header.LedgerHeader{}
@@ -936,7 +940,16 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 	if pin != nil {
 		fingerprint = pin.fingerprint
 	}
+	immutable, err := derived.Snapshot()
+	if err != nil {
+		releaseWork()
+		if pin != nil {
+			pin.Release()
+		}
+		return nil, err
+	}
 	prepared := &PreparedLedger{
+		ledger:           immutable,
 		service:          s,
 		header:           h,
 		stateMap:         stateMap,
@@ -1110,10 +1123,10 @@ func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedL
 		defer s.historyComponent.mu.Unlock()
 		initialCandidate = s.networkLedgerState != networkLedgerReady
 		if mode == preparedAcquisitionHistory {
-			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+			err = s.ingestHistoricalLedgerLocked(ctx, prepared.ledger)
 			return
 		}
-		err = s.storeLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+		err = s.storeLedgerLocked(ctx, prepared.ledger)
 		if err == nil && (initialCandidate || mode == preparedAcquisitionGeneric) && !s.ReplayBlocked() {
 			s.rememberValidatedStateBaseCandidate(prepared.header)
 		}

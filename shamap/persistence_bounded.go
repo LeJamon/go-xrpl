@@ -20,7 +20,20 @@ const DirtyWorkspaceBytes = 256 << 20
 // StoreDirtyBatched stores dirty nodes in post-order with bounded temporary copies.
 // A successful batch becomes clean; a failed batch and its ancestors remain dirty.
 func (sm *SHAMap) StoreDirtyBatched(ctx context.Context, budget DirtyMemoryBudget, store func([]FlushEntry) error) error {
+	return sm.storeBatched(ctx, budget, store, false)
+}
+
+// StoreAllBatched copies a complete tree, including clean acquisition nodes,
+// without retaining descendants loaded while walking a backed source.
+func (sm *SHAMap) StoreAllBatched(ctx context.Context, budget DirtyMemoryBudget, store func([]FlushEntry) error) error {
+	return sm.storeBatched(ctx, budget, store, true)
+}
+
+func (sm *SHAMap) storeBatched(ctx context.Context, budget DirtyMemoryBudget, store func([]FlushEntry) error, all bool) error {
 	if budget == nil {
+		if all {
+			return fmt.Errorf("shamap: full-tree copy requires a memory budget")
+		}
 		return sm.StoreDirty(store)
 	}
 	if store == nil {
@@ -67,7 +80,7 @@ func (sm *SHAMap) StoreDirtyBatched(ctx context.Context, budget DirtyMemoryBudge
 	}
 	var visit func(mapNode) error
 	visit = func(node mapNode) error {
-		if node == nil || !node.IsDirty() {
+		if node == nil || (!all && !node.IsDirty()) {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -77,8 +90,20 @@ func (sm *SHAMap) StoreDirtyBatched(ctx context.Context, budget DirtyMemoryBudge
 		switch n := node.(type) {
 		case *innerNode:
 			for branch := range BranchFactor {
-				child, _, _ := n.LoadChild(branch)
-				if err := visit(child); err != nil {
+				child, _, present := n.LoadChild(branch)
+				loaded := all && present && child == nil
+				if loaded {
+					var err error
+					child, err = sm.descendCtx(ctx, n, branch)
+					if err != nil {
+						return err
+					}
+				}
+				err := visit(child)
+				if loaded {
+					sm.releaseChild(n, branch, child)
+				}
+				if err != nil {
 					return err
 				}
 			}
