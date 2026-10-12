@@ -357,6 +357,7 @@ func (s *Service) Stop() {
 	s.clearRelayCache()
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()
+	s.releaseStartupReplayLocked()
 	s.mu.Unlock()
 	// Retain the final proof for stopped-service checkpoint preparation.
 	s.validatedStateBaseMu.Lock()

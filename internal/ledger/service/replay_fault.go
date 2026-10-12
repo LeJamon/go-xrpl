@@ -737,7 +737,14 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		if evidence.Target.Hash != fault.TargetHash {
 			return errors.New("replay evidence target mismatch")
 		}
-		replay, err := inbound.NewTransactionReplayContext(ctx, parent, evidence.Target, txMap, nil, nil)
+		replay, err := inbound.NewTransactionReplayContext(
+			ctx,
+			parent,
+			evidence.Target,
+			txMap,
+			nil,
+			s.config.ReplayVerificationMemory,
+		)
 		if err != nil {
 			return err
 		}

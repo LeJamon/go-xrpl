@@ -680,6 +680,7 @@ func (s *Service) Start() (err error) {
 		if err != nil {
 			s.mu.Lock()
 			s.clearFastLoadBaseLocked()
+			s.releaseStartupReplayLocked()
 			s.mu.Unlock()
 		}
 	}()
@@ -752,6 +753,11 @@ func (s *Service) Start() (err error) {
 	if err != nil {
 		return fmt.Errorf("select startup ledger: %w", err)
 	}
+	defer func() {
+		if selection.replay != nil {
+			selection.replay.ReleaseMemory()
+		}
+	}()
 	if selection.validate && !selection.ledger.IsValidated() {
 		if err := selection.ledger.SetValidated(); err != nil {
 			return fmt.Errorf("validate startup ledger: %w", err)
@@ -793,6 +799,7 @@ func (s *Service) Start() (err error) {
 		s.clearFastLoadBaseLocked()
 	}
 	s.startupReplay = selection.replay
+	selection.replay = nil
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {

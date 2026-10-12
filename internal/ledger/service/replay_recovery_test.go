@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/stretchr/testify/require"
 )
 
@@ -104,6 +105,10 @@ func TestReplayRecoveryWorkerCancellationIsDrainedByStop(t *testing.T) {
 func TestStartReplayFaultRecoveryClearsVerifiedTransition(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	svc := replayFaultService(t, path)
+	replayPool := membudget.New(512 << 20)
+	replayMemory, err := replayPool.NewAccount("replay", 0, 512<<20)
+	require.NoError(t, err)
+	svc.config.ReplayVerificationMemory = replayMemory
 	parent := svc.GetClosedLedger()
 	target := replayFaultTarget(t, parent, false)
 	raw, err := json.Marshal(replayEvidence{
@@ -119,6 +124,7 @@ func TestStartReplayFaultRecoveryClearsVerifiedTransition(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.StartReplayFaultRecovery(fault.ID))
 	require.Eventually(t, func() bool { return !svc.ReplayBlocked() }, time.Second, time.Millisecond)
+	require.Zero(t, replayMemory.Snapshot().Used)
 	require.NoError(t, svc.WithValidatorDuty(func() error { return nil }))
 	reopened, err := replayfault.Open(path)
 	require.NoError(t, err)

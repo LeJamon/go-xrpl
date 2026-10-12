@@ -123,7 +123,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	}
 	s.pendingTxs = nil
 	if replayed {
-		s.startupReplay = nil
+		s.releaseStartupReplayLocked()
 	}
 
 	// Persist best-effort: a persistence failure must not be fatal — treating it

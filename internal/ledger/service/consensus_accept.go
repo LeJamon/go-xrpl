@@ -235,7 +235,7 @@ func (s *Service) acceptConsensusResult(
 
 		s.pendingTxs = nil
 		if replay != nil {
-			s.startupReplay = nil
+			s.releaseStartupReplayLocked()
 		}
 
 		// Validated entry wins the by-seq map; closedLedger still reflects the local
