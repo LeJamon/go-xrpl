@@ -355,3 +355,5 @@ Prometheus exposes bounded execution work, active root borrowers, flat hits/fall
 For local verification, `go test ./internal/testing/...` runs the transaction corpus with bounded ledger execution and journals. The fixture uses shared RAM/disk allowances and checks explicit release at test teardown.
 
 Commitment streams canonical node batches directly into NodeStore. Build admission protects emission, and destination-root leases protect the resulting closure until service history, pending persistence, or the flat outbox takes ownership. NodeStore Sync remains the durability boundary. Service read leases separately retain exact state/transaction roots for the entire query or queued request; request completion releases them even when the history descriptor was evicted during the operation.
+
+The [before/after benchmark report](performance/state-memory.md) records lower sampled heap but slower signed acceptance and durable state workloads, with raw data and reproduction commands. These measurements do not close the unresolved production performance ceilings or the online-delete soak requirements above.

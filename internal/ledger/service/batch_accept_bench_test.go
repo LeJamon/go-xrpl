@@ -165,7 +165,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			if benchmarkFlatStateEnabled() {
 				b.ReportMetric(float64(flatHits)/float64(b.N), "flat-hits/op")
 				b.ReportMetric(float64(flatFallbacks)/float64(b.N), "root-fallbacks/op")
-				b.ReportMetric(float64(8<<20), "flat-memtable-bytes/op")
+				b.ReportMetric(float64(8<<20), "flat-memtable-limit-bytes")
 			}
 		})
 	}
