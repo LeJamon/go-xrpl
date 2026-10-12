@@ -83,12 +83,8 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 }
 
 func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, error) {
-	const (
-		minTransactionBytes = 32
-		maxTransactionBytes = 1 << 20
-	)
-	if len(blob) < minTransactionBytes || len(blob) > maxTransactionBytes {
-		return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "transaction length invalid")
+	if err := checkTransactionLength(blob); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Decode the canonical binary directly; the blob is already bytes, so
@@ -103,64 +99,98 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 		return nil, nil, nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
 	}
 
-	// Extract present fields from the decoded map
-	// This is used to distinguish between absent fields and empty values
-	presentFields := make(map[string]bool)
-	for key := range jsonMap {
-		presentFields[key] = true
-	}
+	parsed, err := transactionFromFields(jsonMap)
+	return parsed, jsonMap, canonical, err
+}
 
-	typeName, _ := jsonMap["TransactionType"].(string)
+// ParseFromDecodedFields constructs an owned transaction from fields returned by
+// the binary decoder, retaining their canonical encoding and field identity.
+func ParseFromDecodedFields(fields map[string]any) (Transaction, error) {
+	canonical, err := binarycodec.EncodeBytes(fields)
+	if err != nil {
+		return nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
+	}
+	if err := checkTransactionLength(canonical); err != nil {
+		return nil, err
+	}
+	parsed, err := transactionFromFields(fields)
+	if err != nil {
+		return nil, err
+	}
+	if err := bindCanonicalRawBytes(parsed, fields, canonical); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func checkTransactionLength(blob []byte) error {
+	if len(blob) < 32 || len(blob) > 1<<20 {
+		return ter.Errorf(ter.TemMALFORMED, "transaction length invalid")
+	}
+	return nil
+}
+
+func validateTransactionFields(fields map[string]any) error {
+	typeName, _ := fields["TransactionType"].(string)
 	txType, knownType := TypeFromName(typeName)
 	if _, hasTemplate := txTemplates[txType]; !knownType || !hasTemplate {
-		return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "invalid transaction type %q", typeName)
+		return ter.Errorf(ter.TemMALFORMED, "invalid transaction type %q", typeName)
 	}
-	if err := ValidateTemplateFields(txType, jsonMap); err != nil {
-		return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "%s", err)
+	if err := ValidateTemplateFields(txType, fields); err != nil {
+		return ter.Errorf(ter.TemMALFORMED, "%s", err)
 	}
+	return nil
+}
+
+type binaryFieldsUnmarshaler interface {
+	UnmarshalBinaryFields(map[string]any) error
+}
+
+func transactionFromFields(fields map[string]any) (Transaction, error) {
+	if err := validateTransactionFields(fields); err != nil {
+		return nil, err
+	}
+	typeName, _ := fields["TransactionType"].(string)
+	txType, _ := TypeFromName(typeName)
 	if txType == TypeBatch {
-		if reason := batchMapConstructionChecksFailureReason(jsonMap); reason != "" {
-			return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "%s", reason)
+		// Structural checks normalize inner type names. Keep caller maps owned
+		// by their caller, including when construction fails.
+		fields = cloneTransactionFieldValue(fields).(map[string]any)
+		if reason := batchMapConstructionChecksFailureReason(fields); reason != "" {
+			return nil, ter.Errorf(ter.TemMALFORMED, "%s", reason)
 		}
 	}
 
-	// The TransactionType is already known from the decoded map, so build the
-	// concrete transaction and unmarshal in one pass, skipping the redundant
-	// TransactionType re-parse FromJSON performs. Unknown or unregistered
-	// types fall back to the generic ParseJSON path (yielding a BaseTx).
-	var parsed Transaction
-	if knownType {
-		if t, nerr := NewFromType(txType); nerr == nil {
-			parsed = t
-		}
-	}
-	jsonFields := jsonMap
+	parsed, _ := NewFromType(txType)
+	jsonFields := fields
 	if parsed != nil {
-		jsonFields = binaryTransactionJSONFields(parsed, jsonMap)
-		if parsed.TxType() == TypeBatch {
-			jsonFields = binaryBatchJSONFields(jsonFields)
+		jsonFields = binaryTransactionJSONFields(parsed, fields)
+	}
+	if decoder, ok := parsed.(binaryFieldsUnmarshaler); ok {
+		if err := decoder.UnmarshalBinaryFields(jsonFields); err != nil {
+			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
-	}
-	jsonBytes, err := json.Marshal(jsonFields)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
-	}
-	if parsed != nil {
-		if err := json.Unmarshal(jsonBytes, parsed); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to parse transaction: %w", err)
-		}
-		restoreBinaryNoCurrency(parsed, jsonMap)
-	}
-	if parsed == nil {
-		parsed, err = ParseJSON(jsonBytes)
+	} else {
+		jsonBytes, err := json.Marshal(jsonFields)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
+		}
+		if parsed == nil {
+			parsed, err = ParseJSON(jsonBytes)
+		} else {
+			err = json.Unmarshal(jsonBytes, parsed)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 	}
-
+	restoreBinaryNoCurrency(parsed, fields)
+	presentFields := make(map[string]bool, len(fields))
+	for name := range fields {
+		presentFields[name] = true
+	}
 	parsed.GetCommon().SetPresentFields(presentFields)
-
-	return parsed, jsonMap, canonical, nil
+	return parsed, nil
 }
 
 const noCurrencyHex = "0000000000000000000000000000000000000001"
@@ -231,52 +261,6 @@ func batchInnerObject(wrapper map[string]any) (string, map[string]any) {
 		}
 	}
 	return "", nil
-}
-
-func binaryBatchJSONFields(fields map[string]any) map[string]any {
-	rawTransactions, ok := fields["RawTransactions"].([]any)
-	if !ok {
-		return fields
-	}
-	adjustedTransactions := make([]any, len(rawTransactions))
-	copy(adjustedTransactions, rawTransactions)
-	changed := false
-	for i, raw := range rawTransactions {
-		wrapper, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, innerFields := batchInnerObject(wrapper)
-		if innerFields == nil {
-			continue
-		}
-		typeName, _ := innerFields["TransactionType"].(string)
-		txType, ok := TypeFromName(typeName)
-		if !ok {
-			continue
-		}
-		inner, err := NewFromType(txType)
-		if err != nil {
-			continue
-		}
-		adjustedInner := binaryTransactionJSONFields(inner, innerFields)
-		adjustedWrapper := make(map[string]any, len(wrapper))
-		for name, value := range wrapper {
-			adjustedWrapper[name] = value
-		}
-		adjustedWrapper[name] = adjustedInner
-		adjustedTransactions[i] = adjustedWrapper
-		changed = true
-	}
-	if !changed {
-		return fields
-	}
-	adjusted := make(map[string]any, len(fields))
-	for name, value := range fields {
-		adjusted[name] = value
-	}
-	adjusted["RawTransactions"] = adjustedTransactions
-	return adjusted
 }
 
 func restoreBinaryNoCurrency(transaction Transaction, fields map[string]any) {

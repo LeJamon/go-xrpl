@@ -61,11 +61,11 @@ func (r *RawTransaction) UnmarshalJSON(data []byte) error {
 		if !binarytypes.MeetsInnerObjectTemplate(name, innerFields) {
 			return ter.Errorf(ter.TemMALFORMED, "invalid inner object template for %s", name)
 		}
-		var inner RawTransactionData
-		if err := json.Unmarshal(value, &inner); err != nil {
+		inner, err := parseInnerJSON(value, innerFields)
+		if err != nil {
 			return err
 		}
-		*r = RawTransaction{Wrapper: name, RawTransaction: inner}
+		*r = RawTransaction{Wrapper: name, RawTransaction: RawTransactionData{InnerTx: inner}}
 	}
 	return nil
 }
@@ -103,30 +103,87 @@ type RawTransactionData struct {
 }
 
 func (r *RawTransactionData) UnmarshalJSON(data []byte) error {
-	parsed, err := tx.ParseJSON(data)
-	if err != nil {
-		return fmt.Errorf("parse inner transaction JSON: %w", err)
-	}
-	var innerMap map[string]any
-	if err := json.Unmarshal(data, &innerMap); err != nil {
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	typeName, _ := innerMap["TransactionType"].(string)
-	txType, knownType := tx.TypeFromName(typeName)
-	if knownType {
-		if err := tx.ValidateTemplateFields(txType, innerMap); err != nil {
-			return fmt.Errorf("validate inner transaction: %w", err)
+	inner, err := parseInnerJSON(data, fields)
+	if err != nil {
+		return err
+	}
+	r.InnerTx = inner
+	return nil
+}
+
+func parseInnerJSON(data []byte, fields map[string]any) (tx.Transaction, error) {
+	parsed, err := tx.ParseJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse inner transaction JSON: %w", err)
+	}
+	typeName, _ := fields["TransactionType"].(string)
+	if txType, knownType := tx.TypeFromName(typeName); knownType {
+		if err := tx.ValidateTemplateFields(txType, fields); err != nil {
+			return nil, fmt.Errorf("validate inner transaction: %w", err)
 		}
 	}
+	// JSON values still need wire normalization (including accounts and
+	// amounts). Already-decoded binary inners bypass this path entirely.
 	raw, err := tx.SerializeTransaction(parsed)
 	if err != nil {
-		return fmt.Errorf("encode inner transaction: %w", err)
+		return nil, fmt.Errorf("encode inner transaction: %w", err)
 	}
 	inner, err := tx.ParseFromBinary(raw)
 	if err != nil {
-		return fmt.Errorf("parse inner transaction: %w", err)
+		return nil, fmt.Errorf("parse inner transaction: %w", err)
 	}
-	r.InnerTx = inner
+	return inner, nil
+}
+
+// UnmarshalBinaryFields consumes decoded fields without converting inner
+// transactions back through their JSON wrapper unmarshaler.
+func (b *Batch) UnmarshalBinaryFields(fields map[string]any) error {
+	outer := make(map[string]any, len(fields))
+	for name, value := range fields {
+		if name != "RawTransactions" {
+			outer[name] = value
+		}
+	}
+	data, err := json.Marshal(outer)
+	if err != nil {
+		return err
+	}
+	type batchAlias Batch
+	var decoded batchAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	raw, ok := fields["RawTransactions"].([]any)
+	if !ok {
+		return ter.Errorf(ter.TemMALFORMED, "invalid RawTransactions array")
+	}
+	decoded.RawTransactions = make([]RawTransaction, len(raw))
+	for i, value := range raw {
+		wrapper, ok := value.(map[string]any)
+		if !ok || len(wrapper) != 1 {
+			return ter.Errorf(ter.TemMALFORMED, "inner transaction must have one object wrapper")
+		}
+		for name, value := range wrapper {
+			field, err := definitions.Get().FieldInstanceByName(name)
+			if err != nil || field.Type != "STObject" || name == "ObjectEndMarker" {
+				return ter.Errorf(ter.TemMALFORMED, "invalid inner transaction wrapper %q", name)
+			}
+			innerFields, ok := value.(map[string]any)
+			if !ok || !binarytypes.MeetsInnerObjectTemplate(name, innerFields) {
+				return ter.Errorf(ter.TemMALFORMED, "invalid inner object template for %s", name)
+			}
+			inner, err := tx.ParseFromDecodedFields(innerFields)
+			if err != nil {
+				return fmt.Errorf("parse inner transaction: %w", err)
+			}
+			decoded.RawTransactions[i] = RawTransaction{Wrapper: name, RawTransaction: RawTransactionData{InnerTx: inner}}
+		}
+	}
+	*b = Batch(decoded)
 	return nil
 }
 

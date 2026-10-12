@@ -261,6 +261,24 @@ func TestSponsorSignedDeltaCodec(t *testing.T) {
 	}
 }
 
+// These cases exercise the template validation in the unregistered-type fallback.
+// Other tests register concrete transaction types in this process.
+func parseUnregisteredJSON(data []byte, name string) (Transaction, error) {
+	txType, _ := TypeFromName(name)
+	registryMu.Lock()
+	factory, registered := registry[txType]
+	delete(registry, txType)
+	registryMu.Unlock()
+	defer func() {
+		registryMu.Lock()
+		if registered {
+			registry[txType] = factory
+		}
+		registryMu.Unlock()
+	}()
+	return ParseJSON(data)
+}
+
 func TestSponsorTransactionTemplatesRejectForeignFields(t *testing.T) {
 	for _, name := range []string{"SponsorshipTransfer", "SponsorshipSet"} {
 		t.Run(name, func(t *testing.T) {
@@ -282,7 +300,7 @@ func TestSponsorTransactionTemplatesRejectForeignFields(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
-			if _, err := ParseJSON(jsonData); err == nil {
+			if _, err := parseUnregisteredJSON(jsonData, fields["TransactionType"].(string)); err == nil {
 				t.Fatal("ParseJSON accepted foreign SponsorSignature field")
 			}
 		})
@@ -335,7 +353,7 @@ func TestSponsorSignatureTemplateRejectsForeignFields(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
-			if _, err := ParseJSON(jsonData); err == nil {
+			if _, err := parseUnregisteredJSON(jsonData, fields["TransactionType"].(string)); err == nil {
 				t.Fatal("ParseJSON accepted foreign transaction field")
 			}
 		})
