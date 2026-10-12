@@ -10,11 +10,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	ledgercleaner "github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -59,6 +62,25 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 	env.Close()
 	closed := env.LastClosedLedger()
 	require.NotNil(t, closed)
+	stateMap, err := closed.StateMapSnapshotContext(ctx)
+	require.NoError(t, err)
+	txMap, err := closed.TxMapSnapshotContext(ctx)
+	require.NoError(t, err)
+	stateMap = cloneCleanerMap(t, stateMap, shamap.TypeState)
+	txMap = cloneCleanerMap(t, txMap, shamap.TypeTransaction)
+	executionStore := ledgertestutil.NewExecutionStore(t, family)
+	closed, err = ledger.NewClosedFromHeaderContext(
+		ctx,
+		closed.Header(),
+		stateMap,
+		txMap,
+		closed.Fees(),
+		executionStore,
+	)
+	require.NoError(t, err)
+	// Ensure the service releases the imported ledger before the strict store
+	// cleanup registered by NewExecutionStore.
+	t.Cleanup(svc.Stop)
 	hdr := closed.Header()
 	require.NotZero(t, hdr.AccountHash)
 	require.NotZero(t, hdr.TxHash)
@@ -213,4 +235,20 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 	accountTransactions, err = repositories.AccountTransaction().GetNewestAccountTxsPage(ctx, accountOptions)
 	require.NoError(t, err)
 	require.NotEmpty(t, accountTransactions.Transactions)
+}
+
+func cloneCleanerMap(t *testing.T, source *shamap.SHAMap, mapType shamap.Type) *shamap.SHAMap {
+	t.Helper()
+	target := shamap.New(mapType)
+	var copyErr error
+	require.NoError(t, source.ForEachCtx(t.Context(), func(item *shamap.Item) bool {
+		if mapType == shamap.TypeTransaction {
+			copyErr = target.PutWithNodeType(item.Key(), item.Data(), shamap.NodeTypeTransactionWithMeta)
+		} else {
+			copyErr = target.Put(item.Key(), item.Data())
+		}
+		return copyErr == nil
+	}))
+	require.NoError(t, copyErr, "copy %s map", mapType)
+	return target
 }

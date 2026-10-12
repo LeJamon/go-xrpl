@@ -74,6 +74,8 @@ func testStandaloneExecutionStoreLifetime(t *testing.T, nodeDBPath string) {
 	open := runtime.ledger.GetOpenLedger()
 	store := open.ExecutionStore()
 	require.NotNil(t, store)
+	scratchPath := open.ExecutionJournalConfig().SpillDir
+	require.NotEmpty(t, scratchPath)
 	var stateRoot rootlease.Root
 	for _, root := range store.Roots() {
 		if root.Kind == shamap.TypeState && root.Hash != ([32]byte{}) {
@@ -82,18 +84,32 @@ func testStandaloneExecutionStoreLifetime(t *testing.T, nodeDBPath string) {
 		}
 	}
 	require.NotZero(t, stateRoot.Hash)
+	var family interface {
+		Fetch(context.Context, [32]byte) ([]byte, error)
+	}
+	if runtime.nodeFamily != nil {
+		family = runtime.nodeFamily
+	} else {
+		family = runtime.ephemeralFamily
+	}
+	require.NotNil(t, family)
 	if nodeDBPath != "" {
 		flatPath := filepath.Join(cfg.LocalStateDir(), "execution-state")
 		require.DirExists(t, flatPath)
 		require.DirExists(t, filepath.Join(flatPath, "scratch"))
 	}
+	require.DirExists(t, scratchPath)
 
 	release, err := store.AcquireRoot(stateRoot)
 	require.NoError(t, err)
 	releaseLease = release
 
-	closeErr := store.Close()
+	closeErr := runtime.executionCleanup()
 	require.ErrorContains(t, closeErr, "ledger root leases are still active")
+	rootData, err := family.Fetch(t.Context(), stateRoot.Hash)
+	require.NoError(t, err)
+	require.NotEmpty(t, rootData)
+	require.DirExists(t, scratchPath)
 	if nodeDBPath != "" {
 		flatPath := filepath.Join(cfg.LocalStateDir(), "execution-state")
 		require.DirExists(t, flatPath)
@@ -110,4 +126,5 @@ func testStandaloneExecutionStoreLifetime(t *testing.T, nodeDBPath string) {
 		require.DirExists(t, flatPath)
 		require.NoDirExists(t, filepath.Join(flatPath, "scratch"))
 	}
+	require.NoDirExists(t, scratchPath)
 }
