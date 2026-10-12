@@ -71,6 +71,9 @@ func benchmarkRefreshWithPersistence(b *testing.B, workers, batchNodes int) {
 				break
 			}
 		}
+		for _, closed := range ledgers {
+			closed.Discard()
+		}
 		refreshErr := <-done
 		b.StopTimer()
 		require.NoError(b, persistErr)

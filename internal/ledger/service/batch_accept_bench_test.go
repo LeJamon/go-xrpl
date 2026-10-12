@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,8 +34,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var batchBenchmarkFlatStateID atomic.Uint64
-
 type serviceBatchAcceptanceCase struct {
 	name         string
 	agreed       [][]byte
@@ -55,7 +52,11 @@ type serviceBatchAcceptanceCase struct {
 // reused between rounds.
 func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 	b.StopTimer()
-	fixture := newBatchBenchmarkRefreshFixture(b, 4_096, 256<<10)
+	nodeCacheBytes := int64(256 << 10)
+	if benchmarkFlatStateEnabled() {
+		nodeCacheBytes = 128 << 10
+	}
+	fixture := newBatchBenchmarkRefreshFixture(b, 4_096, nodeCacheBytes)
 	env := jtx.NewTestEnv(b)
 	env.SetVerifySignatures(true)
 	cases := newServiceBatchAcceptanceCases(b, env)
@@ -164,6 +165,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			if benchmarkFlatStateEnabled() {
 				b.ReportMetric(float64(flatHits)/float64(b.N), "flat-hits/op")
 				b.ReportMetric(float64(flatFallbacks)/float64(b.N), "root-fallbacks/op")
+				b.ReportMetric(float64(8<<20), "flat-memtable-bytes/op")
 			}
 		})
 	}
@@ -413,19 +415,21 @@ func newBatchConsensusAcceptanceService(
 	var closeOnce sync.Once
 	cleanup := func() {
 		closeOnce.Do(func() {
-			if svc != nil {
-				svc.Stop()
+			currentSvc, currentExecution, currentFlat := svc, execution, flat
+			if currentSvc != nil {
+				currentSvc.Stop()
 			}
-			if execution != nil {
-				if err := execution.Close(); err != nil {
+			if currentExecution != nil {
+				if err := currentExecution.Close(); err != nil {
 					b.Errorf("close benchmark execution store: %v", err)
 				}
 			}
-			if flat != nil {
-				if err := flat.Close(); err != nil {
+			if currentFlat != nil {
+				if err := currentFlat.Close(); err != nil {
 					b.Errorf("close benchmark flat state: %v", err)
 				}
 			}
+			svc, execution, flat = nil, nil, nil
 		})
 	}
 	b.Cleanup(cleanup)
@@ -448,10 +452,7 @@ func newBatchBenchmarkFlatExecution(
 	fixture *benchmarkRefreshFixture,
 ) (*ledgerpkg.ExecutionStore, *flatstate.Store, shamap.DirtyMemoryBudget) {
 	b.Helper()
-	flatPath := filepath.Join(
-		b.TempDir(),
-		fmt.Sprintf("flat-%d", batchBenchmarkFlatStateID.Add(1)),
-	)
+	flatPath := filepath.Join(b.TempDir(), "flat")
 	pool := membudget.New(1 << 30)
 	workspace, err := pool.NewAccount("batch_benchmark_workspace", 128<<20, 128<<20)
 	require.NoError(b, err)
@@ -460,7 +461,7 @@ func newBatchBenchmarkFlatExecution(
 	disk, err := pool.NewAccount("batch_benchmark_spill", 0, 512<<20)
 	require.NoError(b, err)
 	flat, err := flatstate.Open(flatPath, flatstate.Options{
-		CacheBytes:   16 << 20,
+		CacheBytes:   128 << 10,
 		MemTableSize: 8 << 20,
 		MemoryBudget: workspace,
 	})
