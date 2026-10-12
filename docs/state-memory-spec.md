@@ -13,7 +13,7 @@ A retained ledger identifies a version; it does not own an expanded decoded tree
 
 The first implementation keeps Pebble, the existing NodeStore format, and relational indexes. It adds one flat database for a selected durable state and bounded change layers above it. Historical or competing ledgers without a matching flat view remain readable through their retained SHAMap roots. A full flat archive with arbitrary historical MVCC queries is outside this first implementation.
 
-This proposal extends [ADR 0004](adr/0004-storage-architecture.md); it does not change that accepted decision until the implementation gates below pass. The single-writer transaction engine remains in place.
+This decision extends [ADR 0004](adr/0004-storage-architecture.md). The single-writer transaction engine remains in place.
 
 ### Required outcomes
 
@@ -259,7 +259,7 @@ The following are proposed responsibilities, not new public API commitments:
 
 Existing integration points include `internal/ledger/view.go`, `internal/ledger/mutation.go`, `internal/tx/applystate`, `internal/ledger/service/persistence.go`, `internal/ledger/service/state_retention.go`, `shamap/snapshot.go`, `shamap/persistence_bounded.go`, and `storage/kvstore/pebble`.
 
-Prefer internal interfaces with small explicit lifetimes. Do not expose flat-database transactions to transactors. Keep the transaction engine independent of the choice between a flat reader and a bounded root reader. Stable version `ForEach` is point-in-time and ascending, with callback early-stop and no internal publication lock held during callbacks. Reentrant reads are allowed against the captured version; concurrent mutation of a builder stays forbidden. Inventory transactional wrappers with currently unspecified iteration order before migration, and exercise any order-sensitive consumer through behavioral comparison rather than assuming sorting is harmless. `ForEachTransaction` remains a distinct operation. Preserve wrong-keylet-type behavior and the current owned-byte return contracts: flat adapters must check entry type and may not return aliases to mutable cache/iterator buffers. Existing exported SHAMap APIs need a caller inventory and compatibility adapters; removing an API is a separate explicit compatibility decision.
+Prefer internal interfaces with small explicit lifetimes. Do not expose flat-database transactions to transactors. Keep the transaction engine independent of the choice between a flat reader and a bounded root reader. Stable version `ForEach` is point-in-time and ascending, with callback early-stop and no internal publication lock held during callbacks. Reentrant reads are allowed against the captured version; concurrent mutation of a builder stays forbidden. Inventory transactional wrappers with currently unspecified iteration order before migration, and exercise any order-sensitive consumer through behavioral comparison rather than assuming sorting is harmless. `ForEachTransaction` remains a distinct operation. Preserve wrong-keylet-type behavior and the current owned-byte return contracts: flat adapters must check entry type and may not return aliases to mutable cache/iterator buffers. Remove obsolete execution APIs after checking their repository callers. Acquisition and wire-serving SHAMap APIs retain their canonical byte contracts.
 
 ## 12. Required observability
 
@@ -296,7 +296,7 @@ Measure commitment time, durable-write time, publication lock time, consensus ac
 
 Protocol behavior is checked against local rippled `3.3.0`, commit `00a178fb92ca49521b937ae1a99d863765ea8a90`, unless the implementation task explicitly selects another oracle. Source areas include `src/libxrpl/shamap` and the relevant ledger/transaction tests. Memory, scheduling, spill and retention policy are local implementation decisions.
 
-Run the affected Go suites with the race detector, including production completion/handoff paths. A helper-only budget test is insufficient. The full protocol/conformance gate runs before switching production execution to the new path.
+Run the affected Go suites with the race detector, including production completion/handoff paths. A helper-only budget test is insufficient. The full protocol/conformance suite exercises the sole execution path.
 
 ### Performance and soak protocol
 
@@ -306,7 +306,7 @@ Use both a long fixed-state workload that eventually touches the whole key space
 
 Pass conditions are zero root/metadata/result mismatches, zero lost required nodes, zero ownership-accounting violations, and no recurring full-state certification on ordinary advancement. Quantify CPU, allocation, I/O, disk amplification and latency together.
 
-Before implementation tuning, record numerical ceilings for p95/p99 consensus acceptance and commitment latency, replay throughput, storage-read amplification and transient disk use on the agreed reference workload. Those ceilings and the production resource defaults are unresolved measurements in this draft. No performance or rollout pass can be declared while they are unset; memory reduction alone is not sufficient.
+Before implementation tuning, record numerical ceilings for p95/p99 consensus acceptance and commitment latency, replay throughput, storage-read amplification and transient disk use on the agreed reference workload. Those ceilings and measured production sizing remain unresolved. A performance pass cannot be declared while they are unset; memory reduction alone is not sufficient.
 
 ## 14. Implementation sequence and recovery
 
@@ -332,7 +332,7 @@ Any change to canonical encoding, error results, retained-history availability o
 
 ## 16. Operating bounded execution
 
-Bounded execution is always active. Persistent NodeStore deployments use the flat materialization; standalone and in-memory deployments use a bounded in-memory SHAMap family with an explicitly owned temporary spill directory. The configured allowances cover the existing protected accounts plus the execution accounts. These are resource defaults, not measured production sizing recommendations:
+Bounded execution is always active. Persistent NodeStore deployments use the flat materialization; standalone and in-memory deployments use the same execution engine with an in-memory canonical node store and an explicitly owned temporary spill directory. The canonical database itself remains memory-resident in those modes. The configured allowances cover the existing protected accounts plus the execution accounts. These are resource defaults, not measured production sizing recommendations:
 
 ```toml
 [state]

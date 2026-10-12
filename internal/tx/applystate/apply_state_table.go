@@ -13,8 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
-	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -78,8 +76,7 @@ type ApplyStateTable struct {
 	txHash      [32]byte
 	txSeq       uint32
 	rules       *amendment.Rules
-	journal     *boundedJournal
-	cloneErr    error
+	journal     *journal
 }
 
 type AtomicLedgerView interface {
@@ -122,7 +119,7 @@ func newApplyStateTable(
 		txHash:      txHash,
 		txSeq:       txSeq,
 		rules:       rules,
-		journal:     newBoundedJournal(base.ExecutionJournalConfig()),
+		journal:     newJournal(base.ExecutionJournalConfig()),
 	}
 }
 
@@ -136,7 +133,6 @@ func (t *ApplyStateTable) clone() *ApplyStateTable {
 		txSeq:       t.txSeq,
 		rules:       t.rules,
 		journal:     journal,
-		cloneErr:    journal.err,
 	}
 }
 
@@ -152,7 +148,6 @@ func (t *ApplyStateTable) adopt(staged *ApplyStateTable) {
 	t.journal = staged.journal
 	staged.journal = nil
 	t.drops = staged.drops
-	t.cloneErr = staged.cloneErr
 }
 
 // Close releases all bounded journal state. It is safe to call repeatedly.
@@ -165,9 +160,9 @@ func (t *ApplyStateTable) Close() error {
 
 func (t *ApplyStateTable) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := t.clone()
-	if staged.cloneErr != nil {
+	if staged.journal.err != nil {
 		_ = staged.Close()
-		return t.record(staged.cloneErr)
+		return t.record(staged.journal.err)
 	}
 	if err := apply(staged); err != nil {
 		_ = staged.Close()
@@ -177,55 +172,10 @@ func (t *ApplyStateTable) ApplyAtomically(apply func(ledgercore.Writer) error) e
 	return nil
 }
 
-// Read reads a ledger entry, tracking it as cached
-func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
-	return t.readBounded(k)
-}
-
-// Exists checks if an entry exists
-func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
-	return t.existsBounded(k)
-}
-
-// Insert adds a new entry
-func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
-	return t.insertBounded(k, data)
-}
-
-// Update modifies an existing entry
-func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
-	return t.updateBounded(k, data)
-}
-
-// Erase removes an entry
-func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
-	return t.eraseBounded(k)
-}
-
-// IsErased returns true if the entry at the given key has been erased.
-func (t *ApplyStateTable) IsErased(k keylet.Keylet) bool {
-	return t.isErasedBounded(k.Key)
-}
-
 // AdjustDropsDestroyed records destroyed XRP
 func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 	t.drops = t.drops.Add(drops)
 	return nil
-}
-
-// ForEach iterates over all state entries, reflecting local modifications.
-// Locally inserted and modified entries use their current data.
-// Locally erased entries are skipped.
-// Base entries not touched locally are passed through unchanged.
-func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error {
-	return t.forEachBounded(fn)
-}
-
-// Succ returns the first entry with key > the given key.
-// Combines local items with the base view's Succ.
-// Reference: rippled ReadView::succ()
-func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
-	return t.succBounded(key)
 }
 
 // Apply commits all changes to the base view and returns generated metadata.
@@ -233,15 +183,15 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 // Reference: rippled ApplyStateTable.cpp apply() lines 113-292
 func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	staged := t.clone()
-	if staged.cloneErr != nil {
+	if staged.journal.err != nil {
 		_ = staged.Close()
-		return nil, t.record(staged.cloneErr)
+		return nil, t.record(staged.journal.err)
 	}
-	if err := staged.applyThreadingBounded(); err != nil {
+	if err := staged.applyThreading(); err != nil {
 		_ = staged.Close()
 		return nil, err
 	}
-	metadata, err := staged.applyOrderedBounded(staged.base)
+	metadata, err := staged.applyOrdered(staged.base)
 	if err != nil {
 		_ = staged.Close()
 		return nil, err
@@ -253,15 +203,15 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 // Preview generates the same metadata as Apply without mutating the base view.
 func (t *ApplyStateTable) Preview() (*tx.Metadata, error) {
 	staged := t.clone()
-	if staged.cloneErr != nil {
+	if staged.journal.err != nil {
 		_ = staged.Close()
-		return nil, t.record(staged.cloneErr)
+		return nil, t.record(staged.journal.err)
 	}
-	if err := staged.applyThreadingBounded(); err != nil {
+	if err := staged.applyThreading(); err != nil {
 		_ = staged.Close()
 		return nil, err
 	}
-	metadata, err := staged.applyOrderedBounded(nil)
+	metadata, err := staged.applyOrdered(nil)
 	_ = staged.Close()
 	return metadata, err
 }
@@ -269,11 +219,11 @@ func (t *ApplyStateTable) Preview() (*tx.Metadata, error) {
 // ApplyUnthreaded commits changes without updating transaction threading.
 func (t *ApplyStateTable) ApplyUnthreaded() error {
 	staged := t.clone()
-	if staged.cloneErr != nil {
+	if staged.journal.err != nil {
 		_ = staged.Close()
-		return t.record(staged.cloneErr)
+		return t.record(staged.journal.err)
 	}
-	_, err := staged.applyOrderedBounded(staged.base)
+	_, err := staged.applyOrdered(staged.base)
 	if err != nil {
 		_ = staged.Close()
 		return err
@@ -319,20 +269,6 @@ func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 	return t.drops
 }
 
-// CollectEntries returns all modified ledger entries (Insert/Modify/Erase) for invariant checking.
-// Must be called BEFORE Apply() — entries are still in the table at this point.
-func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
-	return t.collectEntriesBounded()
-}
-
-// Size returns the number of entries that have been inserted, modified, or erased.
-// This matches rippled's ApplyStateTable::size() which counts non-cache entries.
-// Used for the oversizeMetaDataCap check (tecOVERSIZE when size > 5200).
-// Reference: rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp
-func (t *ApplyStateTable) Size() int {
-	return t.sizeBounded()
-}
-
 var errUnregisteredLedgerEntryType = errors.New("applystate: unregistered ledger entry type")
 
 func metadataType(data []byte) (entry.Type, error) {
@@ -375,34 +311,6 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.Affect
 	}
 	entry.EmitNewFields(node.NewFields)
 	return node, nil
-}
-
-// modifiedNodePrevTxn returns the node-level PreviousTxnID/PreviousTxnLgrSeq
-// for a ModifiedNode. The emitted value is the threaded SLE's PreviousTxnID as
-// it existed BEFORE this tx threaded it (curNode's pre-thread value), omitted
-// when that value is zero — rippled only emits a pointer when the SLE actually
-// carried one (its threading gate is getFieldIndex(sfPreviousTxnID) != -1).
-//
-// For a normal in-place modify the original node carries the reliable pointer:
-// the apply path peeks the SLE, so curNode and the original share it.
-//
-// For an erase+reinsert, and for a DirectoryNode, the curNode can be a FRESH
-// SLE with no prior pointer even though the pre-tx object had one, so the
-// original node is the WRONG source. An order-book directory page emptied and
-// rebuilt in the same tx — an account replacing the only offer at a quality
-// level removes it (page erased) then re-adds the new offer (page recreated from
-// scratch by state.DirInsert) — serializes no PreviousTxnID, so rippled threads
-// it to self with a zero prior pointer and emits none. There the captured
-// pre-thread value of Current (zero for the rebuilt page) is correct; an
-// in-place-modified page (e.g. an owner directory) keeps its pointer and still
-// emits it. DirectoryNode is the only type with this erase→rebuild-flattened-to-
-// modify case AND a serializer that preserves PreviousTxnID round-trip, so its
-// Current is a faithful proxy for rippled's curNode field-presence gate. The
-// other conditional-threading types (Amendments/FeeSettings/NegativeUNL/AMM) are
-// only ever modified in place and several drop PreviousTxnID from Current, so
-// they must source the pointer from the original node.
-func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType entry.Type, origEntry entry.Entry) (string, uint32) {
-	return t.modifiedNodePrevTxnBounded(key, entryType, origEntry)
 }
 
 // buildModifiedNode creates metadata for a modified entry

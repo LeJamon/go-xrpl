@@ -133,6 +133,11 @@ rippled's split between its NodeStore and its relational databases:
 - **`storage/nodestore`** — content-addressed storage of serialized ledger
   objects, keyed by their SHA-512Half hash. The SHAMap and ledger layers compute
   the keys; the nodestore treats payloads as opaque and never recomputes them.
+- **`internal/ledger/overlay` and `flatstate`** — bounded execution changes and
+  the selected durable flat-state materialization. Ledger handles retain root
+  descriptors; reads use the matching flat version or authenticated SHAMap
+  traversal. Commitments stream canonical nodes into NodeStore. Execution,
+  replay and tests all use this engine.
 - **`storage/relationaldb`** — SQL-backed secondary indexes (ledgers,
   transactions, the account-transaction index, validations, amendment votes) that
   answer history queries the content-addressed store cannot. Default backend is

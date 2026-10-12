@@ -12,7 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-type boundedJournal struct {
+type journal struct {
 	overlay *overlay.Overlay
 	err     error
 	cfg     overlay.Config
@@ -33,41 +33,38 @@ const (
 	nilBlobLength         uint32 = math.MaxUint32
 )
 
-func newBoundedJournal(cfg overlay.Config) *boundedJournal {
+func newJournal(cfg overlay.Config) *journal {
 	o, err := overlay.New(nil, cfg)
 	if err != nil {
-		return &boundedJournal{err: err, cfg: cfg}
+		return &journal{err: err, cfg: cfg}
 	}
-	return &boundedJournal{overlay: o, cfg: cfg}
+	return &journal{overlay: o, cfg: cfg}
 }
 
-func (j *boundedJournal) fork() *boundedJournal {
+func (j *journal) fork() *journal {
 	if j.err != nil {
-		return &boundedJournal{err: j.err, cfg: j.cfg}
+		return &journal{err: j.err, cfg: j.cfg}
 	}
 	child, err := j.overlay.Fork()
 	if err != nil {
-		return &boundedJournal{err: err, cfg: j.cfg}
+		return &journal{err: err, cfg: j.cfg}
 	}
-	return &boundedJournal{overlay: child, cfg: j.cfg}
+	return &journal{overlay: child, cfg: j.cfg}
 }
 
-// ExecutionJournalConfig keeps nested transaction tables on the same bounded
-// path when their base is an outer ApplyStateTable (for example Batch's
-// all-or-nothing table). The shared admission accounts in cfg prevent this
-// forwarding from multiplying the ledger's memory or disk ceiling.
+// ExecutionJournalConfig shares admission accounts with nested transaction tables.
 func (t *ApplyStateTable) ExecutionJournalConfig() overlay.Config {
 	return t.journal.cfg
 }
 
-func (j *boundedJournal) close() error {
+func (j *journal) close() error {
 	if j.err != nil {
 		return nil
 	}
 	return j.overlay.Close()
 }
 
-func (j *boundedJournal) get(ctx context.Context, key [32]byte) (journalRecord, bool, error) {
+func (j *journal) get(ctx context.Context, key [32]byte) (journalRecord, bool, error) {
 	if j.err != nil {
 		return journalRecord{}, false, j.err
 	}
@@ -82,7 +79,7 @@ func (j *boundedJournal) get(ctx context.Context, key [32]byte) (journalRecord, 
 	return record, true, nil
 }
 
-func (j *boundedJournal) put(ctx context.Context, key [32]byte, record journalRecord) error {
+func (j *journal) put(ctx context.Context, key [32]byte, record journalRecord) error {
 	if j.err != nil {
 		return j.err
 	}
@@ -96,7 +93,7 @@ func (j *boundedJournal) put(ctx context.Context, key [32]byte, record journalRe
 	return j.overlay.SetContext(ctx, key, value)
 }
 
-func (j *boundedJournal) putItem(ctx context.Context, key [32]byte, item *TrackedEntry) error {
+func (j *journal) putItem(ctx context.Context, key [32]byte, item *TrackedEntry) error {
 	record, _, err := j.get(ctx, key)
 	if err != nil {
 		return err
@@ -105,7 +102,7 @@ func (j *boundedJournal) putItem(ctx context.Context, key [32]byte, item *Tracke
 	return j.put(ctx, key, record)
 }
 
-func (j *boundedJournal) deleteItem(ctx context.Context, key [32]byte) error {
+func (j *journal) deleteItem(ctx context.Context, key [32]byte) error {
 	record, found, err := j.get(ctx, key)
 	if err != nil {
 		return err
@@ -117,7 +114,7 @@ func (j *boundedJournal) deleteItem(ctx context.Context, key [32]byte) error {
 	return j.put(ctx, key, record)
 }
 
-func (j *boundedJournal) putOwner(ctx context.Context, key [32]byte, owner *ThreadedOwner) error {
+func (j *journal) putOwner(ctx context.Context, key [32]byte, owner *ThreadedOwner) error {
 	record, _, err := j.get(ctx, key)
 	if err != nil {
 		return err
@@ -126,11 +123,11 @@ func (j *boundedJournal) putOwner(ctx context.Context, key [32]byte, owner *Thre
 	return j.put(ctx, key, record)
 }
 
-func (j *boundedJournal) iterate(ctx context.Context, fn func([32]byte, journalRecord) bool) error {
+func (j *journal) iterate(ctx context.Context, fn func([32]byte, journalRecord) bool) error {
 	return j.iterateAfter(ctx, nil, fn)
 }
 
-func (j *boundedJournal) iterateAfter(ctx context.Context, after *[32]byte, fn func([32]byte, journalRecord) bool) error {
+func (j *journal) iterateAfter(ctx context.Context, after *[32]byte, fn func([32]byte, journalRecord) bool) error {
 	if j.err != nil {
 		return j.err
 	}

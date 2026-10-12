@@ -16,7 +16,8 @@ import (
 
 var backgroundContext = context.Background()
 
-func (t *ApplyStateTable) readBounded(k keylet.Keylet) ([]byte, error) {
+// Read reads a ledger entry, tracking it as cached
+func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
 	record, found, err := t.journal.get(backgroundContext, k.Key)
 	if err != nil {
 		return nil, t.record(err)
@@ -44,7 +45,8 @@ func (t *ApplyStateTable) readBounded(k keylet.Keylet) ([]byte, error) {
 	return data, nil
 }
 
-func (t *ApplyStateTable) existsBounded(k keylet.Keylet) (bool, error) {
+// Exists checks if an entry exists
+func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
 	record, found, err := t.journal.get(backgroundContext, k.Key)
 	if err != nil {
 		return false, t.record(err)
@@ -56,7 +58,8 @@ func (t *ApplyStateTable) existsBounded(k keylet.Keylet) (bool, error) {
 	return exists, t.record(err)
 }
 
-func (t *ApplyStateTable) insertBounded(k keylet.Keylet, data []byte) error {
+// Insert adds a new entry
+func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 	record, found, err := t.journal.get(backgroundContext, k.Key)
 	if err != nil {
 		return t.record(err)
@@ -84,7 +87,8 @@ func (t *ApplyStateTable) insertBounded(k keylet.Keylet, data []byte) error {
 	}))
 }
 
-func (t *ApplyStateTable) updateBounded(k keylet.Keylet, data []byte) error {
+// Update modifies an existing entry
+func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 	record, found, err := t.journal.get(backgroundContext, k.Key)
 	if err != nil {
 		return t.record(err)
@@ -112,7 +116,8 @@ func (t *ApplyStateTable) updateBounded(k keylet.Keylet, data []byte) error {
 	return t.record(t.journal.putItem(backgroundContext, k.Key, item))
 }
 
-func (t *ApplyStateTable) eraseBounded(k keylet.Keylet) error {
+// Erase removes an entry
+func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
 	record, found, err := t.journal.get(backgroundContext, k.Key)
 	if err != nil {
 		return t.record(err)
@@ -139,7 +144,9 @@ func (t *ApplyStateTable) eraseBounded(k keylet.Keylet) error {
 	}))
 }
 
-func (t *ApplyStateTable) isErasedBounded(key [32]byte) bool {
+// IsErased returns true if the entry at the given key has been erased.
+func (t *ApplyStateTable) IsErased(k keylet.Keylet) bool {
+	key := k.Key
 	record, found, err := t.journal.get(backgroundContext, key)
 	if err != nil {
 		t.record(err)
@@ -148,7 +155,11 @@ func (t *ApplyStateTable) isErasedBounded(key [32]byte) bool {
 	return found && record.item != nil && record.item.Action == ActionErase
 }
 
-func (t *ApplyStateTable) forEachBounded(fn func([32]byte, []byte) bool) error {
+// ForEach iterates over all state entries, reflecting local modifications.
+// Locally inserted and modified entries use their current data.
+// Locally erased entries are skipped.
+// Base entries not touched locally are passed through unchanged.
+func (t *ApplyStateTable) ForEach(fn func([32]byte, []byte) bool) error {
 	if fn == nil {
 		return nil
 	}
@@ -186,7 +197,10 @@ func (t *ApplyStateTable) forEachBounded(fn func([32]byte, []byte) bool) error {
 	return t.record(err)
 }
 
-func (t *ApplyStateTable) succBounded(key [32]byte) ([32]byte, []byte, bool, error) {
+// Succ returns the first entry with key > the given key.
+// Combines local items with the base view's Succ.
+// Reference: rippled ReadView::succ()
+func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	var localKey [32]byte
 	var localData []byte
 	localFound := false
@@ -234,9 +248,8 @@ func (t *ApplyStateTable) succBounded(key [32]byte) ([32]byte, []byte, bool, err
 	return localKey, localData, localFound, nil
 }
 
-// ForEachTracked streams the final tracked item records in key order. The
-// bounded path supplies an owned, short-lived record to each callback; callers
-// that retain bytes must clone them.
+// ForEachTracked streams tracked items in key order. Callers retaining bytes
+// beyond the callback must clone them.
 func (t *ApplyStateTable) ForEachTracked(fn func([32]byte, *TrackedEntry) bool) error {
 	if fn == nil {
 		return nil
@@ -246,7 +259,7 @@ func (t *ApplyStateTable) ForEachTracked(fn func([32]byte, *TrackedEntry) bool) 
 	}))
 }
 
-func (t *ApplyStateTable) applyThreadingBounded() error {
+func (t *ApplyStateTable) applyThreading() error {
 	fixPreviousTxnID := t.effectiveRules().Enabled(amendment.FeatureFixPreviousTxnID)
 	var callbackErr error
 	err := t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
@@ -275,7 +288,7 @@ func (t *ApplyStateTable) applyThreadingBounded() error {
 					}
 				}
 			}
-			callbackErr = t.threadOwnersBounded(key, item.Current, entryType)
+			callbackErr = t.threadOwners(key, item.Current, entryType)
 		case ActionModify:
 			if bytes.Equal(item.Original, item.Current) {
 				return true
@@ -297,7 +310,7 @@ func (t *ApplyStateTable) applyThreadingBounded() error {
 			if data == nil {
 				data = item.Current
 			}
-			callbackErr = t.threadOwnersBounded(key, data, entryType)
+			callbackErr = t.threadOwners(key, data, entryType)
 		}
 		return callbackErr == nil
 	})
@@ -307,7 +320,7 @@ func (t *ApplyStateTable) applyThreadingBounded() error {
 	return t.record(callbackErr)
 }
 
-func (t *ApplyStateTable) threadOwnersBounded(sourceKey [32]byte, data []byte, entryType entry.Type) error {
+func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType entry.Type) error {
 	if data == nil {
 		return nil
 	}
@@ -388,7 +401,7 @@ func (t *ApplyStateTable) threadOwnersBounded(sourceKey [32]byte, data []byte, e
 	return nil
 }
 
-func (t *ApplyStateTable) applyOrderedBounded(atomicBase ledgercore.AtomicWriter) (*tx.Metadata, error) {
+func (t *ApplyStateTable) applyOrdered(atomicBase ledgercore.AtomicWriter) (*tx.Metadata, error) {
 	metadata := &tx.Metadata{AffectedNodes: make([]tx.AffectedNode, 0)}
 	var callbackErr error
 	err := t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
@@ -506,7 +519,9 @@ func (t *ApplyStateTable) applyOrderedBounded(atomicBase ledgercore.AtomicWriter
 	return metadata, nil
 }
 
-func (t *ApplyStateTable) collectEntriesBounded() []invariants.InvariantEntry {
+// CollectEntries returns all modified ledger entries (Insert/Modify/Erase) for invariant checking.
+// Must be called BEFORE Apply() — entries are still in the table at this point.
+func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 	var entries []invariants.InvariantEntry
 	err := t.journal.iterate(backgroundContext, func(key [32]byte, record journalRecord) bool {
 		item := record.item
@@ -540,7 +555,11 @@ func (t *ApplyStateTable) collectEntriesBounded() []invariants.InvariantEntry {
 	return entries
 }
 
-func (t *ApplyStateTable) sizeBounded() int {
+// Size returns the number of entries that have been inserted, modified, or erased.
+// This matches rippled's ApplyStateTable::size() which counts non-cache entries.
+// Used for the oversizeMetaDataCap check (tecOVERSIZE when size > 5200).
+// Reference: rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp
+func (t *ApplyStateTable) Size() int {
 	count := 0
 	err := t.journal.iterate(backgroundContext, func(_ [32]byte, record journalRecord) bool {
 		if record.item != nil && record.item.Action != ActionCache {
@@ -554,7 +573,31 @@ func (t *ApplyStateTable) sizeBounded() int {
 	return count
 }
 
-func (t *ApplyStateTable) modifiedNodePrevTxnBounded(key [32]byte, entryType entry.Type, origEntry entry.Entry) (string, uint32) {
+// modifiedNodePrevTxn returns the node-level PreviousTxnID/PreviousTxnLgrSeq
+// for a ModifiedNode. The emitted value is the threaded SLE's PreviousTxnID as
+// it existed BEFORE this tx threaded it (curNode's pre-thread value), omitted
+// when that value is zero — rippled only emits a pointer when the SLE actually
+// carried one (its threading gate is getFieldIndex(sfPreviousTxnID) != -1).
+//
+// For a normal in-place modify the original node carries the reliable pointer:
+// the apply path peeks the SLE, so curNode and the original share it.
+//
+// For an erase+reinsert, and for a DirectoryNode, the curNode can be a FRESH
+// SLE with no prior pointer even though the pre-tx object had one, so the
+// original node is the WRONG source. An order-book directory page emptied and
+// rebuilt in the same tx — an account replacing the only offer at a quality
+// level removes it (page erased) then re-adds the new offer (page recreated from
+// scratch by state.DirInsert) — serializes no PreviousTxnID, so rippled threads
+// it to self with a zero prior pointer and emits none. There the captured
+// pre-thread value of Current (zero for the rebuilt page) is correct; an
+// in-place-modified page (e.g. an owner directory) keeps its pointer and still
+// emits it. DirectoryNode is the only type with this erase→rebuild-flattened-to-
+// modify case AND a serializer that preserves PreviousTxnID round-trip, so its
+// Current is a faithful proxy for rippled's curNode field-presence gate. The
+// other conditional-threading types (Amendments/FeeSettings/NegativeUNL/AMM) are
+// only ever modified in place and several drop PreviousTxnID from Current, so
+// they must source the pointer from the original node.
+func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType entry.Type, origEntry entry.Entry) (string, uint32) {
 	record, found, err := t.journal.get(backgroundContext, key)
 	if err != nil {
 		t.record(err)
@@ -568,8 +611,3 @@ func (t *ApplyStateTable) modifiedNodePrevTxnBounded(key [32]byte, entryType ent
 	}
 	return origEntry.PreviousTxn()
 }
-
-// Keep these references in this file so accidental removal of the bounded
-// path's interfaces is caught by the compiler when engine callers evolve.
-var _ tx.LedgerView = (*ApplyStateTable)(nil)
-var _ ledgercore.AtomicWriter = (*ApplyStateTable)(nil)

@@ -162,6 +162,14 @@ protocol = "peer"
 # Database
 # =============================================================================
 
+# Execution overlays are always active. Scratch is a disk allowance; the other
+# state allowances participate in the shared process memory budget.
+[state]
+memory_mb = 64
+scratch_mb = 2048
+cache_mb = 16
+memtable_mb = 8
+
 [node_db]
 type = "pebble"
 path = "/var/lib/goxrpl/db/pebble"

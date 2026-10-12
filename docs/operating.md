@@ -449,6 +449,13 @@ go-xrpl keeps content-addressed state separate from queryable indexes (see
 [architecture.md](architecture.md#storage-layering)):
 
 - **Node store** (`[node_db]`) holds serialized ledger objects keyed by hash.
+- **Execution state** (`[state]`) uses bounded overlays in every mode. Persistent
+  nodes keep a flat materialization in `execution-state` under the local state
+  directory. Defaults are `memory_mb = 64`, `scratch_mb = 2048`, `cache_mb = 16`
+  and `memtable_mb = 8`; startup validates these allowances against the shared
+  process budget. There is no enable/disable switch. Restart reconciles pending
+  advancement and index publication before accepting work; preserve that
+  directory when recovering the node. See [state-memory-spec.md](state-memory-spec.md#16-operating-bounded-execution).
 - **Relational databases** (`[sqlite]`, under `database_path`) hold the
   transaction/account/ledger/validation indexes that answer history RPCs. SQLite
   is the default and needs no external service; a PostgreSQL backend
