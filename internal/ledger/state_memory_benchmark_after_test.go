@@ -17,19 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
-type stateMemoryAfterRuntime struct {
-	store         *ExecutionStore
-	flat          *flatstate.Store
-	family        *benchmarkFamily
-	workspace     *membudget.Account
-	overlayMemory *membudget.Account
-	overlayDisk   *membudget.Account
-	flatAdvances  atomic.Uint64
-	nodePath      string
-	flatPath      string
-	spillPath     string
-}
-
 func benchmarkRevisionName() string { return "bounded-flatstate" }
 
 func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) (*stateMemoryBenchmarkRuntime, error) {
@@ -84,11 +71,7 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 		_ = family.close()
 		return nil, err
 	}
-	rt := &stateMemoryAfterRuntime{
-		store: store, flat: flat, family: family, workspace: workspace,
-		overlayMemory: overlayMemory, overlayDisk: overlayDisk,
-		nodePath: nodePath, flatPath: flatPath, spillPath: spillPath,
-	}
+	var flatAdvances atomic.Uint64
 	return &stateMemoryBenchmarkRuntime{
 		family: family, nodePath: nodePath, flatPath: flatPath,
 		initialize: func(h header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
@@ -120,7 +103,7 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 			if err := flat.AckOutbox(ctx, flatstate.SemanticCommitID(target.LedgerHash, "state-memory-benchmark")); err != nil {
 				return err
 			}
-			rt.flatAdvances.Add(1)
+			flatAdvances.Add(1)
 			return nil
 		},
 		reopen: func(ctx context.Context, l *Ledger) (*Ledger, error) {
@@ -131,7 +114,7 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 			stats := flat.Stats()
 			execution := store.Stats()
 			return benchmarkFlatStats{
-				Active: true, Advances: rt.flatAdvances.Load(), FlatHits: execution.FlatHits, FlatFallbacks: execution.FlatFallbacks,
+				Active: true, Advances: flatAdvances.Load(), FlatHits: execution.FlatHits, FlatFallbacks: execution.FlatFallbacks,
 				OutboxCount: stats.OutboxCount, OutboxBytes: stats.OutboxBytes, Failures: stats.Failures,
 			}
 		},
@@ -174,7 +157,7 @@ func benchmarkFlatDescriptor(l *Ledger) flatstate.Descriptor {
 // not materialize either ledger into a retained SHAMap before flat publication.
 func benchmarkStateChangesAfter(ctx context.Context, parent, current *Ledger) ([]benchmarkChange, error) {
 	if parent == nil {
-		return benchmarkStateChanges(ctx, nil, current)
+		return benchmarkStateChanges(ctx, current)
 	}
 	state := current.execution.state
 	reader := shamap.NewRootReader(shamap.TypeState, parent.Header().AccountHash, state.store.config.Family,

@@ -178,7 +178,6 @@ type stateMemoryBenchmarkRuntime struct {
 	family       *benchmarkFamily
 	nodePath     string
 	flatPath     string
-	memory       benchmarkMemoryStats
 	initialize   func(header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) (*Ledger, error)
 	persist      func(context.Context, *Ledger) error
 	changes      func(context.Context, *Ledger, *Ledger) ([]benchmarkChange, error)
@@ -385,7 +384,7 @@ func TestStateMemoryBenchmark(t *testing.T) {
 	if err := rt.persist(ctx, parent); err != nil {
 		t.Fatalf("persist initial ledger: %v", err)
 	}
-	initialChanges, err := benchmarkStateChanges(ctx, nil, parent)
+	initialChanges, err := benchmarkStateChanges(ctx, parent)
 	if err != nil {
 		t.Fatalf("collect initial changes: %v", err)
 	}
@@ -406,12 +405,10 @@ func TestStateMemoryBenchmark(t *testing.T) {
 		}
 	}
 	initialState = nil
-	initialTx = nil
-	initialChanges = nil
 
 	closeTime := parent.CloseTime().Add(4 * time.Second)
 	for warm := 0; warm < c.WarmupLedgers; warm++ {
-		parent, closeTime = runStateMemoryBenchmarkLedger(t, ctx, rt, c, parent, closeTime, warm, keys, nil)
+		parent, closeTime = runStateMemoryBenchmarkLedger(t, ctx, rt, c, parent, closeTime, warm, keys)
 	}
 	retained[0] = parent
 
@@ -438,6 +435,9 @@ func TestStateMemoryBenchmark(t *testing.T) {
 			data, err := current.Read(keylet.Keylet{Key: keys[slot]})
 			if err != nil {
 				t.Fatalf("read ledger %d key %d: %v", i, slot, err)
+			}
+			if len(data) != c.ValueBytes {
+				t.Fatalf("read ledger %d key %d returned %d bytes, want %d", i, slot, len(data), c.ValueBytes)
 			}
 			_, _ = readDigest.Write(keys[slot][:])
 			_, _ = readDigest.Write(data)
@@ -563,15 +563,20 @@ func TestStateMemoryBenchmark(t *testing.T) {
 	writeStateMemoryBenchmarkResult(t, result)
 }
 
-func runStateMemoryBenchmarkLedger(t *testing.T, ctx context.Context, rt *stateMemoryBenchmarkRuntime, c StateMemoryBenchmarkConfig, parent *Ledger, closeTime time.Time, round int, keys [][32]byte, _ []benchmarkChange) (*Ledger, time.Time) {
+func runStateMemoryBenchmarkLedger(t *testing.T, ctx context.Context, rt *stateMemoryBenchmarkRuntime, c StateMemoryBenchmarkConfig, parent *Ledger, closeTime time.Time, round int, keys [][32]byte) (*Ledger, time.Time) {
 	current, err := NewOpen(parent, closeTime)
 	if err != nil {
 		t.Fatalf("open warmup ledger %d: %v", round, err)
 	}
 	for read := 0; read < c.ReadsPerLedger; read++ {
 		existingEntries := c.SeedEntries + round*c.DisjointWritesLedger
-		if _, err := current.Read(keylet.Keylet{Key: keys[(round*131+read*17)%existingEntries]}); err != nil {
+		slot := (round*131 + read*17) % existingEntries
+		data, err := current.Read(keylet.Keylet{Key: keys[slot]})
+		if err != nil {
 			t.Fatalf("read warmup ledger %d: %v", round, err)
+		}
+		if len(data) != c.ValueBytes {
+			t.Fatalf("read warmup ledger %d key %d returned %d bytes, want %d", round, slot, len(data), c.ValueBytes)
 		}
 	}
 	for write := 0; write < c.HotWritesPerLedger; write++ {
@@ -609,44 +614,17 @@ func runStateMemoryBenchmarkLedger(t *testing.T, ctx context.Context, rt *stateM
 	return current, closeTime.Add(4 * time.Second)
 }
 
-func benchmarkStateChanges(ctx context.Context, parent, current *Ledger) ([]benchmarkChange, error) {
-	if parent == nil {
-		view, err := current.StateMapSnapshotContext(ctx)
-		if err != nil {
-			return nil, err
-		}
-		changes := make([]benchmarkChange, 0, view.Size())
-		if err := view.ForEachCtx(ctx, func(item *shamap.Item) bool {
-			changes = append(changes, benchmarkChange{Key: item.Key(), Value: append([]byte(nil), item.Data()...)})
-			return true
-		}); err != nil {
-			return nil, err
-		}
-		sort.Slice(changes, func(i, j int) bool { return string(changes[i].Key[:]) < string(changes[j].Key[:]) })
-		return changes, nil
-	}
-	previous, err := parent.StateMapSnapshotContext(ctx)
+func benchmarkStateChanges(ctx context.Context, current *Ledger) ([]benchmarkChange, error) {
+	view, err := current.StateMapSnapshotContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	currentMap, err := current.StateMapSnapshotContext(ctx)
-	if err != nil {
+	changes := make([]benchmarkChange, 0, view.Size())
+	if err := view.ForEachCtx(ctx, func(item *shamap.Item) bool {
+		changes = append(changes, benchmarkChange{Key: item.Key(), Value: append([]byte(nil), item.Data()...)})
+		return true
+	}); err != nil {
 		return nil, err
-	}
-	diff, err := previous.CompareContext(ctx, currentMap, 0)
-	if err != nil {
-		return nil, err
-	}
-	changes := make([]benchmarkChange, 0, len(diff.Differences))
-	for _, item := range diff.Differences {
-		switch item.Type {
-		case shamap.DiffRemoved:
-			changes = append(changes, benchmarkChange{Key: item.Key, Delete: true})
-		case shamap.DiffAdded, shamap.DiffModified:
-			changes = append(changes, benchmarkChange{Key: item.Key, Value: append([]byte(nil), item.SecondItem.Data()...)})
-		default:
-			return nil, fmt.Errorf("unknown SHAMap difference type %d", item.Type)
-		}
 	}
 	sort.Slice(changes, func(i, j int) bool { return string(changes[i].Key[:]) < string(changes[j].Key[:]) })
 	return changes, nil
