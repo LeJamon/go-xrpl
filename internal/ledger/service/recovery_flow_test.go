@@ -165,10 +165,11 @@ func TestRecoveryParentDiffRequiresCertifiedCurrentGeneration(t *testing.T) {
 	for _, mode := range []string{"certified", "candidate", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			family := newReplayAdmissionFamily(t)
-			svc, err := New(Config{SHAMapFamily: family})
+			execution := newTestExecutionStore(t, family)
+			svc, err := New(Config{SHAMapFamily: family, Execution: execution})
 			require.NoError(t, err)
 			state := persistedReplayAdmissionState(t, family, 4096)
-			base := replayAdmissionLedger(t, 500, [32]byte{50}, [32]byte{49}, state, shamap.New(shamap.TypeTransaction))
+			base := replayAdmissionLedger(t, 500, [32]byte{50}, [32]byte{49}, state, shamap.New(shamap.TypeTransaction), execution)
 			if mode == "candidate" {
 				svc.rememberValidatedStateBaseCandidate(base.Header())
 			} else {
@@ -177,7 +178,7 @@ func TestRecoveryParentDiffRequiresCertifiedCurrentGeneration(t *testing.T) {
 			changed, err := base.StateMapSnapshot()
 			require.NoError(t, err)
 			require.NoError(t, changed.PutWithNodeType([32]byte{0xf0, 1}, []byte("changed parent state"), shamap.NodeTypeAccountState))
-			parent := replayAdmissionLedger(t, 800, [32]byte{80}, [32]byte{79}, changed, shamap.New(shamap.TypeTransaction))
+			parent := replayAdmissionLedger(t, 800, [32]byte{80}, [32]byte{79}, changed, shamap.New(shamap.TypeTransaction), execution)
 			if mode == "expired" {
 				family.bumpFingerprint()
 			}

@@ -195,9 +195,11 @@ func replayAdmissionLedger(t *testing.T, sequence uint32, seed, parentHash [32]b
 	require.NoError(t, err)
 	txRoot, err := tx.Hash()
 	require.NoError(t, err)
-	store := newTestExecutionStore(t)
-	if len(stores) > 0 {
+	var store *ledger.ExecutionStore
+	if len(stores) > 0 && stores[0] != nil {
 		store = stores[0]
+	} else {
+		store = newTestExecutionStore(t)
 	}
 	baseTime := time.Unix(1_000_000+int64(sequence)*10+int64(seed[0]), 0).UTC()
 	hdr := header.LedgerHeader{
