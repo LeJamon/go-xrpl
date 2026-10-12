@@ -313,15 +313,14 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	if err != nil {
 		return cleanupPrepared(fmt.Errorf("size open-ledger transactions: %w", err))
 	}
-	localSnapshot := []openledger.PendingTx(nil)
+	var localStats, queueStats openledger.TransactionSnapshotStats
 	if localsPool != nil {
-		localSnapshot = localsPool.GetTxSet()
+		localStats.Count, localStats.Bytes = localsPool.SnapshotStats()
 	}
-	queueSnapshot := []*txq.CandidateDetails(nil)
 	if queue != nil {
-		queueSnapshot = queue.AllTxs()
+		queueStats.Count, queueStats.Bytes = queue.SnapshotStats()
 	}
-	privateBytes := preferredTransitionEstimate(stats, localSnapshot, queueSnapshot, options.retries)
+	privateBytes := preferredTransitionEstimate(stats, localStats, queueStats, options.retries)
 	// Accepted leaves include inner Batch transactions and metadata, even when
 	// none of their outer transactions remain in the current open ledger.
 	if !options.allowReplayFault {
@@ -357,7 +356,9 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	if err != nil {
 		return cleanupPrepared(fmt.Errorf("capture open-ledger transactions: %w", err))
 	}
-	p.locals = localSnapshot
+	if localsPool != nil {
+		p.locals = localsPool.GetTxSet()
+	}
 	if err := p.ctx.Err(); err != nil {
 		return cleanupPrepared(err)
 	}
@@ -931,16 +932,12 @@ const (
 	preferredTransitionResultBytes   = 4 << 10
 )
 
-// preferredTransitionEstimate charges the detached inputs and a second copy
-// for the private successor/staged relay path. Metadata covers decoded
-// transaction objects, queue containers and staged result/event records. Blob
-// sizes come from the snapshots themselves so a large local or queued
-// transaction is accounted by its actual retained bytes rather than by a
-// transaction-count surrogate.
+// preferredTransitionEstimate charges private inputs and successor staging
+// before snapshots copy transaction blobs from the live pools.
 func preferredTransitionEstimate(
 	stats openledger.TransactionSnapshotStats,
-	locals []openledger.PendingTx,
-	queue []*txq.CandidateDetails,
+	locals openledger.TransactionSnapshotStats,
+	queue openledger.TransactionSnapshotStats,
 	retries []openledger.PendingTx,
 ) uint64 {
 	bytes := uint64(preferredTransitionBaseBytes)
@@ -956,23 +953,21 @@ func preferredTransitionEstimate(
 	if !add(stats.Bytes) {
 		return bytes
 	}
-	for _, inputs := range [][]openledger.PendingTx{locals, retries} {
-		for _, local := range inputs {
-			if items == ^uint64(0) {
-				return ^uint64(0)
-			}
-			items++
-			if !add(uint64(len(local.Blob))) {
-				return bytes
-			}
+	for _, pool := range []openledger.TransactionSnapshotStats{locals, queue} {
+		if pool.Count > ^uint64(0)-items {
+			return ^uint64(0)
+		}
+		items += pool.Count
+		if !add(pool.Bytes) {
+			return bytes
 		}
 	}
-	for _, candidate := range queue {
+	for _, retry := range retries {
 		if items == ^uint64(0) {
 			return ^uint64(0)
 		}
 		items++
-		if candidate != nil && !add(uint64(len(candidate.TxBlob))) {
+		if !add(uint64(len(retry.Blob))) {
 			return bytes
 		}
 	}
