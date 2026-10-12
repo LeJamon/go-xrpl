@@ -186,6 +186,17 @@ type executionTree struct {
 	haveHash      bool
 }
 
+type durableExecutionFamily struct {
+	shamap.Family
+	durable interface {
+		FetchDurable(context.Context, [32]byte) ([]byte, error)
+	}
+}
+
+func (f durableExecutionFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	return f.durable.FetchDurable(ctx, hash)
+}
+
 func (t *executionTree) reader() *shamap.RootReader {
 	return shamap.NewRootReader(t.kind, t.root, t.store.config.Family,
 		shamap.WithCommitmentBudget(t.store.config.Workspace))
@@ -307,8 +318,12 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 
 func (t *executionTree) newMutable(sequence uint32) (*executionTree, error) {
 	base := executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: t.sequence, count: t.count}
+	closure := t.closure
+	if t.root == ([32]byte{}) && closure == executionClosureUnknown {
+		closure = executionClosureVerified
+	}
 	out := &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: sequence, count: t.count,
-		parentClosure: t.closure == executionClosureVerified}
+		closure: closure, parentClosure: closure == executionClosureVerified || closure == executionClosurePending}
 	lease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		return nil, err
@@ -337,7 +352,7 @@ func (t *executionTree) fork() (*executionTree, error) {
 	}
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root,
 		sequence: t.sequence, changes: changes, lease: lease, release: lease.Release, count: t.count,
-		parentClosure: t.parentClosure}, nil
+		closure: t.closure, parentClosure: t.parentClosure}, nil
 }
 
 func (t *executionTree) close() {
@@ -458,7 +473,7 @@ func (t *executionTree) PutItemsAtomically(items ...*shamap.Item) error {
 		}
 	}
 	t.close()
-	t.changes, t.lease, t.release, t.count, t.parentClosure = fork.changes, fork.lease, fork.release, fork.count, fork.parentClosure
+	t.changes, t.lease, t.release, t.count, t.closure, t.parentClosure = fork.changes, fork.lease, fork.release, fork.count, fork.closure, fork.parentClosure
 	fork.changes, fork.lease, fork.release = nil, nil, nil
 	t.haveHash = false
 	return nil
@@ -609,7 +624,7 @@ func (t *executionTree) rooted(ctx context.Context) (*executionTree, error) {
 		closure = t.closure
 	} else if t.parentClosure {
 		closure = executionClosurePending
-		if root == t.root {
+		if root == t.root && t.closure == executionClosureVerified {
 			closure = executionClosureVerified
 		}
 	}
@@ -621,7 +636,15 @@ func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
 	if tree == nil || tree.root == ([32]byte{}) {
 		return nil
 	}
-	_, err := tree.reader().Count(ctx)
+	family := tree.store.config.Family
+	if durable, ok := family.(interface {
+		FetchDurable(context.Context, [32]byte) ([]byte, error)
+	}); ok {
+		family = durableExecutionFamily{Family: family, durable: durable}
+	}
+	reader := shamap.NewRootReader(tree.kind, tree.root, family,
+		shamap.WithCommitmentBudget(tree.store.config.Workspace))
+	_, err := reader.Count(ctx)
 	return err
 }
 
