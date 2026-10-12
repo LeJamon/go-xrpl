@@ -69,6 +69,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(ledger)
 	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	response := ledgerEntryResponseFields(ledger, validated)
 	if transactions {

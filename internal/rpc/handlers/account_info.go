@@ -72,6 +72,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(ledger)
 	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)

@@ -47,6 +47,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(targetLedger)
 	response := ledgerEntryResponseFields(targetLedger, validated)
 	ledgerIndex, selectorErr := resolveLedgerSelector(ledgerSpec)
 	if selectorErr != nil {

@@ -892,6 +892,19 @@ type ClosedLedgerViewSource interface {
 	GetClosedLedgerView() (LedgerStateView, error)
 }
 
+// ContextLedgerSequenceReader is the context-aware form of ledger sequence
+// lookup. Implementations may attach a lifetime lease to the returned reader;
+// callers should close it when they finish reading.
+type ContextLedgerSequenceReader interface {
+	GetLedgerBySequenceContext(ctx context.Context, seq uint32) (LedgerReader, error)
+}
+
+// LedgerReadCloser is implemented by readers and views that retain a durable
+// ledger root for the duration of an operation.
+type LedgerReadCloser interface {
+	Close() error
+}
+
 // LedgerAccessor is the construction compatibility aggregate.
 type LedgerAccessor interface {
 	LedgerDataReader
@@ -1090,11 +1103,30 @@ type LedgerViewSource interface {
 	GetLedgerViewByHash(hash [32]byte) (LedgerStateView, LedgerReader, error)
 }
 
+// ContextLedgerViewSource is the context-aware form of LedgerViewSource.
+// Returned views/readers may share a closeable root lease.
+type ContextLedgerViewSource interface {
+	GetLedgerViewBySeqContext(ctx context.Context, seq uint32) (LedgerStateView, LedgerReader, error)
+	GetLedgerViewByHashContext(ctx context.Context, hash [32]byte) (LedgerStateView, LedgerReader, error)
+}
+
 // OpenLedgerViewSource provides an immutable snapshot of the current
 // open-ledger state for operations such as transaction path construction.
 // It is optional so lightweight RPC mocks can continue to omit the view.
 type OpenLedgerViewSource interface {
 	GetOpenLedgerView() (LedgerStateView, error)
+}
+
+// ContextOpenLedgerViewSource is the context-aware form of
+// OpenLedgerViewSource.
+type ContextOpenLedgerViewSource interface {
+	GetOpenLedgerViewContext(ctx context.Context) (LedgerStateView, error)
+}
+
+// ContextClosedLedgerViewSource is the context-aware form of
+// ClosedLedgerViewSource.
+type ContextClosedLedgerViewSource interface {
+	GetClosedLedgerViewContext(ctx context.Context) (LedgerStateView, error)
 }
 
 // LedgerStateReader provides low-level read access to ledger state.

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -23,7 +24,9 @@ const (
 
 type pathFindRefreshUpdate struct {
 	generation uint64
-	getView    func() (types.LedgerStateView, error)
+	ctx        context.Context
+	cancel     context.CancelFunc
+	getView    func(context.Context) (types.LedgerStateView, error)
 	targets    []pathFindUpdateTarget
 }
 
@@ -41,15 +44,17 @@ type pathFindRefreshJob struct {
 type pathFindRefreshManager struct {
 	ws *WebSocketServer
 
-	mu         sync.Mutex
-	started    bool
-	closed     bool
-	generation uint64
-	fairCursor int
-	pending    *pathFindRefreshUpdate
-	jobs       map[*websocketConnection]pathFindRefreshJob
-	ready      []*websocketConnection
-	running    map[*websocketConnection]pathFindRefreshJob
+	mu               sync.Mutex
+	started          bool
+	closed           bool
+	generation       uint64
+	fairCursor       int
+	pending          *pathFindRefreshUpdate
+	activeCancel     context.CancelFunc
+	activeGeneration uint64
+	jobs             map[*websocketConnection]pathFindRefreshJob
+	ready            []*websocketConnection
+	running          map[*websocketConnection]pathFindRefreshJob
 
 	stop       chan struct{}
 	updateWake chan struct{}
@@ -98,6 +103,15 @@ func (m *pathFindRefreshManager) goroutineDone() {
 }
 
 func (m *pathFindRefreshManager) enqueue(getView func() (types.LedgerStateView, error), targets []pathFindUpdateTarget) {
+	m.enqueueContext(func(context.Context) (types.LedgerStateView, error) {
+		if getView == nil {
+			return nil, nil
+		}
+		return getView()
+	}, targets)
+}
+
+func (m *pathFindRefreshManager) enqueueContext(getView func(context.Context) (types.LedgerStateView, error), targets []pathFindUpdateTarget) {
 	if len(targets) == 0 {
 		m.invalidate()
 		return
@@ -116,19 +130,30 @@ func (m *pathFindRefreshManager) enqueue(getView func() (types.LedgerStateView, 
 		m.mu.Unlock()
 		return
 	}
+	if m.pending != nil && m.pending.cancel != nil {
+		m.pending.cancel()
+	}
+	if m.activeCancel != nil {
+		m.activeCancel()
+	}
+	updateContext, cancel := context.WithCancel(context.Background())
 	m.generation++
 	targets = rotatePathFindTargets(targets, m.fairCursor)
 	m.fairCursor++
 	m.pending = &pathFindRefreshUpdate{
 		generation: m.generation,
+		ctx:        updateContext,
+		cancel:     cancel,
 		getView:    getView,
 		targets:    targets,
 	}
 	// A newer generation makes all queued work obsolete. In-flight work is
 	// checked against generation before and after pathfinding.
+	queuedViews := queuedPathFindViews(m.jobs)
 	m.jobs = make(map[*websocketConnection]pathFindRefreshJob)
 	m.ready = m.ready[:0]
 	m.mu.Unlock()
+	closePathFindViews(queuedViews)
 	m.signal(m.updateWake)
 }
 
@@ -151,13 +176,22 @@ func rotatePathFindTargets(targets []pathFindUpdateTarget, offset int) []pathFin
 // from a previous generation cannot publish after all sessions are gone.
 func (m *pathFindRefreshManager) invalidate() {
 	m.mu.Lock()
+	var queuedViews []types.LedgerStateView
 	if !m.closed {
 		m.generation++
+		if m.pending != nil && m.pending.cancel != nil {
+			m.pending.cancel()
+		}
+		if m.activeCancel != nil {
+			m.activeCancel()
+		}
 		m.pending = nil
+		queuedViews = queuedPathFindViews(m.jobs)
 		m.jobs = make(map[*websocketConnection]pathFindRefreshJob)
 		m.ready = m.ready[:0]
 	}
 	m.mu.Unlock()
+	closePathFindViews(queuedViews)
 }
 
 func (m *pathFindRefreshManager) coordinate() {
@@ -175,16 +209,6 @@ func (m *pathFindRefreshManager) coordinate() {
 				break
 			}
 
-			view, err := getPathFindRefreshView(update.getView)
-			if err != nil {
-				// A failed view lookup must not poison subsequent generations.
-				wsLog().Error("Failed to get ledger view for path_find updates", "err", err)
-				continue
-			}
-			if view == nil || !m.generationCurrent(update.generation) {
-				continue
-			}
-
 			for _, target := range update.targets {
 				if !m.generationCurrent(update.generation) {
 					break
@@ -192,17 +216,35 @@ func (m *pathFindRefreshManager) coordinate() {
 				if !target.current() {
 					continue
 				}
+				view, err := getPathFindRefreshView(update.ctx, update.getView)
+				if err != nil {
+					closePathFindView(view)
+					if !errors.Is(err, context.Canceled) {
+						// A failed view lookup must not poison subsequent generations.
+						wsLog().Error("Failed to get ledger view for path_find updates", "err", err)
+					}
+					break
+				}
+				if view == nil {
+					continue
+				}
+				if !m.generationCurrent(update.generation) {
+					closePathFindView(view)
+					break
+				}
 				m.enqueueJob(pathFindRefreshJob{target: target, view: view, generation: update.generation}, update.generation)
 			}
+			m.clearActiveUpdate(update)
+			update.cancel()
 		}
 	}
 }
 
-func getPathFindRefreshView(getView func() (types.LedgerStateView, error)) (view types.LedgerStateView, err error) {
+func getPathFindRefreshView(ctx context.Context, getView func(context.Context) (types.LedgerStateView, error)) (view types.LedgerStateView, err error) {
 	if getView == nil {
 		return nil, nil
 	}
-	return getView()
+	return getView(ctx)
 }
 
 func (m *pathFindRefreshManager) takePending() *pathFindRefreshUpdate {
@@ -210,6 +252,10 @@ func (m *pathFindRefreshManager) takePending() *pathFindRefreshUpdate {
 	defer m.mu.Unlock()
 	update := m.pending
 	m.pending = nil
+	if update != nil {
+		m.activeCancel = update.cancel
+		m.activeGeneration = update.generation
+	}
 	return update
 }
 
@@ -217,6 +263,7 @@ func (m *pathFindRefreshManager) enqueueJob(job pathFindRefreshJob, generation u
 	m.mu.Lock()
 	if m.closed || m.generation != generation || !job.target.current() {
 		m.mu.Unlock()
+		closePathFindView(job.view)
 		return
 	}
 	if _, exists := m.jobs[job.target.connection]; !exists {
@@ -246,6 +293,7 @@ func (m *pathFindRefreshManager) worker() {
 
 func (m *pathFindRefreshManager) runJob(job pathFindRefreshJob) {
 	defer m.finishJob(job)
+	defer closePathFindView(job.view)
 	release, admitted := m.waitForPathfindAdmission(job)
 	if !admitted {
 		return
@@ -374,8 +422,10 @@ func (m *pathFindRefreshManager) jobCurrent(job pathFindRefreshJob) bool {
 }
 
 func (m *pathFindRefreshManager) cancel(connection *websocketConnection, session *PathFindSession, generation uint64) {
+	var view types.LedgerStateView
 	m.mu.Lock()
 	if job, ok := m.jobs[connection]; ok && job.target.session == session && job.target.generation == generation {
+		view = job.view
 		delete(m.jobs, connection)
 		ready := m.ready[:0]
 		for _, candidate := range m.ready {
@@ -386,17 +436,27 @@ func (m *pathFindRefreshManager) cancel(connection *websocketConnection, session
 		m.ready = ready
 	}
 	m.mu.Unlock()
+	closePathFindView(view)
 }
 
 func (m *pathFindRefreshManager) shutdown() {
 	m.stopOnce.Do(func() {
+		var queuedViews []types.LedgerStateView
 		m.mu.Lock()
 		m.closed = true
+		if m.pending != nil && m.pending.cancel != nil {
+			m.pending.cancel()
+		}
+		if m.activeCancel != nil {
+			m.activeCancel()
+		}
 		m.pending = nil
+		queuedViews = queuedPathFindViews(m.jobs)
 		m.jobs = make(map[*websocketConnection]pathFindRefreshJob)
 		m.ready = nil
 		started := m.started
 		m.mu.Unlock()
+		closePathFindViews(queuedViews)
 		if !started {
 			m.doneOnce.Do(func() { close(m.doneCh) })
 			return
@@ -405,6 +465,37 @@ func (m *pathFindRefreshManager) shutdown() {
 		m.signal(m.updateWake)
 		m.signal(m.workWake)
 	})
+}
+
+func (m *pathFindRefreshManager) clearActiveUpdate(update *pathFindRefreshUpdate) {
+	m.mu.Lock()
+	if m.activeGeneration == update.generation {
+		m.activeCancel = nil
+		m.activeGeneration = 0
+	}
+	m.mu.Unlock()
+}
+
+func queuedPathFindViews(jobs map[*websocketConnection]pathFindRefreshJob) []types.LedgerStateView {
+	views := make([]types.LedgerStateView, 0, len(jobs))
+	for _, job := range jobs {
+		if job.view != nil {
+			views = append(views, job.view)
+		}
+	}
+	return views
+}
+
+func closePathFindView(view types.LedgerStateView) {
+	if closer, ok := view.(types.LedgerReadCloser); ok {
+		_ = closer.Close()
+	}
+}
+
+func closePathFindViews(views []types.LedgerStateView) {
+	for _, view := range views {
+		closePathFindView(view)
+	}
 }
 
 func (m *pathFindRefreshManager) wait(ctx context.Context) error {

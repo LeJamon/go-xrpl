@@ -65,6 +65,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(ledger)
 	lookupExtra := ledgerEntryResponseFields(ledger, validated)
 	if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, sourceAccount, ledgerIndex); err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {

@@ -128,9 +128,13 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		targetSeq = uint32(idx)
 
-		if l, err := ctx.Services.Ledger().GetLedgerBySequence(targetSeq); err == nil && l != nil {
-			return ledgerRequestSuccess(l), nil
+		l, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), targetSeq)
+		if err == nil && l != nil {
+			response := ledgerRequestSuccess(l)
+			closeLedgerLease(l)
+			return response, nil
 		}
+		closeLedgerLease(l)
 	}
 
 	// Not local — trigger (or join) a generic acquisition from peers. When no

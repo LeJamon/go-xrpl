@@ -373,5 +373,6 @@ func preResolveLedger(ctx *types.RpcContext, probe map[string]json.RawMessage) (
 	if rpcErr != nil {
 		return "", rpcErr
 	}
+	defer closeLedgerLease(resolved.Value)
 	return strconv.FormatUint(uint64(resolved.Sequence), 10), nil
 }

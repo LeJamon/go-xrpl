@@ -139,9 +139,11 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	// Resolve close time from the containing ledger
 	closeTimeSec := txInfo.CloseTime
 	if closeTimeSec == 0 && txInfo.LedgerIndex > 0 {
-		if ledger, err := ctx.Services.Ledger().GetLedgerBySequence(txInfo.LedgerIndex); err == nil {
+		ledger, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), txInfo.LedgerIndex)
+		if err == nil && ledger != nil {
 			closeTimeSec = ledger.CloseTime()
 		}
+		closeLedgerLease(ledger)
 	}
 
 	return m.buildResponse(ctx, storedTx, txInfo, strings.ToUpper(transaction), closeTimeSec, binaryMode), nil
@@ -333,10 +335,12 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 		return nil, rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
 	}
 
-	ledger, err := ctx.Services.Ledger().GetLedgerBySequence(ledgerSeq)
+	ledger, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), ledgerSeq)
 	if err != nil || ledger == nil || !ledger.IsClosed() || !ledger.IsValidated() {
+		closeLedgerLease(ledger)
 		return nil, rpcerrors.RpcErrorTxnNotFound("Transaction not found.")
 	}
+	defer closeLedgerLease(ledger)
 
 	// SHAMap iteration order differs from the metadata's transaction order.
 	var foundHash [32]byte

@@ -37,6 +37,7 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	if lerr != nil {
 		return nil, lerr
 	}
+	defer closeLedgerLease(targetLedger)
 
 	closed := targetLedger.IsClosed()
 

@@ -62,6 +62,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	if ledgerErr != nil {
 		return nil, ledgerErr
 	}
+	defer closeLedgerLease(resolvedLedger.Value)
 	ledgerIndex := strconv.FormatUint(uint64(resolvedLedger.Sequence), 10)
 
 	// For api_version < 3 the combination check runs before the per-field
@@ -192,6 +193,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		if err != nil {
 			return nil, rpcInternalError("amm_info: asset state lookup failed", err)
 		}
+		defer closeLedgerLease(assetView)
 	}
 	for _, field := range []struct {
 		amount, frozen string

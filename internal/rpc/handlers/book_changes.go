@@ -168,6 +168,7 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if lerr != nil {
 		return nil, lerr
 	}
+	defer closeLedgerLease(targetLedger)
 	if !targetLedger.IsClosed() {
 		return formatBookChanges(targetLedger, nil), nil
 	}
