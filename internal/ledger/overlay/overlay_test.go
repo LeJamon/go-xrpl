@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -574,5 +575,125 @@ func TestOverlaySpillTruncatedSkippedValue(t *testing.T) {
 	_, _, err = cursor.get(context.Background(), targetKey)
 	if !errors.Is(err, ErrCorruptSegment) {
 		t.Fatalf("truncated skipped value error = %v, want ErrCorruptSegment", err)
+	}
+}
+
+func TestOverlaySpillBloomSkipsNegativeButChecksPositive(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	present := testKey(1)
+	segment, err := writeOneSegment(context.Background(), owner, dir, present, bytes.Repeat([]byte{0x7f}, 64), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &Overlay{
+		base:   emptyReader{},
+		cfg:    Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20, SpillDir: dir},
+		budget: owner, segments: []*spillSegment{segment},
+	}
+	defer o.Close()
+	var absent [32]byte
+	foundAbsent := false
+	for i := byte(2); i < 255; i++ {
+		candidate := testKey(i)
+		if !segment.bloom.mayContain(candidate) {
+			absent = candidate
+			foundAbsent = true
+			break
+		}
+	}
+	if !foundAbsent {
+		t.Fatal("could not find a Bloom-negative key")
+	}
+	truncatedSize := int64(segmentHeaderSize + recordHeaderSize + 1)
+	if err := os.Truncate(segment.path, truncatedSize); err != nil {
+		t.Fatal(err)
+	}
+	if value, found, err := o.Get(context.Background(), absent); err != nil || found || value != nil {
+		t.Fatalf("Bloom-negative lookup = value %x, found %v, err %v", value, found, err)
+	}
+	if _, _, err := o.Get(context.Background(), present); !errors.Is(err, ErrCorruptSegment) {
+		t.Fatalf("Bloom-positive truncated lookup error = %v, want ErrCorruptSegment", err)
+	}
+}
+
+func TestOverlaySpillBloomIncludesTombstones(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	tombstone := testKey(7)
+	segment, err := writeOneSegment(context.Background(), owner, dir, tombstone, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &Overlay{
+		base:   emptyReader{},
+		cfg:    Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20, SpillDir: dir},
+		budget: owner, segments: []*spillSegment{segment},
+	}
+	defer o.Close()
+	if !segment.bloomReady || !segment.bloom.mayContain(tombstone) {
+		t.Fatal("tombstone key is absent from the segment Bloom filter")
+	}
+	file, err := os.OpenFile(segment.path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0}, 0); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := o.Get(context.Background(), tombstone); !errors.Is(err, ErrCorruptSegment) {
+		t.Fatalf("Bloom-positive tombstone lookup error = %v, want ErrCorruptSegment", err)
+	}
+}
+
+func TestOverlaySpillBloomSurvivesCompaction(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	keys := []byte{1, 2, 3, 4}
+	segments := make([]*spillSegment, 0, len(keys))
+	defer func() {
+		for _, segment := range segments {
+			releaseSegment(segment)
+		}
+	}()
+	for i, value := range keys {
+		segment, err := writeOneSegment(context.Background(), owner, dir, testKey(value), []byte{value}, i == 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		segments = append(segments, segment)
+	}
+	merged, err := compactSegments(context.Background(), owner, dir, segments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseSegment(merged)
+	if !merged.bloomReady {
+		t.Fatal("compacted segment has no Bloom filter")
+	}
+	for _, value := range keys {
+		if !merged.bloom.mayContain(testKey(value)) {
+			t.Fatalf("compacted Bloom filter lost key %d", value)
+		}
+	}
+	var absent [32]byte
+	foundAbsent := false
+	for i := byte(10); i < 255; i++ {
+		candidate := testKey(i)
+		if !merged.bloom.mayContain(candidate) {
+			absent = candidate
+			foundAbsent = true
+			break
+		}
+	}
+	if !foundAbsent {
+		t.Fatal("could not find a compacted Bloom-negative key")
+	}
+	if merged.bloom.mayContain(absent) {
+		t.Fatal("selected key unexpectedly became Bloom-positive")
 	}
 }

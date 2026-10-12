@@ -225,6 +225,9 @@ func (v *view) get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
 		return value, true, nil
 	}
 	for _, segment := range v.segments {
+		if segment.bloomReady && !segment.bloom.mayContain(key) {
+			continue
+		}
 		cursor, err := segment.cursor(ctx, v.budget, nil)
 		if err != nil {
 			return nil, false, err

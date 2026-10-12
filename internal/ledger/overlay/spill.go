@@ -105,6 +105,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 		cursors = append(cursors, cursor)
 	}
 	var index [sparseIndexMax]sparseIndexEntry
+	var bloom segmentBloom
 	indexCount := 0
 	stride := count / sparseIndexMax
 	if stride == 0 {
@@ -116,6 +117,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 	mergeErr := mergeCursors(ctx, cursors, func(key [32]byte, value []byte, deleted bool) bool {
 		writeErr = writeRecord(f, key, value, deleted)
 		if writeErr == nil {
+			bloom.add(key)
 			if position%stride == 0 && indexCount < sparseIndexMax {
 				index[indexCount] = sparseIndexEntry{key: key, offset: offset}
 				indexCount++
@@ -148,7 +150,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 		owner.releaseMemory(segmentOverhead)
 		return nil, closeErr
 	}
-	return finishSegmentFile(ctx, f, path, owner, reserved, position, &index, indexCount)
+	return finishSegmentFile(ctx, f, path, owner, reserved, position, &index, indexCount, &bloom)
 }
 
 func removeSpillFile(path string) error {

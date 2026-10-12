@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,9 @@ const (
 	maxCachedReaders    = 48
 	maxFallbackReaders  = 1
 	maxEphemeralReaders = maxSegmentReaders - maxCachedReaders - maxFallbackReaders
+	bloomWordCount      = 32
+	bloomBitCount       = bloomWordCount * 64
+	bloomProbeCount     = 3
 )
 
 var (
@@ -62,6 +66,48 @@ type sparseIndexEntry struct {
 	offset int64
 }
 
+type segmentBloom [bloomWordCount]uint64
+
+func bloomMix(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	return value ^ (value >> 31)
+}
+
+func bloomHashes(key [32]byte) (uint64, uint64) {
+	hash1 := uint64(0x9e3779b97f4a7c15)
+	hash2 := uint64(0xc2b2ae3d27d4eb4f)
+	for offset := 0; offset < len(key); offset += 8 {
+		word := binary.LittleEndian.Uint64(key[offset : offset+8])
+		hash1 ^= word + 0x9e3779b97f4a7c15
+		hash1 = bits.RotateLeft64(hash1, 27) * 0x3c79ac492ba7b653
+		hash2 += word ^ hash1
+		hash2 = bits.RotateLeft64(hash2, 31) * 0x1c69b3f74ac4ae35
+	}
+	return bloomMix(hash1), bloomMix(hash2) | 1
+}
+
+func (b *segmentBloom) add(key [32]byte) {
+	hash1, hash2 := bloomHashes(key)
+	for i := uint64(0); i < bloomProbeCount; i++ {
+		bit := (hash1 + i*hash2) & (bloomBitCount - 1)
+		b[bit>>6] |= uint64(1) << (bit & 63)
+	}
+}
+
+func (b *segmentBloom) mayContain(key [32]byte) bool {
+	hash1, hash2 := bloomHashes(key)
+	for i := uint64(0); i < bloomProbeCount; i++ {
+		bit := (hash1 + i*hash2) & (bloomBitCount - 1)
+		if b[bit>>6]&(uint64(1)<<(bit&63)) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 type spillSegment struct {
 	refs       atomic.Int64
 	fileMu     sync.Mutex
@@ -73,6 +119,8 @@ type spillSegment struct {
 	count      uint64
 	index      [sparseIndexMax]sparseIndexEntry
 	indexCount uint8
+	bloom      segmentBloom
+	bloomReady bool
 	owner      *budget
 }
 
@@ -163,7 +211,7 @@ func createSegmentFile(ctx context.Context, owner *budget, dir string, size uint
 	return f, f.Name(), nil
 }
 
-func finishSegmentFile(ctx context.Context, f *os.File, path string, owner *budget, reserved, count uint64, index *[sparseIndexMax]sparseIndexEntry, indexCount int) (*spillSegment, error) {
+func finishSegmentFile(ctx context.Context, f *os.File, path string, owner *budget, reserved, count uint64, index *[sparseIndexMax]sparseIndexEntry, indexCount int, bloom *segmentBloom) (*spillSegment, error) {
 	if err := ctx.Err(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
@@ -218,6 +266,10 @@ func finishSegmentFile(ctx context.Context, f *os.File, path string, owner *budg
 		}
 		copy(s.index[:], index[:indexCount])
 		s.indexCount = uint8(indexCount)
+	}
+	if bloom != nil {
+		s.bloom = *bloom
+		s.bloomReady = true
 	}
 	s.refs.Store(1)
 	return s, nil
@@ -282,6 +334,7 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 	cursor := newTreeCursor(root, nil)
 	var previous *[32]byte
 	var index [sparseIndexMax]sparseIndexEntry
+	var bloom segmentBloom
 	indexCount := 0
 	stride := count / sparseIndexMax
 	if stride == 0 {
@@ -313,6 +366,7 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 			index[indexCount] = sparseIndexEntry{key: key, offset: offset}
 			indexCount++
 		}
+		bloom.add(key)
 		position++
 		recordBytes, valid := recordSize(value)
 		if !valid || recordBytes > uint64(math.MaxInt64-offset) {
@@ -331,7 +385,7 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 			return nil, fmt.Errorf("write overlay spill segment: %w", err)
 		}
 	}
-	return finishSegmentFile(ctx, f, path, owner, size, count, &index, indexCount)
+	return finishSegmentFile(ctx, f, path, owner, size, count, &index, indexCount, &bloom)
 }
 
 func writeOneSegment(ctx context.Context, owner *budget, dir string, key [32]byte, value []byte, deleted bool) (*spillSegment, error) {
@@ -352,7 +406,9 @@ func writeOneSegment(ctx context.Context, owner *budget, dir string, key [32]byt
 		return nil, fmt.Errorf("write overlay spill record: %w", err)
 	}
 	index := [sparseIndexMax]sparseIndexEntry{{key: key, offset: int64(segmentHeaderSize)}}
-	return finishSegmentFile(ctx, f, path, owner, size, 1, &index, 1)
+	var bloom segmentBloom
+	bloom.add(key)
+	return finishSegmentFile(ctx, f, path, owner, size, 1, &index, 1, &bloom)
 }
 
 func readAtFull(file *os.File, data []byte, offset int64) (int, error) {
