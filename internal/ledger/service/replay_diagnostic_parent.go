@@ -78,7 +78,7 @@ func (s *Service) prepareReplayDiagnosticParent(ctx context.Context, h header.Le
 	if err := txMap.SetImmutable(); err != nil {
 		return nil, nil, true, err
 	}
-	parent, err := ledger.NewFromHeader(h, stateMap, txMap, fees)
+	parent, err := ledger.NewFromHeader(h, stateMap, txMap, fees, s.config.Execution)
 	if err != nil {
 		return nil, nil, true, err
 	}

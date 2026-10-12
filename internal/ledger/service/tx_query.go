@@ -18,7 +18,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -900,21 +899,11 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		return nil, svcerr.ErrNoOpenLedger
 	}
 
-	var simView applystate.AtomicLedgerView
-	if current.UsesBoundedExecution() {
-		snapshot, err := current.MutableSnapshot()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
-		}
-		defer snapshot.Discard()
-		simView = snapshot
-	} else {
-		snapshot, err := current.StateMapSnapshot()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
-		}
-		simView = newSnapshotView(snapshot, current)
+	simView, err := current.MutableSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
 	}
+	defer simView.Discard()
 
 	// Read fee settings from the FeeSettings SLE in the open ledger
 	simBaseFee, simReserveBase, simReserveIncrement := readFeesFromLedger(current)

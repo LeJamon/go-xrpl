@@ -1030,7 +1030,7 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
 	}
-	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{})
+	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{}, s.config.Execution)
 	if err != nil {
 		return nil, err
 	}

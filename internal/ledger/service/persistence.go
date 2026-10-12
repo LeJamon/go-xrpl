@@ -15,7 +15,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -327,17 +326,15 @@ func (s *Service) Stop() {
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()
-	if s.config.Execution != nil {
-		if s.openLedger != nil {
-			s.openLedger.Discard()
-		}
-		if s.openLedgerView != nil {
-			s.openLedgerView.Current().Discard()
-		}
-		for root, release := range s.flatPins {
-			release()
-			delete(s.flatPins, root)
-		}
+	if s.openLedger != nil {
+		s.openLedger.Discard()
+	}
+	if s.openLedgerView != nil {
+		s.openLedgerView.Current().Discard()
+	}
+	for root, release := range s.flatPins {
+		release()
+		delete(s.flatPins, root)
 	}
 	s.clearRelayCache()
 	s.mu.Lock()
@@ -347,6 +344,12 @@ func (s *Service) Stop() {
 	s.validatedStateBaseMu.Lock()
 	s.validatedStateBaseCandidate = nil
 	s.validatedStateBaseMu.Unlock()
+
+	if s.closeExecution != nil {
+		if err := s.closeExecution(); err != nil {
+			s.logger.Error("close execution store", "error", err)
+		}
+	}
 
 	s.lifecycleMu.Lock()
 	s.lifecycleState = serviceStopped
@@ -536,44 +539,6 @@ func (p *persistenceWorker) waitForNodePersists(ctx context.Context) error {
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
 	s.beginNodePersist()
 	defer s.endNodePersist()
-	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
-		return func(entries []shamap.FlushEntry) error {
-			if family, ok := s.shamapFamily.(*backend.NodeStore); ok {
-				return family.StoreBatch(ctx, entries)
-			}
-			const batchSize = 4096
-			for start := 0; start < len(entries); start += batchSize {
-				end := min(start+batchSize, len(entries))
-				nodes := make([]*nodestore.Node, end-start)
-				for i, entry := range entries[start:end] {
-					nodes[i] = &nodestore.Node{
-						Type:      nodeType,
-						Hash:      nodestore.Hash256(entry.Hash),
-						Data:      entry.Data,
-						LedgerSeq: entry.LedgerSeq,
-					}
-				}
-				if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-
-	if s.config.PersistenceMemory != nil {
-		if err := l.StoreDirtyBatched(ctx, s.config.PersistenceMemory, store(nodestore.NodeAccount), store(nodestore.NodeTransaction)); err != nil {
-			return fmt.Errorf("store ledger %d delta: %w", seq, err)
-		}
-	} else {
-		if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
-			return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
-		}
-		if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
-			return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
-		}
-	}
-
 	headerData := l.SerializeHeader()
 	headerNode := &nodestore.Node{
 		Type:      nodestore.NodeLedger,
@@ -591,10 +556,7 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 	if err := s.nodeStore.Sync(ctx); err != nil {
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
-	if l.UsesBoundedExecution() {
-		return l.EstablishBoundedClosure(ctx)
-	}
-	return nil
+	return l.EstablishBoundedClosure(ctx)
 }
 
 func (s *Service) persistValidatedTipJob(

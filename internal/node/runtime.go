@@ -48,10 +48,11 @@ type nodeRuntime struct {
 	serverLog  xrpllog.Logger
 	options    RunOptions
 
-	nodeStore  nodestore.Database
-	repo       relationaldb.RepositoryManager
-	nodeFamily *backend.NodeStore
-	memory     *nodeMemory
+	nodeStore       nodestore.Database
+	repo            relationaldb.RepositoryManager
+	nodeFamily      *backend.NodeStore
+	ephemeralFamily *backend.NodeStore
+	memory          *nodeMemory
 
 	ledger        *service.Service
 	cleaner       *cleaner.Cleaner
@@ -253,13 +254,16 @@ func (r *nodeRuntime) configureLedger() error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	var family shamap.Family = r.nodeFamily
-	if family == nil {
+	var family shamap.Family
+	if r.nodeFamily != nil {
+		family = r.nodeFamily
+	} else {
 		var options backend.NodeStoreOptions
 		if r.memory != nil {
 			options.CacheMemoryBudget = r.memory.nodes
 		}
-		family = backend.NewMemory(options)
+		r.ephemeralFamily = backend.NewMemory(options)
+		family = r.ephemeralFamily
 	}
 
 	// Build the transaction-queue config from the operator's
@@ -1505,7 +1509,11 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 	if r.executionCleanup != nil {
 		if err := r.executionCleanup(); err != nil {
 			errs = append(errs, fmt.Errorf("close execution store: %w", err))
+			return errors.Join(errs...)
 		}
+	}
+	if r.ephemeralFamily != nil {
+		errs = append(errs, r.ephemeralFamily.Close())
 	}
 
 	if r.nodeFamily != nil {

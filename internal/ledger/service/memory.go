@@ -65,7 +65,7 @@ func (s *Service) acquireLedgerWork(ctx context.Context) (func(), error) {
 }
 
 func (s *Service) acquireExecutionWork(ctx context.Context) (func(), error) {
-	return s.acquireLedgerWorkAdmission(ctx, s.config.Execution == nil)
+	return s.acquireLedgerWorkAdmission(ctx, false)
 }
 
 func (s *Service) acquireLedgerWorkAdmission(ctx context.Context, pinGeneration bool) (func(), error) {

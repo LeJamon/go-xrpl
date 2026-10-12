@@ -75,8 +75,6 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 type Config struct {
 	Execution         *ledger.ExecutionStore
 	FlatState         *flatstate.Store
-	FlatRecoveryOnly  bool
-	OnFlatRecovery    func() error
 	RelayMemory       MemoryBudget
 	PersistenceMemory shamap.DirtyMemoryBudget
 	// ReplayVerificationMemory isolates long-running cold reads from ledger
@@ -196,6 +194,7 @@ type Service struct {
 	config         Config
 	logger         xrpllog.Logger
 	configuredFees drops.Fees
+	closeExecution func() error
 
 	// NodeStore for persistent storage (nil if in-memory only)
 	nodeStore    nodestore.Database
@@ -481,8 +480,14 @@ func New(cfg Config) (*Service, error) {
 		sweepInterval = nodeStoreSweepIntervalForSize(cfg.NodeSize)
 	}
 
+	closeExecution, err := configureServiceExecution(&cfg)
+	if err != nil {
+		return nil, fmt.Errorf("configure execution: %w", err)
+	}
+
 	s := &Service{
 		config:         cfg,
+		closeExecution: closeExecution,
 		logger:         logger.Named(xrpllog.PartitionLedger),
 		configuredFees: configuredFees,
 		nodeStore:      cfg.NodeStore,
@@ -658,21 +663,6 @@ func (s *Service) Start() (err error) {
 	if err := s.recoverFlatState(context.Background()); err != nil {
 		return fmt.Errorf("recover flat execution state: %w", err)
 	}
-	if s.config.FlatRecoveryOnly {
-		for root, release := range s.flatPins {
-			release()
-			delete(s.flatPins, root)
-		}
-		s.flatHeadersMu.Lock()
-		s.flatHeaders = nil
-		s.flatHeadersMu.Unlock()
-		s.config.FlatState, s.config.Execution = nil, nil
-		if s.config.OnFlatRecovery != nil {
-			if err := s.config.OnFlatRecovery(); err != nil {
-				return err
-			}
-		}
-	}
 
 	s.openLedgerMu.Lock()
 	defer s.openLedgerMu.Unlock()
@@ -701,17 +691,10 @@ func (s *Service) Start() (err error) {
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		drops.Fees{},
+		s.config.Execution,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to construct genesis ledger: %w", err)
-	}
-	if s.shamapFamily != nil {
-		genesisLedger.SetSHAMapFamily(s.shamapFamily)
-	}
-	if s.config.Execution != nil {
-		if err := genesisLedger.EnableBoundedExecution(context.Background(), s.config.Execution); err != nil {
-			return err
-		}
 	}
 
 	s.genesisLedger = genesisLedger
@@ -768,11 +751,10 @@ func (s *Service) Start() (err error) {
 			s.validatedSignTime = selection.ledger.CloseTime()
 		}
 	}
-	if s.config.Execution != nil {
-		if err := s.closedLedger.EnableBoundedExecution(context.Background(), s.config.Execution); err != nil {
-			return err
-		}
+	if err := s.closedLedger.AuthenticateClosure(context.Background()); err != nil {
+		return err
 	}
+
 	s.networkLedgerState = selection.networkState
 	if s.networkLedgerState != networkLedgerFastLoadProvisional {
 		s.clearFastLoadBaseLocked()

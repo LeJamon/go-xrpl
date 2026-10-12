@@ -501,7 +501,7 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 		return nil
 	}
 
-	if err := s.enableExecution(parent); err != nil {
+	if err := parent.AuthenticateClosure(context.Background()); err != nil {
 		return err
 	}
 	if s.openLedger != nil {
@@ -1173,11 +1173,11 @@ func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap
 		return nil, fmt.Errorf("acquired transaction map root mismatch: got %x, want %x", txHash, h.TxHash)
 	}
 
-	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{}, s.config.Execution)
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct acquired ledger: %w", err)
 	}
-	if err := s.enableExecution(acquired); err != nil {
+	if err := acquired.AuthenticateClosure(context.Background()); err != nil {
 		return nil, err
 	}
 	return acquired, nil

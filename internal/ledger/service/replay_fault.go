@@ -516,7 +516,7 @@ func (s *Service) captureReplayParent(ctx context.Context, id string, parent *le
 	if txRoot != h.TxHash {
 		return nil, errReplayParentCorrupt
 	}
-	verified, err := ledger.NewFromHeader(h, rebuilt, rebuiltTx, parent.Fees())
+	verified, err := ledger.NewFromHeader(h, rebuilt, rebuiltTx, parent.Fees(), s.config.Execution)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +600,7 @@ func (s *Service) loadReplayParent(ctx context.Context, fault replayfault.Fault,
 	if txRoot != evidence.Parent.TxHash {
 		return nil, errReplayParentCorrupt
 	}
-	return ledger.NewFromHeader(evidence.Parent, state, txMap, evidence.Fees)
+	return ledger.NewFromHeader(evidence.Parent, state, txMap, evidence.Fees, s.config.Execution)
 }
 
 func (s *Service) RevalidateReplayFault(ctx context.Context, id string) error {
@@ -738,7 +738,7 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 		if err != nil {
 			return err
 		}
-		target, err := ledger.NewFromHeader(evidence.Target, state, txMap, parent.Fees())
+		target, err := ledger.NewFromHeader(evidence.Target, state, txMap, parent.Fees(), s.config.Execution)
 		if err != nil {
 			return err
 		}

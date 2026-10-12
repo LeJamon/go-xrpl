@@ -259,12 +259,9 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	}
 	h.Validated = false
 	h.Accepted = true
-	loaded, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, fees)
+	loaded, err := ledger.NewClosedFromRootsContext(ctx, *h, fees, s.config.Execution)
 	if err != nil && isUnavailableSHAMapNode(err) {
 		return nil, fmt.Errorf("%w: ledger state: %w", errStoredLedgerUnavailable, err)
-	}
-	if err == nil && s.config.Execution != nil {
-		err = loaded.EnableBoundedReads(ctx, s.config.Execution)
 	}
 	return loaded, err
 }

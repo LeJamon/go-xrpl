@@ -236,12 +236,9 @@ func (s *Service) loadLedgerJSON(
 	}
 	hdr.Hash = header.CalculateHash(hdr)
 
-	loaded, err := ledger.NewClosedFromHeaderContext(ctx, hdr, stateMap, txMap, fees)
+	loaded, err := ledger.NewClosedFromHeaderContext(ctx, hdr, stateMap, txMap, fees, s.config.Execution)
 	if err != nil {
 		return nil, fmt.Errorf("construct loaded ledger: %w", err)
-	}
-	if s.shamapFamily != nil {
-		loaded.SetSHAMapFamily(s.shamapFamily)
 	}
 	return loaded, nil
 }

@@ -162,27 +162,10 @@ func (s *Service) authorizeFlatTarget(ctx context.Context, l *ledger.Ledger, sou
 	if stateRoot != h.AccountHash || txRoot != h.TxHash || header.CalculateHash(h) != h.Hash {
 		return flatstate.RootClosureAuthorization{}, errors.New("flat target does not match its ledger header")
 	}
-	// The bounded builder inherits unchanged closure from its imported base and
-	// emits every changed node before this ledger's NodeStore sync. Imported
-	// legacy roots require the existing full-closure verification once.
-	if l.UsesBoundedExecution() {
-		if err := l.EstablishBoundedClosure(ctx); err != nil {
-			return flatstate.RootClosureAuthorization{}, err
-		}
-	} else {
-		for _, tree := range []struct {
-			kind shamap.Type
-			root [32]byte
-		}{
-			{shamap.TypeState, stateRoot}, {shamap.TypeTransaction, txRoot},
-		} {
-			reader := shamap.NewRootReader(tree.kind, tree.root, s.shamapFamily,
-				shamap.WithCommitmentBudget(s.config.PersistenceMemory))
-			if _, err := reader.Count(ctx); err != nil {
-				return flatstate.RootClosureAuthorization{}, err
-			}
-		}
+	if err := l.EstablishBoundedClosure(ctx); err != nil {
+		return flatstate.RootClosureAuthorization{}, err
 	}
+
 	fingerprint := h.Hash
 	if durable, ok := s.nodeStore.(nodestore.DurableDatabase); ok {
 		fingerprint, err = durable.DurableFingerprint(ctx)
@@ -311,9 +294,3 @@ func (s *Service) replayFlatOutbox(ctx context.Context) error {
 	return s.refreshFlatRootPins(ctx)
 }
 
-func (s *Service) enableExecution(l *ledger.Ledger) error {
-	if s.config.Execution == nil || l == nil {
-		return nil
-	}
-	return l.EnableBoundedExecution(context.Background(), s.config.Execution)
-}

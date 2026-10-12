@@ -24,12 +24,11 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 	state := r.appConfig.State.Resolved()
 	persistent := r.nodeStore != nil && r.nodeFamily != nil
 	var (
-		flat             *flatstate.Store
-		flatPath         string
-		scratch          string
-		storageBytes     uint64
-		storageReserved  bool
-		ephemeralScratch string
+		flat            *flatstate.Store
+		flatPath        string
+		scratch         string
+		storageBytes    uint64
+		storageReserved bool
 	)
 	closeSetup := func() {
 		if flat != nil {
@@ -37,9 +36,6 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		}
 		if scratch != "" {
 			_ = os.RemoveAll(scratch)
-		}
-		if ephemeralScratch != "" && ephemeralScratch != scratch {
-			_ = os.RemoveAll(ephemeralScratch)
 		}
 		if storageReserved {
 			r.memory.stateStorage.Release(storageBytes)
@@ -85,11 +81,10 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		}
 	} else {
 		var err error
-		ephemeralScratch, err = os.MkdirTemp("", "goxrpl-execution-")
+		scratch, err = os.MkdirTemp("", "goxrpl-execution-")
 		if err != nil {
 			return fmt.Errorf("create bounded execution scratch directory: %w", err)
 		}
-		scratch = ephemeralScratch
 	}
 	execution, err := ledger.NewExecutionStore(ledger.ExecutionConfig{
 		Family: cfg.SHAMapFamily, Workspace: r.memory.persistence, RootMemory: r.memory.stateRoots,
@@ -104,7 +99,10 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 	stopMetrics := r.installExecutionMetrics(execution, flat, r.memory.stateDisk)
 	r.executionCleanup = sync.OnceValue(func() error {
 		defer stopMetrics()
-		errs := []error{execution.Close()}
+		if err := execution.Close(); err != nil {
+			return err
+		}
+		var errs []error
 		if flat != nil {
 			errs = append(errs, flat.Close())
 		}

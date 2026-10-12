@@ -290,27 +290,6 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 			return nil, err
 		}
 		if persist {
-			kind := nodestore.NodeAccount
-			store := func(entries []shamap.FlushEntry) error {
-				for start := 0; start < len(entries); start += 4096 {
-					part := entries[start:min(start+4096, len(entries))]
-					nodes := make([]*nodestore.Node, len(part))
-					for i, entry := range part {
-						nodes[i] = &nodestore.Node{Type: kind, Hash: nodestore.Hash256(entry.Hash), Data: entry.Data, LedgerSeq: l.Sequence()}
-					}
-					if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-			if err := l.StoreStateDirty(store); err != nil {
-				return nil, err
-			}
-			kind = nodestore.NodeTransaction
-			if err := l.StoreTransactionDirty(store); err != nil {
-				return nil, err
-			}
 			if !l.IsOpen() {
 				if err := s.nodeStore.Store(ctx, &nodestore.Node{Type: nodestore.NodeLedger, Hash: nodestore.Hash256(l.Hash()), Data: l.SerializeHeader(), LedgerSeq: s.validatedLedger.Sequence()}); err != nil {
 					return nil, err

@@ -258,7 +258,11 @@ func newTestEnvWithFamily(t testing.TB, cfg genesis.Config, stateFamily *backend
 
 	// Note: drops.Fees has unexported fields, so we use a zero value
 	var fees drops.Fees
-	executionStore := ledgertestutil.NewExecutionStore(t, stateFamily)
+	var executionFamily shamap.Family
+	if stateFamily != nil {
+		executionFamily = stateFamily
+	}
+	executionStore := ledgertestutil.NewExecutionStore(t, executionFamily)
 	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
