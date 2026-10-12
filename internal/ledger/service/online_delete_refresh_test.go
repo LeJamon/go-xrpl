@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgerpkg "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -42,9 +43,9 @@ type countingGenerationDatabase struct {
 	promotionStart        chan struct{}
 	promotionOnce         sync.Once
 	refreshChecks         atomic.Int64
-	storeBatchOnce        sync.Once
-	storeBatchStart       chan struct{}
-	storeBatchResume      chan struct{}
+	headerStoreOnce       sync.Once
+	headerStoreStart      chan struct{}
+	headerStoreResume     chan struct{}
 	promotionHashMu       sync.Mutex
 	promotionHashes       map[nodestore.Hash256]struct{}
 	promotedHashSet       map[nodestore.Hash256]struct{}
@@ -52,17 +53,21 @@ type countingGenerationDatabase struct {
 }
 
 func (d *countingGenerationDatabase) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
-	if d.storeBatchStart != nil {
-		d.storeBatchOnce.Do(func() {
-			close(d.storeBatchStart)
+	d.storeBatchNodes += len(nodes)
+	return d.Database.StoreBatch(ctx, nodes)
+}
+
+func (d *countingGenerationDatabase) Store(ctx context.Context, node *nodestore.Node) error {
+	if d.headerStoreStart != nil {
+		d.headerStoreOnce.Do(func() {
+			close(d.headerStoreStart)
 			select {
 			case <-ctx.Done():
-			case <-d.storeBatchResume:
+			case <-d.headerStoreResume:
 			}
 		})
 	}
-	d.storeBatchNodes += len(nodes)
-	return d.Database.StoreBatch(ctx, nodes)
+	return d.Database.Store(ctx, node)
 }
 
 func (d *countingGenerationDatabase) FetchForPromotion(
@@ -305,10 +310,10 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	)
 	require.NoError(t, err)
 	base := newTestRotatingNodeStore(t, backend, 64)
-	storeBatchStart := make(chan struct{})
-	storeBatchResume := make(chan struct{})
+	headerStoreStart := make(chan struct{})
+	headerStoreResume := make(chan struct{})
 	var releaseOnce sync.Once
-	releasePersist := func() { releaseOnce.Do(func() { close(storeBatchResume) }) }
+	releasePersist := func() { releaseOnce.Do(func() { close(headerStoreResume) }) }
 	t.Cleanup(releasePersist)
 	db := &countingGenerationDatabase{
 		Database:   base,
@@ -324,12 +329,12 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	db.storeBatchStart = storeBatchStart
-	db.storeBatchResume = storeBatchResume
+	db.headerStoreStart = headerStoreStart
+	db.headerStoreResume = headerStoreResume
 
-	blocker := buildLedgerWithState(t, 299)
-	selected := buildLedgerWithState(t, 300)
-	newer := buildLedgerWithState(t, 301)
+	blocker := buildLedgerWithServiceState(t, 299, svc.shamapFamily, svc.config.Execution)
+	selected := buildLedgerWithServiceState(t, 300, svc.shamapFamily, svc.config.Execution)
+	newer := buildLedgerWithServiceState(t, 301, svc.shamapFamily, svc.config.Execution)
 	selectedSeq := selected.Sequence()
 	root, err := selected.StateMapHash()
 	require.NoError(t, err)
@@ -337,7 +342,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	svc.mu.Lock()
 	svc.enqueueValidatedHistoryPersist(blocker)
 	svc.mu.Unlock()
-	<-storeBatchStart
+	<-headerStoreStart
 
 	svc.mu.Lock()
 	svc.validatedLedger = selected
@@ -391,6 +396,39 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	require.True(t, committed)
 	require.NoError(t, err)
 	require.NoError(t, svc.verifyStoredSHAMap(ctx, root, shamap.TypeState))
+}
+
+func buildLedgerWithServiceState(
+	t *testing.T,
+	seq uint32,
+	family shamap.Family,
+	store *ledgerpkg.ExecutionStore,
+) *ledgerpkg.Ledger {
+	t.Helper()
+	stateMap, err := shamap.NewBacked(shamap.TypeState, family)
+	require.NoError(t, err)
+	key := [32]byte{byte(seq), byte(seq >> 8), 0xAB}
+	require.NoError(t, stateMap.Put(key, []byte("state-payload")))
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	hdr := header.LedgerHeader{
+		LedgerIndex:         seq,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
+		ParentCloseTime:     time.Unix(1_699_999_990+int64(seq), 0).UTC(),
+		CloseTimeResolution: 10,
+		Validated:           true,
+		Accepted:            true,
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledgerpkg.FromGenesis(hdr, stateMap, txMap, drops.Fees{}, store)
+	require.NoError(t, err)
+	t.Cleanup(l.Discard)
+	return l
 }
 
 func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
