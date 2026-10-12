@@ -233,7 +233,7 @@ func TestExecutionFlatViewCacheReusesBoundedLease(t *testing.T) {
 }
 
 func TestExecutionFlatViewCacheRefreshesDescriptorAndRetiresOnAdvance(t *testing.T) {
-	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1, MaxBatchRecords: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestExecutionFlatViewCacheRefreshesDescriptorAndRetiresOnAdvance(t *testing
 	third := flatExecutionDescriptor(3, 4, 7, 8, 9)
 	err = flat.Advance(context.Background(), flatstate.AdvanceRequest{
 		Expected: &second, Target: third,
-		Changes:       flatstate.NewSliceChangeIterator([]flatstate.Change{{Key: flatExecutionHash(9), Value: []byte("out of order")}, {Key: flatExecutionHash(1), Value: []byte("out of order")}}),
+		Changes:       flatstate.NewSliceChangeIterator([]flatstate.Change{{Key: flatExecutionHash(9), Value: []byte("out of order")}, {Key: flatExecutionHash(10), Value: []byte("ten")}, {Key: flatExecutionHash(1), Value: []byte("out of order")}}),
 		Authorization: flatstate.RootClosureAuthorization{SourceRoot: second.StateRoot, TargetRoot: third.StateRoot, Token: []byte("execution-flat-test")},
 	})
 	if !errors.Is(err, flatstate.ErrInvalidChangeOrder) {
@@ -523,6 +523,48 @@ func TestExecutionCommitmentSinkBatchesBorrowedNodes(t *testing.T) {
 	stats := store.Stats()
 	if stats.Builds != 1 || stats.BuildErrors != 0 || stats.RootNodes == 0 || stats.Frontier == 0 || stats.RootBuildTime == 0 {
 		t.Fatalf("unexpected execution stats: %+v", stats)
+	}
+}
+
+func TestExecutionCommitmentFlushesBeforeBudgetWait(t *testing.T) {
+	family := &recordingExecutionFamily{Family: backend.NewMemory()}
+	store, _ := executionTestStore(t, family)
+	workspace, err := membudget.New(4096).NewAccount("small-commitment", 0, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.config.Workspace = workspace
+	base := &executionTree{store: store, kind: shamap.TypeState, sequence: 1}
+	tree, err := base.newMutable(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.close()
+	expected := shamap.New(shamap.TypeState)
+	for seed := byte(1); seed != 0; seed++ {
+		key, data := mutAcct(seed).Key, bytes.Repeat(mutData(seed), 4)
+		if err := tree.Put(key, data); err != nil {
+			t.Fatal(err)
+		}
+		if err := expected.Put(key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	root, err := tree.hash(ctx)
+	if err != nil {
+		t.Fatalf("small commitment stalled or failed: %v", err)
+	}
+	want, err := expected.Hash()
+	if err != nil || root != want {
+		t.Fatalf("root %x, want %x: %v", root, want, err)
+	}
+	if len(family.batches) < 2 {
+		t.Fatalf("no pressure flush: %v", family.batches)
+	}
+	if snapshot := workspace.Snapshot(); snapshot.Used != 0 || snapshot.Peak > 4096 {
+		t.Fatalf("workspace = %+v", snapshot)
 	}
 }
 

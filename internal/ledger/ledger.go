@@ -206,14 +206,13 @@ func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, erro
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.execution.state.GetContext(ctx, k.Key)
+	data, found, err := l.execution.state.get(ctx, k.Key)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, nil
 	}
-	data := item.Data()
 	if !state.MatchesKeyletType(k, data) {
 		return nil, nil
 	}

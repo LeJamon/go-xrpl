@@ -372,9 +372,6 @@ func (l *ViewLease) Close() {
 	l.once.Do(func() { l.store.releaseCachedView(l.entry) })
 }
 
-// Release is an alias for Close.
-func (l *ViewLease) Release() { l.Close() }
-
 // Open opens or creates a flat state database.  A marker found during open
 // suppresses new views until Resume is called with an explicit root
 // authorization and deterministic change iterator.
@@ -509,10 +506,6 @@ func (s *Store) Marker() (AdvanceMarker, bool, error) {
 // readiness guard.  Metadata is verified after releasing the guard so no
 // storage read or callback runs under the publication lock.
 func (s *Store) OpenView(ctx context.Context) (*View, error) {
-	return s.openView(ctx)
-}
-
-func (s *Store) openView(ctx context.Context) (*View, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -616,7 +609,7 @@ func (s *Store) BorrowView(ctx context.Context, descriptor Descriptor) (*ViewLea
 	}
 	s.mu.Unlock()
 
-	view, err := s.openView(ctx)
+	view, err := s.OpenView(ctx)
 	if err != nil {
 		return nil, err
 	}

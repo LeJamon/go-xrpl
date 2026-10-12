@@ -736,7 +736,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 	started := time.Now()
 	defer func() { t.store.stats.buildNanos.Add(uint64(time.Since(started))) }()
 	result, err := shamap.BuildChanges(ctx, t.kind, t.root, t.sequence, t.store.config.Family,
-		next, sink.add, shamap.WithCommitmentBudget(t.store.config.Workspace))
+		next, sink.add, shamap.WithCommitmentBudget(t.store.config.Workspace), shamap.WithCommitmentFlush(sink.flush))
 	if err != nil {
 		t.store.stats.buildErrors.Add(1)
 		sink.abort()
