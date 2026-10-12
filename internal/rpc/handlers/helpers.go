@@ -593,10 +593,16 @@ func resolveLedgerSelection(
 
 	bySequence := func(sequence uint32) (types.LedgerReader, bool, error) {
 		reader, err := getLedgerBySequenceContext(ctx.Context, svc, sequence)
+		if err != nil {
+			closeLedgerLease(reader)
+		}
 		return reader, reader != nil, err
 	}
 	byHash := func(hash [32]byte) (types.LedgerReader, bool, error) {
 		reader, err := getLedgerByHashContext(ctx.Context, svc, hash)
+		if err != nil {
+			closeLedgerLease(reader)
+		}
 		return reader, reader != nil, err
 	}
 	current := func() (types.LedgerReader, bool, error) {

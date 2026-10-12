@@ -412,6 +412,9 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.Rp
 
 // resolvedLedgerStateView uses the selected ledger for state-dependent RPC fields.
 func resolvedLedgerStateView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
+	if view, ok := l.(types.LedgerStateView); ok {
+		return view, nil
+	}
 	src, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
 		return nil, errors.New("ledger service does not expose state views")
