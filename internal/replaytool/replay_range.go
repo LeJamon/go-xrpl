@@ -276,6 +276,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	var stateMap *shamap.SHAMap
 	var preSnapshot *statecompare.LedgerSnapshot
 	var fees drops.Fees
+	var execution *replayExecutionSession
 	if r.resumeFrom > 0 {
 		// Checkpoint-file resume seeds from goXRPL's own computed state, which
 		// is held in RAM; nodestore-lazy seeding applies to fresh --from loads.
@@ -284,6 +285,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("resuming from checkpoint: %w", err)
 		}
+		execution, err = newReplayExecutionSession(nil)
 	} else {
 		source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
 		if err != nil {
@@ -299,9 +301,8 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("loading initial state: %w", err)
 		}
+		execution, err = newReplayExecutionSession(source.Family())
 	}
-
-	execution, err := newReplayExecutionSession()
 	if err != nil {
 		return fmt.Errorf("initializing replay execution: %w", err)
 	}

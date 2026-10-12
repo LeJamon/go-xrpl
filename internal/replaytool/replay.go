@@ -173,7 +173,7 @@ func (r *replayRunner) run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("loading fixtures: %w", err)
 	}
-	execution, err := newReplayExecutionSession()
+	execution, err := newReplayExecutionSession(nil)
 	if err != nil {
 		return fmt.Errorf("initializing replay execution: %w", err)
 	}

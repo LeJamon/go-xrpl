@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
@@ -23,18 +24,22 @@ const (
 	replayExecutionMaxRoots       = 4096
 )
 
-// replayExecutionSession owns every resource used by one replay invocation.
-// Ledger views created during the invocation share store; the session closes
-// the store before its backing family and spill directory.
+// replayExecutionSession owns the bounded store and spill directory used by
+// one replay invocation. A session-created family is closed after the store;
+// a family supplied by a state source remains owned by that source.
 type replayExecutionSession struct {
-	mu       sync.Mutex
-	store    *ledger.ExecutionStore
-	family   *backend.NodeStore
-	spillDir string
-	closed   bool
+	mu          sync.Mutex
+	store       *ledger.ExecutionStore
+	family      shamap.Family
+	closeFamily func() error
+	spillDir    string
+	closed      bool
 }
 
-func newReplayExecutionSession() (*replayExecutionSession, error) {
+// newReplayExecutionSession creates a bounded execution store over family. A
+// nil family creates a private bounded memory family for standalone replay;
+// supplied families remain owned by their state source and are not closed here.
+func newReplayExecutionSession(family shamap.Family) (*replayExecutionSession, error) {
 	pool := membudget.New(replayExecutionPoolBytes)
 	workspace, err := pool.NewAccount(
 		"replay-execution-workspace",
@@ -64,7 +69,12 @@ func newReplayExecutionSession() (*replayExecutionSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create replay execution spill directory: %w", err)
 	}
-	family := backend.NewMemory(backend.NodeStoreOptions{CacheMemoryBudget: cacheBudget})
+	var closeFamily func() error
+	if family == nil {
+		owned := backend.NewMemory(backend.NodeStoreOptions{CacheMemoryBudget: cacheBudget})
+		family = owned
+		closeFamily = owned.Close
+	}
 	store, err := ledger.NewExecutionStore(ledger.ExecutionConfig{
 		Family:        family,
 		Workspace:     workspace,
@@ -79,11 +89,13 @@ func newReplayExecutionSession() (*replayExecutionSession, error) {
 		},
 	})
 	if err != nil {
-		_ = family.Close()
+		if closeFamily != nil {
+			_ = closeFamily()
+		}
 		_ = os.RemoveAll(spillDir)
 		return nil, fmt.Errorf("create replay execution store: %w", err)
 	}
-	return &replayExecutionSession{store: store, family: family, spillDir: spillDir}, nil
+	return &replayExecutionSession{store: store, family: family, closeFamily: closeFamily, spillDir: spillDir}, nil
 }
 
 // Close releases the session only after all ledger views have released their
@@ -101,7 +113,10 @@ func (s *replayExecutionSession) Close() error {
 	if err := s.store.Close(); err != nil {
 		return err
 	}
-	closeErr := errors.Join(s.family.Close(), os.RemoveAll(s.spillDir))
+	closeErr := errors.Join(os.RemoveAll(s.spillDir))
+	if s.closeFamily != nil {
+		closeErr = errors.Join(closeErr, s.closeFamily())
+	}
 	if closeErr == nil {
 		s.closed = true
 	}
