@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -494,6 +495,51 @@ func TestBuildChangesRandomizedDifferential(t *testing.T) {
 		if result.Root != wantRoot {
 			t.Fatalf("round %d root mismatch: got %x want %x", round, result.Root, wantRoot)
 		}
+		if result.MaxFrontier > maxDepth+1 {
+			t.Fatalf("round %d frontier=%d exceeds depth bound", round, result.MaxFrontier)
+		}
+	}
+}
+
+func BenchmarkBuildChangesDisjoint(b *testing.B) {
+	family := newCountingFamily()
+	parent := New(TypeState)
+	for i := 0; i < 512; i++ {
+		key := commitmentTestKey(byte(i))
+		key[1] = byte(i >> 8)
+		if err := parent.Put(key, commitmentTestData(byte(i))); err != nil {
+			b.Fatalf("parent.Put(%d): %v", i, err)
+		}
+	}
+	if err := flushToFamily(parent, family.inner.(*memoryFamily)); err != nil {
+		b.Fatalf("flush parent: %v", err)
+	}
+	parentRoot, err := parent.Hash()
+	if err != nil {
+		b.Fatalf("parent.Hash: %v", err)
+	}
+	changeKey := commitmentTestKey(0x7f)
+	changeKey[1] = 0x01
+	changeData := commitmentTestData(0xe1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		family.reset()
+		idx := 0
+		result, err := BuildChanges(context.Background(), TypeState, parentRoot, 1, family, func() (Change, error) {
+			if idx != 0 {
+				return Change{}, io.EOF
+			}
+			idx++
+			return Change{Key: changeKey, Data: changeData}, nil
+		}, func(FlushEntry) error { return nil })
+		if err != nil {
+			b.Fatal(err)
+		}
+		if result.MaxFrontier > maxDepth+1 {
+			b.Fatalf("frontier=%d exceeds depth bound", result.MaxFrontier)
+		}
+		b.ReportMetric(float64(family.count()), "fetches/op")
 	}
 }
 
@@ -573,6 +619,84 @@ func TestBuildChangesShapeTransitions(t *testing.T) {
 	}
 }
 
+func TestRootReaderRejectsLeafOnWrongAuthenticatedPath(t *testing.T) {
+	family := newMemoryFamily()
+	parent := New(TypeState)
+	keyA := commitmentTestKey(0x10)
+	keyB := commitmentTestKey(0x20)
+	for _, key := range [][32]byte{keyA, keyB} {
+		if err := parent.Put(key, commitmentTestData(key[0])); err != nil {
+			t.Fatalf("parent.Put: %v", err)
+		}
+	}
+	if err := flushToFamily(parent, family); err != nil {
+		t.Fatalf("flush parent: %v", err)
+	}
+	parentRoot, err := parent.Hash()
+	if err != nil {
+		t.Fatalf("parent.Hash: %v", err)
+	}
+	rootData, err := family.Fetch(context.Background(), parentRoot)
+	if err != nil {
+		t.Fatalf("family.Fetch(root): %v", err)
+	}
+	decoded, err := decodeAndVerifyPrefixNode(rootData, parentRoot)
+	if err != nil {
+		t.Fatalf("decode root: %v", err)
+	}
+	rootNode, ok := decoded.(*innerNode)
+	if !ok {
+		t.Fatalf("decoded root type = %T", decoded)
+	}
+	rootNode.mu.RLock()
+	hashes, branches := rootNode.hashes, rootNode.isBranch
+	rootNode.mu.RUnlock()
+	branchA := getBranchAtDepth(keyA, 0)
+	branchB := getBranchAtDepth(keyB, 0)
+	if branchA == branchB || branches&(1<<branchA) == 0 || branches&(1<<branchB) == 0 {
+		t.Fatalf("test keys did not produce distinct root leaves: branches=%x", branches)
+	}
+	hashes[branchA] = hashes[branchB]
+	malformed := &innerNode{hashes: hashes, isBranch: branches}
+	if err := malformed.UpdateHash(); err != nil {
+		t.Fatalf("malformed.UpdateHash: %v", err)
+	}
+	malformedData, err := malformed.SerializeWithPrefix()
+	if err != nil {
+		t.Fatalf("malformed.SerializeWithPrefix: %v", err)
+	}
+	malformedRoot := malformed.Hash()
+	if err := family.StoreBatch(context.Background(), []FlushEntry{{Hash: malformedRoot, Data: malformedData, MapType: TypeState}}); err != nil {
+		t.Fatalf("store malformed root: %v", err)
+	}
+	reader := NewRootReader(TypeState, malformedRoot, family)
+	if _, _, _, err := reader.GetLeaf(context.Background(), keyA); err == nil {
+		t.Fatal("GetLeaf accepted leaf on the wrong branch")
+	}
+	if err := reader.ForEach(context.Background(), func(*Item) bool { return true }); err == nil {
+		t.Fatal("ForEach accepted leaf on the wrong branch")
+	}
+	if err := reader.IterateLeaves(context.Background(), nil, func(*Item, NodeType) bool { return true }); err == nil {
+		t.Fatal("IterateLeaves accepted leaf on the wrong branch")
+	}
+	if _, _, err := reader.Succ(context.Background(), [32]byte{}); err == nil {
+		t.Fatal("Succ accepted leaf on the wrong branch")
+	}
+	if err := reader.Diff(context.Background(), parentRoot, func(Change) error { return nil }); err == nil {
+		t.Fatal("Diff accepted leaf on the wrong branch")
+	}
+	idx := 0
+	if _, err := BuildChanges(context.Background(), TypeState, malformedRoot, 1, family, func() (Change, error) {
+		if idx != 0 {
+			return Change{}, io.EOF
+		}
+		idx++
+		return Change{Key: keyA, Data: commitmentTestData(0x99)}, nil
+	}, func(FlushEntry) error { return nil }); err == nil {
+		t.Fatal("BuildChanges accepted leaf on the wrong branch")
+	}
+}
+
 type shapeTestEntry struct {
 	key  [32]byte
 	data []byte
@@ -635,6 +759,48 @@ func TestCommitmentBudgetAdmissionAndRelease(t *testing.T) {
 	}
 	if got := readerBudget.used.Load(); got != 0 {
 		t.Fatalf("reader retained %d bytes", got)
+	}
+}
+
+func TestBuildChangesBudgetReleasesAncestorBeforeChild(t *testing.T) {
+	family := newMemoryFamily()
+	parent := New(TypeState)
+	key := commitmentTestKey(0x23)
+	if err := parent.Put(key, commitmentTestData(0x11)); err != nil {
+		t.Fatalf("parent.Put: %v", err)
+	}
+	if err := flushToFamily(parent, family); err != nil {
+		t.Fatalf("flush parent: %v", err)
+	}
+	parentRoot, err := parent.Hash()
+	if err != nil {
+		t.Fatalf("parent.Hash: %v", err)
+	}
+
+	// The root inner record itself fits, but the root and its changed child do
+	// not fit simultaneously. The builder must release frame payload metadata
+	// before descending so this valid update still has a progress path.
+	budget := &testCommitmentBudget{capacity: commitmentNodeCharge(make([]byte, fullInnerSerializedSize))}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	idx := 0
+	result, err := BuildChanges(ctx, TypeState, parentRoot, 1, family, func() (Change, error) {
+		if idx != 0 {
+			return Change{}, io.EOF
+		}
+		idx++
+		return Change{Key: key, Data: commitmentTestData(0x99)}, nil
+	}, func(entry FlushEntry) error {
+		return family.StoreBatch(context.Background(), []FlushEntry{entry})
+	}, WithCommitmentBudget(budget))
+	if err != nil {
+		t.Fatalf("BuildChanges: %v", err)
+	}
+	if result.Root == ([32]byte{}) {
+		t.Fatal("BuildChanges returned empty root")
+	}
+	if got := budget.used.Load(); got != 0 {
+		t.Fatalf("budget retained %d bytes", got)
 	}
 }
 

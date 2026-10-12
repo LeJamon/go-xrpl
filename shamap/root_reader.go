@@ -108,6 +108,10 @@ func (r *RootReader) read(ctx context.Context, hash [32]byte) (rootReaderNode, e
 			releaseCommitmentMemory(r.budget, charge)
 			return rootReaderNode{}, errors.New("shamap: decoded leaf has no item")
 		}
+		if err := validateCommitmentLeafType(r.mapType, n.Type()); err != nil {
+			releaseCommitmentMemory(r.budget, charge)
+			return rootReaderNode{}, err
+		}
 		return rootReaderNode{
 			leaf:     NewItem(item.Key(), item.dataBytes()),
 			leafType: n.Type(),
@@ -170,7 +174,8 @@ func (r *RootReader) getLeaf(ctx context.Context, key [32]byte) (*Item, NodeType
 	if !node.inner {
 		return nil, NodeType(0), false, fmt.Errorf("shamap: root %x is not an inner node", r.root[:8])
 	}
-	for depth := 0; node.inner; depth++ {
+	depth := 0
+	for node.inner {
 		if err := ctx.Err(); err != nil {
 			return nil, NodeType(0), false, err
 		}
@@ -189,8 +194,13 @@ func (r *RootReader) getLeaf(ctx context.Context, key [32]byte) (*Item, NodeType
 		if err != nil {
 			return nil, NodeType(0), false, err
 		}
+		depth++
 	}
-	if node.leaf == nil || node.leaf.Key() != key {
+	if err := validateCommitmentLeafPath(node.leaf, key, depth); err != nil {
+		node.release(r.budget)
+		return nil, NodeType(0), false, err
+	}
+	if node.leaf.Key() != key {
 		node.release(r.budget)
 		return nil, NodeType(0), false, nil
 	}
@@ -250,7 +260,7 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 		return fmt.Errorf("shamap: root %x is not an inner node", r.root[:8])
 	}
 	stack := make([]iterateFrame, 0, maxDepth)
-	initial := iterateFrame{node: root, owned: true}
+	initial := iterateFrame{node: root, path: [32]byte{}, owned: true}
 	if hasAfter {
 		initial.seek = true
 		initial.branch = getBranchAtDepth(afterKey, 0)
@@ -282,13 +292,15 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 			if err != nil {
 				return err
 			}
+			childPath := childPathForBranch(top.path, top.depth, branch)
+			childDepth := top.depth + 1
 			if child.inner {
-				if len(stack) >= maxDepth {
+				if childDepth >= maxDepth {
 					child.release(r.budget)
 					return fmt.Errorf("shamap: root reader exceeded maximum depth")
 				}
 				childSeek := top.seek && branch == getBranchAtDepth(afterKey, top.depth)
-				frame := iterateFrame{node: child, depth: top.depth + 1, seek: childSeek, owned: true}
+				frame := iterateFrame{node: child, path: childPath, depth: childDepth, seek: childSeek, owned: true}
 				if childSeek {
 					frame.branch = getBranchAtDepth(afterKey, frame.depth)
 				}
@@ -299,6 +311,10 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 			if child.leaf == nil {
 				child.release(r.budget)
 				return errors.New("shamap: decoded branch has no leaf or inner node")
+			}
+			if err := validateCommitmentLeafPath(child.leaf, childPath, childDepth); err != nil {
+				child.release(r.budget)
+				return err
 			}
 			item := cloneReaderItem(child.leaf)
 			childType := child.leafType
@@ -321,6 +337,7 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 
 type iterateFrame struct {
 	node   rootReaderNode
+	path   [32]byte
 	branch int
 	depth  int
 	seek   bool
@@ -338,12 +355,15 @@ func (r *RootReader) Count(ctx context.Context) (uint64, error) {
 	return count, err
 }
 
-func (r *RootReader) minimum(ctx context.Context, node rootReaderNode) (*Item, bool, error) {
+func (r *RootReader) minimum(ctx context.Context, node rootReaderNode, path [32]byte, depth int) (*Item, bool, error) {
 	ctx = normalizeCommitmentContext(ctx)
 	defer node.release(r.budget)
 	for node.inner {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
+		}
+		if depth >= maxDepth {
+			return nil, false, fmt.Errorf("shamap: root reader exceeded maximum depth")
 		}
 		found := false
 		for branch := 0; branch < BranchFactor; branch++ {
@@ -355,8 +375,11 @@ func (r *RootReader) minimum(ctx context.Context, node rootReaderNode) (*Item, b
 			if err != nil {
 				return nil, false, err
 			}
+			childPath := childPathForBranch(path, depth, branch)
 			old := node
 			node = next
+			path = childPath
+			depth++
 			old.release(r.budget)
 			found = true
 			break
@@ -368,21 +391,25 @@ func (r *RootReader) minimum(ctx context.Context, node rootReaderNode) (*Item, b
 	if node.leaf == nil {
 		return nil, false, nil
 	}
+	if err := validateCommitmentLeafPath(node.leaf, path, depth); err != nil {
+		return nil, false, err
+	}
 	return cloneReaderItem(node.leaf), true, nil
 }
 
-func (r *RootReader) successor(ctx context.Context, node rootReaderNode, depth int, key [32]byte) (*Item, bool, error) {
+func (r *RootReader) successor(ctx context.Context, node rootReaderNode, path [32]byte, depth int, key [32]byte) (*Item, bool, error) {
 	ctx = normalizeCommitmentContext(ctx)
 	defer node.release(r.budget)
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
 	if !node.inner {
-		if node.leaf != nil {
-			leafKey := node.leaf.Key()
-			if bytes.Compare(leafKey[:], key[:]) > 0 {
-				return cloneReaderItem(node.leaf), true, nil
-			}
+		if err := validateCommitmentLeafPath(node.leaf, path, depth); err != nil {
+			return nil, false, err
+		}
+		leafKey := node.leaf.Key()
+		if bytes.Compare(leafKey[:], key[:]) > 0 {
+			return cloneReaderItem(node.leaf), true, nil
 		}
 		return nil, false, nil
 	}
@@ -395,7 +422,8 @@ func (r *RootReader) successor(ctx context.Context, node rootReaderNode, depth i
 		if err != nil {
 			return nil, false, err
 		}
-		if item, found, err := r.successor(ctx, child, depth+1, key); err != nil || found {
+		childPath := childPathForBranch(path, depth, branch)
+		if item, found, err := r.successor(ctx, child, childPath, depth+1, key); err != nil || found {
 			return item, found, err
 		}
 	}
@@ -408,7 +436,8 @@ func (r *RootReader) successor(ctx context.Context, node rootReaderNode, depth i
 		if err != nil {
 			return nil, false, err
 		}
-		return r.minimum(ctx, child)
+		childPath := childPathForBranch(path, depth, branch)
+		return r.minimum(ctx, child, childPath, depth+1)
 	}
 	return nil, false, nil
 }
@@ -427,7 +456,7 @@ func (r *RootReader) Succ(ctx context.Context, key [32]byte) (*Item, bool, error
 		root.release(r.budget)
 		return nil, false, fmt.Errorf("shamap: root %x is not an inner node", r.root[:8])
 	}
-	return r.successor(ctx, root, 0, key)
+	return r.successor(ctx, root, [32]byte{}, 0, key)
 }
 
 // Diff emits the sorted final changes needed to transform this root into
@@ -445,10 +474,10 @@ func (r *RootReader) Diff(ctx context.Context, targetRoot [32]byte, emit func(Ch
 		}
 		return errors.New("shamap: nil root reader")
 	}
-	return r.diffNodes(ctx, r.root, targetRoot, 0, emit)
+	return r.diffNodes(ctx, r.root, targetRoot, [32]byte{}, 0, emit)
 }
 
-func (r *RootReader) diffNodes(ctx context.Context, oldHash, newHash [32]byte, depth int, emit func(Change) error) error {
+func (r *RootReader) diffNodes(ctx context.Context, oldHash, newHash, path [32]byte, depth int, emit func(Change) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -481,18 +510,30 @@ func (r *RootReader) diffNodes(ctx context.Context, oldHash, newHash [32]byte, d
 	if depth == 0 && ((!isZeroHash(oldHash) && !oldNode.inner) || (!isZeroHash(newHash) && !newNode.inner)) {
 		return errors.New("shamap: root diff root is not an inner node")
 	}
+	if oldNode.inner || newNode.inner {
+		if depth >= maxDepth {
+			return fmt.Errorf("shamap: root diff exceeded maximum depth")
+		}
+	} else {
+		if err := validateCommitmentLeafPath(oldNode.leaf, path, depth); err != nil && !isZeroHash(oldHash) {
+			return err
+		}
+		if err := validateCommitmentLeafPath(newNode.leaf, path, depth); err != nil && !isZeroHash(newHash) {
+			return err
+		}
+	}
 
 	switch {
 	case isZeroHash(oldHash):
-		return r.walkNode(ctx, newNode, func(item *Item, nodeType NodeType) error {
+		return r.walkNode(ctx, newNode, path, depth, func(item *Item, nodeType NodeType) error {
 			return emitRootChange(ctx, emit, item, nodeType, false)
 		})
 	case isZeroHash(newHash):
-		return r.walkNode(ctx, oldNode, func(item *Item, nodeType NodeType) error {
+		return r.walkNode(ctx, oldNode, path, depth, func(item *Item, nodeType NodeType) error {
 			return emitRootChange(ctx, emit, item, nodeType, true)
 		})
 	case !oldNode.inner && !newNode.inner:
-		return diffReaderLeaves(ctx, emit, oldNode, newNode)
+		return diffReaderLeaves(ctx, emit, oldNode, newNode, path, depth)
 	case oldNode.inner && newNode.inner:
 		if depth >= maxDepth {
 			return errors.New("shamap: root diff exceeded maximum depth")
@@ -509,20 +550,23 @@ func (r *RootReader) diffNodes(ctx context.Context, oldHash, newHash [32]byte, d
 			if oldChild == newChild {
 				continue
 			}
-			if err := r.diffNodes(ctx, oldChild, newChild, depth+1, emit); err != nil {
+			childPath := childPathForBranch(path, depth, branch)
+			if err := r.diffNodes(ctx, oldChild, newChild, childPath, depth+1, emit); err != nil {
 				return err
 			}
 		}
 		return nil
 	case !oldNode.inner:
-		return r.diffLeafAndSubtree(ctx, oldNode, newNode, true, emit)
+		return r.diffLeafAndSubtree(ctx, oldNode, newNode, path, depth, true, emit)
 	default:
-		return r.diffLeafAndSubtree(ctx, newNode, oldNode, false, emit)
+		return r.diffLeafAndSubtree(ctx, newNode, oldNode, path, depth, false, emit)
 	}
 }
 
 type diffWalkFrame struct {
 	node   rootReaderNode
+	path   [32]byte
+	depth  int
 	branch int
 	owned  bool
 }
@@ -530,8 +574,8 @@ type diffWalkFrame struct {
 // walkNode visits an already decoded subtree in ascending key order. The root
 // view is borrowed from its caller; descendants fetched during the walk are
 // released as soon as their branch is complete.
-func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, emit func(*Item, NodeType) error) error {
-	stack := []diffWalkFrame{{node: root}}
+func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, path [32]byte, depth int, emit func(*Item, NodeType) error) error {
+	stack := []diffWalkFrame{{node: root, path: path, depth: depth}}
 	defer func() {
 		for i := range stack {
 			if stack[i].owned {
@@ -545,8 +589,8 @@ func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, emit fun
 		}
 		top := &stack[len(stack)-1]
 		if !top.node.inner {
-			if top.node.leaf == nil {
-				return errors.New("shamap: root diff decoded branch has no leaf")
+			if err := validateCommitmentLeafPath(top.node.leaf, top.path, top.depth); err != nil {
+				return err
 			}
 			item := cloneReaderItem(top.node.leaf)
 			nodeType := top.node.leafType
@@ -568,6 +612,9 @@ func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, emit fun
 		}
 		branch := top.branch
 		top.branch++
+		if top.depth >= maxDepth {
+			return errors.New("shamap: root diff exceeded maximum depth")
+		}
 		hash, ok := top.node.childHash(branch)
 		if !ok {
 			continue
@@ -576,11 +623,13 @@ func (r *RootReader) walkNode(ctx context.Context, root rootReaderNode, emit fun
 		if err != nil {
 			return err
 		}
-		if child.inner && len(stack) >= maxDepth {
+		childPath := childPathForBranch(top.path, top.depth, branch)
+		childDepth := top.depth + 1
+		if child.inner && childDepth >= maxDepth {
 			child.release(r.budget)
 			return errors.New("shamap: root diff exceeded maximum depth")
 		}
-		stack = append(stack, diffWalkFrame{node: child, owned: true})
+		stack = append(stack, diffWalkFrame{node: child, path: childPath, depth: childDepth, owned: true})
 	}
 	return nil
 }
@@ -596,9 +645,12 @@ func emitRootChange(ctx context.Context, emit func(Change) error, item *Item, no
 	return emit(change)
 }
 
-func diffReaderLeaves(ctx context.Context, emit func(Change) error, oldNode, newNode rootReaderNode) error {
-	if oldNode.leaf == nil || newNode.leaf == nil {
-		return errors.New("shamap: root diff decoded leaf is empty")
+func diffReaderLeaves(ctx context.Context, emit func(Change) error, oldNode, newNode rootReaderNode, path [32]byte, depth int) error {
+	if err := validateCommitmentLeafPath(oldNode.leaf, path, depth); err != nil {
+		return err
+	}
+	if err := validateCommitmentLeafPath(newNode.leaf, path, depth); err != nil {
+		return err
 	}
 	oldItem := oldNode.leaf
 	newItem := newNode.leaf
@@ -625,14 +677,14 @@ func diffReaderLeaves(ctx context.Context, emit func(Change) error, oldNode, new
 // diffLeafAndSubtree compares one leaf with the leaves under the other node.
 // If leafIsOld is true, the leaf is removed/replaced and the subtree is the
 // target; otherwise the subtree is the old side and the leaf is the target.
-func (r *RootReader) diffLeafAndSubtree(ctx context.Context, leafNode, subtreeNode rootReaderNode, leafIsOld bool, emit func(Change) error) error {
-	if leafNode.leaf == nil {
-		return errors.New("shamap: root diff decoded leaf is empty")
+func (r *RootReader) diffLeafAndSubtree(ctx context.Context, leafNode, subtreeNode rootReaderNode, path [32]byte, depth int, leafIsOld bool, emit func(Change) error) error {
+	if err := validateCommitmentLeafPath(leafNode.leaf, path, depth); err != nil {
+		return err
 	}
 	leaf := leafNode.leaf
 	leafKey := leaf.Key()
 	matched := false
-	err := r.walkNode(ctx, subtreeNode, func(item *Item, nodeType NodeType) error {
+	err := r.walkNode(ctx, subtreeNode, path, depth, func(item *Item, nodeType NodeType) error {
 		if matched {
 			if leafIsOld {
 				return emitRootChange(ctx, emit, item, nodeType, false)

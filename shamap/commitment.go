@@ -36,8 +36,9 @@ type ChangeSink func(FlushEntry) error
 
 // BuildResult describes the nodes emitted by BuildChanges. Nodes, Leaves and
 // Bytes count emitted changed nodes only; they do not describe the total tree.
-// MaxFrontier is the largest number of decoded parent nodes retained by the
-// bounded traversal at once.
+// MaxFrontier is the largest number of affected path frames active in the
+// bounded traversal. Decoded frame payloads are released after branch
+// metadata is copied, before recursive descent.
 type BuildResult struct {
 	Root        [32]byte
 	Nodes       uint64
@@ -135,10 +136,13 @@ func releaseCommitmentMemory(budget CommitmentBudget, bytes uint64) {
 const commitmentNodeOverhead = uint64(1024)
 
 func commitmentNodeCharge(data []byte) uint64 {
+	return commitmentNodeChargeBytes(uint64(len(data)))
+}
+
+func commitmentNodeChargeBytes(payload uint64) uint64 {
 	// A fetched node and its decoded representation coexist during decode.
 	// Root readers additionally copy the decoded payload into their borrowed
 	// view, so retain a third payload-sized allowance.
-	payload := uint64(len(data))
 	if payload > (^uint64(0)-commitmentNodeOverhead)/3 {
 		return ^uint64(0)
 	}
@@ -240,6 +244,39 @@ func validateCommitmentChange(mapType Type, change Change) error {
 	return nil
 }
 
+func validateCommitmentKeyPath(key, path [32]byte, depth int) error {
+	if depth < 0 || depth > maxDepth {
+		return fmt.Errorf("shamap: leaf path depth %d is outside the authenticated range", depth)
+	}
+	if !pathPrefixEq(key, path, depth) {
+		return fmt.Errorf("shamap: leaf key %x does not match authenticated path at depth %d", key[:8], depth)
+	}
+	return nil
+}
+
+func validateCommitmentLeafPath(item *Item, path [32]byte, depth int) error {
+	if item == nil {
+		return errors.New("shamap: authenticated leaf has no item")
+	}
+	return validateCommitmentKeyPath(item.Key(), path, depth)
+}
+
+func validateCommitmentLeafType(mapType Type, nodeType NodeType) error {
+	switch mapType {
+	case TypeState:
+		if nodeType != NodeTypeAccountState {
+			return fmt.Errorf("shamap: state root contains leaf type %v", nodeType)
+		}
+	case TypeTransaction:
+		if nodeType != NodeTypeTransactionNoMeta && nodeType != NodeTypeTransactionWithMeta {
+			return fmt.Errorf("shamap: transaction root contains leaf type %v", nodeType)
+		}
+	default:
+		return fmt.Errorf("shamap: unknown map type %v", mapType)
+	}
+	return nil
+}
+
 func defaultCommitmentLeafType(mapType Type) (NodeType, error) {
 	switch mapType {
 	case TypeState:
@@ -298,8 +335,9 @@ type commitmentBuilder struct {
 // BuildChanges computes the new root from a verified parent root and a sorted
 // stream of final changes. It reads only affected parent paths and emits each
 // changed leaf/inner node once, post-order. Untouched subtrees remain hash-only
-// references to the parent. The traversal keeps at most one decoded node per
-// SHAMap depth; output Data is borrowed by emit until that callback returns.
+// references to the parent. The traversal keeps at most one active frame per
+// SHAMap depth; decoded node payloads are released after branch metadata is
+// copied. Output Data is borrowed by emit until that callback returns.
 func BuildChanges(
 	ctx context.Context,
 	mapType Type,
@@ -350,7 +388,6 @@ func BuildChanges(
 	}
 	result, err := builder.build(base, 0, [32]byte{}, true)
 	if err != nil {
-		base.release(builder.budget)
 		return BuildResult{}, err
 	}
 	if pending, err := builder.cursor.peek(ctx, mapType); err != nil {
@@ -428,6 +465,10 @@ func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
 			return commitmentBase{}, errors.New("shamap: decoded parent leaf has no item")
 		}
 		base.kind = n.Type()
+		if err := validateCommitmentLeafType(b.mapType, base.kind); err != nil {
+			base.release(b.budget)
+			return commitmentBase{}, err
+		}
 		base.key = item.Key()
 	default:
 		base.release(b.budget)
@@ -437,14 +478,24 @@ func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
 }
 
 func (b *commitmentBuilder) build(base commitmentBase, depth int, path [32]byte, root bool) (result commitmentResult, err error) {
+	defer base.release(b.budget)
 	if err := b.enter(); err != nil {
 		return commitmentResult{}, err
 	}
 	defer b.leave()
-	defer base.release(b.budget)
 	if depth > maxDepth {
 		return commitmentResult{}, errors.New("shamap: commitment exceeded maximum depth")
 	}
+	if base.kind == NodeTypeInner {
+		if depth >= maxDepth {
+			return commitmentResult{}, fmt.Errorf("shamap: inner node at depth %d exceeds maximum depth", depth)
+		}
+	} else if base.kind != NodeType(0) {
+		if err := validateCommitmentKeyPath(base.key, path, depth); err != nil {
+			return commitmentResult{}, err
+		}
+	}
+	base.release(b.budget)
 	if depth == maxDepth {
 		return b.buildTerminal(base)
 	}
@@ -770,16 +821,18 @@ func (b *commitmentBuilder) emitInner(hashes [BranchFactor][32]byte, branches ui
 	if branches == 0 {
 		return commitmentRef{}, nil
 	}
+	charge := commitmentNodeChargeBytes(uint64(fullInnerSerializedSize))
+	if err := reserveCommitmentMemory(b.ctx, b.budget, charge); err != nil {
+		return commitmentRef{}, err
+	}
 	node := &innerNode{hashes: hashes, isBranch: branches}
 	if err := node.UpdateHash(); err != nil {
+		releaseCommitmentMemory(b.budget, charge)
 		return commitmentRef{}, err
 	}
 	data, err := node.SerializeWithPrefix()
 	if err != nil {
-		return commitmentRef{}, err
-	}
-	charge := commitmentNodeCharge(data)
-	if err := reserveCommitmentMemory(b.ctx, b.budget, charge); err != nil {
+		releaseCommitmentMemory(b.budget, charge)
 		return commitmentRef{}, err
 	}
 	entry := FlushEntry{Hash: node.Hash(), Data: data, LedgerSeq: b.ledgerSeq, MapType: b.mapType}
