@@ -1,12 +1,14 @@
 package ledger
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
@@ -32,6 +34,62 @@ type ExecutionConfig struct {
 type ExecutionStore struct {
 	config ExecutionConfig
 	roots  *rootlease.Registry
+	stats  executionStatsCounters
+}
+
+type executionStatsCounters struct {
+	builds        atomic.Uint64
+	buildErrors   atomic.Uint64
+	buildNodes    atomic.Uint64
+	buildLeaves   atomic.Uint64
+	buildBytes    atomic.Uint64
+	buildNanos    atomic.Uint64
+	maxFrontier   atomic.Uint64
+	flatHits      atomic.Uint64
+	rootFallbacks atomic.Uint64
+}
+
+// ExecutionStats reports bounded execution work and read-path counters. The
+// counters are process-local diagnostics and intentionally carry no ledger
+// hashes or object keys.
+type ExecutionStats struct {
+	Builds           uint64
+	BuildErrors      uint64
+	BuildNodes       uint64
+	BuildLeaves      uint64
+	BuildBytes       uint64
+	BuildNanos       uint64
+	MaxFrontier      uint64
+	FlatHits         uint64
+	RootFallbacks    uint64
+	ActiveRootLeases int
+	DistinctRootKeys int
+}
+
+func (s *ExecutionStore) Stats() ExecutionStats {
+	rootStats := s.roots.Stats()
+	return ExecutionStats{
+		Builds:           s.stats.builds.Load(),
+		BuildErrors:      s.stats.buildErrors.Load(),
+		BuildNodes:       s.stats.buildNodes.Load(),
+		BuildLeaves:      s.stats.buildLeaves.Load(),
+		BuildBytes:       s.stats.buildBytes.Load(),
+		BuildNanos:       s.stats.buildNanos.Load(),
+		MaxFrontier:      s.stats.maxFrontier.Load(),
+		FlatHits:         s.stats.flatHits.Load(),
+		RootFallbacks:    s.stats.rootFallbacks.Load(),
+		ActiveRootLeases: rootStats.Active,
+		DistinctRootKeys: rootStats.Distinct,
+	}
+}
+
+func updateExecutionMax(dst *atomic.Uint64, value uint64) {
+	for {
+		current := dst.Load()
+		if value <= current || dst.CompareAndSwap(current, value) {
+			return
+		}
+	}
 }
 
 func NewExecutionStore(config ExecutionConfig) (*ExecutionStore, error) {
@@ -56,6 +114,13 @@ func (s *ExecutionStore) AcquireRoot(root rootlease.Root) (func(), error) {
 }
 
 func (s *ExecutionStore) GuardRoots(preserved func(rootlease.Root) bool) (func(), bool) {
+	return s.roots.GuardFunc(preserved)
+}
+
+// GuardPreservedRoots admits storage retirement when every active lease is in
+// the caller's immutable preservation set. The set is read while admitting the
+// guard and is not retained.
+func (s *ExecutionStore) GuardPreservedRoots(preserved map[rootlease.Root]struct{}) (func(), bool) {
 	return s.roots.Guard(preserved)
 }
 
@@ -96,18 +161,29 @@ type executionView struct {
 	transactions *executionTree
 }
 
+type executionClosureState uint8
+
+const (
+	executionClosureUnknown executionClosureState = iota
+	executionClosurePending
+	executionClosureVerified
+)
+
 type executionTree struct {
-	store    *ExecutionStore
-	kind     shamap.Type
-	base     header.LedgerHeader
-	root     [32]byte
-	sequence uint32
-	changes  *overlay.Overlay
-	release  func()
-	count    uint32
-	hashMu   sync.Mutex
-	cached   [32]byte
-	haveHash bool
+	store         *ExecutionStore
+	kind          shamap.Type
+	base          header.LedgerHeader
+	root          [32]byte
+	sequence      uint32
+	changes       *overlay.Overlay
+	lease         *rootlease.Lease
+	release       func()
+	count         uint32
+	closure       executionClosureState
+	parentClosure bool
+	hashMu        sync.Mutex
+	cached        [32]byte
+	haveHash      bool
 }
 
 func (t *executionTree) reader() *shamap.RootReader {
@@ -185,9 +261,11 @@ func (b executionBase) Get(ctx context.Context, key [32]byte) ([]byte, bool, err
 		return nil, false, err
 	}
 	if v != nil {
+		t.store.stats.flatHits.Add(1)
 		defer v.Close()
 		return v.Get(key)
 	}
+	t.store.stats.rootFallbacks.Add(1)
 	item, kind, found, err := t.reader().GetLeaf(ctx, key)
 	if err != nil || !found {
 		return nil, found, err
@@ -210,12 +288,14 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 		return err
 	}
 	if v != nil {
+		t.store.stats.flatHits.Add(1)
 		defer v.Close()
 		if after == nil {
 			return v.ForEach(ctx, fn)
 		}
 		return v.ForEachFrom(ctx, *after, fn)
 	}
+	t.store.stats.rootFallbacks.Add(1)
 	return t.reader().IterateLeaves(ctx, after, func(item *shamap.Item, kind shamap.NodeType) bool {
 		data := item.Data()
 		if t.kind == shamap.TypeTransaction {
@@ -227,15 +307,16 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 
 func (t *executionTree) newMutable(sequence uint32) (*executionTree, error) {
 	base := executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: t.sequence, count: t.count}
-	out := &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: sequence, count: t.count}
-	release, err := t.store.roots.Acquire(rootlease.Root{Hash: t.root, Kind: t.kind})
+	out := &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root, sequence: sequence, count: t.count,
+		parentClosure: t.closure == executionClosureVerified}
+	lease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		return nil, err
 	}
-	out.release = release
+	out.lease, out.release = lease, lease.Release
 	out.changes, err = overlay.New(executionBase{tree: &base}, t.store.config.Overlay)
 	if err != nil {
-		release()
+		lease.Release()
 		return nil, err
 	}
 	return out, nil
@@ -249,13 +330,14 @@ func (t *executionTree) fork() (*executionTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	release, err := t.store.roots.Acquire(rootlease.Root{Hash: t.root, Kind: t.kind})
+	lease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		_ = changes.Close()
 		return nil, err
 	}
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: t.root,
-		sequence: t.sequence, changes: changes, release: release, count: t.count}, nil
+		sequence: t.sequence, changes: changes, lease: lease, release: lease.Release, count: t.count,
+		parentClosure: t.parentClosure}, nil
 }
 
 func (t *executionTree) close() {
@@ -263,10 +345,14 @@ func (t *executionTree) close() {
 		_ = t.changes.Close()
 		t.changes = nil
 	}
-	if t.release != nil {
+	if t.lease != nil {
+		t.lease.Release()
+		t.lease = nil
+	} else if t.release != nil {
 		t.release()
 		t.release = nil
 	}
+	t.release = nil
 }
 
 func (t *executionTree) get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
@@ -372,13 +458,93 @@ func (t *executionTree) PutItemsAtomically(items ...*shamap.Item) error {
 		}
 	}
 	t.close()
-	t.changes, t.release, t.count = fork.changes, fork.release, fork.count
-	fork.changes, fork.release = nil, nil
+	t.changes, t.lease, t.release, t.count, t.parentClosure = fork.changes, fork.lease, fork.release, fork.count, fork.parentClosure
+	fork.changes, fork.lease, fork.release = nil, nil, nil
 	t.haveHash = false
 	return nil
 }
 
+const (
+	executionCommitmentBatchEntries  = 64
+	executionCommitmentBatchBytes    = 1 << 20
+	executionCommitmentEntryOverhead = 128
+)
+
+// executionCommitmentSink copies each borrowed node only for the duration of a
+// bounded StoreBatch call. A denied copy is reported immediately: waiting from
+// inside BuildChanges would retain that builder's output charge and could
+// deadlock the shared workspace waiting for its own callback to return.
+type executionCommitmentSink struct {
+	ctx     context.Context
+	family  shamap.Family
+	budget  shamap.DirtyMemoryBudget
+	entries []shamap.FlushEntry
+	charged uint64
+}
+
+func newExecutionCommitmentSink(ctx context.Context, family shamap.Family, budget shamap.DirtyMemoryBudget) *executionCommitmentSink {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &executionCommitmentSink{
+		ctx:     ctx,
+		family:  family,
+		budget:  budget,
+		entries: make([]shamap.FlushEntry, 0, executionCommitmentBatchEntries),
+	}
+}
+
+func (s *executionCommitmentSink) add(entry shamap.FlushEntry) error {
+	if err := s.ctx.Err(); err != nil {
+		return err
+	}
+	charge := uint64(len(entry.Data)) + executionCommitmentEntryOverhead
+	if len(s.entries) >= executionCommitmentBatchEntries ||
+		(len(s.entries) > 0 && s.charged+charge > executionCommitmentBatchBytes) {
+		if err := s.flush(); err != nil {
+			return err
+		}
+	}
+	if s.budget != nil && !s.budget.TryReserve(charge) {
+		return fmt.Errorf("bounded execution node batch needs %d bytes: %w", charge, shamap.ErrCommitmentBudget)
+	}
+	entry.Data = bytes.Clone(entry.Data)
+	s.entries = append(s.entries, entry)
+	s.charged += charge
+	return nil
+}
+
+func (s *executionCommitmentSink) flush() error {
+	if len(s.entries) == 0 {
+		return nil
+	}
+	if err := s.ctx.Err(); err != nil {
+		s.abort()
+		return err
+	}
+	if err := s.family.StoreBatch(s.ctx, s.entries); err != nil {
+		s.abort()
+		return fmt.Errorf("store bounded commitment batch: %w", err)
+	}
+	s.release()
+	return nil
+}
+
+func (s *executionCommitmentSink) release() {
+	if s.budget != nil && s.charged != 0 {
+		s.budget.Release(s.charged)
+	}
+	clear(s.entries)
+	s.entries = s.entries[:0]
+	s.charged = 0
+}
+
+func (s *executionCommitmentSink) abort() { s.release() }
+
 func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if t.changes == nil {
 		return t.root, ctx.Err()
 	}
@@ -409,13 +575,26 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		}
 		return out, nil
 	}
+	sink := newExecutionCommitmentSink(ctx, t.store.config.Family, t.store.config.Workspace)
+	t.store.stats.builds.Add(1)
+	started := time.Now()
+	defer func() { t.store.stats.buildNanos.Add(uint64(time.Since(started))) }()
 	result, err := shamap.BuildChanges(ctx, t.kind, t.root, t.sequence, t.store.config.Family,
-		next, func(entry shamap.FlushEntry) error {
-			return t.store.config.Family.StoreBatch(ctx, []shamap.FlushEntry{entry})
-		}, shamap.WithCommitmentBudget(t.store.config.Workspace))
+		next, sink.add, shamap.WithCommitmentBudget(t.store.config.Workspace))
 	if err != nil {
+		t.store.stats.buildErrors.Add(1)
+		sink.abort()
 		return [32]byte{}, err
 	}
+	if err := sink.flush(); err != nil {
+		t.store.stats.buildErrors.Add(1)
+		sink.abort()
+		return [32]byte{}, err
+	}
+	t.store.stats.buildNodes.Add(result.Nodes)
+	t.store.stats.buildLeaves.Add(result.Leaves)
+	t.store.stats.buildBytes.Add(result.Bytes)
+	updateExecutionMax(&t.store.stats.maxFrontier, result.MaxFrontier)
 	t.cached, t.haveHash = result.Root, true
 	return result.Root, nil
 }
@@ -425,7 +604,91 @@ func (t *executionTree) rooted(ctx context.Context) (*executionTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: root, sequence: t.sequence, count: t.count}, nil
+	closure := executionClosureUnknown
+	if t.changes == nil {
+		closure = t.closure
+	} else if t.parentClosure {
+		closure = executionClosurePending
+		if root == t.root {
+			closure = executionClosureVerified
+		}
+	}
+	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: root, sequence: t.sequence,
+		count: t.count, closure: closure}, nil
+}
+
+func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
+	if tree == nil || tree.root == ([32]byte{}) {
+		return nil
+	}
+	_, err := tree.reader().Count(ctx)
+	return err
+}
+
+// HasVerifiedExecutionClosure reports whether both authenticated roots have a
+// verified closure in this ledger's configured Family. A successful StoreBatch
+// is not sufficient; pending roots become verified only after the caller has
+// completed the corresponding storage durability barrier and invokes
+// EstablishBoundedClosure.
+func (l *Ledger) HasVerifiedExecutionClosure() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.execution != nil && !l.writable &&
+		l.execution.state.closure == executionClosureVerified &&
+		l.execution.transactions.closure == executionClosureVerified
+}
+
+// EstablishBoundedClosure authenticates a root-only view against its configured
+// Family when needed and records the exact closure for later flat publication.
+// For a pending incremental build, the caller must invoke this only after its
+// NodeStore durability barrier has completed; promotion then reuses the
+// verified parent closure and changed-node output without a full-state walk.
+func (l *Ledger) EstablishBoundedClosure(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.RLock()
+	if l.execution == nil {
+		l.mu.RUnlock()
+		return ErrInvalidState
+	}
+	if l.writable || l.state == StateOpen {
+		l.mu.RUnlock()
+		return ErrLedgerImmutable
+	}
+	view := l.execution
+	h := l.header
+	state, tx := view.state, view.transactions
+	stateClosure, txClosure := state.closure, tx.closure
+	l.mu.RUnlock()
+	if state.root != h.AccountHash || tx.root != h.TxHash || header.CalculateHash(h) != h.Hash {
+		return errors.New("bounded execution roots do not match ledger header")
+	}
+	if stateClosure != executionClosureVerified {
+		if stateClosure != executionClosurePending {
+			if err := verifyExecutionRoot(ctx, state); err != nil {
+				return fmt.Errorf("verify bounded state closure: %w", err)
+			}
+		}
+	}
+	if txClosure != executionClosureVerified {
+		if txClosure != executionClosurePending {
+			if err := verifyExecutionRoot(ctx, tx); err != nil {
+				return fmt.Errorf("verify bounded transaction closure: %w", err)
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.execution != view || l.header.AccountHash != h.AccountHash || l.header.TxHash != h.TxHash || l.header.Hash != h.Hash {
+		return errors.New("bounded execution changed during closure verification")
+	}
+	view.state.closure = executionClosureVerified
+	view.transactions.closure = executionClosureVerified
+	return nil
 }
 
 func (v *executionView) fork() (*executionView, error) {
@@ -448,6 +711,7 @@ func (v *executionView) rooted(ctx context.Context) (*executionView, error) {
 	}
 	txs, err := v.transactions.rooted(ctx)
 	if err != nil {
+		state.close()
 		return nil, err
 	}
 	return &executionView{state: state, transactions: txs}, nil
@@ -573,36 +837,118 @@ func (l *Ledger) FreezeExecution() error {
 	return nil
 }
 
-// EnableBoundedExecution persists the imported maps before replacing them with
-// root descriptors. The caller must already have authenticated their contents.
-func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionStore) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// EnableBoundedReads replaces an immutable ledger's resident maps with
+// authenticated-root descriptors. The target Family is intentionally checked
+// lazily: this is the historical/read path and its closure is uncertified until
+// EstablishBoundedClosure is called.
+func (l *Ledger) EnableBoundedReads(ctx context.Context, store *ExecutionStore) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.RLock()
 	if l.execution != nil {
+		sameStore := store != nil && l.execution.state.store == store
+		l.mu.RUnlock()
+		if !sameStore {
+			return errors.New("bounded execution is already attached to a different store")
+		}
 		return nil
 	}
-	if l.writable || store == nil {
+	if l.writable || l.state == StateOpen || store == nil || l.stateMap == nil || l.txMap == nil {
+		l.mu.RUnlock()
 		return ErrInvalidState
 	}
-	for _, tree := range []*shamap.SHAMap{l.stateMap, l.txMap} {
+	h := l.header
+	stateMap, txMap := l.stateMap, l.txMap
+	l.mu.RUnlock()
+	if header.CalculateHash(h) != h.Hash {
+		return errors.New("bounded read roots have an invalid ledger header")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	view := &executionView{
+		state: &executionTree{store: store, kind: shamap.TypeState, base: h, root: h.AccountHash, sequence: h.LedgerIndex},
+		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: h.TxHash,
+			sequence: h.LedgerIndex, count: uint32(txMap.Size())},
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.execution != nil || l.stateMap != stateMap || l.txMap != txMap || l.header.Hash != h.Hash {
+		return ErrInvalidState
+	}
+	l.execution = view
+	l.stateMap, l.txMap = nil, nil
+	return nil
+}
+
+// EnableBoundedExecution persists the imported maps before replacing them with
+// root descriptors, then authenticates the complete destination closure once.
+// A later target can carry that proof across incremental builds and promote its
+// pending changed-node closure after the caller's durability barrier.
+func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionStore) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.RLock()
+	if l.execution != nil {
+		writable := l.writable
+		sameStore := store != nil && l.execution.state.store == store
+		l.mu.RUnlock()
+		if !sameStore {
+			return errors.New("bounded execution is already attached to a different store")
+		}
+		if writable {
+			return ErrInvalidState
+		}
+		return l.EstablishBoundedClosure(ctx)
+	}
+	if l.writable || l.state == StateOpen || store == nil || l.stateMap == nil || l.txMap == nil {
+		l.mu.RUnlock()
+		return ErrInvalidState
+	}
+	h := l.header
+	stateMap, txMap := l.stateMap, l.txMap
+	l.mu.RUnlock()
+	if header.CalculateHash(h) != h.Hash {
+		return errors.New("bounded execution header is invalid")
+	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		return fmt.Errorf("hash imported state tree: %w", err)
+	}
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		return fmt.Errorf("hash imported transaction tree: %w", err)
+	}
+	if stateRoot != h.AccountHash || txRoot != h.TxHash {
+		return errors.New("bounded execution roots do not match ledger header")
+	}
+	for _, tree := range []*shamap.SHAMap{stateMap, txMap} {
 		if err := tree.StoreDirtyBatched(ctx, store.config.Workspace, func(entries []shamap.FlushEntry) error {
 			return store.config.Family.StoreBatch(ctx, entries)
 		}); err != nil {
 			return fmt.Errorf("persist imported execution tree: %w", err)
 		}
 	}
-	stateRoot, err := l.stateMap.Hash()
-	if err != nil {
-		return err
+	view := &executionView{
+		state:        &executionTree{store: store, kind: shamap.TypeState, base: h, root: stateRoot, sequence: h.LedgerIndex, closure: executionClosureUnknown},
+		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: h, root: txRoot, sequence: h.LedgerIndex, count: uint32(txMap.Size()), closure: executionClosureUnknown},
 	}
-	txRoot, err := l.txMap.Hash()
-	if err != nil {
-		return err
+	if err := verifyExecutionRoot(ctx, view.state); err != nil {
+		return fmt.Errorf("verify imported state closure: %w", err)
 	}
-	l.execution = &executionView{
-		state:        &executionTree{store: store, kind: shamap.TypeState, base: l.header, root: stateRoot, sequence: l.header.LedgerIndex},
-		transactions: &executionTree{store: store, kind: shamap.TypeTransaction, base: l.header, root: txRoot, sequence: l.header.LedgerIndex, count: uint32(l.txMap.Size())},
+	if err := verifyExecutionRoot(ctx, view.transactions); err != nil {
+		return fmt.Errorf("verify imported transaction closure: %w", err)
 	}
+	view.state.closure = executionClosureVerified
+	view.transactions.closure = executionClosureVerified
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.execution != nil || l.stateMap != stateMap || l.txMap != txMap || l.header.Hash != h.Hash {
+		return ErrInvalidState
+	}
+	l.execution = view
 	l.stateMap, l.txMap = nil, nil
 	return nil
 }

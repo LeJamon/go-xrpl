@@ -131,10 +131,6 @@ func (n *rootReaderNode) release(budget CommitmentBudget) {
 	n.charge = 0
 }
 
-func (n rootReaderNode) isEmpty() bool {
-	return !n.inner && n.leaf == nil
-}
-
 func (n rootReaderNode) childHash(branch int) ([32]byte, bool) {
 	if !n.inner || branch < 0 || branch >= BranchFactor || n.branches&(1<<branch) == 0 {
 		return [32]byte{}, false

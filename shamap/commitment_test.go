@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -797,7 +798,7 @@ func TestBuildChangesErrorsAndCancellation(t *testing.T) {
 	_, err = BuildChanges(context.Background(), TypeState, [32]byte{}, 1, family, func() (Change, error) {
 		return Change{Key: key, Data: commitmentTestData(1)}, nil
 	}, func(FlushEntry) error { return errors.New("sink failed") })
-	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("sink failed")) {
+	if err == nil || !strings.Contains(err.Error(), "sink failed") {
 		t.Fatalf("sink error = %v", err)
 	}
 }
@@ -903,7 +904,7 @@ func (b *testCommitmentBudget) TryReserve(bytes uint64) bool {
 }
 
 func (b *testCommitmentBudget) Release(bytes uint64) {
-	b.used.Add(^uint64(bytes - 1))
+	b.used.Add(^bytes + 1)
 	if b.wake != nil {
 		select {
 		case b.wake <- struct{}{}:
