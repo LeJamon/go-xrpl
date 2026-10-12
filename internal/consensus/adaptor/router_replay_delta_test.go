@@ -339,9 +339,9 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, svc *service.Service) (*mes
 
 // makeRouter wires a router against a real adaptor + recording sender,
 // returning the pieces tests will poke and inspect.
-func makeRouter(t *testing.T) (*Router, *Adaptor, *recordingSender, *service.Service) {
+func makeRouter(t *testing.T, families ...shamap.Family) (*Router, *Adaptor, *recordingSender, *service.Service) {
 	t.Helper()
-	svc := newTestLedgerService(t)
+	svc := newTestLedgerService(t, families...)
 	a, rs := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
 	r := newTestRouter(nil, a, inbox)

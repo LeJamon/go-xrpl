@@ -14,15 +14,20 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
 
 // closedLedgerWithPayment builds a standalone service, applies one signed
 // Payment, and closes a ledger so GetClosedLedger() returns a ledger with a
 // non-empty transaction tree.
-func closedLedgerWithPayment(t *testing.T) *service.Service {
+func closedLedgerWithPayment(t *testing.T, families ...shamap.Family) *service.Service {
 	t.Helper()
-	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
+	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
+	if len(families) > 0 {
+		cfg.SHAMapFamily = families[0]
+	}
+	svc, err := service.New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 

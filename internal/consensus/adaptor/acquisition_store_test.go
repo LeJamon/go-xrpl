@@ -985,7 +985,7 @@ func TestCompleteInboundLedgerDiscardsItsOwnPersistenceFailure(t *testing.T) {
 
 func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
-	router := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(nil, newTestAdaptor(t, base), make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
 	router.catchupReplay.acquisitionStore.start(t.Context())
 	defer router.catchupReplay.acquisitionStore.stopDrain()

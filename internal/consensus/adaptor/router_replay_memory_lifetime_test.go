@@ -33,16 +33,16 @@ func (f *blockedReplayRootFamily) Fetch(ctx context.Context, hash [32]byte) ([]b
 }
 
 func TestReplayCancellationKeepsActiveDrainMemoryUntilItReturns(t *testing.T) {
-	source := closedLedgerWithPayment(t)
+	base := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	source := closedLedgerWithPayment(t, base)
 	t.Cleanup(source.Stop)
 	target := source.GetClosedLedger()
 	hash := target.Hash()
-	r, _, sender, svc := makeRouter(t)
+	r, _, sender, svc := makeRouter(t, base)
 	parent := shamap.NewAcquisitionBudget(2 << 30)
 	require.NoError(t, r.SetAcquisitionMemoryBudget(2<<30, parent))
 	budget := r.catchupReplay.acquisitionMemory
-	base := backend.NewMemory()
-	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	family := &blockedReplayRootFamily{Family: base, root: target.Header().TxHash, entered: make(chan struct{}), resume: make(chan struct{})}
 	release := sync.OnceFunc(func() { close(family.resume) })
 	defer release()
