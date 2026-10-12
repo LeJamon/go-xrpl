@@ -908,22 +908,34 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 			"sequence", h.LedgerIndex, "base_sequence", baseSequence,
 			"verified_base", baseRoot != ([32]byte{}), "generation_changed", stats.GenerationChanged)
 	}
-	stateStats, err := s.verifyReplaySnapshot(ctx, statePurpose, stateMap, baseRoot)
+	immutable, err := derived.Snapshot()
+	if err == nil && immutable.ExecutionStore() != s.config.Execution {
+		immutable, err = ledger.NewClosedFromRootsContext(ctx, h, derived.Fees(), s.config.Execution)
+	}
 	if err != nil {
 		if pin != nil {
 			pin.Release()
 		}
 		return nil, err
 	}
-	stats.State = stateStats
-	txStats, err := s.verifyReplaySnapshot(ctx, "replay derived transactions", txMap, [32]byte{})
+	err = immutable.AuthenticateClosureWith(ctx, func(ctx context.Context, verified header.LedgerHeader) error {
+		if verified.Hash != h.Hash {
+			return errReplayPreparedInvalid
+		}
+		var err error
+		stats.State, err = s.verifyReplaySnapshot(ctx, statePurpose, stateMap, baseRoot)
+		if err != nil {
+			return err
+		}
+		stats.Transactions, err = s.verifyReplaySnapshot(ctx, "replay derived transactions", txMap, [32]byte{})
+		return err
+	})
 	if err != nil {
 		if pin != nil {
 			pin.Release()
 		}
 		return nil, err
 	}
-	stats.Transactions = txStats
 
 	if pinned && reusable {
 		s.rememberReplayProof(h, pin.fingerprint, txMap.IsBacked() && s.hasDurableFamily())
@@ -939,14 +951,6 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 	fingerprint := [32]byte{}
 	if pin != nil {
 		fingerprint = pin.fingerprint
-	}
-	immutable, err := derived.Snapshot()
-	if err != nil {
-		releaseWork()
-		if pin != nil {
-			pin.Release()
-		}
-		return nil, err
 	}
 	prepared := &PreparedLedger{
 		ledger:           immutable,
@@ -1043,7 +1047,14 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
 	}
-	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{}, s.config.Execution)
+	stateRoot, txRoot, err := s.config.Execution.ImportMaps(ctx, stateMap, txMap, h.LedgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	if stateRoot != h.AccountHash || txRoot != h.TxHash {
+		return nil, errors.New("acquired ledger roots do not match header")
+	}
+	source, err := ledger.NewClosedFromRootsContext(ctx, *h, drops.Fees{}, s.config.Execution)
 	if err != nil {
 		return nil, err
 	}

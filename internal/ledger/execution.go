@@ -842,6 +842,39 @@ func (l *Ledger) AuthenticateClosure(ctx context.Context) error {
 	return l.authenticateUnknownBoundedClosure(ctx, view, h)
 }
 
+// AuthenticateClosureWith records a service admission proof for this exact header.
+// verify must authenticate both trees while retaining the backing generation.
+// Durability is still established separately by EstablishBoundedClosure.
+func (l *Ledger) AuthenticateClosureWith(ctx context.Context, verify func(context.Context, header.LedgerHeader) error) error {
+	if verify == nil {
+		return errors.New("nil closure verifier")
+	}
+	l.mu.RLock()
+	if l.execution == nil || l.writable || l.state == StateOpen {
+		l.mu.RUnlock()
+		return ErrInvalidState
+	}
+	view, h := l.execution, l.header
+	l.mu.RUnlock()
+	if view.state.root != h.AccountHash || view.transactions.root != h.TxHash || header.CalculateHash(h) != h.Hash {
+		return errors.New("bounded execution roots do not match ledger header")
+	}
+	if err := verify(ctx, h); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.execution != view || l.header.Hash != h.Hash || l.header.AccountHash != h.AccountHash || l.header.TxHash != h.TxHash {
+		return errors.New("bounded execution changed during closure verification")
+	}
+	view.state.closure = executionClosurePending
+	view.transactions.closure = executionClosurePending
+	return nil
+}
+
 // authenticateUnknownBoundedClosure verifies only roots that have not already
 // been authenticated and records that proof as pending. Pending roots are
 // promoted by EstablishBoundedClosure after the caller's storage durability

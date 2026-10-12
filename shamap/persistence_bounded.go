@@ -30,6 +30,14 @@ func (sm *SHAMap) StoreAllBatched(ctx context.Context, budget DirtyMemoryBudget,
 }
 
 func (sm *SHAMap) storeBatched(ctx context.Context, budget DirtyMemoryBudget, store func([]FlushEntry) error, all bool) error {
+	if !all {
+		sm.tree.mu.RLock()
+		dirty := sm.tree.root != nil && sm.tree.root.IsDirty()
+		sm.tree.mu.RUnlock()
+		if !dirty {
+			return ctx.Err()
+		}
+	}
 	if budget == nil {
 		if all {
 			return fmt.Errorf("shamap: full-tree copy requires a memory budget")

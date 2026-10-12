@@ -264,19 +264,9 @@ func importExecution(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := validateMaps(stateMap, txMap); err != nil {
+	stateRoot, txRoot, err := store.ImportMaps(ctx, stateMap, txMap, hdr.LedgerIndex)
+	if err != nil {
 		return nil, nil, err
-	}
-	if store == nil {
-		return nil, nil, errors.New("bounded execution store cannot be nil")
-	}
-	stateRoot, err := importMap(ctx, stateMap, shamap.TypeState, hdr.LedgerIndex, store)
-	if err != nil {
-		return nil, nil, fmt.Errorf("persist imported state tree: %w", err)
-	}
-	txRoot, err := importMap(ctx, txMap, shamap.TypeTransaction, hdr.LedgerIndex, store)
-	if err != nil {
-		return nil, nil, fmt.Errorf("persist imported transaction tree: %w", err)
 	}
 	if !writable {
 		if header.CalculateHash(hdr) != hdr.Hash {
@@ -330,6 +320,26 @@ func importExecution(
 		return nil, nil, fmt.Errorf("failed to load amendment rules: %w", err)
 	}
 	return view, rules, nil
+}
+
+// ImportMaps stores detached input trees before root-only execution can read them.
+// Backed inputs must use this store's Family; unbacked inputs are copied in full.
+func (s *ExecutionStore) ImportMaps(ctx context.Context, stateMap, txMap *shamap.SHAMap, sequence uint32) ([32]byte, [32]byte, error) {
+	if s == nil {
+		return [32]byte{}, [32]byte{}, errors.New("bounded execution store cannot be nil")
+	}
+	if err := validateMaps(stateMap, txMap); err != nil {
+		return [32]byte{}, [32]byte{}, err
+	}
+	stateRoot, err := importMap(ctx, stateMap, shamap.TypeState, sequence, s)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, fmt.Errorf("persist imported state tree: %w", err)
+	}
+	txRoot, err := importMap(ctx, txMap, shamap.TypeTransaction, sequence, s)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, fmt.Errorf("persist imported transaction tree: %w", err)
+	}
+	return stateRoot, txRoot, nil
 }
 
 func importMap(ctx context.Context, source *shamap.SHAMap, kind shamap.Type, seq uint32, store *ExecutionStore) ([32]byte, error) {
