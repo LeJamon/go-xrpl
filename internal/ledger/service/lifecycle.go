@@ -144,6 +144,9 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.validatedSignTime = closed.CloseTime()
 	s.putHistoryLocked(closed)
 	s.evictOldHistoryLocked(closedSeq)
+	if s.openLedger != nil {
+		s.openLedger.ReleaseExecutionBuildLeases()
+	}
 	s.openLedger = newOpen
 	s.tickLoadFeeLocked()
 
@@ -530,7 +533,11 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 	s.putHistoryLocked(parent)
 	s.cachePersistedLedgerLocked(parent)
 	s.closedLedger = parent
+	if s.openLedger != nil {
+		s.openLedger.ReleaseExecutionBuildLeases()
+	}
 	s.openLedger = newOpen
+	parent.ReleaseExecutionBuildLeases()
 	published = true
 	s.tickLoadFeeLocked()
 	if replacingProvisional {

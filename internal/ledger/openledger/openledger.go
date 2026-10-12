@@ -139,6 +139,7 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 		}
 		return false
 	}
+	parent.ReleaseExecutionBuildLeases()
 
 	published := false
 	defer func() {
@@ -420,6 +421,9 @@ func (o *OpenLedger) accept(
 		published = true
 		o.cachedTxs = nil
 		o.currentMu.Unlock()
+		if previous != nil {
+			previous.ReleaseExecutionBuildLeases()
+		}
 		if retries != nil {
 			*retries = stagedRetries
 		}

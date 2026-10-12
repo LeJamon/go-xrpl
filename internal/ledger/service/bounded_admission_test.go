@@ -44,6 +44,7 @@ func TestBoundedCloseDoesNotPinGenerationDuringSQL(t *testing.T) {
 	unblock := sync.OnceFunc(func() { close(repository.release) })
 	defer unblock()
 	require.NoError(t, runtime.service.Start())
+	runtime.service.StopStateBaseRecertification()
 	repository.block.Store(true)
 	closed := make(chan error, 1)
 	go func() {

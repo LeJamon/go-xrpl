@@ -301,6 +301,9 @@ func (s *Service) acceptConsensusResult(
 		}
 
 		timings.persist = time.Since(persistStarted)
+		if expectedOpen != nil {
+			expectedOpen.ReleaseExecutionBuildLeases()
+		}
 		s.openLedger = newOpen
 		installedOpen = true
 

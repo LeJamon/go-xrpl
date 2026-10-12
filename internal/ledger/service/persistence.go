@@ -206,6 +206,7 @@ func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, validated, up
 		return
 	}
 	p.persistQueue = append(p.persistQueue, job)
+	l.ReleaseExecutionBuildLeases()
 	p.signalPersistLocked()
 	p.persistMu.Unlock()
 }
