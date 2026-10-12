@@ -23,6 +23,7 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 	cfg := &config.Config{
 		NetworkID:    config.NetworkID{Set: true, ID: 0},
 		NodeSize:     "small",
+		Resources:    config.ResourcesConfig{MemoryMB: 4096},
 		DatabasePath: filepath.Join(root, "relational"),
 		NodeDB: config.NodeDBConfig{
 			Path:            filepath.Join(root, "nodes"),
@@ -42,6 +43,7 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 		RunOptions{},
 	)
 
+	require.NoError(t, runtime.configureMemory())
 	require.NoError(t, runtime.configureStorage())
 	base, ok := runtime.nodeStore.(*nodestore.RotatingKVDatabase)
 	require.True(t, ok, "online-delete storage must use a rotating node store")

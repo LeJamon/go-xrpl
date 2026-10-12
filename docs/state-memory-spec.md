@@ -1,6 +1,6 @@
 # Flat state and bounded SHAMap memory
 
-Status: Approved specification; experimental implementation is opt-in. Date: 2026-10-12.
+Status: Approved specification; bounded execution is mandatory. Date: 2026-10-12.
 
 Related issue: [#2050](https://github.com/LeJamon/go-xrpl/issues/2050).
 Implementation baseline: `fd84af198af71770e671de3457663193dd06079a`.
@@ -308,16 +308,15 @@ Pass conditions are zero root/metadata/result mismatches, zero lost required nod
 
 Before implementation tuning, record numerical ceilings for p95/p99 consensus acceptance and commitment latency, replay throughput, storage-read amplification and transient disk use on the agreed reference workload. Those ceilings and the production resource defaults are unresolved measurements in this draft. No performance or rollout pass can be declared while they are unset; memory reduction alone is not sufficient.
 
-## 14. Implementation sequence and rollback
+## 14. Implementation sequence and recovery
 
-1. **Ownership and baseline instrumentation.** Inventory callers and capture representative memory, throughput and latency baselines. Add exact-version view contracts and accounting tests without changing execution storage.
-2. **Flat materialization and differential reads.** Import a verified root, maintain the new durable base/outbox, and compare point/ordered reads against the existing engine. Production remains on the existing path. Shadow work has its own admission and cannot delay validation.
-3. **Bounded transaction and ledger changes.** Introduce rollback-capable overlays, spills, dependency leases and pressure tests. Keep commitment on the legacy implementation while comparing execution results and metadata.
-4. **Incremental commitment in shadow mode.** Build roots/node bytes from the same final delta. Exercise failure injection, forks, import, rotation and cold serving. Retain the old result as authoritative until all equality gates pass.
-5. **Integrated opt-in execution.** Switch selected test/replay deployments to flat reads and bounded commitment. Keep canonical NodeStore writes and a verified fallback path. Complete long-run agreement and resource soaks.
-6. **Production default and cleanup.** Select measured defaults, pass latency/I/O gates, update the storage ADR and operating documentation, then remove superseded graph-retention paths after the rollback window.
+1. **Ownership and baseline instrumentation.** Inventory callers and capture representative memory, throughput and latency baselines. Add exact-version view contracts and accounting tests for every execution mode.
+2. **Flat materialization and authenticated reads.** Import a verified root, maintain the durable base/outbox, and use the matching flat view when ready. Every other read uses the authenticated SHAMap root with bounded workspace.
+3. **Bounded transaction and ledger changes.** Use bounded overlays, spills, dependency leases and pressure tests for every ledger transition. Commitment and execution share the same authoritative bounded view.
+4. **Incremental commitment and recovery.** Build roots/node bytes from the final delta. Exercise failure injection, forks, import, rotation and cold serving. Startup always reconciles advancing markers and outstanding index work before accepting new work.
+5. **Production operation and measurement.** Select measured defaults, pass latency/I/O gates, update the storage ADR and operating documentation, and retain only the bounded execution and recovery contracts.
 
-An experimental selector chooses one authoritative implementation for the entire captured ledger view, including its transaction map, commitment and nested application; it must not silently switch midway through transaction application. Persist the selected schema/epoch compatibility identity so restart cannot combine mismatched implementations. Shadow readers may compare results but cannot supply part of an authoritative view. A rollback first reconciles advancing markers and outstanding index work, then reopens a verified durable root through the legacy implementation and ignores/rebuilds flat materializations. It uses a binary that understands the new recovery records; blindly launching an older binary is not a supported rollback procedure. Preserve compatible NodeStore data and schema markers until rollback support is explicitly retired. Temporary dual execution requires extra bounded capacity and is not the final memory footprint.
+There is one authoritative execution engine for a ledger view, including its transaction map, commitment and nested application. It cannot switch midway through transaction application. Persist the schema/epoch compatibility identity required to interpret recovery records so restart cannot combine mismatched implementations. A flat materialization is a durable read optimization; it never replaces the authenticated root or selects another execution engine. Temporary work and all read leases remain within their configured memory and scratch budgets.
 
 ## 15. Decisions to settle during prototyping
 
@@ -331,13 +330,12 @@ The design fixes ownership, version isolation, canonical persistence and bounded
 Any change to canonical encoding, error results, retained-history availability or publication safety is outside these tuning decisions and requires a separate protocol/compatibility review.
 
 
-## 16. Operating the experimental implementation
+## 16. Operating bounded execution
 
-The selector is disabled by default. It requires persistent NodeStore storage and enough `resources.memory_mb` capacity for the existing protected accounts plus the execution accounts. These are experimental allowances, not measured production sizing recommendations:
+Bounded execution is always active. Persistent NodeStore deployments use the flat materialization; standalone and in-memory deployments use a bounded in-memory SHAMap family with an explicitly owned temporary spill directory. The configured allowances cover the existing protected accounts plus the execution accounts. These are resource defaults, not measured production sizing recommendations:
 
 ```toml
 [state]
-enabled = true
 memory_mb = 64
 scratch_mb = 2048
 cache_mb = 16
@@ -348,12 +346,12 @@ memtable_mb = 8
 
 The flat database is `execution-state` beneath the configured local state directory (or the NodeStore parent directory). Temporary overlay runs live in its `scratch` subdirectory. Startup takes the flat database lock before removing abandoned temporary runs; canonical nodes, the advancement marker and the index outbox supply recovery state. Durable publication retries retain their bounded queue admission under storage failures.
 
-For rollback, stop the node and set `state.enabled = false` using a binary that understands this schema. Startup detects an existing flat database, reconciles its advancement/outbox records, then resumes the configured legacy startup selection. Only after successful recovery does it remove the derived flat materialization while still owning NodeStore exclusively. Canonical NodeStore data and relational ledger/transaction records remain available. A failed recovery prevents startup and preserves its obligations for another attempt.
+Startup recovery reconciles the advancement marker and index outbox before accepting new work. Recovery either completes and resumes bounded execution or prevents startup while preserving its obligations for another attempt; there is no alternate execution selector or derived-state deletion mode.
 
 Prometheus exposes bounded execution work, active root borrowers, flat hits/fallbacks, pending outbox count/bytes/age, advancement/failure state, and spill disk usage/peaks/denials. The existing memory metrics cover overlay, roots, flat storage and persistence allocations. These are managed ownership measurements; Go heap/RSS and storage-engine memory remain separate measurements.
 
-`BenchmarkExecutionDisjointPathsRootFallback` compares the legacy and bounded paths with an in-memory Family and no flat materialization. It is a fallback diagnostic, not the reference workload required by section 13. The regression suite includes a 96-close, small-history retention workload with six rotations and an outstanding flat outbox. Representative long-running storage workloads, numerical latency/I/O ceilings, and measured production defaults remain required before enabling the path by default.
+`BenchmarkExecutionDisjointPathsRootFallback` measures authenticated-root reads with an in-memory Family and no flat materialization. It verifies the required root fallback, not a second execution engine or a rollout gate. The regression suite includes a 96-close, small-history retention workload with six rotations and an outstanding flat outbox. Representative long-running storage workloads, numerical latency/I/O ceilings, and measured production defaults remain required.
 
-For local verification, `GOXRPL_TEST_BOUNDED_JOURNAL=1 go test ./internal/testing/...` runs the transaction corpus with bounded ledger execution and journals. The default test invocation continues to exercise the existing implementation. The bounded fixture uses shared RAM/disk allowances and checks explicit release at test teardown.
+For local verification, `go test ./internal/testing/...` runs the transaction corpus with bounded ledger execution and journals. The fixture uses shared RAM/disk allowances and checks explicit release at test teardown.
 
 Commitment streams canonical node batches directly into NodeStore. Build admission protects emission, and destination-root leases protect the resulting closure until service history, pending persistence, or the flat outbox takes ownership. NodeStore Sync remains the durability boundary. Service read leases separately retain exact state/transaction roots for the entire query or queued request; request completion releases them even when the history descriptor was evicted during the operation.

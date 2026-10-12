@@ -18,6 +18,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 	cfg := &config.Config{
 		NetworkID:    config.NetworkID{Set: true, ID: 0},
 		NodeSize:     "small",
+		Resources:    config.ResourcesConfig{MemoryMB: 4096},
 		DatabasePath: filepath.Join(dir, "relational"),
 		NodeDB: config.NodeDBConfig{
 			Path: filepath.Join(dir, "nodes"), OnlineDelete: 4, FastLoad: true,
@@ -41,6 +42,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 			})
 		}
 		t.Cleanup(stop)
+		require.NoError(t, r.configureMemory())
 		require.NoError(t, r.configureStorage())
 		require.NoError(t, r.configureLedger())
 		if checkpoint {

@@ -58,9 +58,6 @@ func ValidateConfig(config *Config) error {
 	if err := config.State.Validate(); err != nil {
 		return err
 	}
-	if config.State.Enabled && config.NodeDB.Path == "" {
-		return fmt.Errorf("state.enabled requires persistent node_db.path")
-	}
 	if err := config.Resources.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("resources: %w", err))
 	}

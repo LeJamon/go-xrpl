@@ -20,10 +20,10 @@ func TestStateConfigValidation(t *testing.T) {
 		config  StateConfig
 		wantErr string
 	}{
-		{name: "disabled allows zero allowances", config: StateConfig{}},
+		{name: "defaults provide execution headroom", config: StateConfig{}},
 		{
-			name:    "enabled memory minimum",
-			config:  StateConfig{Enabled: true, MemoryMB: 7},
+			name:    "memory minimum",
+			config:  StateConfig{MemoryMB: 7},
 			wantErr: "state.memory_mb must be at least 8 MiB",
 		},
 		{

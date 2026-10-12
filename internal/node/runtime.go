@@ -30,6 +30,7 @@ import (
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -252,6 +253,14 @@ func (r *nodeRuntime) configureLedger() error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+	var family shamap.Family = r.nodeFamily
+	if family == nil {
+		var options backend.NodeStoreOptions
+		if r.memory != nil {
+			options.CacheMemoryBudget = r.memory.nodes
+		}
+		family = backend.NewMemory(options)
+	}
 
 	// Build the transaction-queue config from the operator's
 	// [transaction_queue] stanza layered over the rippled defaults.
@@ -269,7 +278,7 @@ func (r *nodeRuntime) configureLedger() error {
 		LedgerCacheSize: uint32(r.appConfig.ResolvedLedgerCacheSize()),
 		NetworkID:       uint32(networkID),
 		NodeStore:       r.nodeStore,
-		SHAMapFamily:    r.nodeFamily,
+		SHAMapFamily:    family,
 		FastLoad:        r.appConfig.NodeDB.FastLoad,
 		FastLoadWorkers: r.appConfig.NodeDB.FastLoadWorkers,
 		RelationalDB:    r.repo,

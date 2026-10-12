@@ -82,46 +82,42 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 		if err != nil {
 			return nil, err
 		}
-		m.persistence, err = account("persistence", shamap.DirtyWorkspaceBytes, shamap.DirtyWorkspaceBytes)
-		if err != nil {
-			return nil, err
-		}
-		// Cold verification must never occupy persistence's progress reserve.
-		// Account for two bounded readers inside the existing global allowance.
-		verificationBytes := uint64(2 * service.ReplayVerificationWorkspaceBytes)
-		m.replayVerification, err = account("replay_verification", verificationBytes, verificationBytes)
-		if err != nil {
-			return nil, err
-		}
 		m.fullBelow, err = account("full_below", shamap.FullBelowCacheMemoryBytes, shamap.FullBelowCacheMemoryBytes)
 		if err != nil {
 			return nil, err
 		}
 	}
-	flatPresent, err := executionStatePresent(cfg)
+	m.persistence, err = account("persistence", shamap.DirtyWorkspaceBytes, shamap.DirtyWorkspaceBytes)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.State.Enabled || flatPresent {
-		state := cfg.State.Resolved()
-		m.state, err = account("state_overlay", 8<<20, uint64(state.MemoryMB)<<20)
-		if err != nil {
-			return nil, err
-		}
-		m.stateRoots, err = account("state_roots", 1<<20, 1<<20)
-		if err != nil {
-			return nil, err
-		}
+	// Cold verification must never occupy persistence's progress reserve.
+	// Account for two bounded readers inside the existing global allowance.
+	verificationBytes := uint64(2 * service.ReplayVerificationWorkspaceBytes)
+	m.replayVerification, err = account("replay_verification", verificationBytes, verificationBytes)
+	if err != nil {
+		return nil, err
+	}
+	state := cfg.State.Resolved()
+	m.state, err = account("state_overlay", 8<<20, uint64(state.MemoryMB)<<20)
+	if err != nil {
+		return nil, err
+	}
+	m.stateRoots, err = account("state_roots", 1<<20, 1<<20)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.NodeDB.Path != "" {
 		storageBytes := uint64(state.CacheMB+4*state.MemTableMB+16) << 20
 		m.stateStorage, err = account("state_storage", storageBytes, storageBytes)
 		if err != nil {
 			return nil, err
 		}
-		diskPool := membudget.New(uint64(state.ScratchMB) << 20)
-		m.stateDisk, err = diskPool.NewAccount("state_scratch", 0, uint64(state.ScratchMB)<<20)
-		if err != nil {
-			return nil, err
-		}
+	}
+	diskPool := membudget.New(uint64(state.ScratchMB) << 20)
+	m.stateDisk, err = diskPool.NewAccount("state_scratch", 0, uint64(state.ScratchMB)<<20)
+	if err != nil {
+		return nil, err
 	}
 	if !standalone {
 		acquisitionLimit := limit

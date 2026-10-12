@@ -2,13 +2,11 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
-	"syscall"
 
-	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
@@ -16,95 +14,110 @@ import (
 )
 
 func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
-	present, err := executionStatePresent(r.appConfig)
-	if err != nil {
-		return err
+	if cfg == nil || cfg.SHAMapFamily == nil {
+		return errors.New("bounded execution requires a SHAMap family")
 	}
-	if !r.appConfig.State.Enabled && !present {
-		return nil
-	}
-	if r.nodeFamily == nil || r.nodeStore == nil || r.memory == nil || r.memory.persistence == nil {
-		return errors.New("bounded execution requires persistent node storage and memory admission")
+	if r.memory == nil || r.memory.persistence == nil || r.memory.state == nil ||
+		r.memory.stateRoots == nil || r.memory.stateDisk == nil {
+		return errors.New("bounded execution requires memory admission")
 	}
 	state := r.appConfig.State.Resolved()
-	storageBytes := r.memory.stateStorage.Capacity()
-	if !r.memory.stateStorage.TryReserve(storageBytes) {
-		return errors.New("flat state storage memory admission failed")
+	persistent := r.nodeStore != nil && r.nodeFamily != nil
+	var (
+		flat             *flatstate.Store
+		flatPath         string
+		scratch          string
+		storageBytes     uint64
+		storageReserved  bool
+		ephemeralScratch string
+	)
+	closeSetup := func() {
+		if flat != nil {
+			_ = flat.Close()
+		}
+		if scratch != "" {
+			_ = os.RemoveAll(scratch)
+		}
+		if ephemeralScratch != "" && ephemeralScratch != scratch {
+			_ = os.RemoveAll(ephemeralScratch)
+		}
+		if storageReserved {
+			r.memory.stateStorage.Release(storageBytes)
+		}
 	}
-	dir := r.appConfig.LocalStateDir()
-	if dir == "" {
-		dir = filepath.Dir(r.appConfig.NodeDB.Path)
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		r.memory.stateStorage.Release(storageBytes)
-		return err
-	}
-	flat, err := flatstate.Open(filepath.Join(dir, "execution-state"), flatstate.Options{
-		CacheBytes: state.CacheMB << 20, MemTableSize: state.MemTableMB << 20,
-		OutboxMaxCount: 64, OutboxMaxBytes: 1 << 20, MemoryBudget: r.memory.persistence,
-	})
-	if err != nil {
-		r.memory.stateStorage.Release(storageBytes)
-		return err
-	}
-	scratch := filepath.Join(dir, "execution-state", "scratch")
-	// The Pebble lock excludes another owner before abandoned runs are removed.
-	if err := os.RemoveAll(scratch); err != nil {
-		_ = flat.Close()
-		r.memory.stateStorage.Release(storageBytes)
-		return err
-	}
-	if err := os.MkdirAll(scratch, 0700); err != nil {
-		_ = flat.Close()
-		r.memory.stateStorage.Release(storageBytes)
-		return err
+
+	if persistent {
+		if r.memory.stateStorage == nil {
+			return errors.New("persistent bounded execution requires flat-state memory admission")
+		}
+		storageBytes = r.memory.stateStorage.Capacity()
+		if !r.memory.stateStorage.TryReserve(storageBytes) {
+			return errors.New("flat state storage memory admission failed")
+		}
+		storageReserved = true
+		dir := r.appConfig.LocalStateDir()
+		if dir == "" {
+			dir = filepath.Dir(r.appConfig.NodeDB.Path)
+		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			closeSetup()
+			return err
+		}
+		flatPath = filepath.Join(dir, "execution-state")
+		var err error
+		flat, err = flatstate.Open(flatPath, flatstate.Options{
+			CacheBytes: state.CacheMB << 20, MemTableSize: state.MemTableMB << 20,
+			OutboxMaxCount: 64, OutboxMaxBytes: 1 << 20, MemoryBudget: r.memory.persistence,
+		})
+		if err != nil {
+			closeSetup()
+			return err
+		}
+		scratch = filepath.Join(flatPath, "scratch")
+		// The Pebble lock excludes another owner before abandoned runs are removed.
+		if err := os.RemoveAll(scratch); err != nil {
+			closeSetup()
+			return err
+		}
+		if err := os.MkdirAll(scratch, 0700); err != nil {
+			closeSetup()
+			return err
+		}
+	} else {
+		var err error
+		ephemeralScratch, err = os.MkdirTemp("", "goxrpl-execution-")
+		if err != nil {
+			return fmt.Errorf("create bounded execution scratch directory: %w", err)
+		}
+		scratch = ephemeralScratch
 	}
 	execution, err := ledger.NewExecutionStore(ledger.ExecutionConfig{
-		Family: r.nodeFamily, Workspace: r.memory.persistence, RootMemory: r.memory.stateRoots,
+		Family: cfg.SHAMapFamily, Workspace: r.memory.persistence, RootMemory: r.memory.stateRoots,
 		MaxRootLeases: 4096, Flat: flat,
 		Overlay: overlay.Config{MemoryBudget: r.memory.state, DiskBudget: r.memory.stateDisk,
 			MaxMemoryBytes: uint64(state.MemoryMB) << 20, MaxDiskBytes: uint64(state.ScratchMB) << 20, SpillDir: scratch},
 	})
 	if err != nil {
-		_ = flat.Close()
-		_ = os.Remove(scratch)
-		r.memory.stateStorage.Release(storageBytes)
+		closeSetup()
 		return err
 	}
 	stopMetrics := r.installExecutionMetrics(execution, flat, r.memory.stateDisk)
-	var recovered atomic.Bool
 	r.executionCleanup = sync.OnceValue(func() error {
 		defer stopMetrics()
-		if err := execution.Close(); err != nil {
-			return err
+		errs := []error{execution.Close()}
+		if flat != nil {
+			errs = append(errs, flat.Close())
 		}
-		err := errors.Join(flat.Close(), os.RemoveAll(scratch))
-		if err == nil && recovered.Load() {
-			// NodeStore's exclusive owner is still held during cleanup.
-			err = os.RemoveAll(filepath.Join(dir, "execution-state"))
+		if scratch != "" {
+			errs = append(errs, os.RemoveAll(scratch))
 		}
-		r.memory.stateStorage.Release(storageBytes)
-		return err
+		if storageReserved {
+			r.memory.stateStorage.Release(storageBytes)
+		}
+		return errors.Join(errs...)
 	})
-	cfg.OnFlatRecovery = func() error { recovered.Store(true); return r.executionCleanup() }
 	cfg.Execution, cfg.FlatState = execution, flat
-	cfg.FlatRecoveryOnly = !r.appConfig.State.Enabled
-	r.serverLog.Info("Flat execution store opened", "execution_enabled", r.appConfig.State.Enabled, "overlay_mb", state.MemoryMB,
-		"scratch_mb", state.ScratchMB, "flat_path", filepath.Join(dir, "execution-state"))
+	r.serverLog.Info("Bounded execution store opened", "overlay_mb", state.MemoryMB,
+		"scratch_mb", state.ScratchMB, "flat_path", flatPath)
 	return nil
-}
-
-func executionStatePresent(cfg *config.Config) (bool, error) {
-	dir := cfg.LocalStateDir()
-	if dir == "" {
-		if cfg.NodeDB.Path == "" {
-			return false, nil
-		}
-		dir = filepath.Dir(cfg.NodeDB.Path)
-	}
-	_, err := os.Stat(filepath.Join(dir, "execution-state", "CURRENT"))
-	if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
-		return false, nil
-	}
-	return err == nil, err
 }

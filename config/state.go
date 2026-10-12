@@ -2,17 +2,16 @@ package config
 
 import "fmt"
 
-// StateConfig controls the opt-in flat execution path. These allowances are
-// part of resources.memory_mb; scratch_mb is a separate disk ceiling.
+// StateConfig controls bounded execution allowances. These allowances are part
+// of resources.memory_mb; scratch_mb is a separate disk ceiling.
 type StateConfig struct {
-	Enabled    bool  `toml:"enabled" mapstructure:"enabled"`
 	MemoryMB   int64 `toml:"memory_mb" mapstructure:"memory_mb"`
 	ScratchMB  int64 `toml:"scratch_mb" mapstructure:"scratch_mb"`
 	CacheMB    int64 `toml:"cache_mb" mapstructure:"cache_mb"`
 	MemTableMB int64 `toml:"memtable_mb" mapstructure:"memtable_mb"`
 }
 
-// Resolved fills the experimental execution allowances; production rollout remains opt-in.
+// Resolved fills the bounded execution allowances.
 func (c StateConfig) Resolved() StateConfig {
 	if c.MemoryMB == 0 {
 		c.MemoryMB = 64
@@ -42,7 +41,7 @@ func (c StateConfig) Validate() error {
 			return fmt.Errorf("state.%s must be between 0 and 1073741824 MiB", option.name)
 		}
 	}
-	if c.Enabled && c.Resolved().MemoryMB < 8 {
+	if c.Resolved().MemoryMB < 8 {
 		return fmt.Errorf("state.memory_mb must be at least 8 MiB")
 	}
 	return nil
