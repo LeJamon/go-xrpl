@@ -75,10 +75,12 @@ func (q *queryFacade) GetLedgerEntry(ctx context.Context, entryKey [32]byte, led
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
+	readLease, err := s.AcquireLedgerRead(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
+	defer readLease.Close()
+	targetLedger, validated := readLease.Ledger, readLease.Validated
 
 	k := keylet.Keylet{Key: entryKey}
 	exists, err := targetLedger.ExistsContext(ctx, k)
@@ -153,10 +155,12 @@ func (q *queryFacade) GetLedgerData(ctx context.Context, ledgerIndex string, lim
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
+	readLease, err := s.AcquireLedgerRead(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
+	defer readLease.Close()
+	targetLedger, validated := readLease.Ledger, readLease.Validated
 
 	result := &LedgerDataResult{
 		LedgerIndex: targetLedger.Sequence(),

@@ -52,13 +52,15 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
+	readLease, err := s.AcquireLedgerRead(ctx, ledgerIndex)
 	if err != nil {
 		if err == svcerr.ErrLedgerNotFound {
 			return nil, svcerr.ErrLedgerNotFound
 		}
 		return nil, err
 	}
+	defer readLease.Close()
+	targetLedger, validated := readLease.Ledger, readLease.Validated
 
 	// Get the directory keylet for buy or sell offers
 	var dirKey keylet.Keylet
