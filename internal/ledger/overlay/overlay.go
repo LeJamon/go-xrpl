@@ -13,7 +13,7 @@ import (
 type Overlay struct {
 	mu sync.RWMutex
 
-	base     Reader
+	base     baseReader
 	cfg      Config
 	budget   *budget
 	root     *treeNode
@@ -26,7 +26,7 @@ type Overlay struct {
 type Snapshot struct {
 	mu sync.Mutex
 
-	base     Reader
+	base     baseReader
 	budget   *budget
 	root     *treeNode
 	segments []*spillSegment
@@ -34,7 +34,7 @@ type Snapshot struct {
 }
 
 type view struct {
-	base     Reader
+	base     baseReader
 	budget   *budget
 	root     *treeNode
 	segments []*spillSegment
@@ -43,7 +43,7 @@ type view struct {
 // New creates an empty mutable overlay above base. A nil base is treated as an
 // empty state. The base is immutable and owned by the caller for the lifetime
 // of all derived overlays and snapshots.
-func New(base Reader, cfg Config) (*Overlay, error) {
+func New(base baseReader, cfg Config) (*Overlay, error) {
 	if base == nil {
 		base = emptyReader{}
 	}

@@ -15,7 +15,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 )
 
-// Reader is the minimum ordered state-view contract required by Overlay.
+// Reader is the read-only ordered state-view contract implemented by Overlay
+// and Snapshot.
 //
 // Iterate starts at the first key strictly greater than after. A nil after
 // starts at the beginning. Callback data is borrowed until the callback
@@ -25,20 +26,20 @@ type Reader interface {
 	Iterate(context.Context, *[32]byte, func([32]byte, []byte) bool) error
 }
 
-// Cursor is an optional pull-based ordered reader. Next obeys the same strict
-// successor contract as Reader.Iterate; returned bytes are borrowed until the
-// next call. Close is idempotent.
+// baseReader is the immutable base contract used by New. A base supplies point
+// reads and one pull-based ordered cursor so merged iteration does not reopen a
+// callback for every frontier item.
+type baseReader interface {
+	Get(context.Context, [32]byte) ([]byte, bool, error)
+	OpenCursor(context.Context, *[32]byte) (Cursor, error)
+}
+
+// Cursor is a pull-based ordered reader. Next obeys the same strict successor
+// contract as Reader.Iterate; returned bytes are borrowed until the next call.
+// Close is idempotent.
 type Cursor interface {
 	Next(context.Context) ([32]byte, []byte, bool, error)
 	Close() error
-}
-
-// CursorReader lets an immutable base provide one stable iterator instead of
-// requiring the compatibility Reader.Iterate callback to be reopened for every
-// merged frontier item.
-type CursorReader interface {
-	Reader
-	OpenCursor(context.Context, *[32]byte) (Cursor, error)
 }
 
 // Change is one final overlay change. Value is nil when Deleted is true. Values
@@ -140,6 +141,20 @@ type emptyReader struct{}
 
 func (emptyReader) Get(context.Context, [32]byte) ([]byte, bool, error) { return nil, false, nil }
 
-func (emptyReader) Iterate(ctx context.Context, _ *[32]byte, _ func([32]byte, []byte) bool) error {
-	return ctx.Err()
+func (emptyReader) OpenCursor(ctx context.Context, _ *[32]byte) (Cursor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return emptyCursor{}, nil
 }
+
+type emptyCursor struct{}
+
+func (emptyCursor) Next(ctx context.Context) ([32]byte, []byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	return [32]byte{}, nil, false, nil
+}
+
+func (emptyCursor) Close() error { return nil }

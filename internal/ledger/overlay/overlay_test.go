@@ -16,7 +16,13 @@ import (
 type testBase struct {
 	mu     sync.RWMutex
 	values map[[32]byte][]byte
-	err    error
+}
+
+type testCursor struct {
+	keys   [][32]byte
+	values map[[32]byte][]byte
+	index  int
+	closed bool
 }
 
 func newTestBase(values map[[32]byte][]byte) *testBase {
@@ -35,12 +41,15 @@ func (b *testBase) Get(ctx context.Context, key [32]byte) ([]byte, bool, error) 
 	defer b.mu.RUnlock()
 	value, ok := b.values[key]
 	if !ok {
-		return nil, false, b.err
+		return nil, false, nil
 	}
-	return append([]byte(nil), value...), true, b.err
+	return append([]byte(nil), value...), true, nil
 }
 
-func (b *testBase) Iterate(ctx context.Context, after *[32]byte, fn func([32]byte, []byte) bool) error {
+func (b *testBase) OpenCursor(ctx context.Context, after *[32]byte) (Cursor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	b.mu.RLock()
 	keys := make([][32]byte, 0, len(b.values))
 	for key := range b.values {
@@ -51,20 +60,31 @@ func (b *testBase) Iterate(ctx context.Context, after *[32]byte, fn func([32]byt
 	for key, value := range b.values {
 		values[key] = append([]byte(nil), value...)
 	}
-	err := b.err
 	b.mu.RUnlock()
-	for _, key := range keys {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if after != nil && string(key[:]) <= string(after[:]) {
-			continue
-		}
-		if !fn(key, values[key]) {
-			break
+	cursor := &testCursor{keys: keys, values: values}
+	if after != nil {
+		for cursor.index < len(cursor.keys) && string(cursor.keys[cursor.index][:]) <= string(after[:]) {
+			cursor.index++
 		}
 	}
-	return err
+	return cursor, nil
+}
+
+func (c *testCursor) Next(ctx context.Context) ([32]byte, []byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	if c.closed || c.index >= len(c.keys) {
+		return [32]byte{}, nil, false, nil
+	}
+	key := c.keys[c.index]
+	c.index++
+	return key, c.values[key], true, nil
+}
+
+func (c *testCursor) Close() error {
+	c.closed = true
+	return nil
 }
 
 func testKey(n byte) [32]byte {

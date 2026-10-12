@@ -36,18 +36,6 @@ func (c *treeChangeCursor) close() error {
 	return nil
 }
 
-type baseChangeCursor struct {
-	base     Reader
-	owner    *budget
-	after    [32]byte
-	hasAfter bool
-	last     [32]byte
-	hasLast  bool
-	current  uint64
-	done     bool
-	closed   bool
-}
-
 type pullBaseCursor struct {
 	cursor  Cursor
 	owner   *budget
@@ -101,82 +89,6 @@ func (c *pullBaseCursor) close() error {
 	return c.cursor.Close()
 }
 
-func (c *baseChangeCursor) releaseCurrent() {
-	if c.current != 0 {
-		c.owner.releaseMemory(c.current)
-		c.current = 0
-	}
-}
-
-func (c *baseChangeCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool, error) {
-	var key [32]byte
-	if c == nil || c.closed {
-		return key, nil, false, false, ErrClosed
-	}
-	c.releaseCurrent()
-	if c.done {
-		return key, nil, false, false, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return key, nil, false, false, err
-	}
-	var callbackErr error
-	var found bool
-	var candidate [32]byte
-	var copied []byte
-	var after *[32]byte
-	if c.hasAfter {
-		after = &c.after
-	}
-	err := c.base.Iterate(ctx, after, func(k [32]byte, value []byte) bool {
-		if c.hasLast && bytes.Compare(k[:], c.last[:]) <= 0 {
-			callbackErr = ErrOrdering
-			return false
-		}
-		candidate = k
-		charge, ok := addCharge(workspaceStream, uint64(len(value)))
-		if !ok || !c.owner.reserveMemory(charge) {
-			callbackErr = ErrMemoryBudget
-			return false
-		}
-		copied = make([]byte, len(value))
-		copy(copied, value)
-		c.current = charge
-		found = true
-		return false
-	})
-	if err != nil {
-		c.releaseCurrent()
-		return key, nil, false, false, err
-	}
-	if callbackErr != nil {
-		c.releaseCurrent()
-		return key, nil, false, false, callbackErr
-	}
-	if !found {
-		c.done = true
-		return key, nil, false, false, nil
-	}
-	if c.hasAfter && bytes.Compare(candidate[:], c.after[:]) <= 0 {
-		c.releaseCurrent()
-		return key, nil, false, false, ErrOrdering
-	}
-	c.last = candidate
-	c.hasLast = true
-	c.after = candidate
-	c.hasAfter = true
-	return candidate, copied, false, true, nil
-}
-
-func (c *baseChangeCursor) close() error {
-	if c == nil || c.closed {
-		return nil
-	}
-	c.closed = true
-	c.releaseCurrent()
-	return nil
-}
-
 type cursorItem struct {
 	key     [32]byte
 	value   []byte
@@ -221,26 +133,17 @@ func (v *view) openCursors(ctx context.Context, after *[32]byte, includeBase boo
 		cursors = append(cursors, cursor)
 	}
 	if includeBase {
-		if reader, ok := v.base.(CursorReader); ok {
-			var cursorAfter *[32]byte
-			if after != nil {
-				afterCopy := *after
-				cursorAfter = &afterCopy
-			}
-			cursor, err := reader.OpenCursor(ctx, cursorAfter)
-			if err != nil {
-				closeCursors()
-				return nil, 0, err
-			}
-			cursors = append(cursors, &pullBaseCursor{cursor: cursor, owner: v.budget})
-		} else {
-			baseCursor := &baseChangeCursor{base: v.base, owner: v.budget}
-			if after != nil {
-				baseCursor.after = *after
-				baseCursor.hasAfter = true
-			}
-			cursors = append(cursors, baseCursor)
+		var cursorAfter *[32]byte
+		if after != nil {
+			afterCopy := *after
+			cursorAfter = &afterCopy
 		}
+		cursor, err := v.base.OpenCursor(ctx, cursorAfter)
+		if err != nil {
+			closeCursors()
+			return nil, 0, err
+		}
+		cursors = append(cursors, &pullBaseCursor{cursor: cursor, owner: v.budget})
 	}
 	return cursors, workspace, nil
 }
