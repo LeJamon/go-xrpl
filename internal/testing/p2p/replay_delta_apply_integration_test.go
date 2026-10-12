@@ -97,6 +97,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	}
 
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
+	t.Cleanup(rd.ReleaseMemory)
 	require.NoError(t, rd.GotResponse(resp), "GotResponse must verify the wire framing")
 	require.Equal(t, inbound.StateReplayReady, rd.State())
 	require.False(t, rd.IsComplete())
@@ -160,6 +161,7 @@ func TestReplayDelta_Apply_PseudoTransaction(t *testing.T) {
 		Transactions: [][]byte{txMetaBlob},
 	}
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
+	t.Cleanup(rd.ReleaseMemory)
 	require.NoError(t, rd.GotResponse(resp))
 
 	derived, err := rd.Apply(tx.EngineConfig{
@@ -226,6 +228,7 @@ func TestReplay_RejectsDuplicateTransaction(t *testing.T) {
 		Transactions: [][]byte{txMetaBlob, txMetaBlob},
 	}
 	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
+	t.Cleanup(rd.ReleaseMemory)
 	require.ErrorContains(t, rd.GotResponse(resp), "duplicate transaction")
 }
 
@@ -245,6 +248,7 @@ func buildClosedSuccessor(
 
 	child, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(child.Discard)
 
 	parentCloseTime := uint32(0)
 	if !parent.CloseTime().IsZero() {

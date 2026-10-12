@@ -34,6 +34,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	defer open.Discard()
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -52,6 +53,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 func armReplayDeltaWith(t *testing.T, parent *ledger.Ledger, resp *message.ReplayDeltaResponse, hdr header.LedgerHeader) *ReplayDelta {
 	t.Helper()
 	rd := NewReplayDelta(hdr.Hash, 7, parent, nil)
+	t.Cleanup(rd.ReleaseMemory)
 	require.NoError(t, rd.GotResponse(resp))
 	require.Equal(t, StateReplayReady, rd.State())
 	return rd

@@ -332,10 +332,14 @@ func (r *ReplayDelta) releaseMemoryOwner() {
 	account := r.memory
 	headBytes := r.memoryHeadBytes
 	processingBytes := r.memoryProcessingBytes
+	derived := r.derived
 	r.memory = nil
 	r.memoryHeadBytes = 0
 	r.memoryProcessingBytes = 0
 	r.mu.Unlock()
+	if derived != nil {
+		derived.ReleaseExecutionBuildLeases()
+	}
 	if account == nil {
 		return
 	}
@@ -1138,7 +1142,11 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	if err != nil {
 		return nil, fmt.Errorf("construct replay ledger: %w", err)
 	}
-	defer child.Discard()
+	defer func() {
+		if r.derived != child {
+			child.Discard()
+		}
+	}()
 
 	// Override per-ledger config fields from the verified header /
 	// parent. The caller's EngineConfig keeps fees, network ID, logger,
