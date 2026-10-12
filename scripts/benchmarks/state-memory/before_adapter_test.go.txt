@@ -1,0 +1,79 @@
+package ledger
+
+import (
+	"context"
+	"math"
+	"path/filepath"
+	"testing"
+
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
+)
+
+func benchmarkRevisionName() string { return "shamap-baseline" }
+
+func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) (*stateMemoryBenchmarkRuntime, error) {
+	t.Helper()
+	root := t.TempDir()
+	nodePath := filepath.Join(root, "nodestore")
+	// The baseline has one Pebble cache. Give it the new revision's node plus
+	// flat-state allowance so both processes receive the same total block-cache
+	// budget even though this adapter has no flat-state database.
+	cacheMiB := c.NodeBlockCacheMiB + int(math.Ceil(float64(c.FlatCacheBytes)/float64(1<<20)))
+	node, err := backend.OpenPebble(nodePath, cacheMiB, c.NodeCacheItems)
+	if err != nil {
+		return nil, err
+	}
+	family := &benchmarkFamily{inner: node}
+	return &stateMemoryBenchmarkRuntime{
+		family: family, nodePath: nodePath,
+		initialize: func(h header.LedgerHeader, stateMap, txMap *shamap.SHAMap) (*Ledger, error) {
+			return NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+		},
+		persist: func(ctx context.Context, l *Ledger) error {
+			if err := l.StoreStateDirty(func(entries []shamap.FlushEntry) error {
+				return family.StoreBatch(ctx, entries)
+			}); err != nil {
+				return err
+			}
+			if err := l.StoreTransactionDirty(func(entries []shamap.FlushEntry) error {
+				return family.StoreBatch(ctx, entries)
+			}); err != nil {
+				return err
+			}
+			return family.Sync(ctx)
+		},
+		changes: func(context.Context, *Ledger, *Ledger) ([]benchmarkChange, error) { return nil, nil },
+		advance: func(context.Context, *Ledger, *Ledger, []benchmarkChange) error { return nil },
+		reopen: func(ctx context.Context, l *Ledger) (*Ledger, error) {
+			h := l.Header()
+			stateMap, err := benchmarkBaselineRootMap(ctx, shamap.TypeState, h.AccountHash, family)
+			if err != nil {
+				return nil, err
+			}
+			txMap, err := benchmarkBaselineRootMap(ctx, shamap.TypeTransaction, h.TxHash, family)
+			if err != nil {
+				return nil, err
+			}
+			return NewFromHeader(h, stateMap, txMap, drops.Fees{})
+		},
+		flatStats:   func() benchmarkFlatStats { return benchmarkFlatStats{} },
+		memoryStats: func() benchmarkMemoryStats { return benchmarkMemoryStats{} },
+		resources: func() benchmarkResolvedResources {
+			return benchmarkResolvedResources{
+				NodeBlockCacheBytes: uint64(cacheMiB) << 20,
+			}
+		},
+		release: func([]*Ledger, *Ledger) {},
+		close:   family.close,
+	}, nil
+}
+
+func benchmarkBaselineRootMap(ctx context.Context, kind shamap.Type, root [32]byte, family shamap.Family) (*shamap.SHAMap, error) {
+	if root == ([32]byte{}) {
+		return shamap.NewBacked(kind, family)
+	}
+	return shamap.NewFromRootHashContext(ctx, kind, root, family)
+}
