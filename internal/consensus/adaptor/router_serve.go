@@ -1,7 +1,9 @@
 package adaptor
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -10,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -103,6 +106,10 @@ func (r *Router) chargeGetLedgerWorker(msg *peermanagement.InboundMessage, fee r
 
 func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	defer r.recoverFrame(msg, "get_ledger")
+	ctx := r.lifecycleContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	req := msg.GetLedger
 	if req == nil {
@@ -181,29 +188,27 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	var (
-		l   *ledger.Ledger
-		err error
-	)
-	if req.HasLedgerHash() {
-		var hash [32]byte
-		copy(hash[:], req.LedgerHash)
-		l, err = svc.GetLedgerByHash(hash)
-	} else if req.HasLedgerSeq() {
-		if req.LedgerSeq < svc.EarliestFetch() {
+	selector, ok := ledgerReadSelector(req)
+	if !ok {
+		r.maybeRelayGetLedger(msg.PeerID, req)
+		return
+	}
+	if !req.HasLedgerHash() && req.HasLedgerSeq() && req.LedgerSeq < svc.EarliestFetch() {
+		return
+	}
+	readLease, err := svc.AcquireLedgerRead(ctx, selector)
+	if err != nil || readLease == nil || readLease.Ledger == nil {
+		if ctx.Err() != nil {
 			return
 		}
-		l, err = svc.GetLedgerBySequence(req.LedgerSeq)
-	} else if req.HasLType() && req.LType == message.LedgerTypeClosed {
-		l = svc.GetClosedLedger()
-	}
-	if err != nil || l == nil {
 		// We don't have it — relay to a peer that advertises it, mirroring
 		// rippled's getLedger relay. Falls through to a silent drop when the
 		// request isn't relayable or no peer qualifies.
 		r.maybeRelayGetLedger(msg.PeerID, req)
 		return
 	}
+	defer readLease.Close()
+	l := readLease.Ledger
 	if req.HasLedgerSeq() {
 		if l.Sequence() != req.LedgerSeq {
 			if !req.HasRequestCookie() {
@@ -251,6 +256,9 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		RequestCookie:    uint32(req.RequestCookie),
 		RequestCookieSet: req.HasRequestCookie(),
 	}
+	// The response owns detached wire bytes now; release the root before doing
+	// peer capability encoding and network I/O.
+	_ = readLease.Close()
 
 	if r.serve.PeerSupportsNodeDepth(uint64(msg.PeerID)) && resp.InfoType != message.LedgerInfoBase {
 		if err := useLedgerNodeDepth(resp.Nodes); err != nil {
@@ -267,6 +275,24 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if err := r.serve.SendToPeer(uint64(msg.PeerID), frame); err != nil {
 		r.logger.Debug("failed to send ledger_data to peer", "error", err, "peer", msg.PeerID)
 	}
+}
+
+func ledgerReadSelector(req *message.GetLedger) (string, bool) {
+	if req == nil {
+		return "", false
+	}
+	if req.HasLedgerHash() {
+		var hash [32]byte
+		copy(hash[:], req.LedgerHash)
+		return protocol.Hash256Hex(hash), true
+	}
+	if req.HasLedgerSeq() {
+		return strconv.FormatUint(uint64(req.LedgerSeq), 10), true
+	}
+	if req.HasLType() && req.LType == message.LedgerTypeClosed {
+		return "closed", true
+	}
+	return "", false
 }
 
 // buildLedgerBaseNodes builds the liBASE reply node set: node[0] is the
