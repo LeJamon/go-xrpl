@@ -676,25 +676,30 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 	epoch := s.writerEpoch
 	s.mu.Unlock()
 
-	if !resuming {
+	markerWritten := resuming
+	beforeFlush := func() error {
+		if markerWritten {
+			return nil
+		}
 		marker := newAdvanceMarker(expected, target, intent, epoch)
 		if err := s.writeMarker(ctx, epoch, marker); err != nil {
-			if errors.Is(err, errSyncUncertain) {
-				s.markUncertain(epoch)
-			} else {
-				s.finishWriter(epoch, false, false, Descriptor{})
-			}
 			return err
 		}
 		s.mu.Lock()
 		s.marker = &marker
 		s.mu.Unlock()
+		markerWritten = true
+		return nil
 	}
 
-	if err := s.applyChanges(ctx, epoch, changes, func(batch *pebble.Batch) error {
+	if err := s.applyChanges(ctx, epoch, changes, beforeFlush, func(batch *pebble.Batch) error {
 		return s.finalize(ctx, epoch, target, intent, batch)
 	}); err != nil {
-		s.finishWriter(epoch, false, false, Descriptor{})
+		if errors.Is(err, errSyncUncertain) {
+			s.markUncertain(epoch)
+		} else {
+			s.finishWriter(epoch, false, false, Descriptor{})
+		}
 		return err
 	}
 	s.finishWriter(epoch, true, true, target)
@@ -719,7 +724,7 @@ func (s *Store) writeMarker(ctx context.Context, epoch uint64, marker advanceMar
 		return err
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {
-		return err
+		return fmt.Errorf("%w: marker commit: %v", errSyncUncertain, err)
 	}
 	if err := s.sync(); err != nil {
 		return fmt.Errorf("%w: marker sync: %v", errSyncUncertain, err)
@@ -727,7 +732,7 @@ func (s *Store) writeMarker(ctx context.Context, epoch uint64, marker advanceMar
 	return nil
 }
 
-func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIterator, finalize func(*pebble.Batch) error) error {
+func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIterator, beforeFlush func() error, finalize func(*pebble.Batch) error) error {
 	defer changes.Close()
 	batch := s.db.NewBatch()
 	defer batch.Close()
@@ -748,6 +753,9 @@ func (s *Store) applyChanges(ctx context.Context, epoch uint64, changes ChangeIt
 			return nil
 		}
 		if err := s.checkWriter(ctx, epoch); err != nil {
+			return err
+		}
+		if err := beforeFlush(); err != nil {
 			return err
 		}
 		if err := batch.Commit(pebble.NoSync); err != nil {
@@ -864,7 +872,7 @@ func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, i
 		return err
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {
-		return err
+		return fmt.Errorf("%w: publication commit: %v", errSyncUncertain, err)
 	}
 	if err := s.sync(); err != nil {
 		return fmt.Errorf("%w: final sync: %v", errSyncUncertain, err)
@@ -913,7 +921,8 @@ func (s *Store) finishWriter(epoch uint64, ready, clearMarker bool, target Descr
 		s.descriptor = target
 		s.hasDescriptor = true
 	} else {
-		s.ready = false
+		// Without a marker or uncertain commit, no batch reached storage.
+		s.ready = s.marker == nil && !s.uncertain
 	}
 	s.cv.Broadcast()
 }

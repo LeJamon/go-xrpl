@@ -258,29 +258,53 @@ func TestStoreRejectsAuthorizationAndParentMismatch(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsUnsortedChangesAndKeepsBaseUnavailable(t *testing.T) {
-	store, err := Open(t.TempDir(), Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
-	importInitial(t, store, first, []Change{{Key: testHash(1), Value: []byte("old")}})
-	second := testDescriptor(2, first.LedgerHash, testHash(4), testHash(5), testHash(6))
-	err = store.Advance(context.Background(), AdvanceRequest{
-		Expected: &first, Target: second,
-		Changes:       NewSliceChangeIterator([]Change{{Key: testHash(3), Value: []byte("three")}, {Key: testHash(2), Value: []byte("two")}}),
-		Authorization: testAuthorization(first, second),
-	})
-	if !errors.Is(err, ErrInvalidChangeOrder) {
-		t.Fatalf("unsorted changes error = %v", err)
-	}
-	if _, err := store.OpenView(context.Background()); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("view after failed marker transition = %v", err)
-	}
-	marker, ok, err := store.Marker()
-	if err != nil || !ok || !marker.Target.Equal(second) {
-		t.Fatalf("marker after failed transition = %#v, %v, %v", marker, ok, err)
+func TestStoreInvalidChangesPreserveAtomicity(t *testing.T) {
+	for _, maxRecords := range []int{1, 4} {
+		t.Run(fmt.Sprint(maxRecords), func(t *testing.T) {
+			store, err := Open(t.TempDir(), Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: maxRecords})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+			importInitial(t, store, first, []Change{{Key: testHash(1), Value: []byte("old")}})
+			second := testDescriptor(2, first.LedgerHash, testHash(4), testHash(5), testHash(6))
+			err = store.Advance(context.Background(), AdvanceRequest{
+				Expected: &first, Target: second,
+				Changes:       NewSliceChangeIterator([]Change{{Key: testHash(3), Value: []byte("three")}, {Key: testHash(4), Value: []byte("four")}, {Key: testHash(2), Value: []byte("two")}}),
+				Authorization: testAuthorization(first, second),
+			})
+			if !errors.Is(err, ErrInvalidChangeOrder) {
+				t.Fatalf("unsorted changes error = %v", err)
+			}
+			marker, marked, err := store.Marker()
+			if err != nil || marked != (maxRecords == 1) {
+				t.Fatalf("marker = %#v, %v, %v", marker, marked, err)
+			}
+			view, err := store.OpenView(context.Background())
+			if marked {
+				if view != nil {
+					_ = view.Close()
+				}
+				if !errors.Is(err, ErrUnavailable) || !marker.Target.Equal(second) {
+					t.Fatalf("partial transition was available: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer view.Close()
+			if value, found, err := view.Get(testHash(1)); err != nil || !found || string(value) != "old" {
+				t.Fatalf("old object = %q, %v, %v", value, found, err)
+			}
+			if _, found, err := view.Get(testHash(3)); err != nil || found {
+				t.Fatalf("failed atomic batch leaked a mutation: %v, %v", found, err)
+			}
+			if current, _, err := store.Current(); err != nil || !current.Equal(first) {
+				t.Fatalf("failed atomic batch changed descriptor: %+v, %v", current, err)
+			}
+		})
 	}
 }
 
@@ -634,8 +658,12 @@ func TestStorePublicationSyncsAllChunks(t *testing.T) {
 				changes[i] = Change{Key: testHash(byte(i + 1)), Value: []byte("value")}
 			}
 			importInitial(t, store, target, changes)
-			if syncs != 2 {
-				t.Fatalf("transition used %d syncs; want marker and final publication barriers", syncs)
+			wantSyncs := 1
+			if records > 1 {
+				wantSyncs = 2
+			}
+			if syncs != wantSyncs {
+				t.Fatalf("transition used %d syncs; want %d", syncs, wantSyncs)
 			}
 			view, err := store.OpenView(context.Background())
 			if err != nil {
@@ -656,20 +684,25 @@ func TestStorePublicationSyncsAllChunks(t *testing.T) {
 }
 
 func TestStoreUncertainTransitionReopensConsistently(t *testing.T) {
-	for _, failSync := range []int{1, 2} {
-		t.Run(fmt.Sprint(failSync), func(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		maxRecords, failSync int
+	}{
+		{"atomic", 2, 1}, {"marker", 1, 1}, {"chunked-final", 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			path := t.TempDir()
 			var armed bool
 			var syncs int
 			store, err := Open(path, Options{
-				CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
+				CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: tc.maxRecords,
 				Sync: func(db *pebble.DB) error {
 					if err := db.LogData(nil, pebble.Sync); err != nil {
 						return err
 					}
 					if armed {
 						syncs++
-						if syncs == failSync {
+						if syncs == tc.failSync {
 							return errors.New("uncertain sync outcome")
 						}
 					}
@@ -705,7 +738,7 @@ func TestStoreUncertainTransitionReopensConsistently(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			if failSync == 1 {
+			if tc.name == "marker" {
 				if err := store.Resume(context.Background(), ResumeRequest{
 					Authorization: testAuthorization(first, target), Changes: NewSliceChangeIterator(changes),
 				}); err != nil {

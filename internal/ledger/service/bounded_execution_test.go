@@ -353,18 +353,22 @@ func TestBoundedExecutionInterruptedRebaseResumesFromDurableRoots(t *testing.T) 
 
 	branchB, err := ledger.NewOpen(parent, parent.CloseTime().Add(3*time.Second))
 	require.NoError(t, err)
+	require.NoError(t, branchB.Insert(keylet.Keylet{Key: [32]byte{0xba}}, bytes.Repeat([]byte{0x33}, 32)))
 	require.NoError(t, branchB.Close(parent.CloseTime().Add(4*time.Second), 0))
 	require.NoError(t, first.service.persistToNodeStore(ctx, branchB, branchB.Sequence()))
 	branchBHash := branchB.Hash()
 	branchB.Discard()
 	first.close(t)
 
-	var syncCalls atomic.Int32
+	advanceContext, cancelAdvance := context.WithCancel(ctx)
+	defer cancelAdvance()
 	flatOptions := boundedFlatOptions()
-	flatOptions.Sync = func(*pebble.DB) error {
-		if syncCalls.Add(1) == 2 {
-			return errBoundedPublication
+	flatOptions.MaxBatchBytes = 1
+	flatOptions.Sync = func(db *pebble.DB) error {
+		if err := db.LogData(nil, pebble.Sync); err != nil {
+			return err
 		}
+		cancelAdvance()
 		return nil
 	}
 	thirdRepository := newBoundedTestRepository(t, paths)
@@ -373,7 +377,7 @@ func TestBoundedExecutionInterruptedRebaseResumesFromDurableRoots(t *testing.T) 
 	loaded, err := third.service.loadStoredLedgerByHash(ctx, branchBHash)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
-	err = third.service.advanceFlatState(ctx, loaded)
+	err = third.service.advanceFlatState(advanceContext, loaded)
 	require.Error(t, err)
 	marker, advancing, err := third.flat.Marker()
 	require.NoError(t, err)
@@ -661,12 +665,15 @@ func TestBoundedExecutionInterruptedMarkerResumesFromDurableRoots(t *testing.T) 
 	targetHash := target.Hash()
 	second.close(t)
 
-	var syncCalls atomic.Int32
+	advanceContext, cancelAdvance := context.WithCancel(t.Context())
+	defer cancelAdvance()
 	flatOptions := boundedFlatOptions()
-	flatOptions.Sync = func(*pebble.DB) error {
-		if syncCalls.Add(1) == 2 {
-			return errBoundedPublication
+	flatOptions.MaxBatchBytes = 1
+	flatOptions.Sync = func(db *pebble.DB) error {
+		if err := db.LogData(nil, pebble.Sync); err != nil {
+			return err
 		}
+		cancelAdvance()
 		return nil
 	}
 	thirdRepository := newBoundedTestRepository(t, paths)
@@ -675,7 +682,7 @@ func TestBoundedExecutionInterruptedMarkerResumesFromDurableRoots(t *testing.T) 
 	loaded, err := third.service.loadStoredLedgerByHash(t.Context(), targetHash)
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
-	err = third.service.advanceFlatState(t.Context(), loaded)
+	err = third.service.advanceFlatState(advanceContext, loaded)
 	require.Error(t, err)
 	marker, advancing, err := third.flat.Marker()
 	require.NoError(t, err)

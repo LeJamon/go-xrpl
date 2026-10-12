@@ -10,9 +10,10 @@ import (
 func TestStoreStatsCachesOutboxAndTransitionState(t *testing.T) {
 	clock := time.Unix(1_700_000_000, 0).UTC()
 	store, err := Open(t.TempDir(), Options{
-		CacheBytes:   1 << 20,
-		MemTableSize: 1 << 20,
-		Clock:        func() time.Time { return clock },
+		CacheBytes:      1 << 20,
+		MemTableSize:    1 << 20,
+		MaxBatchRecords: 1,
+		Clock:           func() time.Time { return clock },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +41,7 @@ func TestStoreStatsCachesOutboxAndTransitionState(t *testing.T) {
 		Target:   second,
 		Changes: NewSliceChangeIterator([]Change{
 			{Key: testHash(3), Value: []byte("three")},
+			{Key: testHash(4), Value: []byte("four")},
 			{Key: testHash(2), Value: []byte("two")},
 		}),
 		Authorization: testAuthorization(first, second),
