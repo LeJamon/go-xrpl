@@ -808,7 +808,10 @@ func TestCommitmentBudgetAdmissionAndRelease(t *testing.T) {
 	}, func(FlushEntry) error {
 		called = true
 		return nil
-	}, WithCommitmentBudget(tooSmall))
+	}, WithCommitmentBudget(tooSmall), WithCommitmentFlush(func() error {
+		called = true
+		return nil
+	}))
 	if !errors.Is(err, ErrCommitmentBudget) {
 		t.Fatalf("oversized valid change error=%v", err)
 	}
@@ -834,6 +837,156 @@ func TestCommitmentBudgetAdmissionAndRelease(t *testing.T) {
 	}
 	if got := readerBudget.used.Load(); got != 0 {
 		t.Fatalf("reader retained %d bytes", got)
+	}
+}
+
+type retainingCommitmentSink struct {
+	budget  CommitmentBudget
+	entries []FlushEntry
+	flushes int
+	err     error
+}
+
+func (s *retainingCommitmentSink) add(entry FlushEntry) error {
+	charge := uint64(len(entry.Data) + 128)
+	if !s.budget.TryReserve(charge) {
+		return ErrCommitmentBudget
+	}
+	copyEntry := entry
+	copyEntry.Data = bytes.Clone(entry.Data)
+	s.entries = append(s.entries, copyEntry)
+	return nil
+}
+
+func (s *retainingCommitmentSink) flush() error {
+	s.flushes++
+	for _, entry := range s.entries {
+		s.budget.Release(uint64(len(entry.Data) + 128))
+	}
+	clear(s.entries)
+	s.entries = s.entries[:0]
+	return s.err
+}
+
+func TestBuildChangesCommitmentFlushHook(t *testing.T) {
+	data := commitmentTestData(0x21)
+	changes := make([]Change, 0, 10)
+	want := New(TypeState)
+	for i := byte(0); i < 10; i++ {
+		change := Change{Key: commitmentTestKey(i << 4), Data: data}
+		changes = append(changes, change)
+		if err := want.Put(change.Key, change.Data); err != nil {
+			t.Fatalf("want.Put: %v", err)
+		}
+	}
+	wantRoot, err := want.Hash()
+	if err != nil {
+		t.Fatalf("want.Hash: %v", err)
+	}
+
+	innerCopyCharge := uint64(fullInnerSerializedSize) + 128
+	capacity := commitmentNodeChargeBytes(uint64(fullInnerSerializedSize)) + innerCopyCharge
+	budget := &testCommitmentBudget{capacity: capacity}
+	sink := &retainingCommitmentSink{budget: budget}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	idx := 0
+	got, err := BuildChanges(ctx, TypeState, [32]byte{}, 1, newMemoryFamily(), func() (Change, error) {
+		if idx == len(changes) {
+			return Change{}, io.EOF
+		}
+		change := changes[idx]
+		idx++
+		return change, nil
+	}, sink.add, WithCommitmentBudget(budget), WithCommitmentFlush(sink.flush))
+	if err != nil {
+		t.Fatalf("BuildChanges: %v", err)
+	}
+	if got.Root != wantRoot {
+		t.Fatalf("root mismatch: got %x want %x", got.Root, wantRoot)
+	}
+	if sink.flushes == 0 {
+		t.Fatal("builder did not flush retained sink under pressure")
+	}
+	if err := sink.flush(); err != nil {
+		t.Fatalf("final sink flush: %v", err)
+	}
+	if used := budget.used.Load(); used != 0 {
+		t.Fatalf("budget retained %d bytes", used)
+	}
+}
+
+func TestBuildChangesCommitmentFlushFailureReleasesBudget(t *testing.T) {
+	data := commitmentTestData(0x31)
+	innerCopyCharge := uint64(fullInnerSerializedSize) + 128
+	capacity := commitmentNodeChargeBytes(uint64(fullInnerSerializedSize)) + innerCopyCharge
+	wantErr := errors.New("commitment flush failed")
+	budget := &testCommitmentBudget{capacity: capacity}
+	sink := &retainingCommitmentSink{budget: budget, err: wantErr}
+	changes := make([]Change, 0, 10)
+	for i := byte(0); i < 10; i++ {
+		changes = append(changes, Change{Key: commitmentTestKey(i << 4), Data: data})
+	}
+	idx := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := BuildChanges(ctx, TypeState, [32]byte{}, 1, newMemoryFamily(), func() (Change, error) {
+		if idx == len(changes) {
+			return Change{}, io.EOF
+		}
+		change := changes[idx]
+		idx++
+		return change, nil
+	}, sink.add, WithCommitmentBudget(budget), WithCommitmentFlush(sink.flush))
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("BuildChanges error = %v, want %v", err, wantErr)
+	}
+	if sink.flushes == 0 {
+		t.Fatal("builder did not invoke the pressure flush")
+	}
+	if used := budget.used.Load(); used != 0 {
+		t.Fatalf("failed flush retained %d bytes", used)
+	}
+}
+
+func TestBuildChangesCommitmentFlushCancellationWithExternalContention(t *testing.T) {
+	data := commitmentTestData(0x41)
+	capacity := commitmentNodeCharge(data)
+	budget := &testCommitmentBudget{capacity: capacity}
+	if !budget.TryReserve(capacity) {
+		t.Fatal("failed to establish external budget contention")
+	}
+	defer budget.Release(capacity)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	flushCalled := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := BuildChanges(ctx, TypeState, [32]byte{}, 1, newMemoryFamily(), func() (Change, error) {
+			return Change{Key: commitmentTestKey(1), Data: data}, nil
+		}, func(FlushEntry) error { return nil },
+			WithCommitmentBudget(budget), WithCommitmentFlush(func() error {
+				flushCalled <- struct{}{}
+				return nil
+			}))
+		done <- err
+	}()
+	select {
+	case <-flushCalled:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("builder did not invoke pressure flush before waiting")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("BuildChanges error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BuildChanges did not stop after cancellation")
 	}
 }
 

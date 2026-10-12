@@ -62,6 +62,7 @@ type CommitmentOption func(*commitmentOptions)
 
 type commitmentOptions struct {
 	budget CommitmentBudget
+	flush  func() error
 }
 
 func normalizeCommitmentContext(ctx context.Context) context.Context {
@@ -76,6 +77,17 @@ func normalizeCommitmentContext(ctx context.Context) context.Context {
 func WithCommitmentBudget(budget CommitmentBudget) CommitmentOption {
 	return func(options *commitmentOptions) {
 		options.budget = budget
+	}
+}
+
+// WithCommitmentFlush supplies an optional pressure callback for incremental
+// builders that retain emitted bytes outside BuildChanges. The callback runs
+// once after a builder reservation is denied, before the normal Changed wait.
+// It must release any retained budget before returning so the reservation can
+// make progress; a returned error aborts the build.
+func WithCommitmentFlush(flush func() error) CommitmentOption {
+	return func(options *commitmentOptions) {
+		options.flush = flush
 	}
 }
 
@@ -105,18 +117,33 @@ func commitmentCapacity(budget CommitmentBudget) (uint64, bool) {
 }
 
 func reserveCommitmentMemory(ctx context.Context, budget CommitmentBudget, bytes uint64) error {
+	return reserveCommitmentMemoryWithFlush(ctx, budget, bytes, nil)
+}
+
+func reserveCommitmentMemoryWithFlush(ctx context.Context, budget CommitmentBudget, bytes uint64, flush func() error) error {
 	if bytes == 0 || budget == nil {
 		return nil
 	}
 	if capacity, ok := commitmentCapacity(budget); ok && bytes > capacity {
 		return fmt.Errorf("%w: need %d bytes, capacity %d", ErrCommitmentBudget, bytes, capacity)
 	}
+	flushed := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if budget.TryReserve(bytes) {
 			return nil
+		}
+		if flush != nil && !flushed {
+			flushed = true
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := flush(); err != nil {
+				return err
+			}
+			continue
 		}
 		wake := budget.Changed()
 		select {
@@ -325,11 +352,16 @@ type commitmentBuilder struct {
 	ledgerSeq uint32
 	access    *familyAccess
 	budget    CommitmentBudget
+	flush     func() error
 	emit      ChangeSink
 	cursor    commitmentCursor
 	result    BuildResult
 
 	activeFrontier uint64
+}
+
+func (b *commitmentBuilder) reserve(bytes uint64) error {
+	return reserveCommitmentMemoryWithFlush(b.ctx, b.budget, bytes, b.flush)
 }
 
 // BuildChanges computes the new root from a verified parent root and a sorted
@@ -370,6 +402,7 @@ func BuildChanges(
 		ledgerSeq: ledgerSeq,
 		access:    bindFamily(family),
 		budget:    settings.budget,
+		flush:     settings.flush,
 		emit:      emit,
 		cursor:    commitmentCursor{next: next},
 	}
@@ -442,7 +475,7 @@ func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
 		return commitmentBase{}, fmt.Errorf("shamap: fetch parent node %x: %w", hash[:8], &MissingNodeError{Hash: hash})
 	}
 	charge := commitmentNodeCharge(data)
-	if err := reserveCommitmentMemory(b.ctx, b.budget, charge); err != nil {
+	if err := b.reserve(charge); err != nil {
 		return commitmentBase{}, err
 	}
 	node, err := decodeCommitmentNode(data, hash)
@@ -785,7 +818,7 @@ func (b *commitmentBuilder) emitLeaf(change Change) (commitmentRef, error) {
 		}
 	}
 	charge := commitmentNodeCharge(change.Data)
-	if err := reserveCommitmentMemory(b.ctx, b.budget, charge); err != nil {
+	if err := b.reserve(charge); err != nil {
 		return commitmentRef{}, err
 	}
 	node, err := createLeafNode(nodeType, NewItem(change.Key, change.Data))
@@ -811,7 +844,7 @@ func (b *commitmentBuilder) emitInner(hashes [BranchFactor][32]byte, branches ui
 		return commitmentRef{}, nil
 	}
 	charge := commitmentNodeChargeBytes(uint64(fullInnerSerializedSize))
-	if err := reserveCommitmentMemory(b.ctx, b.budget, charge); err != nil {
+	if err := b.reserve(charge); err != nil {
 		return commitmentRef{}, err
 	}
 	node := &innerNode{hashes: hashes, isBranch: branches}
