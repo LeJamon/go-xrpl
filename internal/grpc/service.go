@@ -46,6 +46,23 @@ type LedgerLookup interface {
 	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error)
 }
 
+type ledgerReadAcquirer interface {
+	AcquireLedgerRead(context.Context, string) (*service.LedgerReadLease, error)
+}
+
+type ledgerReadLease struct {
+	ledger    *ledger.Ledger
+	validated bool
+	close     func() error
+}
+
+func (l *ledgerReadLease) Close() error {
+	if l == nil || l.close == nil {
+		return nil
+	}
+	return l.close()
+}
+
 type Server struct {
 	rpcv1.UnimplementedXRPLedgerAPIServiceServer
 	lookup LedgerLookup
@@ -82,6 +99,98 @@ func (s *Server) resolveLedgerContext(ctx context.Context, spec *rpcv1.LedgerSpe
 	}
 	result, err := s.resolveLedgerSelection(ctx, selection)
 	return result.Value, err
+}
+
+func (s *Server) acquireLedgerRead(ctx context.Context, spec *rpcv1.LedgerSpecifier) (*ledgerReadLease, error) {
+	selection, err := selectorFromSpecifier(spec)
+	if err != nil {
+		return nil, err
+	}
+	return s.acquireLedgerReadSelection(ctx, selection)
+}
+
+func (s *Server) acquireLedgerReadSelection(ctx context.Context, selection ledgerselector.Selector) (*ledgerReadLease, error) {
+	if acquirer, ok := s.lookup.(ledgerReadAcquirer); ok {
+		read, err := acquirer.AcquireLedgerRead(ctx, selection.String())
+		if err != nil {
+			return nil, ledgerSelectorError(selection, err)
+		}
+		if read == nil || read.Ledger == nil {
+			if read != nil {
+				_ = read.Close()
+			}
+			return nil, ledgerSelectorError(selection, ledgerselector.ErrLedgerNotFound)
+		}
+		if err := s.validateLedgerReadFreshness(selection, read.Ledger); err != nil {
+			_ = read.Close()
+			return nil, err
+		}
+		return &ledgerReadLease{
+			ledger:    read.Ledger,
+			validated: read.Validated,
+			close:     read.Close,
+		}, nil
+	}
+
+	result, err := s.resolveLedgerSelection(ctx, selection)
+	if err != nil {
+		return nil, err
+	}
+	return &ledgerReadLease{
+		ledger:    result.Value,
+		validated: result.Validated,
+	}, nil
+}
+
+func (s *Server) validateLedgerReadFreshness(selection ledgerselector.Selector, l *ledger.Ledger) error {
+	switch selection.Kind() {
+	case ledgerselector.KindAbsent, ledgerselector.KindCurrent,
+		ledgerselector.KindClosed, ledgerselector.KindValidated:
+		if stale, _ := s.validatedLedgerState(); stale {
+			return ledgerSelectorError(selection, errLedgerNotSynced)
+		}
+	}
+
+	switch selection.Kind() {
+	case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed:
+		if s.shortcutLedgerLagged(l) {
+			return ledgerSelectorError(selection, errLedgerNotSynced)
+		}
+	case ledgerselector.KindSequence:
+		if stale, validSequence := s.validatedLedgerState(); stale && l != nil && l.Sequence() > validSequence {
+			return ledgerSelectorError(selection, errLedgerNotSynced)
+		}
+	}
+	return nil
+}
+
+func (s *Server) acquireLedgerReadByHash(ctx context.Context, hash [32]byte) (*ledgerReadLease, error) {
+	if acquirer, ok := s.lookup.(ledgerReadAcquirer); ok {
+		read, err := acquirer.AcquireLedgerRead(ctx, ledgerselector.FromHash(hash).String())
+		if err != nil {
+			return nil, err
+		}
+		if read == nil || read.Ledger == nil {
+			if read != nil {
+				_ = read.Close()
+			}
+			return nil, svcerr.ErrLedgerNotFound
+		}
+		return &ledgerReadLease{
+			ledger:    read.Ledger,
+			validated: read.Validated,
+			close:     read.Close,
+		}, nil
+	}
+
+	parent, err := s.lookupLedgerByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if parent == nil {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	return &ledgerReadLease{ledger: parent, validated: parent.IsValidated()}, nil
 }
 
 func selectorFromSpecifier(spec *rpcv1.LedgerSpecifier) (ledgerselector.Selector, error) {
@@ -223,14 +332,16 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	l, err := s.resolveLedgerContext(ctx, req.GetLedger())
+	read, err := s.acquireLedgerRead(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
+	defer read.Close()
+	l := read.ledger
 
 	resp := &rpcv1.GetLedgerResponse{
 		LedgerHeader: header.AddRaw(l.Header(), true),
-		Validated:    l.IsValidated(),
+		Validated:    read.validated,
 	}
 
 	if req.GetTransactions() {
@@ -289,17 +400,19 @@ func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.Transacti
 // DELETED. When wantNeighbors is set it also fills each created/deleted
 // object's predecessor and successor and any order-book successors.
 func (s *Server) appendChangedObjects(ctx context.Context, resp *rpcv1.GetLedgerResponse, l *ledger.Ledger, wantNeighbors bool) error {
-	parent, err := s.lookupLedgerByHash(ctx, l.ParentHash())
-	if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && parent == nil) {
-		return status.Error(codes.NotFound, "parent ledger not validated")
-	}
+	parentRead, err := s.acquireLedgerReadByHash(ctx, l.ParentHash())
 	if err != nil {
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return status.Error(codes.NotFound, "parent ledger not validated")
+		}
 		return grpcStorageError("looking up parent ledger", err)
 	}
-	if parent == nil || !parent.IsImmutable() {
+	defer parentRead.Close()
+	parent := parentRead.ledger
+	if parent == nil || parent.IsOpen() || !parent.IsImmutable() {
 		return status.Error(codes.NotFound, "parent ledger not validated")
 	}
-	if !l.IsImmutable() {
+	if l.IsOpen() || !l.IsImmutable() {
 		return status.Error(codes.NotFound, "ledger not validated")
 	}
 	diff, baseMap, desiredMap, err := stateDiff(ctx, parent, l)
@@ -438,10 +551,12 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	resolved, err := s.resolveLedgerContext(ctx, req.GetLedger())
+	read, err := s.acquireLedgerRead(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
+	defer read.Close()
+	resolved := read.ledger
 	if len(req.GetKey()) != 32 {
 		return nil, status.Error(codes.InvalidArgument, "index malformed")
 	}
@@ -480,10 +595,12 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	l, err := s.resolveLedgerContext(ctx, req.GetLedger())
+	read, err := s.acquireLedgerRead(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
+	defer read.Close()
+	l := read.ledger
 
 	var startKey [32]byte
 	hasMarker := false
@@ -553,18 +670,22 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	base, err := s.resolveLedgerContext(ctx, req.GetBaseLedger())
+	baseRead, err := s.acquireLedgerRead(ctx, req.GetBaseLedger())
 	if err != nil {
 		return nil, err
 	}
-	desired, err := s.resolveLedgerContext(ctx, req.GetDesiredLedger())
+	defer baseRead.Close()
+	base := baseRead.ledger
+	desiredRead, err := s.acquireLedgerRead(ctx, req.GetDesiredLedger())
 	if err != nil {
 		return nil, err
 	}
-	if !base.IsImmutable() {
+	defer desiredRead.Close()
+	desired := desiredRead.ledger
+	if base.IsOpen() || !base.IsImmutable() {
 		return nil, status.Error(codes.NotFound, "base ledger not validated")
 	}
-	if !desired.IsImmutable() {
+	if desired.IsOpen() || !desired.IsImmutable() {
 		return nil, status.Error(codes.NotFound, "desired ledger not validated")
 	}
 

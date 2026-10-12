@@ -17,6 +17,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -1166,6 +1167,50 @@ func TestGRPC_GetLedger_GetObjectsRequiresImmutableLedgers(t *testing.T) {
 		GetObjects: true,
 	}); err != nil {
 		t.Fatalf("GetLedger() rejected immutable unvalidated ledgers: %v", err)
+	}
+}
+
+func TestGRPC_ReadLeasePreservesOpenLedgerChecks(t *testing.T) {
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+	})
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	defer svc.Stop()
+
+	read, err := svc.AcquireLedgerRead(context.Background(), "current")
+	if err != nil {
+		t.Fatalf("AcquireLedgerRead: %v", err)
+	}
+	if read.Ledger == nil || !read.Ledger.IsOpen() {
+		t.Fatalf("current read lease = %#v, want open ledger", read.Ledger)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("first lease close: %v", err)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("second lease close: %v", err)
+	}
+
+	srv := NewServer(svc)
+	_, err = srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		GetObjects: true,
+	})
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "ledger not validated" {
+		t.Fatalf("GetLedger open object diff = %v, want NotFound ledger not validated", err)
+	}
+
+	_, err = srv.GetLedgerDiff(context.Background(), &rpcv1.GetLedgerDiffRequest{
+		BaseLedger:    ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED),
+		DesiredLedger: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CURRENT),
+	})
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "desired ledger not validated" {
+		t.Fatalf("GetLedgerDiff open desired = %v, want NotFound desired ledger not validated", err)
 	}
 }
 
