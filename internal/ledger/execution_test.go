@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,9 +33,13 @@ type blockingExecutionFamily struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	block   atomic.Bool
 }
 
 func (f *blockingExecutionFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	if !f.block.Load() {
+		return f.Family.StoreBatch(ctx, entries)
+	}
 	f.once.Do(func() { close(f.entered) })
 	select {
 	case <-f.release:
@@ -200,7 +205,7 @@ func TestBoundedExecutionRollbackForkAndReaders(t *testing.T) {
 	if err != nil || !bytes.Equal(data, mutData(5)) {
 		t.Fatalf("commit failed: %x %v", data, err)
 	}
-	if err := l.FreezeExecution(); err != nil {
+	if err := l.FreezeExecution(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := memory.Snapshot().Used; got != 0 {
@@ -283,6 +288,7 @@ func TestExecutionCommitmentSinkFailureReleasesWorkspace(t *testing.T) {
 
 func TestAutomaticBuildAdmissionCoversBatchedSink(t *testing.T) {
 	family := &blockingExecutionFamily{Family: backend.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	family.block.Store(true)
 	store, _ := executionTestStore(t, family)
 	base := &executionTree{store: store, kind: shamap.TypeState, sequence: 1}
 	tree, err := base.newMutable(1)
@@ -330,6 +336,35 @@ func TestAutomaticBuildAdmissionCoversBatchedSink(t *testing.T) {
 	if got := store.Stats().RootBorrowers; got != 0 {
 		t.Fatalf("root borrowers after tree close = %d, want 0", got)
 	}
+}
+
+func TestFreezeExecutionContextCancelsBlockedCommit(t *testing.T) {
+	family := &blockingExecutionFamily{Family: backend.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	store, _ := executionTestStore(t, family)
+	open := newOpenChildWithStore(t, store)
+	if err := open.Insert(mutAcct(0xaa), mutData(9)); err != nil {
+		t.Fatal(err)
+	}
+	family.block.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- open.FreezeExecution(ctx) }()
+	select {
+	case <-family.entered:
+	case <-time.After(time.Second):
+		t.Fatal("freeze did not reach its blocked commitment")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("freeze error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("freeze did not observe cancellation")
+	}
+	close(family.release)
 }
 
 func TestSealedBuildLeaseReleaseKeepsDescriptor(t *testing.T) {
@@ -657,11 +692,11 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	if err := open.Insert(mutAcct(0xed), mutData(7)); err != nil {
 		t.Fatal(err)
 	}
-	if err := open.FreezeExecution(); err != nil {
+	if err := open.FreezeExecution(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	borrowersAfterFreeze := store.Stats().RootBorrowers
-	if err := open.FreezeExecution(); err != nil {
+	if err := open.FreezeExecution(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := store.Stats().RootBorrowers; got != borrowersAfterFreeze {

@@ -126,7 +126,7 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 		return false
 	}
 
-	if err := parent.FreezeExecution(); err != nil {
+	if err := parent.FreezeExecution(context.Background()); err != nil {
 		if o.logger != nil {
 			o.logger.Error("openledger: preserve previous execution view", "err", err)
 		}
@@ -442,7 +442,7 @@ func (o *OpenLedger) accept(
 	previous := o.current
 	o.currentMu.RUnlock()
 	if previous != nil {
-		if err := previous.FreezeExecution(); err != nil {
+		if err := previous.FreezeExecution(context.Background()); err != nil {
 			return err
 		}
 	}

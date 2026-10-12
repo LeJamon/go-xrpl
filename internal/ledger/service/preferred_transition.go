@@ -734,7 +734,7 @@ func (p *PreparedPreferredLedger) freezePreviousOpenViews() error {
 		if err := p.ctx.Err(); err != nil {
 			return err
 		}
-		if err := previous.FreezeExecution(); err != nil {
+		if err := previous.FreezeExecution(p.ctx); err != nil {
 			return fmt.Errorf("freeze previous open ledger: %w", err)
 		}
 	}

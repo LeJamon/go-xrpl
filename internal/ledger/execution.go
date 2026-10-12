@@ -1079,7 +1079,13 @@ func (t *executionTree) mapSnapshot(ctx context.Context) (*shamap.SHAMap, error)
 
 // FreezeExecution preserves an obsolete published open view for concurrent
 // readers while releasing its mutable buffers and spill files.
-func (l *Ledger) FreezeExecution() error {
+func (l *Ledger) FreezeExecution(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.execution == nil || !l.writable {
@@ -1088,7 +1094,7 @@ func (l *Ledger) FreezeExecution() error {
 	if l.execution.state.changes == nil && l.execution.transactions.changes == nil {
 		return nil
 	}
-	view, err := l.execution.rooted(context.Background(), true)
+	view, err := l.execution.rooted(ctx, true)
 	if err != nil {
 		return err
 	}

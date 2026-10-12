@@ -253,7 +253,7 @@ func (s *Service) prepareNewOpenLedgerLocked(ctx context.Context, closed *ledger
 		return nil, err
 	}
 	if s.openLedger != nil {
-		if err := s.openLedger.FreezeExecution(); err != nil {
+		if err := s.openLedger.FreezeExecution(ctx); err != nil {
 			return nil, err
 		}
 	}
