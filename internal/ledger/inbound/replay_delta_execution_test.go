@@ -44,4 +44,16 @@ func TestReplayDeltaRetainsBuiltRootUntilLastOwnerReleases(t *testing.T) {
 	releaseDiagnostic()
 	require.Empty(t, store.Roots())
 	require.Zero(t, changes.Snapshot().Used)
+	_, err = replay.Apply(tx.EngineConfig{})
+	require.ErrorContains(t, err, "ownership has ended")
+	_, err = replay.Result()
+	require.ErrorContains(t, err, "ownership has ended")
+	_, err = replay.TransactionMapSnapshotContext(t.Context())
+	require.ErrorContains(t, err, "ownership has ended")
+
+	releasedBeforeApply := armReplayDeltaWith(t, parent, resp, hdr)
+	releasedBeforeApply.ReleaseMemory()
+	_, err = releasedBeforeApply.Apply(tx.EngineConfig{})
+	require.ErrorContains(t, err, "ownership has ended")
+	require.Empty(t, store.Roots())
 }

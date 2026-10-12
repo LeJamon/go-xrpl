@@ -765,6 +765,9 @@ func (r *ReplayDelta) NoteSubTaskRetry(newPeerID uint64) {
 func (r *ReplayDelta) Result() (*ledger.Ledger, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.memoryOwners == 0 {
+		return nil, errors.New("replay delta ownership has ended")
+	}
 	if r.state != StateComplete {
 		return nil, fmt.Errorf("replay delta not complete (state=%d)", r.state)
 	}
@@ -805,6 +808,10 @@ func (r *ReplayDelta) TargetHeader() header.LedgerHeader {
 // with a detached worker without rebuilding a second uncharged transaction tree.
 func (r *ReplayDelta) TransactionMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
 	r.mu.Lock()
+	if r.memoryOwners == 0 {
+		r.mu.Unlock()
+		return nil, errors.New("replay delta ownership has ended")
+	}
 	target := r.result
 	r.mu.Unlock()
 	if target == nil {
@@ -1074,6 +1081,9 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.memoryOwners == 0 {
+		return nil, errors.New("replay delta ownership has ended")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
