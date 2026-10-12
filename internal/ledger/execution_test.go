@@ -364,7 +364,16 @@ func TestFreezeExecutionContextCancelsBlockedCommit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("freeze did not observe cancellation")
 	}
+	if got, err := open.Read(mutAcct(0xaa)); err != nil || !bytes.Equal(got, mutData(9)) {
+		t.Fatalf("canceled freeze lost original open view: %x %v", got, err)
+	}
+	if err := open.Insert(mutAcct(0xab), mutData(10)); err != nil {
+		t.Fatalf("canceled freeze left open view unwritable: %v", err)
+	}
 	close(family.release)
+	if err := open.FreezeExecution(context.Background()); err != nil {
+		t.Fatalf("retry freeze after unblocking: %v", err)
+	}
 }
 
 func TestSealedBuildLeaseReleaseKeepsDescriptor(t *testing.T) {
