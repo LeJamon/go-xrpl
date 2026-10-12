@@ -1,25 +1,57 @@
 package ledger
 
 import (
+	"context"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
+// StoreDirtyBatched bounds temporary copies while persisting both ledger trees.
+func (l *Ledger) StoreDirtyBatched(ctx context.Context, budget shamap.DirtyMemoryBudget, stateStore, txStore func([]shamap.FlushEntry) error) error {
+	l.mu.RLock()
+	stateMap, txMap := l.stateMap, l.txMap
+	if l.state != StateOpen {
+		l.mu.RUnlock()
+	} else {
+		defer l.mu.RUnlock()
+	}
+	if stateMap != nil {
+		if err := stateMap.StoreDirtyBatched(ctx, budget, stateStore); err != nil {
+			return err
+		}
+	}
+	if txMap != nil {
+		return txMap.StoreDirtyBatched(ctx, budget, txStore)
+	}
+	return nil
+}
+
 // StateMapSnapshot returns a mutable snapshot of the state map (e.g. for chaining
 // one block's output into the next during continuous replay).
 func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
+	return l.StateMapSnapshotContext(context.Background())
+}
+
+// StateMapSnapshotContext propagates cancellation through dirty-node persistence.
+func (l *Ledger) StateMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.SnapshotMutable()
+	return l.stateMap.SnapshotMutableContext(ctx)
 }
 
 // TxMapSnapshot returns a mutable snapshot of the transaction map.
 func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
+	return l.TxMapSnapshotContext(context.Background())
+}
+
+// TxMapSnapshotContext propagates cancellation through dirty-node persistence.
+func (l *Ledger) TxMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.SnapshotMutable()
+	return l.txMap.SnapshotMutableContext(ctx)
 }
 
 // Mutable ledgers may have temporary SHAMap forks in flight, so retain the

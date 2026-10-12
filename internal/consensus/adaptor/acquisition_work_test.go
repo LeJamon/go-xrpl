@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -235,7 +236,7 @@ func TestProcessAcquisitionWork_PlansSixDisjointPeerRequests(t *testing.T) {
 			seen[key] = request.PeerID
 		}
 	}
-	require.Len(t, seen, 256)
+	require.Len(t, seen, acquisitionMaxUsefulPeers*128)
 }
 
 func TestProcessAcquisitionWork_AddedPeerGetsBlindFrontier(t *testing.T) {
@@ -378,12 +379,14 @@ func TestProcessAcquisitionWork_RefillsReleasedPeerSlots(t *testing.T) {
 
 	result := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{
 		{
-			kind: acquisitionWorkData, peerID: peers[0], resume: true, useful: 10,
-			data: &message.LedgerData{InfoType: message.LedgerInfoAsNode},
+			kind: acquisitionWorkData, peerID: peers[0],
+			data: &message.LedgerData{InfoType: message.LedgerInfoAsNode,
+				Nodes: []message.LedgerNode{requestedWideWorkReply(t, initial[0])}},
 		},
 		{
-			kind: acquisitionWorkData, peerID: peers[1], resume: true,
-			data: &message.LedgerData{InfoType: message.LedgerInfoAsNode},
+			kind: acquisitionWorkData, peerID: peers[1],
+			data: &message.LedgerData{InfoType: message.LedgerInfoAsNode,
+				Nodes: []message.LedgerNode{requestedWideWorkReply(t, initial[1])}},
 		},
 	})
 	require.NoError(t, result.err)
@@ -403,8 +406,22 @@ func TestProcessAcquisitionWork_RefillsReleasedPeerSlots(t *testing.T) {
 	}
 }
 
+func requestedWideWorkReply(t *testing.T, request inbound.MissingRequest) message.LedgerNode {
+	t.Helper()
+	require.NotEmpty(t, request.NodeIDs)
+	nodes, err := newWideWorkSource(t, 4).WalkWireNodes()
+	require.NoError(t, err)
+	for _, node := range nodes {
+		if bytes.Equal(node.NodeID, request.NodeIDs[0]) {
+			return message.LedgerNode{NodeID: node.NodeID, NodeData: node.Data}
+		}
+	}
+	t.Fatal("requested node is absent from the reply fixture")
+	return message.LedgerNode{}
+}
+
 func TestProcessAcquisitionWork_ProgressTimerRefreshesPeerWindow(t *testing.T) {
-	ledger, replies := newWideWorkLedger(t)
+	ledger, _ := newWideWorkLedger(t)
 	peers := []uint64{1, 101, 102, 103, 104}
 	for _, peerID := range peers[1:] {
 		require.True(t, ledger.AddPeer(peerID))
@@ -415,7 +432,8 @@ func TestProcessAcquisitionWork_ProgressTimerRefreshesPeerWindow(t *testing.T) {
 
 	progress := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{{
 		kind: acquisitionWorkData, peerID: peers[0],
-		data: &message.LedgerData{InfoType: message.LedgerInfoAsNode, Nodes: replies[:1]},
+		data: &message.LedgerData{InfoType: message.LedgerInfoAsNode,
+			Nodes: []message.LedgerNode{requestedWideWorkReply(t, initial[0])}},
 	}})
 	require.NoError(t, progress.err)
 	require.NotEmpty(t, progress.requests)
@@ -1555,9 +1573,11 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	router.catchupReplay.fetchTracker.Track(ledger)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(ctx context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
-		// Force the yield boundary after discovery so worker scheduling cannot return a partial batch instead.
+		// Force a yield without network output to check that discovery is not useful progress.
 		result := processAcquisitionWork(ctx, current, events)
 		if result.err == nil && !result.complete && !result.remove && !result.timerEscalate {
+			result.stateIDs, result.txIDs = nil, nil
+			current.ReleaseUnreservedMissingNodes()
 			result.err = shamap.ErrTraversalBudget
 		}
 		return result
@@ -1621,6 +1641,10 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	lane.start(ctx)
 	router.catchupReplay.acquisitionWork = lane
 	require.True(t, lane.submit(blocker, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	t.Cleanup(func() {
+		cancel()
+		lane.stop()
+	})
 	<-entered
 
 	ledgerHash := ledger.Hash()
@@ -1643,12 +1667,19 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	close(blockerResult.ack)
 	result := <-lane.results()
 	router.catchupReplay.handleAcquisitionWorkResult(result)
+	for turns := 0; result.continueRequests || result.yielded; turns++ {
+		require.Less(t, turns, 64, "discovery must eventually wait for another reply")
+		select {
+		case result = <-lane.results():
+			require.Empty(t, result.replies, "the buffered reply must be applied once")
+			router.catchupReplay.handleAcquisitionWorkResult(result)
+		case <-time.After(time.Second):
+			t.Fatal("discovery continuation did not run")
+		}
+	}
 	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 	assert.NotEqual(t, inbound.StateFailed, ledger.State())
 	assert.Same(t, ledger, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
-
-	cancel()
-	lane.stop()
 }
 
 func TestRouter_MaintenanceRunsUnderSustainedAcquisitionInput(t *testing.T) {

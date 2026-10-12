@@ -16,6 +16,14 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 	identity := c.standardReplayIdentityLocked()
 	occupancy := len(c.standardReplay.entries)
 	c.acquisitionMu.Unlock()
+	c.acquisitionWorkMu.RLock()
+	store := c.acquisitionStore
+	c.acquisitionWorkMu.RUnlock()
+	var persistenceBytes, persistencePeak uint64
+	if store != nil {
+		persistenceBytes = store.bytes.Load()
+		persistencePeak = store.peakBytes.Load()
+	}
 	purpose := "consensus"
 	switch ledger.Reason() {
 	case inbound.ReasonHistory:
@@ -28,14 +36,43 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 		"seq", snapshot.Seq, "hash", fmt.Sprintf("%x", snapshot.Hash[:8]),
 		"phase", snapshot.Phase(), "yielded", yielded,
 		"timeouts", snapshot.Timeouts,
+		"consecutive_timeouts", snapshot.ConsecutiveTimeouts,
+		"by_hash_mode", snapshot.ByHashMode,
+		"outstanding_nodes", snapshot.OutstandingNodes,
+		"last_useful_progress", snapshot.LastUsefulProgress,
+		"state_cache_useful", snapshot.StateCacheUseful,
+		"tx_cache_useful", snapshot.TxCacheUseful,
 		"state_nodes_descended", snapshot.StateNodesDescended,
 		"state_durable_reads", snapshot.StateDurableReads,
 		"state_nodes_loaded", snapshot.StateNodesLoaded,
+		"state_traversal_discoveries", snapshot.StateWalk.TraversalDiscoveries,
 		"state_equal_subtrees_skipped", snapshot.StateEqualSubtreesSkipped,
 		"state_missing_discovered", snapshot.StateMissingDiscovered,
+		"acquisition_memory_limit", snapshot.AcquisitionMemory.Limit,
+		"acquisition_cursor_limit", snapshot.AcquisitionMemory.Limit/4,
+		"acquisition_reply_reserve", snapshot.AcquisitionMemory.Limit/8*3,
+		"acquisition_memory_used", snapshot.AcquisitionMemory.Used,
+		"acquisition_memory_peak", snapshot.AcquisitionMemory.Peak,
+		"acquisition_cursor_bytes", snapshot.AcquisitionMemory.CursorUsed,
+		"acquisition_cursor_peak_bytes", snapshot.AcquisitionMemory.CursorPeak,
+		"state_cursor_blocked", snapshot.StateWalk.BlockedItems,
+		"state_cursor_frames", snapshot.StateWalk.ActiveFrames,
+		"state_cursor_proofs", snapshot.StateWalk.ProofEntries,
+		"state_loaded_bytes_charged", snapshot.StateWalk.RetainedBytes,
+		"state_loaded_peak_bytes_charged", snapshot.StateWalk.RetainedPeakBytes,
+		"tx_cursor_blocked", snapshot.TxWalk.BlockedItems,
+		"tx_cursor_frames", snapshot.TxWalk.ActiveFrames,
+		"tx_cursor_proofs", snapshot.TxWalk.ProofEntries,
+		"tx_loaded_bytes_charged", snapshot.TxWalk.RetainedBytes,
+		"tx_loaded_peak_bytes_charged", snapshot.TxWalk.RetainedPeakBytes,
+		"acquisition_memory_wait", snapshot.MemoryWaiting,
+		"acquisition_memory_checkpoints", snapshot.MemoryCheckpoints,
+		"acquisition_persistence_bytes", persistenceBytes,
+		"acquisition_persistence_peak_bytes", persistencePeak,
 		"tx_nodes_descended", snapshot.TxNodesDescended,
 		"tx_durable_reads", snapshot.TxDurableReads,
 		"tx_nodes_loaded", snapshot.TxNodesLoaded,
+		"tx_traversal_discoveries", snapshot.TxWalk.TraversalDiscoveries,
 		"needed_state", len(snapshot.NeededState), "needed_tx", len(snapshot.NeededTx),
 		"peers", snapshot.Peers, "request_peers", snapshot.RequestPeers,
 		"state_received", snapshot.StateReceived, "state_useful", snapshot.StateUseful,

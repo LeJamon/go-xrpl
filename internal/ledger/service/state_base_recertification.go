@@ -244,16 +244,26 @@ func (s *Service) recertifyValidatedStateBase(ctx context.Context) (retErr error
 	if stopped {
 		scheduling = "shutdown"
 	}
+	stateProofReused := s.lookupReplayProof(h, fingerprint, false)
+	txProofReused := h.TxHash == ([32]byte{}) || s.lookupReplayProof(h, fingerprint, true)
+	provenance := "full durable traversal"
+	if stateProofReused {
+		provenance = "generation-bound state certificate"
+	}
 	s.logger.Info("Validated state base re-certification started",
 		"sequence", h.LedgerIndex, "state_root", fmt.Sprintf("%x", h.AccountHash),
-		"fingerprint", fmt.Sprintf("%x", fingerprint), "provenance", "full durable traversal",
+		"fingerprint", fmt.Sprintf("%x", fingerprint), "provenance", provenance,
+		"state_proof_reused", stateProofReused, "tx_proof_reused", txProofReused,
 		"workers", policy.workers, "scheduling", scheduling)
-	metrics, err := s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.AccountHash, shamap.TypeState, policy)
-	if err != nil {
-		s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeState, err)
-		return fmt.Errorf("re-certify durable state tree: %w", err)
+	var metrics storedSHAMapVerificationMetrics
+	if !stateProofReused {
+		metrics, err = s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.AccountHash, shamap.TypeState, policy)
+		if err != nil {
+			s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeState, err)
+			return fmt.Errorf("re-certify durable state tree: %w", err)
+		}
 	}
-	if h.TxHash != ([32]byte{}) {
+	if !txProofReused {
 		txMetrics, err := s.verifyStoredSHAMapMeasuredWithPolicy(ctx, h.TxHash, shamap.TypeTransaction, policy)
 		if err != nil {
 			s.recordStateBaseRecertificationFailure(ctx, h, shamap.TypeTransaction, err)
@@ -306,12 +316,15 @@ func (s *Service) recertifyValidatedStateBase(ctx context.Context) (retErr error
 	if err != nil {
 		return err
 	}
-	s.fastLoadStrictNodes.Store(metrics.nodes)
-	s.fastLoadStrictElapsed.Store(uint64(metrics.elapsed))
+	if metrics.nodes != 0 {
+		s.fastLoadStrictNodes.Store(metrics.nodes)
+		s.fastLoadStrictElapsed.Store(uint64(metrics.elapsed))
+	}
 	s.logger.Info("Fast-load checkpoint eligibility restored",
 		"reason", "durable re-certification complete", "sequence", tip.LedgerIndex,
 		"state_root", fmt.Sprintf("%x", tip.AccountHash), "base_sequence", h.LedgerIndex,
-		"fingerprint", fmt.Sprintf("%x", fingerprint), "provenance", "full durable traversal and consecutive persisted successors")
+		"fingerprint", fmt.Sprintf("%x", fingerprint), "provenance", provenance,
+		"state_proof_reused", stateProofReused, "tx_proof_reused", txProofReused)
 	return nil
 }
 

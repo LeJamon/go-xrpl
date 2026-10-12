@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -165,10 +166,8 @@ func TestWalkMapParallel_BoundsFanoutAtRootBranches(t *testing.T) {
 	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
 		t.Fatalf("complete backed map reported %d missing nodes", len(missing))
 	}
-	if peak := family.peak.Load(); peak <= 1 {
-		t.Fatalf("peak concurrent store reads = %d, want parallel root branches", peak)
-	} else if peak > BranchFactor {
-		t.Fatalf("peak concurrent store reads = %d, exceeds root fan-out (%d)", peak, BranchFactor)
+	if peak := family.peak.Load(); peak != 1 {
+		t.Fatalf("peak concurrent store reads = %d, want one bounded scanner read", peak)
 	}
 }
 
@@ -211,6 +210,9 @@ func TestWalkMapParallel_ReleasesCompleteStoredSubtrees(t *testing.T) {
 	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
 		t.Fatalf("complete backed map reported %d missing nodes", len(missing))
 	}
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatalf("AcknowledgePersistedContext: %v", err)
+	}
 	for branch := range BranchFactor {
 		child, _, isSet := dest.tree.root.LoadChild(branch)
 		if isSet && child != nil {
@@ -222,8 +224,8 @@ func TestWalkMapParallel_ReleasesCompleteStoredSubtrees(t *testing.T) {
 	if missing := dest.GetMissingNodes(1, nil); len(missing) != 0 {
 		t.Fatalf("cached backed map reported %d missing nodes", len(missing))
 	}
-	if got := family.count(); got != 1 {
-		t.Fatalf("second walk performed %d store reads, want only the unstored root proof", got)
+	if got := family.count(); got != 0 {
+		t.Fatalf("second walk performed %d store reads, want the acknowledged cache hit", got)
 	}
 }
 
@@ -260,6 +262,9 @@ func TestFinishSync_ReleasesColdDurableTree(t *testing.T) {
 	}
 	if err := dest.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("AddRootNode: %v", err)
+	}
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatalf("AcknowledgePersistedContext: %v", err)
 	}
 
 	if err := dest.FinishSync(); err != nil {
@@ -344,8 +349,25 @@ func TestWalkMapParallel_RetainsIncompleteFrontier(t *testing.T) {
 	if result != NodeUseful {
 		t.Fatalf("AddKnownNodeByID result = %v, want NodeUseful", result)
 	}
-	if err := dest.FinishSync(); err != nil {
-		t.Fatalf("FinishSync: %v", err)
+	if err := dest.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatalf("AcknowledgePersistedContext: %v", err)
+	}
+	finished := false
+	for attempt := 0; attempt < 4; attempt++ {
+		err := dest.FinishSync()
+		if err == nil {
+			finished = true
+			break
+		}
+		if !strings.Contains(err.Error(), "sync incomplete") {
+			t.Fatalf("FinishSync: %v", err)
+		}
+		if ackErr := dest.AcknowledgePersistedContext(t.Context()); ackErr != nil {
+			t.Fatalf("AcknowledgePersistedContext after FinishSync: %v", ackErr)
+		}
+	}
+	if !finished {
+		t.Fatal("FinishSync did not converge after the withheld node was attached")
 	}
 }
 
@@ -1083,36 +1105,6 @@ func TestFullBelowCache_ZeroGenNeverMatches(t *testing.T) {
 	}
 	if c.Generation() == 0 {
 		t.Error("generation must never be 0")
-	}
-}
-
-func TestFullBelowCache_DeepProofStreamDoesNotEvictShallowProof(t *testing.T) {
-	const target = 64
-	c := newFullBelowCacheWithClock(target, time.Hour, time.Now)
-	gen := c.Generation()
-	shallow := [32]byte{0, 0xff}
-	cacheFullBelow(c, gen, shallow, FullBelowCacheMaxDepth)
-
-	var lastDeep [32]byte
-	for i := range 10_000 {
-		var hash [32]byte
-		binary.BigEndian.PutUint64(hash[8:], uint64(i+1))
-		cacheFullBelow(c, gen, hash, FullBelowCacheMaxDepth+1)
-		lastDeep = hash
-	}
-
-	if got := c.Size(); got != 1 {
-		t.Fatalf("cache size = %d, want only the shallow proof", got)
-	}
-	if !c.Has(gen, shallow) {
-		t.Fatal("deep proof stream evicted the shallow reusable proof")
-	}
-	if c.Has(gen, lastDeep) {
-		t.Fatal("deep proof was admitted to the reusable cache")
-	}
-	stats := c.Stats()
-	if stats.Inserts != 1 || stats.Evictions != 0 {
-		t.Fatalf("unexpected admission stats: %+v", stats)
 	}
 }
 

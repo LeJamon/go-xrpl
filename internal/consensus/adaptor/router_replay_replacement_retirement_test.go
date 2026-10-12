@@ -286,7 +286,7 @@ func TestReplayReplacementLateCallbacksCannotRetireFreshSameHashAcquisition(t *t
 	_, current := c.cancelStandardReplayPipelineIdentity(oldIdentity, "late_stale_cancellation")
 	require.False(t, current)
 	require.False(t, c.failStandardReplayReplacement(oldAcquisition, errors.New("late failure")))
-	require.False(t, c.completeStandardReplayReplacement(oldAcquisition, nil, nil, nil))
+	require.False(t, c.completeStandardReplayReplacement(oldAcquisition, nil, nil))
 	c.failInboundAcquisition(oldAcquisition)
 
 	assert.Equal(t, currentIdentity, c.standardReplayIdentityLocked())

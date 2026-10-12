@@ -217,6 +217,138 @@ func TestStandardReplayPipelineBoundsAndRefillsWindow(t *testing.T) {
 	assert.Equal(t, uint32(standardReplayPipelineWindow), metrics.ReplayPipelineDepth)
 }
 
+func TestStandardReplayHeadProgressSurvivesFutureMemoryQuota(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+
+	parentBudget := shamap.NewAcquisitionBudget(4 << 30)
+	r.SetAcquisitionMemoryBudget(4<<30, parentBudget)
+	budget := r.catchupReplay.acquisitionMemory
+	require.NotNil(t, budget)
+
+	const chunk = uint64(1 << 20)
+	var held uint64
+	for budget.TryReserveReplay(chunk) {
+		held += chunk
+	}
+	require.NotZero(t, held)
+
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 2)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+	require.Len(t, sender.legacyCalls(), 1, "future replay data at quota must not consume head admission")
+
+	completeStandardReplayTestLink(t, r, links[0])
+	drainStandardReplayTestPipeline(t, r)
+	metrics := r.FastSyncMetrics()
+	assert.Equal(t, uint64(1), metrics.ReplayPipelineApplied)
+	assert.Zero(t, metrics.ReplayPipelineFallbacks)
+	r.catchupReplay.acquisitionMu.Lock()
+	assert.Equal(t, links[0].seq, r.catchupReplay.standardReplay.anchorSeq)
+	r.catchupReplay.acquisitionMu.Unlock()
+
+	budget.ReleaseReplay(held)
+	r.catchupReplay.notifyAcquisitionMemoryAvailable()
+	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[1].hash),
+		"collector admission must retry after future replay capacity returns")
+
+	r.catchupReplay.acquisitionMu.Lock()
+	identity := r.catchupReplay.standardReplayIdentityLocked()
+	r.catchupReplay.acquisitionMu.Unlock()
+	_, canceled := r.catchupReplay.cancelStandardReplayPipelineIdentity(identity, "test_cleanup")
+	require.True(t, canceled)
+	require.True(t, budget.Close())
+	require.True(t, parentBudget.Close())
+}
+
+func TestStandardReplayMemoryWakeObservesParentRelease(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	parentBudget := shamap.NewAcquisitionBudget(4 << 30)
+	require.NoError(t, r.SetAcquisitionMemoryBudget(4<<30, parentBudget))
+	budget := r.catchupReplay.acquisitionMemory
+	const protected = uint64(512 << 20)
+	const held = uint64(4<<30) - protected
+	require.True(t, parentBudget.TryReserve(held))
+
+	r.catchupReplay.standardReplay = standardReplayPipeline{
+		active:          true,
+		pivotReady:      true,
+		anchorSeq:       1,
+		memoryWait:      true,
+		memoryWaitKind:  standardReplayMemoryWaitProcessing,
+		memoryWaitBytes: standardReplayProcessingBytes,
+		entries: map[uint32]*standardReplayEntry{
+			2: {seq: 2, readyAt: time.Now()},
+		},
+	}
+	r.catchupReplay.installStandardReplayMemoryWake()
+	parentBudget.Release(held)
+	r.catchupReplay.notifyAcquisitionMemoryAvailable()
+	require.Len(t, r.catchupReplay.standardReplayDrainWake, 1)
+
+	r.catchupReplay.acquisitionMu.Lock()
+	identity := r.catchupReplay.standardReplayIdentityLocked()
+	r.catchupReplay.acquisitionMu.Unlock()
+	_, canceled := r.catchupReplay.cancelStandardReplayPipelineIdentity(identity, "test_cleanup")
+	require.True(t, canceled)
+	require.True(t, budget.Close())
+	require.True(t, parentBudget.Close())
+}
+
+func TestStandardReplayFutureMemoryWaitDoesNotStarveReadyHead(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	parentBudget := shamap.NewAcquisitionBudget(64 << 20)
+	require.NoError(t, r.SetAcquisitionMemoryBudget(20<<20, parentBudget))
+	c := r.catchupReplay
+	future, admitted := c.reserveStandardReplayEntryMemory(false)
+	require.True(t, admitted)
+	head, admitted := c.reserveStandardReplayEntryMemory(true)
+	require.True(t, admitted)
+
+	txMap := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, txMap.Put([32]byte{1}, make([]byte, 10<<20)))
+	required := standardReplayTransactionMapBytes(txMap)
+	require.Greater(t, required, future.payloadBytes)
+
+	const generation = uint64(1)
+	c.standardReplay = standardReplayPipeline{
+		generation:       generation,
+		active:           true,
+		pivotReady:       true,
+		anchorSeq:        0,
+		targetSeq:        2,
+		memoryFutureWait: true,
+		entries: map[uint32]*standardReplayEntry{
+			1: {generation: generation, seq: 1, readyAt: time.Now(), replayMemory: head},
+			2: {
+				generation:          generation,
+				seq:                 2,
+				txMap:               txMap,
+				replayMemory:        future,
+				replayPayloadBytes:  required,
+				replayMemoryPending: true,
+			},
+		},
+	}
+	c.installStandardReplayMemoryWake()
+	c.notifyAcquisitionMemoryAvailable()
+	require.Len(t, c.standardReplayDrainWake, 1,
+		"a future top-up wait must still wake a ready head")
+
+	c.acquisitionMu.Lock()
+	assert.True(t, c.standardReplay.entries[2].replayMemoryPending)
+	assert.False(t, c.standardReplay.memoryWait,
+		"future retry state must not globally block the ready head")
+	assert.True(t, c.standardReplay.memoryFutureWait,
+		"future retry state must survive while the ready head drains")
+	identity := c.standardReplayIdentityLocked()
+	c.acquisitionMu.Unlock()
+	_, canceled := c.cancelStandardReplayPipelineIdentity(identity, "test_cleanup")
+	require.True(t, canceled)
+	require.True(t, c.acquisitionMemory.Close())
+	require.True(t, parentBudget.Close())
+}
+
 func TestStandardReplayPipelineAdvancesPastHeldSuccessor(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
@@ -1029,4 +1161,44 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("final replay did not leave the handoff barrier")
 	}
+}
+
+func TestReplayProcessingWaitHasPriorityOverFutureTopUp(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	parent := shamap.NewAcquisitionBudget(1 << 30)
+	require.NoError(t, r.SetAcquisitionMemoryBudget(1<<30, parent))
+	c := r.catchupReplay
+	budget := c.acquisitionMemory
+	head, ok := c.reserveStandardReplayEntryMemory(true)
+	require.True(t, ok)
+	future, ok := c.reserveStandardReplayEntryMemory(false)
+	require.True(t, ok)
+	const processing = 192 << 20
+	const released = 8 << 20
+	held := uint64(512<<20) - future.bytes
+	require.True(t, budget.TryReserveReplay(held))
+	require.True(t, budget.TryReserveReplayProcessing(processing))
+	c.standardReplay = standardReplayPipeline{
+		active: true, pivotReady: true, anchorSeq: 1, targetSeq: 3,
+		memoryWait: true, memoryWaitKind: standardReplayMemoryWaitProcessing,
+		memoryWaitBytes: standardReplayProcessingBytes, memoryFutureWait: true,
+		entries: map[uint32]*standardReplayEntry{
+			2: {seq: 2, readyAt: time.Now(), replayMemory: head},
+			3: {seq: 3, replayMemory: future, replayMemoryPending: true,
+				txMap: shamap.New(shamap.TypeTransaction), replayPayloadBytes: future.payloadBytes + released},
+		},
+	}
+	budget.ReleaseReplay(released)
+	held -= released
+	c.installStandardReplayMemoryWake()
+	c.notifyAcquisitionMemoryAvailable()
+	require.Len(t, c.standardReplayDrainWake, 1)
+	require.False(t, c.standardReplay.memoryWait)
+	require.True(t, c.standardReplay.entries[3].replayMemoryPending,
+		"future work must leave the newly available capacity for the ready head")
+	r.StopAcquisitions()
+	budget.ReleaseReplay(held)
+	budget.ReleaseReplayProcessing(processing)
+	require.True(t, r.CloseAcquisitionMemoryBudget())
+	require.Zero(t, parent.Snapshot().Used)
 }

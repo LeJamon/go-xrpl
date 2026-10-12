@@ -160,6 +160,12 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 	if c.retireLocallySatisfiedFrozenPivot("local_frontier") {
 		return false
 	}
+	if c.localForwardReplayOwnsRecovery(seq, hash) {
+		// A growing gap while our verifier is busy is not peer failure.
+		// Keep the next-ledger owner instead of starting a competing full
+		// state walk. Completion/failure releases ownership normally.
+		return true
+	}
 
 	c.acquisitionMu.Lock()
 	if c.standardReplay.active {
@@ -402,6 +408,12 @@ func (c *catchupReplayCoordinator) locallySatisfiesLedger(seq uint32, hash [32]b
 			return true
 		}
 	}
+	// This is a scheduling shortcut, including on the validation router. Do
+	// not query SQLite for an unknown hash; acquisition can reuse stored nodes
+	// and the detached admission path still checks completeness before install.
+	if _, held := svc.GetCachedLedgerByHash(hash); !held {
+		return false
+	}
 	_, _, _, err := c.localReplayReplacementCandidate(seq, hash)
 	return err == nil
 }
@@ -581,7 +593,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 	}
 	c.refillStandardReplayCollector(0)
 	if startDrain {
-		c.drainStandardReplayPipeline()
+		c.startStandardReplayDrain()
 	}
 	return true
 }

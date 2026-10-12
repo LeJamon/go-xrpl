@@ -5,29 +5,50 @@ import (
 	"crypto/sha512"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 )
-
-const backedWalkProofChunkSize = 1024
 
 var errVerifiedBaseUnavailable = errors.New("verified SHAMap base is unavailable")
 
 // BackedWalkStats reports local discovery work performed by a backed SHAMap.
 type BackedWalkStats struct {
+	// TraversalDiscoveries counts first observations on paths retained by the
+	// cursor. Repeated reads are excluded; untracked retries are conservative.
+	TraversalDiscoveries  uint64
 	EqualSubtreesSkipped  uint64
 	NodesDescended        uint64
 	DurableReads          uint64
 	MissingNodes          uint64
 	VerifiedBaseFallbacks uint64
+	RetainedNodes         uint64
+	RetainedBytes         uint64
+	RetainedPeakBytes     uint64
+	RetentionPressure     bool
+	BlockedItems          uint64
+	BlockedCapacity       uint64
+	ActiveFrames          uint64
+	ActiveCapacity        uint64
+	ProofEntries          uint64
+	ProofCapacity         uint64
+	CursorBytes           uint64
+	CursorPeakBytes       uint64
 }
 
 type backedWalkStats struct {
+	traversalDiscoveries  atomic.Uint64
 	equalSubtreesSkipped  atomic.Uint64
 	nodesDescended        atomic.Uint64
 	durableReads          atomic.Uint64
 	missingNodes          atomic.Uint64
 	verifiedBaseFallbacks atomic.Uint64
+	blockedItems          atomic.Uint64
+	blockedCapacity       atomic.Uint64
+	activeFrames          atomic.Uint64
+	activeCapacity        atomic.Uint64
+	proofEntries          atomic.Uint64
+	proofCapacity         atomic.Uint64
+	cursorBytes           atomic.Uint64
+	cursorPeakBytes       atomic.Uint64
 }
 
 type verifiedWalkBase struct {
@@ -58,55 +79,6 @@ func takeTraversalVisit(ctx context.Context) bool {
 	return budget == nil || budget.remaining.Add(-1) >= 0
 }
 
-type backedWalkProof struct {
-	hash  [32]byte
-	depth uint8
-}
-
-type backedWalkProofs struct {
-	chunks [][]backedWalkProof
-	size   int
-}
-
-func (proofs *backedWalkProofs) add(hash [32]byte, depth int) {
-	if len(proofs.chunks) == 0 || len(proofs.chunks[len(proofs.chunks)-1]) == backedWalkProofChunkSize {
-		proofs.chunks = append(proofs.chunks, make([]backedWalkProof, 0, backedWalkProofChunkSize))
-	}
-	last := len(proofs.chunks) - 1
-	proofs.chunks[last] = append(proofs.chunks[last], backedWalkProof{hash: hash, depth: uint8(depth)})
-	proofs.size++
-}
-
-func (proofs backedWalkProofs) count() int {
-	return proofs.size
-}
-
-func (proofs *backedWalkProofs) truncate(size int) {
-	if size >= proofs.size {
-		return
-	}
-	if size <= 0 {
-		for i := range proofs.chunks {
-			proofs.chunks[i] = nil
-		}
-		proofs.chunks = nil
-		proofs.size = 0
-		return
-	}
-	keepChunks := (size + backedWalkProofChunkSize - 1) / backedWalkProofChunkSize
-	for i := keepChunks; i < len(proofs.chunks); i++ {
-		proofs.chunks[i] = nil
-	}
-	proofs.chunks = proofs.chunks[:keepChunks]
-	lastSize := size - (keepChunks-1)*backedWalkProofChunkSize
-	proofs.chunks[keepChunks-1] = proofs.chunks[keepChunks-1][:lastSize]
-	proofs.size = size
-}
-
-func (proofs *backedWalkProofs) clear() {
-	proofs.truncate(0)
-}
-
 type backedWalkItem struct {
 	hash       [32]byte
 	baseHash   [32]byte
@@ -116,36 +88,6 @@ type backedWalkItem struct {
 	branch     int
 	parent     *innerNode
 	node       mapNode
-}
-
-type backedWalkFrame struct {
-	item       backedWalkItem
-	view       traversalNode
-	baseView   traversalNode
-	nextBranch int
-	full       bool
-	stored     bool
-	loaded     bool
-	topLevel   bool
-	proofStart int
-	usedBase   bool
-}
-
-type backedWalkLane struct {
-	root        backedWalkItem
-	stack       []backedWalkFrame
-	blocked     []backedWalkItem
-	proofs      backedWalkProofs
-	complete    bool
-	durable     bool
-	passDurable bool
-}
-
-type backedWalkCursor struct {
-	generation uint32
-	rootHash   [32]byte
-	baseRoot   [32]byte
-	lanes      [BranchFactor]backedWalkLane
 }
 
 type traversalNode struct {
@@ -185,363 +127,85 @@ func (sm *SHAMap) SetVerifiedBaseContext(ctx context.Context, rootHash [32]byte)
 	if !view.inner {
 		return fmt.Errorf("%w: root %x is not an inner node", errVerifiedBaseUnavailable, rootHash[:8])
 	}
+	sm.releaseBackedWalkCursorLocked()
 	sm.acquisition.base = &verifiedWalkBase{rootHash: rootHash, root: view}
-	sm.acquisition.cursor = nil
 	return nil
 }
 
 // BackedWalkStats returns a consistent snapshot of the acquisition counters.
 func (sm *SHAMap) BackedWalkStats() BackedWalkStats {
 	return BackedWalkStats{
+		TraversalDiscoveries:  sm.acquisition.stats.traversalDiscoveries.Load(),
 		EqualSubtreesSkipped:  sm.acquisition.stats.equalSubtreesSkipped.Load(),
 		NodesDescended:        sm.acquisition.stats.nodesDescended.Load(),
 		DurableReads:          sm.acquisition.stats.durableReads.Load(),
 		MissingNodes:          sm.acquisition.stats.missingNodes.Load(),
 		VerifiedBaseFallbacks: sm.acquisition.stats.verifiedBaseFallbacks.Load(),
+		RetainedNodes:         sm.acquisition.retained.nodes.Load(),
+		RetainedBytes:         sm.acquisition.retained.bytes.Load(),
+		RetainedPeakBytes:     sm.acquisition.retained.peak.Load(),
+		RetentionPressure:     sm.acquisition.retained.pressure.Load(),
+		BlockedItems:          sm.acquisition.stats.blockedItems.Load(),
+		BlockedCapacity:       sm.acquisition.stats.blockedCapacity.Load(),
+		ActiveFrames:          sm.acquisition.stats.activeFrames.Load(),
+		ActiveCapacity:        sm.acquisition.stats.activeCapacity.Load(),
+		ProofEntries:          sm.acquisition.stats.proofEntries.Load(),
+		ProofCapacity:         sm.acquisition.stats.proofCapacity.Load(),
+		CursorBytes:           sm.acquisition.stats.cursorBytes.Load(),
+		CursorPeakBytes:       sm.acquisition.stats.cursorPeakBytes.Load(),
 	}
 }
 
-func (sm *SHAMap) walkBackedContext(
-	ctx context.Context,
-	root *innerNode,
-	access *familyAccess,
-	cache *FullBelowCache,
-	gen uint32,
-	maxMissing int,
-	filter SyncFilter,
-) ([]MissingNode, error) {
-	rootHash := root.Hash()
-	if cache.Has(gen, rootHash) {
-		return nil, nil
-	}
-	base := sm.acquisition.base
-	baseRoot := [32]byte{}
-	if base != nil {
-		baseRoot = base.rootHash
-		if baseRoot == rootHash {
-			sm.acquisition.stats.equalSubtreesSkipped.Add(1)
-			root.setFullBelowGen(gen)
-			cacheFullBelow(cache, gen, rootHash, 0)
-			return nil, nil
-		}
-	}
-	if sm.acquisition.cursor == nil || sm.acquisition.cursor.generation != gen ||
-		sm.acquisition.cursor.rootHash != rootHash || sm.acquisition.cursor.baseRoot != baseRoot {
-		sm.acquisition.cursor = newBackedWalkCursor(root, rootHash, gen, base)
-	}
-	cursor := sm.acquisition.cursor
-	retryBlocked := true
-	if _, bounded := ctx.Value(traversalBudgetKey{}).(*traversalBudget); bounded {
-		// Bounded slices drain unvisited cursor work before retrying blocked nodes.
-		for i := range BranchFactor {
-			lane := &cursor.lanes[i]
-			if !lane.complete && len(lane.stack) != 0 {
-				retryBlocked = false
-				break
-			}
-		}
-	}
-
-	var (
-		missing  []MissingNode
-		resultMu sync.Mutex
-		stop     atomic.Bool
-		firstErr error
-		errMu    sync.Mutex
-		wg       sync.WaitGroup
-		reported = make(map[[32]byte]struct{})
-	)
-	report := func(item backedWalkItem) {
-		if stop.Load() {
-			return
-		}
-		resultMu.Lock()
-		defer resultMu.Unlock()
-		if stop.Load() {
-			return
-		}
-		if _, exists := reported[item.hash]; exists {
-			return
-		}
-		reported[item.hash] = struct{}{}
-		sm.acquisition.stats.missingNodes.Add(1)
-		missing = append(missing, MissingNode{
-			Hash:       item.hash,
-			Depth:      item.depth,
-			ParentHash: item.parentHash,
-			Branch:     item.branch,
-			NodeID:     item.nodeID,
-		})
-		if maxMissing > 0 && len(missing) >= maxMissing {
-			stop.Store(true)
-		}
-	}
-
-	for i := range BranchFactor {
-		lane := &cursor.lanes[i]
-		if lane.complete {
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := sm.walkBackedLane(ctx, access, cache, gen, root, lane, filter, retryBlocked, &stop, report); err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				errMu.Unlock()
-				stop.Store(true)
-			}
-		}()
-	}
-	wg.Wait()
-	if firstErr != nil {
-		if errors.Is(firstErr, ErrTraversalBudget) && len(missing) != 0 {
-			return missing, nil
-		}
-		return nil, firstErr
-	}
-
-	complete := true
-	durable := true
-	for i := range BranchFactor {
-		if !cursor.lanes[i].complete {
-			complete = false
-		}
-		durable = durable && cursor.lanes[i].durable
-	}
-	if !retryBlocked && !complete && len(missing) == 0 {
-		return nil, ErrTraversalBudget
-	}
-	if complete {
-		root.setFullBelowGen(gen)
-	}
-	if complete && durable {
-		if !takeTraversalVisit(ctx) {
-			return nil, ErrTraversalBudget
-		}
-		data, stored, err := access.fetchPreferDurable(ctx, rootHash)
-		if err != nil {
-			return nil, err
-		}
-		if stored && len(data) != 0 {
-			if _, err := decodeTraversalNode(data, rootHash); err != nil {
-				return nil, err
-			}
-			cacheFullBelow(cache, gen, rootHash, 0)
-		}
-	}
-	return missing, nil
+type cursorBudget struct {
+	budget *AcquisitionBudget
 }
 
-func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32, base *verifiedWalkBase) *backedWalkCursor {
-	cursor := &backedWalkCursor{generation: gen, rootHash: rootHash}
-	if base != nil {
-		cursor.baseRoot = base.rootHash
+func (sm *SHAMap) reserveCursorBytes(cursor *cursorBudget, bytes uint64) bool {
+	if cursor == nil || cursor.budget == nil || bytes == 0 {
+		return true
 	}
-	rootID := newRootNodeID()
-	for branch := range BranchFactor {
-		child, hash, set := root.LoadChild(branch)
-		if !set {
-			cursor.lanes[branch].complete = true
-			cursor.lanes[branch].durable = true
-			continue
-		}
-		childID, err := rootID.childNodeID(uint8(branch))
-		if err != nil {
-			cursor.lanes[branch].complete = true
-			continue
-		}
-		baseHash := [32]byte{}
-		if base != nil && base.root.branches&(1<<branch) != 0 {
-			baseHash = base.root.hashes[branch]
-		}
-		item := backedWalkItem{
-			hash: hash, baseHash: baseHash, parentHash: rootHash, nodeID: childID,
-			depth: 1, branch: branch, parent: root, node: child,
-		}
-		cursor.lanes[branch].root = item
-		cursor.lanes[branch].stack = []backedWalkFrame{{item: item, topLevel: true, proofStart: 0}}
-		cursor.lanes[branch].passDurable = true
+	if !cursor.budget.tryReserveCursor(bytes) {
+		return false
 	}
-	return cursor
+	sm.recordCursorReservation(bytes)
+	return true
 }
 
-func (sm *SHAMap) walkBackedLane(
-	ctx context.Context,
-	access *familyAccess,
-	cache *FullBelowCache,
-	gen uint32,
-	root *innerNode,
-	lane *backedWalkLane,
-	filter SyncFilter,
-	retryBlocked bool,
-	stop *atomic.Bool,
-	report func(backedWalkItem),
-) error {
-	if retryBlocked && len(lane.blocked) != 0 {
-		for _, item := range dedupeBackedWalkItems(lane.blocked) {
-			lane.stack = append(lane.stack, backedWalkFrame{
-				item: item, topLevel: true, proofStart: lane.proofs.count(),
-			})
+func (sm *SHAMap) recordCursorReservation(bytes uint64) {
+	current := sm.acquisition.stats.cursorBytes.Add(bytes)
+	for {
+		peak := sm.acquisition.stats.cursorPeakBytes.Load()
+		if current <= peak || sm.acquisition.stats.cursorPeakBytes.CompareAndSwap(peak, current) {
+			break
 		}
-		lane.blocked = lane.blocked[:0]
 	}
-	for len(lane.stack) != 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if stop.Load() {
-			return nil
-		}
-
-		last := len(lane.stack) - 1
-		frame := &lane.stack[last]
-		if !frame.loaded {
-			if frame.item.baseHash != ([32]byte{}) && frame.item.baseHash == frame.item.hash {
-				sm.acquisition.stats.equalSubtreesSkipped.Add(1)
-				sm.finishBackedWalkFrame(lane, cache, gen, true, true, true)
-				continue
-			}
-			if cache.Has(gen, frame.item.hash) {
-				sm.finishBackedWalkFrame(lane, cache, gen, true, true, false)
-				continue
-			}
-			if !takeTraversalVisit(ctx) {
-				return ErrTraversalBudget
-			}
-			sm.acquisition.stats.nodesDescended.Add(1)
-			view, found, stored, err := sm.loadTraversalNode(ctx, access, root, frame.item)
-			if err != nil {
-				return err
-			}
-			if !found {
-				lane.blocked = append(lane.blocked, frame.item)
-				if filter.ShouldFetch(frame.item.hash) {
-					report(frame.item)
-				}
-				sm.finishBackedWalkFrame(lane, cache, gen, false, false, false)
-				continue
-			}
-			if !view.inner {
-				sm.finishBackedWalkFrame(lane, cache, gen, true, stored, false)
-				continue
-			}
-			frame.view = view
-			if frame.item.baseHash != ([32]byte{}) {
-				baseView, err := sm.loadVerifiedBaseTraversalNode(ctx, access, frame.item.baseHash)
-				if err != nil {
-					return err
-				}
-				frame.baseView = baseView
-			}
-			frame.full = true
-			frame.stored = stored
-			frame.loaded = true
-		}
-
-		for frame.nextBranch < BranchFactor && frame.view.branches&(1<<frame.nextBranch) == 0 {
-			frame.nextBranch++
-		}
-		if frame.nextBranch == BranchFactor {
-			full, stored, usedBase := frame.full, frame.stored, frame.usedBase
-			sm.finishBackedWalkFrame(lane, cache, gen, full, stored, usedBase)
-			continue
-		}
-
-		branch := frame.nextBranch
-		childID, err := frame.item.nodeID.childNodeID(uint8(branch))
-		if err != nil {
-			return err
-		}
-		frame.nextBranch++
-		var parent *innerNode
-		if attached, ok := frame.item.node.(*innerNode); ok {
-			parent = attached
-		}
-		baseHash := [32]byte{}
-		if frame.baseView.inner && frame.baseView.branches&(1<<branch) != 0 {
-			baseHash = frame.baseView.hashes[branch]
-		}
-		lane.stack = append(lane.stack, backedWalkFrame{
-			item: backedWalkItem{
-				hash:       frame.view.hashes[branch],
-				baseHash:   baseHash,
-				parentHash: frame.item.hash,
-				nodeID:     childID,
-				depth:      frame.item.depth + 1,
-				branch:     branch,
-				parent:     parent,
-				node:       frame.view.children[branch],
-			},
-			proofStart: lane.proofs.count(),
-		})
-	}
-	if len(lane.blocked) == 0 {
-		lane.complete = true
-		lane.durable = lane.passDurable
-	} else {
-		lane.complete = false
-		lane.durable = false
-	}
-	return nil
 }
 
-func (lane *backedWalkLane) rememberProof(hash [32]byte, depth int) {
-	lane.proofs.add(hash, depth)
-}
-
-func (sm *SHAMap) finishBackedWalkFrame(
-	lane *backedWalkLane,
-	cache *FullBelowCache,
-	generation uint32,
-	full bool,
-	stored bool,
-	usedBase bool,
-) {
-	frame := &lane.stack[len(lane.stack)-1]
-	if full {
-		lane.proofs.truncate(frame.proofStart)
-		lane.rememberProof(frame.item.hash, frame.item.depth)
-		if stored && !usedBase {
-			cacheFullBelow(cache, generation, frame.item.hash, frame.item.depth)
-		}
-		if stored && frame.item.parent != nil && frame.item.node != nil {
-			sm.releaseChild(frame.item.parent, frame.item.branch, frame.item.node)
-		}
-	}
-	finishBackedWalkFrame(lane, full, stored, usedBase)
-}
-
-func finishBackedWalkFrame(lane *backedWalkLane, full, stored, usedBase bool) {
-	last := len(lane.stack) - 1
-	topLevel := lane.stack[last].topLevel
-	lane.stack = lane.stack[:last]
-	if topLevel {
-		lane.passDurable = lane.passDurable && full && stored
+func (sm *SHAMap) releaseCursorBytes(cursor *cursorBudget, bytes uint64) {
+	if cursor == nil || cursor.budget == nil || bytes == 0 {
 		return
 	}
-	parent := &lane.stack[len(lane.stack)-1]
-	parent.full = parent.full && full
-	parent.stored = parent.stored && stored
-	parent.usedBase = parent.usedBase || usedBase
+	for {
+		used := sm.acquisition.stats.cursorBytes.Load()
+		if bytes > used {
+			panic("shamap: acquisition cursor release exceeds reservation")
+		}
+		if sm.acquisition.stats.cursorBytes.CompareAndSwap(used, used-bytes) {
+			cursor.budget.releaseCursor(bytes)
+			return
+		}
+	}
 }
 
-func dedupeBackedWalkItems(items []backedWalkItem) []backedWalkItem {
-	if len(items) < 2 {
-		return items
-	}
-	seen := make(map[[32]byte]struct{}, len(items))
-	out := items[:0]
-	for i := range items {
-		if _, exists := seen[items[i].hash]; exists {
-			continue
-		}
-		seen[items[i].hash] = struct{}{}
-		out = append(out, items[i])
-	}
-	return out
+func (sm *SHAMap) releaseBackedWalkCursorLocked() {
+	sm.releaseBackedScanCursorLocked()
+	sm.acquisition.base = nil
+	sm.acquisition.stats.blockedItems.Store(0)
+	sm.acquisition.stats.blockedCapacity.Store(0)
+	sm.acquisition.stats.activeFrames.Store(0)
+	sm.acquisition.stats.activeCapacity.Store(0)
+	sm.acquisition.stats.proofEntries.Store(0)
+	sm.acquisition.stats.proofCapacity.Store(0)
 }
 
 func (sm *SHAMap) loadTraversalNode(ctx context.Context, access *familyAccess, root *innerNode, item backedWalkItem) (traversalNode, bool, bool, error) {

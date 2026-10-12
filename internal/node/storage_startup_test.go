@@ -16,7 +16,7 @@ import (
 )
 
 func TestSetupStorageAllowsUnconfiguredRelationalDatabase(t *testing.T) {
-	db, repo, err := setupStorage(context.Background(), &config.Config{}, xrpllog.Discard())
+	db, repo, err := setupStorage(context.Background(), &config.Config{}, xrpllog.Discard(), nil)
 	require.NoError(t, err)
 	require.Nil(t, db)
 	require.Nil(t, repo)
@@ -28,7 +28,7 @@ func TestSetupStorageRejectsUnavailablePostgreSQL(t *testing.T) {
 	}
 
 	started := time.Now()
-	db, repo, err := setupStorage(context.Background(), cfg, xrpllog.Discard())
+	db, repo, err := setupStorage(context.Background(), cfg, xrpllog.Discard(), nil)
 	require.ErrorContains(t, err, "initialize PostgreSQL database")
 	require.Less(t, time.Since(started), 5*time.Second)
 	require.Nil(t, db)
@@ -39,7 +39,7 @@ func TestSetupStorageRejectsInvalidSQLitePath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(path, []byte("occupied"), 0o600))
 
-	db, repo, err := setupStorage(context.Background(), &config.Config{DatabasePath: path}, xrpllog.Discard())
+	db, repo, err := setupStorage(context.Background(), &config.Config{DatabasePath: path}, xrpllog.Discard(), nil)
 	require.ErrorContains(t, err, "initialize SQLite database")
 	require.Nil(t, db)
 	require.Nil(t, repo)
@@ -55,13 +55,13 @@ func TestSetupStorageClosesNodeStoreWhenRelationalStorageFails(t *testing.T) {
 		DatabasePath: databasePath,
 	}
 
-	db, repo, err := setupStorage(context.Background(), cfg, xrpllog.Discard())
+	db, repo, err := setupStorage(context.Background(), cfg, xrpllog.Discard(), nil)
 	require.ErrorContains(t, err, "initialize SQLite database")
 	require.Nil(t, db)
 	require.Nil(t, repo)
 
 	cfg.DatabasePath = ""
-	reopened, _, err := setupStorage(context.Background(), cfg, xrpllog.Discard())
+	reopened, _, err := setupStorage(context.Background(), cfg, xrpllog.Discard(), nil)
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
 }
@@ -74,7 +74,7 @@ func TestSetupStorageHonorsCancellation(t *testing.T) {
 	db, repo, err := setupStorage(ctx, &config.Config{
 		NodeDB:       config.NodeDBConfig{Path: nodeStorePath},
 		DatabasePath: "postgres://127.0.0.1:1/xrpl?connect_timeout=30",
-	}, xrpllog.Discard())
+	}, xrpllog.Discard(), nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, db)
 	require.Nil(t, repo)

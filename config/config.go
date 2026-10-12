@@ -28,6 +28,8 @@ type Config struct {
 	FeeDefault       *int                   `toml:"fee_default" mapstructure:"fee_default"`
 	Overlay          OverlayConfig          `toml:"overlay" mapstructure:"overlay"`
 	TransactionQueue TransactionQueueConfig `toml:"transaction_queue" mapstructure:"transaction_queue"`
+	Acquisition      AcquisitionConfig      `toml:"acquisition" mapstructure:"acquisition"`
+	Resources        ResourcesConfig        `toml:"resources" mapstructure:"resources"`
 
 	// 3. Ripple Protocol
 	RelayProposals   string        `toml:"relay_proposals" mapstructure:"relay_proposals"`     // optional; "" = default ("trusted")

@@ -72,9 +72,16 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 
 // Config holds configuration for the LedgerService
 type Config struct {
-	ReplayFaultPath string
-	Standalone      bool
-	Startup         StartupConfig
+	RelayMemory       MemoryBudget
+	PersistenceMemory shamap.DirtyMemoryBudget
+	// ReplayVerificationMemory isolates long-running cold reads from ledger
+	// persistence. Node wiring must provide a separate shared-pool account so a
+	// verifier cannot consume the workspace needed to persist its own parent.
+	// Nil retains the legacy PersistenceMemory accounting for embedded callers.
+	ReplayVerificationMemory shamap.DirtyMemoryBudget
+	ReplayFaultPath          string
+	Standalone               bool
+	Startup                  StartupConfig
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string
@@ -160,7 +167,8 @@ type Service struct {
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.
-	consensusWG sync.WaitGroup
+	consensusWG  sync.WaitGroup
+	ledgerWorkWG sync.WaitGroup
 
 	// openLedgerMu serializes open-ledger submission with lifecycle transitions.
 	// It is acquired before mu so a transition waiting on transaction application
@@ -184,6 +192,21 @@ type Service struct {
 	// NodeStore for persistent storage (nil if in-memory only)
 	nodeStore    nodestore.Database
 	shamapFamily shamap.Family
+
+	// replayProofMu protects the bounded in-memory certificates used by
+	// generation-bound replay admission. The records contain only ledger and
+	// durable-generation identities; an active prepared proof also retains its
+	// opaque token owner and generation pin until publication activation ends.
+	replayProofMu           sync.Mutex
+	replayProofs            []replayCompletenessRecord
+	replayPreparedProofs    []*replayPreparedProof
+	replayPreparedSlotCount int
+	replayPreparedProofWake chan struct{}
+	// One foreground state verifier at a time. Transaction verification has
+	// independent admission and background re-certification yields between batches.
+	stateVerificationMu     sync.Mutex
+	stateVerificationActive bool
+	stateVerificationWake   chan struct{}
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
@@ -290,13 +313,14 @@ type Service struct {
 	// current open ledger or transaction queue. Reduce-relay announcements may
 	// arrive during that handoff, so the cache spans the request horizon while
 	// remaining explicitly bounded.
-	relayTxCacheMu    sync.Mutex
-	relayTxCache      map[[32]byte]relayTxRecord
-	relayTxCacheOrder []relayTxOrderEntry
-	relayTxCacheHead  int
-	relayTxCacheBytes int64
-	relayTxCacheLimit int64
-	relayTxCacheNext  uint64
+	relayTxCacheMu                sync.Mutex
+	relayTxCache                  map[[32]byte]relayTxRecord
+	relayTxCacheOrder             []relayTxOrderEntry
+	relayTxCacheHead              int
+	relayTxCacheBytes             int64
+	relayTxCacheLimit             int64
+	relayTxCacheNext              uint64
+	relayTxCacheStructureReserved bool
 
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
@@ -1384,12 +1408,16 @@ func (s *Service) rememberRelayTransaction(hash [32]byte, blob []byte, deferred 
 	if int64(len(blob)) > limit {
 		return
 	}
+	if !s.reserveRelayCacheLocked(uint64(len(blob))) {
+		return
+	}
 	if s.relayTxCache == nil {
 		s.relayTxCache = make(map[[32]byte]relayTxRecord)
 	}
 	orderID := uint64(0)
 	if existing, exists := s.relayTxCache[hash]; exists {
 		s.relayTxCacheBytes -= int64(len(existing.blob))
+		s.releaseRelayCachePayloadLocked(uint64(len(existing.blob)))
 		orderID = existing.orderID
 	} else {
 		s.relayTxCacheNext++
@@ -1413,6 +1441,7 @@ func (s *Service) rememberRelayTransaction(hash [32]byte, blob []byte, deferred 
 		if record, stillPresent := s.relayTxCache[old.hash]; stillPresent && record.orderID == old.id {
 			s.relayTxCacheBytes -= int64(len(record.blob))
 			delete(s.relayTxCache, old.hash)
+			s.releaseRelayCachePayloadLocked(uint64(len(record.blob)))
 		}
 	}
 	s.compactRelayCacheOrderLocked()
@@ -1428,6 +1457,7 @@ func (s *Service) relayCacheGet(hash [32]byte) (blob []byte, included, deferred,
 	if time.Since(record.seenAt) >= relayTxCacheTTL {
 		delete(s.relayTxCache, hash)
 		s.relayTxCacheBytes -= int64(len(record.blob))
+		s.releaseRelayCachePayloadLocked(uint64(len(record.blob)))
 		s.compactRelayCacheOrderLocked()
 		return nil, false, false, false
 	}
@@ -1439,9 +1469,14 @@ func (s *Service) relayCacheGet(hash [32]byte) (blob []byte, included, deferred,
 
 func (s *Service) compactRelayCacheOrderLocked() {
 	if len(s.relayTxCache) == 0 {
+		s.relayTxCache = nil
 		s.relayTxCacheOrder = nil
 		s.relayTxCacheHead = 0
 		s.relayTxCacheBytes = 0
+		if s.relayTxCacheStructureReserved {
+			s.config.RelayMemory.Release(relayCacheStructureBytes)
+			s.relayTxCacheStructureReserved = false
+		}
 		return
 	}
 	activeOrder := len(s.relayTxCacheOrder) - s.relayTxCacheHead

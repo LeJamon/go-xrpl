@@ -476,7 +476,7 @@ func walkFullBelowStateAccess(
 	if result.full {
 		node.setFullBelowGen(gen)
 		if result.stored && cache != nil {
-			cacheFullBelow(cache, gen, nodeHash, depth)
+			cache.Insert(gen, nodeHash)
 		}
 	}
 	return result, nil

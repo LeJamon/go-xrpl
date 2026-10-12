@@ -778,10 +778,11 @@ func newRotatingRefreshFixture(
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
-		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  shamapbackend.New(db),
+		PersistenceMemory: &relayTestMemory{limit: shamap.DirtyWorkspaceBytes},
+		Standalone:        true,
+		GenesisConfig:     genesis.DefaultConfig(),
+		NodeStore:         db,
+		SHAMapFamily:      shamapbackend.New(db),
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())

@@ -66,6 +66,35 @@ func TestOptionsResolve(t *testing.T) {
 	}
 }
 
+func TestOptionsMemoryCommitmentCountsSharedCacheOnce(t *testing.T) {
+	options := Options{BlockCacheBytes: 32 << 20, MaxOpenFiles: 200}
+	steady, err := options.MemoryCommitment(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSteady := uint64(32<<20) + 2*uint64(MemTableCommitmentBytes)
+	if steady != wantSteady {
+		t.Fatalf("steady commitment = %d, want %d", steady, wantSteady)
+	}
+	transition, err := options.MemoryCommitment(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTransition := uint64(32<<20) + 3*uint64(MemTableCommitmentBytes)
+	if transition != wantTransition {
+		t.Fatalf("transition commitment = %d, want %d", transition, wantTransition)
+	}
+	if got := transition - steady; got != uint64(MemTableCommitmentBytes) {
+		t.Fatalf("rotation overlap = %d, want one memtable commitment %d", got, MemTableCommitmentBytes)
+	}
+}
+
+func TestOptionsMemoryCommitmentRejectsInvalidGenerationCount(t *testing.T) {
+	if _, err := (Options{}).MemoryCommitment(0); err == nil {
+		t.Fatal("MemoryCommitment accepted zero open generations")
+	}
+}
+
 func TestMakePebbleOptions(t *testing.T) {
 	want := Options{BlockCacheBytes: 32 << 20, MaxOpenFiles: 128}
 	cache := cockroachpebble.NewCache(want.BlockCacheBytes)

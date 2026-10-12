@@ -138,6 +138,9 @@ func TestWalkMapParallelPruneAndFinishDoNotInvertLocks(t *testing.T) {
 	if err := sm.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatal(err)
 	}
+	if err := sm.AcknowledgePersistedContext(t.Context()); err != nil {
+		t.Fatalf("AcknowledgePersistedContext: %v", err)
+	}
 
 	walkDone := make(chan error, 1)
 	go func() {

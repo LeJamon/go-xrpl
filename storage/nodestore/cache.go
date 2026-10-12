@@ -10,12 +10,22 @@ import (
 // cacheShardCount must be a power of two so shardFor can mask cheaply.
 const cacheShardCount = 16
 
+// Cache charges are deliberately conservative. They cover the retained node
+// backing array, the cache entry and the list/heap bookkeeping; map bucket
+// capacity is held separately until the shard is cleared and its maps are
+// dropped.
+const (
+	nodeCacheEntryOverhead   = uint64(256)
+	nodeCacheStructuralBytes = uint64(128)
+)
+
 // cacheEntry represents an entry in the LRU cache.
 type cacheEntry struct {
 	key       Hash256   // The hash key
 	node      *Node     // The cached node
 	expiresAt time.Time // When this entry expires
 	expiryPos int
+	charge    uint64
 }
 
 // isExpired checks if the cache entry has expired.
@@ -66,7 +76,10 @@ type cacheShard struct {
 	// (rounded up); no global cap is enforced.
 	maxItems int
 
-	currentSize int
+	currentSize      int
+	structuralSlots  int
+	structuralCharge uint64
+	budget           MemoryBudget
 }
 
 // nodeCache is a sharded LRU cache with TTL support for NodeStore.
@@ -79,8 +92,12 @@ type nodeCache struct {
 	ttl    time.Duration
 }
 
-func newNodeCache(maxSize int, ttl time.Duration) *nodeCache {
+func newNodeCache(maxSize int, ttl time.Duration, budgets ...MemoryBudget) *nodeCache {
 	c := &nodeCache{ttl: ttl}
+	var budget MemoryBudget
+	if len(budgets) != 0 {
+		budget = budgets[0]
+	}
 	perShard := maxSize / cacheShardCount
 	if perShard*cacheShardCount < maxSize {
 		perShard++
@@ -90,6 +107,7 @@ func newNodeCache(maxSize int, ttl time.Duration) *nodeCache {
 			items:    make(map[Hash256]*list.Element),
 			lru:      list.New(),
 			maxItems: perShard,
+			budget:   budget,
 		}
 	}
 	return c
@@ -128,38 +146,149 @@ func (c *nodeCache) Put(node *Node) {
 	if node == nil {
 		return
 	}
-	c.putOwned(node.Clone())
+	s := c.shardFor(node.Hash)
+	s.mu.Lock()
+	if !s.reserveForNodeLocked(node, nodeCacheCloneCharge(node)) {
+		s.mu.Unlock()
+		return
+	}
+	owned := node.Clone()
+	s.putOwnedWithTTLLocked(owned, c.ttl)
+	s.mu.Unlock()
 }
 
 // putOwned transfers node to the cache without copying it. The caller must not
 // mutate node after the call; readers receive the same immutable pointer.
-func (c *nodeCache) putOwned(node *Node) {
+func (c *nodeCache) putOwned(node *Node) bool {
 	if node == nil {
-		return
+		return false
 	}
-	ttl := c.ttl
 
 	s := c.shardFor(node.Hash)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.reserveForNodeLocked(node, nodeCacheCharge(node)) {
+		return false
+	}
+	s.putOwnedWithTTLLocked(node, c.ttl)
+	return true
+}
+
+// nodeCacheCharge accounts the retained backing capacity. putOwned aliases
+// decoded payloads, so len(node.Data) would undercount a subslice.
+func nodeCacheCharge(node *Node) uint64 {
+	if node == nil {
+		return 0
+	}
+	return nodeCacheEntryOverhead + uint64(cap(node.Data))
+}
+
+// nodeCacheCloneCharge accounts for the exact payload capacity allocated by
+// Node.Clone. Put reserves this amount before allocating the defensive copy.
+func nodeCacheCloneCharge(node *Node) uint64 {
+	if node == nil {
+		return 0
+	}
+	return nodeCacheEntryOverhead + uint64(len(node.Data))
+}
+
+// reserveForNodeLocked reserves the replacement before the caller allocates or
+// transfers a node into the cache. It may shed this shard's expired/LRU values
+// to make room, but it never evicts another shard or calls user code.
+func (s *cacheShard) reserveForNodeLocked(node *Node, charge uint64) bool {
 	now := time.Now()
+	if s.currentSize >= s.maxItems {
+		s.sweepExpiredLocked(now)
+		if s.currentSize == 0 {
+			s.rebuildEmptyLocked()
+		}
+	}
+	_, found := s.items[node.Hash]
+	if found {
+		if s.tryReserveLocked(charge) {
+			return true
+		}
+		// Keep a useful hit if a replacement cannot be admitted. Expired
+		// entries elsewhere in this shard are still safe to discard.
+		s.sweepExpiredLocked(now)
+		if _, stillPresent := s.items[node.Hash]; stillPresent {
+			return s.tryReserveLocked(charge)
+		}
+		return s.tryReserveNodeLocked(charge)
+	}
+
+	if s.tryReserveNodeLocked(charge) {
+		return true
+	}
+
+	// An admission failure can be caused by this shard's cold entries. Shed
+	// only local entries and retry; if the parent budget is full elsewhere the
+	// retry still fails and the new node remains caller-owned.
+	s.sweepExpiredLocked(now)
+	if s.currentSize == 0 {
+		s.rebuildEmptyLocked()
+		if s.tryReserveNodeLocked(charge) {
+			return true
+		}
+	}
+	for s.currentSize > 0 {
+		if !s.evictOldestLocked() {
+			break
+		}
+		if s.currentSize == 0 {
+			s.rebuildEmptyLocked()
+		}
+		if s.tryReserveNodeLocked(charge) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *cacheShard) tryReserveNodeLocked(charge uint64) bool {
+	if s.structuralSlots < s.maxItems {
+		charge += nodeCacheStructuralBytes
+	}
+	return s.tryReserveLocked(charge)
+}
+
+func (s *cacheShard) tryReserveLocked(charge uint64) bool {
+	if s.budget == nil {
+		return true
+	}
+	return s.budget.TryReserve(charge)
+}
+
+func (s *cacheShard) releaseChargeLocked(charge uint64) {
+	if s.budget != nil && charge != 0 {
+		s.budget.Release(charge)
+	}
+}
+
+func (s *cacheShard) putOwnedWithTTLLocked(node *Node, ttl time.Duration) {
+	now := time.Now()
+	charge := nodeCacheCharge(node)
 
 	if element, found := s.items[node.Hash]; found {
 		entry := element.Value.(*cacheEntry)
+		oldCharge := entry.charge
 		entry.node = node
+		entry.charge = charge
 		entry.expiresAt = now.Add(ttl)
 		heap.Fix(&s.expiry, entry.expiryPos)
 		s.lru.MoveToFront(element)
+		s.releaseChargeLocked(oldCharge)
 		return
 	}
-	if s.currentSize >= s.maxItems {
-		s.sweepExpiredLocked(now)
+	if s.structuralSlots < s.maxItems {
+		s.structuralSlots++
+		s.structuralCharge += nodeCacheStructuralBytes
 	}
-
 	entry := &cacheEntry{
 		key:       node.Hash,
 		node:      node,
 		expiresAt: now.Add(ttl),
+		charge:    charge,
 	}
 	element := s.lru.PushFront(entry)
 	s.items[node.Hash] = element
@@ -188,12 +317,40 @@ func (c *nodeCache) Remove(hash Hash256) {
 func (c *nodeCache) Clear() {
 	for _, s := range c.shards {
 		s.mu.Lock()
-		s.items = make(map[Hash256]*list.Element)
-		s.lru.Init()
-		s.expiry = nil
-		s.currentSize = 0
+		s.clearLocked()
 		s.mu.Unlock()
 	}
+}
+
+// Close drops the shard maps and returns every cache-owned reservation. A
+// closed cache is only used through its owning database, which serializes
+// Close against all public operations.
+func (c *nodeCache) Close() {
+	for _, s := range c.shards {
+		s.mu.Lock()
+		s.clearLocked()
+		s.items = nil
+		s.expiry = nil
+		s.structuralSlots = 0
+		s.structuralCharge = 0
+		s.mu.Unlock()
+	}
+}
+
+func (s *cacheShard) clearLocked() {
+	if s.budget != nil {
+		var charge uint64
+		for element := s.lru.Front(); element != nil; element = element.Next() {
+			charge += element.Value.(*cacheEntry).charge
+		}
+		s.budget.Release(charge + s.structuralCharge)
+	}
+	s.items = make(map[Hash256]*list.Element)
+	s.lru.Init()
+	s.expiry = nil
+	s.currentSize = 0
+	s.structuralSlots = 0
+	s.structuralCharge = 0
 }
 
 func (c *nodeCache) Size() int {
@@ -225,6 +382,7 @@ func (s *cacheShard) sweepExpiredLocked(now time.Time) int {
 	for len(s.expiry) > 0 && s.expiry[0].isExpired(now) {
 		entry := heap.Pop(&s.expiry).(*cacheEntry)
 		s.removeElementWithoutExpiryLocked(s.items[entry.key])
+		s.releaseChargeLocked(entry.charge)
 		removed++
 	}
 	return removed
@@ -235,6 +393,7 @@ func (s *cacheShard) removeElementLocked(element *list.Element) {
 	entry := element.Value.(*cacheEntry)
 	heap.Remove(&s.expiry, entry.expiryPos)
 	s.removeElementWithoutExpiryLocked(element)
+	s.releaseChargeLocked(entry.charge)
 }
 
 func (s *cacheShard) removeElementWithoutExpiryLocked(element *list.Element) {
@@ -242,6 +401,17 @@ func (s *cacheShard) removeElementWithoutExpiryLocked(element *list.Element) {
 	delete(s.items, entry.key)
 	s.lru.Remove(element)
 	s.currentSize--
+}
+
+func (s *cacheShard) rebuildEmptyLocked() {
+	if s.budget != nil && s.structuralCharge != 0 {
+		s.budget.Release(s.structuralCharge)
+	}
+	s.items = make(map[Hash256]*list.Element)
+	s.lru.Init()
+	s.expiry = nil
+	s.structuralSlots = 0
+	s.structuralCharge = 0
 }
 
 // evictOldestLocked evicts the LRU entry; returns false on empty shard.

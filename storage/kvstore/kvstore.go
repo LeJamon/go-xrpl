@@ -80,6 +80,17 @@ type RotatingStore interface {
 	RotationState() (lastRotated, minimumOnline uint32)
 }
 
+// RetiringRotatingStore separates publishing a generation pair from retiring
+// the unreachable old archive. Callers must invoke a non-nil retirement even
+// when err is non-nil, after releasing their live-state guards. Until retirement
+// completes, another rotation or Close may wait, but reads and writes against
+// the published pair must remain available. Retirement is idempotent and its
+// error must be combined with err; committed retains Rotate's semantics.
+type RetiringRotatingStore interface {
+	RotatingStore
+	RotateWithRetirement(lastRotated, minimumOnline uint32) (committed bool, retirement func() error, err error)
+}
+
 // BatchPromotingStore extends a rotating store with bounded locality-aware promotion.
 type BatchPromotingStore interface {
 	RotatingStore

@@ -826,7 +826,7 @@ func (c *catchupReplayCoordinator) armPendingConsensusLedger() bool {
 		}
 		svc := c.adaptor.LedgerService()
 		if svc != nil {
-			if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
+			if held, ok := svc.GetCachedLedgerByHash(hash); ok {
 				if svc.NeedsInitialSync() || svc.IsFastLoadProvisional() {
 					accepted, rearm := c.tryInitialLedgerSwitch(held.Sequence(), held.Hash())
 					if accepted || !rearm {
@@ -978,11 +978,11 @@ func (c *catchupReplayCoordinator) recoveryForwardStep(
 	maxGap := uint32(maxForwardDeltaGap)
 	discardAnchor := false
 	if recovery.anchorHash != ([32]byte{}) {
-		anchor, err := svc.GetLedgerByHash(recovery.anchorHash)
-		anchorUsable := recovery.anchorSeq > parent.Sequence() && recovery.anchorSeq < targetSeq &&
+		anchor, held := svc.GetCachedLedgerByHash(recovery.anchorHash)
+		anchorUsable := recovery.anchorSeq >= parent.Sequence() && recovery.anchorSeq < targetSeq &&
 			targetSeq-recovery.anchorSeq <= seqHashRetain &&
 			c.recoveryAnchorReachesTarget(recovery.anchorSeq, recovery.anchorHash, targetHash) &&
-			err == nil && anchor != nil && anchor.Sequence() == recovery.anchorSeq &&
+			held && anchor.Sequence() == recovery.anchorSeq &&
 			anchor.Hash() == recovery.anchorHash
 		if anchorUsable {
 			parent = anchor
@@ -1013,8 +1013,10 @@ func (c *catchupReplayCoordinator) recoveryForwardStep(
 			return 0, [32]byte{}, nil, false, discardAnchor
 		}
 
-		next, err := svc.GetLedgerByHash(entry.hash)
-		if err != nil || next == nil {
+		// Scheduling runs on the validation router. A storage-only successor
+		// belongs to detached acquisition/admission, not a synchronous SQL read.
+		next, held := svc.GetCachedLedgerByHash(entry.hash)
+		if !held {
 			return nextSeq, entry.hash, parent, true, discardAnchor
 		}
 		if next.Sequence() != nextSeq || next.ParentHash() != parentHash {
@@ -1069,7 +1071,7 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 		if target.source != catchupSourceQuorum {
 			return
 		}
-		if held, err := svc.GetLedgerByHash(tHash); err == nil && held != nil {
+		if _, held := svc.GetCachedLedgerByHash(tHash); held {
 			return
 		}
 		if c.protectedCatchupInFlight() >= maxConcurrentSpeculativeCatchup {
@@ -1126,7 +1128,11 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 	c.acquisitionMu.Lock()
 	recovery := c.consensusRecovery
 	if recovery.targetHash != tHash {
-		recovery = consensusRecovery{}
+		// A moving network tip is not a new recovery session. Keep the
+		// committed anchor; recoveryForwardStep independently authenticates
+		// its linkage to the new target before using the extended window.
+		recovery.targetHash = tHash
+		recovery.stepHash = [32]byte{}
 	}
 	c.acquisitionMu.Unlock()
 	if seq, hash, parent, replay, _ := c.recoveryForwardStep(svc, tSeq, tHash, recovery); replay && parent != nil {
@@ -1303,7 +1309,7 @@ func (c *catchupReplayCoordinator) ensureCatchupAcquisitionWithPriority(
 	if seq == 0 || seq <= svc.GetClosedLedgerIndex() {
 		return
 	}
-	if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
+	if _, held := svc.GetCachedLedgerByHash(hash); held {
 		return
 	}
 	peerID, _ = c.resolveAcquisitionPeer(seq, peerID)
@@ -1402,7 +1408,7 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionWithParentLocked(seq ui
 	// this latch a consensus retrigger refetches the just-adopted ledger in a
 	// tight loop, flooding peers past rippled's resource drop threshold.
 	if svc := c.adaptor.LedgerService(); svc != nil {
-		if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+		if _, held := svc.GetCachedLedgerByHash(hash); held {
 			return
 		}
 	}
@@ -1434,6 +1440,9 @@ func (c *catchupReplayCoordinator) isAcquiring(hash [32]byte) bool {
 
 // Caller holds acquisitionMu.
 func (c *catchupReplayCoordinator) isAcquiringLocked(hash [32]byte) bool {
+	if c.standardReplayEntryOwnedLocked(hash) {
+		return true
+	}
 	if c.standardReplay.pivotHandoff != nil &&
 		c.standardReplay.pivotHandoff.acquisition.Hash() == hash {
 		return true
@@ -1466,6 +1475,9 @@ func (c *catchupReplayCoordinator) startReplayDeltaAcquisition(seq uint32, hash 
 	}
 	if c.replayNeedsFullStateLocked(hash) {
 		return errors.New("ledger requires full-state acquisition after replay failure")
+	}
+	if c.standardReplayEntryOwnedLocked(hash) {
+		return inbound.ErrAcquisitionExists
 	}
 	rd, err := c.replayer.Acquire(hash, peerID, parent)
 	if err != nil {
@@ -1511,6 +1523,11 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 	if c.replayFaultBlocked() {
 		return nil, false
 	}
+	if entry := c.standardReplay.entries[seq]; c.standardReplay.active && entry != nil &&
+		entry.generation == c.standardReplay.generation && entry.hash == hash &&
+		(!entry.readyAt.IsZero() || entry.replayMemoryPending || entry.replayMemoryActive != 0) {
+		return nil, false
+	}
 	if c.replayNeedsFullStateLocked(hash) {
 		_ = c.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, true)
 		return c.fetchTracker.Find(hash), false
@@ -1526,7 +1543,7 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 		return nil, false
 	}
 	if svc := c.adaptor.LedgerService(); svc != nil {
-		if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+		if _, held := svc.GetCachedLedgerByHash(hash); held {
 			return nil, false
 		}
 	}
@@ -1632,7 +1649,7 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 	if svc := c.adaptor.LedgerService(); svc != nil && !repairParent && purpose != fullStateAdmissionReplacement {
-		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
+		if held, ok := svc.GetCachedLedgerByHash(hash); ok {
 			heldSeq := seq
 			if heldSeq == 0 {
 				heldSeq = held.Sequence()
@@ -1842,7 +1859,7 @@ func (c *catchupReplayCoordinator) fallbackReplayAcquisitionForTargetMode(
 			c.clearReplayAvailabilityRetryLocked(hash)
 			c.acquisitionMu.Unlock()
 			if startDrain {
-				c.drainStandardReplayPipeline()
+				c.startStandardReplayDrain()
 			}
 			return
 		}
@@ -2077,7 +2094,7 @@ func (c *catchupReplayCoordinator) requestConsensusLedger(id consensus.LedgerID)
 		return nil
 	}
 	if svc := c.adaptor.LedgerService(); svc != nil && seq > svc.GetClosedLedgerIndex() {
-		held, _ := svc.GetLedgerByHash(hash)
+		held, _ := svc.GetCachedLedgerByHash(hash)
 		provenReplay := held != nil && held.Sequence() == seq && held.Hash() == hash
 		_, _, _, forwardReplay, discardAnchor := c.recoveryForwardStep(svc, seq, hash, recovery)
 		provenReplay = provenReplay || forwardReplay
@@ -2380,7 +2397,7 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 		func() {
 			lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
 			defer cancelLookup()
-			releaseAdmission, admissionErr := svc.AcquireStateAdmission(c.lifecycleContext())
+			releaseAdmission, admissionErr := svc.AcquireStateAdmission(lookupCtx)
 			if admissionErr != nil {
 				err = admissionErr
 				return
@@ -2403,17 +2420,20 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 				return
 			}
 			hdr := held.Header()
-			stateMap, snapshotErr := held.StateMapSnapshot()
+			stateMap, snapshotErr := held.StateMapSnapshotContext(lookupCtx)
 			if snapshotErr != nil {
 				err = snapshotErr
 				return
 			}
-			txMap, snapshotErr := held.TxMapSnapshot()
+			txMap, snapshotErr := held.TxMapSnapshotContext(lookupCtx)
 			if snapshotErr != nil {
 				err = snapshotErr
 				return
 			}
-			if err = svc.IngestHistoricalLedgerWithState(c.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
+			// History is optional background work. Its local verification must
+			// honor the same bounded admission as the lookup, rather than park
+			// Router.Run behind a foreground state-verification lease.
+			if err = svc.IngestHistoricalLedgerWithState(lookupCtx, &hdr, stateMap, txMap); err != nil {
 				c.logger.Warn("history backfill: held ledger ingest failed", "error", err, "seq", target.seq)
 			}
 		}()
@@ -2814,12 +2834,6 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 		c.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-verify")
 	}
 
-	releaseAdmission, err := c.acquireStateAdmission()
-	if err != nil {
-		c.logger.Warn("replay delta admission failed", "error", err, "peer", msg.PeerID)
-		return
-	}
-	defer releaseAdmission()
 	rd, err := c.replayer.HandleResponseFrom(uint64(msg.PeerID), resp)
 	if c.stoppedForShutdown() {
 		return
@@ -2847,6 +2861,17 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 		if !resp.HasError() {
 			c.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
 		}
+		return
+	}
+	if errors.Is(err, inbound.ErrReplayMemory) {
+		// Keep the acquisition registered. Its base admission remains owned
+		// while the maintenance loop rotates to another peer or retries after a
+		// sibling owner returns response capacity.
+		hash := rd.Hash()
+		c.logger.Debug("replay delta response deferred by memory budget",
+			"peer", msg.PeerID,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+		)
 		return
 	}
 	if err != nil {
@@ -2889,126 +2914,15 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 		return
 	}
 
-	// GotResponse verified the header hash and the tx-map root. Apply
-	// re-derives the post-state by replaying every tx through the
-	// engine against a mutable copy of the parent's state, then
-	// verifies the resulting AccountHash matches the target header —
-	// the only proof we have that our engine produced the right state.
-	// Without this step the adopted ledger would carry the parent's
-	// stale state map, breaking consensus on the next round.
-	parent := rd.Parent()
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		c.replayer.Abandon(rd.Hash())
-		return
-	}
-	failParentAdmission := func(cause error) {
-		txMap := shamap.New(shamap.TypeTransaction)
-		for _, txn := range rd.OrderedTxs() {
-			if err := txMap.PutWithNodeType(txn.Hash, txn.LeafBlob, shamap.NodeTypeTransactionWithMeta); err != nil {
-				cause = errors.Join(cause, err)
-				txMap = nil
-				break
-			}
-		}
-		svc.RecordReplayPreparationFailure(c.lifecycleContext(), rd.TargetHeader(), txMap, parent,
-			c.replayTargetAuthenticated(rd.TargetHeader()), cause)
-		seq := rd.Seq()
-		hash := rd.Hash()
-		c.acquisitionMu.Lock()
-		c.requireReplayFullStateLocked(seq, hash)
-		c.replayer.Abandon(hash)
-		c.acquisitionMu.Unlock()
-		c.logger.Error("replay delta parent admission failed",
-			"seq", seq,
-			"hash", fmt.Sprintf("%x", hash[:8]),
-			"error", cause,
-			"validator_duties_blocked", svc.ReplayBlocked(),
-		)
-		c.fallbackReplayAcquisition(seq, hash, rd.PeerID())
-	}
-	if parent == nil {
-		failParentAdmission(errors.New("replay parent is unavailable"))
-		return
-	}
-	parentState, err := parent.StateMapSnapshot()
-	if err != nil {
-		failParentAdmission(err)
-		return
-	}
-	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), parentState, nil); err != nil {
-		failParentAdmission(err)
-		return
-	}
-	engineCfg := c.adaptor.EngineConfigForReplay(parent)
-	derived, err := svc.ApplyReplay(c.lifecycleContext(), rd, engineCfg, c.replayTargetAuthenticated(rd.TargetHeader()))
-	if err != nil {
-		seq := rd.Seq()
-		hash := rd.Hash()
-		peerID := rd.PeerID()
-		c.acquisitionMu.Lock()
-		c.requireReplayFullStateLocked(seq, hash)
-		c.replayer.Abandon(hash)
-		c.acquisitionMu.Unlock()
-		// The header and transaction tree passed verification; diagnose local
-		// state and execution before attributing the failure to a peer.
-		c.logger.Error("replay delta apply failed; validator duties blocked",
-			"seq", seq,
-			"hash", fmt.Sprintf("%x", hash[:8]),
-			"peer", peerID,
-			"error", err,
-		)
-		c.fallbackReplayAcquisition(seq, hash, peerID)
-		return
-	}
-	c.replayer.Complete(rd.Hash())
-	c.clearReplayAvailabilityRetry(rd.Hash())
-	if err := c.adoptVerifiedLedger(derived); err != nil {
-		c.logger.Warn("failed to store replay-delta ledger", "error", err)
-	}
+	// Header and transaction roots are authenticated, but parent admission,
+	// execution and child admission can all read storage. Keep them detached.
+	c.completeLegacyDeltaReady(rd)
 }
 
 func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	if r.catchupReplay != nil {
 		r.catchupReplay.handleReplayDeltaResponse(msg)
 	}
-}
-
-// adoptVerifiedLedger stores a ledger reconstructed from a verified replay
-// delta until consensus selects it as the canonical frontier.
-func (c *catchupReplayCoordinator) adoptVerifiedLedger(l *ledger.Ledger) error {
-	if l == nil || c.stoppedForShutdown() {
-		return context.Canceled
-	}
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return errors.New("no ledger service")
-	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
-	if err != nil {
-		return err
-	}
-	defer releaseAdmission()
-	if err := svc.VerifyDetachedLedger(c.lifecycleContext(), l); err != nil {
-		return err
-	}
-	c.replayCommitMu.Lock()
-	if c.stoppedForShutdown() {
-		c.replayCommitMu.Unlock()
-		return context.Canceled
-	}
-	storedHeader, initialCandidate, err := c.storeVerifiedLedgerLocked(l)
-	c.replayCommitMu.Unlock()
-	if err != nil {
-		return err
-	}
-	c.logger.Info("acquired ledger via replay delta",
-		"seq", storedHeader.LedgerIndex,
-		"hash", fmt.Sprintf("%x", storedHeader.Hash[:8]),
-		"initial_candidate", initialCandidate,
-	)
-	c.completeStoredConsensusRecovery(storedHeader.LedgerIndex, storedHeader.Hash, storedHeader.ParentHash, initialCandidate)
-	return nil
 }
 
 func (c *catchupReplayCoordinator) storeVerifiedLedger(l *ledger.Ledger) (header.LedgerHeader, bool, error) {
@@ -3019,49 +2933,53 @@ func (c *catchupReplayCoordinator) storeVerifiedLedger(l *ledger.Ledger) (header
 	if svc == nil {
 		return header.LedgerHeader{}, false, errors.New("no ledger service")
 	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
+	ctx := c.lifecycleContext()
+	prepared, err := c.prepareReplayLedgerForPublication(ctx, l)
 	if err != nil {
 		return header.LedgerHeader{}, false, err
 	}
-	defer releaseAdmission()
-	if err := svc.VerifyDetachedLedger(c.lifecycleContext(), l); err != nil {
-		return header.LedgerHeader{}, false, err
+	if !c.lockReplayCommitContext(ctx) {
+		prepared.Release()
+		if err := ctx.Err(); err != nil {
+			return header.LedgerHeader{}, false, err
+		}
+		return header.LedgerHeader{}, false, context.Canceled
 	}
-	c.replayCommitMu.Lock()
 	defer c.replayCommitMu.Unlock()
+	defer prepared.Release()
 	if c.stoppedForShutdown() {
 		return header.LedgerHeader{}, false, context.Canceled
 	}
-	return c.storeVerifiedLedgerLocked(l)
+	initialCandidate, err := svc.BootstrapPreparedLedger(ctx, prepared)
+	if err != nil {
+		return header.LedgerHeader{}, false, err
+	}
+	return l.Header(), initialCandidate, nil
 }
 
-// storeVerifiedLedgerLocked publishes a verified ledger while replayCommitMu
-// is held. Standard replay calls this locked form after rechecking its active
-// generation; other replay paths use storeVerifiedLedger so publication is
-// serialized at the coordinator boundary.
-func (c *catchupReplayCoordinator) storeVerifiedLedgerLocked(l *ledger.Ledger) (header.LedgerHeader, bool, error) {
+// prepareReplayLedgerForPublication performs parent and detached-map
+// admission before replayCommitMu is acquired. A parent proof is an
+// optimization; generic publication remains correct when the parent is not
+// available and the service performs a complete child walk.
+func (c *catchupReplayCoordinator) prepareReplayLedgerForPublication(
+	ctx context.Context,
+	l *ledger.Ledger,
+) (*service.PreparedLedger, error) {
+	if l == nil {
+		return nil, errors.New("nil ledger")
+	}
 	svc := c.adaptor.LedgerService()
 	if svc == nil {
-		return header.LedgerHeader{}, false, errors.New("no ledger service")
+		return nil, errors.New("no ledger service")
 	}
-	hdr := l.Header()
-	stateMap, err := l.StateMapSnapshot()
-	if err != nil {
-		return header.LedgerHeader{}, false, fmt.Errorf("snapshot state map: %w", err)
+	var parentProof *service.PreparedReplayParent
+	if parent, err := svc.GetLedgerByHash(l.ParentHash()); err == nil && parent != nil {
+		parentProof, _ = svc.PrepareReplayParent(ctx, parent)
 	}
-	// Pass the verified tx map through so the stored ledger carries
-	// real transactions — without this, tx/tx_history/account_tx RPCs
-	// can't answer for replay-delta ledgers and we can't
-	// re-serve the replay-delta to other peers.
-	txMap, err := l.TxMapSnapshot()
-	if err != nil {
-		return header.LedgerHeader{}, false, fmt.Errorf("snapshot tx map: %w", err)
+	if parentProof != nil {
+		defer parentProof.Release()
 	}
-	initialCandidate, err := svc.BootstrapLedgerWithState(c.lifecycleContext(), &hdr, stateMap, txMap)
-	if err != nil {
-		return header.LedgerHeader{}, false, fmt.Errorf("store replay-delta ledger: %w", err)
-	}
-	return hdr, initialCandidate, nil
+	return svc.PrepareReplayLedger(ctx, l, parentProof)
 }
 
 func (c *catchupReplayCoordinator) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, initialCandidate bool) bool {
@@ -3381,8 +3299,10 @@ func (c *catchupReplayCoordinator) maybeAcquireFromValidation(v *consensus.Valid
 		originPeer,
 		catchupSourceValidation,
 	)
-	// Already have it (built or adopted) — nothing to fetch.
-	if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+	// This runs on the validation router. Never probe SQLite synchronously:
+	// pruning can own its single connection for multiple consensus rounds.
+	// Storage-only candidates are resolved by detached acquisition/admission.
+	if _, held := svc.GetCachedLedgerByHash(hash); held {
 		return
 	}
 	// A trusted tip AT OR BELOW our closed tip on a chain we don't hold is a
@@ -3426,7 +3346,7 @@ func (c *catchupReplayCoordinator) armValidatedLedgerAcquisition(seq uint32, has
 		(seq == validated && !svc.IsFastLoadProvisional()) {
 		return
 	}
-	if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil && held.Sequence() == seq {
+	if held, ok := svc.GetCachedLedgerByHash(hash); ok && held.Sequence() == seq {
 		c.acquisitionMu.Lock()
 		c.consensusRecovery.targetHash = hash
 		c.acquisitionMu.Unlock()
@@ -3844,7 +3764,9 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			c.logger.Warn("inbound ledger: GotBase failed", "error", err)
-			if errors.Is(err, inbound.ErrHeaderRejected) {
+			if errors.Is(err, inbound.ErrPersistence) {
+				c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
+			} else if errors.Is(err, inbound.ErrHeaderRejected) {
 				c.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), err)
 			} else {
 				c.acquisition.IncPeerBadData(peerID, "ledger-data-base")
@@ -3864,45 +3786,11 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 		c.requestMissingAcquisitionNodes(il, peerID)
 		return true, false
 
-	case message.LedgerInfoAsNode:
-		il.ReleaseMissingPeer(peerID)
-		useful, err := il.GotStateNodesUseful(ld.Nodes)
-		if err != nil {
-			c.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
-			if errors.Is(err, inbound.ErrInvalidPeerNode) {
-				c.acquisition.IncPeerBadData(peerID, "ledger-data-state")
-			}
-			return true, false
-		}
-
-		if il.IsComplete() {
-			c.completeInboundLedger(il)
-			return true, false
-		}
-
-		if useful > 0 {
-			c.requestMissingAcquisitionNodes(il, peerID)
-		}
-		return true, false
-
-	case message.LedgerInfoTxNode:
-		il.ReleaseMissingPeer(peerID)
-		useful, err := il.GotTransactionNodesUseful(ld.Nodes)
-		if err != nil {
-			c.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
-			if errors.Is(err, inbound.ErrInvalidPeerNode) {
-				c.acquisition.IncPeerBadData(peerID, "ledger-data-tx")
-			}
-			return true, false
-		}
-
-		if il.IsComplete() {
-			c.completeInboundLedger(il)
-			return true, false
-		}
-
-		if useful > 0 {
-			c.requestMissingAcquisitionNodes(il, peerID)
+	case message.LedgerInfoAsNode, message.LedgerInfoTxNode:
+		if c.submitAcquisitionWork(il, acquisitionWorkEvent{
+			kind: acquisitionWorkData, data: ld, owner: owner, peerID: peerID,
+		}) {
+			return true, owner != nil
 		}
 		return true, false
 	}
@@ -3924,7 +3812,7 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
 	if target != 0 {
 		requests, complete, err := il.CollectMissingReplyRequestsContext(context.Background(), []uint64{target})
-		if err != nil {
+		if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 			c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 			return
 		}
@@ -3943,7 +3831,7 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 	}
 
 	stateIDs, txIDs, complete, err := il.CollectMissingRequestContext(context.Background(), false)
-	if err != nil {
+	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 		return
 	}
@@ -3961,7 +3849,7 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger, peerID uint64) {
 	requests, complete, err := il.CollectMissingAddedRequestsContext(context.Background(), []uint64{peerID})
-	if err != nil {
+	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes for added peer", "error", err)
 		return
 	}
@@ -4357,18 +4245,7 @@ func (c *catchupReplayCoordinator) sendNodesByHash(peers []uint64, ledgerHash [3
 	if len(hashes) == 0 || len(peers) == 0 {
 		return
 	}
-	objs := make([]message.IndexedObject, 0, len(hashes))
-	for i := range hashes {
-		h := hashes[i]
-		objs = append(objs, message.IndexedObject{Hash: h[:], LedgerSeq: seq})
-	}
-	req := &message.GetObjectByHash{
-		ObjType:    objType,
-		Query:      true,
-		LedgerHash: ledgerHash[:],
-		Objects:    objs,
-	}
-	frame, err := message.EncodeFrame(req)
+	frame, err := encodeNodesByHash(ledgerHash, seq, hashes, objType)
 	if err != nil {
 		c.logger.Debug("inbound ledger: encode by-hash request failed", "error", err)
 		return
@@ -4387,80 +4264,43 @@ func (c *catchupReplayCoordinator) sendNodesByHash(peers []uint64, ledgerHash [3
 	)
 }
 
+func encodeNodesByHash(ledgerHash [32]byte, seq uint32, hashes [][32]byte, objType message.ObjectType) ([]byte, error) {
+	objs := make([]message.IndexedObject, 0, len(hashes))
+	for i := range hashes {
+		h := hashes[i]
+		objs = append(objs, message.IndexedObject{Hash: h[:], LedgerSeq: seq})
+	}
+	req := &message.GetObjectByHash{
+		ObjType:    objType,
+		Query:      true,
+		LedgerHash: ledgerHash[:],
+		Objects:    objs,
+	}
+	return message.EncodeFrame(req)
+}
+
 // completeInboundLedger finalizes an InboundLedger acquisition and adopts the
 // ledger. A ReasonGeneric acquisition (RPC-driven, ledger_request) is persisted
 // for querying but does not flip operating mode or notify consensus, so an
 // arbitrary historical fetch can't disturb the active chain.
 func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
-	if c.stoppedForShutdown() {
-		return
-	}
-	releaseAdmission, err := c.acquireStateAdmission()
-	if err != nil {
-		c.logger.Warn("inbound ledger: state admission failed", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
-		return
-	}
-	defer releaseAdmission()
-	if err := c.flushAcquisitionStore(c.lifecycleContext(), il); err != nil {
-		c.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
-		return
-	}
 	c.completeInboundLedgerReady(il)
 }
 
-func (c *catchupReplayCoordinator) acquireStateAdmission() (func(), error) {
-	if c.adaptor == nil {
-		return func() {}, nil
-	}
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return func() {}, nil
-	}
-	return svc.AcquireStateAdmission(c.lifecycleContext())
-}
-
-func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger) {
+// publishInboundLedger runs only after worker-side persistence and verification.
+// The result owns its generation pin through publication and consensus handoff.
+func (c *catchupReplayCoordinator) publishInboundLedger(result *acquisitionCompletionResult) {
+	il := result.ledger
 	if c.stoppedForShutdown() {
 		return
 	}
-	releaseAdmission, err := c.acquireStateAdmission()
-	if err != nil {
-		c.logger.Warn("inbound ledger: state admission failed", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
-		return
-	}
-	defer releaseAdmission()
 	if il.Reason() == inbound.ReasonHistory && !c.historySequenceAllowed(il.Seq()) {
 		c.discardHistoryAcquisition(il, "outside_history_window")
 		return
 	}
-	h, stateMap, txMap, err := il.Result()
-	if err != nil {
-		c.logger.Warn("inbound ledger: failed to get result", "error", err)
-		c.discardFailedInboundAcquisition(il, err, standardReplayFailureExecution)
-		return
-	}
-	if c.adaptor == nil {
-		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"), standardReplayFailureExecution)
-		return
-	}
+	h, txMap := &result.header, result.txMap
+	var err error
 	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		c.discardFailedInboundAcquisition(il, errors.New("inbound ledger: ledger service unavailable"), standardReplayFailureExecution)
-		return
-	}
-	if err = c.promoteAcquisitionStore(c.lifecycleContext(), il); err != nil {
-		c.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err, standardReplayFailurePersistence)
-		return
-	}
-	if err = svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
-		c.logger.Warn("inbound ledger: detached state admission failed", "error", err, "seq", il.Seq())
-		c.discardFailedInboundAcquisition(il, err)
-		return
-	}
 	peerID := il.PeerID()
 
 	// A forward child fetched from a standard rippled peer contains only its
@@ -4469,24 +4309,44 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 	// same adoption path as the optional replay-delta protocol.
 	if il.TransactionOnly() {
 		c.acquisitionMu.Lock()
+		if !result.legacy && !c.standardReplayEntryOwnedLocked(h.Hash) {
+			// Pipeline ownership changed while the worker verified the tx map.
+			// Leave the acquisition registered so its next completion prepares
+			// the legacy replay off-router instead of falling through inline.
+			c.acquisitionMu.Unlock()
+			return
+		}
 		if !c.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
 			c.acquisitionMu.Unlock()
 			c.retireAcquisitionStore(c.lifecycleContext(), il)
 			return
 		}
-		handled, startDrain := c.completeStandardReplayPipelineEntryLocked(il, h, txMap, peerID)
+		handled, startDrain, retainAcquisition := c.completeStandardReplayPipelineEntryLocked(il, h, txMap, peerID)
 		c.acquisitionMu.Unlock()
+		// The tracker handoff transfers the verified transaction map to the
+		// replay pipeline, regardless of whether the entry was already in its
+		// prepared window. Retire the acquisition scope after releasing the
+		// coordinator lock so its request and SHAMap charges cannot plateau.
 		if handled {
+			if !retainAcquisition {
+				c.retireAcquisitionStore(c.lifecycleContext(), il)
+			}
 			c.refillStandardReplayCollector(peerID)
 			if startDrain {
-				c.drainStandardReplayPipeline()
+				c.startStandardReplayDrain()
 			}
 			return
 		}
-		c.completeStandardTransactionReplay(h, txMap, peerID)
+		c.finishLegacyTransactionReplay(result, peerID)
+		c.acquisitionMu.Lock()
+		legacyMemoryWait := c.retainsStandardReplayLegacyLocked(il)
+		c.acquisitionMu.Unlock()
+		if !legacyMemoryWait {
+			c.retireAcquisitionStore(c.lifecycleContext(), il)
+		}
 		return
 	}
-	if c.completeStandardReplayReplacement(il, h, stateMap, txMap) {
+	if c.completeStandardReplayReplacement(il, h, result.prepared) {
 		return
 	}
 	var handoff standardReplayPivotHandoff
@@ -4514,13 +4374,16 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		c.retireAcquisitionStore(c.lifecycleContext(), il)
 		return
 	}
+	// The service takes detached snapshots, not ownership of the inbound
+	// request window. Release that accounting even on a publication failure.
+	defer il.ReleaseAcquisitionMemory()
 
 	// A history backfill installs validated sequence history below the closed tip,
 	// then advances the backward walk to its parent. It never touches operating
 	// mode or the consensus engine.
 	if il.Reason() == inbound.ReasonHistory {
 		c.replayCommitMu.Unlock()
-		if err = svc.IngestHistoricalLedgerWithState(c.lifecycleContext(), h, stateMap, txMap); err != nil {
+		if err = svc.IngestHistoricalPreparedLedger(c.lifecycleContext(), result.prepared); err != nil {
 			c.logger.Warn("inbound ledger: history backfill ingest failed",
 				"error", err, "seq", h.LedgerIndex)
 			return
@@ -4541,7 +4404,7 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 	// canonical frontier or feed consensus.
 	if il.Reason() == inbound.ReasonGeneric {
 		c.replayCommitMu.Unlock()
-		if err = svc.StoreLedgerWithState(c.lifecycleContext(), h, stateMap, txMap); err != nil {
+		if err = svc.StorePreparedLedger(c.lifecycleContext(), result.prepared); err != nil {
 			c.logger.Warn("inbound ledger: generic store failed", "error", err, "seq", h.LedgerIndex)
 			return
 		}
@@ -4555,7 +4418,7 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		return
 	}
 
-	initialCandidate, err := svc.BootstrapLedgerWithState(c.lifecycleContext(), h, stateMap, txMap)
+	initialCandidate, err := svc.BootstrapPreparedLedger(c.lifecycleContext(), result.prepared)
 	c.replayCommitMu.Unlock()
 	if err != nil {
 		c.logger.Warn("inbound ledger: failed to store consensus ledger", "error", err, "seq", h.LedgerIndex)
@@ -4579,112 +4442,6 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		return
 	}
 	c.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
-}
-
-func (c *catchupReplayCoordinator) completeStandardTransactionReplay(
-	h *header.LedgerHeader,
-	txMap *shamap.SHAMap,
-	peerID uint64,
-) {
-	if c.stoppedForShutdown() {
-		return
-	}
-	if h == nil {
-		return
-	}
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return
-	}
-	releaseAdmission, err := svc.AcquireStateAdmission(c.lifecycleContext())
-	if err != nil {
-		c.logger.Warn("standard transaction replay state admission failed", "error", err, "seq", h.LedgerIndex)
-		return
-	}
-	defer releaseAdmission()
-	parentHeld := false
-	fallback := func(err error) {
-		parent, _ := svc.GetLedgerByHash(h.ParentHash)
-		if parent != nil {
-			svc.RecordReplayPreparationFailure(c.lifecycleContext(), *h, txMap, parent, c.replayTargetAuthenticated(*h), err)
-		}
-		c.logger.Warn("standard transaction replay unavailable",
-			"seq", h.LedgerIndex,
-			"hash", fmt.Sprintf("%x", h.Hash[:8]),
-			"peer", peerID,
-			"error", err,
-		)
-		c.acquisitionMu.Lock()
-		if parentHeld {
-			c.requireReplayFullStateLocked(h.LedgerIndex, h.Hash)
-		}
-		c.startLedgerAcquisitionLegacyLocked(h.LedgerIndex, h.Hash, peerID)
-		c.acquisitionMu.Unlock()
-	}
-
-	parent, err := svc.GetLedgerByHash(h.ParentHash)
-	if err != nil || parent == nil {
-		if err == nil {
-			err = errors.New("locally-held replay parent is unavailable")
-		}
-		fallback(err)
-		return
-	}
-	if parent.Sequence()+1 != h.LedgerIndex {
-		fallback(fmt.Errorf("replay parent sequence %d is not predecessor of %d", parent.Sequence(), h.LedgerIndex))
-		return
-	}
-	parentHeld = true
-
-	stateMap, err := parent.StateMapSnapshot()
-	if err != nil {
-		fallback(fmt.Errorf("snapshot replay parent state: %w", err))
-		return
-	}
-	if txMap == nil {
-		if h.TxHash != ([32]byte{}) {
-			fallback(errors.New("missing transaction map for non-empty transaction root"))
-			return
-		}
-		txMap = shamap.New(shamap.TypeTransaction)
-	}
-	if err := svc.VerifyDetachedMaps(c.lifecycleContext(), stateMap, txMap); err != nil {
-		fallback(err)
-		return
-	}
-
-	// NewStoredLedgerReplay only needs a header and verified transaction map
-	// from target. Carrying the parent's state snapshot here is intentional:
-	// ReplayDelta.Apply replaces it with the derived child state and checks the
-	// resulting AccountHash before adoption.
-	target, err := ledger.NewFromHeader(*h, stateMap, txMap, parent.Fees())
-	if err != nil {
-		fallback(fmt.Errorf("construct transaction-only replay target: %w", err))
-		return
-	}
-	replay, err := inbound.NewStoredLedgerReplay(parent, target, c.logger)
-	if err != nil {
-		fallback(fmt.Errorf("prepare standard transaction replay: %w", err))
-		return
-	}
-	derived, err := svc.ApplyReplay(c.lifecycleContext(), replay, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(*h))
-	if err != nil {
-		c.logger.Error("standard transaction replay apply failed; validator duties blocked",
-			"seq", h.LedgerIndex,
-			"hash", fmt.Sprintf("%x", h.Hash[:8]),
-			"error", err,
-		)
-		fallback(err)
-		return
-	}
-	c.logger.Info("acquired ledger via standard transaction replay",
-		"seq", h.LedgerIndex,
-		"hash", fmt.Sprintf("%x", h.Hash[:8]),
-		"peer", peerID,
-	)
-	if err := c.adoptVerifiedLedger(derived); err != nil {
-		c.logger.Warn("failed to store standard transaction replay ledger", "error", err)
-	}
 }
 
 func (r *Router) FetchInfo() map[string]any {

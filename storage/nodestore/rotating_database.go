@@ -15,7 +15,8 @@ import (
 // key-value store, so promotion never duplicates decoded nodes in memory.
 type RotatingKVDatabase struct {
 	*KVDatabase
-	rotating kvstore.RotatingStore
+	rotating     kvstore.RotatingStore
+	rotationGate chan struct{}
 }
 
 // PromotionCacheMetrics returns backend cache counters for refresh benchmarks.
@@ -52,8 +53,9 @@ func NewRotatingKVDatabase(
 		return nil, err
 	}
 	return &RotatingKVDatabase{
-		KVDatabase: database,
-		rotating:   store,
+		KVDatabase:   database,
+		rotating:     store,
+		rotationGate: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -216,51 +218,80 @@ func (d *RotatingKVDatabase) RotateGenerationWithPrune(
 
 // RotateGenerationWithRetention acquires the durable mutation gate, then
 // invokes guard before invalidating SHAMap completeness proofs or swapping the
-// backend generations. A non-nil release returned by guard remains held until
-// the rotation attempt has completely exited.
+// backend generations. With detached retirement, live-state and mutation guards
+// are released after publication and cache invalidation, before archive cleanup.
+// A lifecycle pin protects cleanup from Close; rotationGate prevents subsequent
+// rotations from holding live-state guards while awaiting a prior retirement.
 func (d *RotatingKVDatabase) RotateGenerationWithRetention(
 	ctx context.Context,
 	lastRotated, minimumOnline uint32,
 	guard func(context.Context) (func(), error),
 	beginPrune func() func(),
 ) (bool, error) {
-	if err := d.lockMutation(ctx); err != nil {
-		return false, err
+	select {
+	case d.rotationGate <- struct{}{}:
+		defer func() { <-d.rotationGate }()
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
-	defer d.mutationMu.Unlock()
-	if guard != nil {
-		release, guardErr := guard(ctx)
-		if release != nil {
-			defer release()
+	lifecycleHeld := false
+	defer func() {
+		if lifecycleHeld {
+			d.lifecycleMu.RUnlock()
 		}
-		if guardErr != nil {
-			return false, guardErr
+	}()
+	var retire func() error
+	committed, err := func() (bool, error) {
+		if err := d.lockMutation(ctx); err != nil {
+			return false, err
 		}
-	}
-	if err := d.begin(ctx); err != nil {
-		return false, err
-	}
-	defer d.lifecycleMu.RUnlock()
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if beginPrune != nil {
-		finish := beginPrune()
-		defer finish()
-	}
-	d.pruneMu.Lock()
-	committed, err := d.rotating.Rotate(lastRotated, minimumOnline)
-	if committed {
-		d.cacheGeneration.Add(1)
-		if d.cache != nil {
-			d.cache.Clear()
+		defer d.mutationMu.Unlock()
+		if guard != nil {
+			release, guardErr := guard(ctx)
+			if release != nil {
+				defer release()
+			}
+			if guardErr != nil {
+				return false, guardErr
+			}
 		}
-		if d.negativeCache != nil {
-			d.negativeCache.Clear()
+		if err := d.begin(ctx); err != nil {
+			return false, err
 		}
-		d.storeGeneration.Add(1)
+		lifecycleHeld = true
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if beginPrune != nil {
+			finish := beginPrune()
+			defer finish()
+		}
+		d.pruneMu.Lock()
+		defer d.pruneMu.Unlock()
+		var committed bool
+		var err error
+		if backend, ok := d.rotating.(kvstore.RetiringRotatingStore); ok {
+			committed, retire, err = backend.RotateWithRetirement(lastRotated, minimumOnline)
+		} else {
+			committed, err = d.rotating.Rotate(lastRotated, minimumOnline)
+		}
+		if committed {
+			d.cacheGeneration.Add(1)
+			if d.cache != nil {
+				d.cache.Clear()
+			}
+			if d.negativeCache != nil {
+				d.negativeCache.Clear()
+			}
+			d.storeGeneration.Add(1)
+		}
+		return committed, err
+	}()
+	if retire != nil {
+		// Mandatory even on cancellation or a post-publication error, but no
+		// longer holding any live-state, prune or durable-mutation guards.
+		err = errors.Join(err, retire())
 	}
-	d.pruneMu.Unlock()
 	if err != nil {
 		return committed, fmt.Errorf("rotate nodestore generation: %w", err)
 	}

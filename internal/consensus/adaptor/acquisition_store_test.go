@@ -1125,6 +1125,7 @@ func completedScopedAcquisition(t *testing.T, scope *acquisitionStoreScope, seq 
 		{NodeData: rootData},
 	}))
 	require.NoError(t, acquired.GotStateNodes(wire))
+	require.NoError(t, acquired.CheckpointMemory(t.Context()))
 	acquired.CollectMissingRequest(false)
 	require.True(t, acquired.IsComplete())
 	return acquired, ledgerHash

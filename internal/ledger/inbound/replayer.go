@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // DefaultMaxInFlightReplays caps GLOBAL concurrent replay-delta
@@ -87,6 +88,34 @@ type Replayer struct {
 	// acquisitions; the registry carries its own lock.
 	clockMu sync.Mutex
 	clock   Clock
+
+	memoryMu sync.Mutex
+	memory   shamap.AcquisitionMemoryAccount
+}
+
+// SetMemoryBudget attaches the node-owned acquisition account used to admit
+// replay working sets. Call before starting acquisitions; existing entries
+// retain the account they were admitted against until terminal cleanup.
+func (r *Replayer) SetMemoryBudget(account shamap.AcquisitionMemoryAccount) {
+	if r == nil {
+		return
+	}
+	r.memoryMu.Lock()
+	r.memory = account
+	r.memoryMu.Unlock()
+}
+
+func (r *Replayer) currentMemoryBudget() shamap.AcquisitionMemoryAccount {
+	r.memoryMu.Lock()
+	defer r.memoryMu.Unlock()
+	return r.memory
+}
+
+func reserveReplayHead(account shamap.AcquisitionMemoryAccount, bytes uint64) bool {
+	if replay, ok := account.(interface{ TryReserveReplayHead(uint64) bool }); ok {
+		return replay.TryReserveReplayHead(bytes)
+	}
+	return account.TryReserve(bytes)
 }
 
 // NewReplayer returns a Replayer configured with the given concurrency
@@ -145,9 +174,25 @@ func (r *Replayer) currentClock() Clock {
 // the slot. HandleResponse later resolves the response back to this
 // acquisition via its ledger hash.
 func (r *Replayer) Acquire(hash [32]byte, peerID uint64, parent *ledger.Ledger) (*ReplayDelta, error) {
-	return r.delta.add(hash, peerID, func() *ReplayDelta {
+	account := r.currentMemoryBudget()
+	if account != nil && !reserveReplayHead(account, replayDeltaAdmissionBytes) {
+		return nil, ErrReplayMemory
+	}
+	rd, err := r.delta.add(hash, peerID, func() *ReplayDelta {
 		return NewReplayDeltaWithClock(hash, peerID, parent, r.logger, r.currentClock())
 	})
+	if err != nil {
+		if account != nil {
+			if replay, ok := account.(interface{ ReleaseReplayHead(uint64) }); ok {
+				replay.ReleaseReplayHead(replayDeltaAdmissionBytes)
+			} else {
+				account.Release(replayDeltaAdmissionBytes)
+			}
+		}
+		return nil, err
+	}
+	rd.attachMemory(account, replayDeltaAdmissionBytes)
+	return rd, nil
 }
 
 // HandleResponse routes resp to the matching in-flight acquisition
@@ -203,7 +248,9 @@ func (r *Replayer) handleResponseFrom(peerID uint64, enforcePeer bool, resp *mes
 // abandonment. No-op on unknown hash so callers can call it
 // unconditionally at the end of a handle-response path.
 func (r *Replayer) Complete(hash [32]byte) {
-	r.delta.remove(hash)
+	if replay, ok := r.delta.removeItem(hash); ok {
+		replay.releaseMemory()
+	}
 }
 
 // Abandon is a synonym for Complete. Kept as a separate call for
@@ -219,9 +266,15 @@ func (r *Replayer) AbandonOtherAtSequence(seq uint32, keep [32]byte) [][32]byte 
 	if r == nil {
 		return nil
 	}
-	return r.delta.removeMatching(func(hash [32]byte, replay *ReplayDelta) bool {
+	removed := r.delta.removeMatchingItems(func(hash [32]byte, replay *ReplayDelta) bool {
 		return hash != keep && replay.Seq() == seq
 	})
+	hashes := make([][32]byte, 0, len(removed))
+	for hash, replay := range removed {
+		hashes = append(hashes, hash)
+		replay.releaseMemory()
+	}
+	return hashes
 }
 
 // Stop drains the coordinator's in-flight map on shutdown. Returns the
@@ -239,7 +292,11 @@ func (r *Replayer) AbandonOtherAtSequence(seq uint32, keep [32]byte) [][32]byte 
 // "log each outstanding replay at stop") can iterate the slice returned
 // by InFlight() before calling Stop.
 func (r *Replayer) Stop() int {
-	return r.delta.stop()
+	removed := r.delta.stopItems()
+	for _, replay := range removed {
+		replay.releaseMemory()
+	}
+	return len(removed)
 }
 
 // InFlight returns a snapshot of hashes currently being acquired.
@@ -315,4 +372,11 @@ func (r *Replayer) Count() int {
 // incurring the ErrAcquisitionExists round-trip.
 func (r *Replayer) Has(hash [32]byte) bool {
 	return r.delta.has(hash)
+}
+
+// Find preserves acquisition identity across detached preparation. Callers that
+// retain the result asynchronously must also retain its memory ownership.
+func (r *Replayer) Find(hash [32]byte) *ReplayDelta {
+	rd, _ := r.delta.get(hash)
+	return rd
 }

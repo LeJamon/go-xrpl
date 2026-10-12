@@ -417,15 +417,37 @@ func TestCheckLocal_PartialRetainedStoreResetsNoProgressInterval(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, retained.Hash)
 	require.NoError(t, family.StoreBatch(t.Context(), []shamap.FlushEntry{retained}))
 
+	beforeTraversal := acquisition.Snapshot()
 	progressed, complete, err := acquisition.CheckLocalContext(t.Context(), func([32]byte) ([]byte, bool) {
 		return nil, false
 	})
 	require.NoError(t, err)
 	require.True(t, progressed)
+	require.True(t, acquisition.RecordTraversalProgress(beforeTraversal))
 	require.False(t, complete)
 	require.Equal(t, TimerRefresh, acquisition.OnTimer(base.Add(2*time.Hour)),
 		"retained-store hydration must prevent a no-progress strike")
 	require.Zero(t, acquisition.Timeouts())
+
+	loadsBeforeQuiet := acquisition.Snapshot().StateNodesLoaded
+	for quiet := 1; quiet <= ledgerTimeoutRetriesMax+1; quiet++ {
+		before := acquisition.Snapshot()
+		progressed, complete, err = acquisition.CheckLocalContext(t.Context(), func([32]byte) ([]byte, bool) {
+			return nil, false
+		})
+		require.NoError(t, err)
+		require.False(t, progressed, "rereading an incomplete ancestor is not new local work")
+		require.False(t, complete)
+		after := acquisition.Snapshot()
+		require.Equal(t, before.StateWalk.TraversalDiscoveries, after.StateWalk.TraversalDiscoveries)
+		require.False(t, acquisition.RecordTraversalProgress(before))
+		want := TimerEscalate
+		if quiet > ledgerTimeoutRetriesMax {
+			want = TimerFailed
+		}
+		require.Equal(t, want, acquisition.OnTimer(base.Add(time.Duration(quiet+2)*time.Hour)))
+	}
+	require.Greater(t, acquisition.Snapshot().StateNodesLoaded, loadsBeforeQuiet)
 }
 
 func TestGotStateNodes_PartialWorkSurvivesDifferentRootAcquisition(t *testing.T) {
@@ -510,27 +532,32 @@ func TestGotStateNodes_PartialWorkSurvivesDifferentRootAcquisition(t *testing.T)
 	}
 }
 
-func TestGotBase_StoreFailureDoesNotFailAcquisition(t *testing.T) {
+func TestGotBase_StoreFailurePropagatesWithoutFailingAcquisition(t *testing.T) {
 	source, rootHash, rootData := buildBackedTestState(t, 0)
 	wire, err := source.WalkWireNodes()
 	if err != nil {
 		t.Fatalf("walk wire nodes: %v", err)
 	}
+	storeErr := errors.New("store unavailable")
 	family := failingStoreFamily{
 		base: backend.NewMemory(),
-		err:  errors.New("store unavailable"),
+		err:  storeErr,
 	}
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
 	acquisition := New(ledgerHash, 100, 7, discardLogger(), WithFamily(family))
-	if err := acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}); err != nil {
-		t.Fatalf("GotBase with store failure: %v", err)
-	}
-	if err := acquisition.GotStateNodes(toLedgerNodes(wire[1:2])); err != nil {
-		t.Fatalf("GotStateNodes with store failure: %v", err)
-	}
-	if acquisition.State() == StateFailed {
-		t.Fatal("local store failure must not fail or blame the peer acquisition")
-	}
+	err = acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}})
+	require.ErrorIs(t, err, ErrPersistence)
+	require.ErrorIs(t, err, storeErr)
+	require.Equal(t, StateWantState, acquisition.State())
+	require.False(t, acquisition.IsComplete())
+	require.NotEqual(t, StateFailed, acquisition.State())
+
+	err = acquisition.GotStateNodes(toLedgerNodes(wire[1:2]))
+	require.ErrorIs(t, err, ErrPersistence)
+	require.ErrorIs(t, err, storeErr)
+	require.Equal(t, StateWantState, acquisition.State())
+	require.False(t, acquisition.IsComplete())
+	require.NotEqual(t, StateFailed, acquisition.State())
 }
 
 func TestGotBase_PersistsStateRootWhileWaitingForTransactionRoot(t *testing.T) {

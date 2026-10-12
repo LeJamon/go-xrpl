@@ -2,6 +2,7 @@ package rcl
 
 import (
 	"container/list"
+	"context"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -37,7 +38,8 @@ type hashOfSeqHeader interface {
 // Ancestor(s) calls. Partial chains carry a retry marker and are rechecked
 // before reuse so acquisition can repair them in place.
 type AncestryProvider struct {
-	lookup hashLookupFunc
+	lookup     hashLookupFunc
+	background *ancestryBackground
 
 	mu       sync.Mutex
 	maxItems int
@@ -63,8 +65,8 @@ func NewAncestryProvider(svc *service.Service) *AncestryProvider {
 	if svc == nil {
 		return newAncestryProviderFromLookup(nil)
 	}
-	return newAncestryProviderFromLookup(func(hash [32]byte) (ledgerHeader, error) {
-		l, err := svc.GetLedgerByHash(hash)
+	return newBackgroundAncestryProvider(func(ctx context.Context, hash [32]byte) (ledgerHeader, error) {
+		l, err := svc.GetLedgerByHashContext(ctx, hash)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +86,13 @@ func newAncestryProviderFromLookup(fn hashLookupFunc) *AncestryProvider {
 
 // LedgerByID implements LedgerAncestryProvider.
 func (p *AncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, bool) {
-	if p == nil || p.lookup == nil {
+	if p == nil {
+		return nil, false
+	}
+	if p.background != nil {
+		return p.ledgerByIDBackground(id)
+	}
+	if p.lookup == nil {
 		return nil, false
 	}
 	var fallback *providerLedger
@@ -138,6 +146,14 @@ func (p *AncestryProvider) buildAndFinish(
 	id consensus.LedgerID,
 	flight *ancestryFlight,
 ) (built *providerLedger) {
+	return p.buildAndFinishUsing(id, flight, func() *providerLedger { return p.buildChain(id) })
+}
+
+func (p *AncestryProvider) buildAndFinishUsing(
+	id consensus.LedgerID,
+	flight *ancestryFlight,
+	build func() *providerLedger,
+) (built *providerLedger) {
 	defer func() {
 		p.mu.Lock()
 		if built == nil ||
@@ -155,7 +171,7 @@ func (p *AncestryProvider) buildAndFinish(
 		p.mu.Unlock()
 	}()
 
-	built = p.buildChain(id)
+	built = build()
 	return built
 }
 
@@ -185,7 +201,8 @@ func (p *AncestryProvider) cachePutLocked(id consensus.LedgerID, pl *providerLed
 		// transient gap. A complete result must be allowed to replace a
 		// previously cached partial result so recovery is not lost to a race.
 		entry := elem.Value.(*cacheEntry)
-		if entry.pl.partial && !pl.partial {
+		if entry.pl.partial && (!pl.partial ||
+			(pl.id == entry.pl.id && pl.seq == entry.pl.seq && pl.minSeq < entry.pl.minSeq)) {
 			elem.Value = &cacheEntry{id: id, pl: pl}
 		}
 		p.lru.MoveToFront(elem)
@@ -208,7 +225,14 @@ func (p *AncestryProvider) cachePutLocked(id consensus.LedgerID, pl *providerLed
 // maxProviderAncestors links. Returns nil if the tip is unresolvable;
 // partial chains are returned with a higher minSeq and marked retryable.
 func (p *AncestryProvider) buildChain(id consensus.LedgerID) *providerLedger {
-	tip, err := p.lookup([32]byte(id))
+	return p.buildChainContext(context.Background(), id, p.lookup)
+}
+
+func (p *AncestryProvider) buildChainContext(ctx context.Context, id consensus.LedgerID, lookup hashLookupFunc) *providerLedger {
+	if ctx.Err() != nil {
+		return nil
+	}
+	tip, err := lookup([32]byte(id))
 	if err != nil || isNilInterface(tip) {
 		return nil
 	}
@@ -240,7 +264,19 @@ func (p *AncestryProvider) buildChain(id consensus.LedgerID) *providerLedger {
 	if resolver, ok := tip.(hashOfSeqHeader); ok {
 		resolved := true
 		for seq := myMinSeq; seq < tipSeq; seq++ {
-			hash, available, hashErr := resolver.HashOfSeq(seq)
+			if ctx.Err() != nil {
+				return nil
+			}
+			var hash [32]byte
+			var available bool
+			var hashErr error
+			if contextual, ok := tip.(interface {
+				HashOfSeqContext(context.Context, uint32) ([32]byte, bool, error)
+			}); ok {
+				hash, available, hashErr = contextual.HashOfSeqContext(ctx, seq)
+			} else {
+				hash, available, hashErr = resolver.HashOfSeq(seq)
+			}
 			if hashErr != nil || !available {
 				resolved = false
 				break
@@ -258,6 +294,9 @@ func (p *AncestryProvider) buildChain(id consensus.LedgerID) *providerLedger {
 	}
 
 	for filled < targetDepth {
+		if ctx.Err() != nil {
+			return nil
+		}
 		parentHash := consensus.LedgerID(curr.ParentHash())
 		currSeq := curr.Sequence()
 		idx := targetDepth - 1 - filled
@@ -288,7 +327,7 @@ func (p *AncestryProvider) buildChain(id consensus.LedgerID) *providerLedger {
 			break
 		}
 
-		parent, err := p.lookup([32]byte(parentHash))
+		parent, err := lookup([32]byte(parentHash))
 		if currSeq == 0 || err != nil || isNilInterface(parent) ||
 			parent.Hash() != [32]byte(parentHash) || parent.Sequence() != expectedSeq {
 			// Partial chain — truncate to the populated suffix.

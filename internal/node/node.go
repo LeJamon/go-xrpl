@@ -304,6 +304,7 @@ func setupStorage(
 	ctx context.Context,
 	cfg *config.Config,
 	log xrpllog.Logger,
+	cacheMemory nodestore.MemoryBudget,
 ) (db nodestore.Database, repoManager relationaldb.RepositoryManager, err error) {
 	if cause := context.Cause(ctx); cause != nil {
 		return nil, nil, cause
@@ -332,6 +333,7 @@ func setupStorage(
 		} else {
 			databaseConfig.PositiveCache = nodestore.CacheConfig{}
 		}
+		databaseConfig.PositiveCache.MemoryBudget = cacheMemory
 		pebbleOptions, err := pebbleStoreOptions(cfg.NodeDB)
 		if err != nil {
 			return nil, nil, err

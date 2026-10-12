@@ -473,6 +473,35 @@ func (r *Router) SetAcquisitionFamily(family shamap.Family) {
 	}
 }
 
+// SetAcquisitionMemoryLimit sets the shared acquisition budget before Run.
+func (r *Router) SetAcquisitionMemoryLimit(limit uint64) {
+	if r.catchupReplay != nil {
+		r.catchupReplay.setAcquisitionMemoryLimit(limit)
+	}
+}
+
+// SetAcquisitionMemoryBudget attaches the acquisition child budget to a
+// node-owned parent account. It must be called before Run; the existing local
+// limit remains an immutable acquisition ceiling while parent admission covers
+// all node-owned consumers. It returns an error if the protected progress
+// minimum cannot be committed.
+func (r *Router) SetAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) error {
+	if r == nil || r.catchupReplay == nil {
+		return nil
+	}
+	return r.catchupReplay.setAcquisitionMemoryBudget(limit, parent)
+}
+
+// CloseAcquisitionMemoryBudget releases the protected parent commitment after
+// acquisition work and persistence owners have drained. It returns false if
+// any owner still holds a reservation.
+func (r *Router) CloseAcquisitionMemoryBudget() bool {
+	if r == nil || r.catchupReplay == nil {
+		return true
+	}
+	return r.catchupReplay.closeAcquisitionMemoryBudget()
+}
+
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
 // the router refuses to acquire or serve ledgers below it. A nil floor leaves
 // both paths unrestricted, so the disabled / standalone case is unchanged.
@@ -676,6 +705,11 @@ func (r *Router) Run(ctx context.Context) {
 		if !workLane.canAcceptData() {
 			acqInbox = nil
 		}
+		// Capture the level-triggered channels once per select iteration. The
+		// coordinator replaces them after a wake; calling Changed on every
+		// iteration would register another parent watcher each time.
+		memoryChanged := r.catchupReplay.acquisitionMemoryChangedChannel()
+		memoryLocalChanged := r.catchupReplay.acquisitionMemoryLocalChangedChannel()
 		select {
 		case <-runCtx.Done():
 			return
@@ -722,14 +756,28 @@ func (r *Router) Run(ctx context.Context) {
 			r.submitTxJob(msg)
 		case result := <-workLane.results():
 			r.catchupReplay.handleAcquisitionWorkResult(result)
+		case result := <-r.catchupReplay.completionResults:
+			r.catchupReplay.handleAcquisitionCompletion(result)
+		case <-r.catchupReplay.completionWake:
+			r.catchupReplay.retryAcquisitionCompletions()
 		case result := <-r.trustedValidationWorkResults():
 			r.handleValidationWorkResult(result)
 		case result := <-r.untrustedValidationWorkResults():
 			if !r.handleUntrustedValidationWorkResult(runCtx, result) {
 				return
 			}
+		case result := <-r.catchupReplay.standardReplayResultChannel():
+			r.catchupReplay.handleStandardReplayDrainResult(result)
 		case <-r.catchupReplay.standardReplayDrainWakeChannel():
-			r.catchupReplay.drainStandardReplayPipeline()
+			r.catchupReplay.startStandardReplayDrain()
+		case <-memoryChanged:
+			// Shared acquisition capacity is level-triggered. Retry only work
+			// parked on memory; timer and peer housekeeping stay periodic.
+			r.catchupReplay.notifyAcquisitionMemoryAvailable()
+			r.catchupReplay.retryAcquisitionMemoryWaiters()
+		case <-memoryLocalChanged:
+			r.catchupReplay.notifyAcquisitionMemoryAvailable()
+			r.catchupReplay.retryAcquisitionMemoryWaiters()
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:

@@ -225,7 +225,12 @@ func TestNodeStoreFetchDurableCoalescesConcurrentHash(t *testing.T) {
 		err  error
 	}
 	results := make(chan result, callers)
-	for range callers {
+	go func() {
+		data, err := family.FetchDurable(t.Context(), hash)
+		results <- result{data: data, err: err}
+	}()
+	<-store.entered
+	for range callers - 1 {
 		ctx, observed := newObservedContext(t.Context())
 		go func() {
 			data, err := family.FetchDurable(ctx, hash)
@@ -233,7 +238,6 @@ func TestNodeStoreFetchDurableCoalescesConcurrentHash(t *testing.T) {
 		}()
 		<-observed
 	}
-	<-store.entered
 	if got := store.calls.Load(); got != 1 {
 		t.Fatalf("backend fetches while shared read is blocked = %d, want 1", got)
 	}
@@ -322,7 +326,12 @@ func TestNodeStoreFetchDurableErrorPropagatesAndRetries(t *testing.T) {
 
 	const callers = 8
 	results := make(chan error, callers)
-	for range callers {
+	go func() {
+		_, err := family.FetchDurable(t.Context(), hash)
+		results <- err
+	}()
+	<-store.entered
+	for range callers - 1 {
 		ctx, observed := newObservedContext(t.Context())
 		go func() {
 			_, err := family.FetchDurable(ctx, hash)
@@ -330,7 +339,6 @@ func TestNodeStoreFetchDurableErrorPropagatesAndRetries(t *testing.T) {
 		}()
 		<-observed
 	}
-	<-store.entered
 	if got := store.calls.Load(); got != 1 {
 		t.Fatalf("backend fetches while shared read is blocked = %d, want 1", got)
 	}

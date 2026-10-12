@@ -19,6 +19,9 @@ type persistenceWorker struct {
 	persistWake          chan struct{}
 	persistStarted       bool
 	persistStopping      bool
+	persistAdmissions    int
+	persistCapacityWake  chan struct{}
+	persistAdmissionStop bool
 	persistWG            sync.WaitGroup
 	canonicalPersistMu   sync.Mutex
 	promotionMu          sync.Mutex

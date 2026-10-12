@@ -183,7 +183,40 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 			}
 		}
 		admitted = true
-		return unlock, nil
+		// Both validated trees are now completely verified and preserved in
+		// the surviving storage generation. Transfer that fact after mutation
+		// instead of asking a background verifier to read them all again.
+		validated := s.validatedLedger
+		return func() {
+			defer unlock()
+			if validated == nil || !validated.IsValidated() || ctx.Err() != nil {
+				return
+			}
+			next, err := durable.DurableFingerprint(ctx)
+			if err != nil || next == fingerprint {
+				return
+			}
+			h := validated.Header()
+			if _, ok := preserved[retainedStateRoot{h.AccountHash, shamap.TypeState}]; !ok {
+				return
+			}
+			if h.TxHash != ([32]byte{}) {
+				if _, ok := preserved[retainedStateRoot{h.TxHash, shamap.TypeTransaction}]; !ok {
+					return
+				}
+			}
+			s.rememberReplayProof(h, next, true)
+			// This certifies the preserved trees, not an early durable-tip
+			// publication. Consumers still check the durable header/tip. Keep
+			// the certificate in the canonical owner so normal successors can
+			// inherit it even if background publication is delayed.
+			s.rememberValidatedStateBase(h, next)
+			s.logger.Info("State retention completeness proof transferred",
+				"sequence", h.LedgerIndex, "state_root", fmt.Sprintf("%x", h.AccountHash))
+			// Publication still checks the exact durable header and tip. The
+			// transferred certificate only eliminates the redundant tree walk.
+			s.RequestStateBaseRecertification()
+		}, nil
 	}
 }
 

@@ -33,7 +33,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 }
 
 func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) error {
-	return s.persistValidatedTipJob(ctx, l, false, nil)
+	return s.persistValidatedTipJob(ctx, l, false, nil, s.replayPersistenceProof(l.Header()))
 }
 
 func encodeVLForTest(length int) []byte {

@@ -94,7 +94,7 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 // write, exercising the drain-then-exit path.
 func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 	store := newGatedStore(t)
-	svc, err := New(Config{Standalone: false, NodeStore: store})
+	svc, err := New(Config{Standalone: false, NodeStore: store, PersistenceMemory: &relayTestMemory{limit: 256 << 20}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -169,6 +169,8 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Standalone = false
 	cfg.NodeStore = store
+	memory := &relayTestMemory{limit: 256 << 20}
+	cfg.PersistenceMemory = memory
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())

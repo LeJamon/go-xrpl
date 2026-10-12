@@ -20,6 +20,10 @@ const (
 	MinimumOpenFiles = 74
 	// MinimumRotatingOpenFiles is the smallest steady-state total for two generations.
 	MinimumRotatingOpenFiles = 2 * MinimumOpenFiles
+	// MemTableCommitmentBytes is the configured memtable working set for one
+	// open Pebble database. It is a startup accounting commitment; compaction
+	// and other native allocations remain outside this value.
+	MemTableCommitmentBytes int64 = memTableSize * memTableStopWritesThreshold
 
 	memTableSize                = 64 << 20
 	memTableStopWritesThreshold = 4
@@ -78,6 +82,28 @@ func (o Options) Resolve() (Options, error) {
 		)
 	}
 	return o, nil
+}
+
+// MemoryCommitment returns the fixed managed-memory commitment for the
+// requested number of simultaneously open databases. Pebble's block cache is
+// shared by rotating generations and is therefore counted once; each open
+// generation contributes its configured memtable allowance. A rotation opens
+// a third generation transiently, so callers may pass 3 while reserving that
+// transition and 2 for the steady state.
+func (o Options) MemoryCommitment(generations int) (uint64, error) {
+	if generations <= 0 {
+		return 0, errors.New("kvstore/pebble: open generation count must be positive")
+	}
+	resolved, err := o.Resolve()
+	if err != nil {
+		return 0, err
+	}
+	blockCache := uint64(resolved.BlockCacheBytes)
+	perGeneration := uint64(MemTableCommitmentBytes)
+	if uint64(generations) > (^uint64(0)-blockCache)/perGeneration {
+		return 0, errors.New("kvstore/pebble: memory commitment overflows uint64")
+	}
+	return blockCache + uint64(generations)*perGeneration, nil
 }
 
 func resolveRotatingOptions(options Options) (Options, Options, error) {

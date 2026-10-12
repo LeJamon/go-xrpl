@@ -713,8 +713,11 @@ func (a *Adaptor) NetworkValidatedLedgerSeq() uint32 {
 }
 
 func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
-	l, err := a.ledgerService.GetLedgerByHash([32]byte(id))
-	if err != nil {
+	// Engine calls this while holding its consensus mutex (including the
+	// preferred-child and wrong-ledger checks). Missing ledgers must go through
+	// asynchronous acquisition/ancestry lookup, never block here on SQLite.
+	l, held := a.ledgerService.GetCachedLedgerByHash([32]byte(id))
+	if !held {
 		return nil, errLedgerNotFound
 	}
 	return WrapLedger(l), nil

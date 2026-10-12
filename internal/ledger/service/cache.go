@@ -6,6 +6,25 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 )
 
+// GetCachedLedgerByHash is an opportunistic, memory-only scheduling lookup.
+// It never loads storage, refreshes canonical validation flags, or waits for a
+// history writer. A miss says nothing about durable availability: asynchronous
+// acquisition/admission must still reuse and verify locally stored data.
+// The result is not a state-completeness or canonicality proof.
+func (s *Service) GetCachedLedgerByHash(hash [32]byte) (*ledger.Ledger, bool) {
+	if s == nil || !s.historyComponent.mu.TryRLock() {
+		return nil, false
+	}
+	defer s.historyComponent.mu.RUnlock()
+	if seq, ok := s.ledgerByHash[hash]; ok {
+		if l := s.ledgerHistory[seq]; l != nil {
+			return l, true
+		}
+	}
+	l := s.persistedLedgers[hash]
+	return l, l != nil
+}
+
 func (s *historyComponent) ledgerBySequence(seq uint32) *ledger.Ledger {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

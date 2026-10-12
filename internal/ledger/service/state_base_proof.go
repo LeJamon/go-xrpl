@@ -253,11 +253,11 @@ func (s *Service) prepareValidatedStateBaseCache(fingerprint [32]byte) bool {
 	return cache.EnsureDurableFingerprint(fingerprint) != 0
 }
 
-// advanceValidatedStateBaseProof extends an existing complete-tree proof over
+// advanceValidatedStateBaseProofWithReplay extends an existing complete-tree proof over
 // one consecutive persisted ledger, or promotes a fully fetched initial-sync
 // candidate. It deliberately declines when neither exists: a full tree walk
 // belongs to startup, acquisition or background verification, never to ordinary persistence.
-func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) error {
+func (s *Service) advanceValidatedStateBaseProofWithReplay(ctx context.Context, l *ledger.Ledger, admitted *replayCompletenessRecord) error {
 	if l == nil || !l.IsValidated() || s.nodeStore == nil || s.shamapFamily == nil {
 		return nil
 	}
@@ -265,7 +265,7 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 	if !ok {
 		return nil
 	}
-	if _, found := s.currentValidatedStateBaseProof(); !found {
+	if _, found := s.currentValidatedStateBaseProof(); !found && admitted == nil {
 		if _, candidateFound := s.currentValidatedStateBaseCandidate(); !candidateFound {
 			return nil
 		}
@@ -278,18 +278,23 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 	proof, found := s.currentValidatedStateBaseProof()
 	candidate, candidateFound := s.currentValidatedStateBaseCandidate()
 	candidateIdentity := candidate
-	if !found && !candidateFound {
+	if !found && !candidateFound && admitted == nil {
 		return nil
 	}
 	h := l.Header()
 	proofMatches := found && (validatedStateBaseProofCanBeInherited(proof, h, fingerprint) ||
 		validatedStateBaseProofMatchesLedger(proof, h, fingerprint))
+	if !proofMatches && admitted != nil {
+		proofMatches = admitted.matchesExactHeader(h, fingerprint, h.TxHash != ([32]byte{}))
+	}
+	if !proofMatches {
+		// A prepared retention commit may have transferred this root into a
+		// newer generation after the persistence job captured its certificate.
+		proofMatches = s.lookupReplayProof(h, fingerprint, h.TxHash != ([32]byte{}))
+	}
 	if !proofMatches && candidateFound && s.validatedStateBaseCandidateComplete(ctx, h) {
 		candidate.nodeStoreFingerprint = fingerprint
 		proofMatches = validatedStateBaseProofMatchesLedger(candidate, h, fingerprint)
-		if proofMatches {
-			proof = candidate
-		}
 	}
 	if !proofMatches {
 		s.validatedStateBaseMu.Lock()
@@ -298,9 +303,9 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 			*s.validatedStateBaseCandidate == candidateIdentity {
 			s.validatedStateBaseCandidate = nil
 		}
-		if found && proof.sequence <= h.LedgerIndex && s.validatedStateBaseProof != nil && *s.validatedStateBaseProof == proof {
-			s.validatedStateBaseProof = nil
-		}
+		// Keep an older complete root as a Merkle-diff base. It does not
+		// certify h, and exact-tip/checkpoint checks still reject it. Only a
+		// retention mutation invalidates its durable-generation certificate.
 		s.validatedStateBaseMu.Unlock()
 		return nil
 	}
@@ -326,6 +331,13 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 		return errors.New("validated state base generation changed during proof")
 	}
 	s.rememberValidatedStateBase(h, fingerprint)
+	s.validatedStateBaseMu.Lock()
+	// The complete persisted tip supersedes any older speculative walk. Do not
+	// make a future one-ledger recovery wait for that walk to finish.
+	if pending := s.stateBaseRecertification; pending != nil && pending.tip.LedgerIndex <= h.LedgerIndex {
+		s.cancelStateBaseRecertificationLocked("canonical persisted completeness proof available")
+	}
+	s.validatedStateBaseMu.Unlock()
 	return nil
 }
 
@@ -356,14 +368,17 @@ func (s *Service) requestStateBaseRecertificationIfNeeded(l *ledger.Ledger) {
 	s.requestStateBaseRecertification("validated ledger has no matching completeness proof")
 }
 
-func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) bool {
-	s.advanceStateBaseRecertification(ctx, l)
-	if err := s.advanceValidatedStateBaseProof(ctx, l); err != nil {
+func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger, admitted *replayCompletenessRecord) bool {
+	if admitted == nil && l != nil {
+		admitted = s.replayPersistenceProof(l.Header())
+	}
+	if err := s.advanceValidatedStateBaseProofWithReplay(ctx, l, admitted); err != nil {
 		s.logger.Warn("validated state base proof unavailable", "sequence", l.Sequence(), "err", err)
 	}
-	_, proofFoundAfter := s.currentValidatedStateBaseProof()
+	s.advanceStateBaseRecertification(ctx, l)
+	proofAfter, proofFoundAfter := s.currentValidatedStateBaseProof()
 	s.validatedStateBaseMu.RLock()
 	pending := s.stateBaseRecertification != nil
 	s.validatedStateBaseMu.RUnlock()
-	return !pending && !proofFoundAfter
+	return !pending && (!proofFoundAfter || !validatedStateBaseProofMatchesIdentity(proofAfter, l.Header()))
 }

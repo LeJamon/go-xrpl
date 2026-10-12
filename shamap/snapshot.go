@@ -9,7 +9,13 @@ import (
 // SnapshotMutable returns a structurally-shared copy that may be modified.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotMutable() (*SHAMap, error) {
-	return sm.snapshot(context.Background(), true, nil)
+	return sm.SnapshotMutableContext(context.Background())
+}
+
+// SnapshotMutableContext is SnapshotMutable with caller-controlled
+// cancellation for dirty-node persistence.
+func (sm *SHAMap) SnapshotMutableContext(ctx context.Context) (*SHAMap, error) {
+	return sm.snapshot(ctx, true, nil)
 }
 
 // SnapshotImmutable returns a read-only structurally-shared copy.
@@ -114,6 +120,9 @@ func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
 			fullBelow: sm.backing.fullBelow,
 		},
 	}
+	if out.backing.access.available() {
+		out.acquisition.budget = NewAcquisitionBudget(0)
+	}
 	out.tree.cachedSize.Store(-1)
 	return out, nil
 }
@@ -190,6 +199,9 @@ func (sm *SHAMap) snapshotLocked(mutable bool) (*SHAMap, error) {
 			access:    sm.backing.access,
 			fullBelow: sm.backing.fullBelow,
 		},
+	}
+	if out.backing.access.available() {
+		out.acquisition.budget = NewAcquisitionBudget(0)
 	}
 	out.tree.cachedSize.Store(-1)
 	// Immutable→immutable snapshot observes the same leaf set; carry the

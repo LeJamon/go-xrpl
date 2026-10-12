@@ -52,10 +52,11 @@ type readBudget struct {
 	capacity int64
 	used     int64
 	wake     chan struct{}
+	parent   MemoryBudget
 }
 
 func newReadBudget(capacity int64) *readBudget {
-	return &readBudget{capacity: capacity, wake: make(chan struct{})}
+	return &readBudget{capacity: capacity}
 }
 
 func (b *readBudget) acquire(ctx context.Context, closeCh <-chan struct{}, size int64) error {
@@ -67,10 +68,21 @@ func (b *readBudget) acquire(ctx context.Context, closeCh <-chan struct{}, size 
 	}
 	for {
 		b.mu.Lock()
+		var parentWake <-chan struct{}
 		if size <= b.capacity-b.used {
-			b.used += size
-			b.mu.Unlock()
-			return nil
+			admitted := b.parent == nil || b.parent.TryReserve(uint64(size))
+			if !admitted {
+				parentWake = b.parent.Changed()
+				admitted = b.parent.TryReserve(uint64(size))
+			}
+			if admitted {
+				b.used += size
+				b.mu.Unlock()
+				return nil
+			}
+		}
+		if b.wake == nil {
+			b.wake = make(chan struct{})
 		}
 		wake := b.wake
 		b.mu.Unlock()
@@ -81,6 +93,7 @@ func (b *readBudget) acquire(ctx context.Context, closeCh <-chan struct{}, size 
 		case <-closeCh:
 			return ErrConnectionClosed
 		case <-wake:
+		case <-parentWake:
 		}
 	}
 }
@@ -95,8 +108,12 @@ func (b *readBudget) release(size int64) {
 		b.mu.Unlock()
 		panic("peermanagement: inbound read budget released below zero")
 	}
-	wake := b.wake
-	b.wake = make(chan struct{})
-	close(wake)
+	if b.parent != nil {
+		b.parent.Release(uint64(size))
+	}
+	if b.wake != nil {
+		close(b.wake)
+		b.wake = nil
+	}
 	b.mu.Unlock()
 }

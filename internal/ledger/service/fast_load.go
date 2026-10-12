@@ -470,6 +470,8 @@ func (s *Service) verifyStoredSHAMapWithTicksReportPolicy(
 	return err
 }
 
+const storedSHAMapProofMaxDepth = 4
+
 type storedSHAMapProofs struct {
 	cache      *shamap.FullBelowCache
 	generation uint32
@@ -491,7 +493,7 @@ func newStoredSHAMapProofs(family shamap.Family) *storedSHAMapProofs {
 }
 
 func (p *storedSHAMapProofs) record(node storedSHAMapNode) {
-	if p.cache == nil || node.depth > shamap.FullBelowCacheMaxDepth {
+	if p.cache == nil || node.depth > storedSHAMapProofMaxDepth {
 		return
 	}
 	p.mu.Lock()

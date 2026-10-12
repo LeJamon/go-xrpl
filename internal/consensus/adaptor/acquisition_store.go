@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -18,9 +19,12 @@ const (
 )
 
 type acquisitionStoreJob struct {
-	entries []shamap.FlushEntry
-	barrier chan error
-	owner   *acquisitionStoreScope
+	entries    []shamap.FlushEntry
+	barrier    chan error
+	completion chan error
+	ctx        context.Context
+	owner      *acquisitionStoreScope
+	bytes      uint64
 }
 
 type acquisitionStoreScope struct {
@@ -172,6 +176,10 @@ type acquisitionStoreLane struct {
 	base      shamap.Family
 	logger    *slog.Logger
 	fullBelow *shamap.FullBelowCache
+	memory    *shamap.AcquisitionBudget
+	memoryMu  sync.Mutex
+	bytes     atomic.Uint64
+	peakBytes atomic.Uint64
 
 	lifecycleMu  sync.RWMutex
 	jobs         chan acquisitionStoreJob
@@ -182,8 +190,9 @@ type acquisitionStoreLane struct {
 	nextScope    atomic.Uint64
 	unscoped     *acquisitionStoreScope
 
-	pendingMu sync.RWMutex
-	pending   map[pendingAcquisitionKey]pendingAcquisitionNode
+	pendingMu       sync.RWMutex
+	pending         map[pendingAcquisitionKey]pendingAcquisitionNode
+	pendingReleased uint64
 }
 
 func newAcquisitionStoreLane(base shamap.Family, logger *slog.Logger, queueDepth int) *acquisitionStoreLane {
@@ -206,6 +215,7 @@ func newAcquisitionStoreLane(base shamap.Family, logger *slog.Logger, queueDepth
 		base:         base,
 		logger:       logger,
 		fullBelow:    cache,
+		memory:       shamap.NewAcquisitionBudget(0),
 		drainTimeout: acquisitionStoreDrainTimeout,
 		pending:      make(map[pendingAcquisitionKey]pendingAcquisitionNode),
 		jobs:         make(chan acquisitionStoreJob, queueDepth),
@@ -281,17 +291,30 @@ func (l *acquisitionStoreLane) storeBatch(ctx context.Context, owner *acquisitio
 	if len(entries) == 0 {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	charge := acquisitionEntryBytes(entries)
+	if !l.reserveBytes(charge) {
+		if err := l.flushScope(ctx, owner); err != nil {
+			return err
+		}
+		if !l.reserveBytes(charge) {
+			return l.storeBorrowed(ctx, owner, entries)
+		}
+	}
 
 	l.lifecycleMu.RLock()
 	jobs := l.jobs
 	laneCtx := l.ctx
 	if l.done == nil {
 		l.lifecycleMu.RUnlock()
-		return l.base.StoreBatch(ctx, entries)
+		l.releaseBytes(charge)
+		return l.storeBorrowed(ctx, owner, entries)
 	}
 
 	started := time.Now()
-	job := acquisitionStoreJob{entries: cloneAcquisitionEntries(entries), owner: owner}
+	job := acquisitionStoreJob{entries: cloneAcquisitionEntries(entries), owner: owner, bytes: charge}
 	l.addPending(owner.id, job.entries)
 	select {
 	case jobs <- job:
@@ -301,14 +324,41 @@ func (l *acquisitionStoreLane) storeBatch(ctx context.Context, owner *acquisitio
 		l.lifecycleMu.RUnlock()
 		return nil
 	case <-ctx.Done():
-		l.removePending(owner.id, job.entries)
+		l.releaseBytes(l.removePending(owner.id, job.entries, job.bytes))
 		l.lifecycleMu.RUnlock()
 		return ctx.Err()
 	case <-laneCtx.Done():
-		l.removePending(owner.id, job.entries)
+		l.releaseBytes(l.removePending(owner.id, job.entries, job.bytes))
 		l.lifecycleMu.RUnlock()
 		return laneCtx.Err()
 	}
+}
+
+func (l *acquisitionStoreLane) storeBorrowed(ctx context.Context, owner *acquisitionStoreScope, entries []shamap.FlushEntry) error {
+	l.lifecycleMu.RLock()
+	if l.done == nil {
+		l.lifecycleMu.RUnlock()
+		err := l.base.StoreBatch(ctx, entries)
+		if err != nil {
+			owner.recordFailure(err)
+		}
+		return err
+	}
+	done := make(chan error, 1)
+	job := acquisitionStoreJob{entries: entries, owner: owner, completion: done, ctx: ctx}
+	select {
+	case l.jobs <- job:
+		l.lifecycleMu.RUnlock()
+	case <-ctx.Done():
+		l.lifecycleMu.RUnlock()
+		return ctx.Err()
+	case <-l.ctx.Done():
+		err := l.ctx.Err()
+		l.lifecycleMu.RUnlock()
+		return err
+	}
+	// The caller owns these slices until the worker finishes or discards them.
+	return <-done
 }
 
 func (l *acquisitionStoreLane) flush(ctx context.Context) error {
@@ -323,7 +373,7 @@ func (l *acquisitionStoreLane) flushJob(ctx context.Context, owner *acquisitionS
 	l.lifecycleMu.RLock()
 	if l.done == nil {
 		l.lifecycleMu.RUnlock()
-		return nil
+		return owner.failure()
 	}
 	laneCtx := l.ctx
 	done := make(chan error, 1)
@@ -386,6 +436,10 @@ func (l *acquisitionStoreLane) stopDrain() {
 		l.lifecycleMu.Unlock()
 		return
 	}
+	for len(l.jobs) != 0 {
+		job := <-l.jobs
+		l.finishJob(job, context.Canceled)
+	}
 	l.jobs = make(chan acquisitionStoreJob, cap(l.jobs))
 	l.done = nil
 	l.ctx = nil
@@ -398,6 +452,16 @@ func (l *acquisitionStoreLane) stopDrain() {
 
 func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionStoreJob, done chan<- struct{}) {
 	defer close(done)
+	defer func() {
+		for {
+			select {
+			case job := <-jobs:
+				l.finishJob(job, ctx.Err())
+			default:
+				return
+			}
+		}
+	}()
 	for {
 		var job acquisitionStoreJob
 		select {
@@ -414,13 +478,73 @@ func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionS
 			}
 			continue
 		}
-		if err := l.base.StoreBatch(ctx, job.entries); err != nil {
+		writeCtx := ctx
+		cleanup := func() {}
+		if job.ctx != nil {
+			var cancel context.CancelFunc
+			writeCtx, cancel = context.WithCancel(job.ctx)
+			stop := context.AfterFunc(ctx, cancel)
+			cleanup = func() { stop(); cancel() }
+		}
+		err := l.base.StoreBatch(writeCtx, job.entries)
+		cleanup()
+		if err != nil {
 			l.logger.Warn("inbound ledger: failed to persist verified nodes",
 				"entries", len(job.entries), "error", err)
 			job.owner.recordFailure(err)
 		}
-		l.removePending(job.owner.id, job.entries)
+		if err == nil {
+			err = job.owner.failure()
+		}
+		l.finishJob(job, err)
 	}
+}
+
+func (l *acquisitionStoreLane) finishJob(job acquisitionStoreJob, err error) {
+	if job.bytes != 0 {
+		l.releaseBytes(l.removePending(job.owner.id, job.entries, job.bytes))
+	}
+	if job.completion != nil {
+		job.completion <- err
+	}
+}
+
+func (l *acquisitionStoreLane) reserveBytes(size uint64) bool {
+	l.memoryMu.Lock()
+	defer l.memoryMu.Unlock()
+	used := l.bytes.Load()
+	limit := l.memory.Snapshot().Limit / 8
+	if size > limit || used > limit-size || !l.memory.TryReserve(size) {
+		return false
+	}
+	l.bytes.Store(used + size)
+	if used+size > l.peakBytes.Load() {
+		l.peakBytes.Store(used + size)
+	}
+	return true
+}
+
+func (l *acquisitionStoreLane) releaseBytes(size uint64) {
+	if size == 0 {
+		return
+	}
+	l.memoryMu.Lock()
+	defer l.memoryMu.Unlock()
+	used := l.bytes.Load()
+	if size > used {
+		panic("acquisition persistence reservation underflow")
+	}
+	l.bytes.Store(used - size)
+	l.memory.Release(size)
+}
+
+func acquisitionEntryBytes(entries []shamap.FlushEntry) uint64 {
+	entryBytes := uint64(unsafe.Sizeof(shamap.FlushEntry{}) + 2*(unsafe.Sizeof(pendingAcquisitionKey{})+unsafe.Sizeof(pendingAcquisitionNode{})))
+	var size uint64
+	for i := range entries {
+		size += entryBytes + 2*uint64(len(entries[i].Data))
+	}
+	return size
 }
 
 func (l *acquisitionStoreLane) addPending(scope uint64, entries []shamap.FlushEntry) {
@@ -437,7 +561,7 @@ func (l *acquisitionStoreLane) addPending(scope uint64, entries []shamap.FlushEn
 	}
 }
 
-func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.FlushEntry) {
+func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.FlushEntry, charge uint64) uint64 {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
 	for i := range entries {
@@ -453,6 +577,16 @@ func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.Flus
 		pending.refs--
 		l.pending[key] = pending
 	}
+	// Go maps retain their buckets after deletion. Keep completed jobs charged
+	// until the index can be discarded; reaching the staging cap forces a flush.
+	l.pendingReleased += charge
+	if len(l.pending) != 0 {
+		return 0
+	}
+	l.pending = make(map[pendingAcquisitionKey]pendingAcquisitionNode)
+	released := l.pendingReleased
+	l.pendingReleased = 0
+	return released
 }
 
 func cloneAcquisitionEntries(entries []shamap.FlushEntry) []shamap.FlushEntry {

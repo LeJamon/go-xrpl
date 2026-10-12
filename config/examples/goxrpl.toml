@@ -71,6 +71,18 @@ validators_file = "validators.toml"
 # validation_seed = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
 # validator_token = "base64-encoded-token"
 
+# Shared managed-memory allowance (optional). Automatic sizing uses a startup
+# snapshot of available memory, limited by cgroups and GOMEMLIMIT.
+# Set memory_mb > 0 for a fixed total allowance; storage commitments are included.
+[resources]
+memory_mb = 0
+available_memory_percent = 33
+
+# Optional acquisition/replay ceiling within the shared allowance. Zero shares
+# the pool without a separate 512 MiB ceiling. Explicit ceilings must be >= 512 MiB.
+[acquisition]
+memory_mb = 0
+
 # =============================================================================
 # Server Configuration
 # =============================================================================

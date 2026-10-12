@@ -45,6 +45,14 @@ func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 	}
 
 	tests := map[string]func(context.Context, func() bool) error{
+		"state snapshot": func(ctx context.Context, _ func() bool) error {
+			_, err := l.StateMapSnapshotContext(ctx)
+			return err
+		},
+		"transaction snapshot": func(ctx context.Context, _ func() bool) error {
+			_, err := l.TxMapSnapshotContext(ctx)
+			return err
+		},
 		"state foreach": func(ctx context.Context, traversed func() bool) error {
 			return l.ForEachContext(ctx, func([32]byte, []byte) bool { return traversed() })
 		},

@@ -28,6 +28,11 @@ import (
 // callers use errors.Is for matching so the wording can evolve
 // without breaking test assertions on string contents.
 var (
+	// ErrReplayMemory means the response's retained transaction and metadata
+	// working set could not be admitted. The acquisition remains registered so
+	// the caller can retry after another owner returns memory.
+	ErrReplayMemory = errors.New("replay delta memory budget exhausted")
+
 	// ErrReplayParentMismatch means the requested ledger is not a child of the selected replay parent.
 	ErrReplayParentMismatch = errors.New("replay delta: parent hash mismatch")
 	// ErrReplaySequenceMismatch means the response is not the selected parent's direct successor.
@@ -79,6 +84,26 @@ var (
 	ErrReplayLeafInstall = errors.New("replay delta: install tx leaf failed")
 )
 
+// ReplayMemoryError records the minimum processing reservation that was
+// denied. Callers can wait for that exact amount of external capacity without
+// treating local resource pressure as peer misconduct.
+type ReplayMemoryError struct {
+	Required uint64
+	Capacity uint64
+}
+
+func (e *ReplayMemoryError) Error() string {
+	if e == nil {
+		return ErrReplayMemory.Error()
+	}
+	if e.Capacity != 0 && e.Required > e.Capacity {
+		return fmt.Sprintf("%s: required %d bytes exceeds processing capacity %d; increase the configured shared or acquisition allowance", ErrReplayMemory, e.Required, e.Capacity)
+	}
+	return fmt.Sprintf("%s: required %d bytes", ErrReplayMemory, e.Required)
+}
+
+func (e *ReplayMemoryError) Unwrap() error { return ErrReplayMemory }
+
 // replayDeltaTimeout caps the TOTAL budget a replay-delta acquisition
 // is allowed across its entire retry loop (sub-task timeouts +
 // peer-swaps + legacy fallback). Crossing this budget triggers the
@@ -98,6 +123,17 @@ const subTaskRetryInterval = 250 * time.Millisecond
 // outer budget kicks in and we fall back to the legacy path. Matches
 // rippled's LedgerReplayer.h:51 SUB_TASK_MAX_TIMEOUTS.
 const subTaskRetryMax = 10
+
+// replayDeltaAdmissionBytes protects the processing headroom for each
+// in-flight replay before a peer response arrives. Sixteen concurrent
+// acquisitions therefore retain 128 MiB of replay-head capacity; response
+// decoding uses its separate protected processing category.
+const replayDeltaAdmissionBytes = 8 << 20
+
+const (
+	replayDeltaResponseFixedBytes = 64 << 10
+	replayDeltaDecodedTxBytes     = 256
+)
 
 // DecodedTx pairs a verified transaction with its metadata-derived index.
 // Returned (in TransactionIndex order) by ReplayDelta.OrderedTxs() once
@@ -152,6 +188,14 @@ type ReplayDelta struct {
 	derived *ledger.Ledger // post-apply: state map re-derived by the engine
 	txs     []DecodedTx
 
+	// Admission follows the replay through application and asynchronous diagnosis.
+	// Abandonment releases only the original owner.
+	memory                shamap.AcquisitionMemoryAccount
+	memoryHeadBytes       uint64
+	memoryProcessingBytes uint64
+	memoryRelease         sync.Once
+	memoryOwners          uint64
+
 	// subTaskStart is the time of the last wire request (initial send
 	// or peer rotation). Drives IsSubTaskTimedOut without touching
 	// `created` (which bounds the outer budget).
@@ -201,13 +245,177 @@ func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger
 		state:        StateWantBase,
 		logger:       logger,
 		triedPeers:   []uint64{peerID},
+		memoryOwners: 1,
 	}
+}
+
+func (r *ReplayDelta) attachMemory(account shamap.AcquisitionMemoryAccount, bytes uint64) {
+	r.mu.Lock()
+	r.memory = account
+	r.memoryHeadBytes = bytes
+	r.mu.Unlock()
+}
+
+func (r *ReplayDelta) attachProcessingMemory(account shamap.AcquisitionMemoryAccount) {
+	r.mu.Lock()
+	r.memory = account
+	r.mu.Unlock()
+}
+
+// reserveResponseMemory admits the retained response representation while the
+// caller holds r.mu. The wire response itself is decoded outside this type, so
+// the estimate includes the original blobs, SHAMap leaf copies and decoded
+// transaction slice overhead that remain reachable after GotResponse returns.
+func (r *ReplayDelta) reserveResponseMemory(resp *message.ReplayDeltaResponse) error {
+	bytes := replayDeltaResponseBytes(resp)
+	return r.reserveProcessingMemory(bytes)
+}
+
+// reserveProcessingMemory charges decoded replay payloads to the processing
+// category while the caller is retaining them. The charge is released by the
+// replay owner after use or on any construction/abandonment error.
+func (r *ReplayDelta) reserveProcessingMemory(bytes uint64) error {
+	if r != nil && r.memoryOwners == 0 {
+		return errors.New("replay delta ownership has ended")
+	}
+	if r == nil || r.memory == nil || bytes == 0 {
+		return nil
+	}
+	required := r.memoryProcessingBytes + bytes
+	if required < r.memoryProcessingBytes {
+		return &ReplayMemoryError{Required: ^uint64(0)}
+	}
+	if account, ok := r.memory.(interface{ TryReserveReplayProcessing(uint64) bool }); ok {
+		if !account.TryReserveReplayProcessing(bytes) {
+			return r.processingMemoryError(required)
+		}
+	} else if !r.memory.TryReserve(bytes) {
+		return r.processingMemoryError(required)
+	}
+	r.memoryProcessingBytes += bytes
+	return nil
+}
+
+func (r *ReplayDelta) processingMemoryError(required uint64) error {
+	pressure := &ReplayMemoryError{Required: required}
+	if account, ok := r.memory.(interface{ ReplayProcessingCapacity() uint64 }); ok {
+		pressure.Capacity = account.ReplayProcessingCapacity()
+	} else if account, ok := r.memory.(interface{ Capacity() uint64 }); ok {
+		pressure.Capacity = account.Capacity()
+	}
+	return pressure
+}
+
+// RetainMemory keeps the replay's admission alive for an asynchronous owner.
+// A nil release means ownership has already ended.
+func (r *ReplayDelta) RetainMemory() func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.memoryOwners == 0 {
+		return nil
+	}
+	r.memoryOwners++
+	return sync.OnceFunc(r.releaseMemoryOwner)
+}
+
+func (r *ReplayDelta) releaseMemory() {
+	r.memoryRelease.Do(r.releaseMemoryOwner)
+}
+
+func (r *ReplayDelta) releaseMemoryOwner() {
+	r.mu.Lock()
+	r.memoryOwners--
+	if r.memoryOwners != 0 {
+		r.mu.Unlock()
+		return
+	}
+	account := r.memory
+	headBytes := r.memoryHeadBytes
+	processingBytes := r.memoryProcessingBytes
+	r.memory = nil
+	r.memoryHeadBytes = 0
+	r.memoryProcessingBytes = 0
+	r.mu.Unlock()
+	if account == nil {
+		return
+	}
+	if processingBytes != 0 {
+		if replay, ok := account.(interface{ ReleaseReplayProcessing(uint64) }); ok {
+			replay.ReleaseReplayProcessing(processingBytes)
+		} else {
+			account.Release(processingBytes)
+		}
+	}
+	if headBytes != 0 {
+		if replay, ok := account.(interface{ ReleaseReplayHead(uint64) }); ok {
+			replay.ReleaseReplayHead(headBytes)
+		} else {
+			account.Release(headBytes)
+		}
+	}
+}
+
+// ReleaseMemory ends the original owner's admission. Diagnostic owners retain
+// their admission until their own release function is called.
+func (r *ReplayDelta) ReleaseMemory() {
+	r.releaseMemory()
+}
+
+func replayDeltaResponseBytes(resp *message.ReplayDeltaResponse) uint64 {
+	if resp == nil {
+		return 0
+	}
+	bytes := uint64(replayDeltaResponseFixedBytes + len(resp.LedgerHeader))
+	for _, blob := range resp.Transactions {
+		// GotResponse keeps a slice into the decoded wire blob and copies the
+		// complete leaf into the transaction SHAMap. The extra fixed charge
+		// covers DecodedTx and map-node bookkeeping for each retained entry.
+		bytes += uint64(2*len(blob) + replayDeltaDecodedTxBytes)
+	}
+	return bytes
+}
+
+const replayStoredWorkspaceBytes = (128 << 20) + (256 << 10)
+
+func replayStoredEntryBytes(payload int) (uint64, bool) {
+	const overhead = uint64(1024)
+	if payload < 0 || uint64(payload) > (^uint64(0)-overhead)/4 {
+		return 0, false
+	}
+	// Payload copies, derived leaves and allocator rounding; decoded slice
+	// entries, transaction-index buckets and tree bookkeeping.
+	return 4*uint64(payload) + overhead, true
 }
 
 // NewStoredLedgerReplay creates a complete replay from locally stored parent
 // and target ledgers. The target's transaction leaves are decoded and ordered
 // by sfTransactionIndex so Apply can rebuild the target deterministically.
 func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (*ReplayDelta, error) {
+	return NewStoredLedgerReplayWithMemory(parent, target, logger, nil)
+}
+
+// NewStoredLedgerReplayWithMemory is NewStoredLedgerReplay with an optional
+// processing-memory owner. Call ReleaseMemory after the replay and its
+// diagnostics no longer need the decoded transaction data.
+func NewStoredLedgerReplayWithMemory(
+	parent, target *ledger.Ledger,
+	logger *slog.Logger,
+	account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	return NewStoredLedgerReplayWithMemoryContext(context.Background(), parent, target, logger, account)
+}
+
+// NewStoredLedgerReplayWithMemoryContext bounds and cancels stored transaction
+// decoding before admitting retained payloads. The caller owns ReleaseMemory.
+func NewStoredLedgerReplayWithMemoryContext(
+	ctx context.Context,
+	parent, target *ledger.Ledger,
+	logger *slog.Logger,
+	account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if parent == nil {
 		return nil, errors.New("stored replay parent is nil")
 	}
@@ -280,10 +488,52 @@ func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (
 		)
 	}
 
-	decoded := make([]DecodedTx, 0, target.TxCount())
-	seenIndices := make(map[uint32][32]byte)
+	replay := NewReplayDelta(targetHash, 0, parent, logger)
+	if account != nil {
+		replay.attachProcessingMemory(account)
+	}
+	retainMemory := false
+	defer func() {
+		if !retainMemory {
+			replay.releaseMemory()
+		}
+	}()
+
+	// A backed walk holds at most one payload and its decode copy, plus the
+	// bounded inner path. Reserve that workspace before reading cold nodes.
+	if err := replay.reserveProcessingMemory(replayStoredWorkspaceBytes); err != nil {
+		return nil, err
+	}
+	txMap, err := target.TxMapSnapshotContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var count int
+	var decodedBytes uint64
 	var decodeErr error
-	err = target.ForEachTransaction(func(itemHash [32]byte, leafBlob []byte) bool {
+	err = txMap.ForEachCtxReleasing(ctx, func(item *shamap.Item) bool {
+		charge, ok := replayStoredEntryBytes(item.DataSize())
+		if !ok || decodedBytes > ^uint64(0)-charge || count == int(^uint(0)>>1) {
+			decodeErr = &ReplayMemoryError{Required: ^uint64(0)}
+			return false
+		}
+		decodedBytes += charge
+		count++
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("measure stored replay transactions: %w", err)
+	}
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	if err := replay.reserveProcessingMemory(decodedBytes); err != nil {
+		return nil, err
+	}
+	decoded := make([]DecodedTx, 0, count)
+	seenIndices := make(map[uint32][32]byte, count)
+	err = txMap.ForEachCtxReleasing(ctx, func(item *shamap.Item) bool {
+		itemHash, leafBlob := item.Key(), item.Data()
 		txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(leafBlob)
 		if err != nil {
 			decodeErr = fmt.Errorf("stored replay tx %x: split leaf: %w", itemHash[:8], err)
@@ -345,10 +595,10 @@ func NewStoredLedgerReplay(parent, target *ledger.Ledger, logger *slog.Logger) (
 		}
 	}
 
-	replay := NewReplayDelta(targetHash, 0, parent, logger)
 	replay.result = target
 	replay.txs = decoded
 	replay.state = StateReplayReady
+	retainMemory = true
 	return replay, nil
 }
 
@@ -547,6 +797,18 @@ func (r *ReplayDelta) TargetHeader() header.LedgerHeader {
 	return r.result.Header()
 }
 
+// TransactionMapSnapshotContext shares the verified, admission-accounted map
+// with a detached worker without rebuilding a second uncharged transaction tree.
+func (r *ReplayDelta) TransactionMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
+	r.mu.Lock()
+	target := r.result
+	r.mu.Unlock()
+	if target == nil {
+		return nil, errors.New("replay delta verified target is unavailable")
+	}
+	return target.TxMapSnapshotContext(ctx)
+}
+
 // Retry creates a fresh replay in StateReplayReady using the authenticated
 // target and a newly supplied parent. It never mutates the failed replay or
 // retries Apply itself; callers own the policy and must bound how often this
@@ -554,6 +816,19 @@ func (r *ReplayDelta) TargetHeader() header.LedgerHeader {
 // the target transaction map is decoded again so the returned replay does not
 // share mutable apply state with the original.
 func (r *ReplayDelta) Retry(parent *ledger.Ledger) (*ReplayDelta, error) {
+	return r.RetryContext(context.Background(), parent)
+}
+
+// RetryContext rebuilds a verified replay under the caller's cancellation scope.
+func (r *ReplayDelta) RetryContext(ctx context.Context, parent *ledger.Ledger) (*ReplayDelta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	release := r.RetainMemory()
+	if release == nil {
+		return nil, errors.New("replay delta ownership has ended")
+	}
+	defer release()
 	if parent == nil {
 		return nil, errors.New("replay delta retry parent is nil")
 	}
@@ -562,6 +837,7 @@ func (r *ReplayDelta) Retry(parent *ledger.Ledger) (*ReplayDelta, error) {
 	state := r.state
 	target := r.result
 	logger := r.logger
+	account := r.memory
 	peerID := r.peerID
 	requestedHash := r.hash
 	r.mu.Unlock()
@@ -578,7 +854,7 @@ func (r *ReplayDelta) Retry(parent *ledger.Ledger) (*ReplayDelta, error) {
 			ErrReplayHeaderDiverged, targetHash[:8], requestedHash[:8])
 	}
 
-	retry, err := NewStoredLedgerReplay(parent, target, logger)
+	retry, err := NewStoredLedgerReplayWithMemoryContext(ctx, parent, target, logger, account)
 	if err != nil {
 		return nil, err
 	}
@@ -611,6 +887,9 @@ func (r *ReplayDelta) GotResponse(resp *message.ReplayDeltaResponse) error {
 		return r.err
 	}
 
+	if err := r.reserveResponseMemory(resp); err != nil {
+		return err
+	}
 	if err := r.verifyAndBuild(resp); err != nil {
 		r.state = StateFailed
 		r.err = err
@@ -784,8 +1063,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 }
 
 // ApplyContext discards a canceled private replay without marking it failed,
-// allowing a later caller to retry. Individual transaction execution is not
-// interrupted.
+// allowing a later caller to retry.
 func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfig) (derived *ledger.Ledger, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -832,7 +1110,7 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	// rippled's Ledger(parent, closeTime) constructor: child inherits
 	// the parent's totalCoins and chains its parent linkage from the
 	// parent rather than the deserialized response header.
-	stateMap, err := r.parent.StateMapSnapshot()
+	stateMap, err := r.parent.StateMapSnapshotContext(ctx)
 	if err != nil {
 		return nil, newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
 	}
@@ -973,10 +1251,14 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 
 		var result tx.ApplyResult
 		if txn.TxType().IsPseudoTransaction() {
-			result = engine.ApplyPseudo(txn)
+			result = engine.ApplyPseudoWithContext(ctx, txn)
 		} else {
-			result = engine.Apply(txn)
-			result = engine.ApplyBatchInnerTransactions(context.Background(), txn, result)
+			result = engine.ApplyWithContext(ctx, txn)
+			result = engine.ApplyBatchInnerTransactions(ctx, txn, result)
+		}
+
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		// D5 — install the peer-supplied leaf only on applied==true

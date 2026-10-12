@@ -48,9 +48,11 @@ type backingState struct {
 type acquisitionState struct {
 	walkMu       sync.Mutex
 	attachmentMu sync.Mutex
-	cursor       *backedWalkCursor
+	scan         *backedScanCursor
 	base         *verifiedWalkBase
+	budget       *AcquisitionBudget
 	stats        backedWalkStats
+	retained     acquisitionRetention
 }
 
 // Type defines the SHAMap type
@@ -112,9 +114,40 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 			access:    access,
 			fullBelow: familyFullBelowCache(family),
 		},
+		acquisition: acquisitionState{budget: NewAcquisitionBudget(0)},
 	}
 	sm.tree.cachedSize.Store(-1)
 	return sm, nil
+}
+
+// SetAcquisitionBudget attaches a shared memory budget to this map. Set it
+// before attaching acquisition nodes or starting a walk.
+func (sm *SHAMap) SetAcquisitionBudget(budget *AcquisitionBudget) {
+	if budget == nil {
+		budget = NewAcquisitionBudget(0)
+	}
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
+	sm.tree.mu.Lock()
+	defer sm.tree.mu.Unlock()
+	if sm.acquisition.scan != nil || sm.acquisition.retained.bytes.Load() != 0 {
+		panic("cannot replace an active acquisition budget")
+	}
+	sm.acquisition.budget = budget
+}
+
+// ReleaseAcquisitionBudget retires the resumable walk and returns all cursor
+// reservations to its shared budget. The attached tree is left intact and can
+// still be adopted or read by its owner. Calling this method repeatedly is
+// safe.
+func (sm *SHAMap) ReleaseAcquisitionBudget() {
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
+	sm.tree.mu.Lock()
+	defer sm.tree.mu.Unlock()
+	sm.releaseBackedWalkCursorLocked()
+	sm.releaseAcquisitionNodesLocked()
+	sm.acquisition.budget = nil
 }
 
 // SetFamily sets the Family on an existing SHAMap, enabling backed mode.
@@ -130,9 +163,12 @@ func (sm *SHAMap) SetFamily(family Family) {
 	sm.tree.mu.Lock()
 	sm.backing.mu.Lock()
 	sm.backing.access = access
-	sm.acquisition.cursor = nil
+	sm.releaseBackedWalkCursorLocked()
 	sm.acquisition.base = nil
 	if family != nil {
+		if sm.acquisition.budget == nil {
+			sm.acquisition.budget = NewAcquisitionBudget(0)
+		}
 		sm.backing.fullBelow = fullBelow
 	}
 	sm.backing.mu.Unlock()
@@ -184,6 +220,7 @@ func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte
 			access:    access,
 			fullBelow: familyFullBelowCache(family),
 		},
+		acquisition: acquisitionState{budget: NewAcquisitionBudget(0)},
 	}
 	sm.tree.cachedSize.Store(-1)
 	return sm, nil
@@ -202,6 +239,13 @@ func (sm *SHAMap) descend(inner *innerNode, branch int) (mapNode, error) {
 // so concurrent readers racing on the same branch all return the same
 // installed child. Each SHAMap retains its own deserialised subtree.
 func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) (mapNode, error) {
+	return sm.readChild(ctx, inner, branch, true)
+}
+
+// readChild can fetch a child without attaching it to a shared tree. Serving
+// peers uses this mode: a read-only request must not grow all snapshots that
+// share the node, bypassing the bounded NodeStore cache and acquisition budget.
+func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, retain bool) (mapNode, error) {
 	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
 		return child, nil
@@ -231,12 +275,20 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 	if err != nil {
 		return nil, err
 	}
+	if !retain {
+		return node, nil
+	}
 
 	// If another reader installed a child while we were fetching, return
 	// theirs and let ours be GC'd.
+	if !sm.retainAcquisitionNode(node) {
+		return node, nil
+	}
 	installed := inner.SetChildIfNil(branch, node)
 	if installed == node {
 		sm.backing.loads.Add(1)
+	} else {
+		sm.releaseAcquisitionNode(node)
 	}
 	return installed, nil
 }

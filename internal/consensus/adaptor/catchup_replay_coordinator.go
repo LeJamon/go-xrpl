@@ -22,8 +22,9 @@ import (
 //
 // acquisitionMu guards replay generations, retries, recovery, and drain ownership.
 // Canonical publication and cancellation take replayCommitMu before acquisitionMu;
-// publication keeps replayCommitMu through storage and anchor advancement.
-// Acquisition retirement and worker waits occur after releasing these locks.
+// publication holds replayCommitMu only through storage. Router-side completion
+// rechecks the generation before advancing the anchor. Acquisition retirement
+// and worker waits occur after releasing these locks.
 // catchupMu protects the target and cooldowns, seqHashMu protects ancestry,
 // historyMu protects backfill, and peersMu protects peer ledger observations.
 // Header discovery takes headerDiscoveryMu before catchupMu or seqHashMu.
@@ -64,10 +65,21 @@ type catchupReplayCoordinator struct {
 	fetchTracker *inbound.Tracker
 	fetchPacks   *fetchPackCache
 
-	acquisitionWorkMu sync.RWMutex
-	acquisitionFamily shamap.Family
-	acquisitionStore  *acquisitionStoreLane
-	acquisitionWork   *acquisitionWorkLane
+	acquisitionWorkMu        sync.RWMutex
+	acquisitionFamily        shamap.Family
+	acquisitionMemory        *shamap.AcquisitionBudget
+	acquisitionMemoryCh      <-chan struct{}
+	acquisitionMemoryLocalCh <-chan struct{}
+	acquisitionStore         *acquisitionStoreLane
+	acquisitionWork          *acquisitionWorkLane
+	acquisitionMemoryWakeMu  sync.RWMutex
+	acquisitionMemoryWake    func()
+	completionMu             sync.Mutex
+	completionTasks          [2]*acquisitionCompletionTask
+	legacyDeltaTask          *legacyDeltaTask
+	legacyDeltaRetryAt       time.Time
+	completionResults        chan *acquisitionCompletionResult
+	completionWake           chan struct{}
 
 	catchupMu          sync.Mutex
 	catchup            catchupTarget
@@ -108,6 +120,7 @@ type catchupReplayCoordinator struct {
 	localReplayCandidates     []*localReplayCandidate
 
 	standardReplayDrainWake  chan struct{}
+	standardReplayResults    chan *standardReplayDrainResult
 	standardReplayDrainOwner *standardReplayDrainOwner
 	stopped                  atomic.Bool
 
@@ -151,7 +164,167 @@ func (c *catchupReplayCoordinator) setAcquisitionFamily(family shamap.Family) {
 		return
 	}
 	c.acquisitionStore = newAcquisitionStoreLane(family, c.logger, acquisitionStoreQueueDepth)
+	if c.acquisitionMemory == nil {
+		c.acquisitionMemory = shamap.NewAcquisitionBudget(0)
+	}
+	c.acquisitionStore.memory = c.acquisitionMemory
+	if c.replayer != nil {
+		c.replayer.SetMemoryBudget(c.acquisitionMemory)
+	}
 	c.acquisitionFamily = c.acquisitionStore
+}
+
+func (c *catchupReplayCoordinator) setAcquisitionMemoryLimit(limit uint64) {
+	_ = c.setAcquisitionMemoryBudget(limit, nil)
+}
+
+func (c *catchupReplayCoordinator) setAcquisitionMemoryBudget(limit uint64, parent shamap.AcquisitionMemoryAccount) error {
+	var budget *shamap.AcquisitionBudget
+	if parent == nil {
+		budget = shamap.NewAcquisitionBudget(limit)
+	} else {
+		var err error
+		budget, err = shamap.NewAcquisitionBudgetWithParent(limit, parent)
+		if err != nil {
+			return err
+		}
+	}
+	return c.setAcquisitionMemoryBudgetValue(budget)
+}
+
+func (c *catchupReplayCoordinator) setAcquisitionMemoryBudgetValue(budget *shamap.AcquisitionBudget) error {
+	c.acquisitionWorkMu.Lock()
+	defer c.acquisitionWorkMu.Unlock()
+	if c.acquisitionMemory != nil && !c.acquisitionMemory.Close() {
+		_ = budget.Close()
+		return errors.New("acquisition memory budget still has active owners")
+	}
+	c.acquisitionMemory = budget
+	c.acquisitionMemoryCh = nil
+	c.acquisitionMemoryLocalCh = nil
+	if c.acquisitionStore != nil {
+		c.acquisitionStore.memory = c.acquisitionMemory
+	}
+	if c.replayer != nil {
+		c.replayer.SetMemoryBudget(c.acquisitionMemory)
+	}
+	return nil
+}
+
+func (c *catchupReplayCoordinator) closeAcquisitionMemoryBudget() bool {
+	if c == nil {
+		return true
+	}
+	c.acquisitionWorkMu.RLock()
+	budget := c.acquisitionMemory
+	c.acquisitionWorkMu.RUnlock()
+	if budget == nil {
+		return true
+	}
+	if !budget.Close() {
+		return false
+	}
+	c.acquisitionWorkMu.Lock()
+	if c.acquisitionMemory == budget {
+		c.acquisitionMemoryCh = nil
+		c.acquisitionMemoryLocalCh = nil
+	}
+	c.acquisitionWorkMu.Unlock()
+	return true
+}
+
+func (c *catchupReplayCoordinator) acquisitionMemoryChangedChannel() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	c.acquisitionWorkMu.Lock()
+	defer c.acquisitionWorkMu.Unlock()
+	budget := c.acquisitionMemory
+	if budget == nil {
+		return nil
+	}
+	if c.acquisitionMemoryCh == nil {
+		c.acquisitionMemoryCh = budget.Changed()
+	}
+	return c.acquisitionMemoryCh
+}
+
+func (c *catchupReplayCoordinator) acquisitionMemoryLocalChangedChannel() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	c.acquisitionWorkMu.Lock()
+	defer c.acquisitionWorkMu.Unlock()
+	budget := c.acquisitionMemory
+	if budget == nil {
+		return nil
+	}
+	if c.acquisitionMemoryLocalCh == nil {
+		c.acquisitionMemoryLocalCh = budget.LocalChanged()
+	}
+	return c.acquisitionMemoryLocalCh
+}
+
+// setAcquisitionMemoryWake installs the serialized callback used by replay
+// pipeline owners that retain work after an admission miss. The callback runs
+// on the Router loop after a budget wake; it must not start its own goroutine.
+func (c *catchupReplayCoordinator) setAcquisitionMemoryWake(wake func()) {
+	if c == nil {
+		return
+	}
+	c.acquisitionMemoryWakeMu.Lock()
+	c.acquisitionMemoryWake = wake
+	c.acquisitionMemoryWakeMu.Unlock()
+}
+
+func (c *catchupReplayCoordinator) notifyAcquisitionMemoryAvailable() {
+	if c == nil {
+		return
+	}
+	// The selected channel has been closed and must not be reused in the next
+	// select. Refresh both views before invoking retry work: a release during
+	// that work must have a channel to close or it could be lost between select
+	// iterations. A single release may close the parent and local channels
+	// together, so refresh both even when only one case was selected.
+	c.acquisitionWorkMu.Lock()
+	c.acquisitionMemoryCh = nil
+	c.acquisitionMemoryLocalCh = nil
+	if budget := c.acquisitionMemory; budget != nil {
+		c.acquisitionMemoryCh = budget.Changed()
+		c.acquisitionMemoryLocalCh = budget.LocalChanged()
+	}
+	c.acquisitionWorkMu.Unlock()
+	c.acquisitionMemoryWakeMu.RLock()
+	wake := c.acquisitionMemoryWake
+	c.acquisitionMemoryWakeMu.RUnlock()
+	if wake != nil {
+		wake()
+	}
+}
+
+// retryAcquisitionMemoryWaiters wakes only inbound work that retained a
+// reply after an acquisition-memory admission miss. Timer and housekeeping
+// work remains on the periodic maintenance path.
+func (c *catchupReplayCoordinator) retryAcquisitionMemoryWaiters() {
+	if c == nil || c.stoppedForShutdown() {
+		return
+	}
+	lane := c.currentAcquisitionWork()
+	if lane != nil {
+		lane.wakeMemoryWaiters()
+	}
+	if c.fetchTracker == nil {
+		return
+	}
+	for _, ledger := range c.fetchTracker.Active() {
+		if !ledger.AcquisitionMemoryWaiting() {
+			continue
+		}
+		if lane != nil && lane.has(ledger) {
+			continue
+		}
+		c.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkContinue})
+	}
 }
 
 func (c *catchupReplayCoordinator) setFloor(floor MinimumOnlineFloor) {
@@ -197,6 +370,8 @@ func (c *catchupReplayCoordinator) startTasks(parent context.Context) {
 		return
 	}
 	c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(parent)
+	c.completionResults = make(chan *acquisitionCompletionResult)
+	c.completionWake = make(chan struct{}, 1)
 	if c.stopped.Load() {
 		c.lifecycleCancel()
 		c.lifecycleCancel = nil
@@ -252,6 +427,13 @@ func (c *catchupReplayCoordinator) standardReplayDrainWakeChannel() <-chan struc
 	return c.standardReplayDrainWake
 }
 
+func (c *catchupReplayCoordinator) standardReplayResultChannel() <-chan *standardReplayDrainResult {
+	if c == nil {
+		return nil
+	}
+	return c.standardReplayResults
+}
+
 // stopAcquisitions is the sole terminal transition for acquisition state. It
 // takes the publication lock before the acquisition lock so no replay apply or
 // canonical store can race retirement, then releases both before waiting for
@@ -291,7 +473,13 @@ func (c *catchupReplayCoordinator) stopAcquisitions() (legacy, replay int) {
 	if releaseDone := c.retireStandardReplay(retirement); releaseDone != nil {
 		<-releaseDone
 	}
-	return legacy, replay
+	for {
+		select {
+		case <-c.standardReplayDrainWake:
+		default:
+			return legacy, replay
+		}
+	}
 }
 
 func (c *catchupReplayCoordinator) belowFloor(seq uint32) bool {
@@ -314,9 +502,13 @@ func (c *catchupReplayCoordinator) acquisitionOpts() []inbound.Option {
 	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader)}
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
+	memory := c.acquisitionMemory
 	c.acquisitionWorkMu.RUnlock()
 	if store != nil {
 		opts = append(opts, inbound.WithFamily(store.scope()))
+	}
+	if memory != nil {
+		opts = append(opts, inbound.WithAcquisitionBudget(memory))
 	}
 	return opts
 }
@@ -408,6 +600,7 @@ func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor
 		replayAvailabilityRetries: make(map[[32]byte]replayAvailabilityRetryState),
 		replayFallbackRequired:    make(map[[32]byte]uint32),
 		standardReplayDrainWake:   make(chan struct{}, 1),
+		standardReplayResults:     make(chan *standardReplayDrainResult, 1),
 		seqHash:                   make(map[uint32]ledgerHashEntry),
 		lifecycleCtx:              context.Background(),
 	}
@@ -428,6 +621,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 		return
 	}
 	c.expireReplayAvailabilityRetries()
+	c.retryAcquisitionCompletions()
 
 	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
 	// the outer budget kicks in (250ms × 10 rotations inside a larger

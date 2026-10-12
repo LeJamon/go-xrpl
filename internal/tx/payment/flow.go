@@ -383,7 +383,7 @@ func Flow(
 			for k := range iterOfrsToRm {
 				allOfrsToRm[k] = true
 			}
-			for k := range iterOfrsToRm {
+			for _, k := range state.SortedLedgerKeys(iterOfrsToRm) {
 				if err := offerDeleteInSandbox(accumSandbox, k); err != nil {
 					return FlowResult{
 						In:      ZeroXRPEitherAmount(),

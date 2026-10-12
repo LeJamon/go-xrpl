@@ -36,7 +36,7 @@ func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, 
 	if l.IsValidated() {
 		token = s.beginValidatedPersistence(seq, l.Hash())
 	}
-	return s.persistValidatedLedgerAtToken(ctx, l, updateTip, token, false, nil)
+	return s.persistValidatedLedgerAtToken(ctx, l, updateTip, token, false, nil, s.replayPersistenceProof(l.Header()))
 }
 
 func (s *Service) persistValidatedLedgerAtToken(
@@ -46,6 +46,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 	token uint64,
 	allowTipReplacement bool,
 	canceled func() bool,
+	proof *replayCompletenessRecord,
 ) error {
 	seq := l.Sequence()
 	var persistErr error
@@ -75,7 +76,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
 			} else {
-				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l)
+				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
 			}
 		}
 	} else if persistErr == nil && updateTip && s.nodeStore != nil {
@@ -83,7 +84,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
 			} else {
-				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l)
+				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
 			}
 		}
 	}
@@ -110,6 +111,7 @@ type persistJob struct {
 	canceled        atomic.Bool
 	updatesTip      atomic.Bool
 	completionToken uint64
+	proof           *replayCompletenessRecord
 }
 
 type evictedLedgerTip struct {
@@ -160,6 +162,7 @@ func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, validated, up
 	job := &persistJob{
 		l:         l,
 		validated: validated,
+		proof:     s.replayPersistenceProof(l.Header()),
 	}
 	job.updatesTip.Store(updatesTip)
 	if validated {
@@ -289,6 +292,8 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
 	s.lifecycleMu.Unlock()
+	s.signalReplayPreparedSlots()
+	s.persistenceWorker.stopAdmissions()
 	if replayRecoveryCancel != nil {
 		replayRecoveryCancel()
 	}
@@ -300,11 +305,13 @@ func (s *Service) Stop() {
 	// mutate state, regardless of which side of this barrier they acquire it on.
 	s.validationWG.Wait()
 	s.consensusWG.Wait()
+	s.ledgerWorkWG.Wait()
 	s.openLedgerMu.LockRole(openLedgerShutdown)
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()
+	s.clearRelayCache()
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()
 	s.mu.Unlock()
@@ -332,6 +339,7 @@ func (p *persistenceWorker) runPersistWorker() {
 			p.service.runPersistJob(job)
 			p.persistMu.Lock()
 			p.persistActive = nil
+			p.signalCapacityLocked()
 			p.persistMu.Unlock()
 			continue
 		}
@@ -361,6 +369,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 					job.l,
 					true,
 					job.canceled.Load,
+					job.proof,
 				)
 			}
 		} else if !job.canceled.Load() {
@@ -372,6 +381,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 				job.completionToken,
 				true,
 				job.canceled.Load,
+				job.proof,
 			)
 		}
 		s.persistMu.Lock()
@@ -387,6 +397,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 				job.l,
 				true,
 				job.canceled.Load,
+				job.proof,
 			)
 		}
 		if lateTip {
@@ -413,6 +424,7 @@ func (s *Service) persistLedgerJob(
 	completionToken uint64,
 	allowTipReplacement bool,
 	canceled func() bool,
+	proof *replayCompletenessRecord,
 ) error {
 	if validated {
 		return s.persistValidatedLedgerAtToken(
@@ -422,6 +434,7 @@ func (s *Service) persistLedgerJob(
 			completionToken,
 			allowTipReplacement,
 			canceled,
+			proof,
 		)
 	}
 	if s.nodeStore == nil {
@@ -498,11 +511,17 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		}
 	}
 
-	if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
-		return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
-	}
-	if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
-		return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
+	if s.config.PersistenceMemory != nil {
+		if err := l.StoreDirtyBatched(ctx, s.config.PersistenceMemory, store(nodestore.NodeAccount), store(nodestore.NodeTransaction)); err != nil {
+			return fmt.Errorf("store ledger %d delta: %w", seq, err)
+		}
+	} else {
+		if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
+			return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
+		}
+		if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
+			return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
+		}
 	}
 
 	headerData := l.SerializeHeader()
@@ -530,6 +549,7 @@ func (s *Service) persistValidatedTipJob(
 	l *ledger.Ledger,
 	allowSameSequenceReplacement bool,
 	canceled func() bool,
+	proof *replayCompletenessRecord,
 ) error {
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
@@ -539,7 +559,7 @@ func (s *Service) persistValidatedTipJob(
 	if err := s.persistValidatedTipLocked(ctx, l, allowSameSequenceReplacement); err != nil {
 		return err
 	}
-	if s.tryAdvanceValidatedStateBaseProof(ctx, l) {
+	if s.tryAdvanceValidatedStateBaseProof(ctx, l, proof) {
 		s.requestStateBaseRecertificationIfNeeded(l)
 	}
 	return nil

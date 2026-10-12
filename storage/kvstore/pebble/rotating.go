@@ -1094,6 +1094,8 @@ func (r *RotatingStore) Sync() error {
 
 // Close closes both generations.
 func (r *RotatingStore) Close() error {
+	r.rotateMu.Lock()
+	defer r.rotateMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -1137,36 +1139,52 @@ func (r *RotatingStore) RotationIdentity() (kvstore.RotationIdentity, error) {
 // former archive. No operation can observe the in-memory swap before the
 // generation manifest is durable.
 func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) {
+	committed, retire, err := r.RotateWithRetirement(lastRotated, minimumOnline)
+	if retire != nil {
+		err = errors.Join(err, retire())
+	}
+	return committed, err
+}
+
+// RotateWithRetirement publishes the generation pair, but transfers retirement
+// of the detached archive to the caller. rotateMu remains held until retirement
+// completes, serializing both subsequent rotations and Close without blocking
+// ordinary operations on the new pair. Callers must always invoke retirement.
+func (r *RotatingStore) RotateWithRetirement(lastRotated, minimumOnline uint32) (committed bool, retirement func() error, err error) {
 	if lastRotated == 0 || minimumOnline == 0 {
-		return false, errors.New("kvstore/pebble: rotation boundaries must be non-zero")
+		return false, nil, errors.New("kvstore/pebble: rotation boundaries must be non-zero")
 	}
 	if err := validateGenerationBoundaries(lastRotated, minimumOnline); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	r.rotateMu.Lock()
-	defer r.rotateMu.Unlock()
+	defer func() {
+		if retirement == nil {
+			r.rotateMu.Unlock()
+		}
+	}()
 
 	r.mu.RLock()
 	if r.closed {
 		r.mu.RUnlock()
-		return false, kvstore.ErrClosed
+		return false, nil, kvstore.ErrClosed
 	}
 	completed := r.lastRotated
 	completedMinimum := r.minimumOnline
 	r.mu.RUnlock()
 	if lastRotated <= completed {
 		if lastRotated == completed && minimumOnline != completedMinimum {
-			return false, fmt.Errorf(
+			return false, nil, fmt.Errorf(
 				"kvstore/pebble: rotation boundary %d has minimum online %d, not %d",
 				lastRotated,
 				completedMinimum,
 				minimumOnline,
 			)
 		}
-		return true, nil
+		return true, nil, nil
 	}
 	if completedMinimum != 0 && minimumOnline < completedMinimum {
-		return false, fmt.Errorf(
+		return false, nil, fmt.Errorf(
 			"kvstore/pebble: minimum online %d precedes committed minimum %d",
 			minimumOnline,
 			completedMinimum,
@@ -1175,19 +1193,19 @@ func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) 
 
 	newPath, err := r.newGenerationPath()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	r.mu.RLock()
 	if r.closed {
 		r.mu.RUnlock()
 		_ = r.removeOwnedGeneration(newPath)
-		return false, kvstore.ErrClosed
+		return false, nil, kvstore.ErrClosed
 	}
 	newWritable, err := newWithCache(newPath, r.blockCache, r.options)
 	r.mu.RUnlock()
 	if err != nil {
 		_ = r.removeOwnedGeneration(newPath)
-		return false, err
+		return false, nil, err
 	}
 
 	r.mu.Lock()
@@ -1195,13 +1213,13 @@ func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) 
 		r.mu.Unlock()
 		_ = newWritable.Close()
 		_ = r.removeOwnedGeneration(newPath)
-		return false, kvstore.ErrClosed
+		return false, nil, kvstore.ErrClosed
 	}
 	if err := r.writable.Sync(); err != nil {
 		r.mu.Unlock()
 		_ = newWritable.Close()
 		_ = r.removeOwnedGeneration(newPath)
-		return false, err
+		return false, nil, err
 	}
 
 	oldArchive := r.archive
@@ -1235,7 +1253,7 @@ func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) 
 		r.mu.Unlock()
 		_ = newWritable.Close()
 		_ = r.removeOwnedGeneration(newPath)
-		return false, err
+		return false, nil, err
 	}
 	published, saveErr := r.saveState(state)
 	if saveErr != nil && !published {
@@ -1248,17 +1266,21 @@ func (r *RotatingStore) Rotate(lastRotated, minimumOnline uint32) (bool, error) 
 		r.mu.Unlock()
 		_ = newWritable.Close()
 		_ = r.removeOwnedGeneration(newPath)
-		return false, saveErr
-	}
-	if saveErr != nil {
-		r.mu.Unlock()
-		closeErr := oldArchive.Close()
-		return true, errors.Join(saveErr, closeErr)
+		return false, nil, saveErr
 	}
 	r.mu.Unlock()
 
-	cleanupErr := errors.Join(oldArchive.Close(), r.removeOwnedGeneration(oldArchivePath))
-	return true, cleanupErr
+	retirement = sync.OnceValue(func() error {
+		defer r.rotateMu.Unlock()
+		closeErr := oldArchive.Close()
+		if saveErr != nil {
+			// A published manifest with uncertain directory durability must not
+			// cause removal of a generation needed by the previous manifest.
+			return closeErr
+		}
+		return errors.Join(closeErr, r.removeOwnedGeneration(oldArchivePath))
+	})
+	return true, retirement, saveErr
 }
 
 func (r *RotatingStore) loadState() (generationState, bool, error) {

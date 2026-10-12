@@ -1,13 +1,30 @@
 package adaptor
 
+import "context"
+
 // A drain owns one generation for one bounded batch. Keep execution ownership
 // outside standardReplay: cancellation must reset session state without
 // allowing another applier to overlap an old worker still unwinding.
 type standardReplayDrainOwner struct {
-	generation uint64
+	generation  uint64
+	workCtx     context.Context
+	cancel      context.CancelFunc
+	result      *standardReplayDrainResult
+	synchronous bool
 	// Written only by this drain, read by its deferred release. Preserve the
 	// router-loop yield even if the next acquisition is not ready yet.
 	yielded bool
+	// Memory admission is level-triggered by the coordinator's shared budget
+	// watcher. Do not immediately re-arm the same ready head while waiting for
+	// that wakeup.
+	memoryWait bool
+}
+
+func (o *standardReplayDrainOwner) cancelWork() {
+	if o == nil || o.cancel == nil {
+		return
+	}
+	o.cancel()
 }
 
 func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDrainOwner {
@@ -21,11 +38,21 @@ func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDra
 		// also handles a wake consumed during a concurrent/reentrant drain.
 		return nil
 	}
-	if !c.standardReplay.active || !c.standardReplay.pivotReady {
+	if !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
 		c.standardReplay.applying = false
 		return nil
 	}
-	owner := &standardReplayDrainOwner{generation: c.standardReplay.generation}
+	workCtx, cancel := context.WithCancel(c.lifecycleContext())
+	if err := workCtx.Err(); err != nil {
+		cancel()
+		c.standardReplay.applying = false
+		return nil
+	}
+	owner := &standardReplayDrainOwner{
+		generation: c.standardReplay.generation,
+		workCtx:    workCtx,
+		cancel:     cancel,
+	}
 	c.standardReplayDrainOwner = owner
 	c.standardReplay.applying = true
 	return owner
@@ -37,6 +64,8 @@ func (c *catchupReplayCoordinator) finishStandardReplayDrain(owner *standardRepl
 	if c.standardReplayDrainOwner != owner {
 		return // An old completion must not release a newer actual owner.
 	}
+	owner.cancelWork()
+	owner.result = nil
 	c.standardReplayDrainOwner = nil
 	// No drain can begin while acquisitionMu is held. Reconcile the current
 	// generation's reservation instead of leaving the old flag behind or
@@ -51,13 +80,16 @@ func (c *catchupReplayCoordinator) finishStandardReplayDrain(owner *standardRepl
 		c.scheduleStandardReplayDrain()
 		return
 	}
+	if owner.memoryWait {
+		return
+	}
 	c.scheduleReadyStandardReplayDrainLocked()
 }
 
 // Caller holds acquisitionMu. A pending wake is not an executing applier.
 // Re-sending an edge-triggered wake is safe and repairs an orphaned reservation.
 func (c *catchupReplayCoordinator) scheduleReadyStandardReplayDrainLocked() bool {
-	if c.stoppedForShutdown() || c.standardReplayDrainOwner != nil || !c.standardReplay.active || !c.standardReplay.pivotReady {
+	if c.stoppedForShutdown() || c.standardReplayDrainOwner != nil || !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
 		return false
 	}
 	head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]

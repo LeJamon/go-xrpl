@@ -3,6 +3,8 @@ package payment
 import (
 	"errors"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 type sandboxSuccErrorView struct {
@@ -34,7 +36,9 @@ func TestPaymentSandboxSuccPropagatesViewErrorWithLocalCandidate(t *testing.T) {
 		failOnCall:            1,
 	}
 	sandbox := NewPaymentSandbox(view)
-	sandbox.insertions[sandboxSuccKey(2)] = []byte{2}
+	if err := sandbox.Insert(keylet.Keylet{Key: sandboxSuccKey(2)}, []byte{2}); err != nil {
+		t.Fatal(err)
+	}
 
 	gotKey, gotData, found, err := sandbox.Succ(sandboxSuccKey(0))
 	if err != sentinel {
@@ -55,7 +59,9 @@ func TestPaymentSandboxSuccPropagatesViewErrorAfterDeletedEntry(t *testing.T) {
 	view.data[sandboxSuccKey(1)] = []byte{1}
 	sandbox := NewPaymentSandbox(view)
 	sandbox.deletions[sandboxSuccKey(1)] = true
-	sandbox.insertions[sandboxSuccKey(3)] = []byte{3}
+	if err := sandbox.Insert(keylet.Keylet{Key: sandboxSuccKey(3)}, []byte{3}); err != nil {
+		t.Fatal(err)
+	}
 
 	gotKey, gotData, found, err := sandbox.Succ(sandboxSuccKey(0))
 	if err != sentinel {

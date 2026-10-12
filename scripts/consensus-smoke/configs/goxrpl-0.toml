@@ -31,6 +31,9 @@ beta_rpc_api = 0
 validation_seed = "sn8KuG4fs84rowCsqTuz6AtqEkmJ7"
 validators_file = "/etc/goxrpl/validators.toml"
 
+[resources]
+memory_mb = 3072
+
 [logging]
 level = "info"
 format = "text"
