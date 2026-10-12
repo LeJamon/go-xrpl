@@ -31,6 +31,7 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	if err != nil {
 		return fmt.Errorf("snapshot directory mutation: %w", err)
 	}
+	defer staged.Discard()
 	stagedEnv := *e
 	stagedEnv.ledger = staged
 	if err := stagedEnv.bumpDirectoryLastPage(acc, targetPage, adjustField); err != nil {

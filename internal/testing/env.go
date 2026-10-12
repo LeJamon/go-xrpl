@@ -19,6 +19,7 @@ import (
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
@@ -163,10 +164,7 @@ type TestEnv struct {
 // NewTestEnv creates a new test environment with a genesis ledger.
 func NewTestEnv(t testing.TB) *TestEnv {
 	t.Helper()
-	genesisConfig := genesis.DefaultConfig()
-	genesisConfig.Fees.ReserveBase = drops.DropsPerXRP * 200     // 200 XRP
-	genesisConfig.Fees.ReserveIncrement = drops.DropsPerXRP * 50 // 50 XRP
-	return newTestEnv(t, genesisConfig)
+	return newTestEnvWithFamily(t, defaultTestGenesisConfig(), nil)
 }
 
 // NewTestEnvWithTxQ creates a test environment with a transaction queue.
@@ -202,9 +200,23 @@ func NewTestEnvWithTxQAndConfig(t testing.TB, txqCfg txq.Config, genesisCfg gene
 // OOM with unbacked mode. Data goes to disk; only the LRU cache lives in RAM.
 func NewTestEnvBacked(t testing.TB) *TestEnv {
 	t.Helper()
-	env := NewTestEnv(t)
-	env.enablePebbleBacking(t)
-	return env
+	stateFamily, err := backend.OpenPebble(t.TempDir(), 256, 200000)
+	if err != nil {
+		t.Fatalf("Failed to create state family: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stateFamily.Close(); err != nil {
+			t.Errorf("close state family: %v", err)
+		}
+	})
+	return newTestEnvWithFamily(t, defaultTestGenesisConfig(), stateFamily)
+}
+
+func defaultTestGenesisConfig() genesis.Config {
+	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Fees.ReserveBase = drops.DropsPerXRP * 200     // 200 XRP
+	genesisConfig.Fees.ReserveIncrement = drops.DropsPerXRP * 50 // 50 XRP
+	return genesisConfig
 }
 
 // T returns the test handle shared by this environment and its fixtures.
@@ -239,10 +251,14 @@ func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 // NewTestEnvWithConfig creates a new test environment with custom genesis configuration.
 func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 	t.Helper()
-	return newTestEnv(t, cfg)
+	return newTestEnvWithFamily(t, cfg, nil)
 }
 
 func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
+	return newTestEnvWithFamily(t, cfg, nil)
+}
+
+func newTestEnvWithFamily(t testing.TB, cfg genesis.Config, stateFamily *backend.NodeStore) *TestEnv {
 	t.Helper()
 	// Ensure every transaction type is registered before tests run.
 	all.RegisterAll()
@@ -279,6 +295,14 @@ func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
 	if err != nil {
 		t.Fatalf("Failed to construct genesis ledger: %v", err)
 	}
+	if stateFamily != nil {
+		genesisLedger.SetStateMapFamily(stateFamily)
+	}
+	var executionFamily shamap.Family
+	if stateFamily != nil {
+		executionFamily = stateFamily
+	}
+	executionStore := enableBoundedJournal(t, genesisLedger, executionFamily)
 
 	clock := NewManualClock()
 	openLedger, err := ledger.NewOpen(genesisLedger, clock.Now())
@@ -293,6 +317,7 @@ func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
 		accounts:          make(map[string]*Account),
 		accountsByAddress: make(map[string]*Account),
 		genesisLedger:     genesisLedger,
+		stateFamily:       stateFamily,
 		lastClosedLedger:  genesisLedger,
 		currentSeq:        2,
 		baseFee:           uint64(baseFee),
@@ -307,6 +332,16 @@ func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
 	master := MasterAccount()
 	if err := env.registerAccount(master); err != nil {
 		t.Fatalf("register master account: %v", err)
+	}
+	if executionStore != nil {
+		t.Cleanup(func() {
+			if env.ledger != nil {
+				env.ledger.Discard()
+			}
+			if err := executionStore.Close(); err != nil {
+				t.Errorf("close bounded execution store: %v (roots=%v)", err, executionStore.Roots())
+			}
+		})
 	}
 
 	return env

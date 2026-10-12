@@ -50,6 +50,7 @@ func (e *TestEnv) close(timeLeap bool) {
 	closed := e.ledger
 	var retries []openledger.PendingTx
 	if e.replayOnClose || e.needsConsensusBuild {
+		previousOpen := e.ledger
 		build, err := openledger.BuildClosedLedger(e.lastClosedLedger, e.pendingForClose(), openledger.BuildConfig{
 			CloseTime:     e.clock.Now(),
 			CanonicalSalt: e.nextCloseSalt,
@@ -60,6 +61,7 @@ func (e *TestEnv) close(timeLeap bool) {
 		}
 		closed = build.Ledger
 		retries = build.Retries
+		previousOpen.Discard()
 	} else if err := closed.Close(e.clock.Now(), 0); err != nil {
 		e.t.Fatalf("close ledger: %v", err)
 	}
@@ -369,6 +371,7 @@ func (e *TestEnv) applyStaged(
 		if snapshotErr != nil {
 			e.t.Fatalf("snapshot malformed transaction apply: %v", snapshotErr)
 		}
+		defer staged.Discard()
 		engine := txengine.NewEngine(staged, config)
 		engine.SetBaseTxCount(transactionCount)
 		engine.SetApplyObserverForTest(e.observeApplyPhases(observed.observe))
