@@ -30,6 +30,7 @@ const (
 type signatureIdentityFixture struct {
 	txn    txcore.Transaction
 	raw    []byte
+	id     [32]byte
 	engine *Engine
 }
 
@@ -51,14 +52,12 @@ func BenchmarkSignatureIdentity(b *testing.B) {
 		{name: "Ordinary/ColdCryptoVerify", build: buildOrdinarySignatureIdentityFixture, path: signatureIdentityCold},
 	}
 	for _, benchmark := range benchmarks {
-		benchmark := benchmark
 		b.Run(benchmark.name, func(b *testing.B) {
 			runSignatureIdentityBenchmark(b, benchmark.build, benchmark.path)
 		})
 	}
 
 	for _, innerCount := range []int{2, 4, 8} {
-		innerCount := innerCount
 		for _, benchmark := range []struct {
 			name string
 			path signatureIdentityCachePath
@@ -67,7 +66,6 @@ func BenchmarkSignatureIdentity(b *testing.B) {
 			{name: "GlobalCacheHitColdLocal", path: signatureIdentityGlobalCache},
 			{name: "ColdCryptoVerify", path: signatureIdentityCold},
 		} {
-			benchmark := benchmark
 			b.Run(fmt.Sprintf("Batch%d/%s", innerCount, benchmark.name), func(b *testing.B) {
 				runSignatureIdentityBenchmark(b, func(tb testing.TB) signatureIdentityFixture {
 					return buildBatchSignatureIdentityFixture(tb, innerCount)
@@ -84,6 +82,7 @@ func runSignatureIdentityBenchmark(
 ) {
 	b.Helper()
 	fixture := build(b)
+	b.Cleanup(sigcache.Reset)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(fixture.raw)))
 
@@ -98,10 +97,10 @@ func runSignatureIdentityBenchmark(
 	}
 	if path == signatureIdentityGlobalCache {
 		fixture.txn.GetCommon().SetRawBytes(fixture.raw)
-		assertSignatureIdentityGlobalCacheState(b, fixture)
+		assertSignatureIdentityCacheState(b, fixture, true)
 	}
 	if path == signatureIdentityCold {
-		assertSignatureIdentityColdState(b, fixture)
+		assertSignatureIdentityCacheState(b, fixture, false)
 	}
 
 	b.ResetTimer()
@@ -112,11 +111,7 @@ func runSignatureIdentityBenchmark(
 			if path == signatureIdentityCold {
 				sigcache.Reset()
 			}
-			if path == signatureIdentityGlobalCache {
-				assertSignatureIdentityGlobalCacheState(b, fixture)
-			} else {
-				assertSignatureIdentityColdState(b, fixture)
-			}
+			assertSignatureIdentityCacheState(b, fixture, path == signatureIdentityGlobalCache)
 			b.StartTimer()
 		}
 
@@ -126,31 +121,13 @@ func runSignatureIdentityBenchmark(
 	}
 }
 
-func assertSignatureIdentityGlobalCacheState(b *testing.B, fixture signatureIdentityFixture) {
+func assertSignatureIdentityCacheState(b *testing.B, fixture signatureIdentityFixture, wantGlobal bool) {
 	b.Helper()
 	if fixture.txn.GetCommon().SignatureVerified() {
-		b.Fatal("global-cache fixture retained a local signature verdict")
+		b.Fatal("cache fixture retained a local signature verdict")
 	}
-	id, err := txcore.ComputeCurrentTransactionHash(fixture.txn)
-	if err != nil {
-		b.Fatalf("compute fixture transaction ID: %v", err)
-	}
-	if !sigcache.Verified(id) {
-		b.Fatal("global-cache fixture did not retain a process cache verdict")
-	}
-}
-
-func assertSignatureIdentityColdState(b *testing.B, fixture signatureIdentityFixture) {
-	b.Helper()
-	if fixture.txn.GetCommon().SignatureVerified() {
-		b.Fatal("cold fixture retained a local signature verdict")
-	}
-	id, err := txcore.ComputeCurrentTransactionHash(fixture.txn)
-	if err != nil {
-		b.Fatalf("compute fixture transaction ID: %v", err)
-	}
-	if sigcache.Verified(id) {
-		b.Fatal("cold fixture retained a process cache verdict")
+	if got := sigcache.Verified(fixture.id); got != wantGlobal {
+		b.Fatalf("process cache verdict = %t, want %t", got, wantGlobal)
 	}
 }
 
@@ -175,7 +152,7 @@ func buildBatchSignatureIdentityFixture(tb testing.TB, innerCount int) signature
 	registerSignatureIdentityTypes()
 	outer := signatureIdentityKeypairFor(tb, "signature-identity-batch-outer")
 	batchTxn := batch.NewBatch(outer.account)
-	batchTxn.Fee = "100"
+	batchTxn.Fee = "1000"
 	batchTxn.SetSequence(1)
 	batchTxn.SetFlags(batch.BatchFlagAllOrNothing)
 
@@ -240,15 +217,20 @@ func newSignatureIdentityFixture(tb testing.TB, txn txcore.Transaction) signatur
 	if !matches {
 		tb.Fatal("parsed signature fixture fields do not match wire bytes")
 	}
+	id, err := txcore.ComputeCurrentTransactionHash(parsed)
+	if err != nil {
+		tb.Fatalf("compute signature fixture ID: %v", err)
+	}
 
 	fixture := signatureIdentityFixture{
 		txn:    parsed,
 		raw:    raw,
+		id:     id,
 		engine: verifyingEngine(amendment.AllSupportedRules()),
 	}
 	sigcache.Reset()
-	if got := fixture.engine.verifySignatures(fixture.txn); got != ter.TesSUCCESS {
-		tb.Fatalf("verify parsed signature fixture: %s", got)
+	if got := fixture.engine.preflight(fixture.txn); got != ter.TesSUCCESS {
+		tb.Fatalf("preflight parsed signature fixture: %s", got)
 	}
 	fixture.txn.GetCommon().SetRawBytes(raw)
 	sigcache.Reset()
@@ -273,13 +255,16 @@ func signatureIdentityKeypairFor(tb testing.TB, seed string) signatureIdentityKe
 }
 
 func registerSignatureIdentityTypes() {
-	registerSignatureIdentityType(txcore.TypeAccountSet, account.Register)
-	registerSignatureIdentityType(txcore.TypeBatch, batch.Register)
-	registerSignatureIdentityType(txcore.TypePayment, payment.Register)
-}
-
-func registerSignatureIdentityType(txType txcore.Type, register func()) {
-	if _, err := txcore.NewFromType(txType); err != nil {
-		register()
+	for _, entry := range []struct {
+		txType   txcore.Type
+		register func()
+	}{
+		{txcore.TypeAccountSet, account.Register},
+		{txcore.TypeBatch, batch.Register},
+		{txcore.TypePayment, payment.Register},
+	} {
+		if _, err := txcore.NewFromType(entry.txType); err != nil {
+			entry.register()
+		}
 	}
 }
