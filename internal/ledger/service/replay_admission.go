@@ -919,7 +919,14 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 	}
 	immutable, err := derived.Snapshot()
 	if err == nil && immutable.ExecutionStore() != s.config.Execution {
-		immutable, err = ledger.NewClosedFromRootsContext(ctx, h, derived.Fees(), s.config.Execution)
+		stateRoot, txRoot, importErr := s.config.Execution.ImportMaps(ctx, stateMap, txMap, h.LedgerIndex)
+		if importErr != nil {
+			err = fmt.Errorf("replay admission: import foreign execution maps: %w", importErr)
+		} else if stateRoot != h.AccountHash || txRoot != h.TxHash {
+			err = errors.New("replay admission: imported execution roots do not match prepared header")
+		} else {
+			immutable, err = ledger.NewClosedFromRootsContext(ctx, h, derived.Fees(), s.config.Execution)
+		}
 	}
 	if err != nil {
 		return nil, err

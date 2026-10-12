@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
@@ -62,6 +63,146 @@ func TestImportMapsPersistsCleanWireStateAndTransactionTrees(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestImportMapsCopiesForeignCleanBackedTrees(t *testing.T) {
+	sourceFamily := newConstructorRecordingFamily()
+	stateMap := backedImportMap(t, shamap.TypeState, sourceFamily)
+	txMap := backedImportMap(t, shamap.TypeTransaction, sourceFamily)
+	targetFamily := newConstructorRecordingFamily()
+	store, _ := executionTestStore(t, targetFamily)
+
+	stateRoot, txRoot, err := store.ImportMaps(t.Context(), stateMap, txMap, 91)
+	if err != nil {
+		t.Fatalf("ImportMaps: %v", err)
+	}
+	entries := targetFamily.takeEntries()
+	if len(entries) == 0 {
+		t.Fatal("foreign clean backed import wrote no nodes")
+	}
+
+	for _, test := range []struct {
+		name    string
+		kind    shamap.Type
+		root    [32]byte
+		wantLen int
+	}{
+		{name: "state", kind: shamap.TypeState, root: stateRoot, wantLen: storeAllImportLeafCount},
+		{name: "transactions", kind: shamap.TypeTransaction, root: txRoot, wantLen: storeAllImportLeafCount},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loaded, err := shamap.NewFromRootHashContext(t.Context(), test.kind, test.root, targetFamily)
+			if err != nil {
+				t.Fatalf("NewFromRootHashContext: %v", err)
+			}
+			got := 0
+			if err := loaded.ForEach(func(*shamap.Item) bool {
+				got++
+				return true
+			}); err != nil {
+				t.Fatalf("ForEach: %v", err)
+			}
+			if got != test.wantLen {
+				t.Fatalf("loaded item count = %d, want %d", got, test.wantLen)
+			}
+		})
+	}
+}
+
+func TestImportMapsKeepsSharedBackedFastPath(t *testing.T) {
+	family := newConstructorRecordingFamily()
+	stateMap := backedImportMap(t, shamap.TypeState, family)
+	txMap := backedImportMap(t, shamap.TypeTransaction, family)
+	family.takeEntries()
+	store, _ := executionTestStore(t, family)
+	if _, _, err := store.ImportMaps(t.Context(), stateMap, txMap, 93); err != nil {
+		t.Fatalf("ImportMaps: %v", err)
+	}
+	if entries := family.takeEntries(); len(entries) != 0 {
+		t.Fatalf("shared clean import rewrote %d nodes", len(entries))
+	}
+}
+
+func TestImportMapsRejectsMissingForeignBackedDescendant(t *testing.T) {
+	sourceFamily := newConstructorRecordingFamily()
+	stateMap := backedImportMap(t, shamap.TypeState, sourceFamily)
+	txMap := backedImportMap(t, shamap.TypeTransaction, sourceFamily)
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state Hash: %v", err)
+	}
+	missing := firstForeignChildHash(t, sourceFamily, stateRoot)
+	sourceFamily.mu.Lock()
+	delete(sourceFamily.nodes, missing)
+	sourceFamily.mu.Unlock()
+
+	targetFamily := newConstructorRecordingFamily()
+	store, _ := executionTestStore(t, targetFamily)
+	_, _, err = store.ImportMaps(t.Context(), stateMap, txMap, 92)
+	if err == nil {
+		t.Fatal("ImportMaps unexpectedly accepted a missing foreign descendant")
+	}
+	var missingErr *shamap.MissingNodeError
+	if !errors.As(err, &missingErr) || missingErr.Hash != missing {
+		t.Fatalf("ImportMaps error = %v, want missing hash %x", err, missing[:8])
+	}
+}
+
+func backedImportMap(t *testing.T, mapType shamap.Type, family *constructorRecordingFamily) *shamap.SHAMap {
+	t.Helper()
+	source := cleanWireImportMap(t, mapType)
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("source WalkWireNodes: %v", err)
+	}
+	entries := make([]shamap.FlushEntry, 0, len(wireNodes))
+	for _, wireNode := range wireNodes {
+		entry, err := shamap.FlushEntryFromWire(wireNode.Data, 0, mapType)
+		if err != nil {
+			t.Fatalf("FlushEntryFromWire: %v", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := family.StoreBatch(t.Context(), entries); err != nil {
+		t.Fatalf("persist source map: %v", err)
+	}
+	root, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source Hash: %v", err)
+	}
+	loaded, err := shamap.NewFromRootHashContext(t.Context(), mapType, root, family)
+	if err != nil {
+		t.Fatalf("load source map: %v", err)
+	}
+	return loaded
+}
+
+func firstForeignChildHash(t *testing.T, family *constructorRecordingFamily, root [32]byte) [32]byte {
+	t.Helper()
+	data, err := family.Fetch(t.Context(), root)
+	if err != nil {
+		t.Fatalf("fetch root: %v", err)
+	}
+	node, err := shamap.DeserializeFromPrefix(data)
+	if err != nil {
+		t.Fatalf("deserialize root: %v", err)
+	}
+	inner, ok := node.(shamap.InnerNodeReader)
+	if !ok {
+		t.Fatal("source root is not an inner node")
+	}
+	for branch := range shamap.BranchFactor {
+		if inner.IsEmptyBranch(branch) {
+			continue
+		}
+		child, err := inner.ChildHash(branch)
+		if err != nil {
+			t.Fatalf("read child hash: %v", err)
+		}
+		return child
+	}
+	t.Fatal("source root has no child")
+	return [32]byte{}
 }
 
 const storeAllImportLeafCount = 96

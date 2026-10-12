@@ -322,8 +322,9 @@ func importExecution(
 	return view, rules, nil
 }
 
-// ImportMaps stores detached input trees before root-only execution can read them.
-// Backed inputs must use this store's Family; unbacked inputs are copied in full.
+// ImportMaps stores detached input trees before root-only execution can read
+// them. Shared backed inputs use the dirty fast path; foreign and unbacked
+// inputs are copied in full so clean nodes are present in the destination.
 func (s *ExecutionStore) ImportMaps(ctx context.Context, stateMap, txMap *shamap.SHAMap, sequence uint32) ([32]byte, [32]byte, error) {
 	if s == nil {
 		return [32]byte{}, [32]byte{}, errors.New("bounded execution store cannot be nil")
@@ -356,7 +357,7 @@ func importMap(ctx context.Context, source *shamap.SHAMap, kind shamap.Type, seq
 		return [32]byte{}, err
 	}
 	persist := copy.StoreDirtyBatched
-	if !source.IsBacked() {
+	if !source.IsBacked() || !source.UsesFamily(store.config.Family) {
 		persist = copy.StoreAllBatched
 	}
 	if err := persist(ctx, store.config.Workspace, func(entries []shamap.FlushEntry) error {
