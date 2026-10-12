@@ -321,7 +321,7 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	if queue != nil {
 		queueSnapshot = queue.AllTxs()
 	}
-	privateBytes := preferredTransitionEstimate(stats, localSnapshot, queueSnapshot)
+	privateBytes := preferredTransitionEstimate(stats, localSnapshot, queueSnapshot, options.retries)
 	// Accepted leaves include inner Batch transactions and metadata, even when
 	// none of their outer transactions remain in the current open ledger.
 	if !options.allowReplayFault {
@@ -696,7 +696,7 @@ func (p *PreparedPreferredLedger) markReady(err error) {
 }
 
 func (p *PreparedPreferredLedger) run() {
-	started := time.Now()
+	started := p.timings.started
 	if p.keepOpen {
 		p.timings.preparation = time.Since(started)
 		p.markReady(nil)
@@ -821,7 +821,7 @@ func (p *PreparedPreferredLedger) abortLocked(err error) (bool, error) {
 }
 
 func (p *PreparedPreferredLedger) logTimings() {
-	if p == nil || p.service == nil || p.timings.started.IsZero() {
+	if p == nil || p.service == nil || !p.options.preferred || p.timings.started.IsZero() {
 		return
 	}
 	p.service.logger.Info("Preferred ledger switch timings",
@@ -942,6 +942,7 @@ func preferredTransitionEstimate(
 	stats openledger.TransactionSnapshotStats,
 	locals []openledger.PendingTx,
 	queue []*txq.CandidateDetails,
+	retries []openledger.PendingTx,
 ) uint64 {
 	bytes := uint64(preferredTransitionBaseBytes)
 	items := stats.Count
@@ -956,13 +957,15 @@ func preferredTransitionEstimate(
 	if !add(stats.Bytes) {
 		return bytes
 	}
-	for _, local := range locals {
-		if items == ^uint64(0) {
-			return ^uint64(0)
-		}
-		items++
-		if !add(uint64(len(local.Blob))) {
-			return bytes
+	for _, inputs := range [][]openledger.PendingTx{locals, retries} {
+		for _, local := range inputs {
+			if items == ^uint64(0) {
+				return ^uint64(0)
+			}
+			items++
+			if !add(uint64(len(local.Blob))) {
+				return bytes
+			}
 		}
 	}
 	for _, candidate := range queue {

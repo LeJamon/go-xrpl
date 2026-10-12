@@ -49,7 +49,9 @@ func (s *Service) acceptConsensusResult(
 		callbackStarted := time.Now()
 		releaseAdmission()
 		if successor != nil {
+			relayStarted := time.Now()
 			successor.Finish()
+			timings.relay = time.Since(relayStarted)
 			successor.Release()
 		}
 		notification.notify()
