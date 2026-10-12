@@ -316,6 +316,10 @@ type Store struct {
 	hasDescriptor bool
 	activeViews   map[*View]struct{}
 	activeReads   int
+	outboxCount   int
+	outboxBytes   int64
+	outboxOldest  time.Time
+	failures      uint64
 
 	writeMu sync.Mutex
 }
@@ -360,7 +364,33 @@ func Open(path string, options Options) (*Store, error) {
 		cache.Unref()
 		return nil, err
 	}
+	s.refreshOutboxStats()
 	return s, nil
+}
+
+// Stats returns the cached operational counters for the flat base. It does not
+// inspect Pebble or perform any other storage I/O, so it is safe for metrics
+// collection callbacks.
+func (s *Store) Stats() Stats {
+	if s == nil {
+		return Stats{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	age := time.Duration(0)
+	if !s.outboxOldest.IsZero() {
+		age = s.opts.Clock().Sub(s.outboxOldest)
+		if age < 0 {
+			age = 0
+		}
+	}
+	return Stats{
+		OutboxCount: s.outboxCount,
+		OutboxBytes: s.outboxBytes,
+		OutboxAge:   age,
+		Advancing:   s.writerActive || s.marker != nil,
+		Failures:    s.failures,
+	}
 }
 
 func (s *Store) loadMetadata() error {
@@ -498,7 +528,11 @@ func (s *Store) Advance(ctx context.Context, request AdvanceRequest) error {
 	if request.PublicationKind == "" {
 		request.PublicationKind = "flat-state"
 	}
-	return s.advance(ctx, request.Expected, request.Target, request.Authorization, request.PublicationKind, request.Changes, false)
+	err := s.advance(ctx, request.Expected, request.Target, request.Authorization, request.PublicationKind, request.Changes, false)
+	if err != nil {
+		s.recordFailure()
+	}
+	return err
 }
 
 // Resume replays the marker's source-to-target delta from the beginning.  The
@@ -530,7 +564,11 @@ func (s *Store) Resume(ctx context.Context, request ResumeRequest) error {
 			return fmt.Errorf("%w: recovery publication intent mismatch", ErrParentMismatch)
 		}
 	}
-	return s.advance(ctx, &marker.Source, marker.Target, request.Authorization, intent, request.Changes, true)
+	err := s.advance(ctx, &marker.Source, marker.Target, request.Authorization, intent, request.Changes, true)
+	if err != nil {
+		s.recordFailure()
+	}
+	return err
 }
 
 func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descriptor, authorization RootClosureAuthorization, intent string, changes ChangeIterator, resuming bool) error {
@@ -807,6 +845,7 @@ func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, i
 	if err := s.sync(); err != nil {
 		return fmt.Errorf("%w: final sync: %v", errSyncUncertain, err)
 	}
+	s.refreshOutboxStats()
 	return nil
 }
 
@@ -948,7 +987,12 @@ func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]OutboxRecord, e
 
 // AckOutbox durably removes one publication obligation.  A missing ID is an
 // idempotent success.
-func (s *Store) AckOutbox(ctx context.Context, commitID CommitID) error {
+func (s *Store) AckOutbox(ctx context.Context, commitID CommitID) (err error) {
+	defer func() {
+		if err != nil {
+			s.recordFailure()
+		}
+	}()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := contextErr(ctx); err != nil {
@@ -986,7 +1030,26 @@ func (s *Store) AckOutbox(ctx context.Context, commitID CommitID) error {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: outbox ack sync: %v", errSyncUncertain, err)
 	}
+	s.refreshOutboxStats()
 	return nil
+}
+
+func (s *Store) recordFailure() {
+	s.mu.Lock()
+	s.failures++
+	s.mu.Unlock()
+}
+
+func (s *Store) refreshOutboxStats() {
+	count, bytesUsed, oldest, err := s.outboxStats()
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.outboxCount = count
+	s.outboxBytes = bytesUsed
+	s.outboxOldest = oldest
+	s.mu.Unlock()
 }
 
 // Close closes all open views after their in-flight operations finish, then
