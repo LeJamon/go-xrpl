@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -72,6 +73,8 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 
 // Config holds configuration for the LedgerService
 type Config struct {
+	Execution         *ledger.ExecutionStore
+	FlatState         *flatstate.Store
 	RelayMemory       MemoryBudget
 	PersistenceMemory shamap.DirtyMemoryBudget
 	// ReplayVerificationMemory isolates long-running cold reads from ledger
@@ -149,6 +152,7 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 
 // Service manages the ledger lifecycle
 type Service struct {
+	flatPins           flatRootPins
 	replayRepairTarget *ledger.Ledger
 	replayAuthenticate func(header.LedgerHeader) bool
 	replayAcquiredHash [32]byte
@@ -644,6 +648,10 @@ func (s *Service) Start() (err error) {
 		s.startupFastLoadCheckpoint = nil
 	}()
 
+	if err := s.recoverFlatState(context.Background()); err != nil {
+		return fmt.Errorf("recover flat execution state: %w", err)
+	}
+
 	s.openLedgerMu.Lock()
 	defer s.openLedgerMu.Unlock()
 	s.mu.Lock()
@@ -677,6 +685,11 @@ func (s *Service) Start() (err error) {
 	}
 	if s.shamapFamily != nil {
 		genesisLedger.SetSHAMapFamily(s.shamapFamily)
+	}
+	if s.config.Execution != nil {
+		if err := genesisLedger.EnableBoundedExecution(context.Background(), s.config.Execution); err != nil {
+			return err
+		}
 	}
 
 	s.genesisLedger = genesisLedger
@@ -730,6 +743,11 @@ func (s *Service) Start() (err error) {
 		if selection.ledger.IsValidated() {
 			s.validatedLedger = selection.ledger
 			s.validatedSignTime = selection.ledger.CloseTime()
+		}
+	}
+	if s.config.Execution != nil {
+		if err := s.closedLedger.EnableBoundedExecution(context.Background(), s.config.Execution); err != nil {
+			return err
 		}
 	}
 	s.networkLedgerState = selection.networkState

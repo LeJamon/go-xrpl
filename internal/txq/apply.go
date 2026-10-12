@@ -665,6 +665,10 @@ func (q *TxQ) tryClearAccountQueue(
 		return nil
 	}
 
+	if disposable, ok := sandbox.(interface{ Discard() }); ok {
+		defer disposable.Discard()
+	}
+
 	type retryUpdate struct {
 		candidate *candidate
 		result    ter.Result

@@ -99,6 +99,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		}
 	}
 
+	defer closed.Discard()
 	if !replayed {
 		if err := closed.Close(closeTime, 0); err != nil {
 			return 0, fmt.Errorf("failed to close ledger: %w", err)
@@ -239,11 +240,17 @@ func (s *Service) prepareNewOpenLedgerLocked(ctx context.Context, closed *ledger
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.openLedger != nil {
+		if err := s.openLedger.FreezeExecution(); err != nil {
+			return nil, err
+		}
+	}
 	newOpen, err := ledger.NewOpen(closed, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	if err := s.acceptStandaloneOpenLedgerLocked(ctx, closed, retriableTxs); err != nil {
+		newOpen.Discard()
 		return nil, err
 	}
 	return newOpen, nil
@@ -480,6 +487,14 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 		return nil
 	}
 
+	if err := s.enableExecution(parent); err != nil {
+		return err
+	}
+	if s.openLedger != nil {
+		if err := s.openLedger.FreezeExecution(); err != nil {
+			return err
+		}
+	}
 	newOpen, err := ledger.NewOpen(parent, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to create open ledger after preferred chain switch: %w", err)
@@ -1136,6 +1151,9 @@ func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap
 	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct acquired ledger: %w", err)
+	}
+	if err := s.enableExecution(acquired); err != nil {
+		return nil, err
 	}
 	return acquired, nil
 }

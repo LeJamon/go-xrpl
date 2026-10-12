@@ -226,10 +226,21 @@ func (s *Service) acceptConsensusResult(
 	acceptOpen := s.openLedgerAcceptanceLocked(ctx, &timings.relay, &salt)
 	s.mu.Unlock()
 	nextStarted := time.Now()
+	if expectedOpen != nil {
+		if err := expectedOpen.FreezeExecution(); err != nil {
+			return 0, err
+		}
+	}
 	newOpen, err := ledger.NewOpen(closed, time.Now())
 	if err != nil {
 		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
+	installedOpen := false
+	defer func() {
+		if !installedOpen {
+			newOpen.Discard()
+		}
+	}()
 	err = acceptOpen(closed, retriableTxs, anyDisputes, func(publish func()) {
 		timings.nextOpen = time.Since(nextStarted)
 		lockStarted = time.Now()
@@ -279,6 +290,7 @@ func (s *Service) acceptConsensusResult(
 
 		timings.persist = time.Since(persistStarted)
 		s.openLedger = newOpen
+		installedOpen = true
 
 		// Quorum validation publishes the event, rather than the speculative close.
 		event := &LedgerAcceptedEvent{

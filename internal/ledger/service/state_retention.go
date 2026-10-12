@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
@@ -36,14 +37,14 @@ func (s *Service) PrepareStateRetention(
 	if !ok {
 		return 0, nil, errors.New("state retention requires durable snapshots")
 	}
+	if err := s.flushPersists(ctx); err != nil {
+		return 0, nil, err
+	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer release()
-	if err := s.flushPersists(ctx); err != nil {
-		return 0, nil, err
-	}
 	preserved := make(map[retainedStateRoot]struct{})
 	previous := make(map[shamap.Type][32]byte)
 	var sequence uint32
@@ -171,6 +172,7 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 			bases := make(map[shamap.Type][32]byte)
 			for _, root := range preparedOpen {
 				bases[root.kind] = root.hash
+				preserved[root] = struct{}{}
 			}
 			for _, root := range pending {
 				if err := s.preserveStateDifference(catchupCtx, root, bases[root.kind], sequence, nil, stateRetentionCatchupNodes); err != nil {
@@ -182,6 +184,17 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 				return nil, err
 			}
 		}
+		releaseRoots := func() {}
+		if s.config.Execution != nil {
+			var ok bool
+			releaseRoots, ok = s.config.Execution.GuardRoots(func(root rootlease.Root) bool {
+				_, present := preserved[retainedStateRoot{hash: root.Hash, kind: root.Kind}]
+				return present
+			})
+			if !ok {
+				return nil, errStateRetentionChanged
+			}
+		}
 		admitted = true
 		// Both validated trees are now completely verified and preserved in
 		// the surviving storage generation. Transfer that fact after mutation
@@ -189,6 +202,7 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 		validated := s.validatedLedger
 		return func() {
 			defer unlock()
+			defer releaseRoots()
 			if validated == nil || !validated.IsValidated() || ctx.Err() != nil {
 				return
 			}
@@ -313,6 +327,11 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 		}
 		if txs != ([32]byte{}) {
 			roots = append(roots, retainedStateRoot{txs, shamap.TypeTransaction})
+		}
+	}
+	if s.config.Execution != nil {
+		for _, root := range s.config.Execution.Roots() {
+			roots = append(roots, retainedStateRoot{hash: root.Hash, kind: root.Kind})
 		}
 	}
 	return roots, nil

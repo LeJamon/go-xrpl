@@ -44,6 +44,7 @@ func BuildClosedLedger(parent *ledger.Ledger, transactions []PendingTx, cfg Buil
 	if err != nil {
 		return BuildResult{}, fmt.Errorf("openledger.BuildClosedLedger: create child: %w", err)
 	}
+	defer child.Discard()
 	if protocol.IsFlagLedger(child.Sequence()) {
 		if err := child.UpdateNegativeUNL(); err != nil {
 			return BuildResult{}, fmt.Errorf("openledger.BuildClosedLedger: update negative UNL: %w", err)

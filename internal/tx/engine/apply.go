@@ -520,6 +520,8 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 		}
 	}
 
+	defer snapshot.Discard()
+
 	// Create metadata
 	metadata := &txcore.Metadata{
 		AffectedNodes:     make([]txcore.AffectedNode, 0),

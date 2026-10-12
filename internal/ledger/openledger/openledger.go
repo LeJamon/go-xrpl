@@ -126,6 +126,12 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 		return false
 	}
 
+	if err := parent.FreezeExecution(); err != nil {
+		if o.logger != nil {
+			o.logger.Error("openledger: preserve previous execution view", "err", err)
+		}
+		return false
+	}
 	next, err := parent.MutableSnapshot()
 	if err != nil {
 		if o.logger != nil {
@@ -136,6 +142,7 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 
 	changed := fn(next)
 	if !changed {
+		next.Discard()
 		return false
 	}
 
@@ -242,6 +249,13 @@ func (o *OpenLedger) accept(
 	if err != nil {
 		return err
 	}
+
+	published := false
+	defer func() {
+		if !published {
+			next.Discard()
+		}
+	}()
 
 	applyCfg := cfg
 	applyCfg.LedgerSequence = next.Sequence()
@@ -385,9 +399,19 @@ func (o *OpenLedger) accept(
 		})
 	}
 
+	o.currentMu.RLock()
+	previous := o.current
+	o.currentMu.RUnlock()
+	if previous != nil {
+		if err := previous.FreezeExecution(); err != nil {
+			return err
+		}
+	}
+
 	publish := func() {
 		o.currentMu.Lock()
 		o.current = next
+		published = true
 		o.cachedTxs = nil
 		o.currentMu.Unlock()
 		if retries != nil {

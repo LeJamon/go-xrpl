@@ -18,7 +18,7 @@ func (l *Ledger) ExistsContext(ctx context.Context, k keylet.Keylet) (bool, erro
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.HasContext(ctx, k.Key)
+	return l.stateTree().HasContext(ctx, k.Key)
 }
 
 func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
@@ -32,7 +32,7 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateMap.Has(k.Key)
+	exists, err := l.stateTree().Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrEntryExists
 	}
 
-	return l.stateMap.Put(k.Key, data)
+	return l.stateTree().Put(k.Key, data)
 }
 
 func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
@@ -54,7 +54,7 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateMap.Has(k.Key)
+	exists, err := l.stateTree().Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrEntryNotFound
 	}
 
-	return l.stateMap.Put(k.Key, data)
+	return l.stateTree().Put(k.Key, data)
 }
 
 func (l *Ledger) Erase(k keylet.Keylet) error {
@@ -76,7 +76,7 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateMap.Has(k.Key)
+	exists, err := l.stateTree().Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrEntryNotFound
 	}
 
-	return l.stateMap.Delete(k.Key)
+	return l.stateTree().Delete(k.Key)
 }
 
 func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) error {
@@ -106,6 +106,21 @@ func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
 		return ErrLedgerImmutable
 	}
 
+	if l.execution != nil {
+		staged, err := l.executionSnapshot(context.Background(), true)
+		if err != nil {
+			return err
+		}
+		defer staged.Discard()
+		if err := apply(staged); err != nil {
+			return err
+		}
+		l.execution.close()
+		l.execution, staged.execution = staged.execution, nil
+		l.dropsDestroyed = staged.dropsDestroyed
+		staged.invalidateMutableState()
+		return nil
+	}
 	stateMap, err := l.stateMap.MutableFork()
 	if err != nil {
 		return fmt.Errorf("fork ledger state: %w", err)
@@ -147,6 +162,15 @@ func (l *Ledger) AdoptState(src *Ledger) error {
 	if src.state != StateOpen || !src.writable {
 		src.mu.RUnlock()
 		return ErrInvalidState
+	}
+	if src.execution != nil {
+		copy, err := src.executionSnapshot(context.Background(), true)
+		src.mu.RUnlock()
+		if err != nil {
+			return err
+		}
+		defer copy.Discard()
+		return l.ConsumeState(copy)
 	}
 	stateMap, err := src.stateMap.DetachedMutable()
 	if err != nil {
@@ -196,6 +220,10 @@ func (l *Ledger) ConsumeState(src *Ledger) error {
 		return ErrInvalidState
 	}
 
+	if l.execution != nil {
+		l.execution.close()
+	}
+	l.execution, src.execution = src.execution, nil
 	l.stateMap = src.stateMap
 	l.txMap = src.txMap
 	l.dropsDestroyed = src.dropsDestroyed
@@ -210,6 +238,10 @@ func (l *Ledger) invalidateMutableState() {
 }
 
 func (l *Ledger) invalidateMutableStateLocked() {
+	if l.execution != nil {
+		l.execution.close()
+		l.execution = nil
+	}
 	l.stateMap = shamap.New(shamap.TypeState)
 	l.txMap = shamap.New(shamap.TypeTransaction)
 	l.dropsDestroyed = 0

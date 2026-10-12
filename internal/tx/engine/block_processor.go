@@ -119,6 +119,7 @@ func (bp *BlockProcessor) applyTransaction(
 	if err != nil {
 		return result, fmt.Errorf("snapshot ledger for transaction apply: %w", err)
 	}
+	defer staged.Discard()
 	stagedEngine := NewEngine(staged, bp.engine.config)
 	stagedEngine.SetBaseTxCount(bp.engine.TxCount())
 	stagedEngine.invariantViolationHook = bp.engine.invariantViolationHook

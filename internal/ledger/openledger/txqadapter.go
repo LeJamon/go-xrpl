@@ -300,6 +300,7 @@ func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID 
 		return ter.TefINTERNAL
 	}
 
+	defer clone.Discard()
 	key := keylet.Account(accountID)
 	data, err := clone.Read(key)
 	if err != nil {
@@ -392,3 +393,5 @@ func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, er
 	}
 	return state.ReadAccountRoot(a.view, accountID)
 }
+
+func (s *txqSandbox) Discard() { s.child.view.Discard() }

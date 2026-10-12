@@ -62,14 +62,15 @@ type nodeRuntime struct {
 	resourceManager      *resource.Manager
 	ownsResourceManager  bool
 
-	services      *types.ServiceGraphBuilder
-	serviceGraph  *types.ServiceGraph
-	ledgerAdapter *rpcadapter.LedgerServiceAdapter
-	httpServer    *rpc.Server
-	wsServer      *rpc.WebSocketServer
-	publisher     *rpc.Publisher
-	transports    *boundRPCTransports
-	watchdog      *watchdog.Watchdog
+	services         *types.ServiceGraphBuilder
+	serviceGraph     *types.ServiceGraph
+	ledgerAdapter    *rpcadapter.LedgerServiceAdapter
+	executionCleanup func()
+	httpServer       *rpc.Server
+	wsServer         *rpc.WebSocketServer
+	publisher        *rpc.Publisher
+	transports       *boundRPCTransports
+	watchdog         *watchdog.Watchdog
 
 	networkID                 uint32
 	retentionFloor            func() uint32
@@ -283,6 +284,9 @@ func (r *nodeRuntime) configureLedger() error {
 			cfg.PersistenceMemory = r.memory.persistence
 			cfg.ReplayVerificationMemory = r.memory.replayVerification
 		}
+	}
+	if err := r.configureExecution(&cfg); err != nil {
+		return err
 	}
 	cfg.GenesisConfig = genesisConfig
 	configuredFees := configuredLedgerLoadFees(r.appConfig)
@@ -1425,6 +1429,9 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 	if r.ledger != nil {
 		completed, err := runShutdownPhase(ctx, "stop ledger service", func() error {
 			r.ledger.Stop()
+			if r.executionCleanup != nil {
+				r.executionCleanup()
+			}
 			return nil
 		})
 		serviceStopped = completed

@@ -29,6 +29,10 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 			l.header.LedgerIndex, int64(l.dropsDestroyed), l.header.Drops)
 	}
 
+	if l.execution != nil {
+		return l.closeExecution(closeTime, closeFlags)
+	}
+
 	stateMap, err := l.stateMap.MutableFork()
 	if err != nil {
 		return fmt.Errorf("failed to fork state map: %w", err)
@@ -93,7 +97,7 @@ func (l *Ledger) UpdateNegativeUNL() error {
 		return ErrLedgerImmutable
 	}
 
-	return negativeunl.Apply(l.stateMap, l.header.LedgerIndex)
+	return negativeunl.Apply(l.stateTree(), l.header.LedgerIndex)
 }
 
 func (l *Ledger) SetValidated() error {

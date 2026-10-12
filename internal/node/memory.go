@@ -15,6 +15,10 @@ import (
 
 type nodeMemory struct {
 	pool               *membudget.Pool
+	state              *membudget.Account
+	stateRoots         *membudget.Account
+	stateStorage       *membudget.Account
+	stateDisk          *membudget.Account
 	acquisition        *membudget.Account
 	nodes              *membudget.Account
 	fullBelow          *membudget.Account
@@ -87,6 +91,27 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 			return nil, err
 		}
 		m.fullBelow, err = account("full_below", shamap.FullBelowCacheMemoryBytes, shamap.FullBelowCacheMemoryBytes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if cfg.State.Enabled {
+		state := cfg.State.Resolved()
+		m.state, err = account("state_overlay", 8<<20, uint64(state.MemoryMB)<<20)
+		if err != nil {
+			return nil, err
+		}
+		m.stateRoots, err = account("state_roots", 1<<20, 1<<20)
+		if err != nil {
+			return nil, err
+		}
+		storageBytes := uint64(state.CacheMB+4*state.MemTableMB+16) << 20
+		m.stateStorage, err = account("state_storage", storageBytes, storageBytes)
+		if err != nil {
+			return nil, err
+		}
+		diskPool := membudget.New(uint64(state.ScratchMB) << 20)
+		m.stateDisk, err = diskPool.NewAccount("state_scratch", 0, uint64(state.ScratchMB)<<20)
 		if err != nil {
 			return nil, err
 		}

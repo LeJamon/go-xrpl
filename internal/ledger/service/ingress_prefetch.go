@@ -40,6 +40,7 @@ func (s *Service) prefetchIngressState(ptx openledger.PendingTx) {
 	if err != nil {
 		return
 	}
+	defer view.Discard()
 	ctx, cancel := context.WithTimeout(context.Background(), ingressPrefetchBudget)
 	defer cancel()
 	// The deadline bounds further hints; a backend already in a physical

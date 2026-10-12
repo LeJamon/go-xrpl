@@ -14,6 +14,16 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
+type Reader interface {
+	GetContext(context.Context, [32]byte) (*shamap.Item, bool, error)
+}
+
+type Writer interface {
+	Reader
+	Put([32]byte, []byte) error
+	PutItemsAtomically(...*shamap.Item) error
+}
+
 // UpdateOnMap updates the LedgerHashes SLE(s) on a mutable SHAMap: every 256th
 // ledger appends parentHash to the historical skiplist (keylet::skip(seq)), and
 // every ledger appends it to the rolling-256 skiplist (keylet::skip()).
@@ -21,7 +31,7 @@ import (
 // It asserts the existing SLE is consistent before mutating; a violation means a
 // non-chain-advance path mutated it (issue #470: speculative-consensus leakage).
 // Failing loudly here prevents emitting a divergent ledger and forking the network.
-func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte) error {
+func UpdateOnMap(stateMap Writer, ledgerSeq uint32, parentHash [32]byte) error {
 	if stateMap == nil {
 		return errors.New("nil state map")
 	}
@@ -133,11 +143,11 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 
 // ReadLedgerHashesSLE returns the decoded fields, Hashes, and LastLedgerSequence
 // for the LedgerHashes SLE at key, or (nil, nil, 0, nil) when absent.
-func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (*LedgerHashesFields, [][32]byte, uint32, error) {
+func ReadLedgerHashesSLE(stateMap Reader, key [32]byte) (*LedgerHashesFields, [][32]byte, uint32, error) {
 	return ReadLedgerHashesSLEContext(context.Background(), stateMap, key)
 }
 
-func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (*LedgerHashesFields, [][32]byte, uint32, error) {
+func ReadLedgerHashesSLEContext(ctx context.Context, stateMap Reader, key [32]byte) (*LedgerHashesFields, [][32]byte, uint32, error) {
 	item, found, err := stateMap.GetContext(ctx, key)
 	if err != nil {
 		return nil, nil, 0, err
@@ -166,14 +176,14 @@ func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, ke
 
 // ReadHashes returns the Hashes array from a LedgerHashes SLE, or nil when absent.
 // Thin wrapper over ReadLedgerHashesSLE for callers needing only the vector.
-func ReadHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
+func ReadHashes(stateMap Reader, key [32]byte) ([][32]byte, error) {
 	_, hashes, _, err := ReadLedgerHashesSLE(stateMap, key)
 	return hashes, err
 }
 
 // Write serializes a LedgerHashes SLE to the state map. Existing entries retain
 // every decoded optional field; fresh entries leave FirstLedgerSequence absent.
-func Write(stateMap *shamap.SHAMap, key [32]byte, fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) error {
+func Write(stateMap interface{ Put([32]byte, []byte) error }, key [32]byte, fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) error {
 	data, err := encode(fields, hashes, lastSeq)
 	if err != nil {
 		return err

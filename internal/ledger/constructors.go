@@ -74,13 +74,23 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 	if rulesOverride != nil {
 		parentRules = rulesOverride
 	}
-	stateMap, err := parent.stateMap.SnapshotMutable()
+	var stateMap *shamap.SHAMap
+	var execution *executionView
+	var err error
+	if parent.execution != nil {
+		execution, err = parent.execution.successor(parentHeader.LedgerIndex + 1)
+	} else {
+		stateMap, err = parent.stateMap.SnapshotMutable()
+	}
 	parent.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
 
-	txMap := shamap.New(shamap.TypeTransaction)
+	var txMap *shamap.SHAMap
+	if execution == nil {
+		txMap = shamap.New(shamap.TypeTransaction)
+	}
 
 	// Recompute close-time resolution per close from the parent's previousAgree
 	// (encoded in its CloseFlags) — matches rippled and avoids plumbing
@@ -104,10 +114,15 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 		CloseTimeResolution: uint8(newResolution),
 		Drops:               parentHeader.Drops,
 	}
-	stateMap.SetLedgerSeq(newLedgerSeq)
-	txMap.SetLedgerSeq(newLedgerSeq)
+	if stateMap != nil {
+		stateMap.SetLedgerSeq(newLedgerSeq)
+	}
+	if txMap != nil {
+		txMap.SetLedgerSeq(newLedgerSeq)
+	}
 
 	return &Ledger{
+		execution:      execution,
 		stateMap:       stateMap,
 		txMap:          txMap,
 		header:         newHeader,

@@ -94,8 +94,9 @@ type AtomicWriter interface {
 type Ledger struct {
 	mu sync.RWMutex
 
-	stateMap *shamap.SHAMap
-	txMap    *shamap.SHAMap
+	execution *executionView
+	stateMap  *shamap.SHAMap
+	txMap     *shamap.SHAMap
 
 	header header.LedgerHeader
 
@@ -205,7 +206,7 @@ func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, erro
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.stateMap.GetContext(ctx, k.Key)
+	item, found, err := l.stateTree().GetContext(ctx, k.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +225,7 @@ func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, erro
 func (l *Ledger) SkipListHashes() ([][32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return skiplist.ReadHashes(l.stateMap, keylet.LedgerHashes().Key)
+	return skiplist.ReadHashes(l.stateTree(), keylet.LedgerHashes().Key)
 }
 
 // HashOfSeq returns the hash of ledger seq as recorded by this ledger. It resolves
@@ -252,7 +253,7 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	_, hashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateTree(), keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -276,7 +277,7 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 	if seq&0xff != 0 {
 		return [32]byte{}, false, nil
 	}
-	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLEContext(ctx, l.stateTree(), keylet.LedgerHashesForSeq(seq).Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}

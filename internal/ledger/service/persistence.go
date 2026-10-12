@@ -14,6 +14,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -65,6 +66,14 @@ func (s *Service) persistValidatedLedgerAtToken(
 		s.canonicalPersistMu.Lock()
 		defer s.canonicalPersistMu.Unlock()
 	}
+	if persistErr != nil && s.config.FlatState != nil {
+		return persistErr
+	}
+	if updateTip && s.config.FlatState != nil {
+		if err := s.advanceFlatState(ctx, l); err != nil {
+			return err
+		}
+	}
 	if s.relationalDB != nil {
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
 			persistErr = errors.Join(persistErr, err)
@@ -86,6 +95,14 @@ func (s *Service) persistValidatedLedgerAtToken(
 			} else {
 				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
 			}
+		}
+	}
+
+	if persistErr == nil && updateTip && s.config.FlatState != nil {
+		id := flatstate.SemanticCommitID(l.Hash(), ledgerPublication)
+		persistErr = s.config.FlatState.AckOutbox(ctx, id)
+		if persistErr == nil {
+			persistErr = s.refreshFlatRootPins(ctx)
 		}
 	}
 
@@ -311,6 +328,18 @@ func (s *Service) Stop() {
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()
+	if s.config.Execution != nil {
+		if s.openLedger != nil {
+			s.openLedger.Discard()
+		}
+		if s.openLedgerView != nil {
+			s.openLedgerView.Current().Discard()
+		}
+		for root, release := range s.flatPins {
+			release()
+			delete(s.flatPins, root)
+		}
+	}
 	s.clearRelayCache()
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()

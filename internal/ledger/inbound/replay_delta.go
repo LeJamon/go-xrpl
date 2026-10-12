@@ -1110,11 +1110,6 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	// rippled's Ledger(parent, closeTime) constructor: child inherits
 	// the parent's totalCoins and chains its parent linkage from the
 	// parent rather than the deserialized response header.
-	stateMap, err := r.parent.StateMapSnapshotContext(ctx)
-	if err != nil {
-		return nil, newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
-	}
-	txMap := shamap.New(shamap.TypeTransaction)
 	parentHeader := r.parent.Header()
 	applicationResolution := consensus.GetNextLedgerTimeResolution(
 		uint32(parentHeader.CloseTimeResolution),
@@ -1139,10 +1134,11 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 		// subtracts dropsDestroyed accumulated during apply.
 		Drops: r.parent.TotalDrops(),
 	}
-	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.Fees())
+	child, err := ledger.NewOpenFromParentHeader(ctx, r.parent, openHdr)
 	if err != nil {
 		return nil, fmt.Errorf("construct replay ledger: %w", err)
 	}
+	defer child.Discard()
 
 	// Override per-ledger config fields from the verified header /
 	// parent. The caller's EngineConfig keeps fees, network ID, logger,

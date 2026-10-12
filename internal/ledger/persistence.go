@@ -10,6 +10,14 @@ import (
 // StoreDirtyBatched bounds temporary copies while persisting both ledger trees.
 func (l *Ledger) StoreDirtyBatched(ctx context.Context, budget shamap.DirtyMemoryBudget, stateStore, txStore func([]shamap.FlushEntry) error) error {
 	l.mu.RLock()
+	if l.execution != nil {
+		defer l.mu.RUnlock()
+		if _, err := l.execution.state.hash(ctx); err != nil {
+			return err
+		}
+		_, err := l.execution.transactions.hash(ctx)
+		return err
+	}
 	stateMap, txMap := l.stateMap, l.txMap
 	if l.state != StateOpen {
 		l.mu.RUnlock()
@@ -38,6 +46,9 @@ func (l *Ledger) StateMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, e
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
+	if l.execution != nil {
+		return l.execution.state.mapSnapshot(ctx)
+	}
 	return l.stateMap.SnapshotMutableContext(ctx)
 }
 
@@ -51,6 +62,9 @@ func (l *Ledger) TxMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, erro
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
+	if l.execution != nil {
+		return l.execution.transactions.mapSnapshot(ctx)
+	}
 	return l.txMap.SnapshotMutableContext(ctx)
 }
 
@@ -60,6 +74,11 @@ func (l *Ledger) TxMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, erro
 // valid after the ledger lock is released for storage I/O.
 func (l *Ledger) StoreStateDirty(store func([]shamap.FlushEntry) error) error {
 	l.mu.RLock()
+	if l.execution != nil {
+		defer l.mu.RUnlock()
+		_, err := l.execution.state.hash(context.Background())
+		return err
+	}
 	stateMap := l.stateMap
 	if stateMap == nil {
 		l.mu.RUnlock()
@@ -75,6 +94,11 @@ func (l *Ledger) StoreStateDirty(store func([]shamap.FlushEntry) error) error {
 
 func (l *Ledger) StoreTransactionDirty(store func([]shamap.FlushEntry) error) error {
 	l.mu.RLock()
+	if l.execution != nil {
+		defer l.mu.RUnlock()
+		_, err := l.execution.transactions.hash(context.Background())
+		return err
+	}
 	txMap := l.txMap
 	if txMap == nil {
 		l.mu.RUnlock()
