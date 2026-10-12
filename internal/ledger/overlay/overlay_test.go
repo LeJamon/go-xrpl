@@ -631,7 +631,7 @@ func TestOverlaySpillBloomIncludesTombstones(t *testing.T) {
 		budget: owner, segments: []*spillSegment{segment},
 	}
 	defer o.Close()
-	if !segment.bloomReady || !segment.bloom.mayContain(tombstone) {
+	if !segment.bloom.mayContain(tombstone) {
 		t.Fatal("tombstone key is absent from the segment Bloom filter")
 	}
 	file, err := os.OpenFile(segment.path, os.O_WRONLY, 0)
@@ -672,9 +672,7 @@ func TestOverlaySpillBloomSurvivesCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer releaseSegment(merged)
-	if !merged.bloomReady {
-		t.Fatal("compacted segment has no Bloom filter")
-	}
+
 	for _, value := range keys {
 		if !merged.bloom.mayContain(testKey(value)) {
 			t.Fatalf("compacted Bloom filter lost key %d", value)

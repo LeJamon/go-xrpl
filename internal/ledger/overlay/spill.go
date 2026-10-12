@@ -150,7 +150,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 		owner.releaseMemory(segmentOverhead)
 		return nil, closeErr
 	}
-	return finishSegmentFile(ctx, f, path, owner, reserved, position, &index, indexCount, &bloom)
+	return finishSegmentFile(ctx, f, path, owner, reserved, position, &index, indexCount, bloom)
 }
 
 func removeSpillFile(path string) error {
