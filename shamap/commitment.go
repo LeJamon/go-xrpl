@@ -143,9 +143,11 @@ func reserveCommitmentMemoryWithFlush(ctx context.Context, budget CommitmentBudg
 			if err := flush(); err != nil {
 				return err
 			}
-			continue
 		}
 		wake := budget.Changed()
+		if budget.TryReserve(bytes) {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -1038,6 +1038,34 @@ type testCommitmentBudget struct {
 	wake     chan struct{}
 }
 
+type releaseOnChangedBudget struct {
+	capacity uint64
+	used     atomic.Uint64
+	changed  atomic.Uint64
+}
+
+func (b *releaseOnChangedBudget) TryReserve(bytes uint64) bool {
+	for {
+		used := b.used.Load()
+		if bytes > b.capacity-used {
+			return false
+		}
+		if b.used.CompareAndSwap(used, used+bytes) {
+			return true
+		}
+	}
+}
+
+func (b *releaseOnChangedBudget) Release(bytes uint64) {
+	b.used.Add(^bytes + 1)
+}
+
+func (b *releaseOnChangedBudget) Changed() <-chan struct{} {
+	b.changed.Add(1)
+	b.used.Store(0)
+	return make(chan struct{})
+}
+
 func (b *testCommitmentBudget) TryReserve(bytes uint64) bool {
 	for {
 		used := b.used.Load()
@@ -1068,6 +1096,32 @@ func (b *testCommitmentBudget) Changed() <-chan struct{} {
 }
 
 func (b *testCommitmentBudget) Capacity() uint64 { return b.capacity }
+
+func TestReserveCommitmentMemoryRechecksAfterChanged(t *testing.T) {
+	budget := &releaseOnChangedBudget{capacity: 1}
+	if !budget.TryReserve(1) {
+		t.Fatal("failed to establish external reservation")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- reserveCommitmentMemory(ctx, budget, 1) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reserveCommitmentMemory: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("reservation waited after Changed released capacity")
+	}
+	if got := budget.changed.Load(); got != 1 {
+		t.Fatalf("Changed calls = %d, want 1", got)
+	}
+	if got := budget.used.Load(); got != 1 {
+		t.Fatalf("reserved bytes = %d, want 1", got)
+	}
+	budget.Release(1)
+}
 
 func TestRootReaderOperations(t *testing.T) {
 	family := newMemoryFamily()
