@@ -157,6 +157,7 @@ func runBatchOracleFixture(t *testing.T, fixture batchOracleFixture) {
 	require.NoError(t, err)
 	view, err := openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
 	require.NoError(t, err)
+	t.Cleanup(func() { view.Current().Discard() })
 	beforeTxs, err := view.Current().TxMapHash()
 	require.NoError(t, err)
 	apply := oracleApplyConfig(parent.Ledger, parent.EffectiveRules)
@@ -191,6 +192,7 @@ func runBatchOracleFixture(t *testing.T, fixture batchOracleFixture) {
 		Apply:      apply,
 	})
 	require.NoError(t, err)
+	t.Cleanup(built.Ledger.Discard)
 	assertBatchOracleLedger(t, built.Ledger, closed)
 }
 

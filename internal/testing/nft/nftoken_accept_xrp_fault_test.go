@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/nft"
@@ -23,9 +24,14 @@ import (
 type issuerReadFaultView struct {
 	tx.LedgerView
 	atomic    ledgercore.AtomicWriter
+	journal   overlay.Config
 	issuerKey keylet.Keylet
 	err       error
 	malformed bool
+}
+
+func (v *issuerReadFaultView) ExecutionJournalConfig() overlay.Config {
+	return v.journal
 }
 
 func (v *issuerReadFaultView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
@@ -208,6 +214,7 @@ func TestNFTokenAcceptOfferXRP_IssuerCreditFailuresRollBack(t *testing.T) {
 				view := &issuerReadFaultView{
 					LedgerView: fixture.env.Ledger(),
 					atomic:     fixture.env.Ledger(),
+					journal:    fixture.env.Ledger().ExecutionJournalConfig(),
 					issuerKey:  keylet.Account(fixture.issuer.ID),
 				}
 				if fault == "read" {

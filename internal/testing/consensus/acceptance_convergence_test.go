@@ -18,6 +18,7 @@ import (
 )
 
 func TestConsensusAcceptanceConvergesAcrossFullValidators(t *testing.T) {
+	genesisStore := ledgertestutil.NewExecutionStore(t, nil)
 	cluster := NewTestCluster(t, 3)
 	t.Cleanup(cluster.Stop)
 	for _, node := range cluster.Nodes {
@@ -28,8 +29,7 @@ func TestConsensusAcceptanceConvergesAcrossFullValidators(t *testing.T) {
 	genesisConfig.Amendments = nil
 	initial, err := genesis.Create(genesisConfig)
 	require.NoError(t, err)
-	store := ledgertestutil.NewExecutionStore(t, nil)
-	genesisLedger, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, store)
+	genesisLedger, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, genesisStore)
 	require.NoError(t, err)
 	t.Cleanup(genesisLedger.Discard)
 	fixedTime := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
