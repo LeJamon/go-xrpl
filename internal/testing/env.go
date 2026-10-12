@@ -224,37 +224,9 @@ func (e *TestEnv) T() testing.TB {
 	return e.t
 }
 
-// enablePebbleBacking enables PebbleDB-backed SHAMaps on the environment.
-// Must be called before any transactions are submitted.
-func (e *TestEnv) enablePebbleBacking(t testing.TB) {
-	t.Helper()
-	stateFamily, err := backend.OpenPebble(t.TempDir(), 256, 200000)
-	if err != nil {
-		t.Fatalf("Failed to create state family: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := stateFamily.Close(); err != nil {
-			t.Errorf("close state family: %v", err)
-		}
-	})
-	e.stateFamily = stateFamily
-	e.genesisLedger.SetStateMapFamily(stateFamily)
-
-	// Recreate the open ledger so it inherits the backed state map
-	openLedger, err := ledger.NewOpen(e.genesisLedger, e.clock.Now())
-	if err != nil {
-		t.Fatalf("Failed to recreate open ledger with backing: %v", err)
-	}
-	e.ledger = openLedger
-}
-
 // NewTestEnvWithConfig creates a new test environment with custom genesis configuration.
 func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 	t.Helper()
-	return newTestEnvWithFamily(t, cfg, nil)
-}
-
-func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
 	return newTestEnvWithFamily(t, cfg, nil)
 }
 

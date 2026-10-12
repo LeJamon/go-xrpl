@@ -102,15 +102,6 @@ func (m *pathFindRefreshManager) goroutineDone() {
 	}
 }
 
-func (m *pathFindRefreshManager) enqueue(getView func() (types.LedgerStateView, error), targets []pathFindUpdateTarget) {
-	m.enqueueContext(func(context.Context) (types.LedgerStateView, error) {
-		if getView == nil {
-			return nil, nil
-		}
-		return getView()
-	}, targets)
-}
-
 func (m *pathFindRefreshManager) enqueueContext(getView func(context.Context) (types.LedgerStateView, error), targets []pathFindUpdateTarget) {
 	if len(targets) == 0 {
 		m.invalidate()

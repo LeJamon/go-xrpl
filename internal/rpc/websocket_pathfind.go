@@ -170,17 +170,6 @@ func (ws *WebSocketServer) queuePathFindSessionsContext(getView func(context.Con
 	manager.enqueueContext(getView, targets)
 }
 
-func currentPathFindView(services *types.ServiceGraph) func() (types.LedgerStateView, error) {
-	return func() (types.LedgerStateView, error) {
-		ledger := services.Ledger()
-		if source, ok := ledger.(types.LedgerViewSource); ok {
-			view, _, err := source.GetLedgerViewBySeq(ledger.GetCurrentLedgerIndex())
-			return view, err
-		}
-		return services.LedgerViews().GetClosedLedgerView()
-	}
-}
-
 func currentPathFindViewContext(services *types.ServiceGraph) func(context.Context) (types.LedgerStateView, error) {
 	return func(ctx context.Context) (types.LedgerStateView, error) {
 		ledger := services.Ledger()
