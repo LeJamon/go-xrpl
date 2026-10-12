@@ -302,10 +302,6 @@ func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bo
 }
 
 func (l *Ledger) Rules() *amendment.Rules {
-	return l.rulesSnapshot()
-}
-
-func (l *Ledger) rulesSnapshot() *amendment.Rules {
 	l.rulesMu.RLock()
 	defer l.rulesMu.RUnlock()
 	return l.rules

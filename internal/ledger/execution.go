@@ -1007,7 +1007,7 @@ func (l *Ledger) executionSnapshot(ctx context.Context, mutable bool) (*Ledger, 
 		return nil, err
 	}
 	return &Ledger{execution: view, header: l.header, fees: l.fees, state: l.state,
-		writable: mutable, dropsDestroyed: l.dropsDestroyed, rules: l.rulesSnapshot()}, nil
+		writable: mutable, dropsDestroyed: l.dropsDestroyed, rules: l.Rules()}, nil
 }
 
 func (v *executionView) successor(ctx context.Context, sequence uint32) (*executionView, error) {
@@ -1157,5 +1157,5 @@ func NewOpenFromParentHeader(ctx context.Context, parent *Ledger, hdr header.Led
 	if err != nil {
 		return nil, err
 	}
-	return &Ledger{execution: view, header: hdr, fees: parent.fees, rules: parent.rulesSnapshot(), writable: true, state: StateOpen}, nil
+	return &Ledger{execution: view, header: hdr, fees: parent.fees, rules: parent.Rules(), writable: true, state: StateOpen}, nil
 }
