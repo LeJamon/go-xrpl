@@ -312,6 +312,9 @@ type Store struct {
 	mu sync.Mutex
 	cv *sync.Cond
 
+	cacheMu     sync.Mutex
+	cachedViews []*cachedView
+
 	db    *pebble.DB
 	cache *pebble.Cache
 	path  string
@@ -335,6 +338,42 @@ type Store struct {
 
 	writeMu sync.Mutex
 }
+
+const cachedViewLimit = 2
+
+type cachedView struct {
+	view       *View
+	descriptor Descriptor
+	borrows    int
+	retired    bool
+}
+
+// ViewLease keeps a bounded execution view alive for one operation.  The
+// underlying view is owned by Store and must be released after the operation.
+type ViewLease struct {
+	store *Store
+	entry *cachedView
+	once  sync.Once
+}
+
+// View returns the point-in-time view held by the lease.
+func (l *ViewLease) View() *View {
+	if l == nil || l.entry == nil {
+		return nil
+	}
+	return l.entry.view
+}
+
+// Close releases the lease.  It is safe to call Close more than once.
+func (l *ViewLease) Close() {
+	if l == nil || l.store == nil || l.entry == nil {
+		return
+	}
+	l.once.Do(func() { l.store.releaseCachedView(l.entry) })
+}
+
+// Release is an alias for Close.
+func (l *ViewLease) Release() { l.Close() }
 
 // Open opens or creates a flat state database.  A marker found during open
 // suppresses new views until Resume is called with an explicit root
@@ -470,6 +509,10 @@ func (s *Store) Marker() (AdvanceMarker, bool, error) {
 // readiness guard.  Metadata is verified after releasing the guard so no
 // storage read or callback runs under the publication lock.
 func (s *Store) OpenView(ctx context.Context) (*View, error) {
+	return s.openView(ctx)
+}
+
+func (s *Store) openView(ctx context.Context) (*View, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -525,6 +568,118 @@ func (s *Store) OpenView(ctx context.Context) (*View, error) {
 	}
 	view.end()
 	return view, nil
+}
+
+// BorrowView returns a lease on a bounded cached view for descriptor.  Cached
+// views are exact-descriptor views and are retired at the start of every
+// publication transition.  When the two-entry cache is occupied, callers can
+// fall back to their authenticated root-backed view.
+func (s *Store) BorrowView(ctx context.Context, descriptor Descriptor) (*ViewLease, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
+	s.mu.Lock()
+	if err := s.cachedViewStateLocked(descriptor); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	for _, entry := range s.cachedViews {
+		if entry.retired || !entry.descriptor.Equal(descriptor) {
+			continue
+		}
+		s.mu.Unlock()
+		if err := entry.view.begin(); err != nil {
+			s.mu.Lock()
+			s.removeCachedViewLocked(entry)
+			s.mu.Unlock()
+			return nil, err
+		}
+		s.mu.Lock()
+		if err := s.cachedViewStateLocked(descriptor); err != nil || entry.retired {
+			if err == nil {
+				err = ErrUnavailable
+			}
+			s.mu.Unlock()
+			entry.view.end()
+			return nil, err
+		}
+		entry.borrows++
+		s.mu.Unlock()
+		return &ViewLease{store: s, entry: entry}, nil
+	}
+	if len(s.cachedViews) >= cachedViewLimit {
+		s.mu.Unlock()
+		return nil, ErrLimit
+	}
+	s.mu.Unlock()
+
+	view, err := s.openView(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := view.begin(); err != nil {
+		_ = view.Close()
+		return nil, err
+	}
+	s.mu.Lock()
+	if err := s.cachedViewStateLocked(descriptor); err != nil || !view.hasDescriptor || !view.descriptor.Equal(descriptor) {
+		if err == nil {
+			err = ErrUnavailable
+		}
+		s.mu.Unlock()
+		view.end()
+		_ = view.Close()
+		return nil, err
+	}
+	entry := &cachedView{view: view, descriptor: descriptor, borrows: 1}
+	s.cachedViews = append(s.cachedViews, entry)
+	s.mu.Unlock()
+	return &ViewLease{store: s, entry: entry}, nil
+}
+
+func (s *Store) cachedViewStateLocked(descriptor Descriptor) error {
+	if s.closed || s.closing {
+		return ErrClosed
+	}
+	if !s.ready || s.uncertain || s.marker != nil || s.writerActive || !s.hasDescriptor || !s.descriptor.Equal(descriptor) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+func (s *Store) removeCachedViewLocked(target *cachedView) {
+	for index, entry := range s.cachedViews {
+		if entry != target {
+			continue
+		}
+		copy(s.cachedViews[index:], s.cachedViews[index+1:])
+		s.cachedViews[len(s.cachedViews)-1] = nil
+		s.cachedViews = s.cachedViews[:len(s.cachedViews)-1]
+		return
+	}
+}
+
+func (s *Store) releaseCachedView(entry *cachedView) {
+	s.cacheMu.Lock()
+	s.mu.Lock()
+	closeView := false
+	if entry.borrows > 0 {
+		entry.borrows--
+		closeView = entry.borrows == 0 && entry.retired
+		if closeView {
+			s.removeCachedViewLocked(entry)
+		}
+	}
+	s.mu.Unlock()
+	s.cacheMu.Unlock()
+
+	entry.view.end()
+	if closeView {
+		_ = entry.view.Close()
+	}
 }
 
 // Advance applies a sorted delta in bounded batches and publishes Target in
@@ -675,6 +830,7 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 	s.writerEpoch++
 	epoch := s.writerEpoch
 	s.mu.Unlock()
+	s.retireCachedViews()
 
 	markerWritten := resuming
 	beforeFlush := func() error {
@@ -704,6 +860,27 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 	}
 	s.finishWriter(epoch, true, true, target)
 	return nil
+}
+
+func (s *Store) retireCachedViews() {
+	s.cacheMu.Lock()
+	s.mu.Lock()
+	views := make([]*View, 0, len(s.cachedViews))
+	kept := s.cachedViews[:0]
+	for _, entry := range s.cachedViews {
+		entry.retired = true
+		if entry.borrows == 0 {
+			views = append(views, entry.view)
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	s.cachedViews = kept
+	s.mu.Unlock()
+	s.cacheMu.Unlock()
+	for _, view := range views {
+		_ = view.Close()
+	}
 }
 
 func zeroDescriptor(descriptor *Descriptor) Descriptor {
@@ -1101,11 +1278,19 @@ func (s *Store) Close() error {
 		return nil
 	}
 	s.closing = true
+	s.mu.Unlock()
+
+	s.cacheMu.Lock()
+	s.mu.Lock()
+	for _, entry := range s.cachedViews {
+		entry.retired = true
+	}
 	views := make([]*View, 0, len(s.activeViews))
 	for view := range s.activeViews {
 		views = append(views, view)
 	}
 	s.mu.Unlock()
+	s.cacheMu.Unlock()
 	for _, view := range views {
 		_ = view.Close()
 	}
@@ -1115,6 +1300,7 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	db, cache := s.db, s.cache
+	s.cachedViews = nil
 	s.cv.Broadcast()
 	s.mu.Unlock()
 	closeErr := db.Close()

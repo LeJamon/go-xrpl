@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
@@ -151,6 +153,264 @@ func testExecutionStore(t *testing.T) (*ExecutionStore, *membudget.Account) {
 		}
 	})
 	return store, memory
+}
+
+func flatExecutionHash(value byte) [32]byte {
+	var result [32]byte
+	result[31] = value
+	return result
+}
+
+func flatExecutionDescriptor(sequence uint32, parent, ledger, state, tx byte) flatstate.Descriptor {
+	return flatstate.Descriptor{
+		LedgerHash: flatExecutionHash(ledger),
+		ParentHash: flatExecutionHash(parent),
+		Sequence:   sequence,
+		StateRoot:  flatExecutionHash(state),
+		TxRoot:     flatExecutionHash(tx),
+		Schema:     7,
+		Epoch:      19,
+	}
+}
+
+func flatExecutionTree(store *ExecutionStore, descriptor flatstate.Descriptor) *executionTree {
+	return &executionTree{
+		store: store,
+		kind:  shamap.TypeState,
+		base: header.LedgerHeader{
+			Hash:        descriptor.LedgerHash,
+			ParentHash:  descriptor.ParentHash,
+			LedgerIndex: descriptor.Sequence,
+			AccountHash: descriptor.StateRoot,
+			TxHash:      descriptor.TxRoot,
+		},
+		root: descriptor.StateRoot,
+	}
+}
+
+func publishFlatExecution(t *testing.T, store *flatstate.Store, expected *flatstate.Descriptor, target flatstate.Descriptor, changes []flatstate.Change) {
+	t.Helper()
+	authorization := flatstate.RootClosureAuthorization{TargetRoot: target.StateRoot, Token: []byte("execution-flat-test")}
+	if expected != nil {
+		authorization.SourceRoot = expected.StateRoot
+	}
+	if err := store.Advance(context.Background(), flatstate.AdvanceRequest{
+		Expected: expected, Target: target, Changes: flatstate.NewSliceChangeIterator(changes), Authorization: authorization,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionFlatViewCacheReusesBoundedLease(t *testing.T) {
+	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	store, _ := testExecutionStore(t)
+	store.config.Flat = flat
+	target := flatExecutionDescriptor(1, 0, 1, 2, 3)
+	key := flatExecutionHash(11)
+	publishFlatExecution(t, flat, nil, target, []flatstate.Change{{Key: key, Value: []byte("cached")}})
+	tree := flatExecutionTree(store, target)
+	base := executionBase{tree: tree}
+	for i := 0; i < 8; i++ {
+		value, found, err := base.Get(context.Background(), key)
+		if err != nil || !found || string(value) != "cached" {
+			t.Fatalf("cached read %d = %q, %v, %v", i, value, found, err)
+		}
+	}
+	stats := store.Stats()
+	if stats.FlatHits != 8 || stats.FlatFallbacks != 0 {
+		t.Fatalf("flat stats = %#v", stats)
+	}
+	if _, err := flat.OpenView(context.Background()); !errors.Is(err, flatstate.ErrLimit) {
+		t.Fatalf("cached view was not retained: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionFlatViewCacheRefreshesDescriptorAndRetiresOnAdvance(t *testing.T) {
+	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	store, _ := testExecutionStore(t)
+	store.config.Flat = flat
+	first := flatExecutionDescriptor(1, 0, 1, 2, 3)
+	key := flatExecutionHash(11)
+	publishFlatExecution(t, flat, nil, first, []flatstate.Change{{Key: key, Value: []byte("first")}})
+	firstTree := flatExecutionTree(store, first)
+	if value, found, err := (executionBase{tree: firstTree}).Get(context.Background(), key); err != nil || !found || string(value) != "first" {
+		t.Fatalf("first read = %q, %v, %v", value, found, err)
+	}
+
+	second := flatExecutionDescriptor(2, 1, 4, 5, 6)
+	publishFlatExecution(t, flat, &first, second, []flatstate.Change{{Key: key, Value: []byte("second")}})
+	probe, err := flat.OpenView(context.Background())
+	if err != nil {
+		t.Fatalf("idle cached view pinned transition: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	secondTree := flatExecutionTree(store, second)
+	if value, found, err := (executionBase{tree: secondTree}).Get(context.Background(), key); err != nil || !found || string(value) != "second" {
+		t.Fatalf("second read = %q, %v, %v", value, found, err)
+	}
+	if _, err := flat.OpenView(context.Background()); !errors.Is(err, flatstate.ErrLimit) {
+		t.Fatalf("refreshed view was not retained: %v", err)
+	}
+
+	third := flatExecutionDescriptor(3, 4, 7, 8, 9)
+	err = flat.Advance(context.Background(), flatstate.AdvanceRequest{
+		Expected: &second, Target: third,
+		Changes:       flatstate.NewSliceChangeIterator([]flatstate.Change{{Key: flatExecutionHash(9), Value: []byte("out of order")}, {Key: flatExecutionHash(1), Value: []byte("out of order")}}),
+		Authorization: flatstate.RootClosureAuthorization{SourceRoot: second.StateRoot, TargetRoot: third.StateRoot, Token: []byte("execution-flat-test")},
+	})
+	if !errors.Is(err, flatstate.ErrInvalidChangeOrder) {
+		t.Fatalf("invalid advance = %v", err)
+	}
+	if _, _, err := flat.Current(); !errors.Is(err, flatstate.ErrUnavailable) {
+		t.Fatalf("current during advancing = %v", err)
+	}
+	lease, err := secondTree.flatView(context.Background())
+	if err != nil {
+		t.Fatalf("flat view during advancing: %v", err)
+	}
+	if lease != nil {
+		lease.Close()
+		t.Fatal("cached view remained available during advancing")
+	}
+	if _, err := flat.OpenView(context.Background()); !errors.Is(err, flatstate.ErrUnavailable) {
+		t.Fatalf("open view during advancing = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionFlatViewCacheIncludesSchemaEpochIdentity(t *testing.T) {
+	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	store, _ := testExecutionStore(t)
+	store.config.Flat = flat
+	first := flatExecutionDescriptor(1, 0, 1, 2, 3)
+	key := flatExecutionHash(11)
+	publishFlatExecution(t, flat, nil, first, []flatstate.Change{{Key: key, Value: []byte("same-root")}})
+	firstTree := flatExecutionTree(store, first)
+	if _, found, err := (executionBase{tree: firstTree}).Get(context.Background(), key); err != nil || !found {
+		t.Fatalf("first read = found %v, err %v", found, err)
+	}
+
+	second := first
+	second.Schema++
+	second.Epoch++
+	if err := flat.Rebase(context.Background(), flatstate.RebaseRequest{
+		Expected: &first, Target: second, Changes: flatstate.NewSliceChangeIterator(nil),
+		PublicationKind: "schema-epoch",
+		Authorization:   flatstate.RootClosureAuthorization{SourceRoot: first.StateRoot, TargetRoot: second.StateRoot, Token: []byte("execution-flat-test")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := flat.BorrowView(context.Background(), second)
+	if err != nil {
+		t.Fatalf("borrow schema/epoch view: %v", err)
+	}
+	got, hasDescriptor, err := lease.View().Descriptor()
+	lease.Close()
+	if err != nil || !hasDescriptor || !got.Equal(second) {
+		t.Fatalf("cached descriptor = %#v, has=%v, err=%v, want %#v", got, hasDescriptor, err, second)
+	}
+	secondTree := flatExecutionTree(store, second)
+	if _, found, err := (executionBase{tree: secondTree}).Get(context.Background(), key); err != nil || !found {
+		t.Fatalf("schema/epoch read = found %v, err %v", found, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionFlatViewCacheReleasesRetiredLeaseAfterAdvance(t *testing.T) {
+	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	store, _ := testExecutionStore(t)
+	store.config.Flat = flat
+	first := flatExecutionDescriptor(1, 0, 1, 2, 3)
+	key := flatExecutionHash(11)
+	publishFlatExecution(t, flat, nil, first, []flatstate.Change{{Key: key, Value: []byte("first")}})
+	firstTree := flatExecutionTree(store, first)
+	lease, err := firstTree.flatView(context.Background())
+	if err != nil || lease == nil {
+		t.Fatalf("acquire cached lease = %v, %v", lease, err)
+	}
+
+	second := flatExecutionDescriptor(2, 1, 4, 5, 6)
+	publishFlatExecution(t, flat, &first, second, []flatstate.Change{{Key: key, Value: []byte("second")}})
+	lease.Close()
+
+	probe, err := flat.OpenView(context.Background())
+	if err != nil {
+		t.Fatalf("retired lease remained pinned after release: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionFlatViewCacheCloseWaitsForLease(t *testing.T) {
+	flat, err := flatstate.Open(t.TempDir(), flatstate.Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxActiveViews: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	store, _ := testExecutionStore(t)
+	store.config.Flat = flat
+	target := flatExecutionDescriptor(1, 0, 1, 2, 3)
+	key := flatExecutionHash(11)
+	publishFlatExecution(t, flat, nil, target, []flatstate.Change{{Key: key, Value: []byte("lease")}})
+	tree := flatExecutionTree(store, target)
+	lease, err := tree.flatView(context.Background())
+	if err != nil || lease == nil {
+		t.Fatalf("acquire cached lease = %v, %v", lease, err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- flat.Close() }()
+	deadline := time.After(2 * time.Second)
+	for {
+		if _, _, currentErr := flat.Current(); errors.Is(currentErr, flatstate.ErrClosed) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("flat close did not publish closing state")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	lease.Close()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("flat close did not finish after lease release")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func hasVerifiedExecutionClosure(l *Ledger) bool {

@@ -170,25 +170,42 @@ func (t *executionTree) reader() *shamap.RootReader {
 		shamap.WithCommitmentBudget(t.store.config.Workspace))
 }
 
-func (t *executionTree) flatView(ctx context.Context) (*flatstate.View, error) {
+func (t *executionTree) flatView(ctx context.Context) (*flatstate.ViewLease, error) {
 	if t.kind != shamap.TypeState || t.store.config.Flat == nil {
 		return nil, nil
 	}
-	v, err := t.store.config.Flat.OpenView(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d, ready, err := t.store.config.Flat.Current()
 	if err != nil {
-		// An advancing or unavailable base is served by the authenticated root.
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, nil
 	}
-	d, ready, err := v.Descriptor()
-	if err != nil || !ready || d.LedgerHash != t.base.Hash || d.StateRoot != t.root ||
-		d.ParentHash != t.base.ParentHash || d.Sequence != t.base.LedgerIndex || d.TxRoot != t.base.TxHash {
-		_ = v.Close()
-		return nil, err
+	if !ready {
+		return nil, nil
 	}
-	return v, nil
+	if !executionFlatDescriptorMatches(d, t.base, t.root) {
+		return nil, nil
+	}
+	lease, err := t.store.config.Flat.BorrowView(ctx, d)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	}
+	return lease, nil
+}
+
+func executionFlatDescriptorMatches(d flatstate.Descriptor, base header.LedgerHeader, root [32]byte) bool {
+	return d.LedgerHash == base.Hash && d.StateRoot == root &&
+		d.ParentHash == base.ParentHash && d.Sequence == base.LedgerIndex && d.TxRoot == base.TxHash
 }
 
 type executionBase struct{ tree *executionTree }
@@ -230,21 +247,29 @@ func (c *executionCursor) Close() error { c.stop(); return nil }
 
 func (b executionBase) Get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
 	t := b.tree
+	lease, err := t.flatView(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if lease != nil {
+		t.store.stats.flatHits.Add(1)
+		value, found, err := lease.View().Get(key)
+		if err == nil {
+			lease.Close()
+			return value, found, nil
+		}
+		if !errors.Is(err, flatstate.ErrClosed) {
+			lease.Close()
+			return nil, false, err
+		}
+		lease.Close()
+	}
+	t.store.stats.rootFallbacks.Add(1)
 	release, err := t.store.roots.Acquire(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		return nil, false, err
 	}
 	defer release()
-	v, err := t.flatView(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	if v != nil {
-		t.store.stats.flatHits.Add(1)
-		defer v.Close()
-		return v.Get(key)
-	}
-	t.store.stats.rootFallbacks.Add(1)
 	item, kind, found, err := t.reader().GetLeaf(ctx, key)
 	if err != nil || !found {
 		return nil, found, err
@@ -257,24 +282,34 @@ func (b executionBase) Get(ctx context.Context, key [32]byte) ([]byte, bool, err
 
 func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32]byte, []byte) bool) error {
 	t := b.tree
+	lease, err := t.flatView(ctx)
+	if err != nil {
+		return err
+	}
+	if lease != nil {
+		t.store.stats.flatHits.Add(1)
+		var iterateErr error
+		if after == nil {
+			iterateErr = lease.View().ForEach(ctx, fn)
+		} else {
+			iterateErr = lease.View().ForEachFrom(ctx, *after, fn)
+		}
+		if iterateErr == nil {
+			lease.Close()
+			return nil
+		}
+		if !errors.Is(iterateErr, flatstate.ErrClosed) {
+			lease.Close()
+			return iterateErr
+		}
+		lease.Close()
+	}
+	t.store.stats.rootFallbacks.Add(1)
 	release, err := t.store.roots.Acquire(rootlease.Root{Hash: t.root, Kind: t.kind})
 	if err != nil {
 		return err
 	}
 	defer release()
-	v, err := t.flatView(ctx)
-	if err != nil {
-		return err
-	}
-	if v != nil {
-		t.store.stats.flatHits.Add(1)
-		defer v.Close()
-		if after == nil {
-			return v.ForEach(ctx, fn)
-		}
-		return v.ForEachFrom(ctx, *after, fn)
-	}
-	t.store.stats.rootFallbacks.Add(1)
 	return t.reader().IterateLeaves(ctx, after, func(item *shamap.Item, kind shamap.NodeType) bool {
 		data := item.Data()
 		if t.kind == shamap.TypeTransaction {
