@@ -124,7 +124,7 @@ func TestLedgerCloseFailureAtSkipListBoundaryIsAtomicAndRetryable(t *testing.T) 
 	if l.rules != beforeRules || l.dropsDestroyed != beforeDestroyed || !l.IsOpen() || l.IsImmutable() {
 		t.Fatal("failed close changed rules, destroyed drops, lifecycle, or writability")
 	}
-	item, found, err := l.stateTree().Get(rolling.Key)
+	item, found, err := l.execution.state.Get(rolling.Key)
 	if err != nil {
 		t.Fatalf("read rolling skip list after failed close: %v", err)
 	}

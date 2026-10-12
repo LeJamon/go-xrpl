@@ -17,14 +17,14 @@ func (l *Ledger) addTransaction(txHash [32]byte, txData []byte, nodeType shamap.
 	if l.state != StateOpen || !l.writable {
 		return ErrLedgerImmutable
 	}
-	exists, err := l.transactionTree().Has(txHash)
+	exists, err := l.execution.transactions.Has(txHash)
 	if err != nil {
 		return err
 	}
 	if exists {
 		return ErrEntryExists
 	}
-	return l.transactionTree().PutWithNodeType(txHash, txData, nodeType)
+	return l.execution.transactions.PutWithNodeType(txHash, txData, nodeType)
 }
 
 // AddTransactionWithMeta adds a tx with metadata, using NodeTypeTransactionWithMeta
@@ -41,7 +41,7 @@ func (l *Ledger) GetTransactionContext(ctx context.Context, txHash [32]byte) ([]
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.transactionTree().GetContext(ctx, txHash)
+	item, found, err := l.execution.transactions.GetContext(ctx, txHash)
 	if err != nil {
 		return nil, false, err
 	}
@@ -56,5 +56,5 @@ func (l *Ledger) TxExists(txHash [32]byte) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.transactionTree().Has(txHash)
+	return l.execution.transactions.Has(txHash)
 }

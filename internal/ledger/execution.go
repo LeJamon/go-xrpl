@@ -113,37 +113,6 @@ func (s *ExecutionStore) AcquireRoot(root rootlease.Root) (func(), error) {
 	return s.roots.Acquire(root)
 }
 
-// BeginBuild admits a bounded commitment build without pinning a durable
-// generation. The caller must register any destination root ownership before
-// ending the returned token.
-func (s *ExecutionStore) BeginBuild() (*rootlease.BuildLease, error) {
-	return s.roots.BeginBuild()
-}
-
-// EndBuild ends a bounded commitment build admission. It is idempotent for a
-// token and safe from deferred cleanup paths.
-func (s *ExecutionStore) EndBuild(build *rootlease.BuildLease) {
-	s.roots.EndBuild(build)
-}
-
-// AcquireExecutionLease registers a sealed root that must survive storage
-// rotation until its owner transfers or releases it.
-func (s *ExecutionStore) AcquireExecutionLease(root rootlease.Root) (*rootlease.Lease, error) {
-	return s.roots.AcquireLease(root)
-}
-
-// ReleaseExecutionLease releases ownership after the sealed root has been
-// transferred to history, flat outbox, or another retention owner.
-func (s *ExecutionStore) ReleaseExecutionLease(lease *rootlease.Lease) {
-	if lease != nil {
-		lease.Release()
-	}
-}
-
-func (s *ExecutionStore) GuardRoots(preserved func(rootlease.Root) bool) (func(), bool) {
-	return s.roots.GuardFunc(preserved)
-}
-
 // GuardPreservedRoots admits storage retirement when every active lease is in
 // the caller's immutable preservation set. The set is read while admitting the
 // guard and is not retained.
@@ -152,30 +121,6 @@ func (s *ExecutionStore) GuardPreservedRoots(preserved map[rootlease.Root]struct
 }
 
 func (s *ExecutionStore) Close() error { return s.roots.Close() }
-
-type stateTree interface {
-	Get([32]byte) (*shamap.Item, bool, error)
-	GetContext(context.Context, [32]byte) (*shamap.Item, bool, error)
-	Has([32]byte) (bool, error)
-	HasContext(context.Context, [32]byte) (bool, error)
-	Put([32]byte, []byte) error
-	Delete([32]byte) error
-	PutItemsAtomically(...*shamap.Item) error
-}
-
-type transactionTree interface {
-	GetContext(context.Context, [32]byte) (*shamap.Item, bool, error)
-	Has([32]byte) (bool, error)
-	PutWithNodeType([32]byte, []byte, shamap.NodeType) error
-}
-
-func (l *Ledger) stateTree() stateTree {
-	return l.execution.state
-}
-
-func (l *Ledger) transactionTree() transactionTree {
-	return l.execution.transactions
-}
 
 type executionView struct {
 	state        *executionTree
@@ -392,7 +337,7 @@ func (t *executionTree) close() {
 	t.resultLease = nil
 	t.hashMu.Unlock()
 	if resultLease != nil {
-		t.store.ReleaseExecutionLease(resultLease)
+		resultLease.Release()
 	}
 	if t.changes != nil {
 		_ = t.changes.Close()
@@ -416,7 +361,7 @@ func (t *executionTree) invalidateHash() {
 	t.cached = [32]byte{}
 	t.hashMu.Unlock()
 	if resultLease != nil {
-		t.store.ReleaseExecutionLease(resultLease)
+		resultLease.Release()
 	}
 }
 
@@ -426,7 +371,7 @@ func (t *executionTree) releaseBuildLease() {
 	t.resultLease = nil
 	t.hashMu.Unlock()
 	if resultLease != nil {
-		t.store.ReleaseExecutionLease(resultLease)
+		resultLease.Release()
 	}
 }
 
@@ -697,7 +642,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 			return [32]byte{}, err
 		}
 		if t.resultLease == nil {
-			lease, err := t.store.AcquireExecutionLease(rootlease.Root{Hash: t.cached, Kind: t.kind})
+			lease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: t.cached, Kind: t.kind})
 			if err != nil {
 				return [32]byte{}, err
 			}
@@ -705,12 +650,12 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		}
 		return t.cached, ctx.Err()
 	}
-	build, err := t.store.BeginBuild()
+	build, err := t.store.roots.BeginBuild()
 	if err != nil {
 		t.store.stats.buildErrors.Add(1)
 		return [32]byte{}, err
 	}
-	defer t.store.EndBuild(build)
+	defer t.store.roots.EndBuild(build)
 	changes, err := t.changes.Changes(ctx, nil)
 	if err != nil {
 		return [32]byte{}, err
@@ -753,7 +698,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		t.store.stats.buildErrors.Add(1)
 		return [32]byte{}, err
 	}
-	resultLease, err := t.store.AcquireExecutionLease(rootlease.Root{Hash: result.Root, Kind: t.kind})
+	resultLease, err := t.store.roots.AcquireLease(rootlease.Root{Hash: result.Root, Kind: t.kind})
 	if err != nil {
 		t.store.stats.buildErrors.Add(1)
 		return [32]byte{}, err
@@ -810,19 +755,6 @@ func countExecutionRoot(ctx context.Context, tree *executionTree) (uint64, error
 func verifyExecutionRoot(ctx context.Context, tree *executionTree) error {
 	_, err := countExecutionRoot(ctx, tree)
 	return err
-}
-
-// HasVerifiedExecutionClosure reports whether both authenticated roots have a
-// verified closure in this ledger's configured Family. A successful StoreBatch
-// is not sufficient; pending roots become verified only after the caller has
-// completed the corresponding storage durability barrier and invokes
-// EstablishBoundedClosure.
-func (l *Ledger) HasVerifiedExecutionClosure() bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.execution != nil && !l.writable &&
-		l.execution.state.closure == executionClosureVerified &&
-		l.execution.transactions.closure == executionClosureVerified
 }
 
 // EstablishBoundedClosure authenticates a root-only view against its configured

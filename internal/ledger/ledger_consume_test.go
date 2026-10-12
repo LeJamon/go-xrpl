@@ -19,9 +19,9 @@ func TestConsumeStateTransfersOwnershipAndPersists(t *testing.T) {
 	store, _ := executionTestStore(t, family)
 	target := newOpenChildWithStore(t, store)
 
-	staged, err := target.MutableSnapshotUnflushed()
+	staged, err := target.MutableSnapshot()
 	if err != nil {
-		t.Fatalf("MutableSnapshotUnflushed: %v", err)
+		t.Fatalf("MutableSnapshot: %v", err)
 	}
 	stateKey := mutAcct(0x91)
 	stateData := mutData(0x11)
@@ -101,9 +101,9 @@ func TestConsumeStateTransfersOwnershipAndPersists(t *testing.T) {
 
 func TestConsumeStateRejectedCommitPreservesSource(t *testing.T) {
 	target := newOpenChild(t)
-	staged, err := target.MutableSnapshotUnflushed()
+	staged, err := target.MutableSnapshot()
 	if err != nil {
-		t.Fatalf("MutableSnapshotUnflushed: %v", err)
+		t.Fatalf("MutableSnapshot: %v", err)
 	}
 	stateKey := mutAcct(0x93)
 	if err := staged.Insert(stateKey, mutData(0x41)); err != nil {
@@ -144,9 +144,9 @@ func TestConsumeStateRejectedCommitPreservesSource(t *testing.T) {
 
 func TestConsumeStateRejectsImmutableSourceWithoutChangingTarget(t *testing.T) {
 	target := newOpenChild(t)
-	source, err := target.MutableSnapshotUnflushed()
+	source, err := target.MutableSnapshot()
 	if err != nil {
-		t.Fatalf("MutableSnapshotUnflushed: %v", err)
+		t.Fatalf("MutableSnapshot: %v", err)
 	}
 	if err := source.Insert(mutAcct(0x97), mutData(0x81)); err != nil {
 		t.Fatalf("stage state: %v", err)
@@ -216,7 +216,7 @@ func consumeStateAllocs(t *testing.T, entries int) float64 {
 	sources := make([]*Ledger, runs+1)
 	for i := range sources {
 		var err error
-		sources[i], err = target.MutableSnapshotUnflushed()
+		sources[i], err = target.MutableSnapshot()
 		if err != nil {
 			t.Fatalf("snapshot source %d: %v", i, err)
 		}
@@ -282,7 +282,7 @@ func BenchmarkConsumeState(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				staged, err := target.MutableSnapshotUnflushed()
+				staged, err := target.MutableSnapshot()
 				if err != nil {
 					b.Fatal(err)
 				}

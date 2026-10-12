@@ -49,7 +49,7 @@ func TestUpdateNegativeUNL_StampsFlagLedgerSeq(t *testing.T) {
 		t.Fatalf("serialize seed SLE: %v", err)
 	}
 	key := keylet.NegativeUNL().Key
-	if err := l.stateTree().Put(key, seed); err != nil {
+	if err := l.execution.state.Put(key, seed); err != nil {
 		t.Fatalf("seed stateMap: %v", err)
 	}
 
@@ -57,7 +57,7 @@ func TestUpdateNegativeUNL_StampsFlagLedgerSeq(t *testing.T) {
 		t.Fatalf("UpdateNegativeUNL: %v", err)
 	}
 
-	item, ok, err := l.stateTree().Get(key)
+	item, ok, err := l.execution.state.Get(key)
 	if err != nil || !ok {
 		t.Fatalf("read back SLE: ok=%v err=%v", ok, err)
 	}

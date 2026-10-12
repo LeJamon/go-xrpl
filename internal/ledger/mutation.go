@@ -16,7 +16,7 @@ func (l *Ledger) ExistsContext(ctx context.Context, k keylet.Keylet) (bool, erro
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateTree().HasContext(ctx, k.Key)
+	return l.execution.state.HasContext(ctx, k.Key)
 }
 
 func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
@@ -30,7 +30,7 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateTree().Has(k.Key)
+	exists, err := l.execution.state.Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrEntryExists
 	}
 
-	return l.stateTree().Put(k.Key, data)
+	return l.execution.state.Put(k.Key, data)
 }
 
 func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
@@ -52,7 +52,7 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateTree().Has(k.Key)
+	exists, err := l.execution.state.Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrEntryNotFound
 	}
 
-	return l.stateTree().Put(k.Key, data)
+	return l.execution.state.Put(k.Key, data)
 }
 
 func (l *Ledger) Erase(k keylet.Keylet) error {
@@ -74,7 +74,7 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateTree().Has(k.Key)
+	exists, err := l.execution.state.Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrEntryNotFound
 	}
 
-	return l.stateTree().Delete(k.Key)
+	return l.execution.state.Delete(k.Key)
 }
 
 func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) error {
@@ -118,36 +118,6 @@ func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
 	staged.execution = emptyExecution(staged.header, l.execution.state.store)
 	staged.dropsDestroyed = 0
 	staged.writable = false
-	return nil
-}
-
-// AdoptState replaces this ledger's state map, tx map, and destroyed-drops tally
-// with src's in one shot. Header and fees are unchanged.
-func (l *Ledger) AdoptState(src *Ledger) error {
-	if src == nil {
-		return errors.New("ledger: AdoptState from nil source")
-	}
-	l.mu.RLock()
-	targetWritable := l.state == StateOpen && l.writable
-	l.mu.RUnlock()
-	if !targetWritable {
-		return ErrLedgerImmutable
-	}
-
-	src.mu.RLock()
-	if src.state != StateOpen || !src.writable {
-		src.mu.RUnlock()
-		return ErrInvalidState
-	}
-	copy, err := src.executionSnapshot(context.Background(), true)
-	src.mu.RUnlock()
-	if err != nil {
-		return err
-	}
-	defer copy.Discard()
-	if err := l.ConsumeState(copy); err != nil {
-		return err
-	}
 	return nil
 }
 

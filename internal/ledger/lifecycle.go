@@ -45,7 +45,7 @@ func (l *Ledger) UpdateNegativeUNL() error {
 		return ErrLedgerImmutable
 	}
 
-	return negativeunl.Apply(l.stateTree(), l.header.LedgerIndex)
+	return negativeunl.Apply(l.execution.state, l.header.LedgerIndex)
 }
 
 func (l *Ledger) SetValidated() error {

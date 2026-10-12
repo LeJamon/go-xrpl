@@ -142,6 +142,14 @@ func testExecutionStore(t *testing.T) (*ExecutionStore, *membudget.Account) {
 	return store, memory
 }
 
+func hasVerifiedExecutionClosure(l *Ledger) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.execution != nil && !l.writable &&
+		l.execution.state.closure == executionClosureVerified &&
+		l.execution.transactions.closure == executionClosureVerified
+}
+
 func TestBoundedExecutionRollbackForkAndReaders(t *testing.T) {
 	store, memory := testExecutionStore(t)
 	parent := newOpenChildWithStore(t, store)
@@ -173,7 +181,7 @@ func TestBoundedExecutionRollbackForkAndReaders(t *testing.T) {
 	if !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
-	fork, err := l.MutableSnapshotUnflushed()
+	fork, err := l.MutableSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,32 +456,32 @@ func TestExecutionBuildAdmissionRequiresDestinationHandoff(t *testing.T) {
 	store, _ := testExecutionStore(t)
 	parent := rootlease.Root{Hash: [32]byte{1}, Kind: shamap.TypeState}
 	destination := rootlease.Root{Hash: [32]byte{2}, Kind: shamap.TypeState}
-	build, err := store.BeginBuild()
+	build, err := store.roots.BeginBuild()
 	if err != nil {
 		t.Fatal(err)
 	}
-	parentLease, err := store.AcquireExecutionLease(parent)
+	parentLease, err := store.roots.AcquireLease(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if release, ok := store.GuardPreservedRoots(map[rootlease.Root]struct{}{parent: {}}); ok || release != nil {
 		t.Fatal("retirement admitted while bounded build was active")
 	}
-	destinationLease, err := store.AcquireExecutionLease(destination)
+	destinationLease, err := store.roots.AcquireLease(destination)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.ReleaseExecutionLease(parentLease)
-	store.EndBuild(build)
+	parentLease.Release()
+	store.roots.EndBuild(build)
 	guardRelease, ok := store.GuardPreservedRoots(map[rootlease.Root]struct{}{destination: {}})
 	if !ok {
 		t.Fatal("retirement rejected after destination handoff")
 	}
 	guardRelease()
-	store.ReleaseExecutionLease(destinationLease)
+	destinationLease.Release()
 }
 
-func TestEnableBoundedExecutionRejectsPartialDestination(t *testing.T) {
+func TestBoundedExecutionRejectsPartialDestination(t *testing.T) {
 	sourceStore, _ := testExecutionStore(t)
 	parent := newOpenChildWithStore(t, sourceStore)
 	if err := parent.Insert(mutAcct(0x7a), mutData(0x31)); err != nil {
@@ -497,7 +505,7 @@ func TestEnableBoundedExecutionRejectsPartialDestination(t *testing.T) {
 	}
 }
 
-func TestEnableBoundedExecutionLeavesDurableFamilyPendingUntilBarrier(t *testing.T) {
+func TestBoundedExecutionLeavesDurableFamilyPendingUntilBarrier(t *testing.T) {
 	family := &durableOnlyExecutionFamily{base: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
 	parent := newOpenChildWithStore(t, store)
@@ -516,18 +524,18 @@ func TestEnableBoundedExecutionLeavesDurableFamilyPendingUntilBarrier(t *testing
 	if err != nil {
 		t.Fatalf("durable closure verification failed: %v", err)
 	}
-	if loaded.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(loaded) {
 		t.Fatal("imported closure was marked verified before the durability barrier")
 	}
 	if err := loaded.EstablishBoundedClosure(context.Background()); err != nil {
 		t.Fatalf("durable closure establishment failed: %v", err)
 	}
-	if !loaded.HasVerifiedExecutionClosure() {
+	if !hasVerifiedExecutionClosure(loaded) {
 		t.Fatal("durable closure was not marked verified after the barrier")
 	}
 }
 
-func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
+func TestBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	ctx := context.Background()
 	family := &recordingExecutionFamily{Family: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
@@ -544,7 +552,7 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rooted historical constructor: %v", err)
 	}
-	if rooted.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(rooted) {
 		t.Fatal("historical read conversion certified a closure before verification")
 	}
 	family.mu.Lock()
@@ -570,13 +578,13 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	if err := rooted.AuthenticateClosure(ctx); err != nil {
 		t.Fatalf("authenticate historical closure: %v", err)
 	}
-	if rooted.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(rooted) {
 		t.Fatal("authenticated historical closure was promoted before the durability barrier")
 	}
 	if err := rooted.EstablishBoundedClosure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !rooted.HasVerifiedExecutionClosure() {
+	if !hasVerifiedExecutionClosure(rooted) {
 		t.Fatal("historical closure was not certified after explicit verification")
 	}
 }
@@ -588,7 +596,7 @@ func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 	if err := parent.Close(time.Unix(1700000000, 0), 0); err != nil {
 		t.Fatal(err)
 	}
-	if parent.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(parent) {
 		t.Fatal("imported bounded execution was verified before the durability barrier")
 	}
 	child, err := NewOpen(parent, time.Unix(1700000004, 0))
@@ -605,7 +613,7 @@ func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 	if err := child.Close(time.Unix(1700000004, 0), 0); err != nil {
 		t.Fatal(err)
 	}
-	if child.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(child) {
 		t.Fatal("newly emitted closure was marked durable before establishment")
 	}
 	family.mu.Lock()
@@ -616,13 +624,13 @@ func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 	if err := child.EstablishBoundedClosure(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled closure establishment error = %v, want context cancellation", err)
 	}
-	if child.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(child) {
 		t.Fatal("canceled closure establishment marked the root verified")
 	}
 	if err := child.EstablishBoundedClosure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !child.HasVerifiedExecutionClosure() {
+	if !hasVerifiedExecutionClosure(child) {
 		t.Fatal("pending closure was not promoted")
 	}
 	family.mu.Lock()
@@ -670,7 +678,7 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	if err := fork.Close(time.Unix(1700000004, 0), 0); err != nil {
 		t.Fatal(err)
 	}
-	if fork.HasVerifiedExecutionClosure() {
+	if hasVerifiedExecutionClosure(fork) {
 		t.Fatal("forked pending closure was marked verified before the barrier")
 	}
 	family.mu.Lock()
@@ -679,7 +687,7 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	if err := fork.EstablishBoundedClosure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !fork.HasVerifiedExecutionClosure() {
+	if !hasVerifiedExecutionClosure(fork) {
 		t.Fatal("forked pending closure was not promoted")
 	}
 	family.mu.Lock()

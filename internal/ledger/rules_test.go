@@ -2,7 +2,6 @@ package ledger
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 	"time"
 
@@ -210,20 +209,5 @@ func TestNewFromHeaderOwnsImmutableState(t *testing.T) {
 	}
 	if bytes.Equal(ledgerData, data) {
 		t.Fatal("source-map mutation changed constructed ledger state")
-	}
-}
-
-func TestAdoptStateRejectsImmutableLedger(t *testing.T) {
-	priceOracle := amendment.FeatureByName("PriceOracle")
-	if priceOracle == nil {
-		t.Fatal("PriceOracle not registered")
-	}
-	target := ledgerWithAmendments(t, [][32]byte{priceOracle.ID})
-	source, err := NewOpen(target, target.CloseTime().Add(time.Second))
-	if err != nil {
-		t.Fatalf("create source ledger: %v", err)
-	}
-	if err := target.AdoptState(source); !errors.Is(err, ErrLedgerImmutable) {
-		t.Fatalf("AdoptState error = %v, want ErrLedgerImmutable", err)
 	}
 }

@@ -109,7 +109,4 @@ func TestClosedLedgerRejectsMutableSnapshots(t *testing.T) {
 	if _, err := l.MutableSnapshot(); !errors.Is(err, ErrLedgerImmutable) {
 		t.Fatalf("MutableSnapshot error = %v, want ErrLedgerImmutable", err)
 	}
-	if _, err := l.MutableSnapshotUnflushed(); !errors.Is(err, ErrLedgerImmutable) {
-		t.Fatalf("MutableSnapshotUnflushed error = %v, want ErrLedgerImmutable", err)
-	}
 }

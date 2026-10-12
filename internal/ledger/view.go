@@ -23,19 +23,6 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	return l.executionSnapshot(context.Background(), true)
 }
 
-// MutableSnapshotUnflushed returns a mutable copy without persisting dirty
-// SHAMap nodes, for short-lived transactional staging that is then adopted or
-// discarded.
-func (l *Ledger) MutableSnapshotUnflushed() (*Ledger, error) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if l.state != StateOpen || !l.writable {
-		return nil, ErrLedgerImmutable
-	}
-
-	return l.executionSnapshot(context.Background(), true)
-}
-
 func (l *Ledger) StateMapHash() ([32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

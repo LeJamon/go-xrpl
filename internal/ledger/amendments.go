@@ -41,7 +41,11 @@ func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMa
 	return loadAmendmentsFromTree(ctx, stateMap)
 }
 
-func loadAmendmentsFromTree(ctx context.Context, stateMap stateTree) (*amendment.Rules, error) {
+type amendmentsTree interface {
+	GetContext(context.Context, [32]byte) (*shamap.Item, bool, error)
+}
+
+func loadAmendmentsFromTree(ctx context.Context, stateMap amendmentsTree) (*amendment.Rules, error) {
 	item, found, err := stateMap.GetContext(ctx, keylet.Amendments().Key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read amendments entry: %w", err)
