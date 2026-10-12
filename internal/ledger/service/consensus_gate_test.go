@@ -100,11 +100,11 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	select {
 	case <-relayStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("consensus did not acquire the gate before queued ingress")
+		t.Fatal("consensus did not reach the relay callback")
 	}
 	require.Eventually(t, func() bool {
 		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Held && snapshot.Owner == openLedgerConsensus && snapshot.QueuedIngress == 1
+		return snapshot.Owner != openLedgerConsensus && snapshot.QueuedPriority == 0
 	}, time.Second, time.Millisecond)
 
 	readDone = make(chan struct{})
@@ -117,12 +117,17 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	select {
 	case <-readDone:
 	case <-time.After(time.Second):
-		t.Fatal("closed-ledger reads blocked behind consensus open-ledger commit")
+		t.Fatal("closed-ledger reads blocked behind post-publication relay")
 	}
 
+	select {
+	case err := <-queuedIngressDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("queued ingress remained parked after consensus publication")
+	}
 	releaseRelay()
 	require.NoError(t, <-consensusDone)
-	require.NoError(t, <-queuedIngressDone)
 }
 
 func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
