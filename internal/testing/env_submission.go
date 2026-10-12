@@ -91,6 +91,7 @@ func (e *TestEnv) close(timeLeap bool) {
 	if err != nil {
 		e.t.Fatalf("create new open ledger: %v", err)
 	}
+	closed.ReleaseExecutionBuildLeases()
 	e.ledger = newLedger
 	e.currentSeq = newLedger.Sequence()
 	e.txInLedger = 0
