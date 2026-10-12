@@ -94,7 +94,6 @@ func encodeDescriptor(descriptor Descriptor) []byte {
 	copy(result[offset:], descriptor.StateRoot[:])
 	offset += 32
 	copy(result[offset:], descriptor.TxRoot[:])
-	offset += 32
 	return result
 }
 

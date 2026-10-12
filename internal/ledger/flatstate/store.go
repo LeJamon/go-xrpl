@@ -131,11 +131,6 @@ type RootClosureAuthorization struct {
 	Token      []byte
 }
 
-func (a RootClosureAuthorization) clone() RootClosureAuthorization {
-	a.Token = append([]byte(nil), a.Token...)
-	return a
-}
-
 func (a RootClosureAuthorization) validate(source, target Descriptor) error {
 	if len(a.Token) == 0 || a.SourceRoot != source.StateRoot || a.TargetRoot != target.StateRoot {
 		return ErrAuthorization
