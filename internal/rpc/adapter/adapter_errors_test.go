@@ -3,10 +3,12 @@ package adapter
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +54,9 @@ func TestLedgerReaderAdapterReturnsOpenHeaderRoots(t *testing.T) {
 
 	// Mutating an open view changes its live SHAMap roots, but does not change
 	// the reset provisional header roots exposed by ledger RPC responses.
-	require.NoError(t, open.AddTransaction([32]byte{0x01}, make([]byte, 12)))
+	txData := make([]byte, 12)
+	txHash := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txData)
+	require.NoError(t, open.AddTransaction(txHash, txData))
 	require.NoError(t, open.Insert(keylet.Keylet{Key: [32]byte{0x02}}, make([]byte, 12)))
 	liveTxHash, err := open.TxMapHash()
 	require.NoError(t, err)

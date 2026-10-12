@@ -1047,6 +1047,11 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
 	}
+	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePreparation()
 	stateRoot, txRoot, err := s.config.Execution.ImportMaps(ctx, stateMap, txMap, h.LedgerIndex)
 	if err != nil {
 		return nil, err
