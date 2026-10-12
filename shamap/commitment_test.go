@@ -695,7 +695,7 @@ func TestBuildChangesRootClosingDeletion(t *testing.T) {
 	if result.Nodes != 0 {
 		t.Fatalf("closing deletion emitted %d nodes, want none", result.Nodes)
 	}
-	if err := NewRootReader(TypeState, result.Root, family).ForEach(context.Background(), func(*Item) bool { return true }); err != nil {
+	if err := NewRootReader(TypeState, result.Root, family).IterateLeaves(context.Background(), nil, func(*Item, NodeType) bool { return true }); err != nil {
 		t.Fatalf("empty root reader: %v", err)
 	}
 }
@@ -754,14 +754,8 @@ func TestRootReaderRejectsLeafOnWrongAuthenticatedPath(t *testing.T) {
 	if _, _, _, err := reader.GetLeaf(context.Background(), keyA); err == nil {
 		t.Fatal("GetLeaf accepted leaf on the wrong branch")
 	}
-	if err := reader.ForEach(context.Background(), func(*Item) bool { return true }); err == nil {
-		t.Fatal("ForEach accepted leaf on the wrong branch")
-	}
 	if err := reader.IterateLeaves(context.Background(), nil, func(*Item, NodeType) bool { return true }); err == nil {
 		t.Fatal("IterateLeaves accepted leaf on the wrong branch")
-	}
-	if _, _, err := reader.Succ(context.Background(), [32]byte{}); err == nil {
-		t.Fatal("Succ accepted leaf on the wrong branch")
 	}
 	if err := reader.Diff(context.Background(), parentRoot, func(Change) error { return nil }); err == nil {
 		t.Fatal("Diff accepted leaf on the wrong branch")
@@ -835,7 +829,7 @@ func TestCommitmentBudgetAdmissionAndRelease(t *testing.T) {
 	parentRoot, _ := parent.Hash()
 	readerBudget := &testCommitmentBudget{capacity: 1 << 20}
 	reader := NewRootReader(TypeState, parentRoot, family, WithCommitmentBudget(readerBudget))
-	if _, found, err := reader.Get(context.Background(), key); err != nil || !found {
+	if _, _, found, err := reader.GetLeaf(context.Background(), key); err != nil || !found {
 		t.Fatalf("budgeted reader.Get found=%v err=%v", found, err)
 	}
 	if got := readerBudget.used.Load(); got != 0 {
@@ -936,7 +930,7 @@ func TestRootReaderOperations(t *testing.T) {
 	root, _ := sm.Hash()
 	reader := NewRootReader(TypeState, root, family)
 	for _, key := range [][32]byte{commitmentTestKey(1), commitmentTestKey(20), commitmentTestKey(99)} {
-		got, found, err := reader.Get(context.Background(), key)
+		got, _, found, err := reader.GetLeaf(context.Background(), key)
 		if err != nil {
 			t.Fatalf("Get(%x): %v", key[:1], err)
 		}
@@ -949,7 +943,7 @@ func TestRootReaderOperations(t *testing.T) {
 		}
 	}
 	var gotKeys [][32]byte
-	if err := reader.ForEach(context.Background(), func(item *Item) bool {
+	if err := reader.IterateLeaves(context.Background(), nil, func(item *Item, _ NodeType) bool {
 		gotKeys = append(gotKeys, item.Key())
 		return true
 	}); err != nil {
@@ -984,9 +978,14 @@ func TestRootReaderOperations(t *testing.T) {
 	}
 	for i := byte(0); i < 21; i++ {
 		key := commitmentTestKey(i)
-		got, found, err := reader.Succ(context.Background(), key)
+		var got *Item
+		err := reader.IterateLeaves(context.Background(), &key, func(item *Item, _ NodeType) bool {
+			got = item
+			return false
+		})
+		found := got != nil
 		if err != nil {
-			t.Fatalf("Succ(%d): %v", i, err)
+			t.Fatalf("first IterateLeaves(%d): %v", i, err)
 		}
 		var want *Item
 		for _, candidate := range gotKeys {
@@ -996,7 +995,7 @@ func TestRootReaderOperations(t *testing.T) {
 			}
 		}
 		if (want != nil) != found || (found && !bytes.Equal(got.Data(), want.Data())) {
-			t.Fatalf("Succ(%d) found=%v item=%v want=%v", i, found, got, want)
+			t.Fatalf("first IterateLeaves(%d) found=%v item=%v want=%v", i, found, got, want)
 		}
 	}
 }
@@ -1004,11 +1003,11 @@ func TestRootReaderOperations(t *testing.T) {
 func assertReaderMatchesMap(t *testing.T, reader *RootReader, want *SHAMap) {
 	t.Helper()
 	var got [][32]byte
-	if err := reader.ForEach(context.Background(), func(item *Item) bool {
+	if err := reader.IterateLeaves(context.Background(), nil, func(item *Item, _ NodeType) bool {
 		got = append(got, item.Key())
 		return true
 	}); err != nil {
-		t.Fatalf("reader.ForEach: %v", err)
+		t.Fatalf("reader.IterateLeaves: %v", err)
 	}
 	var expected [][32]byte
 	if err := want.ForEach(func(item *Item) bool {
@@ -1024,13 +1023,13 @@ func assertReaderMatchesMap(t *testing.T, reader *RootReader, want *SHAMap) {
 		if got[i] != key {
 			t.Fatalf("reader key %d=%x expected=%x", i, got[i][:4], key[:4])
 		}
-		item, found, err := reader.Get(context.Background(), key)
+		item, _, found, err := reader.GetLeaf(context.Background(), key)
 		if err != nil || !found {
-			t.Fatalf("reader.Get(%x): found=%v err=%v", key[:4], found, err)
+			t.Fatalf("reader.GetLeaf(%x): found=%v err=%v", key[:4], found, err)
 		}
 		wantItem, _, err := want.Get(key)
 		if err != nil || !bytes.Equal(item.Data(), wantItem.Data()) {
-			t.Fatalf("reader.Get(%x) data mismatch", key[:4])
+			t.Fatalf("reader.GetLeaf(%x) data mismatch", key[:4])
 		}
 	}
 }

@@ -11,8 +11,7 @@ import (
 //
 // The reader keeps only the root hash and Family. Every operation fetches and
 // decodes the nodes it needs, and releases those decoded nodes before moving
-// to the next path. Callers own the Items returned by Get and Succ; callback
-// Items passed to ForEach are independent copies.
+// to the next path. Returned Items and callback Items are independent copies.
 type RootReader struct {
 	mapType Type
 	root    [32]byte
@@ -36,22 +35,6 @@ func NewRootReader(mapType Type, root [32]byte, family Family, options ...Commit
 		access:  bindFamily(family),
 		budget:  settings.budget,
 	}
-}
-
-// RootHash returns the authenticated root selected when the reader was made.
-func (r *RootReader) RootHash() [32]byte {
-	if r == nil {
-		return [32]byte{}
-	}
-	return r.root
-}
-
-// Type returns the SHAMap type selected when the reader was made.
-func (r *RootReader) Type() Type {
-	if r == nil {
-		return Type(0)
-	}
-	return r.mapType
 }
 
 type rootReaderNode struct {
@@ -145,19 +128,9 @@ func cloneReaderItem(item *Item) *Item {
 	return NewItem(item.Key(), item.Data())
 }
 
-// Get returns the item at key. The bool is false when key is absent.
-func (r *RootReader) Get(ctx context.Context, key [32]byte) (*Item, bool, error) {
-	item, _, found, err := r.getLeaf(ctx, key)
-	return item, found, err
-}
-
 // GetLeaf returns the item and its authenticated SHAMap leaf type at key. The
 // bool is false when key is absent.
 func (r *RootReader) GetLeaf(ctx context.Context, key [32]byte) (*Item, NodeType, bool, error) {
-	return r.getLeaf(ctx, key)
-}
-
-func (r *RootReader) getLeaf(ctx context.Context, key [32]byte) (*Item, NodeType, bool, error) {
 	ctx = normalizeCommitmentContext(ctx)
 	if r == nil || isZeroHash(r.root) {
 		return nil, NodeType(0), false, nil
@@ -203,31 +176,6 @@ func (r *RootReader) getLeaf(ctx context.Context, key [32]byte) (*Item, NodeType
 	item := cloneReaderItem(node.leaf)
 	node.release(r.budget)
 	return item, node.leafType, true, nil
-}
-
-// ForEach visits every item in ascending key order. Returning false stops the
-// walk without an error. The traversal keeps at most one decoded inner node
-// per SHAMap depth and never attaches a fetched node to a retained tree.
-func (r *RootReader) ForEach(ctx context.Context, fn func(*Item) bool) error {
-	if fn == nil {
-		return errors.New("shamap: nil root reader callback")
-	}
-	return r.forEachLeaf(ctx, func(item *Item, _ NodeType) bool {
-		return fn(item)
-	})
-}
-
-// ForEachLeaf visits every item and its authenticated SHAMap leaf type in
-// ascending key order. Returning false stops the walk without an error.
-func (r *RootReader) ForEachLeaf(ctx context.Context, fn func(*Item, NodeType) bool) error {
-	if fn == nil {
-		return errors.New("shamap: nil root reader callback")
-	}
-	return r.forEachLeaf(ctx, fn)
-}
-
-func (r *RootReader) forEachLeaf(ctx context.Context, fn func(*Item, NodeType) bool) error {
-	return r.IterateLeaves(ctx, nil, fn)
 }
 
 // IterateLeaves visits leaves in strictly ascending key order. When after is
@@ -344,115 +292,11 @@ type iterateFrame struct {
 // and does not retain decoded nodes after the operation returns.
 func (r *RootReader) Count(ctx context.Context) (uint64, error) {
 	var count uint64
-	err := r.ForEach(ctx, func(*Item) bool {
+	err := r.IterateLeaves(ctx, nil, func(*Item, NodeType) bool {
 		count++
 		return true
 	})
 	return count, err
-}
-
-func (r *RootReader) minimum(ctx context.Context, node rootReaderNode, path [32]byte, depth int) (*Item, bool, error) {
-	ctx = normalizeCommitmentContext(ctx)
-	defer node.release(r.budget)
-	for node.inner {
-		if err := ctx.Err(); err != nil {
-			return nil, false, err
-		}
-		if depth >= maxDepth {
-			return nil, false, fmt.Errorf("shamap: root reader exceeded maximum depth")
-		}
-		found := false
-		for branch := 0; branch < BranchFactor; branch++ {
-			hash, ok := node.childHash(branch)
-			if !ok {
-				continue
-			}
-			next, err := r.read(ctx, hash)
-			if err != nil {
-				return nil, false, err
-			}
-			childPath := childPathForBranch(path, depth, branch)
-			old := node
-			node = next
-			path = childPath
-			depth++
-			old.release(r.budget)
-			found = true
-			break
-		}
-		if !found {
-			return nil, false, nil
-		}
-	}
-	if node.leaf == nil {
-		return nil, false, nil
-	}
-	if err := validateCommitmentLeafPath(node.leaf, path, depth); err != nil {
-		return nil, false, err
-	}
-	return cloneReaderItem(node.leaf), true, nil
-}
-
-func (r *RootReader) successor(ctx context.Context, node rootReaderNode, path [32]byte, depth int, key [32]byte) (*Item, bool, error) {
-	ctx = normalizeCommitmentContext(ctx)
-	defer node.release(r.budget)
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	if !node.inner {
-		if err := validateCommitmentLeafPath(node.leaf, path, depth); err != nil {
-			return nil, false, err
-		}
-		leafKey := node.leaf.Key()
-		if bytes.Compare(leafKey[:], key[:]) > 0 {
-			return cloneReaderItem(node.leaf), true, nil
-		}
-		return nil, false, nil
-	}
-	if depth >= maxDepth {
-		return nil, false, fmt.Errorf("shamap: root reader exceeded maximum depth")
-	}
-	branch := getBranchAtDepth(key, depth)
-	if hash, ok := node.childHash(branch); ok {
-		child, err := r.read(ctx, hash)
-		if err != nil {
-			return nil, false, err
-		}
-		childPath := childPathForBranch(path, depth, branch)
-		if item, found, err := r.successor(ctx, child, childPath, depth+1, key); err != nil || found {
-			return item, found, err
-		}
-	}
-	for branch++; branch < BranchFactor; branch++ {
-		hash, ok := node.childHash(branch)
-		if !ok {
-			continue
-		}
-		child, err := r.read(ctx, hash)
-		if err != nil {
-			return nil, false, err
-		}
-		childPath := childPathForBranch(path, depth, branch)
-		return r.minimum(ctx, child, childPath, depth+1)
-	}
-	return nil, false, nil
-}
-
-// Succ returns the smallest item whose key is strictly greater than key.
-func (r *RootReader) Succ(ctx context.Context, key [32]byte) (*Item, bool, error) {
-	ctx = normalizeCommitmentContext(ctx)
-	if r == nil || isZeroHash(r.root) {
-		return nil, false, nil
-	}
-	root, err := r.read(ctx, r.root)
-	if err != nil {
-		return nil, false, err
-	}
-	if !root.inner {
-		root.release(r.budget)
-		return nil, false, fmt.Errorf("shamap: root %x is not an inner node", r.root[:8])
-	}
-	return r.successor(ctx, root, [32]byte{}, 0, key)
 }
 
 // Diff emits the sorted final changes needed to transform this root into
