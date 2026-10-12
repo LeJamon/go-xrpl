@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 )
@@ -370,5 +371,208 @@ func TestOverlayConcurrentForkAndSnapshotReads(t *testing.T) {
 	wg.Wait()
 	if _, ok, err := o.Get(context.Background(), testKey(0)); err != nil || !ok {
 		t.Fatalf("parent state lost during concurrent forks: %v, %v", ok, err)
+	}
+}
+
+func TestOverlayConcurrentSpilledReads(t *testing.T) {
+	pool := membudget.New(1 << 20)
+	memory, err := pool.NewAccount("overlay-memory", 0, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := pool.NewAccount("overlay-disk", 0, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := New(nil, Config{
+		MemoryBudget: memory, DiskBudget: disk,
+		MaxMemoryBytes: 16 << 10, MaxDiskBytes: 1 << 20,
+		SpillDir: t.TempDir(), MaxSegments: 8, MaxMergeFanIn: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := byte(0); i < 64; i++ {
+		value := make([]byte, 512)
+		value[0] = i
+		if err := o.Set(testKey(i), value); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	snapshot, err := o.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := 0; i < 128; i++ {
+				key := byte((worker*17 + i) % 64)
+				value, ok, getErr := snapshot.Get(context.Background(), testKey(key))
+				if getErr != nil || !ok || len(value) != 512 || value[0] != key {
+					t.Errorf("worker %d get %d = len %d first %d ok %v err %v", worker, key, len(value), func() byte {
+						if len(value) == 0 {
+							return 0
+						}
+						return value[0]
+					}(), ok, getErr)
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := memory.Snapshot().Used; got != 0 {
+		t.Fatalf("memory credits leaked after spilled reads: %d", got)
+	}
+	if got := disk.Snapshot().Used; got != 0 {
+		t.Fatalf("disk credits leaked after spilled reads: %d", got)
+	}
+}
+
+func TestOverlaySpilledReaderCapDoesNotDeadlock(t *testing.T) {
+	pool := membudget.New(2 << 20)
+	memory, err := pool.NewAccount("overlay-memory", 0, 2<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := pool.NewAccount("overlay-disk", 0, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := newBudget(Config{
+		MemoryBudget: memory, DiskBudget: disk,
+		MaxMemoryBytes: 2 << 20, MaxDiskBytes: 1 << 20,
+	})
+	dir := t.TempDir()
+	const segmentCount = maxSegmentReaders + 16
+	segments := make([]*spillSegment, 0, segmentCount)
+	releaseSegments := func() {
+		for _, segment := range segments {
+			releaseSegment(segment)
+		}
+		segments = nil
+	}
+	defer func() {
+		releaseSegments()
+	}()
+	for i := 0; i < segmentCount; i++ {
+		segment, writeErr := writeOneSegment(context.Background(), owner, dir, testKey(byte(i)), []byte{byte(i)}, false)
+		if writeErr != nil {
+			t.Fatalf("write segment %d: %v", i, writeErr)
+		}
+		segments = append(segments, segment)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	const workers = 4
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cursors := make([]*segmentCursor, 0, len(segments))
+			var firstErr error
+			defer func() {
+				for _, cursor := range cursors {
+					if closeErr := cursor.close(); firstErr == nil && closeErr != nil {
+						firstErr = closeErr
+					}
+				}
+				errs <- firstErr
+			}()
+			for _, segment := range segments {
+				cursor, openErr := segment.cursor(ctx, owner, nil)
+				if openErr != nil {
+					firstErr = openErr
+					return
+				}
+				cursors = append(cursors, cursor)
+			}
+			for i, cursor := range cursors {
+				key, value, deleted, ok, nextErr := cursor.next(ctx)
+				if nextErr != nil {
+					firstErr = nextErr
+					return
+				}
+				if !ok || deleted || key != testKey(byte(i)) || len(value) != 1 || value[0] != byte(i) {
+					firstErr = fmt.Errorf("cursor %d returned key %x, value %x, deleted=%v, ok=%v", i, key, value, deleted, ok)
+					return
+				}
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("reader cap test did not complete: %v", ctx.Err())
+	}
+	for worker := 0; worker < workers; worker++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("reader worker %d: %v", worker, err)
+		}
+	}
+	releaseSegments()
+	if got := memory.Snapshot().Used; got != 0 {
+		t.Fatalf("memory credits leaked after reader cap test: %d", got)
+	}
+	if got := disk.Snapshot().Used; got != 0 {
+		t.Fatalf("disk credits leaked after reader cap test: %d", got)
+	}
+}
+
+func TestOverlaySpillTruncatedSkippedValue(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	targetKey := testKey(2)
+	firstValue := make([]byte, 64)
+	var root *treeNode
+	var err error
+	for i := byte(1); i <= 17; i++ {
+		value := []byte("other")
+		if i == 1 {
+			value = firstValue
+		} else if i == 2 {
+			value = []byte("target")
+		}
+		root, err = insertTreeNode(owner, root, testKey(i), value, false)
+		if err != nil {
+			releaseTreeNode(root)
+			t.Fatal(err)
+		}
+	}
+	segment, err := writeTreeSegment(context.Background(), owner, dir, root)
+	releaseTreeNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseSegment(segment)
+	truncatedSize := int64(segmentHeaderSize + recordHeaderSize + uint64(len(firstValue)/2))
+	if err := os.Truncate(segment.path, truncatedSize); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cursor.close()
+	_, _, err = cursor.get(context.Background(), targetKey)
+	if !errors.Is(err, ErrCorruptSegment) {
+		t.Fatalf("truncated skipped value error = %v, want ErrCorruptSegment", err)
 	}
 }

@@ -4,20 +4,58 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"sync"
 	"sync/atomic"
 )
 
 var segmentMagic = [8]byte{'G', 'X', 'O', 'V', 1, 0, 0, 0}
 
 const (
-	segmentHeaderSize = uint64(len(segmentMagic))
-	recordHeaderSize  = uint64(32 + 1 + 8)
-	sparseIndexMax    = 8
+	segmentHeaderSize   = uint64(len(segmentMagic))
+	recordHeaderSize    = uint64(32 + 1 + 8)
+	sparseIndexMax      = 8
+	maxSegmentReaders   = 64
+	maxCachedReaders    = 48
+	maxFallbackReaders  = 1
+	maxEphemeralReaders = maxSegmentReaders - maxCachedReaders - maxFallbackReaders
 )
+
+var (
+	cachedReaderSlots    = make(chan struct{}, maxCachedReaders)
+	ephemeralReaderSlots = make(chan struct{}, maxEphemeralReaders)
+	fallbackReaderMu     sync.Mutex
+)
+
+func tryReserveCachedReaderSlot() bool {
+	select {
+	case cachedReaderSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func tryReserveEphemeralReaderSlot() bool {
+	select {
+	case ephemeralReaderSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseCachedReaderSlot() {
+	<-cachedReaderSlots
+}
+
+func releaseEphemeralReaderSlot() {
+	<-ephemeralReaderSlots
+}
 
 type sparseIndexEntry struct {
 	key    [32]byte
@@ -25,7 +63,10 @@ type sparseIndexEntry struct {
 }
 
 type spillSegment struct {
-	refs atomic.Int64
+	refs       atomic.Int64
+	fileMu     sync.Mutex
+	file       *os.File
+	readerSlot bool
 
 	path       string
 	size       uint64
@@ -45,6 +86,18 @@ func retainSegment(s *spillSegment) *spillSegment {
 func releaseSegment(s *spillSegment) {
 	if s == nil || s.refs.Add(-1) != 0 {
 		return
+	}
+	s.fileMu.Lock()
+	file := s.file
+	s.file = nil
+	cached := s.readerSlot
+	s.readerSlot = false
+	s.fileMu.Unlock()
+	if file != nil {
+		_ = file.Close()
+	}
+	if cached {
+		releaseCachedReaderSlot()
 	}
 	_ = os.Remove(s.path)
 	if s.owner != nil {
@@ -148,7 +201,17 @@ func finishSegmentFile(ctx context.Context, f *os.File, path string, owner *budg
 	if actual < reserved {
 		owner.releaseDisk(reserved - actual)
 	}
-	s := &spillSegment{path: path, size: actual, count: count, owner: owner}
+	var reader *os.File
+	readerSlot := tryReserveCachedReaderSlot()
+	if readerSlot {
+		reader, err = os.Open(path)
+		if err != nil {
+			releaseCachedReaderSlot()
+			reader = nil
+			readerSlot = false
+		}
+	}
+	s := &spillSegment{file: reader, readerSlot: readerSlot, path: path, size: actual, count: count, owner: owner}
 	if index != nil {
 		if indexCount > sparseIndexMax {
 			indexCount = sparseIndexMax
@@ -292,54 +355,150 @@ func writeOneSegment(ctx context.Context, owner *budget, dir string, key [32]byt
 	return finishSegmentFile(ctx, f, path, owner, size, 1, &index, 1)
 }
 
+func readAtFull(file *os.File, data []byte, offset int64) (int, error) {
+	read := 0
+	for read < len(data) {
+		n, err := file.ReadAt(data[read:], offset+int64(read))
+		read += n
+		if read == len(data) {
+			return read, nil
+		}
+		if err != nil {
+			if err == io.EOF && read != 0 {
+				return read, io.ErrUnexpectedEOF
+			}
+			return read, err
+		}
+		if n == 0 {
+			return read, io.ErrUnexpectedEOF
+		}
+	}
+	return read, nil
+}
+
+func readPathAt(path string, data []byte, offset int64) (int, error) {
+	fallbackReaderMu.Lock()
+	defer fallbackReaderMu.Unlock()
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, segmentOpenError{err: err}
+	}
+	read, readErr := readAtFull(file, data, offset)
+	closeErr := file.Close()
+	if readErr != nil {
+		return read, readErr
+	}
+	return read, closeErr
+}
+
+type segmentOpenError struct {
+	err error
+}
+
+func (e segmentOpenError) Error() string {
+	return e.err.Error()
+}
+
+func (e segmentOpenError) Unwrap() error {
+	return e.err
+}
+
 type segmentCursor struct {
-	segment  *spillSegment
-	owner    *budget
-	file     *os.File
-	after    [32]byte
-	hasAfter bool
-	last     [32]byte
-	hasLast  bool
-	current  uint64
-	closed   bool
+	segment     *spillSegment
+	owner       *budget
+	file        *os.File
+	closeFile   bool
+	readerSlot  bool
+	heldSegment bool
+	offset      int64
+	after       [32]byte
+	hasAfter    bool
+	last        [32]byte
+	hasLast     bool
+	current     uint64
+	closed      bool
 }
 
 func openSegmentCursor(ctx context.Context, owner *budget, segment *spillSegment, after *[32]byte) (*segmentCursor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(segment.path)
-	if err != nil {
-		return nil, fmt.Errorf("open overlay spill segment: %w", err)
+	if segment == nil {
+		return nil, fmt.Errorf("%w: nil segment", ErrCorruptSegment)
+	}
+	retainSegment(segment)
+	fail := func(err error, file *os.File, closeFile, readerSlot bool) (*segmentCursor, error) {
+		if closeFile && file != nil {
+			_ = file.Close()
+		}
+		if readerSlot {
+			releaseEphemeralReaderSlot()
+		}
+		releaseSegment(segment)
+		return nil, err
+	}
+	segment.fileMu.Lock()
+	f := segment.file
+	segment.fileMu.Unlock()
+	ephemeral := false
+	if f == nil {
+		if tryReserveEphemeralReaderSlot() {
+			var openErr error
+			f, openErr = os.Open(segment.path)
+			if openErr != nil {
+				return fail(fmt.Errorf("open overlay spill segment: %w", openErr), nil, false, true)
+			}
+			ephemeral = true
+		}
 	}
 	var header [len(segmentMagic)]byte
-	if _, err := io.ReadFull(f, header[:]); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: read header: %v", ErrCorruptSegment, err)
+	var headerErr error
+	if f != nil {
+		_, headerErr = readAtFull(f, header[:], 0)
+	} else {
+		_, headerErr = readPathAt(segment.path, header[:], 0)
+	}
+	if headerErr != nil {
+		var openErr segmentOpenError
+		if errors.As(headerErr, &openErr) {
+			return fail(fmt.Errorf("open overlay spill segment: %w", openErr.err), f, ephemeral, ephemeral)
+		}
+		return fail(fmt.Errorf("%w: read header: %v", ErrCorruptSegment, headerErr), f, ephemeral, ephemeral)
 	}
 	if header != segmentMagic {
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: bad header", ErrCorruptSegment)
+		return fail(fmt.Errorf("%w: bad header", ErrCorruptSegment), f, ephemeral, ephemeral)
 	}
+	offset := int64(segmentHeaderSize)
 	if after != nil && segment.indexCount != 0 {
-		best := int64(segmentHeaderSize)
+		best := offset
 		for i := 0; i < int(segment.indexCount); i++ {
 			if bytes.Compare(segment.index[i].key[:], after[:]) > 0 {
 				break
 			}
 			best = segment.index[i].offset
 		}
-		if _, err := f.Seek(best, io.SeekStart); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("seek overlay spill segment: %w", err)
-		}
+		offset = best
 	}
-	cursor := &segmentCursor{segment: segment, owner: owner, file: f}
+	cursor := &segmentCursor{
+		segment: segment, owner: owner, file: f,
+		closeFile: ephemeral, readerSlot: ephemeral,
+		heldSegment: true, offset: offset,
+	}
 	if after != nil {
 		cursor.after = *after
 		cursor.hasAfter = true
 	}
 	return cursor, nil
+}
+
+func (c *segmentCursor) readAt(data []byte, offset int64) (int, error) {
+	if c.file != nil {
+		return readAtFull(c.file, data, offset)
+	}
+	return readPathAt(c.segment.path, data, offset)
 }
 
 func (c *segmentCursor) seekKey(key [32]byte) error {
@@ -356,9 +515,7 @@ func (c *segmentCursor) seekKey(key [32]byte) error {
 		}
 		best = c.segment.index[i].offset
 	}
-	if _, err := c.file.Seek(best, io.SeekStart); err != nil {
-		return fmt.Errorf("seek overlay spill segment: %w", err)
-	}
+	c.offset = best
 	c.hasLast = false
 	c.releaseCurrent()
 	return nil
@@ -371,16 +528,79 @@ func (c *segmentCursor) releaseCurrent() {
 	}
 }
 
+func (c *segmentCursor) advanceValue(valueLen uint64) error {
+	if c.offset < 0 || uint64(c.offset) > c.segment.size || valueLen > c.segment.size-uint64(c.offset) {
+		return fmt.Errorf("%w: value exceeds segment", ErrCorruptSegment)
+	}
+	c.offset += int64(valueLen)
+	return nil
+}
+
+func (c *segmentCursor) skipValue(valueOffset int64, valueLen uint64) error {
+	if err := c.advanceValue(valueLen); err != nil {
+		return err
+	}
+	if valueLen == 0 {
+		return nil
+	}
+	var lastByte [1]byte
+	lastOffset := valueOffset + int64(valueLen) - 1
+	if _, err := c.readAt(lastByte[:], lastOffset); err != nil {
+		return fmt.Errorf("%w: skipped value: %v", ErrCorruptSegment, err)
+	}
+	return nil
+}
+
+func (c *segmentCursor) readRecordHeader() (key [32]byte, flag byte, valueLen uint64, valueOffset int64, err error) {
+	var header [32 + 1 + 8]byte
+	n, err := c.readAt(header[:], c.offset)
+	if err == io.EOF && n == 0 {
+		return key, 0, 0, c.offset, io.EOF
+	}
+	if err != nil {
+		return key, 0, 0, c.offset, fmt.Errorf("%w: record header: %v", ErrCorruptSegment, err)
+	}
+	copy(key[:], header[:32])
+	flag = header[32]
+	if flag > 1 {
+		return key, 0, 0, c.offset, fmt.Errorf("%w: invalid tombstone flag %d", ErrCorruptSegment, flag)
+	}
+	valueLen = binary.BigEndian.Uint64(header[33:])
+	if valueLen > uint64(maxInt()) {
+		return key, 0, 0, c.offset, fmt.Errorf("%w: value length overflows int", ErrCorruptSegment)
+	}
+	c.offset += int64(len(header))
+	valueOffset = c.offset
+	if valueLen > uint64(math.MaxInt64-c.offset) {
+		return key, 0, 0, valueOffset, fmt.Errorf("%w: value offset overflows int64", ErrCorruptSegment)
+	}
+	return key, flag, valueLen, valueOffset, nil
+}
+
 func (c *segmentCursor) close() error {
 	if c == nil || c.closed {
 		return nil
 	}
 	c.closed = true
 	c.releaseCurrent()
-	if c.file == nil {
-		return nil
+	var first error
+	if c.closeFile && c.file != nil {
+		if err := c.file.Close(); err != nil {
+			first = err
+		}
+		c.file = nil
 	}
-	return c.file.Close()
+	if c.readerSlot {
+		releaseEphemeralReaderSlot()
+		c.readerSlot = false
+	}
+	if c.heldSegment {
+		segment := c.segment
+		c.heldSegment = false
+		c.segment = nil
+		releaseSegment(segment)
+	}
+	return first
 }
 
 func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool, error) {
@@ -393,28 +613,12 @@ func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool,
 		if err := ctx.Err(); err != nil {
 			return key, nil, false, false, err
 		}
-		var keyBytes [32]byte
-		n, err := io.ReadFull(c.file, keyBytes[:])
-		if err == io.EOF && n == 0 {
+		keyBytes, flag, valueLen, valueOffset, err := c.readRecordHeader()
+		if err == io.EOF {
 			return key, nil, false, false, nil
 		}
 		if err != nil {
-			return key, nil, false, false, fmt.Errorf("%w: key: %v", ErrCorruptSegment, err)
-		}
-		var flag [1]byte
-		if _, err := io.ReadFull(c.file, flag[:]); err != nil || flag[0] > 1 {
-			if err == nil {
-				err = fmt.Errorf("invalid tombstone flag %d", flag[0])
-			}
-			return key, nil, false, false, fmt.Errorf("%w: flag: %v", ErrCorruptSegment, err)
-		}
-		var length [8]byte
-		if _, err := io.ReadFull(c.file, length[:]); err != nil {
-			return key, nil, false, false, fmt.Errorf("%w: length: %v", ErrCorruptSegment, err)
-		}
-		valueLen := binary.BigEndian.Uint64(length[:])
-		if valueLen > uint64(maxInt()) {
-			return key, nil, false, false, fmt.Errorf("%w: value length overflows int", ErrCorruptSegment)
+			return key, nil, false, false, err
 		}
 		if c.hasLast && bytes.Compare(keyBytes[:], c.last[:]) <= 0 {
 			return key, nil, false, false, ErrOrdering
@@ -422,8 +626,8 @@ func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool,
 		c.last = keyBytes
 		c.hasLast = true
 		if c.hasAfter && bytes.Compare(keyBytes[:], c.after[:]) <= 0 {
-			if _, err := io.CopyN(io.Discard, c.file, int64(valueLen)); err != nil {
-				return key, nil, false, false, fmt.Errorf("%w: skipped value: %v", ErrCorruptSegment, err)
+			if err := c.skipValue(valueOffset, valueLen); err != nil {
+				return key, nil, false, false, err
 			}
 			continue
 		}
@@ -431,13 +635,17 @@ func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool,
 		if !ok || !c.owner.reserveMemory(charge) {
 			return key, nil, false, false, ErrMemoryBudget
 		}
+		if err := c.advanceValue(valueLen); err != nil {
+			c.owner.releaseMemory(charge)
+			return key, nil, false, false, err
+		}
 		value := make([]byte, int(valueLen))
-		if _, err := io.ReadFull(c.file, value); err != nil {
+		if _, err := c.readAt(value, valueOffset); err != nil {
 			c.owner.releaseMemory(charge)
 			return key, nil, false, false, fmt.Errorf("%w: value: %v", ErrCorruptSegment, err)
 		}
 		c.current = charge
-		return keyBytes, value, flag[0] == 1, true, nil
+		return keyBytes, value, flag == 1, true, nil
 	}
 }
 
@@ -446,25 +654,58 @@ func (c *segmentCursor) get(ctx context.Context, key [32]byte) ([]byte, bool, er
 		return nil, false, err
 	}
 	for {
-		candidate, value, deleted, ok, err := c.next(ctx)
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		candidate, flag, valueLen, valueOffset, err := c.readRecordHeader()
+		if err == io.EOF {
+			return nil, false, nil
+		}
 		if err != nil {
 			return nil, false, err
 		}
-		if !ok {
-			return nil, false, nil
+		if c.hasLast && bytes.Compare(candidate[:], c.last[:]) <= 0 {
+			return nil, false, ErrOrdering
 		}
+		c.last = candidate
+		c.hasLast = true
 		cmp := bytes.Compare(candidate[:], key[:])
 		if cmp > 0 {
+			if err := c.skipValue(valueOffset, valueLen); err != nil {
+				return nil, false, err
+			}
 			return nil, false, nil
 		}
-		if cmp == 0 {
-			if deleted {
-				return nil, true, nil
+		if cmp < 0 {
+			if err := c.skipValue(valueOffset, valueLen); err != nil {
+				return nil, false, err
 			}
-			copyValue := make([]byte, len(value))
-			copy(copyValue, value)
-			return copyValue, true, nil
+			continue
 		}
+		if flag == 1 {
+			if err := c.skipValue(valueOffset, valueLen); err != nil {
+				return nil, false, err
+			}
+			return nil, true, nil
+		}
+		charge, ok := addCharge(workspaceStream, valueLen)
+		if !ok || !c.owner.reserveMemory(charge) {
+			return nil, false, ErrMemoryBudget
+		}
+		if err := c.advanceValue(valueLen); err != nil {
+			c.owner.releaseMemory(charge)
+			return nil, false, err
+		}
+		value := make([]byte, int(valueLen))
+		if _, err := c.readAt(value, valueOffset); err != nil {
+			c.owner.releaseMemory(charge)
+			return nil, false, fmt.Errorf("%w: value: %v", ErrCorruptSegment, err)
+		}
+		// Return the temporary value directly. The caller owns the bytes, so
+		// release the cursor's workspace charge before it closes.
+		c.current = 0
+		c.owner.releaseMemory(charge)
+		return value, true, nil
 	}
 }
 
