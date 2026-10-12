@@ -12,6 +12,7 @@ type StateConfig struct {
 	MemTableMB int64 `toml:"memtable_mb" mapstructure:"memtable_mb"`
 }
 
+// Resolved fills the experimental execution allowances; production rollout remains opt-in.
 func (c StateConfig) Resolved() StateConfig {
 	if c.MemoryMB == 0 {
 		c.MemoryMB = 64
@@ -28,6 +29,7 @@ func (c StateConfig) Resolved() StateConfig {
 	return c
 }
 
+// Validate rejects invalid byte limits and configurations without execution headroom.
 func (c StateConfig) Validate() error {
 	for _, option := range []struct {
 		name  string

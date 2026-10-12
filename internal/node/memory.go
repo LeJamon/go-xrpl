@@ -35,6 +35,9 @@ type nodeMemory struct {
 }
 
 func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.Headroom, error)) (*nodeMemory, error) {
+	if err := cfg.State.Validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Acquisition.Validate(); err != nil {
 		return nil, fmt.Errorf("acquisition: %w", err)
 	}
@@ -95,7 +98,11 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 			return nil, err
 		}
 	}
-	if cfg.State.Enabled {
+	flatPresent, err := executionStatePresent(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.State.Enabled || flatPresent {
 		state := cfg.State.Resolved()
 		m.state, err = account("state_overlay", 8<<20, uint64(state.MemoryMB)<<20)
 		if err != nil {

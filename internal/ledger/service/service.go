@@ -75,6 +75,8 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 type Config struct {
 	Execution         *ledger.ExecutionStore
 	FlatState         *flatstate.Store
+	FlatRecoveryOnly  bool
+	OnFlatRecovery    func() error
 	RelayMemory       MemoryBudget
 	PersistenceMemory shamap.DirtyMemoryBudget
 	// ReplayVerificationMemory isolates long-running cold reads from ledger
@@ -655,6 +657,21 @@ func (s *Service) Start() (err error) {
 
 	if err := s.recoverFlatState(context.Background()); err != nil {
 		return fmt.Errorf("recover flat execution state: %w", err)
+	}
+	if s.config.FlatRecoveryOnly {
+		for root, release := range s.flatPins {
+			release()
+			delete(s.flatPins, root)
+		}
+		s.flatHeadersMu.Lock()
+		s.flatHeaders = nil
+		s.flatHeadersMu.Unlock()
+		s.config.FlatState, s.config.Execution = nil, nil
+		if s.config.OnFlatRecovery != nil {
+			if err := s.config.OnFlatRecovery(); err != nil {
+				return err
+			}
+		}
 	}
 
 	s.openLedgerMu.Lock()

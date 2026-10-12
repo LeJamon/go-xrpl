@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"syscall"
 
+	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
@@ -13,7 +16,11 @@ import (
 )
 
 func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
-	if !r.appConfig.State.Enabled {
+	present, err := executionStatePresent(r.appConfig)
+	if err != nil {
+		return err
+	}
+	if !r.appConfig.State.Enabled && !present {
 		return nil
 	}
 	if r.nodeFamily == nil || r.nodeStore == nil || r.memory == nil || r.memory.persistence == nil {
@@ -64,16 +71,38 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		r.memory.stateStorage.Release(storageBytes)
 		return err
 	}
+	var recovered atomic.Bool
 	r.executionCleanup = sync.OnceValue(func() error {
 		if err := execution.Close(); err != nil {
 			return err
 		}
 		err := errors.Join(flat.Close(), os.RemoveAll(scratch))
+		if err == nil && recovered.Load() {
+			// NodeStore's exclusive owner is still held during cleanup.
+			err = os.RemoveAll(filepath.Join(dir, "execution-state"))
+		}
 		r.memory.stateStorage.Release(storageBytes)
 		return err
 	})
+	cfg.OnFlatRecovery = func() error { recovered.Store(true); return r.executionCleanup() }
 	cfg.Execution, cfg.FlatState = execution, flat
-	r.serverLog.Info("Bounded state execution enabled", "overlay_mb", state.MemoryMB,
+	cfg.FlatRecoveryOnly = !r.appConfig.State.Enabled
+	r.serverLog.Info("Flat execution store opened", "execution_enabled", r.appConfig.State.Enabled, "overlay_mb", state.MemoryMB,
 		"scratch_mb", state.ScratchMB, "flat_path", filepath.Join(dir, "execution-state"))
 	return nil
+}
+
+func executionStatePresent(cfg *config.Config) (bool, error) {
+	dir := cfg.LocalStateDir()
+	if dir == "" {
+		if cfg.NodeDB.Path == "" {
+			return false, nil
+		}
+		dir = filepath.Dir(cfg.NodeDB.Path)
+	}
+	_, err := os.Stat(filepath.Join(dir, "execution-state", "CURRENT"))
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+		return false, nil
+	}
+	return err == nil, err
 }
