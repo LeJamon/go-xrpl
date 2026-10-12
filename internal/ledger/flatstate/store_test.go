@@ -1,6 +1,7 @@
 package flatstate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -78,6 +79,89 @@ func importInitial(t *testing.T, store *Store, target Descriptor, changes []Chan
 		Authorization: RootClosureAuthorization{TargetRoot: target.StateRoot, Token: []byte("genesis-closure")},
 	}); err != nil {
 		t.Fatalf("initial advance: %v", err)
+	}
+}
+
+func TestResolveMemTableSize(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cache     int64
+		requested int64
+		want      int64
+	}{
+		{name: "cache budget", cache: 8 << 20, requested: 4 << 20, want: 2 << 20},
+		{name: "requested ceiling", cache: 8 << 20, requested: 1 << 20, want: 1 << 20},
+		{name: "minimum target", cache: 128 << 10, requested: 8 << 20, want: 64 << 10},
+		{name: "default sizing unchanged", cache: 64 << 20, requested: 16 << 20, want: 16 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveMemTableSize(tc.cache, tc.requested); got != tc.want {
+				t.Fatalf("resolveMemTableSize(%d, %d) = %d, want %d", tc.cache, tc.requested, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStoreUsesCacheBoundedMemTableTarget(t *testing.T) {
+	store, err := Open(t.TempDir(), Options{CacheBytes: 8 << 20, MemTableSize: 4 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if store.opts.MemTableSize != 4<<20 {
+		t.Fatalf("configured memtable ceiling = %d, want %d", store.opts.MemTableSize, 4<<20)
+	}
+	if store.effectiveMemTableSize != 2<<20 {
+		t.Fatalf("effective memtable target = %d, want %d", store.effectiveMemTableSize, 2<<20)
+	}
+}
+
+func TestStoreCacheBudgetLeavesBlockCacheAvailable(t *testing.T) {
+	const (
+		cacheBytes   = int64(8 << 20)
+		memTableSize = int64(4 << 20)
+	)
+	store, err := Open(t.TempDir(), Options{CacheBytes: cacheBytes, MemTableSize: memTableSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	value := bytes.Repeat([]byte{'v'}, 2<<10)
+	changes := make([]Change, 256)
+	for i := range changes {
+		var key Hash
+		key[31] = byte(i)
+		changes[i] = Change{Key: key, Value: value}
+	}
+	importInitial(t, store, target, changes)
+	if err := store.db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range changes {
+		if got, found, err := view.Get(change.Key); err != nil || !found || !bytes.Equal(got, value) {
+			_ = view.Close()
+			t.Fatalf("seed read = %d bytes, found=%v, err=%v", len(got), found, err)
+		}
+	}
+	if err := view.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	memMetrics := store.db.Metrics().MemTable
+	cacheMetrics := store.cache.Metrics()
+	if memMetrics.Size > uint64(store.effectiveMemTableSize) {
+		t.Fatalf("memtable bytes = %d, effective target = %d", memMetrics.Size, store.effectiveMemTableSize)
+	}
+	if cacheMetrics.Size == 0 || cacheMetrics.Size > cacheBytes {
+		t.Fatalf("block cache bytes = %d, want (0, %d]", cacheMetrics.Size, cacheBytes)
 	}
 }
 

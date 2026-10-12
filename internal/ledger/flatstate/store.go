@@ -34,6 +34,8 @@ const (
 
 	defaultCacheBytes     int64 = 64 << 20
 	defaultMemTableSize   int64 = 16 << 20
+	minimumMemTableSize   int64 = 64 << 10
+	memTableCacheDivisor        = 4
 	defaultBatchBytes           = 4 << 20
 	defaultBatchRecords         = 4096
 	defaultOutboxCount          = 1024
@@ -243,7 +245,9 @@ func SemanticCommitID(ledger Hash, publicationKind string) CommitID {
 // Options bounds Pebble's execution-state resources and transition batches.
 // Zero values select conservative defaults.
 type Options struct {
-	CacheBytes   int64
+	CacheBytes int64
+	// MemTableSize is the requested maximum Pebble memtable size. Open may
+	// lower the effective target to reserve part of CacheBytes for blocks.
 	MemTableSize int64
 	// MemoryBudget optionally accounts for temporary bytes retained by a
 	// transition batch. The caller owns the budget's policy and lifecycle.
@@ -267,6 +271,17 @@ type Options struct {
 	// committed with NoSync and may return an uncertainty/error; callers must
 	// then recover before the base is made available.
 	Sync func(*pebble.DB) error
+}
+
+func resolveMemTableSize(cacheBytes, requested int64) int64 {
+	cacheTarget := cacheBytes / memTableCacheDivisor
+	if cacheTarget < minimumMemTableSize {
+		cacheTarget = minimumMemTableSize
+	}
+	if requested < cacheTarget {
+		return requested
+	}
+	return cacheTarget
 }
 
 func (o Options) withDefaults() (Options, error) {
@@ -319,6 +334,8 @@ type Store struct {
 	cache *pebble.Cache
 	path  string
 	opts  Options
+
+	effectiveMemTableSize int64
 
 	closed        bool
 	closing       bool
@@ -387,9 +404,10 @@ func Open(path string, options Options) (*Store, error) {
 		return nil, fmt.Errorf("flatstate: create %s: %w", path, err)
 	}
 	cache := pebble.NewCache(resolved.CacheBytes)
+	effectiveMemTableSize := resolveMemTableSize(resolved.CacheBytes, resolved.MemTableSize)
 	pebbleOptions := &pebble.Options{
 		Cache:                       cache,
-		MemTableSize:                uint64(resolved.MemTableSize),
+		MemTableSize:                uint64(effectiveMemTableSize),
 		MemTableStopWritesThreshold: 4,
 		MaxOpenFiles:                128,
 	}
@@ -399,12 +417,13 @@ func Open(path string, options Options) (*Store, error) {
 		return nil, fmt.Errorf("flatstate: open %s: %w", path, err)
 	}
 	s := &Store{
-		db:          db,
-		cache:       cache,
-		path:        path,
-		opts:        resolved,
-		ready:       true,
-		activeViews: make(map[*View]struct{}),
+		db:                    db,
+		cache:                 cache,
+		path:                  path,
+		opts:                  resolved,
+		effectiveMemTableSize: effectiveMemTableSize,
+		ready:                 true,
+		activeViews:           make(map[*View]struct{}),
 	}
 	s.cv = sync.NewCond(&s.mu)
 	if err := s.loadMetadata(); err != nil {
