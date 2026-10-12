@@ -403,6 +403,13 @@ func (e *Engine) checkLedger() {
 	if e.prevLedger == nil {
 		return
 	}
+	if pending, ok := e.preferredRecoveryTarget(); ok && pending == e.getNetworkLedger() &&
+		e.preferredRecovery.currentTargetMatchesLocked(pending, e.prevLedger, e.roundGeneration) {
+		// A detached preferred switch owns this target. Keep heartbeat work
+		// bounded while the preparation runs; a changed network preference falls
+		// through and supersedes the pending target below.
+		return
+	}
 	ourID := e.prevLedger.ID()
 	// A recovery switch changes consensus' previous ledger before the
 	// adaptor accepts a replacement LCL. Do not interpret that expected gap
@@ -641,6 +648,25 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 				"seq", newLedger.Seq(),
 				"hash", fmt.Sprintf("%x", netLedgerID[:8]),
 			)
+		}
+		return
+	}
+	if newLedger != nil && e.deferAcquiredChildLocked(newLedger) {
+		if e.lastDeferredRecovery != netLedgerID {
+			e.lastDeferredRecovery = netLedgerID
+			slog.Info("Deferring network ledger handoff for active consensus round",
+				"t", "consensus", "seq", newLedger.Seq(), "phase", e.phase.String(),
+				"round_age", e.now().Sub(e.roundStartTime),
+				"grace", e.recoveryHandoffGraceLocked())
+		}
+		return
+	}
+	if newLedger != nil && e.preferredSwitchEligibleLocked(netLedgerID, newLedger) &&
+		e.preparePreferredSwitchLocked(netLedgerID, newLedger, true) {
+		// The worker will reset round-scoped proposals and adopt the engine
+		// parent only after the service publication fence succeeds.
+		if e.mode == consensus.ModeProposing {
+			e.setMode(consensus.ModeObserving)
 		}
 		return
 	}

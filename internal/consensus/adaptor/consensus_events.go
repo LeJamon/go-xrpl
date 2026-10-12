@@ -505,6 +505,17 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 
 // OnLedgerSwitched tells peers we abandoned our previous LCL for ledger.
 func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
+	return a.emitLedgerSwitched(ledger, true)
+}
+
+// OnPreferredLedgerSwitched emits the relay and status side effects after a
+// prepared preferred-ledger transition has already published its canonical
+// frontier. It deliberately does not call SwitchToPreferredLedger again.
+func (a *Adaptor) OnPreferredLedgerSwitched(ledger consensus.Ledger) error {
+	return a.emitLedgerSwitched(ledger, false)
+}
+
+func (a *Adaptor) emitLedgerSwitched(ledger consensus.Ledger, publishCanonical bool) error {
 	if ledger == nil {
 		return nil
 	}
@@ -517,8 +528,10 @@ func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) error {
 			a.ledgerService.GetClosedLedger(),
 			a.ledgerService.GetValidatedLedger(),
 		)
-		if err := a.ledgerService.SwitchToPreferredLedger(wrapped.Unwrap()); err != nil {
-			return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+		if publishCanonical {
+			if err := a.ledgerService.SwitchToPreferredLedger(selected); err != nil {
+				return fmt.Errorf("switch canonical closed ledger at sequence %d: %w", ledger.Seq(), err)
+			}
 		}
 		switched = true
 	}

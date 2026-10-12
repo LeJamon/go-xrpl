@@ -34,6 +34,8 @@ var (
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
+var _ consensus.PreferredLedgerPreparer = (*Adaptor)(nil)
+var _ consensus.PreferredLedgerNotifier = (*Adaptor)(nil)
 var _ consensus.LedgerAcceptDeferrer = (*Adaptor)(nil)
 var _ consensus.LedgerAcceptDeferrerLifecycle = (*Adaptor)(nil)
 

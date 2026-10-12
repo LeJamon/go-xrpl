@@ -93,6 +93,12 @@ type Engine struct {
 	// proposing round finishes. Unlike buildingLedgerSeq, this owns no work.
 	lastDeferredRecovery consensus.LedgerID
 
+	// preferredRecovery owns the one bounded, cancellable preferred-ledger
+	// preparation. It is deliberately separate from the consensus mutex: a
+	// service preparation can walk and validate a large ledger while proposals,
+	// validations, and heartbeat admission continue to make progress.
+	preferredRecovery *preferredRecoveryWorker
+
 	ourTxSet consensus.TxSet
 
 	// censorship tracks txs we propose but that never get included, warning
@@ -163,6 +169,10 @@ type Engine struct {
 
 	prevRoundTime  time.Duration
 	roundStartTime time.Time
+	// roundGeneration changes whenever a round is fully initialized. Detached
+	// preferred-ledger completions capture it so a later round cannot adopt a
+	// stale preparation on the same service frontier.
+	roundGeneration uint64
 
 	firstRound bool
 
@@ -408,6 +418,29 @@ func (e *Engine) enqueueValidationBroadcastLocked(v *consensus.Validation) {
 	e.pendingValidationBroadcasts = append(e.pendingValidationBroadcasts, v)
 }
 
+// enqueuePreferredLedgerSwitchedLocked defers notifications for a prepared
+// preferred-ledger transition until the consensus mutex and service fence are
+// both released. Generic adaptors use their existing callback as a fallback;
+// production adaptors provide the notify-only callback so no second service
+// publication can move the canonical frontier backwards.
+func (e *Engine) enqueuePreferredLedgerSwitchedLocked(ledger consensus.Ledger) {
+	if ledger == nil {
+		return
+	}
+	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
+		notifier, ok := e.adaptor.(consensus.PreferredLedgerNotifier)
+		var err error
+		if ok {
+			err = notifier.OnPreferredLedgerSwitched(ledger)
+		} else {
+			err = e.adaptor.OnLedgerSwitched(ledger)
+		}
+		if err != nil {
+			slog.Warn("failed to notify switched ledger", "t", "consensus", "seq", ledger.Seq(), "err", err)
+		}
+	})
+}
+
 // broadcastValidation emits our own validation, logging on failure. Like
 // broadcastProposal, a silent drop is a liveness-critical invisible bow-out.
 func (e *Engine) broadcastValidation(v *consensus.Validation) {
@@ -496,6 +529,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		trustedSnapshot:   make(map[consensus.NodeID]struct{}),
 		pendingTrustPurge: make(map[consensus.NodeID]struct{}),
 	}
+	e.preferredRecovery = newPreferredRecoveryWorker(e)
 	if e.now == nil {
 		e.now = time.Now
 	}
@@ -813,6 +847,9 @@ func (e *Engine) Stop() error {
 	if e.cancel != nil {
 		e.cancel()
 	}
+	if e.preferredRecovery != nil {
+		e.preferredRecovery.stop()
+	}
 	e.wg.Wait()
 	e.mu.Lock()
 	ancestry, _ := e.ledgerAncestry.(*AncestryProvider)
@@ -910,13 +947,29 @@ func (e *Engine) RestartRound(proposing bool) error {
 	return err
 }
 
-// startRoundLocked is the inner StartRound; caller must hold e.mu.
-// recovering (entered after a preferred-ledger switch,
-// rippled's "switchedLedger") makes the node observe for one round — no
-// proposal or validation even as a full validator — because its view of
-// the new round's tx-set isn't coherent yet and a stale emission would
-// poison convergence.
+// startRoundLocked is the inner StartRound; caller must hold e.mu. The normal
+// path preserves the synchronous switched-ledger callback and its error
+// ordering for generic adaptors.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
+	return e.startRoundLockedWithPreferredNotification(round, proposing, recovering, false)
+}
+
+// startRoundPreparedLocked is used only after a detached preferred-ledger
+// publication has committed. Its switched-ledger notification is queued for
+// after e.mu, because the service fence must be released before callbacks or
+// relay work run.
+func (e *Engine) startRoundPreparedLocked(round consensus.RoundID, proposing, recovering bool) {
+	// The prepared branch only queues the notify-only callback, so the shared
+	// body has no fallible operation after publication. Keep the error-bearing
+	// return for the synchronous compatibility path above.
+	_ = e.startRoundLockedWithPreferredNotification(round, proposing, recovering, true)
+}
+
+// startRoundLockedWithPreferredNotification is the shared round-start body;
+// caller must hold e.mu. A prepared preferred switch uses the notify-only
+// post-unlock callback while the synchronous compatibility path invokes the
+// adaptor callback in its original position and propagates its error.
+func (e *Engine) startRoundLockedWithPreferredNotification(round consensus.RoundID, proposing, recovering, prepared bool) error {
 	// First round after boot has no prior round to measure; seed prevRoundTime
 	// to the idle interval so round-1 convergePercent uses the 15s divisor, not
 	// the 5s floor (else avalanche state escalates ~3x faster than rippled).
@@ -931,7 +984,9 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// A recovery restart means we just jumped to a different LCL — tell peers
 	// via SWITCHED_LEDGER so their tallies drop our abandoned ledger.
 	if recovering && e.prevLedger != nil {
-		if err := e.adaptor.OnLedgerSwitched(e.prevLedger); err != nil {
+		if prepared {
+			e.enqueuePreferredLedgerSwitchedLocked(e.prevLedger)
+		} else if err := e.adaptor.OnLedgerSwitched(e.prevLedger); err != nil {
 			return fmt.Errorf("switch ledger: %w", err)
 		}
 	}
@@ -1075,7 +1130,14 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 			if !relayTrusted(p.NodeID) {
 				continue
 			}
-			e.adaptor.RelayProposal(p, 0)
+			if prepared {
+				proposal := p
+				e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
+					_ = e.adaptor.RelayProposal(proposal, 0)
+				})
+			} else {
+				e.adaptor.RelayProposal(p, 0)
+			}
 		}
 
 		// Peer pressure: if a majority of prior proposers already closed,
@@ -1090,6 +1152,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		}
 	}
 
+	e.roundGeneration++
 	return nil
 }
 

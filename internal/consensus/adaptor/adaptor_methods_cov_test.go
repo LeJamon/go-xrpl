@@ -122,6 +122,18 @@ func TestOnLedgerSwitchedMovesCanonicalFrontierBeforeBuild(t *testing.T) {
 	assert.Equal(t, preferred.ID(), built.ParentID())
 }
 
+func TestOnPreferredLedgerSwitchedDoesNotRepublishCanonicalFrontier(t *testing.T) {
+	a := newTestAdaptor(t)
+	closed := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, closed)
+	historical, err := a.ledgerService.GetLedgerBySequence(closed.Sequence() - 1)
+	require.NoError(t, err)
+	require.NotNil(t, historical)
+
+	require.NoError(t, a.OnPreferredLedgerSwitched(WrapLedger(historical)))
+	assert.Equal(t, closed.Hash(), a.ledgerService.GetClosedLedger().Hash())
+}
+
 func TestAdg_ValidateLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 
