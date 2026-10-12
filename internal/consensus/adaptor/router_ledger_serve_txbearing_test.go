@@ -7,7 +7,6 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -23,14 +22,13 @@ import (
 // non-empty transaction tree.
 func closedLedgerWithPayment(t *testing.T, families ...shamap.Family) *service.Service {
 	t.Helper()
-	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
-	if len(families) > 0 {
-		cfg.SHAMapFamily = families[0]
-	}
-	svc, err := service.New(cfg)
-	require.NoError(t, err)
-	require.NoError(t, svc.Start())
+	svc := newTestLedgerService(t, families...)
+	closeLedgerWithPayment(t, svc)
+	return svc
+}
 
+func closeLedgerWithPayment(t *testing.T, svc *service.Service) {
+	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
@@ -55,7 +53,6 @@ func closedLedgerWithPayment(t *testing.T, families ...shamap.Family) *service.S
 
 	_, err = svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
-	return svc
 }
 
 // TestServeLedger_TxBearing_FullRoundTrip is the end-to-end proof for the

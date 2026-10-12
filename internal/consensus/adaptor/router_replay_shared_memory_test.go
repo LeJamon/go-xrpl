@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,8 +61,12 @@ func completePaymentReplayTestLink(t *testing.T, r *Router, link standardReplayT
 }
 
 func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *testing.T) {
-	source := closedLedgerWithPayment(t)
+	family := backend.NewMemory()
+	source := newTestLedgerService(t, family)
 	t.Cleanup(source.Stop)
+	_, err := source.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	closeLedgerWithPayment(t, source)
 	sourceTarget := source.GetClosedLedger()
 	require.NotNil(t, sourceTarget)
 	sourceHash := sourceTarget.Hash()
@@ -69,16 +74,17 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 	require.NoError(t, err)
 	require.NotNil(t, sourceParent)
 
-	r, _, sender, svc := makeRouter(t)
+	r, _, sender, svc := makeRouter(t, family)
 	t.Cleanup(func() {
 		r.StopAcquisitions()
 		_ = r.CloseAcquisitionMemoryBudget()
 		svc.Stop()
 	})
 
+	require.NoError(t, svc.SwitchToPreferredLedger(sourceParent))
 	routerParent := svc.GetClosedLedger()
 	require.NotNil(t, routerParent)
-	require.Equal(t, sourceParent.Hash(), routerParent.Hash(), "standalone fixtures must share the genesis parent")
+	require.Equal(t, sourceParent.Hash(), routerParent.Hash())
 
 	pool := membudget.New(2 << 30)
 	parent, err := pool.NewAccount("acquisition", 512<<20, 2<<30)
