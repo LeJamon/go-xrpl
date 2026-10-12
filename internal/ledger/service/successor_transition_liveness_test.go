@@ -28,6 +28,7 @@ func TestConsensusSuccessorPreparationKeepsReadersAndIngressResponsive(t *testin
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
 	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 1_000_000, 100, 2)
 	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), svc.shamapFamily, sender.AccountID())
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	oldClosed := svc.GetClosedLedger()
 	priorTx, err := openledger.ParsePendingTx(prior)
@@ -85,6 +86,7 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
 	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 21_000_000, 100, 1)
 	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), svc.shamapFamily, sender.AccountID())
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	priorTx, err := openledger.ParsePendingTx(prior)
 	require.NoError(t, err)
@@ -220,6 +222,7 @@ func coldLedgerFromDescriptor(t testing.TB, descriptor *ledger.Ledger, root [32]
 	require.Zero(t, descriptor.TxCount())
 	loaded, err := ledger.NewFromHeader(descriptor.Header(), cold, txMap, descriptor.Fees(), execution)
 	require.NoError(t, err)
+	t.Cleanup(loaded.Discard)
 	return loaded
 }
 

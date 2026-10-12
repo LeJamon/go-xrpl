@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,7 @@ func TestReplaySuccessorRepairRejectsStaleFaultAndClosedIdentity(t *testing.T) {
 
 type replaySuccessorBlockingFamily struct {
 	shamap.Family
+	armed       atomic.Bool
 	started     chan struct{}
 	release     chan struct{}
 	once        sync.Once
@@ -119,11 +121,13 @@ type replaySuccessorBlockingFamily struct {
 }
 
 func (f *replaySuccessorBlockingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
-	f.once.Do(func() { close(f.started) })
-	select {
-	case <-f.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if f.armed.Load() {
+		f.once.Do(func() { close(f.started) })
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return f.Family.Fetch(ctx, hash)
 }
@@ -145,6 +149,8 @@ func replaySuccessorLivenessFixture(t *testing.T) (*Service, *ledger.Ledger, *re
 		release: make(chan struct{}),
 	}
 	repaired := coldLedgerWithFamily(t, svc.GetClosedLedger(), family)
+	family.armed.Store(true)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, repaired.SetValidated())
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()

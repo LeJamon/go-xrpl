@@ -64,6 +64,7 @@ func coldLedgerWithFamily(t testing.TB, parent *ledger.Ledger, family shamap.Fam
 	require.Zero(t, descriptor.TxCount())
 	loaded, err := ledger.NewFromHeader(descriptor.Header(), cold, txMap, descriptor.Fees(), execution)
 	require.NoError(t, err)
+	t.Cleanup(loaded.Discard)
 	return loaded
 }
 

@@ -132,7 +132,6 @@ func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) 
 	budget := &preferredMemoryBudget{
 		limit:     8 << 20,
 		capacity:  8 << 20,
-		used:      8 << 20,
 		changed:   make(chan struct{}),
 		attempted: make(chan struct{}),
 	}
@@ -146,6 +145,9 @@ func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) 
 	preferred, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, preferred.Close(time.Now(), 0))
+	budget.mu.Lock()
+	budget.used = budget.limit
+	budget.mu.Unlock()
 
 	type prepareResult struct {
 		prepared *PreparedPreferredLedger
@@ -174,7 +176,7 @@ func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) 
 	}
 	select {
 	case result := <-preparedDone:
-		require.ErrorIs(t, result.err, context.Canceled)
+		require.ErrorIs(t, result.err, errServiceNotRunning)
 		if result.prepared != nil {
 			result.prepared.Release()
 		}

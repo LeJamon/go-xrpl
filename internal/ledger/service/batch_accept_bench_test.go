@@ -430,6 +430,8 @@ func newBatchBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64
 	fixture.template, err = validated.Snapshot()
 	require.NoError(b, err)
 	fixture.execution = execution
+	validated.Discard()
+	parent.Discard()
 	committed, err := db.RotateGeneration(b.Context(), fixture.rotation, 1)
 	require.True(b, committed)
 	require.NoError(b, err)

@@ -127,6 +127,7 @@ func preferredPreparationFixture(t *testing.T) (*Service, *ledger.Ledger, *accep
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger(), svc.shamapFamily)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, preferred.SetValidated())
 	// The fixture's complete backing store was copied from a real ledger. Keep
 	// it service-owned so the barrier exercises successor work, not admission.
