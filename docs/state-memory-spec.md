@@ -115,7 +115,7 @@ Keep transaction metadata and original-value tracking separate from the final le
 
 The transaction SHAMap is separate from the account-state SHAMap. It contains the existing transaction/metadata leaf encodings and does not inherit the parent ledger's transaction set. Preserve raw versus metadata-bearing leaf kinds, duplicate detection, counts and `TxExists` errors; transaction lookup must not consult account-state overlays. Build it with bounded sorted/spilled entries using the same canonical node encoder where applicable. Transaction records live in per-version pending segments indexed by transaction hash and then in the canonical transaction SHAMap; this draft does not add them to `object/` or introduce a redundant flat transaction table. The segment descriptor records version, root and count; each entry preserves leaf kind and exact bytes. `ForEachTransaction`, `TxExists` and counts resolve the same captured version as its state reader.
 
-Private builder-owned data may be updated in place. Once sealed or exposed to another view, a segment is immutable. Existing `MutableFork` and `DetachedMutable` consumers must migrate to explicit view/builder ownership; deep-copying the resident state is not an acceptable replacement.
+Private builder-owned data may be updated in place. Once sealed or exposed to another view, a segment is immutable. Execution uses explicit view/builder ownership; deep-copying the resident state is not an acceptable replacement. `MutableFork` remains available to SHAMap acquisition and import paths.
 
 ## 6. Incremental SHAMap commitment
 

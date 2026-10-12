@@ -1,9 +1,5 @@
 package shamap
 
-import (
-	"errors"
-)
-
 // Item represents a leaf-level item stored in the SHAMap
 type Item struct {
 	key  [32]byte
@@ -41,14 +37,4 @@ func (item *Item) DataSize() int {
 
 func (item *Item) dataBytes() []byte {
 	return item.data
-}
-
-func (item *Item) clone() (*Item, error) {
-	if item == nil {
-		return nil, errors.New("cannot clone nil item")
-	}
-
-	dataCopy := make([]byte, len(item.data))
-	copy(dataCopy, item.data)
-	return &Item{key: item.key, data: dataCopy}, nil
 }
