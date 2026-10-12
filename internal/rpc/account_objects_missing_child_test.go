@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -164,8 +165,25 @@ func TestAccountObjectsMissingChildrenPreserveStorageErrors(t *testing.T) {
 	require.NoError(t, err)
 	root, err := stateMap.Hash()
 	require.NoError(t, err)
-	family := &accountObjectsFailingFamily{Family: backend.NewMemory(), err: errors.New("injected child storage failure")}
-	require.NoError(t, stateMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+	baseFamily := backend.NewMemory()
+	family := &accountObjectsFailingFamily{Family: baseFamily, err: errors.New("injected child storage failure")}
+	t.Cleanup(func() {
+		if err := baseFamily.Close(); err != nil {
+			t.Errorf("close failing family: %v", err)
+		}
+	})
+	seed := shamap.New(shamap.TypeState)
+	require.NoError(t, stateMap.ForEach(func(item *shamap.Item) bool {
+		if err := seed.Put(item.Key(), item.Data()); err != nil {
+			t.Errorf("seed state map: %v", err)
+			return false
+		}
+		return true
+	}))
+	seedRoot, err := seed.Hash()
+	require.NoError(t, err)
+	require.Equal(t, root, seedRoot)
+	require.NoError(t, seed.StoreDirty(func(entries []shamap.FlushEntry) error {
 		for _, entry := range entries {
 			if bytes.HasSuffix(entry.Data, keys[3][:]) {
 				family.failHash = entry.Hash
@@ -176,9 +194,14 @@ func TestAccountObjectsMissingChildrenPreserveStorageErrors(t *testing.T) {
 	require.NotZero(t, family.failHash)
 	backed, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
 	require.NoError(t, err)
-	replacement, err := ledger.NewOpenWithHeader(open.Header(), backed, shamap.New(shamap.TypeTransaction), open.Fees())
+	executionStore := ledgertestutil.NewExecutionStore(t, family)
+	// Release the transferred open view and stop the service before the strict
+	// execution-store cleanup so all store root ownership is gone first.
+	t.Cleanup(svc.Stop)
+	t.Cleanup(open.Discard)
+	replacement, err := ledger.NewOpenWithHeader(open.Header(), backed, shamap.New(shamap.TypeTransaction), open.Fees(), executionStore)
 	require.NoError(t, err)
-	require.NoError(t, open.AdoptState(replacement))
+	require.NoError(t, open.ConsumeState(replacement))
 
 	result, queryErr := svc.GetAccountObjects(t.Context(), accountObjectsOwner, "current", "offer", 2, "")
 	require.Nil(t, result)

@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 
@@ -54,6 +55,10 @@ type networkLookup struct {
 	validatedAge time.Duration
 }
 
+func syntheticParentHash(seq uint32) [32]byte {
+	return [32]byte{byte(seq), 0xAB}
+}
+
 func (l *networkLookup) IsStandalone() bool                   { return l.standalone }
 func (l *networkLookup) GetValidatedLedgerAge() time.Duration { return l.validatedAge }
 
@@ -63,6 +68,11 @@ func (f *fakeLookup) GetValidatedLedgerAge() time.Duration { return 0 }
 func (f *fakeLookup) GetLedgerByHash(h [32]byte) (*ledger.Ledger, error) {
 	if l, ok := f.byHash[h]; ok {
 		return l, nil
+	}
+	if h == syntheticParentHash(uint32(h[0])) {
+		if l, ok := f.bySeq[uint32(h[0])]; ok {
+			return l, nil
+		}
 	}
 	for _, l := range f.bySeq {
 		if l.Hash() == h {
@@ -148,10 +158,12 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 	}
 	txMap := shamap.New(shamap.TypeTransaction)
 	for k, data := range txs {
-		if err := txMap.Put(k, data); err != nil {
+		if err := txMap.PutWithNodeType(k, data, shamap.NodeTypeTransactionWithMeta); err != nil {
 			t.Fatalf("tx Put: %v", err)
 		}
 	}
+	stateMap.SetLedgerSeq(seq)
+	txMap.SetLedgerSeq(seq)
 
 	hdr := header.LedgerHeader{
 		LedgerIndex:         seq,
@@ -163,10 +175,19 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 		Accepted:            true,
 	}
 	if seq > 1 {
-		hdr.ParentHash = [32]byte{byte(seq - 1), 0xAB}
+		hdr.ParentHash = syntheticParentHash(seq - 1)
 	}
-	hdr.Hash = [32]byte{byte(seq), 0xAB}
-	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	var err error
+	hdr.AccountHash, err = stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state map hash: %v", err)
+	}
+	hdr.TxHash, err = txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction map hash: %v", err)
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}
@@ -179,19 +200,31 @@ func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 	hdr := header.LedgerHeader{
 		LedgerIndex:         seq,
 		ParentHash:          parent.Hash(),
-		Hash:                [32]byte{byte(seq), 0xCD},
 		Drops:               parent.TotalDrops(),
 		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
 		ParentCloseTime:     parent.CloseTime(),
 		CloseTimeResolution: 10,
 		Accepted:            true,
 	}
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
+	var err error
+	hdr.AccountHash, err = stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state map hash: %v", err)
+	}
+	hdr.TxHash, err = txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction map hash: %v", err)
+	}
+	hdr.Hash = header.CalculateHash(hdr)
 	l, err := ledger.NewClosedFromHeaderContext(
 		context.Background(),
 		hdr,
-		shamap.New(shamap.TypeState),
-		shamap.New(shamap.TypeTransaction),
+		stateMap,
+		txMap,
 		drops.Fees{},
+		ledgertestutil.NewExecutionStore(t, nil),
 	)
 	if err != nil {
 		t.Fatalf("NewClosedFromHeaderContext: %v", err)
