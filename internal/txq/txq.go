@@ -172,6 +172,29 @@ func (q *TxQ) Size() int {
 	return len(q.byFee)
 }
 
+// SnapshotStats returns the number of queued transactions and the total size
+// of their retained raw blobs without allocating a snapshot of the queue.
+func (q *TxQ) SnapshotStats() (count, bytes uint64) {
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
+
+	for _, candidate := range q.byFee {
+		if candidate == nil {
+			continue
+		}
+		count = saturatingSnapshotAdd(count, 1)
+		bytes = saturatingSnapshotAdd(bytes, candidate.rawBlobSize())
+	}
+	return count, bytes
+}
+
+func saturatingSnapshotAdd(total, amount uint64) uint64 {
+	if ^uint64(0)-total < amount {
+		return ^uint64(0)
+	}
+	return total + amount
+}
+
 // GetTxBlob returns a copy of the raw transaction held by the queue. The
 // transaction queue is an authoritative cache for reduce-relay replies: a
 // terQUEUED transaction is not present in the open-ledger view yet, but peers
