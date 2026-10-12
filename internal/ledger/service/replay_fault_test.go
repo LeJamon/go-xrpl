@@ -20,12 +20,22 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
 
+type replayFaultEphemeralFamily struct{ shamap.Family }
+
 func replayFaultService(t *testing.T, path string) *Service {
 	t.Helper()
-	svc, err := New(Config{Standalone: true, GenesisConfig: genesis.DefaultConfig(), ReplayFaultPath: path})
+	base := shamapbackend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	family := replayFaultEphemeralFamily{Family: base}
+	execution := newTestExecutionStore(t, family)
+	svc, err := New(Config{
+		Standalone: true, GenesisConfig: genesis.DefaultConfig(), ReplayFaultPath: path,
+		SHAMapFamily: family, Execution: execution,
+	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
@@ -39,15 +49,22 @@ func replayFaultTarget(t *testing.T, parent *ledger.Ledger, divergent bool) *led
 	require.NoError(t, err)
 	require.NoError(t, target.Close(closeTime, 0))
 	if !divergent {
+		t.Cleanup(target.Discard)
 		return target
 	}
+	state, err := target.StateMapSnapshot()
+	require.NoError(t, err)
+	require.NoError(t, state.PutWithNodeType([32]byte{0xfe}, []byte("divergent replay state"), shamap.NodeTypeAccountState))
+	txMap, err := target.TxMapSnapshot()
+	require.NoError(t, err)
 	h := target.Header()
-	h.AccountHash[0] ^= 1
+	h.AccountHash, err = state.Hash()
+	require.NoError(t, err)
 	h.Hash = header.CalculateHash(h)
-	state, err := parent.StateMapSnapshot()
+	target.Discard()
+	target, err = ledger.NewFromHeader(h, state, txMap, parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
-	target, err = ledger.NewFromHeader(h, state, shamap.New(shamap.TypeTransaction), parent.Fees(), parent.ExecutionStore())
-	require.NoError(t, err)
+	t.Cleanup(target.Discard)
 	return target
 }
 
@@ -197,9 +214,11 @@ func TestReplayFaultMissingParentRequiresVerifiedRepairAndExplicitResume(t *test
 func TestReplayFaultCorruptParentIsNotExecutionDisagreement(t *testing.T) {
 	svc := replayFaultService(t, filepath.Join(t.TempDir(), "fault.json"))
 	parent := svc.GetClosedLedger()
-	broken, err := ledger.NewFromHeader(parent.Header(), shamap.New(shamap.TypeState), shamap.New(shamap.TypeTransaction), parent.Fees(), parent.ExecutionStore())
+	fault := replayfault.Fault{ID: "corrupt", ParentHash: parent.Hash()}
+	evidence := replayEvidence{Parent: parent.Header(), Fees: parent.Fees(), ParentSnapshot: true}
+	err := os.WriteFile(svc.replayParentPath(fault.ID), []byte(`{"data":"AAAAAAAAAAAAAAAA"}`+"\n"), 0600)
 	require.NoError(t, err)
-	_, err = svc.captureReplayParent(context.Background(), "corrupt", broken)
+	_, err = svc.loadReplayParent(context.Background(), fault, evidence)
 	require.ErrorIs(t, err, errReplayParentCorrupt)
 	require.Equal(t, replayfault.CorruptState, replayStateFailureClass(err))
 	require.Equal(t, replayfault.MissingState, replayStateFailureClass(shamap.ErrNodeNotInStore))
@@ -633,7 +652,7 @@ func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {
 	h.TxHash, err = targetMap.Hash()
 	require.NoError(t, err)
 	h.Hash = header.CalculateHash(h)
-	state, err := parent.StateMapSnapshot()
+	state, err := closed.StateMapSnapshot()
 	require.NoError(t, err)
 	target, err := ledger.NewFromHeader(h, state, targetMap, parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)

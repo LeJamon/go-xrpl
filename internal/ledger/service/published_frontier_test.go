@@ -90,6 +90,7 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
 
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -105,8 +106,8 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 		}
 	})
 
-	first := makeStubLedger(t, 20, [32]byte{0x20}, [32]byte{0x19})
-	second := makeStubLedger(t, 21, [32]byte{0x21}, [32]byte{0x20})
+	first := makeStubLedger(t, 20, [32]byte{0x20}, [32]byte{0x19}, svc.config.Execution)
+	second := makeStubLedger(t, 21, [32]byte{0x21}, first.Hash(), svc.config.Execution)
 	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
 
 	select {
@@ -128,7 +129,6 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 	}
 	assert.Equal(t, uint32(21), svc.GetServerInfo().PublishedLedgerSeq)
 
-	svc.Stop()
 }
 
 func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
@@ -152,7 +152,8 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 		}
 	})
 
-	first := makeStubLedger(t, 100, [32]byte{0x00, 0x64}, [32]byte{})
+	first := makeStubLedger(t, 100, [32]byte{0x00, 0x64}, [32]byte{}, svc.config.Execution)
+	previous := first
 	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
 	select {
 	case <-firstStarted:
@@ -163,10 +164,12 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 	for i := uint32(1); i < eventCount; i++ {
 		seq := 100 + i
 		hash := [32]byte{byte(seq >> 8), byte(seq)}
-		parentHash := [32]byte{byte((seq - 1) >> 8), byte(seq - 1)}
+		parentHash := previous.Hash()
+		ledger := makeStubLedger(t, seq, hash, parentHash, svc.config.Execution)
 		svc.dispatchLedgerEvent(&LedgerAcceptedEvent{
-			Ledger: makeStubLedger(t, seq, hash, parentHash),
+			Ledger: ledger,
 		})
+		previous = ledger
 	}
 	close(releaseFirst)
 

@@ -45,6 +45,7 @@ func testEvictOldHistoryLocked(t *testing.T, window uint32) {
 	if err := svc.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	t.Cleanup(svc.Stop)
 
 	makeLedger := func(seq uint32, salt byte) *ledger.Ledger {
 		stateMap, err := svc.genesisLedger.StateMapSnapshot()
@@ -60,7 +61,7 @@ func testEvictOldHistoryLocked(t *testing.T, window uint32) {
 		h.Hash[0] = salt
 		h.Hash[1] = byte(seq)
 		h.Hash[2] = byte(seq >> 8)
-		l := mustNewOpenWithHeader(t, h, stateMap, txMap)
+		l := mustNewOpenWithHeader(t, h, stateMap, txMap, svc.config.Execution)
 		var txHash [32]byte
 		txHash[0] = 0xAA
 		txHash[1] = byte(seq)
@@ -133,6 +134,7 @@ func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOpen: %v", err)
 	}
+	t.Cleanup(old.Discard)
 	txHash := [32]byte{0x51}
 	if err := old.AddTransactionWithMeta(txHash, make([]byte, 16)); err != nil {
 		t.Fatalf("AddTransactionWithMeta: %v", err)
@@ -145,11 +147,21 @@ func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TxMapSnapshot: %v", err)
 	}
+	state, err := old.StateMapSnapshot()
+	if err != nil {
+		t.Fatalf("StateMapSnapshot: %v", err)
+	}
 	memory := shamapbackend.NewMemory()
-	if err := txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+	copyBudget := &relayTestMemory{limit: 512 << 20}
+	if err := state.StoreAllBatched(t.Context(), copyBudget, func(entries []shamap.FlushEntry) error {
 		return memory.StoreBatch(t.Context(), entries)
 	}); err != nil {
-		t.Fatalf("StoreDirty: %v", err)
+		t.Fatalf("StoreAllBatched state: %v", err)
+	}
+	if err := txMap.StoreAllBatched(t.Context(), copyBudget, func(entries []shamap.FlushEntry) error {
+		return memory.StoreBatch(t.Context(), entries)
+	}); err != nil {
+		t.Fatalf("StoreAllBatched transactions: %v", err)
 	}
 	root, err := txMap.Hash()
 	if err != nil {
@@ -160,18 +172,17 @@ func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
+	execution := newTestExecutionStore(t, family)
+	t.Cleanup(family.unblock)
 	coldTx, err := shamap.NewFromRootHash(shamap.TypeTransaction, root, family)
 	if err != nil {
 		t.Fatalf("NewFromRootHash: %v", err)
 	}
-	state, err := old.StateMapSnapshot()
-	if err != nil {
-		t.Fatalf("StateMapSnapshot: %v", err)
-	}
-	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees(), svc.config.Execution)
+	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees(), execution)
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}
+	t.Cleanup(coldOld.Discard)
 
 	latestSeq := coldOld.Sequence() + 2
 	latestState, err := svc.genesisLedger.StateMapSnapshot()
@@ -185,7 +196,7 @@ func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
 	var latestHeader header.LedgerHeader
 	latestHeader.LedgerIndex = latestSeq
 	latestHeader.Hash[0] = 0x77
-	latest := mustNewOpenWithHeader(t, latestHeader, latestState, latestTx)
+	latest := mustNewOpenWithHeader(t, latestHeader, latestState, latestTx, svc.config.Execution)
 
 	family.fetches.Store(0)
 	svc.mu.Lock()
@@ -260,6 +271,7 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 	if err := svc.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	t.Cleanup(svc.Stop)
 
 	window := svc.ledgerCacheSize()
 	for seq := uint32(1); seq <= window/2; seq++ {
@@ -273,7 +285,7 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 		}
 		var h header.LedgerHeader
 		h.LedgerIndex = seq
-		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, stateMap, txMap)
+		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, stateMap, txMap, svc.config.Execution)
 	}
 
 	before := len(svc.ledgerHistory)
@@ -298,6 +310,7 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	if err := svc.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	t.Cleanup(svc.Stop)
 
 	ctx := context.Background()
 	window := svc.ledgerCacheSize()
@@ -536,7 +549,7 @@ func TestValidatedPromotionEvictsHistory(t *testing.T) {
 	var adoptedHeader header.LedgerHeader
 	adoptedHeader.LedgerIndex = adoptedSeq
 	adoptedHeader.Hash[0] = 0x77
-	adopted := mustNewOpenWithHeader(t, adoptedHeader, adoptedState, adoptedTx)
+	adopted := mustNewOpenWithHeader(t, adoptedHeader, adoptedState, adoptedTx, svc.config.Execution)
 
 	// Seed entries below the post-eviction cutoff so promotion has
 	// observable work to do.
@@ -545,7 +558,7 @@ func TestValidatedPromotionEvictsHistory(t *testing.T) {
 		st, tx := freshMaps()
 		var h header.LedgerHeader
 		h.LedgerIndex = seq
-		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, st, tx)
+		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, st, tx, svc.config.Execution)
 	}
 
 	svc.mu.Lock()
