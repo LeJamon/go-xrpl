@@ -176,6 +176,30 @@ func TestBuildChangesRawTransactionLeaf(t *testing.T) {
 	}
 }
 
+func TestBuildChangesRejectsInvalidRawTransactionKey(t *testing.T) {
+	family := newMemoryFamily()
+	data := commitmentTestData(0x91)
+	key := commitmentTestKey(0x91)
+	called := false
+	idx := 0
+	_, err := BuildChanges(context.Background(), TypeTransaction, [32]byte{}, 1, family, func() (Change, error) {
+		if idx != 0 {
+			return Change{}, io.EOF
+		}
+		idx++
+		return Change{Key: key, Data: data, Type: NodeTypeTransactionNoMeta}, nil
+	}, func(FlushEntry) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("BuildChanges accepted a raw transaction with a mismatched key")
+	}
+	if called {
+		t.Fatal("sink called for an invalid raw transaction key")
+	}
+}
+
 func TestRootReaderDiffMatchesSHAMap(t *testing.T) {
 	family := newMemoryFamily()
 	oldMap := New(TypeState)
@@ -616,6 +640,62 @@ func TestBuildChangesShapeTransitions(t *testing.T) {
 				t.Fatalf("root=%x want=%x", got.Root, wantRoot)
 			}
 		})
+	}
+}
+
+func TestBuildChangesRootClosingDeletion(t *testing.T) {
+	family := newMemoryFamily()
+	parent := New(TypeState)
+	keys := [][32]byte{commitmentTestKey(0x10), commitmentTestKey(0x20), commitmentTestKey(0x30)}
+	for _, key := range keys {
+		if err := parent.Put(key, commitmentTestData(key[0])); err != nil {
+			t.Fatalf("parent.Put: %v", err)
+		}
+	}
+	if err := flushToFamily(parent, family); err != nil {
+		t.Fatalf("flush parent: %v", err)
+	}
+	parentRoot, err := parent.Hash()
+	if err != nil {
+		t.Fatalf("parent.Hash: %v", err)
+	}
+	expected, err := parent.SnapshotMutable()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	changes := make([]Change, 0, len(keys))
+	for _, key := range keys {
+		if err := expected.Delete(key); err != nil {
+			t.Fatalf("expected.Delete: %v", err)
+		}
+		changes = append(changes, Change{Key: key, Delete: true, Type: NodeTypeAccountState})
+	}
+	wantRoot, err := expected.Hash()
+	if err != nil {
+		t.Fatalf("expected.Hash: %v", err)
+	}
+	idx := 0
+	result, err := BuildChanges(context.Background(), TypeState, parentRoot, 1, family, func() (Change, error) {
+		if idx == len(changes) {
+			return Change{}, io.EOF
+		}
+		change := changes[idx]
+		idx++
+		return change, nil
+	}, func(entry FlushEntry) error {
+		return family.StoreBatch(context.Background(), []FlushEntry{entry})
+	})
+	if err != nil {
+		t.Fatalf("BuildChanges: %v", err)
+	}
+	if result.Root != wantRoot || result.Root != ([32]byte{}) {
+		t.Fatalf("root after closing deletion = %x, want empty root", result.Root)
+	}
+	if result.Nodes != 0 {
+		t.Fatalf("closing deletion emitted %d nodes, want none", result.Nodes)
+	}
+	if err := NewRootReader(TypeState, result.Root, family).ForEach(context.Background(), func(*Item) bool { return true }); err != nil {
+		t.Fatalf("empty root reader: %v", err)
 	}
 }
 
