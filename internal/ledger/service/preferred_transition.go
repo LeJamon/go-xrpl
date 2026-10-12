@@ -156,8 +156,10 @@ func (p *PreparedPreferredLedger) Wait(ctx context.Context) error {
 }
 
 // PreparePreferredLedger captures the canonical frontier and starts detached
-// successor preparation. It holds the ledger-work admission and the explicit
-// transition owner until TryPublish or Release completes.
+// successor preparation. Callers must call Release on every returned owner,
+// including after cancellation. After publication they must call Finish outside
+// engine locks before Release. TryPublish releases transition ownership; Finish
+// or Release drains ledger-work admission so Service.Stop can complete.
 func (s *Service) PreparePreferredLedger(ctx context.Context, parent *ledger.Ledger) (*PreparedPreferredLedger, error) {
 	return s.prepareSuccessor(ctx, parent, successorOptions{preferred: true})
 }
