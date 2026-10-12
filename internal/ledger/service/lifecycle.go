@@ -2,11 +2,9 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -1002,77 +1000,34 @@ func (s *Service) IsFastLoadProvisional() bool {
 // changing the node's closed/open ledger frontier. Consensus may later select
 // the stored ledger as its preferred parent.
 func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	prepared, err := s.PrepareAcquiredLedger(ctx, h, stateMap, txMap)
 	if err != nil {
 		return err
 	}
-	defer releaseAdmission()
-	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	if err := s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap); err != nil {
-		return err
-	}
-	// Runtime catch-up can complete a full acquired state after startup has
-	// already left initial-sync mode. Keep only its identity until persistence
-	// and the generation-bound FullBelow proof authorize promotion.
-	if h != nil && !s.ReplayBlocked() {
-		s.rememberValidatedStateBaseCandidate(*h)
-	}
-	return nil
+	defer prepared.Release()
+	return s.StorePreparedLedger(ctx, prepared)
 }
 
 // BootstrapLedgerWithState stores an acquired ledger and reports whether the
 // node still needs an initial network-ledger switch. Consensus owns that switch.
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	prepared, err := s.PrepareAcquiredLedger(ctx, h, stateMap, txMap)
 	if err != nil {
 		return false, err
 	}
-	defer releaseAdmission()
-	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
-		return false, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	initialCandidate := s.networkLedgerState != networkLedgerReady
-	err = s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
-	if err == nil && initialCandidate && !s.ReplayBlocked() {
-		s.rememberValidatedStateBaseCandidate(*h)
-	}
-	return initialCandidate, err
+	defer prepared.Release()
+	return s.BootstrapPreparedLedger(ctx, prepared)
 }
 
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated
 // history without changing the node's current ledger frontiers.
 func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	prepared, err := s.PrepareAcquiredLedger(ctx, h, stateMap, txMap)
 	if err != nil {
 		return err
 	}
-	defer releaseAdmission()
-	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap)
-}
-
-func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	historical, err := s.ledgerWithStateLocked(ctx, h, stateMap, txMap)
-	if err != nil {
-		return err
-	}
-	return s.ingestHistoricalLedgerLocked(ctx, historical)
+	defer prepared.Release()
+	return s.IngestHistoricalPreparedLedger(ctx, prepared)
 }
 
 func (s *Service) ingestHistoricalLedgerLocked(ctx context.Context, historical *ledger.Ledger) error {
@@ -1137,62 +1092,6 @@ func (s *Service) ingestHistoricalLedgerLocked(ctx context.Context, historical *
 		"hash", fmt.Sprintf("%x", hash[:8]),
 	)
 	return nil
-}
-
-func (s *Service) ledgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (*ledger.Ledger, error) {
-	if s.genesisLedger == nil {
-		return nil, errors.New("no genesis ledger available")
-	}
-	if h == nil {
-		return nil, errors.New("nil ledger header")
-	}
-	if stateMap == nil {
-		return nil, errors.New("nil ledger state map")
-	}
-	if calculated := header.CalculateHash(*h); calculated != h.Hash {
-		return nil, fmt.Errorf("acquired ledger header hash mismatch: got %x, want %x", calculated, h.Hash)
-	}
-	stateHash, err := stateMap.Hash()
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate acquired state map hash: %w", err)
-	}
-	if stateHash != h.AccountHash {
-		return nil, fmt.Errorf("acquired state map root mismatch: got %x, want %x", stateHash, h.AccountHash)
-	}
-	if txMap == nil {
-		if h.TxHash != ([32]byte{}) {
-			return nil, errors.New("nil transaction map for non-empty transaction root")
-		}
-		empty, err := s.genesisLedger.TxMapSnapshot()
-		if err != nil {
-			return nil, fmt.Errorf("failed to snapshot empty tx map: %w", err)
-		}
-		txMap = empty
-	}
-	txHash, err := txMap.Hash()
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate acquired transaction map hash: %w", err)
-	}
-	if txHash != h.TxHash {
-		return nil, fmt.Errorf("acquired transaction map root mismatch: got %x, want %x", txHash, h.TxHash)
-	}
-
-	acquired, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{}, s.config.Execution)
-	if err != nil {
-		return nil, fmt.Errorf("failed to construct acquired ledger: %w", err)
-	}
-	if err := acquired.AuthenticateClosure(ctx); err != nil {
-		return nil, err
-	}
-	return acquired, nil
-}
-
-func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	stored, err := s.ledgerWithStateLocked(ctx, h, stateMap, txMap)
-	if err != nil {
-		return err
-	}
-	return s.storeLedgerLocked(ctx, stored)
 }
 
 func (s *Service) storeLedgerLocked(ctx context.Context, stored *ledger.Ledger) error {
