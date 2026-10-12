@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/version"
@@ -120,6 +121,55 @@ func TestOnLedgerSwitchedMovesCanonicalFrontierBeforeBuild(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, preferred.Seq()+1, built.Seq())
 	assert.Equal(t, preferred.ID(), built.ParentID())
+}
+
+func TestOnPreferredLedgerSwitchedDoesNotRepublishCanonicalFrontier(t *testing.T) {
+	a := newTestAdaptor(t)
+	closed := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, closed)
+	historical, err := a.ledgerService.GetLedgerBySequence(closed.Sequence() - 1)
+	require.NoError(t, err)
+	require.NotNil(t, historical)
+
+	require.NoError(t, a.OnPreferredLedgerSwitched(WrapLedger(historical)))
+	assert.Equal(t, closed.Hash(), a.ledgerService.GetClosedLedger().Hash())
+}
+
+func TestPreparedPreferredSwitchRetainsPrepublicationHistoryFloor(t *testing.T) {
+	svc := newTestLedgerService(t)
+	t.Cleanup(svc.Stop)
+	a, _ := newRecordingAdaptor(t, svc)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	_, child, _, _ := buildSuccessorAgainstParent(t, closed)
+	_, selected, _, _ := buildSuccessorAgainstParent(t, child)
+	for _, candidate := range []*ledger.Ledger{child, selected} {
+		state, err := candidate.StateMapSnapshot()
+		require.NoError(t, err)
+		tx, err := candidate.TxMapSnapshot()
+		require.NoError(t, err)
+		header := candidate.Header()
+		require.NoError(t, svc.StoreLedgerWithState(t.Context(), &header, state, tx))
+	}
+
+	var gotFloor uint32
+	a.setOnLedgerSwitched(func(_ uint32, _, _ [32]byte, floor uint32) {
+		gotFloor = floor
+	})
+	prepared, err := a.PreparePreferredLedger(t.Context(), WrapLedger(selected))
+	require.NoError(t, err)
+	require.NoError(t, prepared.Wait(t.Context()))
+	published, err := prepared.TryPublish()
+	require.NoError(t, err)
+	require.True(t, published)
+	prepared.Finish()
+	prepared.Release()
+
+	notifier, ok := prepared.(consensus.PreferredLedgerPreparationNotifier)
+	require.True(t, ok)
+	require.NoError(t, notifier.NotifyPreferredLedgerSwitched(WrapLedger(selected)))
+	require.Equal(t, closed.Sequence(), gotFloor)
 }
 
 func TestAdg_ValidateLedger(t *testing.T) {

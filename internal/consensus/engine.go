@@ -241,6 +241,45 @@ type LedgerAcceptDeferrerLifecycle interface {
 	StopLedgerAccept() error
 }
 
+// PreferredLedgerPreparation is an engine-owned, detached preferred-ledger
+// transition. Preparation may perform expensive ledger work away from the
+// consensus mutex. TryPublish is a non-blocking publication gate: callers
+// must hold the engine's short commit fence while invoking it. Release drops
+// the detached preparation and any service ownership after the fence ends.
+type PreferredLedgerPreparation interface {
+	// Wait waits only for detached preparation. It must be called outside the
+	// consensus mutex; TryPublish is intentionally a short commit-fence call.
+	Wait(context.Context) error
+	TryPublish() (bool, error)
+	// Finish runs relay and notification side effects after publication and
+	// after both the service and engine commit fences have been released.
+	Finish()
+	Release()
+}
+
+// PreferredLedgerPreparer is implemented by production adaptors whose ledger
+// service can stage preferred-ledger recovery off the consensus goroutine.
+// Adaptors that do not implement it retain the synchronous compatibility path.
+type PreferredLedgerPreparer interface {
+	PreparePreferredLedger(context.Context, Ledger) (PreferredLedgerPreparation, error)
+}
+
+// PreferredLedgerNotifier emits the relay and status side effects for a
+// preferred-ledger transition whose canonical publication already completed.
+// It is optional so generic adaptors keep their existing synchronous callback.
+type PreferredLedgerNotifier interface {
+	OnPreferredLedgerSwitched(Ledger) error
+}
+
+// PreferredLedgerPreparationNotifier is an optional preparation-owned
+// notification hook. It lets an adaptor retain metadata captured before the
+// service publication fence, such as the history floor for a switched ledger.
+// The engine invokes it only after Finish and Release have run and while the
+// engine mutex is released.
+type PreferredLedgerPreparationNotifier interface {
+	NotifyPreferredLedgerSwitched(Ledger) error
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 

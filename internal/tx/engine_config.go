@@ -279,15 +279,31 @@ func CurrentFieldsMatchRaw(tx Transaction) (bool, error) {
 	if len(tx.GetRawBytes()) == 0 {
 		return true, nil
 	}
+	_, matches, err := currentFieldsIdentityWithRaw(tx)
+	return matches, err
+}
+
+// CurrentFieldsIdentity computes the current transaction ID and checks its raw
+// binding. Without raw bytes, matchesRaw is true even if hashing fails; callers
+// may still verify signatures, but must not cache a verdict when err is non-nil.
+func CurrentFieldsIdentity(tx Transaction) (id [32]byte, matchesRaw bool, err error) {
+	if len(tx.GetRawBytes()) == 0 {
+		id, err = ComputeCurrentTransactionHash(tx)
+		return id, true, err
+	}
+	return currentFieldsIdentityWithRaw(tx)
+}
+
+func currentFieldsIdentityWithRaw(tx Transaction) ([32]byte, bool, error) {
 	originalID, ok := tx.GetCommon().RawFieldsIdentity()
 	if !ok {
-		return false, nil
+		return [32]byte{}, false, nil
 	}
 	currentID, err := ComputeCurrentTransactionHash(tx)
 	if err != nil {
-		return false, err
+		return [32]byte{}, false, err
 	}
-	return currentID == originalID, nil
+	return currentID, currentID == originalID, nil
 }
 
 // BindRawBytes associates wire bytes with the transaction's current parsed
@@ -363,11 +379,7 @@ func serializeCurrentTransaction(tx Transaction) ([]byte, error) {
 			return nil, err
 		}
 	}
-	hexStr, err := binarycodec.Encode(txMap)
-	if err != nil {
-		return nil, err
-	}
-	return hex.DecodeString(hexStr)
+	return binarycodec.EncodeBytes(txMap)
 }
 
 // PopulateRequiredWireFields supplies required fields whose valid zero values

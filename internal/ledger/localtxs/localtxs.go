@@ -209,6 +209,26 @@ func (l *LocalTxs) Size() int {
 	return len(l.txs)
 }
 
+// SnapshotStats returns the number of held transactions and the total size of
+// their owned raw blobs without allocating a transaction snapshot.
+func (l *LocalTxs) SnapshotStats() (count, bytes uint64) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	for _, transaction := range l.txs {
+		count = saturatingSnapshotAdd(count, 1)
+		bytes = saturatingSnapshotAdd(bytes, uint64(len(transaction.Ptx.Blob)))
+	}
+	return count, bytes
+}
+
+func saturatingSnapshotAdd(total, amount uint64) uint64 {
+	if ^uint64(0)-total < amount {
+		return ^uint64(0)
+	}
+	return total + amount
+}
+
 func clonePendingTx(ptx openledger.PendingTx) openledger.PendingTx {
 	ptx.Blob = append([]byte(nil), ptx.Blob...)
 	ptx.Parsed = nil

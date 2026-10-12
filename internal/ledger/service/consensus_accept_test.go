@@ -246,10 +246,11 @@ func TestConsensusAcceptancePublishesOpenAndClosedTogether(t *testing.T) {
 	}()
 	select {
 	case got := <-readDone:
-		require.Same(t, parent, got.closed)
-		require.Equal(t, parent.Hash(), got.openParent)
+		require.NotSame(t, parent, got.closed)
+		require.Equal(t, parent.Sequence()+1, got.closed.Sequence())
+		require.Equal(t, got.closed.Hash(), got.openParent)
 	case <-time.After(time.Second):
-		t.Fatal("next-open replay blocked closed-ledger reads")
+		t.Fatal("post-publication relay blocked closed-ledger reads")
 	}
 
 	historyDone := make(chan struct{})

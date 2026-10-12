@@ -50,10 +50,13 @@ func TestFreshNodeSwitchesToNetworkLedgerTwoBeforeFirstValidation(t *testing.T) 
 	a.UpdatePeerLCL(2, consensus.LedgerID(networkHeader.Hash))
 	engine.TimerEntry()
 
-	require.False(t, svc.NeedsInitialSync())
-	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
-	require.Equal(t, networkHeader.Hash, svc.GetClosedLedger().Hash())
-	require.Equal(t, networkHeader.LedgerIndex+1, svc.GetCurrentLedgerIndex())
+	require.Eventually(t, func() bool {
+		closed := svc.GetClosedLedger()
+		return !svc.NeedsInitialSync() &&
+			engine.Mode() == consensus.ModeSwitchedLedger &&
+			closed != nil && closed.Hash() == networkHeader.Hash &&
+			svc.GetCurrentLedgerIndex() == networkHeader.LedgerIndex+1
+	}, time.Second, 5*time.Millisecond)
 }
 
 func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
@@ -117,12 +120,15 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 
 	router.catchupReplay.completeInboundLedger(fresh)
 
-	require.False(t, svc.NeedsInitialSync())
-	require.Equal(t, fresh.Hash(), svc.GetClosedLedger().Hash())
-	require.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
-	require.False(t, engine.IsProposing())
-	require.Equal(t, fresh.Seq()+1, svc.GetCurrentLedgerIndex())
+	require.Eventually(t, func() bool {
+		closed := svc.GetClosedLedger()
+		return !svc.NeedsInitialSync() &&
+			closed != nil && closed.Hash() == fresh.Hash() &&
+			a.GetOperatingMode() == consensus.OpModeTracking &&
+			engine.Mode() == consensus.ModeSwitchedLedger &&
+			!engine.IsProposing() &&
+			svc.GetCurrentLedgerIndex() == fresh.Seq()+1
+	}, time.Second, 5*time.Millisecond)
 
 	svc.SetValidatedLedger(fresh.Seq(), fresh.Hash())
 	router.maintenanceTick()
@@ -187,16 +193,20 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 		targetHash: targetHeader.Hash,
 		stepHash:   targetHeader.Hash,
 	}
-	require.True(t, router.catchupReplay.completeStoredConsensusRecovery(
+	require.False(t, router.catchupReplay.completeStoredConsensusRecovery(
 		targetHeader.LedgerIndex,
 		targetHeader.Hash,
 		targetHeader.ParentHash,
 		false,
 	))
-	require.Equal(t, targetHeader.Hash, svc.GetClosedLedger().Hash())
-	require.Equal(t, targetHeader.Hash, svc.GetValidatedLedger().Hash())
-	require.Equal(t, targetHeader.LedgerIndex+1, svc.GetCurrentLedgerIndex())
-	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
+	require.Eventually(t, func() bool {
+		closed := svc.GetClosedLedger()
+		validated := svc.GetValidatedLedger()
+		return closed != nil && closed.Hash() == targetHeader.Hash &&
+			validated != nil && validated.Hash() == targetHeader.Hash &&
+			svc.GetCurrentLedgerIndex() == targetHeader.LedgerIndex+1 &&
+			engine.Mode() == consensus.ModeSwitchedLedger
+	}, time.Second, 5*time.Millisecond)
 	require.Equal(t, uint64(1), router.FastSyncMetrics().CompletionRecheckAccepted)
 
 	engine.TimerEntry()

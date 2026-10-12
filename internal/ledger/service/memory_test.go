@@ -14,10 +14,18 @@ import (
 type relayTestMemory struct {
 	mu          sync.Mutex
 	limit, used uint64
+	changed     chan struct{}
 }
 
-func (b *relayTestMemory) Limit() uint64            { return b.limit }
-func (b *relayTestMemory) Changed() <-chan struct{} { return nil }
+func (b *relayTestMemory) Limit() uint64 { return b.limit }
+func (b *relayTestMemory) Changed() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.changed == nil {
+		b.changed = make(chan struct{})
+	}
+	return b.changed
+}
 func (b *relayTestMemory) TryReserve(n uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -34,6 +42,10 @@ func (b *relayTestMemory) Release(n uint64) {
 		panic("relay test memory underflow")
 	}
 	b.used -= n
+	if b.changed != nil {
+		close(b.changed)
+		b.changed = nil
+	}
 }
 
 func TestServiceRelayCacheSharedMemoryEvictsAndReleases(t *testing.T) {

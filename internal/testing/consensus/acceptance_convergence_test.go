@@ -132,7 +132,7 @@ func TestConsensusAcceptanceConvergesAcrossFullValidators(t *testing.T) {
 	}
 }
 
-func TestConsensusAcceptanceCarriesIngressQueuedDuringPublication(t *testing.T) {
+func TestConsensusAcceptanceAllowsIngressDuringPostPublicationRelay(t *testing.T) {
 	cluster := NewTestCluster(t, 1)
 	t.Cleanup(cluster.Stop)
 	node := cluster.Nodes[0]
@@ -189,7 +189,7 @@ func TestConsensusAcceptanceCarriesIngressQueuedDuringPublication(t *testing.T) 
 	select {
 	case <-relayEntered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("acceptance did not reach next-open replay")
+		t.Fatal("acceptance did not reach post-publication relay")
 	}
 
 	secondBlob := signedPaymentBlob(
@@ -206,32 +206,29 @@ func TestConsensusAcceptanceCarriesIngressQueuedDuringPublication(t *testing.T) 
 		result openledger.Result
 		err    error
 	}, 1)
-	started := make(chan struct{})
 	go func() {
-		close(started)
 		result, err := node.Service.SubmitOpenLedgerTx(secondBlob, true)
 		submitted <- struct {
 			result openledger.Result
 			err    error
 		}{result: result, err: err}
 	}()
-	<-started
 	select {
-	case <-submitted:
-		t.Fatal("ingress completed before detached publication was released")
-	case <-time.After(100 * time.Millisecond):
+	case submission := <-submitted:
+		require.NoError(t, submission.err)
+		require.Equal(t, openledger.ResultSuccess, submission.result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-publication relay blocked ingress")
 	}
+	require.Equal(t, parent.Sequence()+1, node.Service.GetClosedLedger().Sequence())
 	release()
 	require.NoError(t, <-accepted)
-	submission := <-submitted
-	require.NoError(t, submission.err)
-	require.Equal(t, openledger.ResultSuccess, submission.result)
 
 	hasFirst, err := node.Service.OpenLedgerHasTx(first.Hash)
 	require.NoError(t, err)
 	require.True(t, hasFirst, "pre-existing local transaction was lost during publication")
 	hasSecond, err := node.Service.OpenLedgerHasTx(second.Hash)
 	require.NoError(t, err)
-	require.True(t, hasSecond, "ingress queued during publication was lost")
+	require.True(t, hasSecond, "ingress during post-publication relay was lost")
 	require.Zero(t, node.Service.GetClosedLedger().TxCount(), "speculative ingress leaked into empty agreed set")
 }

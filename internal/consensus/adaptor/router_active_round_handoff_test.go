@@ -60,8 +60,12 @@ func TestRouter_ActiveRoundRecoveryDefersPromotionAndHandoff(t *testing.T) {
 
 	// A round that fails to finish still has a bounded recovery path.
 	now = now.Add(cfg.Timing.LedgerMaxConsensus + time.Second)
-	require.True(t, r.catchupReplay.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, false))
-	require.Equal(t, child.Hash(), svc.GetClosedLedger().Hash())
-	require.Equal(t, child.Hash(), svc.GetValidatedLedger().Hash())
-	require.Equal(t, consensus.ModeSwitchedLedger, e.Mode())
+	require.False(t, r.catchupReplay.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, false))
+	require.Eventually(t, func() bool {
+		closed := svc.GetClosedLedger()
+		validated := svc.GetValidatedLedger()
+		return closed != nil && closed.Hash() == child.Hash() &&
+			validated != nil && validated.Hash() == child.Hash() &&
+			e.Mode() == consensus.ModeSwitchedLedger
+	}, time.Second, 5*time.Millisecond)
 }

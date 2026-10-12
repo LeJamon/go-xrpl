@@ -320,6 +320,11 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
 	s.lifecycleMu.Unlock()
+	// Detached preferred-ledger preparation owns a lifecycle admission until
+	// publication or discard. Cancel it before waiting for ledgerWorkWG so
+	// shutdown cannot strand parked ingress behind a successor that will never
+	// publish.
+	s.cancelPreferredTransition()
 	s.signalReplayPreparedSlots()
 	s.persistenceWorker.stopAdmissions()
 	if replayRecoveryCancel != nil {

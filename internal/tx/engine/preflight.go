@@ -505,10 +505,10 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	}
 	rules := e.rules()
 	legacyRole := common.SignatureCacheLegacyRole(rules)
-	if matches, err := txcore.CurrentFieldsMatchRaw(tx); err != nil || !matches {
+	txID, matches, idErr := txcore.CurrentFieldsIdentity(tx)
+	if !matches {
 		return ter.TemINVALID
 	}
-	txID, idErr := txcore.ComputeCurrentTransactionHash(tx)
 	if idErr == nil && common.SignatureVerifiedWithRules(txID, rules) {
 		return ter.TesSUCCESS
 	}
