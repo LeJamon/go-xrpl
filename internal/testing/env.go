@@ -14,12 +14,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
@@ -258,23 +258,17 @@ func newTestEnvWithFamily(t testing.TB, cfg genesis.Config, stateFamily *backend
 
 	// Note: drops.Fees has unexported fields, so we use a zero value
 	var fees drops.Fees
+	executionStore := ledgertestutil.NewExecutionStore(t, stateFamily)
 	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		fees,
+		executionStore,
 	)
 	if err != nil {
 		t.Fatalf("Failed to construct genesis ledger: %v", err)
 	}
-	if stateFamily != nil {
-		genesisLedger.SetStateMapFamily(stateFamily)
-	}
-	var executionFamily shamap.Family
-	if stateFamily != nil {
-		executionFamily = stateFamily
-	}
-	executionStore := enableBoundedJournal(t, genesisLedger, executionFamily)
 
 	clock := NewManualClock()
 	openLedger, err := ledger.NewOpen(genesisLedger, clock.Now())
@@ -305,16 +299,11 @@ func newTestEnvWithFamily(t testing.TB, cfg genesis.Config, stateFamily *backend
 	if err := env.registerAccount(master); err != nil {
 		t.Fatalf("register master account: %v", err)
 	}
-	if executionStore != nil {
-		t.Cleanup(func() {
-			if env.ledger != nil {
-				env.ledger.Discard()
-			}
-			if err := executionStore.Close(); err != nil {
-				t.Errorf("close bounded execution store: %v (roots=%v)", err, executionStore.Roots())
-			}
-		})
-	}
+	t.Cleanup(func() {
+		if env.ledger != nil {
+			env.ledger.Discard()
+		}
+	})
 
 	return env
 }
