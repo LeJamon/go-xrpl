@@ -275,9 +275,13 @@ func (d *journalDecoder) blob() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return bytes.Clone(value), nil
+	return value[:len(value):len(value)], nil
 }
 
+// decodeJournalRecord borrows blob bytes from value. journal.get receives an
+// owned overlay value, while iterateAfter consumes its owned iterator value
+// during one callback; clipping capacities prevents appends from overwriting
+// adjacent encoded fields.
 func decodeJournalRecord(value []byte) (journalRecord, error) {
 	d := journalDecoder{value: value}
 	magicBytes, err := d.take(4)
