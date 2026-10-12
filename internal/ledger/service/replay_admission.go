@@ -823,12 +823,18 @@ func (s *Service) snapshotPreparedLedger(ctx context.Context, source *ledger.Led
 // publication lock. A non-nil parent proof enables the verified-base sparse
 // walk; a nil proof safely performs the existing cold verification.
 func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent) (*PreparedLedger, error) {
-	return s.prepareLedger(ctx, derived, parent, false)
+	return s.prepareLedger(ctx, derived, parent, false, nil)
 }
 
 // Acquisition may compare against a nonconsecutive checkpoint/validated base.
 // Keep that choice separate from replay's strict parent-identity requirement.
-func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent, acquired bool) (*PreparedLedger, error) {
+func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent, acquired bool, pin *replaySnapshotPin) (*PreparedLedger, error) {
+	pinOwned := true
+	defer func() {
+		if pinOwned && pin != nil {
+			pin.Release()
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -865,9 +871,12 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 		return nil, fmt.Errorf("%w: got %x want %x", errReplayParentMismatch, h.ParentHash[:8], parent.header.Hash[:8])
 	}
 
-	pin, pinned, err := s.acquireReplaySnapshot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("replay admission: acquire derived generation: %w", err)
+	pinned := pin != nil
+	if !pinned {
+		pin, pinned, err = s.acquireReplaySnapshot(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("replay admission: acquire derived generation: %w", err)
+		}
 	}
 	reusable := pinned && stateMap.IsBacked() && s.hasDurableFamily()
 	baseRoot, parentFingerprint, useBase := parent.baseRoot(s, h)
@@ -913,9 +922,6 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 		immutable, err = ledger.NewClosedFromRootsContext(ctx, h, derived.Fees(), s.config.Execution)
 	}
 	if err != nil {
-		if pin != nil {
-			pin.Release()
-		}
 		return nil, err
 	}
 	err = immutable.AuthenticateClosureWith(ctx, func(ctx context.Context, verified header.LedgerHeader) error {
@@ -931,9 +937,6 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 		return err
 	})
 	if err != nil {
-		if pin != nil {
-			pin.Release()
-		}
 		return nil, err
 	}
 
@@ -942,9 +945,6 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 	}
 	releaseWork, err := s.acquireReplayPublicationWork(ctx)
 	if err != nil {
-		if pin != nil {
-			pin.Release()
-		}
 		return nil, fmt.Errorf("replay admission: acquire publication work: %w", err)
 	}
 	stats.Elapsed = time.Since(startedAt)
@@ -975,11 +975,9 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 	}
 	if err := s.registerReplayPrepared(prepared, preparedRecord, pin, releasePreparedSlot); err != nil {
 		releaseWork()
-		if pin != nil {
-			pin.Release()
-		}
 		return nil, fmt.Errorf("replay admission: retain prepared proof: %w", err)
 	}
+	pinOwned = false
 	preparedSlotOwned = false
 	preparationOwned = false
 	return prepared, nil
@@ -1035,6 +1033,11 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePreparation()
 	if h == nil || stateMap == nil {
 		return nil, errors.New("acquired ledger requires a header and state map")
 	}
@@ -1047,11 +1050,16 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
 	}
-	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
+	pin, _, err := s.acquireReplaySnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer releasePreparation()
+	pinOwned := true
+	defer func() {
+		if pinOwned && pin != nil {
+			pin.Release()
+		}
+	}()
 	stateRoot, txRoot, err := s.config.Execution.ImportMaps(ctx, stateMap, txMap, h.LedgerIndex)
 	if err != nil {
 		return nil, err
@@ -1063,7 +1071,8 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 	if err != nil {
 		return nil, err
 	}
-	return s.prepareLedger(ctx, source, nil, true)
+	pinOwned = false
+	return s.prepareLedger(ctx, source, nil, true, pin)
 }
 
 // BootstrapPreparedLedger publishes a prepared ledger without re-running a

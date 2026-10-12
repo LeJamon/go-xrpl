@@ -902,7 +902,7 @@ func (l *Ledger) authenticateUnknownBoundedClosure(ctx context.Context, view *ex
 			return fmt.Errorf("verify bounded state closure: %w", err)
 		}
 	}
-	if txClosure == executionClosureUnknown || !txCountKnown {
+	if txClosure == executionClosureUnknown {
 		count, err := countExecutionRoot(ctx, view.transactions)
 		if err != nil {
 			return fmt.Errorf("verify bounded transaction closure: %w", err)
