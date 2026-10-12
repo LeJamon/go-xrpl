@@ -71,8 +71,10 @@ func (r *nodeRuntime) configureExecution(cfg *service.Config) error {
 		r.memory.stateStorage.Release(storageBytes)
 		return err
 	}
+	stopMetrics := r.installExecutionMetrics(execution, flat, r.memory.stateDisk)
 	var recovered atomic.Bool
 	r.executionCleanup = sync.OnceValue(func() error {
+		defer stopMetrics()
 		if err := execution.Close(); err != nil {
 			return err
 		}

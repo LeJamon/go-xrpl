@@ -1,6 +1,6 @@
 # Flat state and bounded SHAMap memory
 
-Status: Draft technical specification. Date: 2026-10-12.
+Status: Approved specification; experimental implementation is opt-in. Date: 2026-10-12.
 
 Related issue: [#2050](https://github.com/LeJamon/go-xrpl/issues/2050).
 Implementation baseline: `fd84af198af71770e671de3457663193dd06079a`.
@@ -329,3 +329,27 @@ The design fixes ownership, version isolation, canonical persistence and bounded
 - Select numerical performance ceilings and the reference hardware/corpus before evaluating optimization claims.
 
 Any change to canonical encoding, error results, retained-history availability or publication safety is outside these tuning decisions and requires a separate protocol/compatibility review.
+
+
+## 16. Operating the experimental implementation
+
+The selector is disabled by default. It requires persistent NodeStore storage and enough `resources.memory_mb` capacity for the existing protected accounts plus the execution accounts. These are experimental allowances, not measured production sizing recommendations:
+
+```toml
+[state]
+enabled = true
+memory_mb = 64
+scratch_mb = 2048
+cache_mb = 16
+memtable_mb = 8
+```
+
+`memory_mb` caps shared transaction/ledger overlay ownership. `scratch_mb` caps retained spill files separately from RAM. The flat store reserves its cache, four memtables and storage workspace inside the shared process allowance. Root ownership and commitment/persistence workspace have protected accounts; startup rejects an aggregate configuration that cannot fit. Resolved accounts are logged and exposed by the existing memory-budget collector.
+
+The flat database is `execution-state` beneath the configured local state directory (or the NodeStore parent directory). Temporary overlay runs live in its `scratch` subdirectory. Startup takes the flat database lock before removing abandoned temporary runs; canonical nodes, the advancement marker and the index outbox supply recovery state. Durable publication retries retain their bounded queue admission under storage failures.
+
+For rollback, stop the node and set `state.enabled = false` using a binary that understands this schema. Startup detects an existing flat database, reconciles its advancement/outbox records, then resumes the configured legacy startup selection. Only after successful recovery does it remove the derived flat materialization while still owning NodeStore exclusively. Canonical NodeStore data and relational ledger/transaction records remain available. A failed recovery prevents startup and preserves its obligations for another attempt.
+
+Prometheus exposes bounded execution work, active root borrowers, flat hits/fallbacks, pending outbox count/bytes/age, advancement/failure state, and spill disk usage/peaks/denials. The existing memory metrics cover overlay, roots, flat storage and persistence allocations. These are managed ownership measurements; Go heap/RSS and storage-engine memory remain separate measurements.
+
+`BenchmarkExecutionDisjointPathsRootFallback` compares the legacy and bounded paths with an in-memory Family and no flat materialization. It is a fallback diagnostic, not the reference workload required by section 13. The regression suite includes a 96-close, small-history retention workload with six rotations and an outstanding flat outbox. Representative long-running storage workloads, numerical latency/I/O ceilings, and measured production defaults remain required before enabling the path by default.

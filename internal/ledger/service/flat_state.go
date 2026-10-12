@@ -152,7 +152,11 @@ func (s *Service) authorizeFlatTarget(ctx context.Context, l *ledger.Ledger, sou
 	// The bounded builder inherits unchanged closure from its imported base and
 	// emits every changed node before this ledger's NodeStore sync. Imported
 	// legacy roots require the existing full-closure verification once.
-	if !l.UsesBoundedExecution() {
+	if l.UsesBoundedExecution() {
+		if err := l.EstablishBoundedClosure(ctx); err != nil {
+			return flatstate.RootClosureAuthorization{}, err
+		}
+	} else {
 		for _, tree := range []struct {
 			kind shamap.Type
 			root [32]byte

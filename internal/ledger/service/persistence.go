@@ -590,6 +590,9 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 	if err := s.nodeStore.Sync(ctx); err != nil {
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
+	if l.UsesBoundedExecution() {
+		return l.EstablishBoundedClosure(ctx)
+	}
 	return nil
 }
 

@@ -191,10 +191,11 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 		releaseRoots := func() {}
 		if s.config.Execution != nil {
 			var ok bool
-			releaseRoots, ok = s.config.Execution.GuardRoots(func(root rootlease.Root) bool {
-				_, present := preserved[retainedStateRoot{hash: root.Hash, kind: root.Kind}]
-				return present
-			})
+			retained := make(map[rootlease.Root]struct{}, len(preserved))
+			for root := range preserved {
+				retained[rootlease.Root{Hash: root.hash, Kind: root.kind}] = struct{}{}
+			}
+			releaseRoots, ok = s.config.Execution.GuardPreservedRoots(retained)
 			if !ok {
 				return nil, errStateRetentionChanged
 			}
