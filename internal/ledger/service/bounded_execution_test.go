@@ -764,9 +764,16 @@ func TestBoundedExecutionPebbleMixedBranchesKeepIndependentRoots(t *testing.T) {
 func newBoundedRetentionRuntime(
 	t *testing.T,
 ) (*boundedTestRuntime, *nodestore.RotatingKVDatabase, *backend.NodeStore) {
+	return newBoundedRetentionRuntimeAt(t, t.TempDir())
+}
+
+func newBoundedRetentionRuntimeAt(
+	t *testing.T,
+	root string,
+) (*boundedTestRuntime, *nodestore.RotatingKVDatabase, *backend.NodeStore) {
 	t.Helper()
 	store, err := kvpebble.NewRotating(
-		filepath.Join(t.TempDir(), "rotating-nodes"),
+		filepath.Join(root, "rotating-nodes"),
 		kvpebble.Options{BlockCacheBytes: 4 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
@@ -779,7 +786,7 @@ func newBoundedRetentionRuntime(
 	require.NoError(t, err)
 	overlayMemory, err := pool.NewAccount("bounded-retention-overlay", 0, 32<<20)
 	require.NoError(t, err)
-	flatStore, err := flatstate.Open(filepath.Join(t.TempDir(), "flat"), flatstate.Options{
+	flatStore, err := flatstate.Open(filepath.Join(root, "flat"), flatstate.Options{
 		CacheBytes:      1 << 20,
 		MemTableSize:    1 << 20,
 		MaxActiveViews:  16,
@@ -822,14 +829,23 @@ func newBoundedRetentionRuntime(
 	}, database, family
 }
 
-func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotations(t *testing.T) {
+func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotationsAndRestart(t *testing.T) {
 	ctx := t.Context()
-	runtime, database, family := newBoundedRetentionRuntime(t)
-	t.Cleanup(func() { runtime.close(t) })
+	root := t.TempDir()
+	runtime, database, family := newBoundedRetentionRuntimeAt(t, root)
+	runtimes := []*boundedTestRuntime{runtime}
+	t.Cleanup(func() {
+		for _, candidate := range runtimes {
+			if candidate != nil {
+				candidate.close(t)
+			}
+		}
+	})
 	require.NoError(t, runtime.service.Start())
 
 	// Close several service windows first so the retention path sees a real
 	// bounded execution history rather than a hand-built SHAMap fixture.
+	rotations := 0
 	for rotation := range 3 {
 		for step := range 32 {
 			require.True(t, runtime.service.openLedgerView.Modify(func(view *ledger.Ledger) bool {
@@ -857,7 +873,17 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotations(t *testing.T) {
 		committed, err := database.RotateGenerationWithRetention(ctx, seq, 1, guard, family.BeginPrune)
 		require.NoError(t, err)
 		require.True(t, committed)
+		rotations++
 	}
+	historyKey := keylet.Keylet{Key: [32]byte{0x39, 0, 0}}
+	historyValue := bytes.Repeat([]byte{3}, 512)
+	historyLease, err := runtime.service.AcquireLedgerRead(ctx, "closed")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = historyLease.Close() })
+	historyRoot := historyLease.Ledger.Header().AccountHash
+	item, err := historyLease.Ledger.Read(historyKey)
+	require.NoError(t, err)
+	require.Equal(t, historyValue, item)
 
 	// Build one additional durable bounded ledger and publish its flat version
 	// without acknowledging the outbox. Its root lease and header inventory
@@ -910,6 +936,9 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotations(t *testing.T) {
 		node, err := database.Fetch(ctx, nodestore.Hash256(futureHash))
 		require.NoError(t, err)
 		require.NotNil(t, node)
+		historyData, err := historyLease.Ledger.Read(historyKey)
+		require.NoError(t, err)
+		require.Equal(t, historyValue, historyData)
 	}
 
 	validated := runtime.service.GetValidatedLedger()
@@ -921,6 +950,7 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotations(t *testing.T) {
 		committed, err := database.RotateGenerationWithRetention(ctx, lastRotated, 1, guard, family.BeginPrune)
 		require.NoError(t, err)
 		require.True(t, committed)
+		rotations++
 		readRetainedState()
 		pending, err := runtime.flat.PendingOutbox(ctx, 0)
 		require.NoError(t, err)
@@ -935,4 +965,59 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotations(t *testing.T) {
 		runtime.service.flatHeadersMu.Unlock()
 		require.True(t, headerRetained)
 	}
+	require.Equal(t, 6, rotations)
+	committedLastRotated, minimumOnline := database.GenerationState()
+	require.Equal(t, lastRotated, committedLastRotated)
+	require.Equal(t, uint32(1), minimumOnline)
+	generationPaths, err := filepath.Glob(filepath.Join(root, ".rotating-nodes-generation-*"))
+	require.NoError(t, err)
+	require.Len(t, generationPaths, 2, "retired generations should be removed")
+	workspace := runtime.workspace
+	workspaceSnapshot := workspace.Snapshot()
+	require.LessOrEqual(t, workspaceSnapshot.Peak, workspaceSnapshot.Maximum)
+	require.NoError(t, historyLease.Close())
+	require.NoError(t, historyLease.Close())
+	runtimes[0] = nil
+	runtime.close(t)
+	require.Zero(t, workspace.Snapshot().Used)
+
+	runtime, database, family = newBoundedRetentionRuntimeAt(t, root)
+	runtimes = append(runtimes, runtime)
+	pending, err = runtime.flat.PendingOutbox(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, futureHash, pending[0].Descriptor.LedgerHash)
+	require.NoError(t, runtime.service.recoverFlatState(ctx))
+	require.NoError(t, runtime.service.recoverFlatState(ctx))
+	pending, err = runtime.flat.PendingOutbox(ctx, 0)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	current, found, err := runtime.flat.Current()
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, flatDescriptor, current)
+	historyReader, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, historyRoot, family)
+	require.NoError(t, err)
+	historyItem, found, err := historyReader.GetContext(ctx, historyKey.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, historyValue, historyItem.Data())
+	futureReader, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, futureRoot, family)
+	require.NoError(t, err)
+	futureItem, found, err := futureReader.GetContext(ctx, futureKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, futureValue, futureItem.Data())
+	committedLastRotated, minimumOnline = database.GenerationState()
+	require.Equal(t, lastRotated, committedLastRotated)
+	require.Equal(t, uint32(1), minimumOnline)
+	generationPaths, err = filepath.Glob(filepath.Join(root, ".rotating-nodes-generation-*"))
+	require.NoError(t, err)
+	require.Len(t, generationPaths, 2, "restart should retain only active generations")
+	workspace = runtime.workspace
+	workspaceSnapshot = workspace.Snapshot()
+	require.LessOrEqual(t, workspaceSnapshot.Peak, workspaceSnapshot.Maximum)
+	runtimes[1] = nil
+	runtime.close(t)
+	require.Zero(t, workspace.Snapshot().Used)
 }
