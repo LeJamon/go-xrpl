@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"math"
 	"testing"
@@ -19,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -35,8 +35,17 @@ type fakeLookup struct {
 	validated  *ledger.Ledger
 	closed     *ledger.Ledger
 	openLedger *ledger.Ledger
-	entryErr   error
-	entryIndex string
+}
+
+type acquireFailureLookup struct {
+	*fakeLookup
+	err error
+}
+
+type selectedReadLookup struct {
+	*fakeLookup
+	selected   *ledger.Ledger
+	entryCalls int
 }
 
 type networkLookup struct {
@@ -71,11 +80,7 @@ func (f *fakeLookup) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 func (f *fakeLookup) GetClosedLedger() *ledger.Ledger    { return f.closed }
 func (f *fakeLookup) GetValidatedLedger() *ledger.Ledger { return f.validated }
 func (f *fakeLookup) GetOpenLedger() *ledger.Ledger      { return f.openLedger }
-func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error) {
-	f.entryIndex = ledgerIndex
-	if f.entryErr != nil {
-		return nil, f.entryErr
-	}
+func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, _ string) (*service.LedgerEntryResult, error) {
 	if f.validated == nil {
 		return nil, svcerr.ErrLedgerEntryNotFound
 	}
@@ -94,6 +99,19 @@ func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, ledgerIndex
 		Node:        data,
 		Validated:   true,
 	}, nil
+}
+
+func (l *acquireFailureLookup) AcquireLedgerRead(context.Context, string) (*service.LedgerReadLease, error) {
+	return nil, l.err
+}
+
+func (l *selectedReadLookup) AcquireLedgerRead(context.Context, string) (*service.LedgerReadLease, error) {
+	return &service.LedgerReadLease{Ledger: l.selected, Validated: l.selected.IsValidated()}, nil
+}
+
+func (l *selectedReadLookup) GetLedgerEntry(ctx context.Context, key [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error) {
+	l.entryCalls++
+	return l.fakeLookup.GetLedgerEntry(ctx, key, ledgerIndex)
 }
 
 // pad right-pads a string with zero bytes to at least n bytes; the
@@ -648,7 +666,7 @@ func TestGRPC_GetLedgerEntry_ResolvesLedgerBeforeKeyValidation(t *testing.T) {
 // failure (unknown sequence) maps to NotFound — not Internal.
 func TestGRPC_GetLedgerEntry_LedgerNotFound(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l, entryErr: svcerr.ErrLedgerNotFound})
+	srv := NewServer(&fakeLookup{validated: l})
 
 	key := make([]byte, 32)
 	key[0] = 0xCC
@@ -1004,25 +1022,50 @@ func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
 }
 
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
-	l := newTestLedger(t, 9, nil, nil)
-	lookup := &fakeLookup{
-		validated: l,
-		byHash:    map[[32]byte]*ledger.Ledger{l.Hash(): l},
+	key := [32]byte{0xCC}
+	want := pad("selected-ledger", 12)
+	selected := newTestLedger(t, 9, map[[32]byte][]byte{key: want}, nil)
+	validated := newTestLedger(t, 8, map[[32]byte][]byte{key: pad("other-ledger", 12)}, nil)
+	lookup := &selectedReadLookup{
+		fakeLookup: &fakeLookup{
+			validated: validated,
+		},
+		selected: selected,
 	}
 	srv := NewServer(lookup)
 
-	key := make([]byte, 32)
-	key[0] = 0xCC
-	h := l.Hash()
-	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
-		Key:    key,
+	h := selected.Hash()
+	request := &rpcv1.GetLedgerEntryRequest{
+		Key:    key[:],
 		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
-	})
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
 	}
-	if want := hex.EncodeToString(h[:]); lookup.entryIndex != want {
-		t.Errorf("ledger selector = %q, want exact hash %q", lookup.entryIndex, want)
+	resp, err := srv.GetLedgerEntry(context.Background(), request)
+	if err != nil {
+		t.Fatalf("by-hash GetLedgerEntry: %v", err)
+	}
+	if !bytes.Equal(resp.LedgerObject.Data, want) {
+		t.Fatalf("by-hash GetLedgerEntry read wrong ledger: got %q, want %q", resp.LedgerObject.Data, want)
+	}
+	if resp.Ledger != request.Ledger {
+		t.Fatal("by-hash GetLedgerEntry changed the requested ledger header")
+	}
+	if lookup.entryCalls != 0 {
+		t.Fatalf("by-hash GetLedgerEntry performed a second ledger lookup (%d calls)", lookup.entryCalls)
+	}
+}
+
+func TestGRPC_GetLedgerEntry_AcquireFailureIsInternal(t *testing.T) {
+	srv := NewServer(&acquireFailureLookup{
+		fakeLookup: &fakeLookup{},
+		err:        rootlease.ErrCapacity,
+	})
+
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("local ledger-read admission failure: code = %s, want Internal (%v)", status.Code(err), err)
+	}
+	if message := status.Convert(err).Message(); message != "acquiring ledger read: ledger root lease capacity exhausted" {
+		t.Fatalf("local ledger-read admission failure: message = %q", message)
 	}
 }
 

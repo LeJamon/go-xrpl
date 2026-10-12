@@ -8,10 +8,8 @@ package grpc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"math"
-	"strconv"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -113,7 +111,7 @@ func (s *Server) acquireLedgerReadSelection(ctx context.Context, selection ledge
 	if acquirer, ok := s.lookup.(ledgerReadAcquirer); ok {
 		read, err := acquirer.AcquireLedgerRead(ctx, selection.String())
 		if err != nil {
-			return nil, ledgerSelectorError(selection, err)
+			return nil, ledgerReadAcquireError(selection, err)
 		}
 		if read == nil || read.Ledger == nil {
 			if read != nil {
@@ -140,6 +138,31 @@ func (s *Server) acquireLedgerReadSelection(ctx context.Context, selection ledge
 		ledger:    result.Value,
 		validated: result.Validated,
 	}, nil
+}
+
+func ledgerReadAcquireError(selection ledgerselector.Selector, err error) error {
+	if isLedgerSelectorError(err) {
+		return ledgerSelectorError(selection, err)
+	}
+	return grpcStorageError("acquiring ledger read", err)
+}
+
+func isLedgerSelectorError(err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, ledgerselector.ErrInvalidSelector),
+		errors.Is(err, ledgerselector.ErrLedgerNotFound),
+		errors.Is(err, svcerr.ErrLedgerNotFound),
+		errors.Is(err, svcerr.ErrInvalidLedgerIndex),
+		errors.Is(err, svcerr.ErrInvalidLedgerHash),
+		errors.Is(err, svcerr.ErrNoOpenLedger),
+		errors.Is(err, svcerr.ErrNoClosedLedger),
+		errors.Is(err, errLedgerNotSynced):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) validateLedgerReadFreshness(selection ledgerselector.Selector, l *ledger.Ledger) error {
@@ -563,25 +586,17 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	var key [32]byte
 	copy(key[:], req.GetKey())
 
-	ledgerIndex := strconv.FormatUint(uint64(resolved.Sequence()), 10)
-	if spec := req.GetLedger(); spec != nil && len(spec.GetHash()) == 32 {
-		ledgerIndex = hex.EncodeToString(spec.GetHash())
-	}
-	entry, err := s.lookup.GetLedgerEntry(ctx, key, ledgerIndex)
+	data, err := resolved.ReadContext(ctx, keylet.Keylet{Key: key})
 	if err != nil {
-		switch {
-		case errors.Is(err, svcerr.ErrLedgerEntryNotFound):
-			return nil, status.Error(codes.NotFound, "object not found")
-		case errors.Is(err, svcerr.ErrLedgerNotFound), errors.Is(err, svcerr.ErrNoOpenLedger):
-			return nil, status.Error(codes.NotFound, err.Error())
-		default:
-			return nil, grpcStorageError("lookup", err)
-		}
+		return nil, grpcStorageError("lookup", err)
+	}
+	if data == nil {
+		return nil, status.Error(codes.NotFound, "object not found")
 	}
 
 	return &rpcv1.GetLedgerEntryResponse{
 		LedgerObject: &rpcv1.RawLedgerObject{
-			Data: entry.Node,
+			Data: data,
 			Key:  cloneHash(key),
 		},
 		Ledger: req.GetLedger(),
