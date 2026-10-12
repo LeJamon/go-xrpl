@@ -884,6 +884,68 @@ func (l *Ledger) EstablishBoundedClosure(ctx context.Context) error {
 	return nil
 }
 
+// authenticateUnknownBoundedClosure verifies only roots that have not already
+// been authenticated and records that proof as pending. Pending roots are
+// promoted by EstablishBoundedClosure after the caller's storage durability
+// barrier; this method must not make that claim on the strength of a read or a
+// StoreBatch alone.
+func (l *Ledger) authenticateUnknownBoundedClosure(ctx context.Context, view *executionView, h header.LedgerHeader) error {
+	l.mu.RLock()
+	if l.execution != view || l.header.Hash != h.Hash {
+		l.mu.RUnlock()
+		return errors.New("bounded execution changed during closure verification")
+	}
+	stateClosure := view.state.closure
+	txClosure := view.transactions.closure
+	storedTxCount, txCountKnown := view.transactions.countSnapshot()
+	txCount := uint64(storedTxCount)
+	l.mu.RUnlock()
+	if view.state.root != h.AccountHash || view.transactions.root != h.TxHash || header.CalculateHash(h) != h.Hash {
+		return errors.New("bounded execution roots do not match ledger header")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if stateClosure == executionClosureUnknown {
+		if err := verifyExecutionRoot(ctx, view.state); err != nil {
+			return fmt.Errorf("verify bounded state closure: %w", err)
+		}
+	}
+	if txClosure == executionClosureUnknown || !txCountKnown {
+		count, err := countExecutionRoot(ctx, view.transactions)
+		if err != nil {
+			return fmt.Errorf("verify bounded transaction closure: %w", err)
+		}
+		txCount = count
+		txCountKnown = true
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if txCountKnown && txCount > uint64(^uint32(0)) {
+		return errors.New("transaction leaf count exceeds uint32")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.execution != view || l.header.Hash != h.Hash || l.header.AccountHash != h.AccountHash || l.header.TxHash != h.TxHash {
+		return errors.New("bounded execution changed during closure verification")
+	}
+	if view.state.closure == executionClosureUnknown {
+		view.state.closure = executionClosurePending
+	}
+	if view.transactions.closure == executionClosureUnknown {
+		view.transactions.closure = executionClosurePending
+	}
+	if txCountKnown {
+		view.transactions.hashMu.Lock()
+		if !view.transactions.countKnown {
+			view.transactions.count, view.transactions.countKnown = uint32(txCount), true
+		}
+		view.transactions.hashMu.Unlock()
+	}
+	return nil
+}
+
 func (v *executionView) fork() (*executionView, error) {
 	state, err := v.state.fork()
 	if err != nil {
@@ -1097,16 +1159,19 @@ func (l *Ledger) EnableBoundedReads(ctx context.Context, store *ExecutionStore) 
 
 // EnableBoundedExecution persists the imported maps before replacing them with
 // root descriptors, then authenticates the complete destination closure once.
-// A later target can carry that proof across incremental builds and promote its
-// pending changed-node closure after the caller's durability barrier.
+// The imported proof remains pending until the caller's durability barrier and
+// an explicit EstablishBoundedClosure call. An already bounded view only
+// authenticates unknown roots; existing pending or verified proofs are kept.
 func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionStore) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	l.mu.RLock()
 	if l.execution != nil {
+		view := l.execution
+		h := l.header
 		writable := l.writable
-		sameStore := store != nil && l.execution.state.store == store
+		sameStore := store != nil && view.state.store == store
 		l.mu.RUnlock()
 		if !sameStore {
 			return errors.New("bounded execution is already attached to a different store")
@@ -1114,7 +1179,7 @@ func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionSto
 		if writable {
 			return ErrInvalidState
 		}
-		return l.EstablishBoundedClosure(ctx)
+		return l.authenticateUnknownBoundedClosure(ctx, view, h)
 	}
 	if l.writable || l.state == StateOpen || store == nil || l.stateMap == nil || l.txMap == nil {
 		l.mu.RUnlock()
@@ -1159,8 +1224,8 @@ func (l *Ledger) EnableBoundedExecution(ctx context.Context, store *ExecutionSto
 		return errors.New("transaction leaf count exceeds uint32")
 	}
 	view.transactions.count, view.transactions.countKnown = uint32(txCount), true
-	view.state.closure = executionClosureVerified
-	view.transactions.closure = executionClosureVerified
+	view.state.closure = executionClosurePending
+	view.transactions.closure = executionClosurePending
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.execution != nil || l.stateMap != stateMap || l.txMap != txMap || l.header.Hash != h.Hash {

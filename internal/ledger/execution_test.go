@@ -579,7 +579,7 @@ func TestEnableBoundedExecutionRejectsPartialDestination(t *testing.T) {
 	}
 }
 
-func TestEnableBoundedExecutionAuthenticatesDurableFamily(t *testing.T) {
+func TestEnableBoundedExecutionLeavesDurableFamilyPendingUntilBarrier(t *testing.T) {
 	family := &durableOnlyExecutionFamily{base: backend.NewMemory()}
 	store, _ := executionTestStore(t, family)
 	parent := newOpenChild(t)
@@ -589,8 +589,20 @@ func TestEnableBoundedExecutionAuthenticatesDurableFamily(t *testing.T) {
 	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatalf("durable closure verification failed: %v", err)
 	}
+	if parent.HasVerifiedExecutionClosure() {
+		t.Fatal("imported closure was marked verified before the durability barrier")
+	}
+	if err := parent.EstablishBoundedClosure(context.Background()); err != nil {
+		t.Fatalf("durable closure establishment failed: %v", err)
+	}
 	if !parent.HasVerifiedExecutionClosure() {
-		t.Fatal("durable closure was not marked verified")
+		t.Fatal("durable closure was not marked verified after the barrier")
+	}
+	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
+		t.Fatalf("re-enabling verified bounded execution failed: %v", err)
+	}
+	if !parent.HasVerifiedExecutionClosure() {
+		t.Fatal("re-enabling verified bounded execution lost its proof")
 	}
 }
 
@@ -620,6 +632,30 @@ func TestEnableBoundedReadsDropsHistoricalMapsUntilCertification(t *testing.T) {
 	}
 	if historical.HasVerifiedExecutionClosure() {
 		t.Fatal("historical read conversion certified a closure before verification")
+	}
+	family.mu.Lock()
+	family.fetches = 0
+	family.mu.Unlock()
+	if err := historical.EnableBoundedExecution(ctx, store); err != nil {
+		t.Fatalf("authenticating historical bounded roots failed: %v", err)
+	}
+	if historical.HasVerifiedExecutionClosure() {
+		t.Fatal("historical bounded roots were promoted before the durability barrier")
+	}
+	family.mu.Lock()
+	firstAuthenticationFetches := family.fetches
+	family.mu.Unlock()
+	if firstAuthenticationFetches == 0 {
+		t.Fatal("historical bounded root authentication did not read the destination family")
+	}
+	if err := historical.EnableBoundedExecution(ctx, store); err != nil {
+		t.Fatalf("re-authenticating historical bounded roots failed: %v", err)
+	}
+	family.mu.Lock()
+	secondAuthenticationFetches := family.fetches
+	family.mu.Unlock()
+	if secondAuthenticationFetches != firstAuthenticationFetches {
+		t.Fatalf("historical bounded root authentication reread roots: first fetches=%d, second=%d", firstAuthenticationFetches, secondAuthenticationFetches)
 	}
 	got, err := historical.Read(key)
 	if err != nil {
@@ -660,8 +696,23 @@ func TestBoundedExecutionClosureProofIsOneTimeAndPromotable(t *testing.T) {
 	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
-	if !parent.HasVerifiedExecutionClosure() {
-		t.Fatal("imported bounded execution has no verified closure")
+	if parent.HasVerifiedExecutionClosure() {
+		t.Fatal("imported bounded execution was verified before the durability barrier")
+	}
+	family.mu.Lock()
+	family.fetches = 0
+	family.mu.Unlock()
+	if err := parent.EnableBoundedExecution(context.Background(), store); err != nil {
+		t.Fatalf("re-enabling pending bounded execution failed: %v", err)
+	}
+	if parent.HasVerifiedExecutionClosure() {
+		t.Fatal("re-enabling pending bounded execution promoted it before the durability barrier")
+	}
+	family.mu.Lock()
+	repeatFetches := family.fetches
+	family.mu.Unlock()
+	if repeatFetches != 0 {
+		t.Fatalf("re-enabling pending bounded execution reread authenticated roots: %d fetches", repeatFetches)
 	}
 	otherStore, _ := testExecutionStore(t)
 	if err := parent.EnableBoundedExecution(context.Background(), otherStore); err == nil {
