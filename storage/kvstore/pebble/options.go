@@ -23,9 +23,9 @@ const (
 
 	memTableSize = 64 << 20
 	// A small cache can be fully reserved by Pebble memtables. Keep a
-	// reasonable minimum to limit flush churn; very small caches do
-	// not retain a guaranteed block-cache capacity.
-	minimumMemTableSize         = 1 << 20
+	// write-sized minimum to limit flush churn; this intentionally biases
+	// writes for tiny caches and does not guarantee block-cache capacity.
+	minimumMemTableSize         = 8 << 20
 	memTableCacheDivisor        = 2
 	memTableStopWritesThreshold = 4
 	l0CompactionThreshold       = 4

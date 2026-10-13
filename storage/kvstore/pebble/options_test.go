@@ -34,9 +34,9 @@ func TestResolveMemTableSize(t *testing.T) {
 		want    int64
 	}{
 		{name: "default", options: Options{}, want: 64 << 20},
-		{name: "below minimum cache", options: Options{BlockCacheBytes: 32 << 10}, want: 1 << 20},
-		{name: "128 KiB cache", options: Options{BlockCacheBytes: 128 << 10}, want: 1 << 20},
-		{name: "8 MiB cache", options: Options{BlockCacheBytes: 8 << 20}, want: 4 << 20},
+		{name: "below minimum cache", options: Options{BlockCacheBytes: 32 << 10}, want: 8 << 20},
+		{name: "128 KiB cache", options: Options{BlockCacheBytes: 128 << 10}, want: 8 << 20},
+		{name: "8 MiB cache", options: Options{BlockCacheBytes: 8 << 20}, want: 8 << 20},
 		{name: "32 MiB cache", options: Options{BlockCacheBytes: 32 << 20}, want: 16 << 20},
 		{name: "large cache", options: Options{BlockCacheBytes: 1 << 30}, want: 64 << 20},
 	} {
@@ -130,6 +130,17 @@ func TestOptionsMemoryCommitmentCountsSharedCacheOnce(t *testing.T) {
 	if got := transition - steady; got != perGeneration {
 		t.Fatalf("rotation overlap = %d, want one memtable commitment %d", got, perGeneration)
 	}
+
+	smallCache := Options{BlockCacheBytes: 8 << 20}
+	smallMemTable := uint64(resolveMemTableSize(smallCache.BlockCacheBytes))
+	smallCommitment, err := smallCache.MemoryCommitment(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSmallCommitment := uint64(smallCache.BlockCacheBytes) + 2*smallMemTable*memTableStopWritesThreshold
+	if smallCommitment != wantSmallCommitment {
+		t.Fatalf("small-cache commitment = %d, want %d", smallCommitment, wantSmallCommitment)
+	}
 }
 
 func TestOptionsMemoryCommitmentRejectsInvalidGenerationCount(t *testing.T) {
@@ -194,13 +205,13 @@ func TestMakePebbleOptions(t *testing.T) {
 }
 
 func TestConfiguredCacheRetainsBlockCacheAfterFlush(t *testing.T) {
-	const blockCacheBytes = int64(8 << 20)
+	const blockCacheBytes = int64(32 << 20)
 	options := Options{BlockCacheBytes: blockCacheBytes, MaxOpenFiles: MinimumOpenFiles}
 	cache := cockroachpebble.NewCache(blockCacheBytes)
 	defer cache.Unref()
 	dbOptions := makePebbleOptions(options, cache)
-	if dbOptions.MemTableSize != uint64(4<<20) {
-		t.Fatalf("MemTableSize = %d, want %d", dbOptions.MemTableSize, 4<<20)
+	if dbOptions.MemTableSize != uint64(16<<20) {
+		t.Fatalf("MemTableSize = %d, want %d", dbOptions.MemTableSize, 16<<20)
 	}
 	db, err := cockroachpebble.Open(t.TempDir(), dbOptions)
 	if err != nil {
