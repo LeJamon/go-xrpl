@@ -76,7 +76,7 @@ func (sm *SHAMap) AcknowledgeCleanResidencyRelease(token *CleanResidencyRelease)
 	defer sm.backing.mu.RUnlock()
 	access := sm.backing.access
 	root := sm.tree.root
-	valid := access == token.access && root == token.root && access.available() &&
+	valid := sm.tree.state != stateSyncing && access == token.access && root == token.root && access.available() &&
 		root != nil && !root.IsDirty() && root.Hash() == token.rootHash
 	if valid {
 		root.ReleaseChildren()

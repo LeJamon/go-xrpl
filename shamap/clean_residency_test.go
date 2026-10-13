@@ -188,7 +188,6 @@ func TestSetFamilySeparatesSharedSnapshotRoot(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, found)
 			require.Equal(t, bytes.Repeat([]byte{7}, 16), item.Data())
-
 		})
 	}
 }
@@ -256,8 +255,15 @@ func TestCleanResidencyReleaseSkipsSyncingMap(t *testing.T) {
 	sm, err := NewBacked(TypeState, family)
 	require.NoError(t, err)
 	require.NoError(t, sm.Put([32]byte{0x2A}, bytes.Repeat([]byte{9}, 16)))
+	require.NoError(t, sm.StoreDirty(func(entries []FlushEntry) error {
+		return family.StoreBatch(t.Context(), entries)
+	}))
+	token := sm.PrepareCleanResidencyRelease()
+	require.NotNil(t, token)
 	require.NoError(t, sm.StartSync())
 	require.Nil(t, sm.PrepareCleanResidencyRelease())
+	require.False(t, sm.AcknowledgeCleanResidencyRelease(token))
+	require.NotZero(t, loadedChildCount(sm.tree.root))
 }
 
 func TestCleanResidencyReleaseRejectsFamilyReplacement(t *testing.T) {
