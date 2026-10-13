@@ -160,11 +160,29 @@ func (r *RootReader) GetLeaf(ctx context.Context, key [32]byte) (*Item, NodeType
 	return item, node.leafType, true, nil
 }
 
+// IterateLeafData visits leaves in strictly ascending key order. When after is
+// non-nil, leaves at or below *after are skipped by descending directly to its
+// key path; unrelated lower subtrees are never fetched. Data is borrowed until
+// the callback returns and must not be retained or mutated. Returning false
+// stops the walk without an error.
+func (r *RootReader) IterateLeafData(ctx context.Context, after *[32]byte, fn func([32]byte, []byte, NodeType) bool) error {
+	return r.iterateLeaves(ctx, after, fn)
+}
+
 // IterateLeaves visits leaves in strictly ascending key order. When after is
 // non-nil, leaves at or below *after are skipped by descending directly to its
 // key path; unrelated lower subtrees are never fetched. Returning false stops
-// the walk without an error.
+// the walk without an error. Callback Items own their data and may be retained.
 func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func(*Item, NodeType) bool) error {
+	if fn == nil {
+		return r.iterateLeaves(ctx, after, nil)
+	}
+	return r.iterateLeaves(ctx, after, func(key [32]byte, data []byte, nodeType NodeType) bool {
+		return fn(&Item{key: key, data: data}, nodeType)
+	})
+}
+
+func (r *RootReader) iterateLeaves(ctx context.Context, after *[32]byte, fn func([32]byte, []byte, NodeType) bool) error {
 	ctx = normalizeCommitmentContext(ctx)
 	if fn == nil {
 		return errors.New("shamap: nil root reader callback")
@@ -244,10 +262,12 @@ func (r *RootReader) IterateLeaves(ctx context.Context, after *[32]byte, fn func
 					continue
 				}
 			}
-			item := takeRootReaderItem(&child)
+			key := child.leafKey
+			data := child.leafData
+			child.leafData = nil
 			childType := child.leafType
 			child.release(r.budget)
-			if !fn(item, childType) {
+			if !fn(key, data, childType) {
 				return nil
 			}
 		}
