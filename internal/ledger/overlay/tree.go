@@ -228,54 +228,130 @@ func rebalanceTreeNode(n *treeNode) (*treeNode, error) {
 	return n, nil
 }
 
-func insertTreeNode(owner *budget, old *treeNode, key [32]byte, value []byte, deleted bool) (*treeNode, error) {
-	if old == nil {
-		return makeLeaf(owner, key, value, deleted)
+func rotateRightExclusive(n *treeNode) *treeNode {
+	left := n.left
+	if left == nil {
+		return retainTreeNode(n)
 	}
+	retainTreeNode(n)
+	n.left = left.right
+	left.right = n
+	n.height = maxHeight(nodeHeight(n.left), nodeHeight(n.right)) + 1
+	left.height = maxHeight(nodeHeight(left.left), nodeHeight(left.right)) + 1
+	return left
+}
+
+func rotateLeftExclusive(n *treeNode) *treeNode {
+	right := n.right
+	if right == nil {
+		return retainTreeNode(n)
+	}
+	retainTreeNode(n)
+	n.right = right.left
+	right.left = n
+	n.height = maxHeight(nodeHeight(n.left), nodeHeight(n.right)) + 1
+	right.height = maxHeight(nodeHeight(right.left), nodeHeight(right.right)) + 1
+	return right
+}
+
+func rebalanceExclusive(n *treeNode) *treeNode {
+	n.height = maxHeight(nodeHeight(n.left), nodeHeight(n.right)) + 1
+	factor := balanceFactor(n)
+	if factor > 1 {
+		if balanceFactor(n.left) < 0 {
+			oldLeft := n.left
+			n.left = rotateLeftExclusive(oldLeft)
+			releaseTreeNode(oldLeft)
+		}
+		return rotateRightExclusive(n)
+	}
+	if factor < -1 {
+		if balanceFactor(n.right) > 0 {
+			oldRight := n.right
+			n.right = rotateRightExclusive(oldRight)
+			releaseTreeNode(oldRight)
+		}
+		return rotateLeftExclusive(n)
+	}
+	return retainTreeNode(n)
+}
+
+// An insertion can require rebalancing only when a changed child grew. The
+// pivot is then on that changed path and is private or newly allocated. Value
+// updates and tombstones do not change heights, so no fallible operation can
+// follow an in-place mutation here.
+func insertTreeNodeCOW(owner *budget, old *treeNode, key [32]byte, value []byte, deleted, exclusive bool) (*treeNode, bool, error) {
+	if old == nil {
+		n, err := makeLeaf(owner, key, value, deleted)
+		return n, err == nil, err
+	}
+	exclusive = exclusive && old.refs.Load() == 1
 	if key == old.key {
 		if sameTreeValue(old, value, deleted) {
-			return retainTreeNode(old), nil
+			return nil, false, nil
 		}
 		blob, err := newValueBlob(owner, value)
 		if err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		if exclusive {
+			oldValue := old.value
+			old.value = blob
+			old.deleted = deleted
+			releaseBlob(oldValue)
+			return retainTreeNode(old), true, nil
 		}
 		n, err := cloneTreeNode(owner, old, old.left, old.right, blob, deleted)
 		releaseBlob(blob)
-		return n, err
+		return n, err == nil, err
 	}
-	if bytes.Compare(key[:], old.key[:]) < 0 {
-		child, err := insertTreeNode(owner, old.left, key, value, deleted)
-		if err != nil {
-			return nil, err
-		}
-		n, err := cloneTreeNode(owner, old, child, old.right, nil, old.deleted)
-		releaseTreeNode(child)
-		if err != nil {
-			return nil, err
-		}
-		balanced, err := rebalanceTreeNode(n)
-		if err != nil {
-			releaseTreeNode(n)
-			return nil, err
-		}
-		return balanced, nil
+	leftBranch := bytes.Compare(key[:], old.key[:]) < 0
+	oldChild := old.right
+	if leftBranch {
+		oldChild = old.left
 	}
-	child, err := insertTreeNode(owner, old.right, key, value, deleted)
+	child, changed, err := insertTreeNodeCOW(owner, oldChild, key, value, deleted, exclusive)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	n, err := cloneTreeNode(owner, old, old.left, child, nil, old.deleted)
+	if !changed {
+		return nil, false, nil
+	}
+	if exclusive {
+		if leftBranch {
+			old.left = child
+		} else {
+			old.right = child
+		}
+		releaseTreeNode(oldChild)
+		return rebalanceExclusive(old), true, nil
+	}
+	left, right := old.left, child
+	if leftBranch {
+		left, right = child, old.right
+	}
+	n, err := cloneTreeNode(owner, old, left, right, nil, old.deleted)
 	releaseTreeNode(child)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	balanced, err := rebalanceTreeNode(n)
 	if err != nil {
 		releaseTreeNode(n)
+		return nil, false, err
+	}
+	return balanced, true, nil
+}
+
+func insertTreeNode(owner *budget, old *treeNode, key [32]byte, value []byte, deleted bool) (*treeNode, error) {
+	updated, changed, err := insertTreeNodeCOW(owner, old, key, value, deleted, true)
+	if err != nil {
 		return nil, err
 	}
-	return balanced, nil
+	if !changed {
+		return retainTreeNode(old), nil
+	}
+	return updated, nil
 }
 
 func findTreeNode(root *treeNode, key [32]byte) *treeNode {
