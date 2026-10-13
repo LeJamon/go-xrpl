@@ -23,7 +23,7 @@ const (
 
 	memTableSize = 64 << 20
 	// A small cache can be fully reserved by Pebble memtables. Keep a
-	// reasonable minimum WAL batch for write liveness; very small caches do
+	// reasonable minimum to limit flush churn; very small caches do
 	// not retain a guaranteed block-cache capacity.
 	minimumMemTableSize         = 1 << 20
 	memTableCacheDivisor        = 2
@@ -43,8 +43,8 @@ const (
 // Zero values select the package defaults.
 type Options struct {
 	// BlockCacheBytes is the block-cache capacity. A rotating store shares this
-	// cache across both generations. Effective memtables may reserve up to half
-	// of it; very small caches therefore do not guarantee block-cache capacity.
+	// cache across both generations. Pebble subtracts live memtable reservations
+	// from the capacity available for cached blocks.
 	BlockCacheBytes int64
 	// MaxOpenFiles is the open-file soft limit. A rotating store divides this
 	// steady-state total evenly across both generations.

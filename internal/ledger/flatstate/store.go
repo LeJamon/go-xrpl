@@ -248,7 +248,7 @@ type Options struct {
 	CacheBytes int64
 	// MemTableSize is the requested maximum Pebble memtable size. Open may
 	// lower the effective target to reserve part of CacheBytes for blocks. The
-	// effective target has a 1 MiB floor for write liveness, but an explicit
+	// effective target has a 1 MiB floor to limit flush churn, but an explicit
 	// request below that floor remains the requested ceiling.
 	MemTableSize int64
 	// MemoryBudget optionally accounts for temporary bytes retained by a
