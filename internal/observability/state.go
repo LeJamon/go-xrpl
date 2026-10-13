@@ -22,11 +22,12 @@ type ExecutionSnapshot struct {
 // FlatSnapshot contains cached flat-state operational counters. Its provider
 // must not perform storage I/O while a scrape is in progress.
 type FlatSnapshot struct {
-	OutboxCount int
-	OutboxBytes int64
-	OutboxAge   time.Duration
-	Advancing   bool
-	Failures    uint64
+	MemTableTargetBytes int64
+	OutboxCount         int
+	OutboxBytes         int64
+	OutboxAge           time.Duration
+	Advancing           bool
+	Failures            uint64
 }
 
 // SpillSnapshot contains the byte-accounting counters for one bounded spill
@@ -62,21 +63,22 @@ func SetStateProvider(provider StateProvider) func() {
 }
 
 type stateCollector struct {
-	rootBorrowers *prometheus.Desc
-	buildTime     *prometheus.Desc
-	buildNodes    *prometheus.Desc
-	buildErrors   *prometheus.Desc
-	frontier      *prometheus.Desc
-	flatHits      *prometheus.Desc
-	rootFallbacks *prometheus.Desc
-	outboxCount   *prometheus.Desc
-	outboxBytes   *prometheus.Desc
-	outboxAge     *prometheus.Desc
-	advancing     *prometheus.Desc
-	flatFailures  *prometheus.Desc
-	spillUsed     *prometheus.Desc
-	spillPeak     *prometheus.Desc
-	spillDenied   *prometheus.Desc
+	rootBorrowers  *prometheus.Desc
+	buildTime      *prometheus.Desc
+	buildNodes     *prometheus.Desc
+	buildErrors    *prometheus.Desc
+	frontier       *prometheus.Desc
+	flatHits       *prometheus.Desc
+	rootFallbacks  *prometheus.Desc
+	outboxCount    *prometheus.Desc
+	outboxBytes    *prometheus.Desc
+	outboxAge      *prometheus.Desc
+	advancing      *prometheus.Desc
+	flatFailures   *prometheus.Desc
+	memTableTarget *prometheus.Desc
+	spillUsed      *prometheus.Desc
+	spillPeak      *prometheus.Desc
+	spillDenied    *prometheus.Desc
 }
 
 // NewStateCollector returns a callback-based collector for bounded execution,
@@ -120,6 +122,9 @@ func NewStateCollector() prometheus.Collector {
 		flatFailures: prometheus.NewDesc(
 			"goxrpl_flat_failures_total",
 			"Flat-state transition failures observed by this process.", nil, nil),
+		memTableTarget: prometheus.NewDesc(
+			"goxrpl_flat_memtable_target_bytes",
+			"Effective target size of each flat-state memtable, within the configured maximum.", nil, nil),
 		spillUsed: prometheus.NewDesc(
 			"goxrpl_state_spill_disk_used_bytes",
 			"Bytes currently charged to the bounded state spill account.", []string{"account"}, nil),
@@ -145,6 +150,7 @@ func (c *stateCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.outboxAge
 	ch <- c.advancing
 	ch <- c.flatFailures
+	ch <- c.memTableTarget
 	ch <- c.spillUsed
 	ch <- c.spillPeak
 	ch <- c.spillDenied
@@ -181,6 +187,7 @@ func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.outboxAge, prometheus.GaugeValue, age.Seconds())
 		ch <- prometheus.MustNewConstMetric(c.advancing, prometheus.GaugeValue, advancing)
 		ch <- prometheus.MustNewConstMetric(c.flatFailures, prometheus.CounterValue, float64(flat.Failures))
+		ch <- prometheus.MustNewConstMetric(c.memTableTarget, prometheus.GaugeValue, float64(flat.MemTableTargetBytes))
 	}
 	if provider.Spill != nil {
 		spill := provider.Spill()

@@ -162,13 +162,14 @@ type benchmarkMemoryStats struct {
 }
 
 type benchmarkResolvedResources struct {
-	NodeBlockCacheBytes uint64 `json:"node_block_cache_bytes"`
-	FlatCacheBytes      uint64 `json:"flat_cache_bytes"`
-	FlatMemTableBytes   uint64 `json:"flat_memtable_bytes"`
-	WorkspaceBytes      uint64 `json:"workspace_bytes"`
-	OverlayMemoryBytes  uint64 `json:"overlay_memory_bytes"`
-	OverlayDiskBytes    uint64 `json:"overlay_disk_bytes"`
-	WorkspacePoolBytes  uint64 `json:"workspace_pool_bytes"`
+	NodeBlockCacheBytes     uint64 `json:"node_block_cache_bytes"`
+	FlatCacheBytes          uint64 `json:"flat_cache_bytes"`
+	FlatMemTableBytes       uint64 `json:"flat_memtable_bytes"`
+	FlatMemTableTargetBytes uint64 `json:"flat_memtable_target_bytes"`
+	WorkspaceBytes          uint64 `json:"workspace_bytes"`
+	OverlayMemoryBytes      uint64 `json:"overlay_memory_bytes"`
+	OverlayDiskBytes        uint64 `json:"overlay_disk_bytes"`
+	WorkspacePoolBytes      uint64 `json:"workspace_pool_bytes"`
 }
 
 // stateMemoryBenchmarkRuntime is supplied by the revision-specific adapter.
@@ -272,24 +273,29 @@ func benchmarkFlatStatsDelta(stats, baseline benchmarkFlatStats) benchmarkFlatSt
 }
 
 type stateMemoryBenchmarkLedgerSample struct {
-	Sequence       uint32 `json:"sequence"`
-	TotalNanos     int64  `json:"total_nanos"`
-	CloseNanos     int64  `json:"close_nanos"`
-	ReadNanos      int64  `json:"read_nanos"`
-	WriteNanos     int64  `json:"write_nanos"`
-	ScanNanos      int64  `json:"scan_nanos"`
-	Reads          int    `json:"reads"`
-	Writes         int    `json:"writes"`
-	ScanEntries    int    `json:"scan_entries"`
-	StateRoot      string `json:"state_root"`
-	LedgerHash     string `json:"ledger_hash"`
-	ReadDigest     string `json:"read_digest"`
-	HeapAllocBytes uint64 `json:"heap_alloc_bytes"`
-	HeapInuseBytes uint64 `json:"heap_inuse_bytes"`
-	NumGC          uint32 `json:"num_gc"`
-	FlatHits       uint64 `json:"flat_hits"`
-	FlatFallbacks  uint64 `json:"flat_fallbacks"`
-	FlatAdvanced   bool   `json:"flat_advanced"`
+	Sequence          uint32 `json:"sequence"`
+	TotalNanos        int64  `json:"total_nanos"`
+	CloseNanos        int64  `json:"close_nanos"`
+	HashNanos         int64  `json:"hash_nanos"`
+	PersistNanos      int64  `json:"persist_nanos"`
+	AuthenticateNanos int64  `json:"authenticate_nanos"`
+	DiffNanos         int64  `json:"diff_nanos"`
+	PublishNanos      int64  `json:"publish_nanos"`
+	ReadNanos         int64  `json:"read_nanos"`
+	WriteNanos        int64  `json:"write_nanos"`
+	ScanNanos         int64  `json:"scan_nanos"`
+	Reads             int    `json:"reads"`
+	Writes            int    `json:"writes"`
+	ScanEntries       int    `json:"scan_entries"`
+	StateRoot         string `json:"state_root"`
+	LedgerHash        string `json:"ledger_hash"`
+	ReadDigest        string `json:"read_digest"`
+	HeapAllocBytes    uint64 `json:"heap_alloc_bytes"`
+	HeapInuseBytes    uint64 `json:"heap_inuse_bytes"`
+	NumGC             uint32 `json:"num_gc"`
+	FlatHits          uint64 `json:"flat_hits"`
+	FlatFallbacks     uint64 `json:"flat_fallbacks"`
+	FlatAdvanced      bool   `json:"flat_advanced"`
 }
 
 type stateMemoryBenchmarkRuntimeStats struct {
@@ -466,21 +472,30 @@ func TestStateMemoryBenchmark(t *testing.T) {
 		if err := current.Close(closeTime, 0); err != nil {
 			t.Fatalf("close ledger %d: %v", i, err)
 		}
+		sample.HashNanos = time.Since(closeStart).Nanoseconds()
+		phaseStart := time.Now()
 		if err := rt.persist(ctx, current); err != nil {
 			t.Fatalf("persist ledger %d: %v", i, err)
 		}
+		sample.PersistNanos = time.Since(phaseStart).Nanoseconds()
+		phaseStart = time.Now()
 		if rt.authenticate != nil {
 			if err := rt.authenticate(ctx, current); err != nil {
 				t.Fatalf("authenticate ledger %d: %v", i, err)
 			}
 		}
+		sample.AuthenticateNanos = time.Since(phaseStart).Nanoseconds()
+		phaseStart = time.Now()
 		changes, err := rt.changes(ctx, parent, current)
 		if err != nil {
 			t.Fatalf("prepare changes ledger %d: %v", i, err)
 		}
+		sample.DiffNanos = time.Since(phaseStart).Nanoseconds()
+		phaseStart = time.Now()
 		if err := rt.advance(ctx, parent, current, changes); err != nil {
 			t.Fatalf("publish flat state ledger %d: %v", i, err)
 		}
+		sample.PublishNanos = time.Since(phaseStart).Nanoseconds()
 		closeNanos := time.Since(closeStart).Nanoseconds()
 		if c.ScanEvery > 0 && (i+1)%c.ScanEvery == 0 {
 			scanStart := time.Now()

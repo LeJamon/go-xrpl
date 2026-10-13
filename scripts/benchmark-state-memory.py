@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import re
 import subprocess
+import tarfile
 import time
 
 
@@ -60,6 +61,25 @@ def run_process(command, tree, env, log_path):
     return metrics
 
 
+def capture_sources(tree, side, output):
+    paths = [
+        "internal/ledger/state_memory_benchmark_common_test.go",
+        "internal/ledger/state_memory_benchmark_before_test.go",
+        "internal/ledger/state_memory_benchmark_after_test.go",
+        "internal/ledger/service/batch_accept_bench_test.go",
+    ]
+    hashes = {}
+    with tarfile.open(output / f"{side}-harness.tar.gz", "w:gz") as archive:
+        for path in paths:
+            source = tree / path
+            if source.is_file():
+                hashes[path] = hashlib.sha256(source.read_bytes()).hexdigest()
+                archive.add(source, arcname=path)
+    patch = subprocess.check_output(["git", "-C", str(tree), "diff", "--binary", "HEAD"])
+    (output / f"{side}-worktree.patch").write_bytes(patch)
+    return {"harness_sha256": hashes, "worktree_patch_sha256": hashlib.sha256(patch).hexdigest()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--before-tree", type=Path, required=True)
@@ -100,6 +120,8 @@ def main():
                   "rusage block counts are platform-dependent; zero does not prove zero I/O.",
                   "The OS page cache is not flushed; pair order alternates between samples."],
     }
+    for side, tree in trees.items():
+        metadata["revisions"][side].update(capture_sources(tree, side, output))
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     packages = {"state": "./internal/ledger", "service": "./internal/ledger/service"}
     binaries = {}

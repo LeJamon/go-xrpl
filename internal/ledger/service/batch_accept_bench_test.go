@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"testing"
@@ -82,16 +83,21 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			}
 			b.SetBytes(int64(bytesPerRound))
 			var (
-				total         = make([]time.Duration, 0, b.N)
-				parse         = make([]time.Duration, 0, b.N)
-				apply         = make([]time.Duration, 0, b.N)
-				nextOpen      = make([]time.Duration, 0, b.N)
-				flatHits      uint64
-				flatFallbacks uint64
-				wantHash      [32]byte
-				wantStateRoot [32]byte
-				wantTxRoot    [32]byte
-				haveHash      bool
+				total              = make([]time.Duration, 0, b.N)
+				parse              = make([]time.Duration, 0, b.N)
+				apply              = make([]time.Duration, 0, b.N)
+				nextOpen           = make([]time.Duration, 0, b.N)
+				build              = make([]time.Duration, 0, b.N)
+				closeHash          = make([]time.Duration, 0, b.N)
+				gcCycles           uint64
+				gcPause            uint64
+				flatHits           uint64
+				flatFallbacks      uint64
+				flatMemTableTarget int64
+				wantHash           [32]byte
+				wantStateRoot      [32]byte
+				wantTxRoot         [32]byte
+				haveHash           bool
 			)
 
 			b.ResetTimer()
@@ -99,6 +105,9 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				b.StopTimer()
 				logger := &batchAcceptanceBenchmarkLogger{}
 				svc, parent, cleanup := newBatchConsensusAcceptanceService(b, fixture, logger)
+				if svc.config.FlatState != nil {
+					flatMemTableTarget = svc.config.FlatState.Stats().MemTableTargetBytes
+				}
 				if tc.withRetry {
 					outcome, err := svc.SubmitOpenLedgerTxDetailed(tc.local, true)
 					require.NoError(b, err)
@@ -107,6 +116,8 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				}
 
 				beforeStats := svc.config.Execution.Stats()
+				var memBefore, memAfter runtime.MemStats
+				runtime.ReadMemStats(&memBefore)
 				b.StartTimer()
 				_, err := svc.AcceptConsensusResult(
 					b.Context(),
@@ -117,6 +128,9 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 					true,
 				)
 				b.StopTimer()
+				runtime.ReadMemStats(&memAfter)
+				gcCycles += uint64(memAfter.NumGC - memBefore.NumGC)
+				gcPause += memAfter.PauseTotalNs - memBefore.PauseTotalNs
 				require.NoError(b, err)
 				afterStats := svc.config.Execution.Stats()
 				if benchmarkFlatStateEnabled() {
@@ -134,6 +148,8 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				parse = append(parse, sample.parse)
 				apply = append(apply, sample.apply)
 				nextOpen = append(nextOpen, sample.nextOpen)
+				build = append(build, sample.build)
+				closeHash = append(closeHash, sample.closeHash)
 
 				closed := svc.GetClosedLedger()
 				if !haveHash {
@@ -162,10 +178,15 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			reportConsensusAcceptanceQuantiles(b, "parse", parse)
 			reportConsensusAcceptanceQuantiles(b, "transaction-apply", apply)
 			reportConsensusAcceptanceQuantiles(b, "next-open", nextOpen)
+			reportConsensusAcceptanceQuantiles(b, "build", build)
+			reportConsensusAcceptanceQuantiles(b, "close-hash", closeHash)
+			b.ReportMetric(float64(gcCycles)/float64(b.N), "GCs/op")
+			b.ReportMetric(float64(gcPause)/float64(b.N), "gc-pause-ns/op")
 			if benchmarkFlatStateEnabled() {
 				b.ReportMetric(float64(flatHits)/float64(b.N), "flat-hits/op")
 				b.ReportMetric(float64(flatFallbacks)/float64(b.N), "root-fallbacks/op")
 				b.ReportMetric(float64(8<<20), "flat-memtable-limit-bytes")
+				b.ReportMetric(float64(flatMemTableTarget), "flat-memtable-target-bytes")
 			}
 		})
 	}
@@ -329,7 +350,7 @@ func assertBatchAcceptanceEffects(b testing.TB, closed *ledgerpkg.Ledger, tc ser
 }
 
 type batchAcceptanceBenchmarkTiming struct {
-	total, parse, apply, nextOpen time.Duration
+	total, parse, apply, nextOpen, build, closeHash time.Duration
 }
 
 type batchAcceptanceBenchmarkLogger struct {
@@ -367,6 +388,10 @@ func (l *batchAcceptanceBenchmarkLogger) Info(msg string, args ...any) {
 			sample.apply = duration
 		case "next_open":
 			sample.nextOpen = duration
+		case "build":
+			sample.build = duration
+		case "close_state_tx_hash":
+			sample.closeHash = duration
 		}
 	}
 	l.mu.Lock()

@@ -38,11 +38,12 @@ func (r *nodeRuntime) installExecutionMetrics(
 		provider.Flat = func() observability.FlatSnapshot {
 			stats := flat.Stats()
 			return observability.FlatSnapshot{
-				OutboxCount: stats.OutboxCount,
-				OutboxBytes: stats.OutboxBytes,
-				OutboxAge:   stats.OutboxAge,
-				Advancing:   stats.Advancing,
-				Failures:    stats.Failures,
+				MemTableTargetBytes: stats.MemTableTargetBytes,
+				OutboxCount:         stats.OutboxCount,
+				OutboxBytes:         stats.OutboxBytes,
+				OutboxAge:           stats.OutboxAge,
+				Advancing:           stats.Advancing,
+				Failures:            stats.Failures,
 			}
 		}
 	}

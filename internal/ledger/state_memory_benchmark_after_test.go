@@ -124,7 +124,8 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 		resources: func() benchmarkResolvedResources {
 			return benchmarkResolvedResources{
 				NodeBlockCacheBytes: uint64(c.NodeBlockCacheMiB) << 20, FlatCacheBytes: uint64(c.FlatCacheBytes), FlatMemTableBytes: uint64(c.FlatMemTableBytes),
-				WorkspaceBytes: c.WorkspaceBytes, OverlayMemoryBytes: c.OverlayMemoryBytes, OverlayDiskBytes: c.OverlayDiskBytes,
+				FlatMemTableTargetBytes: uint64(flat.Stats().MemTableTargetBytes),
+				WorkspaceBytes:          c.WorkspaceBytes, OverlayMemoryBytes: c.OverlayMemoryBytes, OverlayDiskBytes: c.OverlayDiskBytes,
 				WorkspacePoolBytes: c.WorkspaceBytes + c.OverlayMemoryBytes + c.OverlayDiskBytes + 32<<20,
 			}
 		},

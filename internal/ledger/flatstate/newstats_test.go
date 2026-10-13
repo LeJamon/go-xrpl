@@ -23,6 +23,9 @@ func TestStoreStatsCachesOutboxAndTransitionState(t *testing.T) {
 	first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
 	importInitial(t, store, first, nil)
 	stats := store.Stats()
+	if stats.MemTableTargetBytes != 256<<10 {
+		t.Fatalf("memtable target = %d, want %d", stats.MemTableTargetBytes, 256<<10)
+	}
 	if stats.OutboxCount != 1 || stats.OutboxBytes <= 0 || stats.OutboxAge != 0 || stats.Advancing || stats.Failures != 0 {
 		t.Fatalf("initial stats = %+v", stats)
 	}

@@ -452,11 +452,12 @@ func (s *Store) Stats() Stats {
 		}
 	}
 	return Stats{
-		OutboxCount: s.outboxCount,
-		OutboxBytes: s.outboxBytes,
-		OutboxAge:   age,
-		Advancing:   s.writerActive || s.marker != nil,
-		Failures:    s.failures,
+		MemTableTargetBytes: s.effectiveMemTableSize,
+		OutboxCount:         s.outboxCount,
+		OutboxBytes:         s.outboxBytes,
+		OutboxAge:           age,
+		Advancing:           s.writerActive || s.marker != nil,
+		Failures:            s.failures,
 	}
 }
 

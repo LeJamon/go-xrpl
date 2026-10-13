@@ -27,11 +27,12 @@ func TestStateCollectorReportsBoundedSnapshots(t *testing.T) {
 		Flat: func() FlatSnapshot {
 			flatCalls.Add(1)
 			return FlatSnapshot{
-				OutboxCount: 4,
-				OutboxBytes: 2048,
-				OutboxAge:   7500 * time.Millisecond,
-				Advancing:   true,
-				Failures:    2,
+				MemTableTargetBytes: 2 << 20,
+				OutboxCount:         4,
+				OutboxBytes:         2048,
+				OutboxAge:           7500 * time.Millisecond,
+				Advancing:           true,
+				Failures:            2,
 			}
 		},
 		Spill: func() SpillSnapshot {
@@ -74,6 +75,7 @@ func TestStateCollectorReportsBoundedSnapshots(t *testing.T) {
 	require.Equal(t, 7.5, values["goxrpl_flat_outbox_age_seconds"])
 	require.Equal(t, float64(1), values["goxrpl_flat_advancing"])
 	require.Equal(t, float64(2), values["goxrpl_flat_failures_total"])
+	require.Equal(t, float64(2<<20), values["goxrpl_flat_memtable_target_bytes"])
 	require.Equal(t, float64(1024), values["goxrpl_state_spill_disk_used_bytes/account=state_scratch"])
 	require.Equal(t, float64(4096), values["goxrpl_state_spill_disk_peak_bytes/account=state_scratch"])
 	require.Equal(t, float64(5), values["goxrpl_state_spill_disk_denied_total/account=state_scratch"])
