@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -56,10 +57,8 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 	b.StopTimer()
 	profileAcceptance := os.Getenv("BENCH_PROFILE_ACCEPTANCE") == "1"
 	profileContext := pprof.WithLabels(b.Context(), pprof.Labels("phase", "acceptance"))
-	nodeCacheBytes := int64(256 << 10)
-	if benchmarkFlatStateEnabled() {
-		nodeCacheBytes = 128 << 10
-	}
+	flatEnabled := benchmarkFlatStateEnabled()
+	nodeCacheBytes, flatCacheBytes := benchmarkServiceCacheBytes(b, flatEnabled)
 	fixture := newBatchBenchmarkRefreshFixture(b, 4_096, nodeCacheBytes)
 	nodeMemory, err := fixture.options.MemoryCommitment(2)
 	require.NoError(b, err)
@@ -109,7 +108,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			for round := range b.N {
 				b.StopTimer()
 				logger := &batchAcceptanceBenchmarkLogger{}
-				svc, parent, cleanup := newBatchConsensusAcceptanceService(b, fixture, logger)
+				svc, parent, cleanup := newBatchConsensusAcceptanceService(b, fixture, logger, flatCacheBytes)
 				if svc.config.FlatState != nil {
 					flatMemTableTarget = svc.config.FlatState.Stats().MemTableTargetBytes
 				}
@@ -144,7 +143,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				gcPause += memAfter.PauseTotalNs - memBefore.PauseTotalNs
 				require.NoError(b, err)
 				afterStats := svc.config.Execution.Stats()
-				if benchmarkFlatStateEnabled() {
+				if flatEnabled {
 					hits := afterStats.FlatHits - beforeStats.FlatHits
 					fallbacks := afterStats.FlatFallbacks - beforeStats.FlatFallbacks
 					require.Positive(b, hits, "flat benchmark acceptance did not read the seeded flat state")
@@ -192,9 +191,11 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			reportConsensusAcceptanceQuantiles(b, "build", build)
 			reportConsensusAcceptanceQuantiles(b, "close-hash", closeHash)
 			b.ReportMetric(float64(nodeMemory), "nodestore-steady-memory-commitment-bytes")
+			b.ReportMetric(float64(nodeCacheBytes), "nodestore-block-cache-bytes")
+			b.ReportMetric(float64(flatCacheBytes), "flat-block-cache-bytes")
 			b.ReportMetric(float64(gcCycles)/float64(b.N), "GCs/op")
 			b.ReportMetric(float64(gcPause)/float64(b.N), "gc-pause-ns/op")
-			if benchmarkFlatStateEnabled() {
+			if flatEnabled {
 				b.ReportMetric(float64(flatHits)/float64(b.N), "flat-hits/op")
 				b.ReportMetric(float64(flatFallbacks)/float64(b.N), "root-fallbacks/op")
 				b.ReportMetric(float64(8<<20), "flat-memtable-limit-bytes")
@@ -424,6 +425,7 @@ func newBatchConsensusAcceptanceService(
 	b *testing.B,
 	fixture *benchmarkRefreshFixture,
 	logger log.Logger,
+	flatCacheBytes int64,
 ) (*Service, *ledgerpkg.Ledger, func()) {
 	b.Helper()
 	var (
@@ -431,8 +433,8 @@ func newBatchConsensusAcceptanceService(
 		flat              *flatstate.Store
 		persistenceMemory shamap.DirtyMemoryBudget
 	)
-	if benchmarkFlatStateEnabled() {
-		execution, flat, persistenceMemory = newBatchBenchmarkFlatExecution(b, fixture)
+	if flatCacheBytes > 0 {
+		execution, flat, persistenceMemory = newBatchBenchmarkFlatExecution(b, fixture, flatCacheBytes)
 	}
 	cfg := Config{
 		Standalone: true,
@@ -484,9 +486,28 @@ func benchmarkFlatStateEnabled() bool {
 	return os.Getenv("STATE_BENCH_FLAT") == "1"
 }
 
+const batchBenchmarkDefaultCacheBytes int64 = 256 << 10
+
+func benchmarkServiceCacheBytes(b testing.TB, flatEnabled bool) (nodeCacheBytes, flatCacheBytes int64) {
+	b.Helper()
+	total := batchBenchmarkDefaultCacheBytes
+	if raw := os.Getenv("STATE_BENCH_CACHE_BYTES"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 || parsed%2 != 0 {
+			b.Fatalf("STATE_BENCH_CACHE_BYTES must be a positive even byte count, got %q", raw)
+		}
+		total = parsed
+	}
+	if !flatEnabled {
+		return total, 0
+	}
+	return total / 2, total / 2
+}
+
 func newBatchBenchmarkFlatExecution(
 	b *testing.B,
 	fixture *benchmarkRefreshFixture,
+	flatCacheBytes int64,
 ) (*ledgerpkg.ExecutionStore, *flatstate.Store, shamap.DirtyMemoryBudget) {
 	b.Helper()
 	flatPath := filepath.Join(b.TempDir(), "flat")
@@ -498,7 +519,7 @@ func newBatchBenchmarkFlatExecution(
 	disk, err := pool.NewAccount("batch_benchmark_spill", 0, 512<<20)
 	require.NoError(b, err)
 	flat, err := flatstate.Open(flatPath, flatstate.Options{
-		CacheBytes:   128 << 10,
+		CacheBytes:   flatCacheBytes,
 		MemTableSize: 8 << 20,
 		MemoryBudget: workspace,
 	})
