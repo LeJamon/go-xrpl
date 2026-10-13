@@ -91,7 +91,8 @@ func TestResolveMemTableSize(t *testing.T) {
 	}{
 		{name: "cache budget", cache: 8 << 20, requested: 4 << 20, want: 2 << 20},
 		{name: "requested ceiling", cache: 8 << 20, requested: 1 << 20, want: 1 << 20},
-		{name: "minimum target", cache: 128 << 10, requested: 8 << 20, want: 64 << 10},
+		{name: "minimum target", cache: 128 << 10, requested: 8 << 20, want: 1 << 20},
+		{name: "requested below minimum", cache: 128 << 10, requested: 64 << 10, want: 64 << 10},
 		{name: "default sizing unchanged", cache: 64 << 20, requested: 16 << 20, want: 16 << 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

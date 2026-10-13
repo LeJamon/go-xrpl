@@ -34,7 +34,7 @@ const (
 
 	defaultCacheBytes     int64 = 64 << 20
 	defaultMemTableSize   int64 = 16 << 20
-	minimumMemTableSize   int64 = 64 << 10
+	minimumMemTableSize   int64 = 1 << 20
 	memTableCacheDivisor        = 4
 	defaultBatchBytes           = 4 << 20
 	defaultBatchRecords         = 4096
@@ -247,7 +247,9 @@ func SemanticCommitID(ledger Hash, publicationKind string) CommitID {
 type Options struct {
 	CacheBytes int64
 	// MemTableSize is the requested maximum Pebble memtable size. Open may
-	// lower the effective target to reserve part of CacheBytes for blocks.
+	// lower the effective target to reserve part of CacheBytes for blocks. The
+	// effective target has a 1 MiB floor for write liveness, but an explicit
+	// request below that floor remains the requested ceiling.
 	MemTableSize int64
 	// MemoryBudget optionally accounts for temporary bytes retained by a
 	// transition batch. The caller owns the budget's policy and lifecycle.
