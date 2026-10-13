@@ -911,17 +911,21 @@ func (b *commitmentBuilder) emitLeaf(change Change) (commitmentRef, error) {
 	if err := b.reserve(charge); err != nil {
 		return commitmentRef{}, err
 	}
-	node, err := createLeafNode(nodeType, NewItem(change.Key, change.Data))
+	kind, err := leafKindForNodeType(nodeType)
 	if err != nil {
 		releaseCommitmentMemory(b.budget, charge)
 		return commitmentRef{}, err
 	}
-	entry, err := flushEntryForNode(node, b.ledgerSeq, b.mapType)
-	if err != nil {
-		if b.budget != nil {
-			b.budget.Release(charge)
-		}
-		return commitmentRef{}, err
+	if len(change.Data) < 12 {
+		releaseCommitmentMemory(b.budget, charge)
+		return commitmentRef{}, errItemTooSmall
+	}
+	data := serializeLeafWithPrefix(kind, change.Key, change.Data)
+	entry := FlushEntry{
+		Hash:      sha512half.Sum(data),
+		Data:      data,
+		LedgerSeq: b.ledgerSeq,
+		MapType:   b.mapType,
 	}
 	if err := b.emitEntry(entry, false, charge); err != nil {
 		return commitmentRef{}, err
@@ -937,17 +941,17 @@ func (b *commitmentBuilder) emitInner(hashes [BranchFactor][32]byte, branches ui
 	if err := b.reserve(charge); err != nil {
 		return commitmentRef{}, err
 	}
-	node := &innerNode{hashes: hashes, isBranch: branches}
-	if err := node.UpdateHash(); err != nil {
-		releaseCommitmentMemory(b.budget, charge)
-		return commitmentRef{}, err
-	}
-	data, err := node.SerializeWithPrefix()
+	data, err := serializeInnerWithPrefix(hashes, branches)
 	if err != nil {
 		releaseCommitmentMemory(b.budget, charge)
 		return commitmentRef{}, err
 	}
-	entry := FlushEntry{Hash: node.Hash(), Data: data, LedgerSeq: b.ledgerSeq, MapType: b.mapType}
+	entry := FlushEntry{
+		Hash:      hashInnerPrefix(data),
+		Data:      data,
+		LedgerSeq: b.ledgerSeq,
+		MapType:   b.mapType,
+	}
 	if err := b.emitEntry(entry, true, charge); err != nil {
 		return commitmentRef{}, err
 	}

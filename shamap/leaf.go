@@ -52,6 +52,34 @@ var leafKinds = [...]leafKindInfo{
 	},
 }
 
+func leafKindForNodeType(nodeType NodeType) (leafKind, error) {
+	switch nodeType {
+	case NodeTypeAccountState:
+		return leafAccountState, nil
+	case NodeTypeTransactionNoMeta:
+		return leafTransaction, nil
+	case NodeTypeTransactionWithMeta:
+		return leafTransactionWithMeta, nil
+	default:
+		return 0, fmt.Errorf("invalid node type for leaf: %v", nodeType)
+	}
+}
+
+func serializeLeafWithPrefix(kind leafKind, key [32]byte, data []byte) []byte {
+	info := leafKinds[kind]
+	length := len(info.hashPrefix) + len(data)
+	if info.keyOnWire {
+		length += len(key)
+	}
+	result := make([]byte, length)
+	offset := copy(result, info.hashPrefix)
+	offset += copy(result[offset:], data)
+	if info.keyOnWire {
+		copy(result[offset:], key[:])
+	}
+	return result
+}
+
 // LeafReader is the read-only view of a leaf node returned to callers outside
 // the package: the node's identity plus its stored Item, without the
 // item-replacement or hashing mutators.
@@ -193,19 +221,7 @@ func (n *leafNode) SerializeWithPrefix() ([]byte, error) {
 	if n.item == nil {
 		return nil, errNilItem
 	}
-	data := n.item.dataBytes()
-	if n.keyOnWire() {
-		key := n.item.Key()
-		result := make([]byte, 0, 4+len(data)+32)
-		result = append(result, n.hashPrefix()...)
-		result = append(result, data...)
-		result = append(result, key[:]...)
-		return result, nil
-	}
-	result := make([]byte, 0, 4+len(data))
-	result = append(result, n.hashPrefix()...)
-	result = append(result, data...)
-	return result, nil
+	return serializeLeafWithPrefix(n.kind, n.item.Key(), n.item.dataBytes()), nil
 }
 
 // newAccountStateLeafFromWire creates a leafNode from wire format data
@@ -296,14 +312,9 @@ func createLeafNode(nodeType NodeType, item *Item) (mapLeaf, error) {
 	if item == nil {
 		return nil, errNilItem
 	}
-	switch nodeType {
-	case NodeTypeAccountState:
-		return newAccountStateLeafNode(item)
-	case NodeTypeTransactionNoMeta:
-		return newTransactionLeafNode(item)
-	case NodeTypeTransactionWithMeta:
-		return newTransactionWithMetaLeafNode(item)
-	default:
-		return nil, fmt.Errorf("invalid node type for leaf: %v", nodeType)
+	kind, err := leafKindForNodeType(nodeType)
+	if err != nil {
+		return nil, err
 	}
+	return newLeafNode(kind, item)
 }
