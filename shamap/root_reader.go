@@ -473,7 +473,7 @@ func emitRootChange(ctx context.Context, emit func(Change) error, key [32]byte, 
 	}
 	change := Change{Key: key, Delete: deleted, Type: nodeType}
 	if !deleted {
-		change.Data = bytes.Clone(data)
+		change.Data = data[:len(data):len(data)]
 	}
 	return emit(change)
 }
