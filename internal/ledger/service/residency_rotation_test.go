@@ -27,6 +27,7 @@ type residencyLedgerRecord struct {
 	snapshot *ledgerpkg.Ledger
 	state    *shamap.SHAMap
 	cold     *shamap.SHAMap
+	keepCold bool
 }
 
 type residencyEntry struct {
@@ -95,11 +96,16 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, committed)
 	lastRotated, minimumOnline := db.GenerationState()
+	rotations := 1
 	require.Equal(t, initial.Sequence(), lastRotated)
 	require.Equal(t, uint32(1), minimumOnline)
 
 	initialRecord := captureResidencyRecord(t, ctx, initial, initialSet, family)
+	initialRecord.keepCold = true
 	records := []residencyLedgerRecord{initialRecord}
+	svc.validationCandidates[initialRecord.seq] = initialRecord.snapshot
+	readResidencyRecord(t, ctx, initialRecord)
+	readActiveColdResidencyRecord(t, ctx, initialRecord)
 
 	for round := uint32(1); round <= workingRounds; round++ {
 		workingSet := residencyEntries(round, 0, workingSetEntries)
@@ -116,7 +122,15 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		closed := closeStoredLedgerFixture(t, svc)
 		require.NoError(t, svc.flushPersists(ctx))
 		record := captureResidencyRecord(t, ctx, closed, workingSet, family)
+		record.keepCold = round%rotateEvery == 0
 		records = append(records, record)
+		// Read the new root while its generation is current. Later rotations may
+		// delete this root unless it is one of the deliberately retained leases.
+		readResidencyRecord(t, ctx, record)
+		readActiveColdResidencyRecord(t, ctx, record)
+		if record.keepCold {
+			svc.validationCandidates[record.seq] = record.snapshot
+		}
 
 		if round%rotateEvery != 0 {
 			continue
@@ -183,24 +197,31 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.True(t, committed)
+		rotations++
 		lastRotated, minimumOnline = db.GenerationState()
 		require.Equal(t, closed.Sequence(), lastRotated)
 		require.Equal(t, uint32(1), minimumOnline)
 
 		for _, historical := range records {
-			require.NoError(t, svc.verifyStoredSHAMap(ctx, historical.root, shamap.TypeState))
+			if historical.keepCold {
+				require.NoError(t, svc.verifyStoredSHAMap(ctx, historical.root, shamap.TypeState))
+			}
 		}
 	}
 
 	require.NoError(t, svc.flushPersists(ctx))
 	require.Equal(t, 1+workingRounds, len(records))
+	require.GreaterOrEqual(t, rotations, 4, "test workload did not perform at least three physical generation rotations")
+	require.Equal(t, records[len(records)-1].seq, lastRotated)
 
 	retainedBefore := retainedColdResidencyBytes(t, records)
 	warmBefore := retainedSnapshotResidencyBytes(t, records)
 	for pass := 0; pass < 3; pass++ {
 		for i := range records {
-			readResidencyRecord(t, ctx, records[i])
-			readActiveColdResidencyRecord(t, ctx, records[i])
+			if records[i].keepCold {
+				readResidencyRecord(t, ctx, records[i])
+				readActiveColdResidencyRecord(t, ctx, records[i])
+			}
 		}
 		stats := family.SHAMapCleanResidency().Stats()
 		require.Equal(t, uint64(cleanCacheLimit), stats.Limit)
@@ -217,6 +238,8 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		stats.Limit, stats.UsedBytes, stats.Nodes, stats.Evictions, retainedBefore, retainedAfter, warmBefore, warmAfter)
 	require.Positive(t, stats.Evictions,
 		"disjoint working sets did not exercise clean-cache eviction")
+	require.LessOrEqual(t, len(svc.ledgerHistory), 9,
+		"service history cache did not evict old closed ledgers")
 
 	latest := records[len(records)-1]
 	svc.Stop()
@@ -268,7 +291,9 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	require.NoError(t, err)
 	readResidencyMap(t, ctx, recoveredState, latest)
 	for _, historical := range records[:len(records)-1] {
-		readColdResidencyRecord(t, ctx, reopenedFamily, historical)
+		if historical.keepCold {
+			readColdResidencyRecord(t, ctx, reopenedFamily, historical)
+		}
 	}
 	lastRotated, minimumOnline = reopenedDB.GenerationState()
 	require.Equal(t, latest.seq, lastRotated)

@@ -44,7 +44,7 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			path := filepath.Join(t.TempDir(), "nodes")
-			store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 64})
+			store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 200})
 			require.NoError(t, err)
 			base, err := nodestore.NewRotatingKVDatabase(store, nodestore.DatabaseConfig{})
 			require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 			familyClosed = true
 			require.Zero(t, cleanBudget.Used())
 
-			reopenedStore, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 64})
+			reopenedStore, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 200})
 			require.NoError(t, err)
 			reopenedBase, err := nodestore.NewRotatingKVDatabase(reopenedStore, nodestore.DatabaseConfig{})
 			require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 func TestService_PersistenceReleaseRejectsReplacedFamily(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "nodes")
-	store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 64})
+	store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 200})
 	require.NoError(t, err)
 	base, err := nodestore.NewRotatingKVDatabase(store, nodestore.DatabaseConfig{})
 	require.NoError(t, err)
