@@ -348,7 +348,7 @@ func TestBoundedExecutionInterruptedRebaseResumesFromDurableRoots(t *testing.T) 
 	require.NoError(t, branchA.Close(parent.CloseTime().Add(2*time.Second), 0))
 	require.NoError(t, first.service.persistToNodeStore(ctx, branchA, branchA.Sequence()))
 	require.NoError(t, first.service.advanceFlatState(ctx, branchA))
-	require.NoError(t, first.flat.AckOutbox(ctx, flatstate.SemanticCommitID(branchA.Hash(), ledgerPublication)))
+	require.NoError(t, first.flat.AckPublishedOutbox(ctx, flatstate.SemanticCommitID(branchA.Hash(), ledgerPublication)))
 	branchA.Discard()
 
 	branchB, err := ledger.NewOpen(parent, parent.CloseTime().Add(3*time.Second))
@@ -434,7 +434,7 @@ func TestBoundedExecutionRefreshPinsRollsBackOnHeaderFailure(t *testing.T) {
 		},
 		Changes: flatstate.NewSliceChangeIterator(nil), PublicationKind: ledgerPublication,
 	}))
-	require.NoError(t, runtime.flat.AckOutbox(ctx, flatstate.SemanticCommitID(aLedger, ledgerPublication)))
+	require.NoError(t, runtime.flat.AckPublishedOutbox(ctx, flatstate.SemanticCommitID(aLedger, ledgerPublication)))
 	require.NoError(t, runtime.service.refreshFlatRootPins(ctx))
 
 	containsRoot := func(hash [32]byte, kind shamap.Type) bool {
@@ -571,6 +571,15 @@ func TestBoundedExecutionOutboxReplayAfterCommittedReceipt(t *testing.T) {
 	pending, err = restarted.flat.PendingOutbox(t.Context(), 0)
 	require.NoError(t, err)
 	require.Empty(t, pending)
+	loaded, err := restarted.service.loadStoredLedgerByHash(t.Context(), target.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	stateRoot, err := loaded.StateMapHash()
+	require.NoError(t, err)
+	require.Equal(t, target.Header().AccountHash, stateRoot)
+	txRoot, err := loaded.TxMapHash()
+	require.NoError(t, err)
+	require.Equal(t, target.Header().TxHash, txRoot)
 }
 
 func TestBoundedExecutionSQLFailureRetainsAdmissionUntilRetry(t *testing.T) {
@@ -1009,6 +1018,12 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotationsAndRestart(t *tes
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, futureValue, futureItem.Data())
+	loadedFuture, err := runtime.service.loadStoredLedgerByHash(ctx, futureHash)
+	require.NoError(t, err)
+	require.NotNil(t, loadedFuture)
+	loadedFutureRoot, err := loadedFuture.StateMapHash()
+	require.NoError(t, err)
+	require.Equal(t, futureRoot, loadedFutureRoot)
 	committedLastRotated, minimumOnline = database.GenerationState()
 	require.Equal(t, lastRotated, committedLastRotated)
 	require.Equal(t, uint32(1), minimumOnline)

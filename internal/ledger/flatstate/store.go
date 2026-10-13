@@ -1246,24 +1246,14 @@ func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]OutboxRecord, e
 	return result, iterator.Error()
 }
 
-// AckOutbox durably removes one publication obligation. A missing ID is an
-// idempotent success.
-func (s *Store) AckOutbox(ctx context.Context, commitID CommitID) error {
-	return s.ackOutbox(ctx, commitID, false)
-}
-
 // AckPublishedOutbox completes an obligation whose dependent publication and
 // validated-tip writes have already been durably committed. When the record is
 // for the exact ready current descriptor and no transition is active, the
 // deletion is intentionally left for the next flat-state synchronization. A
 // crash may replay that record, so the dependent publication must be idempotent.
-// Older or mismatched records use the durable AckOutbox path. A missing ID is
-// an idempotent success.
-func (s *Store) AckPublishedOutbox(ctx context.Context, commitID CommitID) error {
-	return s.ackOutbox(ctx, commitID, true)
-}
-
-func (s *Store) ackOutbox(ctx context.Context, commitID CommitID, published bool) (err error) {
+// Older or mismatched records use a durable deletion. A missing ID is an
+// idempotent success.
+func (s *Store) AckPublishedOutbox(ctx context.Context, commitID CommitID) (err error) {
 	defer func() {
 		if err != nil {
 			s.recordFailure()
@@ -1291,20 +1281,17 @@ func (s *Store) ackOutbox(ctx context.Context, commitID CommitID, published bool
 		s.cv.Broadcast()
 		s.mu.Unlock()
 	}()
-	if published {
-		record, found, getErr := s.getOutbox(commitID)
-		if getErr != nil {
-			return getErr
-		}
-		if !found {
-			return nil
-		}
-		s.mu.Lock()
-		syncRequired := record.CommitID != commitID || !s.ready || s.uncertain || s.marker != nil || !s.hasDescriptor || !s.descriptor.Equal(record.Descriptor)
-		s.mu.Unlock()
-		return s.deleteOutbox(commitID, syncRequired)
+	record, found, getErr := s.getOutbox(commitID)
+	if getErr != nil {
+		return getErr
 	}
-	return s.deleteOutbox(commitID, true)
+	if !found {
+		return nil
+	}
+	s.mu.Lock()
+	syncRequired := record.CommitID != commitID || !s.ready || s.uncertain || s.marker != nil || !s.hasDescriptor || !s.descriptor.Equal(record.Descriptor)
+	s.mu.Unlock()
+	return s.deleteOutbox(commitID, syncRequired)
 }
 
 func (s *Store) deleteOutbox(commitID CommitID, syncRequired bool) error {

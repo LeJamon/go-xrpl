@@ -622,7 +622,7 @@ func TestStoreOutboxLimitsBlockAdvanceButAllowAck(t *testing.T) {
 	if !errors.Is(err, ErrLimit) {
 		t.Fatalf("outbox count error = %v", err)
 	}
-	if err := store.AckOutbox(context.Background(), SemanticCommitID(first.LedgerHash, "flat-state")); err != nil {
+	if err := store.AckPublishedOutbox(context.Background(), SemanticCommitID(first.LedgerHash, "flat-state")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Advance(context.Background(), AdvanceRequest{
@@ -748,10 +748,10 @@ func TestStoreOutboxAckAndReopen(t *testing.T) {
 	if err != nil || len(pending) != 1 || pending[0].CommitID != commitID {
 		t.Fatalf("pending = %#v, %v", pending, err)
 	}
-	if err := store.AckOutbox(context.Background(), commitID); err != nil {
+	if err := store.AckPublishedOutbox(context.Background(), commitID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AckOutbox(context.Background(), commitID); err != nil {
+	if err := store.AckPublishedOutbox(context.Background(), commitID); err != nil {
 		t.Fatalf("idempotent ack: %v", err)
 	}
 	if pending, err := store.PendingOutbox(context.Background(), 10); err != nil || len(pending) != 0 {

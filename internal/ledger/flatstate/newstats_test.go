@@ -30,7 +30,7 @@ func TestStoreStatsCachesOutboxAndTransitionState(t *testing.T) {
 		t.Fatalf("initial stats = %+v", stats)
 	}
 
-	if err := store.AckOutbox(context.Background(), SemanticCommitID(first.LedgerHash, "flat-state")); err != nil {
+	if err := store.AckPublishedOutbox(context.Background(), SemanticCommitID(first.LedgerHash, "flat-state")); err != nil {
 		t.Fatal(err)
 	}
 	stats = store.Stats()
