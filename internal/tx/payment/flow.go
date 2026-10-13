@@ -19,6 +19,9 @@ type flowOpts struct {
 	fillOrKillEnabled bool
 	// offerCrossingSell is true when offerCrossing == OfferCrossing::sell.
 	offerCrossingSell bool
+	// offersConsidered receives the aggregate number of offer steps walked by
+	// this flow when an optional diagnostic caller supplies a counter.
+	offersConsidered *uint32
 }
 
 // FlowOption configures the FillOrKill termination behavior of Flow.
@@ -31,6 +34,14 @@ func WithFillOrKill(fillOrKillEnabled, offerCrossingSell bool) FlowOption {
 	return func(o *flowOpts) {
 		o.fillOrKillEnabled = fillOrKillEnabled
 		o.offerCrossingSell = offerCrossingSell
+	}
+}
+
+// withOffersConsidered binds an optional diagnostic counter to Flow. The
+// counter is updated once when Flow returns, including early-return paths.
+func withOffersConsidered(counter *uint32) FlowOption {
+	return func(o *flowOpts) {
+		o.offersConsidered = counter
 	}
 }
 
@@ -66,6 +77,12 @@ func Flow(
 	var fo flowOpts
 	for _, opt := range opts {
 		opt(&fo)
+	}
+	var offersConsidered uint32
+	if fo.offersConsidered != nil {
+		defer func() {
+			*fo.offersConsidered += offersConsidered
+		}()
 	}
 	if len(strands) == 0 {
 		return FlowResult{
@@ -126,7 +143,6 @@ func Flow(
 
 	const maxTries = 1000
 	var maxOffersToConsider uint32 = 1500
-	var offersConsidered uint32
 
 	// Saved amounts for precision: sum from smallest to largest
 	// Reference: rippled uses flat_multiset for savedIns/savedOuts
@@ -759,7 +775,11 @@ func RippleCalculate(
 	}
 
 	// Execute flow. This is the payment (RippleCalculate) entry, never offer crossing.
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, false)
+	var flowOpts []FlowOption
+	if rcOpts.offersConsidered != nil {
+		flowOpts = []FlowOption{withOffersConsidered(rcOpts.offersConsidered)}
+	}
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, false, flowOpts...)
 
 	// Apply flow sandbox changes back to the main sandbox only on success.
 	// rippled's finishFlow (Flow.cpp) applies the flow sandbox solely on
@@ -805,6 +825,8 @@ type rippleCalculateOpts struct {
 	// = view().open()). It selects the FAILED_PROCESSING TER variant in the
 	// XRP-movement balance guards: tel (open) vs tec (closed).
 	openLedger bool
+
+	offersConsidered *uint32
 }
 
 // WithAmendments passes amendment flags and ledger timing to RippleCalculate,
@@ -830,6 +852,14 @@ func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2 bool) RippleCalculateOption {
 func WithNumberContext(numberContext state.NumberContext) RippleCalculateOption {
 	return func(o *rippleCalculateOpts) {
 		o.numberContext = &numberContext
+	}
+}
+
+// WithOffersConsidered binds an optional diagnostic counter to the flow used by
+// RippleCalculate. The counter is untouched when nil.
+func WithOffersConsidered(counter *uint32) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.offersConsidered = counter
 	}
 }
 

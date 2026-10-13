@@ -54,6 +54,14 @@ func (a *TxqAdapter) GetApplyFlags() tx.ApplyFlags {
 	return a.cfg.ApplyFlags
 }
 
+// SetOffersConsideredCounter binds an optional per-transaction offer counter
+// used by the queue's bounded slow-apply diagnostic.
+func (a *TxqAdapter) SetOffersConsideredCounter(counter *uint32) {
+	if a != nil {
+		a.cfg.OffersConsidered = counter
+	}
+}
+
 func (a *TxqAdapter) RulesIdentity() *amendment.Rules {
 	if a == nil {
 		return nil
@@ -205,6 +213,7 @@ func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.Appl
 		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
+		OffersConsidered:          a.cfg.OffersConsidered,
 	}
 	engine := txengine.NewEngine(a.view, engineCfg)
 	engine.SetBaseTxCount(a.view.TxCount())

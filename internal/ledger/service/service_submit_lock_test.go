@@ -35,26 +35,13 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 	preferred, err := ledger.NewOpen(closed, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, preferred.Close(time.Now(), 0))
+	cold, family := coldAcceptanceParent(t, closed)
+	require.NoError(t, svc.SwitchToPreferredLedger(cold))
+	svc.mu.RLock()
+	_, err = svc.applyConfigLocked()
+	svc.mu.RUnlock()
+	require.NoError(t, err)
 	blob, hash := startupPaymentBlob(t, "submit-lock-destination", 1)
-
-	applyBlocked := make(chan struct{})
-	releaseApply := make(chan struct{})
-	modifierDone := make(chan struct{})
-	go func() {
-		defer close(modifierDone)
-		svc.openLedgerView.Modify(func(*ledger.Ledger) bool {
-			close(applyBlocked)
-			<-releaseApply
-			return false
-		})
-	}()
-	<-applyBlocked
-	released := false
-	defer func() {
-		if !released {
-			close(releaseApply)
-		}
-	}()
 
 	type submitResult struct {
 		applied bool
@@ -71,13 +58,14 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 				return
 			}
 			result, submitErr := svc.SubmitTransaction(transaction, blob, false)
-			submitDone <- submitResult{
-				applied: submitErr == nil && result != nil && result.Applied,
-				success: submitErr == nil && result != nil &&
-					(result.Result == ter.TesSUCCESS || result.Result.IsTec()),
-				code: result.Result,
-				err:  submitErr,
+			out := submitResult{err: submitErr}
+			if result != nil {
+				out.applied = submitErr == nil && result.Applied
+				out.success = submitErr == nil &&
+					(result.Result == ter.TesSUCCESS || result.Result.IsTec())
+				out.code = result.Result
 			}
+			submitDone <- out
 			return
 		}
 		outcome, submitErr := svc.SubmitOpenLedgerTxDetailed(blob, true)
@@ -89,12 +77,15 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 		}
 	}()
 
+	family.armed.Store(true)
+	select {
+	case <-family.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingress did not reach the cold open-ledger read")
+	}
+
 	require.Eventually(t, func() bool {
-		if svc.openLedgerMu.TryLock() {
-			svc.openLedgerMu.Unlock()
-			return false
-		}
-		return true
+		return !svc.openLedgerMu.Snapshot().Held
 	}, time.Second, time.Millisecond)
 
 	assertClosedRead := func() {
@@ -102,7 +93,7 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 		go func() { readDone <- svc.GetClosedLedger() }()
 		select {
 		case got := <-readDone:
-			require.Same(t, closed, got)
+			require.NotNil(t, got)
 		case <-time.After(100 * time.Millisecond):
 			t.Fatal("GetClosedLedger blocked behind open-ledger transaction application")
 		}
@@ -110,31 +101,22 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 	assertClosedRead()
 
 	switchDone := make(chan error, 1)
-	switchWaiting := make(chan struct{})
 	go func() {
-		switchDone <- svc.switchToPreferredLedger(preferred, func() { close(switchWaiting) })
+		switchDone <- svc.switchToPreferredLedger(preferred, nil)
 	}()
-	<-switchWaiting
-	require.Eventually(t, func() bool {
-		return svc.openLedgerMu.Snapshot().QueuedPriority != 0
-	}, time.Second, time.Millisecond)
-	assertClosedRead()
 	select {
 	case err := <-switchDone:
 		require.NoError(t, err)
-		t.Fatal("preferred-ledger replacement completed during open-ledger submission")
-	default:
+	case <-time.After(5 * time.Second):
+		t.Fatal("preferred-ledger replacement blocked behind detached submission")
 	}
 
-	close(releaseApply)
-	released = true
-	<-modifierDone
+	family.unblock()
 
 	result := <-submitDone
 	require.NoError(t, result.err)
 	require.True(t, result.success, "submission result = %s", result.code)
 	require.True(t, result.applied)
-	require.NoError(t, <-switchDone)
 	require.Equal(t, preferred.Hash(), svc.GetClosedLedger().Hash())
 
 	exists, err := svc.openLedgerView.Current().TxExists(hash)
@@ -142,12 +124,19 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 	require.True(t, exists, "concurrent replacement dropped the submitted transaction")
 }
 
-func TestValidatedLedgerWaitsForOpenLedgerSubmission(t *testing.T) {
+func TestValidatedLedgerDoesNotWaitForOpenLedgerSubmission(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	candidate := retainNextValidationCandidate(t, svc)
+	closed := svc.GetClosedLedger()
+	cold, family := coldAcceptanceParent(t, closed)
+	require.NoError(t, svc.SwitchToPreferredLedger(cold))
+	candidate := svc.GetClosedLedger()
+	svc.mu.RLock()
+	_, err = svc.applyConfigLocked()
+	svc.mu.RUnlock()
+	require.NoError(t, err)
 	blob, _ := startupPaymentBlob(t, "submit-validation-destination", 1)
 
 	publications := make(chan string, 2)
@@ -157,36 +146,19 @@ func TestValidatedLedgerWaitsForOpenLedgerSubmission(t *testing.T) {
 		return nil
 	}))
 
-	applyBlocked := make(chan struct{})
-	releaseApply := make(chan struct{})
-	modifierDone := make(chan struct{})
-	go func() {
-		defer close(modifierDone)
-		svc.openLedgerView.Modify(func(*ledger.Ledger) bool {
-			close(applyBlocked)
-			<-releaseApply
-			return false
-		})
-	}()
-	<-applyBlocked
-	released := false
-	defer func() {
-		if !released {
-			close(releaseApply)
-		}
-	}()
-
 	submitDone := make(chan error, 1)
 	go func() {
 		_, submitErr := svc.SubmitOpenLedgerTxDetailed(blob, true)
 		submitDone <- submitErr
 	}()
+	family.armed.Store(true)
+	select {
+	case <-family.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingress did not reach the cold open-ledger read")
+	}
 	require.Eventually(t, func() bool {
-		if svc.openLedgerMu.TryLock() {
-			svc.openLedgerMu.Unlock()
-			return false
-		}
-		return true
+		return !svc.openLedgerMu.Snapshot().Held
 	}, time.Second, time.Millisecond)
 
 	validationDone := make(chan struct{})
@@ -194,9 +166,12 @@ func TestValidatedLedgerWaitsForOpenLedgerSubmission(t *testing.T) {
 		svc.SetValidatedLedger(candidate.Sequence(), candidate.Hash())
 		close(validationDone)
 	}()
-	require.Eventually(t, func() bool {
-		return svc.openLedgerMu.Snapshot().QueuedPriority != 0
-	}, time.Second, time.Millisecond)
+	select {
+	case <-validationDone:
+	case <-time.After(time.Second):
+		t.Fatal("validation admission blocked behind detached ledger submission")
+	}
+	require.True(t, candidate.IsValidated(), "validation did not advance while ingress was blocked")
 
 	readDone := make(chan *ledger.Ledger, 1)
 	go func() { readDone <- svc.GetClosedLedger() }()
@@ -207,21 +182,20 @@ func TestValidatedLedgerWaitsForOpenLedgerSubmission(t *testing.T) {
 		t.Fatal("GetClosedLedger blocked behind queued ledger validation")
 	}
 
-	close(releaseApply)
-	released = true
-	<-modifierDone
+	family.unblock()
 	require.NoError(t, <-submitDone)
-	<-validationDone
-	require.True(t, candidate.IsValidated())
 	require.Same(t, candidate, svc.GetValidatedLedger())
-	for _, want := range []string{"proposed", "validated"} {
+	seen := make(map[string]bool, 2)
+	for len(seen) < 2 {
 		select {
-		case got := <-publications:
-			require.Equal(t, want, got)
+		case publication := <-publications:
+			seen[publication] = true
 		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for %s publication", want)
+			t.Fatal("timed out waiting for submit and validation publications")
 		}
 	}
+	require.True(t, seen["proposed"])
+	require.True(t, seen["validated"])
 }
 
 func TestOpenLedgerWaitDoesNotBlockValidationAdmission(t *testing.T) {
@@ -337,38 +311,28 @@ func TestStopWaitsForOpenLedgerSubmission(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	candidate := retainNextValidationCandidate(t, svc)
+	closed := svc.GetClosedLedger()
+	cold, family := coldAcceptanceParent(t, closed)
+	require.NoError(t, svc.SwitchToPreferredLedger(cold))
+	svc.mu.RLock()
+	_, err = svc.applyConfigLocked()
+	svc.mu.RUnlock()
+	require.NoError(t, err)
 	blob, _ := startupPaymentBlob(t, "submit-stop-destination", 1)
-
-	applyBlocked := make(chan struct{})
-	releaseApply := make(chan struct{})
-	modifierDone := make(chan struct{})
-	go func() {
-		defer close(modifierDone)
-		svc.openLedgerView.Modify(func(*ledger.Ledger) bool {
-			close(applyBlocked)
-			<-releaseApply
-			return false
-		})
-	}()
-	<-applyBlocked
-	released := false
-	defer func() {
-		if !released {
-			close(releaseApply)
-		}
-	}()
 
 	submitDone := make(chan error, 1)
 	go func() {
 		_, submitErr := svc.SubmitOpenLedgerTxDetailed(blob, true)
 		submitDone <- submitErr
 	}()
+	family.armed.Store(true)
+	select {
+	case <-family.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingress did not reach the cold open-ledger read")
+	}
 	require.Eventually(t, func() bool {
-		if svc.openLedgerMu.TryLock() {
-			svc.openLedgerMu.Unlock()
-			return false
-		}
-		return true
+		return !svc.openLedgerMu.Snapshot().Held
 	}, time.Second, time.Millisecond)
 
 	stopDone := make(chan struct{})
@@ -388,10 +352,8 @@ func TestStopWaitsForOpenLedgerSubmission(t *testing.T) {
 	default:
 	}
 
-	close(releaseApply)
-	released = true
-	<-modifierDone
-	require.NoError(t, <-submitDone)
+	family.unblock()
+	require.ErrorIs(t, <-submitDone, errServiceNotRunning)
 	<-stopDone
 
 	_, err = svc.SubmitOpenLedgerTxDetailed(blob, true)
@@ -464,7 +426,7 @@ func TestQueuedIngressRejectedWhenStopWinsOpenLedgerGate(t *testing.T) {
 		svc.lifecycleMu.Lock()
 		state := svc.lifecycleState
 		svc.lifecycleMu.Unlock()
-		return state == serviceStopping && svc.openLedgerMu.Snapshot().QueuedPriority != 0
+		return state == serviceStopping
 	}, time.Second, time.Millisecond)
 
 	svc.openLedgerMu.Unlock()

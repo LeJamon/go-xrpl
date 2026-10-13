@@ -131,6 +131,9 @@ type EngineConfig struct {
 
 	// EnforceLoadFee identifies open-view queue application and admission paths.
 	EnforceLoadFee bool
+
+	// OffersConsidered accumulates walked offer steps for optional diagnostics.
+	OffersConsidered *uint32
 }
 
 // CurrentCloseTime returns the application-view close time. The parent-time

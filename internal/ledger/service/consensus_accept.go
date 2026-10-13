@@ -26,7 +26,12 @@ func (s *Service) acceptConsensusResult(
 	if err != nil {
 		return 0, err
 	}
-	defer releaseAdmission()
+	admissionTransferred := false
+	defer func() {
+		if !admissionTransferred {
+			releaseAdmission()
+		}
+	}()
 	if s.ReplayBlocked() {
 		return 0, replayfault.ErrBlocked
 	}
@@ -46,7 +51,9 @@ func (s *Service) acceptConsensusResult(
 	defer func() {
 		s.consensusWG.Done()
 		callbackStarted := time.Now()
-		releaseAdmission()
+		if !admissionTransferred {
+			releaseAdmission()
+		}
 		if successor != nil {
 			relayStarted := time.Now()
 			successor.Finish()
@@ -195,7 +202,7 @@ func (s *Service) acceptConsensusResult(
 	closedTxCount := closed.TxCount()
 	nextStarted := time.Now()
 	successor, err = s.prepareSuccessor(ctx, closed, successorOptions{
-		admitted: true, retries: retriableTxs, retrySalt: &salt, anyDisputes: anyDisputes,
+		admitted: true, deferSpeculation: true, retries: retriableTxs, retrySalt: &salt, anyDisputes: anyDisputes,
 		check: func(s *Service) error {
 			if s.closedLedger != expectedClosed || s.openLedger != expectedOpen || s.startupReplay != replay {
 				return fmt.Errorf("%w: ledger ownership changed during build", ErrConsensusParentMismatch)
@@ -214,6 +221,7 @@ func (s *Service) acceptConsensusResult(
 	stagedResults := successor.staged
 	timings.gateWait = successor.timings.openLedgerWait
 	timings.gateHold = successor.timings.openLedgerHold
+	successor.releaseWork = releaseAdmission
 	_, err = successor.publish(func() error {
 		previousValidated := s.validatedLedger
 		historyStarted := time.Now()
@@ -278,6 +286,7 @@ func (s *Service) acceptConsensusResult(
 	if err != nil {
 		return 0, err
 	}
+	admissionTransferred = successor.options.deferSpeculation
 
 	if s.ReplayBlocked() {
 		return 0, replayfault.ErrBlocked

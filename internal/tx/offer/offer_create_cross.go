@@ -76,6 +76,7 @@ func (o *OfferCreate) invokeFlowCross(
 			FixAMMv1_2:         rules.Enabled(amendment.FeatureFixAMMv1_2),
 			NumberContext:      &numberContext,
 			DomainID:           o.DomainID,
+			OffersConsidered:   ctx.Config.OffersConsidered,
 		},
 	)
 }

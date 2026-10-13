@@ -155,6 +155,13 @@ func (e *Engine) SetApplyObserverForTest(observer ApplyObserver) {
 	e.applyObserver = observer
 }
 
+// SetOffersConsideredCounter binds an optional per-apply offer counter.
+// Engine application is single-writer, so the counter can be shared by the
+// transaction flow and its caller without synchronization.
+func (e *Engine) SetOffersConsideredCounter(counter *uint32) {
+	e.config.OffersConsidered = counter
+}
+
 func (e *Engine) observeApplyPhase(phase ApplyPhase) {
 	if e.applyObserver != nil {
 		e.applyObserver(phase)

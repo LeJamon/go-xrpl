@@ -18,9 +18,12 @@ const ingressPrefetchBudget = 100 * time.Millisecond
 // Never use these values to authorize or apply a transaction: after admission,
 // SubmitDetailed still reads and validates against the current ledger. A ledger
 // replacement during this hint-only work is therefore safe.
-func (s *Service) prefetchIngressState(ptx openledger.PendingTx) {
+func (s *Service) prefetchIngressState(parent context.Context, ptx openledger.PendingTx) {
 	if s.nodeStore == nil || ptx.Parsed == nil {
 		return // In-memory views need no disk-read hints.
+	}
+	if parent == nil {
+		parent = context.Background()
 	}
 	s.mu.RLock()
 	open := s.openLedgerView
@@ -40,7 +43,7 @@ func (s *Service) prefetchIngressState(ptx openledger.PendingTx) {
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ingressPrefetchBudget)
+	ctx, cancel := context.WithTimeout(parent, ingressPrefetchBudget)
 	defer cancel()
 	// The deadline bounds further hints; a backend already in a physical
 	// read may not be interruptible. No apply gate is held in that case.

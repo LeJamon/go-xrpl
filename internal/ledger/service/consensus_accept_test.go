@@ -302,6 +302,7 @@ func TestConsensusAcceptanceCarriesRPCIngressDuringDetachedBuild(t *testing.T) {
 	}
 	family.unblock()
 	require.NoError(t, <-accepted)
+	require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
 	exists, err := svc.openLedgerView.Current().TxExists(ingressHash)
 	require.NoError(t, err)
 	require.True(t, exists, "RPC transaction accepted during build was not carried into the next open view")

@@ -763,6 +763,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 		payment.WithNumberContext(ctx.NumberContext()),
+		payment.WithOffersConsidered(ctx.Config.OffersConsidered),
 	)
 	actualOut, sandbox, flowResult := rc.ActualOut, rc.Sandbox, rc.Result
 

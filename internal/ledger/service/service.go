@@ -169,6 +169,9 @@ type Service struct {
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.
 	consensusWG  sync.WaitGroup
 	ledgerWorkWG sync.WaitGroup
+	// detachedIngress serializes private open-ledger submission while allowing
+	// consensus and frontier transitions to use openLedgerMu.
+	detachedIngress detachedIngressAdmission
 
 	// openLedgerMu serializes open-ledger submission with lifecycle transitions.
 	// It is acquired before mu so a transition waiting on transaction application
@@ -185,6 +188,11 @@ type Service struct {
 	preferredTransitionWake   chan struct{}
 	preferredTransitionCancel context.CancelFunc
 	preferredTransitionOwner  *PreparedPreferredLedger
+
+	// mu guards the latest successor and its single execution worker.
+	speculativeSuccessor     *speculativeSuccessor
+	speculativeRunning       *speculativeSuccessor
+	speculativeWorkerRunning bool
 
 	// mu guards the lifecycle frontier and cross-component state. Lock ordering
 	// is openLedgerMu, mu, historyComponent.mu, then component-specific locks
@@ -409,6 +417,11 @@ func (s *Service) lockOpenLedgerIfRunningTimed(ctx context.Context, role openLed
 		s.lifecycleMu.Unlock()
 
 		waitStarted := time.Now()
+		if role == openLedgerIngress || role == openLedgerConsensus {
+			if err := s.waitSpeculativeSuccessor(ctx); err != nil {
+				return openLedgerGateWait{Role: role, Wait: time.Since(waitStarted)}, err
+			}
+		}
 		if err := s.waitPreferredTransition(ctx); err != nil {
 			return openLedgerGateWait{Role: role, Wait: time.Since(waitStarted)}, err
 		}
@@ -430,6 +443,15 @@ func (s *Service) lockOpenLedgerIfRunningTimed(ctx context.Context, role openLed
 				return wait, err
 			}
 			continue
+		}
+		if role == openLedgerIngress || role == openLedgerConsensus {
+			s.mu.RLock()
+			pending := s.speculativeSuccessor != nil && !s.speculativeSuccessor.finished
+			s.mu.RUnlock()
+			if pending {
+				s.openLedgerMu.Unlock()
+				continue
+			}
 		}
 		lifecycleStarted = time.Now()
 		s.lifecycleMu.Lock()
@@ -1169,6 +1191,11 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	if cfgErr != nil {
 		return failure, cfgErr
 	}
+	releaseAdmission, err := s.detachedIngress.acquire()
+	if err != nil {
+		return failure, err
+	}
+	defer releaseAdmission()
 	ptx, err := openledger.ParsePendingTx(blob)
 	if err != nil {
 		return failure, err
@@ -1183,58 +1210,55 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	initialSignatureCheck := !cfg.SkipSignatureVerification
 	var signatureErr error
 	localReason := tx.TransactionLocalChecksFailureReason(ptx.Parsed)
-	// Verify the signature off the open-ledger apply mutex so the dominant
-	// per-tx cost runs concurrently across ingress workers instead of serialising
-	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
+	// Verify the signature before the short open-ledger capture/fence; the
+	// in-strand check then reuses the cached verdict (#1105).
 	if initialSignatureCheck {
 		signatureErr = signatureVerificationError(
 			txengine.PrewarmSignatureWithRules(ptx.Parsed, initialRules), initialRules)
 	}
-	if signatureErr == nil && localReason == "" {
-		s.prefetchIngressState(ptx)
+	outcome, _, _, _, submitErr := s.submitDetachedIngressOwned(detachedIngressRequest{
+		pendingTx:             ptx,
+		initialRules:          initialRules,
+		signatureEligible:     true,
+		initialSignatureCheck: initialSignatureCheck,
+		initialSignatureErr:   signatureErr,
+		prepare: func(ctx context.Context) {
+			if signatureErr == nil && localReason == "" {
+				s.prefetchIngressState(ctx, ptx)
+			}
+		},
+		localReason: localReason,
+		verifySignature: func(rules *amendment.Rules) error {
+			return signatureVerificationError(
+				txengine.PrewarmSignatureWithRules(ptx.Parsed, rules), rules)
+		},
+		prepareCommit: func(current *ledger.Ledger, _ *ledger.Ledger, _ *txq.TxQ, _ openledger.ApplyConfig, outcome openledger.SubmitOutcome) detachedIngressCommitData {
+			return detachedIngressCommitData{
+				proposed: s.prepareProposedTransaction(ptx, ptx.Blob, outcome, current),
+			}
+		},
+		onCommit: func(current *ledger.Ledger, _ *txq.TxQ, localTxs *localtxs.LocalTxs, _ openledger.ApplyConfig, _ openledger.SubmitOutcome, data detachedIngressCommitData) {
+			if local && localTxs != nil && current != nil {
+				localTxs.PushBack(current.Sequence(), ptx)
+			}
+			s.enqueueProposedTransaction(data.proposed)
+		},
+	})
+	if submitErr != nil {
+		var validationErr *detachedIngressValidationError
+		if errors.As(submitErr, &validationErr) {
+			switch validationErr.kind {
+			case detachedIngressSignatureFailure:
+				return failure, validationErr.err
+			case detachedIngressLocalFailure:
+				return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, validationErr.err)
+			}
+		}
+		return failure, submitErr
 	}
-
-	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
-		return failure, err
-	}
-	defer s.openLedgerMu.Unlock()
-	s.mu.RLock()
-	openLedgerView := s.openLedgerView
-	txQueue := s.txQueue
-	localTxs := s.localTxs
-	if openLedgerView == nil {
-		s.mu.RUnlock()
-		return failure, errors.New("openLedgerView not initialised")
-	}
-	cfg, cfgErr = s.applyConfigLocked()
-	s.mu.RUnlock()
-	if cfgErr != nil {
-		return failure, cfgErr
-	}
-	// The open-ledger view can advance while the off-strand verification runs.
-	// Recheck with the final published snapshot whenever its rules or bypass
-	// policy changed, so a stale verdict cannot decide this submission.
-	if cfg.SkipSignatureVerification {
-		signatureErr = nil
-	} else if !initialSignatureCheck || cfg.Rules != initialRules {
-		signatureErr = signatureVerificationError(
-			txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules), cfg.Rules)
-	}
-	if signatureErr != nil {
-		return failure, signatureErr
-	}
-	if localReason != "" {
-		return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, localReason)
-	}
-	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
 	if outcome.Class == openledger.ResultSuccess {
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
 	}
-	current := openLedgerView.Current()
-	if local && localTxs != nil {
-		localTxs.PushBack(current.Sequence(), ptx)
-	}
-	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, current)
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}

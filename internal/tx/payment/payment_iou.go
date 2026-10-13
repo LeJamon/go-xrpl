@@ -210,6 +210,9 @@ func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, dest
 		WithOpenLedger(ctx.Config.IsViewOpen()),
 		WithNumberContext(ctx.NumberContext()),
 	}
+	if ctx.Config.OffersConsidered != nil {
+		rcOpts = append(rcOpts, WithOffersConsidered(ctx.Config.OffersConsidered))
+	}
 	// Thread domain ID to the flow engine for permissioned domain payments.
 	if p.DomainID != nil {
 		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
@@ -341,6 +344,7 @@ func (p *Payment) ApplyExactIOUFlow(ctx *tx.ApplyContext, senderID, destID [20]b
 		),
 		WithOpenLedger(ctx.Config.IsViewOpen()),
 		WithNumberContext(ctx.NumberContext()),
+		WithOffersConsidered(ctx.Config.OffersConsidered),
 	)
 	if rc.Result != ter.TesSUCCESS {
 		return rc.Result

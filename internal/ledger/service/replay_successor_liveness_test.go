@@ -58,7 +58,7 @@ func TestReplaySuccessorPreparationCancellationPreservesFrontier(t *testing.T) {
 	present, err := open.TxExists(txHash)
 	require.NoError(t, err)
 	require.True(t, present, "canceled repair must retain local ingress")
-	require.Same(t, queue, svc.txQueue)
+	require.NotSame(t, queue, svc.txQueue)
 	require.True(t, svc.ReplayBlocked())
 	require.NotEmpty(t, fault.ID)
 }

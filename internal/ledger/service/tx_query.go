@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/bits"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
@@ -77,40 +78,40 @@ type SubmitLedgerState struct {
 // rather than being replaced by it. The legacy pendingTxs slice is fed
 // for standalone close.
 //
-// This converges RPC ingress onto the same OpenLedger.SubmitDetailed →
-// TxQ.Apply path the network-relay ingress (SubmitOpenLedgerTx) already
-// uses, matching rippled where both routes share processTransaction.
+// This converges RPC ingress onto the same detached OpenLedger.SubmitDetailed
+// and TxQ.Apply path as network-relay ingress, matching rippled where both
+// routes share processTransaction.
 //
 // failHard mirrors rippled tapFAIL_HARD: when set, a submission that
 // does not apply is NOT pushed into the localTxs held pool and is NOT
 // fed into the canonical pendingTxs slice. The ApplyFlags also carries
 // the bit so TxQ.canBeHeld rejects the queue admission (TxQ.cpp:393-399).
 //
-// Lock ordering: openLedgerMu serializes submission with ledger transitions;
-// the service mutex is held only while capturing the current configuration and
-// dependencies. SubmitDetailed then acquires the TxQ mutex without holding the
-// service mutex.
+// Detached ingress owns one private execution slot. The open-ledger gate is
+// held only while capturing the published inputs and fencing the result.
 func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, failHard bool) (*SubmitResult, error) {
 	s.mu.RLock()
 	openLedgerView := s.openLedgerView
+	cfg, cfgErr := s.applyConfigLocked()
+	standalone := s.config.Standalone
 	s.mu.RUnlock()
 	if openLedgerView == nil {
 		return nil, svcerr.ErrNoOpenLedger
 	}
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	releaseAdmission, err := s.detachedIngress.acquire()
+	if err != nil {
+		return nil, err
+	}
+	defer releaseAdmission()
 	if rawBlob != nil {
 		if err := tx.BindRawBytes(transaction, rawBlob); err != nil {
 			return nil, err
 		}
 	}
 	blob := transaction.GetRawBytes()
-
-	s.mu.RLock()
-	cfg, cfgErr := s.applyConfigLocked()
-	standalone := s.config.Standalone
-	s.mu.RUnlock()
-	if cfgErr != nil {
-		return nil, cfgErr
-	}
 	// RPC ingress skips signature verification in standalone mode (the
 	// previous engine path did the same); the network path leaves it on.
 	cfg.SkipSignatureVerification = standalone
@@ -143,59 +144,85 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		signatureErr = txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
 		preprocessValid = signatureErr == nil
 	}
-	if preprocessValid && localReason == "" {
-		s.prefetchIngressState(ptx)
+	var validatedLedger *ledger.Ledger
+	var commitData detachedIngressCommitData
+	outcome, current, _, _, submitErr := s.submitDetachedIngressOwned(detachedIngressRequest{
+		pendingTx:             ptx,
+		initialRules:          initialRules,
+		signatureEligible:     signatureEligible,
+		initialSignatureCheck: initialSignatureCheck,
+		initialSignatureErr:   signatureErr,
+		prepare: func(ctx context.Context) {
+			if preprocessValid && localReason == "" {
+				s.prefetchIngressState(ctx, ptx)
+			}
+		},
+		verifySignature: func(rules *amendment.Rules) error {
+			err := txengine.PrewarmSignatureWithRules(ptx.Parsed, rules)
+			preprocessValid = err == nil
+			return err
+		},
+		localReason: localReason,
+		prepareCommit: func(current, validated *ledger.Ledger, txQueue *txq.TxQ, cfg openledger.ApplyConfig, outcome openledger.SubmitOutcome) detachedIngressCommitData {
+			data := detachedIngressCommitData{
+				proposed: s.prepareProposedTransaction(ptx, ptx.Blob, outcome, current),
+			}
+			if validated != nil {
+				data.ledgerState = s.submitLedgerState(current, ptx.Parsed, cfg, validated, txQueue)
+			}
+			return data
+		},
+		configure: func(cfg openledger.ApplyConfig) openledger.ApplyConfig {
+			cfg.SkipSignatureVerification = standalone
+			if failHard {
+				cfg.ApplyFlags |= tx.TapFAIL_HARD
+			}
+			return cfg
+		},
+		onCommit: func(current *ledger.Ledger, _ *txq.TxQ, localTxs *localtxs.LocalTxs, _ openledger.ApplyConfig, outcome openledger.SubmitOutcome, data detachedIngressCommitData) {
+			commitData = data
+			s.mu.RLock()
+			validatedLedger = s.validatedLedger
+			s.mu.RUnlock()
+			if validatedLedger != nil && commitData.ledgerState != nil {
+				commitData.ledgerState.ValidatedLedgerIndex = validatedLedger.Sequence()
+			}
+			if signatureEligible && localReason == "" && rawBlob != nil && localTxs != nil {
+				tr := outcome.Result
+				if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
+					localTxs.PushBack(current.Sequence(), ptx)
+				}
+			}
+			if outcome.Applied && rawBlob != nil {
+				s.pendingTxs = append(s.pendingTxs, ptx)
+			}
+			s.enqueueProposedTransaction(data.proposed)
+		},
+	})
+	if submitErr != nil {
+		var validationErr *detachedIngressValidationError
+		if errors.As(submitErr, &validationErr) {
+			currentSeq := uint32(0)
+			if current != nil {
+				currentSeq = current.Sequence()
+			}
+			switch validationErr.kind {
+			case detachedIngressSignatureFailure:
+				return &SubmitResult{
+					Result:        ter.TemBAD_SIGNATURE,
+					Message:       ter.TemBAD_SIGNATURE.Message(),
+					CurrentLedger: currentSeq,
+				}, nil
+			case detachedIngressLocalFailure:
+				return &SubmitResult{
+					Result:        ter.TemMALFORMED,
+					Message:       ter.TemMALFORMED.Message(),
+					CurrentLedger: currentSeq,
+				}, nil
+			}
+		}
+		return nil, submitErr
 	}
-
-	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
-		return nil, err
-	}
-	defer s.openLedgerMu.Unlock()
-	s.mu.RLock()
-	openLedgerView = s.openLedgerView
-	txQueue := s.txQueue
-	localTxs := s.localTxs
-	cfg, cfgErr = s.applyConfigLocked()
-	standalone = s.config.Standalone
-	s.mu.RUnlock()
-	if openLedgerView == nil {
-		return nil, svcerr.ErrNoOpenLedger
-	}
-	if cfgErr != nil {
-		return nil, cfgErr
-	}
-	cfg.SkipSignatureVerification = standalone
-	if failHard {
-		cfg.ApplyFlags |= tx.TapFAIL_HARD
-	}
-	if !signatureEligible {
-		preprocessValid = false
-		signatureErr = nil
-	} else if cfg.SkipSignatureVerification {
-		preprocessValid = true
-		signatureErr = nil
-	} else if !initialSignatureCheck || cfg.Rules != initialRules {
-		signatureErr = txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
-		preprocessValid = signatureErr == nil
-	}
-	currentBeforeSubmit := openLedgerView.Current()
-	if signatureErr != nil {
-		return &SubmitResult{
-			Result:        ter.TemBAD_SIGNATURE,
-			Message:       ter.TemBAD_SIGNATURE.Message(),
-			CurrentLedger: currentBeforeSubmit.Sequence(),
-		}, nil
-	}
-	if localReason != "" {
-		return &SubmitResult{
-			Result:        ter.TemMALFORMED,
-			Message:       ter.TemMALFORMED.Message(),
-			CurrentLedger: currentBeforeSubmit.Sequence(),
-		}, nil
-	}
-	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
-
-	current := openLedgerView.Current()
 	currentSeq := current.Sequence()
 	result := &SubmitResult{
 		Result:        outcome.Result,
@@ -205,53 +232,14 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		Message:       outcome.Message,
 		CurrentLedger: currentSeq,
 	}
-	s.mu.RLock()
-	validatedLedger := s.validatedLedger
-	s.mu.RUnlock()
 	if validatedLedger != nil {
 		result.ValidatedLedger = validatedLedger.Sequence()
-		result.CurrentLedgerState = s.submitLedgerState(current, ptx.Parsed, cfg, validatedLedger, txQueue)
+		result.CurrentLedgerState = commitData.ledgerState
 	}
 	if outcome.Class == openledger.ResultSuccess {
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
 	}
 
-	// LocalTxs push: rippled NetworkOPs.cpp:1674-1683 holds a locally-
-	// submitted tx whenever addLocal && !enforceFailHard, where
-	// enforceFailHard = (fail_hard && result != tesSUCCESS). RPC submit is
-	// always "local", so the hold condition reduces to
-	// (!fail_hard || result == tesSUCCESS). rippled does NOT filter by TER
-	// here — LocalTxsImp::push_back (LocalTxs.cpp:114-121) stores the blob
-	// unconditionally, and LocalTxs::sweep ages out impossible/expired
-	// entries after at most holdLedgers (5). So permanent failures
-	// (tef/tem/tel) are held too and test-applied on each rebuilt open
-	// ledger until they age out, matching rippled rather than pre-filtering
-	// them. The held pool coexists with TxQ exactly as in rippled (LocalTxs
-	// alongside TxQ).
-	//
-	// tefALREADY is the single exclusion: go-xrpl surfaces it from the
-	// open-view pre-filter for a tx already in the view, so re-holding it is
-	// pointless (sweep drops it next ledger via txExists).
-	//
-	// fail_hard short-circuits the hold on a non-applied tx: rippled's
-	// enforceFailHard (NetworkOPs.cpp:1674) suppresses both this push (1677)
-	// and relay (1685-1689) so the caller learns about the failure
-	// immediately without a delayed re-application.
-	if preprocessValid && rawBlob != nil && localTxs != nil {
-		tr := outcome.Result
-		if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
-			localTxs.PushBack(currentSeq, ptx)
-		}
-	}
-
-	// Standalone-mode close still drains pendingTxs
-	// for the canonical re-sort. Append on apply so the legacy path
-	// keeps working alongside the openLedgerView ingress.
-	if outcome.Applied && rawBlob != nil {
-		s.pendingTxs = append(s.pendingTxs, ptx)
-	}
-
-	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, current)
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}
@@ -332,25 +320,22 @@ func (s *Service) submitLedgerState(
 	}
 }
 
-// dispatchProposedTransaction publishes only transactions committed to the
-// open ledger. Callers hold s.openLedgerMu, which serializes local and peer
-// ingress with ledger acceptance before the shared publication FIFO.
-func (s *Service) dispatchProposedTransaction(
+func (s *Service) prepareProposedTransaction(
 	ptx openledger.PendingTx,
 	rawBlob []byte,
 	outcome openledger.SubmitOutcome,
 	current *ledger.Ledger,
-) {
+) *SubmittedTxEvent {
 	if !s.eventPublisher.hasSubmittedTxCallback() || rawBlob == nil || !outcome.Applied || current == nil ||
-		!mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
-		return
+		ptx.Parsed == nil || !mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
+		return nil
 	}
 	ownerFunds, _, err := proposedOwnerFunds(rawBlob, current)
 	if err != nil {
 		s.logger.Error("failed to compute proposed transaction owner funds", "hash", fmt.Sprintf("%X", ptx.Hash), "err", err)
-		return
+		return nil
 	}
-	s.eventPublisher.dispatchSubmittedTxEvent(SubmittedTxEvent{
+	return &SubmittedTxEvent{
 		RawBlob:          append([]byte(nil), rawBlob...),
 		TxHash:           ptx.Hash,
 		AffectedAccounts: extractMentionedAccounts(rawBlob),
@@ -362,7 +347,24 @@ func (s *Service) dispatchProposedTransaction(
 			Message: outcome.Message,
 			Applied: outcome.Applied,
 		},
-	})
+	}
+}
+
+func (s *Service) enqueueProposedTransaction(event *SubmittedTxEvent) {
+	if event != nil {
+		s.eventPublisher.dispatchSubmittedTxEvent(*event)
+	}
+}
+
+// dispatchProposedTransaction prepares and enqueues a committed transaction
+// for callers that already hold the publication fence.
+func (s *Service) dispatchProposedTransaction(
+	ptx openledger.PendingTx,
+	rawBlob []byte,
+	outcome openledger.SubmitOutcome,
+	current *ledger.Ledger,
+) {
+	s.enqueueProposedTransaction(s.prepareProposedTransaction(ptx, rawBlob, outcome, current))
 }
 
 func mayPublishProposedTransaction(flags uint32) bool {

@@ -50,6 +50,14 @@ func NewBlockProcessor(engine *Engine) *BlockProcessor {
 	}
 }
 
+// SetOffersConsideredCounter binds an optional per-transaction offer counter
+// to the engine used by this processor.
+func (bp *BlockProcessor) SetOffersConsideredCounter(counter *uint32) {
+	if bp != nil && bp.engine != nil {
+		bp.engine.SetOffersConsideredCounter(counter)
+	}
+}
+
 // ApplyTransaction applies a single transaction and returns the result.
 // It handles:
 // - Calling the engine to apply the transaction
