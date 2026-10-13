@@ -351,8 +351,7 @@ const ackPublishedCrashEnv = "GOXRPL_FLATSTATE_ACK_PUBLISHED_CRASH"
 
 func TestStoreAckPublishedOutboxProcessExitReplay(t *testing.T) {
 	if os.Getenv(ackPublishedCrashEnv) == "1" {
-		path := os.Getenv(ackPublishedCrashEnv + "_PATH")
-		store, err := Open(path, Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20})
+		store, err := Open(".", Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20})
 		if err != nil {
 			os.Exit(2)
 		}
@@ -368,7 +367,8 @@ func TestStoreAckPublishedOutboxProcessExitReplay(t *testing.T) {
 
 	path := t.TempDir()
 	command := exec.Command(os.Args[0], "-test.run=^TestStoreAckPublishedOutboxProcessExitReplay$")
-	command.Env = append(os.Environ(), ackPublishedCrashEnv+"=1", ackPublishedCrashEnv+"_PATH="+path)
+	command.Dir = path
+	command.Env = append(os.Environ(), ackPublishedCrashEnv+"=1")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("crash helper: %v\n%s", err, output)
 	}
