@@ -65,8 +65,9 @@ type Config struct {
 	MemoryBudget *membudget.Account
 	DiskBudget   *membudget.Account
 
-	// MaxMemoryBytes bounds the package's managed in-memory state and temporary
-	// read workspace. Zero means no package-local ceiling.
+	// MaxMemoryBytes bounds the package's managed in-memory state and ordinary
+	// temporary record workspace. Optional spill read windows enabled on a
+	// ChangeIterator are charged to the caller-provided workspace instead.
 	MaxMemoryBytes uint64
 	// MaxDiskBytes bounds all live spill-file bytes, including files shared by
 	// forks and snapshots. Zero disables spilling.

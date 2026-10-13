@@ -297,6 +297,53 @@ type ChangeIterator struct {
 	lastErr   error
 }
 
+func (it *ChangeIterator) releaseReadBuffersLocked() {
+	for _, cursor := range it.cursors {
+		if windowCursor, ok := cursor.(*segmentCursor); ok {
+			windowCursor.releaseReadWindow()
+		}
+	}
+}
+
+// EnableReadBuffers enables optional sequential spill-file windows. Window
+// admission is non-blocking and falls back to direct reads when the supplied
+// workspace is full. The windows are charged to that workspace, separately
+// from the overlay's MaxMemoryBytes admission.
+func (it *ChangeIterator) EnableReadBuffers(workspace readWindowBudget) {
+	if it == nil {
+		return
+	}
+	it.mu.Lock()
+	defer it.mu.Unlock()
+	if it.closed {
+		return
+	}
+	if workspace == nil {
+		for _, cursor := range it.cursors {
+			if windowCursor, ok := cursor.(*segmentCursor); ok {
+				windowCursor.enableReadWindow(nil)
+			}
+		}
+		return
+	}
+	for _, cursor := range it.cursors {
+		if windowCursor, ok := cursor.(*segmentCursor); ok {
+			windowCursor.enableReadWindow(workspace)
+		}
+	}
+}
+
+// ReleaseReadBuffers evicts optional spill-file windows and releases their
+// workspace admission. It does not affect the current frontier values.
+func (it *ChangeIterator) ReleaseReadBuffers() {
+	if it == nil {
+		return
+	}
+	it.mu.Lock()
+	it.releaseReadBuffersLocked()
+	it.mu.Unlock()
+}
+
 func newChangeIterator(ctx context.Context, v view, after *[32]byte, includeBase bool) (*ChangeIterator, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -330,6 +377,7 @@ func (it *ChangeIterator) Next(ctx context.Context) (change Change, done bool, e
 		return Change{}, false, it.lastErr
 	}
 	if err := ctx.Err(); err != nil {
+		it.releaseReadBuffersLocked()
 		it.lastErr = err
 		return Change{}, false, err
 	}
@@ -343,6 +391,7 @@ func (it *ChangeIterator) Next(ctx context.Context) (change Change, done bool, e
 		}
 	}
 	if lowest < 0 {
+		it.releaseReadBuffersLocked()
 		return Change{}, true, nil
 	}
 	key := it.items[lowest].key
@@ -361,6 +410,7 @@ func (it *ChangeIterator) Next(ctx context.Context) (change Change, done bool, e
 	for i := range it.items {
 		if it.items[i].valid && it.items[i].key == key {
 			if advanceErr := advanceItem(ctx, it.cursors[i], &it.items[i]); advanceErr != nil {
+				it.releaseReadBuffersLocked()
 				it.lastErr = advanceErr
 				return Change{}, false, advanceErr
 			}

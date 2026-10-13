@@ -619,11 +619,12 @@ const (
 // inside BuildChanges would retain that builder's output charge and could
 // deadlock the shared workspace waiting for its own callback to return.
 type executionCommitmentSink struct {
-	ctx     context.Context
-	family  shamap.Family
-	budget  shamap.DirtyMemoryBudget
-	entries []shamap.FlushEntry
-	charged uint64
+	ctx                context.Context
+	family             shamap.Family
+	budget             shamap.DirtyMemoryBudget
+	entries            []shamap.FlushEntry
+	charged            uint64
+	releaseReadBuffers func()
 }
 
 func newExecutionCommitmentSink(ctx context.Context, family shamap.Family, budget shamap.DirtyMemoryBudget) *executionCommitmentSink {
@@ -663,6 +664,9 @@ func (s *executionCommitmentSink) add(entry shamap.FlushEntry) error {
 }
 
 func (s *executionCommitmentSink) flush() error {
+	if s.releaseReadBuffers != nil {
+		s.releaseReadBuffers()
+	}
 	if len(s.entries) == 0 {
 		return nil
 	}
@@ -687,7 +691,12 @@ func (s *executionCommitmentSink) release() {
 	s.charged = 0
 }
 
-func (s *executionCommitmentSink) abort() { s.release() }
+func (s *executionCommitmentSink) abort() {
+	if s.releaseReadBuffers != nil {
+		s.releaseReadBuffers()
+	}
+	s.release()
+}
 
 func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 	if ctx == nil {
@@ -722,6 +731,9 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	defer changes.Close()
+	if t.store.config.Workspace != nil {
+		changes.EnableReadBuffers(t.store.config.Workspace)
+	}
 	var payloadBytes uint64
 	next := func() (shamap.Change, error) {
 		change, done, err := changes.Next(ctx)
@@ -745,6 +757,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		return out, nil
 	}
 	sink := newExecutionCommitmentSink(ctx, t.store.config.Family, t.store.config.Workspace)
+	sink.releaseReadBuffers = changes.ReleaseReadBuffers
 	t.store.stats.builds.Add(1)
 	started := time.Now()
 	defer func() { t.store.stats.buildNanos.Add(uint64(time.Since(started))) }()

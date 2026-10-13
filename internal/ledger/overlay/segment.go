@@ -514,21 +514,33 @@ func (e segmentOpenError) Unwrap() error {
 }
 
 type segmentCursor struct {
-	segment     *spillSegment
-	owner       *budget
-	file        *os.File
-	closeFile   bool
-	readerSlot  bool
-	heldSegment bool
-	offset      int64
-	after       [32]byte
-	hasAfter    bool
-	last        [32]byte
-	hasLast     bool
-	pending     [32 + 1 + 8]byte
-	hasPending  bool
-	current     uint64
-	closed      bool
+	segment      *spillSegment
+	owner        *budget
+	file         *os.File
+	closeFile    bool
+	readerSlot   bool
+	heldSegment  bool
+	offset       int64
+	after        [32]byte
+	hasAfter     bool
+	last         [32]byte
+	hasLast      bool
+	pending      [32 + 1 + 8]byte
+	hasPending   bool
+	current      uint64
+	closed       bool
+	readBudget   readWindowBudget
+	readWindow   []byte
+	windowStart  int64
+	windowEnd    int64
+	windowCharge uint64
+}
+
+const segmentReadWindowBytes = uint64(32 << 10)
+
+type readWindowBudget interface {
+	TryReserve(uint64) bool
+	Release(uint64)
 }
 
 func openSegmentCursor(ctx context.Context, owner *budget, segment *spillSegment, after *[32]byte) (*segmentCursor, error) {
@@ -610,10 +622,100 @@ func (c *segmentCursor) readAt(data []byte, offset int64) (int, error) {
 	if len(data) == 0 {
 		return 0, nil
 	}
+	if c.readWindow != nil && offset >= c.windowStart && offset <= c.windowEnd {
+		end := offset + int64(len(data))
+		if end >= offset && end <= c.windowEnd {
+			copy(data, c.readWindow[offset-c.windowStart:end-c.windowStart])
+			return len(data), nil
+		}
+	}
+	return c.readDirect(data, offset)
+}
+
+func (c *segmentCursor) readDirect(data []byte, offset int64) (int, error) {
 	if c.file != nil {
 		return readAtFull(c.file, data, offset)
 	}
 	return readPathAt(c.segment.path, data, offset)
+}
+
+func (c *segmentCursor) enableReadWindow(budget readWindowBudget) {
+	if c == nil || c.closed {
+		return
+	}
+	if c.readBudget != nil {
+		c.releaseReadWindow()
+	}
+	c.readBudget = budget
+}
+
+func (c *segmentCursor) releaseReadWindow() {
+	if c == nil {
+		return
+	}
+	if c.windowCharge != 0 && c.readBudget != nil {
+		c.readBudget.Release(c.windowCharge)
+	}
+	c.readWindow = nil
+	c.windowStart = 0
+	c.windowEnd = 0
+	c.windowCharge = 0
+}
+
+func (c *segmentCursor) fillReadWindow(offset int64) {
+	if c == nil || c.closed || c.readBudget == nil || offset < 0 || uint64(offset) >= c.segment.size {
+		return
+	}
+	if c.readWindow != nil && offset >= c.windowStart && offset <= c.windowEnd {
+		if c.windowEnd-offset >= int64(recordHeaderSize) {
+			return
+		}
+	}
+	remaining := c.segment.size - uint64(offset)
+	if remaining < recordHeaderSize {
+		return
+	}
+	windowLen := remaining
+	if windowLen > segmentReadWindowBytes {
+		windowLen = segmentReadWindowBytes
+	}
+	if windowLen > uint64(maxInt()) {
+		return
+	}
+	if c.readWindow != nil && windowLen <= uint64(cap(c.readWindow)) {
+		window := c.readWindow[:int(windowLen)]
+		read, err := c.readDirect(window, offset)
+		if read == 0 && err != nil {
+			c.releaseReadWindow()
+			return
+		}
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			c.releaseReadWindow()
+			return
+		}
+		c.readWindow = window[:read]
+		c.windowStart = offset
+		c.windowEnd = offset + int64(read)
+		return
+	}
+	c.releaseReadWindow()
+	if !c.readBudget.TryReserve(windowLen) {
+		return
+	}
+	window := make([]byte, int(windowLen))
+	read, err := c.readDirect(window, offset)
+	if read == 0 && err != nil {
+		c.readBudget.Release(windowLen)
+		return
+	}
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		c.readBudget.Release(windowLen)
+		return
+	}
+	c.readWindow = window[:read]
+	c.windowStart = offset
+	c.windowEnd = offset + int64(read)
+	c.windowCharge = windowLen
 }
 
 func (c *segmentCursor) seekKey(key [32]byte) error {
@@ -633,6 +735,7 @@ func (c *segmentCursor) seekKey(key [32]byte) error {
 	c.offset = best
 	c.hasLast = false
 	c.hasPending = false
+	c.releaseReadWindow()
 	c.releaseCurrent()
 	return nil
 }
@@ -681,7 +784,9 @@ func (c *segmentCursor) readRecordHeader() (key [32]byte, flag byte, valueLen ui
 	if c.hasPending {
 		header = c.pending
 		c.hasPending = false
+		c.fillReadWindow(c.offset)
 	} else {
+		c.fillReadWindow(c.offset)
 		n, readErr := c.readAt(header[:], c.offset)
 		if readErr == io.EOF && n == 0 {
 			return key, 0, 0, c.offset, fmt.Errorf("%w: record header: unexpected end of segment", ErrCorruptSegment)
@@ -708,6 +813,9 @@ func (c *segmentCursor) readRecordHeader() (key [32]byte, flag byte, valueLen ui
 }
 
 func (c *segmentCursor) reserveRecordBuffer(valueOffset int64, valueLen uint64) (charge, lookahead uint64, ok bool) {
+	if c.readWindow != nil {
+		return c.reserveExactRecordBuffer(valueLen)
+	}
 	if valueOffset >= 0 && uint64(valueOffset) <= c.segment.size {
 		remaining := c.segment.size - uint64(valueOffset)
 		if valueLen <= remaining {
@@ -763,6 +871,7 @@ func (c *segmentCursor) close() error {
 		return nil
 	}
 	c.closed = true
+	c.releaseReadWindow()
 	c.releaseCurrent()
 	var first error
 	if c.closeFile && c.file != nil {
