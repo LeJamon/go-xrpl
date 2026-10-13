@@ -34,9 +34,10 @@ func TestResolveMemTableSize(t *testing.T) {
 		want    int64
 	}{
 		{name: "default", options: Options{}, want: 64 << 20},
-		{name: "tiny cache", options: Options{BlockCacheBytes: 32 << 10}, want: 64 << 10},
-		{name: "8 MiB cache", options: Options{BlockCacheBytes: 8 << 20}, want: 2 << 20},
-		{name: "32 MiB cache", options: Options{BlockCacheBytes: 32 << 20}, want: 8 << 20},
+		{name: "below minimum cache", options: Options{BlockCacheBytes: 32 << 10}, want: 1 << 20},
+		{name: "128 KiB cache", options: Options{BlockCacheBytes: 128 << 10}, want: 1 << 20},
+		{name: "8 MiB cache", options: Options{BlockCacheBytes: 8 << 20}, want: 4 << 20},
+		{name: "32 MiB cache", options: Options{BlockCacheBytes: 32 << 20}, want: 16 << 20},
 		{name: "large cache", options: Options{BlockCacheBytes: 1 << 30}, want: 64 << 20},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -192,14 +193,14 @@ func TestMakePebbleOptions(t *testing.T) {
 	}
 }
 
-func TestTinyCacheRetainsBlockCacheAfterFlush(t *testing.T) {
-	const blockCacheBytes = int64(256 << 10)
+func TestConfiguredCacheRetainsBlockCacheAfterFlush(t *testing.T) {
+	const blockCacheBytes = int64(8 << 20)
 	options := Options{BlockCacheBytes: blockCacheBytes, MaxOpenFiles: MinimumOpenFiles}
 	cache := cockroachpebble.NewCache(blockCacheBytes)
 	defer cache.Unref()
 	dbOptions := makePebbleOptions(options, cache)
-	if dbOptions.MemTableSize != uint64(64<<10) {
-		t.Fatalf("MemTableSize = %d, want %d", dbOptions.MemTableSize, 64<<10)
+	if dbOptions.MemTableSize != uint64(4<<20) {
+		t.Fatalf("MemTableSize = %d, want %d", dbOptions.MemTableSize, 4<<20)
 	}
 	db, err := cockroachpebble.Open(t.TempDir(), dbOptions)
 	if err != nil {

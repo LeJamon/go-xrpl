@@ -21,9 +21,12 @@ const (
 	// MinimumRotatingOpenFiles is the smallest steady-state total for two generations.
 	MinimumRotatingOpenFiles = 2 * MinimumOpenFiles
 
-	memTableSize                = 64 << 20
-	minimumMemTableSize         = 64 << 10
-	memTableCacheDivisor        = 4
+	memTableSize = 64 << 20
+	// A small cache can be fully reserved by Pebble memtables. Keep a
+	// reasonable minimum WAL batch for write liveness; very small caches do
+	// not retain a guaranteed block-cache capacity.
+	minimumMemTableSize         = 1 << 20
+	memTableCacheDivisor        = 2
 	memTableStopWritesThreshold = 4
 	l0CompactionThreshold       = 4
 	l0StopWritesThreshold       = 20
@@ -40,7 +43,8 @@ const (
 // Zero values select the package defaults.
 type Options struct {
 	// BlockCacheBytes is the block-cache capacity. A rotating store shares this
-	// cache across both generations.
+	// cache across both generations. Effective memtables may reserve up to half
+	// of it; very small caches therefore do not guarantee block-cache capacity.
 	BlockCacheBytes int64
 	// MaxOpenFiles is the open-file soft limit. A rotating store divides this
 	// steady-state total evenly across both generations.
@@ -98,7 +102,8 @@ func (o Options) Resolve() (Options, error) {
 // shared by rotating generations and is therefore counted once; each open
 // generation contributes its effective memtable allowance. A rotation opens
 // a third generation transiently, so callers may pass 3 while reserving that
-// transition and 2 for the steady state.
+// transition and 2 for the steady state. For very small caches, the minimum
+// memtable target intentionally takes precedence over block-cache residency.
 func (o Options) MemoryCommitment(generations int) (uint64, error) {
 	if generations <= 0 {
 		return 0, errors.New("kvstore/pebble: open generation count must be positive")
