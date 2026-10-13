@@ -15,15 +15,15 @@ func TestCleanResidencyReleaseAcrossPendingForks(t *testing.T) {
 	base, err := NewBacked(TypeState, family)
 	require.NoError(t, err)
 
-	values := []map[[32]byte][]byte{{
-		{0xF0}: bytes.Repeat([]byte{0xA0}, 12),
-	}}
+	values := make([]map[[32]byte][]byte, 1, 9)
+	values[0] = map[[32]byte][]byte{{0xF0}: bytes.Repeat([]byte{0xA0}, 12)}
 	require.NoError(t, base.Put([32]byte{0xF0}, values[0][[32]byte{0xF0}]))
 	require.NoError(t, base.StoreDirty(func(entries []FlushEntry) error {
 		return family.StoreBatch(t.Context(), entries)
 	}))
 
-	roots := []*SHAMap{base}
+	roots := make([]*SHAMap, 1, 9)
+	roots[0] = base
 	latest := base
 	for i := range 8 {
 		fork, forkErr := latest.MutableFork()
