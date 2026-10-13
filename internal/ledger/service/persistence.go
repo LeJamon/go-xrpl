@@ -97,7 +97,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 
 	if persistErr == nil && updateTip && s.config.FlatState != nil {
 		id := flatstate.SemanticCommitID(l.Hash(), ledgerPublication)
-		persistErr = s.config.FlatState.AckOutbox(ctx, id)
+		persistErr = s.config.FlatState.AckPublishedOutbox(ctx, id)
 		if persistErr == nil {
 			persistErr = s.refreshFlatRootPins(ctx)
 		}

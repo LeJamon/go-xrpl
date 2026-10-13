@@ -105,7 +105,7 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 			}); err != nil {
 				return err
 			}
-			if err := flat.AckOutbox(ctx, flatstate.SemanticCommitID(target.LedgerHash, "state-memory-benchmark")); err != nil {
+			if err := flat.AckPublishedOutbox(ctx, flatstate.SemanticCommitID(target.LedgerHash, "state-memory-benchmark")); err != nil {
 				return err
 			}
 			flatAdvances.Add(1)

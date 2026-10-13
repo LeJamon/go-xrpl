@@ -287,7 +287,7 @@ func (s *Service) replayFlatOutbox(ctx context.Context) error {
 		if err := s.persistValidatedTipLocked(ctx, l, true); err != nil {
 			return err
 		}
-		if err := s.config.FlatState.AckOutbox(ctx, record.CommitID); err != nil {
+		if err := s.config.FlatState.AckPublishedOutbox(ctx, record.CommitID); err != nil {
 			return err
 		}
 	}
