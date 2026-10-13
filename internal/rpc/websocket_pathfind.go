@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -63,16 +64,24 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ct
 			"No closed ledger available")
 	}
 	session.setSearchLevelMax(ctx.Services.Capabilities().PathSearchMax)
-	view, err := ctx.Services.LedgerViews().GetClosedLedgerView()
+	var view types.LedgerStateView
+	var err error
+	if source, ok := ctx.Services.LedgerViews().(types.ContextClosedLedgerViewSource); ok {
+		view, err = source.GetClosedLedgerViewContext(ctx.Context)
+	} else {
+		view, err = ctx.Services.LedgerViews().GetClosedLedgerView()
+	}
 	if err != nil {
+		closePathFindView(view)
 		return nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")
 	}
+	defer closePathFindView(view)
 
 	event := session.Execute(view, false)
 
 	wsConn.installPathFindSession(session)
-	ws.queuePathFindSessions(currentPathFindView(ctx.Services), wsConn)
+	ws.queuePathFindSessionsContext(currentPathFindViewContext(ctx.Services), wsConn)
 
 	return event, nil
 }
@@ -105,10 +114,40 @@ func (ws *WebSocketServer) executePathFindStatus(wsConn *websocketConnection, _ 
 // asynchronous refresh generation. The ledger-close callback must not perform
 // ledger-view acquisition or path computation itself.
 func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerStateView, error)) {
-	ws.queuePathFindSessions(getView, nil)
+	ws.queuePathFindSessionsContext(func(ctx context.Context) (types.LedgerStateView, error) {
+		if getView == nil {
+			return nil, nil
+		}
+		view, err := getView()
+		if err != nil {
+			return view, err
+		}
+		if _, leased := view.(types.LedgerReadCloser); leased || ws.services == nil {
+			return view, nil
+		}
+		if source, ok := ws.services.LedgerViews().(types.ContextClosedLedgerViewSource); ok {
+			return source.GetClosedLedgerViewContext(ctx)
+		}
+		return view, nil
+	}, nil)
+}
+
+// UpdatePathFindSessionsContext is the lease-aware variant used by runtime
+// callers that can provide a context-aware ledger view source.
+func (ws *WebSocketServer) UpdatePathFindSessionsContext(getView func(context.Context) (types.LedgerStateView, error)) {
+	ws.queuePathFindSessionsContext(getView, nil)
 }
 
 func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerStateView, error), additional *websocketConnection) {
+	ws.queuePathFindSessionsContext(func(context.Context) (types.LedgerStateView, error) {
+		if getView == nil {
+			return nil, nil
+		}
+		return getView()
+	}, additional)
+}
+
+func (ws *WebSocketServer) queuePathFindSessionsContext(getView func(context.Context) (types.LedgerStateView, error), additional *websocketConnection) {
 	manager := ws.ensurePathFindRefreshManager()
 	ws.connectionsMutex.RLock()
 	var targets []pathFindUpdateTarget
@@ -128,15 +167,22 @@ func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerSta
 		}
 	}
 
-	manager.enqueue(getView, targets)
+	manager.enqueueContext(getView, targets)
 }
 
-func currentPathFindView(services *types.ServiceGraph) func() (types.LedgerStateView, error) {
-	return func() (types.LedgerStateView, error) {
+func currentPathFindViewContext(services *types.ServiceGraph) func(context.Context) (types.LedgerStateView, error) {
+	return func(ctx context.Context) (types.LedgerStateView, error) {
 		ledger := services.Ledger()
+		if source, ok := ledger.(types.ContextLedgerViewSource); ok {
+			view, _, err := source.GetLedgerViewBySeqContext(ctx, ledger.GetCurrentLedgerIndex())
+			return view, err
+		}
 		if source, ok := ledger.(types.LedgerViewSource); ok {
 			view, _, err := source.GetLedgerViewBySeq(ledger.GetCurrentLedgerIndex())
 			return view, err
+		}
+		if source, ok := services.LedgerViews().(types.ContextClosedLedgerViewSource); ok {
+			return source.GetClosedLedgerViewContext(ctx)
 		}
 		return services.LedgerViews().GetClosedLedgerView()
 	}

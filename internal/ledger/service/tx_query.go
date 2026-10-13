@@ -764,6 +764,9 @@ func (s *Service) getHistoricalTransaction(txHash [32]byte) (*TransactionResult,
 		return nil, svcerr.ErrLedgerNotFound
 	}
 
+	if s.config.FlatState != nil && l.IsValidated() && !s.hasCompleteLedger(l) {
+		return nil, svcerr.ErrLedgerNotFound
+	}
 	// Get the transaction data
 	txData, found, err := l.GetTransaction(txHash)
 	if err != nil {
@@ -896,14 +899,11 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		return nil, svcerr.ErrNoOpenLedger
 	}
 
-	// Create a snapshot of the open ledger's state map for isolation
-	snapshot, err := current.StateMapSnapshot()
+	simView, err := current.MutableSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
 	}
-
-	// Create a temporary ledger view backed by the snapshot
-	simView := newSnapshotView(snapshot, current)
+	defer simView.Discard()
 
 	// Read fee settings from the FeeSettings SLE in the open ledger
 	simBaseFee, simReserveBase, simReserveIncrement := readFeesFromLedger(current)

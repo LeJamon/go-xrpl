@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
+	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -22,7 +23,7 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	releaseAdmission, err := s.acquireExecutionWork(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -66,7 +67,17 @@ func (s *Service) acceptConsensusResult(
 	// Every frontier transition replaces openLedger, including a switch away
 	// and back to the same parent. Its identity fences detached publication.
 	expectedClosed, expectedOpen, replay := s.closedLedger, s.openLedger, s.startupReplay
+	var releaseParent func()
+	if expectedClosed != nil {
+		releaseParent, err = s.config.Execution.AcquireRoot(rootlease.Root{Hash: expectedClosed.Header().AccountHash, Kind: shamap.TypeState})
+	}
 	s.mu.RUnlock()
+	if err != nil {
+		return 0, err
+	}
+	if releaseParent != nil {
+		defer releaseParent()
+	}
 	if expectedClosed == nil {
 		return 0, svcerr.ErrNoClosedLedger
 	}
@@ -140,6 +151,7 @@ func (s *Service) acceptConsensusResult(
 		closeTime = closed.CloseTime()
 		closeTimeCorrect = closed.Header().CloseFlags&header.LCFNoConsensusTime == 0
 	}
+	defer closed.Discard()
 
 	timings.build = time.Since(buildStarted)
 
@@ -223,7 +235,7 @@ func (s *Service) acceptConsensusResult(
 
 		s.pendingTxs = nil
 		if replay != nil {
-			s.startupReplay = nil
+			s.releaseStartupReplayLocked()
 		}
 
 		// Validated entry wins the by-seq map; closedLedger still reflects the local

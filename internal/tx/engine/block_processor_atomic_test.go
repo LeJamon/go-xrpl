@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -30,14 +31,16 @@ func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatalf("create genesis ledger: %v", err)
 	}
+	t.Cleanup(parent.Discard)
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
 	}
+	t.Cleanup(view.Discard)
 
 	accountID, err := state.DecodeAccountID(recoveryTestAccount)
 	if err != nil {
@@ -101,36 +104,43 @@ func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 	}
 }
 
-func TestBlockProcessor_StagingDoesNotFlushBackedSHAMaps(t *testing.T) {
+func TestBlockProcessor_StagingDoesNotWriteCommitments(t *testing.T) {
 	genesisResult, err := genesis.Create(genesis.DefaultConfig())
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	family := backend.NewMemory()
+	t.Cleanup(func() { _ = family.Close() })
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, family))
 	if err != nil {
 		t.Fatalf("create genesis ledger: %v", err)
 	}
+	t.Cleanup(parent.Discard)
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
 	}
-	family := backend.NewMemory()
+	t.Cleanup(view.Discard)
 	family.SetMinimumLedgerSeq(view.Sequence() + 1)
-	view.SetStateMapFamily(family)
-	if _, err := view.MutableSnapshot(); !errors.Is(err, backend.ErrStoreBelowMinimum) {
-		t.Fatalf("flushing snapshot error = %v, want %v", err, backend.ErrStoreBelowMinimum)
+	snapshot, err := view.MutableSnapshot()
+	if err != nil {
+		t.Fatalf("snapshot requires a commitment write: %v", err)
 	}
+	snapshot.Discard()
 
 	bp := NewBlockProcessor(recoveryEngine(view, txcore.TapNONE))
 	result, err := bp.ApplyTransaction(successfulRecoveryTx{recoveryTx(10, 1)}, []byte{0x12, 0x03})
 	if err != nil {
-		t.Fatalf("apply with backed SHAMap: %v", err)
+		t.Fatalf("apply with commitment writes blocked: %v", err)
 	}
 	if !result.ApplyResult.Applied {
 		t.Fatalf("transaction result = %s, want applied", result.ApplyResult.Result)
 	}
 	if view.TxCount() != 1 || !blockProcessorTxExists(t, view, result.Hash) {
 		t.Fatal("applied transaction was not committed atomically")
+	}
+	if _, err := view.StateMapHash(); !errors.Is(err, backend.ErrStoreBelowMinimum) {
+		t.Fatalf("commitment error = %v, want %v", err, backend.ErrStoreBelowMinimum)
 	}
 }
 
@@ -161,14 +171,16 @@ func TestBlockProcessor_ApplyTransactionCommitsOnlyBatchOuter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(parent.Discard)
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(view.Discard)
 
 	inner1 := successfulRecoveryTx{recoveryTx(0, 2)}
 	inner2 := successfulRecoveryTx{recoveryTx(0, 3)}
@@ -206,14 +218,16 @@ func TestBlockProcessor_CommitsBatchInnerLeavesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(parent.Discard)
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(view.Discard)
 
 	inner1 := successfulRecoveryTx{recoveryTx(0, 2)}
 	inner2 := successfulRecoveryTx{recoveryTx(0, 3)}
@@ -245,14 +259,16 @@ func TestBlockProcessor_InnerMetadataSerializationFailureIsAtomic(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatalf("create genesis ledger: %v", err)
 	}
+	t.Cleanup(parent.Discard)
 	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
 	}
+	t.Cleanup(view.Discard)
 
 	accountID, err := state.DecodeAccountID(recoveryTestAccount)
 	if err != nil {

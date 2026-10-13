@@ -260,11 +260,11 @@ func TestOnlineDeleteRefreshPromotionMetricsReportCancellationDuringPersistence(
 	svc, db, seq := newRotatingRefreshFixture(t, 256)
 	root, err := svc.GetValidatedLedger().StateMapHash()
 	require.NoError(t, err)
-	db.storeBatchStart = make(chan struct{})
-	db.storeBatchResume = make(chan struct{})
+	db.headerStoreStart = make(chan struct{})
+	db.headerStoreResume = make(chan struct{})
 	db.promotionStart = make(chan struct{})
 	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(db.storeBatchResume) }) }
+	release := func() { releaseOnce.Do(func() { close(db.headerStoreResume) }) }
 	t.Cleanup(release)
 
 	next := buildLedgerWithState(t, seq+1)
@@ -272,7 +272,7 @@ func TestOnlineDeleteRefreshPromotionMetricsReportCancellationDuringPersistence(
 	go func() {
 		persistDone <- svc.persistToNodeStore(t.Context(), next, next.Sequence())
 	}()
-	<-db.storeBatchStart
+	<-db.headerStoreStart
 
 	capture, logger := newVerificationLogCapture()
 	svc.logger = logger

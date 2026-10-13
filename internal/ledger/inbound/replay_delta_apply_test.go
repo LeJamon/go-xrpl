@@ -34,6 +34,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	defer open.Discard()
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -52,6 +53,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, parent *ledger.Ledger) (*me
 func armReplayDeltaWith(t *testing.T, parent *ledger.Ledger, resp *message.ReplayDeltaResponse, hdr header.LedgerHeader) *ReplayDelta {
 	t.Helper()
 	rd := NewReplayDelta(hdr.Hash, 7, parent, nil)
+	t.Cleanup(rd.ReleaseMemory)
 	require.NoError(t, rd.GotResponse(resp))
 	require.Equal(t, StateReplayReady, rd.State())
 	return rd
@@ -72,6 +74,7 @@ func TestReplayDelta_Apply_EmptyTxSet(t *testing.T) {
 	derived, err := rd.Apply(tx.EngineConfig{})
 	require.NoError(t, err)
 	require.NotNil(t, derived)
+	t.Cleanup(derived.Discard)
 
 	assert.Equal(t, hdr.Hash, derived.Hash(), "derived ledger hash must match verified header")
 	assert.Equal(t, hdr.LedgerIndex, derived.Sequence())
@@ -163,7 +166,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	// the loop in Apply we need them in that sorted order; the test
 	// asserts the FIRST tx encountered is the one with Index 0 (whose
 	// TxBytes is a unique sentinel).
-	// Stitch a minimal valid result header into r.result so Apply has
+	// Stitch a minimal valid result header into the replay so Apply has
 	// the seq / parent-linkage / closeTime fields it needs. Reuse
 	// parent's values; the successor is a notional seq = parent.seq+1.
 	resHdr := parent.Header()
@@ -175,12 +178,9 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateReplayReady
-	stateMap, err := parent.StateMapSnapshot()
-	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
 	require.NoError(t, err)
-	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.Fees())
-	require.NoError(t, err)
+	rd.target, rd.targetTx = resHdr, txMap
 	// Purposely-malformed TxBytes — distinguishable per index so the
 	// returned error tells us which tx Apply tried first.
 	rd.txs = []DecodedTx{
@@ -233,8 +233,6 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	resHdr.ParentHash = parent.Hash()
 	resHdr.ParentCloseTime = parent.CloseTime()
 	resHdr.CloseTime = parent.CloseTime().Add(10 * time.Second)
-	stateMap, err := parent.StateMapSnapshot()
-	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
 	require.NoError(t, err)
 
@@ -244,6 +242,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 		Build()
 	preview, err := ledger.NewOpen(parent, resHdr.CloseTime)
 	require.NoError(t, err)
+	t.Cleanup(preview.Discard)
 	previewConfig := tx.EngineConfig{
 		BaseFee:                   10,
 		ReserveBase:               200_000_000,
@@ -272,8 +271,7 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateReplayReady
-	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.Fees())
-	require.NoError(t, err)
+	rd.target, rd.targetTx = resHdr, txMap
 	rd.txs = []DecodedTx{{
 		Index:     0,
 		Hash:      outerHash,
@@ -331,6 +329,7 @@ func TestReplayDelta_Apply_RejectsBatchInnerMetadataMismatch(t *testing.T) {
 		Build()
 	preview, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(preview.Discard)
 	previewConfig := tx.EngineConfig{
 		BaseFee:                   10,
 		ReserveBase:               200_000_000,
@@ -420,6 +419,7 @@ func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(open.Discard)
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -468,6 +468,7 @@ func TestReplayDelta_RetryUsesFreshVerifiedReplay(t *testing.T) {
 
 	retry, err := rd.Retry(parent)
 	require.NoError(t, err)
+	t.Cleanup(retry.ReleaseMemory)
 	require.NotNil(t, retry)
 	assert.NotSame(t, rd, retry)
 	assert.Equal(t, StateReplayReady, retry.State())
@@ -477,6 +478,7 @@ func TestReplayDelta_RetryUsesFreshVerifiedReplay(t *testing.T) {
 
 	derived, err := retry.Apply(tx.EngineConfig{})
 	require.NoError(t, err)
+	t.Cleanup(derived.Discard)
 	assert.Equal(t, hdr.Hash, derived.Hash())
 }
 

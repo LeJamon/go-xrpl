@@ -66,6 +66,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if lerr != nil {
 		return nil, lerr
 	}
+	defer closeLedgerLease(targetLedger)
 
 	if request.Full || request.Accounts {
 		if !ctx.Role.IsUnlimited() {
@@ -103,6 +104,11 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if request.OwnerFunds && request.Expand {
 		ownerFundsAnnotator = &ledgerOwnerFundsAnnotator{ctx: ctx, ledger: targetLedger}
 	}
+	defer func() {
+		if ownerFundsAnnotator != nil {
+			closeLedgerLease(ownerFundsAnnotator.view)
+		}
+	}()
 
 	if request.Transactions {
 		var txList []any
@@ -386,14 +392,18 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *rpcerrors.RpcError
 }
 
 func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.RpcError) {
-	closed, err := ctx.Services.Ledger().GetLedgerBySequence(ctx.Services.Ledger().GetClosedLedgerIndex())
+	closed, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), ctx.Services.Ledger().GetClosedLedgerIndex())
 	if err != nil || closed == nil {
+		closeLedgerLease(closed)
 		return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
-	open, err := ctx.Services.Ledger().GetLedgerBySequence(ctx.Services.Ledger().GetCurrentLedgerIndex())
+	defer closeLedgerLease(closed)
+	open, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), ctx.Services.Ledger().GetCurrentLedgerIndex())
 	if err != nil || open == nil {
+		closeLedgerLease(open)
 		return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
+	defer closeLedgerLease(open)
 	return map[string]any{
 		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
 		"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
@@ -402,25 +412,49 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.Rp
 
 // resolvedLedgerStateView uses the selected ledger for state-dependent RPC fields.
 func resolvedLedgerStateView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
+	if view, ok := l.(types.LedgerStateView); ok {
+		return view, nil
+	}
 	src, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
 		return nil, errors.New("ledger service does not expose state views")
 	}
+	contextSrc, contextOK := ctx.Services.Ledger().(types.ContextLedgerViewSource)
 	if l.IsClosed() {
-		view, _, err := src.GetLedgerViewByHash(l.Hash())
+		var view types.LedgerStateView
+		var reader types.LedgerReader
+		var err error
+		if contextOK {
+			view, reader, err = contextSrc.GetLedgerViewByHashContext(ctx.Context, l.Hash())
+		} else {
+			view, reader, err = src.GetLedgerViewByHash(l.Hash())
+		}
 		if err != nil {
+			closeLedgerLease(view)
+			closeLedgerLease(reader)
 			return nil, err
 		}
 		if view == nil {
+			closeLedgerLease(reader)
 			return nil, errors.New("ledger view lookup returned nil")
 		}
 		return view, nil
 	}
-	view, _, err := src.GetLedgerViewBySeq(l.Sequence())
+	var view types.LedgerStateView
+	var reader types.LedgerReader
+	var err error
+	if contextOK {
+		view, reader, err = contextSrc.GetLedgerViewBySeqContext(ctx.Context, l.Sequence())
+	} else {
+		view, reader, err = src.GetLedgerViewBySeq(l.Sequence())
+	}
 	if err != nil {
+		closeLedgerLease(view)
+		closeLedgerLease(reader)
 		return nil, err
 	}
 	if view == nil {
+		closeLedgerLease(reader)
 		return nil, errors.New("ledger view lookup returned nil")
 	}
 	return view, nil

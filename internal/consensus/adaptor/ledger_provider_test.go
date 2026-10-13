@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
@@ -94,8 +95,9 @@ func makeGenesisLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	require.NoError(t, err)
+	t.Cleanup(func() { l.Discard() })
 	return l
 }
 
@@ -111,6 +113,7 @@ func makeClosedLedgerWithTxs(t *testing.T, txs []struct {
 	parent := makeGenesisLedger(t)
 	open, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	for _, txn := range txs {
 		// Real wire-format txs use NodeTypeTransactionWithMeta; this matches
 		// what AcceptConsensusResult would do.
@@ -129,6 +132,7 @@ func makeOpenLedger(t *testing.T) *ledger.Ledger {
 	parent := makeGenesisLedger(t)
 	open, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	return open
 }
 

@@ -168,12 +168,13 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				return entry
 			}
 		}
-		ledger, lookupErr := ctx.Services.Ledger().GetLedgerBySequence(seq)
+		ledger, lookupErr := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), seq)
 		if lookupErr == nil && ledger != nil {
 			entry.hash = ledger.Hash()
 			entry.closeTimeSec = ledger.CloseTime()
 			entry.found = true
 		}
+		closeLedgerLease(ledger)
 		ledgerCache[seq] = entry
 		return entry
 	}
@@ -441,6 +442,7 @@ func resolveAccountTxLedgerSelection(ctx *types.RpcContext, selection accountTxL
 	if err != nil {
 		return 0, 0, err
 	}
+	defer closeLedgerLease(ledger)
 	if !validated || !ledger.IsValidated() || ledger.Sequence() < validatedMin || ledger.Sequence() > validatedMax {
 		return 0, 0, rpcerrors.NewRpcError(rpcerrors.RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
 	}

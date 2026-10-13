@@ -1,0 +1,56 @@
+{
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "cpu_count": 11,
+  "go": "go version go1.24.4 darwin/arm64",
+  "manifest": {
+    "environment": {
+      "GOMAXPROCS": "4",
+      "GOGC": "100",
+      "GOMEMLIMIT": "512MiB",
+      "STATE_BENCH_FLAT": "1"
+    },
+    "cases": [
+      {
+        "name": "batch-small",
+        "suite": "service",
+        "benchmark": "^BenchmarkService_BatchConsensusAcceptance$/^batch-2$",
+        "iterations": 200
+      },
+      {
+        "name": "batch-load",
+        "suite": "service",
+        "benchmark": "^BenchmarkService_BatchConsensusAcceptance$/^load-32-batches-8-inners$",
+        "iterations": 200
+      }
+    ]
+  },
+  "samples": 5,
+  "revisions": {
+    "before": {
+      "commit": "546e974024a77d9dcf80bc07cd4e86930467fff1",
+      "status": "",
+      "diff": ""
+    },
+    "after": {
+      "commit": "627ca831355e84dfd87f276afd8a6c5704a6e1f3",
+      "status": "M internal/ledger/service/batch_accept_bench_test.go\n?? scripts/benchmark-state-memory.py",
+      "diff": "internal/ledger/service/batch_accept_bench_test.go | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)"
+    }
+  },
+  "notes": [
+    "Process metrics include fixture setup and teardown.",
+    "RSS is the process high-water mark, not post-GC live heap.",
+    "rusage block counts are platform-dependent; zero does not prove zero I/O.",
+    "The OS page cache is not flushed; pair order alternates between samples."
+  ],
+  "binaries": {
+    "after-service.test": "d23b85e090d88319010e3d773682baf34eca7b742f6fbdab83aca706f1cb6c10",
+    "before-service.test": "2357b8707eda6dbdc397ec53d8cd69b9e3d3bef7ca02436be518bfc8584e6601"
+  },
+  "host": {
+    "cpu": "Apple M3 Pro",
+    "logical_cpus": 11,
+    "ram_bytes": 19327352832,
+    "dedicated_host": false
+  }
+}

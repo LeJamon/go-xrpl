@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,14 +16,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// gatedStore is an in-memory node store whose StoreBatch blocks until release
-// is closed, so a test can pile ledgers onto the persist queue while the worker
-// is stuck mid-write and then prove Stop drains every queued job before
-// returning.
+// gatedStore is an in-memory node store whose header Store/Sync calls block
+// until release is closed, so a test can pile ledgers onto the persist queue
+// while the worker is stuck mid-write and then prove Stop drains every queued
+// job before returning. Tree imports use StoreBatch freely before and during
+// the persistence barrier.
 type gatedStore struct {
 	nodestore.Database
 	releaseOnce sync.Once
 	enteredOnce sync.Once
+	blocked     atomic.Bool
 	release     chan struct{}
 	entered     chan struct{}
 }
@@ -37,21 +40,31 @@ func newGatedStore(t *testing.T) *gatedStore {
 }
 
 func (g *gatedStore) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
-	g.enteredOnce.Do(func() { close(g.entered) })
-	<-g.release
 	return g.Database.StoreBatch(ctx, nodes)
 }
 
 func (g *gatedStore) Store(ctx context.Context, node *nodestore.Node) error {
-	g.enteredOnce.Do(func() { close(g.entered) })
-	<-g.release
+	if g.blocked.Load() {
+		g.enteredOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
 	return g.Database.Store(ctx, node)
 }
+
+func (g *gatedStore) Sync(ctx context.Context) error {
+	if g.blocked.Load() {
+		g.enteredOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
+	return g.Database.Sync(ctx)
+}
+
+func (g *gatedStore) startBlocking() { g.blocked.Store(true) }
 
 func (g *gatedStore) open() { g.releaseOnce.Do(func() { close(g.release) }) }
 
 // buildLedgerWithState makes a lightweight ledger carrying one state entry (so
-// persistToNodeStore issues a gated StoreBatch) with a hash distinct per seq.
+// persistToNodeStore issues a gated header write with a hash distinct per seq.
 func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 	t.Helper()
 	stateMap := shamap.New(shamap.TypeState)
@@ -79,11 +92,12 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 		Validated:           true,
 		Accepted:            true,
 	}
-	hdr.Hash = [32]byte{0xED, byte(seq), byte(seq >> 8)}
-	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{}, newTestExecutionStore(t))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}
+	t.Cleanup(l.Discard)
 	return l
 }
 
@@ -101,6 +115,7 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 	if err := svc.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	store.startBlocking()
 
 	const n = 100
 	ledgers := make([]*ledger.Ledger, n)
@@ -109,7 +124,7 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 		ledgers[i] = buildLedgerWithState(t, seq)
 	}
 
-	// Enqueue everything while the worker is stalled in the gated StoreBatch,
+	// Enqueue everything while the worker is stalled in the gated header Store,
 	// so the jobs sit in the queue rather than being drained inline.
 	svc.mu.Lock()
 	for _, l := range ledgers {
@@ -174,6 +189,7 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	store.startBlocking()
 	t.Cleanup(func() {
 		store.open()
 		svc.Stop()
@@ -241,6 +257,7 @@ func TestService_StandaloneCommitPersistsAfterCancellation(t *testing.T) {
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	store.startBlocking()
 	t.Cleanup(func() {
 		store.open()
 		svc.Stop()

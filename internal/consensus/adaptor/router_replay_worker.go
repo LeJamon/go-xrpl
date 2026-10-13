@@ -313,19 +313,9 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
 	result.parentStats = parentProof.Stats()
-	stateMap, err := parent.StateMapSnapshotContext(ctx)
-	if err != nil {
-		result.err = fmt.Errorf("snapshot replay predecessor state: %w", err)
-		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
-	}
 	txMap, err = c.loadStandardReplayTransactionMap(ctx, &claim.copy)
 	if err != nil {
 		result.err = err
-		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
-	}
-	target, err := ledger.NewFromHeader(h, stateMap, txMap, parent.Fees())
-	if err != nil {
-		result.err = fmt.Errorf("construct transaction-only replay target: %w", err)
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
 	processingAccount := c.standardReplayMemoryAccount()
@@ -333,7 +323,7 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 	if processingAccount != nil {
 		replayAccount = processingAccount
 	}
-	replay, err := inbound.NewStoredLedgerReplayWithMemoryContext(ctx, parent, target, c.logger, replayAccount)
+	replay, err := inbound.NewTransactionReplayContext(ctx, parent, h, txMap, c.logger, replayAccount)
 	if err != nil {
 		result.err = fmt.Errorf("prepare transaction-only replay: %w", err)
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)

@@ -18,7 +18,7 @@ func TestOpenLedgerSnapshotPreservesPointInTimeStateAndIsReadOnly(t *testing.T) 
 	var txID [32]byte
 	txID[0] = 0x81
 	txData := bytes.Repeat([]byte{0x21}, 16)
-	if err := source.AddTransaction(txID, txData); err != nil {
+	if err := source.AddTransactionWithMeta(txID, txData); err != nil {
 		t.Fatalf("seed transaction: %v", err)
 	}
 	if err := source.AdjustDropsDestroyed(drops.XRPAmount(25)); err != nil {
@@ -48,7 +48,7 @@ func TestOpenLedgerSnapshotPreservesPointInTimeStateAndIsReadOnly(t *testing.T) 
 	if err := snapshot.Insert(mutAcct(0x72), mutData(0x31)); !errors.Is(err, ErrLedgerImmutable) {
 		t.Fatalf("snapshot Insert error = %v, want ErrLedgerImmutable", err)
 	}
-	if err := snapshot.AddTransaction([32]byte{0x82}, bytes.Repeat([]byte{0x41}, 16)); !errors.Is(err, ErrLedgerImmutable) {
+	if err := snapshot.AddTransactionWithMeta([32]byte{0x82}, bytes.Repeat([]byte{0x41}, 16)); !errors.Is(err, ErrLedgerImmutable) {
 		t.Fatalf("snapshot AddTransaction error = %v, want ErrLedgerImmutable", err)
 	}
 	if err := snapshot.AdjustDropsDestroyed(1); !errors.Is(err, ErrLedgerImmutable) {
@@ -66,7 +66,7 @@ func TestOpenLedgerSnapshotPreservesPointInTimeStateAndIsReadOnly(t *testing.T) 
 	}
 	var laterTx [32]byte
 	laterTx[0] = 0x83
-	if err := source.AddTransaction(laterTx, bytes.Repeat([]byte{0x61}, 16)); err != nil {
+	if err := source.AddTransactionWithMeta(laterTx, bytes.Repeat([]byte{0x61}, 16)); err != nil {
 		t.Fatalf("mutate source transactions: %v", err)
 	}
 	if err := source.AdjustDropsDestroyed(5); err != nil {
@@ -108,8 +108,5 @@ func TestClosedLedgerRejectsMutableSnapshots(t *testing.T) {
 	}
 	if _, err := l.MutableSnapshot(); !errors.Is(err, ErrLedgerImmutable) {
 		t.Fatalf("MutableSnapshot error = %v, want ErrLedgerImmutable", err)
-	}
-	if _, err := l.MutableSnapshotUnflushed(); !errors.Is(err, ErrLedgerImmutable) {
-		t.Fatalf("MutableSnapshotUnflushed error = %v, want ErrLedgerImmutable", err)
 	}
 }

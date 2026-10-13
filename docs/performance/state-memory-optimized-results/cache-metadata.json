@@ -1,0 +1,63 @@
+{
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "cpu_count": 11,
+  "go": "go version go1.24.4 darwin/arm64",
+  "manifest": {
+    "environment": {
+      "GOMAXPROCS": "4",
+      "GOGC": "100",
+      "GOMEMLIMIT": "512MiB",
+      "STATE_BENCH_FLAT": "1",
+      "STATE_BENCH_CACHE_BYTES": "33554432"
+    },
+    "cases": [
+      {
+        "name": "batch-small",
+        "suite": "service",
+        "benchmark": "^BenchmarkService_BatchConsensusAcceptance$/^batch-2$",
+        "iterations": 50
+      },
+      {
+        "name": "batch-load",
+        "suite": "service",
+        "benchmark": "^BenchmarkService_BatchConsensusAcceptance$/^load-32-batches-8-inners$",
+        "iterations": 50
+      }
+    ]
+  },
+  "samples": 5,
+  "revisions": {
+    "before": {
+      "commit": "546e974024a77d9dcf80bc07cd4e86930467fff1",
+      "status": "M internal/ledger/service/batch_accept_bench_test.go\n?? internal/ledger/state_memory_benchmark_before_test.go\n?? internal/ledger/state_memory_benchmark_common_test.go",
+      "diff": "internal/ledger/service/batch_accept_bench_test.go | 59 +++++++++++++++++++++-\n 1 file changed, 57 insertions(+), 2 deletions(-)",
+      "harness_sha256": {
+        "internal/ledger/state_memory_benchmark_common_test.go": "f98717fab286bed9169837582b6be5dbd955ac5f0837da8c22e540521413d384",
+        "internal/ledger/state_memory_benchmark_before_test.go": "24e86b5fa496bccf5a9f64a3f70c551630b758dd00da31bedc0224f4628f2d4f",
+        "internal/ledger/service/batch_accept_bench_test.go": "dab1011d9837207b08f279d703ccd940b288dfd3ca39b5299fadedcaf3b2a708"
+      },
+      "worktree_patch_sha256": "8f2b9d491b690915be583ce753e44ed5edc1c2916f30b63f0e6bcbda43c21180"
+    },
+    "after": {
+      "commit": "8f6b85ac98afae1e47966b1393d81cc68d4c2696",
+      "status": "",
+      "diff": "",
+      "harness_sha256": {
+        "internal/ledger/state_memory_benchmark_common_test.go": "f98717fab286bed9169837582b6be5dbd955ac5f0837da8c22e540521413d384",
+        "internal/ledger/state_memory_benchmark_after_test.go": "8454f663d44a2edc1b2465de9e2897af20b8a8f3b3ac876ae0a177c798d8a090",
+        "internal/ledger/service/batch_accept_bench_test.go": "eb3704fb533a6ad17afe22be1aa726cc6141d345e3288f3ddf0e40f4784a3c84"
+      },
+      "worktree_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "notes": [
+    "Process metrics include fixture setup and teardown.",
+    "RSS is the process high-water mark, not post-GC live heap.",
+    "rusage block counts are platform-dependent; zero does not prove zero I/O.",
+    "The OS page cache is not flushed; pair order alternates between samples."
+  ],
+  "binaries": {
+    "before-service": "7e8d82d01c7da3574d3c5ec7d84b4c8a3f6c8bf72c00b6e4b98ab750f48e466e",
+    "after-service": "04aed3f82b18a3d85e5d5a4d1a41d76a4501a39a6559fc6f20311a2f1195bb0c"
+  }
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -77,6 +78,9 @@ func (t *stagedStateApplyTx) Apply(ctx *txcore.ApplyContext) ter.Result {
 type failingAtomicPseudoView struct {
 	*ledger.Ledger
 	candidate *ledger.Ledger
+	stagedKey keylet.Keylet
+	staged    []byte
+	readErr   error
 }
 
 func (v *failingAtomicPseudoView) ApplyAtomically(apply func(ledger.Writer) error) error {
@@ -85,6 +89,7 @@ func (v *failingAtomicPseudoView) ApplyAtomically(apply func(ledger.Writer) erro
 
 func (v *failingAtomicPseudoView) ConsumeState(candidate *ledger.Ledger) error {
 	v.candidate = candidate
+	v.staged, v.readErr = candidate.Read(v.stagedKey)
 	return errors.New("commit failed")
 }
 
@@ -262,6 +267,7 @@ func TestApplyPseudoStateCommitErrorDoesNotMutateLedger(t *testing.T) {
 		t.Fatalf("StateMapHash: %v", err)
 	}
 
+	atomicView.stagedKey = writeKey
 	result := engine.ApplyPseudo(txn)
 
 	assertNonAppliedResult(t, result, ter.TefEXCEPTION)
@@ -271,7 +277,7 @@ func TestApplyPseudoStateCommitErrorDoesNotMutateLedger(t *testing.T) {
 	if atomicView.candidate == nil {
 		t.Fatal("atomic commit was not attempted")
 	}
-	staged, readErr := atomicView.candidate.Read(writeKey)
+	staged, readErr := atomicView.staged, atomicView.readErr
 	if readErr != nil {
 		t.Fatalf("read staged key: %v", readErr)
 	}
@@ -363,10 +369,12 @@ func newApplyPanicLedger(t *testing.T) *ledger.Ledger {
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
+		ledgertestutil.NewExecutionStore(t, nil),
 	)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
+	t.Cleanup(view.Discard)
 	return view
 }
 

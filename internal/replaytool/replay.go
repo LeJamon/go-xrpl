@@ -158,7 +158,7 @@ Example:
 	return cmd
 }
 
-func (r *replayRunner) run(ctx context.Context) error {
+func (r *replayRunner) run(ctx context.Context) (runErr error) {
 	startTime := time.Now()
 
 	fmt.Fprintln(r.out, "================================================================================")
@@ -173,10 +173,20 @@ func (r *replayRunner) run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("loading fixtures: %w", err)
 	}
+	execution, err := newReplayExecutionSession(nil)
+	if err != nil {
+		return fmt.Errorf("initializing replay execution: %w", err)
+	}
+	defer func() {
+		if err := execution.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("closing replay execution: %w", err))
+		}
+	}()
 
 	r.printFixtureInfo(fixture.State, fixture.Env, fixture.Txs, fixture.Expected)
 
 	fixture.Execution.WantTxDetail = r.showDecoded
+	fixture.Execution.Store = execution.store
 	executed, err := executeBlock(ctx, fixture.Execution)
 	if err != nil {
 		return fmt.Errorf("replay execution failed: %w", err)

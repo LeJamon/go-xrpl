@@ -276,6 +276,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	var stateMap *shamap.SHAMap
 	var preSnapshot *statecompare.LedgerSnapshot
 	var fees drops.Fees
+	var execution *replayExecutionSession
 	if r.resumeFrom > 0 {
 		// Checkpoint-file resume seeds from goXRPL's own computed state, which
 		// is held in RAM; nodestore-lazy seeding applies to fresh --from loads.
@@ -284,10 +285,11 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("resuming from checkpoint: %w", err)
 		}
+		execution, err = newReplayExecutionSession(nil)
 	} else {
-		source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
-		if err != nil {
-			return fmt.Errorf("initializing state source: %w", err)
+		source, sourceErr := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
+		if sourceErr != nil {
+			return fmt.Errorf("initializing state source: %w", sourceErr)
 		}
 		defer func() {
 			if err := source.Close(); err != nil {
@@ -299,7 +301,16 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("loading initial state: %w", err)
 		}
+		execution, err = newReplayExecutionSession(source.Family())
 	}
+	if err != nil {
+		return fmt.Errorf("initializing replay execution: %w", err)
+	}
+	defer func() {
+		if err := execution.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("closing replay execution: %w", err))
+		}
+	}()
 
 	fmt.Fprintf(r.out, "      Loaded seed state at ledger %d (root verified against account_hash)\n", startLedger)
 	fmt.Fprintln(r.out)
@@ -319,7 +330,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		blockStart := time.Now()
 
 		// Process this block
-		result, newStateMap, err := r.processBlock(ctx, client, currentStateMap, previousSnapshot, targetLedger, fees)
+		result, newStateMap, err := r.processBlock(ctx, client, currentStateMap, previousSnapshot, targetLedger, fees, execution.store)
 		if err != nil {
 			if cause := context.Cause(ctx); cause != nil {
 				return cause
@@ -655,8 +666,9 @@ func (r *replayRangeRunner) processBlock(
 	preSnapshot *statecompare.LedgerSnapshot,
 	targetLedger uint32,
 	fees drops.Fees,
+	store *ledger.ExecutionStore,
 ) (*blockResult, *shamap.SHAMap, error) {
-	return r.processBlockShared(ctx, client, preStateMap, preSnapshot, targetLedger, fees)
+	return r.processBlockShared(ctx, client, preStateMap, preSnapshot, targetLedger, fees, store)
 }
 
 func validateReplaySnapshotLink(preSnapshot, postSnapshot *statecompare.LedgerSnapshot, targetLedger uint32) error {

@@ -34,7 +34,11 @@ func (f *localReplacementFamily) StoreBatch(_ context.Context, entries []shamap.
 }
 
 func TestReplayReplacementRejectsIncompleteOrInvalidLocalCandidate(t *testing.T) {
-	r, _, _, svc := makeRouter(t)
+	family := &localReplacementFamily{
+		nodes:   make(map[[32]byte][]byte),
+		fetches: make(map[[32]byte]int),
+	}
+	r, _, _, svc := makeRouter(t, family)
 	_, err := svc.AcceptLedger(t.Context())
 	require.NoError(t, err)
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 1)
@@ -51,10 +55,6 @@ func TestReplayReplacementRejectsIncompleteOrInvalidLocalCandidate(t *testing.T)
 	wireNodes, err := stateMap.WalkWireNodes()
 	require.NoError(t, err)
 	require.Greater(t, len(wireNodes), 1)
-	family := &localReplacementFamily{
-		nodes:   make(map[[32]byte][]byte, len(wireNodes)),
-		fetches: make(map[[32]byte]int, len(wireNodes)),
-	}
 	hashes := make([][32]byte, 0, len(wireNodes))
 	for _, node := range wireNodes {
 		entry, convertErr := shamap.FlushEntryFromWire(node.Data, links[0].seq, shamap.TypeState)

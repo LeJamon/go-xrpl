@@ -209,6 +209,7 @@ func (p *PreparedReplayParent) baseRoot(service *Service, target header.LedgerHe
 type PreparedLedger struct {
 	service          *Service
 	header           header.LedgerHeader
+	ledger           *ledger.Ledger
 	stateMap         *shamap.SHAMap
 	txMap            *shamap.SHAMap
 	fingerprint      [32]byte
@@ -249,6 +250,7 @@ func (p *PreparedLedger) Release() {
 		p.releaseWork = nil
 		p.releaseLifecycle = nil
 		p.pin = nil
+		p.ledger = nil
 		p.stateMap = nil
 		p.txMap = nil
 		p.header = header.LedgerHeader{}
@@ -275,6 +277,7 @@ func (p *PreparedLedger) Release() {
 		p.state = preparedLedgerReleased
 		pin := p.pin
 		p.pin = nil
+		p.ledger = nil
 		p.stateMap = nil
 		p.txMap = nil
 		p.header = header.LedgerHeader{}
@@ -348,6 +351,7 @@ func (p *PreparedLedger) finishConsume(published bool) {
 	} else {
 		p.state = preparedLedgerReleased
 	}
+	p.ledger = nil
 	p.stateMap = nil
 	p.txMap = nil
 	p.header = header.LedgerHeader{}
@@ -819,12 +823,18 @@ func (s *Service) snapshotPreparedLedger(ctx context.Context, source *ledger.Led
 // publication lock. A non-nil parent proof enables the verified-base sparse
 // walk; a nil proof safely performs the existing cold verification.
 func (s *Service) PrepareReplayLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent) (*PreparedLedger, error) {
-	return s.prepareLedger(ctx, derived, parent, false)
+	return s.prepareLedger(ctx, derived, parent, false, nil)
 }
 
 // Acquisition may compare against a nonconsecutive checkpoint/validated base.
 // Keep that choice separate from replay's strict parent-identity requirement.
-func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent, acquired bool) (*PreparedLedger, error) {
+func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, parent *PreparedReplayParent, acquired bool, pin *replaySnapshotPin) (*PreparedLedger, error) {
+	pinOwned := true
+	defer func() {
+		if pinOwned && pin != nil {
+			pin.Release()
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -861,9 +871,12 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 		return nil, fmt.Errorf("%w: got %x want %x", errReplayParentMismatch, h.ParentHash[:8], parent.header.Hash[:8])
 	}
 
-	pin, pinned, err := s.acquireReplaySnapshot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("replay admission: acquire derived generation: %w", err)
+	pinned := pin != nil
+	if !pinned {
+		pin, pinned, err = s.acquireReplaySnapshot(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("replay admission: acquire derived generation: %w", err)
+		}
 	}
 	reusable := pinned && stateMap.IsBacked() && s.hasDurableFamily()
 	baseRoot, parentFingerprint, useBase := parent.baseRoot(s, h)
@@ -904,31 +917,44 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 			"sequence", h.LedgerIndex, "base_sequence", baseSequence,
 			"verified_base", baseRoot != ([32]byte{}), "generation_changed", stats.GenerationChanged)
 	}
-	stateStats, err := s.verifyReplaySnapshot(ctx, statePurpose, stateMap, baseRoot)
-	if err != nil {
-		if pin != nil {
-			pin.Release()
+	immutable, err := derived.Snapshot()
+	if err == nil && immutable.ExecutionStore() != s.config.Execution {
+		stateRoot, txRoot, importErr := s.config.Execution.ImportMaps(ctx, stateMap, txMap, h.LedgerIndex)
+		if importErr != nil {
+			err = fmt.Errorf("replay admission: import foreign execution maps: %w", importErr)
+		} else if stateRoot != h.AccountHash || txRoot != h.TxHash {
+			err = errors.New("replay admission: imported execution roots do not match prepared header")
+		} else {
+			immutable, err = ledger.NewClosedFromRootsContext(ctx, h, derived.Fees(), s.config.Execution)
+			if err == nil {
+				_, stateMap, txMap, err = s.snapshotPreparedLedger(ctx, immutable)
+			}
 		}
+	}
+	if err != nil {
 		return nil, err
 	}
-	stats.State = stateStats
-	txStats, err := s.verifyReplaySnapshot(ctx, "replay derived transactions", txMap, [32]byte{})
-	if err != nil {
-		if pin != nil {
-			pin.Release()
+	err = immutable.AuthenticateClosureWith(ctx, func(ctx context.Context, verified header.LedgerHeader) error {
+		if verified.Hash != h.Hash {
+			return errReplayPreparedInvalid
 		}
+		var err error
+		stats.State, err = s.verifyReplaySnapshot(ctx, statePurpose, stateMap, baseRoot)
+		if err != nil {
+			return err
+		}
+		stats.Transactions, err = s.verifyReplaySnapshot(ctx, "replay derived transactions", txMap, [32]byte{})
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
-	stats.Transactions = txStats
 
 	if pinned && reusable {
 		s.rememberReplayProof(h, pin.fingerprint, txMap.IsBacked() && s.hasDurableFamily())
 	}
 	releaseWork, err := s.acquireReplayPublicationWork(ctx)
 	if err != nil {
-		if pin != nil {
-			pin.Release()
-		}
 		return nil, fmt.Errorf("replay admission: acquire publication work: %w", err)
 	}
 	stats.Elapsed = time.Since(startedAt)
@@ -937,6 +963,7 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 		fingerprint = pin.fingerprint
 	}
 	prepared := &PreparedLedger{
+		ledger:           immutable,
 		service:          s,
 		header:           h,
 		stateMap:         stateMap,
@@ -958,11 +985,9 @@ func (s *Service) prepareLedger(ctx context.Context, derived *ledger.Ledger, par
 	}
 	if err := s.registerReplayPrepared(prepared, preparedRecord, pin, releasePreparedSlot); err != nil {
 		releaseWork()
-		if pin != nil {
-			pin.Release()
-		}
 		return nil, fmt.Errorf("replay admission: retain prepared proof: %w", err)
 	}
+	pinOwned = false
 	preparedSlotOwned = false
 	preparationOwned = false
 	return prepared, nil
@@ -1018,6 +1043,11 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	releasePreparation, err := s.acquireReplayPreparationWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releasePreparation()
 	if h == nil || stateMap == nil {
 		return nil, errors.New("acquired ledger requires a header and state map")
 	}
@@ -1030,11 +1060,29 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
 	}
-	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{})
+	pin, _, err := s.acquireReplaySnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return s.prepareLedger(ctx, source, nil, true)
+	pinOwned := true
+	defer func() {
+		if pinOwned && pin != nil {
+			pin.Release()
+		}
+	}()
+	stateRoot, txRoot, err := s.config.Execution.ImportMaps(ctx, stateMap, txMap, h.LedgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	if stateRoot != h.AccountHash || txRoot != h.TxHash {
+		return nil, errors.New("acquired ledger roots do not match header")
+	}
+	source, err := ledger.NewClosedFromRootsContext(ctx, *h, drops.Fees{}, s.config.Execution)
+	if err != nil {
+		return nil, err
+	}
+	pinOwned = false
+	return s.prepareLedger(ctx, source, nil, true, pin)
 }
 
 // BootstrapPreparedLedger publishes a prepared ledger without re-running a
@@ -1110,10 +1158,10 @@ func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedL
 		defer s.historyComponent.mu.Unlock()
 		initialCandidate = s.networkLedgerState != networkLedgerReady
 		if mode == preparedAcquisitionHistory {
-			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+			err = s.ingestHistoricalLedgerLocked(ctx, prepared.ledger)
 			return
 		}
-		err = s.storeLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+		err = s.storeLedgerLocked(ctx, prepared.ledger)
 		if err == nil && (initialCandidate || mode == preparedAcquisitionGeneric) && !s.ReplayBlocked() {
 			s.rememberValidatedStateBaseCandidate(prepared.header)
 		}

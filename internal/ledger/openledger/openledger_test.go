@@ -60,6 +60,7 @@ func TestOpenLedger_NewCurrent_SnapshotsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	cur := ol.Current()
 	if cur == nil {
@@ -96,6 +97,7 @@ func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	pre := ol.Current()
 	preStateHash, err := pre.StateMapHash()
@@ -160,6 +162,7 @@ func TestOpenLedger_Modify_ReturnsFalse_DoesNotPublish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	pre := ol.Current()
 	changed := ol.Modify(func(_ *ledger.Ledger) bool { return false })
@@ -177,6 +180,7 @@ func TestOpenLedgerAcceptCanceledBeforeCommitDoesNotPublish(t *testing.T) {
 	parent := closedParent(t, env)
 	ol, err := openledger.New(parent, openledger.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -208,6 +212,7 @@ func TestOpenLedgerAcceptCommitDrainsAfterCancellation(t *testing.T) {
 	parent := closedParent(t, env)
 	ol, err := openledger.New(parent, openledger.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	ctx, cancel := context.WithCancel(t.Context())
 	before := ol.Current()
@@ -260,6 +265,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	// Pre-build one pending tx per sender so the per-goroutine body is
 	// strictly the Submit call (no signing inside the parallel section,
@@ -407,6 +413,7 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	cfg := openledger.ApplyConfig{
 		BaseFee:          10,
@@ -483,6 +490,7 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	cfg := openledger.ApplyConfig{
 		BaseFee:          10,
@@ -549,6 +557,7 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	cfg := openledger.ApplyConfig{
 		BaseFee:          10,
@@ -603,6 +612,7 @@ func TestOpenLedger_AcceptRejectsCorruptReplayLeaf(t *testing.T) {
 			if err != nil {
 				t.Fatalf("openledger.New: %v", err)
 			}
+			t.Cleanup(func() { ol.Current().Discard() })
 			pay := payment.Pay(alice, bob, 3_000_000).Sequence(env.Seq(alice)).Build()
 			blob := buildSignedBlobOL(t, env, pay, alice)
 			pending, err := openledger.ParsePendingTx(blob)
@@ -665,6 +675,7 @@ func TestOpenLedger_AcceptRejectsMalformedLocalBeforeModifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 	queue, err := txq.New(txq.DefaultConfig())
 	if err != nil {
 		t.Fatalf("txq.New: %v", err)
@@ -713,6 +724,7 @@ func TestOpenLedger_Submit_TecCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	// 100 XRP < 200 XRP reserve → tecNO_DST_INSUF_XRP.
 	pay := payment.Pay(master, newAcct, 100_000_000).
@@ -761,6 +773,7 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 
 	cfg := openledger.ApplyConfig{
 		BaseFee:          10,
@@ -809,6 +822,7 @@ func TestOpenLedger_Accept_SeededRetrySettlesAfterCurrentReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 	cfg := openledger.ApplyConfig{
 		BaseFee:          10,
 		ReserveBase:      200_000_000,
@@ -870,6 +884,7 @@ func TestOpenLedger_Accept_SeededRetryVerifiesSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openledger.New: %v", err)
 	}
+	t.Cleanup(func() { ol.Current().Discard() })
 	cfg := openledger.ApplyConfig{
 		BaseFee:          10,
 		ReserveBase:      200_000_000,
@@ -940,6 +955,7 @@ func TestOpenLedger_Accept_RetriesFirstOrdersCompetingTransactions(t *testing.T)
 			if err != nil {
 				t.Fatalf("openledger.New: %v", err)
 			}
+			t.Cleanup(func() { ol.Current().Discard() })
 			cfg := openledger.ApplyConfig{
 				BaseFee:          10,
 				ReserveBase:      200_000_000,

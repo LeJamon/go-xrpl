@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/engine"
@@ -289,4 +290,8 @@ func putEmptyOwnerDirPage(
 	data, err := state.SerializeDirectoryNode(node, false)
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.DirPage(dir.Key, page), data))
+}
+
+func (*accountDeleteDirectoryView) ExecutionJournalConfig() overlay.Config {
+	return overlay.Config{MaxMemoryBytes: 1 << 20}
 }

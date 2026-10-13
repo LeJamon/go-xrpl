@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,27 +19,53 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
 )
 
 type consensusMissingNodeFamily struct {
-	shamap.Family
+	*backend.NodeStore
+	mu      sync.RWMutex
 	missing [32]byte
 }
 
-func (f consensusMissingNodeFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
-	if hash == f.missing {
+func (f *consensusMissingNodeFamily) SetMissing(hash [32]byte) {
+	f.mu.Lock()
+	f.missing = hash
+	f.mu.Unlock()
+}
+
+func (f *consensusMissingNodeFamily) isMissing(hash [32]byte) bool {
+	f.mu.RLock()
+	missing := f.missing
+	f.mu.RUnlock()
+	return missing != ([32]byte{}) && hash == missing
+}
+
+func (f *consensusMissingNodeFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if f.isMissing(hash) {
 		return nil, nil
 	}
-	return f.Family.Fetch(ctx, hash)
+	return f.NodeStore.Fetch(ctx, hash)
+}
+
+func (f *consensusMissingNodeFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if f.isMissing(hash) {
+		return nil, nil
+	}
+	return f.NodeStore.FetchDurable(ctx, hash)
 }
 
 func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 	for _, applyPhase := range []bool{false, true} {
 		for _, standalone := range []bool{false, true} {
 			t.Run(fmt.Sprintf("apply=%t/standalone=%t", applyPhase, standalone), func(t *testing.T) {
-				f := newStateBaseRecertificationFixture(t)
+				f := newStateBaseRecertificationFixture(t, func(db *nodestore.KVDatabase) shamap.Family {
+					return &consensusMissingNodeFamily{NodeStore: backend.New(db)}
+				})
+				faultFamily := f.svc.shamapFamily.(*consensusMissingNodeFamily)
+				t.Cleanup(func() { faultFamily.SetMissing([32]byte{}) })
 				f.svc.StopStateBaseRecertification()
 				master := jtx.MasterAccount()
 				masterKey := keylet.Account(master.AccountID()).Key
@@ -99,12 +126,11 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				missing, err := reader.(shamap.InnerNodeReader).ChildHash(int(missingKey.Key[0] >> 4))
 				require.NoError(t, err)
 				require.NotEqual(t, [32]byte{}, missing)
-				family := consensusMissingNodeFamily{Family: f.svc.shamapFamily, missing: missing}
-				stateMap, err := shamap.NewFromRootHashContext(t.Context(), shamap.TypeState, f.stateRoot, family)
+				stateMap, err := shamap.NewFromRootHashContext(t.Context(), shamap.TypeState, f.stateRoot, f.svc.shamapFamily)
 				require.NoError(t, err)
 				txMap, err := f.validated.TxMapSnapshot()
 				require.NoError(t, err)
-				parent, err := ledger.NewFromHeader(f.validated.Header(), stateMap, txMap, f.validated.Fees())
+				parent, err := ledger.NewFromHeader(f.validated.Header(), stateMap, txMap, f.validated.Fees(), f.svc.config.Execution)
 				require.NoError(t, err)
 				if applyPhase {
 					for _, account := range []*jtx.Account{master, jtx.NewAccount(destinationName)} {
@@ -115,10 +141,12 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				}
 				simOpen, err := openledger.New(parent, openledger.Config{})
 				require.NoError(t, err)
+				t.Cleanup(func() { simOpen.Current().Discard() })
 				f.svc.mu.Lock()
 				originalOpenView := f.svc.openLedgerView
 				f.svc.openLedgerView = simOpen
 				f.svc.mu.Unlock()
+				faultFamily.SetMissing(missing)
 				transaction, err := tx.ParseFromBinary(blob)
 				require.NoError(t, err)
 				transaction.GetCommon().TxnSignature = ""
@@ -126,6 +154,7 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, ter.TefEXCEPTION, simulation.Result)
 				require.False(t, simulation.Applied)
+				faultFamily.SetMissing([32]byte{})
 				f.svc.mu.Lock()
 				f.svc.openLedgerView = originalOpenView
 				f.svc.mu.Unlock()
@@ -136,6 +165,7 @@ func TestLedgerAcceptanceMissingPaymentStateBlocksPublication(t *testing.T) {
 					require.True(t, result.Applied)
 					require.Equal(t, uint32(1), f.svc.GetOpenLedger().TxCount())
 				}
+				faultFamily.SetMissing(missing)
 				f.svc.mu.Lock()
 				f.svc.closedLedger = parent
 				beforeOpen := f.svc.currentOpenLedgerLocked()

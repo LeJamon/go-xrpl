@@ -28,12 +28,24 @@ type stateBaseRecertificationFixture struct {
 	childHash [32]byte
 }
 
-func newStateBaseRecertificationFixture(t *testing.T) *stateBaseRecertificationFixture {
+func newStateBaseRecertificationFixture(
+	t *testing.T,
+	familyFactories ...func(*nodestore.KVDatabase) shamap.Family,
+) *stateBaseRecertificationFixture {
 	t.Helper()
 	ctx := context.Background()
 	db := newTestNodeStore(t, 100_000)
 	repositories := newTestRepositories(t, ctx)
-	svc := newFastLoadCheckpointService(t, db, repositories, true)
+	var family shamap.Family
+	if len(familyFactories) > 0 {
+		family = familyFactories[0](db)
+		require.NotNil(t, family)
+	}
+	var families []shamap.Family
+	if family != nil {
+		families = []shamap.Family{family}
+	}
+	svc := newFastLoadCheckpointService(t, db, repositories, true, families...)
 	require.NoError(t, svc.Start())
 	svc.recertificationMu.Lock()
 	svc.recertificationStopped = true
@@ -258,7 +270,8 @@ func TestStateBaseRecertificationFaultRequiresExactRepairBeforeResume(t *testing
 	require.True(t, f.svc.ReplayRecoveryParent(f.validated.Hash()))
 
 	wrongHeader := f.validated.Header()
-	wrongHeader.Hash[0] ^= 1
+	wrongHeader.ParentHash[0] ^= 1
+	wrongHeader.Hash = header.CalculateHash(wrongHeader)
 	require.ErrorIs(t, f.svc.StoreLedgerWithState(ctx, &wrongHeader, stateMap, txMap), replayfault.ErrBlocked)
 	targetHeader := f.validated.Header()
 	targetHeader.Validated = false
@@ -279,7 +292,7 @@ func TestStateBaseRecertificationFailureIgnoresSupersededFrontier(t *testing.T) 
 	replacementHeader.CloseFlags ^= header.LCFNoConsensusTime
 	replacementHeader.Validated = false
 	replacementHeader.Hash = header.CalculateHash(replacementHeader)
-	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, f.validated.Fees())
+	replacement, err := ledger.NewFromHeader(replacementHeader, stateMap, txMap, f.validated.Fees(), f.svc.config.Execution)
 	require.NoError(t, err)
 	require.NoError(t, replacement.SetValidated())
 	f.svc.SetReplayTargetAuthenticator(func(header.LedgerHeader) bool {
@@ -554,7 +567,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 		require.NoError(t, err)
 		txMap, err := f.validated.TxMapSnapshot()
 		require.NoError(t, err)
-		alternate, err := ledger.NewFromHeader(alternateHeader, stateMap, txMap, drops.Fees{})
+		alternate, err := ledger.NewFromHeader(alternateHeader, stateMap, txMap, drops.Fees{}, f.svc.config.Execution)
 		require.NoError(t, err)
 		require.NoError(t, alternate.SetValidated())
 

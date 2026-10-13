@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -23,6 +24,16 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+func loadSnapshotLedgerTest(t *testing.T, snapshot snapshotLedger) (loadedSnapshotLedger, error) {
+	t.Helper()
+	store := ledgertestutil.NewExecutionStore(t, nil)
+	loaded, err := loadSnapshotLedger(snapshot, store)
+	if err == nil {
+		t.Cleanup(loaded.Ledger.Discard)
+	}
+	return loaded, err
+}
 
 func minimalSnapshotFixture() snapshotFixture {
 	return snapshotFixture{
@@ -198,7 +209,7 @@ func TestSnapshotClosedLedgerFeeLevelsUseTransactionBaseFee(t *testing.T) {
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			fixture := loadSnapshotV4Fixture(t, tc.fixture)
-			closed, err := loadSnapshotLedger(fixture.Closed)
+			closed, err := loadSnapshotLedgerTest(t, fixture.Closed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -299,7 +310,7 @@ func TestSnapshotMapComparatorRejectsStateByteMismatch(t *testing.T) {
 
 func TestSnapshotMapComparatorRejectsMetadataByteMismatch(t *testing.T) {
 	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
-	closed, err := loadSnapshotLedger(fixture.Closed)
+	closed, err := loadSnapshotLedgerTest(t, fixture.Closed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +353,7 @@ func TestSnapshotOpenLedgerMutationAuthenticatesAndStaysOpen(t *testing.T) {
 	if len(fixture.Parent.State) == 0 {
 		t.Fatal("fixture parent has no state entry for transient mutation test")
 	}
-	parent, err := loadSnapshotLedger(fixture.Parent)
+	parent, err := loadSnapshotLedgerTest(t, fixture.Parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,6 +361,7 @@ func TestSnapshotOpenLedgerMutationAuthenticatesAndStaysOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { view.Current().Discard() })
 	entry := fixture.Parent.State[0]
 	if err := applySnapshotOpenLedger(view, nil, []snapshotEntry{entry}); err != nil {
 		t.Fatalf("authenticated erase: %v", err)
@@ -656,7 +668,7 @@ func mutateSnapshotTestHex(t *testing.T, value string) string {
 
 func TestSnapshotRequiresLedgerRuleEquality(t *testing.T) {
 	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f0-Batch-canonical.json")
-	parent, err := loadSnapshotLedger(fixture.Parent)
+	parent, err := loadSnapshotLedgerTest(t, fixture.Parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +677,7 @@ func TestSnapshotRequiresLedgerRuleEquality(t *testing.T) {
 			continue
 		}
 		fixture.Parent.Rules = append(fixture.Parent.Rules, strings.ToUpper(hex.EncodeToString(feature.ID[:])))
-		if _, err := loadSnapshotLedger(fixture.Parent); err == nil || !strings.Contains(err.Error(), "explicit rules differ") {
+		if _, err := loadSnapshotLedgerTest(t, fixture.Parent); err == nil || !strings.Contains(err.Error(), "explicit rules differ") {
 			t.Fatalf("accepted rule absent from authenticated parent: %v", err)
 		}
 		return
@@ -675,7 +687,7 @@ func TestSnapshotRequiresLedgerRuleEquality(t *testing.T) {
 
 func TestSnapshotAppliedTransactionRequiresStoredBytes(t *testing.T) {
 	fixture := loadSnapshotV4Fixture(t, "c0-l0-b1-f1-AccountSet-require-destination.json")
-	parent, err := loadSnapshotLedger(fixture.Parent)
+	parent, err := loadSnapshotLedgerTest(t, fixture.Parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,6 +695,7 @@ func TestSnapshotAppliedTransactionRequiresStoredBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(current.Discard)
 	all.RegisterAll()
 	blob, err := hex.DecodeString(fixture.TxBlob)
 	if err != nil {

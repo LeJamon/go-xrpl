@@ -99,7 +99,7 @@ func TestValidatedStateBaseSameSequencePersistencePreservesAlternateCandidate(t 
 			require.NoError(t, err)
 			txMap, err := candidate.TxMapSnapshot()
 			require.NoError(t, err)
-			older, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+			older, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 			require.NoError(t, err)
 			require.NoError(t, older.SetValidated())
 			if matchingProof {
@@ -238,7 +238,7 @@ func TestValidatedStateBaseNonConsecutivePromotionRequestsRecertification(t *tes
 	require.NoError(t, err)
 	txMap, err := current.TxMapSnapshot()
 	require.NoError(t, err)
-	target, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+	target, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	require.NoError(t, err)
 	require.NoError(t, target.SetValidated())
 
@@ -267,7 +267,7 @@ func TestValidatedStateBaseConsecutivePromotionPreservesProof(t *testing.T) {
 	require.NoError(t, err)
 	txMap, err := current.TxMapSnapshot()
 	require.NoError(t, err)
-	target, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+	target, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	require.NoError(t, err)
 	require.NoError(t, target.SetValidated())
 

@@ -11,7 +11,9 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,6 +28,15 @@ func DefaultConfig() Config {
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 	}
+}
+
+func newTestExecutionStore(t testing.TB, families ...shamap.Family) *ledger.ExecutionStore {
+	t.Helper()
+	var family shamap.Family
+	if len(families) > 0 {
+		family = families[0]
+	}
+	return ledgertestutil.NewExecutionStore(t, family)
 }
 
 func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, error) {

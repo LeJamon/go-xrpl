@@ -47,10 +47,6 @@ func (c *catchupReplayCoordinator) prepareLegacyReplay(ctx context.Context, resu
 	}
 	defer proof.Release()
 	if rd == nil {
-		state, err := parent.StateMapSnapshotContext(ctx)
-		if err != nil {
-			return err
-		}
 		txMap := result.txMap
 		if txMap == nil {
 			if result.header.TxHash != ([32]byte{}) {
@@ -58,15 +54,11 @@ func (c *catchupReplayCoordinator) prepareLegacyReplay(ctx context.Context, resu
 			}
 			txMap = shamap.New(shamap.TypeTransaction)
 		}
-		target, err := ledger.NewFromHeader(result.header, state, txMap, parent.Fees())
-		if err != nil {
-			return err
-		}
 		var account shamap.AcquisitionMemoryAccount
 		if budget := c.standardReplayMemoryAccount(); budget != nil {
 			account = budget
 		}
-		rd, err = inbound.NewStoredLedgerReplayWithMemoryContext(ctx, parent, target, c.logger, account)
+		rd, err = inbound.NewTransactionReplayContext(ctx, parent, result.header, txMap, c.logger, account)
 		if err != nil {
 			return err
 		}

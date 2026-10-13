@@ -38,10 +38,11 @@ func TestReplayClose_CheckpointSeedBoundary(t *testing.T) {
 	}
 	block := parent.Sequence() + 1
 	hdr := seedBlockHeader(parent)
-	open, err := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	open, err := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{}, parent.ExecutionStore())
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
+	defer open.Discard()
 
 	if err := open.Close(hdr.CloseTime, 0); err != nil {
 		t.Fatalf("closing first replayed block %d after checkpoint seed: %v", block, err)
@@ -94,10 +95,11 @@ func TestReplayClose_DoubleSkipListUpdateRejected(t *testing.T) {
 	}
 
 	// Close() runs the update a second time and must reject the now-ahead state.
-	open, err := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	open, err := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{}, parent.ExecutionStore())
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}
+	defer open.Discard()
 	if err := open.Close(hdr.CloseTime, 0); err == nil {
 		t.Fatal("Close after a double skip-list update: want error, got nil")
 	} else {
@@ -115,11 +117,13 @@ func walkGenesisTo(t *testing.T, target uint32) *ledger.Ledger {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, newTestExecutionStore(t))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}
+	t.Cleanup(func() { parent.Discard() })
 	for parent.Sequence() < target {
+		previous := parent
 		closeTime := parent.CloseTime().Add(10 * time.Second)
 		child, err := ledger.NewOpen(parent, closeTime)
 		if err != nil {
@@ -128,6 +132,7 @@ func walkGenesisTo(t *testing.T, target uint32) *ledger.Ledger {
 		if err := child.Close(closeTime, 0); err != nil {
 			t.Fatalf("Close at seq %d: %v", child.Sequence(), err)
 		}
+		previous.Discard()
 		parent = child
 	}
 	return parent

@@ -31,6 +31,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(ledger)
 
 	rawFields, fieldsErr := rawJSONFields(params)
 	if fieldsErr != nil {

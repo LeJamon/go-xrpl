@@ -45,6 +45,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(ledger)
 	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	ledgerFields := ledgerEntryResponseFields(ledger, validated)
 	if !types.IsValidClassicAddress(account) {

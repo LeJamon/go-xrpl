@@ -352,13 +352,20 @@ func checkPaymentWithRules(txMap map[string]any, params json.RawMessage, doPath 
 		if !ok {
 			return rpcInternalInvariantError("payment: open ledger view unavailable for path construction")
 		}
-		view, viewErr := viewSource.GetOpenLedgerView()
+		var view types.LedgerStateView
+		var viewErr error
+		if contextual, ok := viewSource.(types.ContextOpenLedgerViewSource); ok {
+			view, viewErr = contextual.GetOpenLedgerViewContext(rpcCtx.Context)
+		} else {
+			view, viewErr = viewSource.GetOpenLedgerView()
+		}
 		if viewErr != nil || view == nil {
 			if viewErr == nil {
 				viewErr = errors.New("open ledger view is nil")
 			}
 			return rpcInternalError("payment: open ledger view unavailable", viewErr)
 		}
+		defer closeLedgerLease(view)
 		source, sourceOK := txMap["Account"].(string)
 		if !sourceOK {
 			return rpcInternalInvariantError("payment: source account unavailable for path construction")

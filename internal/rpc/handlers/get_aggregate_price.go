@@ -116,6 +116,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(targetLedger)
 	lookupFields := ledgerEntryResponseFields(targetLedger, lookupValidated)
 
 	prices := make([]aggregatePricePoint, 0, len(oracles))

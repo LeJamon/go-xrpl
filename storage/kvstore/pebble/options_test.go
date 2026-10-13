@@ -1,8 +1,10 @@
 package pebble
 
 import (
+	"bytes"
 	"math"
 	"runtime"
+	"strconv"
 	"testing"
 
 	cockroachpebble "github.com/cockroachdb/pebble"
@@ -22,6 +24,32 @@ func TestOptionsFromMiB(t *testing.T) {
 		if _, err := OptionsFromMiB(cacheMB, 128); err == nil {
 			t.Fatalf("OptionsFromMiB(%d, 128) succeeded, want error", cacheMB)
 		}
+	}
+}
+
+func TestResolveMemTableSize(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		options Options
+		want    int64
+	}{
+		{name: "default", options: Options{}, want: 64 << 20},
+		{name: "below minimum cache", options: Options{BlockCacheBytes: 32 << 10}, want: 8 << 20},
+		{name: "128 KiB cache", options: Options{BlockCacheBytes: 128 << 10}, want: 8 << 20},
+		{name: "8 MiB cache", options: Options{BlockCacheBytes: 8 << 20}, want: 8 << 20},
+		{name: "32 MiB cache", options: Options{BlockCacheBytes: 32 << 20}, want: 16 << 20},
+		{name: "large cache", options: Options{BlockCacheBytes: 1 << 30}, want: 64 << 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := test.options.Resolve()
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			got := resolveMemTableSize(resolved.BlockCacheBytes)
+			if got != test.want {
+				t.Fatalf("effective memtable size = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 
@@ -67,12 +95,27 @@ func TestOptionsResolve(t *testing.T) {
 }
 
 func TestOptionsMemoryCommitmentCountsSharedCacheOnce(t *testing.T) {
+	defaultCommitment, err := (Options{}).MemoryCommitment(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDefault := uint64(DefaultBlockCacheBytes) + 3*uint64(memTableSize)*memTableStopWritesThreshold
+	if defaultCommitment != wantDefault {
+		t.Fatalf("default commitment = %d, want %d", defaultCommitment, wantDefault)
+	}
+
 	options := Options{BlockCacheBytes: 32 << 20, MaxOpenFiles: 200}
+	resolved, err := options.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	memTable := resolveMemTableSize(resolved.BlockCacheBytes)
+	perGeneration := uint64(memTable) * memTableStopWritesThreshold
 	steady, err := options.MemoryCommitment(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantSteady := uint64(32<<20) + 2*uint64(MemTableCommitmentBytes)
+	wantSteady := uint64(32<<20) + 2*perGeneration
 	if steady != wantSteady {
 		t.Fatalf("steady commitment = %d, want %d", steady, wantSteady)
 	}
@@ -80,18 +123,41 @@ func TestOptionsMemoryCommitmentCountsSharedCacheOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTransition := uint64(32<<20) + 3*uint64(MemTableCommitmentBytes)
+	wantTransition := uint64(32<<20) + 3*perGeneration
 	if transition != wantTransition {
 		t.Fatalf("transition commitment = %d, want %d", transition, wantTransition)
 	}
-	if got := transition - steady; got != uint64(MemTableCommitmentBytes) {
-		t.Fatalf("rotation overlap = %d, want one memtable commitment %d", got, MemTableCommitmentBytes)
+	if got := transition - steady; got != perGeneration {
+		t.Fatalf("rotation overlap = %d, want one memtable commitment %d", got, perGeneration)
+	}
+
+	smallCache := Options{BlockCacheBytes: 8 << 20}
+	smallMemTable := uint64(resolveMemTableSize(smallCache.BlockCacheBytes))
+	smallCommitment, err := smallCache.MemoryCommitment(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSmallCommitment := uint64(smallCache.BlockCacheBytes) + 2*smallMemTable*memTableStopWritesThreshold
+	if smallCommitment != wantSmallCommitment {
+		t.Fatalf("small-cache commitment = %d, want %d", smallCommitment, wantSmallCommitment)
 	}
 }
 
 func TestOptionsMemoryCommitmentRejectsInvalidGenerationCount(t *testing.T) {
 	if _, err := (Options{}).MemoryCommitment(0); err == nil {
 		t.Fatal("MemoryCommitment accepted zero open generations")
+	}
+}
+
+func TestOptionsMemoryCommitmentRejectsOverflow(t *testing.T) {
+	const blockCacheBytes = int64(8 << 20)
+	perGeneration := uint64(resolveMemTableSize(blockCacheBytes)) * memTableStopWritesThreshold
+	maxInt := int(^uint(0) >> 1)
+	if uint64(maxInt) <= (^uint64(0)-uint64(blockCacheBytes))/perGeneration {
+		t.Skip("int cannot represent enough generations to overflow uint64")
+	}
+	if _, err := (Options{BlockCacheBytes: blockCacheBytes}).MemoryCommitment(maxInt); err == nil {
+		t.Fatal("MemoryCommitment accepted an overflowing generation count")
 	}
 }
 
@@ -107,7 +173,8 @@ func TestMakePebbleOptions(t *testing.T) {
 	if options.MaxOpenFiles != want.MaxOpenFiles {
 		t.Fatalf("MaxOpenFiles = %d, want %d", options.MaxOpenFiles, want.MaxOpenFiles)
 	}
-	if options.MemTableSize != memTableSize ||
+	wantMemTableSize := resolveMemTableSize(want.BlockCacheBytes)
+	if options.MemTableSize != uint64(wantMemTableSize) ||
 		options.MemTableStopWritesThreshold != memTableStopWritesThreshold ||
 		options.L0CompactionThreshold != l0CompactionThreshold ||
 		options.L0StopWritesThreshold != l0StopWritesThreshold ||
@@ -134,6 +201,55 @@ func TestMakePebbleOptions(t *testing.T) {
 	defer runtime.GOMAXPROCS(previous)
 	if got := options.MaxConcurrentCompactions(); got != 2 {
 		t.Fatalf("MaxConcurrentCompactions = %d, want 2", got)
+	}
+}
+
+func TestConfiguredCacheRetainsBlockCacheAfterFlush(t *testing.T) {
+	const blockCacheBytes = int64(32 << 20)
+	options := Options{BlockCacheBytes: blockCacheBytes, MaxOpenFiles: MinimumOpenFiles}
+	cache := cockroachpebble.NewCache(blockCacheBytes)
+	defer cache.Unref()
+	dbOptions := makePebbleOptions(options, cache)
+	if dbOptions.MemTableSize != uint64(16<<20) {
+		t.Fatalf("MemTableSize = %d, want %d", dbOptions.MemTableSize, 16<<20)
+	}
+	db, err := cockroachpebble.Open(t.TempDir(), dbOptions)
+	if err != nil {
+		t.Fatalf("pebble.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	value := bytes.Repeat([]byte("v"), 4096)
+	for i := 0; i < 256; i++ {
+		key := []byte("key-" + strconv.Itoa(i))
+		if err := db.Set(key, value, cockroachpebble.NoSync); err != nil {
+			t.Fatalf("Set(%q): %v", key, err)
+		}
+	}
+	if err := db.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	for i := 0; i < 256; i++ {
+		key := []byte("key-" + strconv.Itoa(i))
+		got, closer, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, value) {
+			_ = closer.Close()
+			t.Fatalf("Get(%q) returned %d bytes, want %d", key, len(got), len(value))
+		}
+		if err := closer.Close(); err != nil {
+			t.Fatalf("close Get(%q): %v", key, err)
+		}
+	}
+
+	metrics := cache.Metrics()
+	if metrics.Size <= 0 {
+		t.Fatal("block cache has no entries after flushing and reading an sstable")
+	}
+	if metrics.Size > blockCacheBytes {
+		t.Fatalf("block cache size = %d, exceeds configured capacity %d", metrics.Size, blockCacheBytes)
 	}
 }
 

@@ -323,6 +323,7 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, svc *service.Service) (*mes
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -338,9 +339,9 @@ func buildEmptyClosedSuccessorResponse(t *testing.T, svc *service.Service) (*mes
 
 // makeRouter wires a router against a real adaptor + recording sender,
 // returning the pieces tests will poke and inspect.
-func makeRouter(t *testing.T) (*Router, *Adaptor, *recordingSender, *service.Service) {
+func makeRouter(t *testing.T, families ...shamap.Family) (*Router, *Adaptor, *recordingSender, *service.Service) {
 	t.Helper()
-	svc := newTestLedgerService(t)
+	svc := newTestLedgerService(t, families...)
 	a, rs := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
 	r := newTestRouter(nil, a, inbox)
@@ -699,6 +700,7 @@ func buildSuccessorAgainstParent(t *testing.T, parent *ledger.Ledger) (*message.
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC).Add(time.Duration(parent.Sequence()) * time.Second)
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { open.Discard() })
 	require.NoError(t, open.Close(closeTime, 0))
 	hdr := open.Header()
 
@@ -1130,6 +1132,7 @@ func TestSwitchedLedgerHistoryFloorFallsBackFromForkedClosedLedger(t *testing.T)
 	forkTime := canonicalChild.CloseTime().Add(time.Hour)
 	forkedClosed, err := ledger.NewOpen(validated, forkTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { forkedClosed.Discard() })
 	require.NoError(t, forkedClosed.Close(forkTime, 0))
 	require.NotEqual(t, canonicalChild.Hash(), forkedClosed.Hash())
 	_, forkedGrandchild, _, _ := buildSuccessorAgainstParent(t, forkedClosed)

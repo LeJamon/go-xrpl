@@ -2,7 +2,6 @@ package shamap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -86,94 +85,6 @@ func (sm *SHAMap) MutableFork() (*SHAMap, error) {
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
 	return sm.snapshotLocked(true)
-}
-
-// DetachedMutable returns a mutable copy with an independent in-memory tree.
-// Every loaded node and item is deep-cloned, while unloaded backed branches
-// remain represented by their stored hashes. The operation does not flush the
-// source, and either map may subsequently be mutated or persisted through the
-// retained backing independently.
-func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
-	sm.tree.mu.RLock()
-	defer sm.tree.mu.RUnlock()
-	sm.backing.mu.RLock()
-	defer sm.backing.mu.RUnlock()
-
-	if sm.tree.state == stateInvalid {
-		return nil, fmt.Errorf("%w: cannot detach invalid map", errInvalidState)
-	}
-
-	root, err := cloneLoadedInner(sm.tree.root)
-	if err != nil {
-		return nil, fmt.Errorf("clone loaded tree: %w", err)
-	}
-
-	out := &SHAMap{
-		tree: treeState{
-			root:      root,
-			mapType:   sm.tree.mapType,
-			state:     stateModifying,
-			ledgerSeq: sm.tree.ledgerSeq,
-		},
-		backing: backingState{
-			access:    sm.backing.access,
-			fullBelow: sm.backing.fullBelow,
-		},
-	}
-	if out.backing.access.available() {
-		out.acquisition.budget = NewAcquisitionBudget(0)
-	}
-	out.tree.cachedSize.Store(-1)
-	return out, nil
-}
-
-func cloneLoadedInner(source *innerNode) (*innerNode, error) {
-	if source == nil {
-		return nil, errors.New("nil inner node")
-	}
-
-	source.mu.RLock()
-	children := source.children
-	clone := &innerNode{
-		hashes:       source.hashes,
-		isBranch:     source.isBranch,
-		fullBelowGen: source.fullBelowGen,
-	}
-	clone.hash = source.hash
-	clone.SetDirty(source.IsDirty())
-	source.mu.RUnlock()
-
-	for branch, child := range children {
-		if child == nil {
-			continue
-		}
-		childClone, err := cloneLoadedNode(child)
-		if err != nil {
-			return nil, fmt.Errorf("branch %d: %w", branch, err)
-		}
-		clone.children[branch] = childClone
-	}
-	return clone, nil
-}
-
-func cloneLoadedNode(source mapNode) (mapNode, error) {
-	switch node := source.(type) {
-	case *innerNode:
-		return cloneLoadedInner(node)
-	case *leafNode:
-		node.mu.RLock()
-		defer node.mu.RUnlock()
-		item, err := node.item.clone()
-		if err != nil {
-			return nil, fmt.Errorf("clone leaf item: %w", err)
-		}
-		clone := &leafNode{item: item, kind: node.kind}
-		clone.hash = node.hash
-		clone.SetDirty(node.IsDirty())
-		return clone, nil
-	default:
-		return nil, fmt.Errorf("unsupported loaded node type %T", source)
-	}
 }
 
 // snapshotLocked returns a shared snapshot while the caller holds the tree and

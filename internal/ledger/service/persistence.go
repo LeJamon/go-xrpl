@@ -11,12 +11,10 @@ import (
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -65,6 +63,14 @@ func (s *Service) persistValidatedLedgerAtToken(
 		s.canonicalPersistMu.Lock()
 		defer s.canonicalPersistMu.Unlock()
 	}
+	if persistErr != nil && s.config.FlatState != nil {
+		return persistErr
+	}
+	if updateTip && s.config.FlatState != nil {
+		if err := s.advanceFlatState(ctx, l); err != nil {
+			return err
+		}
+	}
 	if s.relationalDB != nil {
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
 			persistErr = errors.Join(persistErr, err)
@@ -86,6 +92,14 @@ func (s *Service) persistValidatedLedgerAtToken(
 			} else {
 				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
 			}
+		}
+	}
+
+	if persistErr == nil && updateTip && s.config.FlatState != nil {
+		id := flatstate.SemanticCommitID(l.Hash(), ledgerPublication)
+		persistErr = s.config.FlatState.AckPublishedOutbox(ctx, id)
+		if persistErr == nil {
+			persistErr = s.refreshFlatRootPins(ctx)
 		}
 	}
 
@@ -191,6 +205,7 @@ func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, validated, up
 		return
 	}
 	p.persistQueue = append(p.persistQueue, job)
+	l.ReleaseExecutionBuildLeases()
 	p.signalPersistLocked()
 	p.persistMu.Unlock()
 }
@@ -274,7 +289,9 @@ func (p *persistenceWorker) flushPersists(ctx context.Context) error {
 // Stop drains the persistence queue and joins the worker, guaranteeing every
 // ledger persist enqueued before Stop is durable before the caller
 // closes the underlying node/relational stores. Idempotent and safe on a
-// never-started Service. Must be called before those stores are closed.
+// never-started Service. Must be called before those stores are closed. If an
+// external ledger view still owns an execution root, call Stop again after
+// releasing that view to finish owned execution cleanup.
 func (s *Service) Stop() {
 	s.lifecycleMu.Lock()
 	switch s.lifecycleState {
@@ -284,6 +301,17 @@ func (s *Service) Stop() {
 		<-done
 		return
 	case serviceStopped:
+		// Stop may have completed its worker drain while an external ledger
+		// view still held an execution root lease. Keep the owned close callback
+		// until it succeeds so a later Stop after that view is released retries
+		// the resource cleanup.
+		if s.closeExecution != nil {
+			if err := s.closeExecution(); err != nil {
+				s.logger.Error("close execution store", "error", err)
+			} else {
+				s.closeExecution = nil
+			}
+		}
 		s.lifecycleMu.Unlock()
 		return
 	}
@@ -316,9 +344,20 @@ func (s *Service) Stop() {
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()
+	if s.openLedger != nil {
+		s.openLedger.Discard()
+	}
+	if s.openLedgerView != nil {
+		s.openLedgerView.Current().Discard()
+	}
+	for root, release := range s.flatPins {
+		release()
+		delete(s.flatPins, root)
+	}
 	s.clearRelayCache()
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()
+	s.releaseStartupReplayLocked()
 	s.mu.Unlock()
 	// Retain the final proof for stopped-service checkpoint preparation.
 	s.validatedStateBaseMu.Lock()
@@ -326,6 +365,13 @@ func (s *Service) Stop() {
 	s.validatedStateBaseMu.Unlock()
 
 	s.lifecycleMu.Lock()
+	if s.closeExecution != nil {
+		if err := s.closeExecution(); err != nil {
+			s.logger.Error("close execution store", "error", err)
+		} else {
+			s.closeExecution = nil
+		}
+	}
 	s.lifecycleState = serviceStopped
 	close(done)
 	s.lifecycleMu.Unlock()
@@ -341,7 +387,24 @@ func (p *persistenceWorker) runPersistWorker() {
 			p.persistQueue = p.persistQueue[1:]
 			p.persistActive = job
 			p.persistMu.Unlock()
-			p.service.runPersistJob(job)
+			for {
+				err := p.service.runPersistJob(job)
+				if err == nil || p.service.config.FlatState == nil {
+					break
+				}
+				p.persistMu.Lock()
+				stopping := p.persistStopping
+				p.persistMu.Unlock()
+				if stopping {
+					break
+				}
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-timer.C:
+				case <-p.persistWake:
+				}
+				timer.Stop()
+			}
 			p.persistMu.Lock()
 			p.persistActive = nil
 			p.signalCapacityLocked()
@@ -357,9 +420,9 @@ func (p *persistenceWorker) runPersistWorker() {
 	}
 }
 
-func (s *Service) runPersistJob(job *persistJob) {
+func (s *Service) runPersistJob(job *persistJob) error {
 	if job == nil {
-		return
+		return nil
 	}
 	if job.evictedTip != nil {
 		s.invalidateEvictedValidatedTip(*job.evictedTip)
@@ -392,7 +455,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 		s.persistMu.Lock()
 		lateTip := job.validated && !job.tipOnly && !job.canceled.Load() &&
 			!updateTip && job.updatesTip.Load()
-		if !lateTip && job.validated && s.validatedPersistJobs[job.l.Sequence()] == job {
+		if !lateTip && (err == nil || s.config.FlatState == nil) && job.validated && s.validatedPersistJobs[job.l.Sequence()] == job {
 			delete(s.validatedPersistJobs, job.l.Sequence())
 		}
 		s.persistMu.Unlock()
@@ -405,7 +468,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 				job.proof,
 			)
 		}
-		if lateTip {
+		if lateTip && (err == nil || s.config.FlatState == nil) {
 			s.persistMu.Lock()
 			if s.validatedPersistJobs[job.l.Sequence()] == job {
 				delete(s.validatedPersistJobs, job.l.Sequence())
@@ -413,13 +476,18 @@ func (s *Service) runPersistJob(job *persistJob) {
 			s.persistMu.Unlock()
 		}
 		if err != nil {
-			s.logger.Error("failed to persist ledger; chain advance continues",
-				"seq", job.l.Sequence(), "err", err)
+			if s.config.FlatState != nil {
+				s.logger.Error("ledger persistence failed; admission waits for retry", "seq", job.l.Sequence(), "err", err)
+			} else {
+				s.logger.Error("failed to persist ledger; chain advance continues", "seq", job.l.Sequence(), "err", err)
+			}
+			return err
 		}
 	}
 	if job.done != nil {
 		close(job.done)
 	}
+	return nil
 }
 
 func (s *Service) persistLedgerJob(
@@ -491,44 +559,6 @@ func (p *persistenceWorker) waitForNodePersists(ctx context.Context) error {
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
 	s.beginNodePersist()
 	defer s.endNodePersist()
-	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
-		return func(entries []shamap.FlushEntry) error {
-			if family, ok := s.shamapFamily.(*backend.NodeStore); ok {
-				return family.StoreBatch(ctx, entries)
-			}
-			const batchSize = 4096
-			for start := 0; start < len(entries); start += batchSize {
-				end := min(start+batchSize, len(entries))
-				nodes := make([]*nodestore.Node, end-start)
-				for i, entry := range entries[start:end] {
-					nodes[i] = &nodestore.Node{
-						Type:      nodeType,
-						Hash:      nodestore.Hash256(entry.Hash),
-						Data:      entry.Data,
-						LedgerSeq: entry.LedgerSeq,
-					}
-				}
-				if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-
-	if s.config.PersistenceMemory != nil {
-		if err := l.StoreDirtyBatched(ctx, s.config.PersistenceMemory, store(nodestore.NodeAccount), store(nodestore.NodeTransaction)); err != nil {
-			return fmt.Errorf("store ledger %d delta: %w", seq, err)
-		}
-	} else {
-		if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
-			return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
-		}
-		if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
-			return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
-		}
-	}
-
 	headerData := l.SerializeHeader()
 	headerNode := &nodestore.Node{
 		Type:      nodestore.NodeLedger,
@@ -546,7 +576,7 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 	if err := s.nodeStore.Sync(ctx); err != nil {
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
-	return nil
+	return l.EstablishBoundedClosure(ctx)
 }
 
 func (s *Service) persistValidatedTipJob(
@@ -556,6 +586,9 @@ func (s *Service) persistValidatedTipJob(
 	canceled func() bool,
 	proof *replayCompletenessRecord,
 ) error {
+	if s.config.FlatState != nil {
+		return s.persistValidatedLedgerAtToken(ctx, l, true, 0, allowSameSequenceReplacement, canceled, proof)
+	}
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
 	if canceled != nil && canceled() {
@@ -922,82 +955,13 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 		CloseFlags:      uint32(h.CloseFlags),
 	}
 
-	seq := relationaldb.LedgerIndex(l.Sequence())
-
-	indexed := make([]relationaldb.IndexedTransaction, 0)
-	var loopErr error
-	err = l.ForEachTransactionContext(ctx, func(txHashBytes [32]byte, txData []byte) bool {
-		txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(txData)
-		if err != nil {
-			loopErr = fmt.Errorf("split transaction %x: %w", txHashBytes[:8], err)
-			return false
-		}
-
-		var accountID relationaldb.AccountID
-		parsedTransaction, err := tx.ParseFromBinary(txBlob)
-		if err != nil {
-			loopErr = fmt.Errorf("decode transaction %x: %w", txHashBytes[:8], err)
-			return false
-		}
-		computedHash, err := tx.ComputeTransactionHash(parsedTransaction)
-		if err != nil {
-			loopErr = fmt.Errorf("hash transaction %x: %w", txHashBytes[:8], err)
-			return false
-		}
-		if computedHash != txHashBytes {
-			loopErr = fmt.Errorf("transaction hash %x does not match map key %x", computedHash, txHashBytes)
-			return false
-		}
-		account := parsedTransaction.GetCommon().Account
-		if account != "" {
-			_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
-			if err != nil || len(accountBytes) != len(accountID) {
-				loopErr = fmt.Errorf("decode transaction %x Account: %w", txHashBytes[:8], errors.Join(err, relationaldb.ErrInvalidData))
-				return false
-			}
-			copy(accountID[:], accountBytes)
-		}
-
-		affected := map[relationaldb.AccountID]struct{}{}
-
-		txnSeq, ok := tx.TransactionIndexFromMetadata(metaBlob)
-		if !ok {
-			loopErr = fmt.Errorf("decode transaction metadata %x: missing or invalid TransactionIndex", txHashBytes[:8])
-			return false
-		}
-		metaJSON, err := binarycodec.Decode(hex.EncodeToString(metaBlob))
-		if err != nil {
-			loopErr = fmt.Errorf("decode transaction metadata %x: %w", txHashBytes[:8], err)
-			return false
-		}
-		if result, ok := metaJSON["TransactionResult"].(string); !ok || result == "" {
-			loopErr = fmt.Errorf("decode transaction metadata %x: missing or invalid TransactionResult", txHashBytes[:8])
-			return false
-		}
-		if err := addMetaAffectedAccounts(metaJSON, affected); err != nil {
-			loopErr = fmt.Errorf("decode transaction metadata %x: %w", txHashBytes[:8], err)
-			return false
-		}
-
-		indexed = append(indexed, relationaldb.IndexedTransaction{
-			Transaction: relationaldb.TransactionInfo{
-				Hash:      relationaldb.Hash(txHashBytes),
-				LedgerSeq: seq,
-				TxnSeq:    txnSeq,
-				Status:    "validated",
-				RawTxn:    txBlob,
-				TxnMeta:   metaBlob,
-				Account:   accountID,
-			},
-			Accounts: sortedAccountIDs(affected),
-		})
-		return true
-	})
-	if err != nil {
-		return fmt.Errorf("iterate transaction map: %w", err)
+	if publisher, ok := s.relationalDB.(relationaldb.StreamingLedgerPublisher); ok {
+		return persistLedgerTransactionStream(ctx, publisher, l, ledgerInfo)
 	}
-	if loopErr != nil {
-		return loopErr
+
+	indexed, err := collectIndexedTransactions(ctx, l, relationaldb.LedgerIndex(l.Sequence()))
+	if err != nil {
+		return err
 	}
 	return s.relationalDB.PersistValidatedLedger(ctx, relationaldb.ValidatedLedger{
 		Ledger:       ledgerInfo,

@@ -126,36 +126,3 @@ func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filt
 	}
 	return sm.walkMapParallelContext(ctx, maxNodes, filter)
 }
-
-// getMissingNodesUnsafe collects up to maxNodes missing-node references
-// missingNodesLocked is the shared walk behind the lenient request path and
-// the strict completeness checks (FinishSync, CheckComplete). strict=true
-// aborts on a transient store error instead of reporting phantom missing
-// nodes. Caller must hold at least the read lock.
-func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict bool) ([]MissingNode, error) {
-	if filter == nil {
-		filter = &defaultSyncFilter{}
-	}
-	if sm.tree.root == nil {
-		return nil, nil
-	}
-
-	var missing []MissingNode
-	_, err := walkSubtreeForMissing(
-		context.Background(), sm,
-		sm.tree.root,
-		newRootNodeID(),
-		sm.tree.root.Hash(),
-		0,
-		filter,
-		strict,
-		func(m MissingNode) bool {
-			missing = append(missing, m)
-			return maxNodes > 0 && len(missing) >= maxNodes
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	return missing, nil
-}

@@ -99,14 +99,16 @@ func relationalTestLedger(t *testing.T, hash [32]byte, combined []byte) *ledger.
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := ledger.FromGenesis(g.Header, g.StateMap, g.TxMap, drops.DefaultFees())
+	parent, err := ledger.FromGenesis(g.Header, g.StateMap, g.TxMap, drops.DefaultFees(), newTestExecutionStore(t))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}
+	t.Cleanup(parent.Discard)
 	l, err := ledger.NewOpen(parent, g.Header.CloseTime.Add(time.Second))
 	if err != nil {
 		t.Fatalf("ledger.NewOpen: %v", err)
 	}
+	t.Cleanup(l.Discard)
 	if err := l.AddTransactionWithMeta(hash, combined); err != nil {
 		t.Fatalf("AddTransactionWithMeta: %v", err)
 	}

@@ -81,7 +81,8 @@ func (f *verifierFamily) corruptNode(hash [32]byte) {
 func newVerifierService(t *testing.T, family *verifierFamily) *Service {
 	t.Helper()
 	t.Cleanup(func() { require.NoError(t, family.Close()) })
-	return &Service{shamapFamily: family}
+	execution := newTestExecutionStore(t, family)
+	return &Service{config: Config{Execution: execution, SHAMapFamily: family}, shamapFamily: family}
 }
 
 func newPersistedVerifierMap(t *testing.T, family *verifierFamily, mapType shamap.Type, count int) *shamap.SHAMap {

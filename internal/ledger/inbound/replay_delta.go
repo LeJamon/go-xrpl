@@ -13,7 +13,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -181,12 +180,13 @@ type ReplayDelta struct {
 	created time.Time
 	logger  *slog.Logger
 
-	mu      sync.Mutex
-	state   State
-	err     error
-	result  *ledger.Ledger // pre-apply: parent state carried through
-	derived *ledger.Ledger // post-apply: state map re-derived by the engine
-	txs     []DecodedTx
+	mu       sync.Mutex
+	state    State
+	err      error
+	target   header.LedgerHeader
+	targetTx *shamap.SHAMap
+	derived  *ledger.Ledger // post-apply: state map re-derived by the engine
+	txs      []DecodedTx
 
 	// Admission follows the replay through application and asynchronous diagnosis.
 	// Abandonment releases only the original owner.
@@ -332,10 +332,14 @@ func (r *ReplayDelta) releaseMemoryOwner() {
 	account := r.memory
 	headBytes := r.memoryHeadBytes
 	processingBytes := r.memoryProcessingBytes
+	derived := r.derived
 	r.memory = nil
 	r.memoryHeadBytes = 0
 	r.memoryProcessingBytes = 0
 	r.mu.Unlock()
+	if derived != nil {
+		derived.ReleaseExecutionBuildLeases()
+	}
 	if account == nil {
 		return
 	}
@@ -429,8 +433,43 @@ func NewStoredLedgerReplayWithMemoryContext(
 		return nil, errors.New("stored replay target is not closed")
 	}
 
+	txRoot, err := target.TxMapHash()
+	if err != nil {
+		return nil, fmt.Errorf("stored replay target transaction map: %w", err)
+	}
+	return newStoredReplay(ctx, parent, target.Header(), txRoot, target.TxMapSnapshotContext, logger, account)
+}
+
+// NewTransactionReplayContext prepares replay from an authenticated target header
+// and transaction tree. Its state root is verified against execution output.
+func NewTransactionReplayContext(
+	ctx context.Context,
+	parent *ledger.Ledger,
+	target header.LedgerHeader,
+	txMap *shamap.SHAMap,
+	logger *slog.Logger,
+	account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if txMap == nil || txMap.Type() != shamap.TypeTransaction {
+		return nil, errors.New("replay requires a transaction map")
+	}
+	root, err := txMap.Hash()
+	if err != nil {
+		return nil, err
+	}
+	return newStoredReplay(ctx, parent, target, root, txMap.SnapshotMutableContext, logger, account)
+}
+
+func newStoredReplay(ctx context.Context, parent *ledger.Ledger, targetHeader header.LedgerHeader, txRoot [32]byte,
+	snapshot func(context.Context) (*shamap.SHAMap, error), logger *slog.Logger, account shamap.AcquisitionMemoryAccount,
+) (*ReplayDelta, error) {
+	if parent == nil || !parent.IsClosed() {
+		return nil, errors.New("stored replay parent must be closed")
+	}
 	parentHash := parent.Hash()
-	targetHeader := target.Header()
 	if targetHeader.ParentHash != parentHash {
 		return nil, fmt.Errorf(
 			"%w: target parent %x, expected %x",
@@ -468,17 +507,13 @@ func NewStoredLedgerReplayWithMemoryContext(
 			expectedResolution,
 		)
 	}
-	targetHash := target.Hash()
+	targetHash := targetHeader.Hash
 	if calculated := header.CalculateHash(targetHeader); calculated != targetHash {
 		return nil, fmt.Errorf(
 			"stored replay target header hash mismatch: computed %x stored %x",
 			calculated[:8],
 			targetHash[:8],
 		)
-	}
-	txRoot, err := target.TxMapHash()
-	if err != nil {
-		return nil, fmt.Errorf("stored replay target transaction map: %w", err)
 	}
 	if txRoot != targetHeader.TxHash {
 		return nil, fmt.Errorf(
@@ -504,7 +539,7 @@ func NewStoredLedgerReplayWithMemoryContext(
 	if err := replay.reserveProcessingMemory(replayStoredWorkspaceBytes); err != nil {
 		return nil, err
 	}
-	txMap, err := target.TxMapSnapshotContext(ctx)
+	txMap, err := snapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +630,7 @@ func NewStoredLedgerReplayWithMemoryContext(
 		}
 	}
 
-	replay.result = target
+	replay.target, replay.targetTx = targetHeader, txMap
 	replay.txs = decoded
 	replay.state = StateReplayReady
 	retainMemory = true
@@ -761,6 +796,9 @@ func (r *ReplayDelta) NoteSubTaskRetry(newPeerID uint64) {
 func (r *ReplayDelta) Result() (*ledger.Ledger, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.memoryOwners == 0 {
+		return nil, errors.New("replay delta ownership has ended")
+	}
 	if r.state != StateComplete {
 		return nil, fmt.Errorf("replay delta not complete (state=%d)", r.state)
 	}
@@ -791,22 +829,23 @@ func (r *ReplayDelta) OrderedTxs() []DecodedTx {
 func (r *ReplayDelta) TargetHeader() header.LedgerHeader {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.result == nil {
-		return header.LedgerHeader{}
-	}
-	return r.result.Header()
+	return r.target
 }
 
 // TransactionMapSnapshotContext shares the verified, admission-accounted map
 // with a detached worker without rebuilding a second uncharged transaction tree.
 func (r *ReplayDelta) TransactionMapSnapshotContext(ctx context.Context) (*shamap.SHAMap, error) {
 	r.mu.Lock()
-	target := r.result
+	if r.memoryOwners == 0 {
+		r.mu.Unlock()
+		return nil, errors.New("replay delta ownership has ended")
+	}
+	target := r.targetTx
 	r.mu.Unlock()
 	if target == nil {
 		return nil, errors.New("replay delta verified target is unavailable")
 	}
-	return target.TxMapSnapshotContext(ctx)
+	return target.SnapshotMutableContext(ctx)
 }
 
 // Retry creates a fresh replay in StateReplayReady using the authenticated
@@ -835,7 +874,7 @@ func (r *ReplayDelta) RetryContext(ctx context.Context, parent *ledger.Ledger) (
 
 	r.mu.Lock()
 	state := r.state
-	target := r.result
+	target, targetTx := r.target, r.targetTx
 	logger := r.logger
 	account := r.memory
 	peerID := r.peerID
@@ -845,16 +884,20 @@ func (r *ReplayDelta) RetryContext(ctx context.Context, parent *ledger.Ledger) (
 	if state != StateReplayReady && state != StateFailed && state != StateComplete {
 		return nil, fmt.Errorf("replay delta retry requires verified target (state=%d)", state)
 	}
-	if target == nil {
+	if targetTx == nil {
 		return nil, errors.New("replay delta retry target is unavailable")
 	}
-	targetHash := target.Hash()
+	targetHash := target.Hash
 	if targetHash != requestedHash {
 		return nil, fmt.Errorf("%w: retry target hash %x, requested %x",
 			ErrReplayHeaderDiverged, targetHash[:8], requestedHash[:8])
 	}
 
-	retry, err := NewStoredLedgerReplayWithMemoryContext(ctx, parent, target, logger, account)
+	txRoot, err := targetTx.Hash()
+	if err != nil {
+		return nil, err
+	}
+	retry, err := newStoredReplay(ctx, parent, target, txRoot, targetTx.SnapshotMutableContext, logger, account)
 	if err != nil {
 		return nil, err
 	}
@@ -1011,22 +1054,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	// Sort by sfTransactionIndex so consumers can replay in order.
 	sort.SliceStable(decoded, func(i, j int) bool { return decoded[i].Index < decoded[j].Index })
 
-	// Build the result ledger. rippled does not commit a state map here
-	// (the downstream LedgerReplayer re-applies the txs against the
-	// parent state); we mirror that by carrying the parent's state map
-	// snapshot through unchanged. A consumer that wants the verified
-	// post-state can call ledger.NewOpen on the parent and apply
-	// OrderedTxs(), then close — that round-trips through the normal
-	// engine path and keeps Phase B free of replay-engine entanglement.
-	stateMap, err := r.parentStateSnapshot()
-	if err != nil {
-		return newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
-	}
-
-	r.result, err = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
-	if err != nil {
-		return fmt.Errorf("construct replay ledger: %w", err)
-	}
+	r.target, r.targetTx = *hdr, txMap
 	r.txs = decoded
 
 	r.logger.Info("replay delta verified",
@@ -1070,6 +1098,9 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.memoryOwners == 0 {
+		return nil, errors.New("replay delta ownership has ended")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1097,24 +1128,16 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	if r.parent == nil {
 		return nil, errors.New("cannot apply replay delta without parent ledger")
 	}
-	if r.result == nil {
+	if r.targetTx == nil {
 		return nil, errors.New("verified result missing — replay delta state corrupt")
 	}
 
-	// The header verified by GotResponse is the one carried in r.result.
-	// Use it as the source of truth for per-ledger fields the engine
-	// needs — close time, sequence, drops baseline, target hashes.
-	hdr := r.result.Header()
+	hdr := r.target
 
 	// Build a mutable child ledger anchored on the parent. Mirror
 	// rippled's Ledger(parent, closeTime) constructor: child inherits
 	// the parent's totalCoins and chains its parent linkage from the
 	// parent rather than the deserialized response header.
-	stateMap, err := r.parent.StateMapSnapshotContext(ctx)
-	if err != nil {
-		return nil, newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
-	}
-	txMap := shamap.New(shamap.TypeTransaction)
 	parentHeader := r.parent.Header()
 	applicationResolution := consensus.GetNextLedgerTimeResolution(
 		uint32(parentHeader.CloseTimeResolution),
@@ -1139,10 +1162,15 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 		// subtracts dropsDestroyed accumulated during apply.
 		Drops: r.parent.TotalDrops(),
 	}
-	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.Fees())
+	child, err := ledger.NewOpenFromParentHeader(ctx, r.parent, openHdr)
 	if err != nil {
 		return nil, fmt.Errorf("construct replay ledger: %w", err)
 	}
+	defer func() {
+		if r.derived != child {
+			child.Discard()
+		}
+	}()
 
 	// Override per-ledger config fields from the verified header /
 	// parent. The caller's EngineConfig keeps fees, network ID, logger,
@@ -1413,22 +1441,6 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 // engine. The Ripple epoch is 2000-01-01 UTC.
 func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
 	return protocol.ToRippleTime(parent.CloseTime())
-}
-
-// parentStateSnapshot returns an immutable snapshot of the parent state
-// map, or an empty state map if there is no parent (test scenarios).
-func (r *ReplayDelta) parentStateSnapshot() (*shamap.SHAMap, error) {
-	if r.parent == nil {
-		return shamap.New(shamap.TypeState), nil
-	}
-	snap, err := r.parent.StateMapSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	if err := snap.SetImmutable(); err != nil {
-		return nil, err
-	}
-	return snap, nil
 }
 
 // ToHash32 returns h as [32]byte iff len(h) == 32. The bool return

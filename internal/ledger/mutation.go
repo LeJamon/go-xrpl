@@ -3,11 +3,9 @@ package ledger
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
@@ -18,7 +16,7 @@ func (l *Ledger) ExistsContext(ctx context.Context, k keylet.Keylet) (bool, erro
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.HasContext(ctx, k.Key)
+	return l.execution.state.HasContext(ctx, k.Key)
 }
 
 func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
@@ -32,7 +30,7 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateMap.Has(k.Key)
+	exists, err := l.execution.state.Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -40,7 +38,7 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrEntryExists
 	}
 
-	return l.stateMap.Put(k.Key, data)
+	return l.execution.state.Put(k.Key, data)
 }
 
 func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
@@ -54,7 +52,7 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateMap.Has(k.Key)
+	exists, err := l.execution.state.Has(k.Key)
 	if err != nil {
 		return err
 	}
@@ -62,7 +60,7 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrEntryNotFound
 	}
 
-	return l.stateMap.Put(k.Key, data)
+	return l.execution.state.Put(k.Key, data)
 }
 
 func (l *Ledger) Erase(k keylet.Keylet) error {
@@ -76,15 +74,7 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrLedgerImmutable
 	}
 
-	exists, err := l.stateMap.Has(k.Key)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return ErrEntryNotFound
-	}
-
-	return l.stateMap.Delete(k.Key)
+	return l.execution.state.Delete(k.Key)
 }
 
 func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) error {
@@ -106,69 +96,20 @@ func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
 		return ErrLedgerImmutable
 	}
 
-	stateMap, err := l.stateMap.MutableFork()
+	staged, err := l.executionSnapshot(context.Background(), true)
 	if err != nil {
-		return fmt.Errorf("fork ledger state: %w", err)
+		return err
 	}
-	staged := &Ledger{
-		stateMap:       stateMap,
-		txMap:          l.txMap,
-		header:         l.header,
-		fees:           l.fees,
-		state:          l.state,
-		writable:       true,
-		dropsDestroyed: l.dropsDestroyed,
-		rules:          l.rules,
-	}
-	defer staged.invalidateMutableState()
+	defer staged.Discard()
 	if err := apply(staged); err != nil {
 		return err
 	}
-
-	l.stateMap = staged.stateMap
+	l.execution.close()
+	l.execution, staged.execution = staged.execution, nil
 	l.dropsDestroyed = staged.dropsDestroyed
-	return nil
-}
-
-// AdoptState replaces this ledger's state map, tx map, and destroyed-drops tally
-// with src's in one shot. Header and fees are unchanged.
-func (l *Ledger) AdoptState(src *Ledger) error {
-	if src == nil {
-		return errors.New("ledger: AdoptState from nil source")
-	}
-	l.mu.RLock()
-	targetWritable := l.state == StateOpen && l.writable
-	l.mu.RUnlock()
-	if !targetWritable {
-		return ErrLedgerImmutable
-	}
-
-	src.mu.RLock()
-	if src.state != StateOpen || !src.writable {
-		src.mu.RUnlock()
-		return ErrInvalidState
-	}
-	stateMap, err := src.stateMap.DetachedMutable()
-	if err != nil {
-		src.mu.RUnlock()
-		return fmt.Errorf("detach adopted state map: %w", err)
-	}
-	txMap, err := src.txMap.DetachedMutable()
-	if err != nil {
-		src.mu.RUnlock()
-		return fmt.Errorf("detach adopted transaction map: %w", err)
-	}
-	dropsDestroyed := src.dropsDestroyed
-	src.mu.RUnlock()
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.state != StateOpen || !l.writable {
-		return ErrLedgerImmutable
-	}
-	l.stateMap = stateMap
-	l.txMap = txMap
-	l.dropsDestroyed = dropsDestroyed
+	staged.execution = emptyExecution(staged.header, l.execution.state.store)
+	staged.dropsDestroyed = 0
+	staged.writable = false
 	return nil
 }
 
@@ -196,22 +137,27 @@ func (l *Ledger) ConsumeState(src *Ledger) error {
 		return ErrInvalidState
 	}
 
-	l.stateMap = src.stateMap
-	l.txMap = src.txMap
+	if l.execution != nil {
+		l.execution.close()
+	}
+	srcStore := src.execution.state.store
+	l.execution, src.execution = src.execution, nil
 	l.dropsDestroyed = src.dropsDestroyed
-	src.invalidateMutableStateLocked()
+	src.execution = emptyExecution(src.header, srcStore)
+	src.dropsDestroyed = 0
+	src.writable = false
 	return nil
 }
 
-func (l *Ledger) invalidateMutableState() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.invalidateMutableStateLocked()
-}
-
 func (l *Ledger) invalidateMutableStateLocked() {
-	l.stateMap = shamap.New(shamap.TypeState)
-	l.txMap = shamap.New(shamap.TypeTransaction)
+	var store *ExecutionStore
+	if l.execution != nil {
+		store = l.execution.state.store
+		l.execution.close()
+	}
+	if store != nil {
+		l.execution = emptyExecution(l.header, store)
+	}
 	l.dropsDestroyed = 0
 	l.writable = false
 }

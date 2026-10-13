@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -22,10 +23,16 @@ import (
 // "parent" for a replay-delta acquisition test.
 func makeGenesisLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
+	return makeGenesisWithStore(t, testutil.NewExecutionStore(t, nil))
+}
+
+func makeGenesisWithStore(t *testing.T, store *ledger.ExecutionStore) *ledger.Ledger {
+	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	require.NoError(t, err)
+	t.Cleanup(l.Discard)
 	return l
 }
 
@@ -395,15 +402,17 @@ func TestInboundReplayDelta_ParentHashMismatch(t *testing.T) {
 	// baked into the response header.
 	other := makeGenesisLedger(t)
 	hdr := other.Header()
-	hdr.Hash = [32]byte{0xDE, 0xAD, 0xBE, 0xEF}
+	hdr.CloseTime = hdr.CloseTime.Add(time.Second)
+	hdr.Hash = header.CalculateHash(hdr)
 	stateSnap, err := other.StateMapSnapshot()
 	require.NoError(t, err)
 	require.NoError(t, stateSnap.SetImmutable())
 	txSnap, err := other.TxMapSnapshot()
 	require.NoError(t, err)
 	require.NoError(t, txSnap.SetImmutable())
-	wrong, err := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{})
+	wrong, err := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{}, other.ExecutionStore())
 	require.NoError(t, err)
+	t.Cleanup(wrong.Discard)
 
 	rd := NewReplayDelta(expectedHash, 42, wrong, nil)
 	err = rd.GotResponse(resp)

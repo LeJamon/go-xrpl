@@ -985,7 +985,7 @@ func TestCompleteInboundLedgerDiscardsItsOwnPersistenceFailure(t *testing.T) {
 
 func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
-	router := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(nil, newTestAdaptor(t, base), make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
 	router.catchupReplay.acquisitionStore.start(t.Context())
 	defer router.catchupReplay.acquisitionStore.stopDrain()
@@ -993,6 +993,9 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 	acquired, ledgerHash := completedScopedAcquisition(t, scope, 45)
 	router.catchupReplay.fetchTracker.Track(acquired)
+	_, beforeStateMap, _, err := acquired.Result()
+	require.NoError(t, err)
+	require.False(t, beforeStateMap.UsesFamily(base), "unpromoted acquisition must remain a distinct backing Family")
 
 	router.catchupReplay.completeInboundLedger(acquired)
 	require.Nil(t, router.catchupReplay.fetchTracker.Find(ledgerHash))
@@ -1004,6 +1007,7 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 
 	_, stateMap, _, err := acquired.Result()
 	require.NoError(t, err)
+	require.True(t, stateMap.UsesFamily(base), "promoted acquisition should reuse the durable Family")
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 	fullBelow := scope.FullBelowCache()

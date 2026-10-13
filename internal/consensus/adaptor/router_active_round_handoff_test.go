@@ -31,6 +31,7 @@ func TestRouter_ActiveRoundRecoveryDefersPromotionAndHandoff(t *testing.T) {
 
 	child, err := ledger.NewOpen(parent, a.Now())
 	require.NoError(t, err)
+	t.Cleanup(func() { child.Discard() })
 	require.NoError(t, child.Close(a.Now(), 0))
 	nodeID, err := a.GetValidatorKey()
 	require.NoError(t, err)

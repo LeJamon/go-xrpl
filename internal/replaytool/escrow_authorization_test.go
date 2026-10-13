@@ -105,6 +105,7 @@ func TestIssue1993HistoricalMPTEscrowMatchesPeerAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, parentHash, parentHashFromTarget)
 
+	store := newTestExecutionStore(t)
 	view, err := ledger.NewOpenWithHeader(
 		header.LedgerHeader{
 			LedgerIndex:         fixture.Target.LedgerIndex,
@@ -117,8 +118,10 @@ func TestIssue1993HistoricalMPTEscrowMatchesPeerAuthorization(t *testing.T) {
 		stateMap,
 		shamap.New(shamap.TypeTransaction),
 		fees,
+		store,
 	)
 	require.NoError(t, err)
+	defer view.Discard()
 
 	txBlob, err := hex.DecodeString(fixture.Transaction.Blob)
 	require.NoError(t, err)

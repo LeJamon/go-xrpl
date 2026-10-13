@@ -59,27 +59,21 @@ func (s *Service) prepareReplayDiagnosticParent(ctx context.Context, h header.Le
 	txProof := h.TxHash == ([32]byte{}) || (reuseProof && s.lookupReplayProof(h, pin.fingerprint, true))
 	s.logger.Info("Replay diagnostic parent verification", "sequence", h.LedgerIndex,
 		"state_proof_reused", stateProof, "tx_proof_reused", txProof)
-	if !stateProof {
-		if err := s.verifyDetachedSnapshot(ctx, "replay diagnostic state", stateMap, [32]byte{}); err != nil {
-			return nil, nil, true, err
-		}
-	}
-	if !txProof {
-		if err := s.verifyDetachedSnapshot(ctx, "replay diagnostic transactions", txMap, [32]byte{}); err != nil {
-			return nil, nil, true, err
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, nil, true, err
-	}
-	if err := stateMap.SetImmutable(); err != nil {
-		return nil, nil, true, err
-	}
-	if err := txMap.SetImmutable(); err != nil {
-		return nil, nil, true, err
-	}
-	parent, err := ledger.NewFromHeader(h, stateMap, txMap, fees)
+	parent, err := ledger.NewClosedFromRootsContext(ctx, h, fees, s.config.Execution)
 	if err != nil {
+		return nil, nil, true, err
+	}
+	if err := parent.AuthenticateClosureWith(ctx, func(ctx context.Context, _ header.LedgerHeader) error {
+		if !stateProof {
+			if err := s.verifyDetachedSnapshot(ctx, "replay diagnostic state", stateMap, [32]byte{}); err != nil {
+				return err
+			}
+		}
+		if !txProof {
+			return s.verifyDetachedSnapshot(ctx, "replay diagnostic transactions", txMap, [32]byte{})
+		}
+		return nil
+	}); err != nil {
 		return nil, nil, true, err
 	}
 	owned = false

@@ -27,7 +27,8 @@ func TestConsensusSuccessorPreparationKeepsReadersAndIngressResponsive(t *testin
 	sender, destination := jtx.MasterAccount(), jtx.NewAccount("consensus-successor")
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
 	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 1_000_000, 100, 2)
-	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), sender.AccountID())
+	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), svc.shamapFamily, sender.AccountID())
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	oldClosed := svc.GetClosedLedger()
 	priorTx, err := openledger.ParsePendingTx(prior)
@@ -84,7 +85,8 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 	sender, destination := jtx.MasterAccount(), jtx.NewAccount("consensus-failure")
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
 	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 21_000_000, 100, 1)
-	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), sender.AccountID())
+	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), svc.shamapFamily, sender.AccountID())
+	t.Cleanup(svc.Stop)
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	priorTx, err := openledger.ParsePendingTx(prior)
 	require.NoError(t, err)
@@ -182,12 +184,10 @@ func (f *successorPathFamily) path() [][32]byte {
 	return path
 }
 
-func successorPreparationParent(t testing.TB, parent *ledger.Ledger, account [20]byte) (*ledger.Ledger, *successorPreparationParentFamily) {
+func successorPreparationParent(t testing.TB, parent *ledger.Ledger, base shamap.Family, account [20]byte) (*ledger.Ledger, *successorPreparationParentFamily) {
 	t.Helper()
-	cold, backing := coldAcceptanceParent(t, parent)
-	root, err := cold.StateMapHash()
-	require.NoError(t, err)
-	base := backing.Family
+	descriptor, root := coldParentDescriptor(t, parent)
+	defer descriptor.Discard()
 	accountPath := successorStatePath(t, root, base, keylet.Account(account).Key)
 	feePath := successorStatePath(t, root, base, keylet.Fees().Key)
 	feeNodes := make(map[[32]byte]struct{}, len(feePath))
@@ -208,9 +208,22 @@ func successorPreparationParent(t testing.TB, parent *ledger.Ledger, account [20
 		release: make(chan struct{}),
 		err:     errors.New("successor cold read failed"),
 	}
-	cold.SetStateMapFamily(family)
+	cold := coldLedgerFromDescriptor(t, descriptor, root, family)
 	t.Cleanup(family.unblock)
 	return cold, family
+}
+
+func coldLedgerFromDescriptor(t testing.TB, descriptor *ledger.Ledger, root [32]byte, family shamap.Family) *ledger.Ledger {
+	t.Helper()
+	execution := newTestExecutionStore(t, family)
+	cold, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	require.Zero(t, descriptor.TxCount())
+	loaded, err := ledger.NewFromHeader(descriptor.Header(), cold, txMap, descriptor.Fees(), execution)
+	require.NoError(t, err)
+	t.Cleanup(loaded.Discard)
+	return loaded
 }
 
 func successorStatePath(t testing.TB, root [32]byte, base shamap.Family, key [32]byte) [][32]byte {

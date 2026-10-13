@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgerpkg "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -42,9 +43,9 @@ type countingGenerationDatabase struct {
 	promotionStart        chan struct{}
 	promotionOnce         sync.Once
 	refreshChecks         atomic.Int64
-	storeBatchOnce        sync.Once
-	storeBatchStart       chan struct{}
-	storeBatchResume      chan struct{}
+	headerStoreOnce       sync.Once
+	headerStoreStart      chan struct{}
+	headerStoreResume     chan struct{}
 	promotionHashMu       sync.Mutex
 	promotionHashes       map[nodestore.Hash256]struct{}
 	promotedHashSet       map[nodestore.Hash256]struct{}
@@ -52,17 +53,21 @@ type countingGenerationDatabase struct {
 }
 
 func (d *countingGenerationDatabase) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
-	if d.storeBatchStart != nil {
-		d.storeBatchOnce.Do(func() {
-			close(d.storeBatchStart)
+	d.storeBatchNodes += len(nodes)
+	return d.Database.StoreBatch(ctx, nodes)
+}
+
+func (d *countingGenerationDatabase) Store(ctx context.Context, node *nodestore.Node) error {
+	if d.headerStoreStart != nil {
+		d.headerStoreOnce.Do(func() {
+			close(d.headerStoreStart)
 			select {
 			case <-ctx.Done():
-			case <-d.storeBatchResume:
+			case <-d.headerStoreResume:
 			}
 		})
 	}
-	d.storeBatchNodes += len(nodes)
-	return d.Database.StoreBatch(ctx, nodes)
+	return d.Database.Store(ctx, node)
 }
 
 func (d *countingGenerationDatabase) FetchForPromotion(
@@ -305,10 +310,10 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	)
 	require.NoError(t, err)
 	base := newTestRotatingNodeStore(t, backend, 64)
-	storeBatchStart := make(chan struct{})
-	storeBatchResume := make(chan struct{})
+	headerStoreStart := make(chan struct{})
+	headerStoreResume := make(chan struct{})
 	var releaseOnce sync.Once
-	releasePersist := func() { releaseOnce.Do(func() { close(storeBatchResume) }) }
+	releasePersist := func() { releaseOnce.Do(func() { close(headerStoreResume) }) }
 	t.Cleanup(releasePersist)
 	db := &countingGenerationDatabase{
 		Database:   base,
@@ -324,12 +329,12 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
-	db.storeBatchStart = storeBatchStart
-	db.storeBatchResume = storeBatchResume
+	db.headerStoreStart = headerStoreStart
+	db.headerStoreResume = headerStoreResume
 
-	blocker := buildLedgerWithState(t, 299)
-	selected := buildLedgerWithState(t, 300)
-	newer := buildLedgerWithState(t, 301)
+	blocker := buildLedgerWithServiceState(t, 299, svc.shamapFamily, svc.config.Execution)
+	selected := buildLedgerWithServiceState(t, 300, svc.shamapFamily, svc.config.Execution)
+	newer := buildLedgerWithServiceState(t, 301, svc.shamapFamily, svc.config.Execution)
 	selectedSeq := selected.Sequence()
 	root, err := selected.StateMapHash()
 	require.NoError(t, err)
@@ -337,7 +342,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	svc.mu.Lock()
 	svc.enqueueValidatedHistoryPersist(blocker)
 	svc.mu.Unlock()
-	<-storeBatchStart
+	<-headerStoreStart
 
 	svc.mu.Lock()
 	svc.validatedLedger = selected
@@ -391,6 +396,39 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	require.True(t, committed)
 	require.NoError(t, err)
 	require.NoError(t, svc.verifyStoredSHAMap(ctx, root, shamap.TypeState))
+}
+
+func buildLedgerWithServiceState(
+	t *testing.T,
+	seq uint32,
+	family shamap.Family,
+	store *ledgerpkg.ExecutionStore,
+) *ledgerpkg.Ledger {
+	t.Helper()
+	stateMap, err := shamap.NewBacked(shamap.TypeState, family)
+	require.NoError(t, err)
+	key := [32]byte{byte(seq), byte(seq >> 8), 0xAB}
+	require.NoError(t, stateMap.Put(key, []byte("state-payload")))
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	hdr := header.LedgerHeader{
+		LedgerIndex:         seq,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
+		ParentCloseTime:     time.Unix(1_699_999_990+int64(seq), 0).UTC(),
+		CloseTimeResolution: 10,
+		Validated:           true,
+		Accepted:            true,
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledgerpkg.FromGenesis(hdr, stateMap, txMap, drops.Fees{}, store)
+	require.NoError(t, err)
+	t.Cleanup(l.Discard)
+	return l
 }
 
 func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
@@ -882,15 +920,16 @@ func TestService_RefreshValidatedStateHandlesPartialPromotionBatches(t *testing.
 }
 
 type benchmarkRefreshFixture struct {
-	path     string
-	options  kvpebble.Options
-	template *ledgerpkg.Ledger
-	root     [32]byte
-	seq      uint32
-	rotation uint32
-	svc      *Service
-	db       *countingGenerationDatabase
-	base     *nodestore.RotatingKVDatabase
+	path      string
+	options   kvpebble.Options
+	template  *ledgerpkg.Ledger
+	root      [32]byte
+	seq       uint32
+	rotation  uint32
+	svc       *Service
+	execution *ledgerpkg.ExecutionStore
+	db        *countingGenerationDatabase
+	base      *nodestore.RotatingKVDatabase
 }
 
 func addBenchmarkIOMetrics(total *kvstore.IOMetrics, delta kvstore.IOMetrics) {
@@ -936,11 +975,13 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *be
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
+	family := shamapbackend.New(db)
+	execution := newTestExecutionStore(b, family)
 	initial, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(b, err)
-	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{}, execution)
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: base, shamapFamily: family, config: Config{Execution: execution, SHAMapFamily: family}}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)
@@ -961,6 +1002,9 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *be
 	fixture.rotation = seq
 	fixture.template, err = validated.Snapshot()
 	require.NoError(b, err)
+	fixture.execution = execution
+	validated.Discard()
+	parent.Discard()
 	committed, err := db.RotateGeneration(b.Context(), fixture.rotation, 1)
 	require.True(b, committed)
 	require.NoError(b, err)
@@ -997,12 +1041,20 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	family := shamapbackend.New(db)
+	execution := newTestExecutionStore(b, family)
+	oldTemplate := f.template
+	oldExecution := f.execution
 	svc := &Service{
 		nodeStore:    db,
 		shamapFamily: family,
+		config:       Config{Execution: execution, SHAMapFamily: family},
 		logger:       xrpllog.Discard(),
 	}
-	f.template.SetSHAMapFamily(family)
+	f.template, err = ledgerpkg.NewClosedFromRootsContext(b.Context(), oldTemplate.Header(), oldTemplate.Fees(), execution)
+	require.NoError(b, err)
+	oldTemplate.Discard()
+	require.NoError(b, oldExecution.Close())
+	f.execution = execution
 	svc.validatedLedger = f.template
 	svc.validatedSignTime = f.template.CloseTime()
 	gotRoot, err := f.template.StateMapHash()
@@ -1019,6 +1071,14 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 func (f *benchmarkRefreshFixture) close(b *testing.B) {
 	b.Helper()
 	f.svc = nil
+	if f.template != nil {
+		f.template.Discard()
+		f.template = nil
+	}
+	if f.execution != nil {
+		require.NoError(b, f.execution.Close())
+		f.execution = nil
+	}
 	if f.db != nil {
 		require.NoError(b, f.db.Close())
 		f.db = nil

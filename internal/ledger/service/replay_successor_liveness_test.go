@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,7 +76,7 @@ func TestReplaySuccessorRepairPublishesAndRetainsLocalTransaction(t *testing.T) 
 	require.NoError(t, err)
 	txMap, err := closed.TxMapSnapshot()
 	require.NoError(t, err)
-	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees())
+	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees(), closed.ExecutionStore())
 	require.NoError(t, err)
 	require.NotSame(t, closed, repaired)
 	fault := latchReplaySuccessorFault(t, svc, repaired)
@@ -98,7 +99,7 @@ func TestReplaySuccessorRepairRejectsStaleFaultAndClosedIdentity(t *testing.T) {
 	require.NoError(t, err)
 	txMap, err := closed.TxMapSnapshot()
 	require.NoError(t, err)
-	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees())
+	repaired, err := ledger.NewFromHeader(closed.Header(), state, txMap, closed.Fees(), closed.ExecutionStore())
 	require.NoError(t, err)
 	latchReplaySuccessorFault(t, svc, repaired)
 
@@ -112,6 +113,7 @@ func TestReplaySuccessorRepairRejectsStaleFaultAndClosedIdentity(t *testing.T) {
 
 type replaySuccessorBlockingFamily struct {
 	shamap.Family
+	armed       atomic.Bool
 	started     chan struct{}
 	release     chan struct{}
 	once        sync.Once
@@ -119,11 +121,13 @@ type replaySuccessorBlockingFamily struct {
 }
 
 func (f *replaySuccessorBlockingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
-	f.once.Do(func() { close(f.started) })
-	select {
-	case <-f.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if f.armed.Load() {
+		f.once.Do(func() { close(f.started) })
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return f.Family.Fetch(ctx, hash)
 }
@@ -139,13 +143,14 @@ func replaySuccessorLivenessFixture(t *testing.T) (*Service, *ledger.Ledger, *re
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	repaired, backing := coldAcceptanceParent(t, svc.GetClosedLedger())
 	family := &replaySuccessorBlockingFamily{
-		Family:  backing.Family,
+		Family:  svc.shamapFamily,
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	repaired.SetStateMapFamily(family)
+	repaired := coldLedgerWithFamily(t, svc.GetClosedLedger(), family)
+	family.armed.Store(true)
+	t.Cleanup(svc.Stop)
 	require.NoError(t, repaired.SetValidated())
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()

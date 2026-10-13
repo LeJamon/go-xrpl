@@ -95,6 +95,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 
 	// Create ApplyStateTable for transaction-specific changes
 	table := applystate.NewApplyStateTableWithErrorRecorder(e.view, txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
+	defer func() { _ = table.Close() }()
 
 	st := &applyState{
 		tx:                  tx,
@@ -371,6 +372,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	// Create a fresh ApplyStateTable to track tec-specific changes
 	// (fee, sequence, ticket consumption) for proper metadata generation.
 	tecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, st.txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
+	defer func() { _ = tecTable.Close() }()
 
 	// Consume ticket through tecTable for proper metadata (DeletedNode + directory changes)
 	// Reference: rippled Transactor.cpp — tec still consumes the ticket.
@@ -517,9 +519,9 @@ func collectPersistentDeletions(table *applystate.ApplyStateTable, result ter.Re
 
 func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.Type, include func(*applystate.TrackedEntry) bool) [][32]byte {
 	var keys [][32]byte
-	for key, tracked := range table.GetItems() {
+	_ = table.ForEachTracked(func(key [32]byte, tracked *applystate.TrackedEntry) bool {
 		if tracked.Action != applystate.ActionErase {
-			continue
+			return true
 		}
 		t, err := state.DecodeType(tracked.Original)
 		if err != nil && tracked.Current != nil {
@@ -528,7 +530,8 @@ func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.
 		if err == nil && t == entryType && (include == nil || include(tracked)) {
 			keys = append(keys, key)
 		}
-	}
+		return true
+	})
 	sort.Slice(keys, func(i, j int) bool {
 		return bytes.Compare(keys[i][:], keys[j][:]) < 0
 	})
@@ -885,6 +888,7 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 	// The inner tx carries no fee, so the reset state has an empty delta; a
 	// second violation there escalates to tefINVARIANT_FAILED.
 	feeOnly := applystate.NewApplyStateTableWithErrorRecorder(e.view, [32]byte{}, e.config.LedgerSequence, rules, e.stateErrors.record)
+	defer func() { _ = feeOnly.Close() }()
 	if invariants.CheckInvariants(wrapped, invariants.Result(ter.TecINVARIANT_FAILED), innerFeeNone, declaredFee, feeOnly.CollectEntries(), invariants.WithParentCloseTime(feeOnly, e.config.ParentCloseTime), rules, e.config.NumberContext()) != nil {
 		return ter.TefINVARIANT_FAILED
 	}
@@ -920,6 +924,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	// Don't call table.Apply() — discard all transaction effects.
 	// Create a fresh tecTable for fee-only changes.
 	invTecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, st.txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
+	defer func() { _ = invTecTable.Close() }()
 
 	// Consume ticket through invTecTable if needed.
 	if st.isTicket {

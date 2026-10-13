@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -60,8 +61,9 @@ func makeStoredReplayTarget(
 	}
 	hdr.Hash = header.CalculateHash(hdr)
 
-	target, err := ledger.NewFromHeader(hdr, stateMap, txMap, parent.Fees())
+	target, err := ledger.NewFromHeader(hdr, stateMap, txMap, parent.Fees(), parent.ExecutionStore())
 	require.NoError(t, err)
+	t.Cleanup(target.Discard)
 	return target
 }
 
@@ -128,10 +130,12 @@ func TestNewStoredLedgerReplayIsReadyToApply(t *testing.T) {
 	closeTime := time.Date(2025, 2, 3, 4, 5, 6, 0, time.UTC)
 	target, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(target.Discard)
 	require.NoError(t, target.Close(closeTime, 0))
 
 	replay, err := NewStoredLedgerReplay(parent, target, nil)
 	require.NoError(t, err)
+	t.Cleanup(replay.ReleaseMemory)
 
 	derived, err := replay.Apply(tx.EngineConfig{})
 	require.NoError(t, err)
@@ -170,6 +174,7 @@ func TestStoredReplayMemorySurvivesCancellationAndDiagnosticRetry(t *testing.T) 
 	require.Equal(t, charge, budget.Snapshot().Used)
 	retry, err := replay.RetryContext(t.Context(), parent)
 	require.NoError(t, err)
+	t.Cleanup(retry.ReleaseMemory)
 	require.Equal(t, 2*charge, budget.Snapshot().Used)
 	retry.ReleaseMemory()
 	require.Equal(t, charge, budget.Snapshot().Used)
@@ -192,7 +197,11 @@ func (f *storedReplayReadProbe) Fetch(ctx context.Context, hash [32]byte) ([]byt
 }
 
 func TestStoredReplayColdWalkAdmitsBeforeDecodeAndReleasesLoads(t *testing.T) {
-	parent := makeGenesisLedger(t)
+	base := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	family := &storedReplayReadProbe{Family: base}
+	store := testutil.NewExecutionStore(t, family)
+	parent := makeGenesisWithStore(t, store)
 	const count = 32
 	blobs := make([][]byte, count)
 	hashes := make([][32]byte, count)
@@ -200,20 +209,9 @@ func TestStoredReplayColdWalkAdmitsBeforeDecodeAndReleasesLoads(t *testing.T) {
 		blobs[i], hashes[i] = makeTxWithMetaBlob(t, []byte(fmt.Sprintf("stored-memory-leaf-%d", i)), uint32(i))
 	}
 	source := makeStoredReplayTarget(t, parent, blobs, hashes, nil)
-	base := backend.NewMemory()
-	t.Cleanup(func() { require.NoError(t, base.Close()) })
-	family := &storedReplayReadProbe{Family: base}
-	txMap, err := source.TxMapSnapshot()
+	target, err := ledger.NewClosedFromRootsContext(t.Context(), source.Header(), source.Fees(), store)
 	require.NoError(t, err)
-	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
-		return family.StoreBatch(t.Context(), entries)
-	}))
-	cold, err := shamap.NewFromRootHash(shamap.TypeTransaction, source.Header().TxHash, family)
-	require.NoError(t, err)
-	stateMap, err := source.StateMapSnapshot()
-	require.NoError(t, err)
-	target, err := ledger.NewFromHeader(source.Header(), stateMap, cold, source.Fees())
-	require.NoError(t, err)
+	t.Cleanup(target.Discard)
 
 	before := family.reads
 	_, err = NewStoredLedgerReplayWithMemory(parent, target, nil, shamap.NewAcquisitionBudget(1))
@@ -253,6 +251,7 @@ func TestNewStoredLedgerReplayRejectsInvalidLinkage(t *testing.T) {
 	t.Run("open parent", func(t *testing.T) {
 		open, err := ledger.NewOpen(parent, time.Now())
 		require.NoError(t, err)
+		t.Cleanup(open.Discard)
 		target := makeStoredReplayTarget(t, parent, nil, nil, nil)
 		_, err = NewStoredLedgerReplay(open, target, nil)
 		require.ErrorContains(t, err, "parent is not closed")
@@ -260,6 +259,7 @@ func TestNewStoredLedgerReplayRejectsInvalidLinkage(t *testing.T) {
 	t.Run("open target", func(t *testing.T) {
 		open, err := ledger.NewOpen(parent, time.Now())
 		require.NoError(t, err)
+		t.Cleanup(open.Discard)
 		_, err = NewStoredLedgerReplay(parent, open, nil)
 		require.ErrorContains(t, err, "target is not closed")
 	})
@@ -357,14 +357,8 @@ func TestNewStoredLedgerReplayRejectsInvalidHeaderHash(t *testing.T) {
 	hdr := target.Header()
 	hdr.Hash[0] ^= 0xff
 
-	stateMap, err := target.StateMapSnapshot()
+	txRoot, err := target.TxMapHash()
 	require.NoError(t, err)
-	txMap, err := target.TxMapSnapshot()
-	require.NoError(t, err)
-	target, err = ledger.NewFromHeader(hdr, stateMap, txMap, target.Fees())
-	require.NoError(t, err)
-
-	_, err = NewStoredLedgerReplay(parent, target, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "header hash mismatch")
+	_, err = newStoredReplay(t.Context(), parent, hdr, txRoot, target.TxMapSnapshotContext, nil, nil)
+	require.ErrorContains(t, err, "header hash mismatch")
 }

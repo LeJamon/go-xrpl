@@ -76,9 +76,11 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 	if selErr != nil {
 		return nil, selErr
 	}
-	if _, _, lookupErr := lookupLedger(ctx, parsedLedgerSpec); lookupErr != nil {
+	targetLedger, _, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(targetLedger)
 
 	marker := ""
 	if markerRaw, hasMarker := fields["marker"]; hasMarker {

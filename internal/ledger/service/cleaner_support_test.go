@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -52,11 +53,11 @@ func TestCleanerLedgerUsesReacquiredCanonicalLedger(t *testing.T) {
 		Validated:   true,
 	}
 	canonicalHeader.Hash = header.CalculateHash(canonicalHeader)
-	canonical, err := ledger.NewFromHeader(canonicalHeader, stateMap, txMap, drops.Fees{})
+	canonical, err := ledger.NewFromHeader(canonicalHeader, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := makeStubLedger(t, seq, [32]byte{0xBB}, parent)
+	wrong := makeStubLedger(t, seq, [32]byte{0xBB}, parent, svc.config.Execution)
 
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()
@@ -90,7 +91,7 @@ func TestCleanerReacquisitionPreservesValidatedLedger(t *testing.T) {
 	}
 	const seq uint32 = 10
 	parent := [32]byte{0x99}
-	validated := makeStubLedger(t, seq, [32]byte{0xAA}, parent)
+	validated := makeStubLedger(t, seq, [32]byte{0xAA}, parent, svc.config.Execution)
 	if !validated.IsValidated() {
 		t.Fatal("test ledger is not validated")
 	}
@@ -104,7 +105,7 @@ func TestCleanerReacquisitionPreservesValidatedLedger(t *testing.T) {
 	}
 	header := validated.Header()
 	header.Validated = false
-	reacquired, err := ledger.NewFromHeader(header, stateMap, txMap, drops.Fees{})
+	reacquired, err := ledger.NewFromHeader(header, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,15 +175,18 @@ func TestCleanerReacquireTargetRepairsMissingCanonicalProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tipHash := [32]byte{0xAA}
-	tip, err := ledger.NewFromHeader(header.LedgerHeader{
-		LedgerIndex: 10,
-		Hash:        tipHash,
-		ParentHash:  hashes[8],
-		AccountHash: stateRoot,
-		TxHash:      txRoot,
-		Validated:   true,
-	}, backedState, txMap, drops.Fees{})
+	tipHeader := header.LedgerHeader{
+		LedgerIndex:         10,
+		ParentHash:          hashes[8],
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		Validated:           true,
+		CloseTime:           time.Unix(10_000, 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	tipHeader.Hash = header.CalculateHash(tipHeader)
+	tipHash := tipHeader.Hash
+	tip, err := ledger.NewFromHeader(tipHeader, backedState, txMap, drops.Fees{}, newTestExecutionStore(t, family))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +216,24 @@ func TestCleanerReacquireTargetUsesResolvedTargetBehindLocalAnchor(t *testing.T)
 	}
 	const targetSeq uint32 = 300
 	const anchorSeq uint32 = 512
-	targetHash := [32]byte{0x30}
+	targetState := shamap.New(shamap.TypeState)
+	targetStateRoot, err := targetState.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetTx := shamap.New(shamap.TypeTransaction)
+	targetTxRoot, err := targetTx.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetHeader := header.LedgerHeader{
+		LedgerIndex:         targetSeq,
+		AccountHash:         targetStateRoot,
+		TxHash:              targetTxRoot,
+		CloseTime:           time.Unix(int64(targetSeq)*1000, 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	targetHash := header.CalculateHash(targetHeader)
 	anchorState := shamap.New(shamap.TypeState)
 	hashes := make([][32]byte, 256)
 	hashes[targetSeq-(anchorSeq-256)] = targetHash
@@ -228,14 +249,17 @@ func TestCleanerReacquireTargetUsesResolvedTargetBehindLocalAnchor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	anchorHash := [32]byte{0x51}
-	anchor, err := ledger.NewFromHeader(header.LedgerHeader{
-		LedgerIndex: anchorSeq,
-		Hash:        anchorHash,
-		AccountHash: anchorRoot,
-		TxHash:      txRoot,
-		Validated:   true,
-	}, anchorState, txMap, drops.Fees{})
+	anchorHeader := header.LedgerHeader{
+		LedgerIndex:         anchorSeq,
+		AccountHash:         anchorRoot,
+		TxHash:              txRoot,
+		Validated:           true,
+		CloseTime:           time.Unix(int64(anchorSeq)*1000, 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	anchorHeader.Hash = header.CalculateHash(anchorHeader)
+	anchorHash := anchorHeader.Hash
+	anchor, err := ledger.NewFromHeader(anchorHeader, anchorState, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,13 +271,17 @@ func TestCleanerReacquireTargetUsesResolvedTargetBehindLocalAnchor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tip, err := ledger.NewFromHeader(header.LedgerHeader{
-		LedgerIndex: 800,
-		Hash:        [32]byte{0x80},
-		AccountHash: tipRoot,
-		TxHash:      txRoot,
-		Validated:   true,
-	}, tipState, txMap, drops.Fees{})
+	tipHeader := header.LedgerHeader{
+		LedgerIndex:         800,
+		ParentHash:          anchorHash,
+		AccountHash:         tipRoot,
+		TxHash:              txRoot,
+		Validated:           true,
+		CloseTime:           time.Unix(800_000, 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	tipHeader.Hash = header.CalculateHash(tipHeader)
+	tip, err := ledger.NewFromHeader(tipHeader, tipState, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,10 +332,11 @@ func TestRepairCleanerLedgerIndexReplacesWrongHistoryMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	seq := uint32(10)
-	hash := [32]byte{0xAA}
+	seed := [32]byte{0xAA}
 	parent := [32]byte{0x99}
-	canonical := makeStubLedger(t, seq, hash, parent)
-	wrong := makeStubLedger(t, seq, [32]byte{0xBB}, parent)
+	canonical := makeStubLedger(t, seq, seed, parent, svc.config.Execution)
+	hash := canonical.Hash()
+	wrong := makeStubLedger(t, seq, [32]byte{0xBB}, parent, svc.config.Execution)
 
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()
@@ -355,9 +384,10 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	seq := uint32(10)
-	hash := [32]byte{0xAA}
+	seed := [32]byte{0xAA}
 	parent := [32]byte{0x99}
-	canonical := makeStubLedger(t, seq, hash, parent)
+	canonical := makeStubLedger(t, seq, seed, parent, svc.config.Execution)
+	hash := canonical.Hash()
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()
 	svc.putHistoryLocked(canonical)

@@ -60,7 +60,8 @@ func TestLedger_Close_LedgerHashes_NoSelfInclusion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	store, _ := testExecutionStore(t)
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{}, store)
 	if err != nil {
 		t.Fatalf("FromGenesis: %v", err)
 	}

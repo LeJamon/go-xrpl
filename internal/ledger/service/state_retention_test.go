@@ -34,17 +34,30 @@ func newRetentionTestService(t *testing.T) (*Service, *nodestore.RotatingKVDatab
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	family := shamapbackend.New(db)
-	return &Service{nodeStore: db, shamapFamily: family, logger: xrpllog.Discard()}, db, family
+	execution := newTestExecutionStore(t, family)
+	return &Service{
+		config:       Config{Execution: execution},
+		nodeStore:    db,
+		shamapFamily: family,
+		logger:       xrpllog.Discard(),
+	}, db, family
 }
 
-func retentionTestLedger(t *testing.T, tree *shamap.SHAMap, seq uint32) *ledger.Ledger {
+func retentionTestLedger(t *testing.T, tree *shamap.SHAMap, seq uint32, stores ...*ledger.ExecutionStore) *ledger.Ledger {
 	t.Helper()
 	root, err := tree.Hash()
 	require.NoError(t, err)
 	h := header.LedgerHeader{LedgerIndex: seq, AccountHash: root}
 	h.Hash = header.CalculateHash(h)
-	l, err := ledger.NewFromHeader(h, tree, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	var store *ledger.ExecutionStore
+	if len(stores) > 0 && stores[0] != nil {
+		store = stores[0]
+	} else {
+		store = newTestExecutionStore(t)
+	}
+	l, err := ledger.NewFromHeader(h, tree, shamap.New(shamap.TypeTransaction), drops.Fees{}, store)
 	require.NoError(t, err)
+	t.Cleanup(l.Discard)
 	return l
 }
 
@@ -55,7 +68,7 @@ func TestStateRetentionRejectsStalePlan(t *testing.T) {
 			tree, err := shamap.NewBacked(shamap.TypeState, family)
 			require.NoError(t, err)
 			require.NoError(t, tree.Put([32]byte{0x30}, []byte("original-state")))
-			svc.validatedLedger = retentionTestLedger(t, tree, 20)
+			svc.validatedLedger = retentionTestLedger(t, tree, 20, svc.config.Execution)
 			seq, guard, err := svc.PrepareStateRetention(t.Context(), 20, nil)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(t.Context())
@@ -63,7 +76,7 @@ func TestStateRetentionRejectsStalePlan(t *testing.T) {
 			switch change {
 			case "new_root":
 				require.NoError(t, tree.Put([32]byte{0x30}, []byte("replacement-state")))
-				svc.closedLedger = retentionTestLedger(t, tree, 21)
+				svc.closedLedger = retentionTestLedger(t, tree, 21, svc.config.Execution)
 			case "generation":
 				committed, err := db.RotateGeneration(t.Context(), 10, 1)
 				require.NoError(t, err)
@@ -106,9 +119,10 @@ func TestStateRetentionReconcilesOpenIngressAtAdmission(t *testing.T) {
 			tree, err := shamap.NewBacked(shamap.TypeState, family)
 			require.NoError(t, err)
 			require.NoError(t, tree.Put([32]byte{0x30}, []byte("original-state")))
-			svc.validatedLedger = retentionTestLedger(t, tree, 20)
-			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{})
+			svc.validatedLedger = retentionTestLedger(t, tree, 20, svc.config.Execution)
+			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{}, svc.config.Execution)
 			require.NoError(t, err)
+			t.Cleanup(svc.openLedger.Discard)
 			seq, guard, err := svc.PrepareStateRetention(t.Context(), 20, nil)
 			require.NoError(t, err)
 			for i := range size {
@@ -117,8 +131,9 @@ func TestStateRetentionReconcilesOpenIngressAtAdmission(t *testing.T) {
 				key[31] = 1
 				require.NoError(t, tree.Put(key, []byte("new-open-state")))
 			}
-			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{})
+			svc.openLedger, err = ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 21}, tree, shamap.New(shamap.TypeTransaction), drops.Fees{}, svc.config.Execution)
 			require.NoError(t, err)
+			t.Cleanup(svc.openLedger.Discard)
 			committed, err := db.RotateGenerationWithRetention(t.Context(), seq, 11, guard, family.BeginPrune)
 			if size > stateRetentionCatchupNodes {
 				require.ErrorIs(t, err, errStateRetentionChanged)
@@ -180,14 +195,14 @@ func TestStateRetentionVisitsOnlyChangedSubtrees(t *testing.T) {
 		key[31] = 1
 		require.NoError(t, tree.Put(key, []byte("old-state-value")))
 	}
-	svc.validatedLedger = retentionTestLedger(t, tree, 20)
+	svc.validatedLedger = retentionTestLedger(t, tree, 20, svc.config.Execution)
 	old, err := tree.Hash()
 	require.NoError(t, err)
 	require.NoError(t, svc.preserveStateDifference(t.Context(), retainedStateRoot{old, shamap.TypeState}, [32]byte{}, 20, nil, 0))
 	key := [32]byte{0x30}
 	key[31] = 1
 	require.NoError(t, tree.Put(key, []byte("changed-state")))
-	updated := retentionTestLedger(t, tree, 21)
+	updated := retentionTestLedger(t, tree, 21, svc.config.Execution)
 	root, err := updated.StateMapHash()
 	require.NoError(t, err)
 	counting.promotions.Store(0)
@@ -201,7 +216,7 @@ func TestStateRetentionDoesNotPublishPlanAfterSyncFailure(t *testing.T) {
 	tree, err := shamap.NewBacked(shamap.TypeState, family)
 	require.NoError(t, err)
 	require.NoError(t, tree.Put([32]byte{0x30}, []byte("example-state")))
-	svc.validatedLedger = retentionTestLedger(t, tree, 20)
+	svc.validatedLedger = retentionTestLedger(t, tree, 20, svc.config.Execution)
 	svc.nodeStore = &retentionCountingDatabase{RotatingKVDatabase: db, failSync: true}
 	_, guard, err := svc.PrepareStateRetention(t.Context(), 20, nil)
 	require.ErrorContains(t, err, "injected sync failure")
@@ -241,7 +256,13 @@ func TestStateRetentionRestampsLegacyStateAndTransactions(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	family := shamapbackend.New(db)
-	svc := &Service{nodeStore: db, shamapFamily: family, logger: xrpllog.Discard()}
+	execution := newTestExecutionStore(t, family)
+	svc := &Service{
+		config:       Config{Execution: execution},
+		nodeStore:    db,
+		shamapFamily: family,
+		logger:       xrpllog.Discard(),
+	}
 	state, err := shamap.NewBacked(shamap.TypeState, family)
 	require.NoError(t, err)
 	require.NoError(t, state.Put([32]byte{0x30}, []byte("old-state-value")))
@@ -258,7 +279,7 @@ func TestStateRetentionRestampsLegacyStateAndTransactions(t *testing.T) {
 	require.NoError(t, err)
 	h := header.LedgerHeader{LedgerIndex: 20, AccountHash: stateRoot, TxHash: txRoot}
 	h.Hash = header.CalculateHash(h)
-	svc.validatedLedger, err = ledger.NewFromHeader(h, state, txs, drops.Fees{})
+	svc.validatedLedger, err = ledger.NewFromHeader(h, state, txs, drops.Fees{}, svc.config.Execution)
 	require.NoError(t, err)
 	orphan := nodestore.Hash256{0xfe}
 	require.NoError(t, db.Store(ctx, &nodestore.Node{Type: nodestore.NodeLedger, Hash: orphan, Data: []byte("obsolete header"), LedgerSeq: 1}))
@@ -322,8 +343,8 @@ func TestStateRetentionPreservesRevivedArchiveSubtree(t *testing.T) {
 			missing, err := reused.GetMissingNodesContext(ctx, 64, nil)
 			require.NoError(t, err)
 			require.Empty(t, missing)
-			svc.validatedLedger = retentionTestLedger(t, selected, 20)
-			live := retentionTestLedger(t, reused, 21)
+			svc.validatedLedger = retentionTestLedger(t, selected, 20, svc.config.Execution)
+			live := retentionTestLedger(t, reused, 21, svc.config.Execution)
 			switch name {
 			case "adopted_during_refresh":
 				svc.nodeStore = &retentionCountingDatabase{RotatingKVDatabase: db, onPromote: func() {

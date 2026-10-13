@@ -64,23 +64,21 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 		parent.mu.RUnlock()
 		return nil, fmt.Errorf("parent ledger sequence %d has no successor", seq)
 	}
-	if parent.rules == nil && rulesOverride == nil {
+	if parent.Rules() == nil && rulesOverride == nil {
 		parent.mu.RUnlock()
 		return nil, errors.New("parent ledger has no amendment rules")
 	}
 	parentHeader := parent.header
 	parentFees := parent.fees
-	parentRules := parent.rules
+	parentRules := parent.Rules()
 	if rulesOverride != nil {
 		parentRules = rulesOverride
 	}
-	stateMap, err := parent.stateMap.SnapshotMutable()
+	execution, err := parent.execution.successor(context.Background(), parentHeader.LedgerIndex+1)
 	parent.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
-
-	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Recompute close-time resolution per close from the parent's previousAgree
 	// (encoded in its CloseFlags) — matches rippled and avoids plumbing
@@ -104,12 +102,8 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 		CloseTimeResolution: uint8(newResolution),
 		Drops:               parentHeader.Drops,
 	}
-	stateMap.SetLedgerSeq(newLedgerSeq)
-	txMap.SetLedgerSeq(newLedgerSeq)
-
 	return &Ledger{
-		stateMap:       stateMap,
-		txMap:          txMap,
+		execution:      execution,
 		header:         newHeader,
 		fees:           parentFees,
 		state:          StateOpen,
@@ -134,9 +128,10 @@ func FromGenesis(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
+	store *ExecutionStore,
 ) (*Ledger, error) {
 	hdr.Validated = true
-	return newFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees, StateValidated)
+	return newFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees, StateValidated, store)
 }
 
 // NewFromHeader creates a closed ledger from a deserialized header and existing
@@ -148,12 +143,13 @@ func NewFromHeader(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
+	store *ExecutionStore,
 ) (*Ledger, error) {
 	state := StateClosed
 	if hdr.Validated {
 		state = StateValidated
 	}
-	return newFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees, state)
+	return newFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees, state, store)
 }
 
 // NewClosedFromHeaderContext reconstructs a closed ledger while forwarding ctx
@@ -164,8 +160,9 @@ func NewClosedFromHeaderContext(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
+	store *ExecutionStore,
 ) (*Ledger, error) {
-	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, StateClosed)
+	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, StateClosed, store)
 }
 
 func newFromHeaderContext(
@@ -175,31 +172,16 @@ func newFromHeaderContext(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 	state State,
+	store *ExecutionStore,
 ) (*Ledger, error) {
-	if err := validateMaps(stateMap, txMap); err != nil {
+	if state == StateOpen {
+		return nil, errors.New("open ledgers must use NewOpenWithHeader")
+	}
+	view, rules, err := importExecution(ctx, hdr, stateMap, txMap, store, false)
+	if err != nil {
 		return nil, err
 	}
-	immutableState, err := stateMap.SnapshotImmutableWithLedgerSeqContext(ctx, hdr.LedgerIndex)
-	if err != nil {
-		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
-	}
-	immutableTx, err := txMap.SnapshotImmutableWithLedgerSeqContext(ctx, hdr.LedgerIndex)
-	if err != nil {
-		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
-	}
-	rules, err := LoadAmendmentsFromSHAMapContext(ctx, immutableState)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
-	}
-	return &Ledger{
-		stateMap: immutableState,
-		txMap:    immutableTx,
-		header:   hdr,
-		fees:     fees,
-		state:    state,
-		writable: false,
-		rules:    rules,
-	}, nil
+	return &Ledger{execution: view, header: hdr, fees: fees, state: state, rules: rules}, nil
 }
 
 // NewOpenWithHeader creates an open ledger with the exact header values provided
@@ -209,31 +191,181 @@ func NewOpenWithHeader(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
+	store *ExecutionStore,
 ) (*Ledger, error) {
-	if err := validateMaps(stateMap, txMap); err != nil {
+	view, rules, err := importExecution(context.Background(), hdr, stateMap, txMap, store, true)
+	if err != nil {
 		return nil, err
 	}
-	ownedState, err := stateMap.SnapshotMutableWithLedgerSeq(hdr.LedgerIndex)
-	if err != nil {
-		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
+	return &Ledger{execution: view, header: hdr, fees: fees, state: StateOpen, writable: true, rules: rules}, nil
+}
+
+// NewClosedFromRootsContext creates a closed ledger whose trees are already
+// represented by roots in store's Family. The roots remain unauthenticated
+// until EstablishBoundedClosure is called after the caller's durability or
+// verification barrier.
+func NewClosedFromRootsContext(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	fees drops.Fees,
+	store *ExecutionStore,
+) (*Ledger, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	ownedTx, err := txMap.SnapshotMutableWithLedgerSeq(hdr.LedgerIndex)
-	if err != nil {
-		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
+	if store == nil {
+		return nil, errors.New("bounded execution store cannot be nil")
 	}
-	rules, err := loadAmendmentsFromSHAMap(ownedState)
+	if header.CalculateHash(hdr) != hdr.Hash {
+		return nil, errors.New("bounded execution header is invalid")
+	}
+	view := rootedExecution(hdr, store)
+	rules, err := loadAmendmentsFromTree(ctx, view.state)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
 	}
-	return &Ledger{
-		stateMap: ownedState,
-		txMap:    ownedTx,
-		header:   hdr,
-		fees:     fees,
-		state:    StateOpen,
-		writable: true,
-		rules:    rules,
-	}, nil
+	state := StateClosed
+	if hdr.Validated {
+		state = StateValidated
+	}
+	return &Ledger{execution: view, header: hdr, fees: fees, state: state, rules: rules}, nil
+}
+
+func rootedExecution(hdr header.LedgerHeader, store *ExecutionStore) *executionView {
+	return &executionView{
+		state: &executionTree{
+			store: store, kind: shamap.TypeState, base: hdr, root: hdr.AccountHash, sequence: hdr.LedgerIndex,
+		},
+		transactions: &executionTree{
+			store: store, kind: shamap.TypeTransaction, base: hdr, root: hdr.TxHash, sequence: hdr.LedgerIndex,
+		},
+	}
+}
+
+func emptyExecution(hdr header.LedgerHeader, store *ExecutionStore) *executionView {
+	view := rootedExecution(header.LedgerHeader{LedgerIndex: hdr.LedgerIndex}, store)
+	view.state.closure = executionClosureVerified
+	view.transactions.closure = executionClosureVerified
+	view.transactions.countKnown = true
+	return view
+}
+
+// importExecution copies the dirty portion of each input map into the shared
+// execution Family, then drops the SHAMap representation from the Ledger. The
+// input maps are acquisition/import boundaries; all subsequent reads and
+// writes use root descriptors and bounded overlays.
+func importExecution(
+	ctx context.Context,
+	hdr header.LedgerHeader,
+	stateMap, txMap *shamap.SHAMap,
+	store *ExecutionStore,
+	writable bool,
+) (*executionView, *amendment.Rules, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stateRoot, txRoot, err := store.ImportMaps(ctx, stateMap, txMap, hdr.LedgerIndex)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !writable {
+		if header.CalculateHash(hdr) != hdr.Hash {
+			return nil, nil, errors.New("bounded execution header is invalid")
+		}
+		if stateRoot != hdr.AccountHash || txRoot != hdr.TxHash {
+			return nil, nil, errors.New("bounded execution roots do not match ledger header")
+		}
+	}
+	view := &executionView{
+		state: &executionTree{
+			store: store, kind: shamap.TypeState, base: hdr, root: stateRoot, sequence: hdr.LedgerIndex,
+		},
+		transactions: &executionTree{
+			store: store, kind: shamap.TypeTransaction, base: hdr, root: txRoot, sequence: hdr.LedgerIndex,
+		},
+	}
+	if !writable {
+		if err := verifyExecutionRoot(ctx, view.state); err != nil {
+			return nil, nil, fmt.Errorf("verify imported state closure: %w", err)
+		}
+		txCount, err := countExecutionRoot(ctx, view.transactions)
+		if err != nil {
+			return nil, nil, fmt.Errorf("verify imported transaction closure: %w", err)
+		}
+		if txCount > uint64(^uint32(0)) {
+			return nil, nil, errors.New("transaction leaf count exceeds uint32")
+		}
+		view.transactions.count, view.transactions.countKnown = uint32(txCount), true
+		view.state.closure = executionClosurePending
+		view.transactions.closure = executionClosurePending
+		rules, err := loadAmendmentsFromTree(ctx, view.state)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load amendment rules: %w", err)
+		}
+		return view, rules, nil
+	}
+	state, err := view.state.newMutableContext(ctx, hdr.LedgerIndex)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open imported state tree: %w", err)
+	}
+	txs, err := view.transactions.newMutableContext(ctx, hdr.LedgerIndex)
+	if err != nil {
+		state.close()
+		return nil, nil, fmt.Errorf("open imported transaction tree: %w", err)
+	}
+	view = &executionView{state: state, transactions: txs}
+	rules, err := loadAmendmentsFromTree(ctx, view.state)
+	if err != nil {
+		view.close()
+		return nil, nil, fmt.Errorf("failed to load amendment rules: %w", err)
+	}
+	return view, rules, nil
+}
+
+// ImportMaps stores detached input trees before root-only execution can read
+// them. Shared backed inputs use the dirty fast path; foreign and unbacked
+// inputs are copied in full so clean nodes are present in the destination.
+func (s *ExecutionStore) ImportMaps(ctx context.Context, stateMap, txMap *shamap.SHAMap, sequence uint32) ([32]byte, [32]byte, error) {
+	if s == nil {
+		return [32]byte{}, [32]byte{}, errors.New("bounded execution store cannot be nil")
+	}
+	if err := validateMaps(stateMap, txMap); err != nil {
+		return [32]byte{}, [32]byte{}, err
+	}
+	stateRoot, err := importMap(ctx, stateMap, shamap.TypeState, sequence, s)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, fmt.Errorf("persist imported state tree: %w", err)
+	}
+	txRoot, err := importMap(ctx, txMap, shamap.TypeTransaction, sequence, s)
+	if err != nil {
+		return [32]byte{}, [32]byte{}, fmt.Errorf("persist imported transaction tree: %w", err)
+	}
+	return stateRoot, txRoot, nil
+}
+
+func importMap(ctx context.Context, source *shamap.SHAMap, kind shamap.Type, seq uint32, store *ExecutionStore) ([32]byte, error) {
+	if source.Type() != kind {
+		return [32]byte{}, fmt.Errorf("map has type %s, want %s", source.Type(), kind)
+	}
+	copy, err := source.MutableFork()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	copy.SetLedgerSeq(seq)
+	root, err := copy.Hash()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	persist := copy.StoreDirtyBatched
+	if !source.IsBacked() || !source.UsesFamily(store.config.Family) {
+		persist = copy.StoreAllBatched
+	}
+	if err := persist(ctx, store.config.Workspace, func(entries []shamap.FlushEntry) error {
+		return store.config.Family.StoreBatch(ctx, entries)
+	}); err != nil {
+		return [32]byte{}, err
+	}
+	return root, nil
 }
 
 func validateMaps(stateMap, txMap *shamap.SHAMap) error {

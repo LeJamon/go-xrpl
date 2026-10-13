@@ -25,6 +25,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(targetLedger)
 	response := vaultInfoLedgerFields(targetLedger, validated)
 	ledgerIndex, selectorErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selectorErr != nil {

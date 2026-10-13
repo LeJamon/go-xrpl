@@ -24,6 +24,15 @@ indexes committed together in `transaction.db`); PostgreSQL is available for sha
 deployments. A low-level `storage/kvstore` abstraction (memory + Pebble) backs the
 node store.
 
+Ledger execution uses root descriptors and bounded change overlays rather than
+retained mutable SHAMaps. Persistent nodes also maintain a Pebble flat-state
+materialization for the selected durable ledger. Exact-root SHAMap reads serve
+history and forks when that materialization does not match. Canonical NodeStore
+nodes remain authoritative; synchronized nodes, an advancement marker and a
+publication outbox make flat-state and index recovery explicit. There is one
+execution engine in persistent, standalone, replay and test modes. See the
+[state-memory specification](../state-memory-spec.md) for ownership and limits.
+
 ## Consequences
 
 - Content addressing gives integrity for free: a node's key *is* its hash.

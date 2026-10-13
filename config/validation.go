@@ -55,6 +55,9 @@ func ValidateConfig(config *Config) error {
 	if err := config.Acquisition.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("acquisition: %w", err))
 	}
+	if err := config.State.Validate(); err != nil {
+		return err
+	}
 	if err := config.Resources.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("resources: %w", err))
 	}

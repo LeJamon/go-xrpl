@@ -14,7 +14,9 @@ import (
 
 func TestAcquisitionCompletionMemorySurvivesPreparedReplayPlateau(t *testing.T) {
 	const count = 640
-	r, _, sender, svc := makeRouter(t)
+	base := backend.NewMemory()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	r, _, sender, svc := makeRouter(t, base)
 	_, err := svc.AcceptLedger(t.Context())
 	require.NoError(t, err)
 	pool := membudget.New(2 << 30)
@@ -25,8 +27,6 @@ func TestAcquisitionCompletionMemorySurvivesPreparedReplayPlateau(t *testing.T) 
 	cacheBytes := pool.Snapshot().SharedAvailable - (64 << 20)
 	require.True(t, cache.TryReserve(cacheBytes))
 	require.NoError(t, r.SetAcquisitionMemoryBudget(parent.Limit(), parent))
-	base := backend.NewMemory()
-	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	r.SetAcquisitionFamily(base)
 	store := r.catchupReplay.acquisitionStore
 	store.start(t.Context())

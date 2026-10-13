@@ -61,6 +61,14 @@ func (s *Service) clearRelayCache() {
 const persistenceAdmissionLimit = 8
 
 func (s *Service) acquireLedgerWork(ctx context.Context) (func(), error) {
+	return s.acquireLedgerWorkAdmission(ctx, true)
+}
+
+func (s *Service) acquireExecutionWork(ctx context.Context) (func(), error) {
+	return s.acquireLedgerWorkAdmission(ctx, false)
+}
+
+func (s *Service) acquireLedgerWorkAdmission(ctx context.Context, pinGeneration bool) (func(), error) {
 	s.lifecycleMu.Lock()
 	if s.lifecycleState == serviceStopping || s.lifecycleState == serviceStopped {
 		s.lifecycleMu.Unlock()
@@ -73,11 +81,14 @@ func (s *Service) acquireLedgerWork(ctx context.Context) (func(), error) {
 		s.ledgerWorkWG.Done()
 		return nil, err
 	}
-	releaseState, err := s.AcquireStateAdmission(ctx)
-	if err != nil {
-		releaseMemory()
-		s.ledgerWorkWG.Done()
-		return nil, err
+	releaseState := func() {}
+	if pinGeneration {
+		releaseState, err = s.AcquireStateAdmission(ctx)
+		if err != nil {
+			releaseMemory()
+			s.ledgerWorkWG.Done()
+			return nil, err
+		}
 	}
 	return sync.OnceFunc(func() {
 		releaseState()

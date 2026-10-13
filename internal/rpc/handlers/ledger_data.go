@@ -31,6 +31,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	defer closeLedgerLease(targetLedger)
 	ledgerIndex := strconv.FormatUint(uint64(targetLedger.Sequence()), 10)
 	fields := make(map[string]json.RawMessage)
 	if params != nil {

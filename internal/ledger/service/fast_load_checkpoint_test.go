@@ -138,7 +138,13 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	require.Equal(t, want.Hash(), reader.GetValidatedLedger().Hash())
 	require.Equal(t, checkpoint.strictNodes, reader.fastLoadStrictNodes.Load())
 	require.Equal(t, checkpoint.strictElapsed, reader.fastLoadStrictElapsed.Load())
-	require.Equal(t, len(checkpoint.stateProofs)+len(checkpoint.txProofs), tracked.uncachedReads())
+	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Amendments = nil
+	genesisResult, err := genesis.Create(genesisConfig)
+	require.NoError(t, err)
+	genesisNodes, err := genesisResult.StateMap.WalkWireNodes()
+	require.NoError(t, err)
+	require.Equal(t, len(genesisNodes)+len(checkpoint.stateProofs)+len(checkpoint.txProofs), tracked.uncachedReads())
 	baseRoot, releaseBase, available, err := reader.AcquireValidatedStateBase(ctx)
 	require.NoError(t, err)
 	require.True(t, available)
@@ -610,7 +616,7 @@ func TestService_StateAdmissionRejectsWarmAliasAfterDurableDeletion(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, stateMap.StartSync())
 	require.NoError(t, stateMap.FinishSyncContext(ctx))
-	preferred, err := ledger.NewFromHeader(candidateHeader, stateMap, shamap.New(shamap.TypeTransaction), reader.GetClosedLedger().Fees())
+	preferred, err := ledger.NewFromHeader(candidateHeader, stateMap, shamap.New(shamap.TypeTransaction), reader.GetClosedLedger().Fees(), reader.config.Execution)
 	require.NoError(t, err)
 
 	deleted, err := db.DeleteBefore(ctx, candidateHeader.LedgerIndex, 1)
@@ -934,13 +940,22 @@ func newFastLoadCheckpointService(
 	db nodestore.Database,
 	repositories relationaldb.RepositoryManager,
 	standalone bool,
+	families ...shamap.Family,
 ) *Service {
 	t.Helper()
+	family := shamap.Family(backend.New(db))
+	if len(families) > 0 {
+		family = families[0]
+		require.NotNil(t, family)
+	}
+	execution := newTestExecutionStore(t, family)
 	svc, err := New(Config{
 		Standalone: standalone, GenesisConfig: genesis.DefaultConfig(),
-		NodeStore: db, SHAMapFamily: backend.New(db), RelationalDB: repositories, FastLoad: true,
+		NodeStore: db, SHAMapFamily: family, Execution: execution,
+		RelationalDB: repositories, FastLoad: true,
 	})
 	require.NoError(t, err)
+	t.Cleanup(svc.Stop)
 	return svc
 }
 

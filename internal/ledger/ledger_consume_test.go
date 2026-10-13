@@ -8,17 +8,20 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 func TestConsumeStateTransfersOwnershipAndPersists(t *testing.T) {
-	target := newOpenChild(t)
 	family := newConstructorRecordingFamily()
-	target.SetSHAMapFamily(family)
+	store, _ := executionTestStore(t, family)
+	target := newOpenChildWithStore(t, store)
 
-	staged, err := target.MutableSnapshotUnflushed()
+	staged, err := target.MutableSnapshot()
 	if err != nil {
-		t.Fatalf("MutableSnapshotUnflushed: %v", err)
+		t.Fatalf("MutableSnapshot: %v", err)
 	}
 	stateKey := mutAcct(0x91)
 	stateData := mutData(0x11)
@@ -35,16 +38,15 @@ func TestConsumeStateTransfersOwnershipAndPersists(t *testing.T) {
 		t.Fatalf("stage destroyed drops: %v", err)
 	}
 
-	stagedStateMap := staged.stateMap
-	stagedTxMap := staged.txMap
+	stagedExecution := staged.execution
 	if err := target.ConsumeState(staged); err != nil {
 		t.Fatalf("ConsumeState: %v", err)
 	}
-	if target.stateMap != stagedStateMap || target.txMap != stagedTxMap {
-		t.Fatal("ConsumeState did not transfer the staged SHAMap wrappers")
+	if target.execution != stagedExecution {
+		t.Fatal("ConsumeState did not transfer the staged execution view")
 	}
-	if staged.stateMap == stagedStateMap || staged.txMap == stagedTxMap {
-		t.Fatal("consumed source retained an adopted SHAMap wrapper")
+	if staged.execution == nil || staged.execution == stagedExecution {
+		t.Fatal("consumed source retained the adopted execution view")
 	}
 	if staged.writable || staged.dropsDestroyed != 0 {
 		t.Fatalf("consumed source writable=%v drops=%d, want false/0", staged.writable, staged.dropsDestroyed)
@@ -71,12 +73,6 @@ func TestConsumeStateTransfersOwnershipAndPersists(t *testing.T) {
 		t.Fatalf("adopted destroyed drops = %d, want 11", target.dropsDestroyed)
 	}
 
-	if _, err := target.stateMap.SnapshotImmutable(); err != nil {
-		t.Fatalf("persist adopted state map: %v", err)
-	}
-	if _, err := target.txMap.SnapshotImmutable(); err != nil {
-		t.Fatalf("persist adopted transaction map: %v", err)
-	}
 	stateRoot, err := target.StateMapHash()
 	if err != nil {
 		t.Fatalf("state root: %v", err)
@@ -105,55 +101,52 @@ func TestConsumeStateTransfersOwnershipAndPersists(t *testing.T) {
 
 func TestConsumeStateRejectedCommitPreservesSource(t *testing.T) {
 	target := newOpenChild(t)
-	staged, err := target.MutableSnapshotUnflushed()
+	staged, err := target.MutableSnapshot()
 	if err != nil {
-		t.Fatalf("MutableSnapshotUnflushed: %v", err)
+		t.Fatalf("MutableSnapshot: %v", err)
 	}
 	stateKey := mutAcct(0x93)
 	if err := staged.Insert(stateKey, mutData(0x41)); err != nil {
 		t.Fatalf("stage state: %v", err)
 	}
-	stagedStateMap := staged.stateMap
-	stagedTxMap := staged.txMap
+	stagedExecution := staged.execution
 	if err := target.Close(target.CloseTime(), 0); err != nil {
 		t.Fatalf("close target: %v", err)
 	}
-	targetStateMap := target.stateMap
-	targetTxMap := target.txMap
+	targetExecution := target.execution
 
 	if err := target.ConsumeState(staged); !errors.Is(err, ErrLedgerImmutable) {
 		t.Fatalf("ConsumeState error = %v, want ErrLedgerImmutable", err)
 	}
-	if target.stateMap != targetStateMap || target.txMap != targetTxMap {
-		t.Fatal("rejected consume changed target SHAMap wrappers")
+	if target.execution != targetExecution {
+		t.Fatal("rejected consume changed target execution view")
 	}
-	if staged.stateMap != stagedStateMap || staged.txMap != stagedTxMap || !staged.writable {
+	if staged.execution != stagedExecution || !staged.writable {
 		t.Fatal("rejected consume changed source ownership")
 	}
 	if err := staged.Insert(mutAcct(0x94), mutData(0x51)); err != nil {
 		t.Fatalf("source was not writable after rejected consume: %v", err)
 	}
-	selfStateMap := staged.stateMap
-	selfTxMap := staged.txMap
+	selfExecution := staged.execution
 	if err := staged.ConsumeState(staged); err == nil {
 		t.Fatal("self ConsumeState succeeded")
 	}
-	if staged.stateMap != selfStateMap || staged.txMap != selfTxMap || !staged.writable {
+	if staged.execution != selfExecution || !staged.writable {
 		t.Fatal("self ConsumeState changed source")
 	}
 	if err := staged.ConsumeState(nil); err == nil {
 		t.Fatal("nil ConsumeState succeeded")
 	}
-	if staged.stateMap != selfStateMap || staged.txMap != selfTxMap || !staged.writable {
+	if staged.execution != selfExecution || !staged.writable {
 		t.Fatal("nil ConsumeState changed target")
 	}
 }
 
 func TestConsumeStateRejectsImmutableSourceWithoutChangingTarget(t *testing.T) {
 	target := newOpenChild(t)
-	source, err := target.MutableSnapshotUnflushed()
+	source, err := target.MutableSnapshot()
 	if err != nil {
-		t.Fatalf("MutableSnapshotUnflushed: %v", err)
+		t.Fatalf("MutableSnapshot: %v", err)
 	}
 	if err := source.Insert(mutAcct(0x97), mutData(0x81)); err != nil {
 		t.Fatalf("stage state: %v", err)
@@ -161,19 +154,17 @@ func TestConsumeStateRejectsImmutableSourceWithoutChangingTarget(t *testing.T) {
 	if err := source.Close(source.CloseTime(), 0); err != nil {
 		t.Fatalf("close source: %v", err)
 	}
-	targetStateMap := target.stateMap
-	targetTxMap := target.txMap
+	targetExecution := target.execution
 	targetDrops := target.dropsDestroyed
-	sourceStateMap := source.stateMap
-	sourceTxMap := source.txMap
+	sourceExecution := source.execution
 
 	if err := target.ConsumeState(source); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("ConsumeState error = %v, want ErrInvalidState", err)
 	}
-	if target.stateMap != targetStateMap || target.txMap != targetTxMap || target.dropsDestroyed != targetDrops {
+	if target.execution != targetExecution || target.dropsDestroyed != targetDrops {
 		t.Fatal("immutable-source rejection changed target")
 	}
-	if source.stateMap != sourceStateMap || source.txMap != sourceTxMap || !source.IsImmutable() {
+	if source.execution != sourceExecution || !source.IsImmutable() {
 		t.Fatal("immutable-source rejection changed source")
 	}
 }
@@ -225,7 +216,7 @@ func consumeStateAllocs(t *testing.T, entries int) float64 {
 	sources := make([]*Ledger, runs+1)
 	for i := range sources {
 		var err error
-		sources[i], err = target.MutableSnapshotUnflushed()
+		sources[i], err = target.MutableSnapshot()
 		if err != nil {
 			t.Fatalf("snapshot source %d: %v", i, err)
 		}
@@ -244,20 +235,43 @@ func consumeStateAllocs(t *testing.T, entries int) float64 {
 
 func newResidentOpenLedger(tb testing.TB, entries int) *Ledger {
 	tb.Helper()
-	stateMap := shamap.New(shamap.TypeState)
+	pool := membudget.New(32 << 20)
+	workspace, err := pool.NewAccount("workspace", 16<<20, 16<<20)
+	if err != nil {
+		tb.Fatalf("workspace: %v", err)
+	}
+	memory, err := pool.NewAccount("overlay", 0, 1<<20)
+	if err != nil {
+		tb.Fatalf("overlay: %v", err)
+	}
+	store, err := NewExecutionStore(ExecutionConfig{Family: backend.NewMemory(), Workspace: workspace,
+		Overlay: overlay.Config{MemoryBudget: memory, MaxMemoryBytes: 128 << 10, MaxDiskBytes: 16 << 20, SpillDir: tb.TempDir()}})
+	if err != nil {
+		tb.Fatalf("execution store: %v", err)
+	}
+	tb.Cleanup(func() { _ = store.Close() })
+	baseState := &executionTree{store: store, kind: shamap.TypeState}
+	state, err := baseState.newMutable(0)
+	if err != nil {
+		tb.Fatalf("mutable state: %v", err)
+	}
+	baseTxs := &executionTree{store: store, kind: shamap.TypeTransaction, countKnown: true}
+	txs, err := baseTxs.newMutable(0)
+	if err != nil {
+		tb.Fatalf("mutable transactions: %v", err)
+	}
 	for i := range entries {
 		var seed [8]byte
 		binary.BigEndian.PutUint64(seed[:], uint64(i))
 		key := sha512.Sum512_256(seed[:])
-		if err := stateMap.Put(key, bytes.Repeat([]byte{byte(i)}, 12)); err != nil {
+		if err := state.Put(key, bytes.Repeat([]byte{byte(i)}, 12)); err != nil {
 			tb.Fatalf("seed state %d: %v", i, err)
 		}
 	}
 	return &Ledger{
-		stateMap: stateMap,
-		txMap:    shamap.New(shamap.TypeTransaction),
-		state:    StateOpen,
-		writable: true,
+		execution: &executionView{state: state, transactions: txs},
+		state:     StateOpen,
+		writable:  true,
 	}
 }
 
@@ -268,7 +282,7 @@ func BenchmarkConsumeState(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				staged, err := target.MutableSnapshotUnflushed()
+				staged, err := target.MutableSnapshot()
 				if err != nil {
 					b.Fatal(err)
 				}

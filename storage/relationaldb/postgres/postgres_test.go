@@ -31,7 +31,8 @@ func setupTestDB(t *testing.T) *RepositoryManager {
 		t.Fatal(err)
 	}
 	if _, err := rm.db.ExecContext(context.Background(),
-		`TRUNCATE account_transactions, transactions, ledgers, validations, feature_votes`); err != nil {
+		`TRUNCATE account_transactions, transactions, ledger_publication_receipts,
+			xrpl_publication_stream_indexes, ledgers, validations, feature_votes`); err != nil {
 		_ = rm.Close()
 		t.Fatal(err)
 	}

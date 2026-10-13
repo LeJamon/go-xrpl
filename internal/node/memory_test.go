@@ -53,6 +53,12 @@ func TestNodeMemoryAutomaticSizingAndProgressReserves(t *testing.T) {
 			target = memory.outboundCritical
 		case "full_below":
 			target = memory.fullBelow
+		case "state_overlay":
+			target = memory.state
+		case "state_roots":
+			target = memory.stateRoots
+		case "state_storage":
+			target = memory.stateStorage
 		default:
 			t.Fatalf("unexpected progress reserve %q", account.Name)
 		}

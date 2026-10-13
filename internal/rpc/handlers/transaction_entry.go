@@ -28,6 +28,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	if lerr != nil {
 		return nil, lerr
 	}
+	defer closeLedgerLease(targetLedger)
 	fields := make(map[string]json.RawMessage)
 	if len(params) != 0 {
 		if err := json.Unmarshal(params, &fields); err != nil {

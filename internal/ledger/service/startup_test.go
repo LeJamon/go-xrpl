@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -249,7 +250,7 @@ func TestService_StartupLoadRejectsLedgerWithoutSuccessor(t *testing.T) {
 	hdr := source.Header()
 	hdr.LedgerIndex = ^uint32(0)
 	hdr.Hash = header.CalculateHash(hdr)
-	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.Fees())
+	maxLedger, err := ledger.NewFromHeader(hdr, stateMap, txMap, source.Fees(), source.ExecutionStore())
 	require.NoError(t, err)
 
 	persister, err := New(Config{
@@ -317,18 +318,23 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 	parent, target, txHash := persistStartupReplayChain(t, ctx, db, rm)
 	targetHash := target.Hash()
 	targetHeader := target.Header()
+	replayPool := membudget.New(512 << 20)
+	replayMemory, err := replayPool.NewAccount("replay", 0, 512<<20)
+	require.NoError(t, err)
 
 	svc, err := New(Config{
-		Standalone:    true,
-		Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
-		RelationalDB:  rm,
+		Standalone:               true,
+		Startup:                  StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+		GenesisConfig:            genesis.DefaultConfig(),
+		NodeStore:                db,
+		SHAMapFamily:             backend.New(db),
+		RelationalDB:             rm,
+		ReplayVerificationMemory: replayMemory,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	require.Positive(t, replayMemory.Snapshot().Used)
 
 	require.Equal(t, parent.Hash(), svc.GetClosedLedger().Hash())
 	openStateRoot, err := svc.GetOpenLedger().StateMapHash()
@@ -342,12 +348,60 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, target.Sequence(), seq)
 	replayed := svc.GetClosedLedger()
+	require.Zero(t, replayMemory.Snapshot().Used)
 	require.Equal(t, targetHash, replayed.Hash())
 	require.Equal(t, targetHeader.AccountHash, replayed.Header().AccountHash)
 	require.Equal(t, targetHeader.TxHash, replayed.Header().TxHash)
 	require.Equal(t, protocol.ToRippleTime(targetHeader.CloseTime), protocol.ToRippleTime(replayed.Header().CloseTime))
 	require.Equal(t, targetHeader.CloseTimeResolution, replayed.Header().CloseTimeResolution)
 	require.Equal(t, targetHeader.CloseFlags, replayed.Header().CloseFlags)
+}
+
+func TestService_StartupReplayRejectsWhenReplayMemoryExhausted(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
+	replayPool := membudget.New(1)
+	replayMemory, err := replayPool.NewAccount("replay", 0, 1)
+	require.NoError(t, err)
+
+	svc, err := New(Config{
+		Standalone:               true,
+		Startup:                  StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", target.Hash())},
+		GenesisConfig:            genesis.DefaultConfig(),
+		NodeStore:                db,
+		SHAMapFamily:             backend.New(db),
+		RelationalDB:             rm,
+		ReplayVerificationMemory: replayMemory,
+	})
+	require.NoError(t, err)
+	t.Cleanup(svc.Stop)
+	require.Error(t, svc.Start())
+	require.Zero(t, replayMemory.Snapshot().Used)
+}
+
+func TestService_StartupReplayReleasesMemoryOnStop(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
+	replayPool := membudget.New(512 << 20)
+	replayMemory, err := replayPool.NewAccount("replay", 0, 512<<20)
+	require.NoError(t, err)
+
+	svc, err := New(Config{
+		Standalone:               true,
+		Startup:                  StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", target.Hash())},
+		GenesisConfig:            genesis.DefaultConfig(),
+		NodeStore:                db,
+		SHAMapFamily:             backend.New(db),
+		RelationalDB:             rm,
+		ReplayVerificationMemory: replayMemory,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	require.Positive(t, replayMemory.Snapshot().Used)
+	svc.Stop()
+	require.Zero(t, replayMemory.Snapshot().Used)
 }
 
 func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
@@ -448,18 +502,23 @@ func TestService_StartupReplayConsensusRetriesAfterOpenViewFailure(t *testing.T)
 	db, rm := newStartupTestStorage(t, ctx)
 	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
 	targetHash := target.Hash()
+	replayPool := membudget.New(512 << 20)
+	replayMemory, err := replayPool.NewAccount("replay", 0, 512<<20)
+	require.NoError(t, err)
 
 	svc, err := New(Config{
-		Standalone:    false,
-		Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
-		RelationalDB:  rm,
+		Standalone:               false,
+		Startup:                  StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+		GenesisConfig:            genesis.DefaultConfig(),
+		NodeStore:                db,
+		SHAMapFamily:             backend.New(db),
+		RelationalDB:             rm,
+		ReplayVerificationMemory: replayMemory,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	require.Positive(t, replayMemory.Snapshot().Used)
 
 	closed := svc.closedLedger
 	legacyOpen := svc.openLedger
@@ -479,6 +538,7 @@ func TestService_StartupReplayConsensusRetriesAfterOpenViewFailure(t *testing.T)
 	require.Equal(t, target.Sequence(), seq)
 	require.Equal(t, targetHash, svc.closedLedger.Hash())
 	require.Nil(t, svc.startupReplay)
+	require.Zero(t, replayMemory.Snapshot().Used)
 }
 
 func TestService_StartupReplayCancelsAfterPreferredLedgerSwitch(t *testing.T) {
@@ -486,18 +546,23 @@ func TestService_StartupReplayCancelsAfterPreferredLedgerSwitch(t *testing.T) {
 	db, rm := newStartupTestStorage(t, ctx)
 	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
 	targetHash := target.Hash()
+	replayPool := membudget.New(512 << 20)
+	replayMemory, err := replayPool.NewAccount("replay", 0, 512<<20)
+	require.NoError(t, err)
 
 	svc, err := New(Config{
-		Standalone:    false,
-		Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
-		RelationalDB:  rm,
+		Standalone:               false,
+		Startup:                  StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+		GenesisConfig:            genesis.DefaultConfig(),
+		NodeStore:                db,
+		SHAMapFamily:             backend.New(db),
+		RelationalDB:             rm,
+		ReplayVerificationMemory: replayMemory,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	require.Positive(t, replayMemory.Snapshot().Used)
 
 	require.NoError(t, svc.SwitchToPreferredLedger(target))
 	seq, err := svc.AcceptConsensusResult(
@@ -511,6 +576,7 @@ func TestService_StartupReplayCancelsAfterPreferredLedgerSwitch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, target.Sequence()+1, seq)
 	require.NotEqual(t, targetHash, svc.GetClosedLedger().Hash())
+	require.Zero(t, replayMemory.Snapshot().Used)
 }
 
 func newStartupTestStorage(t *testing.T, ctx context.Context) (nodestore.Database, *sqlitedb.RepositoryManager) {
@@ -544,16 +610,20 @@ func persistStartupTargetWithGenesis(
 	genesisConfig genesis.Config,
 ) *ledger.Ledger {
 	t.Helper()
+	family := backend.New(db)
+	execution := newTestExecutionStore(t, family)
 	writer, err := New(Config{
 		Standalone:    true,
 		Startup:       StartupConfig{Mode: StartupFresh},
 		GenesisConfig: genesisConfig,
 		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
+		SHAMapFamily:  family,
+		Execution:     execution,
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
 	require.NoError(t, writer.Start())
+	t.Cleanup(writer.Stop)
 	_, err = writer.AcceptLedger(ctx)
 	require.NoError(t, err)
 	writer.FlushPersists()
@@ -569,15 +639,19 @@ func persistStartupReplayChain(
 	rm *sqlitedb.RepositoryManager,
 ) (*ledger.Ledger, *ledger.Ledger, [32]byte) {
 	t.Helper()
+	family := backend.New(db)
+	execution := newTestExecutionStore(t, family)
 	writer, err := New(Config{
 		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
+		SHAMapFamily:  family,
+		Execution:     execution,
 		RelationalDB:  rm,
 	})
 	require.NoError(t, err)
 	require.NoError(t, writer.Start())
+	t.Cleanup(writer.Stop)
 	parent := writer.GetClosedLedger()
 	require.NoError(t, writer.persistValidatedLedger(ctx, parent, false))
 

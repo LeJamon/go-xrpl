@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/feevote"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -608,15 +609,24 @@ func TestRunAmendmentVote_UsesParentCloseTime(t *testing.T) {
 
 	stateMap := shamap.New(shamap.TypeState)
 	txMap := shamap.New(shamap.TypeTransaction)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
 
 	parentClose := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	flagClose := parentClose.Add(time.Hour)
-	prev, err := ledger.NewFromHeader(header.LedgerHeader{
+	h := header.LedgerHeader{
 		LedgerIndex:     256,
 		ParentCloseTime: parentClose,
 		CloseTime:       flagClose,
-	}, stateMap, txMap, drops.Fees{})
+		AccountHash:     stateRoot,
+		TxHash:          txRoot,
+	}
+	h.Hash = header.CalculateHash(h)
+	prev, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	require.NoError(t, err)
+	t.Cleanup(func() { prev.Discard() })
 
 	val := &consensus.Validation{
 		NodeID:     a.identity.NodeID,

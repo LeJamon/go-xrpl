@@ -93,6 +93,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		copy(targetHash[:], hb)
 
 		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger(), targetHash)
+		defer closeLedgerLease(l)
 		if err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
 		}
@@ -128,7 +129,9 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		targetSeq = uint32(idx)
 
-		if l, err := ctx.Services.Ledger().GetLedgerBySequence(targetSeq); err == nil && l != nil {
+		l, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), targetSeq)
+		defer closeLedgerLease(l)
+		if err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
 		}
 	}

@@ -193,5 +193,8 @@ func (r *ledgerRepository) DeleteLedgersBySeq(ctx context.Context, maxSeq relati
 	if err != nil {
 		return relationaldb.NewQueryError("delete_ledgers_by_seq", "failed to delete ledgers", err)
 	}
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM ledger_publication_receipts WHERE ledger_seq <= ?", maxSeq); err != nil {
+		return relationaldb.NewQueryError("delete_ledgers_by_seq", "failed to delete publication receipts", err)
+	}
 	return nil
 }

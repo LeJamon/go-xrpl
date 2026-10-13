@@ -91,6 +91,7 @@ func buildOrdinaryReplayFixture(t *testing.T) ordinaryReplayFixture {
 	rules := replayRules()
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(open.Discard)
 	cfg := replayConfig(parent, closeTime, rules)
 	result := txengine.NewEngine(open, cfg).Apply(transaction)
 	require.True(t, result.Result.IsApplied(), result.Result.String())
@@ -147,6 +148,7 @@ func buildBatchReplayFixture(t *testing.T) batchReplayFixture {
 	rules := replayRules()
 	open, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(open.Discard)
 	cfg := replayConfig(parent, closeTime, rules)
 	engine := txengine.NewEngine(open, cfg)
 	result := engine.Apply(outer)
@@ -310,6 +312,7 @@ func TestReplayDelta_Apply_OrdinaryFixtureSuccess(t *testing.T) {
 
 	derived, err := replay.Apply(fixture.cfg)
 	require.NoError(t, err)
+	t.Cleanup(derived.Discard)
 	assert.Equal(t, StateComplete, replay.State())
 	assertReplayRoots(t, target, derived)
 
@@ -412,6 +415,7 @@ func TestReplayDelta_Apply_BatchFixtureSuccess(t *testing.T) {
 
 	derived, err := replay.Apply(fixture.cfg)
 	require.NoError(t, err)
+	t.Cleanup(derived.Discard)
 	assert.Equal(t, StateComplete, replay.State())
 	assertReplayRoots(t, target, derived)
 	assert.Len(t, replay.OrderedTxs(), 3)
@@ -525,9 +529,11 @@ func TestReplayDelta_RetryDiscardsFailedWorkingEvidence(t *testing.T) {
 
 	retry, err := replay.Retry(fixture.parent)
 	require.NoError(t, err)
+	t.Cleanup(retry.ReleaseMemory)
 	assert.Equal(t, StateReplayReady, retry.State())
 	derived, err := retry.Apply(fixture.cfg)
 	require.NoError(t, err)
+	t.Cleanup(derived.Discard)
 	assert.Equal(t, StateComplete, retry.State())
 	assertReplayRoots(t, target, derived)
 	assertReplayLedgerRootsUnchanged(t, fixture.parent, parentBefore)

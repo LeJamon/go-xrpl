@@ -38,6 +38,20 @@ type acquisitionStoreScope struct {
 	retired   bool
 }
 
+// BackingFamily exposes the durable destination only after promotion has
+// drained this scope's private writes. Before promotion, callers must treat
+// the scope as a distinct Family so clean acquisition nodes are copied into
+// the destination explicitly.
+func (s *acquisitionStoreScope) BackingFamily() shamap.Family {
+	s.mu.Lock()
+	promoted := s.promoted
+	s.mu.Unlock()
+	if !promoted {
+		return nil
+	}
+	return s.lane.base
+}
+
 func (s *acquisitionStoreScope) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	s.mu.Lock()
 	promoted, retired := s.promoted, s.retired

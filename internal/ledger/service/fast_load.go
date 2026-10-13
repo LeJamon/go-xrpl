@@ -71,42 +71,49 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if !storedHeaderMatchesInfo(h, info) {
 		return nil, fmt.Errorf("ledger %d header does not match persisted metadata", info.Sequence)
 	}
-	accepted, checkpointErr := s.acceptFastLoadCheckpoint(ctx, s.startupFastLoadCheckpoint, h)
 	var proofFingerprint [32]byte
-	proofReady := accepted
-	if accepted && s.startupFastLoadCheckpoint != nil {
-		proofFingerprint = s.startupFastLoadCheckpoint.nodeStoreFingerprint
-	}
-	if checkpointErr != nil {
-		s.logger.Warn("Fast-load checkpoint rejected; using strict traversal",
-			"sequence", h.LedgerIndex,
-			"err", checkpointErr,
-		)
-	}
-	if !accepted {
-		metrics, nodeFingerprint, baseAvailable, err := s.verifyFastLoadStrictState(ctx, h)
-		if err != nil {
-			s.recordStartupVerificationFailure(ctx, h, err)
-			return nil, fmt.Errorf("ledger %d: %w", info.Sequence, err)
+	var proofReady bool
+	if err := loaded.AuthenticateClosureWith(ctx, func(ctx context.Context, h header.LedgerHeader) error {
+		accepted, checkpointErr := s.acceptFastLoadCheckpoint(ctx, s.startupFastLoadCheckpoint, h)
+		proofReady = accepted
+		if accepted && s.startupFastLoadCheckpoint != nil {
+			proofFingerprint = s.startupFastLoadCheckpoint.nodeStoreFingerprint
 		}
-		s.fastLoadStrictNodes.Store(metrics.nodes)
-		s.fastLoadStrictElapsed.Store(uint64(metrics.elapsed))
-		if baseAvailable {
-			s.fastLoadBaseStateRoot = h.AccountHash
-			s.fastLoadBaseFingerprint = nodeFingerprint
-			s.fastLoadBaseVerified = true
-			proofFingerprint = nodeFingerprint
-			proofReady = true
+		if checkpointErr != nil {
+			s.logger.Warn("Fast-load checkpoint rejected; using strict traversal",
+				"sequence", h.LedgerIndex,
+				"err", checkpointErr,
+			)
 		}
-		s.markFastLoadCheckpointEligible()
-		s.logger.Info("Fast-load strict traversal completed",
-			"sequence", h.LedgerIndex,
-			"checkpoint_fallback", s.startupFastLoadCheckpoint != nil,
-			"checkpoint_relative_base", baseAvailable,
-			"nodes_checked", metrics.nodes,
-			"elapsed", metrics.elapsed.String(),
-		)
+		if !accepted {
+			metrics, nodeFingerprint, baseAvailable, err := s.verifyFastLoadStrictState(ctx, h)
+			if err != nil {
+				s.recordStartupVerificationFailure(ctx, h, err)
+				return fmt.Errorf("ledger %d: %w", info.Sequence, err)
+			}
+			s.fastLoadStrictNodes.Store(metrics.nodes)
+			s.fastLoadStrictElapsed.Store(uint64(metrics.elapsed))
+			if baseAvailable {
+				s.fastLoadBaseStateRoot = h.AccountHash
+				s.fastLoadBaseFingerprint = nodeFingerprint
+				s.fastLoadBaseVerified = true
+				proofFingerprint = nodeFingerprint
+				proofReady = true
+			}
+			s.markFastLoadCheckpointEligible()
+			s.logger.Info("Fast-load strict traversal completed",
+				"sequence", h.LedgerIndex,
+				"checkpoint_fallback", s.startupFastLoadCheckpoint != nil,
+				"checkpoint_relative_base", baseAvailable,
+				"nodes_checked", metrics.nodes,
+				"elapsed", metrics.elapsed.String(),
+			)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
+
 	if err := loaded.SetValidated(); err != nil {
 		return nil, fmt.Errorf("mark newest ledger %d validated: %w", info.Sequence, err)
 	}
@@ -259,7 +266,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	}
 	h.Validated = false
 	h.Accepted = true
-	loaded, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, fees)
+	loaded, err := ledger.NewClosedFromRootsContext(ctx, *h, fees, s.config.Execution)
 	if err != nil && isUnavailableSHAMapNode(err) {
 		return nil, fmt.Errorf("%w: ledger state: %w", errStoredLedgerUnavailable, err)
 	}

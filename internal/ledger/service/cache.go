@@ -325,6 +325,7 @@ func (s *historyComponent) putHistoryLocked(l *ledger.Ledger) {
 	}
 	s.ledgerHistory[seq] = l
 	s.ledgerByHash[l.Hash()] = seq
+	l.ReleaseExecutionBuildLeases()
 }
 
 // deleteHistoryLocked removes seq from ledgerHistory and the by-hash index.

@@ -7,25 +7,28 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
 
 // closedLedgerWithPayment builds a standalone service, applies one signed
 // Payment, and closes a ledger so GetClosedLedger() returns a ledger with a
 // non-empty transaction tree.
-func closedLedgerWithPayment(t *testing.T) *service.Service {
+func closedLedgerWithPayment(t *testing.T, families ...shamap.Family) *service.Service {
 	t.Helper()
-	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
-	require.NoError(t, err)
-	require.NoError(t, svc.Start())
+	svc := newTestLedgerService(t, families...)
+	closeLedgerWithPayment(t, svc)
+	return svc
+}
 
+func closeLedgerWithPayment(t *testing.T, svc *service.Service) {
+	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
@@ -50,7 +53,6 @@ func closedLedgerWithPayment(t *testing.T) *service.Service {
 
 	_, err = svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
-	return svc
 }
 
 // TestServeLedger_TxBearing_FullRoundTrip is the end-to-end proof for the

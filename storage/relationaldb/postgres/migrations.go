@@ -208,4 +208,29 @@ var postgresMigrations = []migration{
 			instance_id BYTEA NOT NULL CHECK(octet_length(instance_id) = 16)
 		)`)
 	}},
+	{version: 6, apply: func(ctx context.Context, tx *sql.Tx) error {
+		return execAll(ctx, tx,
+			`CREATE TABLE IF NOT EXISTS ledger_publication_receipts (
+				commit_id BYTEA PRIMARY KEY CHECK(octet_length(commit_id) = 32),
+				ledger_hash BYTEA NOT NULL CHECK(octet_length(ledger_hash) = 32),
+				ledger_seq BIGINT NOT NULL CHECK(ledger_seq BETWEEN 0 AND 4294967295),
+				publication_kind TEXT NOT NULL CHECK(char_length(publication_kind) > 0),
+				digest BYTEA NOT NULL CHECK(octet_length(digest) = 32),
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_ledger_publication_receipts_seq
+				ON ledger_publication_receipts(ledger_seq)`,
+		)
+	}},
+	{version: 7, apply: func(ctx context.Context, tx *sql.Tx) error {
+		return execAll(ctx, tx,
+			`CREATE TABLE IF NOT EXISTS xrpl_publication_stream_indexes (
+				stream_id BYTEA NOT NULL CHECK(octet_length(stream_id) = 32),
+				txn_seq BIGINT NOT NULL CHECK(txn_seq BETWEEN 0 AND 4294967295),
+				trans_id BYTEA NOT NULL CHECK(octet_length(trans_id) = 32),
+				PRIMARY KEY(stream_id, txn_seq),
+				UNIQUE(stream_id, trans_id)
+			)`,
+		)
+	}},
 }

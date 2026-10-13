@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -17,14 +18,14 @@ func (l *Ledger) addTransaction(txHash [32]byte, txData []byte, nodeType shamap.
 	if l.state != StateOpen || !l.writable {
 		return ErrLedgerImmutable
 	}
-	exists, err := l.txMap.Has(txHash)
+	exists, err := l.execution.transactions.Has(txHash)
 	if err != nil {
 		return err
 	}
 	if exists {
 		return ErrEntryExists
 	}
-	return l.txMap.PutWithNodeType(txHash, txData, nodeType)
+	return l.execution.transactions.PutWithNodeType(txHash, txData, nodeType)
 }
 
 // AddTransactionWithMeta adds a tx with metadata, using NodeTypeTransactionWithMeta
@@ -41,20 +42,22 @@ func (l *Ledger) GetTransactionContext(ctx context.Context, txHash [32]byte) ([]
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	item, found, err := l.txMap.GetContext(ctx, txHash)
+	data, found, err := l.execution.transactions.get(ctx, txHash)
 	if err != nil {
 		return nil, false, err
 	}
 	if !found {
 		return nil, false, nil
 	}
-
-	return item.Data(), true, nil
+	if len(data) == 0 {
+		return nil, false, errors.New("empty transaction overlay record")
+	}
+	return data[1:], true, nil
 }
 
 func (l *Ledger) TxExists(txHash [32]byte) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.Has(txHash)
+	return l.execution.transactions.Has(txHash)
 }

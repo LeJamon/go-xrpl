@@ -37,6 +37,9 @@ var (
 	ErrInvalidData = errors.New("invalid relational data")
 	// ErrInvalidSchema indicates an unsupported or inconsistent schema version.
 	ErrInvalidSchema = errors.New("invalid relational schema")
+	// ErrCommitConflict indicates that a semantic publication ID was reused
+	// with a different ledger descriptor, intent, or transaction stream.
+	ErrCommitConflict = errors.New("publication commit ID conflict")
 )
 
 // DatabaseError adds an operation and category to a relational database error.

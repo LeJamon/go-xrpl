@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/overlay"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
@@ -421,4 +422,8 @@ func TestAMMInsufficientBalancePropagatesCorruptMPTHolding(t *testing.T) {
 	insufficient, result := insufficientBalance(view, holderID, amount, 0)
 	require.False(t, insufficient)
 	require.Equal(t, ter.TefINTERNAL, result)
+}
+
+func (*ammMPTView) ExecutionJournalConfig() overlay.Config {
+	return overlay.Config{MaxMemoryBytes: 1 << 20}
 }

@@ -1,0 +1,160 @@
+{
+  "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "cpu_count": 11,
+  "go": "go version go1.24.4 darwin/arm64",
+  "manifest": {
+    "environment": {
+      "GOMAXPROCS": "4",
+      "GOGC": "100",
+      "GOMEMLIMIT": "512MiB"
+    },
+    "cases": [
+      {
+        "name": "state-hot",
+        "suite": "state",
+        "config": {
+          "seed": 2050,
+          "seed_entries": 4096,
+          "value_bytes": 512,
+          "ledgers": 512,
+          "warmup_ledgers": 16,
+          "reads_per_ledger": 128,
+          "hot_writes_per_ledger": 16,
+          "disjoint_writes_per_ledger": 0,
+          "retained_views": 32,
+          "scan_every": 0,
+          "scan_entries": 0,
+          "node_block_cache_mib": 8,
+          "node_cache_items": 256,
+          "flat_cache_bytes": 8388608,
+          "flat_memtable_bytes": 4194304,
+          "flat_batch_bytes": 1048576,
+          "flat_batch_records": 1024,
+          "workspace_bytes": 67108864,
+          "overlay_memory_bytes": 1048576,
+          "overlay_disk_bytes": 67108864,
+          "overlay_segments": 8,
+          "overlay_merge_fan_in": 8
+        },
+        "timeout": "20m"
+      },
+      {
+        "name": "state-disjoint",
+        "suite": "state",
+        "config": {
+          "seed": 2050,
+          "seed_entries": 65536,
+          "value_bytes": 512,
+          "ledgers": 1024,
+          "warmup_ledgers": 0,
+          "reads_per_ledger": 512,
+          "hot_writes_per_ledger": 16,
+          "disjoint_writes_per_ledger": 0,
+          "retained_views": 64,
+          "scan_every": 0,
+          "scan_entries": 0,
+          "node_block_cache_mib": 8,
+          "node_cache_items": 256,
+          "flat_cache_bytes": 8388608,
+          "flat_memtable_bytes": 4194304,
+          "flat_batch_bytes": 1048576,
+          "flat_batch_records": 1024,
+          "workspace_bytes": 67108864,
+          "overlay_memory_bytes": 1048576,
+          "overlay_disk_bytes": 67108864,
+          "overlay_segments": 8,
+          "overlay_merge_fan_in": 8
+        },
+        "timeout": "20m"
+      },
+      {
+        "name": "state-growing",
+        "suite": "state",
+        "config": {
+          "seed": 2050,
+          "seed_entries": 32768,
+          "value_bytes": 512,
+          "ledgers": 512,
+          "warmup_ledgers": 16,
+          "reads_per_ledger": 128,
+          "hot_writes_per_ledger": 0,
+          "disjoint_writes_per_ledger": 64,
+          "retained_views": 32,
+          "scan_every": 0,
+          "scan_entries": 0,
+          "node_block_cache_mib": 8,
+          "node_cache_items": 256,
+          "flat_cache_bytes": 8388608,
+          "flat_memtable_bytes": 4194304,
+          "flat_batch_bytes": 1048576,
+          "flat_batch_records": 1024,
+          "workspace_bytes": 67108864,
+          "overlay_memory_bytes": 1048576,
+          "overlay_disk_bytes": 67108864,
+          "overlay_segments": 8,
+          "overlay_merge_fan_in": 8
+        },
+        "timeout": "20m"
+      },
+      {
+        "name": "state-spill",
+        "suite": "state",
+        "config": {
+          "seed": 2050,
+          "seed_entries": 4096,
+          "value_bytes": 512,
+          "ledgers": 256,
+          "warmup_ledgers": 16,
+          "reads_per_ledger": 128,
+          "hot_writes_per_ledger": 512,
+          "disjoint_writes_per_ledger": 0,
+          "retained_views": 32,
+          "scan_every": 0,
+          "scan_entries": 0,
+          "node_block_cache_mib": 8,
+          "node_cache_items": 256,
+          "flat_cache_bytes": 8388608,
+          "flat_memtable_bytes": 4194304,
+          "flat_batch_bytes": 1048576,
+          "flat_batch_records": 1024,
+          "workspace_bytes": 67108864,
+          "overlay_memory_bytes": 65536,
+          "overlay_disk_bytes": 67108864,
+          "overlay_segments": 8,
+          "overlay_merge_fan_in": 8
+        },
+        "timeout": "20m"
+      }
+    ]
+  },
+  "samples": 5,
+  "revisions": {
+    "before": {
+      "commit": "546e974024a77d9dcf80bc07cd4e86930467fff1",
+      "status": "?? internal/ledger/state_memory_benchmark_before_test.go\n?? internal/ledger/state_memory_benchmark_common_test.go",
+      "diff": ""
+    },
+    "after": {
+      "commit": "8e07404b9414a16b9aa98ea490ab8e75cd71df96",
+      "status": "M internal/ledger/service/batch_accept_bench_test.go\n?? docs/performance/state-memory-results/\n?? docs/performance/state-memory.md\n?? scripts/benchmark-state-memory.py\n?? scripts/benchmarks/state-memory/service.json\n?? scripts/benchmarks/state-memory/state.json",
+      "diff": "internal/ledger/service/batch_accept_bench_test.go | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)"
+    }
+  },
+  "notes": [
+    "Process metrics include fixture setup and teardown.",
+    "RSS is the process high-water mark, not post-GC live heap.",
+    "rusage block counts are platform-dependent; zero does not prove zero I/O.",
+    "The OS page cache is not flushed; pair order alternates between samples."
+  ],
+  "binaries": {
+    "before-state": "ccc738ac0c9550cde1dabe590e646c0bb5a33ebbb229620ff76dd56d550a8dc6",
+    "after-state": "4ec213f307f7cd8733348fae58ce378a57b1edbe5e16af488327774f10371115"
+  },
+  "host": {
+    "cpu": "Apple M3 Pro",
+    "logical_cpus": 11,
+    "ram_bytes": 19327352832,
+    "dedicated_host": false
+  },
+  "correctness_verification": "All per-ledger sequence, ledger hash, state root and rolling read digest, and final digest dictionaries match across all ten runs per case."
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/keylet"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // readClosedLedgerHashesSLE decodes the rolling LedgerHashes SLE from
@@ -215,9 +216,18 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 // LedgerHashes ancestors into seq N+2, producing a divergent chain
 // forever.
 func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
+	family := shamapbackend.NewMemory()
+	t.Cleanup(func() {
+		if err := family.Close(); err != nil {
+			t.Errorf("close shared SHAMap family: %v", err)
+		}
+	})
+	execution := newTestExecutionStore(t, family)
 	mkSvc := func() *Service {
 		cfg := DefaultConfig()
 		cfg.Standalone = false
+		cfg.SHAMapFamily = family
+		cfg.Execution = execution
 		svc, err := New(cfg)
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -225,14 +235,34 @@ func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
 		if err := svc.Start(); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
+		t.Cleanup(func() {
+			svc.Stop()
+			svc.historyComponent.mu.RLock()
+			history := make([]*ledger.Ledger, 0, len(svc.ledgerHistory)+len(svc.persistedLedgers))
+			for _, closed := range svc.ledgerHistory {
+				history = append(history, closed)
+			}
+			for _, closed := range svc.persistedLedgers {
+				history = append(history, closed)
+			}
+			svc.historyComponent.mu.RUnlock()
+			for _, closed := range history {
+				closed.ReleaseExecutionBuildLeases()
+			}
+		})
 		return svc
 	}
 
 	alt := mkSvc()
 	canonical := mkSvc()
+	sharedParent := alt.GetClosedLedger()
+	if err := canonical.SwitchToPreferredLedger(sharedParent); err != nil {
+		t.Fatalf("align canonical service with shared parent: %v", err)
+	}
 
-	// Drive both services through a few clean rounds with the same
-	// close times so they stay byte-identical.
+	// Drive both services through a few clean rounds from the same parent
+	// and shared execution/family ownership so startup wall-clock times do
+	// not affect the warm-up chain.
 	closeTime := time.Unix(1700000000, 0)
 	for i := range 5 {
 		closeTime = closeTime.Add(2 * time.Second)

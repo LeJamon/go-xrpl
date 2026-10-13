@@ -76,6 +76,7 @@ export default defineConfig({
         items: [
           { text: 'Introduction', link: '/' },
           { text: 'Architecture', link: '/architecture' },
+          { text: 'State memory proposal', link: '/state-memory-spec' },
           { text: 'Operating a node', link: '/operating' },
         ],
       },

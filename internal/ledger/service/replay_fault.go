@@ -516,7 +516,7 @@ func (s *Service) captureReplayParent(ctx context.Context, id string, parent *le
 	if txRoot != h.TxHash {
 		return nil, errReplayParentCorrupt
 	}
-	verified, err := ledger.NewFromHeader(h, rebuilt, rebuiltTx, parent.Fees())
+	verified, err := ledger.NewFromHeader(h, rebuilt, rebuiltTx, parent.Fees(), s.config.Execution)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +600,7 @@ func (s *Service) loadReplayParent(ctx context.Context, fault replayfault.Fault,
 	if txRoot != evidence.Parent.TxHash {
 		return nil, errReplayParentCorrupt
 	}
-	return ledger.NewFromHeader(evidence.Parent, state, txMap, evidence.Fees)
+	return ledger.NewFromHeader(evidence.Parent, state, txMap, evidence.Fees, s.config.Execution)
 }
 
 func (s *Service) RevalidateReplayFault(ctx context.Context, id string) error {
@@ -734,25 +734,26 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 				return err
 			}
 		}
-		state, err := parent.StateMapSnapshot()
-		if err != nil {
-			return err
-		}
-		target, err := ledger.NewFromHeader(evidence.Target, state, txMap, parent.Fees())
-		if err != nil {
-			return err
-		}
-		if target.Hash() != fault.TargetHash {
+		if evidence.Target.Hash != fault.TargetHash {
 			return errors.New("replay evidence target mismatch")
 		}
-		replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
+		replay, err := inbound.NewTransactionReplayContext(
+			ctx,
+			parent,
+			evidence.Target,
+			txMap,
+			nil,
+			s.config.ReplayVerificationMemory,
+		)
 		if err != nil {
 			return err
 		}
 		defer replay.ReleaseMemory()
-		if _, err := replay.ApplyContext(ctx, s.EngineConfigForReplay(parent)); err != nil {
+		derived, err := replay.ApplyContext(ctx, s.EngineConfigForReplay(parent))
+		if err != nil {
 			return fmt.Errorf("failed transition still disagrees: %w", err)
 		}
+		defer derived.Discard()
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -20,6 +20,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -61,8 +62,17 @@ func newStubLedger(t *testing.T) *ledger.Ledger {
 		Validated:           true,
 		Accepted:            true,
 	}
-	hdr.Hash = [32]byte{0x7B, 0xAB}
-	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	var err error
+	hdr.AccountHash, err = stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state map hash: %v", err)
+	}
+	hdr.TxHash, err = txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction map hash: %v", err)
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}

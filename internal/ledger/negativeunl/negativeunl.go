@@ -11,11 +11,17 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
+type Map interface {
+	Get([32]byte) (*shamap.Item, bool, error)
+	Put([32]byte, []byte) error
+	Delete([32]byte) error
+}
+
 // Apply materializes pending ValidatorToDisable / ValidatorToReEnable on the
 // NegativeUNL SLE, stamping ledgerIndex as FirstLedgerSequence of any newly
 // disabled validator. No-op when the SLE or both transition fields are absent;
 // erases the SLE when DisabledValidators becomes empty.
-func Apply(stateMap *shamap.SHAMap, ledgerIndex uint32) error {
+func Apply(stateMap Map, ledgerIndex uint32) error {
 	key := keylet.NegativeUNL().Key
 	item, exists, err := stateMap.Get(key)
 	if err != nil {

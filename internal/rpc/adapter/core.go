@@ -25,7 +25,12 @@ var _ types.TxTablesProvider = (*LedgerServiceAdapter)(nil)
 var _ types.RangedTransactionLookup = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerContextReader = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerViewSource = (*LedgerServiceAdapter)(nil)
+var _ types.ContextLedgerViewSource = (*LedgerServiceAdapter)(nil)
 var _ types.OpenLedgerViewSource = (*LedgerServiceAdapter)(nil)
+var _ types.ContextOpenLedgerViewSource = (*LedgerServiceAdapter)(nil)
+var _ types.ContextClosedLedgerViewSource = (*LedgerServiceAdapter)(nil)
+var _ types.ContextLedgerHashReader = (*LedgerServiceAdapter)(nil)
+var _ types.ContextLedgerSequenceReader = (*LedgerServiceAdapter)(nil)
 var _ types.TransactionRulesSource = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter

@@ -2,11 +2,9 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -26,7 +24,7 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
 func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (sequence uint32, retErr error) {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	releaseAdmission, err := s.acquireExecutionWork(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -83,11 +81,12 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			}
 		}
 		if len(pending) == 0 {
-			closed, err = s.currentOpenLedgerLocked().MutableSnapshotUnflushed()
+			closed, err = s.currentOpenLedgerLocked().MutableSnapshot()
 			if err != nil {
 				return 0, fmt.Errorf("snapshot open ledger for close: %w", err)
 			}
 			if err := s.applyFlagLedgerNegativeUNL(closed); err != nil {
+				closed.Discard()
 				return 0, err
 			}
 		} else {
@@ -99,6 +98,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		}
 	}
 
+	defer closed.Discard()
 	if !replayed {
 		if err := closed.Close(closeTime, 0); err != nil {
 			return 0, fmt.Errorf("failed to close ledger: %w", err)
@@ -123,7 +123,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	}
 	s.pendingTxs = nil
 	if replayed {
-		s.startupReplay = nil
+		s.releaseStartupReplayLocked()
 	}
 
 	// Persist best-effort: a persistence failure must not be fatal — treating it
@@ -132,6 +132,9 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	if err := s.persistLedger(context.WithoutCancel(ctx), closed); err != nil {
 		s.logger.Error("failed to persist closed ledger; chain advance continues",
 			"seq", closed.Sequence(), "err", err)
+		if s.config.FlatState != nil {
+			s.enqueuePersist(closed)
+		}
 	}
 
 	s.closedLedger = closed
@@ -139,6 +142,9 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.validatedSignTime = closed.CloseTime()
 	s.putHistoryLocked(closed)
 	s.evictOldHistoryLocked(closedSeq)
+	if s.openLedger != nil {
+		s.openLedger.ReleaseExecutionBuildLeases()
+	}
 	s.openLedger = newOpen
 	s.tickLoadFeeLocked()
 
@@ -198,6 +204,12 @@ func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, 
 		return nil, nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
 	}
 
+	complete := false
+	defer func() {
+		if !complete {
+			freshLedger.Discard()
+		}
+	}()
 	// On a flag ledger the NegativeUNL transition must be applied before any txs.
 	if err := s.applyFlagLedgerNegativeUNL(freshLedger); err != nil {
 		return nil, nil, err
@@ -232,6 +244,7 @@ func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, 
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	complete = true
 	return freshLedger, retriableTxs, nil
 }
 
@@ -239,11 +252,17 @@ func (s *Service) prepareNewOpenLedgerLocked(ctx context.Context, closed *ledger
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if s.openLedger != nil {
+		if err := s.openLedger.FreezeExecution(ctx); err != nil {
+			return nil, err
+		}
+	}
 	newOpen, err := ledger.NewOpen(closed, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new open ledger: %w", err)
 	}
 	if err := s.acceptStandaloneOpenLedgerLocked(ctx, closed, retriableTxs); err != nil {
+		newOpen.Discard()
 		return nil, err
 	}
 	return newOpen, nil
@@ -842,77 +861,38 @@ func (s *Service) IsFastLoadProvisional() bool {
 // changing the node's closed/open ledger frontier. Consensus may later select
 // the stored ledger as its preferred parent.
 func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	prepared, err := s.PrepareAcquiredLedger(ctx, h, stateMap, txMap)
 	if err != nil {
 		return err
 	}
-	defer releaseAdmission()
-	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	if err := s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap); err != nil {
-		return err
-	}
-	// Runtime catch-up can complete a full acquired state after startup has
-	// already left initial-sync mode. Keep only its identity until persistence
-	// and the generation-bound FullBelow proof authorize promotion.
-	if h != nil && !s.ReplayBlocked() {
-		s.rememberValidatedStateBaseCandidate(*h)
-	}
-	return nil
+	defer prepared.Release()
+	return s.StorePreparedLedger(ctx, prepared)
 }
 
 // BootstrapLedgerWithState stores an acquired ledger and reports whether the
 // node still needs an initial network-ledger switch. Consensus owns that switch.
 func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (bool, error) {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	prepared, err := s.PrepareAcquiredLedger(ctx, h, stateMap, txMap)
 	if err != nil {
 		return false, err
 	}
-	defer releaseAdmission()
-	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
-		return false, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	initialCandidate := s.networkLedgerState != networkLedgerReady
-	err = s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
-	if err == nil && initialCandidate && !s.ReplayBlocked() {
-		s.rememberValidatedStateBaseCandidate(*h)
-	}
-	return initialCandidate, err
+	defer prepared.Release()
+	return s.BootstrapPreparedLedger(ctx, prepared)
 }
 
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated
 // history without changing the node's current ledger frontiers.
 func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	prepared, err := s.PrepareAcquiredLedger(ctx, h, stateMap, txMap)
 	if err != nil {
 		return err
 	}
-	defer releaseAdmission()
-	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
-	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	defer prepared.Release()
+	return s.IngestHistoricalPreparedLedger(ctx, prepared)
 }
 
-func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+func (s *Service) ingestHistoricalLedgerLocked(ctx context.Context, historical *ledger.Ledger) error {
 	if err := ctx.Err(); err != nil {
-		return err
-	}
-	historical, err := s.ledgerWithStateLocked(h, stateMap, txMap)
-	if err != nil {
 		return err
 	}
 
@@ -975,73 +955,20 @@ func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *
 	return nil
 }
 
-func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) (*ledger.Ledger, error) {
-	if s.genesisLedger == nil {
-		return nil, errors.New("no genesis ledger available")
-	}
-	if h == nil {
-		return nil, errors.New("nil ledger header")
-	}
-	if stateMap == nil {
-		return nil, errors.New("nil ledger state map")
-	}
-	if calculated := header.CalculateHash(*h); calculated != h.Hash {
-		return nil, fmt.Errorf("acquired ledger header hash mismatch: got %x, want %x", calculated, h.Hash)
-	}
-	stateHash, err := stateMap.Hash()
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate acquired state map hash: %w", err)
-	}
-	if stateHash != h.AccountHash {
-		return nil, fmt.Errorf("acquired state map root mismatch: got %x, want %x", stateHash, h.AccountHash)
-	}
-	if txMap == nil {
-		if h.TxHash != ([32]byte{}) {
-			return nil, errors.New("nil transaction map for non-empty transaction root")
-		}
-		empty, err := s.genesisLedger.TxMapSnapshot()
-		if err != nil {
-			return nil, fmt.Errorf("failed to snapshot empty tx map: %w", err)
-		}
-		txMap = empty
-	}
-	txHash, err := txMap.Hash()
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate acquired transaction map hash: %w", err)
-	}
-	if txHash != h.TxHash {
-		return nil, fmt.Errorf("acquired transaction map root mismatch: got %x, want %x", txHash, h.TxHash)
-	}
-
-	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to construct acquired ledger: %w", err)
-	}
-	return acquired, nil
-}
-
-func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
-	if s.ReplayBlocked() {
-		if h == nil || !s.ReplayRecoveryParent(h.Hash) {
-			return replayfault.ErrBlocked
-		}
-		repaired, err := s.ledgerWithStateLocked(h, stateMap, txMap)
-		if err != nil {
-			return err
-		}
-		if fault := s.replayFaults.Snapshot(); replayFaultMatchesRepairTarget(fault, repaired.Hash()) {
-			s.replayRepairTarget = repaired
-		} else {
-			s.replayRepairParent = repaired
-		}
-		return nil
-	}
+func (s *Service) storeLedgerLocked(ctx context.Context, stored *ledger.Ledger) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stored, err := s.ledgerWithStateLocked(h, stateMap, txMap)
-	if err != nil {
-		return err
+	if s.ReplayBlocked() {
+		if !s.ReplayRecoveryParent(stored.Hash()) {
+			return replayfault.ErrBlocked
+		}
+		if fault := s.replayFaults.Snapshot(); replayFaultMatchesRepairTarget(fault, stored.Hash()) {
+			s.replayRepairTarget = stored
+		} else {
+			s.replayRepairParent = stored
+		}
+		return nil
 	}
 
 	s.replayAcquiredHash = stored.Hash()

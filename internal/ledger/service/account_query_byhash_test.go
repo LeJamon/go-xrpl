@@ -29,7 +29,7 @@ func newHistoricalLedger(t *testing.T, svc *Service, seq uint32, addr string, id
 	}
 	var h header.LedgerHeader
 	h.LedgerIndex = seq
-	hist, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+	hist, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{}, svc.config.Execution)
 	if err != nil {
 		t.Fatalf("NewOpenWithHeader: %v", err)
 	}

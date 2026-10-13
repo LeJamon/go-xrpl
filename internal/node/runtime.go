@@ -30,6 +30,7 @@ import (
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -47,10 +48,11 @@ type nodeRuntime struct {
 	serverLog  xrpllog.Logger
 	options    RunOptions
 
-	nodeStore  nodestore.Database
-	repo       relationaldb.RepositoryManager
-	nodeFamily *backend.NodeStore
-	memory     *nodeMemory
+	nodeStore       nodestore.Database
+	repo            relationaldb.RepositoryManager
+	nodeFamily      *backend.NodeStore
+	ephemeralFamily *backend.NodeStore
+	memory          *nodeMemory
 
 	ledger        *service.Service
 	cleaner       *cleaner.Cleaner
@@ -62,14 +64,15 @@ type nodeRuntime struct {
 	resourceManager      *resource.Manager
 	ownsResourceManager  bool
 
-	services      *types.ServiceGraphBuilder
-	serviceGraph  *types.ServiceGraph
-	ledgerAdapter *rpcadapter.LedgerServiceAdapter
-	httpServer    *rpc.Server
-	wsServer      *rpc.WebSocketServer
-	publisher     *rpc.Publisher
-	transports    *boundRPCTransports
-	watchdog      *watchdog.Watchdog
+	services         *types.ServiceGraphBuilder
+	serviceGraph     *types.ServiceGraph
+	ledgerAdapter    *rpcadapter.LedgerServiceAdapter
+	executionCleanup func() error
+	httpServer       *rpc.Server
+	wsServer         *rpc.WebSocketServer
+	publisher        *rpc.Publisher
+	transports       *boundRPCTransports
+	watchdog         *watchdog.Watchdog
 
 	networkID                 uint32
 	retentionFloor            func() uint32
@@ -251,6 +254,17 @@ func (r *nodeRuntime) configureLedger() error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+	var family shamap.Family
+	if r.nodeFamily != nil {
+		family = r.nodeFamily
+	} else {
+		var options backend.NodeStoreOptions
+		if r.memory != nil {
+			options.CacheMemoryBudget = r.memory.nodes
+		}
+		r.ephemeralFamily = backend.NewMemory(options)
+		family = r.ephemeralFamily
+	}
 
 	// Build the transaction-queue config from the operator's
 	// [transaction_queue] stanza layered over the rippled defaults.
@@ -268,7 +282,7 @@ func (r *nodeRuntime) configureLedger() error {
 		LedgerCacheSize: uint32(r.appConfig.ResolvedLedgerCacheSize()),
 		NetworkID:       uint32(networkID),
 		NodeStore:       r.nodeStore,
-		SHAMapFamily:    r.nodeFamily,
+		SHAMapFamily:    family,
 		FastLoad:        r.appConfig.NodeDB.FastLoad,
 		FastLoadWorkers: r.appConfig.NodeDB.FastLoadWorkers,
 		RelationalDB:    r.repo,
@@ -283,6 +297,9 @@ func (r *nodeRuntime) configureLedger() error {
 			cfg.PersistenceMemory = r.memory.persistence
 			cfg.ReplayVerificationMemory = r.memory.replayVerification
 		}
+	}
+	if err := r.configureExecution(&cfg); err != nil {
+		return err
 	}
 	cfg.GenesisConfig = genesisConfig
 	configuredFees := configuredLedgerLoadFees(r.appConfig)
@@ -1487,6 +1504,16 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 				r.serverLog.Info("Fast-load checkpoint preparation skipped", "prepared", false)
 			}
 		}
+	}
+
+	if r.executionCleanup != nil {
+		if err := r.executionCleanup(); err != nil {
+			errs = append(errs, fmt.Errorf("close execution store: %w", err))
+			return errors.Join(errs...)
+		}
+	}
+	if r.ephemeralFamily != nil {
+		errs = append(errs, r.ephemeralFamily.Close())
 	}
 
 	if r.nodeFamily != nil {

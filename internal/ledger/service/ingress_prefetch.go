@@ -36,10 +36,11 @@ func (s *Service) prefetchIngressState(ptx openledger.PendingTx) {
 	// snapshot creation and consensus need those locks too. This O(1) fork
 	// is read-only here, never flushed/published, and only warms verified
 	// hash-addressed children and the runtime NodeStore cache.
-	view, err := current.MutableSnapshotUnflushed()
+	view, err := current.MutableSnapshot()
 	if err != nil {
 		return
 	}
+	defer view.Discard()
 	ctx, cancel := context.WithTimeout(context.Background(), ingressPrefetchBudget)
 	defer cancel()
 	// The deadline bounds further hints; a backend already in a physical

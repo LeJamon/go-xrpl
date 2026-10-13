@@ -25,6 +25,10 @@ type stateSource interface {
 	// Load returns the verified seed state map for the ledger, its snapshot,
 	// and the fee schedule extracted from the state.
 	Load(ctx context.Context, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error)
+	// Family returns the family backing the map returned by the most recent Load.
+	// A nil family means the map is heap-backed and the execution session must
+	// create its own bounded family.
+	Family() shamap.Family
 	// Close releases any resources held by the source (pebble handles, the
 	// ephemeral overlay directory, ...).
 	Close() error
@@ -39,6 +43,8 @@ type memoryStateSource struct {
 func (s *memoryStateSource) Load(ctx context.Context, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
 	return loadInitialState(ctx, s.client, ledgerIndex)
 }
+
+func (s *memoryStateSource) Family() shamap.Family { return nil }
 
 func (s *memoryStateSource) Close() error { return nil }
 
@@ -55,6 +61,7 @@ type nodestoreStateSource struct {
 	overlay        *backend.NodeStore
 	overlayDir     string
 	opened         []*backend.NodeStore
+	family         shamap.Family
 	closed         bool
 }
 
@@ -111,10 +118,12 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 		return nil, nil, drops.Fees{}, err
 	}
 	s.opened = append(s.opened, base)
-	stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, snapshot.AccountHash, shamap.NewOverlayFamily(base, s.overlay))
+	family := shamap.NewOverlayFamily(base, s.overlay)
+	stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, snapshot.AccountHash, family)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("opening checkpoint %d state root: %w", ledgerIndex, err)
 	}
+	s.family = family
 
 	// Targeted lookup; lazily fetches only the FeeSettings path, not the tree.
 	fees, err := feesFromStateMap(stateMap)
@@ -123,6 +132,8 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 	return stateMap, snapshot, fees, nil
 }
+
+func (s *nodestoreStateSource) Family() shamap.Family { return s.family }
 
 func (s *nodestoreStateSource) openOrBuildBase(
 	ctx context.Context,

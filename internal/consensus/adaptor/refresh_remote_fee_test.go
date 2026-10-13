@@ -193,6 +193,7 @@ func TestRefreshRemoteFee_ValidationBeforePreferredLedgerSwitch(t *testing.T) {
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	candidate, err := ledger.NewOpen(parent, closeTime)
 	require.NoError(t, err)
+	t.Cleanup(func() { candidate.Discard() })
 	require.NoError(t, candidate.Close(closeTime, 0))
 	header := candidate.Header()
 

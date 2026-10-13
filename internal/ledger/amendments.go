@@ -33,11 +33,15 @@ func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
 	return loadAmendmentsFromData(data)
 }
 
-func loadAmendmentsFromSHAMap(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
-	return LoadAmendmentsFromSHAMapContext(context.Background(), stateMap)
+func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMap) (*amendment.Rules, error) {
+	return loadAmendmentsFromTree(ctx, stateMap)
 }
 
-func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMap) (*amendment.Rules, error) {
+type amendmentsTree interface {
+	GetContext(context.Context, [32]byte) (*shamap.Item, bool, error)
+}
+
+func loadAmendmentsFromTree(ctx context.Context, stateMap amendmentsTree) (*amendment.Rules, error) {
 	item, found, err := stateMap.GetContext(ctx, keylet.Amendments().Key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read amendments entry: %w", err)

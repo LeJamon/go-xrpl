@@ -21,10 +21,12 @@ func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, rpcerrors.RpcErrorLgrNotFound("No closed ledger")
 	}
 
-	ledger, err := ctx.Services.Ledger().GetLedgerBySequence(seq)
+	ledger, err := getLedgerBySequenceContext(ctx.Context, ctx.Services.Ledger(), seq)
 	if err != nil {
+		closeLedgerLease(ledger)
 		return nil, rpcerrors.RpcErrorLgrNotFound("Closed ledger not found")
 	}
+	defer closeLedgerLease(ledger)
 
 	hash := ledger.Hash()
 	response := map[string]any{

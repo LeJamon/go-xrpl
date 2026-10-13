@@ -23,10 +23,12 @@ import (
 )
 
 func TestServiceSnapshotExecutionFromDurableParent(t *testing.T) {
-	cases, err := conformance.LoadSnapshotCases()
+	store := newTestExecutionStore(t)
+	cases, err := conformance.LoadSnapshotCases(store)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { conformance.DiscardSnapshotCases(cases) })
 	compatible := make([]conformance.SnapshotCase, 0, len(cases))
 	skipped := make([]string, 0)
 	for _, c := range cases {
@@ -246,8 +248,8 @@ func newServiceFromSnapshotParent(t *testing.T, c conformance.SnapshotCase, stan
 	ctx := context.Background()
 	db, relational := newStartupTestStorage(t, ctx)
 	family := backend.New(db)
-	parent := serviceSnapshotParent(t, c)
-	parent.SetSHAMapFamily(family)
+	execution := newTestExecutionStore(t, family)
+	parent := serviceSnapshotParent(t, c, execution)
 	writer, err := New(Config{
 		Standalone:     true,
 		GenesisConfig:  genesis.DefaultConfig(),
@@ -255,6 +257,7 @@ func newServiceFromSnapshotParent(t *testing.T, c conformance.SnapshotCase, stan
 		NodeStore:      db,
 		SHAMapFamily:   family,
 		RelationalDB:   relational,
+		Execution:      execution,
 	})
 	if err != nil {
 		t.Fatalf("writer New: %v", err)
@@ -282,6 +285,7 @@ func newServiceFromSnapshotParent(t *testing.T, c conformance.SnapshotCase, stan
 		NodeStore:      db,
 		SHAMapFamily:   family,
 		RelationalDB:   relational,
+		Execution:      execution,
 		TxQ:            serviceSnapshotTxQ(c.Fixture.TxQConfig),
 	})
 	if err != nil {
@@ -295,7 +299,7 @@ func newServiceFromSnapshotParent(t *testing.T, c conformance.SnapshotCase, stan
 	return svc
 }
 
-func serviceSnapshotParent(t *testing.T, c conformance.SnapshotCase) *ledger.Ledger {
+func serviceSnapshotParent(t *testing.T, c conformance.SnapshotCase, execution *ledger.ExecutionStore) *ledger.Ledger {
 	t.Helper()
 	state := shamap.New(shamap.TypeState)
 	var stateErr error
@@ -321,7 +325,7 @@ func serviceSnapshotParent(t *testing.T, c conformance.SnapshotCase) *ledger.Led
 		t.Fatalf("copy parent transaction item: %v", txErr)
 	}
 
-	parent, err := ledger.NewFromHeader(c.Parent.Header, state, txs, c.Parent.Fees)
+	parent, err := ledger.NewFromHeader(c.Parent.Header, state, txs, c.Parent.Fees, execution)
 	if err != nil {
 		t.Fatalf("construct service parent: %v", err)
 	}

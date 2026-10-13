@@ -83,10 +83,12 @@ func withAccountQuery[T any](
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
-	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
+	readLease, err := s.AcquireLedgerRead(ctx, ledgerIndex)
 	if err != nil {
 		return zero, err
 	}
+	defer readLease.Close()
+	targetLedger, validated := readLease.Ledger, readLease.Validated
 
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
@@ -1757,10 +1759,12 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
+	readLease, err := s.AcquireLedgerRead(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
+	defer readLease.Close()
+	targetLedger, validated := readLease.Ledger, readLease.Validated
 
 	_, srcIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(sourceAccount)
 	if err != nil {

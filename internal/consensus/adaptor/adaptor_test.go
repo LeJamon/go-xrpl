@@ -10,17 +10,21 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestLedgerService(t *testing.T) *service.Service {
+func newTestLedgerService(t *testing.T, families ...shamap.Family) *service.Service {
 	t.Helper()
 	cfg := service.Config{
 		Standalone:    true, // standalone for tests that expect seq 2
 		GenesisConfig: genesis.DefaultConfig(),
+	}
+	if len(families) > 0 {
+		cfg.SHAMapFamily = families[0]
 	}
 	svc, err := service.New(cfg)
 	require.NoError(t, err)
@@ -28,9 +32,9 @@ func newTestLedgerService(t *testing.T) *service.Service {
 	return svc
 }
 
-func newTestAdaptor(t *testing.T) *Adaptor {
+func newTestAdaptor(t *testing.T, families ...shamap.Family) *Adaptor {
 	t.Helper()
-	svc := newTestLedgerService(t)
+	svc := newTestLedgerService(t, families...)
 
 	// Create a validator identity from a known test seed
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")

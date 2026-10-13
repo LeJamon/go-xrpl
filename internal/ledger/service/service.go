@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/flatstate"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -72,12 +73,14 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 
 // Config holds configuration for the LedgerService
 type Config struct {
+	Execution         *ledger.ExecutionStore
+	FlatState         *flatstate.Store
 	RelayMemory       MemoryBudget
 	PersistenceMemory shamap.DirtyMemoryBudget
 	// ReplayVerificationMemory isolates long-running cold reads from ledger
 	// persistence. Node wiring must provide a separate shared-pool account so a
 	// verifier cannot consume the workspace needed to persist its own parent.
-	// Nil retains the legacy PersistenceMemory accounting for embedded callers.
+	// Embedded callers may share PersistenceMemory by leaving this nil.
 	ReplayVerificationMemory shamap.DirtyMemoryBudget
 	ReplayFaultPath          string
 	Standalone               bool
@@ -149,6 +152,9 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 
 // Service manages the ledger lifecycle
 type Service struct {
+	flatPins           flatRootPins
+	flatHeadersMu      sync.Mutex
+	flatHeaders        map[[32]byte]*nodestore.Node
 	replayRepairTarget *ledger.Ledger
 	replayAuthenticate func(header.LedgerHeader) bool
 	replayAcquiredHash [32]byte
@@ -199,6 +205,7 @@ type Service struct {
 	config         Config
 	logger         xrpllog.Logger
 	configuredFees drops.Fees
+	closeExecution func() error
 
 	// NodeStore for persistent storage (nil if in-memory only)
 	nodeStore    nodestore.Database
@@ -460,6 +467,9 @@ func (s *Service) beginValidatedLedgerUpdate() bool {
 
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
+	if cfg.FlatState != nil && (cfg.Execution == nil || cfg.NodeStore == nil || cfg.PersistenceMemory == nil) {
+		return nil, errors.New("flat state requires bounded execution, durable storage, and persistence memory admission")
+	}
 	if err := cfg.Startup.validateMode(); err != nil {
 		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
 	}
@@ -503,8 +513,14 @@ func New(cfg Config) (*Service, error) {
 		sweepInterval = nodeStoreSweepIntervalForSize(cfg.NodeSize)
 	}
 
+	closeExecution, err := configureServiceExecution(&cfg)
+	if err != nil {
+		return nil, fmt.Errorf("configure execution: %w", err)
+	}
+
 	s := &Service{
 		config:         cfg,
+		closeExecution: closeExecution,
 		logger:         logger.Named(xrpllog.PartitionLedger),
 		configuredFees: configuredFees,
 		nodeStore:      cfg.NodeStore,
@@ -664,6 +680,7 @@ func (s *Service) Start() (err error) {
 		if err != nil {
 			s.mu.Lock()
 			s.clearFastLoadBaseLocked()
+			s.releaseStartupReplayLocked()
 			s.mu.Unlock()
 		}
 	}()
@@ -676,6 +693,10 @@ func (s *Service) Start() (err error) {
 	defer func() {
 		s.startupFastLoadCheckpoint = nil
 	}()
+
+	if err := s.recoverFlatState(context.Background()); err != nil {
+		return fmt.Errorf("recover flat execution state: %w", err)
+	}
 
 	s.openLedgerMu.Lock()
 	defer s.openLedgerMu.Unlock()
@@ -704,12 +725,10 @@ func (s *Service) Start() (err error) {
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		drops.Fees{},
+		s.config.Execution,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to construct genesis ledger: %w", err)
-	}
-	if s.shamapFamily != nil {
-		genesisLedger.SetSHAMapFamily(s.shamapFamily)
 	}
 
 	s.genesisLedger = genesisLedger
@@ -725,6 +744,7 @@ func (s *Service) Start() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create initial closed ledger: %w", err)
 	}
+	defer initialClosed.Discard()
 	if err := initialClosed.Close(time.Now(), 0); err != nil {
 		return fmt.Errorf("failed to close initial ledger: %w", err)
 	}
@@ -733,6 +753,11 @@ func (s *Service) Start() (err error) {
 	if err != nil {
 		return fmt.Errorf("select startup ledger: %w", err)
 	}
+	defer func() {
+		if selection.replay != nil {
+			selection.replay.ReleaseMemory()
+		}
+	}()
 	if selection.validate && !selection.ledger.IsValidated() {
 		if err := selection.ledger.SetValidated(); err != nil {
 			return fmt.Errorf("validate startup ledger: %w", err)
@@ -765,11 +790,16 @@ func (s *Service) Start() (err error) {
 			s.validatedSignTime = selection.ledger.CloseTime()
 		}
 	}
+	if err := s.closedLedger.AuthenticateClosure(context.Background()); err != nil {
+		return err
+	}
+
 	s.networkLedgerState = selection.networkState
 	if s.networkLedgerState != networkLedgerFastLoadProvisional {
 		s.clearFastLoadBaseLocked()
 	}
 	s.startupReplay = selection.replay
+	selection.replay = nil
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {

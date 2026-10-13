@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
@@ -36,14 +37,14 @@ func (s *Service) PrepareStateRetention(
 	if !ok {
 		return 0, nil, errors.New("state retention requires durable snapshots")
 	}
+	if err := s.flushPersists(ctx); err != nil {
+		return 0, nil, err
+	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer release()
-	if err := s.flushPersists(ctx); err != nil {
-		return 0, nil, err
-	}
 	preserved := make(map[retainedStateRoot]struct{})
 	previous := make(map[shamap.Type][32]byte)
 	var sequence uint32
@@ -171,32 +172,44 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 			bases := make(map[shamap.Type][32]byte)
 			for _, root := range preparedOpen {
 				bases[root.kind] = root.hash
+				preserved[root] = struct{}{}
 			}
 			for _, root := range pending {
 				if err := s.preserveStateDifference(catchupCtx, root, bases[root.kind], sequence, nil, stateRetentionCatchupNodes); err != nil {
 					return nil, fmt.Errorf("%w: open state reconciliation: %w", errStateRetentionChanged, err)
 				}
 				bases[root.kind] = root.hash
+				preserved[root] = struct{}{}
 			}
 			if err := s.nodeStore.Sync(catchupCtx); err != nil {
 				return nil, err
 			}
 		}
+		validated := s.validatedLedger
+		h := validated.Header()
+		wasValidated := validated.IsValidated()
+		retained := make(map[rootlease.Root]struct{}, len(preserved))
+		for root := range preserved {
+			retained[rootlease.Root{Hash: root.hash, Kind: root.kind}] = struct{}{}
+		}
+		releaseRoots, ok := s.config.Execution.GuardPreservedRoots(retained)
+		if !ok {
+			return nil, errStateRetentionChanged
+		}
 		admitted = true
 		// Both validated trees are now completely verified and preserved in
 		// the surviving storage generation. Transfer that fact after mutation
 		// instead of asking a background verifier to read them all again.
-		validated := s.validatedLedger
 		return func() {
 			defer unlock()
-			if validated == nil || !validated.IsValidated() || ctx.Err() != nil {
+			defer releaseRoots()
+			if !wasValidated || ctx.Err() != nil {
 				return
 			}
 			next, err := durable.DurableFingerprint(ctx)
 			if err != nil || next == fingerprint {
 				return
 			}
-			h := validated.Header()
 			if _, ok := preserved[retainedStateRoot{h.AccountHash, shamap.TypeState}]; !ok {
 				return
 			}
@@ -273,27 +286,6 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 			return nil, err
 		}
 		if persist {
-			kind := nodestore.NodeAccount
-			store := func(entries []shamap.FlushEntry) error {
-				for start := 0; start < len(entries); start += 4096 {
-					part := entries[start:min(start+4096, len(entries))]
-					nodes := make([]*nodestore.Node, len(part))
-					for i, entry := range part {
-						nodes[i] = &nodestore.Node{Type: kind, Hash: nodestore.Hash256(entry.Hash), Data: entry.Data, LedgerSeq: l.Sequence()}
-					}
-					if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-			if err := l.StoreStateDirty(store); err != nil {
-				return nil, err
-			}
-			kind = nodestore.NodeTransaction
-			if err := l.StoreTransactionDirty(store); err != nil {
-				return nil, err
-			}
 			if !l.IsOpen() {
 				if err := s.nodeStore.Store(ctx, &nodestore.Node{Type: nodestore.NodeLedger, Hash: nodestore.Hash256(l.Hash()), Data: l.SerializeHeader(), LedgerSeq: s.validatedLedger.Sequence()}); err != nil {
 					return nil, err
@@ -314,6 +306,20 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 		if txs != ([32]byte{}) {
 			roots = append(roots, retainedStateRoot{txs, shamap.TypeTransaction})
 		}
+	}
+	if persist && s.config.FlatState != nil {
+		s.flatHeadersMu.Lock()
+		headers := make([]*nodestore.Node, 0, len(s.flatHeaders))
+		for _, node := range s.flatHeaders {
+			headers = append(headers, node)
+		}
+		s.flatHeadersMu.Unlock()
+		if err := s.nodeStore.StoreBatch(ctx, headers); err != nil {
+			return nil, err
+		}
+	}
+	for _, root := range s.config.Execution.Roots() {
+		roots = append(roots, retainedStateRoot{hash: root.Hash, kind: root.Kind})
 	}
 	return roots, nil
 }

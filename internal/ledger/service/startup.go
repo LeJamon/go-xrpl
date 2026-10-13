@@ -172,7 +172,13 @@ func (s *Service) loadExplicitStartup(ctx context.Context) (startupSelection, er
 		if err != nil {
 			return startupSelection{}, fmt.Errorf("load replay parent %x: %w", target.ParentHash(), err)
 		}
-		replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
+		replay, err := inbound.NewStoredLedgerReplayWithMemoryContext(
+			ctx,
+			parent,
+			target,
+			nil,
+			s.config.ReplayVerificationMemory,
+		)
 		if err != nil {
 			return startupSelection{}, fmt.Errorf("prepare startup replay: %w", err)
 		}
@@ -307,6 +313,17 @@ func (s *Service) stageStartupReplayLocked() error {
 	return nil
 }
 
+// releaseStartupReplayLocked releases the one-shot startup replay owner. The
+// caller must hold s.mu.
+func (s *Service) releaseStartupReplayLocked() {
+	replay := s.startupReplay
+	if replay == nil {
+		return
+	}
+	s.startupReplay = nil
+	replay.ReleaseMemory()
+}
+
 func (s *Service) applyStartupReplayLocked(ctx context.Context) (*ledger.Ledger, bool, error) {
 	if s.startupReplay == nil {
 		return nil, false, nil
@@ -316,7 +333,7 @@ func (s *Service) applyStartupReplayLocked(ctx context.Context) (*ledger.Ledger,
 		parent.Sequence() != s.closedLedger.Sequence() ||
 		parent.Hash() != s.closedLedger.Hash() {
 		s.logger.Warn("startup replay canceled after closed-ledger change")
-		s.startupReplay = nil
+		s.releaseStartupReplayLocked()
 		return nil, false, nil
 	}
 	cfg := s.EngineConfigForReplay(s.closedLedger)

@@ -36,3 +36,28 @@ func TestAdapterOpenLedgerViewReturnsSnapshot(t *testing.T) {
 	require.NotNil(t, view.Rules())
 	require.NotZero(t, view.LedgerSeq())
 }
+
+func TestAdapterContextLedgerReadHasIdempotentClose(t *testing.T) {
+	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	adapter := NewLedgerServiceAdapter(svc)
+	reader, err := adapter.GetLedgerBySequenceContext(context.Background(), closed.Sequence())
+	require.NoError(t, err)
+	closer, ok := reader.(interface{ Close() error })
+	require.True(t, ok)
+	require.NoError(t, closer.Close())
+	require.NoError(t, closer.Close())
+
+	view, metadata, err := adapter.GetLedgerViewBySeqContext(context.Background(), closed.Sequence())
+	require.NoError(t, err)
+	require.Same(t, view, metadata)
+	viewCloser, ok := view.(interface{ Close() error })
+	require.True(t, ok)
+	require.NoError(t, viewCloser.Close())
+	require.NoError(t, viewCloser.Close())
+}

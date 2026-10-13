@@ -22,6 +22,34 @@ var (
 	errEmptyNonRoot  = errors.New("non-root inner node cannot be empty")
 )
 
+func writeInnerPrefix(data []byte, hashes [BranchFactor][32]byte, branches uint16) {
+	copy(data[:4], protocol.HashPrefixInnerNode().Bytes())
+	clear(data[4:])
+	for i := range BranchFactor {
+		if branches&(1<<i) == 0 {
+			continue
+		}
+		offset := 4 + i*32
+		copy(data[offset:offset+32], hashes[i][:])
+	}
+}
+
+func serializeInnerWithPrefix(hashes [BranchFactor][32]byte, branches uint16) ([]byte, error) {
+	if branches == 0 {
+		return nil, errEmptyNonRoot
+	}
+	data := make([]byte, fullInnerSerializedSize)
+	writeInnerPrefix(data, hashes, branches)
+	return data, nil
+}
+
+func hashInnerPrefix(data []byte) [32]byte {
+	sum := sha512.Sum512(data)
+	var hash [32]byte
+	copy(hash[:], sum[:32])
+	return hash
+}
+
 // innerNode represents an inner node in the SHAMap tree
 type innerNode struct {
 	baseNode
@@ -203,16 +231,15 @@ func (n *innerNode) updateHashUnsafe() error {
 		return nil
 	}
 
-	var preimage [fullInnerSerializedSize]byte
-	copy(preimage[:4], protocol.HashPrefixInnerNode().Bytes())
+	hashes := n.hashes
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
-			ch := n.childPreimageHash(i)
-			copy(preimage[4+i*32:], ch[:])
+			hashes[i] = n.childPreimageHash(i)
 		}
 	}
-	sum := sha512.Sum512(preimage[:])
-	copy(n.hash[:], sum[:32])
+	var preimage [fullInnerSerializedSize]byte
+	writeInnerPrefix(preimage[:], hashes, n.isBranch)
+	n.hash = hashInnerPrefix(preimage[:])
 	return nil
 }
 
@@ -309,20 +336,13 @@ func (n *innerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	if n.isBranch == 0 {
-		return nil, errEmptyNonRoot
-	}
-
-	result := make([]byte, fullInnerSerializedSize)
-	copy(result[:4], protocol.HashPrefixInnerNode().Bytes())
+	hashes := n.hashes
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
-			off := 4 + i*32
-			ch := n.childPreimageHash(i)
-			copy(result[off:off+32], ch[:])
+			hashes[i] = n.childPreimageHash(i)
 		}
 	}
-	return result, nil
+	return serializeInnerWithPrefix(hashes, n.isBranch)
 }
 
 // newInnerNodeFromWire creates an innerNode from wire format data

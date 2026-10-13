@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,10 +18,14 @@ type proofRefreshBlockingFamily struct {
 	*replayAdmissionFamily
 	entered chan struct{}
 	once    sync.Once
+	blocked atomic.Bool
 }
 
 func (f *proofRefreshBlockingFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
 	f.once.Do(func() { close(f.entered) })
+	if !f.blocked.Load() {
+		return f.replayAdmissionFamily.FetchDurable(ctx, hash)
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -30,10 +35,14 @@ func TestColdReplayProofRefreshRequiresExactLedgerAndGeneration(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			base := newReplayAdmissionFamily(t)
 			family := &proofRefreshBlockingFamily{replayAdmissionFamily: base, entered: make(chan struct{})}
-			svc, err := New(Config{SHAMapFamily: family})
+			execution := newTestExecutionStore(t, family)
+			svc, err := New(Config{SHAMapFamily: family, Execution: execution})
 			require.NoError(t, err)
 			state := persistedReplayAdmissionState(t, base, 32)
-			parent := replayAdmissionLedger(t, 500, [32]byte{50}, [32]byte{49}, state, shamap.New(shamap.TypeTransaction))
+			parent := replayAdmissionLedger(t, 500, [32]byte{50}, [32]byte{49}, state, shamap.New(shamap.TypeTransaction), execution)
+			family.entered = make(chan struct{})
+			family.once = sync.Once{}
+			family.blocked.Store(true)
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			type result struct {

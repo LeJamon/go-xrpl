@@ -104,10 +104,12 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
+	readLease, err := s.AcquireLedgerRead(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
+	defer readLease.Close()
+	targetLedger, validated := readLease.Ledger, readLease.Validated
 	view := contextLedgerView{Ledger: targetLedger, ctx: ctx}
 	numberContext := tx.NumberContextForRules(nil)
 

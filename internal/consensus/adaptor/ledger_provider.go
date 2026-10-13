@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -54,6 +55,20 @@ type ledgerProvider struct {
 	floor        MinimumOnlineFloor
 	loadedLocal  func() bool
 	validatedAge func() time.Duration
+	acquireRead  func(context.Context, string) (*service.LedgerReadLease, error)
+}
+
+type ledgerReadLease struct {
+	ledger  *ledger.Ledger
+	release func()
+	once    sync.Once
+}
+
+func (l *ledgerReadLease) Close() {
+	if l == nil || l.release == nil {
+		return
+	}
+	l.once.Do(l.release)
 }
 
 // newLedgerProvider constructs a LedgerProvider backed by the supplied
@@ -65,6 +80,7 @@ func newLedgerProvider(svc *service.Service) *ledgerProvider {
 		svc:          svc,
 		loadedLocal:  func() bool { return svc.FeeTrack() != nil && svc.FeeTrack().IsLoadedLocal() },
 		validatedAge: svc.GetValidatedLedgerAge,
+		acquireRead:  svc.AcquireLedgerRead,
 	}
 }
 
@@ -110,14 +126,19 @@ func (p *ledgerProvider) GetReplayDeltaContext(ctx context.Context, ledgerHash [
 		// Bad-length hash never matches a real ledger; treat as unknown.
 		return nil, nil, nil
 	}
-	l, err := p.getLedgerContext(ctx, hash)
+	readLease, err := p.acquireLedgerContext(ctx, hash)
+	defer readLease.Close()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, nil, ctxErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, nil, err
 	}
-	if err != nil || l == nil || !l.IsImmutable() || p.belowFloor(l.Sequence()) {
+	if err != nil || readLease == nil || readLease.ledger == nil {
+		return nil, nil, nil
+	}
+	l := readLease.ledger
+	if !l.IsImmutable() || p.belowFloor(l.Sequence()) {
 		return nil, nil, nil
 	}
 
@@ -192,16 +213,24 @@ func (p *ledgerProvider) MakeFetchPackContext(ctx context.Context, haveLedgerHas
 	if p.validatedAge != nil && p.validatedAge() > 40*time.Second {
 		return nil, peermanagement.ErrFetchPackBusy
 	}
-	have, err := p.getLedgerContext(ctx, haveLedgerHash)
+	haveLease, err := p.acquireLedgerContext(ctx, haveLedgerHash)
+	var wantLease *ledgerReadLease
+	defer func() {
+		haveLease.Close()
+		if wantLease != nil {
+			wantLease.Close()
+		}
+	}()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, err
 	}
-	if err != nil || have == nil {
+	if err != nil || haveLease == nil || haveLease.ledger == nil {
 		return nil, nil
 	}
+	have := haveLease.ledger
 	if !have.IsImmutable() {
 		return nil, peermanagement.ErrFetchPackOpen
 	}
@@ -214,14 +243,18 @@ func (p *ledgerProvider) MakeFetchPackContext(ctx context.Context, haveLedgerHas
 	}
 	objects := make([]message.IndexedObject, 0, capacity)
 	currentHave := have
-	want, err := p.getLedgerContext(ctx, have.Header().ParentHash)
+	wantLease, err = p.acquireLedgerContext(ctx, have.Header().ParentHash)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, err
 	}
-	if err != nil || want == nil || p.belowFloor(want.Sequence()) {
+	if err != nil || wantLease == nil || wantLease.ledger == nil {
+		return nil, nil
+	}
+	want := wantLease.ledger
+	if p.belowFloor(want.Sequence()) {
 		return nil, nil
 	}
 	deadline := time.Now().Add(fetchPackMaxAge)
@@ -296,9 +329,11 @@ packLoop:
 		if len(objects) >= fetchPackMaxObjects {
 			break
 		}
-		currentHave = want
-		want, err = p.getLedgerContext(ctx, want.Header().ParentHash)
+		nextLease, err := p.acquireLedgerContext(ctx, want.Header().ParentHash)
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			if nextLease != nil {
+				nextLease.Close()
+			}
 			return nil, ctxErr
 		}
 		if err != nil {
@@ -310,9 +345,19 @@ packLoop:
 			// the useful chain rather than failing the reply.
 			break
 		}
-		if want != nil && p.belowFloor(want.Sequence()) {
+		if nextLease == nil || nextLease.ledger == nil {
 			break
 		}
+		if p.belowFloor(nextLease.ledger.Sequence()) {
+			nextLease.Close()
+			break
+		}
+		oldHave := haveLease
+		haveLease = wantLease
+		wantLease = nextLease
+		oldHave.Close()
+		currentHave = want
+		want = wantLease.ledger
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -330,6 +375,38 @@ func (p *ledgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*
 	default:
 	}
 	return p.svc.GetLedgerByHash(hash)
+}
+
+func (p *ledgerProvider) acquireLedgerContext(ctx context.Context, hash [32]byte) (*ledgerReadLease, error) {
+	if p.acquireRead != nil {
+		lease, err := p.acquireRead(ctx, protocol.Hash256Hex(hash))
+		if err != nil {
+			if lease != nil {
+				_ = lease.Close()
+			}
+			return nil, err
+		}
+		if lease == nil || lease.Ledger == nil {
+			if lease != nil {
+				_ = lease.Close()
+			}
+			return nil, fmt.Errorf("acquire ledger read returned an empty lease")
+		}
+		return &ledgerReadLease{
+			ledger: lease.Ledger,
+			release: func() {
+				_ = lease.Close()
+			},
+		}, nil
+	}
+	l, err := p.getLedgerContext(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if l == nil {
+		return nil, nil
+	}
+	return &ledgerReadLease{ledger: l, release: func() {}}, nil
 }
 
 func appendFetchPackNodesFromWalk(objects []message.IndexedObject, nodes []shamap.FetchPackNode, seq uint32) []message.IndexedObject {
@@ -391,14 +468,19 @@ func (p *ledgerProvider) GetProofPathContext(
 		return nil, nil, peermanagement.ErrKeyNotFound
 	}
 
-	l, err := p.getLedgerContext(ctx, hash)
+	readLease, err := p.acquireLedgerContext(ctx, hash)
+	defer readLease.Close()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, nil, ctxErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, nil, err
 	}
-	if err != nil || l == nil || p.belowFloor(l.Sequence()) {
+	if err != nil || readLease == nil || readLease.ledger == nil {
+		return nil, nil, peermanagement.ErrLedgerNotFound
+	}
+	l := readLease.ledger
+	if p.belowFloor(l.Sequence()) {
 		return nil, nil, peermanagement.ErrLedgerNotFound
 	}
 

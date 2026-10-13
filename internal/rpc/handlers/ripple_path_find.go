@@ -99,6 +99,7 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, rpcErr
 		}
 	}
+	defer closeLedgerLease(view)
 
 	// Field validation follows rippled PathRequest::parseJson order exactly.
 	rawSrc, ok := probe["source_account"]
@@ -434,8 +435,15 @@ func resolvePathFindLedger(
 	hasSelector bool,
 ) (types.LedgerStateView, *pathFindLedgerMeta, *rpcerrors.RpcError) {
 	if !hasSelector {
-		view, err := ctx.Services.LedgerViews().GetClosedLedgerView()
+		var view types.LedgerStateView
+		var err error
+		if source, ok := ctx.Services.LedgerViews().(types.ContextClosedLedgerViewSource); ok {
+			view, err = source.GetClosedLedgerViewContext(ctx.Context)
+		} else {
+			view, err = ctx.Services.LedgerViews().GetClosedLedgerView()
+		}
 		if err != nil {
+			closeLedgerLease(view)
 			return nil, nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 		}
 		return view, nil, nil
@@ -449,14 +457,37 @@ func resolvePathFindLedger(
 	if !ok {
 		return nil, nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
+	contextSource, contextOK := ctx.Services.Ledger().(types.ContextLedgerViewSource)
 	bySequence := func(sequence uint32) (selectedPathFindLedger, bool, error) {
-		view, reader, err := source.GetLedgerViewBySeq(sequence)
+		var view types.LedgerStateView
+		var reader types.LedgerReader
+		var err error
+		if contextOK {
+			view, reader, err = contextSource.GetLedgerViewBySeqContext(ctx.Context, sequence)
+		} else {
+			view, reader, err = source.GetLedgerViewBySeq(sequence)
+		}
 		selected := selectedPathFindLedger{view: view, reader: reader}
+		if err != nil || view == nil || reader == nil {
+			closeLedgerLease(view)
+			closeLedgerLease(reader)
+		}
 		return selected, view != nil && reader != nil, err
 	}
 	byHash := func(hash [32]byte) (selectedPathFindLedger, bool, error) {
-		view, reader, err := source.GetLedgerViewByHash(hash)
+		var view types.LedgerStateView
+		var reader types.LedgerReader
+		var err error
+		if contextOK {
+			view, reader, err = contextSource.GetLedgerViewByHashContext(ctx.Context, hash)
+		} else {
+			view, reader, err = source.GetLedgerViewByHash(hash)
+		}
 		selected := selectedPathFindLedger{view: view, reader: reader}
+		if err != nil || view == nil || reader == nil {
+			closeLedgerLease(view)
+			closeLedgerLease(reader)
+		}
 		return selected, view != nil && reader != nil, err
 	}
 	validated := func() (selectedPathFindLedger, bool, error) {

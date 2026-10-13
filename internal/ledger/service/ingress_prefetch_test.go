@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
-	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
@@ -21,30 +20,39 @@ func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			db := newTestNodeStore(t, 10000)
+			family := &acceptanceBlockingFamily{Family: backend.New(db), entered: make(chan struct{}), release: make(chan struct{})}
 			cfg := DefaultConfig()
-			cfg.NodeStore, cfg.SHAMapFamily = db, backend.New(db)
+			cfg.NodeStore, cfg.SHAMapFamily = db, family
+			cfg.Execution = newTestExecutionStore(t, family)
 			svc, err := New(cfg)
 			require.NoError(t, err)
 			require.NoError(t, svc.Start())
-			t.Cleanup(func() { svc.Stop(); require.NoError(t, db.Close()) })
+			var preferred, sourceCold, cold *ledger.Ledger
+			t.Cleanup(func() {
+				svc.Stop()
+				if preferred != nil {
+					preferred.Discard()
+				}
+				if sourceCold != nil {
+					sourceCold.Discard()
+				}
+				if cold != nil {
+					cold.Discard()
+				}
+				require.NoError(t, db.Close())
+			})
+			t.Cleanup(family.unblock)
 			warm := svc.GetClosedLedger()
-			preferred, err := ledger.NewOpen(warm, warm.CloseTime().Add(20*time.Second))
+			preferred, err = ledger.NewOpen(warm, warm.CloseTime().Add(20*time.Second))
 			require.NoError(t, err)
 			require.NoError(t, preferred.Close(warm.CloseTime().Add(20*time.Second), 0))
-			cold, err := ledger.NewOpen(warm, warm.CloseTime().Add(10*time.Second))
+			cold, err = ledger.NewOpen(warm, warm.CloseTime().Add(10*time.Second))
 			require.NoError(t, err)
 			require.NoError(t, cold.Close(warm.CloseTime().Add(10*time.Second), 0))
-			stateMap, err := cold.StateMapSnapshot()
-			require.NoError(t, err)
-			root, err := stateMap.Hash()
-			require.NoError(t, err)
+			sourceCold = cold
 			// The source is already backed and clean: reopen from its actual
 			// NodeStore instead of copying only dirty nodes into another DB.
-			family := &acceptanceBlockingFamily{Family: cfg.SHAMapFamily, entered: make(chan struct{}), release: make(chan struct{})}
-			t.Cleanup(family.unblock)
-			coldState, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
-			require.NoError(t, err)
-			cold, err = ledger.NewFromHeader(cold.Header(), coldState, shamap.New(shamap.TypeTransaction), cold.Fees())
+			cold, err = ledger.NewClosedFromRootsContext(t.Context(), cold.Header(), cold.Fees(), svc.config.Execution)
 			require.NoError(t, err)
 			require.NoError(t, svc.SwitchToPreferredLedger(cold))
 			svc.mu.RLock()

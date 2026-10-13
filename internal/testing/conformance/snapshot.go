@@ -178,21 +178,25 @@ type loadedSnapshotLedger struct {
 // decodeSnapshotFixture decodes exactly one v4 fixture and rejects unknown
 // fields at every level. The explicit shape pass also rejects omitted required
 // fields whose Go zero value could otherwise look valid (for example TER 0).
-func decodeSnapshotFixture(data []byte) (snapshotFixture, error) {
+func decodeSnapshotFixture(data []byte) (fixture snapshotFixture, err error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return snapshotFixture{}, errors.New("snapshot fixture is empty")
 	}
 	if err := validateSnapshotJSONShape(data); err != nil {
 		return snapshotFixture{}, err
 	}
-	var fixture snapshotFixture
 	if err := decodeStrictJSON(data, &fixture); err != nil {
 		return snapshotFixture{}, fmt.Errorf("decode snapshot fixture: %w", err)
 	}
 	if err := validateSnapshotFixture(&fixture); err != nil {
 		return snapshotFixture{}, err
 	}
-	if err := validateSnapshotSemanticInputs(&fixture); err != nil {
+	store, cleanup, err := newSnapshotExecutionStore()
+	if err != nil {
+		return snapshotFixture{}, fmt.Errorf("create execution store: %w", err)
+	}
+	defer func() { err = errors.Join(err, cleanup()) }()
+	if err := validateSnapshotSemanticInputs(&fixture, store); err != nil {
 		return snapshotFixture{}, err
 	}
 	return fixture, nil
@@ -384,19 +388,21 @@ func validateSnapshotQueue(queue *snapshotQueue) error {
 // fixture before corpus selection can exclude it. Expected output comparison
 // still happens in runSnapshotFixture, but malformed snapshots must never be
 // hidden behind an exclusion or an unsupported profile.
-func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
+func validateSnapshotSemanticInputs(fixture *snapshotFixture, store *ledger.ExecutionStore) error {
 	if fixture == nil {
 		return errors.New("snapshot fixture is nil")
 	}
 	all.RegisterAll()
-	parent, err := loadSnapshotLedger(fixture.Parent)
+	parent, err := loadSnapshotLedger(fixture.Parent, store)
 	if err != nil {
 		return fmt.Errorf("parent snapshot: %w", err)
 	}
-	closed, err := loadSnapshotLedger(fixture.Closed)
+	defer parent.Ledger.Discard()
+	closed, err := loadSnapshotLedger(fixture.Closed, store)
 	if err != nil {
 		return fmt.Errorf("closed snapshot: %w", err)
 	}
+	defer closed.Ledger.Discard()
 	if err := validateSnapshotLineage(parent, closed, fixture.CloseInput); err != nil {
 		return fmt.Errorf("snapshot lineage: %w", err)
 	}
@@ -438,7 +444,7 @@ func validateSnapshotSemanticInputs(fixture *snapshotFixture) error {
 			return fmt.Errorf("pre_submit[%d]: %w", i, err)
 		}
 	}
-	if err := validateSnapshotHistorySemantic(fixture); err != nil {
+	if err := validateSnapshotHistorySemantic(fixture, store); err != nil {
 		return err
 	}
 	return nil
@@ -458,21 +464,23 @@ func snapshotFamilyMatchesTxType(family, txType string) bool {
 	}
 }
 
-func validateSnapshotHistorySemantic(fixture *snapshotFixture) error {
+func validateSnapshotHistorySemantic(fixture *snapshotFixture, store *ledger.ExecutionStore) error {
 	if fixture == nil || fixture.History == nil {
 		return nil
 	}
 	var previous *loadedSnapshotLedger
 	for i, item := range fixture.History {
 		name := fmt.Sprintf("history[%d]", i)
-		parent, err := loadSnapshotLedger(item.Parent)
+		parent, err := loadSnapshotLedger(item.Parent, store)
 		if err != nil {
 			return fmt.Errorf("%s parent snapshot: %w", name, err)
 		}
-		closed, err := loadSnapshotLedger(item.Closed)
+		defer parent.Ledger.Discard()
+		closed, err := loadSnapshotLedger(item.Closed, store)
 		if err != nil {
 			return fmt.Errorf("%s closed snapshot: %w", name, err)
 		}
+		defer closed.Ledger.Discard()
 		if err := validateSnapshotLineage(parent, closed, item.CloseInput); err != nil {
 			return fmt.Errorf("%s lineage: %w", name, err)
 		}
@@ -501,10 +509,11 @@ func validateSnapshotHistorySemantic(fixture *snapshotFixture) error {
 		}
 		previous = &closed
 	}
-	mainParent, err := loadSnapshotLedger(fixture.Parent)
+	mainParent, err := loadSnapshotLedger(fixture.Parent, store)
 	if err != nil {
 		return fmt.Errorf("parent snapshot after history: %w", err)
 	}
+	defer mainParent.Ledger.Discard()
 	if previous != nil && mainParent.Header.Hash != previous.Header.Hash {
 		return errors.New("fixture parent does not follow the last history closed ledger")
 	}
@@ -636,23 +645,31 @@ func validateSnapshotSLEBytes(name string, data []byte) error {
 // runSnapshotFixture executes one fixture exactly once. It does not construct
 // setup state, repair sequences, rewrite blobs, infer close inputs, or retry a
 // submission based on its result.
-func runSnapshotFixture(fixture snapshotFixture) error {
+func runSnapshotFixture(fixture snapshotFixture) (err error) {
 	if err := validateSnapshotFixture(&fixture); err != nil {
 		return err
 	}
-	if err := validateSnapshotSemanticInputs(&fixture); err != nil {
+	store, cleanup, err := newSnapshotExecutionStore()
+	if err != nil {
+		return fmt.Errorf("create execution store: %w", err)
+	}
+	defer func() { err = errors.Join(err, cleanup()) }()
+	if err := validateSnapshotSemanticInputs(&fixture, store); err != nil {
 		return err
 	}
 	all.RegisterAll()
 
-	parent, err := loadSnapshotLedger(fixture.Parent)
+	parent, err := loadSnapshotLedger(fixture.Parent, store)
 	if err != nil {
 		return fmt.Errorf("load parent ledger: %w", err)
 	}
-	closed, err := loadSnapshotLedger(fixture.Closed)
+	parentLedger := parent.Ledger
+	defer parentLedger.Discard()
+	closed, err := loadSnapshotLedger(fixture.Closed, store)
 	if err != nil {
 		return fmt.Errorf("load closed ledger: %w", err)
 	}
+	defer closed.Ledger.Discard()
 	if err := validateSnapshotLineage(parent, closed, fixture.CloseInput); err != nil {
 		return err
 	}
@@ -683,24 +700,32 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 		queue,
 		fixture.NetworkID,
 		tx.ApplyFlags(fixture.ApplyFlags),
+		store,
 	)
 	if err != nil {
 		return fmt.Errorf("replay ledger history: %w", err)
 	}
 	var view *openledger.OpenLedger
+	defer func() {
+		if view != nil && view.Current() != nil {
+			view.Current().Discard()
+		}
+	}()
 	if historyReplay != nil {
+		defer historyReplay.Closed.Discard()
+		view = historyReplay.Open
 		if err := assertSnapshotLedger(historyReplay.Closed, parent); err != nil {
 			return fmt.Errorf("history latest parent mismatch: %w", err)
 		}
 		parent.Ledger = historyReplay.Closed
 		parent.Header = historyReplay.Closed.Header()
-		view = historyReplay.Open
 	} else {
 		view, err = openledger.New(parent.Ledger, openledger.Config{Rules: parent.EffectiveRules})
 		if err != nil {
 			return fmt.Errorf("create open ledger: %w", err)
 		}
 	}
+
 	for i, prior := range fixture.PreSubmit {
 		blob, err := decodeSnapshotBytes("pre_submit.tx_blob", prior.TxBlob)
 		if err != nil {
@@ -732,6 +757,7 @@ func runSnapshotFixture(fixture snapshotFixture) error {
 	if err != nil {
 		return fmt.Errorf("build closed ledger from close_input: %w", err)
 	}
+	defer built.Ledger.Discard()
 	if len(built.Retries) != 0 {
 		return fmt.Errorf("closed ledger left %d retriable transactions", len(built.Retries))
 	}
@@ -1091,19 +1117,32 @@ func replaySnapshotHistory(
 	queue *txq.TxQ,
 	networkID uint32,
 	flags tx.ApplyFlags,
-) (*snapshotHistoryReplay, error) {
+	store *ledger.ExecutionStore,
+) (result *snapshotHistoryReplay, err error) {
 	if len(history) == 0 {
 		return nil, nil
 	}
 	var previous *ledger.Ledger
 	var view *openledger.OpenLedger
+	var loaded []*ledger.Ledger
+	defer func() {
+		for _, l := range loaded {
+			if result == nil || l != result.Closed {
+				l.Discard()
+			}
+		}
+		if err != nil && view != nil && view.Current() != nil {
+			view.Current().Discard()
+		}
+	}()
 	heldLocals := localtxs.New()
 	for i, item := range history {
 		name := fmt.Sprintf("history[%d]", i)
-		parent, err := loadSnapshotLedger(item.Parent)
+		parent, err := loadSnapshotLedger(item.Parent, store)
 		if err != nil {
 			return nil, fmt.Errorf("%s parent snapshot: %w", name, err)
 		}
+		loaded = append(loaded, parent.Ledger)
 		if previous != nil && parent.Header.Hash != previous.Hash() {
 			return nil, fmt.Errorf("%s parent does not follow previous closed ledger", name)
 		}
@@ -1155,13 +1194,15 @@ func replaySnapshotHistory(
 		if err != nil {
 			return nil, fmt.Errorf("%s build closed ledger: %w", name, err)
 		}
+		loaded = append(loaded, built.Ledger)
 		if len(built.Retries) != 0 {
 			return nil, fmt.Errorf("%s closed ledger left %d retriable transactions", name, len(built.Retries))
 		}
-		closed, err := loadSnapshotLedger(item.Closed)
+		closed, err := loadSnapshotLedger(item.Closed, store)
 		if err != nil {
 			return nil, fmt.Errorf("%s closed snapshot: %w", name, err)
 		}
+		loaded = append(loaded, closed.Ledger)
 		if err := assertSnapshotLedger(built.Ledger, closed); err != nil {
 			return nil, fmt.Errorf("%s closed ledger mismatch: %w", name, err)
 		}
@@ -1252,7 +1293,7 @@ func assertSnapshotPostSubmitState(got *ledger.Ledger, want []snapshotEntry) err
 	return nil
 }
 
-func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
+func loadSnapshotLedger(snapshot snapshotLedger, store *ledger.ExecutionStore) (loadedSnapshotLedger, error) {
 	hdrBytes, err := decodeSnapshotBytes("ledger header", snapshot.Header)
 	if err != nil {
 		return loadedSnapshotLedger{}, err
@@ -1377,7 +1418,7 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 	if err := validateSnapshotFees(state, explicitRules, fees); err != nil {
 		return loadedSnapshotLedger{}, err
 	}
-	l, err := ledger.NewFromHeader(*hdr, state, txs, fees)
+	l, err := ledger.NewFromHeader(*hdr, state, txs, fees, store)
 	if err != nil {
 		return loadedSnapshotLedger{}, fmt.Errorf("construct ledger: %w", err)
 	}

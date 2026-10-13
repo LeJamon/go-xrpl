@@ -1,0 +1,23 @@
+{
+  "environment": {
+    "GOMAXPROCS": "4",
+    "GOGC": "100",
+    "GOMEMLIMIT": "512MiB",
+    "STATE_BENCH_FLAT": "1",
+    "STATE_BENCH_CACHE_BYTES": "33554432"
+  },
+  "cases": [
+    {
+      "name": "batch-small",
+      "suite": "service",
+      "benchmark": "^BenchmarkService_BatchConsensusAcceptance$/^batch-2$",
+      "iterations": 50
+    },
+    {
+      "name": "batch-load",
+      "suite": "service",
+      "benchmark": "^BenchmarkService_BatchConsensusAcceptance$/^load-32-batches-8-inners$",
+      "iterations": 50
+    }
+  ]
+}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"math"
 	"testing"
@@ -17,9 +16,12 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/rootlease"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	ledgertestutil "github.com/LeJamon/go-xrpl/internal/ledger/testutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 
@@ -34,14 +36,27 @@ type fakeLookup struct {
 	validated  *ledger.Ledger
 	closed     *ledger.Ledger
 	openLedger *ledger.Ledger
-	entryErr   error
-	entryIndex string
+}
+
+type acquireFailureLookup struct {
+	*fakeLookup
+	err error
+}
+
+type selectedReadLookup struct {
+	*fakeLookup
+	selected   *ledger.Ledger
+	entryCalls int
 }
 
 type networkLookup struct {
 	*fakeLookup
 	standalone   bool
 	validatedAge time.Duration
+}
+
+func syntheticParentHash(seq uint32) [32]byte {
+	return [32]byte{byte(seq), 0xAB}
 }
 
 func (l *networkLookup) IsStandalone() bool                   { return l.standalone }
@@ -53,6 +68,11 @@ func (f *fakeLookup) GetValidatedLedgerAge() time.Duration { return 0 }
 func (f *fakeLookup) GetLedgerByHash(h [32]byte) (*ledger.Ledger, error) {
 	if l, ok := f.byHash[h]; ok {
 		return l, nil
+	}
+	if h == syntheticParentHash(uint32(h[0])) {
+		if l, ok := f.bySeq[uint32(h[0])]; ok {
+			return l, nil
+		}
 	}
 	for _, l := range f.bySeq {
 		if l.Hash() == h {
@@ -70,11 +90,7 @@ func (f *fakeLookup) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 func (f *fakeLookup) GetClosedLedger() *ledger.Ledger    { return f.closed }
 func (f *fakeLookup) GetValidatedLedger() *ledger.Ledger { return f.validated }
 func (f *fakeLookup) GetOpenLedger() *ledger.Ledger      { return f.openLedger }
-func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error) {
-	f.entryIndex = ledgerIndex
-	if f.entryErr != nil {
-		return nil, f.entryErr
-	}
+func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, _ string) (*service.LedgerEntryResult, error) {
 	if f.validated == nil {
 		return nil, svcerr.ErrLedgerEntryNotFound
 	}
@@ -93,6 +109,19 @@ func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, ledgerIndex
 		Node:        data,
 		Validated:   true,
 	}, nil
+}
+
+func (l *acquireFailureLookup) AcquireLedgerRead(context.Context, string) (*service.LedgerReadLease, error) {
+	return nil, l.err
+}
+
+func (l *selectedReadLookup) AcquireLedgerRead(context.Context, string) (*service.LedgerReadLease, error) {
+	return &service.LedgerReadLease{Ledger: l.selected, Validated: l.selected.IsValidated()}, nil
+}
+
+func (l *selectedReadLookup) GetLedgerEntry(ctx context.Context, key [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error) {
+	l.entryCalls++
+	return l.fakeLookup.GetLedgerEntry(ctx, key, ledgerIndex)
 }
 
 // pad right-pads a string with zero bytes to at least n bytes; the
@@ -129,10 +158,12 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 	}
 	txMap := shamap.New(shamap.TypeTransaction)
 	for k, data := range txs {
-		if err := txMap.Put(k, data); err != nil {
+		if err := txMap.PutWithNodeType(k, data, shamap.NodeTypeTransactionWithMeta); err != nil {
 			t.Fatalf("tx Put: %v", err)
 		}
 	}
+	stateMap.SetLedgerSeq(seq)
+	txMap.SetLedgerSeq(seq)
 
 	hdr := header.LedgerHeader{
 		LedgerIndex:         seq,
@@ -144,10 +175,19 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 		Accepted:            true,
 	}
 	if seq > 1 {
-		hdr.ParentHash = [32]byte{byte(seq - 1), 0xAB}
+		hdr.ParentHash = syntheticParentHash(seq - 1)
 	}
-	hdr.Hash = [32]byte{byte(seq), 0xAB}
-	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	var err error
+	hdr.AccountHash, err = stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state map hash: %v", err)
+	}
+	hdr.TxHash, err = txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction map hash: %v", err)
+	}
+	hdr.Hash = header.CalculateHash(hdr)
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{}, ledgertestutil.NewExecutionStore(t, nil))
 	if err != nil {
 		t.Fatalf("ledger.FromGenesis: %v", err)
 	}
@@ -160,19 +200,31 @@ func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 	hdr := header.LedgerHeader{
 		LedgerIndex:         seq,
 		ParentHash:          parent.Hash(),
-		Hash:                [32]byte{byte(seq), 0xCD},
 		Drops:               parent.TotalDrops(),
 		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
 		ParentCloseTime:     parent.CloseTime(),
 		CloseTimeResolution: 10,
 		Accepted:            true,
 	}
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
+	var err error
+	hdr.AccountHash, err = stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state map hash: %v", err)
+	}
+	hdr.TxHash, err = txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction map hash: %v", err)
+	}
+	hdr.Hash = header.CalculateHash(hdr)
 	l, err := ledger.NewClosedFromHeaderContext(
 		context.Background(),
 		hdr,
-		shamap.New(shamap.TypeState),
-		shamap.New(shamap.TypeTransaction),
+		stateMap,
+		txMap,
 		drops.Fees{},
+		ledgertestutil.NewExecutionStore(t, nil),
 	)
 	if err != nil {
 		t.Fatalf("NewClosedFromHeaderContext: %v", err)
@@ -647,7 +699,7 @@ func TestGRPC_GetLedgerEntry_ResolvesLedgerBeforeKeyValidation(t *testing.T) {
 // failure (unknown sequence) maps to NotFound — not Internal.
 func TestGRPC_GetLedgerEntry_LedgerNotFound(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l, entryErr: svcerr.ErrLedgerNotFound})
+	srv := NewServer(&fakeLookup{validated: l})
 
 	key := make([]byte, 32)
 	key[0] = 0xCC
@@ -1003,25 +1055,50 @@ func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
 }
 
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
-	l := newTestLedger(t, 9, nil, nil)
-	lookup := &fakeLookup{
-		validated: l,
-		byHash:    map[[32]byte]*ledger.Ledger{l.Hash(): l},
+	key := [32]byte{0xCC}
+	want := pad("selected-ledger", 12)
+	selected := newTestLedger(t, 9, map[[32]byte][]byte{key: want}, nil)
+	validated := newTestLedger(t, 8, map[[32]byte][]byte{key: pad("other-ledger", 12)}, nil)
+	lookup := &selectedReadLookup{
+		fakeLookup: &fakeLookup{
+			validated: validated,
+		},
+		selected: selected,
 	}
 	srv := NewServer(lookup)
 
-	key := make([]byte, 32)
-	key[0] = 0xCC
-	h := l.Hash()
-	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
-		Key:    key,
+	h := selected.Hash()
+	request := &rpcv1.GetLedgerEntryRequest{
+		Key:    key[:],
 		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
-	})
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
 	}
-	if want := hex.EncodeToString(h[:]); lookup.entryIndex != want {
-		t.Errorf("ledger selector = %q, want exact hash %q", lookup.entryIndex, want)
+	resp, err := srv.GetLedgerEntry(context.Background(), request)
+	if err != nil {
+		t.Fatalf("by-hash GetLedgerEntry: %v", err)
+	}
+	if !bytes.Equal(resp.LedgerObject.Data, want) {
+		t.Fatalf("by-hash GetLedgerEntry read wrong ledger: got %q, want %q", resp.LedgerObject.Data, want)
+	}
+	if resp.Ledger != request.Ledger {
+		t.Fatal("by-hash GetLedgerEntry changed the requested ledger header")
+	}
+	if lookup.entryCalls != 0 {
+		t.Fatalf("by-hash GetLedgerEntry performed a second ledger lookup (%d calls)", lookup.entryCalls)
+	}
+}
+
+func TestGRPC_GetLedgerEntry_AcquireFailureIsInternal(t *testing.T) {
+	srv := NewServer(&acquireFailureLookup{
+		fakeLookup: &fakeLookup{},
+		err:        rootlease.ErrCapacity,
+	})
+
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: make([]byte, 32)})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("local ledger-read admission failure: code = %s, want Internal (%v)", status.Code(err), err)
+	}
+	if message := status.Convert(err).Message(); message != "acquiring ledger read: ledger root lease capacity exhausted" {
+		t.Fatalf("local ledger-read admission failure: message = %q", message)
 	}
 }
 
@@ -1166,6 +1243,50 @@ func TestGRPC_GetLedger_GetObjectsRequiresImmutableLedgers(t *testing.T) {
 		GetObjects: true,
 	}); err != nil {
 		t.Fatalf("GetLedger() rejected immutable unvalidated ledgers: %v", err)
+	}
+}
+
+func TestGRPC_ReadLeasePreservesOpenLedgerChecks(t *testing.T) {
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+	})
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	defer svc.Stop()
+
+	read, err := svc.AcquireLedgerRead(context.Background(), "current")
+	if err != nil {
+		t.Fatalf("AcquireLedgerRead: %v", err)
+	}
+	if read.Ledger == nil || !read.Ledger.IsOpen() {
+		t.Fatalf("current read lease = %#v, want open ledger", read.Ledger)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("first lease close: %v", err)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("second lease close: %v", err)
+	}
+
+	srv := NewServer(svc)
+	_, err = srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		GetObjects: true,
+	})
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "ledger not validated" {
+		t.Fatalf("GetLedger open object diff = %v, want NotFound ledger not validated", err)
+	}
+
+	_, err = srv.GetLedgerDiff(context.Background(), &rpcv1.GetLedgerDiffRequest{
+		BaseLedger:    ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED),
+		DesiredLedger: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CURRENT),
+	})
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "desired ledger not validated" {
+		t.Fatalf("GetLedgerDiff open desired = %v, want NotFound desired ledger not validated", err)
 	}
 }
 

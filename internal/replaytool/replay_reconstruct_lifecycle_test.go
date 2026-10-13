@@ -330,6 +330,7 @@ func TestRecordDivergenceResetContinuesFromReconstructedLifecycleState(t *testin
 	parentCloseTime := parent.CloseTime().Add(10 * time.Second)
 	executed, err := executeBlock(context.Background(), blockExecution{
 		StateMap:            resumed,
+		Store:               parent.ExecutionStore(),
 		LedgerIndex:         nextSequence,
 		ParentHash:          nextParentHash,
 		ParentCloseTime:     parentCloseTime,

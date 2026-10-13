@@ -1,0 +1,38 @@
+{
+  "environment": {
+    "GOMAXPROCS": "4",
+    "GOGC": "100",
+    "GOMEMLIMIT": "512MiB"
+  },
+  "cases": [
+    {
+      "name": "state-retained-large",
+      "suite": "state",
+      "config": {
+        "seed": 2050,
+        "seed_entries": 262144,
+        "value_bytes": 512,
+        "ledgers": 2048,
+        "warmup_ledgers": 0,
+        "reads_per_ledger": 512,
+        "hot_writes_per_ledger": 16,
+        "disjoint_writes_per_ledger": 0,
+        "retained_views": 64,
+        "scan_every": 0,
+        "scan_entries": 0,
+        "node_block_cache_mib": 128,
+        "node_cache_items": 256,
+        "flat_cache_bytes": 134217728,
+        "flat_memtable_bytes": 4194304,
+        "flat_batch_bytes": 1048576,
+        "flat_batch_records": 1024,
+        "workspace_bytes": 67108864,
+        "overlay_memory_bytes": 1048576,
+        "overlay_disk_bytes": 67108864,
+        "overlay_segments": 8,
+        "overlay_merge_fan_in": 8
+      },
+      "timeout": "45m"
+    }
+  ]
+}

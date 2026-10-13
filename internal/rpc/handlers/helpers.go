@@ -418,6 +418,7 @@ func preflightAccountPage(
 		return "", nil, rpcErr
 	}
 	reader := resolved.Value
+	defer closeLedgerLease(reader)
 	ledgerIndex := strconv.FormatUint(uint64(reader.Sequence()), 10)
 	ledgerFields := make(map[string]any, 3)
 	fillResolvedLedgerFields(ledgerFields, reader, resolved.Validated)
@@ -591,11 +592,17 @@ func resolveLedgerSelection(
 	svc := ctx.Services.Ledger()
 
 	bySequence := func(sequence uint32) (types.LedgerReader, bool, error) {
-		reader, err := svc.GetLedgerBySequence(sequence)
+		reader, err := getLedgerBySequenceContext(ctx.Context, svc, sequence)
+		if err != nil {
+			closeLedgerLease(reader)
+		}
 		return reader, reader != nil, err
 	}
 	byHash := func(hash [32]byte) (types.LedgerReader, bool, error) {
 		reader, err := getLedgerByHashContext(ctx.Context, svc, hash)
+		if err != nil {
+			closeLedgerLease(reader)
+		}
 		return reader, reader != nil, err
 	}
 	current := func() (types.LedgerReader, bool, error) {
@@ -662,6 +669,19 @@ func getLedgerByHashContext(ctx context.Context, svc types.LedgerReadService, ha
 		return contextual.GetLedgerByHashContext(ctx, hash)
 	}
 	return svc.GetLedgerByHash(hash)
+}
+
+func getLedgerBySequenceContext(ctx context.Context, svc types.LedgerReadService, sequence uint32) (types.LedgerReader, error) {
+	if contextual, ok := svc.(types.ContextLedgerSequenceReader); ok {
+		return contextual.GetLedgerBySequenceContext(ctx, sequence)
+	}
+	return svc.GetLedgerBySequence(sequence)
+}
+
+func closeLedgerLease(value any) {
+	if closer, ok := value.(types.LedgerReadCloser); ok {
+		_ = closer.Close()
+	}
 }
 
 // mapLedgerLookupErr maps the ledger-resolution errors a ledger-backed account
