@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,7 @@ var ErrStoreBelowMinimum = errors.New("shamap: ledger is below the minimum onlin
 type NodeStore struct {
 	db        nodestore.Database
 	fullBelow *shamap.FullBelowCache
+	clean     *shamap.CleanResidency
 	durable   durableReadCoalescer
 	storeMu   sync.RWMutex
 	minimum   atomic.Uint32
@@ -31,17 +33,26 @@ type NodeStore struct {
 // account preserves the standalone cache defaults used by existing callers.
 type NodeStoreOptions struct {
 	CacheMemoryBudget shamap.CacheMemoryBudget
+	CleanMemoryBudget shamap.CacheMemoryBudget
+	CleanCacheBytes   uint64
 }
 
 var _ shamap.Family = (*NodeStore)(nil)
 
 // New returns a SHAMap backend backed by db.
 func New(db nodestore.Database, options ...NodeStoreOptions) *NodeStore {
-	var budget shamap.CacheMemoryBudget
+	opts := NodeStoreOptions{CleanCacheBytes: 64 << 20}
 	if len(options) != 0 {
-		budget = options[0].CacheMemoryBudget
+		opts = options[0]
+		if opts.CleanCacheBytes == 0 {
+			opts.CleanCacheBytes = 64 << 20
+		}
 	}
-	return &NodeStore{db: db, fullBelow: shamap.NewFullBelowCacheWithBudget(budget)}
+	return &NodeStore{
+		db:        db,
+		fullBelow: shamap.NewFullBelowCacheWithBudget(opts.CacheMemoryBudget),
+		clean:     shamap.NewCleanResidency(opts.CleanCacheBytes, opts.CleanMemoryBudget),
+	}
 }
 
 // NewMemory returns a backend backed by an in-memory NodeStore.
@@ -124,12 +135,22 @@ func openPebble(
 	if err != nil {
 		return nil, errors.Join(err, store.Close())
 	}
-	return New(db, NodeStoreOptions{CacheMemoryBudget: cacheBudget}), nil
+	return New(db, options...), nil
 }
 
 // FullBelowCache returns the cache shared by every SHAMap using this backend.
 func (f *NodeStore) FullBelowCache() *shamap.FullBelowCache {
 	return f.fullBelow
+}
+
+// SHAMapCleanResidency owns reusable clean nodes across maps and snapshots.
+func (f *NodeStore) SHAMapCleanResidency() *shamap.CleanResidency {
+	return f.clean
+}
+
+// UsesDatabase checks whether a caller's durability barrier covers this Family.
+func (f *NodeStore) UsesDatabase(db nodestore.Database) bool {
+	return db != nil && reflect.TypeOf(db).Comparable() && f.db == db
 }
 
 // Fetch retrieves serialized node data by its SHAMap hash.
@@ -252,5 +273,6 @@ func (f *NodeStore) BeginPrune() func() {
 // Close closes the underlying NodeStore.
 func (f *NodeStore) Close() error {
 	f.fullBelow.Close()
+	f.clean.Close()
 	return f.db.Close()
 }

@@ -5,7 +5,26 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
+
+// PrepareCleanResidencyRelease captures the maps before persistence. Invoke the
+// returned function only after both node and header writes have been synced.
+func (l *Ledger) PrepareCleanResidencyRelease(family *backend.NodeStore) func() {
+	l.mu.RLock()
+	stateMap, txMap := l.stateMap, l.txMap
+	stateToken := stateMap.PrepareCleanResidencyRelease()
+	txToken := txMap.PrepareCleanResidencyRelease()
+	l.mu.RUnlock()
+	return func() {
+		if stateToken != nil && stateToken.Family() == family {
+			stateMap.AcknowledgeCleanResidencyRelease(stateToken)
+		}
+		if txToken != nil && txToken.Family() == family {
+			txMap.AcknowledgeCleanResidencyRelease(txToken)
+		}
+	}
+}
 
 // StoreDirtyBatched bounds temporary copies while persisting both ledger trees.
 func (l *Ledger) StoreDirtyBatched(ctx context.Context, budget shamap.DirtyMemoryBudget, stateStore, txStore func([]shamap.FlushEntry) error) error {
