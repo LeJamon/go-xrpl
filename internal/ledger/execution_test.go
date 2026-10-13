@@ -1094,3 +1094,75 @@ func TestPendingClosureLineageSurvivesFrozenOpenFork(t *testing.T) {
 	}
 	fork.Discard()
 }
+
+func TestTransactionDataStatsTrackSealedAndImportedRoots(t *testing.T) {
+	family := &recordingExecutionFamily{Family: backend.NewMemory()}
+	store, _ := executionTestStore(t, family)
+	open := newOpenChildWithStore(t, store)
+	for i, size := range []int{16, 48} {
+		if err := open.AddTransactionWithMeta([32]byte{byte(i + 1)}, bytes.Repeat([]byte{0x41}, size)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frozen, err := open.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := open.AddTransactionWithMeta([32]byte{3}, bytes.Repeat([]byte{0x42}, 24)); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := open.MutableSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fork.execution.transactions.Delete([32]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fork.execution.transactions.PutWithNodeType([32]byte{2}, bytes.Repeat([]byte{0x43}, 40), shamap.NodeTypeTransactionWithMeta); err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []*Ledger{open, fork} {
+		if err := view.Close(time.Unix(1700000000, 0), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	imported, err := NewClosedFromRootsContext(context.Background(), open.Header(), open.Fees(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		view        *Ledger
+		count, size uint64
+		fetch       bool
+	}{
+		{"sealed", open, 3, 88, false},
+		{"snapshot", frozen, 2, 64, false},
+		{"replaced and deleted", fork, 2, 64, false},
+		{"imported", imported, 3, 88, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			family.mu.Lock()
+			family.fetches = 0
+			family.mu.Unlock()
+			count, size, err := tc.view.TransactionDataStatsContext(context.Background())
+			if err != nil || count != tc.count || size != tc.size {
+				t.Fatalf("stats = %d, %d, %v; want %d, %d", count, size, err, tc.count, tc.size)
+			}
+			family.mu.Lock()
+			fetched := family.fetches != 0
+			family.mu.Unlock()
+			if fetched != tc.fetch {
+				t.Fatalf("read canonical nodes = %v, want %v", fetched, tc.fetch)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := open.TransactionDataStatsContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled stats = %v", err)
+	}
+	for _, view := range []*Ledger{open, fork, frozen, imported} {
+		view.Discard()
+	}
+}

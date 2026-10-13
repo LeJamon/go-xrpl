@@ -336,22 +336,19 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	// Accepted leaves include inner Batch transactions and metadata, even when
 	// none of their outer transactions remain in the current open ledger.
 	if !options.allowReplayFault {
-		err = parent.ForEachTransactionContext(p.ctx, func(_ [32]byte, data []byte) bool {
-			size := uint64(len(data))
-			if size > (^uint64(0)-preferredTransitionResultBytes)/32 {
-				privateBytes = ^uint64(0)
-				return false
-			}
-			size = size*32 + preferredTransitionResultBytes
-			if privateBytes > ^uint64(0)-size {
-				privateBytes = ^uint64(0)
-				return false
-			}
-			privateBytes += size
-			return true
-		})
+		count, size, err := parent.TransactionDataStatsContext(p.ctx)
 		if err != nil {
 			return cleanupPrepared(err)
+		}
+		if size > (^uint64(0)-privateBytes)/32 {
+			privateBytes = ^uint64(0)
+		} else {
+			privateBytes += size * 32
+		}
+		if count > (^uint64(0)-privateBytes)/preferredTransitionResultBytes {
+			privateBytes = ^uint64(0)
+		} else {
+			privateBytes += count * preferredTransitionResultBytes
 		}
 	}
 

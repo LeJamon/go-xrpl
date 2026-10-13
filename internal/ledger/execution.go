@@ -151,6 +151,8 @@ type executionTree struct {
 	hashMu        sync.Mutex
 	cached        [32]byte
 	haveHash      bool
+	payloadBytes  uint64
+	payloadKnown  bool
 	resultLease   *rootlease.Lease
 }
 
@@ -408,6 +410,7 @@ func (t *executionTree) invalidateHash() {
 	resultLease := t.resultLease
 	t.resultLease = nil
 	t.haveHash = false
+	t.payloadKnown = false
 	t.cached = [32]byte{}
 	t.hashMu.Unlock()
 	if resultLease != nil {
@@ -719,6 +722,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	defer changes.Close()
+	var payloadBytes uint64
 	next := func() (shamap.Change, error) {
 		change, done, err := changes.Next(ctx)
 		if err != nil {
@@ -733,6 +737,10 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 				return shamap.Change{}, errors.New("empty transaction overlay record")
 			}
 			out.Type, out.Data = shamap.NodeType(out.Data[0]), out.Data[1:]
+			if uint64(len(out.Data)) > ^uint64(0)-payloadBytes {
+				return shamap.Change{}, errors.New("transaction payload size overflows uint64")
+			}
+			payloadBytes += uint64(len(out.Data))
 		}
 		return out, nil
 	}
@@ -766,6 +774,7 @@ func (t *executionTree) hash(ctx context.Context) ([32]byte, error) {
 	t.store.stats.buildBytes.Add(result.Bytes)
 	updateExecutionMax(&t.store.stats.maxFrontier, result.MaxFrontier)
 	t.cached, t.haveHash, t.resultLease = result.Root, true, resultLease
+	t.payloadBytes, t.payloadKnown = payloadBytes, t.kind == shamap.TypeTransaction && t.root == ([32]byte{})
 	return result.Root, nil
 }
 
@@ -790,9 +799,13 @@ func (t *executionTree) rooted(ctx context.Context, transferBuildLease bool) (*e
 	if t.changes != nil && transferBuildLease {
 		resultLease = t.takeResultLease()
 	}
-	count, countKnown := t.countSnapshot()
+	t.hashMu.Lock()
+	count, countKnown := t.count, t.countKnown
+	payloadBytes, payloadKnown := t.payloadBytes, t.payloadKnown
+	t.hashMu.Unlock()
 	return &executionTree{store: t.store, kind: t.kind, base: t.base, root: root, sequence: t.sequence,
-		count: count, countKnown: countKnown, closure: closure, resultLease: resultLease}, nil
+		count: count, countKnown: countKnown, payloadBytes: payloadBytes, payloadKnown: payloadKnown,
+		closure: closure, resultLease: resultLease}, nil
 }
 
 func countExecutionRoot(ctx context.Context, tree *executionTree) (uint64, error) {

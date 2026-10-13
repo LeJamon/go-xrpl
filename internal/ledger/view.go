@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"errors"
 )
 
 func (l *Ledger) Snapshot() (*Ledger, error) {
@@ -114,6 +115,39 @@ func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [
 	}
 	defer release()
 	return read.Iterate(ctx, nil, func(k [32]byte, data []byte) bool { return fn(k, data[1:]) })
+}
+
+// TransactionDataStatsContext sizes transaction leaves, including metadata,
+// without decoding or retaining transaction objects.
+func (l *Ledger) TransactionDataStatsContext(ctx context.Context) (count, size uint64, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	l.mu.RLock()
+	tree := l.execution.transactions
+	tree.hashMu.Lock()
+	known := !l.writable && tree.payloadKnown && tree.countKnown
+	count, size = uint64(tree.count), tree.payloadBytes
+	tree.hashMu.Unlock()
+	l.mu.RUnlock()
+	if known {
+		return count, size, ctx.Err()
+	}
+	count, size = 0, 0
+	var visitErr error
+	err = l.ForEachTransactionContext(ctx, func(_ [32]byte, data []byte) bool {
+		if count == ^uint64(0) || uint64(len(data)) > ^uint64(0)-size {
+			visitErr = errors.New("transaction payload size overflows uint64")
+			return false
+		}
+		count++
+		size += uint64(len(data))
+		return true
+	})
+	return count, size, errors.Join(err, visitErr, ctx.Err())
 }
 
 func (l *Ledger) TxCount() uint32 {
