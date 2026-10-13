@@ -103,6 +103,7 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	initialRecord := captureResidencyRecord(t, ctx, initial, initialSet, family)
 	initialRecord.keepCold = true
 	records := []residencyLedgerRecord{initialRecord}
+	windowStart := 1
 	svc.validationCandidates[initialRecord.seq] = initialRecord.snapshot
 	readResidencyRecord(t, ctx, initialRecord)
 	readActiveColdResidencyRecord(t, ctx, initialRecord)
@@ -135,6 +136,20 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		if round%rotateEvery != 0 {
 			continue
 		}
+		for i := windowStart; i < len(records); i++ {
+			readResidencyRecord(t, ctx, records[i])
+			readActiveColdResidencyRecord(t, ctx, records[i])
+		}
+		windowCold := retainedColdResidencyBytes(t, records[windowStart:])
+		windowWarm := retainedSnapshotResidencyBytes(t, records[windowStart:])
+		// Each active reader retains a small root and accounting metadata. The
+		// decoded descendants must still fit within a few cache windows.
+		require.LessOrEqual(t, windowCold, uint64(4*cleanCacheLimit),
+			"active cold readers retained an unbounded decoded graph")
+		require.LessOrEqual(t, windowWarm, uint64(4*cleanCacheLimit),
+			"active immutable snapshots retained an unbounded decoded graph")
+		t.Logf("window %d-%d cold retained=%d warm retained=%d", windowStart, len(records)-1, windowCold, windowWarm)
+		windowStart = len(records)
 
 		// Install a real pending persistence write before retention preparation.
 		// The deferred release also unblocks the worker if an assertion fails.
