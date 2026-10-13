@@ -713,9 +713,16 @@ func (c *segmentCursor) reserveRecordBuffer(valueOffset int64, valueLen uint64) 
 		if valueLen <= remaining {
 			remaining -= valueLen
 			if remaining >= recordHeaderSize && valueLen <= uint64(maxInt())-recordHeaderSize {
-				bufferLen, valid := addCharge(valueLen, recordHeaderSize)
+				temporaryLen, valid := addCharge(valueLen, recordHeaderSize)
 				if valid {
-					charge, valid = addCharge(workspaceStream, bufferLen)
+					// Keep the returned value and the temporary lookahead backing
+					// allocation accounted independently. The latter is released
+					// before next returns, so it cannot pin another cursor's value
+					// admission while this value is consumed.
+					bufferLen, valid := addCharge(valueLen, temporaryLen)
+					if valid {
+						charge, valid = addCharge(workspaceStream, bufferLen)
+					}
 					if valid && c.owner.reserveMemory(charge) {
 						return charge, recordHeaderSize, true
 					}
@@ -828,6 +835,18 @@ func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool,
 		if err != nil {
 			c.owner.releaseMemory(charge)
 			return key, nil, false, false, err
+		}
+		if lookahead != 0 {
+			retainedCharge, valid := addCharge(workspaceStream, valueLen)
+			if !valid || retainedCharge > charge {
+				c.owner.releaseMemory(charge)
+				return key, nil, false, false, ErrMemoryBudget
+			}
+			exact := make([]byte, len(value))
+			copy(exact, value)
+			c.owner.releaseMemory(charge - retainedCharge)
+			charge = retainedCharge
+			value = exact
 		}
 		c.current = charge
 		return keyBytes, value, flag == 1, true, nil

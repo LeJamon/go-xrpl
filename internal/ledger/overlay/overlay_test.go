@@ -689,9 +689,9 @@ func TestOverlaySpillCursorCachesNextHeader(t *testing.T) {
 	if cap(value) != len(value) || !cursor.hasPending {
 		t.Fatalf("first cursor value cap=%d len=%d, pending=%v; want clipped value and cached header", cap(value), len(value), cursor.hasPending)
 	}
-	wantCharge := workspaceStream + uint64(len(firstValue)) + recordHeaderSize
+	wantCharge := workspaceStream + uint64(len(firstValue))
 	if got := owner.memoryUsed() - baseline; got != wantCharge {
-		t.Fatalf("lookahead charge = %d, want %d", got, workspaceStream+uint64(len(firstValue))+recordHeaderSize)
+		t.Fatalf("lookahead charge = %d, want %d", got, wantCharge)
 	}
 
 	key, value, deleted, ok, err = cursor.next(context.Background())
@@ -749,6 +749,63 @@ func TestOverlaySpillCursorLookaheadFallsBackWithinBudget(t *testing.T) {
 	}
 	if got := owner.memoryUsed(); got != limit {
 		t.Fatalf("fallback memory = %d, want %d", got, limit)
+	}
+}
+
+func TestOverlaySpillLookaheadDoesNotStarveConcurrentCursors(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	firstKey, secondKey := testKey(1), testKey(2)
+	firstValue, secondValue := []byte("first-value"), []byte("second-value")
+	var root *treeNode
+	var err error
+	for key, value := range map[[32]byte][]byte{firstKey: firstValue, secondKey: secondValue} {
+		var nextRoot *treeNode
+		nextRoot, err = insertTreeNode(owner, root, key, value, false)
+		releaseTreeNode(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root = nextRoot
+	}
+	segment, err := writeTreeSegment(context.Background(), owner, dir, root)
+	releaseTreeNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseSegment(segment)
+
+	firstCursor, err := segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstCursor.close()
+	secondCursor, err := segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondCursor.close()
+
+	baseline := owner.memoryUsed()
+	exactCharge := workspaceStream + uint64(len(firstValue))
+	limit := baseline + 2*exactCharge
+	owner.mu.Lock()
+	owner.maxMemory = limit
+	owner.mu.Unlock()
+
+	key, value, deleted, ok, err := firstCursor.next(context.Background())
+	if err != nil || !ok || deleted || key != firstKey || !bytes.Equal(value, firstValue) {
+		t.Fatalf("first cursor result = key %v, value %q, deleted=%v, ok=%v, err=%v", key, value, deleted, ok, err)
+	}
+	key, value, deleted, ok, err = secondCursor.next(context.Background())
+	if err != nil || !ok || deleted || key != firstKey || !bytes.Equal(value, firstValue) {
+		t.Fatalf("second cursor result = key %v, value %q, deleted=%v, ok=%v, err=%v", key, value, deleted, ok, err)
+	}
+	if !firstCursor.hasPending || secondCursor.hasPending {
+		t.Fatalf("lookahead admission = first:%v second:%v, want first optional and second exact", firstCursor.hasPending, secondCursor.hasPending)
+	}
+	if got := owner.memoryUsed(); got != limit {
+		t.Fatalf("concurrent cursor memory = %d, want %d", got, limit)
 	}
 }
 
