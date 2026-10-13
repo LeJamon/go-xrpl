@@ -277,17 +277,24 @@ func validateCommitmentKeyPath(key, path [32]byte, depth int) error {
 	if depth < 0 || depth > maxDepth {
 		return fmt.Errorf("shamap: leaf path depth %d is outside the authenticated range", depth)
 	}
-	if !pathPrefixEq(key, path, depth) {
+	if !commitmentPathPrefixEq(key, path, depth) {
 		return fmt.Errorf("shamap: leaf key %x does not match authenticated path at depth %d", key[:8], depth)
 	}
 	return nil
 }
 
-func validateCommitmentLeafPath(item *Item, path [32]byte, depth int) error {
-	if item == nil {
-		return errors.New("shamap: authenticated leaf has no item")
+func commitmentPathPrefixEq(a, b [32]byte, depth int) bool {
+	if depth <= 0 {
+		return true
 	}
-	return validateCommitmentKeyPath(item.Key(), path, depth)
+	fullBytes := depth / 2
+	if !bytes.Equal(a[:fullBytes], b[:fullBytes]) {
+		return false
+	}
+	if depth&1 != 0 {
+		return a[fullBytes]&0xf0 == b[fullBytes]&0xf0
+	}
+	return true
 }
 
 func validateCommitmentLeafType(mapType Type, nodeType NodeType) error {
@@ -456,7 +463,7 @@ func (b *commitmentBuilder) hasPrefix(path [32]byte, depth int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return change != nil && pathPrefixEq(change.Key, path, depth), nil
+	return change != nil && commitmentPathPrefixEq(change.Key, path, depth), nil
 }
 
 func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
@@ -572,29 +579,67 @@ func (b *commitmentBuilder) buildTerminal(base commitmentBase) (commitmentResult
 }
 
 func (b *commitmentBuilder) buildEmpty(depth int, path [32]byte, root bool) (commitmentResult, error) {
+	return b.buildEmptyGroup(depth, path, root, commitmentRef{})
+}
+
+func (b *commitmentBuilder) buildEmptyGroup(depth int, path [32]byte, root bool, seed commitmentRef) (commitmentResult, error) {
+	if depth > maxDepth {
+		return commitmentResult{}, errors.New("shamap: commitment exceeded maximum depth")
+	}
+	if seed.empty() {
+		var err error
+		seed, err = b.takeEmptyLeaf(path, depth)
+		if err != nil {
+			return commitmentResult{}, err
+		}
+		if seed.empty() {
+			return commitmentResult{}, nil
+		}
+	}
+	if depth == maxDepth {
+		return commitmentResult{ref: seed, changed: true}, nil
+	}
+
+	change, err := b.nextEmptyChange(path, depth)
+	if err != nil {
+		return commitmentResult{}, err
+	}
+	if change == nil {
+		return b.finishEmptyLeaf(depth, root, seed)
+	}
+
 	var (
 		hashes   [BranchFactor][32]byte
 		branches uint16
 		kinds    [BranchFactor]NodeType
 		keys     [BranchFactor][32]byte
-		changed  bool
-		deleted  bool
 	)
-	for branch := 0; branch < BranchFactor; branch++ {
-		childPath := childPathForBranch(path, depth, branch)
-		hasChanges, err := b.hasPrefix(childPath, depth+1)
+	branch := getBranchAtDepth(seed.key, depth)
+	childPath := childPathForBranch(path, depth, branch)
+	child, err := b.buildEmptyChild(depth+1, childPath, seed)
+	if err != nil {
+		return commitmentResult{}, err
+	}
+	if !child.ref.empty() {
+		hashes[branch] = child.ref.hash
+		kinds[branch] = child.ref.kind
+		keys[branch] = child.ref.key
+		branches |= 1 << branch
+	}
+	for {
+		change, err := b.nextEmptyChange(path, depth)
 		if err != nil {
 			return commitmentResult{}, err
 		}
-		if !hasChanges {
-			continue
+		if change == nil {
+			break
 		}
-		child, err := b.build(commitmentBase{}, depth+1, childPath, false)
+		branch = getBranchAtDepth(change.Key, depth)
+		childPath = childPathForBranch(path, depth, branch)
+		child, err = b.buildEmptyChild(depth+1, childPath, commitmentRef{})
 		if err != nil {
 			return commitmentResult{}, err
 		}
-		changed = changed || child.changed
-		deleted = deleted || child.deleted
 		if child.ref.empty() {
 			continue
 		}
@@ -603,16 +648,12 @@ func (b *commitmentBuilder) buildEmpty(depth int, path [32]byte, root bool) (com
 		keys[branch] = child.ref.key
 		branches |= 1 << branch
 	}
-	if branches == 0 {
-		return commitmentResult{changed: changed, deleted: deleted}, nil
-	}
 	if !root && bits.OnesCount16(branches) == 1 {
 		branch := bits.TrailingZeros16(branches)
 		if kinds[branch] != NodeTypeInner {
 			return commitmentResult{
 				ref:     commitmentRef{hash: hashes[branch], kind: kinds[branch], key: keys[branch]},
-				changed: changed,
-				deleted: deleted,
+				changed: true,
 			}, nil
 		}
 	}
@@ -620,7 +661,54 @@ func (b *commitmentBuilder) buildEmpty(depth int, path [32]byte, root bool) (com
 	if err != nil {
 		return commitmentResult{}, err
 	}
-	return commitmentResult{ref: ref, changed: true, deleted: deleted}, nil
+	return commitmentResult{ref: ref, changed: true}, nil
+}
+
+func (b *commitmentBuilder) nextEmptyChange(path [32]byte, depth int) (*Change, error) {
+	for {
+		change, err := b.cursor.peek(b.ctx, b.mapType)
+		if err != nil {
+			return nil, err
+		}
+		if change == nil || !commitmentPathPrefixEq(change.Key, path, depth) {
+			return nil, nil
+		}
+		if !change.Delete {
+			return change, nil
+		}
+		b.cursor.take()
+	}
+}
+
+func (b *commitmentBuilder) takeEmptyLeaf(path [32]byte, depth int) (commitmentRef, error) {
+	change, err := b.nextEmptyChange(path, depth)
+	if err != nil || change == nil {
+		return commitmentRef{}, err
+	}
+	value := b.cursor.take()
+	return b.emitLeaf(value)
+}
+
+func (b *commitmentBuilder) finishEmptyLeaf(depth int, root bool, seed commitmentRef) (commitmentResult, error) {
+	if !root {
+		return commitmentResult{ref: seed, changed: true}, nil
+	}
+	branch := getBranchAtDepth(seed.key, depth)
+	var hashes [BranchFactor][32]byte
+	hashes[branch] = seed.hash
+	ref, err := b.emitInner(hashes, 1<<branch)
+	if err != nil {
+		return commitmentResult{}, err
+	}
+	return commitmentResult{ref: ref, changed: true}, nil
+}
+
+func (b *commitmentBuilder) buildEmptyChild(depth int, path [32]byte, seed commitmentRef) (result commitmentResult, err error) {
+	if err := b.enter(); err != nil {
+		return commitmentResult{}, err
+	}
+	defer b.leave()
+	return b.buildEmptyGroup(depth, path, false, seed)
 }
 
 func (b *commitmentBuilder) buildInner(base commitmentBase, depth int, path [32]byte, root bool) (commitmentResult, error) {
@@ -705,7 +793,7 @@ func (b *commitmentBuilder) buildLeaf(base commitmentBase, depth int, path [32]b
 	if err != nil {
 		return commitmentResult{}, err
 	}
-	if change == nil || !pathPrefixEq(change.Key, path, depth) {
+	if change == nil || !commitmentPathPrefixEq(change.Key, path, depth) {
 		return result, nil
 	}
 	if change.Key == base.key {
