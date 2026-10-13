@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"sync"
 	"testing"
@@ -53,6 +54,8 @@ type serviceBatchAcceptanceCase struct {
 // reused between rounds.
 func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 	b.StopTimer()
+	profileAcceptance := os.Getenv("BENCH_PROFILE_ACCEPTANCE") == "1"
+	profileContext := pprof.WithLabels(b.Context(), pprof.Labels("phase", "acceptance"))
 	nodeCacheBytes := int64(256 << 10)
 	if benchmarkFlatStateEnabled() {
 		nodeCacheBytes = 128 << 10
@@ -120,6 +123,9 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				beforeStats := svc.config.Execution.Stats()
 				var memBefore, memAfter runtime.MemStats
 				runtime.ReadMemStats(&memBefore)
+				if profileAcceptance {
+					pprof.SetGoroutineLabels(profileContext)
+				}
 				b.StartTimer()
 				_, err := svc.AcceptConsensusResult(
 					b.Context(),
@@ -130,6 +136,9 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 					true,
 				)
 				b.StopTimer()
+				if profileAcceptance {
+					pprof.SetGoroutineLabels(b.Context())
+				}
 				runtime.ReadMemStats(&memAfter)
 				gcCycles += uint64(memAfter.NumGC - memBefore.NumGC)
 				gcPause += memAfter.PauseTotalNs - memBefore.PauseTotalNs
