@@ -147,87 +147,6 @@ func balanceFactor(n *treeNode) int8 {
 	return nodeHeight(n.left) - nodeHeight(n.right)
 }
 
-func rotateRight(n *treeNode) (*treeNode, error) {
-	left := n.left
-	if left == nil {
-		return n, nil
-	}
-	right, err := cloneTreeNode(n.owner, n, left.right, n.right, nil, n.deleted)
-	if err != nil {
-		return nil, err
-	}
-	root, err := cloneTreeNode(n.owner, left, left.left, right, nil, left.deleted)
-	if err != nil {
-		releaseTreeNode(right)
-		return nil, err
-	}
-	releaseTreeNode(right)
-	releaseTreeNode(n)
-	return root, nil
-}
-
-func rotateLeft(n *treeNode) (*treeNode, error) {
-	right := n.right
-	if right == nil {
-		return n, nil
-	}
-	left, err := cloneTreeNode(n.owner, n, n.left, right.left, nil, n.deleted)
-	if err != nil {
-		return nil, err
-	}
-	root, err := cloneTreeNode(n.owner, right, left, right.right, nil, right.deleted)
-	if err != nil {
-		releaseTreeNode(left)
-		return nil, err
-	}
-	releaseTreeNode(left)
-	releaseTreeNode(n)
-	return root, nil
-}
-
-func rebalanceTreeNode(n *treeNode) (*treeNode, error) {
-	factor := balanceFactor(n)
-	if factor > 1 {
-		if balanceFactor(n.left) < 0 {
-			rotating := retainTreeNode(n.left)
-			rotated, err := rotateLeft(rotating)
-			if err != nil {
-				releaseTreeNode(rotating)
-				return nil, err
-			}
-			// rotateLeft consumed its input reference. Replace the child while
-			// preserving the caller's ownership of n.
-			copyNode, err := cloneTreeNode(n.owner, n, rotated, n.right, nil, n.deleted)
-			releaseTreeNode(rotated)
-			if err != nil {
-				return nil, err
-			}
-			releaseTreeNode(n)
-			n = copyNode
-		}
-		return rotateRight(n)
-	}
-	if factor < -1 {
-		if balanceFactor(n.right) > 0 {
-			rotating := retainTreeNode(n.right)
-			rotated, err := rotateRight(rotating)
-			if err != nil {
-				releaseTreeNode(rotating)
-				return nil, err
-			}
-			copyNode, err := cloneTreeNode(n.owner, n, n.left, rotated, nil, n.deleted)
-			releaseTreeNode(rotated)
-			if err != nil {
-				return nil, err
-			}
-			releaseTreeNode(n)
-			n = copyNode
-		}
-		return rotateLeft(n)
-	}
-	return n, nil
-}
-
 func rotateRightExclusive(n *treeNode) *treeNode {
 	left := n.left
 	if left == nil {
@@ -277,9 +196,9 @@ func rebalanceExclusive(n *treeNode) *treeNode {
 }
 
 // An insertion can require rebalancing only when a changed child grew. The
-// pivot is then on that changed path and is private or newly allocated. Value
-// updates and tombstones do not change heights, so no fallible operation can
-// follow an in-place mutation here.
+// pivot is then on that changed path and is private or newly allocated.
+// Replacing an existing value, including a tombstone, does not change heights,
+// so no fallible operation can follow an in-place mutation here.
 func insertTreeNodeCOW(owner *budget, old *treeNode, key [32]byte, value []byte, deleted, exclusive bool) (*treeNode, bool, error) {
 	if old == nil {
 		n, err := makeLeaf(owner, key, value, deleted)
@@ -335,11 +254,8 @@ func insertTreeNodeCOW(owner *budget, old *treeNode, key [32]byte, value []byte,
 	if err != nil {
 		return nil, false, err
 	}
-	balanced, err := rebalanceTreeNode(n)
-	if err != nil {
-		releaseTreeNode(n)
-		return nil, false, err
-	}
+	balanced := rebalanceExclusive(n)
+	releaseTreeNode(n)
 	return balanced, true, nil
 }
 

@@ -186,6 +186,35 @@ func TestSharedAncestorDoesNotUseExclusiveMutation(t *testing.T) {
 	}
 }
 
+func TestSharedPrefixFailureAfterChildClone(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	root := buildTreeTestTree(t, owner, 2, 1, 4)
+	shared := retainTreeNode(root)
+	defer func() {
+		releaseTreeNode(root)
+		releaseTreeNode(shared)
+		if got := owner.memoryUsed(); got != 0 {
+			t.Fatalf("memory credits leaked: %d", got)
+		}
+	}()
+
+	baseline := owner.memoryUsed()
+	leafCharge := nodeOverhead + blobOverhead + 1
+	owner.mu.Lock()
+	owner.maxMemory = baseline + leafCharge + nodeOverhead
+	owner.mu.Unlock()
+	updated, err := insertTreeNode(owner, root, treeTestKey(0), []byte{0}, false)
+	if !errors.Is(err, ErrMemoryBudget) || updated != nil {
+		t.Fatalf("shared-prefix insertion = root %v, err %v, want ErrMemoryBudget with no result", updated, err)
+	}
+	if findTreeNode(root, treeTestKey(0)) != nil || findTreeNode(shared, treeTestKey(0)) != nil {
+		t.Fatal("failed shared-prefix insertion changed an existing root")
+	}
+	if got := owner.memoryUsed(); got != baseline {
+		t.Fatalf("failed shared-prefix memory = %d, want %d", got, baseline)
+	}
+}
+
 func TestExclusiveMutationPreservesCapturedRootAfterPriorShare(t *testing.T) {
 	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
 	root := buildTreeTestTree(t, owner, 1, 2)
@@ -317,6 +346,35 @@ func TestPrivatePrefixDoesNotMutateSharedDescendant(t *testing.T) {
 	assertTreeAVL(t, root, -1, 256)
 }
 
+func TestPrivatePrefixFailurePreservesSharedDescendant(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	root := buildTreeTestTree(t, owner, 4, 2, 6, 1, 3, 5, 7)
+	sharedChild := retainTreeNode(root.left)
+	defer func() {
+		releaseTreeNode(root)
+		releaseTreeNode(sharedChild)
+		if got := owner.memoryUsed(); got != 0 {
+			t.Fatalf("memory credits leaked: %d", got)
+		}
+	}()
+
+	baseline := owner.memoryUsed()
+	leafCharge := nodeOverhead + blobOverhead + 1
+	owner.mu.Lock()
+	owner.maxMemory = baseline + leafCharge
+	owner.mu.Unlock()
+	updated, err := insertTreeNode(owner, root, treeTestKey(0), []byte{0}, false)
+	if !errors.Is(err, ErrMemoryBudget) || updated != nil {
+		t.Fatalf("private-prefix failure = root %v, err %v, want ErrMemoryBudget with no result", updated, err)
+	}
+	if findTreeNode(root, treeTestKey(0)) != nil || findTreeNode(sharedChild, treeTestKey(0)) != nil {
+		t.Fatal("failed private-prefix insertion changed an existing root")
+	}
+	if got := owner.memoryUsed(); got != baseline {
+		t.Fatalf("failed private-prefix memory = %d, want %d", got, baseline)
+	}
+}
+
 func BenchmarkInsertTreeNodeExclusive(b *testing.B) {
 	owner := newBudget(Config{MaxMemoryBytes: 1 << 30, MaxDiskBytes: 1 << 30})
 	root := buildTreeTestTree(b, owner, 8, 4, 12, 2, 6, 10, 14, 1, 3, 5, 7, 9, 11, 13, 15)
@@ -330,6 +388,32 @@ func BenchmarkInsertTreeNodeExclusive(b *testing.B) {
 			value = secondValue
 		}
 		updated, err := insertTreeNode(owner, root, treeTestKey(8), value, false)
+		if err != nil {
+			b.Fatal(err)
+		}
+		releaseTreeNode(root)
+		root = updated
+	}
+	b.StopTimer()
+	releaseTreeNode(root)
+}
+
+func BenchmarkInsertTreeNodeExclusiveDeep(b *testing.B) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 30, MaxDiskBytes: 1 << 30})
+	root := buildTreeTestTree(b, owner,
+		16, 8, 24, 4, 12, 20, 28, 2, 6, 10, 14, 18, 22, 26, 30,
+		1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
+	)
+	firstValue := []byte("value-a")
+	secondValue := []byte("value-b")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		value := firstValue
+		if i&1 != 0 {
+			value = secondValue
+		}
+		updated, err := insertTreeNode(owner, root, treeTestKey(1), value, false)
 		if err != nil {
 			b.Fatal(err)
 		}
