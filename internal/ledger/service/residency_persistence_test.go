@@ -15,8 +15,9 @@ import (
 
 type residencyFaultDatabase struct {
 	nodestore.Database
-	storeErr error
-	syncErr  error
+	storeErr   error
+	cancelSync context.CancelFunc
+	syncErr    error
 }
 
 func (d *residencyFaultDatabase) Store(ctx context.Context, node *nodestore.Node) error {
@@ -27,6 +28,9 @@ func (d *residencyFaultDatabase) Store(ctx context.Context, node *nodestore.Node
 }
 
 func (d *residencyFaultDatabase) Sync(ctx context.Context) error {
+	if d.cancelSync != nil {
+		d.cancelSync()
+	}
 	if d.syncErr != nil {
 		return d.syncErr
 	}
@@ -38,11 +42,13 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 		name string
 		set  func(*residencyFaultDatabase, error)
 	}{
+		{name: "cancel", set: func(db *residencyFaultDatabase, err error) {}},
 		{name: "header", set: func(db *residencyFaultDatabase, err error) { db.storeErr = err }},
 		{name: "sync", set: func(db *residencyFaultDatabase, err error) { db.syncErr = err }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := t.Context()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
 			path := filepath.Join(t.TempDir(), "nodes")
 			store, err := kvpebble.NewRotating(path, kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 200})
 			require.NoError(t, err)
@@ -83,8 +89,13 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 
 			failure := errors.New("injected " + tc.name + " failure")
 			tc.set(db, failure)
+			if tc.name == "cancel" {
+				db.cancelSync = cancel
+				failure = context.Canceled
+			}
 			err = svc.persistToNodeStore(ctx, ledger, ledger.Sequence())
 			require.ErrorIs(t, err, failure)
+			ctx = t.Context()
 			failed, err := state.RetainedMemoryBytes()
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, failed, before,
@@ -96,6 +107,7 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 			require.Equal(t, entries[0].value, item.Data())
 
 			db.storeErr = nil
+			db.cancelSync = nil
 			db.syncErr = nil
 			require.NoError(t, svc.persistToNodeStore(ctx, ledger, ledger.Sequence()))
 			after, err := state.RetainedMemoryBytes()
@@ -146,7 +158,11 @@ func TestService_PersistenceReleaseRejectsReplacedFamily(t *testing.T) {
 	db := &residencyFaultDatabase{Database: base}
 	family := shamapbackend.New(db, shamapbackend.NodeStoreOptions{CleanCacheBytes: 16 << 10})
 	replaced := shamapbackend.New(db, shamapbackend.NodeStoreOptions{CleanCacheBytes: 16 << 10})
-	t.Cleanup(func() { require.NoError(t, family.Close()) })
+	t.Cleanup(func() {
+		replaced.SHAMapCleanResidency().Close()
+		replaced.FullBelowCache().Close()
+		require.NoError(t, family.Close())
+	})
 
 	state, err := shamap.NewBacked(shamap.TypeState, family)
 	require.NoError(t, err)

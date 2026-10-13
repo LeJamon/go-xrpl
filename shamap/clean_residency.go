@@ -157,13 +157,6 @@ func (c *CleanResidency) lookupLocked(hash [32]byte) (mapNode, bool) {
 	return node, true
 }
 
-func (c *CleanResidency) insert(hash [32]byte, body prefixNodeBody) {
-	if c == nil {
-		return
-	}
-	c.insertForGeneration(0, hash, body)
-}
-
 func (c *CleanResidency) insertForGeneration(generation uint64, hash [32]byte, body prefixNodeBody) {
 	if c == nil {
 		return

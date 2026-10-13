@@ -167,12 +167,12 @@ func (sm *SHAMap) SetFamily(family Family) {
 		sm.tree.root = sm.tree.root.cloneSharedHeader()
 	}
 	sm.backing.access = access
+	sm.backing.fullBelow = fullBelow
 	sm.acquisition.base = nil
 	if family != nil {
 		if sm.acquisition.budget == nil {
 			sm.acquisition.budget = NewAcquisitionBudget(0)
 		}
-		sm.backing.fullBelow = fullBelow
 	}
 	sm.backing.mu.Unlock()
 	sm.tree.mu.Unlock()

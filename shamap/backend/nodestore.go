@@ -267,7 +267,12 @@ func (f *NodeStore) Sweep() error {
 // BeginPrune invalidates completeness marks and blocks missing-node walks
 // until the returned function is called after the backing-store mutation.
 func (f *NodeStore) BeginPrune() func() {
-	return f.fullBelow.BeginMutation()
+	finishProofs := f.fullBelow.BeginMutation()
+	finishResidency := f.clean.BeginMutation()
+	return func() {
+		finishResidency()
+		finishProofs()
+	}
 }
 
 // Close closes the underlying NodeStore.

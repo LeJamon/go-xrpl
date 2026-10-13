@@ -50,7 +50,7 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	require.NoError(t, err)
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(t, err)
-	db := &countingGenerationDatabase{Database: base, generation: base}
+	db := &residencyGenerationDatabase{&countingGenerationDatabase{Database: base, generation: base}}
 	cleanBudget := &preferredMemoryBudget{limit: cleanCacheLimit}
 	family := shamapbackend.New(db, shamapbackend.NodeStoreOptions{
 		CleanCacheBytes:   cleanCacheLimit,
@@ -270,7 +270,7 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	require.NoError(t, err)
 	reopenedBase, err := nodestore.NewRotatingKVDatabase(reopenedBackend, nodestore.DatabaseConfig{})
 	require.NoError(t, err)
-	reopenedDB := &countingGenerationDatabase{Database: reopenedBase, generation: reopenedBase}
+	reopenedDB := &residencyGenerationDatabase{&countingGenerationDatabase{Database: reopenedBase, generation: reopenedBase}}
 	reopenedCleanBudget := &preferredMemoryBudget{limit: cleanCacheLimit}
 	reopenedFamily := shamapbackend.New(reopenedDB, shamapbackend.NodeStoreOptions{
 		CleanCacheBytes:   cleanCacheLimit,
@@ -430,7 +430,11 @@ func retainedSnapshotResidencyBytes(t *testing.T, records []residencyLedgerRecor
 	return total
 }
 
-func (d *countingGenerationDatabase) DurableFingerprint(ctx context.Context) ([32]byte, error) {
+type residencyGenerationDatabase struct {
+	*countingGenerationDatabase
+}
+
+func (d *residencyGenerationDatabase) DurableFingerprint(ctx context.Context) ([32]byte, error) {
 	durable, ok := d.Database.(interface {
 		DurableFingerprint(context.Context) ([32]byte, error)
 	})
@@ -440,7 +444,7 @@ func (d *countingGenerationDatabase) DurableFingerprint(ctx context.Context) ([3
 	return durable.DurableFingerprint(ctx)
 }
 
-func (d *countingGenerationDatabase) StoreDurable(ctx context.Context, node *nodestore.Node) error {
+func (d *residencyGenerationDatabase) StoreDurable(ctx context.Context, node *nodestore.Node) error {
 	durable, ok := d.Database.(interface {
 		StoreDurable(context.Context, *nodestore.Node) error
 	})
@@ -450,7 +454,7 @@ func (d *countingGenerationDatabase) StoreDurable(ctx context.Context, node *nod
 	return durable.StoreDurable(ctx, node)
 }
 
-func (d *countingGenerationDatabase) WithDurableSnapshot(ctx context.Context, fn func([32]byte) error) error {
+func (d *residencyGenerationDatabase) WithDurableSnapshot(ctx context.Context, fn func([32]byte) error) error {
 	durable, ok := d.Database.(interface {
 		WithDurableSnapshot(context.Context, func([32]byte) error) error
 	})
@@ -460,7 +464,7 @@ func (d *countingGenerationDatabase) WithDurableSnapshot(ctx context.Context, fn
 	return durable.WithDurableSnapshot(ctx, fn)
 }
 
-func (d *countingGenerationDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+func (d *residencyGenerationDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
 	durable, ok := d.Database.(interface {
 		AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
 	})

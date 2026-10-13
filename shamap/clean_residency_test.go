@@ -159,31 +159,38 @@ func TestCleanResidencyBeginMutationInvalidatesInFlightReader(t *testing.T) {
 }
 
 func TestSetFamilySeparatesSharedSnapshotRoot(t *testing.T) {
-	family := &cleanResidencyFamily{memoryFamily: newMemoryFamily()}
-	source, err := NewBacked(TypeState, family)
-	require.NoError(t, err)
-	key := [32]byte{0x71}
-	require.NoError(t, source.Put(key, bytes.Repeat([]byte{7}, 16)))
-	require.NoError(t, source.StoreDirty(func(entries []FlushEntry) error {
-		return family.StoreBatch(t.Context(), entries)
-	}))
-	sibling, err := source.SnapshotMutable()
-	require.NoError(t, err)
-	require.NotZero(t, loadedChildCount(source.tree.root))
-	require.NotZero(t, loadedChildCount(sibling.tree.root))
+	for name, replacement := range map[string]Family{"nil": nil, "replacement": newMemoryFamily()} {
+		t.Run(name, func(t *testing.T) {
+			family := &cleanResidencyFamily{memoryFamily: newMemoryFamily()}
+			source, err := NewBacked(TypeState, family)
+			require.NoError(t, err)
+			key := [32]byte{0x71}
+			require.NoError(t, source.Put(key, bytes.Repeat([]byte{7}, 16)))
+			require.NoError(t, source.StoreDirty(func(entries []FlushEntry) error {
+				return family.StoreBatch(t.Context(), entries)
+			}))
+			sibling, err := source.SnapshotMutable()
+			require.NoError(t, err)
+			require.NotZero(t, loadedChildCount(source.tree.root))
+			require.NotZero(t, loadedChildCount(sibling.tree.root))
 
-	// A Family replacement gives the sibling an independent root header, so a
-	// later release on source cannot clear the sibling's attached children.
-	sibling.SetFamily(nil)
-	token := source.PrepareCleanResidencyRelease()
-	require.NotNil(t, token)
-	require.True(t, source.AcknowledgeCleanResidencyRelease(token))
-	require.Zero(t, loadedChildCount(source.tree.root))
-	require.NotZero(t, loadedChildCount(sibling.tree.root))
-	item, found, err := sibling.Get(key)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, bytes.Repeat([]byte{7}, 16), item.Data())
+			// A Family replacement gives the sibling an independent root header, so a
+			// later release on source cannot clear the sibling's attached children.
+			source.backing.fullBelow.Insert(source.backing.fullBelow.Generation(), source.tree.root.Hash())
+			sibling.SetFamily(replacement)
+			require.NoError(t, sibling.AcknowledgePersistedContext(t.Context()))
+			token := source.PrepareCleanResidencyRelease()
+			require.NotNil(t, token)
+			require.True(t, source.AcknowledgeCleanResidencyRelease(token))
+			require.Zero(t, loadedChildCount(source.tree.root))
+			require.NotZero(t, loadedChildCount(sibling.tree.root))
+			item, found, err := sibling.Get(key)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, bytes.Repeat([]byte{7}, 16), item.Data())
+
+		})
+	}
 }
 
 func TestBackedMutationDoesNotRetainCleanHistoryChildren(t *testing.T) {
@@ -317,4 +324,8 @@ func loadedChildCount(node *innerNode) int {
 		}
 	}
 	return count
+}
+
+func (c *CleanResidency) insert(hash [32]byte, body prefixNodeBody) {
+	c.insertForGeneration(c.beginRead(), hash, body)
 }
