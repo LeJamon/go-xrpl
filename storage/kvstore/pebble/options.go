@@ -20,12 +20,10 @@ const (
 	MinimumOpenFiles = 74
 	// MinimumRotatingOpenFiles is the smallest steady-state total for two generations.
 	MinimumRotatingOpenFiles = 2 * MinimumOpenFiles
-	// MemTableCommitmentBytes is the configured memtable working set for one
-	// open Pebble database. It is a startup accounting commitment; compaction
-	// and other native allocations remain outside this value.
-	MemTableCommitmentBytes int64 = memTableSize * memTableStopWritesThreshold
 
 	memTableSize                = 64 << 20
+	minimumMemTableSize         = 64 << 10
+	memTableCacheDivisor        = 4
 	memTableStopWritesThreshold = 4
 	l0CompactionThreshold       = 4
 	l0StopWritesThreshold       = 20
@@ -47,6 +45,17 @@ type Options struct {
 	// MaxOpenFiles is the open-file soft limit. A rotating store divides this
 	// steady-state total evenly across both generations.
 	MaxOpenFiles int
+}
+
+func resolveMemTableSize(blockCacheBytes int64) int64 {
+	target := blockCacheBytes / memTableCacheDivisor
+	if target < minimumMemTableSize {
+		target = minimumMemTableSize
+	}
+	if target > memTableSize {
+		target = memTableSize
+	}
+	return target
 }
 
 // OptionsFromMiB validates MiB-based input and resolves package defaults.
@@ -87,7 +96,7 @@ func (o Options) Resolve() (Options, error) {
 // MemoryCommitment returns the fixed managed-memory commitment for the
 // requested number of simultaneously open databases. Pebble's block cache is
 // shared by rotating generations and is therefore counted once; each open
-// generation contributes its configured memtable allowance. A rotation opens
+// generation contributes its effective memtable allowance. A rotation opens
 // a third generation transiently, so callers may pass 3 while reserving that
 // transition and 2 for the steady state.
 func (o Options) MemoryCommitment(generations int) (uint64, error) {
@@ -99,7 +108,12 @@ func (o Options) MemoryCommitment(generations int) (uint64, error) {
 		return 0, err
 	}
 	blockCache := uint64(resolved.BlockCacheBytes)
-	perGeneration := uint64(MemTableCommitmentBytes)
+	memTable := uint64(resolveMemTableSize(resolved.BlockCacheBytes))
+	stopWritesThreshold := uint64(memTableStopWritesThreshold)
+	if memTable > ^uint64(0)/stopWritesThreshold {
+		return 0, errors.New("kvstore/pebble: memtable commitment overflows uint64")
+	}
+	perGeneration := memTable * stopWritesThreshold
 	if uint64(generations) > (^uint64(0)-blockCache)/perGeneration {
 		return 0, errors.New("kvstore/pebble: memory commitment overflows uint64")
 	}
@@ -130,10 +144,14 @@ func resolveRotatingOptions(options Options) (Options, Options, error) {
 }
 
 func makePebbleOptions(options Options, cache *cockroachpebble.Cache) *cockroachpebble.Options {
+	blockCacheBytes := options.BlockCacheBytes
+	if blockCacheBytes == 0 {
+		blockCacheBytes = DefaultBlockCacheBytes
+	}
 	result := &cockroachpebble.Options{
 		Cache:                       cache,
 		MaxOpenFiles:                options.MaxOpenFiles,
-		MemTableSize:                memTableSize,
+		MemTableSize:                uint64(resolveMemTableSize(blockCacheBytes)),
 		MemTableStopWritesThreshold: memTableStopWritesThreshold,
 		MaxConcurrentCompactions: func() int {
 			return runtime.GOMAXPROCS(0)
