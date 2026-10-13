@@ -119,6 +119,8 @@ Private builder-owned data may be updated in place. Once sealed or exposed to an
 
 The in-memory overlay uses copy-on-write AVL paths. A shared ancestor makes every descendant on that path logically shared, even when a descendant has only one incoming pointer. Insertions clone below the first shared ancestor and update private ancestors only after all required admissions succeed. Rotations transfer references between private nodes without allocating. Structural removal is not used: deletion records a tombstone, preserving the insertion-only rotation invariant.
 
+During commitment construction, spill cursors may admit sequential read windows of at most 32 KiB each against the existing commitment workspace. Record-frontier ownership stays in the overlay account. Window admission never waits; denial uses direct reads. Returned values do not alias windows, so a workspace-pressure callback can evict all windows before flushing output or waiting for required memory. Completion, cancellation and errors release the window charges.
+
 ## 6. Incremental SHAMap commitment
 
 ### Inputs and outputs

@@ -91,7 +91,7 @@ func TestOverlaySpillReadWindowBoundariesAndEviction(t *testing.T) {
 		if change.Key != readWindowKey(i+1) || change.Deleted != want.deleted || !bytes.Equal(change.Value, want.value) {
 			t.Fatalf("record %d = key %x, value length %d, deleted %v", i, change.Key, len(change.Value), change.Deleted)
 		}
-		if i == 0 {
+		if i == 1 {
 			saved = change.Value
 		}
 		if workspace.Snapshot().Used != 0 {
@@ -105,7 +105,7 @@ func TestOverlaySpillReadWindowBoundariesAndEviction(t *testing.T) {
 			if got := workspace.Snapshot().Used; got != 0 {
 				t.Fatalf("eviction retained %d workspace bytes", got)
 			}
-			if !bytes.Equal(saved, records[0].value) {
+			if !bytes.Equal(saved, records[1].value) {
 				t.Fatal("eviction changed an already returned value")
 			}
 			it.EnableReadBuffers(nil)
@@ -120,6 +120,9 @@ func TestOverlaySpillReadWindowBoundariesAndEviction(t *testing.T) {
 	}
 	if len(windowStarts) < 2 {
 		t.Fatalf("sequential changes used %d read window, want multiple windows", len(windowStarts))
+	}
+	if !bytes.Equal(saved, records[1].value) {
+		t.Fatal("refilling the window changed an already returned value")
 	}
 	if _, done, err := it.Next(context.Background()); err != nil || !done {
 		t.Fatalf("final iterator result = done %v, err %v", done, err)
