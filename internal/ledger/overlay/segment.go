@@ -525,6 +525,8 @@ type segmentCursor struct {
 	hasAfter    bool
 	last        [32]byte
 	hasLast     bool
+	pending     [32 + 1 + 8]byte
+	hasPending  bool
 	current     uint64
 	closed      bool
 }
@@ -630,6 +632,7 @@ func (c *segmentCursor) seekKey(key [32]byte) error {
 	}
 	c.offset = best
 	c.hasLast = false
+	c.hasPending = false
 	c.releaseCurrent()
 	return nil
 }
@@ -675,12 +678,17 @@ func (c *segmentCursor) readRecordHeader() (key [32]byte, flag byte, valueLen ui
 		return key, 0, 0, c.offset, fmt.Errorf("%w: truncated record header", ErrCorruptSegment)
 	}
 	var header [32 + 1 + 8]byte
-	n, err := c.readAt(header[:], c.offset)
-	if err == io.EOF && n == 0 {
-		return key, 0, 0, c.offset, fmt.Errorf("%w: record header: unexpected end of segment", ErrCorruptSegment)
-	}
-	if err != nil {
-		return key, 0, 0, c.offset, fmt.Errorf("%w: record header: %v", ErrCorruptSegment, err)
+	if c.hasPending {
+		header = c.pending
+		c.hasPending = false
+	} else {
+		n, readErr := c.readAt(header[:], c.offset)
+		if readErr == io.EOF && n == 0 {
+			return key, 0, 0, c.offset, fmt.Errorf("%w: record header: unexpected end of segment", ErrCorruptSegment)
+		}
+		if readErr != nil {
+			return key, 0, 0, c.offset, fmt.Errorf("%w: record header: %v", ErrCorruptSegment, readErr)
+		}
 	}
 	copy(key[:], header[:32])
 	flag = header[32]
@@ -697,6 +705,50 @@ func (c *segmentCursor) readRecordHeader() (key [32]byte, flag byte, valueLen ui
 		return key, 0, 0, valueOffset, fmt.Errorf("%w: value offset overflows int64", ErrCorruptSegment)
 	}
 	return key, flag, valueLen, valueOffset, nil
+}
+
+func (c *segmentCursor) reserveRecordBuffer(valueOffset int64, valueLen uint64) (charge, lookahead uint64, ok bool) {
+	if valueOffset >= 0 && uint64(valueOffset) <= c.segment.size {
+		remaining := c.segment.size - uint64(valueOffset)
+		if valueLen <= remaining {
+			remaining -= valueLen
+			if remaining >= recordHeaderSize && valueLen <= uint64(maxInt())-recordHeaderSize {
+				bufferLen, valid := addCharge(valueLen, recordHeaderSize)
+				if valid {
+					charge, valid = addCharge(workspaceStream, bufferLen)
+					if valid && c.owner.reserveMemory(charge) {
+						return charge, recordHeaderSize, true
+					}
+				}
+			}
+		}
+	}
+	return c.reserveExactRecordBuffer(valueLen)
+}
+
+func (c *segmentCursor) reserveExactRecordBuffer(valueLen uint64) (charge, lookahead uint64, ok bool) {
+	charge, valid := addCharge(workspaceStream, valueLen)
+	if !valid || !c.owner.reserveMemory(charge) {
+		return 0, 0, false
+	}
+	return charge, 0, true
+}
+
+func (c *segmentCursor) readRecordValue(valueOffset int64, valueLen, lookahead uint64) ([]byte, error) {
+	bufferLen, valid := addCharge(valueLen, lookahead)
+	if !valid || bufferLen > uint64(maxInt()) {
+		return nil, fmt.Errorf("%w: value length overflows int", ErrCorruptSegment)
+	}
+	backing := make([]byte, int(bufferLen))
+	if _, err := c.readAt(backing, valueOffset); err != nil {
+		return nil, fmt.Errorf("%w: value: %v", ErrCorruptSegment, err)
+	}
+	if lookahead == recordHeaderSize {
+		copy(c.pending[:], backing[int(valueLen):])
+		c.hasPending = true
+	}
+	value := backing[:int(valueLen)]
+	return value[:len(value):len(value)], nil
 }
 
 func (c *segmentCursor) close() error {
@@ -756,18 +808,26 @@ func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool,
 			}
 			continue
 		}
-		charge, ok := addCharge(workspaceStream, valueLen)
-		if !ok || !c.owner.reserveMemory(charge) {
+		charge, lookahead, ok := c.reserveRecordBuffer(valueOffset, valueLen)
+		if !ok {
 			return key, nil, false, false, ErrMemoryBudget
 		}
 		if err := c.advanceValue(valueLen); err != nil {
 			c.owner.releaseMemory(charge)
 			return key, nil, false, false, err
 		}
-		value := make([]byte, int(valueLen))
-		if _, err := c.readAt(value, valueOffset); err != nil {
+		value, err := c.readRecordValue(valueOffset, valueLen, lookahead)
+		if err != nil && lookahead != 0 {
 			c.owner.releaseMemory(charge)
-			return key, nil, false, false, fmt.Errorf("%w: value: %v", ErrCorruptSegment, err)
+			charge, lookahead, ok = c.reserveExactRecordBuffer(valueLen)
+			if !ok {
+				return key, nil, false, false, ErrMemoryBudget
+			}
+			value, err = c.readRecordValue(valueOffset, valueLen, lookahead)
+		}
+		if err != nil {
+			c.owner.releaseMemory(charge)
+			return key, nil, false, false, err
 		}
 		c.current = charge
 		return keyBytes, value, flag == 1, true, nil

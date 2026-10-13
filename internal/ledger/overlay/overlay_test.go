@@ -600,11 +600,13 @@ func TestOverlaySpillBoundaryTruncationIsCorrupt(t *testing.T) {
 	var root *treeNode
 	var err error
 	for key, value := range map[[32]byte][]byte{firstKey: firstValue, secondKey: secondValue} {
-		root, err = insertTreeNode(owner, root, key, value, false)
+		var nextRoot *treeNode
+		nextRoot, err = insertTreeNode(owner, root, key, value, false)
+		releaseTreeNode(root)
 		if err != nil {
-			releaseTreeNode(root)
 			t.Fatal(err)
 		}
+		root = nextRoot
 	}
 	segment, err := writeTreeSegment(context.Background(), owner, dir, root)
 	releaseTreeNode(root)
@@ -645,6 +647,108 @@ func TestOverlaySpillBoundaryTruncationIsCorrupt(t *testing.T) {
 	}
 	if _, found, err := o.Get(context.Background(), secondKey); !errors.Is(err, ErrCorruptSegment) || found {
 		t.Fatalf("boundary-truncated Get = found %v, err %v, want ErrCorruptSegment", found, err)
+	}
+}
+
+func TestOverlaySpillCursorCachesNextHeader(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	firstKey, secondKey := testKey(1), testKey(2)
+	firstValue, secondValue := []byte("first-value"), []byte("second-value")
+	var root *treeNode
+	var err error
+	for key, value := range map[[32]byte][]byte{firstKey: firstValue, secondKey: secondValue} {
+		var nextRoot *treeNode
+		nextRoot, err = insertTreeNode(owner, root, key, value, false)
+		releaseTreeNode(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root = nextRoot
+	}
+	segment, err := writeTreeSegment(context.Background(), owner, dir, root)
+	releaseTreeNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		releaseSegment(segment)
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cursor.close()
+		releaseSegment(segment)
+	}()
+
+	baseline := owner.memoryUsed()
+	key, value, deleted, ok, err := cursor.next(context.Background())
+	if err != nil || !ok || deleted || key != firstKey || !bytes.Equal(value, firstValue) {
+		t.Fatalf("first cursor result = key %v, value %q, deleted=%v, ok=%v, err=%v", key, value, deleted, ok, err)
+	}
+	if cap(value) != len(value) || !cursor.hasPending {
+		t.Fatalf("first cursor value cap=%d len=%d, pending=%v; want clipped value and cached header", cap(value), len(value), cursor.hasPending)
+	}
+	wantCharge := workspaceStream + uint64(len(firstValue)) + recordHeaderSize
+	if got := owner.memoryUsed() - baseline; got != wantCharge {
+		t.Fatalf("lookahead charge = %d, want %d", got, workspaceStream+uint64(len(firstValue))+recordHeaderSize)
+	}
+
+	key, value, deleted, ok, err = cursor.next(context.Background())
+	if err != nil || !ok || deleted || key != secondKey || !bytes.Equal(value, secondValue) {
+		t.Fatalf("second cursor result = key %v, value %q, deleted=%v, ok=%v, err=%v", key, value, deleted, ok, err)
+	}
+	if cursor.hasPending {
+		t.Fatal("final record unexpectedly cached another header")
+	}
+	if _, _, _, ok, err = cursor.next(context.Background()); err != nil || ok {
+		t.Fatalf("cursor end = ok=%v, err=%v, want clean end", ok, err)
+	}
+}
+
+func TestOverlaySpillCursorLookaheadFallsBackWithinBudget(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	firstKey, secondKey := testKey(1), testKey(2)
+	firstValue, secondValue := []byte("first-value"), []byte("second-value")
+	var root *treeNode
+	var err error
+	for key, value := range map[[32]byte][]byte{firstKey: firstValue, secondKey: secondValue} {
+		root, err = insertTreeNode(owner, root, key, value, false)
+		if err != nil {
+			releaseTreeNode(root)
+			t.Fatal(err)
+		}
+	}
+	segment, err := writeTreeSegment(context.Background(), owner, dir, root)
+	releaseTreeNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		releaseSegment(segment)
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cursor.close()
+		releaseSegment(segment)
+	}()
+
+	baseline := owner.memoryUsed()
+	limit := baseline + workspaceStream + uint64(len(firstValue))
+	owner.mu.Lock()
+	owner.maxMemory = limit
+	owner.mu.Unlock()
+	key, value, deleted, ok, err := cursor.next(context.Background())
+	if err != nil || !ok || deleted || key != firstKey || !bytes.Equal(value, firstValue) {
+		t.Fatalf("fallback cursor result = key %v, value %q, deleted=%v, ok=%v, err=%v", key, value, deleted, ok, err)
+	}
+	if cursor.hasPending {
+		t.Fatal("budget fallback retained optional header")
+	}
+	if got := owner.memoryUsed(); got != limit {
+		t.Fatalf("fallback memory = %d, want %d", got, limit)
 	}
 }
 
