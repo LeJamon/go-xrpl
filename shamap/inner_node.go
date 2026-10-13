@@ -438,6 +438,25 @@ func (n *innerNode) shallowClone() *innerNode {
 	return clone
 }
 
+// cloneSharedHeader copies a root header and its child array while preserving
+// hashes, dirty state, and full-below metadata. The independent child array
+// prevents a later ReleaseChildren on a map with a different Family binding
+// from clearing this map's root edges.
+func (n *innerNode) cloneSharedHeader() *innerNode {
+	n.mu.RLock()
+	clone := &innerNode{
+		isBranch:     n.isBranch,
+		hashes:       n.hashes,
+		children:     n.children,
+		fullBelowGen: n.fullBelowGen,
+	}
+	clone.hash = n.hash
+	dirty := n.IsDirty()
+	n.mu.RUnlock()
+	clone.SetDirty(dirty)
+	return clone
+}
+
 // HasChildren returns true if the node has any children
 func (n *innerNode) HasChildren() bool {
 	return !n.IsEmpty()

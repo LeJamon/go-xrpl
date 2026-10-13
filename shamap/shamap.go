@@ -162,8 +162,11 @@ func (sm *SHAMap) SetFamily(family Family) {
 	sm.acquisition.walkMu.Lock()
 	sm.tree.mu.Lock()
 	sm.backing.mu.Lock()
-	sm.backing.access = access
 	sm.releaseBackedWalkCursorLocked()
+	if sm.tree.root != nil {
+		sm.tree.root = sm.tree.root.cloneSharedHeader()
+	}
+	sm.backing.access = access
 	sm.acquisition.base = nil
 	if family != nil {
 		if sm.acquisition.budget == nil {
@@ -261,8 +264,14 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 		return nil, nil
 	}
 
-	if !retain {
-		if node, ok := access.residency.lookup(hash); ok {
+	var (
+		residency           *CleanResidency
+		residencyGeneration uint64
+	)
+	if !retain && access.residency != nil {
+		residency = access.residency
+		residencyGeneration = residency.beginRead()
+		if node, ok := residency.lookup(hash); ok {
 			return node, nil
 		}
 	}
@@ -281,7 +290,9 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 		return nil, err
 	}
 	if !retain {
-		access.residency.insert(hash, body)
+		if residency != nil {
+			residency.insertForGeneration(residencyGeneration, hash, body)
+		}
 		return node, nil
 	}
 

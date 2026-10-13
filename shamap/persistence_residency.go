@@ -38,7 +38,10 @@ func (sm *SHAMap) PrepareCleanResidencyRelease() *CleanResidencyRelease {
 	defer sm.tree.mu.RUnlock()
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
-	if !sm.backing.access.available() || sm.tree.root == nil || sm.tree.root.IsEmpty() {
+	// Syncing nodes are owned by the acquisition budget and may still be
+	// attached or replaced by the sync pipeline. Ordinary residency cleanup
+	// must not detach that graph; the acquisition acknowledgement path owns it.
+	if sm.tree.state == stateSyncing || !sm.backing.access.available() || sm.tree.root == nil || sm.tree.root.IsEmpty() {
 		return nil
 	}
 	return &CleanResidencyRelease{

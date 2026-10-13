@@ -120,6 +120,72 @@ func TestCleanResidencyEvictionKeepsStructuralCharge(t *testing.T) {
 	require.Zero(t, budget.used)
 }
 
+func TestCleanResidencyRetriesAfterSharedBudgetPressure(t *testing.T) {
+	payload := uint64(16)
+	budgetLimit := cleanResidencyFixedBytes + 2*payload
+	budget := &cacheTestBudget{limit: budgetLimit}
+	cache := NewCleanResidency(2*cleanResidencyFixedBytes+2*payload, budget)
+	body := prefixNodeBody{kind: storedInner, payload: make([]byte, payload)}
+	cache.insert([32]byte{0x51}, body)
+	require.True(t, budget.TryReserve(payload), "test external consumer should fill the shared pool")
+	cache.insert([32]byte{0x52}, body)
+	stats := cache.Stats()
+	require.Equal(t, uint64(1), stats.Nodes)
+	require.Equal(t, uint64(1), stats.Evictions)
+	require.Equal(t, cleanResidencyFixedBytes+payload, stats.UsedBytes)
+	require.Equal(t, budgetLimit, budget.used)
+	budget.Release(payload)
+	cache.Close()
+	require.Zero(t, budget.used)
+}
+
+func TestCleanResidencyBeginMutationInvalidatesInFlightReader(t *testing.T) {
+	cache := NewCleanResidency(1<<20, nil)
+	body := prefixNodeBody{kind: storedInner, payload: make([]byte, BranchFactor*32)}
+	generation := cache.beginRead()
+	cache.insertForGeneration(generation, [32]byte{0x61}, body)
+	unlock := cache.BeginMutation()
+	unlock()
+	_, ok := cache.lookup([32]byte{0x61})
+	require.False(t, ok)
+	// A fetch that started before the mutation carries the retired epoch and
+	// cannot repopulate the cache after the backing store changes.
+	cache.insertForGeneration(generation, [32]byte{0x61}, body)
+	_, ok = cache.lookup([32]byte{0x61})
+	require.False(t, ok)
+	cache.insert([32]byte{0x62}, body)
+	_, ok = cache.lookup([32]byte{0x62})
+	require.True(t, ok)
+}
+
+func TestSetFamilySeparatesSharedSnapshotRoot(t *testing.T) {
+	family := &cleanResidencyFamily{memoryFamily: newMemoryFamily()}
+	source, err := NewBacked(TypeState, family)
+	require.NoError(t, err)
+	key := [32]byte{0x71}
+	require.NoError(t, source.Put(key, bytes.Repeat([]byte{7}, 16)))
+	require.NoError(t, source.StoreDirty(func(entries []FlushEntry) error {
+		return family.StoreBatch(t.Context(), entries)
+	}))
+	sibling, err := source.SnapshotMutable()
+	require.NoError(t, err)
+	require.NotZero(t, loadedChildCount(source.tree.root))
+	require.NotZero(t, loadedChildCount(sibling.tree.root))
+
+	// A Family replacement gives the sibling an independent root header, so a
+	// later release on source cannot clear the sibling's attached children.
+	sibling.SetFamily(nil)
+	token := source.PrepareCleanResidencyRelease()
+	require.NotNil(t, token)
+	require.True(t, source.AcknowledgeCleanResidencyRelease(token))
+	require.Zero(t, loadedChildCount(source.tree.root))
+	require.NotZero(t, loadedChildCount(sibling.tree.root))
+	item, found, err := sibling.Get(key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, bytes.Repeat([]byte{7}, 16), item.Data())
+}
+
 func TestBackedMutationDoesNotRetainCleanHistoryChildren(t *testing.T) {
 	family := newMemoryFamily()
 	source := New(TypeState)
@@ -176,6 +242,15 @@ func TestStoreDirtyBatchedDurabilityTokenRetainsUntilAcknowledged(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, bytes.Repeat([]byte{3}, 16), item.Data())
+}
+
+func TestCleanResidencyReleaseSkipsSyncingMap(t *testing.T) {
+	family := &cleanResidencyFamily{memoryFamily: newMemoryFamily()}
+	sm, err := NewBacked(TypeState, family)
+	require.NoError(t, err)
+	require.NoError(t, sm.Put([32]byte{0x2A}, bytes.Repeat([]byte{9}, 16)))
+	require.NoError(t, sm.StartSync())
+	require.Nil(t, sm.PrepareCleanResidencyRelease())
 }
 
 func TestCleanResidencyReleaseRejectsFamilyReplacement(t *testing.T) {

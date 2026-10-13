@@ -27,9 +27,10 @@ type cleanResidencyEntry struct {
 }
 
 // The charge includes the entry, its list element, and a conservative amount
-// for map/list bookkeeping. It remains reserved until Close: Go maps and
-// lists retain bucket/high-water capacity after individual entries are
-// evicted, so releasing this charge per eviction would under-account memory.
+// for map/list bookkeeping. It remains reserved while the cache retains any
+// entries: Go maps and lists retain bucket/high-water capacity after
+// individual entries are evicted, so releasing it per eviction would
+// under-account memory. An empty cache discards those structures.
 const cleanResidencyFixedBytes = uint64(unsafe.Sizeof(cleanResidencyEntry{})) +
 	uint64(unsafe.Sizeof(list.Element{})) + 128
 
@@ -39,19 +40,20 @@ const cleanResidencyFixedBytes = uint64(unsafe.Sizeof(cleanResidencyEntry{})) +
 // admission failure only disables reuse for that node; it never blocks or
 // changes map correctness.
 type CleanResidency struct {
-	mu     sync.Mutex
-	limit  uint64
-	budget CacheMemoryBudget
-	used   uint64
-	items  map[[32]byte]*list.Element
-	order  list.List
-	closed bool
+	generationGate sync.RWMutex
+	generation     uint64
+	mu             sync.Mutex
+	limit          uint64
+	budget         CacheMemoryBudget
+	used           uint64
+	items          map[[32]byte]*list.Element
+	order          list.List
+	closed         bool
 
-	// structuralSlots is the high-water number of cache entries. The
-	// corresponding structuralCharge is retained until Close even when an
-	// entry is evicted, conservatively covering map/list capacity.
-	structuralSlots  uint64
-	structuralCharge uint64
+	// structuralSlots is the high-water number of cache entries. Its
+	// conservative reservation remains in used while entries still occupy the
+	// map/list; an empty cache resets those structures and releases it.
+	structuralSlots uint64
 
 	hits             atomic.Uint64
 	misses           atomic.Uint64
@@ -65,10 +67,44 @@ type CleanResidency struct {
 // retained records and conservative cache structure, and is never waited on.
 func NewCleanResidency(limit uint64, budget CacheMemoryBudget) *CleanResidency {
 	return &CleanResidency{
-		limit:  limit,
-		budget: budget,
-		items:  make(map[[32]byte]*list.Element),
+		generation: 1,
+		limit:      limit,
+		budget:     budget,
+		items:      make(map[[32]byte]*list.Element),
 	}
+}
+
+// BeginMutation invalidates all retained records and blocks cache operations
+// until the returned function is called. A read that is already fetching from
+// the Family may finish, but its earlier generation cannot reinsert a retired
+// record after the mutation starts.
+func (c *CleanResidency) BeginMutation() func() {
+	if c == nil {
+		return func() {}
+	}
+	c.generationGate.Lock()
+	c.mu.Lock()
+	if !c.closed {
+		c.clearLocked(true)
+		c.generation++
+		if c.generation == 0 {
+			c.generation = 1
+		}
+	}
+	c.mu.Unlock()
+	return c.generationGate.Unlock
+}
+
+func (c *CleanResidency) beginRead() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.generationGate.RLock()
+	c.mu.Lock()
+	generation := c.generation
+	c.mu.Unlock()
+	c.generationGate.RUnlock()
+	return generation
 }
 
 func cleanResidencyPayloadBytes(body prefixNodeBody) (uint64, bool) {
@@ -87,6 +123,12 @@ func (c *CleanResidency) lookup(hash [32]byte) (mapNode, bool) {
 	if c == nil {
 		return nil, false
 	}
+	c.generationGate.RLock()
+	defer c.generationGate.RUnlock()
+	return c.lookupLocked(hash)
+}
+
+func (c *CleanResidency) lookupLocked(hash [32]byte) (mapNode, bool) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -119,6 +161,15 @@ func (c *CleanResidency) insert(hash [32]byte, body prefixNodeBody) {
 	if c == nil {
 		return
 	}
+	c.insertForGeneration(0, hash, body)
+}
+
+func (c *CleanResidency) insertForGeneration(generation uint64, hash [32]byte, body prefixNodeBody) {
+	if c == nil {
+		return
+	}
+	c.generationGate.RLock()
+	defer c.generationGate.RUnlock()
 	payload, ok := cleanResidencyPayloadBytes(body)
 	if !ok || c.limit == 0 || payload > c.limit || cleanResidencyFixedBytes > c.limit-payload {
 		c.admissionDenials.Add(1)
@@ -127,7 +178,7 @@ func (c *CleanResidency) insert(hash [32]byte, body prefixNodeBody) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed {
+	if c.closed || generation != 0 && generation != c.generation {
 		c.admissionDenials.Add(1)
 		return
 	}
@@ -135,51 +186,92 @@ func (c *CleanResidency) insert(hash [32]byte, body prefixNodeBody) {
 		return
 	}
 
-	var structural uint64
 	for {
-		structural = 0
+		structural := uint64(0)
 		if uint64(len(c.items)) >= c.structuralSlots {
 			structural = cleanResidencyFixedBytes
 		}
 		additional := payload + structural
-		if !cleanResidencyExceeds(c.limit, c.used, additional) {
-			break
-		}
-		oldest := c.order.Back()
-		if oldest == nil {
+		if cleanResidencyExceeds(c.limit, c.used, additional) {
+			if c.evictOldestLocked() {
+				continue
+			}
+			if len(c.items) == 0 && c.used != 0 {
+				c.resetEmptyLocked()
+				continue
+			}
 			c.admissionDenials.Add(1)
 			return
 		}
-		entry := oldest.Value.(*cleanResidencyEntry)
-		delete(c.items, entry.hash)
-		c.order.Remove(oldest)
-		// Keep structuralCharge reserved. Only the exact payload ceases to be
-		// live when the entry is removed.
-		c.used -= entry.payloadBytes
-		if c.budget != nil && entry.payloadBytes != 0 {
-			c.budget.Release(entry.payloadBytes)
+		if c.budget != nil && !c.budget.TryReserve(additional) {
+			// A different cache may be consuming the shared pool. Give this
+			// cache a chance to free cold payloads before denying admission.
+			if c.evictOldestLocked() {
+				continue
+			}
+			if len(c.items) == 0 && c.used != 0 {
+				c.resetEmptyLocked()
+				continue
+			}
+			c.admissionDenials.Add(1)
+			return
 		}
-		c.evictions.Add(1)
-	}
-	additional := payload + structural
-	if c.budget != nil && !c.budget.TryReserve(additional) {
-		c.admissionDenials.Add(1)
+		storedPayload := make([]byte, len(body.payload))
+		copy(storedPayload, body.payload)
+		entry := &cleanResidencyEntry{
+			hash:         hash,
+			body:         prefixNodeBody{kind: body.kind, payload: storedPayload, key: body.key},
+			payloadBytes: payload,
+		}
+		element := c.order.PushFront(entry)
+		c.items[hash] = element
+		if structural != 0 {
+			c.structuralSlots++
+		}
+		c.used += additional
 		return
 	}
-	storedPayload := make([]byte, len(body.payload))
-	copy(storedPayload, body.payload)
-	entry := &cleanResidencyEntry{
-		hash:         hash,
-		body:         prefixNodeBody{kind: body.kind, payload: storedPayload, key: body.key},
-		payloadBytes: payload,
+}
+
+func (c *CleanResidency) evictOldestLocked() bool {
+	oldest := c.order.Back()
+	if oldest == nil {
+		return false
 	}
-	element := c.order.PushFront(entry)
-	c.items[hash] = element
-	if structural != 0 {
-		c.structuralSlots++
-		c.structuralCharge += structural
+	entry := oldest.Value.(*cleanResidencyEntry)
+	delete(c.items, entry.hash)
+	c.order.Remove(oldest)
+	// Keep structural capacity reserved while the cache remains populated;
+	// resetEmptyLocked releases it when the backing map/list are discarded.
+	c.used -= entry.payloadBytes
+	if c.budget != nil && entry.payloadBytes != 0 {
+		c.budget.Release(entry.payloadBytes)
 	}
-	c.used += additional
+	c.evictions.Add(1)
+	if len(c.items) == 0 {
+		c.resetEmptyLocked()
+	}
+	return true
+}
+
+func (c *CleanResidency) clearLocked(reopen bool) {
+	if c.budget != nil && c.used != 0 {
+		c.budget.Release(c.used)
+	}
+	c.used = 0
+	c.structuralSlots = 0
+	c.order.Init()
+	if reopen {
+		c.items = make(map[[32]byte]*list.Element)
+	} else {
+		c.items = nil
+	}
+}
+
+func (c *CleanResidency) resetEmptyLocked() {
+	if len(c.items) == 0 && c.used != 0 {
+		c.clearLocked(true)
+	}
 }
 
 // Stats returns a point-in-time view of retained clean records and cumulative
@@ -214,13 +306,6 @@ func (c *CleanResidency) Close() {
 	if c.closed {
 		return
 	}
-	if c.budget != nil && c.used != 0 {
-		c.budget.Release(c.used)
-	}
-	c.used = 0
-	c.structuralSlots = 0
-	c.structuralCharge = 0
-	c.items = nil
-	c.order.Init()
+	c.clearLocked(false)
 	c.closed = true
 }
