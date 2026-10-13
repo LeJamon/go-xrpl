@@ -537,6 +537,144 @@ func TestOverlaySpilledReaderCapDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+func TestOverlaySpillCursorAccountingAndTruncation(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte{0x5a}, 64)
+	segment, err := writeOneSegment(context.Background(), owner, dir, testKey(1), value, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := owner.memoryUsed()
+	cursor, err := segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		releaseSegment(segment)
+		t.Fatal(err)
+	}
+	_, got, deleted, ok, err := cursor.next(context.Background())
+	if err != nil || !ok || deleted || !bytes.Equal(got, value) {
+		_ = cursor.close()
+		releaseSegment(segment)
+		t.Fatalf("cursor result = %x, deleted=%v, ok=%v, err=%v", got, deleted, ok, err)
+	}
+	want := baseline + workspaceStream + uint64(len(value))
+	if got := owner.memoryUsed(); got != want {
+		_ = cursor.close()
+		releaseSegment(segment)
+		t.Fatalf("cursor memory = %d, want %d", got, want)
+	}
+	if err := cursor.close(); err != nil {
+		releaseSegment(segment)
+		t.Fatal(err)
+	}
+	if got := owner.memoryUsed(); got != baseline {
+		releaseSegment(segment)
+		t.Fatalf("cursor close memory = %d, want baseline %d", got, baseline)
+	}
+
+	truncatedSize := int64(segmentHeaderSize + recordHeaderSize + uint64(len(value)/2))
+	if err := os.Truncate(segment.path, truncatedSize); err != nil {
+		releaseSegment(segment)
+		t.Fatal(err)
+	}
+	cursor, err = segment.cursor(context.Background(), owner, nil)
+	if err != nil {
+		releaseSegment(segment)
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cursor.close()
+		releaseSegment(segment)
+	}()
+	_, _, _, _, err = cursor.next(context.Background())
+	if !errors.Is(err, ErrCorruptSegment) {
+		t.Fatalf("truncated value error = %v, want ErrCorruptSegment", err)
+	}
+}
+
+func TestOverlaySpillCompactionDoesNotStarveValueMemory(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 64 << 10, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte{0x3c}, 30<<10)
+	segments := make([]*spillSegment, 0, 2)
+	defer func() {
+		for _, segment := range segments {
+			releaseSegment(segment)
+		}
+	}()
+	for i := byte(1); i <= 2; i++ {
+		segment, err := writeOneSegment(context.Background(), owner, dir, testKey(i), value, false)
+		if err != nil {
+			t.Fatalf("write input segment %d: %v", i, err)
+		}
+		segments = append(segments, segment)
+	}
+
+	merged, err := compactSegments(context.Background(), owner, dir, segments)
+	if err != nil {
+		t.Fatalf("compact near-limit values: %v", err)
+	}
+	if merged.count != 2 {
+		releaseSegment(merged)
+		t.Fatalf("compacted record count = %d, want 2", merged.count)
+	}
+	releaseSegment(merged)
+	for _, segment := range segments {
+		releaseSegment(segment)
+	}
+	segments = nil
+	if got := owner.memoryUsed(); got != 0 {
+		t.Fatalf("memory credits leaked after near-limit compaction: %d", got)
+	}
+}
+
+func TestOverlaySpillChangesNearMemoryLimit(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 64 << 10, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte{0x4d}, 30<<10)
+	segments := make([]*spillSegment, 0, 2)
+	for i := byte(1); i <= 2; i++ {
+		segment, err := writeOneSegment(context.Background(), owner, dir, testKey(i), value, false)
+		if err != nil {
+			for _, held := range segments {
+				releaseSegment(held)
+			}
+			t.Fatalf("write input segment %d: %v", i, err)
+		}
+		segments = append(segments, segment)
+	}
+	o := &Overlay{
+		base:   emptyReader{},
+		cfg:    Config{MaxMemoryBytes: 64 << 10, MaxDiskBytes: 1 << 20, SpillDir: dir},
+		budget: owner, segments: segments,
+	}
+	defer o.Close()
+	iterator, err := o.Changes(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iterator.Close()
+	for i := byte(1); i <= 2; i++ {
+		change, done, nextErr := iterator.Next(context.Background())
+		if nextErr != nil || done || change.Key != testKey(i) || len(change.Value) != len(value) {
+			t.Fatalf("change %d = key %x, value length %d, done=%v, err=%v", i, change.Key, len(change.Value), done, nextErr)
+		}
+	}
+	_, done, err := iterator.Next(context.Background())
+	if err != nil || !done {
+		t.Fatalf("final Changes result done=%v, err=%v", done, err)
+	}
+	if err := iterator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := owner.memoryUsed(); got != 0 {
+		t.Fatalf("memory credits leaked after near-limit Changes: %d", got)
+	}
+}
+
 func TestOverlaySpillTruncatedSkippedValue(t *testing.T) {
 	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
 	dir := t.TempDir()

@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -17,16 +18,18 @@ import (
 var segmentMagic = [8]byte{'G', 'X', 'O', 'V', 1, 0, 0, 0}
 
 const (
-	segmentHeaderSize   = uint64(len(segmentMagic))
-	recordHeaderSize    = uint64(32 + 1 + 8)
-	sparseIndexMax      = 8
-	maxSegmentReaders   = 64
-	maxCachedReaders    = 48
-	maxFallbackReaders  = 1
-	maxEphemeralReaders = maxSegmentReaders - maxCachedReaders - maxFallbackReaders
-	bloomWordCount      = 32
-	bloomBitCount       = bloomWordCount * 64
-	bloomProbeCount     = 3
+	segmentHeaderSize          = uint64(len(segmentMagic))
+	recordHeaderSize           = uint64(32 + 1 + 8)
+	sparseIndexMax             = 8
+	maxSegmentReaders          = 64
+	maxCachedReaders           = 48
+	maxFallbackReaders         = 1
+	maxEphemeralReaders        = maxSegmentReaders - maxCachedReaders - maxFallbackReaders
+	segmentWriteBufferBytes    = 32 << 10
+	minSegmentWriteBufferBytes = 1 << 10
+	bloomWordCount             = 32
+	bloomBitCount              = bloomWordCount * 64
+	bloomProbeCount            = 3
 )
 
 var (
@@ -179,7 +182,75 @@ func reserveSegment(owner *budget, size uint64) error {
 	return nil
 }
 
-func createSegmentFile(ctx context.Context, owner *budget, dir string, size uint64) (*os.File, string, error) {
+type segmentWriter struct {
+	file         *os.File
+	buffer       *bufio.Writer
+	owner        *budget
+	bufferCharge uint64
+}
+
+func newSegmentWriter(file *os.File, owner *budget, buffered bool) *segmentWriter {
+	writer := &segmentWriter{file: file, owner: owner}
+	if buffered && owner != nil {
+		for size := uint64(segmentWriteBufferBytes); size >= minSegmentWriteBufferBytes; size >>= 1 {
+			if owner.reserveMemory(size) {
+				writer.buffer = bufio.NewWriterSize(file, int(size))
+				writer.bufferCharge = size
+				break
+			}
+		}
+	}
+	return writer
+}
+
+func (w *segmentWriter) Write(data []byte) (int, error) {
+	if w == nil || w.file == nil {
+		return 0, ErrClosed
+	}
+	if w.buffer != nil {
+		return w.buffer.Write(data)
+	}
+	return w.file.Write(data)
+}
+
+func (w *segmentWriter) close() error {
+	return w.finish(true)
+}
+
+func (w *segmentWriter) abort() error {
+	return w.finish(false)
+}
+
+func (w *segmentWriter) finish(flush bool) error {
+	if w == nil || w.file == nil {
+		return nil
+	}
+	var first error
+	if flush && w.buffer != nil {
+		if err := w.buffer.Flush(); err != nil {
+			first = err
+		}
+	}
+	if err := w.file.Close(); err != nil && first == nil {
+		first = err
+	}
+	w.file = nil
+	w.buffer = nil
+	if w.owner != nil {
+		w.owner.releaseMemory(w.bufferCharge)
+	}
+	w.bufferCharge = 0
+	return first
+}
+
+func discardSegmentFile(w *segmentWriter, path string, owner *budget, reserved uint64) {
+	_ = w.abort()
+	_ = os.Remove(path)
+	owner.releaseDisk(reserved)
+	owner.releaseMemory(segmentOverhead)
+}
+
+func createSegmentFile(ctx context.Context, owner *budget, dir string, size uint64, buffered bool) (*segmentWriter, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
@@ -197,28 +268,26 @@ func createSegmentFile(ctx context.Context, owner *budget, dir string, size uint
 		owner.releaseMemory(segmentOverhead)
 		return nil, "", fmt.Errorf("create overlay spill segment: %w", err)
 	}
-	cleanup := func(cause error) (*os.File, string, error) {
-		_ = f.Close()
+	writer := newSegmentWriter(f, owner, buffered)
+	cleanup := func(cause error) (*segmentWriter, string, error) {
+		_ = writer.abort()
 		_ = os.Remove(f.Name())
 		owner.releaseDisk(size)
 		owner.releaseMemory(segmentOverhead)
 		return nil, "", cause
 	}
-	if _, err := f.Write(segmentMagic[:]); err != nil {
+	if err := writeAll(writer, segmentMagic[:]); err != nil {
 		return cleanup(fmt.Errorf("write overlay spill header: %w", err))
 	}
-	return f, f.Name(), nil
+	return writer, f.Name(), nil
 }
 
-func finishSegmentFile(ctx context.Context, f *os.File, path string, owner *budget, reserved, count uint64, index *[sparseIndexMax]sparseIndexEntry, indexCount int, bloom segmentBloom) (*spillSegment, error) {
+func finishSegmentFile(ctx context.Context, f *segmentWriter, path string, owner *budget, reserved, count uint64, index *[sparseIndexMax]sparseIndexEntry, indexCount int, bloom segmentBloom) (*spillSegment, error) {
 	if err := ctx.Err(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		owner.releaseDisk(reserved)
-		owner.releaseMemory(segmentOverhead)
+		discardSegmentFile(f, path, owner, reserved)
 		return nil, err
 	}
-	if err := f.Close(); err != nil {
+	if err := f.close(); err != nil {
 		_ = os.Remove(path)
 		owner.releaseDisk(reserved)
 		owner.releaseMemory(segmentOverhead)
@@ -264,25 +333,36 @@ func finishSegmentFile(ctx context.Context, f *os.File, path string, owner *budg
 	return s, nil
 }
 
-func writeRecord(w io.Writer, key [32]byte, value []byte, deleted bool) error {
-	if _, err := w.Write(key[:]); err != nil {
-		return err
+func writeAll(w io.Writer, data []byte) error {
+	for len(data) != 0 {
+		written, err := w.Write(data)
+		if written > 0 {
+			data = data[written:]
+		}
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
 	}
+	return nil
+}
+
+func writeRecord(w io.Writer, key [32]byte, value []byte, deleted bool) error {
+	var header [32 + 1 + 8]byte
+	copy(header[:32], key[:])
 	flag := byte(0)
 	if deleted {
 		flag = 1
 	}
-	if _, err := w.Write([]byte{flag}); err != nil {
-		return err
-	}
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
-	if _, err := w.Write(length[:]); err != nil {
+	header[32] = flag
+	binary.BigEndian.PutUint64(header[33:], uint64(len(value)))
+	if err := writeAll(w, header[:]); err != nil {
 		return err
 	}
 	if len(value) != 0 {
-		_, err := w.Write(value)
-		return err
+		return writeAll(w, value)
 	}
 	return nil
 }
@@ -316,7 +396,7 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 	if err != nil {
 		return nil, err
 	}
-	f, path, err := createSegmentFile(ctx, owner, dir, size)
+	f, path, err := createSegmentFile(ctx, owner, dir, size, true)
 	if err != nil {
 		return nil, err
 	}
@@ -333,10 +413,7 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 	offset := int64(segmentHeaderSize)
 	for {
 		if err := ctx.Err(); err != nil {
-			_ = f.Close()
-			_ = os.Remove(path)
-			owner.releaseDisk(size)
-			owner.releaseMemory(segmentOverhead)
+			discardSegmentFile(f, path, owner, size)
 			return nil, err
 		}
 		key, value, deleted, ok := cursor.next()
@@ -344,10 +421,7 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 			break
 		}
 		if previous != nil && bytes.Compare(key[:], previous[:]) <= 0 {
-			_ = f.Close()
-			_ = os.Remove(path)
-			owner.releaseDisk(size)
-			owner.releaseMemory(segmentOverhead)
+			discardSegmentFile(f, path, owner, size)
 			return nil, ErrOrdering
 		}
 		previous = &key
@@ -359,18 +433,12 @@ func writeTreeSegment(ctx context.Context, owner *budget, dir string, root *tree
 		position++
 		recordBytes, valid := recordSize(value)
 		if !valid || recordBytes > uint64(math.MaxInt64-offset) {
-			_ = f.Close()
-			_ = os.Remove(path)
-			owner.releaseDisk(size)
-			owner.releaseMemory(segmentOverhead)
+			discardSegmentFile(f, path, owner, size)
 			return nil, ErrDiskBudget
 		}
 		offset += int64(recordBytes)
 		if err := writeRecord(f, key, value, deleted); err != nil {
-			_ = f.Close()
-			_ = os.Remove(path)
-			owner.releaseDisk(size)
-			owner.releaseMemory(segmentOverhead)
+			discardSegmentFile(f, path, owner, size)
 			return nil, fmt.Errorf("write overlay spill segment: %w", err)
 		}
 	}
@@ -383,15 +451,12 @@ func writeOneSegment(ctx context.Context, owner *budget, dir string, key [32]byt
 		return nil, ErrDiskBudget
 	}
 	size := segmentHeaderSize + recordBytes
-	f, path, err := createSegmentFile(ctx, owner, dir, size)
+	f, path, err := createSegmentFile(ctx, owner, dir, size, true)
 	if err != nil {
 		return nil, err
 	}
 	if err := writeRecord(f, key, value, deleted); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		owner.releaseDisk(size)
-		owner.releaseMemory(segmentOverhead)
+		discardSegmentFile(f, path, owner, size)
 		return nil, fmt.Errorf("write overlay spill record: %w", err)
 	}
 	index := [sparseIndexMax]sparseIndexEntry{{key: key, offset: int64(segmentHeaderSize)}}
@@ -540,6 +605,9 @@ func openSegmentCursor(ctx context.Context, owner *budget, segment *spillSegment
 }
 
 func (c *segmentCursor) readAt(data []byte, offset int64) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
 	if c.file != nil {
 		return readAtFull(c.file, data, offset)
 	}
@@ -654,6 +722,9 @@ func (c *segmentCursor) next(ctx context.Context) ([32]byte, []byte, bool, bool,
 		return key, nil, false, false, ErrClosed
 	}
 	c.releaseCurrent()
+	if err := ctx.Err(); err != nil {
+		return key, nil, false, false, err
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return key, nil, false, false, err

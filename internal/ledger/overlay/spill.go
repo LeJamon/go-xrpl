@@ -3,7 +3,6 @@ package overlay
 import (
 	"context"
 	"fmt"
-	"os"
 )
 
 func (o *Overlay) spillRootLocked(ctx context.Context) error {
@@ -85,7 +84,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 		}
 		count += input.count
 	}
-	f, path, err := createSegmentFile(ctx, owner, dir, reserved)
+	f, path, err := createSegmentFile(ctx, owner, dir, reserved, false)
 	if err != nil {
 		return nil, err
 	}
@@ -96,10 +95,7 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 			for _, held := range cursors {
 				_ = held.close()
 			}
-			_ = f.Close()
-			_ = removeSpillFile(path)
-			owner.releaseDisk(reserved)
-			owner.releaseMemory(segmentOverhead)
+			discardSegmentFile(f, path, owner, reserved)
 			return nil, openErr
 		}
 		cursors = append(cursors, cursor)
@@ -137,25 +133,12 @@ func compactSegments(ctx context.Context, owner *budget, dir string, inputs []*s
 	}
 	closeErr := closeCursors(cursors, 0, owner)
 	if mergeErr != nil {
-		_ = f.Close()
-		_ = removeSpillFile(path)
-		owner.releaseDisk(reserved)
-		owner.releaseMemory(segmentOverhead)
+		discardSegmentFile(f, path, owner, reserved)
 		return nil, mergeErr
 	}
 	if closeErr != nil {
-		_ = f.Close()
-		_ = removeSpillFile(path)
-		owner.releaseDisk(reserved)
-		owner.releaseMemory(segmentOverhead)
+		discardSegmentFile(f, path, owner, reserved)
 		return nil, closeErr
 	}
 	return finishSegmentFile(ctx, f, path, owner, reserved, position, &index, indexCount, bloom)
-}
-
-func removeSpillFile(path string) error {
-	if path == "" {
-		return nil
-	}
-	return os.Remove(path)
 }
