@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,14 +23,26 @@ type residencyLedgerRecord struct {
 	seq      uint32
 	hash     [32]byte
 	root     [32]byte
-	key      [32]byte
-	value    []byte
+	entries  []residencyEntry
 	snapshot *ledgerpkg.Ledger
-	retained uint64
+	state    *shamap.SHAMap
+	cold     *shamap.SHAMap
+}
+
+type residencyEntry struct {
+	key   [32]byte
+	value []byte
 }
 
 func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	ctx := t.Context()
+	const (
+		initialEntries    = 128
+		workingSetEntries = 32
+		workingRounds     = 64
+		rotateEvery       = 16
+		cleanCacheLimit   = 16 << 10
+	)
 	path := filepath.Join(t.TempDir(), "nodes")
 	options := kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200}
 	backend, err := kvpebble.NewRotating(path, options)
@@ -36,21 +50,32 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(t, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
-	family := shamapbackend.New(db)
+	cleanBudget := &preferredMemoryBudget{limit: cleanCacheLimit}
+	family := shamapbackend.New(db, shamapbackend.NodeStoreOptions{
+		CleanCacheBytes:   cleanCacheLimit,
+		CleanMemoryBudget: cleanBudget,
+	})
+	require.True(t, family.UsesDatabase(db))
+	familyClosed := false
 
 	svc, err := New(Config{
 		PersistenceMemory: &relayTestMemory{limit: shamap.DirtyWorkspaceBytes},
 		Standalone:        true,
 		GenesisConfig:     genesis.DefaultConfig(),
-		NodeStore:         base,
+		NodeStore:         db,
 		SHAMapFamily:      family,
-		LedgerCacheSize:   256,
+		LedgerCacheSize:   8,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(func() {
 		svc.Stop()
-		_ = db.Close()
+		if !familyClosed {
+			require.NoError(t, family.Close())
+			familyClosed = true
+		}
+		require.Zero(t, family.SHAMapCleanResidency().Stats().UsedBytes)
+		require.Zero(t, cleanBudget.Used())
 	})
 
 	// Keep background recertification out of this deterministic lifecycle test;
@@ -59,14 +84,13 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	svc.recertificationStopped = true
 	svc.recertificationMu.Unlock()
 
-	const initialEntries = 32
-	for i := 1; i <= initialEntries; i++ {
-		key := residencyKey(0, uint32(i))
-		value := residencyValue(0, uint32(i))
-		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: key}, value))
+	initialSet := residencyEntries(0, 1, initialEntries)
+	for _, entry := range initialSet {
+		require.NoError(t, svc.openLedger.Insert(keylet.Keylet{Key: entry.key}, entry.value))
 	}
 	initial := closeStoredLedgerFixture(t, svc)
 	svc.FlushPersists()
+	require.NoError(t, svc.flushPersists(ctx))
 	committed, err := db.RotateGeneration(ctx, initial.Sequence(), 1)
 	require.NoError(t, err)
 	require.True(t, committed)
@@ -74,58 +98,69 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	require.Equal(t, initial.Sequence(), lastRotated)
 	require.Equal(t, uint32(1), minimumOnline)
 
-	initialRecord := captureResidencyRecord(t, initial, residencyKey(0, 1), residencyValue(0, 1))
+	initialRecord := captureResidencyRecord(t, ctx, initial, initialSet, family)
 	records := []residencyLedgerRecord{initialRecord}
-	var storeBatchResume chan struct{}
 
-	for round := uint32(1); round <= 3; round++ {
-		key := residencyKey(round, 0)
-		value := residencyValue(round, 0)
+	for round := uint32(1); round <= workingRounds; round++ {
+		workingSet := residencyEntries(round, 0, workingSetEntries)
 		svc.mu.Lock()
-		insertErr := svc.openLedger.Insert(keylet.Keylet{Key: key}, value)
+		var insertErr error
+		for _, entry := range workingSet {
+			if err := svc.openLedger.Insert(keylet.Keylet{Key: entry.key}, entry.value); err != nil {
+				insertErr = err
+				break
+			}
+		}
 		svc.mu.Unlock()
 		require.NoError(t, insertErr)
 		closed := closeStoredLedgerFixture(t, svc)
-		if round == 1 {
-			// closeStoredLedgerFixture verifies the successor synchronously, so
-			// install the gate only after publication. Requeueing the published
-			// ledger's dirty successor through the real persistence worker gives
-			// retention a genuine pending write to wait for without blocking
-			// successor construction.
-			require.NoError(t, svc.flushPersists(ctx))
-			svc.mu.Lock()
-			pending := svc.openLedger
-			pendingErr := pending.Insert(keylet.Keylet{Key: residencyKey(round, 1)}, residencyValue(round, 1))
-			svc.mu.Unlock()
-			require.NoError(t, pendingErr)
-			storeBatchStart := make(chan struct{})
-			storeBatchResume = make(chan struct{})
-			db.storeBatchStart = storeBatchStart
-			db.storeBatchResume = storeBatchResume
-			svc.enqueueNodePersist(pending)
-			select {
-			case <-storeBatchStart:
-			case <-time.After(5 * time.Second):
-				t.Fatal("successor persistence did not reach the real node-store write")
-			}
+		require.NoError(t, svc.flushPersists(ctx))
+		record := captureResidencyRecord(t, ctx, closed, workingSet, family)
+		records = append(records, record)
+
+		if round%rotateEvery != 0 {
+			continue
+		}
+
+		// Install a real pending persistence write before retention preparation.
+		// The deferred release also unblocks the worker if an assertion fails.
+		svc.mu.Lock()
+		pending := svc.openLedger
+		pendingErr := pending.Insert(keylet.Keylet{Key: residencyKey(round, workingSetEntries+1)}, residencyValue(round, workingSetEntries+1))
+		svc.mu.Unlock()
+		require.NoError(t, pendingErr)
+		storeBatchStart := make(chan struct{})
+		storeBatchResume := make(chan struct{})
+		db.storeBatchOnce = sync.Once{}
+		db.storeBatchStart = storeBatchStart
+		db.storeBatchResume = storeBatchResume
+		var resumeOnce sync.Once
+		resumeStoreBatch := func() {
+			resumeOnce.Do(func() { close(storeBatchResume) })
+		}
+		defer resumeStoreBatch()
+		svc.enqueueNodePersist(pending)
+		select {
+		case <-storeBatchStart:
+		case <-time.After(5 * time.Second):
+			t.Fatal("successor persistence did not reach the real node-store write")
 		}
 
 		prepareDone := make(chan retentionPreparationResult, 1)
-		prepareStarted := make(chan struct{})
 		go func() {
-			close(prepareStarted)
 			seq, guard, prepareErr := svc.PrepareStateRetention(ctx, closed.Sequence(), nil)
 			prepareDone <- retentionPreparationResult{seq: seq, guard: guard, err: prepareErr}
 		}()
-		if round == 1 {
-			<-prepareStarted
-			select {
-			case result := <-prepareDone:
-				t.Fatalf("retention preparation bypassed blocked persistence: seq=%d err=%v", result.seq, result.err)
-			default:
+		wait := time.NewTimer(250 * time.Millisecond)
+		select {
+		case result := <-prepareDone:
+			if !wait.Stop() {
+				<-wait.C
 			}
-			close(storeBatchResume)
+			t.Fatalf("retention preparation bypassed blocked persistence: seq=%d err=%v", result.seq, result.err)
+		case <-wait.C:
 		}
+		resumeStoreBatch()
 
 		var prepared retentionPreparationResult
 		select {
@@ -152,21 +187,43 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		require.Equal(t, closed.Sequence(), lastRotated)
 		require.Equal(t, uint32(1), minimumOnline)
 
-		record := captureResidencyRecord(t, closed, key, value)
-		records = append(records, record)
 		for _, historical := range records {
-			readResidencyRecord(t, historical)
-			readColdResidencyRecord(t, ctx, family, historical)
 			require.NoError(t, svc.verifyStoredSHAMap(ctx, historical.root, shamap.TypeState))
 		}
 	}
 
 	require.NoError(t, svc.flushPersists(ctx))
-	require.GreaterOrEqual(t, len(records), 4)
+	require.Equal(t, 1+workingRounds, len(records))
+
+	retainedBefore := retainedColdResidencyBytes(t, records)
+	warmBefore := retainedSnapshotResidencyBytes(t, records)
+	for pass := 0; pass < 3; pass++ {
+		for i := range records {
+			readResidencyRecord(t, ctx, records[i])
+			readActiveColdResidencyRecord(t, ctx, records[i])
+		}
+		stats := family.SHAMapCleanResidency().Stats()
+		require.Equal(t, uint64(cleanCacheLimit), stats.Limit)
+		require.LessOrEqual(t, stats.UsedBytes, stats.Limit)
+	}
+	retainedAfter := retainedColdResidencyBytes(t, records)
+	warmAfter := retainedSnapshotResidencyBytes(t, records)
+	require.LessOrEqual(t, retainedAfter, retainedBefore+2*cleanCacheLimit,
+		"historical reads grew retained decoded trees beyond the bounded cache")
+	require.LessOrEqual(t, warmAfter, warmBefore+2*cleanCacheLimit,
+		"historical snapshot reads grew retained decoded trees beyond the bounded cache")
+	stats := family.SHAMapCleanResidency().Stats()
+	t.Logf("clean residency: limit=%d used=%d nodes=%d evictions=%d; cold retained=%d->%d warm retained=%d->%d",
+		stats.Limit, stats.UsedBytes, stats.Nodes, stats.Evictions, retainedBefore, retainedAfter, warmBefore, warmAfter)
+	require.Positive(t, stats.Evictions,
+		"disjoint working sets did not exercise clean-cache eviction")
 
 	latest := records[len(records)-1]
 	svc.Stop()
-	require.NoError(t, db.Close())
+	require.NoError(t, family.Close())
+	familyClosed = true
+	require.Zero(t, family.SHAMapCleanResidency().Stats().UsedBytes)
+	require.Zero(t, cleanBudget.Used())
 
 	// Reopen the actual rotating Pebble store and recover the claimed-complete
 	// tip from its persisted header. The state root and an older root are read
@@ -176,19 +233,26 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	reopenedBase, err := nodestore.NewRotatingKVDatabase(reopenedBackend, nodestore.DatabaseConfig{})
 	require.NoError(t, err)
 	reopenedDB := &countingGenerationDatabase{Database: reopenedBase, generation: reopenedBase}
-	reopenedFamily := shamapbackend.New(reopenedDB)
+	reopenedCleanBudget := &preferredMemoryBudget{limit: cleanCacheLimit}
+	reopenedFamily := shamapbackend.New(reopenedDB, shamapbackend.NodeStoreOptions{
+		CleanCacheBytes:   cleanCacheLimit,
+		CleanMemoryBudget: reopenedCleanBudget,
+	})
+	require.True(t, reopenedFamily.UsesDatabase(reopenedDB))
 	restarted, err := New(Config{
 		PersistenceMemory: &relayTestMemory{limit: shamap.DirtyWorkspaceBytes},
 		Standalone:        true,
 		GenesisConfig:     genesis.DefaultConfig(),
-		NodeStore:         reopenedBase,
+		NodeStore:         reopenedDB,
 		SHAMapFamily:      reopenedFamily,
 	})
 	require.NoError(t, err)
 	require.NoError(t, restarted.Start())
 	t.Cleanup(func() {
 		restarted.Stop()
-		_ = reopenedDB.Close()
+		require.NoError(t, reopenedFamily.Close())
+		require.Zero(t, reopenedFamily.SHAMapCleanResidency().Stats().UsedBytes)
+		require.Zero(t, reopenedCleanBudget.Used())
 	})
 
 	recovered, err := restarted.loadStoredLedgerByHash(ctx, latest.hash)
@@ -202,10 +266,7 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 	require.Equal(t, latest.hash, restarted.GetValidatedLedger().Hash())
 	recoveredState, err := recovered.StateMapSnapshot()
 	require.NoError(t, err)
-	item, found, err := recoveredState.Get(latest.key)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, latest.value, item.Data())
+	readResidencyMap(t, ctx, recoveredState, latest)
 	for _, historical := range records[:len(records)-1] {
 		readColdResidencyRecord(t, ctx, reopenedFamily, historical)
 	}
@@ -234,7 +295,25 @@ func residencyValue(round, entry uint32) []byte {
 	return value
 }
 
-func captureResidencyRecord(t *testing.T, l *ledgerpkg.Ledger, key [32]byte, value []byte) residencyLedgerRecord {
+func residencyEntries(round, first, count uint32) []residencyEntry {
+	entries := make([]residencyEntry, 0, count)
+	for i := uint32(0); i < count; i++ {
+		entry := first + i
+		entries = append(entries, residencyEntry{
+			key:   residencyKey(round, entry),
+			value: residencyValue(round, entry),
+		})
+	}
+	return entries
+}
+
+func captureResidencyRecord(
+	t *testing.T,
+	ctx context.Context,
+	l *ledgerpkg.Ledger,
+	entries []residencyEntry,
+	family shamap.Family,
+) residencyLedgerRecord {
 	t.Helper()
 	snapshot, err := l.Snapshot()
 	require.NoError(t, err)
@@ -242,39 +321,111 @@ func captureResidencyRecord(t *testing.T, l *ledgerpkg.Ledger, key [32]byte, val
 	require.NoError(t, err)
 	state, err := snapshot.StateMapSnapshot()
 	require.NoError(t, err)
-	retained, err := state.RetainedMemoryBytes()
+	cold, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, stateRoot, family)
 	require.NoError(t, err)
+	ownedEntries := make([]residencyEntry, len(entries))
+	for i, entry := range entries {
+		ownedEntries[i] = residencyEntry{key: entry.key, value: append([]byte(nil), entry.value...)}
+	}
 	return residencyLedgerRecord{
 		seq:      snapshot.Sequence(),
 		hash:     snapshot.Hash(),
 		root:     stateRoot,
-		key:      key,
-		value:    append([]byte(nil), value...),
+		entries:  ownedEntries,
 		snapshot: snapshot,
-		retained: retained,
+		state:    state,
+		cold:     cold,
 	}
 }
 
-func readResidencyRecord(t *testing.T, record residencyLedgerRecord) {
+func readResidencyRecord(t *testing.T, ctx context.Context, record residencyLedgerRecord) {
 	t.Helper()
-	state, err := record.snapshot.StateMapSnapshot()
-	require.NoError(t, err)
-	item, found, err := state.Get(record.key)
-	require.NoError(t, err)
-	require.True(t, found, "missing historical key seq=%d key=%x", record.seq, record.key[:4])
-	require.Equal(t, record.value, item.Data(), "historical value seq=%d", record.seq)
-	retained, err := state.RetainedMemoryBytes()
-	require.NoError(t, err)
-	require.LessOrEqual(t, retained, record.retained+1<<20,
-		"historical read expanded retained state unexpectedly at seq %d", record.seq)
+	require.NotNil(t, record.state)
+	readResidencyMap(t, ctx, record.state, record)
+}
+
+func readActiveColdResidencyRecord(t *testing.T, ctx context.Context, record residencyLedgerRecord) {
+	t.Helper()
+	require.NotNil(t, record.cold)
+	readResidencyMap(t, ctx, record.cold, record)
 }
 
 func readColdResidencyRecord(t *testing.T, ctx context.Context, family shamap.Family, record residencyLedgerRecord) {
 	t.Helper()
 	cold, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, record.root, family)
 	require.NoError(t, err)
-	item, found, err := cold.GetContext(ctx, record.key)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, record.value, item.Data())
+	readResidencyMap(t, ctx, cold, record)
+}
+
+func readResidencyMap(t *testing.T, ctx context.Context, state *shamap.SHAMap, record residencyLedgerRecord) {
+	t.Helper()
+	for _, entry := range record.entries {
+		item, found, err := state.GetContext(ctx, entry.key)
+		require.NoError(t, err)
+		require.True(t, found, "missing historical key seq=%d key=%x", record.seq, entry.key[:4])
+		require.Equal(t, entry.value, item.Data(), "historical value seq=%d", record.seq)
+	}
+}
+
+func retainedColdResidencyBytes(t *testing.T, records []residencyLedgerRecord) uint64 {
+	t.Helper()
+	var total uint64
+	for _, record := range records {
+		retained, err := record.cold.RetainedMemoryBytes()
+		require.NoError(t, err)
+		total += retained
+	}
+	return total
+}
+
+func retainedSnapshotResidencyBytes(t *testing.T, records []residencyLedgerRecord) uint64 {
+	t.Helper()
+	var total uint64
+	for _, record := range records {
+		require.NotNil(t, record.state)
+		retained, err := record.state.RetainedMemoryBytes()
+		require.NoError(t, err)
+		total += retained
+	}
+	return total
+}
+
+func (d *countingGenerationDatabase) DurableFingerprint(ctx context.Context) ([32]byte, error) {
+	durable, ok := d.Database.(interface {
+		DurableFingerprint(context.Context) ([32]byte, error)
+	})
+	if !ok {
+		return [32]byte{}, errors.New("test database does not support durable fingerprints")
+	}
+	return durable.DurableFingerprint(ctx)
+}
+
+func (d *countingGenerationDatabase) StoreDurable(ctx context.Context, node *nodestore.Node) error {
+	durable, ok := d.Database.(interface {
+		StoreDurable(context.Context, *nodestore.Node) error
+	})
+	if !ok {
+		return errors.New("test database does not support durable stores")
+	}
+	return durable.StoreDurable(ctx, node)
+}
+
+func (d *countingGenerationDatabase) WithDurableSnapshot(ctx context.Context, fn func([32]byte) error) error {
+	durable, ok := d.Database.(interface {
+		WithDurableSnapshot(context.Context, func([32]byte) error) error
+	})
+	if !ok {
+		return errors.New("test database does not support durable snapshots")
+	}
+	return durable.WithDurableSnapshot(ctx, fn)
+}
+
+func (d *countingGenerationDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	durable, ok := d.Database.(interface {
+		AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
+	})
+	if !ok {
+		return [32]byte{}, nil, errors.New("test database does not support durable snapshots")
+	}
+	return durable.AcquireDurableSnapshot(ctx)
 }
