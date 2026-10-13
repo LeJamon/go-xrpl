@@ -665,10 +665,19 @@ func (c *segmentCursor) skipValue(valueOffset int64, valueLen uint64) error {
 }
 
 func (c *segmentCursor) readRecordHeader() (key [32]byte, flag byte, valueLen uint64, valueOffset int64, err error) {
+	if c.offset < 0 || uint64(c.offset) > c.segment.size {
+		return key, 0, 0, c.offset, fmt.Errorf("%w: record header offset exceeds segment", ErrCorruptSegment)
+	}
+	if uint64(c.offset) == c.segment.size {
+		return key, 0, 0, c.offset, io.EOF
+	}
+	if c.segment.size-uint64(c.offset) < recordHeaderSize {
+		return key, 0, 0, c.offset, fmt.Errorf("%w: truncated record header", ErrCorruptSegment)
+	}
 	var header [32 + 1 + 8]byte
 	n, err := c.readAt(header[:], c.offset)
 	if err == io.EOF && n == 0 {
-		return key, 0, 0, c.offset, io.EOF
+		return key, 0, 0, c.offset, fmt.Errorf("%w: record header: unexpected end of segment", ErrCorruptSegment)
 	}
 	if err != nil {
 		return key, 0, 0, c.offset, fmt.Errorf("%w: record header: %v", ErrCorruptSegment, err)

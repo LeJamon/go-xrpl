@@ -592,6 +592,62 @@ func TestOverlaySpillCursorAccountingAndTruncation(t *testing.T) {
 	}
 }
 
+func TestOverlaySpillBoundaryTruncationIsCorrupt(t *testing.T) {
+	owner := newBudget(Config{MaxMemoryBytes: 1 << 20, MaxDiskBytes: 1 << 20})
+	dir := t.TempDir()
+	firstKey, secondKey := testKey(1), testKey(2)
+	firstValue, secondValue := []byte("first"), []byte("second")
+	var root *treeNode
+	var err error
+	for key, value := range map[[32]byte][]byte{firstKey: firstValue, secondKey: secondValue} {
+		root, err = insertTreeNode(owner, root, key, value, false)
+		if err != nil {
+			releaseTreeNode(root)
+			t.Fatal(err)
+		}
+	}
+	segment, err := writeTreeSegment(context.Background(), owner, dir, root)
+	releaseTreeNode(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &Overlay{
+		base:     newTestBase(map[[32]byte][]byte{secondKey: []byte("base-second")}),
+		budget:   owner,
+		segments: []*spillSegment{segment},
+	}
+	defer o.Close()
+
+	var before []([32]byte)
+	if err := o.Iterate(context.Background(), nil, func(key [32]byte, _ []byte) bool {
+		before = append(before, key)
+		return true
+	}); err != nil {
+		t.Fatalf("iterate intact segment: %v", err)
+	}
+	if len(before) != 2 || before[0] != firstKey || before[1] != secondKey {
+		t.Fatalf("intact iteration keys = %v, want [%v %v]", before, firstKey, secondKey)
+	}
+
+	truncatedSize := int64(segmentHeaderSize + recordHeaderSize + uint64(len(firstValue)))
+	if err := os.Truncate(segment.path, truncatedSize); err != nil {
+		t.Fatal(err)
+	}
+	var after []([32]byte)
+	if err := o.Iterate(context.Background(), nil, func(key [32]byte, _ []byte) bool {
+		after = append(after, key)
+		return true
+	}); !errors.Is(err, ErrCorruptSegment) {
+		t.Fatalf("boundary-truncated iteration error = %v, want ErrCorruptSegment", err)
+	}
+	if len(after) != 1 || after[0] != firstKey {
+		t.Fatalf("boundary-truncated iteration keys = %v, want [%v]", after, firstKey)
+	}
+	if _, found, err := o.Get(context.Background(), secondKey); !errors.Is(err, ErrCorruptSegment) || found {
+		t.Fatalf("boundary-truncated Get = found %v, err %v, want ErrCorruptSegment", found, err)
+	}
+}
+
 func TestOverlaySpillCompactionDoesNotStarveValueMemory(t *testing.T) {
 	owner := newBudget(Config{MaxMemoryBytes: 64 << 10, MaxDiskBytes: 1 << 20})
 	dir := t.TempDir()
