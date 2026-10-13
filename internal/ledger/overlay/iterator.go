@@ -288,7 +288,7 @@ func (s *Snapshot) Iterate(ctx context.Context, after *[32]byte, fn func([32]byt
 type ChangeIterator struct {
 	mu sync.Mutex
 
-	view      *view
+	view      view
 	cursors   []changeCursor
 	items     []cursorItem
 	workspace uint64
@@ -297,7 +297,7 @@ type ChangeIterator struct {
 	lastErr   error
 }
 
-func newChangeIterator(ctx context.Context, v *view, after *[32]byte, includeBase bool) (*ChangeIterator, error) {
+func newChangeIterator(ctx context.Context, v view, after *[32]byte, includeBase bool) (*ChangeIterator, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -381,11 +381,12 @@ func (it *ChangeIterator) Close() error {
 		return nil
 	}
 	it.closed = true
-	cursors, workspace, owner, view := it.cursors, it.workspace, it.owner, it.view
-	it.cursors, it.items, it.view = nil, nil, nil
+	cursors, workspace, owner, captured := it.cursors, it.workspace, it.owner, it.view
+	it.cursors, it.items = nil, nil
+	it.view = view{}
 	it.mu.Unlock()
 	err := closeCursors(cursors, workspace, owner)
-	view.release()
+	captured.release()
 	return err
 }
 

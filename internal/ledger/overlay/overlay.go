@@ -201,6 +201,29 @@ func (o *Overlay) shouldSpillBeforeMutation(key [32]byte, value []byte, deleted 
 // Get resolves the newest change, then the immutable base. Returned bytes are
 // owned by the caller and may be retained or mutated.
 func (o *Overlay) Get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	o.mu.RLock()
+	if o.closed {
+		o.mu.RUnlock()
+		return nil, false, ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		o.mu.RUnlock()
+		return nil, false, err
+	}
+	if node := findTreeNode(o.root, key); node != nil {
+		var value []byte
+		if !node.deleted {
+			value = make([]byte, len(node.value.data))
+			copy(value, node.value.data)
+		}
+		found := !node.deleted
+		o.mu.RUnlock()
+		return value, found, nil
+	}
+	o.mu.RUnlock()
 	v, err := o.capture()
 	if err != nil {
 		return nil, false, err
@@ -351,13 +374,13 @@ func (s *Snapshot) Close() error {
 	return nil
 }
 
-func (o *Overlay) capture() (*view, error) {
+func (o *Overlay) capture() (view, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	if o.closed {
-		return nil, ErrClosed
+		return view{}, ErrClosed
 	}
-	v := &view{base: o.base, budget: o.budget, root: retainTreeNode(o.root)}
+	v := view{base: o.base, budget: o.budget, root: retainTreeNode(o.root)}
 	v.segments = make([]*spillSegment, len(o.segments))
 	for i, segment := range o.segments {
 		v.segments[i] = retainSegment(segment)
@@ -365,13 +388,13 @@ func (o *Overlay) capture() (*view, error) {
 	return v, nil
 }
 
-func (s *Snapshot) capture() (*view, error) {
+func (s *Snapshot) capture() (view, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, ErrClosed
+		return view{}, ErrClosed
 	}
-	v := &view{base: s.base, budget: s.budget, root: retainTreeNode(s.root)}
+	v := view{base: s.base, budget: s.budget, root: retainTreeNode(s.root)}
 	v.segments = make([]*spillSegment, len(s.segments))
 	for i, segment := range s.segments {
 		v.segments[i] = retainSegment(segment)

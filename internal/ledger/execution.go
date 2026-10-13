@@ -247,6 +247,12 @@ func (c *executionCursor) Close() error { c.stop(); return nil }
 
 func (b executionBase) Get(ctx context.Context, key [32]byte) ([]byte, bool, error) {
 	t := b.tree
+	if t.root == ([32]byte{}) {
+		if ctx != nil {
+			return nil, false, ctx.Err()
+		}
+		return nil, false, nil
+	}
 	lease, err := t.flatView(ctx)
 	if err != nil {
 		return nil, false, err
