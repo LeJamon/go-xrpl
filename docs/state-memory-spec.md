@@ -117,6 +117,8 @@ The transaction SHAMap is separate from the account-state SHAMap. It contains th
 
 Private builder-owned data may be updated in place. Once sealed or exposed to another view, a segment is immutable. Execution uses explicit view/builder ownership; deep-copying the resident state is not an acceptable replacement. `MutableFork` remains available to SHAMap acquisition and import paths.
 
+The in-memory overlay uses copy-on-write AVL paths. A shared ancestor makes every descendant on that path logically shared, even when a descendant has only one incoming pointer. Insertions clone below the first shared ancestor and update private ancestors only after all required admissions succeed. Rotations transfer references between private nodes without allocating. Structural removal is not used: deletion records a tombstone, preserving the insertion-only rotation invariant.
+
 ## 6. Incremental SHAMap commitment
 
 ### Inputs and outputs
@@ -343,6 +345,8 @@ memtable_mb = 8
 ```
 
 `memory_mb` caps shared transaction/ledger overlay ownership. `scratch_mb` caps retained spill files separately from RAM. The flat store reserves its cache, four memtables and storage workspace inside the shared process allowance. Root ownership and commitment/persistence workspace have protected accounts; startup rejects an aggregate configuration that cannot fit. Resolved accounts are logged and exposed by the existing memory-budget collector.
+
+Storage memtable targets follow the configured cache allowance. NodeStore uses `min(64 MiB, max(8 MiB, block-cache bytes / 2))` and accounts for four memtables per generation plus its shared block cache. Flat storage uses `min(requested memtable bytes, max(1 MiB, cache bytes / 4))`. Pebble reserves memtable arenas against its block cache; configured cache capacity therefore does not guarantee the same capacity for cached reads. These allowances describe ownership ceilings, not process RSS.
 
 The flat database is `execution-state` beneath the configured local state directory (or the NodeStore parent directory). Temporary overlay runs live in its `scratch` subdirectory. Startup takes the flat database lock before removing abandoned temporary runs; canonical nodes, the advancement marker and the index outbox supply recovery state. Runs are process-lifetime scratch: close completes their writes, but they are not individually synced or treated as recovery evidence. NodeStore synchronization still precedes any durable flat publication. Durable publication retries retain their bounded queue admission under storage failures.
 
