@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/metrics"
+	"runtime/pprof"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -419,6 +420,22 @@ func TestStateMemoryBenchmark(t *testing.T) {
 	}
 	retained[0] = parent
 
+	if profilePath := os.Getenv("STATE_BENCH_CPU_PROFILE"); profilePath != "" {
+		profile, err := os.Create(profilePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(profile); err != nil {
+			_ = profile.Close()
+			t.Fatal(err)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			if err := profile.Close(); err != nil {
+				t.Errorf("close CPU profile: %v", err)
+			}
+		}()
+	}
 	flatBaseline := rt.flatStats()
 	rt.family.reset()
 	gcCPUStart := readStateMemoryBenchmarkGCCPUSeconds()
