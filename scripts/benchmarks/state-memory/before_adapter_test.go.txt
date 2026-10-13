@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 )
 
 func benchmarkRevisionName() string { return "shamap-baseline" }
@@ -22,6 +23,10 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 	// flat-state allowance so both processes receive the same total block-cache
 	// budget even though this adapter has no flat-state database.
 	cacheMiB := c.NodeBlockCacheMiB + int(math.Ceil(float64(c.FlatCacheBytes)/float64(1<<20)))
+	nodeMemory, err := (kvpebble.Options{BlockCacheBytes: int64(cacheMiB) << 20}).MemoryCommitment(1)
+	if err != nil {
+		return nil, err
+	}
 	node, err := backend.OpenPebble(nodePath, cacheMiB, c.NodeCacheItems)
 	if err != nil {
 		return nil, err
@@ -63,7 +68,8 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 		memoryStats: func() benchmarkMemoryStats { return benchmarkMemoryStats{} },
 		resources: func() benchmarkResolvedResources {
 			return benchmarkResolvedResources{
-				NodeBlockCacheBytes: uint64(cacheMiB) << 20,
+				NodeBlockCacheBytes:            uint64(cacheMiB) << 20,
+				NodeStoreMemoryCommitmentBytes: nodeMemory,
 			}
 		},
 		release: func([]*Ledger, *Ledger) {},

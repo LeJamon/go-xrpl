@@ -58,6 +58,8 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 		nodeCacheBytes = 128 << 10
 	}
 	fixture := newBatchBenchmarkRefreshFixture(b, 4_096, nodeCacheBytes)
+	nodeMemory, err := fixture.options.MemoryCommitment(2)
+	require.NoError(b, err)
 	env := jtx.NewTestEnv(b)
 	env.SetVerifySignatures(true)
 	cases := newServiceBatchAcceptanceCases(b, env)
@@ -180,6 +182,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 			reportConsensusAcceptanceQuantiles(b, "next-open", nextOpen)
 			reportConsensusAcceptanceQuantiles(b, "build", build)
 			reportConsensusAcceptanceQuantiles(b, "close-hash", closeHash)
+			b.ReportMetric(float64(nodeMemory), "nodestore-steady-memory-commitment-bytes")
 			b.ReportMetric(float64(gcCycles)/float64(b.N), "GCs/op")
 			b.ReportMetric(float64(gcPause)/float64(b.N), "gc-pause-ns/op")
 			if benchmarkFlatStateEnabled() {

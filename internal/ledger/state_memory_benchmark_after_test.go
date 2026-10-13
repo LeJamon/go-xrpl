@@ -15,12 +15,17 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 )
 
 func benchmarkRevisionName() string { return "bounded-flatstate" }
 
 func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) (*stateMemoryBenchmarkRuntime, error) {
 	t.Helper()
+	nodeMemory, err := (kvpebble.Options{BlockCacheBytes: int64(c.NodeBlockCacheMiB) << 20}).MemoryCommitment(1)
+	if err != nil {
+		return nil, err
+	}
 	root := t.TempDir()
 	nodePath := filepath.Join(root, "nodestore")
 	flatPath := filepath.Join(root, "flatstate")
@@ -123,7 +128,8 @@ func newStateMemoryBenchmarkRuntime(t *testing.T, c StateMemoryBenchmarkConfig) 
 		},
 		resources: func() benchmarkResolvedResources {
 			return benchmarkResolvedResources{
-				NodeBlockCacheBytes: uint64(c.NodeBlockCacheMiB) << 20, FlatCacheBytes: uint64(c.FlatCacheBytes), FlatMemTableBytes: uint64(c.FlatMemTableBytes),
+				NodeStoreMemoryCommitmentBytes: nodeMemory,
+				NodeBlockCacheBytes:            uint64(c.NodeBlockCacheMiB) << 20, FlatCacheBytes: uint64(c.FlatCacheBytes), FlatMemTableBytes: uint64(c.FlatMemTableBytes),
 				FlatMemTableTargetBytes: uint64(flat.Stats().MemTableTargetBytes),
 				WorkspaceBytes:          c.WorkspaceBytes, OverlayMemoryBytes: c.OverlayMemoryBytes, OverlayDiskBytes: c.OverlayDiskBytes,
 				WorkspacePoolBytes: c.WorkspaceBytes + c.OverlayMemoryBytes + c.OverlayDiskBytes + 32<<20,

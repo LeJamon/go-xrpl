@@ -162,14 +162,15 @@ type benchmarkMemoryStats struct {
 }
 
 type benchmarkResolvedResources struct {
-	NodeBlockCacheBytes     uint64 `json:"node_block_cache_bytes"`
-	FlatCacheBytes          uint64 `json:"flat_cache_bytes"`
-	FlatMemTableBytes       uint64 `json:"flat_memtable_bytes"`
-	FlatMemTableTargetBytes uint64 `json:"flat_memtable_target_bytes"`
-	WorkspaceBytes          uint64 `json:"workspace_bytes"`
-	OverlayMemoryBytes      uint64 `json:"overlay_memory_bytes"`
-	OverlayDiskBytes        uint64 `json:"overlay_disk_bytes"`
-	WorkspacePoolBytes      uint64 `json:"workspace_pool_bytes"`
+	NodeStoreMemoryCommitmentBytes uint64 `json:"node_store_memory_commitment_bytes"`
+	NodeBlockCacheBytes            uint64 `json:"node_block_cache_bytes"`
+	FlatCacheBytes                 uint64 `json:"flat_cache_bytes"`
+	FlatMemTableBytes              uint64 `json:"flat_memtable_bytes"`
+	FlatMemTableTargetBytes        uint64 `json:"flat_memtable_target_bytes"`
+	WorkspaceBytes                 uint64 `json:"workspace_bytes"`
+	OverlayMemoryBytes             uint64 `json:"overlay_memory_bytes"`
+	OverlayDiskBytes               uint64 `json:"overlay_disk_bytes"`
+	WorkspacePoolBytes             uint64 `json:"workspace_pool_bytes"`
 }
 
 // stateMemoryBenchmarkRuntime is supplied by the revision-specific adapter.
