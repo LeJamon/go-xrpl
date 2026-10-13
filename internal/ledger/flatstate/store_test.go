@@ -426,7 +426,7 @@ func TestStoreDeleteAndOversizedRecordStreaming(t *testing.T) {
 }
 
 func TestStoreMemoryBudgetAdmitsOversizedRecordAsSingleBatch(t *testing.T) {
-	budget := newFlatTestBudget(512)
+	budget := newFlatTestBudget(4 << 10)
 	store, err := Open(t.TempDir(), Options{
 		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchBytes: 32,
 		MemoryBudget: budget,
@@ -473,6 +473,111 @@ func TestStoreMemoryBudgetRejectsRecordOverAccount(t *testing.T) {
 	}
 	if got := budget.used.Load(); got != 0 {
 		t.Fatalf("failed admission leaked: %d", got)
+	}
+}
+
+func testFinalMetadataBytes() uint64 {
+	return finalMetadataReservationBytes("flat-state")
+}
+
+func TestStoreMemoryBudgetRejectsFinalMetadataBeforeAtomicMutation(t *testing.T) {
+	target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	required := testFinalMetadataBytes()
+	budget := newFlatTestBudget(required - 1)
+	store, err := Open(t.TempDir(), Options{
+		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchBytes: 1,
+		MemoryBudget: budget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	err = store.Advance(context.Background(), AdvanceRequest{
+		Target: target, Changes: NewSliceChangeIterator(nil),
+		Authorization: testAuthorization(Descriptor{}, target),
+	})
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("final metadata admission error = %v", err)
+	}
+	if _, marked, markerErr := store.Marker(); markerErr != nil || marked {
+		t.Fatalf("failed atomic admission left marker: marked=%v err=%v", marked, markerErr)
+	}
+	if current, found, currentErr := store.Current(); currentErr != nil || found || !current.IsZero() {
+		t.Fatalf("failed atomic admission changed current: %+v found=%v err=%v", current, found, currentErr)
+	}
+	if got := budget.used.Load(); got != 0 {
+		t.Fatalf("failed final metadata admission leaked %d bytes", got)
+	}
+}
+
+func TestStoreFinalMetadataExceedsObjectBatchCeiling(t *testing.T) {
+	store, err := Open(t.TempDir(), Options{
+		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchBytes: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	if err := store.Advance(context.Background(), AdvanceRequest{
+		Target: target, Changes: NewSliceChangeIterator(nil),
+		Authorization: testAuthorization(Descriptor{}, target),
+	}); err != nil {
+		t.Fatalf("metadata-only publication with tiny object ceiling: %v", err)
+	}
+}
+
+func TestStoreMemoryBudgetReservationReleasesForRecovery(t *testing.T) {
+	metadataBytes := testFinalMetadataBytes()
+	budget := newFlatTestBudget(metadataBytes + 512)
+	store, err := Open(t.TempDir(), Options{
+		CacheBytes: 1 << 20, MemTableSize: 1 << 20, MaxBatchRecords: 1,
+		MemoryBudget: budget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+	importInitial(t, store, first, nil)
+	target := testDescriptor(2, first.LedgerHash, testHash(4), testHash(5), testHash(6))
+	changes := []Change{
+		{Key: testHash(1), Value: []byte("one")},
+		{Key: testHash(2), Value: []byte("two")},
+	}
+	if err := store.Advance(context.Background(), AdvanceRequest{
+		Expected: &first, Target: target, Changes: &interruptedChanges{NewSliceChangeIterator(changes)},
+		Authorization: testAuthorization(first, target),
+	}); err == nil {
+		t.Fatal("expected interrupted changes")
+	}
+	marker, marked, err := store.Marker()
+	if err != nil || !marked || !marker.Target.Equal(target) {
+		t.Fatalf("recoverable marker = %#v marked=%v err=%v", marker, marked, err)
+	}
+	if _, _, err := store.Current(); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("failed marked publication current error = %v", err)
+	}
+	if got := budget.used.Load(); got != 0 {
+		t.Fatalf("failed marked publication leaked %d bytes", got)
+	}
+
+	if err := store.Resume(context.Background(), ResumeRequest{
+		Authorization: testAuthorization(first, target), Changes: NewSliceChangeIterator(changes),
+	}); err != nil {
+		t.Fatalf("resume after interrupted transition: %v", err)
+	}
+	view, err := store.OpenView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	for _, change := range changes {
+		value, found, getErr := view.Get(change.Key)
+		if getErr != nil || !found || !bytes.Equal(value, change.Value) {
+			t.Fatalf("recovered key %x = %q found=%v err=%v", change.Key, value, found, getErr)
+		}
 	}
 }
 
@@ -693,6 +798,43 @@ func TestStoreCloseRacesViewOperations(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("view operation did not finish after store close")
+	}
+}
+
+func TestStoreOpenViewCloseRace(t *testing.T) {
+	for i := 0; i < 32; i++ {
+		store, err := Open(t.TempDir(), Options{CacheBytes: 1 << 20, MemTableSize: 1 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := testDescriptor(1, Hash{}, testHash(1), testHash(2), testHash(3))
+		importInitial(t, store, target, nil)
+		opened := make(chan error, 1)
+		go func() {
+			view, openErr := store.OpenView(context.Background())
+			if view != nil {
+				openErr = errors.Join(openErr, view.Close())
+			}
+			opened <- openErr
+		}()
+		closed := make(chan error, 1)
+		go func() { closed <- store.Close() }()
+		select {
+		case err := <-opened:
+			if err != nil && !errors.Is(err, ErrClosed) {
+				t.Fatalf("open view close race: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("OpenView did not finish during Close")
+		}
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Fatalf("close after OpenView race: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close did not finish during OpenView race")
+		}
 	}
 }
 

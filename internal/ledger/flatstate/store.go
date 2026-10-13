@@ -256,6 +256,10 @@ type Options struct {
 	// MaxActiveViews bounds point-in-time snapshots retained by this store.
 	MaxActiveViews int
 
+	// MaxBatchBytes and MaxBatchRecords bound object mutation records.  The
+	// final publication batch may exceed these ceilings by its descriptor,
+	// outbox, and marker-delete metadata; those bytes are admitted separately
+	// against MemoryBudget.
 	MaxBatchBytes   int
 	MaxBatchRecords int
 
@@ -579,7 +583,13 @@ func (s *Store) OpenView(ctx context.Context) (*View, error) {
 	} else if !errors.Is(markerErr, pebble.ErrNotFound) {
 		return closeInvalid(markerErr)
 	}
+	s.mu.Lock()
+	if s.closed || s.closing {
+		s.mu.Unlock()
+		return closeInvalid(ErrClosed)
+	}
 	view.end()
+	s.mu.Unlock()
 	return view, nil
 }
 
@@ -843,6 +853,15 @@ func (s *Store) advance(ctx context.Context, expected *Descriptor, target Descri
 	s.writerEpoch++
 	epoch := s.writerEpoch
 	s.mu.Unlock()
+	finalMetadataBytes := finalMetadataReservationBytes(intent)
+	if s.opts.MemoryBudget != nil {
+		if !s.opts.MemoryBudget.TryReserve(finalMetadataBytes) {
+			_ = changes.Close()
+			s.finishWriter(epoch, false, false, Descriptor{})
+			return fmt.Errorf("%w: final publication requires %d bytes", ErrLimit, finalMetadataBytes)
+		}
+		defer s.opts.MemoryBudget.Release(finalMetadataBytes)
+	}
 	s.retireCachedViews()
 
 	markerWritten := resuming
@@ -1052,10 +1071,12 @@ func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, i
 		}
 		encodedOutbox = encodeOutboxUnchecked(existing)
 	}
-	if err := batch.Set([]byte(metaCurrent), encodeDescriptor(target), nil); err != nil {
+	encodedDescriptor := encodeDescriptor(target)
+	publicationKey := outboxKey(commitID)
+	if err := batch.Set([]byte(metaCurrent), encodedDescriptor, nil); err != nil {
 		return err
 	}
-	if err := batch.Set(outboxKey(commitID), encodedOutbox, nil); err != nil {
+	if err := batch.Set(publicationKey, encodedOutbox, nil); err != nil {
 		return err
 	}
 	if err := batch.Delete([]byte(metaAdvance), nil); err != nil {
@@ -1069,6 +1090,21 @@ func (s *Store) finalize(ctx context.Context, epoch uint64, target Descriptor, i
 	}
 	s.refreshOutboxStats()
 	return nil
+}
+
+const finalMetadataFixedOverheadBytes uint64 = 128
+
+// finalMetadataReservationBytes reserves two copies of the final metadata
+// payload plus a fixed allowance for batch and slice bookkeeping.  The
+// object-record ceilings remain independent from this publication allowance.
+func finalMetadataReservationBytes(intent string) uint64 {
+	const checksumBytes = 32
+	const outboxFixedBytes = 4 + 4 + len(CommitID{}) + 8 + 4 + checksumBytes
+
+	outboxKeyBytes := len(outboxPrefix) + len(CommitID{})
+	outboxBytes := outboxFixedBytes + descriptorEncodedSize + len(intent)
+	payloadBytes := len(metaCurrent) + descriptorEncodedSize + outboxKeyBytes + outboxBytes + len(metaAdvance)
+	return 2*uint64(payloadBytes) + finalMetadataFixedOverheadBytes
 }
 
 func (s *Store) checkWriter(ctx context.Context, epoch uint64) error {
