@@ -316,12 +316,11 @@ func (b executionBase) Iterate(ctx context.Context, after *[32]byte, fn func([32
 		return err
 	}
 	defer release()
-	return t.reader().IterateLeaves(ctx, after, func(item *shamap.Item, kind shamap.NodeType) bool {
-		data := item.Data()
+	return t.reader().IterateLeafData(ctx, after, func(key [32]byte, data []byte, kind shamap.NodeType) bool {
 		if t.kind == shamap.TypeTransaction {
 			data = append([]byte{byte(kind)}, data...)
 		}
-		return fn(item.Key(), data)
+		return fn(key, data)
 	})
 }
 
