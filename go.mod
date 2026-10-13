@@ -7,7 +7,7 @@ toolchain go1.24.4
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/decred/dcrd/crypto/ripemd160 v1.0.2
-	github.com/go-viper/mapstructure/v2 v2.2.1
+	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/lib/pq v1.10.9
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/spf13/cobra v1.9.1
