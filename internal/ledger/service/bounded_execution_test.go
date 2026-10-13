@@ -833,7 +833,8 @@ func TestBoundedExecutionRetentionKeepsFlatRootsAcrossRotationsAndRestart(t *tes
 	ctx := t.Context()
 	root := t.TempDir()
 	runtime, database, family := newBoundedRetentionRuntimeAt(t, root)
-	runtimes := []*boundedTestRuntime{runtime}
+	runtimes := make([]*boundedTestRuntime, 1, 2)
+	runtimes[0] = runtime
 	t.Cleanup(func() {
 		for _, candidate := range runtimes {
 			if candidate != nil {
