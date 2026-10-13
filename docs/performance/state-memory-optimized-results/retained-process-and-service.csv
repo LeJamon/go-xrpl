@@ -1,0 +1,7 @@
+case,exit_code,log,process_input_blocks,process_major_faults,process_minor_faults,process_output_blocks,process_peak_rss_bytes,process_system_seconds,process_user_seconds,process_wall_seconds,sample,side
+state-retained-large,0,state-retained-large-1-before.log,0,130,101989,0,1234452480,2.06668,16.752342,18.766900125017855,1,before
+state-retained-large,0,state-retained-large-1-after.log,0,122,61298,0,772374528,9.01393,31.686613,48.3694182090112,1,after
+state-retained-large,0,state-retained-large-2-after.log,0,121,62964,0,809467904,9.006495,32.430791,49.48911387496628,2,after
+state-retained-large,0,state-retained-large-2-before.log,0,720,99313,0,1388347392,2.176542,18.04541,19.01572058396414,2,before
+state-retained-large,0,state-retained-large-3-before.log,0,257,100192,0,1203372032,1.989901,17.599624,18.250185666955076,3,before
+state-retained-large,0,state-retained-large-3-after.log,0,766,95112,0,735019008,8.015503,31.936788,47.252060541009996,3,after

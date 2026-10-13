@@ -1,124 +1,175 @@
-# Bounded state execution: before/after benchmark
+# Bounded state execution: optimized comparison
 
-**Measured outcome: lower sampled heap, slower execution.** Signed acceptance regressed by 61% for the small Batch and 26% for the larger workload. Disk-backed state workloads were also slower, with a much larger penalty when forced to spill. This is performance evidence, not a performance acceptance pass: numerical production ceilings and the longer soak across online-delete rotations remain unresolved.
+The optimized engine substantially reduces retained state memory, but it remains slower than the old engine in these workloads. Median mean signed acceptance is **+26.2%** for the small Batch and **+4.2%** for 32 Batches / 256 inner payments. Ordinary durable-state cases take **1.84–2.29×** the old time; forced spilling takes **3.01×**, versus **15.97×** in the initial comparison. Larger-state sampled heap is **92–93% lower** and whole-process peak RSS **45–54% lower** in the original suite. These results improve the tradeoff; they do not establish performance parity or close the production performance gate.
 
-## Reference and method
+The [initial comparison](state-memory-initial.md) remains available with its original raw data. This report compares the optimized implementation directly with the same old engine, rather than treating improvement over the first bounded implementation as a speedup over the old engine.
 
-Compare old execution at `546e974024a77d9dcf80bc07cd4e86930467fff1` (the fixed PR base) with bounded execution at `3ee8a740fe3816abbb0a40f1186fd3f6c7491450`. Subsequent benchmark-only changes provide fixtures and instrumentation; they do not alter production execution. Each revision runs in its own worktree/process, on the same host, with the same deterministic workload. The comparison does not include unrelated later main changes.
+## Method and boundaries
 
-Measured on 2026-10-12. Host: Apple M3 Pro, 11 CPU cores, 18 GiB RAM, Darwin arm64 25.3.0, Go 1.24.4. Both processes use `GOMAXPROCS=4`, `GOGC=100`, `GOMEMLIMIT=512MiB`. The memory limit is Go's soft runtime target, not a hard RSS cap. This is an interactive laptop with background applications, not a dedicated performance host; small timing differences require caution.
+Old execution is pinned to `546e974024a77d9dcf80bc07cd4e86930467fff1`; optimized execution is pinned to `8f6b85ac9`. Both source harnesses and worktree patches are archived. Measurements ran on 2026-10-13 on an Apple M3 Pro (11 cores, 18 GiB RAM), Darwin arm64, Go 1.24.4, with `GOMAXPROCS=4`, `GOGC=100`, and `GOMEMLIMIT=512MiB`. The host is an interactive laptop. Processes ran serially, with before/after order reversed between successive pairs; local builds and tests were stopped during timing. The OS page cache was not cleared.
 
-All test binaries are compiled before measurement. Cases run serially, alternating before/after order between samples. The OS page cache is not purged. Process CPU and peak RSS come from `wait4`; they include fixture setup and teardown. Per-workload allocation/GC counters and latency samples use narrower boundaries. Rusage block counters are platform dependent and zero does not prove zero I/O.
+The six workloads, five independent process pairs, and original iteration counts are unchanged. Service measurements contain 200 acceptances per process, either one signed Batch with two inner payments or 32 signed Batches with 256 inner payments. Acceptance includes parsing, application, close/commitment, successor preparation and persistence queueing; it excludes the asynchronous durable writer. Process RSS and CPU include fixture setup and teardown, which differ substantially between implementations and are outside acceptance timing.
 
-Correctness is mandatory: signed acceptance cases verify fixed ledger hashes, state/transaction roots, transaction counts, and `tesSUCCESS` metadata. State-workload results must match before/after correctness digests. Report regressions as well as improvements. These measurements are descriptive; they do not establish mainnet capacity or satisfy an unspecified production latency ceiling.
+State workloads seed identical hashed keys with 512-byte values, persist them, then reopen root-backed views. This drops decoded setup trees without flushing storage or OS caches. They use these original settings:
 
-## Signed transaction acceptance
-
-`BenchmarkService_BatchConsensusAcceptance` runs two workloads: one signed Batch containing two inner payments, and 32 signed Batches containing 256 inner payments. Fixtures and signatures are prepared outside timing; every acceptance starts at the same persisted parent. Each sample contains 200 measured acceptances, with five independent samples per revision. Report medians of per-run results; p99 has only a few tail observations within each run.
-
-The old engine receives a 256 KiB NodeStore block cache. Flat mode receives a 128 KiB NodeStore block cache and a 128 KiB flat cache. The additional flat database has an 8 MiB memtable; that extra storage-engine cost is included in process memory. Flat-hit/root-fallback counters verify which paths execute. A newly closed root may still use authenticated-root reads before asynchronous flat advancement catches up.
-
-The timed operation includes parsing, transaction application, close/hash, successor preparation/publication and persistence queueing. It excludes the asynchronous durable writer and flat advancement. Do not interpret acceptance time as durable-publication latency. Peak process RSS also includes per-round store construction and fixture work, so it is not steady-state node RSS.
-
-## Disk-backed state workload
-
-The common workload source is copied unchanged into the old worktree, with a separate test-only adapter for its API. Both versions seed identical hashed keys and 512-byte values into Pebble, persist them, then replace the seed's decoded tree with a root-backed view. This drops the seed graph; it does **not** clear Pebble caches/memtables or the OS page cache. “Disjoint” means reads sweep the larger keyspace, not cold physical-disk I/O.
-
-| Case | Initial entries | Measured ledgers | Warm-up ledgers | Reads/ledger | Updates or inserts/ledger | Retained closed views |
+| Workload | Initial entries | Measured ledgers | Warmup | Reads/ledger | Writes/ledger | Retained views |
 | --- | ---: | ---: | ---: | ---: | --- | ---: |
-| Hot | 4,096 | 512 | 16 | 128 | Update the same 16 keys | 32 |
-| Disjoint reads | 65,536 | 1,024 | 0 | 512 | Update the same 16 keys | 64 |
-| Growing | 32,768 | 512 | 16 | 128 | Insert 64 new keys | 32 |
-| Spill | 4,096 | 256 | 16 | 128 | Update the same 512 keys | 32 |
+| Hot | 4,096 | 512 | 16 | 128 | Update 16 keys | 32 |
+| Disjoint | 65,536 | 1,024 | 0 | 512 | Update 16 keys | 64 |
+| Growing | 32,768 | 512 | 16 | 128 | Insert 64 keys | 32 |
+| Spill | 4,096 | 256 | 16 | 128 | Update 512 keys | 32 |
 
-Each case runs in five independent before/after process pairs. The old NodeStore receives a 16 MiB block cache; the new NodeStore and flat database each receive 8 MiB. The new flat database additionally has a 4 MiB memtable. Bounded execution has a 64 MiB workspace, 1 MiB overlay memory (64 KiB in the spill case), and 64 MiB scratch-disk allowance. Exact settings are in [state.json](../../scripts/benchmarks/state-memory/state.json).
+State total latency includes successor opening, reads, writes, close, canonical persistence and synchronization. Bounded execution additionally verifies the committed closure, computes a root diff, advances the flat database durably, and acknowledges the outbox. It excludes SQL/header publication, transaction parsing/application, networking, and service-level scheduling. The benchmark materializes its per-ledger diff in test-owned slices before flat publication; production consumes a streaming diff. Harness allocations are included in runtime metrics but are outside managed execution accounts.
 
-The total timer includes opening a successor, reads, updates/inserts, close/hash, canonical-node persistence and Sync. The new version also verifies root closure, derives the root diff, durably advances flat state, and acknowledges the outbox. The close timer starts after reads/writes and includes those persistence/publication steps. This is a storage-layer comparison: it excludes service publication, ledger-header/relational persistence, networking, and transaction parsing/application. Unlike the acceptance benchmark, it includes flat durable-write cost. The adapter uses a benchmark authorization token after real closure verification; it does not construct the complete service proof token. It acknowledges each outbox record immediately, including its durable commit; production drains the outbox through a separate path. The old engine has neither flat projection maintenance nor a spill allowance, so these new costs are part of the architecture comparison rather than identical storage operations.
+Current-record outbox cleanup changed deliberately: after dependent publication is durable, `AckPublishedOutbox` can delete a record matching the full current descriptor without another fsync. A crash can resurrect that cleanup record and trigger idempotent replay. The durable current descriptor retains its roots, and the next descriptor transition syncs the deletion. Older, mismatched or uncertain records still require synchronous deletion. Canonical nodes, flat publication, SQL and the validated tip retain their durability boundaries. The initial benchmark included a separate synchronous cleanup for every record.
 
-Per-ledger sampling and eviction of expired retained views are outside the latency timers but inside allocation/GC deltas. There is no forced GC. Heap samples therefore include uncollected garbage and are not post-GC live-memory measurements. Account peaks and final database sizes include setup; family fetch/store counters cover measured ledgers and represent logical SHAMap work. File sizes include the initial state and transient WAL/compaction files. Neither file sizes nor Darwin's rusage block counters measure physical write amplification. These cases do not cover online deletion, RPC scans, network acquisition, or a long-running mainnet replay.
+## Resources
 
-## Acceptance results
+Block-cache allowances remain equal in total: service uses old 256 KiB versus new 128 KiB NodeStore + 128 KiB flat; state uses old 16 MiB versus new 8 MiB + 8 MiB. These are small-cache fixtures, not production-default configurations. Memtable policy changed and must be considered alongside the cache allowances:
 
-Median of five independent 200-acceptance samples, milliseconds unless stated otherwise:
+| Resource | Old | Optimized |
+| --- | --- | --- |
+| NodeStore memtable target in these fixtures | 64 MiB | 8 MiB |
+| NodeStore accounted ceiling, service (two generations) | 512.25 MiB | 64.125 MiB |
+| NodeStore accounted ceiling, state (one generation) | 272 MiB | 40 MiB |
+| Flat memtable requested/effective, service | None | 8 / 1 MiB |
+| Flat memtable requested/effective, state | None | 4 / 2 MiB |
 
-| Workload | Metric | Old | Bounded + flat | Change |
+NodeStore reserves one shared block cache plus four memtables per generation. Its target is `min(64 MiB, max(8 MiB, cache/2))`; default 256 MiB cache therefore retains the original 64 MiB target. Flat target is `min(requested, max(1 MiB, cache/4))`. Pebble reserves memtable arenas against its block cache, so a configured block-cache capacity is not a guaranteed amount available for cached reads. These accounting ceilings are not RSS measurements.
+
+State workspace remains 64 MiB; overlay memory remains 1 MiB, or 64 KiB for forced spill; scratch disk remains 64 MiB. The original workload budgets were not enlarged. The old engine has no equivalent execution-memory or spill bound. Runtime allocation and heap samples include garbage awaiting collection; no forced GC runs during measurements.
+
+## Acceptance
+
+Median of five per-run values; milliseconds unless stated otherwise.
+
+| Workload | Metric | Old | Optimized | Change |
 | --- | --- | ---: | ---: | ---: |
-| Batch with 2 inner payments | Mean acceptance | 1.220 | 1.964 | +61.0% |
-| | p50 acceptance | 1.112 | 1.740 | +56.5% |
-| | p95 acceptance | 1.689 | 2.457 | +45.5% |
-| | p99 acceptance | 1.859 | 2.906 | +56.3% |
-| | Allocated bytes/acceptance | 751,710 | 865,905 | +15.2% |
-| 32 Batches / 256 inner payments | Mean acceptance | 94.858 | 119.983 | +26.5% |
-| | p50 acceptance | 94.188 | 119.128 | +26.5% |
-| | p95 acceptance | 100.983 | 126.393 | +25.2% |
-| | p99 acceptance | 106.784 | 132.614 | +24.2% |
-| | Allocated bytes/acceptance | 64,184,692 | 73,590,682 | +14.7% |
+| Batch / 2 inner payments | Mean acceptance | 1.150 | 1.452 | +26.2% |
+| Batch / 2 inner payments | p50 | 1.048 | 1.264 | +20.5% |
+| Batch / 2 inner payments | p95 | 1.793 | 1.958 | +9.2% |
+| Batch / 2 inner payments | p99 | 2.121 | 3.181 | +50.0% |
+| Batch / 2 inner payments | Allocated bytes/acceptance | 747838 | 785759 | +5.1% |
+| 32 Batches / 256 inner payments | Mean acceptance | 79.967 | 83.297 | +4.2% |
+| 32 Batches / 256 inner payments | p50 | 79.225 | 82.644 | +4.3% |
+| 32 Batches / 256 inner payments | p95 | 85.939 | 90.851 | +5.7% |
+| 32 Batches / 256 inner payments | p99 | 89.545 | 95.337 | +6.5% |
+| 32 Batches / 256 inner payments | Allocated bytes/acceptance | 64082310 | 67868239 | +5.9% |
 
-The five per-run means ranged from 1.192–1.270 ms before versus 1.938–1.985 ms after for the small case, and 94.498–95.428 ms versus 119.240–120.288 ms for the large case. These are observed ranges, not confidence intervals. All roots and transaction-effect assertions passed. Both cases demonstrate a repeatable acceptance regression on this host. Inverse mean acceptance time falls from 820 to 509 acceptances/s for the small fixture and 10.54 to 8.33 acceptances/s for the large fixture; these are benchmark rates, not production TPS.
+Per-run mean ranges (observed ranges, not confidence intervals): Batch / 2 inner payments: 1.139–1.203 ms old and 1.348–1.546 ms optimized. 32 Batches / 256 inner payments: 79.352–80.232 ms old and 83.097–85.970 ms optimized.
 
-Flat mode reported 21 flat hits per acceptance, plus 18 root fallbacks in the small case and 904 in the large case. The fallback count reflects successor/new-root access before flat advancement; this is not an all-flat-read benchmark. Median process peak RSS was 42.6 → 45.9 MiB for the small case and 93.5 → 97.4 MiB for the large case, including setup and teardown. These short fixtures do not demonstrate retained-memory reduction.
+Whole-process peak RSS, including setup: Batch / 2 inner payments: 43.8 → 47.3 MiB. 32 Batches / 256 inner payments: 94.3 → 73.2 MiB. The short acceptance fixtures do not demonstrate a retained-memory reduction. Optimized runs reported 18 flat hits and 7 authenticated-root fallbacks per acceptance; newly closed roots are accessed before asynchronous flat advancement.
 
-Raw per-run results and process counters are in [service-runs.json](state-memory-results/service-runs.json), the [CSV](state-memory-results/service-process-and-service.csv), and [metadata](state-memory-results/service-metadata.json). Whole-process CPU times include fixture construction; use the timed operation measurements above for acceptance comparisons.
+Median phase p50, old → optimized (milliseconds):
 
-## State workload results
-
-All four cases completed five before/after process pairs. Every per-ledger state root, ledger hash, sequence and rolling read digest matched across revisions and repetitions. All new-engine runs used flat reads with zero root fallbacks, advanced flat state once per measured ledger, and ended with no pending outbox record or recorded flat failure. All measured account peaks stayed within their allowances; every spill run used scratch disk.
-
-Median of five per-run values; arrows are **old → bounded + flat**. Total latency includes reads, writes and the durable storage boundary described above.
-
-| Workload | Mean total (ms) | p50 (ms) | p95 (ms) | p99 (ms) | Workloads/s | Mean latency ratio |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Hot | 3.95 → 18.44 | 3.90 → 18.58 | 5.85 → 22.95 | 6.10 → 24.93 | 252.9 → 54.2 | 4.66× |
-| Disjoint reads | 5.89 → 25.66 | 5.91 → 25.85 | 8.77 → 32.06 | 12.03 → 34.01 | 169.7 → 39.0 | 4.36× |
-| Growing | 6.30 → 26.15 | 6.63 → 25.98 | 8.55 → 31.12 | 10.85 → 35.00 | 158.8 → 38.2 | 4.15× |
-| Spill (64 KiB overlay) | 9.52 → 152.14 | 9.07 → 151.95 | 12.15 → 162.09 | 14.99 → 167.10 | 105.0 → 6.6 | 15.97× |
-
-The new implementation is slower in every tested case. The forced-spill case compares a 64 KiB overlay with actual scratch writes against the old unconstrained mutation path; it quantifies the cost of that tight allowance, not a production-default claim. These synthetic ledger-workload rates are not transaction throughput.
-
-| Workload | Last-quarter sampled heap (MiB) | Whole-process peak RSS (MiB) | Allocated KiB/ledger | GC CPU (s/run) | GC cycles/run |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Hot | 11.6 → 3.2 | 72.3 → 71.6 | 478 → 1116 | 0.20 → 0.46 | 33 → 284 |
-| Disjoint reads | 105.5 → 6.6 | 517.7 → 317.7 | 921 → 2312 | 0.39 → 0.56 | 13 → 527 |
-| Growing | 98.0 → 6.5 | 325.3 → 224.5 | 1407 → 3014 | 0.23 → 0.40 | 15 → 368 |
-| Spill (64 KiB overlay) | 51.1 → 4.0 | 274.4 → 224.7 | 7046 → 25630 | 0.47 → 2.23 | 69 → 2731 |
-
-The bounded engine retains much less sampled Go heap near the end of these workloads, while allocating more bytes and spending more CPU on GC. Heap includes uncollected garbage; peak RSS includes initialization and storage-engine/native memory. The measurements do not establish a production RSS plateau, post-GC live-heap size, or behavior across online-delete rotations.
-
-| Workload | Logical node fetches/ledger | Canonical node KiB stored/ledger (same both sides) | Final node + flat files (MiB) | New peak scratch (KiB) |
+| Workload | Parse | Apply | Close / commitment | Prepare successor |
 | --- | ---: | ---: | ---: | ---: |
-| Hot | 4.4 → 165.0 | 34.0 | 21.7 → 34.3 | 0.0 |
-| Disjoint reads | 87.2 → 213.0 | 42.8 | 135.6 → 151.1 | 0.0 |
-| Growing | 73.1 → 615.7 | 129.3 | 137.3 → 150.2 | 0.0 |
-| Spill (64 KiB overlay) | 6.8 → 3246.0 | 565.3 | 195.3 → 220.9 | 249.0 |
+| Batch / 2 inner payments | 0.199 → 0.213 | 0.467 → 0.494 | 0.042 → 0.111 | 0.285 → 0.374 |
+| 32 Batches / 256 inner payments | 12.865 → 12.573 | 43.102 → 43.874 | 0.104 → 1.197 | 22.970 → 24.502 |
 
-Canonical node bytes are identical, but bounded execution fetches more canonical nodes and adds flat-state writes. Final file sizes vary with compaction timing and include the seeded database; they must not be used as physical write-amplification measurements. Fetch counters exclude flat database lookups.
+## Cache-size check
 
-Full raw samples are in [state-runs.json.gz](state-memory-results/state-runs.json.gz); see [per-run metrics](state-memory-results/state-per-run.csv), [comparison medians](state-memory-results/state-summary.csv), [metadata](state-memory-results/state-metadata.json), and the [aggregation definitions](state-memory-results/README.md). Original output for both suites is preserved in [raw-logs.tar.gz](state-memory-results/raw-logs.tar.gz).
+A separate five-pair diagnostic uses 32 MiB total block cache (old: 32 MiB NodeStore; optimized: 16 MiB NodeStore + 16 MiB flat), with 50 acceptances per process. Signed workload, production code, execution admission limits and durability are unchanged. This is an additional configuration, not a replacement for the original 256 KiB results above. The benchmark-only cache option is included in the measured revision.
 
-## Validation
+| Workload | Old mean (ms) | Optimized mean (ms) | Change |
+| --- | ---: | ---: | ---: |
+| Batch / 2 inner payments | 1.065 | 1.366 | +28.3% |
+| 32 Batches / 256 inner payments | 78.911 | 82.919 | +5.1% |
 
-The integrated state smoke and shared-parent service regression passed three repetitions, plus race detection. The service fixture also passed 20 ordinary and 10 race repetitions in its isolated worktree. Strict and advisory ledger-package lint reported zero issues. A fresh before/after smoke run passed using the final runner. Production source is unchanged from the measured implementation.
+With the larger cache, the small case remains +28.3% and the large case +5.1%. The regression is not explained by the original tiny block-cache allowance alone. This diagnostic has fewer acceptances per process; its absolute timings should not replace the original comparison.
 
-## Code paths behind the trade-off
+## Larger retained working set, equal NodeStore memtables
 
-The bounded [execution read path](../../internal/ledger/execution.go) opens and closes a flat view for each base lookup. [Opening that view](../../internal/ledger/flatstate/store.go) creates a Pebble snapshot, validates current/advancing metadata, and registers the reader. The old SHAMap instead keeps decoded nodes attached after lazy reads. Repeated view setup is therefore a plausible contributor to slower reads, while dropping decoded-tree retention explains the different memory behavior. These measurements do not attribute an exact percentage to view setup; that would require profiling.
+This additional case was selected before measurement: 262,144 initial entries, 2,048 ledgers, 512 reads and 16 updates per ledger, and 64 retained views. Its read schedule touches all initial keys. Three process pairs use 256 MiB total block cache (old: 256 MiB NodeStore; optimized: 128 MiB NodeStore + 128 MiB flat). Both revisions therefore use the same 64 MiB NodeStore memtable target; the new flat store additionally uses 4 MiB memtables. The 512 MiB Go soft memory limit, 64 MiB workspace, 1 MiB overlay and 64 MiB scratch allowance remain unchanged. This is an additional configuration, not a replacement for the original small-cache cases.
 
-The new close path constructs the canonical commitment, then traverses changed old/new paths again to derive flat changes. The production [flat-state publisher](../../internal/ledger/service/flat_state.go) also uses this root-diff approach. The state benchmark additionally includes flat advancement and immediate durable outbox acknowledgement. Spill adds overlay file operations to enforce its small allowance. These are concrete extra operations; the tables measure their combined effect, not isolated function costs.
+| Metric | Old | Optimized | Change |
+| --- | ---: | ---: | ---: |
+| Mean durable workload (ms) | 6.561 | 11.242 | +71.4% |
+| p95 durable workload (ms) | 8.992 | 15.026 | +67.1% |
+| p99 durable workload (ms) | 11.894 | 22.029 | +85.2% |
+| Last-quarter sampled heap (MiB) | 363.6 | 16.5 | -95.5% |
+| Whole-process peak RSS (MiB) | 1177.3 | 736.6 | -37.4% |
+| Allocated KiB/ledger | 1121 | 1167 | +4.1% |
+| GC CPU (seconds/run) | 0.959 | 0.435 | -54.7% |
+| GC cycles/run | 19 | 190 | +900.0% |
+| Whole-process wall time (seconds) | 18.77 | 48.37 | +157.7% |
+| Final node + flat files (MiB) | 475.3 | 616.5 | +29.7% |
 
-## Reproduction
+The retained-memory reduction persists when NodeStore memtable targets match. GC CPU is lower in this larger case, although total durable latency is still higher. Setup materializes a full initial SHAMap and clones initial changes outside the timed ledger loop; whole-process wall time and peak RSS include that setup and are not steady-state memory limits. No forced GC is performed during measurement. All 12,288 per-ledger identities match, flat advancement succeeds without fallback or backlog, and all managed account peaks stay within their allowances. This case does not exercise online-delete rotations or establish a production memory plateau.
 
-From this branch's repository root, use Go 1.24.4 and Python 3.9+ on macOS or Linux (`os.wait4` is required). Create a fresh old-code worktree, then install only the shared test workload and old-API adapter:
+![Sampled retained heap across ledgers](state-memory-optimized-results/retained-heap.svg)
+
+The plot shows the median of three runs at each ledger, with the observed minimum-to-maximum range shaded. Samples include garbage awaiting collection; the plot is not post-GC live heap or process RSS.
+
+## Durable state workloads
+
+Median of five per-run values; arrows are **old → optimized**.
+
+| Workload | Mean total (ms) | p50 (ms) | p95 (ms) | p99 (ms) | Ratio | Initial ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Hot | 4.48 → 9.65 | 4.55 → 9.73 | 6.00 → 12.54 | 6.95 → 15.63 | 2.15× | 4.66× |
+| Disjoint | 5.62 → 10.37 | 5.10 → 10.05 | 8.08 → 14.15 | 10.71 → 17.34 | 1.84× | 4.36× |
+| Growing | 6.28 → 14.37 | 5.98 → 13.55 | 8.97 → 20.05 | 11.83 → 24.10 | 2.29× | 4.15× |
+| Spill, 64 KiB overlay | 9.95 → 29.96 | 9.84 → 28.40 | 13.84 → 44.37 | 16.85 → 51.44 | 3.01× | 15.97× |
+
+Initial ratios come from the earlier measurement session; compare each revision with its own paired baseline. Absolute latencies across sessions are not controlled speedup measurements. The forced-spill case measures a deliberately tight 64 KiB allowance against the old unconstrained engine.
+
+| Workload | Last-quarter sampled heap (MiB) | Process peak RSS (MiB) | Allocated KiB/ledger | GC CPU (s/run) | GC cycles/run |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Hot | 11.4 → 3.4 | 72.0 → 66.0 | 478 → 592 | 0.18 → 0.37 | 33 → 145 |
+| Disjoint | 106.0 → 7.0 | 492.3 → 269.8 | 921 → 1120 | 0.26 → 0.56 | 10 → 255 |
+| Growing | 98.7 → 7.5 | 326.2 → 151.2 | 1403 → 1808 | 0.21 → 0.43 | 14 → 192 |
+| Spill, 64 KiB overlay | 51.4 → 8.0 | 273.0 → 67.6 | 7056 → 10343 | 0.58 → 2.07 | 72 → 646 |
+
+Both the execution architecture and the lower NodeStore memtable targets contribute to the memory result. Lower retained heap does not imply fewer allocations: in these four cases, allocation and GC overhead remain higher. Peak RSS includes seeding and storage-engine memory; sampled Go heap is not post-GC live heap.
+
+| Workload | Logical node fetches/ledger | Canonical KiB stored/ledger, both sides | Final node + flat files (MiB) | Peak scratch (KiB), optimized |
+| --- | ---: | ---: | ---: | ---: |
+| Hot | 4.4 → 165.0 | 34.0 | 21.7 → 43.6 | 0.0 |
+| Disjoint | 87.2 → 213.0 | 42.8 | 135.6 → 164.7 | 0.0 |
+| Growing | 73.1 → 615.7 | 129.3 | 143.6 → 162.0 | 0.0 |
+| Spill, 64 KiB overlay | 6.8 → 3246.0 | 565.3 | 195.3 → 224.6 | 249.0 |
+
+Optimized phase timings, median of per-run means in milliseconds (medians need not sum exactly):
+
+| Workload | Read | Write | Close / build | Node persistence | Root diff | Flat publication + cleanup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Hot | 1.28 | 0.16 | 1.27 | 2.97 | 0.51 | 3.36 |
+| Disjoint | 3.46 | 0.06 | 0.66 | 3.07 | 0.24 | 2.86 |
+| Growing | 0.88 | 0.52 | 3.28 | 3.19 | 2.98 | 3.51 |
+| Spill, 64 KiB overlay | 0.60 | 7.60 | 7.98 | 3.41 | 5.39 | 5.03 |
+
+The old engine writes dirty canonical nodes during its persistence phase, whereas bounded execution writes them while constructing the commitment. Phase timings therefore locate work within each implementation; they are not isolated comparisons of identical functions. Logical fetch/store counts exclude flat database lookups. File sizes include seeded data, WALs and compaction files and do not measure physical write amplification.
+
+## Changes and verification
+
+- Reuse at most two leased flat snapshots, retiring them safely when the descriptor advances; preserve owned-byte public reads while eliminating internal copies.
+- Stream empty-subtree construction directly, including singleton leaves; avoid repeated descent and copying through all 64 key nibbles. Emit canonical bytes through the same encoders used by existing SHAMap nodes, avoiding temporary mutable nodes and item copies. Diagnostic hash formatting no longer causes successful paths to allocate escaping hash arrays.
+- Batch canonical writes and flush admitted output before waiting for additional workspace; prevent missed wakeups under memory pressure.
+- Retain exact transaction payload totals from locally built commitments for successor sizing. Imported or changed-base trees still traverse authenticated nodes; cancellation and overflow checks remain active.
+- Reuse exclusively owned overlay tree paths and rotation pivots. Shared ancestry still forces copying; fallible allocations finish before private ancestors change. No-op writes succeed even at the account limit.
+- Buffer scratch writes within the existing account, bound shared file descriptors, and reject truncated record headers. During commitment, optional read windows of at most 32 KiB per cursor use the existing workspace; required-memory pressure evicts them before any wait. Values remain owned across eviction and refill. Scratch files remain process-lifetime data.
+- Keep the flat transition marker before actual chunked mutation; synchronize the final descriptor/outbox batch after intermediate WAL writes. Small transitions remain one atomic batch. Current-record outbox cleanup follows the replay contract above.
+- Size storage memtables from configured cache allowances, with measured floors to avoid excessive flush/compaction work.
+
+All 60 original-comparison processes passed: 4,000 measured signed acceptances and 23,040 measured state ledger steps. Every state sequence, root, ledger hash and rolling read digest matched across revisions and repetitions; service fixtures checked fixed hashes, transaction counts, metadata and effects. All bounded state runs used flat reads with zero fallback, failures or pending outbox records, advanced once per ledger, and respected workspace, overlay and scratch allowances. All spill runs used scratch disk. These checks establish cross-revision agreement, not an independent protocol oracle.
+
+Full repository tests with the required conformance corpus, affected ledger/service/overlay/flatstate/SHAMap/Pebble race suites, and strict/advisory lint passed. The pushed production checkpoint `8f6b85ac9` passed all required hosted CI checks, including PostgreSQL, native MPT, pinned corpus and rippled peer/consensus interop. Failure/recovery tests cover marker replay, lost unsynchronized cleanup, older-record retention, cancellation, bounded cursor pressure, and physical rotation/reopen.
+
+These fixtures do not establish mainnet TPS, a production RSS ceiling, or a long-running production soak. The rotation test demonstrates ownership and recovery correctness across six physical rotations and 96 closes; it is not a performance soak. All remaining regressions are reported, including the additional flat durability cost and forced spill overhead.
+
+## Evidence and reproduction
+
+Raw data: [service runs](state-memory-optimized-results/service-runs.json), [state runs](state-memory-optimized-results/state-runs.json.gz), [state summary](state-memory-optimized-results/state-summary.csv), [cache diagnostic](state-memory-optimized-results/cache-runs.json), and [raw logs, exact harnesses and patches](state-memory-optimized-results/raw-evidence.tar.gz). The larger retention case is in [retained-state runs](state-memory-optimized-results/retained-runs.json.gz). See [aggregation definitions](state-memory-optimized-results/README.md).
+
+Create separate worktrees at the measured revisions, then install the archived baseline harness. Use Go 1.24.4 and Python 3.9+ with `os.wait4` (macOS or Linux), configured with the repository's native dependencies:
 
 ```sh
-git worktree add --detach /tmp/go-xrpl-state-before 546e974024a77d9dcf80bc07cd4e86930467fff1
-cp internal/ledger/state_memory_benchmark_common_test.go /tmp/go-xrpl-state-before/internal/ledger/
-cp scripts/benchmarks/state-memory/before_adapter_test.go.txt /tmp/go-xrpl-state-before/internal/ledger/state_memory_benchmark_before_test.go
-python3 scripts/benchmark-state-memory.py --before-tree /tmp/go-xrpl-state-before --after-tree . --manifest scripts/benchmarks/state-memory/service.json --output /tmp/go-xrpl-service-results --samples 5
-python3 scripts/benchmark-state-memory.py --before-tree /tmp/go-xrpl-state-before --after-tree . --manifest scripts/benchmarks/state-memory/state.json --output /tmp/go-xrpl-state-results --samples 5
+git worktree add --detach /tmp/state-before 546e974024a77d9dcf80bc07cd4e86930467fff1
+git worktree add --detach /tmp/state-after 8f6b85ac9
+tar -xzf docs/performance/state-memory-optimized-results/before-harness.tar.gz -C /tmp/state-before
+python3 /tmp/state-after/scripts/benchmark-state-memory.py --before-tree /tmp/state-before --after-tree /tmp/state-after --manifest /tmp/state-after/scripts/benchmarks/state-memory/service.json --output /tmp/service-results --samples 5
+python3 /tmp/state-after/scripts/benchmark-state-memory.py --before-tree /tmp/state-before --after-tree /tmp/state-after --manifest /tmp/state-after/scripts/benchmarks/state-memory/state.json --output /tmp/state-results --samples 5
 ```
 
-Use fresh output paths on a repeat; the runner refuses to overwrite an existing `runs.json`. It compiles before timing, alternates process order, stops on failed runs or differing state digests, and records commits, worktree status, Go version, manifest, binary SHA-256 hashes, commands, logs, per-run JSON and process/acceptance CSV. Keep other local builds/tests stopped during measurement. Benchmark-only baseline adapters live under `scripts/benchmarks`; the production code has no old-engine fallback.
-
-Acceptance measurements used fixture commit `627ca8313` plus the metric-label change from `flat-memtable-bytes/op` to `flat-memtable-limit-bytes`. State measurements used fixture commit `8e07404b9`. Both have identical production code to `3ee8a740f`. The published metadata records the original measured worktree status; subsequent documentation/results commits do not change those measurements.
-
-The original measurement runner was uncommitted and its source hash was not captured; the service build logs were not retained. Binary hashes and all process logs are preserved. The committed runner provides workload reproduction, with stricter per-ledger identity checks and mandatory fresh builds added after measurement; published data was independently checked against those stricter conditions.
+Use fresh output directories. The runner compiles before timing, alternates pair order, archives source hashes and patches, records binary hashes/process metrics, and stops on failed runs or differing state identities. For the cache check, use the same after revision, install [cache-before-harness.tar.gz](state-memory-optimized-results/cache-before-harness.tar.gz) into the baseline worktree, and pass [cache-manifest.json](state-memory-optimized-results/cache-manifest.json). All comparisons use the same production revision. For the larger retention case, pass [retained-manifest.json](state-memory-optimized-results/retained-manifest.json) with `--samples 3`.
