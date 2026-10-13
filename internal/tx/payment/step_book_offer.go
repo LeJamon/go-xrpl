@@ -41,269 +41,203 @@ func (s *BookStep) stepOfferCounter() bool {
 	return true
 }
 
-// getNextOfferSkipVisited returns the next offer at the best quality, skipping offers in ofrsToRm and visited.
-// Uses Succ() for efficient O(log n) ordered traversal of book directories.
-// Follows IndexNext chains through multi-page directories at each quality level.
-// Reference: rippled OfferStream::step() + BookTip::step()
-func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, visited map[[32]byte]bool, enforceQualityBound bool) (*state.LedgerOffer, [32]byte, error) {
-	bookBase := s.bookBaseKey()
-	bookPrefix := bookBase[:24]
-
-	// Walk through book directories in quality order using Succ.
-	// bookBase has quality=0 (bytes 24-31 zeroed), so Succ finds the first quality entry.
-	searchKey := bookBase
+// getNextOfferSkipVisited returns the next funded offer from this pass's cursor.
+func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, visited map[[32]byte]bool, enforceQualityBound bool, cursor *bookOfferCursor) (*state.LedgerOffer, [32]byte, error) {
+	selfCrossEligible := s.defaultPath && s.strandSrc == s.strandDst
 	for {
-		foundKey, foundData, found, err := sb.Succ(searchKey)
-		if err != nil || !found {
+		offerKey, found := cursor.next(sb)
+		if !found {
 			return nil, [32]byte{}, nil
 		}
-		// Check if still within the book prefix
-		if !bytes.Equal(foundKey[:24], bookPrefix) {
-			return nil, [32]byte{}, nil
-		}
-
-		// pageBeyondLimit: this directory's quality is worse than the taker's
-		// limit. selfCrossEligible: an offer-crossing default-path strand, where
-		// the taker is both the strand source and destination. See the per-offer
-		// check below for how the two bound the walk.
-		pageBeyondLimit := enforceQualityBound && s.qualityLimit != nil &&
-			QualityFromKey(foundKey).WorseThan(*s.qualityLimit)
-		selfCrossEligible := s.defaultPath && s.strandSrc == s.strandDst
-
-		// Iterate through all pages of this directory (root + linked pages)
-		dir, err := state.ParseDirectoryNode(foundData)
-		if err != nil {
-			searchKey = foundKey
+		if visited[offerKey] {
 			continue
 		}
+		pageBeyondLimit := enforceQualityBound && s.qualityLimit != nil &&
+			QualityFromKey(cursor.root).WorseThan(*s.qualityLimit)
 
-		// Iterate root page + all subsequent pages via IndexNext chain
-		rootKey := foundKey
-		pageKey := keylet.DirPage(rootKey, 0)
-		for {
-			for _, idx := range dir.Indexes {
-				var offerKey [32]byte
-				copy(offerKey[:], idx[:])
-
-				// Skip offers already in ofrsToRm or visited.
-				//
-				// Exception: a self-crossable own offer is re-yielded on every
-				// pass even after a prior pass marked it for removal. rippled
-				// builds a fresh FlowOfferStream per forEachOffer call (one per
-				// rev/fwd pass); a self-crossed offer it walks past is deleted only
-				// in that pass's working sandbox, which the limiting-step reset
-				// rolls back, so the still-present own offer re-appears at the book
-				// tip on the re-executed pass and bounds the AMM-offer quality
-				// (tryAMM(offers.tip().quality()), BookStep.cpp:857) consistently.
-				// goXRPL shares ofrsToRm across all rev/fwd passes; skipping the own
-				// offer here would let the AMM be generated against the next (worse)
-				// CLOB tier on the forward pass — crossing the AMM when rippled
-				// crosses the CLOB. Within a single pass, the `visited` set below
-				// still dedups it. The offer remains in ofrsToRm (and permRm), so
-				// its final erasure is unchanged.
-				// Reference: rippled BookStep.cpp forEachOffer 855-865, OfferStream
-				// per-call construction; limitSelfCrossQuality 443-457.
-				if ofrsToRm != nil && ofrsToRm[offerKey] {
-					reYieldOwnOffer := false
-					if selfCrossEligible {
-						if od, oe := sb.Read(keylet.Keylet{Key: offerKey}); oe == nil && od != nil {
-							if oo, pe := state.ParseLedgerOffer(od); pe == nil {
-								if oid, de := state.DecodeAccountID(oo.Account); de == nil && oid == s.strandSrc {
-									reYieldOwnOffer = true
-								}
-							}
+		// A self-crossed own offer must reappear after a reverse/forward reset:
+		// it still bounds AMM quality even when a previous pass marked it for
+		// removal. The current pass's visited check above prevents duplicates.
+		if ofrsToRm != nil && ofrsToRm[offerKey] {
+			reYieldOwnOffer := false
+			if selfCrossEligible {
+				if od, oe := sb.Read(keylet.Keylet{Key: offerKey}); oe == nil && od != nil {
+					if oo, pe := state.ParseLedgerOffer(od); pe == nil {
+						if oid, de := state.DecodeAccountID(oo.Account); de == nil && oid == s.strandSrc {
+							reYieldOwnOffer = true
 						}
 					}
-					if !reYieldOwnOffer {
-						continue
-					}
 				}
-				if visited != nil && visited[offerKey] {
-					continue
-				}
+			}
+			if !reYieldOwnOffer {
+				continue
+			}
+		}
 
-				// In a beyond-limit directory the taker crosses nothing past its
-				// limit. rippled's OfferStream::step still advances the book tip into
-				// such a directory and perm-removes any offer it walks over that it
-				// would groom regardless of quality — a FOUND-unfunded offer, a
-				// FOUND-tiny offer (small/increased-quality, OfferStream.cpp:343-404),
-				// an expired one, or a domain-removed one — before execOffer's
-				// checkQualityThreshold ever applies the limit; that threshold only
-				// stops the *crossing* at a FUNDED, non-groomable beyond-limit tip. So
-				// at a beyond-limit page we yield an offer only when step() would groom
-				// it — zero funds, a tiny-quality offer whose funds are unchanged from
-				// the pristine afView, an expired offer, or a domain-removed offer —
-				// and let forEachOffer / the expiry/domain branch remove it. The taker's OWN
-				// offer on the default path (a self-cross) is also yielded: rippled
-				// removes a self-crossed own offer "even if no crossing occurs". A
-				// FUNDED, non-groomable non-own beyond-limit offer (and any BECAME-
-				// unfunded/tiny one) still stops the walk here — exactly as rippled
-				// never crosses past a funded beyond-limit tip — so an over-extended
-				// reverse pass can never reach and remove a deeper BECAME-unfunded
-				// offer behind it.
-				// Reference: rippled OfferStream.cpp step() lines 314-404 (found vs
-				// became unfunded/tiny) and BookStep.cpp checkQualityThreshold/do-while.
-				if pageBeyondLimit {
-					ownData, ownErr := sb.Read(keylet.Keylet{Key: offerKey})
-					isOwnOffer := false
-					if selfCrossEligible && ownErr == nil && ownData != nil {
-						if ownOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
-							if ownerID, derr := state.DecodeAccountID(ownOffer.Account); derr == nil && ownerID == s.strandSrc {
-								isOwnOffer = true
-							}
-						}
+		// In a beyond-limit directory the taker crosses nothing past its
+		// limit. rippled's OfferStream::step still advances the book tip into
+		// such a directory and perm-removes any offer it walks over that it
+		// would groom regardless of quality — a FOUND-unfunded offer, a
+		// FOUND-tiny offer (small/increased-quality, OfferStream.cpp:343-404),
+		// an expired one, or a domain-removed one — before execOffer's
+		// checkQualityThreshold ever applies the limit; that threshold only
+		// stops the *crossing* at a FUNDED, non-groomable beyond-limit tip. So
+		// at a beyond-limit page we yield an offer only when step() would groom
+		// it — zero funds, a tiny-quality offer whose funds are unchanged from
+		// the pristine afView, an expired offer, or a domain-removed offer —
+		// and let forEachOffer / the expiry/domain branch remove it. The taker's OWN
+		// offer on the default path (a self-cross) is also yielded: rippled
+		// removes a self-crossed own offer "even if no crossing occurs". A
+		// FUNDED, non-groomable non-own beyond-limit offer (and any BECAME-
+		// unfunded/tiny one) still stops the walk here — exactly as rippled
+		// never crosses past a funded beyond-limit tip — so an over-extended
+		// reverse pass can never reach and remove a deeper BECAME-unfunded
+		// offer behind it.
+		// Reference: rippled OfferStream.cpp step() lines 314-404 (found vs
+		// became unfunded/tiny) and BookStep.cpp checkQualityThreshold/do-while.
+		if pageBeyondLimit {
+			ownData, ownErr := sb.Read(keylet.Keylet{Key: offerKey})
+			isOwnOffer := false
+			if selfCrossEligible && ownErr == nil && ownData != nil {
+				if ownOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
+					if ownerID, derr := state.DecodeAccountID(ownOffer.Account); derr == nil && ownerID == s.strandSrc {
+						isOwnOffer = true
 					}
-					if !isOwnOffer {
-						groomable := false
-						if ownErr == nil && ownData != nil {
-							if probeOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
-								groomable = s.offerExpired(probeOffer) ||
-									probeOffer.TakerPays.IsZero() || probeOffer.TakerGets.IsZero()
-								if !groomable {
-									ownerID, decodeErr := state.DecodeAccountID(probeOffer.Account)
-									if decodeErr == nil {
-										groomable, err = s.isDeepFrozenIssue(sb, ownerID, s.book.In)
-										if err != nil {
-											return nil, [32]byte{}, err
-										}
-									}
-								}
-								if !groomable {
-									groomable = s.offerOutOfDomain(sb, probeOffer)
-								}
-								if !groomable {
-									groomable, err = s.isFoundPermGroomable(sb, afView, probeOffer)
-									if err != nil {
-										return nil, [32]byte{}, err
-									}
+				}
+			}
+			if !isOwnOffer {
+				groomable := false
+				var err error
+				if ownErr == nil && ownData != nil {
+					if probeOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
+						groomable = s.offerExpired(probeOffer) ||
+							probeOffer.TakerPays.IsZero() || probeOffer.TakerGets.IsZero()
+						if !groomable {
+							ownerID, decodeErr := state.DecodeAccountID(probeOffer.Account)
+							if decodeErr == nil {
+								groomable, err = s.isDeepFrozenIssue(sb, ownerID, s.book.In)
+								if err != nil {
+									return nil, [32]byte{}, err
 								}
 							}
 						}
 						if !groomable {
-							return nil, [32]byte{}, nil
+							groomable = s.offerOutOfDomain(sb, probeOffer)
+						}
+						if !groomable {
+							groomable, err = s.isFoundPermGroomable(sb, afView, probeOffer)
+							if err != nil {
+								return nil, [32]byte{}, err
+							}
 						}
 					}
 				}
-
-				// Count this offer before the expiry/funding/removal checks,
-				// mirroring rippled's OfferStream::step where counter_.step()
-				// runs before those checks. When the limit is reached, stop the
-				// walk without counting or touching this offer. Mark it visited
-				// so every offer the walk advances to is counted exactly once —
-				// even one skipped just below as expired, missing or
-				// domain-removed — and is never re-counted on a later walk.
-				if !s.stepOfferCounter() {
+				if !groomable {
 					return nil, [32]byte{}, nil
 				}
-				if visited != nil {
-					visited[offerKey] = true
-				}
-
-				offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
-				if err != nil || offerData == nil {
-					// Dangling sfIndexes entry: the directory page references an
-					// offer SLE that no longer exists. Erase the stale index from
-					// the current page in both the execution sandbox and the cancel
-					// view, mirroring rippled's OfferStream::step removal of a
-					// directory item with no corresponding ledger entry.
-					s.eraseDanglingOffer(sb, pageKey, offerKey)
-					s.eraseDanglingOffer(afView, pageKey, offerKey)
-					continue
-				}
-
-				offer, err := state.ParseLedgerOffer(offerData)
-				if err != nil {
-					continue
-				}
-
-				// Check offer expiration
-				// Reference: rippled OfferStream.cpp lines 256-265
-				if s.offerExpired(offer) {
-					if err := s.removeExpiredOffer(sb, offer, offerKey); err != nil {
-						return nil, [32]byte{}, &offerCleanupError{cause: err}
-					}
-					if ofrsToRm != nil {
-						ofrsToRm[offerKey] = true
-					}
-					s.recordPermRm(offerKey)
-					continue
-				}
-
-				if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && s.domainID != nil && offer.DomainID != *s.domainID {
-					throwFlowError(ter.TecINTERNAL)
-				}
-
-				// The single funded/groom rule, applied to every offer the walk
-				// steps onto and read from the live working sandbox — rippled's
-				// OfferStream::step. A deep-frozen or zero-amount offer is a
-				// permanent removal; an unfunded or tiny/increased-quality offer is
-				// classified FOUND (still unfunded/tiny in the pristine afView →
-				// permanent, survives a limiting-step reset) or BECAME (this flow's
-				// crossing drained the owner → a plain working-sandbox delete that
-				// rides the sandbox reset/apply lifecycle, never the permanent
-				// removableOffers set). Only a funded, non-groomable offer is
-				// yielded for crossing, so the main loop and trailing drain no
-				// longer repeat any funded check.
-				// Reference: rippled OfferStream.cpp step() lines 271-404.
-				offerOwner, ownerErr := state.DecodeAccountID(offer.Account)
-				if ownerErr != nil {
-					continue
-				}
-				if offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
-					ofrsToRm[offerKey] = true
-					s.recordPermRm(offerKey)
-					continue
-				}
-				deepFrozen, err := s.isDeepFrozenIssue(sb, offerOwner, s.book.In)
-				if err != nil {
-					return nil, [32]byte{}, err
-				}
-				if deepFrozen {
-					ofrsToRm[offerKey] = true
-					s.recordPermRm(offerKey)
-					continue
-				}
-
-				// Domain membership check: if the offer has a DomainID (domain or
-				// hybrid offer), verify the owner is still in that domain. Owners
-				// who have left the domain (or whose credential has expired) have
-				// their offers treated as unfunded and removed. With
-				// fixCleanup3_3_0 enabled, this check is limited to domain books so
-				// expired hybrid offers remain usable in the open book.
-				// Reference: rippled OfferStream.cpp lines 294-303
-				if s.offerOutOfDomain(sb, offer) {
-					ofrsToRm[offerKey] = true
-					s.recordPermRm(offerKey)
-					continue
-				}
-				groomed, err := s.groomUnfundedOffer(sb, afView, offer, offerKey, offerOwner, ofrsToRm)
-				if err != nil {
-					return nil, [32]byte{}, err
-				}
-				if groomed {
-					continue
-				}
-
-				return offer, offerKey, nil
-			}
-
-			// Follow IndexNext to next page
-			if dir.IndexNext == 0 {
-				break // No more pages at this quality
-			}
-			pageKey = keylet.DirPage(rootKey, dir.IndexNext)
-			pageData, err := sb.Read(pageKey)
-			if err != nil || pageData == nil {
-				break
-			}
-			dir, err = state.ParseDirectoryNode(pageData)
-			if err != nil {
-				break
 			}
 		}
 
-		// All offers at this quality consumed — move to next quality
-		searchKey = foundKey
+		// Count this offer before the expiry/funding/removal checks,
+		// mirroring rippled's OfferStream::step where counter_.step()
+		// runs before those checks. When the limit is reached, stop the
+		// walk without counting or touching this offer. Mark it visited
+		// so every offer the walk advances to is counted exactly once —
+		// even one skipped just below as expired, missing or
+		// domain-removed — and is never re-counted on a later walk.
+		if !s.stepOfferCounter() {
+			return nil, [32]byte{}, nil
+		}
+		if visited != nil {
+			visited[offerKey] = true
+		}
+
+		offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
+		if err != nil || offerData == nil {
+			// Dangling sfIndexes entry: the directory page references an
+			// offer SLE that no longer exists. Erase the stale index from
+			// the current page in both the execution sandbox and the cancel
+			// view, mirroring rippled's OfferStream::step removal of a
+			// directory item with no corresponding ledger entry.
+			s.eraseDanglingOffer(sb, cursor.page, offerKey)
+			s.eraseDanglingOffer(afView, cursor.page, offerKey)
+			continue
+		}
+
+		offer, err := state.ParseLedgerOffer(offerData)
+		if err != nil {
+			continue
+		}
+
+		// Check offer expiration
+		// Reference: rippled OfferStream.cpp lines 256-265
+		if s.offerExpired(offer) {
+			if err := s.removeExpiredOffer(sb, offer, offerKey); err != nil {
+				return nil, [32]byte{}, &offerCleanupError{cause: err}
+			}
+			if ofrsToRm != nil {
+				ofrsToRm[offerKey] = true
+			}
+			s.recordPermRm(offerKey)
+			continue
+		}
+
+		if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && s.domainID != nil && offer.DomainID != *s.domainID {
+			throwFlowError(ter.TecINTERNAL)
+		}
+
+		// The single funded/groom rule, applied to every offer the walk
+		// steps onto and read from the live working sandbox — rippled's
+		// OfferStream::step. A deep-frozen or zero-amount offer is a
+		// permanent removal; an unfunded or tiny/increased-quality offer is
+		// classified FOUND (still unfunded/tiny in the pristine afView →
+		// permanent, survives a limiting-step reset) or BECAME (this flow's
+		// crossing drained the owner → a plain working-sandbox delete that
+		// rides the sandbox reset/apply lifecycle, never the permanent
+		// removableOffers set). Only a funded, non-groomable offer is
+		// yielded for crossing, so the main loop and trailing drain no
+		// longer repeat any funded check.
+		// Reference: rippled OfferStream.cpp step() lines 271-404.
+		offerOwner, ownerErr := state.DecodeAccountID(offer.Account)
+		if ownerErr != nil {
+			continue
+		}
+		if offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
+			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+			continue
+		}
+		deepFrozen, err := s.isDeepFrozenIssue(sb, offerOwner, s.book.In)
+		if err != nil {
+			return nil, [32]byte{}, err
+		}
+		if deepFrozen {
+			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+			continue
+		}
+
+		// Domain membership check: if the offer has a DomainID (domain or
+		// hybrid offer), verify the owner is still in that domain. Owners
+		// who have left the domain (or whose credential has expired) have
+		// their offers treated as unfunded and removed. With
+		// fixCleanup3_3_0 enabled, this check is limited to domain books so
+		// expired hybrid offers remain usable in the open book.
+		// Reference: rippled OfferStream.cpp lines 294-303
+		if s.offerOutOfDomain(sb, offer) {
+			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+			continue
+		}
+		groomed, err := s.groomUnfundedOffer(sb, afView, offer, offerKey, offerOwner, ofrsToRm)
+		if err != nil {
+			return nil, [32]byte{}, err
+		}
+		if groomed {
+			continue
+		}
+
+		return offer, offerKey, nil
 	}
 }
 
