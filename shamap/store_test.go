@@ -495,15 +495,16 @@ func TestBacked_LazyLoading(t *testing.T) {
 		t.Error("Key1 data mismatch after lazy load")
 	}
 
-	// Now some children should be loaded (the path to key1)
+	// Normal reads materialize the requested path only for this operation. They
+	// do not attach clean descendants to a shared backed tree.
 	childrenLoadedAfter := 0
 	for i := range BranchFactor {
 		if c, _, _ := backed.tree.root.LoadChild(i); c != nil {
 			childrenLoadedAfter++
 		}
 	}
-	if childrenLoadedAfter == 0 {
-		t.Error("At least one child should be loaded after Get")
+	if childrenLoadedAfter != 0 {
+		t.Errorf("Get attached %d clean children to a backed tree", childrenLoadedAfter)
 	}
 }
 

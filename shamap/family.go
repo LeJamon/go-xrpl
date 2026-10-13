@@ -21,6 +21,10 @@ type fullBelowCacheProvider interface {
 	FullBelowCache() *FullBelowCache
 }
 
+type cleanResidencyProvider interface {
+	SHAMapCleanResidency() *CleanResidency
+}
+
 type durableFamily interface {
 	FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error)
 }
@@ -41,6 +45,7 @@ type familyAccess struct {
 	durable         durableFamily
 	durableSnapshot durableSnapshotFamily
 	placement       nodePlacementFamily
+	residency       *CleanResidency
 }
 
 func bindFamily(family Family) *familyAccess {
@@ -51,6 +56,9 @@ func bindFamily(family Family) *familyAccess {
 	access.durable, _ = family.(durableFamily)
 	access.durableSnapshot, _ = family.(durableSnapshotFamily)
 	access.placement, _ = family.(nodePlacementFamily)
+	if provider, ok := family.(cleanResidencyProvider); ok {
+		access.residency = provider.SHAMapCleanResidency()
+	}
 	return access
 }
 

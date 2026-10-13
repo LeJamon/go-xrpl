@@ -167,12 +167,21 @@ func materializePrefixNode(body prefixNodeBody) (mapNode, error) {
 }
 
 func decodeAndVerifyPrefixNode(data []byte, expected [32]byte) (mapNode, error) {
-	node, err := deserializeFromPrefix(data)
+	node, _, err := decodeAndVerifyPrefixNodeRecord(data, expected)
+	return node, err
+}
+
+func decodeAndVerifyPrefixNodeRecord(data []byte, expected [32]byte) (mapNode, prefixNodeBody, error) {
+	body, err := decodePrefixBody(data)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+		return nil, prefixNodeBody{}, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+	}
+	node, err := materializePrefixNode(body)
+	if err != nil {
+		return nil, prefixNodeBody{}, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
 	}
 	if actual := node.Hash(); actual != expected {
-		return nil, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, expected[:8], actual[:8])
+		return nil, prefixNodeBody{}, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, expected[:8], actual[:8])
 	}
-	return node, nil
+	return node, body, nil
 }
