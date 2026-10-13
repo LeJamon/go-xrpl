@@ -60,10 +60,10 @@ func (r *RootReader) read(ctx context.Context, hash [32]byte) (rootReaderNode, e
 	}
 	data, err := r.access.fetch(ctx, hash)
 	if err != nil {
-		return rootReaderNode{}, fmt.Errorf("shamap: fetch node %x: %w", hash[:8], err)
+		return rootReaderNode{}, fmt.Errorf("shamap: fetch node %x: %w", [8]byte(hash[:8]), err)
 	}
 	if len(data) == 0 {
-		return rootReaderNode{}, fmt.Errorf("shamap: fetch node %x: %w", hash[:8], &MissingNodeError{Hash: hash})
+		return rootReaderNode{}, fmt.Errorf("shamap: fetch node %x: %w", [8]byte(hash[:8]), &MissingNodeError{Hash: hash})
 	}
 	charge := commitmentNodeCharge(data)
 	if err := reserveCommitmentMemory(ctx, r.budget, charge); err != nil {
@@ -72,7 +72,7 @@ func (r *RootReader) read(ctx context.Context, hash [32]byte) (rootReaderNode, e
 	node, err := decodeCommitmentNode(data, hash)
 	if err != nil {
 		releaseCommitmentMemory(r.budget, charge)
-		return rootReaderNode{}, fmt.Errorf("shamap: decode node %x: %w", hash[:8], err)
+		return rootReaderNode{}, fmt.Errorf("shamap: decode node %x: %w", [8]byte(hash[:8]), err)
 	}
 
 	if node.inner {

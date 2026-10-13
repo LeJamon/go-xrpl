@@ -55,7 +55,7 @@ func decodeCommitmentNode(data []byte, expected [32]byte) (commitmentNodeView, e
 
 	actual := hashCommitmentPrefix(data, view.inner && view.branches == 0)
 	if actual != expected {
-		return commitmentNodeView{}, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, expected[:8], actual[:8])
+		return commitmentNodeView{}, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, [8]byte(expected[:8]), [8]byte(actual[:8]))
 	}
 	return view, nil
 }

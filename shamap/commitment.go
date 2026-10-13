@@ -278,7 +278,7 @@ func validateCommitmentKeyPath(key, path [32]byte, depth int) error {
 		return fmt.Errorf("shamap: leaf path depth %d is outside the authenticated range", depth)
 	}
 	if !commitmentPathPrefixEq(key, path, depth) {
-		return fmt.Errorf("shamap: leaf key %x does not match authenticated path at depth %d", key[:8], depth)
+		return fmt.Errorf("shamap: leaf key %x does not match authenticated path at depth %d", [8]byte(key[:8]), depth)
 	}
 	return nil
 }
@@ -425,7 +425,7 @@ func BuildChanges(
 		}
 		if base.kind != NodeTypeInner {
 			base.release(builder.budget)
-			return BuildResult{}, fmt.Errorf("shamap: parent root %x is not an inner node", parentRoot[:8])
+			return BuildResult{}, fmt.Errorf("shamap: parent root %x is not an inner node", [8]byte(parentRoot[:8]))
 		}
 	}
 	result, err := builder.build(base, 0, [32]byte{}, true)
@@ -478,10 +478,10 @@ func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
 	}
 	data, err := b.access.fetch(b.ctx, hash)
 	if err != nil {
-		return commitmentBase{}, fmt.Errorf("shamap: fetch parent node %x: %w", hash[:8], err)
+		return commitmentBase{}, fmt.Errorf("shamap: fetch parent node %x: %w", [8]byte(hash[:8]), err)
 	}
 	if len(data) == 0 {
-		return commitmentBase{}, fmt.Errorf("shamap: fetch parent node %x: %w", hash[:8], &MissingNodeError{Hash: hash})
+		return commitmentBase{}, fmt.Errorf("shamap: fetch parent node %x: %w", [8]byte(hash[:8]), &MissingNodeError{Hash: hash})
 	}
 	charge := commitmentNodeCharge(data)
 	if err := b.reserve(charge); err != nil {
@@ -490,7 +490,7 @@ func (b *commitmentBuilder) load(hash [32]byte) (commitmentBase, error) {
 	node, err := decodeCommitmentNode(data, hash)
 	if err != nil {
 		releaseCommitmentMemory(b.budget, charge)
-		return commitmentBase{}, fmt.Errorf("shamap: decode parent node %x: %w", hash[:8], err)
+		return commitmentBase{}, fmt.Errorf("shamap: decode parent node %x: %w", [8]byte(hash[:8]), err)
 	}
 	base := commitmentBase{commitmentRef: commitmentRef{hash: hash}, charge: charge}
 	if node.inner {
@@ -965,7 +965,7 @@ func (b *commitmentBuilder) emitEntry(entry FlushEntry, inner bool, charge uint6
 		b.budget.Release(charge)
 	}
 	if err != nil {
-		return fmt.Errorf("shamap: emit node %x: %w", entry.Hash[:8], err)
+		return fmt.Errorf("shamap: emit node %x: %w", [8]byte(entry.Hash[:8]), err)
 	}
 	return b.ctx.Err()
 }
