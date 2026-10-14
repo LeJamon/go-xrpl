@@ -474,7 +474,9 @@ func TestAcquisitionStoreScopePromotionKeepsDurableReads(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, second.Data, data)
 
-	require.NoError(t, scope.Promote(t.Context()))
+	promoted, err := scope.Promote(t.Context())
+	require.NoError(t, err)
+	require.Same(t, base, promoted)
 	data, err = scope.FetchDurable(t.Context(), second.Hash)
 	require.NoError(t, err)
 	require.Equal(t, second.Data, data)
@@ -812,7 +814,8 @@ func TestAcquisitionStoreScopePromoteWaitsForAdmittedWrite(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	promoteDone := make(chan error, 1)
 	go func() {
-		promoteDone <- scope.Promote(t.Context())
+		_, err := scope.Promote(t.Context())
+		promoteDone <- err
 	}()
 	select {
 	case err := <-promoteDone:
@@ -1051,7 +1054,9 @@ func TestStandardReplayReloadsPromotedTransactionMap(t *testing.T) {
 	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
 		return scope.StoreBatch(t.Context(), entries)
 	}))
-	require.NoError(t, scope.Promote(t.Context()))
+	promoted, err := scope.Promote(t.Context())
+	require.NoError(t, err)
+	require.Same(t, base, promoted)
 	base.clearCached()
 
 	entry := &standardReplayEntry{

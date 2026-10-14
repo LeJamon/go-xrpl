@@ -1285,12 +1285,11 @@ func (l *Ledger) checkpointPersistence(ctx context.Context, useful int, force bo
 	return nil
 }
 
-// PromotePersistence seals a successfully flushed acquisition for use by its
-// adopted ledger. Future reads use durable storage and future writes pass
-// synchronously through to that storage.
+// PromotePersistence acknowledges flushed acquisition writes and binds the
+// maps to the underlying Family for use by adopted ledgers.
 func (l *Ledger) PromotePersistence(ctx context.Context) error {
 	promoter, ok := l.family.(interface {
-		Promote(context.Context) error
+		Promote(context.Context) (shamap.Family, error)
 	})
 	if !ok {
 		return nil
@@ -1301,7 +1300,8 @@ func (l *Ledger) PromotePersistence(ctx context.Context) error {
 	l.mu.Lock()
 	stateMap, txMap := l.stateMap, l.txMap
 	l.mu.Unlock()
-	if err := promoter.Promote(ctx); err != nil {
+	family, err := promoter.Promote(ctx)
+	if err != nil {
 		return err
 	}
 	if stateMap != nil {
@@ -1312,6 +1312,11 @@ func (l *Ledger) PromotePersistence(ctx context.Context) error {
 	if txMap != nil {
 		if err := txMap.AcknowledgePersistedContext(ctx); err != nil {
 			return err
+		}
+	}
+	for _, m := range []*shamap.SHAMap{stateMap, txMap} {
+		if m != nil {
+			m.SetFamily(family)
 		}
 	}
 	return nil
@@ -1332,8 +1337,7 @@ func (l *Ledger) RetirePersistence(ctx context.Context) error {
 }
 
 // ReleaseAcquisitionMemory ends acquisition ownership after publication. It
-// leaves the promoted persistence family intact: adopted ledger snapshots may
-// still use that family for normal cached reads and synchronous writes.
+// leaves persistence available to adopted ledger snapshots.
 // RetirePersistence is for abandoned scopes, not successful handoffs.
 func (l *Ledger) ReleaseAcquisitionMemory() {
 	l.retired.Store(true)
