@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"testing"
+	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -43,13 +45,21 @@ func TestAcquiredLedgerSuccessorsReleaseCleanResidency(t *testing.T) {
 	t.Cleanup(c.acquisitionStore.stopDrain)
 	t.Cleanup(func() { router.StopAcquisitions() })
 	scope := c.acquisitionStore.scope().(*acquisitionStoreScope)
-	root, rootData, wire := buildSelfHealSourceState(t)
-	h := svc.GetClosedLedger().Header()
-	h.ParentHash = h.Hash
-	h.LedgerIndex++
-	h.AccountHash = root
-	h.TxHash = [32]byte{}
-	h.Hash = header.CalculateHash(h)
+	closeTime := svc.GetClosedLedger().CloseTime().Add(time.Second)
+	source, err := ledger.NewOpen(svc.GetClosedLedger(), closeTime)
+	require.NoError(t, err)
+	require.NoError(t, source.Close(closeTime, 0))
+	sourceState, err := source.StateMapSnapshot()
+	require.NoError(t, err)
+	rootData, err := sourceState.SerializeRoot()
+	require.NoError(t, err)
+	wireNodes, err := sourceState.WalkWireNodes()
+	require.NoError(t, err)
+	wire := make([]message.LedgerNode, 0, len(wireNodes))
+	for _, node := range wireNodes {
+		wire = append(wire, message.LedgerNode{NodeID: node.NodeID, NodeData: node.Data})
+	}
+	h := source.Header()
 	acquired := inbound.NewGeneric(h.Hash, h.LedgerIndex, 7, serveTestLogger(), inbound.WithFamily(scope))
 	require.NoError(t, acquired.GotBase([]message.LedgerNode{
 		{NodeData: header.AddRaw(h, false)}, {NodeData: rootData},
