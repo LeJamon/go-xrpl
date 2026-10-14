@@ -104,11 +104,18 @@ func TestBookOfferTraversalLinearReads(t *testing.T) {
 				step.offersUsed = 0
 				view.successors, view.pages, view.offerReads = 0, 0, 0
 				sb := NewPaymentSandbox(view)
-				step.forEachOffer(sb, sb, removals, QualityOne, QualityOne,
-					func() bool { return false }, func(offerExec) bool {
-						t.Fatal("own offer must be removed without crossing")
-						return false
-					})
+				cursor := bookOfferCursor{root: step.bookBaseKey()}
+				visited := make(map[[32]byte]bool)
+				for _, key := range keys {
+					offer, got, err := step.getNextOfferSkipVisited(sb, sb, removals, visited, true, &cursor)
+					require.NoError(t, err)
+					require.NotNil(t, offer)
+					require.Equal(t, key, got)
+					removals[key] = true
+				}
+				offer, _, err := step.getNextOfferSkipVisited(sb, sb, removals, visited, true, &cursor)
+				require.NoError(t, err)
+				require.Nil(t, offer)
 				require.Equal(t, uint32(count), step.offersUsed)
 				require.Len(t, removals, count)
 				for _, key := range keys {

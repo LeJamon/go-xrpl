@@ -185,3 +185,114 @@ func TestBookStep_ErasesDanglingDirectoryEntry(t *testing.T) {
 			"%s: dangling index must be erased, real offer index retained", name)
 	}
 }
+
+func newBeyondQualityCounterFixture(t testing.TB) (*BookStep, *bookCursorView, [][32]byte) {
+	t.Helper()
+
+	const offerCount = 1000
+	step, view, keys := newBookCursorFixture(t, offerCount, offerCount-1)
+	step.strandSrc = [20]byte{3}
+	step.strandDst = [20]byte{4}
+	step.parentCloseTime = 100
+
+	first, err := state.ParseLedgerOffer(view.data[keys[0]])
+	require.NoError(t, err)
+	qualityLimit := step.offerQuality(first)
+	step.qualityLimit = &qualityLimit
+
+	for _, key := range keys[:offerCount-1] {
+		offer, err := state.ParseLedgerOffer(view.data[key])
+		require.NoError(t, err)
+		offer.Expiration = step.parentCloseTime
+		view.data[key], err = state.SerializeLedgerOffer(offer)
+		require.NoError(t, err)
+	}
+
+	tip, err := state.ParseLedgerOffer(view.data[keys[offerCount-1]])
+	require.NoError(t, err)
+	tipQuality := step.offerQuality(tip)
+	require.True(t, qualityLimit.BetterThan(tipQuality))
+	owner, err := state.DecodeAccountID(tip.Account)
+	require.NoError(t, err)
+	require.NotEqual(t, step.strandSrc, owner)
+
+	return step, view, keys
+}
+
+func TestBookStep_OfferCounterCountsBeyondQualityTip(t *testing.T) {
+	step, view, keys := newBeyondQualityCounterFixture(t)
+	tipKey := keys[len(keys)-1]
+	tipBefore := append([]byte(nil), view.data[tipKey]...)
+	tipOffer, err := state.ParseLedgerOffer(tipBefore)
+	require.NoError(t, err)
+	tipPageKey := keylet.DirPage(tipOffer.BookDirectory, tipOffer.BookNode)
+	tipPageBefore := append([]byte(nil), view.data[tipPageKey.Key]...)
+
+	sb := NewPaymentSandbox(view)
+	sb.SetTransactionContext([32]byte{}, 1)
+	ofrsToRm := make(map[[32]byte]bool)
+	gotIn, gotOut := step.Rev(sb, sb, ofrsToRm, NewXRPEitherAmount(1))
+
+	require.True(t, gotIn.IsZero())
+	require.True(t, gotOut.IsZero())
+	require.Equal(t, uint32(1000), step.OffersUsed())
+	require.True(t, step.Inactive())
+	require.False(t, ofrsToRm[tipKey])
+
+	tipAfter, err := sb.Read(keylet.Keylet{Key: tipKey})
+	require.NoError(t, err)
+	require.Equal(t, tipBefore, tipAfter, "a counted quality-rejected tip must remain unchanged")
+	tipPageAfter, err := sb.Read(tipPageKey)
+	require.NoError(t, err)
+	require.Equal(t, tipPageBefore, tipPageAfter, "a counted quality-rejected tip must remain in its directory")
+}
+
+func TestBookStep_OfferCounterKeepsQualityRejectedTipForAMMProbe(t *testing.T) {
+	step, view, keys := newBeyondQualityCounterFixture(t)
+	tipKey := keys[len(keys)-1]
+	tip, err := state.ParseLedgerOffer(view.data[tipKey])
+	require.NoError(t, err)
+	wantQuality := step.offerQuality(tip)
+
+	sb := NewPaymentSandbox(view)
+	visited := make(map[[32]byte]bool)
+	ofrsToRm := make(map[[32]byte]bool)
+	for _, key := range keys[:len(keys)-1] {
+		visited[key] = true
+		ofrsToRm[key] = true
+	}
+
+	step.maxOffersToConsume = maxOffersToConsume()
+	step.offersUsed = maxOffersToConsume() - 1
+	cursor := &bookOfferCursor{root: step.bookBaseKey()}
+	offer, offerKey, err := step.getNextOfferSkipVisited(
+		sb, sb, ofrsToRm, visited, true, cursor,
+	)
+	require.NoError(t, err)
+	require.Nil(t, offer)
+	require.Zero(t, offerKey)
+	require.Equal(t, maxOffersToConsume(), step.OffersUsed())
+	require.False(t, visited[tipKey], "quality rejection must leave the tip visible to the AMM probe")
+
+	gotQuality, err := step.firstCrossableTipQuality(sb, ofrsToRm, visited)
+	require.NoError(t, err)
+	require.NotNil(t, gotQuality)
+	require.Equal(t, wantQuality, *gotQuality)
+
+	// A counter already at its limit must leave a newly encountered tip both
+	// uncounted and untouched.
+	tipBefore := append([]byte(nil), view.data[tipKey]...)
+	step.offersUsed = maxOffersToConsume()
+	cursor = &bookOfferCursor{root: step.bookBaseKey()}
+	offer, offerKey, err = step.getNextOfferSkipVisited(
+		sb, sb, ofrsToRm, visited, true, cursor,
+	)
+	require.NoError(t, err)
+	require.Nil(t, offer)
+	require.Zero(t, offerKey)
+	require.Equal(t, maxOffersToConsume(), step.OffersUsed())
+	require.False(t, visited[tipKey])
+	tipAfter, err := sb.Read(keylet.Keylet{Key: tipKey})
+	require.NoError(t, err)
+	require.Equal(t, tipBefore, tipAfter)
+}

@@ -74,6 +74,10 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			}
 		}
 
+		if !s.stepOfferCounter() {
+			return nil, [32]byte{}, nil
+		}
+
 		// In a beyond-limit directory the taker crosses nothing past its
 		// limit. rippled's OfferStream::step still advances the book tip into
 		// such a directory and perm-removes any offer it walks over that it
@@ -138,16 +142,8 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			}
 		}
 
-		// Count this offer before the expiry/funding/removal checks,
-		// mirroring rippled's OfferStream::step where counter_.step()
-		// runs before those checks. When the limit is reached, stop the
-		// walk without counting or touching this offer. Mark it visited
-		// so every offer the walk advances to is counted exactly once —
-		// even one skipped just below as expired, missing or
-		// domain-removed — and is never re-counted on a later walk.
-		if !s.stepOfferCounter() {
-			return nil, [32]byte{}, nil
-		}
+		// A rejected tip still counts, but must remain visible to the AMM
+		// quality probe, which skips visited offers.
 		if visited != nil {
 			visited[offerKey] = true
 		}
