@@ -45,7 +45,9 @@ func TestAcquisitionPromotedRuntimeReadsUseNodeCache(t *testing.T) {
 	base.clearCached()
 	lane := newAcquisitionStoreLane(base, slog.Default(), 1)
 	scope := lane.scope().(*acquisitionStoreScope)
-	require.NoError(t, scope.Promote(t.Context()))
+	promoted, err := scope.Promote(t.Context())
+	require.NoError(t, err)
+	require.Same(t, base, promoted)
 	for range 2 {
 		data, err := scope.Fetch(t.Context(), entry.Hash)
 		require.NoError(t, err)

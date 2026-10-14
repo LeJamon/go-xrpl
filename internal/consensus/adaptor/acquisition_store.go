@@ -43,7 +43,7 @@ func (s *acquisitionStoreScope) Fetch(ctx context.Context, hash [32]byte) ([]byt
 	promoted, retired := s.promoted, s.retired
 	s.mu.Unlock()
 	if promoted {
-		// Promotion has drained this scope's writes. Descendant live ledgers
+		// Promotion has drained this scope's writes. Earlier snapshots can
 		// retain this Family, so ordinary reads must use the normal NodeStore
 		// cache, not the acquisition verifier's uncached read path. Placement
 		// and explicit durability reads keep their separate rules below.
@@ -113,29 +113,29 @@ func (s *acquisitionStoreScope) Retire(context.Context) error {
 	return nil
 }
 
-func (s *acquisitionStoreScope) Promote(ctx context.Context) error {
+func (s *acquisitionStoreScope) Promote(ctx context.Context) (shamap.Family, error) {
 	s.admission.Lock()
 	defer s.admission.Unlock()
 
 	s.mu.Lock()
 	if s.retired {
 		s.mu.Unlock()
-		return errors.New("acquisition persistence scope retired")
+		return nil, errors.New("acquisition persistence scope retired")
 	}
 	s.mu.Unlock()
 
 	if err := s.lane.flushScope(ctx, s); err != nil {
-		return err
+		return nil, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.retired {
-		return errors.New("acquisition persistence scope retired")
+		return nil, errors.New("acquisition persistence scope retired")
 	}
 	s.promoted = true
 	s.err = nil
-	return nil
+	return s.lane.base, nil
 }
 
 func (s *acquisitionStoreScope) FullBelowCache() *shamap.FullBelowCache {

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +33,7 @@ func TestNodeMemoryAutomaticSizingAndProgressReserves(t *testing.T) {
 	require.Equal(t, uint64(1<<30), memory.storageBytes)
 	require.True(t, memory.nodes.TryReserve(initial.SharedAvailable))
 	require.False(t, memory.nodes.TryReserve(1))
+	require.False(t, memory.cleanNodes.TryReserve(1), "decoded and serialized caches must share the total allowance")
 	for _, account := range initial.Accounts {
 		if account.Minimum == 0 {
 			continue
@@ -101,6 +104,30 @@ func TestNodeMemoryStorageFailureAndShutdownRelease(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, runtime.memory.storageBytes, runtime.memory.pool.Snapshot().Used)
+			tree, err := shamap.NewBacked(shamap.TypeState, runtime.nodeFamily)
+			require.NoError(t, err)
+			keys := make([][32]byte, 64)
+			for i := range keys {
+				keys[i] = sha256.Sum256([]byte{byte(i)})
+				require.NoError(t, tree.Put(keys[i], make([]byte, 24)))
+			}
+			require.NoError(t, tree.StoreDirtyAndRelease(func(entries []shamap.FlushEntry) error {
+				return runtime.nodeFamily.StoreBatch(t.Context(), entries)
+			}))
+			for _, key := range keys {
+				_, found, err := tree.Get(key)
+				require.NoError(t, err)
+				require.True(t, found)
+			}
+			stats := runtime.nodeFamily.SHAMapCleanResidency().Stats()
+			require.Positive(t, stats.UsedBytes)
+			require.Positive(t, stats.Nodes)
+			require.Equal(t, runtime.memory.cleanNodes.Limit(), stats.Limit)
+			for _, account := range runtime.memory.pool.Snapshot().Accounts {
+				if account.Name == "shamap_cache" {
+					require.Equal(t, stats.UsedBytes, account.Used)
+				}
+			}
 			require.NoError(t, runtime.shutdownWithin(5*time.Second))
 			require.Zero(t, runtime.memory.pool.Snapshot().Used)
 		})

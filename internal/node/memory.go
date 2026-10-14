@@ -17,6 +17,7 @@ type nodeMemory struct {
 	pool               *membudget.Pool
 	acquisition        *membudget.Account
 	nodes              *membudget.Account
+	cleanNodes         *membudget.Account
 	fullBelow          *membudget.Account
 	relay              *membudget.Account
 	persistence        *membudget.Account
@@ -127,6 +128,7 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 		dest **membudget.Account
 	}{
 		{"node_cache", &m.nodes},
+		{"shamap_cache", &m.cleanNodes},
 		{"relay_cache", &m.relay},
 	} {
 		*item.dest, err = account(item.name, 0, limit)

@@ -79,6 +79,7 @@ type nodeRuntime struct {
 	stopSampler               func()
 	stopWatchdog              func()
 	stopMemoryMetrics         func()
+	stopSHAMapMetrics         func()
 }
 
 func newNodeRuntime(
@@ -140,6 +141,9 @@ func (r *nodeRuntime) run() (runErr error) {
 		if r.stopMemoryMetrics != nil {
 			r.stopMemoryMetrics()
 		}
+		if r.stopSHAMapMetrics != nil {
+			r.stopSHAMapMetrics()
+		}
 	}()
 
 	stages := []func() error{
@@ -189,8 +193,11 @@ func (r *nodeRuntime) configureStorage() error {
 		var options backend.NodeStoreOptions
 		if r.memory != nil {
 			options.CacheMemoryBudget = r.memory.fullBelow
+			options.CleanMemoryBudget = r.memory.cleanNodes
+			options.CleanCacheBytes = r.memory.cleanNodes.Limit()
 		}
 		r.nodeFamily = backend.New(r.nodeStore, options)
+		r.stopSHAMapMetrics = observability.SetSHAMapCleanResidency(r.nodeFamily.SHAMapCleanResidency())
 	}
 	return nil
 }
@@ -1491,6 +1498,7 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 
 	if r.nodeFamily != nil {
 		r.nodeFamily.FullBelowCache().Close()
+		r.nodeFamily.SHAMapCleanResidency().Close()
 	}
 	if r.nodeStore != nil {
 		_, err := runShutdownPhaseWithin(ctx, storeShutdownGrace, "close node store", func() error {

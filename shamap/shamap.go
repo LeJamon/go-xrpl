@@ -162,14 +162,17 @@ func (sm *SHAMap) SetFamily(family Family) {
 	sm.acquisition.walkMu.Lock()
 	sm.tree.mu.Lock()
 	sm.backing.mu.Lock()
-	sm.backing.access = access
 	sm.releaseBackedWalkCursorLocked()
+	if sm.tree.root != nil {
+		sm.tree.root = sm.tree.root.cloneSharedHeader()
+	}
+	sm.backing.access = access
+	sm.backing.fullBelow = fullBelow
 	sm.acquisition.base = nil
 	if family != nil {
 		if sm.acquisition.budget == nil {
 			sm.acquisition.budget = NewAcquisitionBudget(0)
 		}
-		sm.backing.fullBelow = fullBelow
 	}
 	sm.backing.mu.Unlock()
 	sm.tree.mu.Unlock()
@@ -231,15 +234,14 @@ func (sm *SHAMap) descend(inner *innerNode, branch int) (mapNode, error) {
 }
 
 // descendCtx returns the child node at the given branch of an inner node.
-// For backed maps, if the child pointer is nil but the hash is set, the
-// node is fetched from the Family and deserialized.
-//
-// Safe to call while holding only the tree read lock: all child/hash access
-// goes through innerNode.LoadChild and the lazy attach uses SetChildIfNil,
-// so concurrent readers racing on the same branch all return the same
-// installed child. Each SHAMap retains its own deserialised subtree.
+// For backed maps, if the child pointer is nil but the hash is set, the node
+// is fetched from the Family and deserialized. Normal reads deliberately do
+// not attach that clean node to the tree: mutation walks already retain their
+// ancestor path and dirtyUp copies the path before publishing a change. Sync
+// walks remain attachable because their acquisition budget owns the loaded
+// nodes until the persistence acknowledgement.
 func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) (mapNode, error) {
-	return sm.readChild(ctx, inner, branch, true)
+	return sm.readChild(ctx, inner, branch, sm.tree.state == stateSyncing)
 }
 
 // readChild can fetch a child without attaching it to a shared tree. Serving
@@ -262,6 +264,18 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 		return nil, nil
 	}
 
+	var (
+		residency           *CleanResidency
+		residencyGeneration uint64
+	)
+	if !retain && access.residency != nil {
+		residency = access.residency
+		residencyGeneration = residency.beginRead()
+		if node, ok := residency.lookup(hash); ok {
+			return node, nil
+		}
+	}
+
 	data, err := access.fetch(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
@@ -271,11 +285,14 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 	}
 
 	// Fresh deserialised copy — not shared across SHAMap instances.
-	node, err := decodeAndVerifyPrefixNode(data, hash)
+	node, body, err := decodeAndVerifyPrefixNodeRecord(data, hash)
 	if err != nil {
 		return nil, err
 	}
 	if !retain {
+		if residency != nil {
+			residency.insertForGeneration(residencyGeneration, hash, body)
+		}
 		return node, nil
 	}
 

@@ -491,6 +491,10 @@ func (p *persistenceWorker) waitForNodePersists(ctx context.Context) error {
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
 	s.beginNodePersist()
 	defer s.endNodePersist()
+	var releaseClean func()
+	if family, ok := s.shamapFamily.(*backend.NodeStore); ok && family.UsesDatabase(s.nodeStore) {
+		releaseClean = l.PrepareCleanResidencyRelease(family)
+	}
 	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
 		return func(entries []shamap.FlushEntry) error {
 			if family, ok := s.shamapFamily.(*backend.NodeStore); ok {
@@ -545,6 +549,9 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 	// unblocks the caller (see KVDatabaseImpl.Sync).
 	if err := s.nodeStore.Sync(ctx); err != nil {
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
+	}
+	if releaseClean != nil {
+		releaseClean()
 	}
 	return nil
 }
