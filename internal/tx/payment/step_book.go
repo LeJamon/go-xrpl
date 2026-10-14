@@ -606,6 +606,19 @@ func (s *BookStep) forEachOffer(
 		}
 		consumed = true
 
+		// BookTip::step erases a skipped tip from the working view before
+		// advancing, even when it was self-crossed/unauthorized rather than
+		// consumed. Keep the permanent-removal set for discarded strands, but
+		// do not defer this working-view deletion to Flow's sorted cleanup:
+		// offer-key order can differ from book order, changing adjacent deleted
+		// owner pages' link metadata (testnet ledger 21481628). This write stays
+		// in sb, so a reverse/forward reset discards it with the attempted pass.
+		if ofrsToRm[offerKey] {
+			if err := DeleteOfferAtomically(sb, offerKey); err != nil {
+				throwOfferCleanupFailure(err)
+			}
+		}
+
 		// Per-advance became-unfunded deletion. rippled's forEachOffer do-while
 		// runs offers.step() after execOffer returns true (the requested amount is
 		// not yet satisfied and the walk continues); that step()'s BookTip::step
