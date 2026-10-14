@@ -125,9 +125,9 @@ func ExecuteStrand(
 	// preserved. The FlowException's TER is not propagated to the strand result;
 	// Flow() simply treats the strand as dry (it filters on !success || out==0).
 	//
-	// Any other panic value is a genuine bug (nil deref, arithmetic overflow,
-	// etc.) and is re-panicked so it crashes loudly rather than being silently
-	// swallowed into a "dry strand".
+	// Other panics must not become a "dry strand". RippleCalculate handles
+	// protocol arithmetic exceptions at the payment boundary; unexpected bugs
+	// continue to the engine's generic tefEXCEPTION handler.
 	defer func() {
 		if r := recover(); r != nil {
 			flowErr, ok := r.(flowError)

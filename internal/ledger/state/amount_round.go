@@ -312,8 +312,8 @@ func guardNativeOffset(exponent int) {
 
 // guardNativeDrops enforces cMaxNativeN on a native drops magnitude (>= 0),
 // mirroring STAmount::canonicalize's per-multiply and post-loop checks. rippled
-// Throws here; go-xrpl panics, recovered as tefEXCEPTION at the tx-apply boundary
-// and as a path-find failure on the RPC path.
+// throws here; go-xrpl panics. Payment flow maps this to tecINTERNAL, while the
+// generic tx-apply boundary maps unhandled panics to tefEXCEPTION.
 func guardNativeDrops(value int64) {
 	if value > maxNativeDrops {
 		panic("Native currency amount out of range")

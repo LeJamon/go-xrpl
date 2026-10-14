@@ -691,7 +691,7 @@ func RippleCalculate(
 	txHash [32]byte,
 	ledgerSeq uint32,
 	opts ...RippleCalculateOption,
-) RippleCalculateResult {
+) (rc RippleCalculateResult) {
 	// Apply options
 	var rcOpts rippleCalculateOpts
 	for _, opt := range opts {
@@ -707,6 +707,28 @@ func RippleCalculate(
 	// Mirror rippled view.open(): the XRP-movement balance guards select the
 	// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
 	sandbox.SetOpenLedger(rcOpts.openLedger)
+
+	// RippleCalc.cpp in rippled 3.4.1 catches std::exception from payment
+	// flow (including strand construction) and returns a fee-claiming
+	// tecINTERNAL. Amount arithmetic throws those exceptions in C++; its Go
+	// equivalents panic. Do not let them reach the engine's generic
+	// tefEXCEPTION boundary, or a valid failed Payment cannot be replayed.
+	// Keep this at the payment entry point, not Flow/ExecuteStrand: offer
+	// crossing and dry-strand FlowException handling have different semantics.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if !isPaymentFlowArithmeticPanic(recovered) {
+				panic(recovered)
+			}
+			// Discard all accumulated changes, including offer removals. The
+			// transaction engine applies only the fee/sequence for tecINTERNAL.
+			rc = RippleCalculateResult{
+				ActualIn:  ZeroXRPEitherAmount(),
+				ActualOut: ZeroXRPEitherAmount(),
+				Result:    ter.TecINTERNAL,
+			}
+		}
+	}()
 
 	// Convert paths to strands (offerCrossing=false for payments).
 	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false, rcOpts.parentCloseTime)
