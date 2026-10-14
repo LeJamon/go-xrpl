@@ -41,7 +41,6 @@ func (s *BookStep) stepOfferCounter() bool {
 	return true
 }
 
-// getNextOfferSkipVisited returns the next funded offer from this pass's cursor.
 func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, visited map[[32]byte]bool, enforceQualityBound bool, cursor *bookOfferCursor) (*state.LedgerOffer, [32]byte, error) {
 	selfCrossEligible := s.defaultPath && s.strandSrc == s.strandDst
 	for {

@@ -279,8 +279,6 @@ func TestBookStep_OfferCounterKeepsQualityRejectedTipForAMMProbe(t *testing.T) {
 	require.NotNil(t, gotQuality)
 	require.Equal(t, wantQuality, *gotQuality)
 
-	// A counter already at its limit must leave a newly encountered tip both
-	// uncounted and untouched.
 	tipBefore := append([]byte(nil), view.data[tipKey]...)
 	step.offersUsed = maxOffersToConsume()
 	cursor = &bookOfferCursor{root: step.bookBaseKey()}
