@@ -74,7 +74,7 @@ func TestConsensusSuccessorPreparationKeepsReadersAndIngressResponsive(t *testin
 	}
 }
 
-func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
+func TestConsensusSuccessorSurvivesCompletedAcceptanceContext(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -83,7 +83,7 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	sender, destination := jtx.MasterAccount(), jtx.NewAccount("consensus-failure")
 	prior, priorHash := preferredSwitchPaymentBlob(t, env, sender, destination, 20_000_000, 100, 1)
-	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 21_000_000, 100, 1)
+	late, lateHash := preferredSwitchPaymentBlob(t, env, sender, destination, 21_000_000, 100, 2)
 	parent, family := successorPreparationParent(t, svc.GetClosedLedger(), sender.AccountID())
 	require.NoError(t, svc.SwitchToPreferredLedger(parent))
 	priorTx, err := openledger.ParsePendingTx(prior)
@@ -105,7 +105,8 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 
 	cancel()
 	family.unblock()
-	require.ErrorIs(t, <-accepted, context.Canceled)
+	require.NoError(t, <-accepted)
+	require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
 
 	submitted := make(chan error, 1)
 	go func() {
@@ -116,15 +117,15 @@ func TestConsensusSuccessorPreparationFailureReleasesIngress(t *testing.T) {
 		submitted <- submitErr
 	}()
 	require.NoError(t, <-submitted)
-	require.Same(t, parent, svc.GetClosedLedger())
+	require.Equal(t, parent.Sequence()+1, svc.GetClosedLedger().Sequence())
 	current := svc.openLedgerView.Current()
-	for _, hash := range [][32]byte{lateHash} {
+	for _, hash := range [][32]byte{priorHash, lateHash} {
 		present, txErr := current.TxExists(hash)
 		require.NoError(t, txErr)
-		require.True(t, present, "failed successor must leave ingress on original view: %x", hash)
+		require.True(t, present, "successor must retain replay and late ingress: %x", hash)
 	}
 	_, held := svc.localTxs.Get(priorHash)
-	require.True(t, held, "failed successor must retain the held local transaction")
+	require.True(t, held, "local replay must retain the held transaction")
 }
 
 type successorPreparationParentFamily struct {

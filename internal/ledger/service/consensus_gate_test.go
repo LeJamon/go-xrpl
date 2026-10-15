@@ -1,7 +1,6 @@
 package service
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -24,17 +23,6 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	ingressBlob, _ := startupPaymentBlob(t, "cold-gate-ingress", 1)
 	queuedIngressBlob, _ := startupPaymentBlob(t, "cold-gate-queued-ingress", 1)
 
-	relayStarted := make(chan struct{})
-	releaseRelayCh := make(chan struct{})
-	var releaseRelayOnce sync.Once
-	releaseRelay := func() { releaseRelayOnce.Do(func() { close(releaseRelayCh) }) }
-	var relayOnce sync.Once
-	defer releaseRelay()
-	svc.SetTxRelay(func([]byte) {
-		relayOnce.Do(func() { close(relayStarted) })
-		<-releaseRelayCh
-	})
-
 	family.armed.Store(true)
 	ingressDone := make(chan struct {
 		outcomeApplied bool
@@ -54,7 +42,7 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Held && snapshot.Owner == openLedgerIngress
+		return !snapshot.Held
 	}, time.Second, time.Millisecond)
 
 	queuedIngressDone := make(chan error, 1)
@@ -63,8 +51,9 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 		queuedIngressDone <- submitErr
 	}()
 	require.Eventually(t, func() bool {
-		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Owner == openLedgerIngress && snapshot.QueuedPriority == 0 && snapshot.QueuedIngress == 1
+		svc.detachedIngress.mu.Lock()
+		defer svc.detachedIngress.mu.Unlock()
+		return len(svc.detachedIngress.waiters) == 1
 	}, time.Second, time.Millisecond)
 
 	consensusDone := make(chan error, 1)
@@ -74,10 +63,11 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 		)
 		consensusDone <- acceptErr
 	}()
-	require.Eventually(t, func() bool {
-		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Owner == openLedgerIngress && snapshot.QueuedPriority == 1
-	}, 5*time.Second, time.Millisecond)
+	select {
+	case <-ingressDone:
+		t.Fatal("detached ingress completed before its storage barrier was released")
+	default:
+	}
 
 	readDone := make(chan struct{})
 	go func() {
@@ -96,16 +86,12 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	ingress := <-ingressDone
 	require.NoError(t, ingress.err)
 	require.True(t, ingress.outcomeApplied)
-
 	select {
-	case <-relayStarted:
+	case consensusErr := <-consensusDone:
+		require.NoError(t, consensusErr)
 	case <-time.After(5 * time.Second):
-		t.Fatal("consensus did not reach the relay callback")
+		t.Fatal("consensus did not complete after ingress released")
 	}
-	require.Eventually(t, func() bool {
-		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Owner != openLedgerConsensus && snapshot.QueuedPriority == 0
-	}, time.Second, time.Millisecond)
 
 	readDone = make(chan struct{})
 	go func() {
@@ -126,8 +112,6 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("queued ingress remained parked after consensus publication")
 	}
-	releaseRelay()
-	require.NoError(t, <-consensusDone)
 }
 
 func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
@@ -164,7 +148,7 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Held && snapshot.Owner == openLedgerIngress
+		return !snapshot.Held
 	}, time.Second, time.Millisecond)
 
 	consensusDone := make(chan error, 1)
@@ -175,9 +159,10 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 		consensusDone <- acceptErr
 	}()
 	require.Eventually(t, func() bool {
-		snapshot := svc.openLedgerMu.Snapshot()
-		return snapshot.Owner == openLedgerIngress && snapshot.QueuedPriority == 1
-	}, 5*time.Second, time.Millisecond)
+		svc.detachedIngress.mu.Lock()
+		defer svc.detachedIngress.mu.Unlock()
+		return len(svc.detachedIngress.waiters) == 0
+	}, time.Second, time.Millisecond)
 
 	queuedIngressDone := make(chan error, 1)
 	go func() {
@@ -185,11 +170,9 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 		queuedIngressDone <- submitErr
 	}()
 	require.Eventually(t, func() bool {
-		snapshot := svc.openLedgerMu.Snapshot()
-		svc.preferredTransitionMu.Lock()
-		transitionActive := svc.preferredTransitionActive
-		svc.preferredTransitionMu.Unlock()
-		return snapshot.Owner == openLedgerIngress && snapshot.QueuedPriority == 1 && transitionActive
+		svc.detachedIngress.mu.Lock()
+		defer svc.detachedIngress.mu.Unlock()
+		return len(svc.detachedIngress.waiters) == 1
 	}, time.Second, time.Millisecond)
 
 	stopDone := make(chan struct{})
@@ -224,9 +207,16 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 
 	family.unblock()
 	ingress := <-ingressDone
-	require.NoError(t, ingress.err)
-	require.True(t, ingress.outcomeApplied)
-	require.ErrorIs(t, <-consensusDone, errServiceNotRunning)
+	require.ErrorIs(t, ingress.err, errServiceNotRunning)
+	require.False(t, ingress.outcomeApplied)
+	select {
+	case consensusErr := <-consensusDone:
+		if consensusErr != nil {
+			require.ErrorIs(t, consensusErr, errServiceNotRunning)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("consensus acceptance did not drain during Stop")
+	}
 	require.ErrorIs(t, <-queuedIngressDone, errServiceNotRunning)
 	select {
 	case <-stopDone:

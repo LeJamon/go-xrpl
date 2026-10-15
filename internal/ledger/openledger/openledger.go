@@ -199,9 +199,12 @@ func (o *OpenLedger) AcceptWithPrecommit(
 }
 
 // AcceptWithPrecommitContext runs the cancellable preparation phase and then
-// invokes precommit exactly once at the commit boundary. The callbacks after
-// precommit are deliberately uninterruptible: they mutate TxQ/open-ledger
-// ownership and must either all finish or be drained by the service owner.
+// invokes precommit exactly once at the commit boundary. By default the
+// callbacks after precommit are deliberately uninterruptible: they mutate
+// TxQ/open-ledger ownership and must either all finish or be drained by the
+// service owner. Detached private builds may set
+// ApplyConfig.AllowPostPrecommitCancellation to discard their private view and
+// queue at transaction boundaries instead.
 func (o *OpenLedger) AcceptWithPrecommitContext(
 	ctx context.Context,
 	newLCL *ledger.Ledger,
@@ -372,10 +375,15 @@ func (o *OpenLedger) accept(
 		return err
 	}
 	// From this point forward processClosed, modifier, queue replay, relay, and
-	// publication mutate shared ownership. Cancellation is no longer observed;
-	// the caller's lifecycle owner must drain this commit to completion.
+	// publication mutate ownership. The canonical path remains uninterruptible;
+	// detached private builds opt into boundary checks through cfg.
 	if precommit != nil {
 		precommit()
+	}
+	if cfg.AllowPostPrecommitCancellation {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 
 	// 3. Modifier hook (TxQ promotion) — runs before locals so they see the
@@ -383,14 +391,50 @@ func (o *OpenLedger) accept(
 	if modifier != nil {
 		modifier(next)
 	}
+	if cfg.AllowPostPrecommitCancellation {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 
 	// 4. Replay locals via TxQ.Apply so an under-fee local lands in the queue.
 	if len(eligibleLocals) > 0 {
 		if queue != nil {
 			viewCfg := applyCfg
 			adapter := NewTxqAdapter(next, viewCfg)
+			slowEnabled := cfg.SlowTransactionObserver != nil && cfg.SlowTransactionThreshold > 0
+			slowReported := false
 			for _, local := range parsedLocals {
+				if cfg.AllowPostPrecommitCancellation {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				var started time.Time
+				var offersConsidered uint32
+				if slowEnabled && !slowReported {
+					adapter.SetOffersConsideredCounter(&offersConsidered)
+					started = time.Now()
+				}
 				_ = queue.Apply(adapter, local.parsed, local.pending.Hash, local.pending.Account)
+				if !started.IsZero() {
+					adapter.SetOffersConsideredCounter(nil)
+				}
+				if !started.IsZero() {
+					if elapsed := time.Since(started); elapsed >= cfg.SlowTransactionThreshold {
+						slowReported = true
+						cfg.SlowTransactionObserver(SlowTransactionDiagnostic{
+							Hash: local.pending.Hash, Type: local.parsed.TxType(),
+							Phase: "local", Pass: 1, Duration: elapsed,
+							OffersConsidered: offersConsidered,
+						})
+					}
+				}
+				if cfg.AllowPostPrecommitCancellation {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -399,6 +443,9 @@ func (o *OpenLedger) accept(
 	// the HashRouter + overlay, we just iterate.
 	if relay != nil {
 		_ = next.ForEachTransaction(func(hash [32]byte, data []byte) bool {
+			if cfg.AllowPostPrecommitCancellation && ctx.Err() != nil {
+				return false
+			}
 			rawBlob, _, splitErr := tx.SplitTxWithMetaBlob(data)
 			if splitErr != nil {
 				return true
@@ -415,6 +462,16 @@ func (o *OpenLedger) accept(
 			relay(hash, rawBlob)
 			return true
 		})
+		if cfg.AllowPostPrecommitCancellation {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+	}
+	if cfg.AllowPostPrecommitCancellation {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 
 	publish := func() {

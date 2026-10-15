@@ -55,6 +55,7 @@ func TestConsensusLoadFeeUsesPublishedSuccessor(t *testing.T) {
 			parent := svc.GetClosedLedger()
 			_, err = svc.AcceptConsensusResult(t.Context(), parent, blobs, nil, parent.CloseTime().Add(time.Second), true)
 			require.NoError(t, err)
+			require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
 
 			if includeTransactions {
 				require.Equal(t, uint32(2), svc.GetClosedLedger().TxCount())

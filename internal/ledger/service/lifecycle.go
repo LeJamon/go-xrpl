@@ -411,6 +411,9 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 // disputedBlobs are the round's disputed txs we voted NO on (peer-proposed,
 // excluded from the agreed set); they get first crack at the new open ledger,
 // ahead of the TxQ.
+// The closed ledger and an empty successor are published together. Speculative
+// replay completes asynchronously; ingress waits for that replay outside the
+// publication gate, while later consensus acceptances can advance the frontier.
 func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs, disputedBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
 	return s.acceptConsensusResult(ctx, parent, txBlobs, disputedBlobs, closeTime, closeTimeCorrect)
 }

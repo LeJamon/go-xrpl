@@ -31,6 +31,8 @@ const (
 )
 
 type successorOptions struct {
+	deferSpeculation   bool
+	replaySpeculation  bool
 	preferred          bool
 	admitted           bool
 	allowReplayFault   bool
@@ -79,8 +81,9 @@ type PreparedPreferredLedger struct {
 	provisionalReplace bool
 	keepOpen           bool
 
-	prior  []openledger.PendingTx
-	locals []openledger.PendingTx
+	prior      []openledger.PendingTx
+	locals     []openledger.PendingTx
+	unfinished *speculativeSuccessor
 
 	networkID     uint32
 	lastRoundSlow bool
@@ -94,6 +97,7 @@ type PreparedPreferredLedger struct {
 
 	releaseWork   func()
 	releaseMemory func()
+	memory        *successorMemory
 	ctx           context.Context
 	cancel        context.CancelFunc
 	ready         chan struct{}
@@ -189,7 +193,7 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 		state:   preferredTransitionPreparing,
 		timings: preferredTransitionTimings{started: time.Now()},
 	}
-	p.ctx, p.cancel = context.WithCancel(ctx)
+	p.ctx, p.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancellation belongs to the prepared ledger and runs on cleanup, Release, or Stop.
 	if err := s.beginPreferredTransition(p); err != nil {
 		p.cancel()
 		return fail(err)
@@ -264,6 +268,7 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	p.expectedQueue = s.txQueue
 	p.expectedLocals = s.localTxs
 	p.expectedReplay = s.startupReplay
+	p.unfinished = s.speculativeSuccessor
 	p.validatedAtPrepare = s.validatedLedger
 	p.networkID = s.config.NetworkID
 	p.lastRoundSlow = options.preferred || options.allowReplayFault || s.lastConsensusRoundTime > slowConsensusThreshold
@@ -323,6 +328,9 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 		queueStats.Count, queueStats.Bytes = queue.SnapshotStats()
 	}
 	privateBytes := preferredTransitionEstimate(stats, localStats, queueStats, options.retries)
+	if p.unfinished != nil {
+		privateBytes = saturatedSuccessorBytes(privateBytes, p.unfinished.inputBytes())
+	}
 	// Accepted leaves include inner Batch transactions and metadata, even when
 	// none of their outer transactions remain in the current open ledger.
 	if !options.allowReplayFault {
@@ -346,7 +354,12 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	}
 
 	p.privateBytes = privateBytes
-	p.releaseMemory, err = s.acquirePreferredTransitionMemory(p.ctx, privateBytes)
+	if options.deferSpeculation && s.config.PersistenceMemory == nil && privateBytes > speculativeSuccessorMemoryLimit {
+		return cleanupPrepared(ErrPreferredTransitionMemory)
+	}
+	// A detached ingress or older successor may need publication to release
+	// its reservation. Do not wait for its memory while owning that fence.
+	p.releaseMemory, err = p.reserveMemory(privateBytes)
 	if err != nil {
 		return cleanupPrepared(err)
 	}
@@ -360,6 +373,17 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	}
 	if localsPool != nil {
 		p.locals = localsPool.GetTxSet()
+	}
+	if queue != nil || options.preferred || options.allowReplayFault {
+		for _, local := range p.locals {
+			prepared, parseErr := openledger.ParsePendingTx(local.Blob)
+			if parseErr != nil {
+				return cleanupPrepared(fmt.Errorf("parse successor local transaction %x: %w", local.Hash, parseErr))
+			}
+			if prepared.Hash != local.Hash || prepared.Account != local.Account {
+				return cleanupPrepared(fmt.Errorf("successor local transaction identity does not match blob %x", local.Hash))
+			}
+		}
 	}
 	if err := p.ctx.Err(); err != nil {
 		return cleanupPrepared(err)
@@ -379,6 +403,14 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 		prior = make([]openledger.PendingTx, 0)
 	}
 	p.prior = prior
+	if p.unfinished != nil {
+		p.prior = mergeSuccessorTransactions(p.prior, p.unfinished.prior)
+		p.options.retries = mergeSuccessorTransactions(p.options.retries, p.unfinished.retries)
+		p.options.anyDisputes = p.options.anyDisputes || p.unfinished.anyDisputes
+		if p.options.retrySalt != nil {
+			openledger.CanonicalSort(p.options.retries, *p.options.retrySalt)
+		}
+	}
 	go p.run()
 	return p, nil
 }
@@ -508,12 +540,16 @@ func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error
 		return p.abortLocked(err)
 	}
 	if !p.keepOpen {
+		s.cancelSpeculativeSuccessorLocked()
 		s.openLedgerView = p.openView
 		s.openLedger = p.openView.Current()
 		s.txQueue = p.queue
 	}
-	if !p.options.allowReplayFault && !p.keepOpen {
+	if !p.options.allowReplayFault && !p.options.deferSpeculation && !p.keepOpen {
 		s.tickLoadFeeLocked()
+	}
+	if p.options.deferSpeculation && !p.keepOpen {
+		s.scheduleSpeculativeSuccessorLocked(p)
 	}
 	s.mu.Unlock()
 	p.stateMu.Lock()
@@ -704,12 +740,29 @@ func (p *PreparedPreferredLedger) run() {
 		p.markReady(nil)
 		return
 	}
+	if p.options.deferSpeculation && len(p.prior) == 0 && len(p.locals) == 0 && len(p.options.retries) == 0 && (p.queue == nil || p.queue.Size() == 0) {
+		p.options.deferSpeculation = false
+	}
 	var err error
 	stageStarted := time.Now()
-	if !p.options.allowReplayFault {
+	if !p.options.allowReplayFault && !p.options.replaySpeculation {
 		p.staged, err = stageTransactionResultsContext(p.ctx, p.parent, p.parent.Sequence(), p.parent.Hash())
 	}
 	p.timings.stageResults = time.Since(stageStarted)
+	if err == nil && p.options.deferSpeculation {
+		p.openView, err = openledger.New(p.parent, openledger.Config{
+			NetworkID: p.networkID,
+			Logger:    p.service.logger,
+			Rules:     openLedgerRules(p.validatedAtPrepare, p.service.logger),
+		})
+		if err == nil && p.queue != nil {
+			baseFee, reserveBase, reserveIncrement := readFeesFromLedger(p.parent)
+			p.queue.ProcessClosedLedger(&closedLedgerCtx{ledger: p.parent, baseFee: baseFee, reserveBase: reserveBase, reserveIncrement: reserveIncrement}, p.lastRoundSlow)
+		}
+		p.timings.preparation = time.Since(started)
+		p.markReady(err)
+		return
+	}
 	if err == nil {
 		var rules = openLedgerRules(p.validatedAtPrepare, p.service.logger)
 		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(p.parent)
@@ -723,6 +776,19 @@ func (p *PreparedPreferredLedger) run() {
 			Logger:           p.service.logger,
 			Rules:            rules,
 			FeeTrack:         p.service.feeTrack,
+		}
+		if p.options.replaySpeculation {
+			var slowReported sync.Once
+			cfg.AllowPostPrecommitCancellation = true
+			cfg.SlowTransactionThreshold = openLedgerGateSlowWait
+			cfg.SlowTransactionObserver = func(d openledger.SlowTransactionDiagnostic) {
+				slowReported.Do(func() {
+					p.service.logger.Warn("Slow speculative transaction",
+						"seq", cfg.LedgerSequence, "hash", fmt.Sprintf("%x", d.Hash),
+						"type", d.Type, "phase", d.Phase, "pass", d.Pass, "duration", d.Duration,
+						"offers_considered", d.OffersConsidered)
+				})
+			}
 		}
 		var retrySalt [32]byte
 		cfg.RetrySalt = p.options.retrySalt
@@ -774,7 +840,7 @@ func (p *PreparedPreferredLedger) run() {
 				cfg,
 				p.queue,
 				func() {
-					if p.queue != nil {
+					if p.queue != nil && !p.options.replaySpeculation {
 						baseFee, reserveBase, reserveIncrement := readFeesFromLedger(p.parent)
 						p.queue.ProcessClosedLedger(&closedLedgerCtx{ledger: p.parent, baseFee: baseFee, reserveBase: reserveBase, reserveIncrement: reserveIncrement}, p.lastRoundSlow)
 					}
@@ -785,7 +851,12 @@ func (p *PreparedPreferredLedger) run() {
 					}
 					viewCfg := cfg
 					viewCfg.LedgerSequence = view.Sequence()
-					_ = p.queue.Accept(openledger.NewTxqAdapter(view, viewCfg))
+					adapter := openledger.NewTxqAdapter(view, viewCfg)
+					if p.options.replaySpeculation {
+						p.queue.AcceptContextWithObserver(p.ctx, adapter, cfg.SlowTransactionThreshold, cfg.SlowTransactionObserver)
+					} else {
+						p.queue.Accept(adapter)
+					}
 				},
 				func(hash [32]byte, blob []byte) {
 					if stagedRelayBytes+int64(len(blob)) > relayTxCacheMaxBytes {
@@ -995,34 +1066,27 @@ func preferredTransitionEstimate(
 }
 
 func (s *Service) acquirePreferredTransitionMemory(ctx context.Context, bytes uint64) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if bytes == 0 || s.config.PersistenceMemory == nil {
 		return func() {}, nil
 	}
 	budget := s.config.PersistenceMemory
-	capacity := budget.Limit()
-	if provider, ok := budget.(interface{ Capacity() uint64 }); ok {
-		if available := provider.Capacity(); available < capacity {
-			capacity = available
-		}
-	}
-	if bytes > capacity {
+	if bytes > s.preferredTransitionMemoryCapacity() || !budget.TryReserve(bytes) {
 		return nil, ErrPreferredTransitionMemory
 	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		wake := budget.Changed()
-		if budget.TryReserve(bytes) {
-			return sync.OnceFunc(func() { budget.Release(bytes) }), nil
-		}
-		if wake == nil {
-			return nil, ErrPreferredTransitionMemory
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-wake:
-		}
+	return sync.OnceFunc(func() { budget.Release(bytes) }), nil
+}
+
+func (s *Service) preferredTransitionMemoryCapacity() uint64 {
+	budget := s.config.PersistenceMemory
+	if budget == nil {
+		return ^uint64(0)
 	}
+	capacity := budget.Limit()
+	if provider, ok := budget.(interface{ Capacity() uint64 }); ok {
+		capacity = min(capacity, provider.Capacity())
+	}
+	return capacity
 }

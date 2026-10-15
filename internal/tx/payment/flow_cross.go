@@ -40,6 +40,8 @@ type FlowCrossParams struct {
 
 	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
 	DomainID *[32]byte
+
+	OffersConsidered *uint32
 }
 
 // FlowCrossResult contains the result of an offer crossing operation
@@ -288,8 +290,12 @@ func FlowCross(
 	// grooming is discarded (see the apply gate below), leaving removableOffers
 	// out of the applied sandbox on a kill.
 	partialPayment := !params.FillOrKill
+	flowOpts := []FlowOption{WithFillOrKill(params.FixFillOrKill, params.Sell)}
+	if params.OffersConsidered != nil {
+		flowOpts = append(flowOpts, withOffersConsidered(params.OffersConsidered))
+	}
 	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, true,
-		WithFillOrKill(params.FixFillOrKill, params.Sell))
+		flowOpts...)
 
 	// Apply the flow sandbox changes to our root sandbox only on success.
 	// Reference: rippled finishFlow (Flow.cpp:42-45) applies the flow sandbox

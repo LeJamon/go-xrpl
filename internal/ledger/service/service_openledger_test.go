@@ -250,6 +250,9 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, time.Now(), true); err != nil {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
+	if err := svc.WaitForSpeculationForTest(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	if !openLedgerHasTx(t, svc, hash1) {
 		t.Errorf("post-Accept OpenLedgerHasTx(hash1) = false; replay dropped tx1")
@@ -330,6 +333,9 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, [][]byte{blob1}, nil, time.Now(), true); err != nil {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
+	if err := svc.WaitForSpeculationForTest(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
 	closed := svc.GetClosedLedger()
 	if closed == nil {
@@ -372,6 +378,9 @@ func TestService_AcceptConsensusResult_DisputedTxsFirstCrack(t *testing.T) {
 	}
 	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, [][]byte{disputedBlob}, time.Now(), true); err != nil {
 		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
+	if err := svc.WaitForSpeculationForTest(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 
 	closed := svc.GetClosedLedger()

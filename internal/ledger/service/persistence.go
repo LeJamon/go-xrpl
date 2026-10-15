@@ -292,11 +292,13 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
 	s.lifecycleMu.Unlock()
+	detachedIngressDone := s.detachedIngress.stop()
 	// Detached preferred-ledger preparation owns a lifecycle admission until
 	// publication or discard. Cancel it before waiting for ledgerWorkWG so
 	// shutdown cannot strand parked ingress behind a successor that will never
 	// publish.
 	s.cancelPreferredTransition()
+	s.stopSpeculativeSuccessors()
 	s.signalReplayPreparedSlots()
 	s.persistenceWorker.stopAdmissions()
 	if replayRecoveryCancel != nil {
@@ -311,6 +313,7 @@ func (s *Service) Stop() {
 	s.validationWG.Wait()
 	s.consensusWG.Wait()
 	s.ledgerWorkWG.Wait()
+	<-detachedIngressDone
 	s.openLedgerMu.LockRole(openLedgerShutdown)
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()

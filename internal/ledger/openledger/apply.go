@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
@@ -11,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -21,6 +23,18 @@ const (
 	totalPasses = 3
 	retryPasses = 1
 )
+
+// SlowTransactionDiagnostic identifies one transaction engine call that took
+// at least the configured ApplyConfig.SlowTransactionThreshold. The observer
+// is invoked at most once per ApplyTxsContext call, after the engine returns.
+// A caller spanning multiple replay phases can enforce a job-wide bound by
+// sharing a sync.Once in its observer.
+type SlowTransactionDiagnostic = txq.SlowTransactionDiagnostic
+
+// SlowTransactionObserver receives bounded diagnostics for expensive private
+// replay work. It must not retain transaction or ledger pointers; the
+// diagnostic contains only value data.
+type SlowTransactionObserver = txq.SlowTransactionObserver
 
 func nextRetryState(certainRetry bool, changes, pass int) bool {
 	return certainRetry && changes != 0 && pass < retryPasses
@@ -112,6 +126,21 @@ type ApplyConfig struct {
 	// ApplyObserver is a test-only hook for recording engine phases during
 	// closed-ledger replay. Production callers leave it nil.
 	ApplyObserver txengine.ApplyObserver
+	// AllowPostPrecommitCancellation enables cancellation checks after the
+	// precommit callback. It is intended only for detached private successor
+	// builds whose view and queue are discarded on cancellation. Canonical
+	// acceptance leaves this false so the shared commit phase remains
+	// uninterruptible.
+	AllowPostPrecommitCancellation bool
+	// SlowTransactionThreshold enables one bounded diagnostic per
+	// ApplyTxsContext call when an engine apply exceeds the threshold. A
+	// non-positive threshold or nil observer disables timing with no clock call
+	// per transaction.
+	SlowTransactionThreshold time.Duration
+	SlowTransactionObserver  SlowTransactionObserver
+	// OffersConsidered is an optional per-transaction offer-step counter used by
+	// the slow diagnostic path. It carries no protocol behavior.
+	OffersConsidered *uint32
 }
 
 // ApplyTxs runs rippled's open-ledger 3-pass apply against view, which
@@ -198,6 +227,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		ApplyFlags:                cfg.ApplyFlags,
 		FeeTrack:                  cfg.FeeTrack,
 		ViewOpen:                  cfg.Mode == OpenLedgerMode,
+		OffersConsidered:          cfg.OffersConsidered,
 	}
 	if retry {
 		engineConfig.ApplyFlags |= tx.TapRETRY
@@ -296,6 +326,46 @@ func applyTxs(
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
+	slowEnabled := cfg.SlowTransactionObserver != nil && cfg.SlowTransactionThreshold > 0
+	slowReported := false
+	applyObserved := func(
+		bp *txengine.BlockProcessor,
+		transaction tx.Transaction,
+		blob []byte,
+		phase string,
+		pass int,
+		hash [32]byte,
+	) (Result, error) {
+		var started time.Time
+		var offersConsidered uint32
+		countOffers := slowEnabled && !slowReported
+		if countOffers {
+			bp.SetOffersConsideredCounter(&offersConsidered)
+			defer bp.SetOffersConsideredCounter(nil)
+		}
+		if slowEnabled && !slowReported {
+			started = time.Now()
+		}
+		class, err := applyAndClassify(bp, transaction, blob, cfg.Mode, logger)
+		if !started.IsZero() {
+			if duration := time.Since(started); duration >= cfg.SlowTransactionThreshold {
+				slowReported = true
+				transactionType := tx.Type(0)
+				if transaction != nil {
+					transactionType = transaction.TxType()
+				}
+				cfg.SlowTransactionObserver(SlowTransactionDiagnostic{
+					Hash:             hash,
+					Type:             transactionType,
+					Phase:            phase,
+					Pass:             pass,
+					Duration:         duration,
+					OffersConsidered: offersConsidered,
+				})
+			}
+		}
+		return class, err
+	}
 
 	parsed := make([]tx.Transaction, len(txs))
 	eligible := make([]bool, len(txs))
@@ -361,6 +431,7 @@ func applyTxs(
 			ApplyFlags:                cfg.ApplyFlags,
 			FeeTrack:                  cfg.FeeTrack,
 			ViewOpen:                  cfg.Mode == OpenLedgerMode,
+			OffersConsidered:          cfg.OffersConsidered,
 		}
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
@@ -393,7 +464,7 @@ func applyTxs(
 		if parsed[i] == nil || !eligible[i] {
 			continue
 		}
-		class, err := applyAndClassify(bp, parsed[i], ptx.Blob, cfg.Mode, logger)
+		class, err := applyObserved(bp, parsed[i], ptx.Blob, "initial", 0, ptx.Hash)
 		if err != nil {
 			return fmt.Errorf("openledger.ApplyTxs: apply transaction %x on initial pass: %w", ptx.Hash, err)
 		}
@@ -433,7 +504,7 @@ func applyTxs(
 				return err
 			}
 			ptx := candidate.pending
-			class, err := applyAndClassify(bp, candidate.parsed, ptx.Blob, cfg.Mode, logger)
+			class, err := applyObserved(bp, candidate.parsed, ptx.Blob, "retry", pass+1, ptx.Hash)
 			if err != nil {
 				return fmt.Errorf(
 					"openledger.ApplyTxs: apply transaction %x on retry pass %d: %w",

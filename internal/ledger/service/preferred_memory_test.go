@@ -128,57 +128,26 @@ func TestAcquirePreferredTransitionMemoryRejectsCapacityOversize(t *testing.T) {
 	require.Zero(t, budget.Used())
 }
 
-func TestPreparedPreferredLedgerStopCancelsBlockedMemoryAdmission(t *testing.T) {
+func TestPreparedPreferredLedgerRejectsBusyMemoryWithoutOwningPublication(t *testing.T) {
 	budget := &preferredMemoryBudget{
-		limit:     8 << 20,
-		capacity:  8 << 20,
-		used:      8 << 20,
-		changed:   make(chan struct{}),
-		attempted: make(chan struct{}),
+		limit: 8 << 20, capacity: 8 << 20, used: 8 << 20, changed: make(chan struct{}),
 	}
 	cfg := DefaultConfig()
 	cfg.PersistenceMemory = budget
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
-
+	t.Cleanup(svc.Stop)
 	parent := svc.GetClosedLedger()
 	preferred, err := ledger.NewOpen(parent, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, preferred.Close(time.Now(), 0))
-
-	type prepareResult struct {
-		prepared *PreparedPreferredLedger
-		err      error
-	}
-	preparedDone := make(chan prepareResult, 1)
-	go func() {
-		prepared, err := svc.PreparePreferredLedger(context.Background(), preferred)
-		preparedDone <- prepareResult{prepared: prepared, err: err}
-	}()
-	select {
-	case <-budget.attempted:
-	case <-time.After(time.Second):
-		t.Fatal("preferred preparation did not reach memory admission")
-	}
-
-	stopDone := make(chan struct{})
-	go func() {
-		svc.Stop()
-		close(stopDone)
-	}()
-	select {
-	case <-stopDone:
-	case <-time.After(time.Second):
-		t.Fatal("service stop remained blocked behind canceled preparation")
-	}
-	select {
-	case result := <-preparedDone:
-		require.ErrorIs(t, result.err, context.Canceled)
-		if result.prepared != nil {
-			result.prepared.Release()
-		}
-	case <-time.After(time.Second):
-		t.Fatal("blocked preparation did not return after service stop")
-	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	prepared, err := svc.PreparePreferredLedger(ctx, preferred)
+	require.ErrorIs(t, err, ErrPreferredTransitionMemory)
+	require.Nil(t, prepared)
+	require.False(t, svc.preferredTransitionIsActive())
+	require.Same(t, parent, svc.GetClosedLedger())
+	require.Equal(t, uint64(8<<20), budget.Used())
 }

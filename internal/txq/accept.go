@@ -1,6 +1,9 @@
 package txq
 
 import (
+	"context"
+	"time"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -19,20 +22,88 @@ type AcceptContext interface {
 	GetParentHash() [32]byte
 }
 
+// SlowTransactionDiagnostic identifies one transaction engine call that took
+// at least the configured threshold. It contains value data only so an
+// observer cannot retain a private ledger or transaction view.
+type SlowTransactionDiagnostic struct {
+	Hash             [32]byte
+	Type             tx.Type
+	Phase            string
+	Pass             int
+	Duration         time.Duration
+	OffersConsidered uint32
+}
+
+// SlowTransactionObserver receives at most one diagnostic per queue accept
+// pass when the optional observer API is used.
+type SlowTransactionObserver func(SlowTransactionDiagnostic)
+
+type offersConsideredBinder interface {
+	SetOffersConsideredCounter(*uint32)
+}
+
 // Accept attempts to move transactions from the queue into the open ledger.
 // It iterates through queued transactions from highest fee to lowest,
 // applying each one that meets the current fee requirements.
 //
 // This is called when a new open ledger is created after a ledger closes.
 // Returns true if any transactions were applied.
-func (q *TxQ) Accept(ctx AcceptContext) bool {
+func (q *TxQ) Accept(acceptCtx AcceptContext) bool {
+	return q.accept(context.Background(), acceptCtx, 0, nil)
+}
+
+// AcceptContext is Accept with cancellation checks at transaction boundaries.
+// It is intended for detached private successor queues: cancellation may
+// leave the current candidate and private view partially processed, so the
+// caller must discard that queue and view rather than publish either one.
+// Canonical shared acceptance should continue to call Accept, which uses an
+// uninterruptible background context.
+func (q *TxQ) AcceptContext(cancelCtx context.Context, acceptCtx AcceptContext) bool {
+	if cancelCtx == nil {
+		cancelCtx = context.Background()
+	}
+	return q.accept(cancelCtx, acceptCtx, 0, nil)
+}
+
+// AcceptContextWithObserver is the bounded diagnostic form of AcceptContext.
+// Timing is disabled when threshold is non-positive or observer is nil, and
+// at most one transaction is reported for this queue pass.
+func (q *TxQ) AcceptContextWithObserver(
+	cancelCtx context.Context,
+	acceptCtx AcceptContext,
+	threshold time.Duration,
+	observer SlowTransactionObserver,
+) bool {
+	if cancelCtx == nil {
+		cancelCtx = context.Background()
+	}
+	return q.accept(cancelCtx, acceptCtx, threshold, observer)
+}
+
+func (q *TxQ) accept(
+	cancelCtx context.Context,
+	ctx AcceptContext,
+	threshold time.Duration,
+	observer SlowTransactionObserver,
+) bool {
+	if err := cancelCtx.Err(); err != nil {
+		return false
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if err := cancelCtx.Err(); err != nil {
+		return false
+	}
 	parentHash := ctx.GetParentHash()
 	q.stateMu.Lock()
 	defer q.stateMu.Unlock()
+	if err := cancelCtx.Err(); err != nil {
+		return false
+	}
 
 	ledgerChanged := false
+	slowEnabled := threshold > 0 && observer != nil
+	slowReported := false
 
 	// The fee snapshot is constant for the whole Accept pass (only
 	// ProcessClosedLedger mutates it, under the same lock), so take it once
@@ -42,6 +113,9 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 	// Process candidates from highest fee to lowest
 	i := 0
 	for i < len(q.byFee) {
+		if err := cancelCtx.Err(); err != nil {
+			return ledgerChanged
+		}
 		candidate := q.byFee[i]
 		if candidate == nil {
 			q.byFee = append(q.byFee[:i], q.byFee[i+1:]...)
@@ -71,6 +145,9 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 		q.withStateUnlocked(func() {
 			txInLedger = ctx.GetTxInLedger()
 		})
+		if err := cancelCtx.Err(); err != nil {
+			return ledgerChanged
+		}
 		requiredFeeLevel := scaleFeeLevel(snapshot, txInLedger)
 
 		if candidate.FeeLevel < requiredFeeLevel {
@@ -91,6 +168,9 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 			q.withStateUnlocked(func() {
 				preflight = ctx.PreflightTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
 			})
+			if err := cancelCtx.Err(); err != nil {
+				return ledgerChanged
+			}
 			candidate.PreflightResult = preflight
 			candidate.PreflightFlags = candidate.Flags
 			candidate.PreflightRules = currentRules
@@ -102,11 +182,53 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 
 		applied := false
 		if shouldApply {
+			transaction := candidateTransaction(candidate)
+			if err := cancelCtx.Err(); err != nil {
+				return ledgerChanged
+			}
+			var started time.Time
+			if slowEnabled && !slowReported {
+				started = time.Now()
+			}
+			var offersConsidered uint32
+			var counterBinder offersConsideredBinder
+			if !started.IsZero() {
+				counterBinder, _ = ctx.(offersConsideredBinder)
+			}
 			// Try to apply the transaction outside the state lock so callbacks may
 			// query queue snapshots reentrantly.
-			q.withStateUnlocked(func() {
-				result, applied = ctx.ApplyTransactionWithFlags(candidateTransaction(candidate), candidate.Flags)
-			})
+			func() {
+				if counterBinder != nil {
+					counterBinder.SetOffersConsideredCounter(&offersConsidered)
+					defer counterBinder.SetOffersConsideredCounter(nil)
+				}
+				q.withStateUnlocked(func() {
+					result, applied = ctx.ApplyTransactionWithFlags(transaction, candidate.Flags)
+				})
+			}()
+			if !started.IsZero() {
+				if duration := time.Since(started); duration >= threshold {
+					slowReported = true
+					transactionType := tx.Type(0)
+					if transaction != nil {
+						transactionType = transaction.TxType()
+					}
+					observer(SlowTransactionDiagnostic{
+						Hash:             candidate.TxID,
+						Type:             transactionType,
+						Phase:            "queue",
+						Pass:             0,
+						Duration:         duration,
+						OffersConsidered: offersConsidered,
+					})
+				}
+			}
+			if err := cancelCtx.Err(); err != nil {
+				return ledgerChanged
+			}
+		}
+		if err := cancelCtx.Err(); err != nil {
+			return ledgerChanged
 		}
 
 		if applied {
@@ -156,9 +278,15 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 
 		i++
 	}
+	if err := cancelCtx.Err(); err != nil {
+		return ledgerChanged
+	}
 
 	// Rebuild byFee with new parent hash for deterministic ordering
 	if parentHash != q.parentHash {
+		if err := cancelCtx.Err(); err != nil {
+			return ledgerChanged
+		}
 		q.parentHash = parentHash
 		q.rebuildByFee()
 	}

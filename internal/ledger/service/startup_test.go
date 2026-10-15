@@ -394,6 +394,7 @@ func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
 	}
 	require.Equal(t, target.Sequence(), seq)
 	require.Equal(t, targetHash, svc.GetClosedLedger().Hash())
+	require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
 	hasExtra, err := svc.OpenLedgerHasTx(extraHash)
 	require.NoError(t, err)
 	require.True(t, hasExtra)
