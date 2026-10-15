@@ -300,6 +300,7 @@ func (s *BookStep) forEachOffer(
 	callback func(offerExec) bool,
 ) {
 	visited := make(map[[32]byte]bool)
+	cursor := bookOfferCursor{root: s.bookBaseKey()}
 
 	// Track the current quality level — forEachOffer processes one quality at a
 	// time. Reference: rippled BookStep.cpp forEachOffer lines 751-754:
@@ -546,7 +547,7 @@ func (s *BookStep) forEachOffer(
 	// callback returns false and breaks. Reference: BookStep.cpp:855-865.
 	consumed := false
 	for s.offersUsed < s.maxOffersToConsume {
-		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
+		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed, &cursor)
 		if err != nil {
 			var cleanupErr *offerCleanupError
 			if errors.As(err, &cleanupErr) {

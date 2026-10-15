@@ -121,6 +121,7 @@ func (f *expiredOfferFixture) walk() (map[[32]byte]bool, error) {
 		removals,
 		make(map[[32]byte]bool),
 		true,
+		&bookOfferCursor{root: f.step.bookBaseKey()},
 	)
 	return removals, err
 }

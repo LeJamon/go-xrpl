@@ -229,6 +229,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 				offersToRemove,
 				make(map[[32]byte]bool),
 				true,
+				&bookOfferCursor{root: step.bookBaseKey()},
 			)
 			tc.checkErr(t, err)
 			require.Nil(t, offer)
@@ -325,6 +326,7 @@ func TestBookStepSkipsDeepFreezeLookupAfterEarlierGroomingDecision(t *testing.T)
 			offersToRemove,
 			make(map[[32]byte]bool),
 			true,
+			&bookOfferCursor{root: step.bookBaseKey()},
 		)
 		require.NoError(t, err)
 		require.Nil(t, gotOffer)
@@ -406,6 +408,7 @@ func TestBookStepSkipsDeepFreezeLookupAfterEarlierGroomingDecision(t *testing.T)
 			offersToRemove,
 			make(map[[32]byte]bool),
 			true,
+			&bookOfferCursor{root: step.bookBaseKey()},
 		)
 		require.NoError(t, err)
 		require.Nil(t, gotOffer)
