@@ -236,10 +236,6 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		result.ValidatedLedger = validatedLedger.Sequence()
 		result.CurrentLedgerState = commitData.ledgerState
 	}
-	if outcome.Class == openledger.ResultSuccess {
-		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
-	}
-
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}

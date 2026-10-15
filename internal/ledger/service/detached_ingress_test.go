@@ -7,9 +7,110 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/stretchr/testify/require"
 )
+
+type ingressRelayMemory struct {
+	relayTestMemory
+	onReserve func()
+}
+
+func (b *ingressRelayMemory) TryReserve(bytes uint64) bool {
+	if b.onReserve != nil {
+		b.onReserve()
+	}
+	return b.relayTestMemory.TryReserve(bytes)
+}
+
+func TestDetachedIngressRelayCachePrecedesSuccessorPromotion(t *testing.T) {
+	for _, rpc := range []bool{false, true} {
+		name := "peer"
+		if rpc {
+			name = "rpc"
+		}
+		t.Run(name, func(t *testing.T) {
+			memory := &ingressRelayMemory{relayTestMemory: relayTestMemory{limit: relayCacheStructureBytes + 1<<20}}
+			cfg := DefaultConfig()
+			queueCfg := txq.StandaloneConfig()
+			queueCfg.MinimumTxnInLedgerStandalone = 1
+			queueCfg.TargetTxnInLedger = 1
+			cfg.TxQ = &queueCfg
+			cfg.RelayMemory = memory
+			svc, err := New(cfg)
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+
+			env := jtx.NewTestEnv(t)
+			master, receiver := jtx.MasterAccount(), jtx.NewAccount("relay-promotion-recipient")
+			var prior [][]byte
+			for sequence := uint32(1); sequence <= 2; sequence++ {
+				blob, _ := preferredSwitchPaymentBlob(t, env, master, receiver, 20_000_000, 10, sequence)
+				outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, false)
+				require.NoError(t, err)
+				require.True(t, outcome.Applied)
+				prior = append(prior, blob)
+			}
+
+			var gates []openLedgerGateSnapshot
+			memory.onReserve = func() { gates = append(gates, svc.openLedgerMu.Snapshot()) }
+			blob, hash := preferredSwitchPaymentBlob(t, env, master, receiver, 1_000_000, 10, 3)
+			if rpc {
+				transaction, err := tx.ParseFromBinary(blob)
+				require.NoError(t, err)
+				result, err := svc.SubmitTransaction(transaction, blob, false)
+				require.NoError(t, err)
+				require.Equal(t, ter.TerQUEUED, result.Result)
+			} else {
+				outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, false)
+				require.NoError(t, err)
+				require.True(t, outcome.Queued)
+			}
+			memory.onReserve = nil
+			require.NotEmpty(t, gates)
+			for _, gate := range gates {
+				require.True(t, gate.Held, "successor publication must not overtake a queued relay-cache write")
+				require.Equal(t, openLedgerIngress, gate.Owner)
+			}
+			_, _, deferred, ok := svc.relayCacheGet(hash)
+			require.True(t, ok)
+			require.True(t, deferred)
+
+			parent := svc.GetClosedLedger()
+			_, err = svc.AcceptConsensusResult(t.Context(), parent, prior, nil, parent.CloseTime().Add(time.Second), true)
+			require.NoError(t, err)
+			require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
+			got, included, deferred, ok := svc.TransactionForRelay(hash)
+			require.True(t, ok)
+			require.Equal(t, blob, got)
+			require.True(t, included)
+			require.False(t, deferred)
+			require.Eventually(t, func() bool {
+				_, _, deferred, ok := svc.relayCacheGet(hash)
+				return ok && !deferred
+			}, 5*time.Second, time.Millisecond)
+
+			parent = svc.GetClosedLedger()
+			_, err = svc.AcceptConsensusResult(t.Context(), parent, [][]byte{blob}, nil, parent.CloseTime().Add(time.Second), true)
+			require.NoError(t, err)
+			require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
+			exists, err := svc.GetClosedLedger().TxExists(hash)
+			require.NoError(t, err)
+			require.True(t, exists)
+			_, queued := svc.txQueue.GetTxBlob(hash)
+			require.False(t, queued)
+			got, included, deferred, ok = svc.TransactionForRelay(hash)
+			require.True(t, ok)
+			require.Equal(t, blob, got)
+			require.False(t, included)
+			require.False(t, deferred, "closing a promoted transaction must retain its newer relay disposition")
+		})
+	}
+}
 
 func TestDetachedIngressValidationAdvanceDoesNotRepeatApply(t *testing.T) {
 	svc, err := New(DefaultConfig())
@@ -158,6 +259,8 @@ func TestDetachedIngressRejectsReplayFaultAtFence(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists, "replay fault allowed detached ingress publication")
 	require.Zero(t, svc.localTxs.Size(), "replay fault allowed local-pool side effects")
+	_, _, _, cached := svc.relayCacheGet(hash)
+	require.False(t, cached, "replay fault allowed relay-cache publication")
 }
 
 func TestDetachedIngressRejectsExistingReplayFault(t *testing.T) {

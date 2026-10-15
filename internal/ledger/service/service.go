@@ -1256,9 +1256,6 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 		}
 		return failure, submitErr
 	}
-	if outcome.Class == openledger.ResultSuccess {
-		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
-	}
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}

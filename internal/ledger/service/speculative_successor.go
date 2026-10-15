@@ -82,7 +82,7 @@ func (s *Service) scheduleSpeculativeSuccessorLocked(p *PreparedPreferredLedger)
 		releaseWork: p.releaseWork, releaseMemory: p.releaseMemory, memory: p.memory,
 	}
 	p.releaseWork, p.releaseMemory = nil, nil
-	j.ctx, j.cancel = context.WithCancel(context.Background())
+	j.ctx, j.cancel = context.WithCancel(context.Background()) //nolint:gosec // G118: cancellation belongs to the job and runs on release, supersession, or Stop.
 	s.speculativeSuccessor = j
 	if !s.speculativeWorkerRunning {
 		s.speculativeWorkerRunning = true

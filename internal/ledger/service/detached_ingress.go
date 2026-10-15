@@ -493,6 +493,10 @@ func (s *Service) commitDetachedIngress(
 		s.openLedgerMu.Unlock()
 		return false, nil
 	}
+	// Publish the relay disposition before a successor can promote this transaction.
+	if outcome.Class == openledger.ResultSuccess {
+		s.rememberRelayTransaction(req.pendingTx.Hash, req.pendingTx.Blob, outcome.Queued)
+	}
 	publishedCurrent := snapshot.current
 	if outcome.Changed {
 		publishedCurrent = privateCurrent

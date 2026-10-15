@@ -193,7 +193,7 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 		state:   preferredTransitionPreparing,
 		timings: preferredTransitionTimings{started: time.Now()},
 	}
-	p.ctx, p.cancel = context.WithCancel(ctx)
+	p.ctx, p.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancellation belongs to the prepared ledger and runs on cleanup, Release, or Stop.
 	if err := s.beginPreferredTransition(p); err != nil {
 		p.cancel()
 		return fail(err)
