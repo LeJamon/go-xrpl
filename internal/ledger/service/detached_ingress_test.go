@@ -145,7 +145,7 @@ func TestDetachedIngressDoesNotBlockConsensusAndPublishesRetry(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := successorPreparationParent(t, svc.GetClosedLedger(), jtx.MasterAccount().AccountID())
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	blob, hash := startupPaymentBlob(t, "detached-ingress-retry", 1)
 	family.armed.Store(true)
@@ -192,7 +192,7 @@ func TestDetachedIngressStopDrainsBlockedApply(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := successorPreparationParent(t, svc.GetClosedLedger(), jtx.MasterAccount().AccountID())
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	blob, _ := startupPaymentBlob(t, "detached-ingress-stop", 1)
 	family.armed.Store(true)
@@ -238,7 +238,7 @@ func TestDetachedIngressRejectsReplayFaultAtFence(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	cold, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	cold, family := successorPreparationParent(t, svc.GetClosedLedger(), jtx.MasterAccount().AccountID())
 	require.NoError(t, svc.SwitchToPreferredLedger(cold))
 	blob, hash := startupPaymentBlob(t, "detached-ingress-fault", 1)
 	family.armed.Store(true)
