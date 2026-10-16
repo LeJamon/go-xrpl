@@ -48,6 +48,11 @@ func TestRouter_ReplayDeltaAvailabilityRetriesSuitablePeer(t *testing.T) {
 	_, retained := r.catchupReplay.replayAvailabilityRetries[target]
 	r.catchupReplay.acquisitionMu.Unlock()
 	assert.True(t, retained, "bounded retry state should survive while the alternative is in flight")
+	metrics := r.FastSyncMetrics()
+	assert.Equal(t, uint64(2), metrics.ReplayDeltaRequested)
+	assert.Equal(t, uint64(1), metrics.ReplayDeltaNoLedger)
+	assert.Zero(t, metrics.ReplayDeltaNoNode)
+	assert.Equal(t, uint64(1), metrics.ReplayDeltaAvailabilityFallbacks)
 
 	r.catchupReplay.replayer.Abandon(target)
 	r.catchupReplay.expireReplayAvailabilityRetries()
@@ -110,6 +115,11 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 		{peerID: 7, reason: "replay-delta-verify"},
 	}
 	assert.Equal(t, charges, sender.getBadDataCalls())
+	metrics := r.FastSyncMetrics()
+	assert.Equal(t, uint64(2), metrics.ReplayDeltaRequested)
+	assert.Equal(t, uint64(1), metrics.ReplayDeltaNoLedger)
+	assert.Zero(t, metrics.ReplayDeltaNoNode, "delayed availability response from old peer is not a matched fallback")
+	assert.Equal(t, uint64(1), metrics.ReplayDeltaAvailabilityFallbacks)
 
 	payload, err := message.Encode(resp)
 	require.NoError(t, err)
@@ -124,6 +134,37 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, stored)
 	assert.Equal(t, charges, sender.getBadDataCalls())
+}
+
+func TestRouter_ReplayDeltaAvailabilityIgnoresRotatedPeer(t *testing.T) {
+	for name, validPeer := range map[string]uint64{"current peer": 8, "prior peer": 7} {
+		t.Run(name, func(t *testing.T) {
+			r, sender := makeRouterWithBadDataRecorder(t)
+			svc := r.adaptor.LedgerService()
+			parent := svc.GetClosedLedger()
+			resp, target, seq := buildEmptyClosedSuccessorResponse(t, svc)
+			require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, target, 7, parent))
+			rd := r.catchupReplay.replayer.Find(target)
+			rd.NoteSubTaskRetry(8)
+			state := rd.State()
+			sendReplayAvailabilityResponse(t, r, 7, target, message.ReplyErrorNoLedger)
+			sendReplayAvailabilityResponse(t, r, 7, target, message.ReplyErrorNoNode)
+			require.Same(t, rd, r.catchupReplay.replayer.Find(target))
+			assert.Equal(t, state, rd.State())
+			assert.Zero(t, r.FastSyncMetrics().ReplayDeltaAvailabilityFallbacks)
+			assert.Empty(t, sender.legacyCalls())
+			payload, err := message.Encode(resp)
+			require.NoError(t, err)
+			r.handleMessage(&peermanagement.InboundMessage{
+				PeerID: peermanagement.PeerID(validPeer), Type: message.TypeReplayDeltaResponse, Payload: payload,
+			})
+			assert.Zero(t, r.catchupReplay.replayer.Count())
+			stored, err := svc.GetLedgerByHash(target)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, target, stored.Hash())
+		})
+	}
 }
 
 func TestRouter_ReplayDeltaAvailabilityFallsBackToTransactionReplayAfterBound(t *testing.T) {
@@ -162,6 +203,11 @@ func TestRouter_ReplayDeltaAvailabilityFallsBackToTransactionReplayAfterBound(t 
 	_, retained := r.catchupReplay.replayAvailabilityRetries[target]
 	r.catchupReplay.acquisitionMu.Unlock()
 	assert.False(t, retained, "retry state must be cleared after bounded fallback")
+	metrics := r.FastSyncMetrics()
+	assert.Equal(t, uint64(4), metrics.ReplayDeltaRequested)
+	assert.Zero(t, metrics.ReplayDeltaNoLedger)
+	assert.Equal(t, uint64(4), metrics.ReplayDeltaNoNode)
+	assert.Equal(t, uint64(4), metrics.ReplayDeltaAvailabilityFallbacks)
 }
 
 func TestRouter_ReplayDeltaAvailabilityExpiredBudgetDoesNotRestart(t *testing.T) {
@@ -233,6 +279,16 @@ func TestRouter_ReplayDeltaAvailabilityChargesPeerAndPreservesRecovery(t *testin
 			il := r.catchupReplay.fetchTracker.Find(target)
 			require.NotNil(t, il)
 			assert.True(t, il.TransactionOnly())
+			metrics := r.FastSyncMetrics()
+			assert.Equal(t, uint64(1), metrics.ReplayDeltaRequested)
+			assert.Equal(t, uint64(1), metrics.ReplayDeltaAvailabilityFallbacks)
+			if tc.reply == message.ReplyErrorNoNode {
+				assert.Equal(t, uint64(1), metrics.ReplayDeltaNoNode)
+				assert.Zero(t, metrics.ReplayDeltaNoLedger)
+			} else {
+				assert.Equal(t, uint64(1), metrics.ReplayDeltaNoLedger)
+				assert.Zero(t, metrics.ReplayDeltaNoNode)
+			}
 		})
 	}
 }

@@ -1291,6 +1291,11 @@ type FastSyncMetrics struct {
 	CompletionRecheckRejectedUnavailable uint64
 	TargetSuperseded                     uint64
 	ObsoleteAcquisitionCompleted         uint64
+	ReplayDeltaRequested                 uint64
+	ReplayDeltaNoLedger                  uint64
+	ReplayDeltaNoNode                    uint64
+	ReplayDeltaAvailabilityFallbacks     uint64
+	RecoveryLocallySatisfied             uint64
 	ReplayPipelineRequested              uint64
 	ReplayPipelineReady                  uint64
 	ReplayPipelineApplied                uint64

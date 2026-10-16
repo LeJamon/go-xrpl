@@ -197,7 +197,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 	peerID := hint
 	if survivor == nil {
 		var ok bool
-		peerID, ok = c.resolveAcquisitionPeer(seq, hint)
+		peerID, ok = c.resolveAcquisitionPeer(seq, hash, hint)
 		if !ok {
 			return
 		}

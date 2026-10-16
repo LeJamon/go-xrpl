@@ -21,6 +21,10 @@ type consensusNetwork interface {
 
 type noopSender struct{}
 
+func (n *noopSender) PeerLedgerAvailability(uint64, [32]byte, uint32) (bool, uint32, uint32) {
+	return false, 0, 0
+}
+
 var (
 	_ consensusNetwork         = (*noopSender)(nil)
 	_ gossipNetwork            = (*noopSender)(nil)

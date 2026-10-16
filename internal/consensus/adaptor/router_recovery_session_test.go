@@ -294,6 +294,7 @@ func TestConsensusCatchupRetiresLocallySatisfiedFrozenPivot(t *testing.T) {
 	assert.False(t, r.catchupReplay.standardReplay.active)
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Equal(t, consensusRecovery{}, r.catchupReplay.consensusRecovery)
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().RecoveryLocallySatisfied)
 }
 
 func TestConsensusCatchupHandsHeldPivotToConsensus(t *testing.T) {

@@ -494,6 +494,9 @@ func (c *catchupReplayCoordinator) retireLocallySatisfiedLedger(seq uint32, hash
 
 	retiredLegacy := len(retirement.ledgers)
 	c.retireStandardReplay(retirement)
+	if retiredPipeline || retiredLegacy != 0 || retiredReplay {
+		c.recoveryLocallySatisfied.Add(1)
+	}
 	retired := retiredPipeline || retiredLegacy != 0 || retiredReplay || releasedRecovery
 	if retired {
 		c.logger.Info("retired locally satisfied recovery work",
@@ -608,7 +611,7 @@ func (c *catchupReplayCoordinator) rearmFrozenPivotAcquisition(
 		c.belowFloor(seq) || c.catchupRetryBlocked(hash, now) {
 		return false
 	}
-	peerID, ok := c.resolveAcquisitionPeer(seq, 0)
+	peerID, ok := c.resolveAcquisitionPeer(seq, hash, 0)
 	if !ok {
 		return false
 	}
@@ -754,7 +757,7 @@ func (c *catchupReplayCoordinator) retargetFrozenPivot(
 		return false
 	}
 
-	peerID, ok := c.resolveAcquisitionPeer(target.seq, target.peerID)
+	peerID, ok := c.resolveAcquisitionPeer(target.seq, target.hash, target.peerID)
 	if !ok {
 		c.replayPipelineRetargetFailures.Add(1)
 		c.logger.Warn("cannot retarget frozen recovery pivot without an acquisition peer",
