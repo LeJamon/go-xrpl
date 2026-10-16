@@ -13,6 +13,11 @@ import (
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 )
 
+const (
+	speculativeMemoryMinimum = 64 << 20
+	speculativeMemoryMaximum = shamap.DirtyWorkspaceBytes
+)
+
 type nodeMemory struct {
 	pool               *membudget.Pool
 	acquisition        *membudget.Account
@@ -21,6 +26,7 @@ type nodeMemory struct {
 	fullBelow          *membudget.Account
 	relay              *membudget.Account
 	persistence        *membudget.Account
+	speculative        *membudget.Account
 	replayVerification *membudget.Account
 	inbound            *membudget.Account
 	outbound           *membudget.Account
@@ -77,6 +83,10 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 			return nil, err
 		}
 		m.persistence, err = account("persistence", shamap.DirtyWorkspaceBytes, shamap.DirtyWorkspaceBytes)
+		if err != nil {
+			return nil, err
+		}
+		m.speculative, err = account("speculative", speculativeMemoryMinimum, speculativeMemoryMaximum)
 		if err != nil {
 			return nil, err
 		}
