@@ -46,3 +46,34 @@ func TestMemoryCollectorReportsProtectedAndElasticCapacity(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, metrics)
 }
+
+func TestMemoryCollectorReportsAdmissionOutcomes(t *testing.T) {
+	cleanup := SetMemoryPool(membudget.New(100))
+	defer cleanup()
+	registry := prometheus.NewRegistry()
+	require.NoError(t, registry.Register(NewMemoryCollector()))
+	for origin, outcome := range map[string]string{
+		"peer": "exhausted", "rpc": "retried", "txset": "oversized", "successor": "canceled",
+	} {
+		RecordMemoryAdmission(origin, outcome)
+	}
+	metrics, err := registry.Gather()
+	require.NoError(t, err)
+	outcomes := make(map[string]string)
+	for _, family := range metrics {
+		if family.GetName() != "goxrpl_memory_admission_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := make(map[string]string)
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			require.Positive(t, metric.Counter.GetValue())
+			outcomes[labels["origin"]] = labels["outcome"]
+		}
+	}
+	require.Equal(t, map[string]string{
+		"peer": "exhausted", "rpc": "retried", "txset": "oversized", "successor": "canceled",
+	}, outcomes)
+}

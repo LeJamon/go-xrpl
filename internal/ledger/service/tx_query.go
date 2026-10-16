@@ -148,6 +148,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	var commitData detachedIngressCommitData
 	outcome, current, _, _, submitErr := s.submitDetachedIngressOwned(detachedIngressRequest{
 		pendingTx:             ptx,
+		origin:                "rpc",
 		initialRules:          initialRules,
 		signatureEligible:     signatureEligible,
 		initialSignatureCheck: initialSignatureCheck,

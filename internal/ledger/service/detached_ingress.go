@@ -121,6 +121,7 @@ func (a *detachedIngressAdmission) activeDoneOrClosedLocked() <-chan struct{} {
 
 type detachedIngressRequest struct {
 	pendingTx openledger.PendingTx
+	origin    string
 
 	initialRules          *amendment.Rules
 	signatureEligible     bool
@@ -267,6 +268,7 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 		req.prepare(workCtx)
 	}
 
+	retry := memoryAdmissionRetry{origin: req.origin}
 	for {
 		snapshot, err := s.captureDetachedIngress(req)
 		if err != nil {
@@ -315,11 +317,17 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 
 		releaseMemory, err := s.reserveDetachedIngressMemory(workCtx, snapshot, req.pendingTx)
 		if err != nil {
+			if err = retry.wait(workCtx, s, err); err == nil {
+				continue
+			}
 			if workCtx.Err() != nil {
 				err = errServiceNotRunning
 			}
+			retry.finish(s, err)
 			return failure, snapshot.current, snapshot.queue, snapshot.config, err
 		}
+		retry.finish(s, nil)
+		retry = memoryAdmissionRetry{origin: req.origin}
 		privateView, err := snapshot.openView.ForkCurrent(snapshot.current)
 		if err != nil {
 			releaseMemory()
@@ -424,8 +432,8 @@ func (s *Service) reserveDetachedIngressMemory(
 		queueStats,
 		[]openledger.PendingTx{pending},
 	)
-	if s.config.PersistenceMemory == nil && bytes > speculativeSuccessorMemoryLimit {
-		return nil, ErrPreferredTransitionMemory
+	if s.speculativeMemoryBudget() == nil && bytes > speculativeSuccessorMemoryLimit {
+		return nil, newSpeculativeMemoryError(nil, bytes, speculativeSuccessorMemoryLimit, true, nil)
 	}
 	return s.acquirePreferredTransitionMemory(ctx, bytes)
 }

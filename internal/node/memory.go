@@ -15,7 +15,7 @@ import (
 
 const (
 	speculativeMemoryMinimum = 64 << 20
-	speculativeMemoryMaximum = shamap.DirtyWorkspaceBytes
+	speculativeMemoryMaximum = 256 << 20
 )
 
 type nodeMemory struct {

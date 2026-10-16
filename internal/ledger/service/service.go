@@ -74,6 +74,9 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 type Config struct {
 	RelayMemory       MemoryBudget
 	PersistenceMemory shamap.DirtyMemoryBudget
+	// SpeculativeMemory isolates ingress and successors from persistence's
+	// progress reserve. Nil uses PersistenceMemory for embedded callers.
+	SpeculativeMemory shamap.DirtyMemoryBudget
 	// ReplayVerificationMemory isolates long-running cold reads from ledger
 	// persistence. Node wiring must provide a separate shared-pool account so a
 	// verifier cannot consume the workspace needed to persist its own parent.
@@ -164,6 +167,7 @@ type Service struct {
 	lifecycleMu          sync.Mutex
 	lifecycleState       serviceLifecycleState
 	stopDone             chan struct{}
+	memoryAdmissionStop  chan struct{}
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.
@@ -1179,6 +1183,19 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 // SubmitOpenLedgerTxDetailed is SubmitOpenLedgerTx with the queue disposition
 // retained for callers that must distinguish applied from deferred transactions.
 func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledger.SubmitOutcome, error) {
+	origin := "peer"
+	if local {
+		origin = "local"
+	}
+	return s.submitOpenLedgerTx(blob, local, origin)
+}
+
+// LearnOpenLedgerTx admits an acquired transaction without retaining it in the local retry pool.
+func (s *Service) LearnOpenLedgerTx(blob []byte) (openledger.SubmitOutcome, error) {
+	return s.submitOpenLedgerTx(blob, false, "txset")
+}
+
+func (s *Service) submitOpenLedgerTx(blob []byte, local bool, origin string) (openledger.SubmitOutcome, error) {
 	failure := openledger.SubmitOutcome{Class: openledger.ResultFailure}
 	s.mu.RLock()
 	cfg, cfgErr := s.applyConfigLocked()
@@ -1218,6 +1235,7 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	}
 	outcome, _, _, _, submitErr := s.submitDetachedIngressOwned(detachedIngressRequest{
 		pendingTx:             ptx,
+		origin:                origin,
 		initialRules:          initialRules,
 		signatureEligible:     true,
 		initialSignatureCheck: initialSignatureCheck,

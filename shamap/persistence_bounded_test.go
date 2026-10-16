@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -109,4 +111,159 @@ func TestStoreDirtyBatchedEmptyTree(t *testing.T) {
 		return nil
 	}))
 	require.Zero(t, budget.used)
+}
+
+func TestStoreDirtyBatchedReservesOnlyTinyBatch(t *testing.T) {
+	sm := New(TypeState)
+	require.NoError(t, sm.Put([32]byte{1}, bytes.Repeat([]byte{2}, 32)))
+	budget := &dirtyTestBudget{limit: DirtyWorkspaceBytes}
+	var serializedCharge uint64
+	var entriesCount uint64
+	require.NoError(t, sm.StoreDirtyBatched(context.Background(), budget, func(entries []FlushEntry) error {
+		entriesCount += uint64(len(entries))
+		for _, entry := range entries {
+			serializedCharge += 3 * (uint64(len(entry.Data)) + 128)
+		}
+		return nil
+	}))
+	require.Equal(t, uint64(2), entriesCount)
+	want := serializedCharge + dirtyBatchStructureBytes
+	require.Equal(t, want, budget.peak)
+	require.Less(t, budget.peak, uint64(1<<20))
+	require.Zero(t, budget.used)
+}
+
+func TestStoreDirtyBatchedAllowsSingleNodeAboveBatchTarget(t *testing.T) {
+	sm := New(TypeState)
+	require.NoError(t, sm.Put([32]byte{1}, bytes.Repeat([]byte{2}, 9<<20)))
+	budget := &dirtyTestBudget{limit: DirtyWorkspaceBytes}
+	calls := 0
+	largeNodeSeen := false
+	require.NoError(t, sm.StoreDirtyBatched(context.Background(), budget, func(entries []FlushEntry) error {
+		calls++
+		for _, entry := range entries {
+			if len(entry.Data) > 8<<20 {
+				largeNodeSeen = true
+			}
+		}
+		return nil
+	}))
+	require.Equal(t, 2, calls)
+	require.True(t, largeNodeSeen)
+	require.Greater(t, budget.peak, uint64(8<<20))
+	require.LessOrEqual(t, budget.peak, uint64(DirtyWorkspaceBytes))
+	require.Zero(t, budget.used)
+}
+
+type wakeupDirtyBudget struct {
+	mu       sync.Mutex
+	limit    uint64
+	used     uint64
+	changed  chan struct{}
+	attempts chan struct{}
+}
+
+func newWakeupDirtyBudget(limit uint64) *wakeupDirtyBudget {
+	return &wakeupDirtyBudget{
+		limit:    limit,
+		changed:  make(chan struct{}),
+		attempts: make(chan struct{}, 1),
+	}
+}
+
+func (b *wakeupDirtyBudget) Limit() uint64 { return b.limit }
+
+func (b *wakeupDirtyBudget) Changed() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.changed
+}
+
+func (b *wakeupDirtyBudget) TryReserve(bytes uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if bytes <= b.limit-b.used {
+		b.used += bytes
+		return true
+	}
+	select {
+	case b.attempts <- struct{}{}:
+	default:
+	}
+	return false
+}
+
+func (b *wakeupDirtyBudget) Release(bytes uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if bytes > b.used {
+		panic("wakeup dirty budget underflow")
+	}
+	b.used -= bytes
+	close(b.changed)
+	b.changed = make(chan struct{})
+}
+
+func (b *wakeupDirtyBudget) Used() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
+
+func TestStoreDirtyBatchedSharedBudgetWakeupAndCancellation(t *testing.T) {
+	const limit = 1 << 20
+	sm := New(TypeState)
+	require.NoError(t, sm.Put([32]byte{1}, bytes.Repeat([]byte{2}, 32)))
+	const nodeCharge = 3 * (68 + 128)
+	required := uint64(nodeCharge) + dirtyBatchStructureBytes
+	budget := newWakeupDirtyBudget(limit)
+	require.True(t, budget.TryReserve(limit-required+1))
+
+	wakeDone := make(chan error, 1)
+	go func() {
+		wakeDone <- sm.StoreDirtyBatched(context.Background(), budget, func(entries []FlushEntry) error {
+			if len(entries) == 0 {
+				return errors.New("empty dirty batch")
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-budget.attempts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bounded persistence did not wait for shared budget")
+	}
+	budget.Release(limit - required + 1)
+	select {
+	case err := <-wakeDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bounded persistence did not wake after budget release")
+	}
+	require.Zero(t, budget.Used())
+
+	// A waiter that is canceled before capacity returns must release nothing
+	// and leave the external owner's reservation intact.
+	require.NoError(t, sm.Put([32]byte{2}, bytes.Repeat([]byte{3}, 32)))
+	require.True(t, budget.TryReserve(limit-required+1))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelDone := make(chan error, 1)
+	go func() {
+		cancelDone <- sm.StoreDirtyBatched(ctx, budget, func([]FlushEntry) error { return nil })
+	}()
+	select {
+	case <-budget.attempts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bounded persistence did not attempt canceled reservation")
+	}
+	cancel()
+	select {
+	case err := <-cancelDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bounded persistence did not observe cancellation")
+	}
+	require.Equal(t, limit-required+1, budget.Used())
+	budget.Release(limit - required + 1)
+	require.Zero(t, budget.Used())
 }

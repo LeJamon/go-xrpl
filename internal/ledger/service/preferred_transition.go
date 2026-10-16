@@ -172,6 +172,23 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	retry := memoryAdmissionRetry{origin: "successor"}
+	for {
+		prepared, err := s.prepareSuccessorOnce(ctx, parent, options)
+		if err == nil {
+			retry.finish(s, nil)
+			return prepared, nil
+		}
+		// A failed attempt releases transition ownership before waiting: other
+		// holders may need to publish their work to return these credits.
+		if err = retry.wait(ctx, s, err); err != nil {
+			retry.finish(s, err)
+			return nil, err
+		}
+	}
+}
+
+func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledger, options successorOptions) (*PreparedPreferredLedger, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -354,8 +371,8 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 	}
 
 	p.privateBytes = privateBytes
-	if options.deferSpeculation && s.config.PersistenceMemory == nil && privateBytes > speculativeSuccessorMemoryLimit {
-		return cleanupPrepared(ErrPreferredTransitionMemory)
+	if options.deferSpeculation && s.speculativeMemoryBudget() == nil && privateBytes > speculativeSuccessorMemoryLimit {
+		return cleanupPrepared(newSpeculativeMemoryError(nil, privateBytes, speculativeSuccessorMemoryLimit, true, nil))
 	}
 	// A detached ingress or older successor may need publication to release
 	// its reservation. Do not wait for its memory while owning that fence.
@@ -1069,18 +1086,18 @@ func (s *Service) acquirePreferredTransitionMemory(ctx context.Context, bytes ui
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if bytes == 0 || s.config.PersistenceMemory == nil {
+	if bytes == 0 || s.speculativeMemoryBudget() == nil {
 		return func() {}, nil
 	}
-	budget := s.config.PersistenceMemory
-	if bytes > s.preferredTransitionMemoryCapacity() || !budget.TryReserve(bytes) {
-		return nil, ErrPreferredTransitionMemory
+	budget := s.speculativeMemoryBudget()
+	if err := reserveSpeculativeBytes(budget, bytes, s.preferredTransitionMemoryCapacity()); err != nil {
+		return nil, err
 	}
 	return sync.OnceFunc(func() { budget.Release(bytes) }), nil
 }
 
 func (s *Service) preferredTransitionMemoryCapacity() uint64 {
-	budget := s.config.PersistenceMemory
+	budget := s.speculativeMemoryBudget()
 	if budget == nil {
 		return ^uint64(0)
 	}

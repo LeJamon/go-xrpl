@@ -51,7 +51,7 @@ func (r *Router) handleTxSetLearnJob(job txSetLearnJob) {
 	}
 	// Preserve the acquired-leaf admission path: ordinary gossip suppression
 	// must not swallow a novel acquired transaction merely seen from a peer.
-	if outcome, err := r.adaptor.SubmitPendingTx(job.blob, false); err == nil && outcome.Class == openledger.ResultSuccess {
+	if outcome, err := r.adaptor.submitPendingTx(job.blob, false, true); err == nil && outcome.Class == openledger.ResultSuccess {
 		r.relayTransaction(
 			r.transactionRelaySkip(job.id, peermanagement.PeerID(job.peer)),
 			job.blob,

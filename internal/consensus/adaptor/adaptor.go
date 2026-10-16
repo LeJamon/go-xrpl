@@ -1002,12 +1002,28 @@ func (a *Adaptor) validatePeerSignature(ptx openledger.PendingTx, rules *amendme
 }
 
 func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.SubmitOutcome, error) {
+	return a.submitPendingTx(blob, local, false)
+}
+
+func (a *Adaptor) submitPendingTx(blob []byte, local, learned bool) (openledger.SubmitOutcome, error) {
 	if a.ledgerService == nil {
 		return openledger.SubmitOutcome{Class: openledger.ResultFailure}, errors.New("ledger service unavailable")
 	}
-	res, err := a.ledgerService.SubmitOpenLedgerTxDetailed(blob, local)
+	var res openledger.SubmitOutcome
+	var err error
+	origin := "peer"
+	if learned {
+		origin = "txset"
+		res, err = a.ledgerService.LearnOpenLedgerTx(blob)
+	} else {
+		if local {
+			origin = "local"
+		}
+		res, err = a.ledgerService.SubmitOpenLedgerTxDetailed(blob, local)
+	}
 	if err != nil {
 		a.logger.Warn("openLedger submit failed",
+			"origin", origin,
 			"err", err,
 			"blob_size", len(blob),
 			"local", local,
