@@ -750,6 +750,13 @@ func (c *catchupReplayCoordinator) retireAcquisitionStore(ctx context.Context, l
 	if ledger == nil {
 		return
 	}
+	c.completionMu.Lock()
+	for _, task := range c.completionTasks {
+		if task != nil && task.ledger == ledger {
+			task.cancel()
+		}
+	}
+	c.completionMu.Unlock()
 	if err := ledger.RetirePersistence(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		c.logger.Warn("inbound ledger: failed to retire persistence scope", "error", err, "seq", ledger.Seq())
 	}

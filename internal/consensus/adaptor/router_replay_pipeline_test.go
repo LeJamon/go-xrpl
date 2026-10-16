@@ -425,10 +425,10 @@ func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {
 	for _, link := range newLinks {
 		require.NotNil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
-	require.NoError(t, stale.GotBase([]message.LedgerNode{
+	require.ErrorIs(t, stale.GotBase([]message.LedgerNode{
 		{NodeData: oldLinks[0].response.LedgerHeader},
 		{NodeData: []byte{1}},
-	}))
+	}), context.Canceled)
 	r.catchupReplay.completeInboundLedger(stale)
 	stored, _ := svc.GetLedgerByHash(oldLinks[0].hash)
 	assert.Nil(t, stored)

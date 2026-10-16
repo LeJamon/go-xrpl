@@ -245,6 +245,12 @@ var ErrInvalidPeerNode = errors.New("invalid peer ledger node")
 // barrier and must not acknowledge the acquisition as complete.
 var ErrPersistence = errors.New("inbound persistence failed")
 
+// ErrAcquisitionRetired identifies a persistence scope whose ownership ended.
+// It is cancellation only when the acquisition itself has also retired.
+var ErrAcquisitionRetired = errors.New("acquisition persistence scope retired")
+
+var errAcquisitionCanceled = fmt.Errorf("%w: %w", context.Canceled, ErrAcquisitionRetired)
+
 // WithFamily backs the acquisition's state and transaction SHAMaps with the
 // node-store family, so nodes already present locally (the shared majority of
 // the tree after a fork or during forward catch-up) are satisfied from the
@@ -367,6 +373,9 @@ func (l *Ledger) newSyncMap(ctx context.Context, t shamap.Type) (*shamap.SHAMap,
 func (l *Ledger) SetVerifiedStateBaseContext(ctx context.Context, rootHash [32]byte) error {
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	l.verifiedStateBase = rootHash
 	stateMap := l.stateMap
@@ -837,6 +846,9 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return 0, err
+	}
 
 	l.mu.Lock()
 	if l.state != StateWantBase {
@@ -1020,6 +1032,9 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	var stored []shamap.FlushEntry
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return 0, err
+	}
 	l.mu.Lock()
 	defer func() {
 		l.mu.Unlock()
@@ -1090,6 +1105,9 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	var stored []shamap.FlushEntry
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return 0, err
+	}
 	l.mu.Lock()
 	defer func() {
 		l.mu.Unlock()
@@ -1201,26 +1219,56 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 	return added, stored, nil
 }
 
+func (l *Ledger) retirementError() error {
+	if l.retired.Load() {
+		return errAcquisitionCanceled
+	}
+	return nil
+}
+
+func (l *Ledger) persistenceResult(ctx context.Context, err error) error {
+	if err == nil {
+		return l.retirementError()
+	}
+	if errors.Is(err, ErrAcquisitionRetired) && l.retired.Load() {
+		return errAcquisitionCanceled
+	}
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrPersistence, err)
+}
+
 func (l *Ledger) persistReceived(ctx context.Context, entries []shamap.FlushEntry, label string) error {
+	if err := l.retirementError(); err != nil {
+		return err
+	}
 	if l.family == nil || len(entries) == 0 {
 		return nil
 	}
-	if err := l.family.StoreBatch(ctx, entries); err != nil {
-		l.logger.Warn("inbound ledger: failed to persist verified "+label, "error", err)
-		return fmt.Errorf("%w: %s: %w", ErrPersistence, label, err)
+	if err := l.persistenceResult(ctx, l.family.StoreBatch(ctx, entries)); err != nil {
+		if errors.Is(err, ErrPersistence) {
+			l.logger.Warn("inbound ledger: failed to persist verified "+label, "error", err)
+		} else {
+			l.logger.Debug("inbound ledger: persistence canceled", "nodes", label, "error", err)
+		}
+		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
 }
 
 // FlushPersistence waits for every verified node queued by this acquisition.
 func (l *Ledger) FlushPersistence(ctx context.Context) error {
+	if err := l.retirementError(); err != nil {
+		return err
+	}
 	flusher, ok := l.family.(interface {
 		Flush(context.Context) error
 	})
 	if !ok {
 		return nil
 	}
-	return flusher.Flush(ctx)
+	return l.persistenceResult(ctx, flusher.Flush(ctx))
 }
 
 // CheckpointPersistence bounds the resident acquisition tree after enough
@@ -1241,6 +1289,9 @@ func (l *Ledger) checkpointPersistence(ctx context.Context, useful int, force bo
 	}
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return err
+	}
 
 	l.mu.Lock()
 	if useful > 0 {
@@ -1267,12 +1318,16 @@ func (l *Ledger) checkpointPersistence(ctx context.Context, useful int, force bo
 		} else {
 			err = m.AcknowledgePersistedContext(ctx)
 		}
-		if err != nil {
+		if err := l.persistenceResult(ctx, err); err != nil {
 			return err
 		}
 	}
 
 	l.mu.Lock()
+	if err := l.retirementError(); err != nil {
+		l.mu.Unlock()
+		return err
+	}
 	if force {
 		l.memoryCheckpoints++
 	}
@@ -1288,6 +1343,9 @@ func (l *Ledger) checkpointPersistence(ctx context.Context, useful int, force bo
 // PromotePersistence acknowledges flushed acquisition writes and binds the
 // maps to the underlying Family for use by adopted ledgers.
 func (l *Ledger) PromotePersistence(ctx context.Context) error {
+	if err := l.retirementError(); err != nil {
+		return err
+	}
 	promoter, ok := l.family.(interface {
 		Promote(context.Context) (shamap.Family, error)
 	})
@@ -1297,20 +1355,23 @@ func (l *Ledger) PromotePersistence(ctx context.Context) error {
 
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return err
+	}
 	l.mu.Lock()
 	stateMap, txMap := l.stateMap, l.txMap
 	l.mu.Unlock()
 	family, err := promoter.Promote(ctx)
-	if err != nil {
+	if err := l.persistenceResult(ctx, err); err != nil {
 		return err
 	}
 	if stateMap != nil {
-		if err := stateMap.AcknowledgePersistedContext(ctx); err != nil {
+		if err := l.persistenceResult(ctx, stateMap.AcknowledgePersistedContext(ctx)); err != nil {
 			return err
 		}
 	}
 	if txMap != nil {
-		if err := txMap.AcknowledgePersistedContext(ctx); err != nil {
+		if err := l.persistenceResult(ctx, txMap.AcknowledgePersistedContext(ctx)); err != nil {
 			return err
 		}
 	}
@@ -1319,7 +1380,7 @@ func (l *Ledger) PromotePersistence(ctx context.Context) error {
 			m.SetFamily(family)
 		}
 	}
-	return nil
+	return l.retirementError()
 }
 
 // RetirePersistence releases persistence state owned by an acquisition that
@@ -1373,7 +1434,7 @@ func (l *Ledger) releaseRetiredMemory() {
 // complete_ = mHaveHeader && mHaveState && mHaveTransactions
 // (InboundLedger.cpp:734,946). Caller must hold l.mu.
 func (l *Ledger) recomputeComplete() {
-	if l.haveState && l.haveTx && l.state != StateFailed {
+	if l.haveState && l.haveTx && l.state != StateFailed && !l.retired.Load() {
 		l.state = StateComplete
 		l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
 	}
@@ -1389,7 +1450,7 @@ func (l *Ledger) finishReceivedTree(ctx context.Context, m *shamap.SHAMap, trans
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.state != StateWantState && l.state != StateComplete {
+	if l.retired.Load() || l.state != StateWantState && l.state != StateComplete {
 		return
 	}
 	if transaction {
@@ -2369,6 +2430,11 @@ func missingNodeHashes(missing []shamap.MissingNode, max int) [][32]byte {
 	return hashes
 }
 
+// IsRetired reports whether acquisition work has relinquished ownership.
+func (l *Ledger) IsRetired() bool {
+	return l.retired.Load()
+}
+
 // IsComplete returns true if the ledger has been fully acquired.
 func (l *Ledger) IsComplete() bool {
 	l.mu.Lock()
@@ -2446,6 +2512,9 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	}
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return false, false, err
+	}
 
 	l.mu.Lock()
 	if l.state != StateWantState {
@@ -2571,10 +2640,10 @@ func (l *Ledger) persistLocalNodes(ctx context.Context, m *shamap.SHAMap, entrie
 		return nil
 	}
 	if err := l.FlushPersistence(ctx); err != nil {
-		return fmt.Errorf("%w: flush %s: %w", ErrPersistence, label, err)
+		return fmt.Errorf("flush %s: %w", label, err)
 	}
-	if err := m.AcknowledgePersistedContext(ctx); err != nil {
-		return fmt.Errorf("%w: acknowledge %s: %w", ErrPersistence, label, err)
+	if err := l.persistenceResult(ctx, m.AcknowledgePersistedContext(ctx)); err != nil {
+		return fmt.Errorf("acknowledge %s: %w", label, err)
 	}
 	return nil
 }

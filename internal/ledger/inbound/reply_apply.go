@@ -16,6 +16,9 @@ import (
 // can resume it after a checkpoint.
 func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, transaction bool, nodes []message.LedgerNode) (MissingReplyResult, error) {
 	result := MissingReplyResult{Received: len(nodes)}
+	if err := l.retirementError(); err != nil {
+		return result, err
+	}
 	if len(nodes) == 0 {
 		l.mu.Lock()
 		result.Complete = l.state == StateComplete
@@ -28,6 +31,9 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 
 	l.workMu.Lock()
 	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return result, err
+	}
 
 	l.mu.Lock()
 	if l.state == StateComplete || (transaction && l.haveTx) || (!transaction && l.haveState) {
@@ -81,6 +87,10 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 	}
 
 	l.mu.Lock()
+	if err := l.retirementError(); err != nil {
+		l.mu.Unlock()
+		return result, err
+	}
 	if applyErr == nil && result.Consumed == len(nodes) && matchedPeer {
 		result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
 		l.releaseRequestSlotLocked(peerID, transaction, SystemClock.Now())

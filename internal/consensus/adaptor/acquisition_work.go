@@ -109,6 +109,7 @@ type acquisitionWorkResult struct {
 	byHashTx         [][32]byte
 	badData          []acquisitionBadData
 	remove           bool
+	canceled         bool
 	timerFailure     bool
 	policyFailure    bool
 	failureClass     standardReplayFailureClass
@@ -130,6 +131,20 @@ type acquisitionWorkResult struct {
 	err              error
 	persistenceErr   error
 	ack              chan struct{}
+}
+
+func (r *acquisitionWorkResult) setPersistenceError(ctx context.Context, err error) {
+	r.complete = false
+	r.remove = true
+	if !errors.Is(err, inbound.ErrPersistence) &&
+		(errors.Is(err, inbound.ErrAcquisitionRetired) && errors.Is(err, context.Canceled) ||
+			ctx.Err() != nil && errors.Is(err, ctx.Err())) {
+		r.err = err
+		r.canceled = true
+		return
+	}
+	r.persistenceErr = err
+	r.failureClass = standardReplayFailurePersistence
 }
 
 type acquisitionBadData struct {
@@ -397,17 +412,13 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		current := batch.ledger.Snapshot()
 		useful += int(current.StateCacheUseful - previous.StateCacheUseful + current.TxCacheUseful - previous.TxCacheUseful)
 		if err := batch.ledger.CheckpointPersistence(batch.ctx, useful); err != nil {
-			result.persistenceErr = err
-			result.failureClass = standardReplayFailurePersistence
-			result.remove = true
+			result.setPersistenceError(batch.ctx, err)
 		}
 	}
 	pressure := batch.ledger.Snapshot()
 	if (result.memoryWait || pressure.StateWalk.RetentionPressure || pressure.TxWalk.RetentionPressure) && !result.remove && !result.complete {
 		if err := batch.ledger.CheckpointMemory(batch.ctx); err != nil {
-			result.persistenceErr = err
-			result.failureClass = standardReplayFailurePersistence
-			result.remove = true
+			result.setPersistenceError(batch.ctx, err)
 		} else if result.requestWait == inbound.MissingRequestWaitPersistence || result.memoryWait && batch.ledger.Snapshot().AcquisitionMemory.Used < beforeCheckpoint {
 			result.yielded = true
 			if (result.requestWait == inbound.MissingRequestWaitMemory || result.requestWait == inbound.MissingRequestWaitPersistence) && !result.pendingReply {
@@ -450,9 +461,8 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		}
 	}
 	if result.complete && l.flush != nil {
-		result.persistenceErr = l.flush(batch.ctx, batch.ledger)
-		if result.persistenceErr != nil {
-			result.failureClass = standardReplayFailurePersistence
+		if err := l.flush(batch.ctx, batch.ledger); err != nil {
+			result.setPersistenceError(batch.ctx, err)
 		}
 	}
 	result.ack = make(chan struct{})
@@ -633,8 +643,12 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 					return result
 				}
 				if errors.Is(err, inbound.ErrPersistence) {
-					result.persistenceErr = err
-					result.failureClass = standardReplayFailurePersistence
+					result.setPersistenceError(ctx, err)
+					return result
+				}
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					result.err = err
+					result.canceled = true
 					result.remove = true
 					return result
 				}
@@ -899,9 +913,7 @@ func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger,
 		if result.memoryWait && !result.remove {
 			before := ledger.Snapshot().AcquisitionMemory.Used
 			if err := ledger.CheckpointMemory(ctx); err != nil {
-				result.persistenceErr = err
-				result.failureClass = standardReplayFailurePersistence
-				result.remove = true
+				result.setPersistenceError(ctx, err)
 			} else {
 				resumable := result.requestWait == inbound.MissingRequestWaitPersistence || ledger.Snapshot().AcquisitionMemory.Used < before
 				resumeWork = resumable
@@ -915,10 +927,8 @@ func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger,
 			result.yielded = true
 		}
 		if result.complete {
-			result.persistenceErr = ledger.FlushPersistence(ctx)
-			if result.persistenceErr != nil {
-				result.failureClass = standardReplayFailurePersistence
-				result.remove = true
+			if err := ledger.FlushPersistence(ctx); err != nil {
+				result.setPersistenceError(ctx, err)
 			}
 		}
 		ledger.SetMemoryWaiting(result.memoryWait && !result.remove)
@@ -953,7 +963,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 	if result.ack != nil {
 		defer close(result.ack)
 	}
-	if errors.Is(result.err, context.Canceled) {
+	if result.canceled || errors.Is(result.err, context.Canceled) && !errors.Is(result.err, inbound.ErrPersistence) {
 		return
 	}
 	ledger := result.ledger

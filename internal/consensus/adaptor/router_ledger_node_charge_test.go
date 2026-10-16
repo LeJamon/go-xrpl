@@ -204,7 +204,9 @@ func TestLedgerDataControlStatesDoNotCharge(t *testing.T) {
 					peerID: 7,
 					data:   data,
 				}})
-				require.NoError(t, result.err)
+				require.True(t, ledger.IsRetired())
+				require.ErrorIs(t, result.err, context.Canceled)
+				require.NotErrorIs(t, result.err, inbound.ErrPersistence)
 				require.Empty(t, result.badData, "worker control states must not charge")
 			})
 		}
