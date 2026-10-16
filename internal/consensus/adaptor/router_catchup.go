@@ -4291,7 +4291,7 @@ func (c *catchupReplayCoordinator) completeInboundLedger(il *inbound.Ledger) {
 // The result owns its generation pin through publication and consensus handoff.
 func (c *catchupReplayCoordinator) publishInboundLedger(result *acquisitionCompletionResult) {
 	il := result.ledger
-	if c.stoppedForShutdown() {
+	if il.IsRetired() || c.stoppedForShutdown() {
 		return
 	}
 	if il.Reason() == inbound.ReasonHistory && !c.historySequenceAllowed(il.Seq()) {
@@ -4316,7 +4316,7 @@ func (c *catchupReplayCoordinator) publishInboundLedger(result *acquisitionCompl
 			c.acquisitionMu.Unlock()
 			return
 		}
-		if !c.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
+		if il.IsRetired() || !c.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
 			c.acquisitionMu.Unlock()
 			c.retireAcquisitionStore(c.lifecycleContext(), il)
 			return
@@ -4352,7 +4352,7 @@ func (c *catchupReplayCoordinator) publishInboundLedger(result *acquisitionCompl
 	var handoff standardReplayPivotHandoff
 	pivotHandoff := false
 	c.replayCommitMu.Lock()
-	if c.stoppedForShutdown() {
+	if il.IsRetired() || c.stoppedForShutdown() {
 		c.replayCommitMu.Unlock()
 		return
 	}

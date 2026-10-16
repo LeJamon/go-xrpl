@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -36,6 +37,17 @@ type acquisitionStoreScope struct {
 	err       error
 	promoted  bool
 	retired   bool
+	retiredCh chan struct{}
+}
+
+func (s *acquisitionStoreScope) retirementError() error {
+	s.mu.Lock()
+	retired := s.retired
+	s.mu.Unlock()
+	if retired {
+		return inbound.ErrAcquisitionRetired
+	}
+	return nil
 }
 
 func (s *acquisitionStoreScope) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -81,34 +93,45 @@ func (s *acquisitionStoreScope) StoreBatch(ctx context.Context, entries []shamap
 	s.admission.Lock()
 	defer s.admission.Unlock()
 
+	if err := s.retirementError(); err != nil {
+		return err
+	}
 	s.mu.Lock()
-	retired := s.retired
 	promoted := s.promoted
 	s.mu.Unlock()
-	if retired {
-		return errors.New("acquisition persistence scope retired")
-	}
 	if promoted {
-		return s.lane.base.StoreBatch(ctx, entries)
+		if err := s.lane.base.StoreBatch(ctx, entries); err != nil {
+			return err
+		}
+		return s.retirementError()
 	}
-	return s.lane.storeBatch(ctx, s, entries)
+	if err := s.lane.storeBatch(ctx, s, entries); err != nil {
+		return err
+	}
+	return s.retirementError()
 }
 
 func (s *acquisitionStoreScope) Flush(ctx context.Context) error {
 	s.admission.Lock()
 	defer s.admission.Unlock()
 
+	if err := s.retirementError(); err != nil {
+		return err
+	}
 	if err := s.lane.flushScope(ctx, s); err != nil {
 		return err
 	}
-	return nil
+	return s.retirementError()
 }
 
 func (s *acquisitionStoreScope) Retire(context.Context) error {
 	s.mu.Lock()
-	s.retired = true
-	s.promoted = false
-	s.err = nil
+	if !s.retired {
+		s.retired = true
+		s.promoted = false
+		s.err = nil
+		close(s.retiredCh)
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -120,7 +143,7 @@ func (s *acquisitionStoreScope) Promote(ctx context.Context) (shamap.Family, err
 	s.mu.Lock()
 	if s.retired {
 		s.mu.Unlock()
-		return nil, errors.New("acquisition persistence scope retired")
+		return nil, inbound.ErrAcquisitionRetired
 	}
 	s.mu.Unlock()
 
@@ -131,7 +154,7 @@ func (s *acquisitionStoreScope) Promote(ctx context.Context) (shamap.Family, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.retired {
-		return nil, errors.New("acquisition persistence scope retired")
+		return nil, inbound.ErrAcquisitionRetired
 	}
 	s.promoted = true
 	s.err = nil
@@ -220,7 +243,7 @@ func newAcquisitionStoreLane(base shamap.Family, logger *slog.Logger, queueDepth
 		pending:      make(map[pendingAcquisitionKey]pendingAcquisitionNode),
 		jobs:         make(chan acquisitionStoreJob, queueDepth),
 	}
-	lane.unscoped = &acquisitionStoreScope{lane: lane}
+	lane.unscoped = &acquisitionStoreScope{lane: lane, retiredCh: make(chan struct{})}
 	return lane
 }
 
@@ -238,7 +261,7 @@ func (l *acquisitionStoreLane) AcquireDurableSnapshot(ctx context.Context) ([32]
 }
 
 func (l *acquisitionStoreLane) scope() shamap.Family {
-	return &acquisitionStoreScope{lane: l, id: l.nextScope.Add(1)}
+	return &acquisitionStoreScope{lane: l, id: l.nextScope.Add(1), retiredCh: make(chan struct{})}
 }
 
 func (l *acquisitionStoreLane) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -291,12 +314,18 @@ func (l *acquisitionStoreLane) storeBatch(ctx context.Context, owner *acquisitio
 	if len(entries) == 0 {
 		return nil
 	}
+	if err := owner.retirementError(); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	charge := acquisitionEntryBytes(entries)
 	if !l.reserveBytes(charge) {
 		if err := l.flushScope(ctx, owner); err != nil {
+			return err
+		}
+		if err := owner.retirementError(); err != nil {
 			return err
 		}
 		if !l.reserveBytes(charge) {
@@ -311,6 +340,11 @@ func (l *acquisitionStoreLane) storeBatch(ctx context.Context, owner *acquisitio
 		l.lifecycleMu.RUnlock()
 		l.releaseBytes(charge)
 		return l.storeBorrowed(ctx, owner, entries)
+	}
+	if err := owner.retirementError(); err != nil {
+		l.lifecycleMu.RUnlock()
+		l.releaseBytes(charge)
+		return err
 	}
 
 	started := time.Now()
@@ -331,13 +365,23 @@ func (l *acquisitionStoreLane) storeBatch(ctx context.Context, owner *acquisitio
 		l.releaseBytes(l.removePending(owner.id, job.entries, job.bytes))
 		l.lifecycleMu.RUnlock()
 		return laneCtx.Err()
+	case <-owner.retiredCh:
+		l.releaseBytes(l.removePending(owner.id, job.entries, job.bytes))
+		l.lifecycleMu.RUnlock()
+		return inbound.ErrAcquisitionRetired
 	}
 }
 
 func (l *acquisitionStoreLane) storeBorrowed(ctx context.Context, owner *acquisitionStoreScope, entries []shamap.FlushEntry) error {
+	if err := owner.retirementError(); err != nil {
+		return err
+	}
 	l.lifecycleMu.RLock()
 	if l.done == nil {
 		l.lifecycleMu.RUnlock()
+		if err := owner.retirementError(); err != nil {
+			return err
+		}
 		err := l.base.StoreBatch(ctx, entries)
 		if err != nil {
 			owner.recordFailure(err)
@@ -356,6 +400,9 @@ func (l *acquisitionStoreLane) storeBorrowed(ctx context.Context, owner *acquisi
 		err := l.ctx.Err()
 		l.lifecycleMu.RUnlock()
 		return err
+	case <-owner.retiredCh:
+		l.lifecycleMu.RUnlock()
+		return inbound.ErrAcquisitionRetired
 	}
 	// The caller owns these slices until the worker finishes or discards them.
 	return <-done
@@ -370,10 +417,20 @@ func (l *acquisitionStoreLane) flushScope(ctx context.Context, scope *acquisitio
 }
 
 func (l *acquisitionStoreLane) flushJob(ctx context.Context, owner *acquisitionStoreScope) error {
+	if err := owner.retirementError(); err != nil {
+		return err
+	}
 	l.lifecycleMu.RLock()
 	if l.done == nil {
 		l.lifecycleMu.RUnlock()
+		if err := owner.retirementError(); err != nil {
+			return err
+		}
 		return owner.failure()
+	}
+	if err := owner.retirementError(); err != nil {
+		l.lifecycleMu.RUnlock()
+		return err
 	}
 	laneCtx := l.ctx
 	done := make(chan error, 1)
@@ -386,17 +443,26 @@ func (l *acquisitionStoreLane) flushJob(ctx context.Context, owner *acquisitionS
 	case <-laneCtx.Done():
 		l.lifecycleMu.RUnlock()
 		return laneCtx.Err()
+	case <-owner.retiredCh:
+		l.lifecycleMu.RUnlock()
+		return inbound.ErrAcquisitionRetired
 	}
 	select {
 	case err := <-done:
 		l.lifecycleMu.RUnlock()
-		return err
+		if err != nil {
+			return err
+		}
+		return owner.retirementError()
 	case <-ctx.Done():
 		l.lifecycleMu.RUnlock()
 		return ctx.Err()
 	case <-laneCtx.Done():
 		l.lifecycleMu.RUnlock()
 		return laneCtx.Err()
+	case <-owner.retiredCh:
+		l.lifecycleMu.RUnlock()
+		return inbound.ErrAcquisitionRetired
 	}
 }
 
@@ -469,13 +535,24 @@ func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionS
 			return
 		case job = <-jobs:
 		}
+		if err := ctx.Err(); err != nil {
+			l.finishJob(job, err)
+			return
+		}
 		if job.barrier != nil {
-			err := job.owner.failure()
+			err := job.owner.retirementError()
+			if err == nil {
+				err = job.owner.failure()
+			}
 			select {
 			case job.barrier <- err:
 			case <-ctx.Done():
 				return
 			}
+			continue
+		}
+		if err := job.owner.retirementError(); err != nil {
+			l.finishJob(job, err)
 			continue
 		}
 		writeCtx := ctx
@@ -487,13 +564,19 @@ func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionS
 			cleanup = func() { stop(); cancel() }
 		}
 		err := l.base.StoreBatch(writeCtx, job.entries)
+		writeCtxErr := writeCtx.Err()
 		cleanup()
 		if err != nil {
-			l.logger.Warn("inbound ledger: failed to persist verified nodes",
-				"entries", len(job.entries), "error", err)
-			job.owner.recordFailure(err)
-		}
-		if err == nil {
+			if writeCtxErr != nil && errors.Is(err, writeCtxErr) {
+				l.logger.Debug("inbound ledger: persistence canceled",
+					"entries", len(job.entries), "error", err)
+			} else {
+				l.logger.Warn("inbound ledger: failed to persist verified nodes",
+					"entries", len(job.entries), "error", err)
+			}
+		} else if retiredErr := job.owner.retirementError(); retiredErr != nil {
+			err = retiredErr
+		} else {
 			err = job.owner.failure()
 		}
 		l.finishJob(job, err)
@@ -501,6 +584,9 @@ func (l *acquisitionStoreLane) run(ctx context.Context, jobs <-chan acquisitionS
 }
 
 func (l *acquisitionStoreLane) finishJob(job acquisitionStoreJob, err error) {
+	if err != nil {
+		job.owner.recordFailure(err)
+	}
 	if job.bytes != 0 {
 		l.releaseBytes(l.removePending(job.owner.id, job.entries, job.bytes))
 	}

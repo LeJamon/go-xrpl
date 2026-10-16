@@ -46,7 +46,7 @@ func (r *acquisitionCompletionResult) release() {
 }
 
 func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger) {
-	if il == nil || c.stoppedForShutdown() || c.fetchTracker.Find(il.Hash()) != il {
+	if il == nil || il.IsRetired() || c.stoppedForShutdown() || c.fetchTracker.Find(il.Hash()) != il {
 		return
 	}
 	if il.Reason() == inbound.ReasonHistory && !c.historySequenceAllowed(il.Seq()) {
@@ -152,6 +152,15 @@ func (c *catchupReplayCoordinator) retryAcquisitionCompletions() {
 
 func (c *catchupReplayCoordinator) prepareAcquisitionCompletion(ctx context.Context, il *inbound.Ledger) *acquisitionCompletionResult {
 	result := &acquisitionCompletionResult{ledger: il, failureClass: standardReplayFailureExecution}
+	if il.IsRetired() || c.fetchTracker.Find(il.Hash()) != il {
+		result.err = context.Canceled
+		return result
+	}
+	defer func() {
+		if result.err == nil && (il.IsRetired() || c.fetchTracker.Find(il.Hash()) != il) {
+			result.err = context.Canceled
+		}
+	}()
 	if c.adaptor == nil || c.adaptor.LedgerService() == nil {
 		result.err = errors.New("inbound ledger: ledger service unavailable")
 		return result
@@ -207,7 +216,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionCompletion(result *acquisiti
 		return
 	}
 	il := result.ledger
-	if c.stoppedForShutdown() || c.fetchTracker.Find(il.Hash()) != il {
+	if il.IsRetired() || c.stoppedForShutdown() || c.fetchTracker.Find(il.Hash()) != il {
 		return
 	}
 	if result.err != nil && !result.legacy {

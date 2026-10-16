@@ -240,7 +240,7 @@ func TestAcquisitionStoreScopeCanceledCheckpointRetainsPersistenceFailure(t *tes
 	require.EqualError(t, scope.Flush(t.Context()), "store failed")
 
 	require.NoError(t, scope.Retire(t.Context()))
-	require.NoError(t, scope.Flush(t.Context()))
+	require.ErrorIs(t, scope.Flush(t.Context()), inbound.ErrAcquisitionRetired)
 }
 
 func TestAcquisitionStoreScopeCheckpointReprovesFromDurableStore(t *testing.T) {
@@ -785,7 +785,7 @@ func TestAcquisitionStoreScopeRetireConsumesAbandonedFailure(t *testing.T) {
 	scope := lane.scope().(*acquisitionStoreScope)
 	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(9)}))
 	require.NoError(t, scope.Retire(t.Context()))
-	require.NoError(t, scope.Flush(t.Context()))
+	require.ErrorIs(t, scope.Flush(t.Context()), inbound.ErrAcquisitionRetired)
 	require.NoError(t, scope.Retire(t.Context()))
 }
 
@@ -983,7 +983,7 @@ func TestCompleteInboundLedgerDiscardsItsOwnPersistenceFailure(t *testing.T) {
 
 	router.catchupReplay.completeInboundLedger(ledger)
 	require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
-	require.NoError(t, family.(*acquisitionStoreScope).Flush(t.Context()))
+	require.ErrorIs(t, family.(*acquisitionStoreScope).Flush(t.Context()), inbound.ErrAcquisitionRetired)
 }
 
 func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
@@ -1206,7 +1206,7 @@ func TestRouterRetiresPersistenceOnAbandonedAcquisitionPaths(t *testing.T) {
 
 			test.finish(t, router, ledger)
 			require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
-			require.NoError(t, scope.Flush(t.Context()))
+			require.ErrorIs(t, scope.Flush(t.Context()), inbound.ErrAcquisitionRetired)
 		})
 	}
 }
@@ -1240,5 +1240,5 @@ func TestClearThenStaleResultRetiresLaterPersistenceFailure(t *testing.T) {
 
 	close(base.blockFirst)
 	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: ledger})
-	require.NoError(t, scope.Flush(t.Context()))
+	require.ErrorIs(t, scope.Flush(t.Context()), inbound.ErrAcquisitionRetired)
 }

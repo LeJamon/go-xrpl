@@ -212,3 +212,40 @@ func TestAcquisitionCompletionRejectsReplacedIdentityAndReleasesSlot(t *testing.
 	require.Nil(t, c.completionTasks[0])
 	c.completionMu.Unlock()
 }
+
+func TestAcquisitionCompletionRetirementCancelsDetachedVerification(t *testing.T) {
+	router, svc, il, family, _ := newBlockedAcquisitionCompletion(t)
+	c := router.catchupReplay
+	c.startTasks(t.Context())
+	c.completeInboundLedgerReady(il)
+	select {
+	case <-family.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("verification did not start")
+	}
+
+	retired := make(chan struct{})
+	go func() {
+		c.onLedgerBuilt(il.Seq(), il.Hash())
+		close(retired)
+	}()
+	select {
+	case <-retired:
+	case <-time.After(time.Second):
+		t.Fatal("retirement waited for durable verification")
+	}
+	require.True(t, il.IsRetired())
+	require.Nil(t, c.fetchTracker.Find(il.Hash()))
+	replacement := inbound.New(il.Hash(), il.Seq(), 8, serveTestLogger())
+	c.fetchTracker.Track(replacement)
+	require.Eventually(t, func() bool {
+		c.completionMu.Lock()
+		defer c.completionMu.Unlock()
+		return c.completionTasks[0] == nil
+	}, time.Second, time.Millisecond, "retired verification retained its worker slot")
+	c.stopTasks()
+	require.Same(t, replacement, c.fetchTracker.Find(il.Hash()))
+	_, err := svc.GetLedgerByHash(il.Hash())
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
+	require.Zero(t, c.acquisitionMemory.Snapshot().Used)
+}
