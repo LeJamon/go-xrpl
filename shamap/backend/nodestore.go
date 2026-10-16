@@ -162,6 +162,24 @@ func (f *NodeStore) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	return node.Data, nil
 }
 
+// FetchWithPolicy uses existing NodeStore records without duplicating new
+// SHAMap residency. Peer hits leave the lower cache's foreground LRU unchanged.
+// Database wrappers must forward PolicyDatabase to preserve admission intent.
+func (f *NodeStore) FetchWithPolicy(ctx context.Context, hash [32]byte, policy shamap.ReadPolicy) ([]byte, error) {
+	if db, ok := f.db.(nodestore.PolicyDatabase); ok {
+		lowerPolicy := nodestore.ReadForegroundUncached
+		if policy == shamap.ReadPeer {
+			lowerPolicy = nodestore.ReadPeer
+		}
+		node, err := db.FetchWithPolicy(ctx, nodestore.Hash256(hash), lowerPolicy)
+		if err != nil || node == nil {
+			return nil, err
+		}
+		return node.Data, nil
+	}
+	return f.Fetch(ctx, hash)
+}
+
 // FetchCached returns serialized node data only when the decoded node is
 // already resident in the NodeStore cache.
 func (f *NodeStore) FetchCached(ctx context.Context, hash [32]byte) ([]byte, error) {

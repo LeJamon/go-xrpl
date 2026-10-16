@@ -182,7 +182,7 @@ func walkFetchPackDifferences(
 			}
 			if havePresent && haveChild == nil {
 				var err error
-				haveChild, err = haveMap.descendCtx(ctx, haveInner, branch)
+				haveChild, err = haveMap.readChild(ctx, haveInner, branch, false, ReadPeer)
 				if err != nil {
 					return err
 				}
@@ -190,7 +190,7 @@ func walkFetchPackDifferences(
 		}
 		if child == nil {
 			var err error
-			child, err = wantMap.descendCtx(ctx, wantInner, branch)
+			child, err = wantMap.readChild(ctx, wantInner, branch, false, ReadPeer)
 			if err != nil {
 				return err
 			}

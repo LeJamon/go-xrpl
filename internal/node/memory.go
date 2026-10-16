@@ -123,20 +123,37 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 			return nil, err
 		}
 	}
+	// Cache shares are derived only after every progress reserve has been
+	// registered. This leaves those reserves protected while bounding each
+	// elastic cache independently.
+	residual := m.pool.Snapshot().SharedAvailable
 	for _, item := range []struct {
-		name string
-		dest **membudget.Account
+		name         string
+		dest         **membudget.Account
+		minimumShare uint64
+		maximumShare uint64
 	}{
-		{"node_cache", &m.nodes},
-		{"shamap_cache", &m.cleanNodes},
-		{"relay_cache", &m.relay},
+		{"node_cache", &m.nodes, residual / 8, boundedCacheMaximum(limit, residual, 4)},
+		{"shamap_cache", &m.cleanNodes, residual / 4, boundedCacheMaximum(limit, residual, 2)},
+		{"relay_cache", &m.relay, 0, boundedCacheMaximum(limit, residual, 16)},
 	} {
-		*item.dest, err = account(item.name, 0, limit)
+		*item.dest, err = account(item.name, item.minimumShare, item.maximumShare)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return m, nil
+}
+
+// boundedCacheMaximum keeps a zero share an explicit cap. membudget uses zero
+// as the sentinel for the parent pool limit, which would make a tiny residual
+// unbounded and defeat the per-cache admission policy.
+func boundedCacheMaximum(limit, residual, divisor uint64) uint64 {
+	maximum := residual / divisor
+	if maximum == 0 && limit != 0 {
+		return 1
+	}
+	return maximum
 }
 
 func (r *nodeRuntime) configureMemory() error {

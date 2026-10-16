@@ -80,6 +80,7 @@ type nodeRuntime struct {
 	stopWatchdog              func()
 	stopMemoryMetrics         func()
 	stopSHAMapMetrics         func()
+	stopNodeStoreMetrics      func()
 }
 
 func newNodeRuntime(
@@ -141,6 +142,9 @@ func (r *nodeRuntime) run() (runErr error) {
 		if r.stopMemoryMetrics != nil {
 			r.stopMemoryMetrics()
 		}
+		if r.stopNodeStoreMetrics != nil {
+			r.stopNodeStoreMetrics()
+		}
 		if r.stopSHAMapMetrics != nil {
 			r.stopSHAMapMetrics()
 		}
@@ -198,6 +202,7 @@ func (r *nodeRuntime) configureStorage() error {
 		}
 		r.nodeFamily = backend.New(r.nodeStore, options)
 		r.stopSHAMapMetrics = observability.SetSHAMapCleanResidency(r.nodeFamily.SHAMapCleanResidency())
+		r.stopNodeStoreMetrics = observability.SetNodeStore(r.nodeStore)
 	}
 	return nil
 }

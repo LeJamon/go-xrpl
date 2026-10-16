@@ -37,6 +37,20 @@ type Node struct {
 	LedgerSeq uint32   // Optional ledger sequence number
 }
 
+// ReadPolicy controls admission and recency updates in the positive node cache.
+type ReadPolicy uint8
+
+const (
+	// ReadForeground is the normal read path and may admit a backend hit.
+	ReadForeground ReadPolicy = iota
+	// ReadForegroundUncached reuses and promotes cache hits but does not admit
+	// a backend hit into the positive cache.
+	ReadForegroundUncached
+	// ReadPeer reuses a cache hit without promotion and never admits a backend
+	// hit into the positive cache.
+	ReadPeer
+)
+
 // Clone returns a deep copy of the node with its own Data buffer,
 // enforcing the immutability contract at cache and Fetch boundaries.
 func (n *Node) Clone() *Node {
@@ -86,6 +100,14 @@ type Database interface {
 	Sync(ctx context.Context) error
 }
 
+// PolicyDatabase is an optional Database capability for callers that need to
+// select a positive-cache access policy without constraining other Database
+// implementations.
+type PolicyDatabase interface {
+	Database
+	FetchWithPolicy(context.Context, Hash256, ReadPolicy) (*Node, error)
+}
+
 // GenerationDatabase is a Database backed by two rotating generations.
 // FetchForPromotion bypasses the decoded-node cache so an archive hit is
 // durably copied into the writable generation without populating that cache.
@@ -113,4 +135,20 @@ type Statistics struct {
 	ReadBytes   uint64
 	Writes      uint64
 	WriteBytes  uint64
+	Foreground  CacheAccessStats
+	Peer        CacheAccessStats
+}
+
+// CacheAccessStats holds cumulative positive-cache activity for one access
+// class. ReservationDenials counts failed budget reservations, including
+// reservations recovered after local eviction. AdmissionDenials counts only
+// terminal admission failures after those recovery attempts.
+type CacheAccessStats struct {
+	Lookups            uint64
+	Hits               uint64
+	Admissions         uint64
+	Bypasses           uint64
+	Evictions          uint64
+	AdmissionDenials   uint64
+	ReservationDenials uint64
 }

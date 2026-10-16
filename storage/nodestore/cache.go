@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"container/list"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,6 +81,14 @@ type cacheShard struct {
 	structuralSlots  int
 	structuralCharge uint64
 	budget           MemoryBudget
+	counters         *nodeCacheCounters
+}
+
+type nodeCacheCounters struct {
+	admissions         atomic.Uint64
+	evictions          atomic.Uint64
+	admissionDenials   atomic.Uint64
+	reservationDenials atomic.Uint64
 }
 
 // nodeCache is a sharded LRU cache with TTL support for NodeStore.
@@ -88,8 +97,9 @@ type cacheShard struct {
 // every other reader. Per the Node contract it MUST NOT be mutated;
 // callers that need to mutate must Clone() first.
 type nodeCache struct {
-	shards [cacheShardCount]*cacheShard
-	ttl    time.Duration
+	shards   [cacheShardCount]*cacheShard
+	ttl      time.Duration
+	counters nodeCacheCounters
 }
 
 func newNodeCache(maxSize int, ttl time.Duration, budgets ...MemoryBudget) *nodeCache {
@@ -108,6 +118,7 @@ func newNodeCache(maxSize int, ttl time.Duration, budgets ...MemoryBudget) *node
 			lru:      list.New(),
 			maxItems: perShard,
 			budget:   budget,
+			counters: &c.counters,
 		}
 	}
 	return c
@@ -119,6 +130,16 @@ func (c *nodeCache) shardFor(h Hash256) *cacheShard {
 
 // Get returns the cached *Node and true on hit, (nil, false) otherwise.
 func (c *nodeCache) Get(hash Hash256) (*Node, bool) {
+	return c.lookup(hash, true)
+}
+
+// Lookup returns the cached *Node without changing its LRU position. It is
+// used by peer reads, whose cache reuse must not displace foreground nodes.
+func (c *nodeCache) Lookup(hash Hash256) (*Node, bool) {
+	return c.lookup(hash, false)
+}
+
+func (c *nodeCache) lookup(hash Hash256, promote bool) (*Node, bool) {
 	s := c.shardFor(hash)
 	s.mu.Lock()
 	element, found := s.items[hash]
@@ -134,7 +155,9 @@ func (c *nodeCache) Get(hash Hash256) (*Node, bool) {
 		return nil, false
 	}
 
-	s.lru.MoveToFront(element)
+	if promote {
+		s.lru.MoveToFront(element)
+	}
 	node := entry.node
 	s.mu.Unlock()
 	return node, true
@@ -149,11 +172,13 @@ func (c *nodeCache) Put(node *Node) {
 	s := c.shardFor(node.Hash)
 	s.mu.Lock()
 	if !s.reserveForNodeLocked(node, nodeCacheCloneCharge(node)) {
+		c.counters.admissionDenials.Add(1)
 		s.mu.Unlock()
 		return
 	}
 	owned := node.Clone()
 	s.putOwnedWithTTLLocked(owned, c.ttl)
+	c.counters.admissions.Add(1)
 	s.mu.Unlock()
 }
 
@@ -168,9 +193,11 @@ func (c *nodeCache) putOwned(node *Node) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.reserveForNodeLocked(node, nodeCacheCharge(node)) {
+		c.counters.admissionDenials.Add(1)
 		return false
 	}
 	s.putOwnedWithTTLLocked(node, c.ttl)
+	c.counters.admissions.Add(1)
 	return true
 }
 
@@ -256,7 +283,11 @@ func (s *cacheShard) tryReserveLocked(charge uint64) bool {
 	if s.budget == nil {
 		return true
 	}
-	return s.budget.TryReserve(charge)
+	if s.budget.TryReserve(charge) {
+		return true
+	}
+	s.counters.reservationDenials.Add(1)
+	return false
 }
 
 func (s *cacheShard) releaseChargeLocked(charge uint64) {
@@ -363,6 +394,15 @@ func (c *nodeCache) Size() int {
 	return size
 }
 
+func (c *nodeCache) accessStats() CacheAccessStats {
+	return CacheAccessStats{
+		Admissions:         c.counters.admissions.Load(),
+		Evictions:          c.counters.evictions.Load(),
+		AdmissionDenials:   c.counters.admissionDenials.Load(),
+		ReservationDenials: c.counters.reservationDenials.Load(),
+	}
+}
+
 func (c *nodeCache) Sweep() int {
 	removed := 0
 	now := time.Now()
@@ -422,5 +462,6 @@ func (s *cacheShard) evictOldestLocked() bool {
 		return false
 	}
 	s.removeElementLocked(element)
+	s.counters.evictions.Add(1)
 	return true
 }

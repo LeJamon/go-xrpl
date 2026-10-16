@@ -17,6 +17,20 @@ type Family interface {
 	StoreBatch(ctx context.Context, entries []FlushEntry) error
 }
 
+// ReadPolicy separates cache admission intent from tree attachment.
+type ReadPolicy uint8
+
+const (
+	// ReadForeground admits records for local ledger work.
+	ReadForeground ReadPolicy = iota
+	// ReadPeer uses bounded peer residency without promoting foreground entries.
+	ReadPeer
+)
+
+type policyFamily interface {
+	FetchWithPolicy(context.Context, [32]byte, ReadPolicy) ([]byte, error)
+}
+
 type fullBelowCacheProvider interface {
 	FullBelowCache() *FullBelowCache
 }
@@ -45,6 +59,7 @@ type familyAccess struct {
 	durable         durableFamily
 	durableSnapshot durableSnapshotFamily
 	placement       nodePlacementFamily
+	policy          policyFamily
 	residency       *CleanResidency
 }
 
@@ -56,6 +71,7 @@ func bindFamily(family Family) *familyAccess {
 	access.durable, _ = family.(durableFamily)
 	access.durableSnapshot, _ = family.(durableSnapshotFamily)
 	access.placement, _ = family.(nodePlacementFamily)
+	access.policy, _ = family.(policyFamily)
 	if provider, ok := family.(cleanResidencyProvider); ok {
 		access.residency = provider.SHAMapCleanResidency()
 	}
@@ -71,6 +87,13 @@ func (a *familyAccess) fetch(ctx context.Context, hash [32]byte) ([]byte, error)
 		return nil, nil
 	}
 	return a.Fetch(ctx, hash)
+}
+
+func (a *familyAccess) fetchWithPolicy(ctx context.Context, hash [32]byte, policy ReadPolicy) ([]byte, error) {
+	if a != nil && a.policy != nil {
+		return a.policy.FetchWithPolicy(ctx, hash, policy)
+	}
+	return a.fetch(ctx, hash)
 }
 
 func (a *familyAccess) storeBatch(ctx context.Context, entries []FlushEntry) error {
