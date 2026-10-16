@@ -11,9 +11,31 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
+
+type issue2071BenchmarkLogger struct {
+	consensusAcceptanceBenchmarkLogger
+	retries atomic.Uint64
+}
+
+func (l *issue2071BenchmarkLogger) Debug(msg string, args ...any) {
+	if msg != "Speculative memory admission" {
+		return
+	}
+	for i := 0; i+1 < len(args); i += 2 {
+		if args[i] == "retries" {
+			if retries, ok := args[i+1].(int); ok {
+				l.retries.Add(uint64(retries))
+			}
+		}
+	}
+}
+
+func (l *issue2071BenchmarkLogger) With(...any) log.Logger  { return l }
+func (l *issue2071BenchmarkLogger) Named(string) log.Logger { return l }
 
 type issue2071BenchmarkStore struct {
 	started chan struct{}
@@ -46,6 +68,7 @@ type issue2071BenchmarkAdmission struct {
 
 type issue2071BenchmarkFixture struct {
 	service       *Service
+	logger        *issue2071BenchmarkLogger
 	budget        issue2071Budget
 	parent        *ledger.Ledger
 	pending       openledger.PendingTx
@@ -57,7 +80,9 @@ type issue2071BenchmarkFixture struct {
 func newIssue2071BenchmarkFixture(b *testing.B, isolated bool) issue2071BenchmarkFixture {
 	b.Helper()
 	budget := newIssue2071Budget(b, 256<<20, 256<<20, 256<<20, 0)
+	logger := &issue2071BenchmarkLogger{}
 	cfg := DefaultConfig()
+	cfg.Logger = logger
 	cfg.PersistenceMemory = budget.persistence
 	if isolated {
 		cfg.SpeculativeMemory = budget.speculative
@@ -90,6 +115,7 @@ func newIssue2071BenchmarkFixture(b *testing.B, isolated bool) issue2071Benchmar
 	}
 	return issue2071BenchmarkFixture{
 		service:       svc,
+		logger:        logger,
 		budget:        budget,
 		parent:        issue2071ClosedChild(b, svc.GetClosedLedger()),
 		pending:       retries[0],
@@ -141,8 +167,9 @@ func BenchmarkIssue2071PersistenceIngressContention(b *testing.B) {
 }
 
 func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, delayed bool) {
-	var admissions, successorReady []int64
-	var budgetDenials, operationErrors, persisted, batches uint64
+	admissions := make([]int64, 0, b.N)
+	successorReady := make([]int64, 0, b.N)
+	var budgetDenials, memoryRetries, operationErrors, persisted, batches uint64
 	var peak uint64
 	var targetBytes int
 	arm := "shared"
@@ -279,6 +306,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 		p := fixture.budget.persistence.Snapshot()
 		s := fixture.budget.speculative.Snapshot()
 		budgetDenials += (p.Denied - baselinePersistence.Denied) + (s.Denied - baselineSpeculative.Denied)
+		memoryRetries += fixture.logger.retries.Load()
 		persisted += storage.bytes.Load()
 		batches += storage.batches.Load()
 		if current := fixture.budget.pool.Snapshot().Peak; current > peak {
@@ -290,6 +318,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 	reportPersistenceLatencies(b, admissions, "admission")
 	reportPersistenceLatencies(b, successorReady, "successor-ready")
 	b.ReportMetric(float64(budgetDenials)/float64(b.N), "budget-denials/op")
+	b.ReportMetric(float64(memoryRetries)/float64(b.N), "memory-retries/op")
 	b.ReportMetric(float64(operationErrors)/float64(b.N), "operation-errors/op")
 	b.ReportMetric(float64(peak), "memory-peak-B")
 	b.ReportMetric(float64(persisted)/float64(b.N), "persisted-B/op")
