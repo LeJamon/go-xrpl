@@ -772,7 +772,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 			c.standardReplay.collectHash = link.hash
 			continue
 		}
-		peerID, ok := c.resolveAcquisitionPeer(link.seq, peerHint)
+		peerID, ok := c.resolveAcquisitionPeer(link.seq, link.hash, peerHint)
 		if !ok {
 			break
 		}

@@ -48,6 +48,7 @@ type catchupReplayCoordinator struct {
 
 	peersMu                   sync.RWMutex
 	peerStates                map[peermanagement.PeerID]*peerLedgerState
+	peerAvailabilityMisses    map[uint64]peerAvailabilityMiss
 	peerStatusCandidates      map[peermanagement.PeerID]peerStatusCandidate
 	headerDiscoveryMu         sync.Mutex
 	headerDiscovery           *headerDiscoverySession
@@ -93,6 +94,11 @@ type catchupReplayCoordinator struct {
 	completionRecheckRejectedUnavailable atomic.Uint64
 	targetSuperseded                     atomic.Uint64
 	obsoleteAcquisitionCompleted         atomic.Uint64
+	replayDeltaRequested                 atomic.Uint64
+	replayDeltaNoLedger                  atomic.Uint64
+	replayDeltaNoNode                    atomic.Uint64
+	replayDeltaAvailabilityFallbacks     atomic.Uint64
+	recoveryLocallySatisfied             atomic.Uint64
 	replayPipelineRequested              atomic.Uint64
 	replayPipelineReady                  atomic.Uint64
 	replayPipelineApplied                atomic.Uint64
@@ -572,6 +578,7 @@ func (c *catchupReplayCoordinator) forgetPeer(peerID peermanagement.PeerID) {
 	}
 	c.peersMu.Lock()
 	delete(c.peerStates, peerID)
+	delete(c.peerAvailabilityMisses, uint64(peerID))
 	delete(c.peerStatusCandidates, peerID)
 	c.peersMu.Unlock()
 	c.invalidateCatchupPeer(uint64(peerID))
@@ -629,10 +636,35 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	// full 10s before the legacy fallback fires.
 	for _, rd := range c.replayer.SubTaskTimedOut() {
 		tried := rd.TriedPeers()
-		// Ask the overlay for a fresh replay-capable peer, excluding
-		// every peer we've already tried for this hash.
-		candidates := c.acquisition.ReplayCapablePeersExcluding(tried, 1)
-		if len(candidates) == 0 {
+		excluded := make(map[uint64]struct{}, len(tried))
+		for _, peer := range tried {
+			excluded[peer] = struct{}{}
+		}
+		newPeer, found := c.chooseAcquisitionPeer(rd.Seq(), rd.Hash(), 0, excluded, true)
+		if !found {
+			peer, available := c.resolveAcquisitionPeer(rd.Seq(), rd.Hash(), 0)
+			parentUsable := false
+			parent := rd.Parent()
+			if svc := c.adaptor.LedgerService(); parent != nil && svc != nil {
+				held, ok := svc.GetCachedLedgerByHash(parent.Hash())
+				parentUsable = ok && held.IsClosed() && held.Sequence()+1 == rd.Seq()
+			}
+			if available && c.acquisitionPeerRank(peer, rd.Seq(), rd.Hash(), time.Now()) == peerAdvertised &&
+				parentUsable {
+				abandoned := false
+				c.acquisitionMu.Lock()
+				if c.replayer.Find(rd.Hash()) == rd && rd.IsSubTaskTimedOut() {
+					c.replayer.Abandon(rd.Hash())
+					c.clearReplayAvailabilityRetryLocked(rd.Hash())
+					abandoned = true
+				}
+				c.acquisitionMu.Unlock()
+				if abandoned {
+					c.replayDeltaAvailabilityFallbacks.Add(1)
+					c.fallbackReplayAvailability(rd.Seq(), rd.Hash(), peer, parent, tried)
+				}
+				continue
+			}
 			// No fresh peer available — can't rotate; the outer
 			// budget below will eventually time this out and fall
 			// back to the legacy path. Log so operators can see
@@ -644,7 +676,6 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 			)
 			continue
 		}
-		newPeer := candidates[0]
 		rd.NoteSubTaskRetry(newPeer)
 		// Dispatch the actual network send in a goroutine so a slow or
 		// back-pressured overlay write doesn't block router message dispatch.
@@ -656,6 +687,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 		seq := rd.Seq()
 		hash := rd.Hash()
 		c.runLifecycleTask(func(context.Context) {
+			c.replayDeltaRequested.Add(1)
 			if err := c.acquisition.RequestReplayDelta(newPeer, hash); err != nil {
 				c.logger.Debug("replay-delta retry request failed",
 					"seq", seq,

@@ -53,6 +53,7 @@ func TestNodeMemoryAutomaticSizingAndProgressReserves(t *testing.T) {
 		"acquisition":         config.MinAcquisitionMemoryMB << 20,
 		"storage":             memory.storageBytes,
 		"persistence":         shamap.DirtyWorkspaceBytes,
+		"speculative":         speculativeMemoryMinimum,
 		"replay_verification": 2 * service.ReplayVerificationWorkspaceBytes,
 		"full_below":          shamap.FullBelowCacheMemoryBytes,
 		"peer_inbound":        uint64(peermanagement.DefaultInboundRetainedBytes),
@@ -81,6 +82,8 @@ func TestNodeMemoryAutomaticSizingAndProgressReserves(t *testing.T) {
 			target = memory.storage
 		case "persistence":
 			target = memory.persistence
+		case "speculative":
+			target = memory.speculative
 		case "replay_verification":
 			target = memory.replayVerification
 		case "peer_inbound":
@@ -196,6 +199,76 @@ func TestNodeMemoryFixedSizingAndInvalidAllowance(t *testing.T) {
 	cfg.Resources.MemoryMB = 0
 	_, err = newNodeMemory(cfg, false, func() (membudget.Headroom, error) { return membudget.Headroom{}, errors.New("probe unavailable") })
 	require.ErrorContains(t, err, "configure resources.memory_mb explicitly")
+}
+
+func TestNodeMemorySpeculativeBudgetIsIndependentFromPersistence(t *testing.T) {
+	cfg := &config.Config{
+		Resources: config.ResourcesConfig{MemoryMB: 4096},
+		NodeDB:    config.NodeDBConfig{Path: filepath.Join(t.TempDir(), "nodes")},
+	}
+	memory, err := newNodeMemory(cfg, true, nil)
+	require.NoError(t, err)
+	require.NotNil(t, memory.persistence)
+	require.NotNil(t, memory.speculative)
+	require.Equal(t, uint64(shamap.DirtyWorkspaceBytes), memory.persistence.Limit())
+	require.Equal(t, uint64(speculativeMemoryMinimum), memory.speculative.Snapshot().Minimum)
+	require.Equal(t, uint64(speculativeMemoryMaximum), memory.speculative.Limit())
+
+	// A normal persistence workspace must leave the speculative account able to
+	// admit its protected minimum from the same pool.
+	require.True(t, memory.persistence.TryReserve(shamap.DirtyWorkspaceBytes))
+	require.True(t, memory.speculative.TryReserve(speculativeMemoryMinimum))
+	snapshot := memory.pool.Snapshot()
+	require.LessOrEqual(t, snapshot.Used, snapshot.Limit)
+	memory.speculative.Release(speculativeMemoryMinimum)
+	memory.persistence.Release(shamap.DirtyWorkspaceBytes)
+	require.Zero(t, memory.pool.Snapshot().Used)
+}
+
+func TestNodeMemorySpeculativeBudgetProtectsPersistenceReserve(t *testing.T) {
+	cfg := &config.Config{
+		Resources: config.ResourcesConfig{MemoryMB: 4096},
+		NodeDB:    config.NodeDBConfig{Path: filepath.Join(t.TempDir(), "nodes")},
+	}
+	memory, err := newNodeMemory(cfg, true, nil)
+	require.NoError(t, err)
+
+	// Consume all elastic capacity. The speculative account can still take its
+	// protected floor, but an expensive reservation cannot consume persistence's
+	// unallocated protected minimum.
+	pressure, err := memory.pool.NewAccount("pressure", 0, 0)
+	require.NoError(t, err)
+	shared := memory.pool.Snapshot().SharedAvailable
+	require.True(t, pressure.TryReserve(shared))
+	require.Zero(t, memory.pool.Snapshot().SharedAvailable)
+	require.False(t, memory.speculative.TryReserve(speculativeMemoryMaximum))
+	require.Zero(t, memory.speculative.Snapshot().Used)
+	require.True(t, memory.speculative.TryReserve(speculativeMemoryMinimum))
+	require.False(t, memory.speculative.TryReserve(1))
+	require.Equal(t, uint64(shamap.DirtyWorkspaceBytes), memory.persistence.Snapshot().UnusedReserved)
+
+	memory.speculative.Release(speculativeMemoryMinimum)
+	pressure.Release(shared)
+	require.Zero(t, memory.pool.Snapshot().Used)
+}
+
+func TestNodeMemorySpeculativeBudgetOnlyExistsWithNodeStore(t *testing.T) {
+	withoutStore, err := newNodeMemory(&config.Config{Resources: config.ResourcesConfig{MemoryMB: 4096}}, true, nil)
+	require.NoError(t, err)
+	require.Nil(t, withoutStore.speculative)
+
+	withStore, err := newNodeMemory(&config.Config{
+		Resources: config.ResourcesConfig{MemoryMB: 4096},
+		NodeDB:    config.NodeDBConfig{Path: filepath.Join(t.TempDir(), "nodes")},
+	}, true, nil)
+	require.NoError(t, err)
+	require.NotNil(t, withStore.speculative)
+	for _, account := range withStore.pool.Snapshot().Accounts {
+		if account.Name == "speculative" {
+			require.Equal(t, uint64(speculativeMemoryMinimum), account.Minimum)
+			require.Equal(t, uint64(speculativeMemoryMaximum), account.Maximum)
+		}
+	}
 }
 
 func TestNodeMemoryStorageFailureAndShutdownRelease(t *testing.T) {

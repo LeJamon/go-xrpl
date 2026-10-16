@@ -293,6 +293,11 @@ func (r *nodeRuntime) configureLedger() error {
 		cfg.RelayMemory = r.memory.relay
 		if r.memory.persistence != nil {
 			cfg.PersistenceMemory = r.memory.persistence
+		}
+		if r.memory.speculative != nil {
+			cfg.SpeculativeMemory = r.memory.speculative
+		}
+		if r.memory.replayVerification != nil {
 			cfg.ReplayVerificationMemory = r.memory.replayVerification
 		}
 	}
@@ -849,6 +854,11 @@ func (r *nodeRuntime) configureConsensus() error {
 					CompletionRecheckRejectedUnavailable: snapshot.CompletionRecheckRejectedUnavailable,
 					TargetSuperseded:                     snapshot.TargetSuperseded,
 					ObsoleteAcquisitionCompleted:         snapshot.ObsoleteAcquisitionCompleted,
+					ReplayDeltaRequested:                 snapshot.ReplayDeltaRequested,
+					ReplayDeltaNoLedger:                  snapshot.ReplayDeltaNoLedger,
+					ReplayDeltaNoNode:                    snapshot.ReplayDeltaNoNode,
+					ReplayDeltaAvailabilityFallbacks:     snapshot.ReplayDeltaAvailabilityFallbacks,
+					RecoveryLocallySatisfied:             snapshot.RecoveryLocallySatisfied,
 					ReplayPipelineRequested:              snapshot.ReplayPipelineRequested,
 					ReplayPipelineReady:                  snapshot.ReplayPipelineReady,
 					ReplayPipelineApplied:                snapshot.ReplayPipelineApplied,

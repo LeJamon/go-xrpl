@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unsafe"
 )
@@ -17,6 +18,14 @@ type DirtyMemoryBudget interface {
 // DirtyWorkspaceBytes admits one maximum-size peer payload and storage copies.
 const DirtyWorkspaceBytes = 256 << 20
 
+const (
+	dirtyBatchEntries        = 256
+	dirtyBatchBytes          = 8 << 20
+	dirtyBatchStructureBytes = dirtyBatchEntries * uint64(unsafe.Sizeof(FlushEntry{})+unsafe.Sizeof(mapNode(nil)))
+)
+
+var errDirtyMemoryUnavailable = errors.New("shamap: dirty serialization memory unavailable")
+
 // StoreDirtyBatched stores dirty nodes in post-order with bounded temporary copies.
 // A successful batch becomes clean; a failed batch and its ancestors remain dirty.
 func (sm *SHAMap) StoreDirtyBatched(ctx context.Context, budget DirtyMemoryBudget, store func([]FlushEntry) error) error {
@@ -26,45 +35,99 @@ func (sm *SHAMap) StoreDirtyBatched(ctx context.Context, budget DirtyMemoryBudge
 	if store == nil {
 		return fmt.Errorf("shamap: nil dirty-node store")
 	}
-	const batchEntries = 256
-	const batchBytes = 8 << 20
-	const structureBytes = batchEntries * uint64(unsafe.Sizeof(FlushEntry{})+unsafe.Sizeof(mapNode(nil)))
-	workspace := min(uint64(DirtyWorkspaceBytes), budget.Limit())
-	if workspace <= structureBytes {
-		return fmt.Errorf("shamap: dirty workspace requires more than %d bytes, budget is %d", structureBytes, workspace)
-	}
-	if err := reserveDirtyMemory(ctx, budget, workspace); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	defer budget.Release(workspace)
-	entries := make([]FlushEntry, 0, batchEntries)
-	nodes := make([]mapNode, 0, batchEntries)
+	workspace := min(uint64(DirtyWorkspaceBytes), budget.Limit())
+	var batchLimit uint64
+	if workspace > dirtyBatchStructureBytes {
+		batchLimit = min(uint64(dirtyBatchBytes), workspace-dirtyBatchStructureBytes)
+	}
+	var entries []FlushEntry
+	var nodes []mapNode
 	var charged uint64
+	var reserved uint64
+	var needed uint64
+	releaseBatch := func() {
+		toRelease := reserved
+		reserved = 0
+		charged = 0
+		clear(entries)
+		clear(nodes)
+		entries = nil
+		nodes = nil
+		if toRelease != 0 {
+			budget.Release(toRelease)
+		}
+	}
+	defer releaseBatch()
 	flush := func() error {
 		if len(entries) == 0 {
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
+			releaseBatch()
 			return err
 		}
 		if err := store(entries); err != nil {
+			releaseBatch()
 			return err
 		}
 		for _, node := range nodes {
 			node.SetDirty(false)
 		}
-		clear(entries)
-		clear(nodes)
-		entries, nodes = entries[:0], nodes[:0]
-		charged = 0
+		releaseBatch()
 		return nil
+	}
+	reserveNode := func(charge uint64) error {
+		if charge > workspace-dirtyBatchStructureBytes {
+			return fmt.Errorf("shamap: dirty node requires %d bytes of workspace, budget is %d", charge+dirtyBatchStructureBytes, workspace)
+		}
+		for {
+			if len(entries) == 0 {
+				firstReservation := charge + dirtyBatchStructureBytes
+				if reserved < firstReservation {
+					if !budget.TryReserve(firstReservation - reserved) {
+						releaseBatch()
+						needed = firstReservation
+						return errDirtyMemoryUnavailable
+					}
+				} else if reserved > firstReservation {
+					budget.Release(reserved - firstReservation)
+				}
+				reserved = firstReservation
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				entries = make([]FlushEntry, 0, dirtyBatchEntries)
+				nodes = make([]mapNode, 0, dirtyBatchEntries)
+				charged = charge
+				return nil
+			}
+			if len(entries) == dirtyBatchEntries || charged > batchLimit || charge > batchLimit-charged {
+				if err := flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			if !budget.TryReserve(charge) {
+				// Do not wait while retaining a partial batch. The flush either
+				// publishes and releases it or returns the store/cancellation error.
+				if err := flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				budget.Release(charge)
+				return err
+			}
+			reserved += charge
+			charged += charge
+			return nil
+		}
 	}
 
-	sm.tree.mu.Lock()
-	defer sm.tree.mu.Unlock()
-	if sm.tree.root == nil || sm.tree.root.IsEmpty() {
-		return nil
-	}
 	var visit func(mapNode) error
 	visit = func(node mapNode) error {
 		if node == nil || !node.IsDirty() {
@@ -92,34 +155,61 @@ func (sm *SHAMap) StoreDirtyBatched(ctx context.Context, budget DirtyMemoryBudge
 				n.mu.RUnlock()
 				return errNilItem
 			}
-			size = uint64(n.item.DataSize()) + 4 + 32
+			size = uint64(n.item.DataSize()) + 4
+			if n.keyOnWire() {
+				size += 32
+			}
 			n.mu.RUnlock()
 		default:
 			return fmt.Errorf("shamap: unsupported dirty node type %T", node)
 		}
 		// Prefix serialization plus backend copies and per-node indexing overhead.
 		charge := 3 * (size + 128)
-		if charge > workspace-structureBytes {
-			return fmt.Errorf("shamap: dirty node requires %d bytes of workspace, budget is %d", charge+structureBytes, workspace)
+		if err := reserveNode(charge); err != nil {
+			return err
 		}
-		if len(entries) == batchEntries || charged+charge > min(uint64(batchBytes), workspace-structureBytes) {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		charged += charge
 		entry, err := flushEntryForNode(node, sm.tree.ledgerSeq, sm.tree.mapType)
 		if err != nil {
 			return err
 		}
+		if uint64(len(entry.Data)) != size {
+			return fmt.Errorf("shamap: dirty node serialized size changed from %d to %d", size, len(entry.Data))
+		}
 		entries = append(entries, entry)
 		nodes = append(nodes, node)
+		if len(entries) == dirtyBatchEntries || charged >= batchLimit {
+			return flush()
+		}
 		return nil
 	}
-	if err := visit(sm.tree.root); err != nil {
-		return err
+	storeLocked := func() error {
+		sm.tree.mu.Lock()
+		defer sm.tree.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if sm.tree.root == nil || sm.tree.root.IsEmpty() {
+			return nil
+		}
+		if workspace <= dirtyBatchStructureBytes {
+			return fmt.Errorf("shamap: dirty workspace requires more than %d bytes, budget is %d", dirtyBatchStructureBytes, workspace)
+		}
+		if err := visit(sm.tree.root); err != nil {
+			return err
+		}
+		return flush()
 	}
-	return flush()
+	for {
+		if err := storeLocked(); err != errDirtyMemoryUnavailable {
+			return err
+		}
+		// Credit holders may need this tree to finish. Wait outside its lock,
+		// then rewalk the current dirty nodes because the tree may have changed.
+		if err := reserveDirtyMemory(ctx, budget, needed); err != nil {
+			return err
+		}
+		reserved = needed
+	}
 }
 
 func reserveDirtyMemory(ctx context.Context, budget DirtyMemoryBudget, bytes uint64) error {
@@ -132,6 +222,10 @@ func reserveDirtyMemory(ctx context.Context, budget DirtyMemoryBudget, bytes uin
 		}
 		wake := budget.Changed()
 		if budget.TryReserve(bytes) {
+			if err := ctx.Err(); err != nil {
+				budget.Release(bytes)
+				return err
+			}
 			return nil
 		}
 		select {

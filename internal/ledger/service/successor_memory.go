@@ -15,11 +15,11 @@ func (m *successorMemory) claim(bytes, capacity uint64) (func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if bytes > capacity {
-		return nil, ErrPreferredTransitionMemory
+		return nil, newSpeculativeMemoryError(m.budget, bytes, capacity, true, nil)
 	}
 	if bytes > m.bytes {
-		if m.budget != nil && !m.budget.TryReserve(bytes-m.bytes) {
-			return nil, ErrPreferredTransitionMemory
+		if err := reserveSpeculativeBytes(m.budget, bytes-m.bytes, capacity); err != nil {
+			return nil, err
 		}
 		m.bytes = bytes
 	}
@@ -51,7 +51,7 @@ func (p *PreparedPreferredLedger) reserveMemory(bytes uint64) (func(), error) {
 	}
 	if p.memory == nil {
 		p.memory = &successorMemory{
-			budget: s.config.PersistenceMemory,
+			budget: s.speculativeMemoryBudget(),
 			claims: make(map[*uint64]struct{}),
 		}
 	}

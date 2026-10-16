@@ -290,6 +290,14 @@ remain additional bounds. The node rejects an allowance that cannot fit its
 configured fixed commitments and minimum working sets, with a configuration
 error identifying the consumer that does not fit.
 
+With a node database, persistence retains a protected 256 MiB workspace capacity
+and charges only the current serialization batch. Transaction ingress and ledger
+successors use a separate `speculative` account with a 64 MiB protected minimum
+and 256 MiB ceiling. Both accounts remain inside the shared allowance. Temporary
+speculative contention waits for budget changes for up to 100 ms without holding
+the publication fence; oversized work is rejected immediately. This adds 64 MiB to the minimum
+configured commitments needed to start a database-backed node.
+
 After those progress reservations, the remaining capacity `R` determines cache
 shares. These shares do not change the total allowance or existing progress
 minima:
@@ -358,6 +366,13 @@ heap metrics. Acquisition diagnostics continue to report useful nodes, traversal
 visits, request occupancy, memory waits and pressure checkpoints. Bounded memory
 alone does not prove that sync is progressing: monitor both state acquisition and
 prepared/applied replay ledgers.
+
+`goxrpl_memory_admission_total{origin,outcome}` distinguishes admitted, retried,
+oversized, exhausted, canceled and aborted speculative admissions. Origins include peer,
+local, RPC, transaction-set learning (`txset`) and successor work. Debug admission
+logs include the origin, account, requested/used/limit/capacity bytes, retry count
+and outcome. A rejected transaction-set learning attempt does not discard the
+acquired set delivered independently to consensus.
 
 ### `[server]` and `[port_*]`
 

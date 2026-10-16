@@ -7,7 +7,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
@@ -320,7 +319,7 @@ func (c *catchupReplayCoordinator) issueHeaderDiscoveryRequest(generation uint64
 	indirect := current.attempts > 0
 	c.headerDiscoveryMu.Unlock()
 
-	peerID, found := c.selectHeaderDiscoveryPeer(seq, peerHint, excluded)
+	peerID, found := c.chooseAcquisitionPeer(seq, hash, peerHint, excluded, false)
 	if !found {
 		c.headerDiscoveryMu.Lock()
 		if current = c.headerDiscovery; current != nil && current.generation == generation {
@@ -355,20 +354,6 @@ func (c *catchupReplayCoordinator) issueHeaderDiscoveryRequest(generation uint64
 	c.headerDiscoveryMu.Unlock()
 
 	return network.RequestLedgerHeaderFromPeer(peerID, hash, seq, indirect)
-}
-
-func (c *catchupReplayCoordinator) selectHeaderDiscoveryPeer(
-	seq uint32,
-	preferred uint64,
-	excluded map[uint64]struct{},
-) (uint64, bool) {
-	if preferred != 0 {
-		if _, skip := excluded[preferred]; !skip &&
-			(c.peerSessions == nil || c.peerSessions.IsPeerConnected(peermanagement.PeerID(preferred))) {
-			return preferred, true
-		}
-	}
-	return c.selectAcquisitionPeerExcluding(seq, excluded)
 }
 
 func (c *catchupReplayCoordinator) headerDiscoveryRequestFailed(generation uint64, err error) {

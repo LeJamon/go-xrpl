@@ -78,6 +78,32 @@ func TestPeer_HasLedger(t *testing.T) {
 	assert.False(t, p.HasLedger([32]byte{}, 0), "seq 0 disables the range arm")
 }
 
+func TestOverlay_PeerLedgerAvailability(t *testing.T) {
+	peer := newRelayTestPeer(7)
+	peer.firstLedgerSeq, peer.lastLedgerSeq = 100, 200
+	peer.setTracking(PeerTrackingConverged)
+	o := &Overlay{peers: map[PeerID]*Peer{7: peer}}
+	hash := hash32(0x42)
+	has, first, last := o.PeerLedgerAvailability(7, hash, 150)
+	assert.True(t, has)
+	assert.Equal(t, uint32(100), first)
+	assert.Equal(t, uint32(200), last)
+	has, _, _ = o.PeerLedgerAvailability(7, hash, 201)
+	assert.False(t, has)
+	peer.AddLedger(hash)
+	has, _, _ = o.PeerLedgerAvailability(7, hash, 201)
+	assert.True(t, has, "recent hashes can establish availability outside the range")
+	peer.setTracking(PeerTrackingDiverged)
+	has, first, last = o.PeerLedgerAvailability(7, hash32(0x43), 150)
+	assert.False(t, has, "an unconverged range must not establish availability")
+	assert.Equal(t, uint32(100), first)
+	assert.Equal(t, uint32(200), last)
+	has, first, last = o.PeerLedgerAvailability(8, hash, 150)
+	assert.False(t, has)
+	assert.Zero(t, first)
+	assert.Zero(t, last)
+}
+
 // TestPeer_StatusChangeFeedsLedgerRing pins that a status change advertising a
 // closed (and previous) ledger feeds the recentLedgers ring, and that a later
 // LostSync clears the single hints but never the ring — mirroring rippled

@@ -9,6 +9,16 @@ import (
 
 var nodeMemoryPool atomic.Pointer[membudget.Pool]
 
+var memoryAdmissions = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "goxrpl_memory_admission_total",
+	Help: "Speculative memory admission outcomes by bounded source and outcome labels.",
+}, []string{"origin", "outcome"})
+
+// RecordMemoryAdmission counts admission outcomes using fixed internal source labels.
+func RecordMemoryAdmission(origin, outcome string) {
+	memoryAdmissions.WithLabelValues(origin, outcome).Inc()
+}
+
 // SetMemoryPool publishes the node's managed-memory accounting until cleanup.
 func SetMemoryPool(pool *membudget.Pool) func() {
 	nodeMemoryPool.Store(pool)
@@ -33,6 +43,7 @@ func NewMemoryCollector() prometheus.Collector {
 }
 
 func (c *memoryCollector) Describe(ch chan<- *prometheus.Desc) {
+	memoryAdmissions.Describe(ch)
 	ch <- c.bytes
 	ch <- c.denied
 	ch <- c.released
@@ -44,6 +55,7 @@ func (c *memoryCollector) Collect(ch chan<- prometheus.Metric) {
 	if pool == nil {
 		return
 	}
+	memoryAdmissions.Collect(ch)
 	snapshot := pool.Snapshot()
 	bytes := func(name, state string, value uint64) {
 		ch <- prometheus.MustNewConstMetric(c.bytes, prometheus.GaugeValue, float64(value), name, state)

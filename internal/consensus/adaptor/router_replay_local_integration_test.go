@@ -24,7 +24,7 @@ func TestLocalReplayReplacementResumesWithoutPeer(t *testing.T) {
 		delete(c.peerStates, id)
 	}
 	c.peersMu.Unlock()
-	_, available := c.resolveAcquisitionPeer(links[1].seq, 0)
+	_, available := c.resolveAcquisitionPeer(links[1].seq, links[1].hash, 0)
 	require.False(t, available)
 	requests := len(sender.legacyCalls())
 	generation := c.standardReplay.generation

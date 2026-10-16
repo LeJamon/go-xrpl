@@ -49,6 +49,7 @@ type ledgerAcquisitionNetwork interface {
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error
 	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error
 	PeerSupportsReplay(peerID uint64) bool
+	PeerLedgerAvailability(peerID uint64, hash [32]byte, seq uint32) (has bool, first, last uint32)
 	ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64
 	SelectLedgerPeers(target [32]byte, seq uint32, excluded []uint64, max int) []uint64
 	PeerLatency(peerID uint64) (time.Duration, bool)
