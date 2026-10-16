@@ -45,13 +45,13 @@ type issue2071BenchmarkAdmission struct {
 }
 
 type issue2071BenchmarkFixture struct {
-	service     *Service
-	budget      issue2071Budget
-	parent      *ledger.Ledger
-	pending     openledger.PendingTx
-	retries     []openledger.PendingTx
-	storeLedger *ledger.Ledger
-	targetBytes int
+	service       *Service
+	budget        issue2071Budget
+	parent        *ledger.Ledger
+	pending       openledger.PendingTx
+	retries       []openledger.PendingTx
+	storeLedger   *ledger.Ledger
+	workloadBytes int
 }
 
 func newIssue2071BenchmarkFixture(b *testing.B, isolated bool) issue2071BenchmarkFixture {
@@ -72,25 +72,51 @@ func newIssue2071BenchmarkFixture(b *testing.B, isolated bool) issue2071Benchmar
 	fundingOutcome, err := svc.SubmitOpenLedgerTxDetailed(funding, false)
 	require.NoError(b, err)
 	require.True(b, fundingOutcome.Applied, "account funding returned %s", fundingOutcome.Result)
-	target, _ := issue2071SignedPaymentAmount(b, env, jtx.MasterAccount(), receiver, 1_000_000, 2)
-	pending, err := openledger.ParsePendingTx(target)
-	require.NoError(b, err)
 	_, err = svc.AcceptLedger(b.Context())
 	require.NoError(b, err)
 
-	retries := make([]openledger.PendingTx, 512)
-	for i := range retries {
-		retries[i] = pending
+	const retryCount = 128
+	retries := make([]openledger.PendingTx, 0, retryCount)
+	workloadBytes := 0
+	seen := make(map[[32]byte]struct{}, retryCount)
+	for sequence := uint32(2); sequence < 2+retryCount; sequence++ {
+		target, _ := issue2071SignedPaymentAmount(b, env, jtx.MasterAccount(), receiver, 1, sequence)
+		pending, parseErr := openledger.ParsePendingTx(target)
+		require.NoError(b, parseErr)
+		require.NotContains(b, seen, pending.Hash)
+		seen[pending.Hash] = struct{}{}
+		retries = append(retries, pending)
+		workloadBytes += len(target)
 	}
 	return issue2071BenchmarkFixture{
-		service:     svc,
-		budget:      budget,
-		parent:      issue2071ClosedChild(b, svc.GetClosedLedger()),
-		pending:     pending,
-		retries:     retries,
-		storeLedger: benchmarkPersistenceLedgers(b, 1)[0],
-		targetBytes: len(target),
+		service:       svc,
+		budget:        budget,
+		parent:        issue2071ClosedChild(b, svc.GetClosedLedger()),
+		pending:       retries[0],
+		retries:       retries,
+		storeLedger:   benchmarkPersistenceLedgers(b, 1)[0],
+		workloadBytes: workloadBytes + len(retries[0].Blob),
 	}
+}
+
+func issue2071BenchmarkSuccessorError(prepared *PreparedPreferredLedger, retries []openledger.PendingTx) error {
+	if prepared == nil || prepared.openView == nil {
+		return fmt.Errorf("successor did not retain a private open view")
+	}
+	candidate := prepared.openView.Current()
+	if candidate == nil {
+		return fmt.Errorf("successor private open view has no candidate ledger")
+	}
+	for i, expected := range retries {
+		exists, err := candidate.TxExists(expected.Hash)
+		if err != nil {
+			return fmt.Errorf("successor replay %d (%x): check accepted transaction: %w", i, expected.Hash, err)
+		}
+		if !exists {
+			return fmt.Errorf("successor replay %d (%x) was not accepted (candidate tx count %d)", i, expected.Hash, candidate.TxCount())
+		}
+	}
+	return nil
 }
 
 // BenchmarkIssue2071PersistenceIngressContention uses a blocking callback as a
@@ -115,7 +141,7 @@ func BenchmarkIssue2071PersistenceIngressContention(b *testing.B) {
 }
 
 func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, delayed bool) {
-	var admissions, validations []int64
+	var admissions, successorReady []int64
 	var budgetDenials, operationErrors, persisted, batches uint64
 	var peak uint64
 	var targetBytes int
@@ -128,7 +154,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 	for range b.N {
 		b.StopTimer()
 		fixture := newIssue2071BenchmarkFixture(b, isolated)
-		targetBytes = fixture.targetBytes
+		targetBytes = fixture.workloadBytes
 		ctx, cancel := context.WithTimeout(b.Context(), 5*time.Second)
 		storage := &issue2071BenchmarkStore{
 			started: make(chan struct{}),
@@ -156,83 +182,95 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 		baselineSpeculative := fixture.budget.speculative.Snapshot()
 
 		start := make(chan struct{})
+		ingressStarted := make(chan struct{})
+		validationStarted := make(chan struct{})
 		ingressDone := make(chan issue2071BenchmarkAdmission, 1)
 		validationDone := make(chan issue2071BenchmarkAdmission, 1)
 		b.StartTimer()
 		go func() {
 			<-start
+			close(ingressStarted)
 			started := time.Now()
 			_, err := fixture.service.SubmitOpenLedgerTxDetailed(fixture.pending.Blob, false)
 			ingressDone <- issue2071BenchmarkAdmission{duration: time.Since(started), err: err}
 		}()
 		go func() {
 			<-start
+			close(validationStarted)
 			started := time.Now()
 			prepared, err := fixture.service.prepareSuccessor(ctx, fixture.parent, successorOptions{
-				preferred: true,
-				admitted:  true,
-				retries:   fixture.retries,
+				preferred:   true,
+				admitted:    true,
+				anyDisputes: true,
+				retries:     fixture.retries,
 			})
 			if err == nil {
 				err = prepared.Wait(ctx)
+				if err == nil {
+					err = issue2071BenchmarkSuccessorError(prepared, fixture.retries)
+				}
 				prepared.Release()
 			}
 			validationDone <- issue2071BenchmarkAdmission{duration: time.Since(started), err: err}
 		}()
 		close(start)
 
-		admissionSampled, validationSampled := false, false
-		deadline := time.NewTimer(2 * time.Second)
-		for !admissionSampled || !validationSampled {
-			if !isolated {
-				p := fixture.budget.persistence.Snapshot()
-				s := fixture.budget.speculative.Snapshot()
-				if p.Denied > baselinePersistence.Denied || s.Denied > baselineSpeculative.Denied {
-					break
-				}
-			}
+		startupDeadline := time.NewTimer(time.Second)
+		select {
+		case <-ingressStarted:
+		case <-startupDeadline.C:
+			close(storage.release)
+			cancel()
+			fixture.service.Stop()
+			b.Fatalf("%s ingress did not start", arm)
+		}
+		select {
+		case <-validationStarted:
+		case <-startupDeadline.C:
+			close(storage.release)
+			cancel()
+			fixture.service.Stop()
+			b.Fatalf("%s successor replay did not start", arm)
+		}
+		startupDeadline.Stop()
+		// Hold persistence for the same bounded interval in every arm. This keeps
+		// the shared and isolated runs on the same schedule even when final
+		// right-sized persistence does not need to deny speculative work.
+		releaseTimer := time.NewTimer(5 * time.Millisecond)
+		<-releaseTimer.C
+		close(storage.release)
+		result := func() issue2071BenchmarkAdmission {
 			select {
 			case result := <-ingressDone:
-				admissionSampled = true
-				admissions = append(admissions, result.duration.Nanoseconds())
-				if result.err != nil {
-					operationErrors++
-				}
-				require.NoError(b, result.err)
-			case result := <-validationDone:
-				validationSampled = true
-				validations = append(validations, result.duration.Nanoseconds())
-				if result.err != nil {
-					operationErrors++
-				}
-				require.NoError(b, result.err)
-			case <-deadline.C:
-				close(storage.release)
+				return result
+			case <-time.After(5 * time.Second):
 				cancel()
 				fixture.service.Stop()
-				b.Fatalf("%s admission did not complete", arm)
-			default:
-				time.Sleep(time.Millisecond)
+				b.Fatal("ingress did not complete after storage release")
+				return issue2071BenchmarkAdmission{}
 			}
+		}()
+		admissions = append(admissions, result.duration.Nanoseconds())
+		if result.err != nil {
+			operationErrors++
 		}
-		deadline.Stop()
-		close(storage.release)
-		if !admissionSampled {
-			result := <-ingressDone
-			admissions = append(admissions, result.duration.Nanoseconds())
-			if result.err != nil {
-				operationErrors++
+		require.NoError(b, result.err)
+		result = func() issue2071BenchmarkAdmission {
+			select {
+			case result := <-validationDone:
+				return result
+			case <-time.After(5 * time.Second):
+				cancel()
+				fixture.service.Stop()
+				b.Fatal("successor replay did not complete after storage release")
+				return issue2071BenchmarkAdmission{}
 			}
-			require.NoError(b, result.err)
+		}()
+		successorReady = append(successorReady, result.duration.Nanoseconds())
+		if result.err != nil {
+			operationErrors++
 		}
-		if !validationSampled {
-			result := <-validationDone
-			validations = append(validations, result.duration.Nanoseconds())
-			if result.err != nil {
-				operationErrors++
-			}
-			require.NoError(b, result.err)
-		}
+		require.NoError(b, result.err)
 		require.NoError(b, <-storeDone)
 		b.StopTimer()
 		cancel()
@@ -250,10 +288,9 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 
 	b.SetBytes(int64(targetBytes))
 	reportPersistenceLatencies(b, admissions, "admission")
-	reportPersistenceLatencies(b, validations, "consensus-validation")
+	reportPersistenceLatencies(b, successorReady, "successor-ready")
 	b.ReportMetric(float64(budgetDenials)/float64(b.N), "budget-denials/op")
-	b.ReportMetric(float64(budgetDenials)/float64(b.N), "budget-retry-attempts/op")
-	b.ReportMetric(float64(operationErrors)/float64(b.N), "admission-errors/op")
+	b.ReportMetric(float64(operationErrors)/float64(b.N), "operation-errors/op")
 	b.ReportMetric(float64(peak), "memory-peak-B")
 	b.ReportMetric(float64(persisted)/float64(b.N), "persisted-B/op")
 	b.ReportMetric(float64(batches)/float64(b.N), "storage-batches/op")
