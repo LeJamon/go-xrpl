@@ -241,13 +241,13 @@ func (sm *SHAMap) descend(inner *innerNode, branch int) (mapNode, error) {
 // walks remain attachable because their acquisition budget owns the loaded
 // nodes until the persistence acknowledgement.
 func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) (mapNode, error) {
-	return sm.readChild(ctx, inner, branch, sm.tree.state == stateSyncing)
+	return sm.readChild(ctx, inner, branch, sm.tree.state == stateSyncing, ReadForeground)
 }
 
 // readChild can fetch a child without attaching it to a shared tree. Serving
 // peers uses this mode: a read-only request must not grow all snapshots that
 // share the node, bypassing the bounded NodeStore cache and acquisition budget.
-func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, retain bool) (mapNode, error) {
+func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, retain bool, policy ReadPolicy) (mapNode, error) {
 	child, hash, hasBranch := inner.LoadChild(branch)
 	if child != nil {
 		return child, nil
@@ -271,12 +271,18 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 	if !retain && access.residency != nil {
 		residency = access.residency
 		residencyGeneration = residency.beginRead()
-		if node, ok := residency.lookup(hash); ok {
+		if node, ok := residency.lookupForPolicy(hash, policy); ok {
 			return node, nil
 		}
 	}
 
-	data, err := access.fetch(ctx, hash)
+	var data []byte
+	var err error
+	if retain {
+		data, err = access.fetch(ctx, hash)
+	} else {
+		data, err = access.fetchWithPolicy(ctx, hash, policy)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
 	}
@@ -291,7 +297,7 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 	}
 	if !retain {
 		if residency != nil {
-			residency.insertForGeneration(residencyGeneration, hash, body)
+			residency.insertForPolicy(residencyGeneration, hash, body, policy)
 		}
 		return node, nil
 	}

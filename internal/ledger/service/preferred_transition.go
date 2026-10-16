@@ -216,9 +216,7 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 		return fail(err)
 	}
 	failPrepared := func(err error) (*PreparedPreferredLedger, error) {
-		if errors.Is(err, context.Canceled) && !s.preferredLifecycleRunning() {
-			err = errServiceNotRunning
-		}
+		err = s.preferredTransitionError(err)
 		if p.cancel != nil {
 			p.cancel()
 		}
@@ -321,6 +319,7 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	}
 
 	cleanupPrepared := func(err error) (*PreparedPreferredLedger, error) {
+		err = s.preferredTransitionError(err)
 		if p.cancel != nil {
 			p.cancel()
 		}
@@ -494,6 +493,7 @@ func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error
 	}
 	if p.ctx != nil {
 		if err := p.ctx.Err(); err != nil {
+			err = p.service.preferredTransitionError(err)
 			p.abort(err)
 			return false, err
 		}
@@ -736,6 +736,7 @@ func (p *PreparedPreferredLedger) releaseRetainedMemory() {
 }
 
 func (p *PreparedPreferredLedger) markReady(err error) {
+	err = p.service.preferredTransitionError(err)
 	p.stateMu.Lock()
 	p.runErr = err
 	if err != nil {
@@ -1015,6 +1016,13 @@ func (s *Service) preferredLifecycleRunning() bool {
 	running := s.lifecycleState == serviceRunning
 	s.lifecycleMu.Unlock()
 	return running
+}
+
+func (s *Service) preferredTransitionError(err error) error {
+	if errors.Is(err, context.Canceled) && !s.preferredLifecycleRunning() {
+		return errServiceNotRunning
+	}
+	return err
 }
 
 const (

@@ -24,6 +24,7 @@ func newMetricsRegistry() *prometheus.Registry {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		observability.NewMemoryCollector(),
 		observability.NewSHAMapCollector(),
+		observability.NewNodeStoreCollector(),
 	)
 
 	buildInfo := prometheus.NewGauge(prometheus.GaugeOpts{

@@ -75,7 +75,7 @@ func (sm *SHAMap) walkWireNodesRec(node mapNode, path [32]byte, depth int, out *
 		return nil
 	}
 	for branch := range BranchFactor {
-		child, err := sm.readChild(context.Background(), inner, branch, false)
+		child, err := sm.readChild(context.Background(), inner, branch, false, ReadPeer)
 		if err != nil {
 			return err
 		}
@@ -119,7 +119,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 			return nil, nil
 		}
 		branch := selectBranchForPath(wantedPath, curDepth)
-		child, err := sm.readChild(context.Background(), inner, branch, false)
+		child, err := sm.readChild(context.Background(), inner, branch, false, ReadPeer)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 		}
 		// Reverse iteration → ascending-branch pop order.
 		for i := BranchFactor - 1; i >= 0; i-- {
-			child, err := sm.readChild(context.Background(), inner, i, false)
+			child, err := sm.readChild(context.Background(), inner, i, false, ReadPeer)
 			if err != nil {
 				return nil, err
 			}

@@ -3,7 +3,6 @@ package shamap
 import (
 	"container/list"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -11,6 +10,8 @@ import (
 // CleanResidency. Materialized nodes returned to a walk are operation-owned
 // and are not included in UsedBytes or Nodes.
 type CleanResidencyStats struct {
+	Foreground       CleanResidencyClassStats
+	Peer             CleanResidencyClassStats
 	Limit            uint64
 	UsedBytes        uint64
 	Nodes            uint64
@@ -18,6 +19,27 @@ type CleanResidencyStats struct {
 	Misses           uint64
 	Evictions        uint64
 	AdmissionDenials uint64
+}
+
+// CleanResidencyClassStats reports one bounded access class. ReservationDenials
+// counts failed budget attempts, including attempts recovered by eviction.
+type CleanResidencyClassStats struct {
+	Limit, UsedBytes, Nodes                        uint64
+	Lookups, Hits, Admissions, Bypasses, Evictions uint64
+	AdmissionDenials, ReservationDenials           uint64
+}
+
+type cleanResidencyCounters struct {
+	lookups, hits, admissions, bypasses, evictions uint64
+	admissionDenials, reservationDenials           uint64
+}
+
+type cleanResidencySegment struct {
+	limit, used     uint64
+	items           map[[32]byte]*list.Element
+	order           list.List
+	structuralSlots uint64
+	counters        cleanResidencyCounters
 }
 
 type cleanResidencyEntry struct {
@@ -45,33 +67,28 @@ type CleanResidency struct {
 	mu             sync.Mutex
 	limit          uint64
 	budget         CacheMemoryBudget
-	used           uint64
-	items          map[[32]byte]*list.Element
-	order          list.List
+	segments       [2]cleanResidencySegment
 	closed         bool
-
-	// structuralSlots is the high-water number of cache entries. Its
-	// conservative reservation remains in used while entries still occupy the
-	// map/list; an empty cache resets those structures and releases it.
-	structuralSlots uint64
-
-	hits             atomic.Uint64
-	misses           atomic.Uint64
-	evictions        atomic.Uint64
-	admissionDenials atomic.Uint64
 }
 
 // NewCleanResidency creates a bounded clean-node record cache. A zero limit
 // creates a disabled cache, which is useful when a Family exposes the optional
 // provider but has no cache allowance. The optional budget is charged only for
 // retained records and conservative cache structure, and is never waited on.
+// One eighth of the limit is reserved for peer records; peer activity never
+// evicts or changes the recency of foreground records.
 func NewCleanResidency(limit uint64, budget CacheMemoryBudget) *CleanResidency {
-	return &CleanResidency{
-		generation: 1,
-		limit:      limit,
-		budget:     budget,
-		items:      make(map[[32]byte]*list.Element),
+	c := &CleanResidency{generation: 1, limit: limit, budget: budget}
+	peerLimit := limit / 8
+	if peerLimit < cleanResidencyFixedBytes {
+		peerLimit = 0
 	}
+	c.segments[ReadForeground].limit = limit - peerLimit
+	c.segments[ReadPeer].limit = peerLimit
+	for i := range c.segments {
+		c.segments[i].items = make(map[[32]byte]*list.Element)
+	}
+	return c
 }
 
 // BeginMutation invalidates all retained records and blocks cache operations
@@ -85,7 +102,7 @@ func (c *CleanResidency) BeginMutation() func() {
 	c.generationGate.Lock()
 	c.mu.Lock()
 	if !c.closed {
-		c.clearLocked(true)
+		c.clearAllLocked(true)
 		c.generation++
 		if c.generation == 0 {
 			c.generation = 1
@@ -120,94 +137,111 @@ func cleanResidencyExceeds(limit, used, additional uint64) bool {
 }
 
 func (c *CleanResidency) lookup(hash [32]byte) (mapNode, bool) {
+	return c.lookupForPolicy(hash, ReadForeground)
+}
+
+func (c *CleanResidency) lookupForPolicy(hash [32]byte, policy ReadPolicy) (mapNode, bool) {
 	if c == nil {
 		return nil, false
 	}
 	c.generationGate.RLock()
 	defer c.generationGate.RUnlock()
-	return c.lookupLocked(hash)
-}
-
-func (c *CleanResidency) lookupLocked(hash [32]byte) (mapNode, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	stats := &c.segments[policy].counters
+	stats.lookups++
 	if c.closed {
-		c.mu.Unlock()
-		c.misses.Add(1)
 		return nil, false
 	}
-	element, ok := c.items[hash]
-	if !ok {
-		c.mu.Unlock()
-		c.misses.Add(1)
-		return nil, false
+	for _, class := range []ReadPolicy{ReadForeground, ReadPeer} {
+		segment := &c.segments[class]
+		element, ok := segment.items[hash]
+		if !ok {
+			continue
+		}
+		entry := element.Value.(*cleanResidencyEntry)
+		// Materialization keeps the payload charged until its operation-owned copy exists.
+		node, err := materializePrefixNode(entry.body)
+		if err != nil {
+			return nil, false
+		}
+		if class == policy {
+			segment.order.MoveToFront(element)
+		} else if policy == ReadForeground {
+			// A local reuse earns foreground residency. Reserve the new copy
+			// before releasing the peer copy and its structural capacity. A
+			// promotion cannot evict other foreground records.
+			if c.insertLocked(&c.segments[ReadForeground], hash, entry.body, false) {
+				c.removeLocked(segment, element, false)
+			}
+		}
+		stats.hits++
+		return node, true
 	}
-	c.order.MoveToFront(element)
-	entry := element.Value.(*cleanResidencyEntry)
-	// Keep the cache lock while materializing so the payload remains covered by
-	// the cache's budget reservation until the operation-owned node is complete.
-	node, err := materializePrefixNode(entry.body)
-	c.mu.Unlock()
-	if err != nil {
-		// Entries are created only from already-validated records. Treat an
-		// invariant violation as a miss rather than returning unverifiable data.
-		c.misses.Add(1)
-		return nil, false
-	}
-	c.hits.Add(1)
-	return node, true
+	return nil, false
 }
 
 func (c *CleanResidency) insertForGeneration(generation uint64, hash [32]byte, body prefixNodeBody) {
+	c.insertForPolicy(generation, hash, body, ReadForeground)
+}
+
+func (c *CleanResidency) insertForPolicy(generation uint64, hash [32]byte, body prefixNodeBody, policy ReadPolicy) {
 	if c == nil {
 		return
 	}
 	c.generationGate.RLock()
 	defer c.generationGate.RUnlock()
-	payload, ok := cleanResidencyPayloadBytes(body)
-	if !ok || c.limit == 0 || payload > c.limit || cleanResidencyFixedBytes > c.limit-payload {
-		c.admissionDenials.Add(1)
-		return
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	segment := &c.segments[policy]
 	if c.closed || generation != 0 && generation != c.generation {
-		c.admissionDenials.Add(1)
+		segment.counters.admissionDenials++
 		return
 	}
-	if _, exists := c.items[hash]; exists {
-		return
+	// A concurrent foreground admission already provides peer reuse.
+	if policy == ReadPeer {
+		if _, exists := c.segments[ReadForeground].items[hash]; exists {
+			segment.counters.bypasses++
+			return
+		}
 	}
+	if c.insertLocked(segment, hash, body, true) && policy == ReadForeground {
+		peer := &c.segments[ReadPeer]
+		if element, exists := peer.items[hash]; exists {
+			c.removeLocked(peer, element, false)
+		}
+	}
+}
 
+func (c *CleanResidency) insertLocked(segment *cleanResidencySegment, hash [32]byte, body prefixNodeBody, evict bool) bool {
+	if _, exists := segment.items[hash]; exists {
+		return true
+	}
+	payload, ok := cleanResidencyPayloadBytes(body)
+	if !ok || segment.limit == 0 || payload > segment.limit || cleanResidencyFixedBytes > segment.limit-payload {
+		segment.counters.bypasses++
+		return false
+	}
 	for {
 		structural := uint64(0)
-		if uint64(len(c.items)) >= c.structuralSlots {
+		if uint64(len(segment.items)) >= segment.structuralSlots {
 			structural = cleanResidencyFixedBytes
 		}
 		additional := payload + structural
-		if cleanResidencyExceeds(c.limit, c.used, additional) {
-			if c.evictOldestLocked() {
+		if cleanResidencyExceeds(segment.limit, segment.used, additional) {
+			if evict && c.evictOldestLocked(segment) {
 				continue
 			}
-			if len(c.items) == 0 && c.used != 0 {
-				c.resetEmptyLocked()
-				continue
-			}
-			c.admissionDenials.Add(1)
-			return
+			segment.counters.admissionDenials++
+			return false
 		}
 		if c.budget != nil && !c.budget.TryReserve(additional) {
-			// A different cache may be consuming the shared pool. Give this
-			// cache a chance to free cold payloads before denying admission.
-			if c.evictOldestLocked() {
+			segment.counters.reservationDenials++
+			if evict && c.evictOldestLocked(segment) {
 				continue
 			}
-			if len(c.items) == 0 && c.used != 0 {
-				c.resetEmptyLocked()
-				continue
-			}
-			c.admissionDenials.Add(1)
-			return
+			segment.counters.admissionDenials++
+			return false
 		}
 		storedPayload := make([]byte, len(body.payload))
 		copy(storedPayload, body.payload)
@@ -216,80 +250,92 @@ func (c *CleanResidency) insertForGeneration(generation uint64, hash [32]byte, b
 			body:         prefixNodeBody{kind: body.kind, payload: storedPayload, key: body.key},
 			payloadBytes: payload,
 		}
-		element := c.order.PushFront(entry)
-		c.items[hash] = element
+		segment.items[hash] = segment.order.PushFront(entry)
 		if structural != 0 {
-			c.structuralSlots++
+			segment.structuralSlots++
 		}
-		c.used += additional
-		return
+		segment.used += additional
+		segment.counters.admissions++
+		return true
 	}
 }
 
-func (c *CleanResidency) evictOldestLocked() bool {
-	oldest := c.order.Back()
+func (c *CleanResidency) evictOldestLocked(segment *cleanResidencySegment) bool {
+	oldest := segment.order.Back()
 	if oldest == nil {
 		return false
 	}
-	entry := oldest.Value.(*cleanResidencyEntry)
-	delete(c.items, entry.hash)
-	c.order.Remove(oldest)
-	// Keep structural capacity reserved while the cache remains populated;
-	// resetEmptyLocked releases it when the backing map/list are discarded.
-	c.used -= entry.payloadBytes
-	if c.budget != nil && entry.payloadBytes != 0 {
-		c.budget.Release(entry.payloadBytes)
-	}
-	c.evictions.Add(1)
-	if len(c.items) == 0 {
-		c.resetEmptyLocked()
-	}
+	c.removeLocked(segment, oldest, true)
 	return true
 }
 
-func (c *CleanResidency) clearLocked(reopen bool) {
-	if c.budget != nil && c.used != 0 {
-		c.budget.Release(c.used)
+func (c *CleanResidency) removeLocked(segment *cleanResidencySegment, element *list.Element, eviction bool) {
+	entry := element.Value.(*cleanResidencyEntry)
+	delete(segment.items, entry.hash)
+	segment.order.Remove(element)
+	// Map/list high-water capacity stays charged until the segment is empty.
+	segment.used -= entry.payloadBytes
+	if c.budget != nil && entry.payloadBytes != 0 {
+		c.budget.Release(entry.payloadBytes)
 	}
-	c.used = 0
-	c.structuralSlots = 0
-	c.order.Init()
+	if eviction {
+		segment.counters.evictions++
+	}
+	if len(segment.items) == 0 {
+		c.clearLocked(segment, true)
+	}
+}
+
+func (c *CleanResidency) clearLocked(segment *cleanResidencySegment, reopen bool) {
+	if c.budget != nil && segment.used != 0 {
+		c.budget.Release(segment.used)
+	}
+	segment.used = 0
+	segment.structuralSlots = 0
+	segment.order.Init()
 	if reopen {
-		c.items = make(map[[32]byte]*list.Element)
+		segment.items = make(map[[32]byte]*list.Element)
 	} else {
-		c.items = nil
+		segment.items = nil
 	}
 }
 
-func (c *CleanResidency) resetEmptyLocked() {
-	if len(c.items) == 0 && c.used != 0 {
-		c.clearLocked(true)
+func (c *CleanResidency) clearAllLocked(reopen bool) {
+	for i := range c.segments {
+		c.clearLocked(&c.segments[i], reopen)
 	}
 }
 
-// Stats returns a point-in-time view of retained clean records and cumulative
-// cache activity.
+// Stats returns retained bytes and cumulative activity by access class.
 func (c *CleanResidency) Stats() CleanResidencyStats {
 	if c == nil {
 		return CleanResidencyStats{}
 	}
 	c.mu.Lock()
-	stats := CleanResidencyStats{
-		Limit:     c.limit,
-		UsedBytes: c.used,
-		Nodes:     uint64(len(c.items)),
+	defer c.mu.Unlock()
+	stats := CleanResidencyStats{Limit: c.limit}
+	classes := []*CleanResidencyClassStats{&stats.Foreground, &stats.Peer}
+	for i, class := range classes {
+		segment := &c.segments[i]
+		counters := &segment.counters
+		*class = CleanResidencyClassStats{
+			Limit: segment.limit, UsedBytes: segment.used, Nodes: uint64(len(segment.items)),
+			Lookups: counters.lookups, Hits: counters.hits,
+			Admissions: counters.admissions, Bypasses: counters.bypasses,
+			Evictions: counters.evictions, AdmissionDenials: counters.admissionDenials,
+			ReservationDenials: counters.reservationDenials,
+		}
+		stats.UsedBytes += class.UsedBytes
+		stats.Nodes += class.Nodes
+		stats.Hits += class.Hits
+		stats.Misses += class.Lookups - class.Hits
+		stats.Evictions += class.Evictions
+		stats.AdmissionDenials += class.AdmissionDenials
 	}
-	c.mu.Unlock()
-	stats.Hits = c.hits.Load()
-	stats.Misses = c.misses.Load()
-	stats.Evictions = c.evictions.Load()
-	stats.AdmissionDenials = c.admissionDenials.Load()
 	return stats
 }
 
-// Close drops all retained records and returns their cache-budget charges. It
-// is safe to call more than once and does not affect in-flight materialized
-// nodes returned by an earlier lookup.
+// Close returns all cache-owned charges without invalidating operation-owned nodes.
 func (c *CleanResidency) Close() {
 	if c == nil {
 		return
@@ -299,6 +345,6 @@ func (c *CleanResidency) Close() {
 	if c.closed {
 		return
 	}
-	c.clearLocked(false)
+	c.clearAllLocked(false)
 	c.closed = true
 }

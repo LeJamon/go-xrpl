@@ -305,3 +305,4 @@ func (d *RotatingKVDatabase) GenerationState() (uint32, uint32) {
 }
 
 var _ GenerationDatabase = (*RotatingKVDatabase)(nil)
+var _ PolicyDatabase = (*RotatingKVDatabase)(nil)
