@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -266,4 +267,141 @@ func TestStoreDirtyBatchedSharedBudgetWakeupAndCancellation(t *testing.T) {
 	require.Equal(t, limit-required+1, budget.Used())
 	budget.Release(limit - required + 1)
 	require.Zero(t, budget.Used())
+}
+
+func TestStoreDirtyBatchedBudgetWaitRevalidatesTree(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		valueSize int
+	}{
+		{name: "smaller", valueSize: 16},
+		{name: "larger", valueSize: 64 << 10},
+		{name: "removed", valueSize: 0},
+		{name: "oversized", valueSize: 512 << 10},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const limit = 1 << 20
+			key := [32]byte{1}
+			sm := New(TypeState)
+			require.NoError(t, sm.Put(key, bytes.Repeat([]byte{2}, 32)))
+			budget := newWakeupDirtyBudget(limit)
+			require.True(t, budget.TryReserve(limit))
+			release := sync.OnceFunc(func() { budget.Release(limit) })
+			defer release()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stored := make(map[[32]byte][]byte)
+			done := make(chan error, 1)
+			go func() {
+				done <- sm.StoreDirtyBatched(ctx, budget, func(entries []FlushEntry) error {
+					charge := dirtyBatchStructureBytes
+					for _, entry := range entries {
+						charge += 3 * (uint64(len(entry.Data)) + 128)
+						stored[entry.Hash] = bytes.Clone(entry.Data)
+					}
+					if used := budget.Used(); used != charge {
+						return fmt.Errorf("batch charge is %d, want %d", used, charge)
+					}
+					return nil
+				})
+			}()
+			select {
+			case <-budget.attempts:
+			case <-time.After(5 * time.Second):
+				t.Fatal("persistence did not wait for memory")
+			}
+
+			value := bytes.Repeat([]byte{3}, test.valueSize)
+			mutated := make(chan error, 1)
+			go func() {
+				if len(value) == 0 {
+					mutated <- sm.Delete(key)
+				} else {
+					mutated <- sm.Put(key, value)
+				}
+			}()
+			select {
+			case err := <-mutated:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("memory wait retained the tree lock")
+			}
+			release()
+			select {
+			case err := <-done:
+				if test.name == "oversized" {
+					require.ErrorContains(t, err, "workspace")
+					require.Empty(t, stored)
+					require.True(t, sm.tree.root.IsDirty())
+				} else {
+					require.NoError(t, err)
+					reference := New(TypeState)
+					if len(value) > 0 {
+						require.NoError(t, reference.Put(key, value))
+					}
+					want := make(map[[32]byte][]byte)
+					require.NoError(t, reference.StoreDirty(func(entries []FlushEntry) error {
+						for _, entry := range entries {
+							want[entry.Hash] = bytes.Clone(entry.Data)
+						}
+						return nil
+					}))
+					require.Equal(t, want, stored)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("persistence did not resume after memory release")
+			}
+			require.Zero(t, budget.Used())
+		})
+	}
+}
+
+func TestStoreDirtyBatchedPartialBatchWaitReleasesTree(t *testing.T) {
+	const limit = 1 << 20
+	const firstCharge = 3 * (32 + 4 + 32 + 128)
+	sm := New(TypeState)
+	require.NoError(t, sm.Put([32]byte{0x10}, bytes.Repeat([]byte{1}, 32)))
+	require.NoError(t, sm.Put([32]byte{0x20}, bytes.Repeat([]byte{2}, 64<<10)))
+	budget := newWakeupDirtyBudget(limit)
+	held := uint64(limit) - dirtyBatchStructureBytes - firstCharge
+	require.True(t, budget.TryReserve(held))
+	release := sync.OnceFunc(func() { budget.Release(held) })
+	defer release()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	flushed := make(chan struct{})
+	firstFlush := sync.OnceFunc(func() { close(flushed) })
+	done := make(chan error, 1)
+	go func() {
+		done <- sm.StoreDirtyBatched(ctx, budget, func([]FlushEntry) error {
+			firstFlush()
+			return nil
+		})
+	}()
+	select {
+	case <-flushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("persistence did not flush its partial batch")
+	}
+	read := make(chan error, 1)
+	go func() {
+		_, err := sm.Hash()
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("partial-batch memory wait retained the tree lock")
+	}
+	require.Equal(t, held, budget.Used(), "persistence must release its partial batch before waiting")
+	release()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("partial batch did not resume")
+	}
+	require.Zero(t, budget.Used())
+	require.False(t, sm.tree.root.IsDirty())
 }
