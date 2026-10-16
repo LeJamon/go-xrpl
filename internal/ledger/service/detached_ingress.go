@@ -248,11 +248,11 @@ func (s *Service) captureDetachedIngress(req detachedIngressRequest) (detachedIn
 
 // submitDetachedIngressOwned runs with the caller's admission slot held.
 func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
-	openledger.SubmitOutcome,
-	*ledger.Ledger,
-	*txq.TxQ,
-	openledger.ApplyConfig,
-	error,
+	resultOutcome openledger.SubmitOutcome,
+	resultCurrent *ledger.Ledger,
+	resultQueue *txq.TxQ,
+	resultConfig openledger.ApplyConfig,
+	resultErr error,
 ) {
 	failure := openledger.SubmitOutcome{Class: openledger.ResultFailure}
 	workCtx := s.detachedIngress.ctx()
@@ -269,6 +269,11 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 	}
 
 	retry := memoryAdmissionRetry{origin: req.origin}
+	defer func() {
+		if retry.last != nil {
+			retry.finish(s, resultErr)
+		}
+	}()
 	for {
 		snapshot, err := s.captureDetachedIngress(req)
 		if err != nil {
@@ -323,7 +328,6 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 			if workCtx.Err() != nil {
 				err = errServiceNotRunning
 			}
-			retry.finish(s, err)
 			return failure, snapshot.current, snapshot.queue, snapshot.config, err
 		}
 		retry.finish(s, nil)
