@@ -121,6 +121,7 @@ func (a *detachedIngressAdmission) activeDoneOrClosedLocked() <-chan struct{} {
 
 type detachedIngressRequest struct {
 	pendingTx openledger.PendingTx
+	origin    string
 
 	initialRules          *amendment.Rules
 	signatureEligible     bool
@@ -247,11 +248,11 @@ func (s *Service) captureDetachedIngress(req detachedIngressRequest) (detachedIn
 
 // submitDetachedIngressOwned runs with the caller's admission slot held.
 func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
-	openledger.SubmitOutcome,
-	*ledger.Ledger,
-	*txq.TxQ,
-	openledger.ApplyConfig,
-	error,
+	resultOutcome openledger.SubmitOutcome,
+	resultCurrent *ledger.Ledger,
+	resultQueue *txq.TxQ,
+	resultConfig openledger.ApplyConfig,
+	resultErr error,
 ) {
 	failure := openledger.SubmitOutcome{Class: openledger.ResultFailure}
 	workCtx := s.detachedIngress.ctx()
@@ -267,6 +268,12 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 		req.prepare(workCtx)
 	}
 
+	retry := memoryAdmissionRetry{origin: req.origin}
+	defer func() {
+		if retry.last != nil {
+			retry.finish(s, resultErr)
+		}
+	}()
 	for {
 		snapshot, err := s.captureDetachedIngress(req)
 		if err != nil {
@@ -315,11 +322,16 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 
 		releaseMemory, err := s.reserveDetachedIngressMemory(workCtx, snapshot, req.pendingTx)
 		if err != nil {
+			if err = retry.wait(workCtx, s, err); err == nil {
+				continue
+			}
 			if workCtx.Err() != nil {
 				err = errServiceNotRunning
 			}
 			return failure, snapshot.current, snapshot.queue, snapshot.config, err
 		}
+		retry.finish(s, nil)
+		retry = memoryAdmissionRetry{origin: req.origin}
 		privateView, err := snapshot.openView.ForkCurrent(snapshot.current)
 		if err != nil {
 			releaseMemory()
@@ -424,8 +436,8 @@ func (s *Service) reserveDetachedIngressMemory(
 		queueStats,
 		[]openledger.PendingTx{pending},
 	)
-	if s.config.PersistenceMemory == nil && bytes > speculativeSuccessorMemoryLimit {
-		return nil, ErrPreferredTransitionMemory
+	if s.speculativeMemoryBudget() == nil && bytes > speculativeSuccessorMemoryLimit {
+		return nil, newSpeculativeMemoryError(nil, bytes, speculativeSuccessorMemoryLimit, true, nil)
 	}
 	return s.acquirePreferredTransitionMemory(ctx, bytes)
 }

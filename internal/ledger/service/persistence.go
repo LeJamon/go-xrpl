@@ -288,6 +288,9 @@ func (s *Service) Stop() {
 		return
 	}
 	s.lifecycleState = serviceStopping
+	if s.memoryAdmissionStop != nil {
+		close(s.memoryAdmissionStop)
+	}
 	s.stopDone = make(chan struct{})
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
