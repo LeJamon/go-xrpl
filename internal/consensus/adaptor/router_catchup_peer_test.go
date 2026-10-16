@@ -508,6 +508,7 @@ func TestRouter_CatchupBaseRequestFailureUsesInboundRetryTimer(t *testing.T) {
 	sender.mu.Lock()
 	sender.legacyBaseErr = nil
 	sender.mu.Unlock()
+	trackCatchupPeer(r, 8, targetSeq, targetHash)
 	r.catchupReplay.ensureCatchupAcquisition(targetSeq, targetHash, 8)
 	assert.Len(t, sender.legacyCalls(), 7)
 	assert.Zero(t, r.catchupReplay.catchupInFlight())

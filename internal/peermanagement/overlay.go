@@ -584,6 +584,16 @@ func (o *Overlay) PeerClosedLedger(peerID PeerID) ([32]byte, bool) {
 	return peer.ClosedLedger()
 }
 
+// PeerLedgerAvailability returns the peer's ledger advertisement and retained range.
+func (o *Overlay) PeerLedgerAvailability(peerID PeerID, hash [32]byte, seq uint32) (has bool, first, last uint32) {
+	peer, ok := o.getPeer(peerID)
+	if !ok || peer.State() != PeerStateConnected {
+		return false, 0, 0
+	}
+	first, last = peer.LedgerRange()
+	return peer.HasLedger(hash, seq), first, last
+}
+
 // AcknowledgePeerBootstrap releases cold-start admission after a peer's
 // startup traffic has been parsed and accepted by its protocol handler.
 func (o *Overlay) AcknowledgePeerBootstrap(peerID PeerID) {

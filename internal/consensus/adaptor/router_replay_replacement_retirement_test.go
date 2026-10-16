@@ -108,7 +108,7 @@ func TestStandardReplayBaseRetiresObsoleteReplacementAfterStoredAdvance(t *testi
 			// No peer is available and no suffix is ready; the only progress comes
 			// from the complete locally stored prefix.
 			r.setPeerSessionView(&testPeerSessions{})
-			_, connected := c.resolveAcquisitionPeer(replacement.seq, replacement.peerID)
+			_, connected := c.resolveAcquisitionPeer(replacement.seq, replacement.hash, replacement.peerID)
 			require.False(t, connected)
 			_, updated, current := c.standardReplayBase(svc, base, links[3].seq, links[3].hash)
 			require.True(t, current)
@@ -174,7 +174,7 @@ func TestRetryStandardReplayReplacementRetiresObsoleteBeforeRetryGates(t *testin
 			}
 			c.consensusRecovery.stepHash = hash
 			r.setPeerSessionView(&testPeerSessions{})
-			_, connected := c.resolveAcquisitionPeer(replacement.seq, replacement.peerID)
+			_, connected := c.resolveAcquisitionPeer(replacement.seq, replacement.hash, replacement.peerID)
 			require.False(t, connected)
 
 			c.retryStandardReplayReplacement(now)

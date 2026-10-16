@@ -259,6 +259,10 @@ func (s *OverlaySender) PeerSupportsReplay(peerID uint64) bool {
 	return s.overlay.PeerSupports(peermanagement.PeerID(peerID), peermanagement.FeatureLedgerReplay)
 }
 
+func (s *OverlaySender) PeerLedgerAvailability(peerID uint64, hash [32]byte, seq uint32) (has bool, first, last uint32) {
+	return s.overlay.PeerLedgerAvailability(peermanagement.PeerID(peerID), hash, seq)
+}
+
 // ReplayCapablePeersExcluding returns up to `max` peer IDs that
 // advertised ledger-replay via handshake, omitting IDs in `excluded`.
 // Uses the overlay's Peers() snapshot and filters by PeerSupports.

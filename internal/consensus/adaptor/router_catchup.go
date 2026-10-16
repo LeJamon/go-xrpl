@@ -863,7 +863,7 @@ func (c *catchupReplayCoordinator) armPendingConsensusLedger() bool {
 			c.acquisitionMu.Unlock()
 		}
 		if replay && parent != nil {
-			if _, replayPeerFound := c.resolveReplayPeer(parent.Sequence()+1, 0); !replayPeerFound &&
+			if _, replayPeerFound := c.resolveReplayPeer(parent.Sequence()+1, nextHash, 0); !replayPeerFound &&
 				c.tryArmStandardReplayPipeline(svc, parent, seq, hash, 0) {
 				return true
 			}
@@ -906,7 +906,7 @@ func (c *catchupReplayCoordinator) armPendingConsensusLedger() bool {
 			return true
 		}
 		if replay {
-			peer, found := c.resolveReplayPeer(nextSeq, 0)
+			peer, found := c.resolveReplayPeer(nextSeq, nextHash, 0)
 			if found && c.startReplayDeltaAcquisition(nextSeq, nextHash, peer, parent) == nil {
 				c.consensusRecovery.stepHash = nextHash
 				c.acquisitionMu.Unlock()
@@ -914,7 +914,7 @@ func (c *catchupReplayCoordinator) armPendingConsensusLedger() bool {
 			}
 		}
 
-		peerID, _ := c.selectAcquisitionPeer(acquisitionSeq)
+		peerID, _ := c.resolveAcquisitionPeer(acquisitionSeq, acquisitionHash, 0)
 		if replay && parent != nil {
 			c.startLedgerReplayAcquisitionLegacyLocked(acquisitionSeq, acquisitionHash, peerID)
 		} else {
@@ -927,17 +927,6 @@ func (c *catchupReplayCoordinator) armPendingConsensusLedger() bool {
 		c.acquisitionMu.Unlock()
 		return started
 	}
-}
-
-func (c *catchupReplayCoordinator) resolveReplayPeer(seq uint32, preferred uint64) (uint64, bool) {
-	if peer, ok := c.resolveAcquisitionPeer(seq, preferred); ok && c.acquisition.PeerSupportsReplay(peer) {
-		return peer, true
-	}
-	peers := c.acquisition.ReplayCapablePeersExcluding(nil, 1)
-	if len(peers) == 0 {
-		return 0, false
-	}
-	return peers[0], true
 }
 
 // catchupReplayBase keeps recovery on the verified branch even when an observer
@@ -1077,7 +1066,7 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 		if c.protectedCatchupInFlight() >= maxConcurrentSpeculativeCatchup {
 			return
 		}
-		peer, found := c.resolveAcquisitionPeer(tSeq, peerHint)
+		peer, found := c.resolveAcquisitionPeer(tSeq, tHash, peerHint)
 		if !found || c.isBuildingLedger(tSeq) {
 			return
 		}
@@ -1091,7 +1080,7 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 	}
 	if closedLedger != nil && tSeq-closed <= maxForwardDeltaGap &&
 		c.recoveryAnchorReachesTarget(closedLedger.Sequence(), closedLedger.Hash(), tHash) {
-		if _, replayPeerFound := c.resolveReplayPeer(closedLedger.Sequence()+1, peerHint); !replayPeerFound &&
+		if _, replayPeerFound := c.resolveReplayPeer(closedLedger.Sequence()+1, [32]byte{}, peerHint); !replayPeerFound &&
 			c.tryArmStandardReplayPipeline(svc, closedLedger, tSeq, tHash, peerHint) {
 			return
 		}
@@ -1104,7 +1093,7 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 		if seq, hash, ok := c.forwardDeltaStep(svc, actualClosed, tSeq); ok &&
 			!c.locallySatisfiesLedger(seq, hash) {
 			c.clearPeerStatusEvidence(actualClosed, tSeq, tHash)
-			peer, found := c.resolveAcquisitionPeer(seq, peerHint)
+			peer, found := c.resolveAcquisitionPeer(seq, hash, peerHint)
 			if !found {
 				return
 			}
@@ -1136,7 +1125,7 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 	}
 	c.acquisitionMu.Unlock()
 	if seq, hash, parent, replay, _ := c.recoveryForwardStep(svc, tSeq, tHash, recovery); replay && parent != nil {
-		peer, found := c.resolveAcquisitionPeer(seq, peerHint)
+		peer, found := c.resolveAcquisitionPeer(seq, hash, peerHint)
 		if !found {
 			return
 		}
@@ -1151,7 +1140,7 @@ func (c *catchupReplayCoordinator) armCatchupTowardTargetWithPeer(peerHint uint6
 			return
 		}
 	}
-	peer, found := c.resolveAcquisitionPeer(tSeq, peerHint)
+	peer, found := c.resolveAcquisitionPeer(tSeq, tHash, peerHint)
 	if !found {
 		return
 	}
@@ -1312,7 +1301,7 @@ func (c *catchupReplayCoordinator) ensureCatchupAcquisitionWithPriority(
 	if _, held := svc.GetCachedLedgerByHash(hash); held {
 		return
 	}
-	peerID, _ = c.resolveAcquisitionPeer(seq, peerID)
+	peerID, _ = c.resolveAcquisitionPeer(seq, hash, peerID)
 	if source == catchupSourcePeer {
 		c.recordCatchupTarget(seq, hash, peerID)
 	} else {
@@ -1416,7 +1405,11 @@ func (c *catchupReplayCoordinator) startLedgerAcquisitionWithParentLocked(seq ui
 	if parent == nil {
 		parent = c.adaptor.GetParentLedgerForReplay(seq)
 	}
-	if parent != nil && c.acquisition.PeerSupportsReplay(peerID) {
+	if selected, ok := c.resolveAcquisitionPeer(seq, hash, peerID); ok {
+		peerID = selected
+	}
+	if parent != nil && c.acquisition.PeerSupportsReplay(peerID) &&
+		c.acquisitionPeerRank(peerID, seq, hash, time.Now()) >= peerUnknown {
 		if err := c.startReplayDeltaAcquisition(seq, hash, peerID, parent); err == nil {
 			return
 		}
@@ -1489,6 +1482,7 @@ func (c *catchupReplayCoordinator) startReplayDeltaAcquisition(seq uint32, hash 
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
 	)
+	c.replayDeltaRequested.Add(1)
 	if err := c.acquisition.RequestReplayDelta(peerID, hash); err != nil {
 		c.logger.Warn("failed to request replay delta from peer", "error", err)
 		c.replayer.Abandon(hash)
@@ -1689,7 +1683,7 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 	if !c.canAdmitProvisionalFullStateLocked(hash) {
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
-	peerID, found := c.resolveAcquisitionPeer(seq, peerID)
+	peerID, found := c.resolveAcquisitionPeer(seq, hash, peerID)
 	if !found {
 		peers := c.acquisition.SelectLedgerPeers(hash, seq, nil, 1)
 		if len(peers) == 0 {
@@ -1719,13 +1713,15 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 
 	c.seedAcquisitionPeers(il)
 	requested := false
+	attempted := make(map[uint64]struct{})
 	for _, candidate := range il.Peers() {
+		attempted[candidate] = struct{}{}
 		if c.requestLedgerBaseFromPeer(il, candidate, "failed to request ledger base from peer") {
 			requested = true
 		}
 	}
 	if !requested {
-		c.requestLedgerBase(il, 0, "failed to request ledger base from peer")
+		c.requestLedgerBaseExcluding(il, 0, "failed to request ledger base from peer", attempted)
 	}
 	return fullStateAdmission{outcome: fullStateAdmissionStarted, acquisition: il}
 }
@@ -1800,6 +1796,13 @@ func (c *catchupReplayCoordinator) fallbackReplayAcquisitionForTargetMode(
 	availability bool,
 ) {
 	c.acquisitionMu.Lock()
+	if svc := c.adaptor.LedgerService(); svc != nil {
+		if _, held := svc.GetCachedLedgerByHash(hash); held {
+			c.clearReplayAvailabilityRetryLocked(hash)
+			c.acquisitionMu.Unlock()
+			return
+		}
+	}
 
 	if !availability {
 		c.requireReplayFullStateLocked(seq, hash)
@@ -1887,6 +1890,9 @@ func (c *catchupReplayCoordinator) fallbackReplayAcquisitionForTargetMode(
 		// the target header and transaction tree. Its replay verifier still
 		// checks the derived state root before adoption.
 		if parentUsable {
+			if selected, ok := c.resolveAcquisitionPeer(seq, hash, peerID); ok {
+				peerID = selected
+			}
 			il, _ := c.startLedgerReplayAcquisitionLegacyLocked(seq, hash, peerID)
 			if il != nil && il.TransactionOnly() {
 				if target != ([32]byte{}) {
@@ -1985,18 +1991,12 @@ func (c *catchupReplayCoordinator) nextReplayAvailabilityPeerLocked(
 		delete(c.replayAvailabilityRetries, hash)
 		return 0, false
 	}
-	// SelectLedgerPeers keeps the retry on a connected peer and prioritizes
-	// peers that advertise the requested ledger. Filter that bounded set by
-	// the replay handshake feature before choosing an alternative.
-	candidates := c.acquisition.SelectLedgerPeers(hash, seq, retry.peers, replayAvailabilityPeerSelectionLimit)
-	var next uint64
-	for _, candidate := range candidates {
-		if candidate != 0 && c.acquisition.PeerSupportsReplay(candidate) {
-			next = candidate
-			break
-		}
+	excluded := make(map[uint64]struct{}, len(retry.peers))
+	for _, peer := range retry.peers {
+		excluded[peer] = struct{}{}
 	}
-	if next == 0 {
+	next, ok := c.chooseAcquisitionPeer(seq, hash, 0, excluded, true)
+	if !ok {
 		delete(c.replayAvailabilityRetries, hash)
 		return 0, false
 	}
@@ -2108,7 +2108,7 @@ func (c *catchupReplayCoordinator) requestConsensusLedger(id consensus.LedgerID)
 			c.acquisitionMu.Unlock()
 		}
 		if !provenReplay {
-			peerID, found := c.resolveAcquisitionPeer(seq, 0)
+			peerID, found := c.resolveAcquisitionPeer(seq, hash, 0)
 			if found && c.beginFrozenPivotRecovery(seq, hash, peerID) {
 				return nil
 			}
@@ -2145,11 +2145,14 @@ func (c *catchupReplayCoordinator) seedAcquisitionPeers(il *inbound.Ledger) {
 }
 
 func (c *catchupReplayCoordinator) requestLedgerBase(il *inbound.Ledger, peerID uint64, logMessage string) bool {
-	excluded := make(map[uint64]struct{})
+	return c.requestLedgerBaseExcluding(il, peerID, logMessage, make(map[uint64]struct{}))
+}
+
+func (c *catchupReplayCoordinator) requestLedgerBaseExcluding(il *inbound.Ledger, peerID uint64, logMessage string, excluded map[uint64]struct{}) bool {
 	for {
 		if peerID == 0 {
 			var ok bool
-			peerID, ok = c.selectAcquisitionPeerExcluding(il.Seq(), excluded)
+			peerID, ok = c.chooseAcquisitionPeer(il.Seq(), il.Hash(), 0, excluded, false)
 			if !ok {
 				return false
 			}
@@ -2474,7 +2477,7 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 	if c.fetchTracker.CountReason(inbound.ReasonHistory) >= 1 || c.isAcquiring(target.hash) {
 		return
 	}
-	peer, ok := c.resolveAcquisitionPeer(target.seq, target.peerID)
+	peer, ok := c.resolveAcquisitionPeer(target.seq, target.hash, target.peerID)
 	if !ok {
 		return
 	}
@@ -2574,6 +2577,11 @@ func (c *catchupReplayCoordinator) FastSyncMetrics() FastSyncMetrics {
 		CompletionRecheckRejectedUnavailable: c.completionRecheckRejectedUnavailable.Load(),
 		TargetSuperseded:                     c.targetSuperseded.Load(),
 		ObsoleteAcquisitionCompleted:         c.obsoleteAcquisitionCompleted.Load(),
+		ReplayDeltaRequested:                 c.replayDeltaRequested.Load(),
+		ReplayDeltaNoLedger:                  c.replayDeltaNoLedger.Load(),
+		ReplayDeltaNoNode:                    c.replayDeltaNoNode.Load(),
+		ReplayDeltaAvailabilityFallbacks:     c.replayDeltaAvailabilityFallbacks.Load(),
+		RecoveryLocallySatisfied:             c.recoveryLocallySatisfied.Load(),
 		ReplayPipelineRequested:              c.replayPipelineRequested.Load(),
 		ReplayPipelineReady:                  c.replayPipelineReady.Load(),
 		ReplayPipelineApplied:                c.replayPipelineApplied.Load(),
@@ -2739,7 +2747,7 @@ func (c *catchupReplayCoordinator) startGenericAcquisition(hash [32]byte, seq ui
 		return inbound.AcquisitionJSON(il.Snapshot()), true
 	}
 
-	peerID, ok := c.selectAcquisitionPeer(seq)
+	peerID, ok := c.resolveAcquisitionPeer(seq, hash, 0)
 	if !ok {
 		return nil, false
 	}
@@ -2769,53 +2777,6 @@ func getCandidateLedger(seq uint32) uint32 {
 	return (seq + 255) &^ 255
 }
 
-// selectAcquisitionPeer picks a connected peer to fetch a ledger from,
-// preferring one whose reported ledger is at or beyond the target sequence
-// (and therefore likely to hold it). When seq is unknown (0) or no peer is far
-// enough along, it falls back to any connected peer. Returns (0,false) when no
-// peer has reported a ledger state.
-func (c *catchupReplayCoordinator) resolveAcquisitionPeer(seq uint32, preferred uint64) (uint64, bool) {
-	if preferred != 0 && (c.peerSessions == nil || c.peerSessions.IsPeerConnected(peermanagement.PeerID(preferred))) {
-		return preferred, true
-	}
-	return c.selectAcquisitionPeer(seq)
-}
-
-func (c *catchupReplayCoordinator) selectAcquisitionPeer(seq uint32) (uint64, bool) {
-	return c.selectAcquisitionPeerExcluding(seq, nil)
-}
-
-func (c *catchupReplayCoordinator) selectAcquisitionPeerExcluding(seq uint32, excluded map[uint64]struct{}) (uint64, bool) {
-	c.peersMu.RLock()
-	type candidate struct {
-		id  uint64
-		seq uint32
-	}
-	candidates := make([]candidate, 0, len(c.peerStates))
-	for pid, st := range c.peerStates {
-		candidates = append(candidates, candidate{id: uint64(pid), seq: st.LedgerSeq})
-	}
-	c.peersMu.RUnlock()
-
-	var fallback uint64
-	var haveFallback bool
-	for _, peer := range candidates {
-		if _, skip := excluded[peer.id]; skip {
-			continue
-		}
-		if c.peerSessions != nil && !c.peerSessions.IsPeerConnected(peermanagement.PeerID(peer.id)) {
-			continue
-		}
-		if !haveFallback {
-			fallback, haveFallback = peer.id, true
-		}
-		if seq == 0 || peer.seq >= seq {
-			return peer.id, true
-		}
-	}
-	return fallback, haveFallback
-}
-
 func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	if c.stoppedForShutdown() {
 		return
@@ -2832,6 +2793,14 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 	}
 	if resp.HasError() && !msg.SelectPeerCharge(resource.FeeInvalidData(), "replay-delta-verify") {
 		c.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-verify")
+	}
+	if resp.HasError() && isReplayAvailabilityError(resp.Error) {
+		if hash, ok := inbound.ToHash32(resp.LedgerHash); ok {
+			if rd := c.replayer.Find(hash); rd != nil && rd.PeerID() != uint64(msg.PeerID) && rd.WasTried(uint64(msg.PeerID)) {
+				c.logger.Debug("ignoring replay availability response from rotated peer", "peer", msg.PeerID)
+				return
+			}
+		}
 	}
 
 	rd, err := c.replayer.HandleResponseFrom(uint64(msg.PeerID), resp)
@@ -2890,7 +2859,15 @@ func (c *catchupReplayCoordinator) handleReplayDeltaResponse(msg *peermanagement
 		c.replayer.Abandon(hash)
 		c.acquisitionMu.Unlock()
 		if availability {
-			c.logger.Warn("replay delta unavailable; trying recovery fallback",
+			c.recordPeerAvailabilityMiss(peerID, seq, hash, resp.Error, time.Now())
+			c.replayDeltaAvailabilityFallbacks.Add(1)
+			switch resp.Error {
+			case message.ReplyErrorNoLedger:
+				c.replayDeltaNoLedger.Add(1)
+			case message.ReplyErrorNoNode:
+				c.replayDeltaNoNode.Add(1)
+			}
+			c.logger.Debug("replay delta unavailable; trying recovery fallback",
 				"seq", seq,
 				"hash", fmt.Sprintf("%x", hash[:8]),
 				"peer", peerID,
@@ -3990,7 +3967,7 @@ func (c *catchupReplayCoordinator) requestAcquisitionBase(il *inbound.Ledger) {
 	if requested {
 		return
 	}
-	peerID, ok := c.selectAcquisitionPeer(il.Seq())
+	peerID, ok := c.resolveAcquisitionPeer(il.Seq(), il.Hash(), 0)
 	if !ok {
 		return
 	}
