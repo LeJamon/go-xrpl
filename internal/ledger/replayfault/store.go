@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -159,7 +160,12 @@ type recoveryState struct {
 // Store durably records at most one unresolved replay fault. Its zero value is
 // usable as an in-memory store; Open is preferred when loading persisted state.
 type Store struct {
-	mu sync.Mutex
+	// mu serializes all journal state and I/O. Observers only read published,
+	// whose fault and evidence are immutable. operation remains the authority
+	// for signing; a healthy observation alone never authorizes publication.
+	mu        sync.Mutex
+	published atomic.Pointer[Status]
+	lockedAt  time.Time
 
 	// operation serializes validator callbacks with mutations that can gate or
 	// clear signing and proposal publication.
@@ -178,6 +184,7 @@ type Store struct {
 // load error so callers cannot accidentally proceed in a healthy state.
 func Open(path string) (*Store, error) {
 	s := &Store{path: path}
+	defer s.publishLocked()
 	if path == "" {
 		return s, nil
 	}
@@ -224,10 +231,10 @@ func (s *Store) BeginReplay(fault Fault) (string, error) {
 	if s == nil {
 		return "", ErrBlocked
 	}
-	s.operation.Lock()
+	s.lockOperation()
 	defer s.operation.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockState()
+	defer s.unlockState()
 	if s.blocked {
 		return "", ErrBlocked
 	}
@@ -257,10 +264,10 @@ func (s *Store) FailReplay(id string, fault Fault) error {
 	if s == nil {
 		return ErrBlocked
 	}
-	s.operation.Lock()
+	s.lockOperation()
 	defer s.operation.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockState()
+	defer s.unlockState()
 	if s.pending == nil || id == "" || s.pending.ID != id {
 		return ErrFaultIDMismatch
 	}
@@ -300,10 +307,10 @@ func (s *Store) clearReplayIntent(id string) error {
 	if s == nil {
 		return ErrBlocked
 	}
-	s.operation.Lock()
+	s.lockOperation()
 	defer s.operation.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockState()
+	defer s.unlockState()
 	if s.blocked {
 		return ErrBlocked
 	}
@@ -325,10 +332,10 @@ func (s *Store) clearReplayIntent(id string) error {
 
 // ReserveAcquisition persists the retry budget before network work begins.
 func (s *Store) ReserveAcquisition(id string, limit int) error {
-	s.operation.Lock()
+	s.lockOperation()
 	defer s.operation.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockState()
+	defer s.unlockState()
 	if s.fault == nil {
 		return ErrNoFault
 	}
@@ -354,11 +361,11 @@ func (s *Store) Update(id string, fault Fault) error {
 	if s == nil {
 		return ErrNoFault
 	}
-	s.operation.Lock()
+	s.lockOperation()
 	defer s.operation.Unlock()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockState()
+	defer s.unlockState()
 	if s.fault == nil {
 		if s.blocked {
 			return ErrBlocked
@@ -408,28 +415,35 @@ func (s *Store) Snapshot() *Fault {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return cloneFault(s.fault)
+	return cloneFault(s.observed().Fault)
 }
 
-// Blocked reports whether signing and proposal publication must stop.
+// Blocked is an advisory gate observation. WithValidator must authorize actual
+// signing and proposal publication under the operation fence.
 func (s *Store) Blocked() bool {
-	if s == nil {
-		return true
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.blocked
+	started := time.Now()
+	defer func() { gateObservationTiming.Observe(time.Since(started).Seconds()) }()
+	return s.observed().Blocked
 }
 
-// Status returns a deep point-in-time view of the gate and recovery state.
+// Status returns a deep point-in-time view without waiting for journal I/O.
 func (s *Store) Status() Status {
+	status := s.observed()
+	status.Fault = faultSummary(status.Fault)
+	return status
+}
+
+func (s *Store) observed() Status {
 	if s == nil {
 		return Status{Blocked: true, PersistenceError: ErrBlocked}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if status := s.published.Load(); status != nil {
+		return *status
+	}
+	return Status{}
+}
+
+func (s *Store) publishLocked() {
 	recovery := s.recovery.RecoveryProgress
 	if s.fault != nil {
 		if recovery.LastError == "" {
@@ -438,12 +452,32 @@ func (s *Store) Status() Status {
 		recovery.BlockedReason = s.fault.BlockedReason
 		recovery.OperatorAction = s.fault.OperatorAction
 	}
-	return Status{
-		Fault:            faultSummary(s.fault),
+	s.published.Store(&Status{
+		Fault:            cloneFault(s.fault),
 		Blocked:          s.blocked,
 		Recovery:         recovery,
 		PersistenceError: s.persistenceErr,
-	}
+	})
+}
+
+func (s *Store) lockState() {
+	started := time.Now()
+	s.mu.Lock()
+	s.lockedAt = time.Now()
+	stateWaitTiming.Observe(s.lockedAt.Sub(started).Seconds())
+}
+
+func (s *Store) unlockState() {
+	s.publishLocked()
+	held := time.Since(s.lockedAt)
+	s.mu.Unlock()
+	stateHoldTiming.Observe(held.Seconds())
+}
+
+func (s *Store) lockOperation() {
+	started := time.Now()
+	s.operation.Lock()
+	mutationFenceTiming.Observe(time.Since(started).Seconds())
 }
 
 // WithValidator serializes fn with fault-journal mutations. A blocked store
@@ -455,13 +489,12 @@ func (s *Store) WithValidator(fn func() error) error {
 	if fn == nil {
 		return ErrVerifierRequired
 	}
+	started := time.Now()
 	s.operation.RLock()
+	validatorFenceTiming.Observe(time.Since(started).Seconds())
 	defer s.operation.RUnlock()
 
-	s.mu.Lock()
-	blocked := s.blocked
-	s.mu.Unlock()
-	if blocked {
+	if s.Blocked() {
 		return ErrBlocked
 	}
 	return fn()
@@ -482,21 +515,21 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 		ctx = context.Background()
 	}
 
-	s.mu.Lock()
+	s.lockState()
 	if s.fault == nil {
 		if s.blocked {
-			s.mu.Unlock()
+			s.unlockState()
 			return ErrBlocked
 		}
-		s.mu.Unlock()
+		s.unlockState()
 		return ErrNoFault
 	}
 	if s.recovery.InFlight {
-		s.mu.Unlock()
+		s.unlockState()
 		return ErrRevalidationInProgress
 	}
 	if id == "" || s.fault.ID != id {
-		s.mu.Unlock()
+		s.unlockState()
 		return fmt.Errorf("%w: %q", ErrFaultIDMismatch, id)
 	}
 
@@ -514,32 +547,36 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 	if err := s.persistLocked(s.fault); err != nil {
 		s.persistenceErr = err
 	}
-	s.mu.Unlock()
+	s.unlockState()
 
 	err := runVerifier(ctx, fault, verify)
 	if err == nil && ctx.Err() != nil {
 		err = ctx.Err()
 	}
 	if err != nil {
-		s.mu.Lock()
+		s.lockState()
+		defer s.unlockState()
 		s.recovery.InFlight = false
-		s.recovery.LastError = err.Error()
-		if s.fault != nil && s.fault.ID == fault.ID {
-			s.fault.RecoveryError = err.Error()
-			if persistErr := s.persistLocked(s.fault); persistErr != nil {
-				s.persistenceErr = persistErr
+		if s.fault == nil || s.fault.ID != id || s.generation != generation {
+			if s.recovery.LastError == "" {
+				s.recovery.LastError = ErrStaleRevalidation.Error()
 			}
+			return errors.Join(ErrStaleRevalidation, err)
 		}
-		s.mu.Unlock()
+		s.recovery.LastError = err.Error()
+		s.fault.RecoveryError = err.Error()
+		if persistErr := s.persistLocked(s.fault); persistErr != nil {
+			s.persistenceErr = persistErr
+		}
 		return err
 	}
 
 	// Take the operation write lock before checking generation and clearing so
 	// a validator callback cannot overlap the durable unblock.
-	s.operation.Lock()
+	s.lockOperation()
 	defer s.operation.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockState()
+	defer s.unlockState()
 	if s.fault == nil || s.fault.ID != id || s.generation != generation {
 		err := ErrStaleRevalidation
 		s.recovery.InFlight = false
@@ -628,6 +665,7 @@ func cloneFault(fault *Fault) *Fault {
 }
 
 func (s *Store) persistLocked(fault *Fault) error {
+	s.publishLocked()
 	if s.path == "" {
 		return nil
 	}
@@ -666,22 +704,28 @@ func writeAtomic(path string, value any) error {
 		_ = tmp.Close()
 		return fmt.Errorf("encode replay fault: %w", err)
 	}
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := writeFileFn(tmp, data); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write replay fault: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
+	started := time.Now()
+	syncErr := syncFileFn(tmp)
+	fileSyncTiming.Observe(time.Since(started).Seconds())
+	if err := syncErr; err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("sync replay fault: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close replay fault temporary file: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := renameFileFn(tmpPath, path); err != nil {
 		return fmt.Errorf("publish replay fault: %w", err)
 	}
 	committed = true
-	if err := syncDirectoryFn(dir); err != nil {
+	started = time.Now()
+	syncErr = syncDirectoryFn(dir)
+	directorySyncTiming.Observe(time.Since(started).Seconds())
+	if err := syncErr; err != nil {
 		return fmt.Errorf("sync replay fault directory: %w", err)
 	}
 	return nil
@@ -701,7 +745,12 @@ func clearDurable(path string, fault Fault) error {
 	return nil
 }
 
-var syncDirectoryFn = syncDirectory
+var (
+	writeFileFn     = (*os.File).Write
+	syncFileFn      = (*os.File).Sync
+	renameFileFn    = os.Rename
+	syncDirectoryFn = syncDirectory
+)
 
 func syncDirectory(path string) error {
 	dir, err := os.Open(path)

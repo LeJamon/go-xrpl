@@ -22,6 +22,15 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
+	started := time.Now()
+	var timings consensusAcceptanceTimings
+	replayBlocked := false
+	observeReplayGate := func() bool {
+		gateStarted := time.Now()
+		replayBlocked = s.ReplayBlocked()
+		timings.replayGateWait += time.Since(gateStarted)
+		return replayBlocked
+	}
 	releaseAdmission, err := s.acquireLedgerWork(ctx)
 	if err != nil {
 		return 0, err
@@ -32,11 +41,10 @@ func (s *Service) acceptConsensusResult(
 			releaseAdmission()
 		}
 	}()
-	if s.ReplayBlocked() {
+	if observeReplayGate() {
+		timings.log(s, time.Since(started), true)
 		return 0, replayfault.ErrBlocked
 	}
-	started := time.Now()
-	var timings consensusAcceptanceTimings
 	lifecycleStarted := time.Now()
 	s.lifecycleMu.Lock()
 	timings.lifecycleWait += time.Since(lifecycleStarted)
@@ -62,7 +70,7 @@ func (s *Service) acceptConsensusResult(
 		}
 		notification.notify()
 		timings.callback = time.Since(callbackStarted)
-		timings.log(s, time.Since(started))
+		timings.log(s, time.Since(started), replayBlocked)
 	}()
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -288,7 +296,7 @@ func (s *Service) acceptConsensusResult(
 	}
 	admissionTransferred = successor.options.deferSpeculation
 
-	if s.ReplayBlocked() {
+	if observeReplayGate() {
 		return 0, replayfault.ErrBlocked
 	}
 
@@ -317,16 +325,17 @@ func (s *Service) acceptConsensusResult(
 
 type consensusAcceptanceTimings struct {
 	sequence                                                                    uint32
-	lifecycleWait, gateWait, gateHold, serviceWait, historyWait                 time.Duration
+	lifecycleWait, gateWait, gateHold, serviceWait, historyWait, replayGateWait time.Duration
 	parse, build, apply, stateTxHash, stage, nextOpen, persist, callback, relay time.Duration
 }
 
-func (t consensusAcceptanceTimings) log(s *Service, total time.Duration) {
-	if t.sequence == 0 {
+func (t consensusAcceptanceTimings) log(s *Service, total time.Duration, blocked bool) {
+	if t.sequence == 0 && !blocked {
 		return
 	}
 	s.logger.Info("Consensus acceptance timings", "seq", t.sequence,
-		"total", total, "lifecycle_wait", t.lifecycleWait, "open_ledger_wait", t.gateWait, "open_ledger_hold", t.gateHold,
+		"total", total, "replay_gate_wait", t.replayGateWait, "blocked", blocked,
+		"lifecycle_wait", t.lifecycleWait, "open_ledger_wait", t.gateWait, "open_ledger_hold", t.gateHold,
 		"service_wait", t.serviceWait, "history_wait", t.historyWait,
 		"parse", t.parse, "build", t.build, "transaction_apply", t.apply, "close_state_tx_hash", t.stateTxHash,
 		"stage_results", t.stage, "next_open", t.nextOpen, "persistence_enqueue", t.persist, "callback", t.callback, "relay_callback", t.relay)

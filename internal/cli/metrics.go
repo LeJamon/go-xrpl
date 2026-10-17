@@ -3,6 +3,7 @@ package cli
 import (
 	"net/http"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,6 +25,7 @@ func newMetricsRegistry() *prometheus.Registry {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		observability.NewMemoryCollector(),
 		observability.NewSHAMapCollector(),
+		replayfault.TimingCollector(),
 	)
 
 	buildInfo := prometheus.NewGauge(prometheus.GaugeOpts{

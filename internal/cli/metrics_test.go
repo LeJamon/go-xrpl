@@ -43,6 +43,7 @@ func TestMetricsRegistry(t *testing.T) {
 		"goxrpl_build_info",
 		"goxrpl_sched_latency_milliseconds",
 		"goxrpl_io_latency_events_total",
+		"goxrpl_replay_fault_duration_seconds",
 	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("metrics output missing %s:\n%s", name, out)
