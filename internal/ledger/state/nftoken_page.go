@@ -1,8 +1,8 @@
 package state
 
 import (
+	"encoding/hex"
 	"fmt"
-	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -30,7 +30,7 @@ func SerializeNFTokenPage(page *NFTokenPageData) ([]byte, error) {
 	for i, token := range page.NFTokens {
 		var nfToken ledgerfields.NFTokenValue
 		nfToken.SetNFTokenID(token.NFTokenID)
-		if token.URI != "" {
+		if token.HasURI || token.URI != "" {
 			if err := nfToken.SetURIHex(token.URI); err != nil {
 				return nil, err
 			}
@@ -92,6 +92,7 @@ type NFTokenPageData struct {
 type NFTokenData struct {
 	NFTokenID [32]byte
 	URI       string
+	HasURI    bool
 }
 
 // NFTokenOfferData represents an NFToken offer ledger entry
@@ -142,30 +143,19 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokens, err := entry.GetNFTokens()
-	if err != nil {
-		return nil, err
-	}
 	page := &NFTokenPageData{
 		PreviousPageMin:   previousPageMin,
 		NextPageMin:       nextPageMin,
-		NFTokens:          make([]NFTokenData, 0, len(tokens)),
+		NFTokens:          make([]NFTokenData, len(entry.NFTokens)),
 		PreviousTxnID:     previousTxnID,
 		PreviousTxnLgrSeq: previousTxnLgrSeq,
 	}
-	for _, value := range tokens {
-		tokenID, err := value.GetNFTokenID()
-		if err != nil {
-			return nil, err
+	for i, value := range entry.NFTokens {
+		page.NFTokens[i] = NFTokenData{
+			NFTokenID: value.NFTokenID,
+			URI:       hex.EncodeToString(value.URI),
+			HasURI:    value.HasURI(),
 		}
-		uri, err := value.GetURIHex()
-		if err != nil {
-			return nil, err
-		}
-		page.NFTokens = append(page.NFTokens, NFTokenData{
-			NFTokenID: tokenID,
-			URI:       strings.ToLower(uri),
-		})
 	}
 	return page, nil
 }

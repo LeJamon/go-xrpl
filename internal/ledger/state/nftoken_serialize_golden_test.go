@@ -1,11 +1,46 @@
 package state
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+func TestNFTokenPageURIPresenceRoundTrip(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		token := map[string]any{"NFTokenID": strings.Repeat("01", 32)}
+		if present {
+			token["URI"] = ""
+		}
+		original, err := binarycodec.EncodeBytes(map[string]any{
+			"LedgerEntryType":   "NFTokenPage",
+			"Flags":             uint32(0),
+			"PreviousTxnID":     strings.Repeat("02", 32),
+			"PreviousTxnLgrSeq": uint32(123),
+			"NFTokens":          []any{map[string]any{"NFToken": token}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := ParseNFTokenPage(original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.NFTokens[0].HasURI != present {
+			t.Fatalf("URI presence = %v, want %v", page.NFTokens[0].HasURI, present)
+		}
+		roundTrip, err := SerializeNFTokenPage(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(roundTrip, original) {
+			t.Fatalf("URI presence %v: round trip changed bytes", present)
+		}
+	}
+}
 
 func nftHexUpper(b []byte) string { return strings.ToUpper(hexEncode(b)) }
 
