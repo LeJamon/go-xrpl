@@ -134,6 +134,8 @@ func TestCleanResidencyRetriesAfterSharedBudgetPressure(t *testing.T) {
 	require.Equal(t, uint64(1), stats.Evictions)
 	require.Equal(t, cleanResidencyFixedBytes+payload, stats.UsedBytes)
 	require.Equal(t, budgetLimit, budget.used)
+	require.Positive(t, stats.Foreground.ReservationDenials)
+	require.Zero(t, stats.Foreground.AdmissionDenials)
 	budget.Release(payload)
 	cache.Close()
 	require.Zero(t, budget.used)

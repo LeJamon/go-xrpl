@@ -25,6 +25,7 @@ func newMetricsRegistry() *prometheus.Registry {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		observability.NewMemoryCollector(),
 		observability.NewSHAMapCollector(),
+		observability.NewNodeStoreCollector(),
 		replayfault.TimingCollector(),
 	)
 

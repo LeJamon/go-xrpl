@@ -88,6 +88,55 @@ func TestPreferredPreparationCancellationKeepsPublishedState(t *testing.T) {
 	require.False(t, svc.openLedgerMu.Snapshot().Held)
 }
 
+func TestPreferredPreparationStopKeepsPublishedState(t *testing.T) {
+	for _, phase := range []string{"preparing", "ready"} {
+		t.Run(phase, func(t *testing.T) {
+			svc, preferred, family := preferredPreparationFixture(t)
+			closed, open, queue := svc.GetClosedLedger(), svc.openLedgerView.Current(), svc.txQueue
+			family.armed.Store(phase == "preparing")
+			prepared, err := svc.PreparePreferredLedger(t.Context(), preferred)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				family.unblock()
+				prepared.Release()
+			})
+			if phase == "preparing" {
+				awaitPreferredPreparation(t, family.entered)
+			} else {
+				require.NoError(t, prepared.Wait(t.Context()))
+			}
+
+			stopped := make(chan struct{})
+			go func() {
+				svc.Stop()
+				close(stopped)
+			}()
+			select {
+			case <-prepared.ctx.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("Stop did not cancel successor preparation")
+			}
+			family.unblock()
+			if phase == "preparing" {
+				require.ErrorIs(t, prepared.Wait(t.Context()), errServiceNotRunning)
+			}
+			published, err := prepared.TryPublish()
+			require.False(t, published)
+			require.ErrorIs(t, err, errServiceNotRunning)
+			prepared.Release()
+			select {
+			case <-stopped:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Stop did not drain successor preparation")
+			}
+			require.Same(t, closed, svc.GetClosedLedger())
+			require.Same(t, open, svc.openLedgerView.Current())
+			require.Same(t, queue, svc.txQueue)
+			require.False(t, svc.openLedgerMu.Snapshot().Held)
+		})
+	}
+}
+
 func TestPreferredPreparationRejectsChangedOwnership(t *testing.T) {
 	for _, name := range []string{"closed", "open", "queue", "validated"} {
 		t.Run(name, func(t *testing.T) {

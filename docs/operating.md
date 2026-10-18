@@ -298,6 +298,50 @@ speculative contention waits for budget changes for up to 100 ms without holding
 the publication fence; oversized work is rejected immediately. This adds 64 MiB to the minimum
 configured commitments needed to start a database-backed node.
 
+After those progress reservations, the remaining capacity `R` determines cache
+shares. These shares do not change the total allowance or existing progress
+minima:
+
+| Cache | Protected minimum | Maximum |
+|-------|-------------------|---------|
+| SHAMap clean records | `R / 4` | `R / 2` |
+| NodeStore decoded records | `R / 8` | `R / 4` |
+| Transaction relay | `0` | `R / 16` |
+
+Each cache can reach its maximum regardless of which cache warms first when
+other consumers hold only their minima. Under acquisition pressure the two
+record caches can still use their protected minima. Shares round down to bytes;
+a maximum that rounds to zero is capped at one byte because zero means
+unlimited to the allocator. Such a cap cannot admit a record.
+
+The SHAMap cache assigns one eighth of its maximum to peer records and the rest
+to foreground ledger reads. Peer scans can evict only peer records, and peer
+hits do not reorder the foreground LRU. Repeated peer requests reuse records
+that fit in this segment; larger scans still perform storage reads. A local read
+of a peer record promotes it only when a separately charged foreground copy fits
+without evicting another foreground record. With a full peer segment, a
+foreground working set of at most `3R / 16`, including retained structural
+capacity, remains fundable under competing shared-pool pressure. Foreground
+traffic can still replace its own working set, and online deletion invalidates
+both segments. Tiny caches unable to hold one peer entry retain foreground
+capacity instead.
+
+SHAMap child reads consult existing NodeStore entries but admit new records only
+into the upper cache. Peer lookups neither admit into nor promote entries in the
+NodeStore cache. This avoids double admission on a SHAMap miss while retaining
+lower-cache utility for direct NodeStore consumers. Cache misses still verify
+node content before SHAMap admission. No cache invokes another cache to reclaim
+memory while holding its lock.
+
+`goxrpl_shamap_cache_access_total{class,event}` and
+`goxrpl_nodestore_cache_access_total{class,event}` distinguish `foreground` and
+`peer` lookups, hits, admissions, bypasses, capacity evictions, terminal admission
+denials and failed reservation attempts. A reservation denial can recover after
+eviction; it is not a terminal admission denial. `goxrpl_shamap_cache_class_bytes`
+reports each segment's limit and retained bytes. Compare these with
+`goxrpl_memory_budget_bytes{consumer,state="available"}` for effective shared
+headroom; a nominal cache maximum is not its current available capacity.
+
 `acquisition.memory_mb` remains compatible as a child ceiling. Existing explicit
 512 MiB settings still constrain acquisition/replay to that amount; remove the
 setting or set it to zero to allow elastic use of the shared pool. Optional

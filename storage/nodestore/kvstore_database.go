@@ -30,6 +30,7 @@ type DatabaseConfig struct {
 
 type nodeCacheAccess interface {
 	Get(Hash256) (*Node, bool)
+	Lookup(Hash256) (*Node, bool)
 	Put(*Node)
 	putOwned(*Node) bool
 	Remove(Hash256)
@@ -37,6 +38,7 @@ type nodeCacheAccess interface {
 	Close()
 	Size() int
 	Sweep() int
+	accessStats() CacheAccessStats
 }
 
 // DefaultDatabaseConfig returns the production cache defaults.
@@ -108,7 +110,17 @@ type KVDatabase struct {
 		writes      uint64
 		readBytes   uint64
 		writeBytes  uint64
+		foreground  cacheReadCounters
+		peer        cacheReadCounters
 	}
+}
+
+var _ PolicyDatabase = (*KVDatabase)(nil)
+
+type cacheReadCounters struct {
+	lookups  atomic.Uint64
+	hits     atomic.Uint64
+	bypasses atomic.Uint64
 }
 
 const mutationLockPoll = time.Millisecond
@@ -241,20 +253,47 @@ func (d *KVDatabase) StoreDurable(ctx context.Context, node *Node) error {
 
 // Fetch returns a node by hash, consulting configured caches.
 func (d *KVDatabase) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
+	return d.FetchWithPolicy(ctx, hash, ReadForeground)
+}
+
+// FetchWithPolicy returns a node while applying the requested positive-cache
+// access policy. Foreground reads promote cache hits and admit backend hits;
+// foreground-uncached reads promote hits but bypass positive-cache admission;
+// peer reads neither promote hits nor admit backend hits.
+func (d *KVDatabase) FetchWithPolicy(ctx context.Context, hash Hash256, policy ReadPolicy) (*Node, error) {
 	if err := d.begin(ctx); err != nil {
 		return nil, err
 	}
 	defer d.lifecycleMu.RUnlock()
+	if policy > ReadPeer {
+		return nil, ErrInvalidReadPolicy
+	}
 
 	atomic.AddUint64(&d.stats.reads, 1)
 	if d.cache != nil {
-		if node, found := d.cache.Get(hash); found {
+		var (
+			node  *Node
+			found bool
+		)
+		if policy == ReadPeer {
+			node, found = d.cache.Lookup(hash)
+		} else {
+			node, found = d.cache.Get(hash)
+		}
+		d.recordCacheLookup(policy, found)
+		if found {
 			atomic.AddUint64(&d.stats.cacheHits, 1)
 			atomic.AddUint64(&d.stats.fetchHits, 1)
 			atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 			return node, nil
 		}
 		atomic.AddUint64(&d.stats.cacheMisses, 1)
+	} else {
+		d.recordCacheLookup(policy, false)
+		d.recordCacheBypass(policy)
+	}
+	if policy != ReadForeground && d.cache != nil {
+		d.recordCacheBypass(policy)
 	}
 	cacheGeneration := d.cacheGeneration.Load()
 	data, err := d.fetchBackend(hash)
@@ -267,10 +306,32 @@ func (d *KVDatabase) Fetch(ctx context.Context, hash Hash256) (*Node, error) {
 	}
 	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
-	if d.cache != nil && d.cacheGeneration.Load() == cacheGeneration {
+	if policy == ReadForeground && d.cache != nil && d.cacheGeneration.Load() == cacheGeneration {
 		d.cache.putOwned(node)
 	}
 	return node, nil
+}
+
+func (d *KVDatabase) recordCacheLookup(policy ReadPolicy, found bool) {
+	if policy == ReadPeer {
+		d.stats.peer.lookups.Add(1)
+		if found {
+			d.stats.peer.hits.Add(1)
+		}
+		return
+	}
+	d.stats.foreground.lookups.Add(1)
+	if found {
+		d.stats.foreground.hits.Add(1)
+	}
+}
+
+func (d *KVDatabase) recordCacheBypass(policy ReadPolicy) {
+	if policy == ReadPeer {
+		d.stats.peer.bypasses.Add(1)
+		return
+	}
+	d.stats.foreground.bypasses.Add(1)
 }
 
 // FetchCached returns a node only when it is in the positive cache.
@@ -285,6 +346,7 @@ func (d *KVDatabase) FetchCached(ctx context.Context, hash Hash256) (*Node, erro
 		return nil, nil
 	}
 	node, found := d.cache.Get(hash)
+	d.recordCacheLookup(ReadForeground, found)
 	if !found {
 		atomic.AddUint64(&d.stats.cacheMisses, 1)
 		return nil, nil
@@ -426,9 +488,24 @@ func (d *KVDatabase) Stats() Statistics {
 		ReadBytes:   atomic.LoadUint64(&d.stats.readBytes),
 		Writes:      atomic.LoadUint64(&d.stats.writes),
 		WriteBytes:  atomic.LoadUint64(&d.stats.writeBytes),
+		Foreground: CacheAccessStats{
+			Lookups:  d.stats.foreground.lookups.Load(),
+			Hits:     d.stats.foreground.hits.Load(),
+			Bypasses: d.stats.foreground.bypasses.Load(),
+		},
+		Peer: CacheAccessStats{
+			Lookups:  d.stats.peer.lookups.Load(),
+			Hits:     d.stats.peer.hits.Load(),
+			Bypasses: d.stats.peer.bypasses.Load(),
+		},
 	}
 	if d.cache != nil {
 		stats.CacheSize = uint64(d.cache.Size())
+		admissionStats := d.cache.accessStats()
+		stats.Foreground.Admissions = admissionStats.Admissions
+		stats.Foreground.Evictions = admissionStats.Evictions
+		stats.Foreground.AdmissionDenials = admissionStats.AdmissionDenials
+		stats.Foreground.ReservationDenials = admissionStats.ReservationDenials
 	}
 	return stats
 }
