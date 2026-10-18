@@ -557,11 +557,17 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 		s.lockState()
 		defer s.unlockState()
 		s.recovery.InFlight = false
-		if s.fault == nil || s.fault.ID != id || s.generation != generation {
+		if s.fault == nil || s.fault.ID != id {
 			if s.recovery.LastError == "" {
 				s.recovery.LastError = ErrStaleRevalidation.Error()
 			}
 			return errors.Join(ErrStaleRevalidation, err)
+		}
+		if s.generation != generation {
+			err = errors.Join(ErrStaleRevalidation, err)
+			if s.recovery.LastError != "" {
+				return err
+			}
 		}
 		s.recovery.LastError = err.Error()
 		s.fault.RecoveryError = err.Error()

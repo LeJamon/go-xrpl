@@ -751,6 +751,45 @@ func TestRecoveryUpdatePreservesNewerErrorOnStaleVerifierFailure(t *testing.T) {
 	require.Equal(t, "newer recovery evidence", restarted.Status().Recovery.LastError)
 }
 
+func TestRecoveryMetadataUpdatesPreserveVerifierFailure(t *testing.T) {
+	for _, operation := range []string{"update", "reserve acquisition"} {
+		t.Run(operation, func(t *testing.T) {
+			store, path := newDurableStore(t)
+			id := seedFault(t, store)
+			verifierErr := errors.New("parent repair unavailable")
+			err := store.Revalidate(t.Context(), id, func(_ context.Context, fault Fault) error {
+				if operation == "update" {
+					fault.Evidence = json.RawMessage(`{"repair":"parent"}`)
+					require.NoError(t, store.Update(id, fault))
+				} else {
+					require.NoError(t, store.ReserveAcquisition(id, 3))
+				}
+				return verifierErr
+			})
+			require.ErrorIs(t, err, verifierErr)
+			require.ErrorIs(t, err, ErrStaleRevalidation)
+
+			restarted, openErr := Open(path)
+			require.NoError(t, openErr)
+			for _, current := range []*Store{store, restarted} {
+				status := current.Status()
+				require.True(t, status.Blocked)
+				require.False(t, status.Recovery.InFlight)
+				require.Contains(t, status.Recovery.LastError, verifierErr.Error())
+				snapshot := current.Snapshot()
+				require.NotNil(t, snapshot)
+				require.Equal(t, status.Recovery.LastError, snapshot.RecoveryError)
+				if operation == "update" {
+					require.JSONEq(t, `{"repair":"parent"}`, string(snapshot.Evidence))
+				} else {
+					require.Equal(t, 1, snapshot.AcquisitionAttempts)
+				}
+				requireValidatorRejected(t, current)
+			}
+		})
+	}
+}
+
 func TestConcurrentSnapshotsRemainIndependent(t *testing.T) {
 	store, _ := Open("")
 	id := seedFault(t, store)

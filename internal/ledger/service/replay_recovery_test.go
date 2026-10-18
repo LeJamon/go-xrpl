@@ -45,7 +45,8 @@ func seedAsyncReplayFault(t *testing.T, svc *Service) replayfault.Fault {
 }
 
 func TestStartReplayFaultRecoveryAdmitsExactIDAndPublishesFailure(t *testing.T) {
-	svc := replayFaultService(t, filepath.Join(t.TempDir(), "fault.json"))
+	path := filepath.Join(t.TempDir(), "fault.json")
+	svc := replayFaultService(t, path)
 	fault := seedAsyncReplayFault(t, svc)
 
 	entered := make(chan struct{})
@@ -69,6 +70,12 @@ func TestStartReplayFaultRecoveryAdmitsExactIDAndPublishesFailure(t *testing.T) 
 		return !status.Recovery.InFlight && status.Recovery.LastError != ""
 	}, time.Second, time.Millisecond)
 	require.True(t, svc.ReplayBlocked())
+	require.Contains(t, svc.ReplayFaultStatus().Recovery.LastError, "acquisition failed")
+	svc.Stop()
+	restarted, err := replayfault.Open(path)
+	require.NoError(t, err)
+	require.True(t, restarted.Blocked())
+	require.Contains(t, restarted.Status().Recovery.LastError, "acquisition failed")
 }
 
 func TestReplayRecoveryWorkerCancellationIsDrainedByStop(t *testing.T) {
