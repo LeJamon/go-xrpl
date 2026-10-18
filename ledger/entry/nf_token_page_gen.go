@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -25,7 +24,7 @@ type NFTokenPage struct {
 	dirty             bool
 	PreviousPageMin   string // Hash256 (uppercase hex)
 	NextPageMin       string // Hash256 (uppercase hex)
-	NFTokens          []any
+	NFTokens          []NFTokenValue
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -62,8 +61,8 @@ func (n *NFTokenPage) SetNextPageMin(value string) {
 }
 
 // SetNFTokens assigns NFTokens and updates its serialized presence.
-func (n *NFTokenPage) SetNFTokens(value []any) {
-	n.NFTokens = value
+func (n *NFTokenPage) SetNFTokens(value []NFTokenValue) {
+	n.NFTokens = cloneNFTokenValueSlice(value)
 	n.dirty = true
 	n.present |= nftokenpageBitNFTokens
 }
@@ -163,21 +162,23 @@ func (n *NFTokenPage) HasNFTokens() bool {
 	return n != nil && n.present&nftokenpageBitNFTokens != 0
 }
 
-// GetNFTokens returns typed nested objects.
+// GetNFTokens returns independently owned typed nested objects.
 func (n *NFTokenPage) GetNFTokens() ([]NFTokenValue, error) {
-	if n == nil || n.NFTokens == nil {
+	if n == nil {
 		return nil, nil
 	}
-	return nFTokenValueSliceFromAny(n.NFTokens, "NFTokenPage.NFTokens")
+	if err := validateNFTokens(n.NFTokens); err != nil {
+		return nil, err
+	}
+	return cloneNFTokenValueSlice(n.NFTokens), nil
 }
 
-// SetNFTokensValue assigns typed nested objects.
+// SetNFTokensValue assigns independently owned typed nested objects.
 func (n *NFTokenPage) SetNFTokensValue(value []NFTokenValue) error {
-	encoded, err := nFTokenValueSliceToAny(value, "NFTokenPage.NFTokens")
-	if err != nil {
+	if err := validateNFTokens(value); err != nil {
 		return err
 	}
-	n.SetNFTokens(encoded)
+	n.SetNFTokens(value)
 	return nil
 }
 
@@ -387,7 +388,7 @@ func (n *NFTokenPage) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
 		case 15: // STArray
-			val, err := sr.readSTArray("NFTokens")
+			val, err := sr.readNFTokens()
 			if err != nil {
 				return err
 			}
@@ -423,7 +424,7 @@ func (n *NFTokenPage) emitAll(out map[string]any, skipDefault bool) {
 		out["NextPageMin"] = n.NextPageMin
 	}
 	if n.present&nftokenpageBitNFTokens != 0 && !(skipDefault && len(n.NFTokens) == 0) {
-		out["NFTokens"] = n.NFTokens
+		out["NFTokens"] = nftokensToAny(n.NFTokens)
 	}
 	if n.present&nftokenpageBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
@@ -454,7 +455,7 @@ func (n *NFTokenPage) EmitPreviousFields(prev Entry, out map[string]any) {
 	}
 	emitIfChangedString(out, "PreviousPageMin", prv.PreviousPageMin, n.PreviousPageMin, prv.present&nftokenpageBitPreviousPageMin, n.present&nftokenpageBitPreviousPageMin)
 	emitIfChangedString(out, "NextPageMin", prv.NextPageMin, n.NextPageMin, prv.present&nftokenpageBitNextPageMin, n.present&nftokenpageBitNextPageMin)
-	emitIfChangedDeep(out, "NFTokens", prv.NFTokens, n.NFTokens, prv.present&nftokenpageBitNFTokens, n.present&nftokenpageBitNFTokens)
+	emitIfChangedNFTokens(out, "NFTokens", prv.NFTokens, n.NFTokens, prv.present&nftokenpageBitNFTokens, n.present&nftokenpageBitNFTokens)
 	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenpageBitFlags, n.present&nftokenpageBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&nftokenpageBitSponsor, n.present&nftokenpageBitSponsor)
 }
@@ -472,7 +473,7 @@ func (n *NFTokenPage) EmitChangeOrigFields(out map[string]any) {
 		out["NextPageMin"] = n.NextPageMin
 	}
 	if n.present&nftokenpageBitNFTokens != 0 {
-		out["NFTokens"] = n.NFTokens
+		out["NFTokens"] = nftokensToAny(n.NFTokens)
 	}
 	if n.present&nftokenpageBitFlags != 0 {
 		out["Flags"] = n.Flags
@@ -528,7 +529,7 @@ func (n *NFTokenPage) ToMap() map[string]any {
 		out["NextPageMin"] = n.NextPageMin
 	}
 	if n.present&nftokenpageBitNFTokens != 0 {
-		out["NFTokens"] = n.NFTokens
+		out["NFTokens"] = nftokensToAny(n.NFTokens)
 	}
 	if n.present&nftokenpageBitFlags != 0 {
 		out["Flags"] = n.Flags
@@ -551,19 +552,7 @@ func (n *NFTokenPage) Encode() ([]byte, error) {
 	if err := n.validateRequired(); err != nil {
 		return nil, err
 	}
-	if n.present&nftokenpageBitNFTokens != 0 {
-		if err := validateSTArrayForEncode("NFTokens", n.NFTokens); err != nil {
-			return nil, err
-		}
-	}
-	out := n.ToMap()
-	if n.present&nftokenpageBitPreviousTxnID == 0 {
-		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
-	}
-	if n.present&nftokenpageBitPreviousTxnLgrSeq == 0 {
-		out["PreviousTxnLgrSeq"] = uint32(0)
-	}
-	return binarycodec.EncodeBytes(out)
+	return n.encodeNFTokens()
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

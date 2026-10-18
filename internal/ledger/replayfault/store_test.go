@@ -248,7 +248,7 @@ func TestRevalidateArchivesResolvedFault(t *testing.T) {
 	}
 }
 
-func TestRevalidateClearFailureRestoresFault(t *testing.T) {
+func TestRevalidateArchiveSyncFailureKeepsFault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "replay-fault.json")
 	store, err := Open(path)
 	if err != nil {
@@ -274,21 +274,21 @@ func TestRevalidateClearFailureRestoresFault(t *testing.T) {
 		return nil
 	})
 	if err == nil {
-		t.Fatal("Revalidate unexpectedly succeeded after clear sync failure")
+		t.Fatal("Revalidate unexpectedly succeeded after archive sync failure")
 	}
 	if !store.Blocked() || store.Snapshot() == nil {
-		t.Fatalf("clear failure lost in-memory gate: status=%+v", store.Status())
+		t.Fatalf("archive failure lost in-memory gate: status=%+v", store.Status())
 	}
 
 	restarted, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open after failed clear: %v", err)
+		t.Fatalf("Open after failed archive: %v", err)
 	}
 	if !restarted.Blocked() || restarted.Snapshot() == nil {
 		t.Fatalf("restart lost unresolved fault: status=%+v", restarted.Status())
 	}
 	if _, err := os.Stat(path + ".fault.resolved"); err != nil {
-		t.Fatalf("resolved archive missing after failed clear: %v", err)
+		t.Fatalf("resolved archive missing after failed directory sync: %v", err)
 	}
 }
 

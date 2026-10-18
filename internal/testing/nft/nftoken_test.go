@@ -3362,5 +3362,17 @@ func TestNFTokenModify(t *testing.T) {
 		result = env.Submit(nft.NFTokenModify(alice, nftID).URI("https://updated.example.com").Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		page := readNFTokenPage(t, env, keylet.NFTokenPageMax(alice.ID))
+		if page == nil || len(page.NFTokens) != 1 || !page.NFTokens[0].HasURI {
+			t.Fatal("modified token URI is absent")
+		}
+
+		result = env.Submit(nft.NFTokenModify(alice, nftID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		page = readNFTokenPage(t, env, keylet.NFTokenPageMax(alice.ID))
+		if page == nil || len(page.NFTokens) != 1 || page.NFTokens[0].HasURI || page.NFTokens[0].URI != "" {
+			t.Fatal("removing the URI left its value or field presence")
+		}
 	})
 }
