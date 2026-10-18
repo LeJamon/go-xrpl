@@ -42,8 +42,8 @@ const (
 )
 
 // Field is a single decoded field of a serialized STObject: its serialized type
-// code, field code, and the raw value bytes (excluding the header and, for
-// variable-length types, excluding the length prefix). For STObject and STArray
+// code, field code, and the raw value bytes (excluding the header but including
+// the length prefix for variable-length types). For STObject and STArray
 // fields Value spans the entire nested content up to and including the matching
 // end marker.
 type Field struct {

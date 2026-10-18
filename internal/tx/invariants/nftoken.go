@@ -275,7 +275,7 @@ func checkNFTokenPageSLE(
 func checkNFTokenPageURIEmpty(data []byte) bool {
 	var found bool
 	_ = state.WalkFieldsDeep(data, func(f state.Field) error {
-		if f.TypeCode == 7 && f.FieldCode == 5 && len(f.Value) == 0 { // empty URI Blob
+		if f.TypeCode == 7 && f.FieldCode == 5 && len(f.Value) == 1 && f.Value[0] == 0 { // zero-length Blob prefix
 			found = true
 			return errStopURIWalk
 		}
@@ -305,14 +305,16 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 		if e.EntryType != entry.TypeNFTokenPage {
 			continue
 		}
+		var beforePage, afterPage *state.NFTokenPageData
+		var err error
 
 		// Check before state
 		if e.Before != nil {
-			page, err := state.ParseNFTokenPage(e.Before)
+			beforePage, err = state.ParseNFTokenPage(e.Before)
 			if err != nil {
 				return nftPageParseViolation(err)
 			}
-			bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, page, e.IsDelete)
+			bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, beforePage, e.IsDelete)
 			badLink = badLink || bl
 			badEntry = badEntry || be
 			badSort = badSort || bs
@@ -328,7 +330,7 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 			// Reference: rippled line 1098-1102
 			if e.IsDelete {
 				pageBits := andKey256(e.Key, nftPageMaskLocal)
-				if pageBits == nftPageMaskLocal && !isZeroKey256(page.PreviousPageMin) {
+				if pageBits == nftPageMaskLocal && !isZeroKey256(beforePage.PreviousPageMin) {
 					deletedFinalPage = true
 				}
 			}
@@ -336,11 +338,11 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 
 		// Check after state
 		if e.After != nil {
-			page, err := state.ParseNFTokenPage(e.After)
+			afterPage, err = state.ParseNFTokenPage(e.After)
 			if err != nil {
 				return nftPageParseViolation(err)
 			}
-			bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, page, false)
+			bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, afterPage, false)
 			badLink = badLink || bl
 			badEntry = badEntry || be
 			badSort = badSort || bs
@@ -355,15 +357,11 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 		// Check for lost NextPageMin link (modification, not deletion).
 		// If before has NextPageMin and after doesn't, and this is not the final page.
 		// Reference: rippled lines 1108-1121
-		if !e.IsDelete && e.Before != nil && e.After != nil {
+		if !e.IsDelete && beforePage != nil && afterPage != nil {
 			pageBits := andKey256(e.Key, nftPageMaskLocal)
 			if pageBits != nftPageMaskLocal {
-				beforePage, errB := state.ParseNFTokenPage(e.Before)
-				afterPage, errA := state.ParseNFTokenPage(e.After)
-				if errB == nil && errA == nil {
-					if !isZeroKey256(beforePage.NextPageMin) && isZeroKey256(afterPage.NextPageMin) {
-						deletedLink = true
-					}
+				if !isZeroKey256(beforePage.NextPageMin) && isZeroKey256(afterPage.NextPageMin) {
+					deletedLink = true
 				}
 			}
 		}
