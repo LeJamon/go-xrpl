@@ -275,7 +275,7 @@ func checkNFTokenPageSLE(
 func checkNFTokenPageURIEmpty(data []byte) bool {
 	var found bool
 	_ = state.WalkFieldsDeep(data, func(f state.Field) error {
-		if f.TypeCode == 7 && f.FieldCode == 5 && len(f.Value) == 0 { // empty URI Blob
+		if f.TypeCode == 7 && f.FieldCode == 5 && len(f.Value) == 1 && f.Value[0] == 0 { // zero-length Blob prefix
 			found = true
 			return errStopURIWalk
 		}
