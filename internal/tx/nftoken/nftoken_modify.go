@@ -170,9 +170,11 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) ter.Result {
 	if n.HasField("URI") || n.URI != "" {
 		// URI is present — set it
 		page.NFTokens[tokenIdx].URI = n.URI
+		page.NFTokens[tokenIdx].HasURI = true
 	} else {
 		// URI is absent — remove it
 		page.NFTokens[tokenIdx].URI = ""
+		page.NFTokens[tokenIdx].HasURI = false
 	}
 
 	// Serialize and update the page

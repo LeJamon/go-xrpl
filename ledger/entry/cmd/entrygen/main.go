@@ -92,6 +92,7 @@ type fieldRender struct {
 	SetterDefaultExpr string
 	SetterGoType      string
 	SetterAssignment  string
+	MapValue          string
 	Clearable         bool
 	Compound          *compoundRender
 }
@@ -312,6 +313,7 @@ func makeFieldRender(f schema.Field, fi *definitions.FieldInstance, entryName, b
 		Style:            f.Style,
 		DeferredRequired: f.DeferredRequired,
 		Clearable:        f.Style != schema.StyleRequired,
+		MapValue:         receiver + "." + f.Name,
 	}
 	// Balance on AccountRoot is always XRP. Other Amount fields may be IOU.
 	if entryName == "AccountRoot" && f.Name == "Balance" {
@@ -386,6 +388,11 @@ func makeFieldRender(f schema.Field, fi *definitions.FieldInstance, entryName, b
 		fr.GoType = "[]any"
 		fr.Comparer = "Deep"
 		fr.DecodeKind = "starray"
+		if entryName == "NFTokenPage" && f.Name == "NFTokens" {
+			fr.GoType = "[]NFTokenValue"
+			fr.Comparer = "NFTokens"
+			fr.MapValue = "nftokensToAny(" + fr.MapValue + ")"
+		}
 	case "Issue":
 		fr.GoType = "any"
 		fr.Comparer = "Deep"
@@ -416,6 +423,9 @@ func makeFieldRender(f schema.Field, fi *definitions.FieldInstance, entryName, b
 	fr.SetterDefaultExpr = setterDefaultExprFor(fr)
 	fr.SetterGoType = fr.GoType
 	fr.SetterAssignment = "value"
+	if entryName == "NFTokenPage" && f.Name == "NFTokens" {
+		fr.SetterAssignment = "cloneNFTokenValueSlice(value)"
+	}
 	switch fr.XRPLType {
 	case "UInt8":
 		fr.SetterGoType = "uint8"
@@ -578,7 +588,7 @@ func defaultExprFor(fr fieldRender, value string) string {
 		return "numberIsDefault(" + g + ")"
 	case fr.XRPLType == "XChainBridge":
 		return "xchainBridgeIsDefault(" + g + ")"
-	case fr.GoType == "[]string" || fr.GoType == "[]any" || fr.GoType == "map[string]any":
+	case fr.XRPLType == "Vector256" || fr.XRPLType == "STArray" || fr.XRPLType == "STObject":
 		// STVector256 / STArray / STObject: default == empty.
 		return "len(" + g + ") == 0"
 	case fr.GoType == "uint32" || fr.GoType == "int":
@@ -680,7 +690,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+{{ if ne .Name "NFTokenPage" }}	"github.com/LeJamon/go-xrpl/codec/binarycodec"{{ end }}
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -838,6 +848,26 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}Value(value {{ .Com
 		return err
 	}
 	{{ $.Receiver }}.Set{{ .GoField }}(encoded)
+	return nil
+}
+
+{{ else if and (eq $.Name "NFTokenPage") (eq .Name "NFTokens") }}// GetNFTokens returns independently owned typed nested objects.
+func ({{ $.Receiver }} *{{ $.StructName }}) GetNFTokens() ([]NFTokenValue, error) {
+	if {{ $.Receiver }} == nil {
+		return nil, nil
+	}
+	if err := validateNFTokens({{ $.Receiver }}.NFTokens); err != nil {
+		return nil, err
+	}
+	return cloneNFTokenValueSlice({{ $.Receiver }}.NFTokens), nil
+}
+
+// SetNFTokensValue assigns independently owned typed nested objects.
+func ({{ $.Receiver }} *{{ $.StructName }}) SetNFTokensValue(value []NFTokenValue) error {
+	if err := validateNFTokens(value); err != nil {
+		return err
+	}
+	{{ $.Receiver }}.SetNFTokens(value)
 	return nil
 }
 
@@ -1199,7 +1229,11 @@ func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error
 				return err
 			}
 {{- else if eq $first.XRPLType "STArray" }}
+{{- if and (eq $.Name "NFTokenPage") (eq $first.FieldName "NFTokens") }}
+			val, err := sr.readNFTokens()
+{{- else }}
 			val, err := sr.readSTArray({{ printf "%q" $first.FieldName }})
+{{- end }}
 			if err != nil {
 				return err
 			}
@@ -1276,12 +1310,12 @@ func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error
 func ({{ .Receiver }} *{{ .StructName }}) emitAll(out map[string]any, skipDefault bool) {
 {{- range .Fields }}{{ if eq .Meta 0 }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} != 0{{ if .DefaultExpr }} && !(skipDefault && {{ .DefaultExpr }}){{ end }} {
-		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+		out[{{ printf "%q" .Name }}] = {{ .MapValue }}
 	}
 {{- end }}{{ end }}
 {{- range .Fields }}{{ if eq .Meta 1 }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} != 0{{ if .DefaultExpr }} && !(skipDefault && {{ .DefaultExpr }}){{ end }} {
-		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+		out[{{ printf "%q" .Name }}] = {{ .MapValue }}
 	}
 {{- end }}{{ end }}
 }
@@ -1318,7 +1352,7 @@ func ({{ .Receiver }} *{{ .StructName }}) EmitPreviousFields(prev Entry, out map
 func ({{ .Receiver }} *{{ .StructName }}) EmitChangeOrigFields(out map[string]any) {
 {{- range .Fields }}{{ if eq .Meta 0 }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+		out[{{ printf "%q" .Name }}] = {{ .MapValue }}
 	}
 {{- end }}{{ end }}
 }
@@ -1330,7 +1364,7 @@ func ({{ .Receiver }} *{{ .StructName }}) EmitDeleteFinalFields(out map[string]a
 	{{ .Receiver }}.emitAll(out, false)
 {{- range .Fields }}{{ if eq .Meta 2 }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+		out[{{ printf "%q" .Name }}] = {{ .MapValue }}
 	}
 {{- end }}{{ end }}
 }
@@ -1366,7 +1400,7 @@ func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
 	}
 {{- range .Fields }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+		out[{{ printf "%q" .Name }}] = {{ .MapValue }}
 	}
 {{- end }}
 	return out
@@ -1378,6 +1412,9 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 	if err := {{ .Receiver }}.validateRequired(); err != nil {
 		return nil, err
 	}
+{{- if eq .Name "NFTokenPage" }}
+	return {{ .Receiver }}.encodeNFTokens()
+{{- else }}
 {{- range .Fields }}{{ if eq .XRPLType "STArray" }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
 		if err := validateSTArrayForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
@@ -1407,6 +1444,7 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 	}
 {{- end }}{{ end }}
 	return binarycodec.EncodeBytes(out)
+{{- end }}
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
