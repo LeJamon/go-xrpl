@@ -731,6 +731,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	if lpTokensToRedeem.IsZero() || math.fromAmount(lpTokensToRedeem).Cmp(math.fromAmount(lpTokensHeld)) > 0 {
 		return ter.TecAMM_INVALID_TOKENS
 	}
+	if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1) && isGreater(lpTokensToRedeem, lptBalance) {
+		return ter.TecINTERNAL
+	}
 
 	// Verify withdrawal doesn't exceed balances
 	if isGreater(withdrawAmount1, assetBalance1) {
