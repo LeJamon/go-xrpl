@@ -2,10 +2,12 @@ package peermanagement
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
@@ -891,6 +893,80 @@ func TestServeSchedulerRetainedBytesStayChargedDuringDiscard(t *testing.T) {
 	s.Close()
 	if firstDiscarded.Load() != 1 || secondDiscarded.Load() != 1 {
 		t.Fatalf("discard counts = first %d second %d, want one each", firstDiscarded.Load(), secondDiscarded.Load())
+	}
+}
+
+func TestServeSchedulerDiscardReleasesCompletedRequests(t *testing.T) {
+	for _, shutdown := range []string{"cancel_peer", "close"} {
+		for _, outcome := range []string{"return", "panic"} {
+			t.Run(shutdown+"/"+outcome, func(t *testing.T) {
+				const requestBytes = 1 << 20
+				s := NewServeScheduler(context.Background(), ServeSchedulerConfig{
+					Workers:       1,
+					MaxPending:    2,
+					PerPeerQueue:  2,
+					PerPeerActive: 1,
+					MaxBytes:      requestBytes + 1,
+				})
+				defer s.Close()
+				request := func() weak.Pointer[InboundMessage] {
+					msg := &InboundMessage{Payload: make([]byte, requestBytes)}
+					if !s.SubmitOwnedBytes(context.Background(), 1, requestBytes, func(context.Context) {
+						runtime.KeepAlive(msg)
+					}, func() {
+						_ = msg.Close()
+						if outcome == "panic" {
+							panic("discard failure")
+						}
+					}) {
+						t.Fatal("first request rejected")
+					}
+					return weak.Make(msg)
+				}()
+				runtime.GC()
+				if request.Value() == nil {
+					t.Fatal("queued request was not retained")
+				}
+
+				discardStarted := make(chan struct{})
+				releaseDiscard := make(chan struct{})
+				defer close(releaseDiscard)
+				if !s.SubmitOwnedBytes(context.Background(), 1, 1, func(context.Context) {}, func() {
+					close(discardStarted)
+					<-releaseDiscard
+				}) {
+					t.Fatal("second request rejected")
+				}
+				discardDone := make(chan struct{})
+				go func() {
+					defer close(discardDone)
+					if shutdown == "cancel_peer" {
+						s.CancelPeer(1)
+					} else {
+						s.Close()
+					}
+				}()
+				t.Cleanup(func() {
+					select {
+					case <-discardDone:
+					case <-time.After(time.Second):
+						t.Error("discard did not finish")
+					}
+				})
+				select {
+				case <-discardStarted:
+				case <-time.After(time.Second):
+					t.Fatal("second discard did not start")
+				}
+				if got := s.Snapshot(); got.RetainedBytes != 1 || got.Queued != 0 || got.Active != 0 {
+					t.Fatalf("during second discard snapshot = %+v, want only its byte charge", got)
+				}
+				runtime.GC()
+				if request.Value() != nil {
+					t.Fatal("completed request retained after its byte charge was released")
+				}
+			})
+		}
 	}
 }
 

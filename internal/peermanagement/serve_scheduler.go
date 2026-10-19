@@ -472,7 +472,8 @@ func (s *ServeScheduler) discardQueuedTask(task serveTask) {
 }
 
 func (s *ServeScheduler) discardQueuedTasks(tasks []serveTask) {
-	for _, task := range tasks {
+	for i, task := range tasks {
+		tasks[i] = serveTask{}
 		func() {
 			defer s.disposalWG.Done()
 			s.discardQueuedTask(task)
