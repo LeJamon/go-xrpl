@@ -3,6 +3,7 @@
 package memorydb
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,21 @@ func New() *MemDatabase {
 // Get retrieves the value for the given key.
 // Returns kvstore.ErrNotFound if the key does not exist.
 func (m *MemDatabase) Get(key []byte) ([]byte, error) {
+	return m.get(key, -1)
+}
+
+// GetBounded checks the value size before making a caller-owned copy.
+func (m *MemDatabase) GetBounded(ctx context.Context, key []byte, maxBytes int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if maxBytes < 0 {
+		return nil, kvstore.ErrValueTooLarge
+	}
+	return m.get(key, maxBytes)
+}
+
+func (m *MemDatabase) get(key []byte, maxBytes int) ([]byte, error) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 	if m.closed {
@@ -35,6 +51,9 @@ func (m *MemDatabase) Get(key []byte) ([]byte, error) {
 	val, ok := m.db[string(key)]
 	if !ok {
 		return nil, kvstore.ErrNotFound
+	}
+	if maxBytes >= 0 && len(val) > maxBytes {
+		return nil, kvstore.ErrValueTooLarge
 	}
 	// Return a copy to prevent external mutation
 	result := make([]byte, len(val))

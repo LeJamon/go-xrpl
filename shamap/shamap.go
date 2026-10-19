@@ -316,6 +316,82 @@ func (sm *SHAMap) readChild(ctx context.Context, inner *innerNode, branch int, r
 	return installed, nil
 }
 
+// readChildForWire is the bounded serving read path. It checks retained clean
+// records before materializing them and requires the Family's strict bounded
+// fetch capability for a cold node. The wire walker never falls back to
+// access.fetch here: an unbounded backend read would defeat the reply budget.
+func (sm *SHAMap) readChildForWire(ctx context.Context, inner *innerNode, branch int, maxWireBytes int) (mapNode, error) {
+	child, hash, hasBranch := inner.LoadChild(branch)
+	if child != nil {
+		return child, nil
+	}
+
+	sm.backing.mu.RLock()
+	access := sm.backing.access
+	sm.backing.mu.RUnlock()
+	if !access.available() {
+		return nil, nil
+	}
+	if !hasBranch || isZeroHash(hash) {
+		return nil, nil
+	}
+
+	var (
+		residency           *CleanResidency
+		residencyGeneration uint64
+	)
+	if access.residency != nil {
+		residency = access.residency
+		residencyGeneration = residency.beginRead()
+		if node, hit, tooLarge := residency.lookupForPolicyBounded(hash, ReadPeer, maxWireBytes); hit {
+			return node, nil
+		} else if tooLarge {
+			return nil, ErrWireBudget
+		}
+	}
+
+	maxPrefixBytes := maxBoundedPrefixBytes(maxWireBytes)
+	if maxPrefixBytes == 0 {
+		return nil, ErrWireBudget
+	}
+	data, exceeded, err := access.fetchBounded(ctx, hash, maxPrefixBytes)
+	if err != nil {
+		return nil, err
+	}
+	if exceeded || len(data) > maxPrefixBytes {
+		return nil, ErrWireBudget
+	}
+	if data == nil {
+		return nil, fmt.Errorf("child node: %w", &MissingNodeError{Hash: hash})
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	body, err := decodePrefixBody(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+	}
+	dataBytes, err := wireSizeForPrefixBody(body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+	}
+	if maxWireBytes < wireNodeIDSize || dataBytes > maxWireBytes-wireNodeIDSize {
+		return nil, ErrWireBudget
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	node, err := materializeAndVerifyPrefixNode(body, hash)
+	if err != nil {
+		return nil, err
+	}
+	if residency != nil {
+		residency.insertForPolicy(residencyGeneration, hash, body, ReadPeer)
+	}
+	return node, nil
+}
+
 // FamilyLoadCount returns how many nodes this map has loaded and verified from
 // its backing Family. The count includes temporary traversal nodes released
 // after their subtrees are proven complete.

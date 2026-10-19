@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -248,7 +249,9 @@ type Router struct {
 	// (handleGetLedger / serveTxSet, which builds the largest map — the
 	// 15k-tx tx-set — inline) off the Run message loop onto a small worker
 	// pool. It is nil before Run and after shutdown.
-	serveJobs chan *peermanagement.InboundMessage
+	serveJobs       chan *peermanagement.InboundMessage
+	serveMemory     *membudget.Account
+	serveReplyBytes int
 
 	// droppedServeJobs counts inbound get_ledger requests shed because the
 	// serve pool was saturated — the requesting peer retries elsewhere, so a
@@ -393,6 +396,8 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		txSetNet:               network.txSet,
 		acquisition:            network.acquisition,
 		serve:                  network.serve,
+		serveMemory:            newLedgerServeMemory(),
+		serveReplyBytes:        ledgerServeReplyBytes,
 		inbox:                  inbox,
 		logger:                 logger,
 		peerDisconnectWake:     make(chan struct{}, 1),

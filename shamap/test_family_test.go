@@ -28,6 +28,22 @@ func (f *memoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error)
 	return bytes.Clone(f.store[hash]), nil
 }
 
+func (f *memoryFamily) FetchBounded(ctx context.Context, hash [32]byte, maxPrefixBytes int) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	data := f.store[hash]
+	if data == nil {
+		return nil, false, nil
+	}
+	if len(data) > maxPrefixBytes {
+		return nil, true, nil
+	}
+	return bytes.Clone(data), false, nil
+}
+
 func (f *memoryFamily) FetchCached(ctx context.Context, hash [32]byte) ([]byte, error) {
 	return f.Fetch(ctx, hash)
 }

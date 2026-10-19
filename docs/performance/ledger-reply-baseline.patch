@@ -1,0 +1,42 @@
+--- internal/consensus/adaptor/router_serve_bench_test.go
++++ internal/consensus/adaptor/router_serve_bench_test.go
+@@ -58 +57,0 @@
+-	{name: "default"},
+@@ -309,5 +308,2 @@
+-		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+-		serve:           ledgerReplyBenchmarkNetwork{},
+-		serveMemory:     newLedgerServeMemory(),
+-		serveReplyBytes: ledgerServeReplyBytes,
+-		lifecycleCtx:    context.Background(),
++		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
++		serve:  ledgerReplyBenchmarkNetwork{},
+@@ -318,6 +314 @@
+-	workspace := router.reserveLedgerServeWorkspace(ctx, false)
+-	if workspace == nil {
+-		return nil, nil, false, nil
+-	}
+-	defer workspace.close()
+-
++	_ = ctx
+@@ -333 +324 @@
+-		nodes = buildShaMapReplyNodes(ctx, workspace.walkBudget(), f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
++		nodes = buildShaMapReplyNodes(f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
+@@ -335,3 +326,3 @@
+-		nodes = router.serveLedgerMapNodes(ctx, workspace, func() (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
+-	}
+-	frame, err := message.EncodeLedgerDataFrame(&message.LedgerData{
++		nodes = router.serveLedgerMapNodes(func() (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
++	}
++	frame, err := message.EncodeFrame(&message.LedgerData{
+@@ -341 +332 @@
+-	}, workspace.wire)
++	})
+@@ -444,3 +434,0 @@
+-	workspaceSnapshot := router.serveMemory.Snapshot()
+-	b.ReportMetric(float64(workspaceSnapshot.Peak), "managed-workspace-peak-bytes")
+-	b.ReportMetric(float64(workspaceSnapshot.Denied), "managed-workspace-denied")
+@@ -590,3 +578 @@
+-	workspaceSnapshot := router.serveMemory.Snapshot()
+-	b.ReportMetric(float64(workspaceSnapshot.Peak), "managed-workspace-peak-bytes")
+-	b.ReportMetric(float64(workspaceSnapshot.Denied), "managed-workspace-denied")
++

@@ -56,7 +56,7 @@ func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 			LedgerSeq:  seq,
 			NodeIDs:    ids,
 		}
-		nodes := router.serveLedgerMapNodes(l.StateMapSnapshot, req, 7, "state")
+		nodes := router.serveLedgerMapNodes(t.Context(), testLedgerServeWorkspace(), l.StateMapSnapshot, req, 7, "state")
 		require.NotEmpty(t, nodes, "serve must answer the requested state node IDs")
 		require.NoError(t, il.GotStateNodes(nodes))
 	}

@@ -36,6 +36,8 @@ func TestNodeMemoryAutomaticSizingAndProgressReserves(t *testing.T) {
 	cleanSnapshot := memory.cleanNodes.Snapshot()
 	nodeSnapshot := memory.nodes.Snapshot()
 	relaySnapshot := memory.relay.Snapshot()
+	require.Zero(t, memory.ledgerServe.Snapshot().Minimum)
+	require.Equal(t, uint64(adaptor.LedgerServeMemoryBytes), memory.ledgerServe.Snapshot().Maximum)
 	residual := initial.SharedAvailable + cleanSnapshot.Minimum + nodeSnapshot.Minimum + relaySnapshot.Minimum
 	require.Equal(t, residual/4, cleanSnapshot.Minimum)
 	require.Equal(t, residual/2, cleanSnapshot.Maximum)

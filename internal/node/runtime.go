@@ -620,6 +620,9 @@ func (r *nodeRuntime) configureConsensus() error {
 		// (issue #1158).
 		if router := r.consensus.Router; router != nil {
 			if r.memory != nil {
+				if err := router.SetLedgerServeMemoryBudget(r.memory.ledgerServe); err != nil {
+					return fmt.Errorf("configure ledger serving memory: %w", err)
+				}
 				if err := router.SetAcquisitionMemoryBudget(r.memory.acquisition.Limit(), r.memory.acquisition); err != nil {
 					return fmt.Errorf("configure acquisition memory: %w", err)
 				}

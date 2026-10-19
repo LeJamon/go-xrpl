@@ -6,6 +6,7 @@ package kvstoretest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
@@ -31,6 +32,7 @@ func RunConformance(t *testing.T, newStore NewStoreFunc) {
 		{"Overwrite", testOverwrite},
 		{"EmptyValue", testEmptyValue},
 		{"ValueIsolation", testValueIsolation},
+		{"BoundedRead", testBoundedRead},
 		{"Batch", testBatch},
 		{"BatchInterleaved", testBatchInterleaved},
 		{"BatchInputOwnership", testBatchInputOwnership},
@@ -56,6 +58,47 @@ func RunConformance(t *testing.T, newStore NewStoreFunc) {
 	t.Run("Closed", func(t *testing.T) {
 		testClosed(t, newStore(t))
 	})
+}
+
+func testBoundedRead(t *testing.T, store kvstore.KeyValueStore) {
+	reader, ok := store.(kvstore.BoundedReadingStore)
+	if !ok {
+		t.Skip("backend does not support bounded reads")
+	}
+	key := []byte("bounded")
+	value := bytes.Repeat([]byte{42}, 64<<10)
+	if err := store.Put(key, value); err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int{-1, 0, 1, len(value) - 1} {
+		got, err := reader.GetBounded(t.Context(), key, limit)
+		if got != nil || !errors.Is(err, kvstore.ErrValueTooLarge) {
+			t.Fatalf("limit %d: got %d bytes, err=%v", limit, len(got), err)
+		}
+	}
+	got, err := reader.GetBounded(t.Context(), key, len(value))
+	if err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("exact boundary: got %d bytes, err=%v", len(got), err)
+	}
+	got[0] ^= 0xff
+	again, err := reader.GetBounded(t.Context(), key, len(value))
+	if err != nil || !bytes.Equal(again, value) {
+		t.Fatalf("bounded read aliases store: err=%v", err)
+	}
+	if _, err := reader.GetBounded(t.Context(), []byte("absent"), 0); !errors.Is(err, kvstore.ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	if err := store.Put([]byte("empty"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := reader.GetBounded(t.Context(), []byte("empty"), 0); err != nil || len(got) != 0 {
+		t.Fatalf("empty: got %d bytes, err=%v", len(got), err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := reader.GetBounded(ctx, key, len(value)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled: %v", err)
+	}
 }
 
 func testPutGet(t *testing.T, store kvstore.KeyValueStore) {

@@ -64,6 +64,23 @@ func closedLedgerWithPayment(t *testing.T) *service.Service {
 // persists with the acquired ledger.
 func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	t.Parallel()
+	testServeLedgerTxBearingRoundTrip(t, testLedgerServeWorkspace(), false)
+}
+
+func TestServeLedger_TxBearing_BoundedRoundTrip(t *testing.T) {
+	for _, nodeDepth := range []bool{false, true} {
+		name := "legacy"
+		if nodeDepth {
+			name = "node_depth"
+		}
+		t.Run(name, func(t *testing.T) {
+			testServeLedgerTxBearingRoundTrip(t, &ledgerServeWorkspace{wire: 2048, nodes: 2}, nodeDepth)
+		})
+	}
+}
+
+func testServeLedgerTxBearingRoundTrip(t *testing.T, workspace *ledgerServeWorkspace, nodeDepth bool) {
+	t.Helper()
 	svc := closedLedgerWithPayment(t)
 
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
@@ -96,6 +113,18 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	require.NoError(t, il.GotBase(baseNodes))
 	require.False(t, il.IsComplete(), "must still need state + tx nodes after base")
 
+	encodeNodes := func(nodes []message.LedgerNode, kind message.LedgerInfoType) []message.LedgerNode {
+		if nodeDepth {
+			require.NoError(t, useLedgerNodeDepth(nodes))
+		}
+		frame, err := message.EncodeLedgerDataFrame(&message.LedgerData{
+			LedgerHash: hash[:], LedgerSeq: seq, InfoType: kind, Nodes: nodes,
+		}, workspace.wire)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(frame), workspace.wire)
+		_, decoded := decodeFrame(t, frame)
+		return decoded.(*message.LedgerData).Nodes
+	}
 	asReq := func(ids [][]byte) *message.GetLedger {
 		return &message.GetLedger{LedgerHash: hash[:], LedgerSeq: seq, NodeIDs: ids}
 	}
@@ -112,15 +141,15 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 			}
 		}
 		if len(stateIDs) > 0 {
-			nodes := router.serveLedgerMapNodes(l.StateMapSnapshot, asReq(stateIDs), 7, "state")
+			nodes := router.serveLedgerMapNodes(t.Context(), workspace, l.StateMapSnapshot, asReq(stateIDs), 7, "state")
 			require.NotEmpty(t, nodes, "serve must answer requested state nodes")
-			require.NoError(t, il.GotStateNodes(nodes))
+			require.NoError(t, il.GotStateNodes(encodeNodes(nodes, message.LedgerInfoAsNode)))
 			progressed = true
 		}
 		if len(txIDs) > 0 {
-			nodes := router.serveLedgerMapNodes(l.TxMapSnapshot, asReq(txIDs), 7, "tx")
+			nodes := router.serveLedgerMapNodes(t.Context(), workspace, l.TxMapSnapshot, asReq(txIDs), 7, "tx")
 			require.NotEmpty(t, nodes, "serve must answer requested tx nodes")
-			require.NoError(t, il.GotTransactionNodes(nodes))
+			require.NoError(t, il.GotTransactionNodes(encodeNodes(nodes, message.LedgerInfoTxNode)))
 			progressed = true
 		}
 		require.True(t, progressed, "acquisition stalled with neither tree complete")
