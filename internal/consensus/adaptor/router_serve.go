@@ -217,7 +217,9 @@ func (r *Router) handleGetLedger(ctx context.Context, msg *peermanagement.Inboun
 	if ctx.Err() != nil {
 		return
 	}
-	if err != nil || l == nil {
+	// Open-ledger snapshots can flush an unbounded dirty tree. Peer replies
+	// must use finalized ledgers, whose contents have a stable hash.
+	if err != nil || l == nil || l.IsOpen() {
 		// We don't have it — relay to a peer that advertises it, mirroring
 		// rippled's getLedger relay. Falls through to a silent drop when the
 		// request isn't relayable or no peer qualifies.

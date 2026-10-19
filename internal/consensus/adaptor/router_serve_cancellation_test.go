@@ -27,6 +27,7 @@ type routerServeFetchGate struct {
 	block          atomic.Bool
 	noncancellable bool
 	fetches        atomic.Int32
+	stores         atomic.Int32
 
 	started     chan struct{}
 	canceled    chan struct{}
@@ -82,6 +83,7 @@ func (f *routerServeFetchGate) waitFetch(ctx context.Context) (context.Context, 
 }
 
 func (f *routerServeFetchGate) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	f.stores.Add(1)
 	return f.inner.StoreBatch(ctx, entries)
 }
 

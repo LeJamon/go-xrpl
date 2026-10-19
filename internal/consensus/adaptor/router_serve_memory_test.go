@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,6 +192,62 @@ func TestLedgerServeWorkspaceEarlyReturns(t *testing.T) {
 			require.Positive(t, stats.Peak)
 			require.Zero(t, stats.Used)
 			require.Zero(t, stats.InvalidReleases)
+		})
+	}
+}
+
+func TestLedgerServeOpenLedgerDoesNotFlushDirtyMaps(t *testing.T) {
+	for _, kind := range []message.LedgerInfoType{message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode} {
+		t.Run(fmt.Sprint(kind), func(t *testing.T) {
+			fixture := newRouterServeFixture(t, false)
+			svc := fixture.router.adaptor.LedgerService()
+			open := svc.GetOpenLedger()
+			require.NotNil(t, open)
+			require.True(t, open.IsOpen())
+			open.SetSHAMapFamily(fixture.family)
+			require.NoError(t, open.Insert(keylet.Keylet{Key: [32]byte{0x42}}, []byte("dirty state")))
+			require.NoError(t, open.AddTransaction([32]byte{0x57}, []byte("dirty transaction")))
+			found, err := svc.GetLedgerBySequence(open.Sequence())
+			require.NoError(t, err)
+			require.Same(t, open, found, "sequence lookup exposes the current open view")
+			stores := fixture.family.stores.Load()
+
+			fixture.sender.ledgerPeer, fixture.sender.ledgerOK = 99, true
+			query := message.QueryTypeIndirect
+			req := &message.GetLedger{
+				InfoType: kind, LedgerSeq: open.Sequence(),
+				NodeIDs: [][]byte{rootNodeID()}, QueryType: &query,
+			}
+			for range 2 {
+				fixture.router.handleMessage(&peermanagement.InboundMessage{
+					PeerID: 7, Type: message.TypeGetLedger, Payload: encodePayload(t, req),
+				})
+				require.Empty(t, fixture.sender.sentFrames(), "open-ledger sequence requests must neither serve nor relay")
+				require.Empty(t, fixture.sender.badDataCalls())
+				require.Equal(t, stores, fixture.family.stores.Load(), "serving must not persist the dirty open view")
+				require.Zero(t, fixture.router.serveMemory.Snapshot().Used)
+				require.Zero(t, fixture.router.serveMemory.Snapshot().InvalidReleases)
+			}
+
+			_, err = open.StateMapSnapshotContext(t.Context())
+			require.NoError(t, err)
+			require.Greater(t, fixture.family.stores.Load(), stores, "fixture must retain dirty backed state")
+			stores = fixture.family.stores.Load()
+			_, err = open.TxMapSnapshotContext(t.Context())
+			require.NoError(t, err)
+			require.Greater(t, fixture.family.stores.Load(), stores, "fixture must retain dirty backed transactions")
+
+			fixture.router.handleMessage(&peermanagement.InboundMessage{
+				PeerID: 7, Type: message.TypeGetLedger,
+				Payload: encodePayload(t, &message.GetLedger{
+					InfoType: message.LedgerInfoBase, LedgerSeq: svc.GetClosedLedger().Sequence(),
+				}),
+			})
+			sent := fixture.sender.sentFrames()
+			require.Len(t, sent, 1, "closed-ledger serving remains available")
+			msgType, decoded := decodeFrame(t, sent[0].frame)
+			require.Equal(t, message.TypeLedgerData, msgType)
+			require.Equal(t, svc.GetClosedLedger().Sequence(), decoded.(*message.LedgerData).LedgerSeq)
 		})
 	}
 }
