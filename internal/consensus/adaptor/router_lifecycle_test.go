@@ -52,7 +52,10 @@ func TestRouterRunJoinsOwnedTasksOnInboxClose(t *testing.T) {
 	router.lifecycleMu.RLock()
 	require.Equal(t, routerLifecycleStopped, router.lifecycleState)
 	require.Nil(t, router.txJobs)
-	require.Nil(t, router.serveJobs)
+	for _, pool := range router.servePools {
+		require.Zero(t, pool.Snapshot().Queued)
+		require.Zero(t, pool.Snapshot().Active)
+	}
 	router.lifecycleMu.RUnlock()
 	require.ErrorIs(t, router.lifecycleContext().Err(), context.Canceled)
 }

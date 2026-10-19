@@ -291,8 +291,13 @@ func TestRouterIssue2080_ShutdownCancelsServeFetchAndJoins(t *testing.T) {
 	require.Empty(t, fixture.sender.sentFrames(), "a canceled serve must not emit a reply")
 	fixture.router.lifecycleMu.RLock()
 	require.Equal(t, routerLifecycleStopped, fixture.router.lifecycleState)
-	require.Nil(t, fixture.router.serveJobs)
 	fixture.router.lifecycleMu.RUnlock()
+	metrics := fixture.router.LedgerServeMetrics()
+	for _, stats := range []peermanagement.ServeSchedulerStats{metrics.Ledger, metrics.TxSet} {
+		require.Zero(t, stats.Queued)
+		require.Zero(t, stats.Active)
+		require.Zero(t, stats.RetainedBytes)
+	}
 }
 
 func TestRouterIssue2080_NoncancellableServeKeepsJoinUntilReadReturns(t *testing.T) {
@@ -332,7 +337,7 @@ func TestRouterIssue2080_NoncancellableServeKeepsJoinUntilReadReturns(t *testing
 
 func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBoundary(t *testing.T) {
 	oldWorkerCount := serveWorkerCount
-	serveWorkerCount = 1
+	serveWorkerCount = 2
 	t.Cleanup(func() { serveWorkerCount = oldWorkerCount })
 
 	fixture := newRouterServeFixture(t, true)
@@ -398,9 +403,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	queued := receive()
 	require.True(t, fixture.router.handleMessage(queued))
 	require.Eventually(t, func() bool {
-		fixture.router.lifecycleMu.RLock()
-		defer fixture.router.lifecycleMu.RUnlock()
-		return fixture.router.serveJobs != nil && len(fixture.router.serveJobs) == 1
+		return fixture.router.LedgerServeMetrics().Ledger.Queued == 1
 	}, time.Second, time.Millisecond, "second production-ingress request did not remain queued")
 	queuedHeld := budget.Used()
 	require.Greater(t, queuedHeld, runningHeld)
@@ -446,7 +449,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 
 func TestRouterIssue2080_ServeAdmissionRaceWithPeerDisconnect(t *testing.T) {
 	oldWorkerCount := serveWorkerCount
-	serveWorkerCount = 1
+	serveWorkerCount = 2
 	t.Cleanup(func() { serveWorkerCount = oldWorkerCount })
 
 	fixture := newRouterServeFixture(t, false)
@@ -486,9 +489,8 @@ func TestRouterIssue2080_ServeAdmissionRaceWithPeerDisconnect(t *testing.T) {
 		t.Fatal("admission race did not cancel the running serve")
 	}
 	require.Eventually(t, func() bool {
-		fixture.router.lifecycleMu.RLock()
-		defer fixture.router.lifecycleMu.RUnlock()
-		return fixture.router.serveJobs != nil && len(fixture.router.serveJobs) == 0
+		stats := fixture.router.LedgerServeMetrics().Ledger
+		return stats.Queued == 0 && stats.Active == 0 && stats.RetainedBytes == 0
 	}, time.Second, time.Millisecond, "admission race left serve jobs queued after disconnect")
 	require.Empty(t, fixture.sender.sentFrames(), "admission race must not produce a late peer reply")
 	cancel()

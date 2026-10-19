@@ -19,7 +19,12 @@ import (
 func TestGetLedgerAdmissionRejectsInvalidRequestsBeforeQueue(t *testing.T) {
 	r, recorder := makeRouterWithRelayRecorder(t)
 	r.lifecycleState = routerLifecycleRunning
-	r.serveJobs = make(chan *ledgerServeJob, 8)
+	r.servePools = newLedgerServePools(context.Background(), 2)
+	t.Cleanup(func() {
+		for _, pool := range r.servePools {
+			pool.Close()
+		}
+	})
 
 	tests := []struct {
 		name   string
@@ -56,7 +61,7 @@ func TestGetLedgerAdmissionRejectsInvalidRequestsBeforeQueue(t *testing.T) {
 				Payload: encodePayload(t, test.req),
 			}
 			require.False(t, r.handleMessage(msg))
-			require.Empty(t, r.serveJobs, "invalid requests must not enter the serve queue")
+			require.Zero(t, pendingLedgerServeJobs(r), "invalid requests must not enter the serve queue")
 			calls := recorder.badDataCalls()
 			require.Len(t, calls, i+1)
 			require.Equal(t, test.reason, calls[i].reason)
@@ -138,8 +143,12 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 
 	r, recorder := makeRouterWithRelayRecorder(t)
 	r.lifecycleState = routerLifecycleRunning
-	r.serveJobs = make(chan *ledgerServeJob, 2)
-	t.Cleanup(func() { r.drainLedgerServeJobs(r.serveJobs) })
+	r.servePools = newLedgerServePools(context.Background(), 2)
+	t.Cleanup(func() {
+		for _, pool := range r.servePools {
+			pool.Close()
+		}
+	})
 	ledger := r.adaptor.LedgerService().GetClosedLedger()
 	hash := ledger.Hash()
 	sendWithCookie := func(infoType message.LedgerInfoType, count int, cookie *uint64) {
@@ -175,11 +184,9 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 					continue
 				}
 				r.handleInboundMessage(inbound)
-				require.Len(t, r.serveJobs, 1)
-				queued := <-r.serveJobs
-				t.Cleanup(func() { r.finishLedgerServeJob(queued) })
-				job := queued.takeMessage()
-				t.Cleanup(func() { require.NoError(t, job.Close()) })
+				require.Equal(t, 1, pendingLedgerServeJobs(r))
+				job := inbound
+				t.Cleanup(func() { r.cancelPeerServes(job.PeerID) })
 				decoded, err := message.Decode(job.Type, job.Payload)
 				require.NoError(t, err)
 				request := decoded.(*message.GetLedger)
@@ -203,7 +210,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 					continue
 				}
 				r.handleInboundMessage(inbound)
-				require.Empty(t, r.serveJobs)
+				require.Zero(t, pendingLedgerServeJobs(r))
 				return
 			case <-timeout.C:
 				t.Fatal("rejected ledger request did not reach the router")
@@ -216,7 +223,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 		send(infoType, 12_289)
 		send(infoType, 12_288)
 		job := receive(infoType, 12_288)
-		require.NoError(t, job.Close())
+		r.cancelPeerServes(job.PeerID)
 		var invalid, trivial int
 		for _, charge := range journal.snapshot()[before:] {
 			if charge.context == "wire-invalid" {
@@ -256,7 +263,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	send(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
 	oversized := receive(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
 	r.handleGetLedger(context.Background(), oversized)
-	require.NoError(t, oversized.Close())
+	r.cancelPeerServes(oversized.PeerID)
 	var moderate, trivial int
 	for _, charge := range journal.snapshot()[before:] {
 		if !strings.Contains(charge.context, "get-ledger-") && !strings.Contains(charge.context, message.TypeGetLedger.String()) {
@@ -277,7 +284,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	sendWithCookie(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1, &zeroCookie)
 	cookied := receive(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
 	r.handleGetLedger(context.Background(), cookied)
-	require.NoError(t, cookied.Close())
+	r.cancelPeerServes(cookied.PeerID)
 	moderate, trivial = 0, 0
 	for _, charge := range journal.snapshot()[before:] {
 		if !strings.Contains(charge.context, "get-ledger-") && !strings.Contains(charge.context, message.TypeGetLedger.String()) {
@@ -296,7 +303,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	send(message.LedgerInfoBase, 12_289)
 	base := receive(message.LedgerInfoBase, 12_289)
 	r.handleGetLedger(context.Background(), base)
-	require.NoError(t, base.Close())
+	r.cancelPeerServes(base.PeerID)
 	require.Len(t, recorder.sentFrames(), 1)
 	_, decoded := decodeFrame(t, recorder.sentFrames()[0].frame)
 	reply := decoded.(*message.LedgerData)
@@ -304,4 +311,9 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	require.Equal(t, hash[:], reply.LedgerHash)
 	require.NotEmpty(t, reply.Nodes)
 	require.Empty(t, recorder.badDataCalls())
+}
+
+func pendingLedgerServeJobs(r *Router) int {
+	stats := r.LedgerServeMetrics()
+	return stats.Ledger.Queued + stats.TxSet.Queued
 }

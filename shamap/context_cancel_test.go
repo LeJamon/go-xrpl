@@ -3,6 +3,7 @@ package shamap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -77,6 +78,27 @@ func cancelAfterFetchStarts(t *testing.T, started <-chan struct{}, cancel contex
 }
 
 func TestLazyTraversalContextCancellation(t *testing.T) {
+	for _, depth := range []int{0, 1} {
+		t.Run(fmt.Sprintf("wire nodes at depth %d", depth), func(t *testing.T) {
+			lazy, family, key := newCancelFetchMap(t, 1)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			path := [32]byte{}
+			if depth != 0 {
+				path = key
+			}
+			result := make(chan error, 1)
+			go func() {
+				nodes, err := lazy.GetNodeFatByPathContext(ctx, path, depth, 4, true)
+				if len(nodes) != 0 {
+					err = errors.New("canceled wire traversal returned partial nodes")
+				}
+				result <- err
+			}()
+			cancelAfterFetchStarts(t, family.started, cancel, result)
+		})
+	}
+
 	t.Run("missing nodes", func(t *testing.T) {
 		lazy, family, _ := newCancelFetchMap(t, 1)
 		if err := lazy.StartSync(); err != nil {

@@ -7,11 +7,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func TestMetricsRegistry(t *testing.T) {
+	cleanup := observability.SetLedgerServeMetrics(func() observability.LedgerServeMetricsSnapshot {
+		return observability.LedgerServeMetricsSnapshot{}
+	})
+	defer cleanup()
+
 	reg := newMetricsRegistry()
 	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	defer srv.Close()
@@ -44,6 +50,8 @@ func TestMetricsRegistry(t *testing.T) {
 		"goxrpl_sched_latency_milliseconds",
 		"goxrpl_io_latency_events_total",
 		"goxrpl_replay_fault_duration_seconds",
+		"goxrpl_router_serve_queued",
+		"goxrpl_router_serve_queue_wait_seconds",
 	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("metrics output missing %s:\n%s", name, out)
@@ -51,5 +59,10 @@ func TestMetricsRegistry(t *testing.T) {
 	}
 	if want := "version=\"" + version.Version + "\""; !strings.Contains(out, want) {
 		t.Errorf("goxrpl_build_info missing label %s:\n%s", want, out)
+	}
+	for _, class := range []string{"ledger", "txset"} {
+		if want := "goxrpl_router_serve_queued{class=\"" + class + "\"}"; !strings.Contains(out, want) {
+			t.Errorf("router serving metrics missing class %s:\n%s", class, out)
+		}
 	}
 }
