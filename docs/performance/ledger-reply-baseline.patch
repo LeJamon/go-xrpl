@@ -18,24 +18,29 @@
 -	defer workspace.close()
 -
 +	_ = ctx
-@@ -333 +324 @@
--		nodes = buildShaMapReplyNodes(ctx, workspace.walkBudget(), f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
+@@ -332 +322,0 @@
+-	var err error
+@@ -334 +324 @@
+-		nodes, err = buildShaMapReplyNodes(ctx, workspace.walkBudget(), f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
 +		nodes = buildShaMapReplyNodes(f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
-@@ -335,3 +326,3 @@
--		nodes = router.serveLedgerMapNodes(ctx, workspace, func() (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
+@@ -336,6 +326,3 @@
+-		nodes = router.serveLedgerMapNodes(ctx, workspace, func(context.Context) (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
+-	}
+-	if err != nil {
+-		return nil, nil, true, err
 -	}
 -	frame, err := message.EncodeLedgerDataFrame(&message.LedgerData{
 +		nodes = router.serveLedgerMapNodes(func() (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
 +	}
 +	frame, err := message.EncodeFrame(&message.LedgerData{
-@@ -341 +332 @@
+@@ -345 +332 @@
 -	}, workspace.wire)
 +	})
-@@ -444,3 +434,0 @@
+@@ -448,3 +434,0 @@
 -	workspaceSnapshot := router.serveMemory.Snapshot()
 -	b.ReportMetric(float64(workspaceSnapshot.Peak), "managed-workspace-peak-bytes")
 -	b.ReportMetric(float64(workspaceSnapshot.Denied), "managed-workspace-denied")
-@@ -590,3 +578 @@
+@@ -594,3 +578 @@
 -	workspaceSnapshot := router.serveMemory.Snapshot()
 -	b.ReportMetric(float64(workspaceSnapshot.Peak), "managed-workspace-peak-bytes")
 -	b.ReportMetric(float64(workspaceSnapshot.Denied), "managed-workspace-denied")

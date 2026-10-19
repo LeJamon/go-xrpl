@@ -30,7 +30,7 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 	}
 	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
 	r.txSetLearnJobs = make(chan txSetLearnJob, txSetLearnQueueDepth)
-	r.serveJobs = make(chan *peermanagement.InboundMessage, serveQueueDepth)
+	r.serveJobs = make(chan *ledgerServeJob, serveQueueDepth)
 	if r.lifecycleReady == nil {
 		r.lifecycleReady = make(chan struct{})
 	}
@@ -74,11 +74,8 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 				select {
 				case <-ctx.Done():
 					return
-				case msg := <-serveJobs:
-					func() {
-						defer func() { _ = msg.Close() }()
-						r.handleGetLedger(msg)
-					}()
+				case job := <-serveJobs:
+					r.runLedgerServeJob(job)
 				}
 			}
 		}()
@@ -115,13 +112,13 @@ func (r *Router) stopLifecycle() {
 	r.lifecycleCancel = nil
 	cancel()
 	r.lifecycleMu.Unlock()
+	r.drainLedgerServeJobs(serveJobs)
 	if r.catchupReplay != nil {
 		r.catchupReplay.stopTasks()
 	}
 
 	r.lifecycleWG.Wait()
 	drainInboundMessages(txJobs)
-	drainInboundMessages(serveJobs)
 }
 
 func drainInboundMessages(messages <-chan *peermanagement.InboundMessage) {

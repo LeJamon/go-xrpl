@@ -329,10 +329,14 @@ func (f *ledgerReplyBenchmarkFixture) buildAndEncodeReply(ctx context.Context, r
 		QueryDepthSet: req.queryDepth != 0,
 	}
 	var nodes []message.LedgerNode
+	var err error
 	if infoType == message.LedgerInfoTsCandidate {
-		nodes = buildShaMapReplyNodes(ctx, workspace.walkBudget(), f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
+		nodes, err = buildShaMapReplyNodes(ctx, workspace.walkBudget(), f.tree, request.NodeIDs, req.queryDepth, fatLeaves, silentLogger{}, 1, "benchmark")
 	} else {
-		nodes = router.serveLedgerMapNodes(ctx, workspace, func() (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
+		nodes = router.serveLedgerMapNodes(ctx, workspace, func(context.Context) (*shamap.SHAMap, error) { return f.tree, nil }, request, 1, "benchmark")
+	}
+	if err != nil {
+		return nil, nil, true, err
 	}
 	frame, err := message.EncodeLedgerDataFrame(&message.LedgerData{
 		LedgerHash: f.root[:],

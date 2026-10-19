@@ -50,7 +50,6 @@ func TestLedgerServeWorkspaceRelease(t *testing.T) {
 				r := newTestRouter(&mockEngine{}, a, nil)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				r.lifecycleCtx = ctx
 				req := workspaceTxSetRequest(t, a)
 				if kind != message.LedgerInfoTsCandidate {
 					l := a.LedgerService().GetClosedLedger()
@@ -80,7 +79,7 @@ func TestLedgerServeWorkspaceRelease(t *testing.T) {
 						}
 					},
 				}
-				r.handleGetLedger(&peermanagement.InboundMessage{PeerID: 7, GetLedger: req})
+				r.handleGetLedger(ctx, &peermanagement.InboundMessage{PeerID: 7, GetLedger: req})
 				if outcome == "canceled_before_encode" {
 					require.Zero(t, sends)
 				} else {
@@ -123,7 +122,7 @@ func TestLedgerServeWorkspaceConcurrentCeiling(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			r.serveTxSet(7, req)
+			r.serveTxSet(t.Context(), 7, req)
 		}()
 	}
 	for range 2 {
@@ -182,7 +181,7 @@ func TestLedgerServeWorkspaceEarlyReturns(t *testing.T) {
 			}
 			var sends int
 			r.serve = &workspaceServeNetwork{send: func([]byte) error { sends++; return nil }}
-			r.handleGetLedger(&peermanagement.InboundMessage{PeerID: 7, GetLedger: req})
+			r.handleGetLedger(t.Context(), &peermanagement.InboundMessage{PeerID: 7, GetLedger: req})
 			if outcome == "empty" {
 				require.Equal(t, 1, sends)
 			} else {

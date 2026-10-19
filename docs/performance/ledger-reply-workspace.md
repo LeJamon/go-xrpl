@@ -88,6 +88,11 @@ baseline intentionally contains only `smallcap32`: the base benchmark did not
 have the production-default policy, so there is no valid default-policy
 before/after comparison.
 
+The optimized timing samples were collected at `196551f68`, before merging
+the cancellation changes from issue #2080. Post-integration checks exercise
+the benchmark and cancellation paths without repeating the timing study;
+the tables below describe the measured pre-integration revision.
+
 Starting from a clean checkout at `2f6217276`, copy the final benchmark and
 patch into that checkout, then apply the patch:
 

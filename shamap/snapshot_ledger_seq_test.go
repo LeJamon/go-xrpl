@@ -9,10 +9,9 @@ import (
 
 type snapshotSequenceFamily struct {
 	*memoryFamily
-	mu          sync.Mutex
-	entries     []FlushEntry
-	storeErr    error
-	storeCtxErr error
+	mu       sync.Mutex
+	entries  []FlushEntry
+	storeErr error
 }
 
 func newSnapshotSequenceFamily() *snapshotSequenceFamily {
@@ -22,7 +21,6 @@ func newSnapshotSequenceFamily() *snapshotSequenceFamily {
 func (f *snapshotSequenceFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
 	f.mu.Lock()
 	f.entries = append(f.entries, entries...)
-	f.storeCtxErr = ctx.Err()
 	err := f.storeErr
 	f.mu.Unlock()
 	if err != nil {
@@ -133,7 +131,7 @@ func TestSnapshotWithLedgerSeqFailurePreservesSource(t *testing.T) {
 	}
 }
 
-func TestSnapshotImmutableContextPassesCancellationToStore(t *testing.T) {
+func TestSnapshotImmutableContextPreCanceledSkipsStore(t *testing.T) {
 	family := newSnapshotSequenceFamily()
 	sm, err := NewBacked(TypeState, family)
 	if err != nil {
@@ -148,10 +146,7 @@ func TestSnapshotImmutableContextPassesCancellationToStore(t *testing.T) {
 	if _, err := sm.SnapshotImmutableContext(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("SnapshotImmutableContext error = %v, want context.Canceled", err)
 	}
-	family.mu.Lock()
-	storeCtxErr := family.storeCtxErr
-	family.mu.Unlock()
-	if !errors.Is(storeCtxErr, context.Canceled) {
-		t.Fatalf("StoreBatch context error = %v, want context.Canceled", storeCtxErr)
+	if entries := family.takeEntries(); len(entries) != 0 {
+		t.Fatalf("pre-canceled snapshot passed %d entries to StoreBatch", len(entries))
 	}
 }
