@@ -16,9 +16,6 @@ func (sm *SHAMap) SerializeRoot() ([]byte, error) {
 
 // SerializeRootContext is the cancellation-aware form of SerializeRoot.
 func (sm *SHAMap) SerializeRootContext(ctx context.Context) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -138,9 +135,6 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 
 // GetNodeFatByPathContext is the cancellation-aware form of GetNodeFatByPath.
 func (sm *SHAMap) GetNodeFatByPathContext(ctx context.Context, wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

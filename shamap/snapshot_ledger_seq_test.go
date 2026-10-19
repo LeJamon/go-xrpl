@@ -9,10 +9,9 @@ import (
 
 type snapshotSequenceFamily struct {
 	*memoryFamily
-	mu          sync.Mutex
-	entries     []FlushEntry
-	storeErr    error
-	storeCtxErr error
+	mu       sync.Mutex
+	entries  []FlushEntry
+	storeErr error
 }
 
 func newSnapshotSequenceFamily() *snapshotSequenceFamily {
@@ -22,7 +21,6 @@ func newSnapshotSequenceFamily() *snapshotSequenceFamily {
 func (f *snapshotSequenceFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
 	f.mu.Lock()
 	f.entries = append(f.entries, entries...)
-	f.storeCtxErr = ctx.Err()
 	err := f.storeErr
 	f.mu.Unlock()
 	if err != nil {

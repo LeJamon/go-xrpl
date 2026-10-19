@@ -139,8 +139,8 @@ type Router struct {
 	logger        *slog.Logger
 	peerSessions  peerSessionView
 
-	// The overlay callback only records disconnects; a router-owned worker performs
-	// cleanup so acquisition scans never block the overlay event loop.
+	// Acquisition cleanup stays off the overlay event loop; serving cancellation
+	// is bounded by the serve queue and active worker limits.
 	pendingPeerDisconnects sync.Map
 	peerDisconnectWake     chan struct{}
 	pendingPeerConnects    sync.Map
@@ -248,7 +248,8 @@ type Router struct {
 	// (handleGetLedger / serveTxSet, which builds the largest map — the
 	// 15k-tx tx-set — inline) off the Run message loop onto a small worker
 	// pool. It is nil before Run and after shutdown.
-	serveJobs chan *peermanagement.InboundMessage
+	serveJobs  chan *ledgerServeJob
+	servePeers map[peermanagement.PeerID]map[*ledgerServeJob]struct{}
 
 	// droppedServeJobs counts inbound get_ledger requests shed because the
 	// serve pool was saturated — the requesting peer retries elsewhere, so a
@@ -599,6 +600,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 // instead of lingering until the next ledger adoption happens to
 // overwrite it.
 func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
+	r.cancelLedgerServePeer(peerID)
 	if r.catchupReplay != nil && r.catchupReplay.stoppedForShutdown() {
 		return
 	}
@@ -632,6 +634,7 @@ func (r *Router) reconcilePeerAvailability() {
 }
 
 func (r *Router) queuePeerDisconnect(peerID peermanagement.PeerID) {
+	r.cancelLedgerServePeer(peerID)
 	r.pendingPeerConnects.Delete(peerID)
 	r.pendingPeerDisconnects.Store(peerID, struct{}{})
 	select {
@@ -904,30 +907,41 @@ func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
 	if msg == nil {
 		return
 	}
-	r.lifecycleMu.RLock()
+	r.lifecycleMu.Lock()
 	state := r.lifecycleState
 	jobs := r.serveJobs
 	if state == routerLifecycleInitial {
-		r.lifecycleMu.RUnlock()
+		r.lifecycleMu.Unlock()
 		defer func() { _ = msg.Close() }()
-		r.handleGetLedger(msg)
+		r.handleGetLedger(context.Background(), msg)
 		return
 	}
-	if state != routerLifecycleRunning || jobs == nil {
-		r.lifecycleMu.RUnlock()
+	if state != routerLifecycleRunning || jobs == nil || r.lifecycleCtx.Err() != nil ||
+		(r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID)) {
+		r.lifecycleMu.Unlock()
 		r.droppedServeJobs.Add(1)
 		_ = msg.Close()
 		return
 	}
+	ctx, cancel := context.WithCancel(r.lifecycleCtx)
+	job := &ledgerServeJob{ctx: ctx, cancel: cancel, peerID: msg.PeerID, msg: msg}
+	if r.servePeers == nil {
+		r.servePeers = make(map[peermanagement.PeerID]map[*ledgerServeJob]struct{})
+	}
+	if r.servePeers[msg.PeerID] == nil {
+		r.servePeers[msg.PeerID] = make(map[*ledgerServeJob]struct{})
+	}
+	r.servePeers[msg.PeerID][job] = struct{}{}
 	select {
-	case jobs <- msg:
+	case jobs <- job:
+		r.lifecycleMu.Unlock()
 	default:
+		r.lifecycleMu.Unlock()
 		r.droppedServeJobs.Add(1)
-		_ = msg.Close()
+		r.finishLedgerServeJob(job)
 		r.logger.Debug("inbound get_ledger dropped: serve pool saturated",
 			"t", "consensus", "event", "serve-shed", "peer", msg.PeerID)
 	}
-	r.lifecycleMu.RUnlock()
 }
 
 // DroppedServeJobs returns the cumulative count of inbound get_ledger

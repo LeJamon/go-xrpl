@@ -56,9 +56,6 @@ func (sm *SHAMap) SnapshotImmutableWithLedgerSeqContext(ctx context.Context, led
 // dirty flag is atomic and node hashes are read and written under each
 // node's own lock.
 func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32) (*SHAMap, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -79,7 +76,7 @@ func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32)
 	}
 
 	if sm.backing.access.available() {
-		if err := sm.storeDirtyLockedContext(ctx, func(entries []FlushEntry) error {
+		if err := sm.storeDirtyLocked(ctx, func(entries []FlushEntry) error {
 			return sm.backing.access.storeBatch(ctx, entries)
 		}, false); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {

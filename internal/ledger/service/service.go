@@ -1784,9 +1784,6 @@ func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.L
 		return nil, svcerr.ErrLedgerNotFound
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	loaded, err := s.loadPersistedLedgerByHash(ctx, hash)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

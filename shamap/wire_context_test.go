@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -179,18 +180,17 @@ func TestWireContextNonCancellableFetchStopsBeforeNextRead(t *testing.T) {
 }
 
 type cancelAfterCacheHitContext struct {
+	context.Context
+	cancel   context.CancelFunc
 	cache    *CleanResidency
 	baseline uint64
 }
 
-func (c cancelAfterCacheHitContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (c cancelAfterCacheHitContext) Done() <-chan struct{}       { return nil }
-func (c cancelAfterCacheHitContext) Value(any) any               { return nil }
 func (c cancelAfterCacheHitContext) Err() error {
 	if c.cache.Stats().Hits > c.baseline {
-		return context.Canceled
+		c.cancel()
 	}
-	return nil
+	return c.Context.Err()
 }
 
 func TestWireContextCacheHitCancellationDiscardsResult(t *testing.T) {
@@ -220,7 +220,9 @@ func TestWireContextCacheHitCancellationDiscardsResult(t *testing.T) {
 		t.Fatalf("warm GetNodeFatByPath: %v", err)
 	}
 	baselineHits := cache.Stats().Hits
-	ctx := cancelAfterCacheHitContext{cache: cache, baseline: baselineHits}
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := cancelAfterCacheHitContext{Context: parent, cancel: cancel, cache: cache, baseline: baselineHits}
 	nodes, err := sm.GetNodeFatByPathContext(ctx, [32]byte{}, 0, 2, true)
 	if !errors.Is(err, context.Canceled) || nodes != nil {
 		t.Fatalf("cache-hit traversal = nodes=%v err=%v, want cancellation and no result", nodes, err)
@@ -242,20 +244,17 @@ func TestWireContextPreservesWireAndHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
-	wantRoot, err := sm.SerializeRoot()
+	wantNodes, err := sm.WalkWireNodes()
 	if err != nil {
-		t.Fatalf("SerializeRoot: %v", err)
+		t.Fatalf("WalkWireNodes: %v", err)
 	}
+	wantRoot := wantNodes[0].Data
 	gotRoot, err := sm.SerializeRootContext(context.Background())
 	if err != nil {
 		t.Fatalf("SerializeRootContext: %v", err)
 	}
 	if !bytes.Equal(gotRoot, wantRoot) {
 		t.Fatalf("SerializeRootContext changed wire bytes")
-	}
-	wantNodes, err := sm.GetNodeFatByPath([32]byte{}, 0, 2, true)
-	if err != nil {
-		t.Fatalf("GetNodeFatByPath: %v", err)
 	}
 	gotNodes, err := sm.GetNodeFatByPathContext(context.Background(), [32]byte{}, 0, 2, true)
 	if err != nil {
@@ -264,6 +263,13 @@ func TestWireContextPreservesWireAndHash(t *testing.T) {
 	if len(gotNodes) != len(wantNodes) {
 		t.Fatalf("wire node count changed: got=%d want=%d", len(gotNodes), len(wantNodes))
 	}
+	if !bytes.Equal(gotNodes[0].Data, wantRoot) {
+		t.Fatal("wire traversal did not emit the root first")
+	}
+	// The full walker and fat-node serving emit siblings in different orders.
+	byID := func(a, b WireNode) int { return bytes.Compare(a.NodeID, b.NodeID) }
+	slices.SortFunc(gotNodes, byID)
+	slices.SortFunc(wantNodes, byID)
 	for i := range wantNodes {
 		if !bytes.Equal(gotNodes[i].NodeID, wantNodes[i].NodeID) || !bytes.Equal(gotNodes[i].Data, wantNodes[i].Data) {
 			t.Fatalf("wire node %d changed", i)
@@ -344,5 +350,85 @@ func TestSnapshotContextNonCancellableStoreStopsAfterReturn(t *testing.T) {
 	}
 	if !sm.tree.root.IsDirty() {
 		t.Fatal("canceled snapshot cleared dirty state after StoreBatch returned")
+	}
+}
+
+type cancelOnSerializeNode struct {
+	mapNode
+	cancel  context.CancelFunc
+	onClean context.CancelFunc
+	calls   int
+}
+
+func (n *cancelOnSerializeNode) SerializeWithPrefix() ([]byte, error) {
+	n.calls++
+	data, err := n.mapNode.SerializeWithPrefix()
+	if n.cancel != nil {
+		n.cancel()
+	}
+	return data, err
+}
+
+func (n *cancelOnSerializeNode) SetDirty(dirty bool) {
+	n.mapNode.SetDirty(dirty)
+	if !dirty && n.onClean != nil {
+		n.onClean()
+	}
+}
+
+func TestSnapshotContextStopsBetweenDirtyNodes(t *testing.T) {
+	for _, boundary := range []string{"serialization", "cleanup"} {
+		t.Run(boundary, func(t *testing.T) {
+			family := &snapshotStoreFamily{
+				memoryFamily: newMemoryFamily(),
+				started:      make(chan struct{}),
+				release:      make(chan struct{}),
+			}
+			close(family.release)
+			sm, err := NewBacked(TypeState, family)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var leaves [2]*cancelOnSerializeNode
+			for i := range leaves {
+				leaf, err := newAccountStateLeafNode(NewItem([32]byte{byte(i) << 4}, bytes.Repeat([]byte{byte(i)}, 12)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaves[i] = &cancelOnSerializeNode{mapNode: leaf}
+				if err := sm.tree.root.SetChild(i, leaves[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantSecond, wantStores := 0, int32(0)
+			if boundary == "serialization" {
+				leaves[0].cancel = cancel
+			} else {
+				leaves[0].onClean = cancel
+				wantSecond, wantStores = 1, 1
+			}
+			snapshot, err := sm.SnapshotImmutableContext(ctx)
+			if snapshot != nil || !errors.Is(err, context.Canceled) {
+				t.Fatalf("snapshot = %v, error = %v; want cancellation without a snapshot", snapshot, err)
+			}
+			if leaves[0].calls != 1 || leaves[1].calls != wantSecond || family.calls.Load() != wantStores {
+				t.Fatalf("work continued after cancellation: serialized=%d,%d stored=%d", leaves[0].calls, leaves[1].calls, family.calls.Load())
+			}
+			if !sm.tree.root.IsDirty() || !leaves[1].IsDirty() {
+				t.Fatal("canceled preparation cleared remaining dirty state")
+			}
+			if leaves[0].IsDirty() != (boundary == "serialization") {
+				t.Fatal("first leaf dirty state does not match the persistence boundary")
+			}
+			leaves[0].cancel, leaves[0].onClean = nil, nil
+			if _, err := sm.SnapshotImmutableContext(t.Context()); err != nil {
+				t.Fatalf("snapshot retry: %v", err)
+			}
+			if family.calls.Load() != wantStores+1 || leaves[1].calls != wantSecond+1 || sm.tree.root.IsDirty() {
+				t.Fatal("snapshot retry did not persist the remaining dirty tree")
+			}
+		})
 	}
 }

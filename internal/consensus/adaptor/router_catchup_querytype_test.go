@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -139,7 +140,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 	l := svc.GetClosedLedger()
 	require.NotNil(t, l)
 	il := inbound.New(l.Hash(), l.Sequence(), 7, serveTestLogger())
-	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(l)))
+	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(context.Background(), l)))
 	require.NotEmpty(t, il.NeedsMissingNodeIDs(), "acquisition must have outstanding state nodes")
 
 	// First attempt, before any timeout → direct.
@@ -174,7 +175,7 @@ func TestRequestMissingAcquisitionNodes_ReplyUsesOneLevelFatNodes(t *testing.T) 
 	router := newTestRouter(&mockEngine{}, a, nil)
 	l := svc.GetClosedLedger()
 	il := inbound.New(l.Hash(), l.Sequence(), 7, serveTestLogger())
-	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(l)))
+	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(context.Background(), l)))
 
 	router.catchupReplay.requestMissingAcquisitionNodes(il, 7)
 	assert.Equal(t, []uint32{1}, rs.queryDepths(),

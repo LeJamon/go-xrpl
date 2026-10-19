@@ -24,19 +24,12 @@ func (sm *SHAMap) storeDirty(store func([]FlushEntry) error, releaseChildren boo
 
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
-	return sm.storeDirtyLockedContext(context.Background(), store, releaseChildren)
+	return sm.storeDirtyLocked(context.Background(), store, releaseChildren)
 }
 
 // storeDirtyLocked serializes and stores dirty nodes while the caller holds
 // the tree write lock.
-func (sm *SHAMap) storeDirtyLocked(store func([]FlushEntry) error, releaseChildren bool) error {
-	return sm.storeDirtyLockedContext(context.Background(), store, releaseChildren)
-}
-
-func (sm *SHAMap) storeDirtyLockedContext(ctx context.Context, store func([]FlushEntry) error, releaseChildren bool) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (sm *SHAMap) storeDirtyLocked(ctx context.Context, store func([]FlushEntry) error, releaseChildren bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -53,7 +46,7 @@ func (sm *SHAMap) storeDirtyLockedContext(ctx context.Context, store func([]Flus
 
 	var entries []FlushEntry
 	var nodes []mapNode
-	if err := sm.collectDirtyNodeContext(ctx, sm.tree.root, &entries, &nodes); err != nil {
+	if err := sm.collectDirtyNode(ctx, sm.tree.root, &entries, &nodes); err != nil {
 		return fmt.Errorf("failed to flush: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -72,6 +65,9 @@ func (sm *SHAMap) storeDirtyLockedContext(ctx context.Context, store func([]Flus
 	// partially synced map. Only a complete traversal may publish its hash as
 	// full-below.
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		node.SetDirty(false)
 		if releaseChildren {
 			if inner, ok := node.(*innerNode); ok {
@@ -82,11 +78,7 @@ func (sm *SHAMap) storeDirtyLockedContext(ctx context.Context, store func([]Flus
 	return nil
 }
 
-func (sm *SHAMap) collectDirtyNode(node mapNode, entries *[]FlushEntry, nodes *[]mapNode) error {
-	return sm.collectDirtyNodeContext(context.Background(), node, entries, nodes)
-}
-
-func (sm *SHAMap) collectDirtyNodeContext(ctx context.Context, node mapNode, entries *[]FlushEntry, nodes *[]mapNode) error {
+func (sm *SHAMap) collectDirtyNode(ctx context.Context, node mapNode, entries *[]FlushEntry, nodes *[]mapNode) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -105,7 +97,7 @@ func (sm *SHAMap) collectDirtyNodeContext(ctx context.Context, node mapNode, ent
 				return err
 			}
 			if child != nil && child.IsDirty() {
-				if err := sm.collectDirtyNodeContext(ctx, child, entries, nodes); err != nil {
+				if err := sm.collectDirtyNode(ctx, child, entries, nodes); err != nil {
 					return err
 				}
 			}

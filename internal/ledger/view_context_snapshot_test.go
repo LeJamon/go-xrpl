@@ -126,8 +126,8 @@ func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 			if traversed {
 				t.Fatal("iteration traversed after canceled snapshot persistence")
 			}
-			if family.storeCalls != callsBefore+1 {
-				t.Fatalf("StoreBatch calls = %d, want %d", family.storeCalls, callsBefore+1)
+			if family.storeCalls != callsBefore {
+				t.Fatalf("pre-canceled operation called StoreBatch: calls = %d, want %d", family.storeCalls, callsBefore)
 			}
 		})
 	}
