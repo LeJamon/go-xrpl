@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -8,8 +9,11 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-func useLedgerNodeDepth(nodes []message.LedgerNode) error {
+func useLedgerNodeDepth(ctx context.Context, nodes []message.LedgerNode) error {
 	for i := range nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		node := &nodes[i]
 		id, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {

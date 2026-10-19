@@ -1598,10 +1598,19 @@ func (s *Service) SetValidatedLedgerAgeClock(now func() time.Time) {
 // GetLedgerBySequence returns a ledger by sequence, falling back to the open
 // ledger or durable validated history.
 func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
-	return s.getLedgerBySequence(context.Background(), seq)
+	return s.GetLedgerBySequenceContext(context.Background(), seq)
+}
+
+// GetLedgerBySequenceContext is GetLedgerBySequence with caller-controlled
+// cancellation for cache, storage, and snapshot work.
+func (s *Service) GetLedgerBySequenceContext(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
+	return s.getLedgerBySequence(ctx, seq)
 }
 
 func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	s.historyComponent.mu.RLock()
 	history := s.ledgerHistory[seq]
@@ -1611,49 +1620,91 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 	}
 	s.historyComponent.mu.RUnlock()
 	s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	s.completeMu.RLock()
 	hash, complete := s.completeLedgerHashes[seq]
 	complete = complete && s.completedLedgers != nil && s.completedLedgers.contains(seq)
 	s.completeMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if history != nil && (!complete || history.Hash() == hash) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return history, nil
 	}
 	if open != nil && (!complete || open.Hash() == hash) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return open, nil
 	}
 	if !complete || s.nodeStore == nil || s.shamapFamily == nil {
 		return nil, svcerr.ErrLedgerNotFound
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.historyComponent.mu.RLock()
 	cached := s.persistedLedgers[hash]
 	s.historyComponent.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cached != nil && cached.Sequence() == seq {
 		if cached.IsValidated() {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return cached, nil
 		}
-		validated, err := cached.Snapshot()
+		validated, err := cached.SnapshotContext(ctx)
 		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if err := validated.SetValidated(); err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return validated, nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if errors.Is(err, errStoredLedgerUnavailable) {
 			return nil, fmt.Errorf("%w: load ledger %d from nodestore: %v", svcerr.ErrLedgerNotFound, seq, err)
 		}
 		return nil, fmt.Errorf("load ledger %d from nodestore: %w", seq, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if loaded == nil || loaded.Sequence() != seq {
 		return nil, svcerr.ErrLedgerNotFound
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := loaded.SetValidated(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
@@ -1662,13 +1713,23 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 		s.completedLedgers.contains(seq) &&
 		s.completeLedgerHashes[seq] == hash
 	s.completeMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !stillComplete {
 		return nil, svcerr.ErrLedgerNotFound
 	}
 
 	s.historyComponent.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.historyComponent.mu.Unlock()
+		return nil, err
+	}
 	s.cachePersistedLedgerLocked(loaded)
 	s.historyComponent.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return loaded, nil
 }
 
@@ -1693,47 +1754,83 @@ func (s *Service) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*l
 }
 
 func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.historyComponent.mu.RLock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
 			s.historyComponent.mu.RUnlock()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return l, nil
 		}
 	}
 	if l, ok := s.persistedLedgers[hash]; ok {
 		s.historyComponent.mu.RUnlock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return s.validatedPersistedLedger(ctx, l)
 	}
 	canLoad := s.nodeStore != nil && s.shamapFamily != nil &&
 		s.relationalDB != nil && s.relationalDB.Ledger() != nil
 	s.historyComponent.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !canLoad {
 		return nil, svcerr.ErrLedgerNotFound
 	}
 
 	loaded, err := s.loadPersistedLedgerByHash(ctx, hash)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, err
 	}
-
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.historyComponent.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.historyComponent.mu.Unlock()
+		return nil, err
+	}
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
 			s.historyComponent.mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return l, nil
 		}
 	}
 	if l, ok := s.persistedLedgers[hash]; ok {
 		s.historyComponent.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return s.validatedPersistedLedger(ctx, l)
 	}
 	s.cachePersistedLedgerLocked(loaded)
 	s.historyComponent.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return s.validatedPersistedLedger(ctx, loaded)
 }
 
 func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	info, err := s.relationalDB.Ledger().GetLedgerInfoByHash(ctx, relationaldb.Hash(hash))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if errors.Is(err, relationaldb.ErrLedgerNotFound) {
 		return nil, svcerr.ErrLedgerNotFound
 	}
@@ -1743,12 +1840,21 @@ func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) 
 	if info == nil {
 		return nil, svcerr.ErrLedgerNotFound
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if errors.Is(err, errStoredLedgerUnavailable) {
 			return nil, fmt.Errorf("%w: load ledger %x from nodestore: %v", svcerr.ErrLedgerNotFound, hash[:8], err)
 		}
 		return nil, fmt.Errorf("load ledger %x from nodestore: %w", hash[:8], err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if loaded == nil {
 		return nil, svcerr.ErrLedgerNotFound
@@ -1760,31 +1866,58 @@ func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) 
 }
 
 func (s *Service) validatedPersistedLedger(ctx context.Context, l *ledger.Ledger) (*ledger.Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	validated, err := s.persistedLedgerIsValidated(ctx, l.Hash(), l.Sequence())
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if err != nil || !validated {
 		return l, err
 	}
 	if l.IsValidated() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return l, nil
 	}
-	copy, err := l.Snapshot()
+	copy, err := l.SnapshotContext(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := copy.SetValidated(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return copy, nil
 }
 
 func (s *Service) persistedLedgerIsValidated(ctx context.Context, hash [32]byte, seq uint32) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	s.mu.RLock()
 	tip := s.validatedLedger
 	s.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if tip == nil || seq > tip.Sequence() {
 		return false, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	canonical, ok, err := tip.HashOfSeqContext(ctx, seq)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
 	if canonicalProofUnavailable(err) {
 		return false, nil
 	}
@@ -1798,21 +1931,39 @@ func (s *Service) persistedLedgerIsValidated(ctx context.Context, hash [32]byte,
 	if anchor64 > uint64(tip.Sequence()) {
 		return false, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	anchorHash, ok, err := tip.HashOfSeqContext(ctx, uint32(anchor64))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
 	if canonicalProofUnavailable(err) {
 		return false, nil
 	}
 	if err != nil || !ok {
 		return false, err
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	anchor, err := s.loadPersistedLedgerByHash(ctx, anchorHash)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
 	if errors.Is(err, svcerr.ErrLedgerNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	canonical, ok, err = anchor.HashOfSeqContext(ctx, seq)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
 	if canonicalProofUnavailable(err) {
 		return false, nil
 	}

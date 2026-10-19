@@ -88,7 +88,7 @@ func TestGetLedgerWorkerValidatesOnlyTheSoftNodeIDPrefix(t *testing.T) {
 		r, recorder := makeRouterWithRelayRecorder(t)
 		req := newRequest()
 		req.NodeIDs[0] = []byte{1}
-		r.handleGetLedger(&peermanagement.InboundMessage{
+		r.handleGetLedger(context.Background(), &peermanagement.InboundMessage{
 			PeerID:  4,
 			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
@@ -102,7 +102,7 @@ func TestGetLedgerWorkerValidatesOnlyTheSoftNodeIDPrefix(t *testing.T) {
 		recorder.txsetPeer, recorder.txsetOK = 8, true
 		req := newRequest()
 		req.NodeIDs[len(req.NodeIDs)-1] = []byte{1}
-		r.handleGetLedger(&peermanagement.InboundMessage{
+		r.handleGetLedger(context.Background(), &peermanagement.InboundMessage{
 			PeerID:  5,
 			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
@@ -262,7 +262,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	before = len(journal.snapshot())
 	send(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
 	oversized := receive(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
-	r.handleGetLedger(oversized)
+	r.handleGetLedger(context.Background(), oversized)
 	r.cancelPeerServes(oversized.PeerID)
 	var moderate, trivial int
 	for _, charge := range journal.snapshot()[before:] {
@@ -283,7 +283,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	zeroCookie := uint64(0)
 	sendWithCookie(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1, &zeroCookie)
 	cookied := receive(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
-	r.handleGetLedger(cookied)
+	r.handleGetLedger(context.Background(), cookied)
 	r.cancelPeerServes(cookied.PeerID)
 	moderate, trivial = 0, 0
 	for _, charge := range journal.snapshot()[before:] {
@@ -302,7 +302,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 
 	send(message.LedgerInfoBase, 12_289)
 	base := receive(message.LedgerInfoBase, 12_289)
-	r.handleGetLedger(base)
+	r.handleGetLedger(context.Background(), base)
 	r.cancelPeerServes(base.PeerID)
 	require.Len(t, recorder.sentFrames(), 1)
 	_, decoded := decodeFrame(t, recorder.sentFrames()[0].frame)

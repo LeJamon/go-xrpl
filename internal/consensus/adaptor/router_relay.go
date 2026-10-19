@@ -54,17 +54,17 @@ func (r *Router) maybeRelayGetLedger(ctx context.Context, from peermanagement.Pe
 		return false
 	}
 
-	if ctx.Err() != nil {
-		return false
-	}
 	relayed := *req
 	relayed.RequestCookie = uint64(from)
-	frame, err := message.EncodeFrame(&relayed)
-	if err != nil {
-		r.logger.Warn("failed to encode relayed get_ledger", "error", err)
+	if ctx.Err() != nil {
 		return false
 	}
+	frame, err := message.EncodeFrame(&relayed)
 	if ctx.Err() != nil {
+		return false
+	}
+	if err != nil {
+		r.logger.Warn("failed to encode relayed get_ledger", "error", err)
 		return false
 	}
 	if err := r.serve.SendToPeer(peer, frame); err != nil {

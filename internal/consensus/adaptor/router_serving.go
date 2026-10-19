@@ -86,11 +86,11 @@ func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
 	if r.lifecycleState == routerLifecycleInitial {
 		r.lifecycleMu.RUnlock()
 		defer func() { _ = msg.Close() }()
-		r.handleGetLedger(msg)
+		r.handleGetLedger(context.Background(), msg)
 		return
 	}
 	pool := r.servePools[getLedgerServeClass(msg)]
-	if r.lifecycleState != routerLifecycleRunning || pool == nil ||
+	if r.lifecycleState != routerLifecycleRunning || pool == nil || r.lifecycleCtx.Err() != nil ||
 		(r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID)) {
 		r.lifecycleMu.RUnlock()
 		r.droppedServeJobs.Add(1)
@@ -100,7 +100,7 @@ func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
 	accepted := pool.SubmitOwnedBytes(r.lifecycleCtx, msg.PeerID, getLedgerRetainedBytes(msg), func(ctx context.Context) {
 		defer func() { _ = msg.Close() }()
 		if r.peerSessions == nil || r.peerSessions.IsPeerConnected(msg.PeerID) {
-			r.handleGetLedgerContext(ctx, msg)
+			r.handleGetLedger(ctx, msg)
 		}
 	}, func() { _ = msg.Close() })
 	r.lifecycleMu.RUnlock()

@@ -139,8 +139,8 @@ type Router struct {
 	logger        *slog.Logger
 	peerSessions  peerSessionView
 
-	// The overlay callback only records disconnects; a router-owned worker performs
-	// cleanup so acquisition scans never block the overlay event loop.
+	// Acquisition cleanup stays off the overlay event loop; serving cancellation
+	// is bounded by the serve queue and active worker limits.
 	pendingPeerDisconnects sync.Map
 	peerDisconnectWake     chan struct{}
 	pendingPeerConnects    sync.Map

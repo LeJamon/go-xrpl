@@ -7,16 +7,34 @@ import (
 )
 
 func (l *Ledger) Snapshot() (*Ledger, error) {
+	return l.SnapshotContext(context.Background())
+}
+
+// SnapshotContext is Snapshot with caller-controlled cancellation for dirty
+// node persistence and the immutable map copies.
+func (l *Ledger) SnapshotContext(ctx context.Context) (*Ledger, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-
-	stateMapCopy, err := l.stateMap.SnapshotImmutable()
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	txMapCopy, err := l.txMap.SnapshotImmutable()
+	stateMapCopy, err := l.stateMap.SnapshotImmutableContext(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	txMapCopy, err := l.txMap.SnapshotImmutableContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 

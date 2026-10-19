@@ -23,6 +23,52 @@ func (f *canceledSnapshotFamily) StoreBatch(ctx context.Context, _ []shamap.Flus
 	return ctx.Err()
 }
 
+type cancelOnSnapshotFamily struct {
+	storeCalls int
+	cancel     context.CancelFunc
+}
+
+func (f *cancelOnSnapshotFamily) Fetch(context.Context, [32]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (f *cancelOnSnapshotFamily) StoreBatch(ctx context.Context, _ []shamap.FlushEntry) error {
+	f.storeCalls++
+	f.cancel()
+	return ctx.Err()
+}
+
+func TestSnapshotContextPropagatesCancellationAcrossMapCopies(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	family := &cancelOnSnapshotFamily{cancel: cancel}
+	stateMap, err := shamap.NewBacked(shamap.TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked state: %v", err)
+	}
+	txMap, err := shamap.NewBacked(shamap.TypeTransaction, family)
+	if err != nil {
+		t.Fatalf("NewBacked transaction: %v", err)
+	}
+	l, err := NewOpenWithHeader(header.LedgerHeader{LedgerIndex: 88}, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
+	if err := l.Insert(mutAcct(0x81), mutData(0x11)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := l.AddTransaction([32]byte{0x82}, []byte("transaction data")); err != nil {
+		t.Fatalf("AddTransaction: %v", err)
+	}
+
+	if _, err := l.SnapshotContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SnapshotContext error = %v, want context.Canceled", err)
+	}
+	if family.storeCalls != 1 {
+		t.Fatalf("StoreBatch calls = %d, want 1", family.storeCalls)
+	}
+}
+
 func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 	family := &canceledSnapshotFamily{}
 	stateMap, err := shamap.NewBacked(shamap.TypeState, family)
@@ -80,8 +126,8 @@ func TestContextIterationCancelsDirtySnapshotBeforeTraversal(t *testing.T) {
 			if traversed {
 				t.Fatal("iteration traversed after canceled snapshot persistence")
 			}
-			if family.storeCalls != callsBefore+1 {
-				t.Fatalf("StoreBatch calls = %d, want %d", family.storeCalls, callsBefore+1)
+			if family.storeCalls != callsBefore {
+				t.Fatalf("pre-canceled operation called StoreBatch: calls = %d, want %d", family.storeCalls, callsBefore)
 			}
 		})
 	}
