@@ -4,10 +4,13 @@ import (
 	"testing"
 	"time"
 
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,16 +62,31 @@ func completePaymentReplayTestLink(t *testing.T, r *Router, link standardReplayT
 	r.catchupReplay.completeInboundLedger(il)
 }
 
-func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *testing.T) {
-	source := closedLedgerWithPayment(t)
-	t.Cleanup(source.Stop)
-	sourceTarget := source.GetClosedLedger()
-	require.NotNil(t, sourceTarget)
-	sourceHash := sourceTarget.Hash()
-	sourceParent, err := source.GetLedgerBySequence(sourceTarget.Sequence() - 1)
-	require.NoError(t, err)
-	require.NotNil(t, sourceParent)
+func paymentReplayLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
+	t.Helper()
+	builder := newTestLedgerService(t)
+	t.Cleanup(builder.Stop)
+	require.NoError(t, builder.SwitchToPreferredLedger(parent))
 
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
+	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
+	env.SignWith(txn, master)
+	fields, err := txn.Flatten()
+	require.NoError(t, err)
+	blob, err := binarycodec.EncodeBytes(fields)
+	require.NoError(t, err)
+
+	_, err = builder.AcceptConsensusResult(t.Context(), parent, [][]byte{blob}, nil, parent.CloseTime().Add(10*time.Second), true)
+	require.NoError(t, err)
+	target := builder.GetClosedLedger()
+	require.NotNil(t, target)
+	return target
+}
+
+func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	t.Cleanup(func() {
 		r.StopAcquisitions()
@@ -78,7 +96,8 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 
 	routerParent := svc.GetClosedLedger()
 	require.NotNil(t, routerParent)
-	require.Equal(t, sourceParent.Hash(), routerParent.Hash(), "standalone fixtures must share the genesis parent")
+	sourceTarget := paymentReplayLedger(t, routerParent)
+	sourceHash := sourceTarget.Hash()
 
 	pool := membudget.New(2 << 30)
 	parent, err := pool.NewAccount("acquisition", 512<<20, 2<<30)

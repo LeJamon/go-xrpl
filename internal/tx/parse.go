@@ -72,19 +72,19 @@ func ParseHash256NonZero(s string) ([32]byte, error) {
 
 // ParseFromBinary parses a binary transaction blob and retains its canonical encoding.
 func ParseFromBinary(blob []byte) (Transaction, error) {
-	parsed, decoded, canonical, err := parseFromBinaryUnbound(blob)
+	parsed, canonical, err := parseFromBinaryUnbound(blob)
 	if err != nil {
 		return nil, err
 	}
-	if err := bindCanonicalRawBytes(parsed, decoded, canonical); err != nil {
+	if err := bindCanonicalRawBytes(parsed, canonical); err != nil {
 		return nil, err
 	}
 	return parsed, nil
 }
 
-func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, error) {
+func parseFromBinaryUnbound(blob []byte) (Transaction, []byte, error) {
 	if err := checkTransactionLength(blob); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// Decode the canonical binary directly; the blob is already bytes, so
@@ -92,15 +92,15 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 	// this per-transaction hot path.
 	jsonMap, err := binarycodec.DecodeBytes(blob)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to decode binary transaction: %w", err)
+		return nil, nil, fmt.Errorf("failed to decode binary transaction: %w", err)
 	}
 	canonical, err := binarycodec.EncodeBytes(jsonMap)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
+		return nil, nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
 	}
 
 	parsed, err := transactionFromFields(jsonMap)
-	return parsed, jsonMap, canonical, err
+	return parsed, canonical, err
 }
 
 // ParseFromDecodedFields constructs an owned transaction from fields returned by
@@ -117,7 +117,7 @@ func ParseFromDecodedFields(fields map[string]any) (Transaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := bindCanonicalRawBytes(parsed, fields, canonical); err != nil {
+	if err := bindCanonicalRawBytes(parsed, canonical); err != nil {
 		return nil, err
 	}
 	return parsed, nil
