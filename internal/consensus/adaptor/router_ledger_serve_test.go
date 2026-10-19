@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
@@ -34,7 +35,7 @@ func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 
 	// Serve the base: header (118-byte wire form, no trailing hash) + state root.
 	// The genesis ledger has no transactions, so there is no node[2].
-	baseNodes := router.buildLedgerBaseNodes(l)
+	baseNodes := router.buildLedgerBaseNodes(context.Background(), l)
 	require.GreaterOrEqual(t, len(baseNodes), 2, "base must carry header + state root")
 	require.Equal(t, header.SizeBase, len(baseNodes[0].NodeData),
 		"node[0] must be the 118-byte rippled wire header (no trailing hash)")
@@ -56,7 +57,7 @@ func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 			LedgerSeq:  seq,
 			NodeIDs:    ids,
 		}
-		nodes := router.serveLedgerMapNodes(l.StateMapSnapshot, req, 7, "state")
+		nodes := router.serveLedgerMapNodes(context.Background(), l.StateMapSnapshotContext, req, 7, "state")
 		require.NotEmpty(t, nodes, "serve must answer the requested state node IDs")
 		require.NoError(t, il.GotStateNodes(nodes))
 	}
@@ -92,6 +93,6 @@ func TestBuildLedgerBaseNodes_EmptyTxTreeOmitsTxRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [32]byte{}, txHash, "fixture precondition: genesis has an empty tx tree")
 
-	nodes := router.buildLedgerBaseNodes(l)
+	nodes := router.buildLedgerBaseNodes(context.Background(), l)
 	require.Len(t, nodes, 2, "empty tx tree must omit the tx root (header + state root only)")
 }

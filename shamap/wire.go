@@ -11,14 +11,32 @@ import (
 //
 // Returns the serialized wire format of the root node.
 func (sm *SHAMap) SerializeRoot() ([]byte, error) {
+	return sm.SerializeRootContext(context.Background())
+}
+
+// SerializeRootContext is the cancellation-aware form of SerializeRoot.
+func (sm *SHAMap) SerializeRootContext(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sm.tree.mu.RLock()
 	defer sm.tree.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if sm.tree.root == nil {
 		return nil, errors.New("no root node")
 	}
 
-	return sm.tree.root.SerializeForWire()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	data, err := sm.tree.root.SerializeForWire()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	return data, err
 }
 
 // WireNode is a node ready for wire transmission via TMLedgerData.
@@ -39,6 +57,17 @@ func wireNodeAt(node mapNode, path [32]byte, depth int) (WireNode, error) {
 	copy(nodeID[:32], path[:])
 	nodeID[32] = byte(depth)
 	return WireNode{NodeID: nodeID, Data: data}, nil
+}
+
+func wireNodeAtContext(ctx context.Context, node mapNode, path [32]byte, depth int) (WireNode, error) {
+	if err := ctx.Err(); err != nil {
+		return WireNode{}, err
+	}
+	wireNode, err := wireNodeAt(node, path, depth)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return WireNode{}, ctxErr
+	}
+	return wireNode, err
 }
 
 // WalkWireNodes performs a pre-order traversal returning every node as
@@ -101,8 +130,19 @@ func (sm *SHAMap) walkWireNodesRec(node mapNode, path [32]byte, depth int, out *
 // For backed maps, hash-only branches are read without attaching them to the
 // shared tree, both when locating the requested subtree and serving its nodes.
 func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
+	return sm.GetNodeFatByPathContext(context.Background(), wantedPath, wantedDepth, depth, fatLeaves)
+}
+
+// GetNodeFatByPathContext is the cancellation-aware form of GetNodeFatByPath.
+func (sm *SHAMap) GetNodeFatByPathContext(ctx context.Context, wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sm.tree.mu.RLock()
 	defer sm.tree.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if sm.tree.root == nil {
 		return nil, nil
@@ -113,13 +153,22 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	curDepth := 0
 	curPath := [32]byte{}
 	for node != nil && curDepth < wantedDepth {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		inner, ok := node.(*innerNode)
 		if !ok {
 			// Leaf reached before wantedDepth — not the requested node.
 			return nil, nil
 		}
 		branch := selectBranchForPath(wantedPath, curDepth)
-		child, err := sm.readChild(context.Background(), inner, branch, false, ReadPeer)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		child, err := sm.readChild(ctx, inner, branch, false, ReadPeer)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -130,6 +179,9 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 		node = child
 		curDepth++
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if node == nil || curDepth != wantedDepth {
 		return nil, nil
 	}
@@ -138,9 +190,18 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	if !pathPrefixEq(curPath, wantedPath, wantedDepth) {
 		return nil, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Empty inner: rippled rejects with "peer requests empty node".
-	if inner, ok := node.(*innerNode); ok && inner.BranchCount() == 0 {
-		return nil, nil
+	if inner, ok := node.(*innerNode); ok {
+		empty := inner.BranchCount() == 0
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if empty {
+			return nil, nil
+		}
 	}
 
 	// 2-3. Stack walk with the depth budget.
@@ -156,11 +217,17 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	var out []WireNode
 
 	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		e := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		wn, err := wireNodeAt(e.node, e.path, e.depth)
+		wn, err := wireNodeAtContext(ctx, e.node, e.path, e.depth)
 		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		out = append(out, wn)
@@ -170,13 +237,22 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 			continue
 		}
 		bc := inner.BranchCount()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// Descend if budget>0 or single-child chain.
 		if e.budget == 0 && bc != 1 {
 			continue
 		}
 		// Reverse iteration → ascending-branch pop order.
 		for i := BranchFactor - 1; i >= 0; i-- {
-			child, err := sm.readChild(context.Background(), inner, i, false, ReadPeer)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			child, err := sm.readChild(ctx, inner, i, false, ReadPeer)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -199,13 +275,16 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 				})
 			} else if isInner || fatLeaves {
 				// Include directly without descent.
-				cwn, err := wireNodeAt(child, childPath, e.depth+1)
+				cwn, err := wireNodeAtContext(ctx, child, childPath, e.depth+1)
 				if err != nil {
 					return nil, err
 				}
 				out = append(out, cwn)
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

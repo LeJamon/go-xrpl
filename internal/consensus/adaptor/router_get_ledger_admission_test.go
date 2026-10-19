@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ import (
 func TestGetLedgerAdmissionRejectsInvalidRequestsBeforeQueue(t *testing.T) {
 	r, recorder := makeRouterWithRelayRecorder(t)
 	r.lifecycleState = routerLifecycleRunning
-	r.serveJobs = make(chan *peermanagement.InboundMessage, 8)
+	r.serveJobs = make(chan *ledgerServeJob, 8)
 
 	tests := []struct {
 		name   string
@@ -82,7 +83,7 @@ func TestGetLedgerWorkerValidatesOnlyTheSoftNodeIDPrefix(t *testing.T) {
 		r, recorder := makeRouterWithRelayRecorder(t)
 		req := newRequest()
 		req.NodeIDs[0] = []byte{1}
-		r.handleGetLedger(&peermanagement.InboundMessage{
+		r.handleGetLedger(context.Background(), &peermanagement.InboundMessage{
 			PeerID:  4,
 			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
@@ -96,7 +97,7 @@ func TestGetLedgerWorkerValidatesOnlyTheSoftNodeIDPrefix(t *testing.T) {
 		recorder.txsetPeer, recorder.txsetOK = 8, true
 		req := newRequest()
 		req.NodeIDs[len(req.NodeIDs)-1] = []byte{1}
-		r.handleGetLedger(&peermanagement.InboundMessage{
+		r.handleGetLedger(context.Background(), &peermanagement.InboundMessage{
 			PeerID:  5,
 			Type:    message.TypeGetLedger,
 			Payload: encodePayload(t, req),
@@ -137,8 +138,8 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 
 	r, recorder := makeRouterWithRelayRecorder(t)
 	r.lifecycleState = routerLifecycleRunning
-	r.serveJobs = make(chan *peermanagement.InboundMessage, 2)
-	t.Cleanup(func() { drainInboundMessages(r.serveJobs) })
+	r.serveJobs = make(chan *ledgerServeJob, 2)
+	t.Cleanup(func() { r.drainLedgerServeJobs(r.serveJobs) })
 	ledger := r.adaptor.LedgerService().GetClosedLedger()
 	hash := ledger.Hash()
 	sendWithCookie := func(infoType message.LedgerInfoType, count int, cookie *uint64) {
@@ -175,7 +176,9 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 				}
 				r.handleInboundMessage(inbound)
 				require.Len(t, r.serveJobs, 1)
-				job := <-r.serveJobs
+				queued := <-r.serveJobs
+				t.Cleanup(func() { r.finishLedgerServeJob(queued) })
+				job := queued.takeMessage()
 				t.Cleanup(func() { require.NoError(t, job.Close()) })
 				decoded, err := message.Decode(job.Type, job.Payload)
 				require.NoError(t, err)
@@ -252,7 +255,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	before = len(journal.snapshot())
 	send(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
 	oversized := receive(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
-	r.handleGetLedger(oversized)
+	r.handleGetLedger(context.Background(), oversized)
 	require.NoError(t, oversized.Close())
 	var moderate, trivial int
 	for _, charge := range journal.snapshot()[before:] {
@@ -273,7 +276,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	zeroCookie := uint64(0)
 	sendWithCookie(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1, &zeroCookie)
 	cookied := receive(message.LedgerInfoTsCandidate, txSetSoftMaxReplyNodes+1)
-	r.handleGetLedger(cookied)
+	r.handleGetLedger(context.Background(), cookied)
 	require.NoError(t, cookied.Close())
 	moderate, trivial = 0, 0
 	for _, charge := range journal.snapshot()[before:] {
@@ -292,7 +295,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 
 	send(message.LedgerInfoBase, 12_289)
 	base := receive(message.LedgerInfoBase, 12_289)
-	r.handleGetLedger(base)
+	r.handleGetLedger(context.Background(), base)
 	require.NoError(t, base.Close())
 	require.Len(t, recorder.sentFrames(), 1)
 	_, decoded := decodeFrame(t, recorder.sentFrames()[0].frame)

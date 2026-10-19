@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -30,7 +31,7 @@ func TestLedgerNodeDepthRelay(t *testing.T) {
 	_, hash, wire := buildTxSetForTest(t, 4)
 	legacy := ldFromWire(hash, wire)
 	modern := ldFromWire(hash, wire)
-	require.NoError(t, useLedgerNodeDepth(modern.Nodes))
+	require.NoError(t, useLedgerNodeDepth(context.Background(), modern.Nodes))
 	for _, depth := range []bool{false, true} {
 		t.Run(map[bool]string{false: "2.2", true: "2.3"}[depth], func(t *testing.T) {
 			for _, input := range []*message.LedgerData{legacy, modern} {
@@ -82,7 +83,7 @@ func TestLedgerNodeDepthTxSetAcquisition(t *testing.T) {
 			r.MarkTxSetStillNeeded(id)
 			data := ldFromWire(hash, wire)
 			if depth {
-				require.NoError(t, useLedgerNodeDepth(data.Nodes))
+				require.NoError(t, useLedgerNodeDepth(context.Background(), data.Nodes))
 			}
 			deliverTxSetData(t, r, 5, data)
 			require.Equal(t, []consensus.TxSetID{id}, engine.txSets)
@@ -115,7 +116,7 @@ func TestLedgerNodeDepthServesAndAcquiresLedger(t *testing.T) {
 			request := func(kind message.LedgerInfoType, ids [][]byte) *message.LedgerData {
 				t.Helper()
 				before := len(recorder.sentFrames())
-				r.handleGetLedger(&peermanagement.InboundMessage{PeerID: 7, Type: message.TypeGetLedger, Payload: encodePayload(t, &message.GetLedger{LedgerHash: hash[:], LedgerSeq: seq, InfoType: kind, NodeIDs: ids})})
+				r.handleGetLedger(context.Background(), &peermanagement.InboundMessage{PeerID: 7, Type: message.TypeGetLedger, Payload: encodePayload(t, &message.GetLedger{LedgerHash: hash[:], LedgerSeq: seq, InfoType: kind, NodeIDs: ids})})
 				frames := recorder.sentFrames()
 				require.Len(t, frames, before+1)
 				_, decoded := decodeFrame(t, frames[before].frame)
@@ -171,7 +172,7 @@ func TestLedgerNodeDepthServesTxSet(t *testing.T) {
 			consumer.MarkTxSetStillNeeded(id)
 			ids := [][]byte{make([]byte, 33)}
 			for i := 0; i < 100 && len(engine.txSets) == 0; i++ {
-				r.serveTxSet(7, &message.GetLedger{LedgerHash: id[:], InfoType: message.LedgerInfoTsCandidate, NodeIDs: ids, QueryDepth: 64, QueryDepthSet: true})
+				r.serveTxSet(context.Background(), 7, &message.GetLedger{LedgerHash: id[:], InfoType: message.LedgerInfoTsCandidate, NodeIDs: ids, QueryDepth: 64, QueryDepthSet: true})
 				frames := recorder.sentFrames()
 				require.Len(t, frames, i+1)
 				_, decoded := decodeFrame(t, frames[i].frame)

@@ -87,7 +87,7 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// liBASE must now carry the tx root (node[2]) alongside header + state root.
-	baseNodes := router.buildLedgerBaseNodes(l)
+	baseNodes := router.buildLedgerBaseNodes(context.Background(), l)
 	require.Len(t, baseNodes, 3, "tx-bearing base must carry header + state root + tx root")
 	require.NotEmpty(t, baseNodes[2].NodeData, "node[2] (tx root) must be non-empty")
 
@@ -112,13 +112,13 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 			}
 		}
 		if len(stateIDs) > 0 {
-			nodes := router.serveLedgerMapNodes(l.StateMapSnapshot, asReq(stateIDs), 7, "state")
+			nodes := router.serveLedgerMapNodes(context.Background(), l.StateMapSnapshotContext, asReq(stateIDs), 7, "state")
 			require.NotEmpty(t, nodes, "serve must answer requested state nodes")
 			require.NoError(t, il.GotStateNodes(nodes))
 			progressed = true
 		}
 		if len(txIDs) > 0 {
-			nodes := router.serveLedgerMapNodes(l.TxMapSnapshot, asReq(txIDs), 7, "tx")
+			nodes := router.serveLedgerMapNodes(context.Background(), l.TxMapSnapshotContext, asReq(txIDs), 7, "tx")
 			require.NotEmpty(t, nodes, "serve must answer requested tx nodes")
 			require.NoError(t, il.GotTransactionNodes(nodes))
 			progressed = true

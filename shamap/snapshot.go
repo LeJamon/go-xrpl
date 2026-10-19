@@ -56,10 +56,19 @@ func (sm *SHAMap) SnapshotImmutableWithLedgerSeqContext(ctx context.Context, led
 // dirty flag is atomic and node hashes are read and written under each
 // node's own lock.
 func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32) (*SHAMap, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if ledgerSeq != nil {
 		sourceLedgerSeq := sm.tree.ledgerSeq
 		sm.tree.ledgerSeq = *ledgerSeq
@@ -67,13 +76,23 @@ func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32)
 	}
 
 	if sm.backing.access.available() {
-		if err := sm.storeDirtyLocked(func(entries []FlushEntry) error {
+		if err := sm.storeDirtyLocked(ctx, func(entries []FlushEntry) error {
 			return sm.backing.access.storeBatch(ctx, entries)
 		}, false); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, fmt.Errorf("failed to store dirty nodes: %w", err)
 		}
 	}
-	return sm.snapshotLocked(mutable)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	snapshot, err := sm.snapshotLocked(mutable)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	return snapshot, err
 }
 
 // MutableFork returns a mutable, structurally shared copy without flushing
