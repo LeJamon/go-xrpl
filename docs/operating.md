@@ -374,6 +374,35 @@ logs include the origin, account, requested/used/limit/capacity bytes, retry cou
 and outcome. A rejected transaction-set learning attempt does not discard the
 acquired set delivered independently to consensus.
 
+Router GET_LEDGER serving reports `goxrpl_router_serve_queued{class}`,
+`goxrpl_router_serve_active{class}`, and
+`goxrpl_router_serve_retained_bytes{class}` for the queued and active request
+work. The `class` label is limited to `ledger` and `txset`; these metrics do not
+include peer labels. `goxrpl_router_serve_dropped_total{class}` counts requests
+rejected by scheduler queue, per-peer, retained-byte or closed-scheduler limits.
+
+`goxrpl_router_serve_completed_total{class}` and
+`goxrpl_router_serve_canceled_total{class}` count admitted jobs by outcome.
+`goxrpl_router_serve_queue_wait_seconds{class}` measures time from admission to
+worker selection. `goxrpl_router_serve_service_seconds{class}` measures active
+worker time; a job canceled while active still contributes a service sample,
+while a job canceled while queued contributes neither duration sample. Retained
+bytes estimate retained request structs, slice capacities and decoded node IDs,
+including jobs being discarded. They exclude response construction and ledger
+storage. The existing inbound reservation stays attached to each request until
+serving or discard completes.
+
+The router keeps `N = max(2, GOMAXPROCS/2)` serving workers, reserving
+`max(1, N/4)` for transaction sets and the remainder for ordinary ledger work.
+The classes have 64 and 192 pending slots and 8 MiB and 24 MiB retained-request
+limits respectively. Each class allows eight queued and one active request per
+peer, caps each peer at a quarter of its byte allowance, and selects peers
+round-robin. Classes do not borrow workers or queue
+capacity: this leaves capacity idle when only one class is busy, but ensures
+that already-running work cannot occupy the other class's workers. Disconnect
+and shutdown cancel queued and active jobs; storage calls without a context
+finish before the next cancellation checkpoint.
+
 ### `[server]` and `[port_*]`
 
 `[server].ports` lists the named port sections to open. Each named

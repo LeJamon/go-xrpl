@@ -1,6 +1,8 @@
 package adaptor
 
 import (
+	"context"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -19,8 +21,8 @@ import (
 // single best peer. The relayed frame is stamped with
 // request_cookie = our local id for the original requester so the eventual
 // TMLedgerData reply routes back through routeRelayedLedgerData.
-func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.GetLedger) bool {
-	if req.QueryType == nil || req.HasRequestCookie() {
+func (r *Router) maybeRelayGetLedger(ctx context.Context, from peermanagement.PeerID, req *message.GetLedger) bool {
+	if ctx.Err() != nil || req.QueryType == nil || req.HasRequestCookie() {
 		return false
 	}
 
@@ -52,11 +54,17 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 		return false
 	}
 
+	if ctx.Err() != nil {
+		return false
+	}
 	relayed := *req
 	relayed.RequestCookie = uint64(from)
 	frame, err := message.EncodeFrame(&relayed)
 	if err != nil {
 		r.logger.Warn("failed to encode relayed get_ledger", "error", err)
+		return false
+	}
+	if ctx.Err() != nil {
 		return false
 	}
 	if err := r.serve.SendToPeer(peer, frame); err != nil {

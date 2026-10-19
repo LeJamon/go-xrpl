@@ -651,7 +651,7 @@ func TestApplyAcquisitionData_DuplicateBaseIsNotUseful(t *testing.T) {
 	closed := service.GetClosedLedger()
 	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	ledger := inbound.New(closed.Hash(), closed.Sequence(), 1, serveTestLogger())
-	data := &message.LedgerData{InfoType: message.LedgerInfoBase, Nodes: router.buildLedgerBaseNodes(closed)}
+	data := &message.LedgerData{InfoType: message.LedgerInfoBase, Nodes: router.buildLedgerBaseNodes(context.Background(), closed)}
 	first, _, _, _, err := applyAcquisitionData(t.Context(), ledger, data)
 	require.NoError(t, err)
 	assert.Equal(t, 2, first)
@@ -664,7 +664,7 @@ func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testin
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()
 	router := newTestRouter(nil, newTestAdaptor(t), nil)
-	valid := router.buildLedgerBaseNodes(closed)
+	valid := router.buildLedgerBaseNodes(context.Background(), closed)
 	require.NotEmpty(t, valid)
 
 	tests := []struct {

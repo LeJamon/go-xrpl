@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -102,7 +103,14 @@ func (r *Router) chargeGetLedgerWorker(msg *peermanagement.InboundMessage, fee r
 }
 
 func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
+	r.handleGetLedgerContext(context.Background(), msg)
+}
+
+func (r *Router) handleGetLedgerContext(ctx context.Context, msg *peermanagement.InboundMessage) {
 	defer r.recoverFrame(msg, "get_ledger")
+	if ctx.Err() != nil {
+		return
+	}
 
 	req := msg.GetLedger
 	if req == nil {
@@ -156,7 +164,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	// For a liTS_CANDIDATE request, ledger_hash carries the tx-set ID and
 	// the response is TMLedgerData{type=liTS_CANDIDATE, ...}.
 	if req.InfoType == message.LedgerInfoTsCandidate {
-		r.serveTxSet(msg.PeerID, req)
+		r.serveTxSet(ctx, msg.PeerID, req)
 		return
 	}
 
@@ -169,7 +177,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	// above is exempt from this isLoadedLocal gate — a tx-set serve that
 	// reaches the handler is answered — so this gate runs only for
 	// liBASE / liAS_NODE / liTX_NODE. (Under extreme load the bounded serve
-	// pool can still shed any get_ledger, tx-set included, before it reaches
+	// pool can still shed requests within either bounded class before reaching
 	// here; the requesting peer retries elsewhere.)
 	loadedLocal := false
 	if ft := svc.FeeTrack(); ft != nil {
@@ -178,6 +186,9 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if r.serve.ShouldShedLedgerRequest(uint64(msg.PeerID), loadedLocal) {
 		r.logger.Debug("get_ledger shed under load",
 			"peer", msg.PeerID, "itype", req.InfoType)
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
@@ -197,11 +208,14 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	} else if req.HasLType() && req.LType == message.LedgerTypeClosed {
 		l = svc.GetClosedLedger()
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil || l == nil {
 		// We don't have it — relay to a peer that advertises it, mirroring
 		// rippled's getLedger relay. Falls through to a silent drop when the
 		// request isn't relayable or no peer qualifies.
-		r.maybeRelayGetLedger(msg.PeerID, req)
+		r.maybeRelayGetLedger(ctx, msg.PeerID, req)
 		return
 	}
 	if req.HasLedgerSeq() {
@@ -233,16 +247,15 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	var nodes []message.LedgerNode
 	switch req.InfoType {
 	case message.LedgerInfoBase:
-		nodes = r.buildLedgerBaseNodes(l)
+		nodes = r.buildLedgerBaseNodes(ctx, l)
 	case message.LedgerInfoAsNode:
-		nodes = r.serveLedgerMapNodes(l.StateMapSnapshot, req, msg.PeerID, "state")
+		nodes = r.serveLedgerMapNodes(ctx, l.StateMapSnapshot, req, msg.PeerID, "state")
 	case message.LedgerInfoTxNode:
-		nodes = r.serveLedgerMapNodes(l.TxMapSnapshot, req, msg.PeerID, "tx")
+		nodes = r.serveLedgerMapNodes(ctx, l.TxMapSnapshot, req, msg.PeerID, "tx")
 	}
-	if len(nodes) == 0 {
+	if ctx.Err() != nil || len(nodes) == 0 {
 		return
 	}
-
 	resp := &message.LedgerData{
 		LedgerHash:       hash[:],
 		LedgerSeq:        l.Sequence(),
@@ -258,12 +271,18 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 			return
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		r.logger.Warn("failed to encode ledger_data response", "error", err)
 		return
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
 	if err := r.serve.SendToPeer(uint64(msg.PeerID), frame); err != nil {
 		r.logger.Debug("failed to send ledger_data to peer", "error", err, "peer", msg.PeerID)
 	}
@@ -273,10 +292,16 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 // wire header (no trailing hash); node[1] is the account-state root when
 // the state tree is non-empty; node[2] is the transaction root when the
 // ledger has transactions (txHash and tx-map hash both non-zero).
-func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
+func (r *Router) buildLedgerBaseNodes(ctx context.Context, l *ledger.Ledger) []message.LedgerNode {
+	if ctx.Err() != nil {
+		return nil
+	}
 	nodes := []message.LedgerNode{{NodeData: header.AddRaw(l.Header(), false)}}
 
 	stateHash, err := l.StateMapHash()
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err != nil || stateHash == ([32]byte{}) {
 		return nodes
 	}
@@ -285,7 +310,13 @@ func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
 		r.logger.Warn("ledger base: state snapshot failed", "error", err)
 		return nodes
 	}
+	if ctx.Err() != nil {
+		return nil
+	}
 	stateRoot, err := stateMap.SerializeRoot()
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err != nil {
 		r.logger.Warn("ledger base: state root serialize failed", "error", err)
 		return nodes
@@ -296,6 +327,9 @@ func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
 		return nodes
 	}
 	txHash, err := l.TxMapHash()
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err != nil || txHash == ([32]byte{}) {
 		return nodes
 	}
@@ -304,7 +338,13 @@ func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
 		r.logger.Warn("ledger base: tx snapshot failed", "error", err)
 		return nodes
 	}
+	if ctx.Err() != nil {
+		return nil
+	}
 	txRoot, err := txMap.SerializeRoot()
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err != nil {
 		r.logger.Warn("ledger base: tx root serialize failed", "error", err)
 		return nodes
@@ -316,14 +356,17 @@ func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
 // state or transaction tree: fat nodes, QueryDepth levels deep, honouring
 // the soft/hard reply caps. fatLeaves is true here — only liTS_CANDIDATE
 // uses false.
-func (r *Router) serveLedgerMapNodes(snapshot func() (*shamap.SHAMap, error), req *message.GetLedger, peerID peermanagement.PeerID, label string) []message.LedgerNode {
+func (r *Router) serveLedgerMapNodes(ctx context.Context, snapshot func() (*shamap.SHAMap, error), req *message.GetLedger, peerID peermanagement.PeerID, label string) []message.LedgerNode {
+	if ctx.Err() != nil {
+		return nil
+	}
 	m, err := snapshot()
 	if err != nil || m == nil {
 		r.logger.Debug("ledger node serve: map snapshot unavailable", "error", err, "peer", peerID)
 		return nil
 	}
 	queryDepth := r.ledgerQueryDepth(peerID, req)
-	return buildShaMapReplyNodes(m, req.NodeIDs, queryDepth, true, r.logger, peerID,
+	return buildShaMapReplyNodes(ctx, m, req.NodeIDs, queryDepth, true, r.logger, peerID,
 		fmt.Sprintf("ledger %d %s", req.LedgerSeq, label))
 }
 
@@ -334,8 +377,8 @@ func (r *Router) serveLedgerMapNodes(snapshot func() (*shamap.SHAMap, error), re
 // soft/hard caps. Empty nodeids falls back to a full pre-order walk for
 // legacy goxrpl→goxrpl fixtures; real requestors always send at least the
 // root.
-func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger) {
-	if len(req.LedgerHash) != 32 {
+func (r *Router) serveTxSet(ctx context.Context, peerID peermanagement.PeerID, req *message.GetLedger) {
+	if ctx.Err() != nil || len(req.LedgerHash) != 32 {
 		return
 	}
 	var txSetID consensus.TxSetID
@@ -344,7 +387,7 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	ts, ok := r.adaptor.txSetCache.Get(txSetID)
 	if !ok {
 		// We don't have it — relay to a peer that advertised it (getTxSet).
-		if r.maybeRelayGetLedger(peerID, req) {
+		if r.maybeRelayGetLedger(ctx, peerID, req) {
 			return
 		}
 		r.logger.Debug("peer requested tx-set we don't have",
@@ -360,9 +403,12 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	// fatLeaves is always false for liTS_CANDIDATE.
 	const fatLeaves = false
 
-	nodes := buildShaMapReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID,
+	nodes := buildShaMapReplyNodes(ctx, txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID,
 		fmt.Sprintf("txset %x", txSetID[:8]))
 
+	if ctx.Err() != nil {
+		return
+	}
 	resp := &message.LedgerData{
 		LedgerHash:       req.LedgerHash,
 		LedgerSeq:        0, // tx-set responses carry no ledger seq
@@ -378,12 +424,18 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 			return
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		r.logger.Warn("failed to encode tx-set response", "error", err)
 		return
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
 	if err := r.serve.SendToPeer(uint64(peerID), frame); err != nil {
 		r.logger.Debug("failed to send tx-set response", "error", err, "peer", peerID)
 		return
@@ -412,6 +464,7 @@ func (r *Router) ledgerQueryDepth(peerID peermanagement.PeerID, req *message.Get
 // NodeIDs/QueryDepth and soft/hard reply caps. label identifies the source map
 // for logging.
 func buildShaMapReplyNodes(
+	ctx context.Context,
 	m *shamap.SHAMap,
 	requestedNodeIDs [][]byte,
 	queryDepth int,
@@ -422,6 +475,9 @@ func buildShaMapReplyNodes(
 ) []message.LedgerNode {
 	nodes := make([]message.LedgerNode, 0)
 	for i, rawID := range requestedNodeIDs {
+		if ctx.Err() != nil {
+			return nil
+		}
 		// Soft cap: stop starting new subtrees.
 		if len(nodes) >= txSetSoftMaxReplyNodes {
 			logger.Debug("shamap serve: soft-cap reached, stopping subtree iteration",
@@ -436,7 +492,10 @@ func buildShaMapReplyNodes(
 				"node_idx", i, "len", len(rawID))
 			continue
 		}
-		subtree, err := m.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
+		subtree, err := m.GetNodeFatByPathContext(ctx, path, depth, queryDepth, fatLeaves)
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err != nil {
 			logger.Debug("shamap serve: GetNodeFatByPath failed, skipping",
 				"peer", peerID, "map", label,
@@ -444,6 +503,9 @@ func buildShaMapReplyNodes(
 			continue
 		}
 		for _, n := range subtree {
+			if ctx.Err() != nil {
+				return nil
+			}
 			// Hard cap: truncate mid-subtree.
 			if len(nodes) >= txSetHardMaxReplyNodes {
 				logger.Debug("shamap serve: hard-cap reached, truncating subtree",
@@ -453,6 +515,9 @@ func buildShaMapReplyNodes(
 			}
 			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
 		}
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	return nodes
 }

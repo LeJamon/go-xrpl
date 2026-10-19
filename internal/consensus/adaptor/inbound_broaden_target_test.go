@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -114,7 +115,7 @@ func TestRequestMissingAcquisitionNodes_ReplyTargetsReplier(t *testing.T) {
 	l := svc.GetClosedLedger()
 	require.NotNil(t, l)
 	il := inbound.New(l.Hash(), l.Sequence(), 7, serveTestLogger())
-	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(l)))
+	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(context.Background(), l)))
 	require.NotEmpty(t, il.NeedsMissingNodeIDs(), "acquisition must have outstanding state nodes")
 	il.AddPeer(8)
 	il.AddPeer(9)

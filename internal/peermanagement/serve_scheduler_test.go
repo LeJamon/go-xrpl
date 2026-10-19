@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 2, 32, 16, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 2, MaxPending: 32, PerPeerQueue: 16, PerPeerActive: 1})
 	runDone := make(chan struct{})
 	go func() {
 		_ = s.Run(ctx)
@@ -61,7 +62,7 @@ func TestServeSchedulerPerPeerFairness(t *testing.T) {
 
 func TestServeSchedulerBoundsAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	started := make(chan struct{})
 	block := make(chan struct{})
 	if !s.Submit(ctx, 1, func(context.Context) {
@@ -91,7 +92,7 @@ func TestServeSchedulerBoundsAndCancellation(t *testing.T) {
 func TestServeSchedulerCancelPeerTracksCompletedTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 2, 8, 8, 2)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 2, MaxPending: 8, PerPeerQueue: 8, PerPeerActive: 2})
 	go func() { _ = s.Run(ctx) }()
 
 	startedFirst := make(chan struct{})
@@ -147,7 +148,7 @@ func TestServeSchedulerCancelPeerTracksCompletedTasks(t *testing.T) {
 
 func TestServeSchedulerCancelPeerRemovesRoundEntry(t *testing.T) {
 	ctx := context.Background()
-	s := newServeScheduler(ctx, 1, 256, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 256, PerPeerQueue: 1, PerPeerActive: 1})
 	for peerID := PeerID(1); peerID <= 128; peerID++ {
 		if !s.Submit(ctx, peerID, func(context.Context) {}) {
 			t.Fatalf("submission for peer %d rejected", peerID)
@@ -168,7 +169,7 @@ func TestServeSchedulerWakesEveryIdleWorkerForBurst(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	const workers = 4
-	s := newServeScheduler(ctx, workers, workers, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: workers, MaxPending: workers, PerPeerQueue: 1, PerPeerActive: 1})
 	done := make(chan struct{})
 	go func() {
 		_ = s.Run(ctx)
@@ -213,7 +214,7 @@ func TestServeSchedulerWakesEveryIdleWorkerForBurst(t *testing.T) {
 func TestServeSchedulerDiscardsOwnedQueuedTaskOnPeerCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	var discarded atomic.Int32
 	requireSubmitted := s.SubmitOwned(ctx, 1, func(context.Context) {
 		t.Fatal("canceled queued task ran")
@@ -225,7 +226,7 @@ func TestServeSchedulerDiscardsOwnedQueuedTaskOnPeerCancel(t *testing.T) {
 	}
 
 	s.CancelPeer(1)
-	s.close()
+	s.Close()
 	if got := discarded.Load(); got != 1 {
 		t.Fatalf("discard count = %d, want 1", got)
 	}
@@ -234,7 +235,7 @@ func TestServeSchedulerDiscardsOwnedQueuedTaskOnPeerCancel(t *testing.T) {
 func TestServeSchedulerRejectedOwnedTaskRemainsCallerOwned(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	if !s.Submit(ctx, 1, func(context.Context) {}) {
 		t.Fatal("first submission rejected")
 	}
@@ -250,7 +251,7 @@ func TestServeSchedulerRejectedOwnedTaskRemainsCallerOwned(t *testing.T) {
 func TestServeSchedulerDiscardsOwnedQueuedTaskOnClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	var discarded atomic.Int32
 	if !s.SubmitOwned(ctx, 1, func(context.Context) {
 		t.Fatal("closed queued task ran")
@@ -260,8 +261,8 @@ func TestServeSchedulerDiscardsOwnedQueuedTaskOnClose(t *testing.T) {
 		t.Fatal("owned task submission rejected")
 	}
 
-	s.close()
-	s.close()
+	s.Close()
+	s.Close()
 	if got := discarded.Load(); got != 1 {
 		t.Fatalf("discard count = %d, want 1", got)
 	}
@@ -270,7 +271,7 @@ func TestServeSchedulerDiscardsOwnedQueuedTaskOnClose(t *testing.T) {
 func TestServeSchedulerActiveCancellationUsesRunCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	go func() { _ = s.Run(ctx) }()
 	started := make(chan struct{})
 	cleaned := make(chan struct{})
@@ -303,7 +304,7 @@ func TestServeSchedulerActiveCancellationUsesRunCleanup(t *testing.T) {
 
 func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newServeScheduler(ctx, 1, 3, 2, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 3, PerPeerQueue: 2, PerPeerActive: 1})
 	peer := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, nil, nil)
 	peer.setState(PeerStateConnected)
 	overlay := &Overlay{
@@ -410,7 +411,7 @@ func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
 func TestOverlayServeAdmissionSerializesWithPeerClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	peer := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, nil, nil)
 	peer.setState(PeerStateConnected)
 	overlay := &Overlay{
@@ -462,5 +463,601 @@ func TestOverlayServeAdmissionSerializesWithPeerClose(t *testing.T) {
 	s.CancelPeer(peer.ID())
 	if pending := s.Pending(); pending != 0 {
 		t.Fatalf("pending = %d after peer close cancellation, want 0", pending)
+	}
+}
+
+func TestServeSchedulerRetainedBytesIncludeActiveTasks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    4,
+		PerPeerQueue:  4,
+		PerPeerActive: 1,
+		MaxBytes:      10,
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if !s.SubmitOwnedBytes(ctx, 1, 7, func(context.Context) {
+		close(started)
+		<-release
+	}, nil) {
+		t.Fatal("active byte-charged task rejected")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("byte-charged task did not start")
+	}
+	stats := s.Snapshot()
+	if stats.Queued != 0 || stats.Active != 1 || stats.RetainedBytes != 7 {
+		t.Fatalf("active snapshot = %+v, want queued=0 active=1 retained=7", stats)
+	}
+	var rejectedDiscarded atomic.Int32
+	if s.SubmitOwnedBytes(ctx, 2, 4, func(context.Context) {}, func() {
+		rejectedDiscarded.Add(1)
+	}) {
+		t.Fatal("submission over retained-byte budget accepted")
+	}
+	if got := rejectedDiscarded.Load(); got != 0 {
+		t.Fatalf("rejected task was discarded %d times, want 0", got)
+	}
+	if stats = s.Snapshot(); stats.RetainedBytes != 7 || stats.Dropped != 1 {
+		t.Fatalf("after rejection snapshot = %+v, want retained=7 dropped=1", stats)
+	}
+
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats = s.Snapshot()
+		if stats.Active == 0 && stats.RetainedBytes == 0 && stats.Completed == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("completed snapshot = %+v", stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	secondDone := make(chan struct{})
+	if !s.SubmitOwnedBytes(ctx, 2, 10, func(context.Context) {
+		close(secondDone)
+	}, nil) {
+		t.Fatal("byte budget was not released after completion")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second byte-charged task did not run")
+	}
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != context.Canceled {
+			t.Fatalf("scheduler run error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop")
+	}
+}
+
+func TestServeSchedulerRejectsInvalidRetainedBytesWithoutOverflow(t *testing.T) {
+	s := NewServeScheduler(context.Background(), ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    4,
+		PerPeerQueue:  4,
+		PerPeerActive: 1,
+		MaxBytes:      maxRetainedBytes,
+	})
+	var discarded atomic.Int32
+	if !s.SubmitOwnedBytes(context.Background(), 1, maxRetainedBytes, func(context.Context) {}, func() {
+		discarded.Add(1)
+	}) {
+		t.Fatal("maximum retained-byte task rejected")
+	}
+	if s.SubmitOwnedBytes(context.Background(), 1, 1, func(context.Context) {}, func() {
+		discarded.Add(1)
+	}) {
+		t.Fatal("retained-byte addition overflow was accepted")
+	}
+	if s.SubmitOwnedBytes(context.Background(), 1, -1, func(context.Context) {}, func() {
+		discarded.Add(1)
+	}) {
+		t.Fatal("negative retained-byte task accepted")
+	}
+	if got := discarded.Load(); got != 0 {
+		t.Fatalf("rejected tasks were discarded %d times, want 0", got)
+	}
+	if got := s.Snapshot(); got.Dropped != 2 || got.RetainedBytes != maxRetainedBytes {
+		t.Fatalf("rejection snapshot = %+v", got)
+	}
+	s.Close()
+	if got := discarded.Load(); got != 1 {
+		t.Fatalf("accepted queued task discarded %d times, want 1", got)
+	}
+	if got := s.Snapshot(); got.RetainedBytes != 0 || got.Canceled != 1 {
+		t.Fatalf("close snapshot = %+v", got)
+	}
+}
+
+func TestServeSchedulerCancelPeerKeepsActiveRetentionUntilExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    4,
+		PerPeerQueue:  4,
+		PerPeerActive: 1,
+		MaxBytes:      10,
+	})
+	go func() { _ = s.Run(ctx) }()
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	cleaned := make(chan struct{})
+	if !s.SubmitOwnedBytes(ctx, 1, 6, func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		close(cleaned)
+	}, nil) {
+		t.Fatal("active task rejected")
+	}
+	var queuedDiscarded atomic.Int32
+	if !s.SubmitOwnedBytes(ctx, 1, 3, func(context.Context) {
+		t.Fatal("canceled queued task ran")
+	}, func() {
+		queuedDiscarded.Add(1)
+	}) {
+		t.Fatal("queued task rejected")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("active task did not start")
+	}
+	s.CancelPeer(1)
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("active task did not observe cancellation")
+	}
+	if got := s.Snapshot(); got.Active != 1 || got.Queued != 0 || got.RetainedBytes != 6 {
+		t.Fatalf("after peer cancellation snapshot = %+v", got)
+	}
+	close(release)
+	select {
+	case <-cleaned:
+	case <-time.After(time.Second):
+		t.Fatal("active task did not observe cancellation")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := s.Snapshot()
+		if stats.Active == 0 && stats.RetainedBytes == 0 && stats.Canceled == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after active cleanup snapshot = %+v", stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := queuedDiscarded.Load(); got != 1 {
+		t.Fatalf("queued discard count = %d, want 1", got)
+	}
+	s.Close()
+}
+
+func TestServeSchedulerCloseJoinsWorkers(t *testing.T) {
+	s := NewServeScheduler(context.Background(), ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    1,
+		PerPeerQueue:  1,
+		PerPeerActive: 1,
+		MaxBytes:      1,
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(context.Background()) }()
+	started := make(chan struct{})
+	cleaned := make(chan struct{})
+	if !s.SubmitOwnedBytes(context.Background(), 1, 1, func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(cleaned)
+	}, nil) {
+		t.Fatal("active task rejected")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("active task did not start")
+	}
+	s.Close()
+	select {
+	case <-cleaned:
+	case <-time.After(time.Second):
+		t.Fatal("active task did not observe close")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("scheduler run error = %v, want nil after direct close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not join workers after direct close")
+	}
+	if got := s.Snapshot(); got.Active != 0 || got.RetainedBytes != 0 || got.Canceled != 1 {
+		t.Fatalf("close snapshot = %+v", got)
+	}
+}
+
+func TestServeSchedulerSnapshotTimingIsBounded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    1,
+		PerPeerQueue:  1,
+		PerPeerActive: 1,
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+	finished := make(chan struct{})
+	if !s.Submit(ctx, 1, func(context.Context) {
+		close(finished)
+	}) {
+		t.Fatal("timed task rejected")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("timed task did not finish")
+	}
+	deadline := time.Now().Add(time.Second)
+	var stats ServeSchedulerStats
+	for {
+		stats = s.Snapshot()
+		if stats.QueueWait.Count == 1 && stats.Service.Count == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timing snapshot = %+v", stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if stats.QueueWait.Sum < 0 || stats.Service.Sum < 0 {
+		t.Fatalf("negative timing sum: %+v", stats)
+	}
+	for _, distribution := range []ServeDurationStats{stats.QueueWait, stats.Service} {
+		previous := uint64(0)
+		for i, count := range distribution.Buckets {
+			if count < previous || count > distribution.Count {
+				t.Fatalf("non-cumulative timing bucket %d: count=%d previous=%d total=%d", i, count, previous, distribution.Count)
+			}
+			previous = count
+		}
+	}
+	wantBounds := [8]float64{1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 10}
+	if got := ServeDurationBucketBounds(); got != wantBounds {
+		t.Fatalf("timing bounds = %v, want %v", got, wantBounds)
+	}
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != context.Canceled {
+			t.Fatalf("scheduler run error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop")
+	}
+}
+
+func TestServeSchedulerCanceledParentConstruction(t *testing.T) {
+	for range 100 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		s := NewServeScheduler(ctx, ServeSchedulerConfig{
+			Workers:       1,
+			MaxPending:    1,
+			PerPeerQueue:  1,
+			PerPeerActive: 1,
+		})
+		select {
+		case <-s.done:
+		case <-time.After(time.Second):
+			t.Fatal("scheduler did not close for an already-canceled parent")
+		}
+		s.Close()
+	}
+}
+
+func TestServeSchedulerConcurrentCloseJoinsDiscard(t *testing.T) {
+	s := NewServeScheduler(context.Background(), ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    1,
+		PerPeerQueue:  1,
+		PerPeerActive: 1,
+	})
+	discardStarted := make(chan struct{})
+	releaseDiscard := make(chan struct{})
+	if !s.SubmitOwned(context.Background(), 1, func(context.Context) {
+		t.Fatal("queued task ran while close was disposing it")
+	}, func() {
+		close(discardStarted)
+		<-releaseDiscard
+	}) {
+		t.Fatal("queued task rejected")
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-discardStarted:
+	case <-time.After(time.Second):
+		t.Fatal("close did not enter discard")
+	}
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before discard completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(context.Background()) }()
+	select {
+	case err := <-runDone:
+		t.Fatalf("Run returned before discard completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseDiscard)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after discard completed")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run error = %v, want nil after direct close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not join close disposal")
+	}
+}
+
+func TestServeSchedulerRetainedBytesStayChargedDuringDiscard(t *testing.T) {
+	s := NewServeScheduler(context.Background(), ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    2,
+		PerPeerQueue:  1,
+		PerPeerActive: 1,
+		MaxBytes:      1,
+	})
+	discardStarted := make(chan struct{})
+	releaseDiscard := make(chan struct{})
+	var firstDiscarded atomic.Int32
+	if !s.SubmitOwnedBytes(context.Background(), 1, 1, func(context.Context) {
+		t.Fatal("queued task ran")
+	}, func() {
+		firstDiscarded.Add(1)
+		close(discardStarted)
+		<-releaseDiscard
+	}) {
+		t.Fatal("byte-charged task rejected")
+	}
+	cancelDone := make(chan struct{})
+	go func() {
+		s.CancelPeer(1)
+		close(cancelDone)
+	}()
+	select {
+	case <-discardStarted:
+	case <-time.After(time.Second):
+		t.Fatal("peer cancellation did not enter discard")
+	}
+	stats := s.Snapshot()
+	if stats.Queued != 0 || stats.Active != 0 || stats.RetainedBytes != 1 {
+		t.Fatalf("during discard snapshot = %+v, want retained byte charge", stats)
+	}
+	var rejectedDiscarded atomic.Int32
+	if s.SubmitOwnedBytes(context.Background(), 2, 1, func(context.Context) {}, func() {
+		rejectedDiscarded.Add(1)
+	}) {
+		t.Fatal("new task admitted before discard released retained bytes")
+	}
+	if got := rejectedDiscarded.Load(); got != 0 {
+		t.Fatalf("rejected task discarded %d times, want 0", got)
+	}
+	close(releaseDiscard)
+	select {
+	case <-cancelDone:
+	case <-time.After(time.Second):
+		t.Fatal("peer cancellation did not finish")
+	}
+	if got := s.Snapshot(); got.RetainedBytes != 0 {
+		t.Fatalf("after discard retained bytes = %d, want 0", got.RetainedBytes)
+	}
+	var secondDiscarded atomic.Int32
+	if !s.SubmitOwnedBytes(context.Background(), 2, 1, func(context.Context) {}, func() {
+		secondDiscarded.Add(1)
+	}) {
+		t.Fatal("byte budget was not released after discard")
+	}
+	s.Close()
+	if firstDiscarded.Load() != 1 || secondDiscarded.Load() != 1 {
+		t.Fatalf("discard counts = first %d second %d, want one each", firstDiscarded.Load(), secondDiscarded.Load())
+	}
+}
+
+func TestServeSchedulerCloseJoinsCancelPeerDiscard(t *testing.T) {
+	s := NewServeScheduler(context.Background(), ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    1,
+		PerPeerQueue:  1,
+		PerPeerActive: 1,
+		MaxBytes:      1,
+	})
+	discardStarted := make(chan struct{})
+	releaseDiscard := make(chan struct{})
+	if !s.SubmitOwnedBytes(context.Background(), 1, 1, func(context.Context) {
+		t.Fatal("queued task ran while peer cancellation was disposing it")
+	}, func() {
+		close(discardStarted)
+		<-releaseDiscard
+	}) {
+		t.Fatal("byte-charged task rejected")
+	}
+	cancelDone := make(chan struct{})
+	go func() {
+		s.CancelPeer(1)
+		close(cancelDone)
+	}()
+	select {
+	case <-discardStarted:
+	case <-time.After(time.Second):
+		t.Fatal("peer cancellation did not enter discard")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before CancelPeer discard completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(context.Background()) }()
+	select {
+	case err := <-runDone:
+		t.Fatalf("Run returned before CancelPeer discard completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseDiscard)
+	select {
+	case <-cancelDone:
+	case <-time.After(time.Second):
+		t.Fatal("CancelPeer did not finish after discard completed")
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not join CancelPeer discard")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run error = %v, want nil after direct close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not join CancelPeer discard")
+	}
+	if got := s.Snapshot(); got.RetainedBytes != 0 || got.Queued != 0 || got.Canceled != 1 {
+		t.Fatalf("final snapshot = %+v, want no queued retention and one cancellation", got)
+	}
+}
+
+func TestServeSchedulerPerPeerByteBudget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := NewServeScheduler(ctx, ServeSchedulerConfig{
+		Workers:       1,
+		MaxPending:    4,
+		PerPeerQueue:  4,
+		PerPeerActive: 1,
+		MaxBytes:      10,
+		PerPeerBytes:  6,
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseTask := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseTask()
+	if !s.SubmitOwnedBytes(ctx, 1, 6, func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+	}, nil) {
+		t.Fatal("peer A byte-charged task rejected")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("peer A task did not start")
+	}
+
+	var rejectedDiscarded atomic.Int32
+	if s.SubmitOwnedBytes(ctx, 1, 1, func(context.Context) {}, func() {
+		rejectedDiscarded.Add(1)
+	}) {
+		t.Fatal("peer A exceeded its byte budget")
+	}
+	if got := rejectedDiscarded.Load(); got != 0 {
+		t.Fatalf("rejected peer A task was discarded %d times", got)
+	}
+	bDone := make(chan struct{})
+	if !s.SubmitOwnedBytes(ctx, 2, 4, func(context.Context) {
+		close(bDone)
+	}, nil) {
+		t.Fatal("peer B was rejected while peer A used its per-peer budget")
+	}
+	if got := s.Snapshot(); got.Queued != 1 || got.Active != 1 || got.RetainedBytes != 10 {
+		t.Fatalf("saturated snapshot = %+v, want queued=1 active=1 retained=10", got)
+	}
+
+	s.CancelPeer(1)
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("peer A task did not observe cancellation")
+	}
+	if s.SubmitOwnedBytes(ctx, 1, 1, func(context.Context) {}, nil) {
+		t.Fatal("peer A was admitted before canceled active work released its bytes")
+	}
+	if got := s.Snapshot(); got.RetainedBytes != 10 || got.Active != 1 || got.Queued != 1 {
+		t.Fatalf("canceled snapshot = %+v, want retained=10 active=1 queued=1", got)
+	}
+
+	releaseTask()
+	select {
+	case <-bDone:
+	case <-time.After(time.Second):
+		t.Fatal("peer B task did not run after peer A exited")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := s.Snapshot()
+		if stats.Active == 0 && stats.Queued == 0 && stats.RetainedBytes == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cleanup snapshot = %+v", stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !s.SubmitOwnedBytes(ctx, 1, 6, func(context.Context) {}, nil) {
+		t.Fatal("peer A byte budget was not released after active cleanup")
+	}
+	s.Close()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("scheduler run error = %v, want nil after direct close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop")
 	}
 }

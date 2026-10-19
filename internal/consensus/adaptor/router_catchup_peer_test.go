@@ -444,7 +444,7 @@ func TestRouter_PeerlessAcquisitionSkipsFetchPackEscalation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, parent)
 	il := inbound.NewGeneric(parent.Hash(), parent.Sequence(), 1, serveTestLogger())
-	require.NoError(t, il.GotBase(r.buildLedgerBaseNodes(parent)))
+	require.NoError(t, il.GotBase(r.buildLedgerBaseNodes(context.Background(), parent)))
 	require.True(t, il.RemovePeer(1))
 
 	r.catchupReplay.escalateAcquisition(il, time.Now().Add(4*time.Second))

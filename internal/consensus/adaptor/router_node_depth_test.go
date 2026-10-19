@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -171,7 +172,7 @@ func TestLedgerNodeDepthServesTxSet(t *testing.T) {
 			consumer.MarkTxSetStillNeeded(id)
 			ids := [][]byte{make([]byte, 33)}
 			for i := 0; i < 100 && len(engine.txSets) == 0; i++ {
-				r.serveTxSet(7, &message.GetLedger{LedgerHash: id[:], InfoType: message.LedgerInfoTsCandidate, NodeIDs: ids, QueryDepth: 64, QueryDepthSet: true})
+				r.serveTxSet(context.Background(), 7, &message.GetLedger{LedgerHash: id[:], InfoType: message.LedgerInfoTsCandidate, NodeIDs: ids, QueryDepth: 64, QueryDepthSet: true})
 				frames := recorder.sentFrames()
 				require.Len(t, frames, i+1)
 				_, decoded := decodeFrame(t, frames[i].frame)
