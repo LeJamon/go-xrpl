@@ -98,6 +98,22 @@ func TestCurrentFieldsIdentity(t *testing.T) {
 	}
 }
 
+func TestBindRawBytesSerializesCurrentFieldsOnce(t *testing.T) {
+	base := NewBaseTx(TypeAccountSet, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+	base.Fee = "10"
+	base.SetSequence(1)
+	raw, err := SerializeTransaction(base)
+	require.NoError(t, err)
+
+	txn := &identityTestTransaction{Transaction: base}
+	require.NoError(t, BindRawBytes(txn, raw))
+	require.Equal(t, 1, txn.calls)
+
+	boundID, ok := txn.GetCommon().RawFieldsIdentity()
+	require.True(t, ok)
+	require.Equal(t, hashWithTxnPrefix(raw), boundID)
+}
+
 func TestSerializeCurrentTransactionMatchesHexEncoding(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	baseFields := func() map[string]any {

@@ -78,6 +78,7 @@ func TestClosedLedgerFeeMetricsDispatchCustomFee(t *testing.T) {
 	if len(levels) != 1 || levels[0] != txq.FeeLevel(txq.BaseLevel) {
 		t.Fatalf("fee levels = %v, want [%d]", levels, txq.BaseLevel)
 	}
+	assertReusedFeeLevels(t, ctx, levels)
 }
 
 func feeFailureLedger(t *testing.T) (*Service, *ledger.Ledger, string) {
@@ -185,10 +186,34 @@ func TestClosedLedgerFeeMetricsExcludeCalculationFailures(t *testing.T) {
 				require.NoError(t, current.AddTransactionWithMeta(hash, blob))
 			}
 			require.ElementsMatch(t, expected, ctx.GetTransactionFeeLevels())
+			assertReusedFeeLevels(t, ctx, expected)
 			require.Equal(t, uint32(count), ctx.GetTransactionCount())
 			queue, err := txq.New(txq.DefaultConfig())
 			require.NoError(t, err)
 			require.Equal(t, uint64(count), queue.ProcessClosedLedger(ctx, false))
 		})
 	}
+}
+
+func assertReusedFeeLevels(t *testing.T, original *closedLedgerCtx, expected []txq.FeeLevel) {
+	t.Helper()
+	ctx := *original
+	ctx.transactions = make(map[[32]byte]tx.Transaction)
+	require.NoError(t, ctx.ledger.ForEachTransaction(func(hash [32]byte, data []byte) bool {
+		raw, _, err := tx.SplitTxWithMetaBlob(data)
+		require.NoError(t, err)
+		parsed, err := tx.ParseFromBinary(raw)
+		require.NoError(t, err)
+		ctx.transactions[hash] = parsed
+		return true
+	}))
+	require.ElementsMatch(t, expected, ctx.GetTransactionFeeLevels())
+	for _, parsed := range ctx.transactions {
+		parsed.GetCommon().Fee = "123456789"
+	}
+	require.ElementsMatch(t, expected, ctx.GetTransactionFeeLevels(), "mutated fields must fall back to closed transaction bytes")
+	for _, parsed := range ctx.transactions {
+		parsed.SetRawBytes([]byte{1, 2, 3})
+	}
+	require.ElementsMatch(t, expected, ctx.GetTransactionFeeLevels(), "replaced raw bytes must fall back to closed transaction bytes")
 }

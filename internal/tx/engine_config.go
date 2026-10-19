@@ -2,7 +2,6 @@ package tx
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -324,65 +323,59 @@ func BindRawBytes(tx Transaction, raw []byte) error {
 	if err != nil {
 		return err
 	}
-	return bindCanonicalRawBytes(tx, rawFields, canonical)
+	return bindCanonicalRawBytes(tx, canonical)
 }
 
-func bindCanonicalRawBytes(tx Transaction, rawFields map[string]any, canonical []byte) error {
+func bindCanonicalRawBytes(tx Transaction, canonical []byte) error {
 	_, alreadyBound := tx.GetCommon().RawFieldsIdentity()
 	sameRaw := bytes.Equal(tx.GetRawBytes(), canonical)
 	if alreadyBound && sameRaw {
 		tx.SetRawBytes(canonical)
 		return nil
 	}
-	currentFields, err := tx.Flatten()
+	currentFields, err := currentTransactionFields(tx)
 	if err != nil {
 		return err
 	}
-	PopulateRequiredWireFields(currentFields, tx.GetCommon())
-	currentProjectionID, err := transactionFieldProjectionID(currentFields)
+	currentBytes, err := binarycodec.EncodeBytes(currentFields)
 	if err != nil {
 		return err
 	}
-	rawProjectionID, err := transactionFieldProjectionID(rawFields)
-	if err != nil {
-		return err
-	}
+	currentProjectionID := hashWithTxnPrefix(currentBytes)
+	rawProjectionID := hashWithTxnPrefix(canonical)
 	if currentProjectionID != rawProjectionID {
 		return errors.New("raw transaction fields do not match transaction")
 	}
-	currentID, err := ComputeCurrentTransactionHash(tx)
-	if err != nil {
-		return err
+	if tx.TxType() == TypeClawback {
+		if err := ValidateTemplateFields(tx.TxType(), currentFields); err != nil {
+			return err
+		}
 	}
 	tx.SetRawBytes(canonical)
-	tx.GetCommon().MarkRawFieldsIdentity(currentID)
+	tx.GetCommon().MarkRawFieldsIdentity(currentProjectionID)
 	return nil
 }
 
-func transactionFieldProjectionID(fields map[string]any) ([32]byte, error) {
-	hexValue, err := binarycodec.Encode(fields)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	encoded, err := hex.DecodeString(hexValue)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return hashWithTxnPrefix(encoded), nil
-}
-
 func serializeCurrentTransaction(tx Transaction) ([]byte, error) {
-	txMap, err := tx.Flatten()
+	txMap, err := currentTransactionFields(tx)
 	if err != nil {
 		return nil, err
 	}
-	PopulateRequiredWireFields(txMap, tx.GetCommon())
 	if tx.TxType() == TypeClawback {
 		if err := ValidateTemplateFields(tx.TxType(), txMap); err != nil {
 			return nil, err
 		}
 	}
 	return binarycodec.EncodeBytes(txMap)
+}
+
+func currentTransactionFields(tx Transaction) (map[string]any, error) {
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	PopulateRequiredWireFields(txMap, tx.GetCommon())
+	return txMap, nil
 }
 
 // PopulateRequiredWireFields supplies required fields whose valid zero values

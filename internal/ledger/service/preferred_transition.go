@@ -40,6 +40,7 @@ type successorOptions struct {
 	retries            []openledger.PendingTx
 	retrySalt          *[32]byte
 	anyDisputes        bool
+	feeLevels          []txq.FeeLevel
 	check              func(*Service) error
 }
 
@@ -116,6 +117,10 @@ type PreparedPreferredLedger struct {
 type preferredTransitionTimings struct {
 	started        time.Time
 	preparation    time.Duration
+	snapshot       time.Duration
+	capture        time.Duration
+	queueFork      time.Duration
+	feeLevels      time.Duration
 	stageResults   time.Duration
 	retryApply     time.Duration
 	openLedgerWait time.Duration
@@ -332,6 +337,7 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	// The transition owner now parks all mutating ingress while these snapshots
 	// run. Reads remain available because neither the service nor history locks
 	// are held during traversal or queue fork.
+	snapshotStarted := time.Now()
 	stats, err := openView.CurrentTransactionStats(p.ctx)
 	if err != nil {
 		return cleanupPrepared(fmt.Errorf("size open-ledger transactions: %w", err))
@@ -369,6 +375,7 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 		}
 	}
 
+	p.timings.snapshot = time.Since(snapshotStarted)
 	p.privateBytes = privateBytes
 	if options.deferSpeculation && s.speculativeMemoryBudget() == nil && privateBytes > speculativeSuccessorMemoryLimit {
 		return cleanupPrepared(newSpeculativeMemoryError(nil, privateBytes, speculativeSuccessorMemoryLimit, true, nil))
@@ -383,6 +390,7 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	// Parse the old view only after admission has covered the retained
 	// successor. The service gate is free, but the owner keeps all mutating
 	// ingress parked until publication or Release.
+	captureStarted := time.Now()
 	prior, err := openView.CurrentTransactions(p.ctx)
 	if err != nil {
 		return cleanupPrepared(fmt.Errorf("capture open-ledger transactions: %w", err))
@@ -404,10 +412,13 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	if err := p.ctx.Err(); err != nil {
 		return cleanupPrepared(err)
 	}
+	p.timings.capture = time.Since(captureStarted)
 	if queue != nil {
 		// Fork snapshots every queue-owned candidate, account ordering and fee
 		// metric so private preparation cannot mutate live admission state.
+		forkStarted := time.Now()
 		p.queue, err = queue.Fork()
+		p.timings.queueFork = time.Since(forkStarted)
 		if err != nil {
 			return cleanupPrepared(fmt.Errorf("preferred ledger transition: fork TxQ: %w", err))
 		}
@@ -774,8 +785,7 @@ func (p *PreparedPreferredLedger) run() {
 			Rules:     openLedgerRules(p.validatedAtPrepare, p.service.logger),
 		})
 		if err == nil && p.queue != nil {
-			baseFee, reserveBase, reserveIncrement := readFeesFromLedger(p.parent)
-			p.queue.ProcessClosedLedger(&closedLedgerCtx{ledger: p.parent, baseFee: baseFee, reserveBase: reserveBase, reserveIncrement: reserveIncrement}, p.lastRoundSlow)
+			p.processClosedLedger()
 		}
 		p.timings.preparation = time.Since(started)
 		p.markReady(err)
@@ -859,8 +869,7 @@ func (p *PreparedPreferredLedger) run() {
 				p.queue,
 				func() {
 					if p.queue != nil && !p.options.replaySpeculation {
-						baseFee, reserveBase, reserveIncrement := readFeesFromLedger(p.parent)
-						p.queue.ProcessClosedLedger(&closedLedgerCtx{ledger: p.parent, baseFee: baseFee, reserveBase: reserveBase, reserveIncrement: reserveIncrement}, p.lastRoundSlow)
+						p.processClosedLedger()
 					}
 				},
 				func(view *ledger.Ledger) {
@@ -896,6 +905,17 @@ func (p *PreparedPreferredLedger) run() {
 	p.markReady(err)
 }
 
+func (p *PreparedPreferredLedger) processClosedLedger() {
+	started := time.Now()
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(p.parent)
+	p.queue.ProcessClosedLedger(&closedLedgerCtx{
+		ledger: p.parent, baseFee: baseFee, reserveBase: reserveBase, reserveIncrement: reserveIncrement,
+		feeLevels: p.options.feeLevels,
+	}, p.lastRoundSlow)
+	p.options.feeLevels = nil
+	p.timings.feeLevels += time.Since(started)
+}
+
 func (p *PreparedPreferredLedger) abort(err error) (bool, error) {
 	p.service.preferredTransitionMu.Lock()
 	defer p.service.preferredTransitionMu.Unlock()
@@ -919,6 +939,10 @@ func (p *PreparedPreferredLedger) logTimings() {
 		"seq", p.parent.Sequence(),
 		"total", time.Since(p.timings.started),
 		"preparation", p.timings.preparation,
+		"snapshot", p.timings.snapshot,
+		"transaction_capture", p.timings.capture,
+		"txq_fork", p.timings.queueFork,
+		"fee_levels", p.timings.feeLevels,
 		"stage_results", p.timings.stageResults,
 		"retry_apply", p.timings.retryApply,
 		"open_ledger_wait", p.timings.openLedgerWait,

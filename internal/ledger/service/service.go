@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -869,6 +870,8 @@ type closedLedgerCtx struct {
 	baseFee          uint64
 	reserveBase      uint64
 	reserveIncrement uint64
+	feeLevels        []txq.FeeLevel
+	transactions     map[[32]byte]tx.Transaction
 }
 
 func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
@@ -901,14 +904,17 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 	if c.ledger == nil {
 		return nil
 	}
-	var levels []txq.FeeLevel
+	if c.feeLevels != nil {
+		return c.feeLevels
+	}
+	levels := make([]txq.FeeLevel, 0, c.ledger.TxCount())
 	config := c.feeConfig()
-	_ = c.ledger.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+	_ = c.ledger.ForEachTransaction(func(hash [32]byte, data []byte) bool {
 		raw, _, err := tx.SplitTxWithMetaBlob(data)
 		if err != nil {
 			return true
 		}
-		parsed, err := tx.ParseFromBinary(raw)
+		parsed, err := c.feeTransaction(hash, raw)
 		if err != nil {
 			return true
 		}
@@ -929,6 +935,42 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 		return true
 	})
 	return levels
+}
+
+func (c *closedLedgerCtx) feeTransaction(hash [32]byte, raw []byte) (tx.Transaction, error) {
+	if parsed := c.transactions[hash]; parsed != nil && bytes.Equal(parsed.GetRawBytes(), raw) {
+		if matches, err := tx.CurrentFieldsMatchRaw(parsed); err == nil && matches {
+			return parsed, nil
+		}
+	}
+	return tx.ParseFromBinary(raw)
+}
+
+// The consensus builder owns these transactions until this call returns. Only
+// the resulting fee vector crosses into successor preparation.
+func consensusFeeLevels(closed *ledger.Ledger, pending []openledger.PendingTx) []txq.FeeLevel {
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(closed)
+	feeContext := closedLedgerCtx{
+		ledger: closed, baseFee: baseFee, reserveBase: reserveBase, reserveIncrement: reserveIncrement,
+		transactions: make(map[[32]byte]tx.Transaction, len(pending)),
+	}
+	add := func(transaction tx.Transaction) {
+		if transaction == nil {
+			return
+		}
+		if hash, err := tx.ComputeTransactionHash(transaction); err == nil {
+			feeContext.transactions[hash] = transaction
+		}
+	}
+	for _, ptx := range pending {
+		add(ptx.Parsed)
+		if batch, ok := ptx.Parsed.(interface{ InnerTransactions() []tx.Transaction }); ok {
+			for _, inner := range batch.InnerTransactions() {
+				add(inner)
+			}
+		}
+	}
+	return feeContext.GetTransactionFeeLevels()
 }
 
 // slowConsensusThreshold: past this round time the TxQ treats consensus as slow
