@@ -30,15 +30,14 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 	}
 	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
 	r.txSetLearnJobs = make(chan txSetLearnJob, txSetLearnQueueDepth)
-	r.serveJobs = make(chan *ledgerServeJob, serveQueueDepth)
+	r.servePools = newLedgerServePools(ctx, serveWorkerCount)
 	if r.lifecycleReady == nil {
 		r.lifecycleReady = make(chan struct{})
 	}
 
 	txJobs := r.txJobs
 	txSetLearnJobs := r.txSetLearnJobs
-	serveJobs := r.serveJobs
-	r.lifecycleWG.Add(txWorkerCount + serveWorkerCount)
+	r.lifecycleWG.Add(txWorkerCount + len(r.servePools))
 	for range txWorkerCount {
 		go func() {
 			defer r.lifecycleWG.Done()
@@ -62,22 +61,10 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 			}
 		}()
 	}
-	for range serveWorkerCount {
+	for _, pool := range r.servePools {
 		go func() {
 			defer r.lifecycleWG.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case job := <-serveJobs:
-					r.runLedgerServeJob(job)
-				}
-			}
+			_ = pool.Run(ctx)
 		}()
 	}
 	close(r.lifecycleReady)
@@ -101,22 +88,23 @@ func (r *Router) stopLifecycle() {
 	}
 	r.lifecycleState = routerLifecycleStopped
 	txJobs := r.txJobs
-	serveJobs := r.serveJobs
+	servePools := r.servePools
 	r.txJobs = nil
 	// Queued learning owns detached blobs, not overlay reservations. It can
 	// be discarded at shutdown; the acquired consensus set was delivered
 	// independently. In-flight workers are still joined below.
 	r.txSetLearnJobs = nil
-	r.serveJobs = nil
 	cancel := r.lifecycleCancel
 	r.lifecycleCancel = nil
 	cancel()
 	r.lifecycleMu.Unlock()
-	r.drainLedgerServeJobs(serveJobs)
 	if r.catchupReplay != nil {
 		r.catchupReplay.stopTasks()
 	}
 
+	for _, pool := range servePools {
+		pool.Close()
+	}
 	r.lifecycleWG.Wait()
 	drainInboundMessages(txJobs)
 }

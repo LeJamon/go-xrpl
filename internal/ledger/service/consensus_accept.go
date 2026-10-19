@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -81,6 +82,7 @@ func (s *Service) acceptConsensusResult(
 	// Every frontier transition replaces openLedger, including a switch away
 	// and back to the same parent. Its identity fences detached publication.
 	expectedClosed, expectedOpen, replay := s.closedLedger, s.openLedger, s.startupReplay
+	hasQueue := s.txQueue != nil
 	s.mu.RUnlock()
 	if expectedClosed == nil {
 		return 0, svcerr.ErrNoClosedLedger
@@ -144,7 +146,7 @@ func (s *Service) acceptConsensusResult(
 
 	var retriableTxs []openledger.PendingTx
 	if !replayed {
-		closed, retriableTxs, err = s.buildClosedLedger(ctx, expectedClosed, pending, salt, closeTime, false, &timings.apply)
+		closed, retriableTxs, err = s.buildClosedLedgerWithOwnership(ctx, expectedClosed, pending, salt, closeTime, false, &timings.apply, true)
 		if err != nil {
 			s.recordExecutionStateFailure(ctx, expectedClosed, err)
 			return 0, err
@@ -209,8 +211,15 @@ func (s *Service) acceptConsensusResult(
 	closedLedgerHash := closed.Hash()
 	closedTxCount := closed.TxCount()
 	nextStarted := time.Now()
+	var feeLevels []txq.FeeLevel
+	if hasQueue {
+		feeStarted := time.Now()
+		feeLevels = consensusFeeLevels(closed, pending)
+		timings.feeLevels = time.Since(feeStarted)
+	}
 	successor, err = s.prepareSuccessor(ctx, closed, successorOptions{
 		admitted: true, deferSpeculation: true, retries: retriableTxs, retrySalt: &salt, anyDisputes: anyDisputes,
+		feeLevels: feeLevels,
 		check: func(s *Service) error {
 			if s.closedLedger != expectedClosed || s.openLedger != expectedOpen || s.startupReplay != replay {
 				return fmt.Errorf("%w: ledger ownership changed during build", ErrConsensusParentMismatch)
@@ -226,10 +235,15 @@ func (s *Service) acceptConsensusResult(
 	}
 	timings.nextOpen = time.Since(nextStarted)
 	timings.stage = successor.timings.stageResults
+	timings.snapshot = successor.timings.snapshot
+	timings.capture = successor.timings.capture
+	timings.queueFork = successor.timings.queueFork
+	timings.feeLevels += successor.timings.feeLevels
 	stagedResults := successor.staged
 	timings.gateWait = successor.timings.openLedgerWait
 	timings.gateHold = successor.timings.openLedgerHold
 	successor.releaseWork = releaseAdmission
+	publicationStarted := time.Now()
 	_, err = successor.publish(func() error {
 		previousValidated := s.validatedLedger
 		historyStarted := time.Now()
@@ -291,6 +305,7 @@ func (s *Service) acceptConsensusResult(
 		notification = s.validatedLedgerNotificationLocked(previousValidated)
 		return nil
 	})
+	timings.publication = time.Since(publicationStarted)
 	if err != nil {
 		return 0, err
 	}
@@ -327,6 +342,7 @@ type consensusAcceptanceTimings struct {
 	sequence                                                                    uint32
 	lifecycleWait, gateWait, gateHold, serviceWait, historyWait, replayGateWait time.Duration
 	parse, build, apply, stateTxHash, stage, nextOpen, persist, callback, relay time.Duration
+	snapshot, capture, queueFork, feeLevels, publication                        time.Duration
 }
 
 func (t consensusAcceptanceTimings) log(s *Service, total time.Duration, blocked bool) {
@@ -338,5 +354,6 @@ func (t consensusAcceptanceTimings) log(s *Service, total time.Duration, blocked
 		"lifecycle_wait", t.lifecycleWait, "open_ledger_wait", t.gateWait, "open_ledger_hold", t.gateHold,
 		"service_wait", t.serviceWait, "history_wait", t.historyWait,
 		"parse", t.parse, "build", t.build, "transaction_apply", t.apply, "close_state_tx_hash", t.stateTxHash,
+		"snapshot", t.snapshot, "transaction_capture", t.capture, "txq_fork", t.queueFork, "fee_levels", t.feeLevels, "publication", t.publication,
 		"stage_results", t.stage, "next_open", t.nextOpen, "persistence_enqueue", t.persist, "callback", t.callback, "relay_callback", t.relay)
 }

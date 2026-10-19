@@ -245,12 +245,7 @@ type Router struct {
 	// the gap, so a dropped relay frame is recoverable.
 	droppedTxJobs atomic.Uint64
 
-	// serveJobs is the bounded queue draining inbound mtGET_LEDGER serve work
-	// (handleGetLedger / serveTxSet, which builds the largest map — the
-	// 15k-tx tx-set — inline) off the Run message loop onto a small worker
-	// pool. It is nil before Run and after shutdown.
-	serveJobs       chan *ledgerServeJob
-	servePeers      map[peermanagement.PeerID]map[*ledgerServeJob]struct{}
+	servePools      [ledgerServeClassCount]*peermanagement.ServeScheduler
 	serveMemory     *membudget.Account
 	serveReplyBytes int
 
@@ -345,14 +340,6 @@ var txWorkerCount = max(4, runtime.GOMAXPROCS(0))
 
 const txQueueDepth = 1024
 
-// serveWorkerCount bounds the goroutines answering inbound mtGET_LEDGER
-// requests off the Run loop, and serveQueueDepth bounds the pending backlog
-// before submitServeJob sheds. Serving a request — especially building the
-// 15k-tx tx-set reply in serveTxSet — is CPU/IO-heavy and, run inline on Run,
-// stalls proposal / validation / acquisition-reply handling. The pool is
-// sized at half the cores (floored at 2): serving is a background courtesy to
-// peers, so it should not claim every core away from the apply strand and the
-// tx-prewarm pool. A shed request is recoverable (the peer retries elsewhere).
 var serveWorkerCount = max(2, runtime.GOMAXPROCS(0)/2)
 
 const serveQueueDepth = 256
@@ -605,7 +592,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 // instead of lingering until the next ledger adoption happens to
 // overwrite it.
 func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
-	r.cancelLedgerServePeer(peerID)
+	r.cancelPeerServes(peerID)
 	if r.catchupReplay != nil && r.catchupReplay.stoppedForShutdown() {
 		return
 	}
@@ -639,7 +626,7 @@ func (r *Router) reconcilePeerAvailability() {
 }
 
 func (r *Router) queuePeerDisconnect(peerID peermanagement.PeerID) {
-	r.cancelLedgerServePeer(peerID)
+	r.cancelPeerServes(peerID)
 	r.pendingPeerConnects.Delete(peerID)
 	r.pendingPeerDisconnects.Store(peerID, struct{}{})
 	select {
@@ -903,50 +890,6 @@ func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
 // acquired transaction learning jobs shed at saturation or shutdown.
 func (r *Router) DroppedTxJobs() uint64 {
 	return r.droppedTxJobs.Load()
-}
-
-// submitServeJob hands an inbound get_ledger request to the serve pool, off
-// the Run message loop. Before the first Run it handles synchronously for
-// direct dispatch tests. Once shutdown begins, admission remains closed.
-func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
-	if msg == nil {
-		return
-	}
-	r.lifecycleMu.Lock()
-	state := r.lifecycleState
-	jobs := r.serveJobs
-	if state == routerLifecycleInitial {
-		r.lifecycleMu.Unlock()
-		defer func() { _ = msg.Close() }()
-		r.handleGetLedger(context.Background(), msg)
-		return
-	}
-	if state != routerLifecycleRunning || jobs == nil || r.lifecycleCtx.Err() != nil ||
-		(r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID)) {
-		r.lifecycleMu.Unlock()
-		r.droppedServeJobs.Add(1)
-		_ = msg.Close()
-		return
-	}
-	ctx, cancel := context.WithCancel(r.lifecycleCtx)
-	job := &ledgerServeJob{ctx: ctx, cancel: cancel, peerID: msg.PeerID, msg: msg}
-	if r.servePeers == nil {
-		r.servePeers = make(map[peermanagement.PeerID]map[*ledgerServeJob]struct{})
-	}
-	if r.servePeers[msg.PeerID] == nil {
-		r.servePeers[msg.PeerID] = make(map[*ledgerServeJob]struct{})
-	}
-	r.servePeers[msg.PeerID][job] = struct{}{}
-	select {
-	case jobs <- job:
-		r.lifecycleMu.Unlock()
-	default:
-		r.lifecycleMu.Unlock()
-		r.droppedServeJobs.Add(1)
-		r.finishLedgerServeJob(job)
-		r.logger.Debug("inbound get_ledger dropped: serve pool saturated",
-			"t", "consensus", "event", "serve-shed", "peer", msg.PeerID)
-	}
 }
 
 // DroppedServeJobs returns the cumulative count of inbound get_ledger

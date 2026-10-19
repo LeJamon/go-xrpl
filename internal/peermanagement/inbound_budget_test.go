@@ -218,7 +218,7 @@ func TestGetObjectsQueryRetainsBudgetUntilServeCompletion(t *testing.T) {
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	scheduler := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	peer := newLatencyTestPeer(t)
 	overlay := &Overlay{
 		cfg:            DefaultConfig(),
@@ -239,7 +239,7 @@ func TestGetObjectsQueryRetainsBudgetUntilServeCompletion(t *testing.T) {
 	task, ok := scheduler.take(ctx)
 	require.True(t, ok)
 	task.run(task.ctx)
-	scheduler.finish(task)
+	scheduler.finish(task, true)
 	require.Zero(t, readBudgetUsed(budget))
 }
 
@@ -251,7 +251,7 @@ func TestDroppedGetObjectsQueryReleasesBudget(t *testing.T) {
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	scheduler := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	peer := newLatencyTestPeer(t)
 	require.True(t, scheduler.Submit(ctx, peer.ID(), func(context.Context) {}))
 	overlay := &Overlay{
@@ -281,7 +281,7 @@ func TestServeShutdownReleasesQueuedDecodedBudget(t *testing.T) {
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	scheduler := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	peer := newLatencyTestPeer(t)
 	overlay := &Overlay{
 		cfg:            DefaultConfig(),
@@ -299,7 +299,7 @@ func TestServeShutdownReleasesQueuedDecodedBudget(t *testing.T) {
 	})
 	require.Equal(t, int64(len(payload)), readBudgetUsed(budget))
 
-	scheduler.close()
+	scheduler.Close()
 	require.Zero(t, readBudgetUsed(budget))
 }
 
@@ -311,7 +311,7 @@ func TestServePeerCancellationReleasesQueuedDecodedBudget(t *testing.T) {
 	require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+	scheduler := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 	peer := newLatencyTestPeer(t)
 	overlay := &Overlay{
 		cfg:            DefaultConfig(),
@@ -363,7 +363,7 @@ func TestReplayAndProofRequestsRetainBudgetUntilServeCompletion(t *testing.T) {
 			require.NoError(t, budget.acquire(context.Background(), nil, int64(len(payload))))
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			scheduler := newServeScheduler(ctx, 1, 1, 1, 1)
+			scheduler := NewServeScheduler(ctx, ServeSchedulerConfig{Workers: 1, MaxPending: 1, PerPeerQueue: 1, PerPeerActive: 1})
 			peer := newLatencyTestPeer(t)
 			capabilities := NewPeerCapabilities()
 			capabilities.Features.Enable(FeatureLedgerReplay)
@@ -390,7 +390,7 @@ func TestReplayAndProofRequestsRetainBudgetUntilServeCompletion(t *testing.T) {
 			task, ok := scheduler.take(ctx)
 			require.True(t, ok)
 			task.run(task.ctx)
-			scheduler.finish(task)
+			scheduler.finish(task, true)
 			require.Zero(t, readBudgetUsed(budget))
 		})
 	}

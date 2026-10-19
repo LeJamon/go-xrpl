@@ -150,7 +150,7 @@ type Overlay struct {
 	// goroutine. It is created in Run; nil when the overlay was built without
 	// Run (submitServeForPeerOwned then runs the job inline, preserving
 	// synchronous unit test behaviour).
-	serveScheduler *serveScheduler
+	serveScheduler *ServeScheduler
 
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
 	// router) that need to clean up per-peer state on disconnect. Fired
@@ -944,12 +944,17 @@ func (o *Overlay) Run(ctx context.Context) error {
 	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
 	// scheduler context is canceled with the overlay and cancels queued or
 	// running work during shutdown.
-	scheduler := newServeScheduler(gCtx, serveWorkerCount, serveQueueDepth, servePerPeerQueue, servePerPeerConcurrency)
+	scheduler := NewServeScheduler(gCtx, ServeSchedulerConfig{
+		Workers:       serveWorkerCount,
+		MaxPending:    serveQueueDepth,
+		PerPeerQueue:  servePerPeerQueue,
+		PerPeerActive: servePerPeerConcurrency,
+	})
 	scheduler.onTaskPanic = o.closePeerAfterServePanic
 	o.lifecycleMu.Lock()
 	if o.lifecycleState != overlayLifecycleRunning {
 		o.lifecycleMu.Unlock()
-		scheduler.close()
+		scheduler.Close()
 		if err := runCtx.Err(); err != nil {
 			return err
 		}
@@ -957,7 +962,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 	}
 	if err := runCtx.Err(); err != nil {
 		o.lifecycleMu.Unlock()
-		scheduler.close()
+		scheduler.Close()
 		return err
 	}
 	o.serveScheduler = scheduler
@@ -1046,7 +1051,7 @@ func (o *Overlay) requestStop() {
 	}
 	o.peersMu.Unlock()
 	if scheduler != nil {
-		scheduler.close()
+		scheduler.Close()
 	}
 }
 

@@ -1,6 +1,7 @@
 package openledger
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -263,6 +264,20 @@ func ApplyTxsContext(ctx context.Context, view *ledger.Ledger, txs []PendingTx, 
 	return applyTxs(ctx, view, txs, retries, cfg, true, true)
 }
 
+// ApplyOwnedTxsContext is ApplyTxsContext for a transaction set whose Parsed
+// values are exclusively owned by the caller for the duration of this apply.
+// The apply loop may update transaction-local caches and nested Batch
+// transactions in place. The caller may continue using those values after the
+// call returns, including when a value is returned in retries, and must account
+// for those mutations. Inputs with a nil or stale Parsed value are decoded from
+// Blob and that fresh value is retained if the transaction must be retried.
+func ApplyOwnedTxsContext(ctx context.Context, view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return applyTxsWithOwnership(ctx, view, txs, retries, cfg, true, true, true)
+}
+
 type retryCandidate struct {
 	pending PendingTx
 	parsed  tx.Transaction
@@ -297,6 +312,36 @@ func orderRetryCandidates(queue []retryCandidate, salt *[32]byte) {
 	}
 }
 
+func ownedParsedTransaction(ptx PendingTx) (tx.Transaction, bool) {
+	parsed := ptx.Parsed
+	if parsed == nil || !bytes.Equal(parsed.GetRawBytes(), ptx.Blob) {
+		return nil, false
+	}
+	fieldsMatch, err := tx.CurrentFieldsMatchRaw(parsed)
+	if err != nil || !fieldsMatch {
+		return nil, false
+	}
+	hash, err := tx.ComputeTransactionHash(parsed)
+	if err != nil || hash != ptx.Hash {
+		return nil, false
+	}
+	return parsed, true
+}
+
+func preparePendingTx(ptx PendingTx, useOwnedParsed bool) (tx.Transaction, error) {
+	if useOwnedParsed {
+		if parsed, ok := ownedParsedTransaction(ptx); ok {
+			return parsed, nil
+		}
+	}
+	parsed, err := tx.ParseFromBinary(ptx.Blob)
+	if err != nil {
+		return nil, err
+	}
+	parsed.SetRawBytes(ptx.Blob)
+	return parsed, nil
+}
+
 func applyTxs(
 	ctx context.Context,
 	view *ledger.Ledger,
@@ -305,6 +350,19 @@ func applyTxs(
 	cfg ApplyConfig,
 	checkMembership bool,
 	includeSeededRetries bool,
+) error {
+	return applyTxsWithOwnership(ctx, view, txs, retries, cfg, checkMembership, includeSeededRetries, false)
+}
+
+func applyTxsWithOwnership(
+	ctx context.Context,
+	view *ledger.Ledger,
+	txs []PendingTx,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+	checkMembership bool,
+	includeSeededRetries bool,
+	useOwnedParsed bool,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -373,11 +431,10 @@ func applyTxs(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		t, err := tx.ParseFromBinary(ptx.Blob)
+		t, err := preparePendingTx(ptx, useOwnedParsed)
 		if err != nil {
 			return fmt.Errorf("openledger.ApplyTxs: parse transaction %x: %w", ptx.Hash, err)
 		}
-		t.SetRawBytes(ptx.Blob)
 		parsed[i] = t
 		if checkMembership {
 			exists, err := view.TxExists(ptx.Hash)
@@ -402,11 +459,13 @@ func applyTxs(
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			parsedRetry, err := tx.ParseFromBinary(ptx.Blob)
+			parsedRetry, err := preparePendingTx(ptx, useOwnedParsed)
 			if err != nil {
 				return fmt.Errorf("openledger.ApplyTxs: parse seeded retry %x: %w", ptx.Hash, err)
 			}
-			parsedRetry.SetRawBytes(ptx.Blob)
+			if useOwnedParsed {
+				ptx.Parsed = parsedRetry
+			}
 			retrySet = appendRetryCandidate(retrySet, retrySeen, ptx, parsedRetry)
 		}
 	}
@@ -457,12 +516,16 @@ func applyTxs(
 	// this pass so tec results stay retriable rather than committing.
 	bp := buildEngine(true, cfg.SkipSignatureVerification)
 	initialChanges := 0
-	for i, ptx := range txs {
+	for i := range txs {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if parsed[i] == nil || !eligible[i] {
 			continue
+		}
+		ptx := txs[i]
+		if useOwnedParsed {
+			ptx.Parsed = parsed[i]
 		}
 		class, err := applyObserved(bp, parsed[i], ptx.Blob, "initial", 0, ptx.Hash)
 		if err != nil {

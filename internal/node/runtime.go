@@ -81,6 +81,7 @@ type nodeRuntime struct {
 	stopMemoryMetrics         func()
 	stopSHAMapMetrics         func()
 	stopNodeStoreMetrics      func()
+	stopLedgerServeMetrics    func()
 }
 
 func newNodeRuntime(
@@ -147,6 +148,9 @@ func (r *nodeRuntime) run() (runErr error) {
 		}
 		if r.stopSHAMapMetrics != nil {
 			r.stopSHAMapMetrics()
+		}
+		if r.stopLedgerServeMetrics != nil {
+			r.stopLedgerServeMetrics()
 		}
 	}()
 
@@ -590,6 +594,15 @@ func (r *nodeRuntime) configureConsensus() error {
 		r.consensus, compErr = adaptor.NewFromConfig(ctx, r.appConfig, r.ledger, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
+		}
+		if router := r.consensus.Router; router != nil {
+			r.stopLedgerServeMetrics = observability.SetLedgerServeMetrics(func() observability.LedgerServeMetricsSnapshot {
+				snapshot := router.LedgerServeMetrics()
+				return observability.LedgerServeMetricsSnapshot{
+					Ledger: snapshot.Ledger,
+					TxSet:  snapshot.TxSet,
+				}
+			})
 		}
 		if r.memory != nil {
 			if err := r.consensus.Overlay.SetMemoryBudgets(r.memory.inbound, r.memory.outbound, r.memory.outboundCritical); err != nil {

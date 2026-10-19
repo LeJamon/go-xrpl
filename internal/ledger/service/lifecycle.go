@@ -188,6 +188,10 @@ func (s *Service) buildClosedLedgerLocked(ctx context.Context, pending []openled
 }
 
 func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, pending []openledger.PendingTx, salt [32]byte, closeTime time.Time, skipSigVerify bool, applyDuration *time.Duration) (*ledger.Ledger, []openledger.PendingTx, error) {
+	return s.buildClosedLedgerWithOwnership(ctx, parent, pending, salt, closeTime, skipSigVerify, applyDuration, false)
+}
+
+func (s *Service) buildClosedLedgerWithOwnership(ctx context.Context, parent *ledger.Ledger, pending []openledger.PendingTx, salt [32]byte, closeTime time.Time, skipSigVerify bool, applyDuration *time.Duration, owned bool) (*ledger.Ledger, []openledger.PendingTx, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -226,7 +230,11 @@ func (s *Service) buildClosedLedger(ctx context.Context, parent *ledger.Ledger, 
 		defer func() { *applyDuration = time.Since(applyStarted) }()
 	}
 	var retriableTxs []openledger.PendingTx
-	if err := openledger.ApplyTxsContext(ctx, freshLedger, pending, &retriableTxs, applyCfg); err != nil {
+	apply := openledger.ApplyTxsContext
+	if owned {
+		apply = openledger.ApplyOwnedTxsContext
+	}
+	if err := apply(ctx, freshLedger, pending, &retriableTxs, applyCfg); err != nil {
 		return nil, nil, fmt.Errorf("openledger.ApplyTxs: %w", err)
 	}
 	if err := ctx.Err(); err != nil {

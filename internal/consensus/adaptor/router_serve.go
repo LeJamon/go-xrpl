@@ -181,7 +181,7 @@ func (r *Router) handleGetLedger(ctx context.Context, msg *peermanagement.Inboun
 	// above is exempt from this isLoadedLocal gate — a tx-set serve that
 	// reaches the handler is answered — so this gate runs only for
 	// liBASE / liAS_NODE / liTX_NODE. (Under extreme load the bounded serve
-	// pool can still shed any get_ledger, tx-set included, before it reaches
+	// pool can still shed requests within either bounded class before reaching
 	// here; the requesting peer retries elsewhere.)
 	loadedLocal := false
 	if ft := svc.FeeTrack(); ft != nil {
