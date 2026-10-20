@@ -3,6 +3,7 @@ package shamap
 import (
 	"context"
 	"fmt"
+	"math/bits"
 )
 
 // pathEntry represents an entry in the traversal path
@@ -212,20 +213,20 @@ func (sm *SHAMap) onlyBelow(node mapNode) (*Item, error) {
 			break
 		}
 
-		var nextNode mapNode
-		for i := range BranchFactor {
-			child, err := sm.descend(inner, i)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get child %d: %w", i, err)
-			}
+		// Branch occupancy is authoritative even when backed children are
+		// not resident. Avoid loading branched subtrees or probing the empty
+		// slots at every level of a long single-child path during deletion.
+		inner.mu.RLock()
+		mask := inner.isBranch
+		inner.mu.RUnlock()
+		if bits.OnesCount16(mask) != 1 {
+			return nil, nil
+		}
 
-			if child != nil {
-				if nextNode != nil {
-					// Found second child - multiple items below
-					return nil, nil
-				}
-				nextNode = child
-			}
+		branch := bits.TrailingZeros16(mask)
+		nextNode, err := sm.descend(inner, branch)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get child %d: %w", branch, err)
 		}
 
 		if nextNode == nil {
