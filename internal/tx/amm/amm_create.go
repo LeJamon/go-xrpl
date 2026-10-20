@@ -362,39 +362,42 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return TecINSUF_RESERVE_LINE
 	}
 
-	// Transfer assets from creator to AMM and set lsfAMMNode on trustlines
-	// Reference: rippled AMMCreate.cpp sendAndTrustSet lines 285-309
-	isXRP1 := isXRPAsset(sortedAsset1)
-	isXRP2 := isXRPAsset(sortedAsset2)
+	// Transfer assets from creator to AMM and set lsfAMMNode on trustlines.
+	// The AMM object and LP calculation use canonical asset order, but rippled
+	// sends sfAmount before sfAmount2. Keep that transaction order here because
+	// owner-directory page allocation observes the two trustline insertions.
+	// Reference: rippled AMMCreate.cpp sendAndInitTrustOrMPT lines 319-389.
+	isXRP1 := isXRPAsset(asset1)
+	isXRP2 := isXRPAsset(asset2)
 
 	// Reference: rippled AMMCreate.cpp sendAndTrustSet uses accountSend which
 	// handles issuer-as-sender (no self-trust-line debit needed).
 	if isXRP1 {
-		if result := transferCreateXRP(ctx, ammAccount, sortedAmount1); result != ter.TesSUCCESS {
+		if result := transferCreateXRP(ctx, ammAccount, a.Amount); result != ter.TesSUCCESS {
 			return result
 		}
-	} else if sortedAsset1.IsMPT() {
-		if result := requireAssetAuth(ctx.View, sortedAsset1, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+	} else if asset1.IsMPT() {
+		if result := requireAssetAuth(ctx.View, asset1, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := ensureAMMMPTHolding(ctx.View, sortedAsset1, ammAccountID); result != ter.TesSUCCESS {
+		if result := ensureAMMMPTHolding(ctx.View, asset1, ammAccountID); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := sendMPT(ctx.View, accountID, ammAccountID, sortedAmount1, true); result != ter.TesSUCCESS {
+		if result := sendMPT(ctx.View, accountID, ammAccountID, a.Amount, true); result != ter.TesSUCCESS {
 			return result
 		}
 	} else {
-		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View, ctx.NumberContext()); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, asset1, a.Amount, ctx.View, ctx.NumberContext()); err != nil {
 			return TecNO_LINE
 		}
-		if err := setAMMNodeFlag(ammAccountID, sortedAsset1, ctx.View); err != nil {
+		if err := setAMMNodeFlag(ammAccountID, asset1, ctx.View); err != nil {
 			return ter.TefINTERNAL
 		}
 		// Debit from creator's trustline (skip if creator is the issuer —
 		// issuers have unlimited supply and no self-trust-line).
-		issuerID1, _ := state.DecodeAccountID(sortedAsset1.Issuer)
+		issuerID1, _ := state.DecodeAccountID(asset1.Issuer)
 		if accountID != issuerID1 {
-			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View, ctx.NumberContext())
+			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, asset1.Currency, a.Amount.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
 				return ammResultFromError(tlErr, TecUNFUNDED_AMM)
 			}
@@ -415,29 +418,29 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	if isXRP2 {
-		if result := transferCreateXRP(ctx, ammAccount, sortedAmount2); result != ter.TesSUCCESS {
+		if result := transferCreateXRP(ctx, ammAccount, a.Amount2); result != ter.TesSUCCESS {
 			return result
 		}
-	} else if sortedAsset2.IsMPT() {
-		if result := requireAssetAuth(ctx.View, sortedAsset2, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+	} else if asset2.IsMPT() {
+		if result := requireAssetAuth(ctx.View, asset2, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := ensureAMMMPTHolding(ctx.View, sortedAsset2, ammAccountID); result != ter.TesSUCCESS {
+		if result := ensureAMMMPTHolding(ctx.View, asset2, ammAccountID); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := sendMPT(ctx.View, accountID, ammAccountID, sortedAmount2, true); result != ter.TesSUCCESS {
+		if result := sendMPT(ctx.View, accountID, ammAccountID, a.Amount2, true); result != ter.TesSUCCESS {
 			return result
 		}
 	} else {
-		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View, ctx.NumberContext()); err != nil {
+		if err := createOrUpdateAMMTrustline(ammAccountID, asset2, a.Amount2, ctx.View, ctx.NumberContext()); err != nil {
 			return TecNO_LINE
 		}
-		if err := setAMMNodeFlag(ammAccountID, sortedAsset2, ctx.View); err != nil {
+		if err := setAMMNodeFlag(ammAccountID, asset2, ctx.View); err != nil {
 			return ter.TefINTERNAL
 		}
-		issuerID2, _ := state.DecodeAccountID(sortedAsset2.Issuer)
+		issuerID2, _ := state.DecodeAccountID(asset2.Issuer)
 		if accountID != issuerID2 {
-			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View, ctx.NumberContext())
+			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, asset2.Currency, a.Amount2.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
 				return ammResultFromError(tlErr, TecUNFUNDED_AMM)
 			}

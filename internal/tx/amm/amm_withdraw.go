@@ -200,7 +200,11 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 	ammAccountID := amm.Account
 
 	assetBalance1, assetBalance2, lptBalance := AMMHolds(view, amm, false)
-	if !matchesAssetByIssue(amm.Asset, a.Asset) {
+	// rippled's ammHolds uses canonical AMM asset order when neither Amount
+	// field is present. Amount-bearing modes request balances in transaction
+	// amount order instead. The distinction controls which authorization or
+	// freeze result wins for tfWithdrawAll/tfLPToken.
+	if (a.Amount != nil || a.Amount2 != nil) && !matchesAssetByIssue(amm.Asset, a.Asset) {
 		assetBalance1, assetBalance2 = assetBalance2, assetBalance1
 	}
 

@@ -249,8 +249,8 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 	lptExists, _ := view.Exists(lptKey)
 
 	// Check authorization and freeze status for BOTH pool assets. fixCleanup3_3_0
-	// uses the unified pseudo-account deposit rules; the legacy path remains
-	// unchanged when the amendment is disabled.
+	// uses the unified pseudo-account deposit rules; the legacy path preserves
+	// rippled's per-asset authorization/freeze ordering.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		checkAsset := func(asset tx.Asset) ter.Result {
@@ -266,17 +266,20 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			return result
 		}
 	} else if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
-		if result := requireAssetAuth(view, a.Asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+		checkAsset := func(asset tx.Asset) ter.Result {
+			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+				return result
+			}
+			if assetFrozen(view, accountID, asset) {
+				return frozenAssetResult(asset)
+			}
+			return ter.TesSUCCESS
+		}
+		if result := checkAsset(a.Asset); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := requireAssetAuth(view, a.Asset2, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := checkAsset(a.Asset2); result != ter.TesSUCCESS {
 			return result
-		}
-		if assetFrozen(view, accountID, a.Asset) {
-			return frozenAssetResult(a.Asset)
-		}
-		if assetFrozen(view, accountID, a.Asset2) {
-			return frozenAssetResult(a.Asset2)
 		}
 	}
 
