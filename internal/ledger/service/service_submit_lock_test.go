@@ -50,6 +50,7 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 		err     error
 	}
 	submitDone := make(chan submitResult, 1)
+	family.armed.Store(true)
 	go func() {
 		if rpc {
 			transaction, parseErr := tx.ParseFromBinary(blob)
@@ -77,9 +78,10 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 		}
 	}()
 
-	family.armed.Store(true)
 	select {
 	case <-family.entered:
+	case result := <-submitDone:
+		t.Fatalf("ingress returned before the cold open-ledger read: %+v", result)
 	case <-time.After(5 * time.Second):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
@@ -147,13 +149,15 @@ func TestValidatedLedgerDoesNotWaitForOpenLedgerSubmission(t *testing.T) {
 	}))
 
 	submitDone := make(chan error, 1)
+	family.armed.Store(true)
 	go func() {
 		_, submitErr := svc.SubmitOpenLedgerTxDetailed(blob, true)
 		submitDone <- submitErr
 	}()
-	family.armed.Store(true)
 	select {
 	case <-family.entered:
+	case err := <-submitDone:
+		t.Fatalf("ingress returned before the cold open-ledger read: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
@@ -321,13 +325,15 @@ func TestStopWaitsForOpenLedgerSubmission(t *testing.T) {
 	blob, _ := startupPaymentBlob(t, "submit-stop-destination", 1)
 
 	submitDone := make(chan error, 1)
+	family.armed.Store(true)
 	go func() {
 		_, submitErr := svc.SubmitOpenLedgerTxDetailed(blob, true)
 		submitDone <- submitErr
 	}()
-	family.armed.Store(true)
 	select {
 	case <-family.entered:
+	case err := <-submitDone:
+		t.Fatalf("ingress returned before the cold open-ledger read: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
