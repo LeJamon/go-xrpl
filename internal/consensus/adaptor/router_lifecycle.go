@@ -30,7 +30,11 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 	}
 	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
 	r.txSetLearnJobs = make(chan txSetLearnJob, txSetLearnQueueDepth)
-	r.servePools = newLedgerServePools(ctx, serveWorkerCount)
+	// Leave room for every worker's largest reply so one serving class cannot
+	// exhaust the shared workspace allowance while the other class is idle.
+	workspaceBytes := ledgerServeWorkspaceBytes(r.serveReplyBytes, txSetHardMaxReplyNodes)
+	workers := min(uint64(max(2, serveWorkerCount)), r.serveMemory.Capacity()/workspaceBytes)
+	r.servePools = newLedgerServePools(ctx, int(workers))
 	if r.lifecycleReady == nil {
 		r.lifecycleReady = make(chan struct{})
 	}

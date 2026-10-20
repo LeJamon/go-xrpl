@@ -365,6 +365,9 @@ func TestRouterServingClassesRemainIndependent(t *testing.T) {
 
 func TestRouterServingRealLedgerWorkRemainsClassIndependent(t *testing.T) {
 	t.Run("cached txset progresses while state provider is blocked", func(t *testing.T) {
+		oldWorkerCount := serveWorkerCount
+		serveWorkerCount = 16
+		t.Cleanup(func() { serveWorkerCount = oldWorkerCount })
 		peerIDs := make([]peermanagement.PeerID, serveWorkerCount+1)
 		for i := range peerIDs {
 			peerIDs[i] = peermanagement.PeerID(i + 1)
