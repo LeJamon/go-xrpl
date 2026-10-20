@@ -94,7 +94,8 @@ func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) 
 
 	// No signing fields are permitted.
 	// Reference: Change.cpp:58-63.
-	if common.SigningPubKey != "" || common.TxnSignature != "" || len(common.Signers) > 0 {
+	if common.SigningPubKey != "" || common.TxnSignature != "" ||
+		common.HasField("Signers") || len(common.Signers) > 0 {
 		return ter.TemBAD_SIGNATURE
 	}
 
@@ -120,7 +121,7 @@ func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) 
 // without a PreclaimPseudo implementation must fail loudly, not silently.
 // Reference: Change.cpp:82-140.
 func (e *Engine) pseudoPreclaim(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
-	if e.config.OpenLedger {
+	if e.config.IsViewOpen() {
 		return ter.TemINVALID
 	}
 	switch tx.TxType() {
