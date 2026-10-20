@@ -205,7 +205,7 @@ func TestLedgerServeOpenLedgerDoesNotFlushDirtyMaps(t *testing.T) {
 			require.NotNil(t, open)
 			require.True(t, open.IsOpen())
 			open.SetSHAMapFamily(fixture.family)
-			require.NoError(t, open.Insert(keylet.Keylet{Key: [32]byte{0x42}}, []byte("dirty state")))
+			require.NoError(t, open.Insert(keylet.Keylet{Key: [32]byte{0x42}}, bytes.Repeat([]byte{0x42}, 32)))
 			require.NoError(t, open.AddTransaction([32]byte{0x57}, []byte("dirty transaction")))
 			found, err := svc.GetLedgerBySequence(open.Sequence())
 			require.NoError(t, err)
