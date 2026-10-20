@@ -166,6 +166,39 @@ func materializePrefixNode(body prefixNodeBody) (mapNode, error) {
 	return node, nil
 }
 
+// wireSizeForPrefixBody returns the exact SerializeForWire payload size for a
+// validated prefix record without materializing a node. Prefix records for
+// leaf nodes carry three bytes more than their wire form; inner records carry
+// all sixteen child hashes even when the compressed wire form is smaller.
+func wireSizeForPrefixBody(body prefixNodeBody) (int, error) {
+	switch body.kind {
+	case storedInner:
+		if len(body.payload) != BranchFactor*32 {
+			return 0, fmt.Errorf("invalid inner node body")
+		}
+		var branches int
+		for branch := range BranchFactor {
+			start := branch * 32
+			if !isZeroHash([32]byte(body.payload[start : start+32])) {
+				branches++
+			}
+		}
+		if branches == 0 {
+			return 0, errEmptyNonRoot
+		}
+		if branches < 12 {
+			return branches*33 + 1, nil
+		}
+		return BranchFactor*32 + 1, nil
+	case storedAccountState, storedTransactionWithMeta:
+		return len(body.payload) + 33, nil
+	case storedTransaction:
+		return len(body.payload) + 1, nil
+	default:
+		return 0, fmt.Errorf("unknown stored node kind: %d", body.kind)
+	}
+}
+
 func decodeAndVerifyPrefixNode(data []byte, expected [32]byte) (mapNode, error) {
 	node, _, err := decodeAndVerifyPrefixNodeRecord(data, expected)
 	return node, err
@@ -176,12 +209,20 @@ func decodeAndVerifyPrefixNodeRecord(data []byte, expected [32]byte) (mapNode, p
 	if err != nil {
 		return nil, prefixNodeBody{}, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
 	}
-	node, err := materializePrefixNode(body)
+	node, err := materializeAndVerifyPrefixNode(body, expected)
 	if err != nil {
-		return nil, prefixNodeBody{}, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
-	}
-	if actual := node.Hash(); actual != expected {
-		return nil, prefixNodeBody{}, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, expected[:8], actual[:8])
+		return nil, prefixNodeBody{}, err
 	}
 	return node, body, nil
+}
+
+func materializeAndVerifyPrefixNode(body prefixNodeBody, expected [32]byte) (mapNode, error) {
+	node, err := materializePrefixNode(body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to deserialize child node: %v", ErrInvalidNodeData, err)
+	}
+	if actual := node.Hash(); actual != expected {
+		return nil, fmt.Errorf("%w: child node hash mismatch: expected %x, got %x", ErrInvalidNodeData, expected[:8], actual[:8])
+	}
+	return node, nil
 }

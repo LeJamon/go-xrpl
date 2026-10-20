@@ -34,17 +34,37 @@ type blockingServingFamily struct {
 	exitedOnce  sync.Once
 }
 
-func (f *blockingServingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+func (f *blockingServingFamily) waitFetch(ctx context.Context) error {
 	if f.block.Load() {
 		f.enteredOnce.Do(func() { close(f.entered) })
 		defer f.exitedOnce.Do(func() { close(f.exited) })
 		select {
 		case <-f.release:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
+	return nil
+}
+
+func (f *blockingServingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	if err := f.waitFetch(ctx); err != nil {
+		return nil, err
+	}
 	return f.Family.Fetch(ctx, hash)
+}
+
+func (f *blockingServingFamily) FetchBounded(ctx context.Context, hash [32]byte, maxBytes int) ([]byte, bool, error) {
+	if err := f.waitFetch(ctx); err != nil {
+		return nil, false, err
+	}
+	bounded, ok := f.Family.(interface {
+		FetchBounded(context.Context, [32]byte, int) ([]byte, bool, error)
+	})
+	if !ok {
+		return nil, false, errors.ErrUnsupported
+	}
+	return bounded.FetchBounded(ctx, hash, maxBytes)
 }
 
 type servingFrameRecorder struct {
@@ -345,6 +365,9 @@ func TestRouterServingClassesRemainIndependent(t *testing.T) {
 
 func TestRouterServingRealLedgerWorkRemainsClassIndependent(t *testing.T) {
 	t.Run("cached txset progresses while state provider is blocked", func(t *testing.T) {
+		oldWorkerCount := serveWorkerCount
+		serveWorkerCount = 16
+		t.Cleanup(func() { serveWorkerCount = oldWorkerCount })
 		peerIDs := make([]peermanagement.PeerID, serveWorkerCount+1)
 		for i := range peerIDs {
 			peerIDs[i] = peermanagement.PeerID(i + 1)

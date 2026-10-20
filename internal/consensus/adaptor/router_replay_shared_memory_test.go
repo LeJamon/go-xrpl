@@ -243,11 +243,14 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 }
 
 func TestLegacyReplayMemoryWaitPreservesPaymentAndAvoidsSelfWake(t *testing.T) {
-	source := closedLedgerWithPayment(t)
-	t.Cleanup(source.Stop)
-	target := source.GetClosedLedger()
-	hash := target.Hash()
 	r, _, _, svc := makeRouter(t)
+	t.Cleanup(func() {
+		svc.Stop()
+	})
+	routerParent := svc.GetClosedLedger()
+	require.NotNil(t, routerParent)
+	target := paymentReplayLedger(t, routerParent)
+	hash := target.Hash()
 	pool := membudget.New(2 << 30)
 	parent, err := pool.NewAccount("acquisition", 512<<20, 2<<30)
 	require.NoError(t, err)

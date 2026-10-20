@@ -22,11 +22,12 @@ import (
 // startup before blocking is enabled, so a request reaching the gate proves it
 // traversed the same lazy Family path used by production serving.
 type routerServeFetchGate struct {
-	inner shamap.Family
+	inner *shamapbackend.NodeStore
 
 	block          atomic.Bool
 	noncancellable bool
 	fetches        atomic.Int32
+	stores         atomic.Int32
 
 	started     chan struct{}
 	canceled    chan struct{}
@@ -46,6 +47,22 @@ func newRouterServeFetchGate() *routerServeFetchGate {
 }
 
 func (f *routerServeFetchGate) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	ctx, err := f.waitFetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return f.inner.Fetch(ctx, hash)
+}
+
+func (f *routerServeFetchGate) FetchBounded(ctx context.Context, hash [32]byte, maxBytes int) ([]byte, bool, error) {
+	ctx, err := f.waitFetch(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	return f.inner.FetchBounded(ctx, hash, maxBytes)
+}
+
+func (f *routerServeFetchGate) waitFetch(ctx context.Context) (context.Context, error) {
 	f.fetches.Add(1)
 	if f.block.CompareAndSwap(true, false) {
 		f.startOnce.Do(func() { close(f.started) })
@@ -60,12 +77,13 @@ func (f *routerServeFetchGate) Fetch(ctx context.Context, hash [32]byte) ([]byte
 		}
 	}
 	if f.noncancellable {
-		return f.inner.Fetch(context.Background(), hash)
+		return context.Background(), nil
 	}
-	return f.inner.Fetch(ctx, hash)
+	return ctx, nil
 }
 
 func (f *routerServeFetchGate) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	f.stores.Add(1)
 	return f.inner.StoreBatch(ctx, entries)
 }
 
@@ -274,6 +292,7 @@ func TestRouterIssue2080_ShutdownCancelsServeFetchAndJoins(t *testing.T) {
 	msg := routerServeRequest(11, payload)
 	require.True(t, fixture.router.handleMessage(msg))
 	waitRouterServeFetch(t, fixture.family)
+	require.Positive(t, fixture.router.serveMemory.Snapshot().Used)
 
 	cancel()
 	select {
@@ -288,6 +307,7 @@ func TestRouterIssue2080_ShutdownCancelsServeFetchAndJoins(t *testing.T) {
 	}
 
 	require.GreaterOrEqual(t, fixture.family.fetches.Load(), int32(1))
+	require.Zero(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Empty(t, fixture.sender.sentFrames(), "a canceled serve must not emit a reply")
 	fixture.router.lifecycleMu.RLock()
 	require.Equal(t, routerLifecycleStopped, fixture.router.lifecycleState)
@@ -309,6 +329,7 @@ func TestRouterIssue2080_NoncancellableServeKeepsJoinUntilReadReturns(t *testing
 	msg := routerServeRequest(12, payload)
 	require.True(t, fixture.router.handleMessage(msg))
 	waitRouterServeFetch(t, fixture.family)
+	require.Positive(t, fixture.router.serveMemory.Snapshot().Used)
 
 	cancel()
 	select {
@@ -332,6 +353,7 @@ func TestRouterIssue2080_NoncancellableServeKeepsJoinUntilReadReturns(t *testing
 
 	require.Equal(t, fetchesBeforeRelease, fixture.family.fetches.Load(),
 		"joining a released serve must not start another backing fetch")
+	require.Zero(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Empty(t, fixture.sender.sentFrames(), "a canceled serve must not emit a late reply")
 }
 
@@ -393,6 +415,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	sessions.set(running.PeerID, true)
 	require.True(t, fixture.router.handleMessage(running))
 	waitRouterServeFetch(t, fixture.family)
+	require.Positive(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Eventually(t, func() bool {
 		return budget.Used() > baseline
 	}, time.Second, time.Millisecond, "running inbound message did not retain its ingress reservation")
@@ -424,6 +447,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 		t.Fatal("router joined while the deliberately noncancellable read was still active")
 	case <-time.After(100 * time.Millisecond):
 	}
+	require.Positive(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Equal(t, runningHeld, budget.Used(),
 		"running ingress reservation must remain owned until the serve returns")
 
@@ -432,6 +456,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 		return budget.Used() == baseline
 	}, 2*time.Second, time.Millisecond,
 		"running ingress reservation was not released after the serve returned")
+	require.Zero(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Empty(t, fixture.sender.sentFrames(), "disconnected peer must receive no serve reply")
 
 	cancel()
@@ -463,6 +488,7 @@ func TestRouterIssue2080_ServeAdmissionRaceWithPeerDisconnect(t *testing.T) {
 	running := routerServeRequest(peerID, payload)
 	require.True(t, fixture.router.handleMessage(running))
 	waitRouterServeFetch(t, fixture.family)
+	require.Positive(t, fixture.router.serveMemory.Snapshot().Used)
 
 	const submitters = 64
 	start := make(chan struct{})
@@ -527,7 +553,7 @@ func TestRouterIssue2080_EncodingCancellationSuppressesServeReply(t *testing.T) 
 		}},
 	}
 
-	require.False(t, fixture.router.sendLedgerResponse(ctx, 24, resp))
+	require.False(t, fixture.router.sendLedgerResponse(ctx, testLedgerServeWorkspace(), 24, resp))
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.Empty(t, sender.sentFrames(), "cancellation during node-depth preparation must suppress encoding/send")
 }

@@ -63,7 +63,7 @@ func rootNodeID() []byte {
 func TestServeTxSet_RootRequest_RootFirstAndInnersIncluded(t *testing.T) {
 	txMap, _, wireNodes := buildTxSetForTest(t, 4)
 
-	got, err := buildShaMapReplyNodes(context.Background(),
+	got, err := buildShaMapReplyNodes(context.Background(), testLedgerServeWorkspace().walkBudget(),
 		txMap,
 		[][]byte{rootNodeID()},
 		3,     // querydepth=3 — TransactionAcquire's first-request value
@@ -117,7 +117,7 @@ func TestServeTxSet_RootRequest_RootFirstAndInnersIncluded(t *testing.T) {
 func TestServeTxSet_RootRequest_FatLeaves_FullCoverage(t *testing.T) {
 	txMap, _, wireNodes := buildTxSetForTest(t, 4)
 
-	got, err := buildShaMapReplyNodes(context.Background(),
+	got, err := buildShaMapReplyNodes(context.Background(), testLedgerServeWorkspace().walkBudget(),
 		txMap,
 		[][]byte{rootNodeID()},
 		3,
@@ -142,7 +142,7 @@ func TestServeTxSet_RootRequest_FatLeaves_FullCoverage(t *testing.T) {
 func TestBuildShaMapReplyNodes_NoNodeIDsReturnsNothing(t *testing.T) {
 	txMap, _, _ := buildTxSetForTest(t, 3)
 
-	got, err := buildShaMapReplyNodes(context.Background(),
+	got, err := buildShaMapReplyNodes(context.Background(), testLedgerServeWorkspace().walkBudget(),
 		txMap,
 		nil, // explicit empty
 		1,
@@ -164,7 +164,7 @@ func TestBuildShaMapReplyNodes_NoNodeIDsReturnsNothing(t *testing.T) {
 func TestServeTxSet_BadNodeID_Skipped(t *testing.T) {
 	txMap, _, _ := buildTxSetForTest(t, 2)
 
-	got, err := buildShaMapReplyNodes(context.Background(),
+	got, err := buildShaMapReplyNodes(context.Background(), testLedgerServeWorkspace().walkBudget(),
 		txMap,
 		[][]byte{
 			{0xAA, 0xBB},     // too short
@@ -191,7 +191,7 @@ func TestServeTxSet_HardCap(t *testing.T) {
 	require.Greater(t, len(wireNodes), 5, "fixture must have enough nodes to exercise the cap")
 
 	got := withTxSetReplyCaps(2, 3, func() []message.LedgerNode {
-		nodes, err := buildShaMapReplyNodes(context.Background(),
+		nodes, err := buildShaMapReplyNodes(context.Background(), testLedgerServeWorkspace().walkBudget(),
 			txMap,
 			[][]byte{rootNodeID()},
 			3, false, silentLogger{}, 7, "txset",
@@ -242,7 +242,7 @@ func TestServeTxSet_SoftCap(t *testing.T) {
 	// Soft cap of 1 means: after the FIRST subtree adds any nodes,
 	// every subsequent NodeID in the request is skipped.
 	got := withTxSetReplyCaps(1, 100, func() []message.LedgerNode {
-		nodes, err := buildShaMapReplyNodes(context.Background(),
+		nodes, err := buildShaMapReplyNodes(context.Background(), testLedgerServeWorkspace().walkBudget(),
 			txMap,
 			[][]byte{leaves[0].NodeID, leaves[1].NodeID},
 			0,

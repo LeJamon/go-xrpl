@@ -45,6 +45,14 @@ type KeyValueStore interface {
 	Close() error
 }
 
+// BoundedReadingStore checks the stored value size before allocating its
+// caller-owned copy. Oversized values return ErrValueTooLarge, including the
+// first read; there is no progress exception. Backend block-cache memory is
+// owned by the store independently of this limit.
+type BoundedReadingStore interface {
+	GetBounded(ctx context.Context, key []byte, maxBytes int) ([]byte, error)
+}
+
 // BatchReadingStore optionally provides bounded, context-aware reads for an
 // explicit set of keys. Results are the sorted prefix of the sorted input and
 // retain duplicate requests. For a non-empty request, maxNodes and maxBytes

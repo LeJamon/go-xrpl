@@ -392,8 +392,13 @@ including jobs being discarded. They exclude response construction and ledger
 storage. The existing inbound reservation stays attached to each request until
 serving or discard completes.
 
-The router keeps `N = max(2, GOMAXPROCS/2)` serving workers, reserving
-`max(1, N/4)` for transaction sets and the remainder for ordinary ledger work.
+The router starts with `N = max(2, GOMAXPROCS/2)` serving workers and reduces
+that count to the number of maximum-size replies that fit the `peer_serve`
+account capacity, retaining at least two workers. The default 256 MiB ceiling
+allows at most four workers. It reserves `max(1, N/4)` for transaction sets and
+the remainder for ordinary ledger work. Reply admission can still shed work
+when the shared node allowance is exhausted or a smaller account cannot fit
+both classes' replies.
 The classes have 64 and 192 pending slots and 8 MiB and 24 MiB retained-request
 limits respectively. Each class allows eight queued and one active request per
 peer, caps each peer at a quarter of its byte allowance, and selects peers

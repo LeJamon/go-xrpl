@@ -2,12 +2,14 @@ package adaptor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -190,6 +192,11 @@ func (r *Router) handleGetLedger(ctx context.Context, msg *peermanagement.Inboun
 			"peer", msg.PeerID, "itype", req.InfoType)
 		return
 	}
+	workspace := r.reserveLedgerServeWorkspace(ctx, req.InfoType == message.LedgerInfoBase)
+	if workspace == nil {
+		return
+	}
+	defer workspace.close()
 
 	var (
 		l   *ledger.Ledger
@@ -210,7 +217,9 @@ func (r *Router) handleGetLedger(ctx context.Context, msg *peermanagement.Inboun
 	if ctx.Err() != nil {
 		return
 	}
-	if err != nil || l == nil {
+	// Open-ledger snapshots can flush an unbounded dirty tree. Peer replies
+	// must use finalized ledgers, whose contents have a stable hash.
+	if err != nil || l == nil || l.IsOpen() {
 		// We don't have it — relay to a peer that advertises it, mirroring
 		// rippled's getLedger relay. Falls through to a silent drop when the
 		// request isn't relayable or no peer qualifies.
@@ -248,9 +257,9 @@ func (r *Router) handleGetLedger(ctx context.Context, msg *peermanagement.Inboun
 	case message.LedgerInfoBase:
 		nodes = r.buildLedgerBaseNodes(ctx, l)
 	case message.LedgerInfoAsNode:
-		nodes = r.serveLedgerMapNodes(ctx, l.StateMapSnapshotContext, req, msg.PeerID, "state")
+		nodes = r.serveLedgerMapNodes(ctx, workspace, l.StateMapSnapshotContext, req, msg.PeerID, "state")
 	case message.LedgerInfoTxNode:
-		nodes = r.serveLedgerMapNodes(ctx, l.TxMapSnapshotContext, req, msg.PeerID, "tx")
+		nodes = r.serveLedgerMapNodes(ctx, workspace, l.TxMapSnapshotContext, req, msg.PeerID, "tx")
 	}
 	if ctx.Err() != nil || len(nodes) == 0 {
 		return
@@ -265,7 +274,7 @@ func (r *Router) handleGetLedger(ctx context.Context, msg *peermanagement.Inboun
 		RequestCookieSet: req.HasRequestCookie(),
 	}
 
-	r.sendLedgerResponse(ctx, msg.PeerID, resp)
+	r.sendLedgerResponse(ctx, workspace, msg.PeerID, resp)
 }
 
 // buildLedgerBaseNodes builds the liBASE reply node set: node[0] is the
@@ -345,7 +354,7 @@ func (r *Router) buildLedgerBaseNodes(ctx context.Context, l *ledger.Ledger) []m
 // state or transaction tree: fat nodes, QueryDepth levels deep, honouring
 // the soft/hard reply caps. fatLeaves is true here — only liTS_CANDIDATE
 // uses false.
-func (r *Router) serveLedgerMapNodes(ctx context.Context, snapshot func(context.Context) (*shamap.SHAMap, error), req *message.GetLedger, peerID peermanagement.PeerID, label string) []message.LedgerNode {
+func (r *Router) serveLedgerMapNodes(ctx context.Context, workspace *ledgerServeWorkspace, snapshot func(context.Context) (*shamap.SHAMap, error), req *message.GetLedger, peerID peermanagement.PeerID, label string) []message.LedgerNode {
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -358,7 +367,7 @@ func (r *Router) serveLedgerMapNodes(ctx context.Context, snapshot func(context.
 		return nil
 	}
 	queryDepth := r.ledgerQueryDepth(peerID, req)
-	nodes, err := buildShaMapReplyNodes(ctx, m, req.NodeIDs, queryDepth, true, r.logger, peerID,
+	nodes, err := buildShaMapReplyNodes(ctx, workspace.walkBudget(), m, req.NodeIDs, queryDepth, true, r.logger, peerID,
 		fmt.Sprintf("ledger %d %s", req.LedgerSeq, label))
 	if err != nil {
 		return nil
@@ -366,13 +375,8 @@ func (r *Router) serveLedgerMapNodes(ctx context.Context, snapshot func(context.
 	return nodes
 }
 
-// serveTxSet replies to TMGetLedger{itype=liTS_CANDIDATE} with the tx set
-// encoded as TMLedgerData{type=liTS_CANDIDATE, ledger_hash=<txSetID>,
-// nodes=[<SHAMapNodeID, wire-serialized SHAMap node>...]}. For each
-// requested NodeID, walk QueryDepth levels via GetNodeFatByPath, honouring
-// soft/hard caps. Empty nodeids falls back to a full pre-order walk for
-// legacy goxrpl→goxrpl fixtures; real requestors always send at least the
-// root.
+// serveTxSet replies with the requested tx-set subtrees. Candidate replies
+// omit boundary leaves because the requester may already have those transactions.
 func (r *Router) serveTxSet(ctx context.Context, peerID peermanagement.PeerID, req *message.GetLedger) {
 	if ctx.Err() != nil || len(req.LedgerHash) != 32 {
 		return
@@ -390,6 +394,11 @@ func (r *Router) serveTxSet(ctx context.Context, peerID peermanagement.PeerID, r
 			"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
 		return
 	}
+	workspace := r.reserveLedgerServeWorkspace(ctx, false)
+	if workspace == nil {
+		return
+	}
+	defer workspace.close()
 
 	// SHAMap is non-nil for any TxSet that reached the cache —
 	// newTxSet returns an error before stashing on shamap.New failure.
@@ -399,7 +408,7 @@ func (r *Router) serveTxSet(ctx context.Context, peerID peermanagement.PeerID, r
 	// fatLeaves is always false for liTS_CANDIDATE.
 	const fatLeaves = false
 
-	nodes, err := buildShaMapReplyNodes(ctx, txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID,
+	nodes, err := buildShaMapReplyNodes(ctx, workspace.walkBudget(), txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID,
 		fmt.Sprintf("txset %x", txSetID[:8]))
 	if err != nil {
 		return
@@ -414,7 +423,7 @@ func (r *Router) serveTxSet(ctx context.Context, peerID peermanagement.PeerID, r
 		RequestCookieSet: req.HasRequestCookie(),
 	}
 
-	if !r.sendLedgerResponse(ctx, peerID, resp) {
+	if !r.sendLedgerResponse(ctx, workspace, peerID, resp) {
 		return
 	}
 	r.logger.Debug("served tx-set to peer",
@@ -436,7 +445,7 @@ func (r *Router) ledgerQueryDepth(peerID peermanagement.PeerID, req *message.Get
 	return 1
 }
 
-func (r *Router) sendLedgerResponse(ctx context.Context, peerID peermanagement.PeerID, resp *message.LedgerData) bool {
+func (r *Router) sendLedgerResponse(ctx context.Context, workspace *ledgerServeWorkspace, peerID peermanagement.PeerID, resp *message.LedgerData) bool {
 	if ctx.Err() != nil {
 		return false
 	}
@@ -451,7 +460,7 @@ func (r *Router) sendLedgerResponse(ctx context.Context, peerID peermanagement.P
 	if ctx.Err() != nil {
 		return false
 	}
-	frame, err := message.EncodeFrame(resp)
+	frame, err := message.EncodeLedgerDataFrame(resp, workspace.wire)
 	if ctx.Err() != nil {
 		return false
 	}
@@ -472,6 +481,7 @@ func (r *Router) sendLedgerResponse(ctx context.Context, peerID peermanagement.P
 // for logging.
 func buildShaMapReplyNodes(
 	ctx context.Context,
+	budget *shamap.WireBudget,
 	m *shamap.SHAMap,
 	requestedNodeIDs [][]byte,
 	queryDepth int,
@@ -487,6 +497,7 @@ func buildShaMapReplyNodes(
 		}
 		// Soft cap: stop starting new subtrees.
 		if len(nodes) >= txSetSoftMaxReplyNodes {
+			observability.RecordMemoryAdmission("ledger_serve", "truncated")
 			logger.Debug("shamap serve: soft-cap reached, stopping subtree iteration",
 				"peer", peerID, "map", label,
 				"nodes_so_far", len(nodes), "remaining_requested", len(requestedNodeIDs)-i)
@@ -499,11 +510,12 @@ func buildShaMapReplyNodes(
 				"node_idx", i, "len", len(rawID))
 			continue
 		}
-		subtree, err := m.GetNodeFatByPathContext(ctx, path, depth, queryDepth, fatLeaves)
+		subtree, err := m.GetNodeFatByPathBounded(ctx, path, depth, queryDepth, fatLeaves, budget)
 		if canceled := ctx.Err(); canceled != nil {
 			return nil, canceled
 		}
-		if err != nil {
+		truncated := errors.Is(err, shamap.ErrWireBudget)
+		if err != nil && !truncated {
 			logger.Debug("shamap serve: GetNodeFatByPath failed, skipping",
 				"peer", peerID, "map", label,
 				"error", err.Error())
@@ -513,14 +525,11 @@ func buildShaMapReplyNodes(
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			// Hard cap: truncate mid-subtree.
-			if len(nodes) >= txSetHardMaxReplyNodes {
-				logger.Debug("shamap serve: hard-cap reached, truncating subtree",
-					"peer", peerID, "map", label,
-					"nodes", len(nodes))
-				return nodes, nil
-			}
 			nodes = append(nodes, message.LedgerNode{NodeID: n.NodeID, NodeData: n.Data})
+		}
+		if truncated {
+			observability.RecordMemoryAdmission("ledger_serve", "truncated")
+			return nodes, nil
 		}
 	}
 	return nodes, nil

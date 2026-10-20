@@ -31,6 +31,15 @@ type policyFamily interface {
 	FetchWithPolicy(context.Context, [32]byte, ReadPolicy) ([]byte, error)
 }
 
+// boundedFamily optionally provides a strict, prefix-byte bounded read. The
+// implementation must reject an oversized record before copying it into a
+// caller-owned buffer and report that case with exceeded=true. A missing node
+// is (nil, false, nil). Families without this capability cannot safely serve
+// a cold node to a bounded wire walk.
+type boundedFamily interface {
+	FetchBounded(context.Context, [32]byte, int) ([]byte, bool, error)
+}
+
 type fullBelowCacheProvider interface {
 	FullBelowCache() *FullBelowCache
 }
@@ -60,6 +69,7 @@ type familyAccess struct {
 	durableSnapshot durableSnapshotFamily
 	placement       nodePlacementFamily
 	policy          policyFamily
+	bounded         boundedFamily
 	residency       *CleanResidency
 }
 
@@ -72,6 +82,7 @@ func bindFamily(family Family) *familyAccess {
 	access.durableSnapshot, _ = family.(durableSnapshotFamily)
 	access.placement, _ = family.(nodePlacementFamily)
 	access.policy, _ = family.(policyFamily)
+	access.bounded, _ = family.(boundedFamily)
 	if provider, ok := family.(cleanResidencyProvider); ok {
 		access.residency = provider.SHAMapCleanResidency()
 	}
@@ -94,6 +105,16 @@ func (a *familyAccess) fetchWithPolicy(ctx context.Context, hash [32]byte, polic
 		return a.policy.FetchWithPolicy(ctx, hash, policy)
 	}
 	return a.fetch(ctx, hash)
+}
+
+func (a *familyAccess) fetchBounded(ctx context.Context, hash [32]byte, maxPrefixBytes int) ([]byte, bool, error) {
+	if !a.available() {
+		return nil, false, nil
+	}
+	if a.bounded == nil {
+		return nil, false, errors.ErrUnsupported
+	}
+	return a.bounded.FetchBounded(ctx, hash, maxPrefixBytes)
 }
 
 func (a *familyAccess) storeBatch(ctx context.Context, entries []FlushEntry) error {

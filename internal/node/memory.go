@@ -31,6 +31,7 @@ type nodeMemory struct {
 	inbound            *membudget.Account
 	outbound           *membudget.Account
 	outboundCritical   *membudget.Account
+	ledgerServe        *membudget.Account
 	storage            *membudget.Account
 	storageBytes       uint64
 	releaseStorage     func()
@@ -129,6 +130,10 @@ func newNodeMemory(cfg *config.Config, standalone bool, probe func() (membudget.
 			return nil, err
 		}
 		m.outbound, err = account("peer_outbound", generalMinimum, uint64(peerConfig.OutboundRetainedBytes)-criticalMinimum)
+		if err != nil {
+			return nil, err
+		}
+		m.ledgerServe, err = account("peer_serve", 0, min(limit, adaptor.LedgerServeMemoryBytes))
 		if err != nil {
 			return nil, err
 		}

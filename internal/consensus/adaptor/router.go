@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -244,7 +245,9 @@ type Router struct {
 	// the gap, so a dropped relay frame is recoverable.
 	droppedTxJobs atomic.Uint64
 
-	servePools [ledgerServeClassCount]*peermanagement.ServeScheduler
+	servePools      [ledgerServeClassCount]*peermanagement.ServeScheduler
+	serveMemory     *membudget.Account
+	serveReplyBytes int
 
 	// droppedServeJobs counts inbound get_ledger requests shed because the
 	// serve pool was saturated — the requesting peer retries elsewhere, so a
@@ -381,6 +384,8 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		txSetNet:               network.txSet,
 		acquisition:            network.acquisition,
 		serve:                  network.serve,
+		serveMemory:            newLedgerServeMemory(),
+		serveReplyBytes:        ledgerServeReplyBytes,
 		inbox:                  inbox,
 		logger:                 logger,
 		peerDisconnectWake:     make(chan struct{}, 1),

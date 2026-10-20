@@ -141,8 +141,17 @@ func (c *CleanResidency) lookup(hash [32]byte) (mapNode, bool) {
 }
 
 func (c *CleanResidency) lookupForPolicy(hash [32]byte, policy ReadPolicy) (mapNode, bool) {
+	node, hit, _ := c.lookupForPolicyBounded(hash, policy, -1)
+	return node, hit
+}
+
+// lookupForPolicyBounded materializes a retained record only after proving
+// that its wire payload fits the caller's remaining node-byte allowance. The
+// third result distinguishes a cache miss from a matching record that cannot
+// be admitted to the reply. A negative limit preserves unbounded local reads.
+func (c *CleanResidency) lookupForPolicyBounded(hash [32]byte, policy ReadPolicy, maxWireBytes int) (mapNode, bool, bool) {
 	if c == nil {
-		return nil, false
+		return nil, false, false
 	}
 	c.generationGate.RLock()
 	defer c.generationGate.RUnlock()
@@ -151,7 +160,7 @@ func (c *CleanResidency) lookupForPolicy(hash [32]byte, policy ReadPolicy) (mapN
 	stats := &c.segments[policy].counters
 	stats.lookups++
 	if c.closed {
-		return nil, false
+		return nil, false, false
 	}
 	for _, class := range []ReadPolicy{ReadForeground, ReadPeer} {
 		segment := &c.segments[class]
@@ -160,25 +169,32 @@ func (c *CleanResidency) lookupForPolicy(hash [32]byte, policy ReadPolicy) (mapN
 			continue
 		}
 		entry := element.Value.(*cleanResidencyEntry)
-		// Materialization keeps the payload charged until its operation-owned copy exists.
+		if maxWireBytes >= 0 {
+			wireBytes, err := wireSizeForPrefixBody(entry.body)
+			if err != nil {
+				return nil, false, false
+			}
+			if maxWireBytes < wireNodeIDSize || wireBytes > maxWireBytes-wireNodeIDSize {
+				return nil, false, true
+			}
+		}
+		// Materialization keeps the payload charged until this operation-owned
+		// copy exists, and the size admission above bounds that copy's wire use.
 		node, err := materializePrefixNode(entry.body)
 		if err != nil {
-			return nil, false
+			return nil, false, false
 		}
 		if class == policy {
 			segment.order.MoveToFront(element)
 		} else if policy == ReadForeground {
-			// A local reuse earns foreground residency. Reserve the new copy
-			// before releasing the peer copy and its structural capacity. A
-			// promotion cannot evict other foreground records.
 			if c.insertLocked(&c.segments[ReadForeground], hash, entry.body, false) {
 				c.removeLocked(segment, element, false)
 			}
 		}
 		stats.hits++
-		return node, true
+		return node, true, false
 	}
-	return nil, false
+	return nil, false, false
 }
 
 func (c *CleanResidency) insertForGeneration(generation uint64, hash [32]byte, body prefixNodeBody) {
