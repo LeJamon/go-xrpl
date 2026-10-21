@@ -57,6 +57,84 @@ func TestAMMCreatePreservesAmountOrderAtOwnerDirectoryBoundary(t *testing.T) {
 	require.Contains(t, page.Indexes, eurLine)
 }
 
+func TestAMMWithdrawPreservesCanonicalOrderAtOwnerDirectoryBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		lpToken bool
+	}{
+		{name: "WithdrawAll"},
+		{name: "LPToken", lpToken: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			env.Fund()
+			env.Trust(env.Alice, env.GW, "USD", 1000)
+			env.Trust(env.Alice, env.GW, "EUR", 1000)
+			env.Close()
+			env.PayIOU(env.GW, env.Alice, "USD", 500)
+			env.PayIOU(env.GW, env.Alice, "EUR", 500)
+			env.Close()
+
+			// The AMM stores the canonical EUR/USD order. The withdrawal uses
+			// the reversed USD/EUR transaction pair.
+			jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(
+				env.Alice,
+				amm.IOUAmount(env.GW, "EUR", 100),
+				amm.IOUAmount(env.GW, "USD", 100),
+			).Build()))
+			env.Close()
+
+			eur, usd := env.EUR, env.USD
+			ammAccount := amm.AMMAccount(t, env, eur, usd)
+			ammData := env.ReadAMMData(eur, usd)
+			require.NotNil(t, ammData)
+			env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
+			env.Close()
+			lpt := env.LPTokenAmountFromLedger(eur, usd, 10)
+			env.Trust(env.Bob, ammAccount, lpt.Currency, 1000)
+			env.Close()
+			jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(env.Alice, env.Bob, lpt).Build()))
+			env.Close()
+
+			// Put the receiver at the owner-directory page boundary with valid
+			// ticket objects before the two new trust lines are created.
+			env.CreateTickets(env.Bob, 30)
+			rootKey := keylet.OwnerDir(env.Bob.ID)
+			rootRaw, err := env.LedgerEntry(rootKey)
+			require.NoError(t, err)
+			root, err := state.ParseDirectoryNode(rootRaw)
+			require.NoError(t, err)
+			require.Equal(t, uint32(30), env.TicketCount(env.Bob))
+			require.Len(t, root.Indexes, 31)
+
+			withdraw := amm.AMMWithdraw(env.Bob, usd, eur)
+			if tt.lpToken {
+				withdraw.LPTokenIn(env.LPTokenAmountFromLedger(eur, usd, 1)).LPToken()
+			} else {
+				withdraw.WithdrawAll()
+			}
+			jtx.RequireTxSuccess(t, env.Submit(withdraw.Build()))
+			env.Close()
+
+			usdLine := keylet.Line(env.Bob.ID, env.GW.ID, "USD").Key
+			eurLine := keylet.Line(env.Bob.ID, env.GW.ID, "EUR").Key
+			rootRaw, err = env.LedgerEntry(rootKey)
+			require.NoError(t, err)
+			root, err = state.ParseDirectoryNode(rootRaw)
+			require.NoError(t, err)
+			pageRaw, err := env.LedgerEntry(keylet.OwnerDirPage(env.Bob.ID, 1))
+			require.NoError(t, err)
+			page, err := state.ParseDirectoryNode(pageRaw)
+			require.NoError(t, err)
+			require.Contains(t, root.Indexes, eurLine)
+			require.NotContains(t, root.Indexes, usdLine)
+			require.Contains(t, page.Indexes, usdLine)
+		})
+	}
+}
+
 func setupTwoIssuerAMM(t *testing.T) (*amm.AMMTestEnv, *jtx.Account, tx.Asset, tx.Asset) {
 	t.Helper()
 	env := amm.NewAMMTestEnv(t)
