@@ -19,17 +19,6 @@ import (
 // pattern-matches on that exact wire shape.
 type ValidatorInfoMethod struct{ adminHandler }
 
-type validatorInfoResponse struct {
-	MasterKey    string `json:"master_key,omitempty"`
-	EphemeralKey string `json:"ephemeral_key,omitempty"`
-	Manifest     string `json:"manifest,omitempty"`
-	// Pointer so a legitimate seq=0 still serialises (rippled emits
-	// `ret[jss::seq] = *seq` regardless of value); nil is dropped by
-	// omitempty when the manifest cache had no sequence to report.
-	Seq    *uint32 `json:"seq,omitempty"`
-	Domain string  `json:"domain,omitempty"`
-}
-
 func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 	if ctx.Services == nil || len(ctx.Services.ValidatorPublicKey()) == 0 {
 		return nil, rpcerrors.RpcErrorInvalidParams("not a validator")
@@ -52,7 +41,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 	if err != nil {
 		return nil, rpcInternalError("validator_info: master key encoding failed", err)
 	}
-	resp := validatorInfoResponse{MasterKey: masterB58}
+	resp := map[string]any{"master_key": masterB58}
 
 	// rippled: `if (mk == validationPK) return ret;` — only emit the
 	// ephemeral / manifest / seq / domain block when a manifest cache
@@ -64,17 +53,16 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 		if err != nil {
 			return nil, rpcInternalError("validator_info: ephemeral key encoding failed", err)
 		}
-		resp.EphemeralKey = ephB58
+		resp["ephemeral_key"] = ephB58
 
 		if manifestBytes, ok := ctx.Services.Manifests().GetManifest(masterKey); ok {
-			resp.Manifest = base64.StdEncoding.EncodeToString(manifestBytes)
+			resp["manifest"] = base64.StdEncoding.EncodeToString(manifestBytes)
 		}
 		if seq, ok := ctx.Services.Manifests().GetSequence(masterKey); ok {
-			s := seq
-			resp.Seq = &s
+			resp["seq"] = seq
 		}
 		if domain, ok := ctx.Services.Manifests().GetDomain(masterKey); ok {
-			resp.Domain = domain
+			resp["domain"] = domain
 		}
 	}
 

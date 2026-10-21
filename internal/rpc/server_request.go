@@ -227,6 +227,16 @@ func normalizeJSONValueAtDepth(value any, depth int) (any, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid JSON number %q: %w", raw, err)
 			}
+			if number == 0 {
+				mantissa := raw
+				if exponent := strings.IndexAny(mantissa, "eE"); exponent >= 0 {
+					mantissa = mantissa[:exponent]
+				}
+				// ParseFloat silently rounds underflow to zero; RPC rejects it.
+				if strings.ContainsAny(mantissa, "123456789") {
+					return nil, fmt.Errorf("invalid JSON number %q: %w", raw, strconv.ErrRange)
+				}
+			}
 			return jsonReal(number), nil
 		}
 		if strings.HasPrefix(raw, "-") {

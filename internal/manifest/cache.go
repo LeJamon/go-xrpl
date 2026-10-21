@@ -445,12 +445,13 @@ func (c *Cache) WithCurrent(masterKey, signingKey [33]byte, sequence uint32, fn 
 }
 
 // GetDomain returns the stored manifest's domain string. Second return
-// is false on unknown, revoked, or when no domain was recorded.
+// is false only on unknown or revoked manifests; a valid manifest without
+// a Domain field returns an empty string with true.
 func (c *Cache) GetDomain(masterKey [33]byte) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	m, ok := c.byMaster[masterKey]
-	if !ok || m.Revoked() || m.domain == "" {
+	if !ok || m.Revoked() {
 		return "", false
 	}
 	return m.domain, true
