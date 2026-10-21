@@ -392,9 +392,8 @@ func DecodeBytes(b []byte) (map[string]any, error) {
 }
 
 // DecodeBytesAllowOverCap decodes a transaction wire object while preserving
-// native amount magnitudes above the JSON supply cap. It is for transaction
-// ingress only: callers decoding generic ledger objects must use DecodeBytes so
-// the ordinary JSON representation remains capped.
+// native amount magnitudes above the JSON supply cap.
+// Callers decoding generic ledger objects must use DecodeBytes.
 func DecodeBytesAllowOverCap(b []byte) (map[string]any, error) {
 	p := serdes.NewBinaryParserAllowOverCap(b, definitions.Get())
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
