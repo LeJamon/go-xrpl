@@ -160,7 +160,7 @@ func (l *LoanBrokerCoverDeposit) Validate() error {
 	if isZeroHashStr(l.LoanBrokerID) {
 		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
 	}
-	if l.Amount.Signum() <= 0 {
+	if !tx.IsLegalNetAmount(l.Amount) || l.Amount.Signum() <= 0 {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	}
 	return nil
@@ -215,7 +215,7 @@ func (l *LoanBrokerCoverWithdraw) validate(rules *amendment.Rules) error {
 	if isZeroHashStr(l.LoanBrokerID) {
 		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
 	}
-	if l.Amount.Signum() <= 0 {
+	if !tx.IsLegalNetAmount(l.Amount) || l.Amount.Signum() <= 0 {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	}
 	if l.Destination != "" && isZeroAccount(l.Destination) {

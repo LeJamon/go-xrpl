@@ -13,11 +13,16 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txall "github.com/LeJamon/go-xrpl/internal/tx/all"
+	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
+	lendingtx "github.com/LeJamon/go-xrpl/internal/tx/lending"
 	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +38,8 @@ type mockLedgerServiceSubmit struct {
 	currentFeesCalls int
 	accountInfoCalls int
 }
+
+const admissionSubmitDestination = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 func newMockLedgerServiceSubmit() *mockLedgerServiceSubmit {
 	return &mockLedgerServiceSubmit{
@@ -114,6 +121,78 @@ func TestSubmitMethodRawBlobPresenceAndProjection(t *testing.T) {
 	assert.Equal(t, handlers.CalculateTxHash(rawBlob), txJSON["hash"])
 	assert.NotContains(t, txJSON, "DeliverMax", "raw submit does not apply DeliverMax projection")
 	assert.Equal(t, 1, mock.submitCalls)
+}
+
+func TestSubmitMethodSignedZeroSourceReachesEngineAdapter(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSubmitTestServices(mock),
+	}
+
+	blob := rawSubmitBlob(t, map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         protocol.ZeroAccount,
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+	})
+	params, err := json.Marshal(map[string]any{
+		"tx_blob": blob,
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	if rpcErr != nil {
+		t.Fatalf("signed zero-source submit returned RPC error: %v", rpcErr)
+	}
+	if result == nil {
+		t.Fatal("signed zero-source submit returned nil result")
+	}
+	assert.Equal(t, 1, mock.submitCalls, "the validly signed source account must reach engine submission")
+	response, ok := result.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, strings.ToUpper(blob), response["tx_blob"])
+	assert.Equal(t, strings.ToUpper(blob), mock.lastTxBlob)
+}
+
+func TestSubmitMethodSignedOverCapNativeAmountsReachEngineAdapter(t *testing.T) {
+	for _, txType := range []string{
+		"CheckCreate",
+		"CheckCash",
+		"LoanBrokerCoverDeposit",
+		"LoanBrokerCoverWithdraw",
+	} {
+		t.Run(txType, func(t *testing.T) {
+			mock := newMockLedgerServiceSubmit()
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleUser,
+				ApiVersion: types.ApiVersion2,
+				Services:   newSubmitTestServices(mock),
+			}
+
+			blob := rawSubmitOverCapBlob(t, txType)
+			params, err := json.Marshal(map[string]any{
+				"tx_blob": blob,
+			})
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+			if rpcErr != nil {
+				t.Fatalf("signed over-cap %s submit returned RPC error: %v", txType, rpcErr)
+			}
+			if result == nil {
+				t.Fatal("signed over-cap submit returned nil result")
+			}
+			assert.Equal(t, 1, mock.submitCalls, "the raw signed blob must reach engine submission")
+			response, ok := result.(map[string]any)
+			assert.True(t, ok)
+			assert.Equal(t, strings.ToUpper(blob), response["tx_blob"])
+			assert.Equal(t, strings.ToUpper(blob), mock.lastTxBlob)
+		})
+	}
 }
 
 func TestSubmitMethodRawBlobInvalidTransactionEnvelope(t *testing.T) {
@@ -308,6 +387,42 @@ func rawSubmitBlob(t *testing.T, txJSON map[string]any) string {
 	blob, err := binarycodec.Encode(wireJSON)
 	require.NoError(t, err)
 	return blob
+}
+
+func rawSubmitOverCapBlob(t *testing.T, txType string) string {
+	t.Helper()
+	txall.RegisterAll()
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair(bytes.Repeat([]byte{0x22}, 16), false)
+	require.NoError(t, err)
+	overCap := tx.NewXRPAmount(int64(binarytypes.MaxDrops) + 1)
+	const loanBrokerID = "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+
+	var transaction tx.Transaction
+	switch txType {
+	case "CheckCreate":
+		transaction = checktx.NewCheckCreate(validAccountAddress, admissionSubmitDestination, overCap)
+	case "CheckCash":
+		cash := checktx.NewCheckCash(validAccountAddress, loanBrokerID)
+		cash.SetExactAmount(overCap)
+		transaction = cash
+	case "LoanBrokerCoverDeposit":
+		transaction = lendingtx.NewLoanBrokerCoverDeposit(validAccountAddress, loanBrokerID, overCap)
+	case "LoanBrokerCoverWithdraw":
+		transaction = lendingtx.NewLoanBrokerCoverWithdraw(validAccountAddress, loanBrokerID, overCap)
+	default:
+		t.Fatalf("unsupported over-cap transaction type %q", txType)
+	}
+
+	common := transaction.GetCommon()
+	common.Fee = "10"
+	sequence := uint32(1)
+	common.Sequence = &sequence
+	common.SigningPubKey = publicKey
+	common.TxnSignature, err = txsign.SignTransaction(transaction, privateKey)
+	require.NoError(t, err)
+	blob, err := tx.SerializeTransaction(transaction)
+	require.NoError(t, err)
+	return hex.EncodeToString(blob)
 }
 
 func signedSubmitParams(t *testing.T, txJSON map[string]any, extra map[string]any) json.RawMessage {

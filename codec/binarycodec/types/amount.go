@@ -141,6 +141,17 @@ type RawXRPAmount struct {
 	Negative bool
 }
 
+// MarshalJSON renders a raw native amount in the same signed decimal form as a
+// normal XRP amount. The value remains a RawXRPAmount in maps passed directly to
+// the binary codec, so canonical wire bytes retain its original magnitude.
+func (a RawXRPAmount) MarshalJSON() ([]byte, error) {
+	value := strconv.FormatUint(a.Drops, 10)
+	if a.Negative && a.Drops != 0 {
+		value = "-" + value
+	}
+	return json.Marshal(value)
+}
+
 // FromJSON serializes an issued currency amount to its bytes representation from JSON.
 func (a *Amount) FromJSON(value any) ([]byte, error) {
 	switch v := value.(type) {
@@ -198,16 +209,17 @@ func (a *Amount) FromJSON(value any) ([]byte, error) {
 // 2. If bit 0x20 is set → MPT (33 bytes)
 // 3. Otherwise → XRP (8 bytes)
 func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
-	return a.toJSON(p, false)
+	return a.toJSON(p, p.AllowsOverCap(), p.AllowsOverCap())
 }
 
-// ToJSONAllowOverCap decodes ledger amounts without enforcing the XRP supply
-// cap. Transaction decoding must use ToJSON.
+// ToJSONAllowOverCap decodes an amount without enforcing the XRP supply cap.
+// Transaction wire decoding uses ToJSON with a parser configured for the
+// transaction ingress path; generic ledger decoding remains capped.
 func (a *Amount) ToJSONAllowOverCap(p *serdes.BinaryParser) (any, error) {
-	return a.toJSON(p, true)
+	return a.toJSON(p, true, false)
 }
 
-func (a *Amount) toJSON(p *serdes.BinaryParser, allowOverCap bool) (any, error) {
+func (a *Amount) toJSON(p *serdes.BinaryParser, allowOverCap, preserveRaw bool) (any, error) {
 	b, err := p.Peek()
 	if err != nil {
 		return nil, err
@@ -261,6 +273,9 @@ func (a *Amount) toJSON(p *serdes.BinaryParser, allowOverCap bool) (any, error) 
 	// cap on decode — otherwise an over-cap blob decodes to a value Encode rejects.
 	if xrpVal > uint64(MaxDrops) && !allowOverCap {
 		return nil, &InvalidAmountError{Amount: sign + strconv.FormatUint(xrpVal, 10)}
+	}
+	if xrpVal > uint64(MaxDrops) && preserveRaw {
+		return RawXRPAmount{Drops: xrpVal, Negative: !isPositive(b)}, nil
 	}
 	return sign + strconv.FormatUint(xrpVal, 10), nil
 }

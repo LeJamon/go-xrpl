@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	txcodec "github.com/LeJamon/go-xrpl/internal/tx"
@@ -85,6 +86,22 @@ func makeTransactions(t *testing.T, indices ...uint32) []txRecord {
 		}
 	}
 	return records
+}
+
+func overCapTransactionBlob(t *testing.T) []byte {
+	t.Helper()
+	blob, err := binarycodec.EncodeBytes(map[string]any{
+		"TransactionType": "Payment",
+		"Sequence":        uint32(1),
+		"Fee":             "10",
+		"Account":         "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+		"Destination":     "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+		"Amount":          binarytypes.RawXRPAmount{Drops: uint64(binarytypes.MaxDrops) + 1},
+	})
+	if err != nil {
+		t.Fatalf("encode over-cap transaction: %v", err)
+	}
+	return blob
 }
 
 func transactionRoot(t *testing.T, records []txRecord) [32]byte {
@@ -280,6 +297,65 @@ func TestValidateTransactionsRejectsCorruption(t *testing.T) {
 				t.Fatal("validateTransactions unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestValidateCanonicalTransactionAllowsOverCapAndKeepsMetadataStrict(t *testing.T) {
+	blob := overCapTransactionBlob(t)
+	if err := validateCanonicalTransaction(blob); err != nil {
+		t.Fatalf("validateCanonicalTransaction: %v", err)
+	}
+	if err := validateCanonicalObject(blob); err == nil {
+		t.Fatal("generic canonical object validation accepted over-cap transaction")
+	}
+
+	normalBlob, err := binarycodec.EncodeBytes(map[string]any{
+		"TransactionType": "Payment",
+		"Sequence":        uint32(1),
+		"Fee":             "0",
+		"Account":         "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+		"Destination":     "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+		"Amount":          "1",
+	})
+	if err != nil {
+		t.Fatalf("encode zero-fee transaction: %v", err)
+	}
+	negativeZero := bytes.Clone(normalBlob)
+	positiveZero := append([]byte{0x40}, make([]byte, 7)...)
+	if offset := bytes.Index(negativeZero, positiveZero); offset >= 0 {
+		negativeZero[offset] = 0
+		if err := validateCanonicalTransaction(negativeZero); err == nil {
+			t.Fatal("negative-zero transaction amount was accepted")
+		}
+	} else {
+		t.Fatal("zero-fee fixture did not contain a native zero amount")
+	}
+
+	meta, err := binarycodec.EncodeBytes(map[string]any{"TransactionIndex": uint32(0)})
+	if err != nil {
+		t.Fatalf("encode metadata: %v", err)
+	}
+	records := []txRecord{{
+		txHash:   sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob),
+		txBlob:   blob,
+		metaBlob: meta,
+	}}
+	snapshot := &LedgerSnapshot{TransactionCount: 1, TransactionHash: transactionRoot(t, records)}
+	if _, err := validateTransactions(context.Background(), records, snapshot); err != nil {
+		t.Fatalf("validateTransactions with over-cap transaction: %v", err)
+	}
+
+	strictMeta, err := binarycodec.EncodeBytes(map[string]any{
+		"TransactionIndex": uint32(0),
+		"DeliveredAmount":  binarytypes.RawXRPAmount{Drops: uint64(binarytypes.MaxDrops) + 1},
+	})
+	if err != nil {
+		t.Fatalf("encode over-cap metadata: %v", err)
+	}
+	records[0].metaBlob = strictMeta
+	snapshot.TransactionHash = transactionRoot(t, records)
+	if _, err := validateTransactions(context.Background(), records, snapshot); err == nil {
+		t.Fatal("validateTransactions accepted over-cap metadata")
 	}
 }
 

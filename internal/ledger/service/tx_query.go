@@ -637,10 +637,10 @@ type LedgerContext struct {
 	CloseTime int64
 }
 
-// getOpenTransactionLocked looks up an accepted transaction in the
-// authoritative open-ledger view. The caller must hold s.mu.RLock or s.mu.
-// Open leaves are always transaction+metadata records; validate and split the
-// complete leaf before exposing the transaction-only bytes to RPC callers.
+// getOpenTransactionLocked looks up a transaction in the authoritative
+// open-ledger view. The caller must hold s.mu.RLock or s.mu. Accepted leaves
+// carry transaction and metadata; startup replay leaves carry only the raw
+// canonical transaction until the ledger closes.
 func (s *Service) getOpenTransactionLocked(txHash [32]byte) (*TransactionResult, bool, error) {
 	if s.openLedgerView == nil {
 		return nil, false, nil
@@ -659,12 +659,20 @@ func (s *Service) getOpenTransactionLocked(txHash [32]byte) (*TransactionResult,
 	}
 
 	accepted := ParseAcceptedTransaction(data)
-	if err := accepted.ParseError(); err != nil {
-		return nil, false, fmt.Errorf("%w: decode open-ledger transaction: %v", svcerr.ErrTxnDataCorrupt, err)
+	if err := accepted.ParseError(); err == nil {
+		result, err := transactionResultFromRawBlob(accepted.TransactionBlob(), txHash, "open-ledger")
+		if err != nil {
+			return nil, false, err
+		}
+		return result, true, nil
 	}
-	result, err := transactionResultFromRawBlob(accepted.TransactionBlob(), txHash, "open-ledger")
-	if err != nil {
-		return nil, false, err
+
+	// Startup replay stages canonical transaction bytes without metadata. Try
+	// that representation only after the accepted-leaf parser rejects the
+	// record, and keep the same parse-and-hash checks used for queued data.
+	result, rawErr := transactionResultFromRawBlob(data, txHash, "open-ledger raw")
+	if rawErr != nil {
+		return nil, false, fmt.Errorf("%w: decode open-ledger transaction: %v; raw transaction: %v", svcerr.ErrTxnDataCorrupt, accepted.ParseError(), rawErr)
 	}
 	return result, true, nil
 }

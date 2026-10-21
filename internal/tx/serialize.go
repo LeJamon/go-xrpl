@@ -40,7 +40,7 @@ func CanonicalizeSerializedTransaction(fields map[string]any) (map[string]any, e
 	if err := checkRequiredFields(txTemplates[txType], common.PresentFields); err != nil {
 		return nil, err
 	}
-	return binarycodec.DecodeBytes(encoded)
+	return binarycodec.DecodeBytesAllowOverCap(encoded)
 }
 
 // CanonicalizeSerializedMetadata validates and returns the codec-decoded

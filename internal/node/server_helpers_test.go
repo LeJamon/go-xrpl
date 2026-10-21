@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -357,7 +358,7 @@ func TestBuildProposedTxEventCarriesHashAndOwnerFunds(t *testing.T) {
 	blobHex, err := binarycodec.Encode(map[string]any{
 		"TransactionType": "OfferCreate",
 		"Account":         "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59",
-		"TakerGets":       "1",
+		"TakerGets":       binarytypes.RawXRPAmount{Drops: uint64(binarytypes.MaxDrops) + 1},
 		"TakerPays":       "2",
 	})
 	if err != nil {
@@ -383,6 +384,9 @@ func TestBuildProposedTxEventCarriesHashAndOwnerFunds(t *testing.T) {
 	}
 	if txJSON["owner_funds"] != "123" {
 		t.Fatalf("owner_funds = %v", txJSON["owner_funds"])
+	}
+	if txJSON["TakerGets"] != "100000000000000001" {
+		t.Fatalf("TakerGets = %v, want preserved over-cap decimal", txJSON["TakerGets"])
 	}
 }
 

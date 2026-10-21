@@ -414,7 +414,7 @@ func (b *Batch) PreflightInnerTransactions(rules *amendment.Rules, preflight fun
 		}
 		var wireFields map[string]any
 		if raw := inner.GetRawBytes(); len(raw) != 0 {
-			wireFields, _ = binarycodec.DecodeBytes(raw)
+			wireFields, _ = binarycodec.DecodeBytesAllowOverCap(raw)
 		}
 		// A CounterpartySignature is optional on an inner transaction and should
 		// not be present, but if it is it must not carry any signature material.

@@ -143,7 +143,7 @@ func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.C
 	hasSigners := len(cp.Signers) > 0 || cp.HasField("Signers")
 	hasTxnSignature := cp.TxnSignature != "" || cp.HasField("TxnSignature")
 	if raw := transaction.GetRawBytes(); len(raw) > 0 {
-		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
+		if fields, err := binarycodec.DecodeBytesAllowOverCap(raw); err == nil {
 			if object, ok := fields["CounterpartySignature"].(map[string]any); ok {
 				_, hasSigners = object["Signers"]
 				_, hasTxnSignature = object["TxnSignature"]
@@ -179,7 +179,7 @@ func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.S
 	hasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
 	hasTxnSignature := sponsor.TxnSignature != "" || sponsor.HasField("TxnSignature")
 	if raw := transaction.GetRawBytes(); len(raw) > 0 {
-		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
+		if fields, err := binarycodec.DecodeBytesAllowOverCap(raw); err == nil {
 			if object, ok := fields["SponsorSignature"].(map[string]any); ok {
 				_, hasSigners = object["Signers"]
 				_, hasTxnSignature = object["TxnSignature"]
@@ -706,7 +706,7 @@ func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
 		if err != nil || !matches {
 			return nil, errors.New("transaction fields do not match retained wire transaction")
 		}
-		txMap, err := binarycodec.DecodeBytes(raw)
+		txMap, err := binarycodec.DecodeBytesAllowOverCap(raw)
 		if err != nil {
 			return nil, err
 		}

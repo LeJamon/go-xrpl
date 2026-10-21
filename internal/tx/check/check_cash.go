@@ -68,7 +68,7 @@ func (c *CheckCash) Validate() error {
 	// Validate the provided amount
 	// Reference: CashCheck.cpp L65-77
 	if hasAmount {
-		if c.Amount.Signum() <= 0 {
+		if !tx.IsLegalNetAmount(*c.Amount) || c.Amount.Signum() <= 0 {
 			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 		}
 		if badMPTAsset(*c.Amount) {
@@ -80,7 +80,7 @@ func (c *CheckCash) Validate() error {
 	}
 
 	if hasDeliverMin {
-		if c.DeliverMin.Signum() <= 0 {
+		if !tx.IsLegalNetAmount(*c.DeliverMin) || c.DeliverMin.Signum() <= 0 {
 			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin must be positive")
 		}
 		if badMPTAsset(*c.DeliverMin) {

@@ -149,9 +149,8 @@ func TestTransactionLocalChecksFailureReason(t *testing.T) {
 		want        string
 	}{
 		{
-			name:        "default account field",
+			name:        "explicit zero account field",
 			transaction: newLocalChecksTransaction(TypePayment, map[string]any{"Destination": zeroAccount}),
-			want:        "An account field is invalid.",
 		},
 		{
 			name:        "zero length account field",

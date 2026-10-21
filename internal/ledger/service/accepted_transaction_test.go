@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/stretchr/testify/require"
@@ -148,6 +149,38 @@ func TestAcceptedTransactionMalformedStateNeverReportsSuccess(t *testing.T) {
 	require.Error(t, accepted.ParseError())
 	require.Equal(t, uint32(3), mustAcceptedIndex(t, accepted))
 	require.NotEqual(t, ter.TesSUCCESS, accepted.Result())
+}
+
+func TestAcceptedTransactionPreservesLegacyOverCapTransactionAndRejectsOverCapMetadata(t *testing.T) {
+	const overCap = uint64(binarytypes.MaxDrops) + 1
+	transaction := map[string]any{
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Amount":          binarytypes.RawXRPAmount{Drops: overCap},
+		"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "EscrowCreate",
+	}
+	metadata := map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(4),
+		"TransactionResult": "tecNO_LINE",
+	}
+
+	accepted := ParseAcceptedTransaction(acceptedLeaf(t, transaction, metadata))
+	require.NoError(t, accepted.ParseError())
+	require.Equal(t, ter.TecNO_LINE, accepted.Result())
+	rawAmount, ok := accepted.Transaction()["Amount"].(binarytypes.RawXRPAmount)
+	require.True(t, ok)
+	require.Equal(t, overCap, rawAmount.Drops)
+
+	// Metadata must retain the strict decoder: an over-cap DeliveredAmount makes
+	// the accepted leaf corrupt even though its transaction half is readable.
+	metadata["DeliveredAmount"] = binarytypes.RawXRPAmount{Drops: overCap}
+	corruptMetadata := ParseAcceptedTransaction(acceptedLeaf(t, transaction, metadata))
+	require.Error(t, corruptMetadata.ParseError())
+	require.Nil(t, corruptMetadata.Transaction())
 }
 
 func TestAcceptedTransactionValidatesRequiredFieldsWithoutLosingMetadataIndex(t *testing.T) {

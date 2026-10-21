@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,6 +142,105 @@ func TestLedgerCurrentOpenAcceptedPaymentQueries(t *testing.T) {
 			require.Equal(t, hashString, closedEntry["hash"])
 			require.Contains(t, closedEntry, "metaData")
 		})
+	}
+}
+
+func TestRawOpenTransactionQueriesThroughRPC(t *testing.T) {
+	rm, err := sqlitedb.NewRepositoryManager(t.Context(), t.TempDir(), sqlitedb.Settings{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rm.Close() })
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	sender := jtx.MasterAccount()
+	txn := payment.Pay(sender, jtx.NewAccount("raw-open-rpc"), 1_000_000).Fee(10).Sequence(1).Build()
+	env.SignWith(txn, sender)
+	txJSON, err := txn.Flatten()
+	require.NoError(t, err)
+	hexBlob, err := binarycodec.Encode(txJSON)
+	require.NoError(t, err)
+	raw, err := hex.DecodeString(hexBlob)
+	require.NoError(t, err)
+	hash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+	hashString := strings.ToUpper(hex.EncodeToString(hash[:]))
+	require.NoError(t, svc.GetOpenLedger().AddTransaction(hash, raw))
+
+	adapter := rpcadapter.NewLedgerServiceAdapter(svc)
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+		ctx := &types.RpcContext{
+			Context:    t.Context(),
+			Role:       types.RoleGuest,
+			ApiVersion: apiVersion,
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: adapter}),
+		}
+		for _, binary := range []bool{false, true} {
+			params, marshalErr := json.Marshal(map[string]any{
+				"transaction": hashString,
+				"binary":      binary,
+			})
+			require.NoError(t, marshalErr)
+			response, rpcErr := (&TxMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr, "api=%d binary=%t", apiVersion, binary)
+			responseMap := response.(map[string]any)
+			require.Equal(t, hashString, responseMap["hash"])
+			require.Equal(t, false, responseMap["validated"])
+			if binary {
+				binaryKey := "tx"
+				if apiVersion > 1 {
+					binaryKey = "tx_blob"
+				}
+				require.Equal(t, strings.ToUpper(hexBlob), responseMap[binaryKey])
+				require.NotContains(t, responseMap, "meta")
+				require.NotContains(t, responseMap, "meta_blob")
+				continue
+			}
+			if apiVersion == types.ApiVersion1 {
+				require.Equal(t, "Payment", responseMap["TransactionType"])
+			} else {
+				txResponse, ok := responseMap["tx_json"].(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, "Payment", txResponse["TransactionType"])
+			}
+			require.NotContains(t, responseMap, "meta")
+		}
+
+		for _, binary := range []bool{false, true} {
+			params, marshalErr := json.Marshal(map[string]any{
+				"ledger_index": "current",
+				"transactions": true,
+				"expand":       true,
+				"binary":       binary,
+			})
+			require.NoError(t, marshalErr)
+			response, rpcErr := (&LedgerMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr, "api=%d binary=%t", apiVersion, binary)
+			transactions := ledgerTransactions(t, response)
+			require.Len(t, transactions, 1)
+			entry := transactions[0].(map[string]any)
+			if binary {
+				require.Equal(t, strings.ToUpper(hexBlob), entry["tx_blob"])
+				require.NotContains(t, entry, "meta_blob")
+				continue
+			}
+			require.Equal(t, hashString, entry["hash"])
+			if apiVersion == types.ApiVersion1 {
+				require.Equal(t, "Payment", entry["TransactionType"])
+			} else {
+				txResponse, ok := entry["tx_json"].(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, "Payment", txResponse["TransactionType"])
+			}
+			require.NotContains(t, entry, "meta")
+		}
 	}
 }
 

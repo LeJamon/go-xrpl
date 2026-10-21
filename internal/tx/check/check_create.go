@@ -65,7 +65,7 @@ func (c *CheckCreate) Validate() error {
 
 	// SendMax must be positive
 	// Reference: CreateCheck.cpp L55-61
-	if c.SendMax.Signum() <= 0 {
+	if !tx.IsLegalNetAmount(c.SendMax) || c.SendMax.Signum() <= 0 {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 

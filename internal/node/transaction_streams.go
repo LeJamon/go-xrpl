@@ -1,7 +1,6 @@
 package node
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,7 +92,7 @@ func validBookCurrencySpec(spec types.CurrencySpec) bool {
 func buildProposedTxEvent(ev service.SubmittedTxEvent) *rpc.ProposedTransactionEvent {
 	txJSON := json.RawMessage("{}")
 	if len(ev.RawBlob) > 0 {
-		if decoded, err := binarycodec.Decode(hex.EncodeToString(ev.RawBlob)); err == nil {
+		if decoded, err := binarycodec.DecodeBytesAllowOverCap(ev.RawBlob); err == nil {
 			if ev.OwnerFunds != "" {
 				decoded["owner_funds"] = ev.OwnerFunds
 			}

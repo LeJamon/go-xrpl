@@ -138,7 +138,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 					}
 				}
 				if ownerFundsAnnotator != nil {
-					storedTx, err := decodeTxBlob(txData)
+					storedTx, err := decodeLedgerTransaction(txData, hashStr, targetLedger.IsClosed())
 					if err != nil {
 						decodeErr = err
 						return false
@@ -672,7 +672,7 @@ func expandTransaction(
 	ctx SyntheticMetadataContext,
 	includeMetadata bool,
 ) (map[string]any, error) {
-	storedTx, err := decodeTxBlob(txData)
+	storedTx, err := decodeLedgerTransaction(txData, hashStr, includeMetadata)
 	if err != nil {
 		return nil, err
 	}

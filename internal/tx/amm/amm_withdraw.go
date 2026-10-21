@@ -200,7 +200,8 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 	ammAccountID := amm.Account
 
 	assetBalance1, assetBalance2, lptBalance := AMMHolds(view, amm, false)
-	if !matchesAssetByIssue(amm.Asset, a.Asset) {
+	// Keep canonical pool order when neither Amount field is present.
+	if (a.Amount != nil || a.Amount2 != nil) && !matchesAssetByIssue(amm.Asset, a.Asset) {
 		assetBalance1, assetBalance2 = assetBalance2, assetBalance1
 	}
 
@@ -325,6 +326,13 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	ammAccountKey := loaded.AccountKey
 	ammAccount := loaded.Account
 	assetBalance1, assetBalance2, lptBalance := loaded.AssetBalance1, loaded.AssetBalance2, loaded.LPTokenBalance
+	applyAsset1, applyAsset2 := a.Asset, a.Asset2
+	// When neither amount field is present, rippled's ammHolds call keeps the
+	// AMM SLE's canonical asset order. Amount-driven modes use transaction order.
+	if a.Amount == nil && a.Amount2 == nil && !matchesAssetByIssue(amm.Asset, applyAsset1) {
+		assetBalance1, assetBalance2 = assetBalance2, assetBalance1
+		applyAsset1, applyAsset2 = applyAsset2, applyAsset1
+	}
 
 	flags := a.GetFlags()
 	// Trading fee, potentially discounted for auction slot holders.
@@ -336,8 +344,8 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 	isWithdrawAll := (flags & (tfWithdrawAll | tfOneAssetWithdrawAll)) != 0
 
-	amount1 := zeroAmount(a.Asset)
-	amount2 := zeroAmount(a.Asset2)
+	amount1 := zeroAmount(applyAsset1)
+	amount2 := zeroAmount(applyAsset2)
 	lpTokensRequested := zeroAmount(tx.Asset{}) // LP tokens
 
 	if a.Amount != nil {
@@ -782,8 +790,8 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
-	isXRP1 := isXRPAsset(a.Asset)
-	isXRP2 := isXRPAsset(a.Asset2)
+	isXRP1 := isXRPAsset(applyAsset1)
+	isXRP2 := isXRPAsset(applyAsset2)
 
 	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 	if err != nil {
@@ -824,12 +832,12 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// then transfer tokens.
 	// Reference: rippled AMMWithdraw.cpp lines 581-647
 	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, a.Asset, withdrawAmount1, withdrawalOptions{}); result != ter.TesSUCCESS {
+		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset1, withdrawAmount1, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 	if !isXRP2 && !withdrawAmount2.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, a.Asset2, withdrawAmount2, withdrawalOptions{}); result != ter.TesSUCCESS {
+		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset2, withdrawAmount2, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}

@@ -860,6 +860,10 @@ func decodeBinaryObject(data []byte) (map[string]any, error) {
 	return binarycodec.Decode(hex.EncodeToString(data))
 }
 
+func decodeTransactionBinaryObject(data []byte) (map[string]any, error) {
+	return binarycodec.DecodeBytesAllowOverCap(data)
+}
+
 // decodeTxBlob decodes transaction data that may be in one of two formats:
 //  1. VL-encoded binary blob: [VL-prefix][tx_bytes][VL-prefix][meta_bytes]
 //     (produced by tx.CreateTxWithMetaBlob, stored via AddTransactionWithMeta)
@@ -887,7 +891,7 @@ func decodeOpenTxBlob(data []byte) (StoredTransaction, error) {
 	if metaBytes != nil {
 		return StoredTransaction{}, errors.New("open transaction unexpectedly contains metadata")
 	}
-	txJSON, err := binarycodec.DecodeBytes(txBytes)
+	txJSON, err := decodeTransactionBinaryObject(txBytes)
 	if err != nil {
 		return StoredTransaction{}, fmt.Errorf("decode open transaction: %w", err)
 	}
@@ -896,6 +900,51 @@ func decodeOpenTxBlob(data []byte) (StoredTransaction, error) {
 		return StoredTransaction{}, err
 	}
 	return stored, nil
+}
+
+// decodeLedgerTransaction decodes a transaction tree leaf for ledger RPCs.
+// Open ledgers may contain a raw canonical transaction staged by startup
+// replay. Closed ledgers retain the stored-envelope decoder. Raw bytes are
+// accepted only after parsing and checking the transaction hash supplied by
+// the ledger iterator.
+func decodeLedgerTransaction(data []byte, hashStr string, includeMetadata bool) (StoredTransaction, error) {
+	if includeMetadata {
+		return decodeTxBlob(data)
+	}
+
+	parsed, rawErr := tx.ParseFromBinary(data)
+	if rawErr == nil {
+		return storedTransactionFromRaw(parsed, hashStr)
+	}
+
+	stored, envelopeErr := decodeTxBlob(data)
+	if envelopeErr == nil {
+		stored.Meta = nil
+		return stored, nil
+	}
+	return StoredTransaction{}, errors.Join(
+		fmt.Errorf("decode transaction envelope: %w", envelopeErr),
+		fmt.Errorf("decode raw canonical transaction: %w", rawErr),
+	)
+}
+
+func storedTransactionFromRaw(parsed tx.Transaction, hashStr string) (StoredTransaction, error) {
+	expectedHash, err := tx.ParseHash256NonZero(hashStr)
+	if err != nil {
+		return StoredTransaction{}, fmt.Errorf("parse transaction hash: %w", err)
+	}
+	computedHash, err := tx.ComputeTransactionHash(parsed)
+	if err != nil {
+		return StoredTransaction{}, fmt.Errorf("hash raw canonical transaction: %w", err)
+	}
+	if computedHash != expectedHash {
+		return StoredTransaction{}, fmt.Errorf("raw canonical transaction hash mismatch: key=%x computed=%x", expectedHash, computedHash)
+	}
+	txJSON, err := parsed.Flatten()
+	if err != nil {
+		return StoredTransaction{}, fmt.Errorf("flatten raw canonical transaction: %w", err)
+	}
+	return StoredTransaction{TxJSON: txJSON}, nil
 }
 
 func decodeTxBlobForTransactionEntry(data []byte) (StoredTransaction, error) {
@@ -922,7 +971,7 @@ func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEm
 		if requireBinaryMetadata && metaBytes == nil {
 			return StoredTransaction{}, errors.New("stored transaction is missing binary metadata")
 		}
-		txJSON, decErr := binarycodec.DecodeBytes(txBytes)
+		txJSON, decErr := decodeTransactionBinaryObject(txBytes)
 		if decErr == nil {
 			st := StoredTransaction{TxJSON: txJSON}
 			if len(metaBytes) > 0 {

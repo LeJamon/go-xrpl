@@ -51,7 +51,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		if txParseErr != nil {
 			return nil, rpcerrors.RpcErrorInvalidTransaction(txParseErr.Error())
 		}
-		canonical, canonicalErr := binarycodec.DecodeBytes(rawBlob)
+		canonical, canonicalErr := binarycodec.DecodeBytesAllowOverCap(rawBlob)
 		if canonicalErr != nil {
 			return nil, rpcerrors.RpcErrorInvalidTransaction(canonicalErr.Error())
 		}

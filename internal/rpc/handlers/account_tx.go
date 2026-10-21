@@ -215,7 +215,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			}
 
 			// Decode tx_blob into JSON
-			txJSON, decErr := decodeBinaryObject(txn.TxBlob)
+			txJSON, decErr := decodeTransactionBinaryObject(txn.TxBlob)
 			if decErr != nil {
 				continue
 			} else {

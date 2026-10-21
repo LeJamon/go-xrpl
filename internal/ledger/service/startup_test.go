@@ -337,6 +337,17 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 	hasTx, err := svc.GetOpenLedger().TxExists(txHash)
 	require.NoError(t, err)
 	require.True(t, hasTx)
+	openResult, err := svc.GetTransaction(txHash)
+	require.NoError(t, err)
+	require.Zero(t, openResult.LedgerIndex)
+	require.False(t, openResult.Validated)
+	require.Equal(t, invalidTransactionIndex, openResult.TxIndex)
+	rawTx, rawMeta, err := tx.SplitTxWithMetaBlob(openResult.TxData)
+	require.NoError(t, err)
+	require.NotEmpty(t, rawTx)
+	require.Nil(t, rawMeta)
+	_, err = tx.ParseFromBinary(rawTx)
+	require.NoError(t, err)
 
 	seq, err := svc.acceptLedgerAt(ctx, time.Unix(1, 0))
 	require.NoError(t, err)
@@ -348,6 +359,13 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 	require.Equal(t, protocol.ToRippleTime(targetHeader.CloseTime), protocol.ToRippleTime(replayed.Header().CloseTime))
 	require.Equal(t, targetHeader.CloseTimeResolution, replayed.Header().CloseTimeResolution)
 	require.Equal(t, targetHeader.CloseFlags, replayed.Header().CloseFlags)
+	closedResult, err := svc.GetTransaction(txHash)
+	require.NoError(t, err)
+	require.Equal(t, target.Sequence(), closedResult.LedgerIndex)
+	require.True(t, closedResult.Validated)
+	require.Equal(t, uint32(0), closedResult.TxIndex)
+	closedAccepted := ParseAcceptedTransaction(closedResult.TxData)
+	require.NoError(t, closedAccepted.ParseError())
 }
 
 func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {

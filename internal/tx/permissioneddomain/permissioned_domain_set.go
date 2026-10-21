@@ -3,6 +3,7 @@ package permissioneddomain
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -219,49 +220,36 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 
-	// Compute domain keylet from account + transaction sequence
-	// Reference: rippled PermissionedDomainSet.cpp doApply() — uses ctx_.tx[sfSequence]
-	txSeq := p.Common.SeqProxy()
+	txSeq := p.Common.GetSequence()
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3) {
+		txSeq = p.Common.SeqProxy()
+	}
 	domainKeylet := keylet.PermissionedDomain(ctx.AccountID, txSeq)
 
-	pd := &state.PermissionedDomainData{
-		Owner:               ctx.AccountID,
-		Sequence:            txSeq,
-		OwnerNode:           0,
-		AcceptedCredentials: sorted,
-	}
-
-	pdData, err := state.SerializePermissionedDomain(pd, p.Account)
-	if err != nil {
-		ctx.Log.Error("permissioned domain set: failed to serialize domain", "error", err)
-		return ter.TefINTERNAL
-	}
-
-	if err := ctx.View.Insert(domainKeylet, pdData); err != nil {
-		ctx.Log.Error("permissioned domain set: failed to insert domain", "error", err)
-		return ter.TefINTERNAL
-	}
-
-	// Add to owner directory. The describe callback stamps sfOwner on a freshly
-	// created owner-dir root/page (rippled describeOwnerDir, PermissionedDomainSet
-	// .cpp:138-139); without it the SLE bytes (and CreatedNode NewFields) diverge.
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: directory insert failed", "error", err)
-		return ter.TecDIR_FULL
+		if errors.Is(err, state.ErrDirFull) {
+			return ter.TecDIR_FULL
+		}
+		return ter.TefEXCEPTION
 	}
 
-	// Update OwnerNode in the stored entry
-	pd.OwnerNode = result.Page
-	pdData, err = state.SerializePermissionedDomain(pd, p.Account)
+	pd := &state.PermissionedDomainData{
+		Owner:               ctx.AccountID,
+		Sequence:            txSeq,
+		OwnerNode:           result.Page,
+		AcceptedCredentials: sorted,
+	}
+	pdData, err := state.SerializePermissionedDomain(pd, p.Account)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if err := ctx.View.Update(domainKeylet, pdData); err != nil {
-		return ter.TefINTERNAL
+	if err := ctx.View.Insert(domainKeylet, pdData); err != nil {
+		return ter.TefEXCEPTION
 	}
 
 	ctx.Account.OwnerCount++

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 )
 
 // uint64ToUpperHex matches fmt.Sprintf("%X", v) but avoids the fmt
@@ -236,6 +237,15 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 // Note: The binary codec expects map[string]any, not map[string]string.
 func flattenAmount(a Amount) any {
 	if a.IsNative() {
+		drops := a.Drops()
+		magnitude := uint64(drops)
+		negative := drops < 0
+		if negative {
+			magnitude = uint64(-(drops + 1)) + 1
+		}
+		if magnitude > uint64(binarytypes.MaxDrops) {
+			return binarytypes.RawXRPAmount{Drops: magnitude, Negative: negative}
+		}
 		return a.Value()
 	}
 	if a.IsMPT() {
