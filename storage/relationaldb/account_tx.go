@@ -82,7 +82,7 @@ func matchesAccountTxDelegate(rawTransaction []byte, account AccountID, filter A
 	if len(rawTransaction) == 0 {
 		return false, nil
 	}
-	transaction, err := binarycodec.DecodeBytes(rawTransaction)
+	transaction, err := binarycodec.DecodeBytesAllowOverCap(rawTransaction)
 	if err != nil {
 		return false, err
 	}

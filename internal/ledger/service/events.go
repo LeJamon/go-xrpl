@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -707,7 +706,7 @@ func extractMentionedAccounts(rawSTTx []byte) []string {
 	if len(rawSTTx) == 0 {
 		return nil
 	}
-	txJSON, err := binarycodec.Decode(hex.EncodeToString(rawSTTx))
+	txJSON, err := binarycodec.DecodeBytesAllowOverCap(rawSTTx)
 	if err != nil {
 		return nil
 	}
@@ -762,7 +761,7 @@ func proposedOwnerFunds(rawSTTx []byte, view *ledger.Ledger) (string, bool, erro
 	if len(rawSTTx) == 0 || view == nil {
 		return "", false, nil
 	}
-	txJSON, err := binarycodec.Decode(hex.EncodeToString(rawSTTx))
+	txJSON, err := binarycodec.DecodeBytesAllowOverCap(rawSTTx)
 	if err != nil {
 		return "", false, fmt.Errorf("decode proposed transaction: %w", err)
 	}

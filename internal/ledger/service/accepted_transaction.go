@@ -57,7 +57,11 @@ func ParseAcceptedTransaction(data []byte) *AcceptedTransaction {
 	accepted.metadataBlob = metaBlob
 
 	var parseErrors []error
-	txMap, txErr := binarycodec.DecodeBytes(txBlob)
+	// Accepted transaction blobs can contain native amounts above the current
+	// supply cap when they were produced under an older amendment set. Keep the
+	// transaction wire value available for historical queries; metadata remains
+	// on the strict decoder below.
+	txMap, txErr := binarycodec.DecodeBytesAllowOverCap(txBlob)
 	if txErr != nil {
 		parseErrors = append(parseErrors, fmt.Errorf("decode accepted transaction: %w", txErr))
 	} else {

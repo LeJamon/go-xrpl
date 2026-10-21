@@ -860,6 +860,10 @@ func decodeBinaryObject(data []byte) (map[string]any, error) {
 	return binarycodec.Decode(hex.EncodeToString(data))
 }
 
+func decodeTransactionBinaryObject(data []byte) (map[string]any, error) {
+	return binarycodec.DecodeBytesAllowOverCap(data)
+}
+
 // decodeTxBlob decodes transaction data that may be in one of two formats:
 //  1. VL-encoded binary blob: [VL-prefix][tx_bytes][VL-prefix][meta_bytes]
 //     (produced by tx.CreateTxWithMetaBlob, stored via AddTransactionWithMeta)
@@ -887,7 +891,7 @@ func decodeOpenTxBlob(data []byte) (StoredTransaction, error) {
 	if metaBytes != nil {
 		return StoredTransaction{}, errors.New("open transaction unexpectedly contains metadata")
 	}
-	txJSON, err := binarycodec.DecodeBytes(txBytes)
+	txJSON, err := decodeTransactionBinaryObject(txBytes)
 	if err != nil {
 		return StoredTransaction{}, fmt.Errorf("decode open transaction: %w", err)
 	}
@@ -967,7 +971,7 @@ func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEm
 		if requireBinaryMetadata && metaBytes == nil {
 			return StoredTransaction{}, errors.New("stored transaction is missing binary metadata")
 		}
-		txJSON, decErr := binarycodec.DecodeBytes(txBytes)
+		txJSON, decErr := decodeTransactionBinaryObject(txBytes)
 		if decErr == nil {
 			st := StoredTransaction{TxJSON: txJSON}
 			if len(metaBytes) > 0 {

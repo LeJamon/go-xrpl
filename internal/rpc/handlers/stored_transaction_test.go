@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -116,6 +117,76 @@ func TestDecodeLedgerTransactionRejectsRawCorruptionAndClosedRawTransaction(t *t
 	require.Nil(t, stored.Meta)
 	_, err = decodeLedgerTransaction(raw, hashString, true)
 	require.Error(t, err)
+}
+
+func TestTransactionOnlyDecodersAllowLegacyOverCapAndKeepMetadataStrict(t *testing.T) {
+	const overCap = uint64(binarytypes.MaxDrops) + 1
+	txFields := map[string]any{
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Amount":          binarytypes.RawXRPAmount{Drops: overCap},
+		"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "EscrowCreate",
+	}
+	txHex, err := binarycodec.Encode(txFields)
+	require.NoError(t, err)
+	txBlob, err := hex.DecodeString(txHex)
+	require.NoError(t, err)
+	metaFields := map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(4),
+		"TransactionResult": "tecNO_LINE",
+	}
+	metaHex, err := binarycodec.Encode(metaFields)
+	require.NoError(t, err)
+	metaBlob, err := hex.DecodeString(metaHex)
+	require.NoError(t, err)
+	txOnly, err := tx.EncodeWithVL(txBlob)
+	require.NoError(t, err)
+	combined := append(append([]byte(nil), txOnly...), mustEncodeVL(t, metaBlob)...)
+
+	open, err := decodeOpenTxBlob(txOnly)
+	require.NoError(t, err)
+	assertRawAmount(t, open.TxJSON, overCap)
+
+	closed, err := decodeTxBlobForTx(combined)
+	require.NoError(t, err)
+	assertRawAmount(t, closed.TxJSON, overCap)
+
+	entry, err := decodeTxBlobForTransactionEntry(combined)
+	require.NoError(t, err)
+	assertRawAmount(t, entry.TxJSON, overCap)
+
+	badMetaFields := map[string]any{}
+	for name, value := range metaFields {
+		badMetaFields[name] = value
+	}
+	badMetaFields["DeliveredAmount"] = binarytypes.RawXRPAmount{Drops: overCap}
+	badMetaHex, err := binarycodec.Encode(badMetaFields)
+	require.NoError(t, err)
+	badMetaBlob, err := hex.DecodeString(badMetaHex)
+	require.NoError(t, err)
+	badCombined := append(append([]byte(nil), txOnly...), mustEncodeVL(t, badMetaBlob)...)
+	_, err = decodeTxBlobForTx(badCombined)
+	require.Error(t, err)
+	_, err = decodeBinaryObject(badMetaBlob)
+	require.Error(t, err)
+}
+
+func mustEncodeVL(t *testing.T, data []byte) []byte {
+	t.Helper()
+	encoded, err := tx.EncodeWithVL(data)
+	require.NoError(t, err)
+	return encoded
+}
+
+func assertRawAmount(t *testing.T, fields map[string]any, want uint64) {
+	t.Helper()
+	raw, ok := fields["Amount"].(binarytypes.RawXRPAmount)
+	require.True(t, ok, "Amount type = %T", fields["Amount"])
+	require.Equal(t, want, raw.Drops)
 }
 
 func testRawPayment(t *testing.T) ([]byte, [32]byte) {
