@@ -79,7 +79,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if err != nil || len(rawBlob) == 0 {
 			return nil, rpcerrors.RpcErrorInvalidField("tx_blob")
 		}
-		txJsonMap, err = binarycodec.DecodeBytes(rawBlob)
+		txJsonMap, err = binarycodec.DecodeBytesAllowOverCap(rawBlob)
 		if err != nil {
 			return nil, rpcerrors.RpcErrorInvalidField("tx_blob")
 		}

@@ -91,7 +91,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		if parseErr != nil {
 			return malformedSubmitResult(), nil
 		}
-		fields, canonicalErr := binarycodec.DecodeBytes(rawBlob)
+		fields, canonicalErr := binarycodec.DecodeBytesAllowOverCap(rawBlob)
 		if canonicalErr != nil {
 			return malformedSubmitResult(), nil
 		}

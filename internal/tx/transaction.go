@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -423,7 +425,8 @@ type Common struct {
 	TransactionType string `json:"TransactionType"`
 
 	// Fee in drops (required for signing, optional for submission)
-	Fee string `json:"Fee,omitempty"`
+	Fee    string `json:"Fee,omitempty"`
+	rawFee *binarytypes.RawXRPAmount
 
 	// Sequence number (required unless using TicketSequence)
 	Sequence *uint32 `json:"Sequence,omitempty"`
@@ -683,7 +686,11 @@ func (c *Common) ToMap() map[string]any {
 	}
 
 	if c.Fee != "" {
-		m["Fee"] = c.Fee
+		if c.rawFee != nil && c.Fee == rawXRPAmountDecimal(*c.rawFee) {
+			m["Fee"] = *c.rawFee
+		} else {
+			m["Fee"] = c.Fee
+		}
 	}
 	if c.Sequence != nil {
 		m["Sequence"] = *c.Sequence
@@ -760,6 +767,14 @@ func (c *Common) ToMap() map[string]any {
 	}
 
 	return m
+}
+
+func rawXRPAmountDecimal(amount binarytypes.RawXRPAmount) string {
+	value := strconv.FormatUint(amount.Drops, 10)
+	if amount.Negative && amount.Drops != 0 {
+		return "-" + value
+	}
+	return value
 }
 
 // SeqProxy returns the effective sequence value for this transaction.

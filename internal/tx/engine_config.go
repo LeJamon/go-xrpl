@@ -252,7 +252,7 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 func SerializeTransaction(tx Transaction) ([]byte, error) {
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
 		if tx.TxType() == TypeClawback {
-			decoded, err := binarycodec.DecodeBytes(rawBytes)
+			decoded, err := binarycodec.DecodeBytesAllowOverCap(rawBytes)
 			if err != nil {
 				return nil, err
 			}
@@ -315,7 +315,7 @@ func BindRawBytes(tx Transaction, raw []byte) error {
 		tx.SetRawBytes(nil)
 		return nil
 	}
-	rawFields, err := binarycodec.DecodeBytes(raw)
+	rawFields, err := binarycodec.DecodeBytesAllowOverCap(raw)
 	if err != nil {
 		return err
 	}
@@ -402,7 +402,7 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 			return c.cachedTxID, nil
 		}
 		if tx.TxType() == TypeClawback {
-			fields, err := binarycodec.DecodeBytes(rawBytes)
+			fields, err := binarycodec.DecodeBytesAllowOverCap(rawBytes)
 			if err != nil {
 				return [32]byte{}, err
 			}

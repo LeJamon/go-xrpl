@@ -88,6 +88,12 @@ func TestSerializedFieldParseMessageLeafValidation(t *testing.T) {
 			message: "Field 'tx_json.Amount' has invalid data.",
 		},
 		{
+			name:    "native amount above supply cap",
+			field:   "Amount",
+			value:   "100000000000000001",
+			message: "Field 'tx_json.Amount' has invalid data.",
+		},
+		{
 			name:  "numeric amount",
 			field: "Fee",
 			value: json.Number("50"),

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -90,7 +91,7 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, []byte, error) {
 	// Decode the canonical binary directly; the blob is already bytes, so
 	// going through a hex string round-trip would only churn allocations on
 	// this per-transaction hot path.
-	jsonMap, err := binarycodec.DecodeBytes(blob)
+	jsonMap, err := binarycodec.DecodeBytesAllowOverCap(blob)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to decode binary transaction: %w", err)
 	}
@@ -171,6 +172,7 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 	} else {
+		jsonFields = sanitizeRawXRPAmounts(jsonFields).(map[string]any)
 		jsonBytes, err := json.Marshal(jsonFields)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
@@ -185,12 +187,74 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 		}
 	}
 	restoreBinaryNoCurrency(parsed, fields)
+	restoreRawXRPAmounts(parsed, fields)
 	presentFields := make(map[string]bool, len(fields))
 	for name := range fields {
 		presentFields[name] = true
 	}
 	parsed.GetCommon().SetPresentFields(presentFields)
 	return parsed, nil
+}
+
+// sanitizeRawXRPAmounts keeps binary-only over-cap values out of the ordinary
+// JSON unmarshaling path. The typed Amount is restored from the raw field map
+// immediately after unmarshaling, so the transaction retains its canonical wire
+// identity while JSON input remains subject to the normal supply cap.
+func sanitizeRawXRPAmounts(value any) any {
+	switch v := value.(type) {
+	case binarytypes.RawXRPAmount:
+		return "0"
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for name, child := range v {
+			out[name] = sanitizeRawXRPAmounts(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, child := range v {
+			out[i] = sanitizeRawXRPAmounts(child)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func restoreRawXRPAmounts(transaction Transaction, fields map[string]any) {
+	if transaction == nil {
+		return
+	}
+	if raw, ok := fields["Fee"].(binarytypes.RawXRPAmount); ok {
+		common := transaction.GetCommon()
+		common.Fee = rawXRPAmountDecimal(raw)
+		common.rawFee = &raw
+	}
+	value := reflect.ValueOf(transaction)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	for _, field := range getFlattenInfo(value.Type()).fields {
+		if !field.isAmount {
+			continue
+		}
+		raw, ok := fields[field.name].(binarytypes.RawXRPAmount)
+		if !ok {
+			continue
+		}
+		drops := int64(raw.Drops)
+		if raw.Negative {
+			drops = -drops
+		}
+		amount := NewXRPAmount(drops)
+		amountField := value.Field(field.index)
+		if amountField.Kind() == reflect.Pointer {
+			amountField.Set(reflect.New(amountField.Type().Elem()))
+			amountField.Elem().Set(reflect.ValueOf(amount))
+			continue
+		}
+		amountField.Set(reflect.ValueOf(amount))
+	}
 }
 
 const noCurrencyHex = "0000000000000000000000000000000000000001"

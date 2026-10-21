@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
@@ -438,6 +439,9 @@ func reserveSponsorAllowed(txType txcore.Type) bool {
 // Reference: rippled Transactor.cpp preflight1 (id == beast::zero → temBAD_SRC_ACCOUNT).
 func checkAccountPresent(common *txcore.Common) ter.Result {
 	if common.Account == "" {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	if accountID, err := state.DecodeAccountID(common.Account); err == nil && accountID == ([20]byte{}) {
 		return ter.TemBAD_SRC_ACCOUNT
 	}
 	if common.TransactionType == "" {

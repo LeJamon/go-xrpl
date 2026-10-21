@@ -24,8 +24,9 @@ var (
 
 // BinaryParser parses binary-encoded XRPL data into field instances based on definitions.
 type BinaryParser struct {
-	data        []byte
-	definitions *definitions.Definitions
+	data         []byte
+	definitions  *definitions.Definitions
+	allowOverCap bool
 }
 
 // NewBinaryParser returns a new BinaryParser initialized with the given data.
@@ -34,6 +35,24 @@ func NewBinaryParser(d []byte, definitions *definitions.Definitions) *BinaryPars
 		data:        d,
 		definitions: definitions,
 	}
+}
+
+// NewBinaryParserAllowOverCap returns a parser for transaction wire data. The
+// native amount deserializer preserves an over-cap magnitude as a raw amount so
+// transaction preflight can return temBAD_AMOUNT. Generic object decoding stays
+// strict through NewBinaryParser.
+func NewBinaryParserAllowOverCap(d []byte, definitions *definitions.Definitions) *BinaryParser {
+	return &BinaryParser{
+		data:         d,
+		definitions:  definitions,
+		allowOverCap: true,
+	}
+}
+
+// AllowsOverCap reports whether native amounts above the JSON supply cap should
+// be retained as raw wire values by this parser.
+func (p *BinaryParser) AllowsOverCap() bool {
+	return p.allowOverCap
 }
 
 // ReadField reads the next field in the data.

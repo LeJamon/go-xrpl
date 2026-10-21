@@ -1,12 +1,10 @@
 package tx
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
@@ -45,7 +43,7 @@ func TransactionLocalChecksFailureReason(transaction Transaction) string {
 		return "Invalid transaction."
 	}
 	if raw := transaction.GetRawBytes(); len(raw) != 0 {
-		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
+		if fields, err := binarycodec.DecodeBytesAllowOverCap(raw); err == nil {
 			return TransactionMapLocalChecksFailureReason(transaction.TxType(), fields)
 		}
 	}
@@ -253,16 +251,6 @@ func hasDefaultAccountField(fields map[string]any) bool {
 			continue
 		}
 		if account == "" {
-			return true
-		}
-		if decoded, err := hex.DecodeString(account); err == nil && len(decoded) == 20 {
-			if bytes.Equal(decoded, make([]byte, 20)) {
-				return true
-			}
-			continue
-		}
-		_, decoded, err := addresscodec.DecodeClassicAddressToAccountID(account)
-		if err == nil && bytes.Equal(decoded, make([]byte, 20)) {
 			return true
 		}
 	}
