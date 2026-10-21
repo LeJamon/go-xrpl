@@ -13,7 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// ManifestMethod handles the manifest RPC method.
 type ManifestMethod struct{ baseHandler }
 
 func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
