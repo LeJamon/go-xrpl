@@ -67,6 +67,10 @@ func redactJSONValue(value any) any {
 			redacted[i] = redactJSONValue(item)
 		}
 		return redacted
+	case string:
+		// RPC request echoes use NUL-terminated string values.
+		prefix, _, _ := strings.Cut(value, "\x00")
+		return prefix
 	default:
 		return value
 	}

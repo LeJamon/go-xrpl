@@ -167,10 +167,34 @@ func TestValidatorInfo_WithManifest(t *testing.T) {
 	assert.Equal(t, domain, resp["domain"])
 }
 
-// TestValidatorInfo_SeqZeroSerialises pins rippled parity for `seq`:
-// rippled emits ret[jss::seq] = *seq even when the value is 0, so we
-// use *uint32 to avoid omitempty dropping a legitimate zero-sequence
-// manifest.
+func TestValidatorInfo_WithManifestWithoutDomain(t *testing.T) {
+	signingKey := makeValidatorPubKey(0x02)
+	var signingArr [33]byte
+	copy(signingArr[:], signingKey)
+
+	var masterArr [33]byte
+	masterArr[0] = 0x03
+	for i := 1; i < 33; i++ {
+		masterArr[i] = byte(i)
+	}
+
+	manifests := &fakeManifestLookup{
+		masterFor:   map[[33]byte][33]byte{signingArr: masterArr},
+		manifestFor: map[[33]byte][]byte{masterArr: {0xDE, 0xAD}},
+		seqFor:      map[[33]byte]uint32{masterArr: 1},
+		domainFor:   map[[33]byte]string{masterArr: ""},
+	}
+	services := installServices(signingKey, manifests)
+
+	result, rpcErr := (&handlers.ValidatorInfoMethod{}).Handle(adminCtx(services), nil)
+	require.Nil(t, rpcErr)
+
+	resp := decodeResponse(t, result)
+	assert.Contains(t, resp, "domain")
+	assert.Equal(t, "", resp["domain"])
+}
+
+// A cached sequence of zero must be emitted, rather than treated as absent.
 func TestValidatorInfo_SeqZeroSerialises(t *testing.T) {
 	signingKey := makeValidatorPubKey(0x02)
 	var signingArr [33]byte
@@ -193,7 +217,7 @@ func TestValidatorInfo_SeqZeroSerialises(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	resp := decodeResponse(t, result)
-	assert.Contains(t, resp, "seq", "seq=0 must round-trip; pointer + omitempty preserves the zero value")
+	assert.Contains(t, resp, "seq", "seq=0 must round-trip")
 	assert.EqualValues(t, 0, resp["seq"])
 }
 

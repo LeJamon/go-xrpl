@@ -1148,6 +1148,7 @@ func TestManifest_Domain_Validation(t *testing.T) {
 		domain string
 		accept bool
 	}{
+		{"empty", "", false},
 		{"simple", "example.com", true},
 		{"subdomain", "validators.ripple.com", true},
 		{"hyphenated", "my-validator.example.org", true},
@@ -1178,6 +1179,40 @@ func TestManifest_Domain_Validation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManifest_CacheDomainPresence(t *testing.T) {
+	noDomainWire, noDomainMaster, _ := buildManifest(t, 1, false, 0x74, 0x75)
+	noDomain, err := manifest.Deserialize(noDomainWire)
+	require.NoError(t, err)
+
+	domainWire := buildManifestWithDomain(t, "example.org", 0x76, 0x77)
+	domain, err := manifest.Deserialize(domainWire)
+	require.NoError(t, err)
+
+	cache := manifest.NewCache()
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(noDomain))
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(domain))
+
+	got, ok := cache.GetDomain(noDomainMaster)
+	require.True(t, ok)
+	require.Empty(t, got)
+
+	got, ok = cache.GetDomain(domain.MasterKey())
+	require.True(t, ok)
+	require.Equal(t, "example.org", got)
+
+	revocationWire, _, _ := buildManifest(t, manifest.RevokedSequence, true, 0x74, 0)
+	revocation, err := manifest.Deserialize(revocationWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(revocation))
+	_, ok = cache.GetDomain(noDomainMaster)
+	require.False(t, ok)
+
+	var unknown [33]byte
+	unknown[0] = 0xed
+	_, ok = cache.GetDomain(unknown)
+	require.False(t, ok)
 }
 
 func TestManifest_MaximumDomainFitsSerializedLimit(t *testing.T) {

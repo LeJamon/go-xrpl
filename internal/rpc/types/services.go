@@ -211,7 +211,9 @@ type ManifestLookup interface {
 	GetManifest(masterKey [33]byte) ([]byte, bool)
 	// GetSequence returns the stored manifest's sequence number.
 	GetSequence(masterKey [33]byte) (uint32, bool)
-	// GetDomain returns the stored manifest's domain.
+	// GetDomain returns the stored manifest's domain. A valid cached manifest
+	// without a Domain field returns an empty string with true; false means
+	// unknown or revoked.
 	GetDomain(masterKey [33]byte) (string, bool)
 }
 

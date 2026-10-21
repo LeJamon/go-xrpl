@@ -33,6 +33,11 @@ type rpcManifestFixture struct {
 
 func newRPCManifestFixture(t *testing.T) rpcManifestFixture {
 	t.Helper()
+	return newRPCManifestFixtureWithDomain(t, "example.org")
+}
+
+func newRPCManifestFixtureWithDomain(t *testing.T, domain string) rpcManifestFixture {
+	t.Helper()
 
 	masterPubBytes, masterPriv := deterministicEd25519KeypairRPC(0x11)
 	ephPubBytes, ephPriv := deterministicEd25519KeypairRPC(0x22)
@@ -46,7 +51,9 @@ func newRPCManifestFixture(t *testing.T) rpcManifestFixture {
 		"PublicKey":     hex.EncodeToString(masterPubBytes),
 		"SigningPubKey": hex.EncodeToString(ephPubBytes),
 		"Sequence":      uint32(7),
-		"Domain":        hex.EncodeToString([]byte("example.org")),
+	}
+	if domain != "" {
+		jsonMap["Domain"] = hex.EncodeToString([]byte(domain))
 	}
 	preimage := manifestPreimageRPC(t, jsonMap)
 	jsonMap["Signature"] = hex.EncodeToString(ed25519.Sign(ed25519.PrivateKey(ephPriv), preimage))
@@ -229,6 +236,67 @@ func TestManifestTransportSuccessShapes(t *testing.T) {
 					assert.Equal(t, "example.org", details["domain"])
 				})
 			}
+		})
+	}
+}
+
+func TestManifestTransportCachedManifestWithoutDomain(t *testing.T) {
+	fixture := newRPCManifestFixtureWithDomain(t, "")
+
+	for _, transport := range []string{"http", "websocket"} {
+		t.Run(transport, func(t *testing.T) {
+			for _, requested := range []string{fixture.master, fixture.ephemeral} {
+				t.Run(requested, func(t *testing.T) {
+					var response map[string]any
+					if transport == "http" {
+						var status int
+						response, status = callManifestHTTP(t, manifestServices(fixture.cache),
+							`{"public_key":"`+requested+`"}`)
+						require.Equal(t, http.StatusOK, status)
+					} else {
+						response = callManifestWebSocket(t, manifestServices(fixture.cache),
+							`{"command":"manifest","id":1,"public_key":"`+requested+`"}`)
+					}
+
+					result := assertManifestSuccessEnvelope(t, transport, response)
+					assert.Equal(t, requested, result["requested"])
+					assert.Equal(t, map[string]any{
+						"master_key":    fixture.master,
+						"ephemeral_key": fixture.ephemeral,
+						"seq":           float64(7),
+						"domain":        "",
+					}, result["details"])
+				})
+			}
+		})
+	}
+}
+
+func TestValidatorInfoCachedManifestDomainHTTP(t *testing.T) {
+	for _, domain := range []string{"", "example.org"} {
+		t.Run(domain, func(t *testing.T) {
+			fixture := newRPCManifestFixtureWithDomain(t, domain)
+			signingKey, err := addresscodec.DecodeNodePublicKey(fixture.ephemeral)
+			require.NoError(t, err)
+			server := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewTestServiceGraph(&types.ServiceContainer{
+				Manifests:          fixture.cache,
+				ValidatorPublicKey: signingKey,
+			})})
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"method":"validator_info","params":[{}]}`))
+			request.RemoteAddr = "127.0.0.1:1234"
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, withLoopbackAdmin(request))
+			require.Equal(t, http.StatusOK, response.Code)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+			assert.Equal(t, map[string]any{
+				"status":        "success",
+				"master_key":    fixture.master,
+				"ephemeral_key": fixture.ephemeral,
+				"manifest":      base64.StdEncoding.EncodeToString(fixture.serialized),
+				"seq":           float64(7),
+				"domain":        domain,
+			}, body["result"])
 		})
 	}
 }

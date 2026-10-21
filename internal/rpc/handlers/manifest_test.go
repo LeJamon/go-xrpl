@@ -235,7 +235,7 @@ func TestRPCManifestCacheLifecycle(t *testing.T) {
 		require.Equal(t, map[string]any{
 			"requested": key,
 			"manifest":  base64.StdEncoding.EncodeToString(serialized),
-			"details":   map[string]any{"master_key": masterKey, "ephemeral_key": oldKey, "seq": float64(0)},
+			"details":   map[string]any{"master_key": masterKey, "ephemeral_key": oldKey, "seq": float64(0), "domain": ""},
 		}, out)
 	}
 	_, newSigning, serialized := applyRPCManifest(t, cache, 1, 0x33, "example.org")
