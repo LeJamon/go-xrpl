@@ -471,7 +471,8 @@ func TestCheckCashRejectsIllegalStoredMPT(t *testing.T) {
 	amount := state.NewMPTAmountWithIssuanceID(1, "", mptHex)
 	cash := NewCheckCash(dstAddress, hex.EncodeToString(checkKey.Key[:]))
 	cash.Amount = &amount
-	if result := cash.Apply(checkMPTContext(view, dst, dstID)); result != ter.TefBAD_LEDGER {
-		t.Fatalf("cash illegal stored MPT = %v, want tefBAD_LEDGER", result)
+	ctx := checkMPTContext(view, dst, dstID)
+	if result := cash.Preclaim(view, ctx.Config); result != ter.TefBAD_LEDGER {
+		t.Fatalf("cash illegal stored MPT preclaim = %v, want tefBAD_LEDGER", result)
 	}
 }
