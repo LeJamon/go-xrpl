@@ -30,7 +30,7 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 	for _, name := range names {
 		fieldValue := object[name]
 		field, err := defs.FieldInstanceByName(name)
-		if err != nil {
+		if err != nil || name == "taker_gets_funded" || name == "taker_pays_funded" {
 			return fmt.Sprintf("Field '%s.%s' is unknown.", path, name)
 		}
 
@@ -73,7 +73,7 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				for wrapperName, wrapperValue = range itemObject {
 				}
 				wrapperField, err := defs.FieldInstanceByName(wrapperName)
-				if err != nil {
+				if err != nil || wrapperName == "taker_gets_funded" || wrapperName == "taker_pays_funded" {
 					return fmt.Sprintf("Field '%s.%s' is unknown.", fieldPath, wrapperName)
 				}
 				var wrapperObject map[string]any
