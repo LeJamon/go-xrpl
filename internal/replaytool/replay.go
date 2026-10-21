@@ -465,6 +465,14 @@ func decodeEntryBytes(blob []byte) map[string]any {
 	return decoded
 }
 
+func decodeTransactionEntryBytes(blob []byte) map[string]any {
+	decoded, err := binarycodec.DecodeBytesAllowOverCap(blob)
+	if err != nil {
+		return nil
+	}
+	return decoded
+}
+
 // materializeDecoded fills DecodedTx for any result still missing it, decoding
 // from the retained raw blob. The apply path leaves DecodedTx nil on the hot
 // success path (the ledger hashes never read it); the on-failure debug dump
@@ -473,7 +481,7 @@ func decodeEntryBytes(blob []byte) map[string]any {
 func materializeDecoded(results []txApplyInfo) {
 	for i := range results {
 		if results[i].DecodedTx == nil && len(results[i].RawBlob) > 0 {
-			results[i].DecodedTx = decodeEntryBytes(results[i].RawBlob)
+			results[i].DecodedTx = decodeTransactionEntryBytes(results[i].RawBlob)
 		}
 	}
 }
@@ -497,7 +505,7 @@ func fillTxDisplay(txInfo *txApplyInfo, blob []byte, parsed tx.Transaction, want
 			return
 		}
 	}
-	decoded := decodeEntryBytes(blob)
+	decoded := decodeTransactionEntryBytes(blob)
 	if decoded == nil {
 		return
 	}

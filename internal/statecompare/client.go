@@ -308,7 +308,7 @@ func validateTransactions(ctx context.Context, records []txRecord, snapshot *Led
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := validateCanonicalObject(record.txBlob); err != nil {
+		if err := validateCanonicalTransaction(record.txBlob); err != nil {
 			return nil, fmt.Errorf("ledger %d transaction %x is not canonical: %w", snapshot.LedgerIndex, record.txHash, err)
 		}
 		if err := validateCanonicalObject(record.metaBlob); err != nil {
@@ -365,6 +365,15 @@ func validateTransactions(ctx context.Context, records []txRecord, snapshot *Led
 
 func validateCanonicalObject(blob []byte) error {
 	decoded, err := binarycodec.DecodeBytes(blob)
+	return validateCanonicalDecodedObject(blob, decoded, err)
+}
+
+func validateCanonicalTransaction(blob []byte) error {
+	decoded, err := binarycodec.DecodeBytesAllowOverCap(blob)
+	return validateCanonicalDecodedObject(blob, decoded, err)
+}
+
+func validateCanonicalDecodedObject(blob []byte, decoded map[string]any, err error) error {
 	if err != nil {
 		return err
 	}
