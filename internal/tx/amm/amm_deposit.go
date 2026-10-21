@@ -248,9 +248,8 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 	lptKey := keylet.Line(accountID, ammAccountID, lptCurrency)
 	lptExists, _ := view.Exists(lptKey)
 
-	// Check authorization and freeze status for BOTH pool assets. fixCleanup3_3_0
-	// uses the unified pseudo-account deposit rules; the legacy path preserves
-	// rippled's per-asset authorization/freeze ordering.
+	// Check authorization and freeze status for both pool assets. The legacy
+	// path preserves rippled's per-asset ordering.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		checkAsset := func(asset tx.Asset) ter.Result {

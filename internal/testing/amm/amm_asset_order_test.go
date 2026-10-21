@@ -22,24 +22,17 @@ func TestAMMCreatePreservesAmountOrderAtOwnerDirectoryBoundary(t *testing.T) {
 	env.PayIOU(env.GW, env.Alice, "EUR", 500)
 	env.Close()
 
-	// Leave one free slot on the issuer's owner-directory page. The first
-	// AMM trustline must occupy that slot and the second must spill to page 1.
+	// Two trustlines occupy two owner-directory slots. Fill the remaining
+	// root-page slots with real Ticket objects so the boundary is valid ledger
+	// state before AMMCreate.
+	env.CreateTickets(env.GW, 29)
 	dirKey := keylet.OwnerDir(env.GW.ID)
 	raw, err := env.LedgerEntry(dirKey)
 	require.NoError(t, err)
 	dir, err := state.ParseDirectoryNode(raw)
 	require.NoError(t, err)
-	for len(dir.Indexes) < 31 {
-		var filler [32]byte
-		filler[0] = 0xf0
-		filler[31] = byte(len(dir.Indexes))
-		dir.Indexes = append(dir.Indexes, filler)
-	}
+	require.Equal(t, uint32(29), env.TicketCount(env.GW))
 	require.Len(t, dir.Indexes, 31)
-	dir.Owner = env.GW.ID
-	raw, err = state.SerializeDirectoryNode(dir, false)
-	require.NoError(t, err)
-	require.NoError(t, env.Ledger().Update(dirKey, raw))
 
 	usd := amm.IOUAmount(env.GW, "USD", 100)
 	eur := amm.IOUAmount(env.GW, "EUR", 100)
@@ -114,30 +107,45 @@ func TestAMMDepositChecksLegacyAuthAndFreezePerAsset(t *testing.T) {
 	amm.ExpectTER(t, result, "tecFROZEN")
 }
 
-func TestAMMWithdrawAllChecksCanonicalAssetOrder(t *testing.T) {
-	env, _, usd, eur := setupTwoIssuerAMM(t)
-	ammAccount := amm.AMMAccount(t, env, usd, eur)
-	ammData := env.ReadAMMData(usd, eur)
-	require.NotNil(t, ammData)
+func TestAMMWithdrawChecksCanonicalAssetOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		lpToken bool
+	}{
+		{name: "WithdrawAll"},
+		{name: "LPToken", lpToken: true},
+	}
 
-	// Move LP tokens to an account that has no EUR trust line. Its USD line is
-	// frozen so the result depends on whether validation follows tx or pool order.
-	env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
-	env.Close()
-	env.Trust(env.Bob, ammAccount, ammData.LPTokenBalance.Currency, 1000)
-	env.Close()
-	lpt := amm.LPTokenAmount(env, usd, eur, 10)
-	jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(env.Alice, env.Bob, lpt).Build()))
-	env.Close()
-	env.Trust(env.Bob, env.GW, "USD", 100)
-	env.Close()
-	env.FreezeTrustLine(env.GW, env.Bob, "USD")
-	env.DisableFeature("fixCleanup3_3_0")
-	env.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, _, usd, eur := setupTwoIssuerAMM(t)
+			ammAccount := amm.AMMAccount(t, env, usd, eur)
+			ammData := env.ReadAMMData(usd, eur)
+			require.NotNil(t, ammData)
 
-	// EUR sorts before USD in the AMM entry, while the transaction deliberately
-	// presents USD first. With no Amount fields, rippled checks canonical EUR
-	// first and returns tecNO_LINE for Bob's missing EUR trust line.
-	result := env.Submit(amm.AMMWithdraw(env.Bob, usd, eur).WithdrawAll().Build())
-	amm.ExpectTER(t, result, "tecNO_LINE")
+			// Bob has no EUR trust line. His USD line is frozen, so the result
+			// depends on whether validation follows transaction or pool order.
+			env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(30000)))
+			env.Close()
+			env.Trust(env.Bob, ammAccount, ammData.LPTokenBalance.Currency, 1000)
+			env.Close()
+			lpt := env.LPTokenAmountFromLedger(usd, eur, 10)
+			jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(env.Alice, env.Bob, lpt).Build()))
+			env.Close()
+			env.Trust(env.Bob, env.GW, "USD", 100)
+			env.Close()
+			env.FreezeTrustLine(env.GW, env.Bob, "USD")
+			env.DisableFeature("fixCleanup3_3_0")
+			env.Close()
+
+			withdraw := amm.AMMWithdraw(env.Bob, usd, eur)
+			if tt.lpToken {
+				withdraw.LPTokenIn(env.LPTokenAmountFromLedger(usd, eur, 1)).LPToken()
+			} else {
+				withdraw.WithdrawAll()
+			}
+			result := env.Submit(withdraw.Build())
+			amm.ExpectTER(t, result, "tecNO_LINE")
+		})
+	}
 }

@@ -362,10 +362,9 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return TecINSUF_RESERVE_LINE
 	}
 
-	// Transfer assets from creator to AMM and set lsfAMMNode on trustlines.
-	// The AMM object and LP calculation use canonical asset order, but rippled
-	// sends sfAmount before sfAmount2. Keep that transaction order here because
-	// owner-directory page allocation observes the two trustline insertions.
+	// Transfer assets in transaction field order: owner-directory page
+	// allocation observes the two trustline insertions. AMM math above remains
+	// in canonical asset order.
 	// Reference: rippled AMMCreate.cpp sendAndInitTrustOrMPT lines 319-389.
 	isXRP1 := isXRPAsset(asset1)
 	isXRP2 := isXRPAsset(asset2)
