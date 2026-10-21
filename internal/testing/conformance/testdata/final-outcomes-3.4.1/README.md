@@ -1,6 +1,6 @@
 # Final transaction outcome regressions
 
-These five signed snapshots were recorded from rippled **3.4.1**, commit
+These six signed snapshots were recorded from rippled **3.4.1**, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`, through a network-isolated standalone
 server's JSON-RPC interface. Setup used ordinary transactions; no ledger objects
 were injected or edited. The executable reported that exact commit and came from
@@ -21,6 +21,7 @@ the recorded oracle context; these cases do not test clock or consensus scheduli
 | AMMCreate directory boundary | Two IOUs from one issuer fill and overflow an owner-directory page in transaction Amount/Amount2 order. |
 | AMMDeposit freeze before authorization | With AMMClawback enabled and fixCleanup3_3_0 disabled, a frozen first asset takes precedence over a missing second-asset line. |
 | AMMWithdraw canonical asset precedence | Full withdrawal without explicit amounts checks the AMM's canonical asset order. |
+| AMMWithdraw reversed assets at directory boundary | Amountless withdrawal creates the receiver's EUR/USD lines in canonical order when the owner directory overflows. |
 | PermissionedDomainSet first ticket | With fixCleanup3_1_3 disabled, the domain uses raw Sequence=0; ticket 4 is consumed. |
 | PermissionedDomainSet second ticket | Starts independently from the first oracle closed ledger. A second create collides, returns tefEXCEPTION, preserves ticket/fee/state, and is absent from the next closed ledger. |
 

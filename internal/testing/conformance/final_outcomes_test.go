@@ -8,6 +8,7 @@ import (
 
 func TestFinalOutcomeRegressionSnapshots(t *testing.T) {
 	cases := map[string]string{
+		"amm-withdraw-reversed-owner-directory-boundary.json":  "73c9bb0e31c2524bdf851c79eec46e007def1b376a1c7a8efcc1d31ee61bb9e9",
 		"amm-create-two-iou-directory-boundary.json":           "8d54f572c5285ad9fe29bcbdf3c4daf5decddc8697ce027080b96910af5a7026",
 		"amm-deposit-freeze-before-auth.json":                  "86bc3110adf5b73286dcf6173eb75d2016ea0090bcd426f836b64905b09db57d",
 		"amm-withdraw-canonical-asset-precedence.json":         "493f733571dd061c3adfe22c5856ce770defecb4ac2e7d231b29ab7f85b71978",
