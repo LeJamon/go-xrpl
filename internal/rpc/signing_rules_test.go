@@ -73,7 +73,6 @@ func signingRulesPrimary(t *testing.T, multi bool) map[string]any {
 	}
 	require.Nil(t, rpcErr)
 	fields := maps.Clone(result.(map[string]any)["tx_json"].(map[string]any))
-	delete(fields, "hash")
 	return fields
 }
 
@@ -138,7 +137,6 @@ func TestSigningRPCRoleRulesSnapshot(t *testing.T) {
 							response := result.(map[string]any)
 							if multi {
 								fields := response["tx_json"].(map[string]any)
-								delete(fields, "hash")
 								request = map[string]any{"tx_json": fields}
 							} else {
 								request = map[string]any{"tx_blob": response["tx_blob"]}
@@ -201,7 +199,6 @@ func TestSigningConstructionRejectsMismatchedNestedRules(t *testing.T) {
 					}
 					require.Nil(t, rpcErr)
 					fields := maps.Clone(result.(map[string]any)["tx_json"].(map[string]any))
-					delete(fields, "hash")
 					request := map[string]any{
 						"tx_json": fields, "passphrase": "masterpassphrase", "key_type": "secp256k1", "offline": true,
 					}

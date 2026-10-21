@@ -77,6 +77,130 @@ func TestPreprocessTransactionRequiredFieldOrder(t *testing.T) {
 	}
 }
 
+func TestPreprocessTransactionDiscardableFields(t *testing.T) {
+	for _, mode := range []transactionPreprocessMode{
+		transactionPreprocessSign,
+		transactionPreprocessSignFor,
+		transactionPreprocessSubmitMultisigned,
+		transactionPreprocessSimulate,
+	} {
+		for _, test := range []struct {
+			name     string
+			field    string
+			value    any
+			message  string
+			template bool
+		}{
+			{name: "hash", field: "hash", value: strings.Repeat("A", 64)},
+			{name: "lowercase hash", field: "hash", value: strings.Repeat("ab", 32)},
+			{name: "zero hash", field: "hash", value: strings.Repeat("0", 64)},
+			{name: "empty hash", field: "hash", value: ""},
+			{name: "index", field: "index", value: strings.Repeat("B", 64)},
+			{name: "empty index", field: "index", value: ""},
+			{name: "funded gets", field: "taker_gets_funded", value: "100", message: "Field 'tx_json.taker_gets_funded' is unknown."},
+			{name: "funded pays", field: "taker_pays_funded", value: "100", message: "Field 'tx_json.taker_pays_funded' is unknown."},
+			{name: "malformed hash", field: "hash", value: "not-hex", message: "Field 'tx_json.hash' has invalid data."},
+			{name: "short hash", field: "hash", value: "AA", message: "Field 'tx_json.hash' has invalid data."},
+			{name: "odd-length hash", field: "hash", value: strings.Repeat("A", 63), message: "Field 'tx_json.hash' has invalid data."},
+			{name: "overlong hash", field: "hash", value: strings.Repeat("A", 66), message: "Field 'tx_json.hash' has invalid data."},
+			{name: "null hash", field: "hash", value: nil, message: "Field 'tx_json.hash' has bad type."},
+			{name: "numeric hash", field: "hash", value: 1, message: "Field 'tx_json.hash' has bad type."},
+			{name: "array hash", field: "hash", value: []any{}, message: "Field 'tx_json.hash' has bad type."},
+			{name: "object hash", field: "hash", value: map[string]any{}, message: "Field 'tx_json.hash' has bad type."},
+			{name: "malformed index", field: "index", value: "not-hex", message: "Field 'tx_json.index' has invalid data."},
+			{name: "malformed funded amount", field: "taker_gets_funded", value: "invalid", message: "Field 'tx_json.taker_gets_funded' is unknown."},
+			{name: "unknown field", field: "UnknownField", value: "1", message: "Field 'tx_json.UnknownField' is unknown."},
+			{name: "ledger index", field: "ledger_index", value: 1, message: "Field 'tx_json.ledger_index' is unknown."},
+			{name: "case-sensitive hash", field: "Hash", value: strings.Repeat("A", 64), message: "Field 'tx_json.Hash' is unknown."},
+			{name: "disallowed serialized field", field: "Balance", value: "1", message: "Field 'Balance' found in disallowed location.", template: true},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", mode, test.name), func(t *testing.T) {
+				fields := map[string]any{
+					"TransactionType": "AccountSet", "Account": loadAdmissionAccount,
+					"Sequence": 1, "Fee": "10", "SigningPubKey": "",
+				}
+				fields[test.field] = test.value
+				transaction, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: mode})
+				if test.message != "" {
+					want := rpcerrors.RpcErrorInvalidParams(test.message)
+					if test.template && mode == transactionPreprocessSimulate {
+						want = rpcerrors.RpcErrorInvalidTransaction(test.message)
+					}
+					if !reflect.DeepEqual(rpcErr, want) {
+						t.Fatalf("error = %#v, want %#v", rpcErr, want)
+					}
+					return
+				}
+				if rpcErr != nil {
+					t.Fatalf("preprocess: %v", rpcErr)
+				}
+				canonical, err := flattenCanonicalTransaction(transaction, fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, present := canonical[test.field]; present {
+					t.Fatalf("discardable field %q survived canonicalization", test.field)
+				}
+			})
+		}
+	}
+}
+
+func TestPreprocessTransactionSignerMetadata(t *testing.T) {
+	for _, mode := range []transactionPreprocessMode{
+		transactionPreprocessSign,
+		transactionPreprocessSignFor,
+		transactionPreprocessSubmitMultisigned,
+		transactionPreprocessSimulate,
+	} {
+		for _, test := range []struct {
+			name    string
+			field   string
+			value   any
+			message string
+		}{
+			{name: "hash", field: "hash", value: strings.Repeat("A", 64)},
+			{name: "empty hash", field: "hash", value: ""},
+			{name: "index", field: "index", value: strings.Repeat("B", 64)},
+			{name: "invalid hash", field: "hash", value: "invalid", message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.hash' has invalid data."},
+			{name: "null hash", field: "hash", value: nil, message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.hash' has bad type."},
+			{name: "unknown field", field: "UnknownField", value: "1", message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.UnknownField' is unknown."},
+			{name: "funded gets", field: "taker_gets_funded", value: "100", message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.taker_gets_funded' is unknown."},
+			{name: "funded pays", field: "taker_pays_funded", value: "100", message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.taker_pays_funded' is unknown."},
+			{name: "malformed funded gets", field: "taker_gets_funded", value: "invalid", message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.taker_gets_funded' is unknown."},
+			{name: "malformed funded pays", field: "taker_pays_funded", value: "invalid", message: "Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer.taker_pays_funded' is unknown."},
+			{name: "disallowed serialized field", field: "Balance", value: "1", message: "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type."},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", mode, test.name), func(t *testing.T) {
+				signer := signerValue(loadAdmissionSigner)
+				signer["Signer"].(map[string]any)[test.field] = test.value
+				fields := map[string]any{
+					"TransactionType": "AccountSet", "Account": loadAdmissionAccount,
+					"Sequence": 1, "Fee": "20", "SigningPubKey": "", "Signers": []any{signer},
+				}
+				transaction, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: mode})
+				if test.message != "" {
+					if want := rpcerrors.RpcErrorInvalidParams(test.message); !reflect.DeepEqual(rpcErr, want) {
+						t.Fatalf("error = %#v, want %#v", rpcErr, want)
+					}
+					return
+				}
+				if rpcErr != nil {
+					t.Fatalf("preprocess: %v", rpcErr)
+				}
+				canonical, err := flattenCanonicalTransaction(transaction, fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := []any{signerValue(loadAdmissionSigner)}
+				if !reflect.DeepEqual(canonical["Signers"], want) {
+					t.Fatalf("signers = %#v, want %#v", canonical["Signers"], want)
+				}
+			})
+		}
+	}
+}
+
 func TestNormalizeSignersStrictAndLossless(t *testing.T) {
 	first := signerValue(loadAdmissionSigner)
 	second := signerValue(loadAdmissionSigningAccount)
@@ -160,8 +284,7 @@ func TestPreprocessTransactionCanonicalizesAndValidatesSigners(t *testing.T) {
 	}
 	preprocess := func(signers any) (*rpcerrors.RpcError, string) {
 		transaction, rpcErr := preprocessTransaction(base(signers), transactionPreprocessOptions{
-			mode:            transactionPreprocessSubmitMultisigned,
-			preserveSigners: true,
+			mode: transactionPreprocessSubmitMultisigned,
 		})
 		if rpcErr != nil {
 			return rpcErr, ""
@@ -311,29 +434,49 @@ func TestCheckPaymentValidationAndMutation(t *testing.T) {
 	}
 }
 
-func TestSubmitMultisignedRejectsMalformedSignerBeforeBinaryEncoding(t *testing.T) {
-	params, err := json.Marshal(map[string]any{"tx_json": map[string]any{
-		"TransactionType": "AccountSet",
-		"Account":         loadAdmissionAccount,
-		"Sequence":        1,
-		"Fee":             "10",
-		"SigningPubKey":   "",
-		"Signers": []any{map[string]any{"Signer": map[string]any{
-			"Account":       loadAdmissionSigner,
-			"SigningPubKey": "",
-			"TxnSignature":  "",
-			"Extra":         "must reject",
-		}}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := &types.RpcContext{
-		Context:  context.Background(),
-		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: &loadAdmissionLedger{}}),
-	}
-	_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
-	if rpcErr == nil || rpcErr.Message != "Signers array may only contain Signer entries." {
-		t.Fatalf("error = %#v, want strict signer error", rpcErr)
+func TestMultisigningPreservesSignerParseErrors(t *testing.T) {
+	for _, method := range []struct {
+		name   string
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
+	}{
+		{name: "sign_for", handle: (&SignForMethod{}).Handle},
+		{name: "submit_multisigned", handle: (&SubmitMultisignedMethod{}).Handle},
+	} {
+		for _, field := range []string{"Extra", "taker_gets_funded", "taker_pays_funded"} {
+			t.Run(method.name+"/"+field, func(t *testing.T) {
+				signer := signerValue(loadAdmissionSigner)
+				signer["Signer"].(map[string]any)[field] = "invalid"
+				params, err := json.Marshal(map[string]any{
+					"account":  loadAdmissionSigningAccount,
+					"seed_hex": loadAdmissionSeedHex,
+					"key_type": "ed25519",
+					"tx_json": map[string]any{
+						"TransactionType": "AccountSet",
+						"Account":         loadAdmissionAccount,
+						"Sequence":        1,
+						"Fee":             "10",
+						"SigningPubKey":   "",
+						"Signers":         []any{signer},
+						"hash":            "invalid",
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ledger := &loadAdmissionLedger{}
+				ctx := &types.RpcContext{
+					Context:  context.Background(),
+					Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
+				}
+				_, rpcErr := method.handle(ctx, params)
+				want := rpcerrors.RpcErrorInvalidParams("Error at 'tx_json.Signers.[0].Signer'. Field 'tx_json.Signers.[0].Signer." + field + "' is unknown.")
+				if rpcErr == nil || rpcErr.Code != want.Code || rpcErr.ErrorString != want.ErrorString || rpcErr.Message != want.Message {
+					t.Fatalf("error = %#v, want %#v", rpcErr, want)
+				}
+				if ledger.transactionSends != 0 {
+					t.Fatal("malformed signer reached transaction submission")
+				}
+			})
+		}
 	}
 }

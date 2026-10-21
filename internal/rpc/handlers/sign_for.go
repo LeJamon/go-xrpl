@@ -151,8 +151,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		nested["SigningPubKey"] = ""
 	}
 	transaction, rpcErr := preprocessTransaction(txMap, transactionPreprocessOptions{
-		mode:            transactionPreprocessSignFor,
-		preserveSigners: true,
+		mode: transactionPreprocessSignFor,
 	})
 	if rpcErr != nil {
 		return nil, rpcErr

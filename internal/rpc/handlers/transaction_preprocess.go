@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
-	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -23,7 +22,6 @@ const (
 
 type transactionPreprocessOptions struct {
 	mode               transactionPreprocessMode
-	preserveSigners    bool
 	rejectTxnSignature bool
 }
 
@@ -35,23 +33,11 @@ func preprocessTransaction(
 	txMap map[string]any,
 	options transactionPreprocessOptions,
 ) (tx.Transaction, *rpcerrors.RpcError) {
-	var rawSigners any
-	strictSignerError := false
-	if options.preserveSigners {
-		if value, ok := txMap["Signers"]; ok {
-			rawSigners = cloneJSONValue(value)
-		}
-	}
-
 	if message := serializedFieldParseMessage(txMap, "tx_json", binarycodecdefs.Get()); message != "" {
-		if options.preserveSigners && signerShapeMessage(message) {
-			return nil, rpcerrors.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-		}
 		return nil, rpcerrors.RpcErrorInvalidParams(message)
 	}
-	if options.preserveSigners && rawSigners != nil {
-		strictSignerError = strictSignerExtra(rawSigners)
-	}
+	delete(txMap, "hash")
+	delete(txMap, "index")
 	if rpcErr := canonicalizeAccountFields(txMap); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -93,9 +79,6 @@ func preprocessTransaction(
 		if _, present := txMap["TxnSignature"]; present {
 			return nil, rpcerrors.RpcErrorSigningMalformed()
 		}
-	}
-	if strictSignerError {
-		return nil, rpcerrors.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 	}
 	return transaction, nil
 }
@@ -141,53 +124,6 @@ func parseTransactionTypeCode(value any) (uint16, *rpcerrors.RpcError) {
 	default:
 		return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 	}
-}
-
-func cloneJSONValue(value any) any {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return value
-	}
-	var clone any
-	if err := json.Unmarshal(encoded, &clone); err != nil {
-		return value
-	}
-	return clone
-}
-
-func signerShapeMessage(message string) bool {
-	return strings.Contains(message, "tx_json.Signers.") && strings.Contains(message, ".Signer.") &&
-		(strings.Contains(message, "unknown.") || strings.Contains(message, "disallowed location."))
-}
-
-func strictSignerExtra(value any) bool {
-	items, ok := value.([]any)
-	if !ok {
-		return false
-	}
-	for _, item := range items {
-		wrapper, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		inner, ok := wrapper["Signer"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if len(wrapper) != 1 || len(inner) != 3 {
-			return true
-		}
-		if _, ok := inner["Account"]; !ok {
-			continue
-		}
-		if _, ok := inner["SigningPubKey"]; !ok {
-			continue
-		}
-		if _, ok := inner["TxnSignature"]; !ok {
-			continue
-		}
-	}
-	return false
 }
 
 func canonicalizeAccountFields(value any) *rpcerrors.RpcError {

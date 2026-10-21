@@ -196,6 +196,16 @@ func TestSerializedFieldParseMessageRejectsInvalidArrayWrappers(t *testing.T) {
 			want: "Item 'tx_json.Memos.[0].Account' at index 0 is not an object.  " +
 				"Arrays may only contain objects.",
 		},
+		{
+			name:    "funded gets wrapper",
+			wrapper: map[string]any{"taker_gets_funded": map[string]any{}},
+			want:    "Field 'tx_json.Memos.taker_gets_funded' is unknown.",
+		},
+		{
+			name:    "funded pays wrapper",
+			wrapper: map[string]any{"taker_pays_funded": map[string]any{}},
+			want:    "Field 'tx_json.Memos.taker_pays_funded' is unknown.",
+		},
 	}
 
 	for _, test := range tests {
