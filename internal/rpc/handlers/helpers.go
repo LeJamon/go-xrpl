@@ -912,14 +912,7 @@ func decodeOpenTxBlob(data []byte) (StoredTransaction, error) {
 // transaction hash supplied by the ledger iterator.
 func decodeLedgerTransaction(data []byte, hashStr string, includeMetadata bool) (StoredTransaction, error) {
 	if includeMetadata {
-		stored, err := decodeTxBlobForTx(data)
-		if err != nil {
-			return StoredTransaction{}, err
-		}
-		if stored.Meta == nil {
-			return StoredTransaction{}, errors.New("closed transaction is missing metadata")
-		}
-		return stored, nil
+		return decodeTxBlobForTx(data)
 	}
 
 	parsed, rawErr := tx.ParseFromBinary(data)
