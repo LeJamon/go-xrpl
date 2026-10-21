@@ -3,111 +3,115 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-
-	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+	"strconv"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// ManifestMethod handles the `manifest` RPC method.
-//
-// Rippled reference: src/xrpld/rpc/handlers/DoManifest.cpp:29-76.
-//
-// Given a base58 node public key (either a master key OR an ephemeral
-// signing key), the handler resolves it to the master key via the
-// cached manifest and returns the stored manifest's details plus the
-// raw serialized manifest as base64. Keys with no recorded manifest
-// return only the `requested` field.
+// ManifestMethod handles the manifest RPC method.
 type ManifestMethod struct{ baseHandler }
 
-// manifestResponse mirrors rippled's DoManifest response shape.
-type manifestResponse struct {
-	Requested string         `json:"requested"`
-	Manifest  string         `json:"manifest,omitempty"`
-	Details   map[string]any `json:"details,omitempty"`
-}
-
 func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	var request struct {
-		PublicKey string `json:"public_key"`
+	fields, rpcErr := rawJSONFields(params)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+	raw, present := fields["public_key"]
+	if !present {
+		return nil, rpcerrors.RpcErrorMissingField("public_key")
+	}
+	requested, rpcErr := manifestRequestedKey(raw)
+	if rpcErr != nil {
+		if rpcErr.Code == rpcerrors.RpcINTERNAL {
+			ctx.LoadCost = uint32(resource.FeeExceptionRPC().Cost())
+		}
+		return nil, rpcErr
+	}
+	response := map[string]any{"requested": requested}
+	rawKey, err := addresscodec.DecodeNodePublicKey(requested)
+	if err != nil || crypto.PublicKeyType(rawKey) == crypto.KeyTypeUnknown {
+		return nil, rpcerrors.RpcErrorInvalidParams("").WithExtra(response)
+	}
+	var master [33]byte
+	copy(master[:], rawKey)
+	ephemeral := master
+	cache := ctx.Services.Manifests()
+	if cache != nil {
+		master = cache.GetMasterKey(master)
+		var found bool
+		ephemeral, found = cache.GetSigningKey(master)
+		if !found {
+			ephemeral = master
 		}
 	}
-
-	if request.PublicKey == "" {
-		return nil, rpcerrors.RpcErrorInvalidParams("Missing required parameter: public_key")
-	}
-
-	// Parse the base58 NodePublic key. rippled DoManifest.cpp:36
-	// rejects non-base58 or wrong-type inputs with rpcPUBLIC_MALFORMED.
-	rawKey, err := addresscodec.DecodeNodePublicKey(request.PublicKey)
-	if err != nil {
-		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("invalid node public key: %v", err))
-	}
-	if len(rawKey) != 33 {
-		return nil, rpcerrors.RpcErrorInvalidParams("node public key must be 33 bytes")
-	}
-	var keyArr [33]byte
-	copy(keyArr[:], rawKey)
-
-	resp := manifestResponse{Requested: request.PublicKey}
-
-	// Manifest cache isn't wired in standalone / pre-consensus setups
-	// — return the sparse response so clients can still probe the
-	// method without a 500.
-	if ctx.Services == nil || ctx.Services.Manifests() == nil {
-		return resp, nil
-	}
-	cache := ctx.Services.Manifests()
-
-	// Callers may pass EITHER the master key or its ephemeral signing
-	// key. GetMasterKey collapses both into the master; if the input
-	// was unknown it returns the input unchanged.
-	master := cache.GetMasterKey(keyArr)
-
-	// Try to find a stored manifest under the resolved master.
-	serialized, ok := cache.GetManifest(master)
-	if !ok {
-		// No manifest recorded (or the master is revoked). Rippled
-		// returns requested + empty details in this case.
-		return resp, nil
-	}
-
-	ephemeral, ephOK := cache.GetSigningKey(master)
-	seq, _ := cache.GetSequence(master)
-	domain, _ := cache.GetDomain(master)
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(master[:])
 	if err != nil {
 		return nil, rpcInternalError("manifest: master key encoding failed", err)
 	}
-
+	ephemeralB58, err := addresscodec.EncodeNodePublicKey(ephemeral[:])
+	if err != nil {
+		return nil, rpcInternalError("manifest: ephemeral key encoding failed", err)
+	}
 	details := map[string]any{
-		"master_key": masterB58,
-		"seq":        seq,
+		"master_key":    masterB58,
+		"ephemeral_key": ephemeralB58,
 	}
-	if ephOK {
-		ephB58, err := addresscodec.EncodeNodePublicKey(ephemeral[:])
-		if err != nil {
-			return nil, rpcInternalError("manifest: ephemeral key encoding failed", err)
+	if cache != nil {
+		if serialized, ok := cache.GetManifest(master); ok {
+			response["manifest"] = base64.StdEncoding.EncodeToString(serialized)
 		}
-		details["ephemeral_key"] = ephB58
+		if seq, ok := cache.GetSequence(master); ok {
+			details["seq"] = seq
+		}
+		if domain, ok := cache.GetDomain(master); ok {
+			details["domain"] = domain
+		}
 	}
-	if domain != "" {
-		details["domain"] = domain
-	}
+	response["details"] = details
+	return response, nil
+}
 
-	resp.Manifest = base64.StdEncoding.EncodeToString(serialized)
-	resp.Details = details
-	return resp, nil
+func manifestRequestedKey(raw json.RawMessage) (string, *rpcerrors.RpcError) {
+	value, err := decodeRawJSONValue(raw)
+	if err != nil {
+		return "", rpcerrors.RpcErrorInvalidParams("")
+	}
+	switch value := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		value, _, _ = strings.Cut(value, "\x00")
+		return value, nil
+	case bool:
+		return strconv.FormatBool(value), nil
+	case json.Number:
+		if strings.ContainsAny(value.String(), ".eE") {
+			number, err := value.Float64()
+			if err != nil {
+				return "", rpcerrors.RpcErrorInvalidParams("")
+			}
+			return strconv.FormatFloat(number, 'f', 6, 64), nil
+		}
+		if strings.HasPrefix(value.String(), "-") {
+			number, err := strconv.ParseInt(value.String(), 10, 32)
+			if err == nil {
+				return strconv.FormatInt(number, 10), nil
+			}
+		} else if number, err := strconv.ParseUint(value.String(), 10, 32); err == nil {
+			return strconv.FormatUint(number, 10), nil
+		}
+		return "", rpcerrors.RpcErrorInvalidParams("")
+	default:
+		return "", rpcerrors.RpcErrorInternal()
+	}
 }
 
 func (m *ManifestMethod) RequiredRole() types.Role {
-	return types.RoleUser // rippled: Role::USER (Handler.cpp line 136)
+	return types.RoleUser
 }
