@@ -121,6 +121,285 @@ func (c *CheckCash) RequiredAmendments() [][32]byte {
 	return nil
 }
 
+func (c *CheckCash) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
+	checkIDBytes, err := hex.DecodeString(c.CheckID)
+	if err != nil || len(checkIDBytes) != 32 {
+		return ter.TemINVALID
+	}
+
+	var checkKeyBytes [32]byte
+	copy(checkKeyBytes[:], checkIDBytes)
+	checkKey := keylet.Keylet{Key: checkKeyBytes}
+	checkData, err := view.Read(checkKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkData == nil {
+		return ter.TecNO_ENTRY
+	}
+	checkType, err := state.DecodeType(checkData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkType != entry.TypeCheck {
+		return ter.TecNO_ENTRY
+	}
+	check, err := state.ParseCheck(checkData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	accountID, err := state.DecodeAccountID(c.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	if check.DestinationID != accountID {
+		return ter.TecNO_PERMISSION
+	}
+	if check.Account == check.DestinationID {
+		return ter.TecINTERNAL
+	}
+
+	sourceData, err := view.Read(keylet.Account(check.Account))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if sourceData == nil {
+		return ter.TecNO_ENTRY
+	}
+	sourceAccount, err := state.ParseAccountRoot(sourceData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	destinationData, err := view.Read(keylet.Account(accountID))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if destinationData == nil {
+		return ter.TecNO_ENTRY
+	}
+	destinationAccount, err := state.ParseAccountRoot(destinationData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if destinationAccount.Flags&state.LsfRequireDestTag != 0 && !check.HasDestTag {
+		return ter.TecDST_TAG_NEEDED
+	}
+	if tx.HasExpiredField(check.Expiration, config.ParentCloseTime) {
+		return ter.TecEXPIRED
+	}
+
+	value := c.Amount
+	if value == nil {
+		value = c.DeliverMin
+	}
+	if value == nil {
+		return ter.TemMALFORMED
+	}
+	rules := view.Rules()
+	if rules == nil {
+		rules = config.Rules
+	}
+	if rules != nil && rules.FixCleanup3_2_0Enabled() && !legalStoredMPTAmount(check.SendMaxAmount) {
+		return ter.TefBAD_LEDGER
+	}
+	if result := matchesCheckSendMax(*value, check.SendMaxAmount); result != ter.TesSUCCESS {
+		return result
+	}
+	if value.IsMPT() {
+		requested, ok := value.MPTRaw()
+		if !ok || requested <= 0 {
+			return ter.TemBAD_AMOUNT
+		}
+		sendMax, ok := check.SendMaxAmount.MPTRaw()
+		if !ok || requested > sendMax {
+			return ter.TecPATH_PARTIAL
+		}
+	} else {
+		cmp, err := value.CompareChecked(check.SendMaxAmount)
+		if err != nil {
+			return ter.TemMALFORMED
+		}
+		if cmp > 0 {
+			return ter.TecPATH_PARTIAL
+		}
+	}
+
+	if result := checkCashSourceFunds(view, config, sourceAccount, check.Account, *value, checkData); result != ter.TesSUCCESS {
+		return result
+	}
+
+	if value.IsNative() {
+		return ter.TesSUCCESS
+	}
+	if value.IsMPT() {
+		return checkCashPreclaimMPTDestination(view, config, check.Account, accountID, *value)
+	}
+	return checkCashPreclaimIOUDestination(view, accountID, *value)
+}
+
+func checkCashSourceFunds(view tx.ReadOnlyLedgerView, config tx.EngineConfig, sourceAccount *state.AccountRoot, sourceID [20]byte, value tx.Amount, checkData []byte) ter.Result {
+	if value.IsNative() {
+		sponsor, err := tx.LedgerEntrySponsor(checkData, "Sponsor")
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		reserve, ok := tx.AccountReserveForView(view, config, sourceAccount, sourceAccount.OwnerCount)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		var available uint64
+		if sourceAccount.Balance > reserve {
+			available = sourceAccount.Balance - reserve
+		}
+		if sponsor == "" {
+			if ^uint64(0)-available < config.ReserveIncrement {
+				return ter.TefINTERNAL
+			}
+			available += config.ReserveIncrement
+		}
+		if value.Drops() < 0 || uint64(value.Drops()) > available {
+			return ter.TecPATH_PARTIAL
+		}
+		return ter.TesSUCCESS
+	}
+
+	if value.IsMPT() {
+		mptID, err := mptutil.DecodeID(value.MPTIssuanceID())
+		if err != nil {
+			return ter.TecOBJECT_NOT_FOUND
+		}
+		if result := mptutil.RequireAuthAt(view, mptID, sourceID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
+			if result == ter.TefINTERNAL {
+				return result
+			}
+			return ter.TecPATH_PARTIAL
+		}
+		requested, ok := value.MPTRaw()
+		if !ok || requested < 0 {
+			return ter.TemBAD_AMOUNT
+		}
+		funds, result := mptutil.Funds(view, mptID, sourceID, true)
+		if result == ter.TefINTERNAL {
+			return result
+		}
+		if result != ter.TesSUCCESS || funds < requested {
+			return ter.TecPATH_PARTIAL
+		}
+		return ter.TesSUCCESS
+	}
+
+	issuerID, err := state.DecodeAccountID(value.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if sourceID == issuerID {
+		return ter.TesSUCCESS
+	}
+	frozen, err := tx.IsIOUFrozen(view, sourceID, issuerID, value.Currency)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if frozen || tx.IsDeepFrozen(view, sourceID, issuerID, value.Currency) {
+		return ter.TecPATH_PARTIAL
+	}
+	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
+		switch tx.LPTokenFrozenForIssuer(view, sourceID, issuerID) {
+		case tx.LPTokenFrozen, tx.LPTokenAMMUnresolvable:
+			return ter.TecPATH_PARTIAL
+		}
+	}
+	funds, err := tx.AccountFundsNoFreezeStrict(view, sourceID, value, config.ReserveBase, config.ReserveIncrement)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	cmp, err := value.CompareChecked(funds)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if cmp > 0 {
+		return ter.TecPATH_PARTIAL
+	}
+	return ter.TesSUCCESS
+}
+
+func checkCashPreclaimIOUDestination(view tx.ReadOnlyLedgerView, destinationID [20]byte, value tx.Amount) ter.Result {
+	issuerID, err := state.DecodeAccountID(value.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuerID == destinationID {
+		return ter.TesSUCCESS
+	}
+	trustLineKey := keylet.Line(destinationID, issuerID, value.Currency)
+	trustLineData, err := view.Read(trustLineKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	issuerData, err := view.Read(keylet.Account(issuerID))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuerData == nil {
+		return ter.TecNO_ISSUER
+	}
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuerAccount.Flags&state.LsfRequireAuth != 0 {
+		if trustLineData == nil {
+			return ter.TecNO_AUTH
+		}
+		trustLine, err := state.ParseRippleState(trustLineData)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		authFlag := state.LsfHighAuth
+		if state.CompareAccountIDs(destinationID, issuerID) > 0 {
+			authFlag = state.LsfLowAuth
+		}
+		if trustLine.Flags&authFlag == 0 {
+			return ter.TecNO_AUTH
+		}
+	}
+	frozen, err := tx.IsIOUFrozen(view, destinationID, issuerID, value.Currency)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if frozen {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func checkCashPreclaimMPTDestination(view tx.ReadOnlyLedgerView, config tx.EngineConfig, sourceID, destinationID [20]byte, value tx.Amount) ter.Result {
+	mptID, err := mptutil.DecodeID(value.MPTIssuanceID())
+	if err != nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	issuerID := mptutil.Issuer(mptID)
+	if issuerID == destinationID {
+		return ter.TesSUCCESS
+	}
+	issuerData, err := view.Read(keylet.Account(issuerID))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuerData == nil {
+		return ter.TecNO_ISSUER
+	}
+	if _, err := state.ParseAccountRoot(issuerData); err != nil {
+		return ter.TefINTERNAL
+	}
+	if result := mptutil.RequireAuthAt(view, mptID, destinationID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+		return result
+	}
+	if mptutil.IsFrozen(view, mptID, destinationID) {
+		return ter.TecLOCKED
+	}
+	return mptutil.CanTransfer(view, mptID, sourceID, destinationID)
+}
+
 // CheckExtraFeatures gates an MPT-denominated Amount or DeliverMin on the
 // MPTokensV2 amendment, mirroring rippled CheckCash::checkExtraFeatures.
 func (c *CheckCash) CheckExtraFeatures(rules *amendment.Rules) error {
@@ -133,7 +412,6 @@ func (c *CheckCash) CheckExtraFeatures(rules *amendment.Rules) error {
 	return nil
 }
 
-// Apply implements preclaim + doApply matching rippled's CashCheck.
 func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check cash apply",
 		"account", c.Account,
@@ -178,23 +456,10 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Verify the account is the destination
-	// Reference: CashCheck.cpp L93-98
 	accountID := ctx.AccountID
-	if check.DestinationID != accountID {
-		return ter.TecNO_PERMISSION
-	}
-
-	// A check written to self should have been caught at creation time, but
-	// guard defensively here as rippled does.
-	// Reference: CashCheck.cpp L99-106
-	if check.Account == accountID {
-		return ter.TecINTERNAL
-	}
 
 	// Read source (check writer) and destination accounts. If the check
 	// exists, both should be present; a missing one is a corrupt ledger.
-	// Reference: CashCheck.cpp L107-116
 	srcKey := keylet.Account(check.Account)
 	srcData, err := ctx.View.Read(srcKey)
 	if err != nil {
@@ -212,39 +477,6 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	if destData == nil {
 		return ter.TecNO_ENTRY
 	}
-	destAccount, err := state.ParseAccountRoot(destData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Check RequireDestTag on destination
-	// Reference: CashCheck.cpp L118-126
-	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && !check.HasDestTag {
-		return ter.TecDST_TAG_NEEDED
-	}
-
-	// Check expiration
-	// Reference: CashCheck.cpp L129-133
-	if tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
-		return ter.TecEXPIRED
-	}
-
-	// Currency and issuer of the requested amount (Amount or DeliverMin) must
-	// match the check's SendMax. This guards against cashing a check with the
-	// wrong asset — including the cross-type case of an IOU check cashed with a
-	// native XRP amount (or vice versa), where the currencies differ.
-	// Reference: CashCheck.cpp L135-155
-	value := c.Amount
-	if value == nil {
-		value = c.DeliverMin
-	}
-	if ctx.Rules().FixCleanup3_2_0Enabled() && !legalStoredMPTAmount(check.SendMaxAmount) {
-		return ter.TefBAD_LEDGER
-	}
-	if result := matchesCheckSendMax(*value, check.SendMaxAmount); result != ter.TesSUCCESS {
-		return result
-	}
-
 	// Determine the cash amount
 	if c.Amount != nil {
 		return c.applyCashWithAmount(ctx, check, checkKey)
@@ -326,13 +558,6 @@ func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.C
 // after the funds checks it delivers min(srcLiquid, SendMax) for DeliverMin and
 // exactly the requested drops for Amount. Reference: CashCheck.cpp L294-334.
 func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedDrops uint64, isDeliverMin bool) ter.Result {
-	// Requested amount cannot exceed SendMax.
-	// Reference: CashCheck.cpp L156-160
-	if requestedDrops > check.SendMax {
-		return ter.TecPATH_PARTIAL
-	}
-
-	// Check creator has sufficient liquid XRP
 	creatorKey := keylet.Account(check.Account)
 	creatorData, err := ctx.View.Read(creatorKey)
 	if err != nil {
@@ -343,25 +568,12 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 		return ter.TefINTERNAL
 	}
 
-	// Preclaim funds check: the creator's zero-clamped liquid XRP plus one
-	// released reserve increment must cover the requested amount. Mirrors
-	// rippled's accountFunds(value) + fees().increment guard, which returns
-	// tecPATH_PARTIAL when the writer is at or above their reserve.
-	// Reference: CashCheck.cpp L162-185.
 	sponsorAddress, err := tx.LedgerEntrySponsorFromView(ctx.View, checkKey, "Sponsor")
 	if err != nil {
 		return ter.TefINTERNAL
 	}
 	sponsored := sponsorAddress != ""
-	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx, sponsored) {
-		return ter.TecPATH_PARTIAL
-	}
 
-	// doApply funds check: xrpLiquid with the released check reserve (-1 owner
-	// count). Distinct from the preclaim guard in the below-reserve window,
-	// where rippled returns tecUNFUNDED_PAYMENT. For DeliverMin, xrpDeliver
-	// collapses to DeliverMin in the underfunded case (min(sendMax, srcLiquid)
-	// never exceeds srcLiquid). Reference: CashCheck.cpp L304-319.
 	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx, sponsored)
 	if srcLiquid < requestedDrops {
 		return ter.TecUNFUNDED_PAYMENT
@@ -405,23 +617,6 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	return ter.TesSUCCESS
 }
 
-// xrpAvailableFunds returns the check writer's preclaim-stage available XRP:
-// their zero-clamped liquid balance at the current owner count plus one
-// reserve increment, since cashing the check releases its reserve.
-// Mirrors rippled's accountFunds(value) + fees().increment for native amounts.
-// Reference: CashCheck.cpp L162-185, View.cpp xrpLiquid (zero-clamp).
-func xrpAvailableFunds(creator *state.AccountRoot, ctx *tx.ApplyContext, sponsored bool) uint64 {
-	reserve := ctx.AccountReserveFor(creator, creator.OwnerCount)
-	var liquid uint64
-	if creator.Balance > reserve {
-		liquid = creator.Balance - reserve
-	}
-	if !sponsored {
-		liquid += ctx.Config.ReserveIncrement
-	}
-	return liquid
-}
-
 // xrpLiquidAfterCheck returns the writer's zero-clamped liquid XRP computed with
 // the check's reserve already released (owner count minus one), matching
 // rippled's xrpLiquid(psb, srcId, -1). This is the amount actually available to
@@ -448,8 +643,8 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 		return ter.TemBAD_AMOUNT
 	}
 	sendMax, ok := check.SendMaxAmount.MPTRaw()
-	if !ok || sendMax < requested {
-		return ter.TecPATH_PARTIAL
+	if !ok {
+		return ter.TefBAD_LEDGER
 	}
 
 	issuance, _, result := mptutil.ReadIssuance(ctx.View, mptID)
@@ -463,39 +658,12 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 	dstID := ctx.AccountID
 	issuerID := issuance.Issuer
 
-	if result := mptutil.RequireAuthAt(ctx.View, mptID, srcID, true, ctx.Config.ParentCloseTime); result == ter.TefINTERNAL {
-		return result
-	} else if result != ter.TesSUCCESS {
-		return ter.TecPATH_PARTIAL
-	}
 	srcFunds, result := mptutil.Funds(ctx.View, mptID, srcID, true)
 	if result == ter.TefINTERNAL {
 		return result
 	}
 	if result != ter.TesSUCCESS || srcFunds < requested {
 		return ter.TecPATH_PARTIAL
-	}
-
-	if dstID != issuerID {
-		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if issuerData == nil {
-			return ter.TecNO_ISSUER
-		}
-		if _, err := state.ParseAccountRoot(issuerData); err != nil {
-			return ter.TefINTERNAL
-		}
-		if result := mptutil.RequireAuthAt(ctx.View, mptID, dstID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
-			return result
-		}
-		if mptutil.IsFrozen(ctx.View, mptID, dstID) {
-			return ter.TecLOCKED
-		}
-	}
-	if result := mptutil.CanTransfer(ctx.View, mptID, srcID, dstID); result != ter.TesSUCCESS {
-		return result
 	}
 
 	if dstID != issuerID {
@@ -579,103 +747,12 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	accountID := ctx.AccountID
 	sendMax := check.SendMaxAmount
 
-	// --- Preclaim checks for IOU ---
-	// The requested amount's currency/issuer was already verified against the
-	// check's SendMax in Apply (matchesCheckSendMax), matching rippled's
-	// preclaim order.
-
-	// Requested amount (whether Amount or DeliverMin) cannot exceed SendMax
-	// Reference: CashCheck.cpp L156-160
-	if requestedAmount.Compare(sendMax) > 0 {
-		return ter.TecPATH_PARTIAL
-	}
-
 	issuerID, err := state.DecodeAccountID(sendMax.Issuer)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
 
 	srcID := check.Account
-
-	// Check source has sufficient non-frozen funds
-	// Reference: CashCheck.cpp L162-185
-	// Applies to BOTH Amount and DeliverMin paths (rippled checks value > availableFunds
-	// where value is either Amount or DeliverMin).
-	srcFunds := tx.AccountFunds(ctx.View, srcID, requestedAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-	if requestedAmount.Compare(srcFunds) > 0 {
-		return ter.TecPATH_PARTIAL
-	}
-
-	// IOU-specific preclaim: destination is not issuer
-	// Reference: CashCheck.cpp L187-247
-	if accountID != issuerID {
-		// Check trust line existence
-		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
-		trustLineExists, err := ctx.View.Exists(trustLineKey)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-
-		// Check issuer existence
-		// Reference: CashCheck.cpp L201-208
-		issuerKey := keylet.Account(issuerID)
-		issuerData, err := ctx.View.Read(issuerKey)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if issuerData == nil {
-			return ter.TecNO_ISSUER
-		}
-		issuerAccount, err := state.ParseAccountRoot(issuerData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-
-		// Check RequireAuth on issuer
-		// Reference: CashCheck.cpp L210-234
-		if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
-			if !trustLineExists {
-				// Can't auto-create trust line when auth is required
-				return ter.TecNO_AUTH
-			}
-
-			// Check if destination is authorized
-			trustLineData, err := ctx.View.Read(trustLineKey)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			trustLine, err := state.ParseRippleState(trustLineData)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-
-			// Check auth flag based on canonical ordering
-			// Reference: CashCheck.cpp L222-226
-			// canonical_gt means dstId > issuerId
-			dstGtIssuer := state.CompareAccountIDs(accountID, issuerID) > 0
-			var authFlag uint32
-			if dstGtIssuer {
-				authFlag = state.LsfLowAuth // issuer is LOW
-			} else {
-				authFlag = state.LsfHighAuth // issuer is HIGH
-			}
-
-			if (trustLine.Flags & authFlag) == 0 {
-				return ter.TecNO_AUTH
-			}
-		}
-
-		frozen, err := tx.IsIOUFrozen(ctx.View, accountID, issuerID, sendMax.Currency)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if frozen {
-			return ter.TecFROZEN
-		}
-	}
-
-	// --- doApply: Execute IOU transfer using flow engine ---
-	// Reference: CashCheck.cpp L252-end
 
 	// Auto-create the destination's trust line if it does not yet exist.
 	destLow := state.CompareAccountIDs(issuerID, accountID) > 0
