@@ -1,9 +1,15 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +54,83 @@ func TestDecodeTxBlobCanonicalizesJSONStoredObjects(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, node, 1)
 	}
+}
+
+func TestDecodeLedgerTransactionRawCanonicalOpen(t *testing.T) {
+	raw, hash := testRawPayment(t)
+	hashString := strings.ToUpper(hex.EncodeToString(hash[:]))
+
+	for _, test := range []struct {
+		name   string
+		binary bool
+		api    int
+	}{
+		{name: "json v1", api: 1},
+		{name: "json v2", api: 2},
+		{name: "binary v1", binary: true, api: 1},
+		{name: "binary v2", binary: true, api: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry, err := expandTransaction(raw, hashString, test.binary, test.api, SyntheticMetadataContext{}, false)
+			require.NoError(t, err)
+			if test.api > 1 || !test.binary {
+				require.Equal(t, hashString, entry["hash"])
+			} else {
+				require.NotContains(t, entry, "hash")
+			}
+			if test.binary {
+				require.Equal(t, strings.ToUpper(hex.EncodeToString(raw)), entry["tx_blob"])
+				require.NotContains(t, entry, "meta_blob")
+				require.NotContains(t, entry, "meta")
+				return
+			}
+			if test.api == 1 {
+				require.Equal(t, "Payment", entry["TransactionType"])
+				require.NotContains(t, entry, "metaData")
+				return
+			}
+			txJSON, ok := entry["tx_json"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "Payment", txJSON["TransactionType"])
+			require.NotContains(t, entry, "meta")
+		})
+	}
+}
+
+func TestDecodeLedgerTransactionRejectsRawCorruptionAndClosedMissingMetadata(t *testing.T) {
+	raw, hash := testRawPayment(t)
+	hashString := strings.ToUpper(hex.EncodeToString(hash[:]))
+	var wrongHash [32]byte
+	wrongHash[0] = 0xA5
+
+	_, err := decodeLedgerTransaction(raw, strings.ToUpper(hex.EncodeToString(wrongHash[:])), false)
+	require.Error(t, err)
+
+	_, err = decodeLedgerTransaction([]byte{0x01, 0x02}, hashString, false)
+	require.Error(t, err)
+
+	txOnly, err := tx.EncodeWithVL(raw)
+	require.NoError(t, err)
+	_, err = decodeLedgerTransaction(txOnly, hashString, true)
+	require.ErrorContains(t, err, "missing metadata")
+	_, err = decodeLedgerTransaction(raw, hashString, true)
+	require.Error(t, err)
+}
+
+func testRawPayment(t *testing.T) ([]byte, [32]byte) {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	sender := jtx.MasterAccount()
+	txn := payment.Pay(sender, jtx.NewAccount("ledger-raw-rpc"), 1_000_000).Fee(10).Sequence(1).Build()
+	env.SignWith(txn, sender)
+	txJSON, err := txn.Flatten()
+	require.NoError(t, err)
+	hexBlob, err := binarycodec.Encode(txJSON)
+	require.NoError(t, err)
+	raw, err := hex.DecodeString(hexBlob)
+	require.NoError(t, err)
+	hash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+	return raw, hash
 }

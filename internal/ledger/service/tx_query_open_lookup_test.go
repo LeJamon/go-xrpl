@@ -111,3 +111,66 @@ func TestGetTransactionHeldPoolReturnsTxOnly(t *testing.T) {
 		t.Fatalf("held transaction payload = (%x, %x), want tx-only input", txBlob, metaBlob)
 	}
 }
+
+func TestGetTransactionOpenRawCanonicalValidatesHash(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	raw, hash := validRelationalTestTransaction(t, 1)
+	var wrongHash [32]byte
+	wrongHash[0] = 0xA5
+	var malformedHash [32]byte
+	malformedHash[0] = 0x5A
+	svc.mu.Lock()
+	var addErr error
+	svc.openLedgerView.Modify(func(view *ledger.Ledger) bool {
+		if addErr = view.AddTransaction(hash, raw); addErr != nil {
+			return false
+		}
+		if addErr = view.AddTransaction(wrongHash, raw); addErr != nil {
+			return false
+		}
+		addErr = view.AddTransaction(malformedHash, make([]byte, 32))
+		return addErr == nil
+	})
+	svc.mu.Unlock()
+	if addErr != nil {
+		t.Fatalf("inject raw open leaves: %v", addErr)
+	}
+
+	result, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("raw open transaction lookup: %v", err)
+	}
+	if result.LedgerIndex != 0 || result.Validated || result.TxIndex != invalidTransactionIndex {
+		t.Fatalf("raw open transaction advertised closed-ledger state: %+v", result)
+	}
+	txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(result.TxData)
+	if err != nil {
+		t.Fatalf("split raw open transaction: %v", err)
+	}
+	if string(txBlob) != string(raw) || metaBlob != nil {
+		t.Fatalf("raw open transaction payload = (%x, %x), want tx-only input", txBlob, metaBlob)
+	}
+
+	for _, test := range []struct {
+		name string
+		hash [32]byte
+	}{
+		{name: "wrong hash", hash: wrongHash},
+		{name: "malformed raw", hash: malformedHash},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := svc.GetTransaction(test.hash)
+			if !errors.Is(err, svcerr.ErrTxnDataCorrupt) {
+				t.Fatalf("raw open transaction error = %v, want svcerr.ErrTxnDataCorrupt", err)
+			}
+		})
+	}
+}

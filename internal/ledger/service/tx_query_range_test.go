@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -62,9 +64,8 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 		}
 	}
 
-	var foundHash relationaldb.Hash
-	foundHash[0] = 0xF0
-	rawTxn := []byte{0x12, 0x34}
+	rawTxn, foundHashBytes := validRelationalTestTransaction(t, 1)
+	foundHash := relationaldb.Hash(foundHashBytes)
 	if err := repositories.Transaction().SaveTransaction(ctx, relationaldb.TransactionInfo{
 		Hash:      foundHash,
 		LedgerSeq: 5,
@@ -91,6 +92,20 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 	}
 	if string(gotTxn) != string(rawTxn) || string(gotMeta) != string(metaBlob) {
 		t.Fatal("DB transaction and metadata were not reframed into the ledger result shape")
+	}
+
+	missingMetaRaw, missingMetaHash := validRelationalTestTransaction(t, 2)
+	if err := repositories.Transaction().SaveTransaction(ctx, relationaldb.TransactionInfo{
+		Hash:      relationaldb.Hash(missingMetaHash),
+		LedgerSeq: 5,
+		Status:    "validated",
+		RawTxn:    missingMetaRaw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = svc.GetTransactionWithRange(ctx, missingMetaHash, 1, 5)
+	if !errors.Is(err, svcerr.ErrTxnDataCorrupt) {
+		t.Fatalf("missing metadata DB transaction error = %v, want svcerr.ErrTxnDataCorrupt", err)
 	}
 
 	var missingHash [32]byte
