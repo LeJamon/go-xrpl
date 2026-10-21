@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
-	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -23,7 +22,6 @@ const (
 
 type transactionPreprocessOptions struct {
 	mode               transactionPreprocessMode
-	preserveSigners    bool
 	rejectTxnSignature bool
 }
 
@@ -36,9 +34,6 @@ func preprocessTransaction(
 	options transactionPreprocessOptions,
 ) (tx.Transaction, *rpcerrors.RpcError) {
 	if message := serializedFieldParseMessage(txMap, "tx_json", binarycodecdefs.Get()); message != "" {
-		if options.preserveSigners && signerShapeMessage(message) {
-			return nil, rpcerrors.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-		}
 		return nil, rpcerrors.RpcErrorInvalidParams(message)
 	}
 	delete(txMap, "hash")
@@ -129,11 +124,6 @@ func parseTransactionTypeCode(value any) (uint16, *rpcerrors.RpcError) {
 	default:
 		return 0, rpcerrors.RpcErrorInvalidParams("Field 'tx_json.TransactionType' has invalid data.")
 	}
-}
-
-func signerShapeMessage(message string) bool {
-	return strings.Contains(message, "tx_json.Signers.") && strings.Contains(message, ".Signer.") &&
-		(strings.Contains(message, "unknown.") || strings.Contains(message, "disallowed location."))
 }
 
 func canonicalizeAccountFields(value any) *rpcerrors.RpcError {

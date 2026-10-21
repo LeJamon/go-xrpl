@@ -106,7 +106,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 	transaction, rpcErr := preprocessTransaction(txMap, transactionPreprocessOptions{
 		mode:               transactionPreprocessSubmitMultisigned,
-		preserveSigners:    true,
 		rejectTxnSignature: true,
 	})
 	if rpcErr != nil {
