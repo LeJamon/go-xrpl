@@ -33,11 +33,10 @@ func (f *blockedReplayRootFamily) Fetch(ctx context.Context, hash [32]byte) ([]b
 }
 
 func TestReplayCancellationKeepsActiveDrainMemoryUntilItReturns(t *testing.T) {
-	source := closedLedgerWithPayment(t)
-	t.Cleanup(source.Stop)
-	target := source.GetClosedLedger()
-	hash := target.Hash()
 	r, _, sender, svc := makeRouter(t)
+	t.Cleanup(svc.Stop)
+	target := paymentReplayLedger(t, svc.GetClosedLedger())
+	hash := target.Hash()
 	parent := shamap.NewAcquisitionBudget(2 << 30)
 	require.NoError(t, r.SetAcquisitionMemoryBudget(2<<30, parent))
 	budget := r.catchupReplay.acquisitionMemory
