@@ -779,14 +779,7 @@ func (s *Service) getHistoricalTransaction(txHash [32]byte) (*TransactionResult,
 	if !found {
 		return nil, fmt.Errorf("%w: not found in ledger", svcerr.ErrTxnNotFound)
 	}
-	accepted := ParseAcceptedTransaction(txData)
-	if err := accepted.ParseError(); err != nil {
-		return nil, fmt.Errorf("%w: decode historical transaction: %v", svcerr.ErrTxnDataCorrupt, err)
-	}
-	if _, err := transactionResultFromRawBlob(accepted.TransactionBlob(), txHash, "historical"); err != nil {
-		return nil, err
-	}
-	txIndex, ok := accepted.TransactionIndex()
+	txIndex, ok := tx.TransactionIndexFromTxWithMetaBlob(txData)
 	if !ok {
 		txIndex = invalidTransactionIndex
 	}
@@ -865,14 +858,7 @@ func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, 
 	txData = append(txData, vlTx...)
 	txData = append(txData, vlMeta...)
 
-	accepted := ParseAcceptedTransaction(txData)
-	if err := accepted.ParseError(); err != nil {
-		return nil, searched, fmt.Errorf("%w: decode database transaction: %v", svcerr.ErrTxnDataCorrupt, err)
-	}
-	if _, err := transactionResultFromRawBlob(accepted.TransactionBlob(), txHash, "database"); err != nil {
-		return nil, searched, err
-	}
-	txIndex, ok := accepted.TransactionIndex()
+	txIndex, ok := tx.TransactionIndexFromMetadata(dbResult.TxnMeta)
 	if !ok {
 		txIndex = invalidTransactionIndex
 	}

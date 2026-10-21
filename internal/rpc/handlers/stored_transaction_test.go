@@ -97,7 +97,7 @@ func TestDecodeLedgerTransactionRawCanonicalOpen(t *testing.T) {
 	}
 }
 
-func TestDecodeLedgerTransactionRejectsRawCorruptionAndClosedMissingMetadata(t *testing.T) {
+func TestDecodeLedgerTransactionRejectsRawCorruptionAndClosedRawTransaction(t *testing.T) {
 	raw, hash := testRawPayment(t)
 	hashString := strings.ToUpper(hex.EncodeToString(hash[:]))
 	var wrongHash [32]byte
@@ -111,8 +111,9 @@ func TestDecodeLedgerTransactionRejectsRawCorruptionAndClosedMissingMetadata(t *
 
 	txOnly, err := tx.EncodeWithVL(raw)
 	require.NoError(t, err)
-	_, err = decodeLedgerTransaction(txOnly, hashString, true)
-	require.ErrorContains(t, err, "missing metadata")
+	stored, err := decodeLedgerTransaction(txOnly, hashString, true)
+	require.NoError(t, err)
+	require.Nil(t, stored.Meta)
 	_, err = decodeLedgerTransaction(raw, hashString, true)
 	require.Error(t, err)
 }

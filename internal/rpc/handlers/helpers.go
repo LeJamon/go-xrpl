@@ -872,14 +872,7 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 }
 
 func decodeTxBlobForTx(data []byte) (StoredTransaction, error) {
-	stored, err := decodeTxBlobWithMetadataMode(data, true, false, false)
-	if err != nil {
-		return StoredTransaction{}, err
-	}
-	if stored.Meta == nil {
-		return StoredTransaction{}, errors.New("stored transaction is missing metadata")
-	}
-	return stored, nil
+	return decodeTxBlobWithMetadataMode(data, true, false, false)
 }
 
 // decodeOpenTxBlob decodes the transaction-only VL form returned for an
@@ -907,12 +900,12 @@ func decodeOpenTxBlob(data []byte) (StoredTransaction, error) {
 
 // decodeLedgerTransaction decodes a transaction tree leaf for ledger RPCs.
 // Open ledgers may contain a raw canonical transaction staged by startup
-// replay, while closed ledgers must contain a complete transaction and
-// metadata entry. Raw bytes are accepted only after parsing and checking the
-// transaction hash supplied by the ledger iterator.
+// replay. Closed ledgers retain the stored-envelope decoder. Raw bytes are
+// accepted only after parsing and checking the transaction hash supplied by
+// the ledger iterator.
 func decodeLedgerTransaction(data []byte, hashStr string, includeMetadata bool) (StoredTransaction, error) {
 	if includeMetadata {
-		return decodeTxBlobForTx(data)
+		return decodeTxBlob(data)
 	}
 
 	parsed, rawErr := tx.ParseFromBinary(data)
@@ -951,14 +944,7 @@ func storedTransactionFromRaw(parsed tx.Transaction, hashStr string) (StoredTran
 }
 
 func decodeTxBlobForTransactionEntry(data []byte) (StoredTransaction, error) {
-	stored, err := decodeTxBlobWithMetadataMode(data, false, true, true)
-	if err != nil {
-		return StoredTransaction{}, err
-	}
-	if stored.Meta == nil {
-		return StoredTransaction{}, errors.New("stored transaction is missing metadata")
-	}
-	return stored, nil
+	return decodeTxBlobWithMetadataMode(data, false, true, true)
 }
 
 func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEmptyMetadata, requireBinaryMetadata bool) (StoredTransaction, error) {
