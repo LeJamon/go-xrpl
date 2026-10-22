@@ -323,6 +323,16 @@ func BenchmarkRouterTransactionIngressMemo(b *testing.B) {
 					if result.submitError != nil || result.submitResult != openledger.ResultSuccess {
 						b.Fatalf("benchmark fixture %s was not admitted: result=%v error=%v", fixture.name, result.submitResult, result.submitError)
 					}
+					pending, err := openledger.ParsePendingTx(blob)
+					require.NoError(b, err)
+					stored, found, err := router.adaptor.ledgerService.GetOpenLedger().GetTransaction(pending.Hash)
+					require.NoError(b, err)
+					require.True(b, found)
+					_, metadata, err := tx.SplitTxWithMetaBlobStrict(stored)
+					require.NoError(b, err)
+					decoded, err := binarycodec.DecodeBytes(metadata)
+					require.NoError(b, err)
+					require.Equal(b, "tesSUCCESS", decoded["TransactionResult"])
 				}
 				b.ReportAllocs()
 				b.ResetTimer()
