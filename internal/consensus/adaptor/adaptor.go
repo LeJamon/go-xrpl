@@ -1005,6 +1005,30 @@ func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.SubmitOut
 	return a.submitPendingTx(blob, local, false)
 }
 
+// SubmitPendingTxOwned transfers ownership of pending, including Blob and Parsed,
+// to the service. The service reparses the canonical blob only
+// when the parsed value no longer matches it or when a publication retry is
+// stale. Callers must not modify Blob or use Parsed during or after this call.
+func (a *Adaptor) SubmitPendingTxOwned(pending openledger.PendingTx, local bool) (openledger.SubmitOutcome, error) {
+	if a.ledgerService == nil {
+		return openledger.SubmitOutcome{Class: openledger.ResultFailure}, errors.New("ledger service unavailable")
+	}
+	origin := "peer"
+	if local {
+		origin = "local"
+	}
+	res, err := a.ledgerService.SubmitOpenLedgerTxDetailedOwned(pending, local)
+	if err != nil {
+		a.logger.Warn("openLedger owned submit failed",
+			"origin", origin,
+			"err", err,
+			"blob_size", len(pending.Blob),
+			"local", local,
+		)
+	}
+	return res, err
+}
+
 func (a *Adaptor) submitPendingTx(blob []byte, local, learned bool) (openledger.SubmitOutcome, error) {
 	if a.ledgerService == nil {
 		return openledger.SubmitOutcome{Class: openledger.ResultFailure}, errors.New("ledger service unavailable")

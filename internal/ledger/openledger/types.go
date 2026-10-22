@@ -47,6 +47,42 @@ type PendingTx struct {
 	Parsed tx.Transaction
 }
 
+// ParsedMatchesCanonical reports whether Parsed still describes the canonical
+// transaction identified by this PendingTx. It is the ownership boundary for
+// callers that transfer a parsed transaction into an apply path: checking the
+// retained bytes and current field identity also covers nested Batch fields.
+func (p PendingTx) ParsedMatchesCanonical() bool {
+	if p.Parsed == nil || !bytes.Equal(p.Parsed.GetRawBytes(), p.Blob) {
+		return false
+	}
+	fieldsMatch, err := tx.CurrentFieldsMatchRaw(p.Parsed)
+	if err != nil || !fieldsMatch {
+		return false
+	}
+	hash, err := tx.ComputeTransactionHash(p.Parsed)
+	if err != nil || hash != p.Hash {
+		return false
+	}
+	common := p.Parsed.GetCommon()
+	if common == nil {
+		return false
+	}
+	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
+	if err != nil || len(accountBytes) != len(p.Account) {
+		return false
+	}
+	var account [20]byte
+	copy(account[:], accountBytes)
+	if account != p.Account || common.SeqProxy() != p.Sequence {
+		return false
+	}
+	lastMatches := common.LastLedgerSequence == nil && !p.HasLastLedgerSequence
+	if common.LastLedgerSequence != nil {
+		lastMatches = p.HasLastLedgerSequence && p.LastLedgerSequence == *common.LastLedgerSequence
+	}
+	return lastMatches && p.IsTicket == (common.TicketSequence != nil)
+}
+
 // Result classifies the outcome of applying a single transaction in the
 // 3-pass loop. Mirrors rippled OpenLedger::Result (OpenLedger.h:192) and
 // OpenLedger::apply_one (OpenLedger.cpp:170-189):

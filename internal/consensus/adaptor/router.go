@@ -152,8 +152,10 @@ type Router struct {
 	// reduce-relay slot only feeds on DUPLICATE arrivals. Counting first-seen
 	// messages would accelerate selection and produce earlier squelches for
 	// the same traffic pattern.
-	messageSeen *messageSuppression
-	txSeen      *transactionSuppression
+	messageSeen    *messageSuppression
+	txSeen         *transactionSuppression
+	txIngressMemo  *transactionIngressMemo
+	txIngressStats transactionIngressStats
 	// validationWork verifies signatures outside the router goroutine. Trusted
 	// and untrusted work use separate bounded queues so untrusted traffic cannot
 	// occupy the trusted capacity.
@@ -332,7 +334,7 @@ const (
 // other peers), so over-buffering costs little.
 //
 // Each worker's job — decode, parse, and the ECDSA/EdDSA signature prewarm in
-// SubmitPendingTx — is CPU-bound and runs concurrently with the serialized
+// SubmitPendingTxOwned — is CPU-bound and runs concurrently with the serialized
 // apply strand, so the pool scales with the available cores (floored at the
 // historical 4) to keep that strand fed; a single fixed worker count throttled
 // the prewarm throughput well below the apply rate on multi-core validators.
@@ -394,6 +396,7 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		messageSeen:            newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		manifestUntrustedLimit: manifest.DefaultMaxUntrustedCount,
 		txSeen:                 newTransactionSuppression(5*time.Minute, 1<<17),
+		txIngressMemo:          newTransactionIngressMemo(transactionIngressMemoTTL, transactionIngressMemoMaxEntries, transactionIngressMemoMaxBytes),
 		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
 		lifecycleCtx:           context.Background(),

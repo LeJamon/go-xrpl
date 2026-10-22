@@ -17,6 +17,10 @@ func TestMetricsRegistry(t *testing.T) {
 		return observability.LedgerServeMetricsSnapshot{}
 	})
 	defer cleanup()
+	stopIngress := observability.SetTransactionIngressMetrics(func() observability.TransactionIngressMetricsSnapshot {
+		return observability.TransactionIngressMetricsSnapshot{}
+	})
+	defer stopIngress()
 
 	reg := newMetricsRegistry()
 	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
@@ -52,6 +56,9 @@ func TestMetricsRegistry(t *testing.T) {
 		"goxrpl_replay_fault_duration_seconds",
 		"goxrpl_router_serve_queued",
 		"goxrpl_router_serve_queue_wait_seconds",
+		"goxrpl_transaction_ingress_frames_total",
+		"goxrpl_transaction_ingress_inputs_total",
+		"goxrpl_transaction_ingress_queue_wait_seconds",
 	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("metrics output missing %s:\n%s", name, out)

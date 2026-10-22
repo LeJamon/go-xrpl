@@ -71,17 +71,18 @@ type nodeRuntime struct {
 	transports    *boundRPCTransports
 	watchdog      *watchdog.Watchdog
 
-	networkID                 uint32
-	retentionFloor            func() uint32
-	prepareFastLoadCheckpoint func(context.Context) (bool, error)
-	shutdownCh                chan struct{}
-	shutdowner                types.Shutdowner
-	stopSampler               func()
-	stopWatchdog              func()
-	stopMemoryMetrics         func()
-	stopSHAMapMetrics         func()
-	stopNodeStoreMetrics      func()
-	stopLedgerServeMetrics    func()
+	networkID                     uint32
+	retentionFloor                func() uint32
+	prepareFastLoadCheckpoint     func(context.Context) (bool, error)
+	shutdownCh                    chan struct{}
+	shutdowner                    types.Shutdowner
+	stopSampler                   func()
+	stopWatchdog                  func()
+	stopMemoryMetrics             func()
+	stopSHAMapMetrics             func()
+	stopNodeStoreMetrics          func()
+	stopLedgerServeMetrics        func()
+	stopTransactionIngressMetrics func()
 }
 
 func newNodeRuntime(
@@ -151,6 +152,9 @@ func (r *nodeRuntime) run() (runErr error) {
 		}
 		if r.stopLedgerServeMetrics != nil {
 			r.stopLedgerServeMetrics()
+		}
+		if r.stopTransactionIngressMetrics != nil {
+			r.stopTransactionIngressMetrics()
 		}
 	}()
 
@@ -1012,6 +1016,7 @@ func (r *nodeRuntime) configureConsensus() error {
 			"openLedger", r.ledger.GetCurrentLedgerIndex(),
 		)
 	}
+	r.stopTransactionIngressMetrics = observability.SetTransactionIngressMetrics(r.transactionIngressMetrics)
 	return nil
 }
 
