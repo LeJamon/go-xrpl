@@ -364,6 +364,9 @@ func inboundFrameReservation(header message.Header) int64 {
 // traffic and uses the best-effort event lane for other traffic. Closing the
 // peer releases a read loop waiting for capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
+	if evt.Type == EventMessageReceived {
+		evt.ReceivedAt = time.Now()
+	}
 	if evt.Type == EventMessageReceived && evt.MessageType == message.TypeManifests && p.manifestMessages != nil {
 		msg := evt.inboundMessage()
 		select {

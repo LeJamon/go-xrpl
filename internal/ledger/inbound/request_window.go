@@ -9,7 +9,7 @@ import (
 
 // Request metadata is deliberately charged to the same acquisition budget as
 // map/cursor state. A 1 KiB slot charge covers the map bucket slack for the
-// lease, node-index, recent-owner, peer, and ready-set indexes plus the
+// lease, wire-shadow, node-index, recent-owner, peer, and ready-set indexes plus the
 // retained ready slice. At the current 896-slot bound this reserves 917,504
 // bytes before any request container grows.
 const missingRequestMetadataBytes = uint64(1024)
@@ -47,24 +47,24 @@ func (l *Ledger) reserveRequestMetadataLocked() bool {
 	return true
 }
 
-func (l *Ledger) enqueueReadyLocked(node shamap.MissingNode, transaction bool) bool {
+func (l *Ledger) enqueueReadyLeaseLocked(ready readyMissingNode) bool {
 	if l.retired.Load() {
 		return false
 	}
 	if len(l.readyRequests) >= missingRequestReadyReserve {
 		return false
 	}
-	if _, reserved := l.requestLeases[node.Hash]; reserved {
+	if _, reserved := l.requestLeases[ready.node.Hash]; reserved {
 		return false
 	}
-	if _, queued := l.readySet[node.Hash]; queued {
+	if _, queued := l.readySet[ready.node.Hash]; queued {
 		return false
 	}
 	if !l.reserveRequestMetadataLocked() {
 		return false
 	}
-	l.readyRequests = append(l.readyRequests, readyMissingNode{node: node, transaction: transaction})
-	l.readySet[node.Hash] = struct{}{}
+	l.readyRequests = append(l.readyRequests, ready)
+	l.readySet[ready.node.Hash] = struct{}{}
 	return true
 }
 
@@ -75,6 +75,35 @@ func (l *Ledger) removeReadyLocked(hash [32]byte) {
 			l.readyRequests = append(l.readyRequests[:i], l.readyRequests[i+1:]...)
 			return
 		}
+	}
+}
+
+// fulfillReadyNodeLocked consumes a cached ready node. A failed hedge may have
+// moved the logical lease into readyRequests while its original wire frame is
+// still outstanding; retain that peer credit as a wire-only shadow.
+func (l *Ledger) fulfillReadyNodeLocked(transaction bool, hash [32]byte) {
+	now := SystemClock.Now()
+	for i := range l.readyRequests {
+		ready := l.readyRequests[i]
+		if ready.transaction != transaction || ready.node.Hash != hash {
+			continue
+		}
+		l.readyRequests = append(l.readyRequests[:i], l.readyRequests[i+1:]...)
+		delete(l.readySet, hash)
+		if ready.previousPeerID != 0 && ready.previousExpires.After(now) {
+			l.requestLeases[hash] = missingRequestLease{
+				previousPeerID:  ready.previousPeerID,
+				previousExpires: ready.previousExpires,
+				wireShadow:      true,
+				transaction:     transaction,
+				nodeID:          ready.node.NodeID,
+				started:         ready.started,
+				expires:         now,
+				retries:         ready.retries,
+				hedges:          ready.hedges,
+			}
+		}
+		return
 	}
 }
 
@@ -99,6 +128,7 @@ func (l *Ledger) reserveMissingNodeLocked(node shamap.MissingNode, transaction b
 		peerID:      peerID,
 		transaction: transaction,
 		nodeID:      node.NodeID,
+		started:     now,
 		expires:     now.Add(missingRequestLeaseTTL),
 	}
 	l.requestByNode[key] = node.Hash
@@ -119,9 +149,22 @@ func (l *Ledger) claimReadyNodeLocked(transaction bool, peerID uint64, now time.
 		l.readyRequests = append(l.readyRequests[:i], l.readyRequests[i+1:]...)
 		delete(l.readySet, ready.node.Hash)
 		if l.reserveMissingNodeLocked(ready.node, transaction, peerID, now) {
+			lease := l.requestLeases[ready.node.Hash]
+			lease.started = ready.started
+			if lease.started.IsZero() {
+				lease.started = now
+			}
+			lease.previousPeerID = ready.previousPeerID
+			lease.previousExpires = ready.previousExpires
+			lease.retries = ready.retries
+			if !ready.started.IsZero() && lease.retries != ^uint32(0) {
+				lease.retries++
+			}
+			lease.hedges = ready.hedges
+			l.requestLeases[ready.node.Hash] = lease
 			return ready.node, true
 		}
-		l.enqueueReadyLocked(ready.node, transaction)
+		l.enqueueReadyLeaseLocked(ready)
 		return shamap.MissingNode{}, false
 	}
 	if !claimOrphan {
@@ -131,8 +174,16 @@ func (l *Ledger) claimReadyNodeLocked(transaction bool, peerID uint64, now time.
 		if lease.transaction != transaction || lease.peerID != 0 {
 			continue
 		}
+		if lease.wireShadow {
+			continue
+		}
 		lease.peerID = peerID
 		lease.expires = now.Add(missingRequestLeaseTTL)
+		if lease.started.IsZero() {
+			lease.started = now
+		} else if lease.retries != ^uint32(0) {
+			lease.retries++
+		}
 		l.requestLeases[hash] = lease
 		l.recentNodes[hash] = peerID
 		return shamap.MissingNode{Hash: hash, NodeID: lease.nodeID}, true
@@ -154,12 +205,48 @@ func (l *Ledger) removeLeaseLocked(hash [32]byte) (missingRequestLease, bool) {
 	return lease, true
 }
 
+// fulfillLeaseLocked removes a logical reservation after a verified local or
+// peer placement. A hedge can satisfy the node while either wire frame is
+// still outstanding; retain those peer credits in the bounded lease map until
+// each reply boundary or expiry.
+func (l *Ledger) fulfillLeaseLocked(hash [32]byte, replyPeerID uint64) {
+	lease, ok := l.requestLeases[hash]
+	if !ok {
+		return
+	}
+	now := SystemClock.Now()
+	keepPrevious := lease.previousPeerID != 0 && lease.previousPeerID != replyPeerID && lease.previousExpires.After(now)
+	keepCurrent := lease.hedges != 0 && lease.peerID != 0 && lease.peerID != replyPeerID && lease.expires.After(now)
+	if keepPrevious || keepCurrent {
+		delete(l.recentNodes, hash)
+		key := requestNodeKey{transaction: lease.transaction, nodeID: lease.nodeID}
+		if current, exists := l.requestByNode[key]; exists && current == hash {
+			delete(l.requestByNode, key)
+		}
+		if !keepPrevious {
+			lease.previousPeerID = 0
+			lease.previousExpires = time.Time{}
+		}
+		if !keepCurrent {
+			lease.peerID = 0
+			lease.expires = now
+		}
+		lease.wireShadow = true
+		l.requestLeases[hash] = lease
+		return
+	}
+	l.removeLeaseLocked(hash)
+}
+
 // requeueLeaseLocked releases a peer's send ownership while retaining the
 // unresolved node. The ready reserve absorbs common partial replies; overflow
 // stays as an unowned lease and is claimed directly by the next planner pass.
 func (l *Ledger) requeueLeaseLocked(hash [32]byte, now time.Time) {
 	lease, ok := l.requestLeases[hash]
 	if !ok {
+		return
+	}
+	if lease.wireShadow {
 		return
 	}
 	if lease.peerID == 0 {
@@ -173,7 +260,15 @@ func (l *Ledger) requeueLeaseLocked(hash [32]byte, now time.Time) {
 	l.refreshPeerLeaseLocked(oldPeer)
 	if len(l.readyRequests) < missingRequestReadyReserve {
 		if removed, ok := l.removeLeaseLocked(hash); ok {
-			l.enqueueReadyLocked(shamap.MissingNode{Hash: hash, NodeID: removed.nodeID}, removed.transaction)
+			l.enqueueReadyLeaseLocked(readyMissingNode{
+				node:            shamap.MissingNode{Hash: hash, NodeID: removed.nodeID},
+				transaction:     removed.transaction,
+				previousPeerID:  removed.previousPeerID,
+				previousExpires: removed.previousExpires,
+				started:         removed.started,
+				retries:         removed.retries,
+				hedges:          removed.hedges,
+			})
 		}
 	}
 }
@@ -182,8 +277,13 @@ func (l *Ledger) refreshPeerLeaseLocked(peerID uint64) {
 	if peerID == 0 {
 		return
 	}
+	now := SystemClock.Now()
 	for _, lease := range l.requestLeases {
 		if lease.peerID == peerID {
+			l.requestPeers[peerID] = struct{}{}
+			return
+		}
+		if lease.previousPeerID == peerID && lease.previousExpires.After(now) {
 			l.requestPeers[peerID] = struct{}{}
 			return
 		}
@@ -192,20 +292,114 @@ func (l *Ledger) refreshPeerLeaseLocked(peerID uint64) {
 }
 
 func (l *Ledger) refreshRequestPeersLocked() {
+	l.refreshRequestPeersAtLocked(SystemClock.Now())
+}
+
+func (l *Ledger) refreshRequestPeersAtLocked(now time.Time) {
 	if l.retired.Load() {
 		return
 	}
 	clear(l.requestPeers)
-	for _, lease := range l.requestLeases {
+	for hash, lease := range l.requestLeases {
+		if lease.wireShadow {
+			if lease.peerID != 0 && !lease.expires.After(now) {
+				lease.peerID = 0
+				lease.expires = now
+			}
+			if lease.previousPeerID != 0 && !lease.previousExpires.After(now) {
+				lease.previousPeerID = 0
+				lease.previousExpires = time.Time{}
+			}
+			if lease.peerID == 0 && lease.previousPeerID == 0 {
+				l.removeLeaseLocked(hash)
+				continue
+			}
+			l.requestLeases[hash] = lease
+		}
+		if lease.previousPeerID != 0 && (lease.previousExpires.IsZero() || !lease.previousExpires.After(now)) {
+			lease.previousPeerID = 0
+			lease.previousExpires = time.Time{}
+			l.requestLeases[hash] = lease
+		}
 		if lease.peerID != 0 {
 			l.requestPeers[lease.peerID] = struct{}{}
 		}
+		if lease.previousPeerID != 0 {
+			l.requestPeers[lease.previousPeerID] = struct{}{}
+		}
+	}
+	for i, ready := range l.readyRequests {
+		if ready.previousPeerID != 0 && (ready.previousExpires.IsZero() || !ready.previousExpires.After(now)) {
+			ready.previousPeerID = 0
+			ready.previousExpires = time.Time{}
+			l.readyRequests[i] = ready
+		}
+		if ready.previousPeerID != 0 {
+			l.requestPeers[ready.previousPeerID] = struct{}{}
+		}
+	}
+}
+
+func (l *Ledger) clearHedgePeerLocked(peerID uint64) {
+	if peerID == 0 {
+		return
+	}
+	for hash, lease := range l.requestLeases {
+		if lease.wireShadow {
+			if lease.previousPeerID == peerID {
+				lease.previousPeerID = 0
+				lease.previousExpires = time.Time{}
+			}
+			if lease.peerID == peerID {
+				lease.peerID = 0
+				lease.expires = time.Time{}
+			}
+			if lease.peerID == 0 && lease.previousPeerID == 0 {
+				l.removeLeaseLocked(hash)
+			} else {
+				l.requestLeases[hash] = lease
+			}
+			continue
+		}
+		if lease.previousPeerID != peerID {
+			continue
+		}
+		lease.previousPeerID = 0
+		lease.previousExpires = time.Time{}
+		l.requestLeases[hash] = lease
+	}
+	for i, ready := range l.readyRequests {
+		if ready.previousPeerID != peerID {
+			continue
+		}
+		ready.previousPeerID = 0
+		ready.previousExpires = time.Time{}
+		l.readyRequests[i] = ready
 	}
 }
 
 func (l *Ledger) expireMissingLeasesLocked(now time.Time, force bool) {
 	for hash, lease := range l.requestLeases {
+		if lease.wireShadow {
+			if lease.peerID != 0 && !lease.expires.After(now) {
+				lease.peerID = 0
+			}
+			if lease.previousPeerID != 0 && !lease.previousExpires.After(now) {
+				lease.previousPeerID = 0
+			}
+			if lease.peerID == 0 && lease.previousPeerID == 0 {
+				l.removeLeaseLocked(hash)
+			} else {
+				l.requestLeases[hash] = lease
+			}
+			continue
+		}
 		if lease.peerID == 0 {
+			if lease.previousPeerID != 0 && lease.previousExpires.After(now) {
+				// A failed hedge can overflow the ready reserve. Keep its
+				// shadow lease until the original wire request expires.
+				continue
+			}
 			if force || !now.Before(lease.expires) {
 				l.removeLeaseLocked(hash)
 			}

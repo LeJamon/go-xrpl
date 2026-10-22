@@ -30,6 +30,8 @@ jobs:
       # package in the static-analysis path as well.
       - name: Vet tag-gated postgres backend
         run: go vet -tags postgres ./storage/relationaldb/postgres/
+      - name: Test slow-acceptance recorder
+        run: python3 -B scripts/profile-slow-acceptance_test.py
       - name: Record producer evidence
         if: always()
         env:
@@ -38,7 +40,8 @@ jobs:
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
             golangci/golangci-lint-action@v8 version=v2.11.3;
-            go vet -tags postgres ./storage/relationaldb/postgres/
+            go vet -tags postgres ./storage/relationaldb/postgres/;
+            python3 -B scripts/profile-slow-acceptance_test.py
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()

@@ -254,6 +254,9 @@ func benchmarkIssue2090Acceptance(b *testing.B, withRefresh bool) {
 		reportConsensusAcceptanceQuantiles(b, "refresh", refreshTime)
 	}
 	b.ReportMetric(float64(issue2090BatchCount), "batches/op")
+	b.ReportMetric(float64(len(workload.agreed)), "top-level-txs/op")
+	b.ReportMetric(float64(len(workload.innerHash)), "inner-txs/op")
+	b.ReportMetric(float64(issue2090RefreshEntries), "refresh-entries/op")
 	b.ReportMetric(float64(issue2090ExpectedLeafCount), "leaves/op")
 }
 

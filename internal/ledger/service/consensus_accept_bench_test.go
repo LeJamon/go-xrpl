@@ -189,8 +189,14 @@ func reportConsensusAcceptanceQuantiles(b *testing.B, name string, values []time
 	if len(values) == 0 {
 		return
 	}
+	var totalNS float64
+	for _, value := range values {
+		totalNS += float64(value)
+	}
 	sorted := append([]time.Duration(nil), values...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	b.ReportMetric(float64(len(values)), fmt.Sprintf("%s-samples", name))
+	b.ReportMetric(totalNS/float64(len(values)), fmt.Sprintf("%s-mean-ns", name))
 	for _, percentile := range []int{50, 95, 99} {
 		index := (len(sorted)*percentile+99)/100 - 1
 		if index < 0 {

@@ -5,6 +5,7 @@
 package inbound
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -42,6 +43,9 @@ const (
 	missingRequestReadyReserve = reqNodesReply
 	missingRequestWindow       = requestPeerLimit * reqNodesReply
 	missingRequestLeaseTTL     = 2 * acquireTimerInterval
+	txOnlyTailHedgeDelay       = time.Second
+	txOnlyTailNodeLimit        = 8
+	txOnlyTailPeerLimit        = 1
 )
 
 // hardMaxReplyNodes is rippled's per-message cap on the nodes a peer may pack
@@ -490,6 +494,7 @@ type MissingRequest struct {
 	Transaction bool
 	Blind       bool
 	ByHash      bool
+	Hedge       bool
 }
 
 // MissingRequestOutcome tells the acquisition owner which condition should
@@ -525,20 +530,47 @@ type MissingReplyResult struct {
 }
 
 type missingRequestLease struct {
-	peerID      uint64
+	peerID          uint64
+	previousPeerID  uint64
+	previousExpires time.Time
+	// wireShadow retains in-flight peer credits after a hedge fulfilled this
+	// node. It is not a missing logical lease and must not be claimed or
+	// requeued.
+	wireShadow  bool
 	transaction bool
 	nodeID      shamap.NodeID
+	started     time.Time
 	expires     time.Time
+	retries     uint32
+	hedges      uint32
 }
 
 type readyMissingNode struct {
-	node        shamap.MissingNode
-	transaction bool
+	node            shamap.MissingNode
+	transaction     bool
+	previousPeerID  uint64
+	previousExpires time.Time
+	started         time.Time
+	retries         uint32
+	hedges          uint32
 }
 
 type requestNodeKey struct {
 	transaction bool
 	nodeID      shamap.NodeID
+}
+
+// RequestPeerSnapshot describes the bounded request ownership held by one
+// peer at a point in time. OldestRequest is the first assignment time of the
+// oldest outstanding node; retries and hedges are per-node counts retained by
+// the acquisition until its lease is fulfilled or retired. OutstandingNodes
+// includes wire-only shadow slots retained after logical fulfillment.
+type RequestPeerSnapshot struct {
+	PeerID           uint64
+	OutstandingNodes int
+	OldestRequest    time.Time
+	Retries          uint32
+	Hedges           uint32
 }
 
 // Timeouts returns the number of no-progress timer intervals counted so far,
@@ -694,6 +726,164 @@ func (l *Ledger) ByHashMode() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.byHashMode
+}
+
+// TxOnlyTailHedgeDue reports whether a small transaction-only frontier can be
+// hedged. The caller must restrict this check to the actionable replay head.
+func (l *Ledger) TxOnlyTailHedgeDue(now time.Time) bool {
+	if !l.mu.TryLock() {
+		return false
+	}
+	defer l.mu.Unlock()
+	return l.txOnlyTailHedgeDueLocked(now)
+}
+
+func (l *Ledger) txOnlyTailHedgeDueLocked(now time.Time) bool {
+	if l.retired.Load() || !l.transactionOnly || l.state != StateWantState || !l.haveState || l.haveTx {
+		return false
+	}
+	frontier := 0
+	active := 0
+	for _, lease := range l.requestLeases {
+		if !lease.transaction {
+			continue
+		}
+		if lease.wireShadow {
+			continue
+		}
+		frontier++
+		if lease.peerID == 0 || lease.hedges != 0 || lease.started.IsZero() {
+			continue
+		}
+		if !now.Before(lease.expires) {
+			continue
+		}
+		if now.Sub(lease.started) >= txOnlyTailHedgeDelay {
+			active++
+		}
+	}
+	for _, ready := range l.readyRequests {
+		if ready.transaction {
+			frontier++
+		}
+	}
+	if len(l.missingTx) > txOnlyTailNodeLimit || len(l.neededTx) > txOnlyTailNodeLimit {
+		return false
+	}
+	return frontier > 0 && frontier <= txOnlyTailNodeLimit && active > 0
+}
+
+// PlanTransactionOnlyTailRequestsContext assigns aged transaction nodes to one
+// alternate peer without duplicating logical node reservations. peerIDs must be
+// ordered by preference. Verified replies from the original peer remain useful.
+func (l *Ledger) PlanTransactionOnlyTailRequestsContext(ctx context.Context, peerIDs []uint64, now time.Time) (MissingRequestPlan, error) {
+	plan := MissingRequestPlan{Outcome: MissingRequestWaitReply}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return plan, err
+	}
+	if err := l.retirementError(); err != nil {
+		return plan, err
+	}
+
+	l.workMu.Lock()
+	defer l.finishWork()
+	if err := l.retirementError(); err != nil {
+		return plan, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return plan, err
+	}
+	if l.state == StateComplete {
+		plan.Outcome = MissingRequestComplete
+		return plan, nil
+	}
+	if !l.txOnlyTailHedgeDueLocked(now) {
+		return plan, nil
+	}
+	l.refreshRequestPeersAtLocked(now)
+
+	type tailLease struct {
+		hash  [32]byte
+		lease missingRequestLease
+	}
+	tail := make([]tailLease, 0, txOnlyTailNodeLimit)
+	for hash, lease := range l.requestLeases {
+		if lease.wireShadow || !lease.transaction || lease.peerID == 0 || lease.hedges != 0 || lease.started.IsZero() ||
+			!now.Before(lease.expires) || now.Sub(lease.started) < txOnlyTailHedgeDelay {
+			continue
+		}
+		tail = append(tail, tailLease{hash: hash, lease: lease})
+	}
+	if len(tail) == 0 || len(tail) > txOnlyTailNodeLimit {
+		return plan, nil
+	}
+	slices.SortFunc(tail, func(a, b tailLease) int {
+		if a.lease.started.Before(b.lease.started) {
+			return -1
+		}
+		if a.lease.started.After(b.lease.started) {
+			return 1
+		}
+		return bytes.Compare(a.hash[:], b.hash[:])
+	})
+
+	// A candidate must not already own another request. The old owners remain
+	// occupied until their reply boundary, preserving the one-request-per-peer
+	// invariant while the hedge is in flight.
+	availablePeers := requestPeerLimit - len(l.requestPeers)
+	if availablePeers < txOnlyTailPeerLimit {
+		return plan, nil
+	}
+	var candidate uint64
+	for _, peerID := range peerIDs {
+		if peerID == 0 {
+			continue
+		}
+		if slices.ContainsFunc(tail, func(item tailLease) bool { return item.lease.peerID == peerID }) {
+			continue
+		}
+		if _, busy := l.requestPeers[peerID]; busy {
+			continue
+		}
+		candidate = peerID
+		break
+	}
+	if candidate == 0 {
+		return plan, nil
+	}
+
+	request := MissingRequest{
+		PeerID:      candidate,
+		Transaction: true,
+		ByHash:      l.byHashMode,
+		Hedge:       true,
+		NodeIDs:     make([][]byte, 0, len(tail)),
+		NodeHashes:  make([][32]byte, 0, len(tail)),
+	}
+	for _, item := range tail {
+		lease := item.lease
+		lease.previousPeerID = lease.peerID
+		lease.previousExpires = lease.expires
+		lease.peerID = candidate
+		lease.expires = now.Add(missingRequestLeaseTTL)
+		if lease.hedges != ^uint32(0) {
+			lease.hedges++
+		}
+		l.requestLeases[item.hash] = lease
+		l.recentNodes[item.hash] = lease.peerID
+		request.NodeIDs = append(request.NodeIDs, lease.nodeID.Bytes())
+		request.NodeHashes = append(request.NodeHashes, item.hash)
+	}
+	l.refreshRequestPeersAtLocked(now)
+	if len(request.NodeHashes) > 0 {
+		plan.Requests = append(plan.Requests, request)
+	}
+	return plan, nil
 }
 
 // TakeByHashRequest returns the content hashes of up to max still-missing nodes
@@ -1193,13 +1383,13 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 			}
 			stored = append(stored, entry)
 			if hash, ok := l.requestByNode[requestNodeKey{transaction: m == l.txMap, nodeID: parsedID}]; ok {
-				l.removeLeaseLocked(hash)
+				l.fulfillLeaseLocked(hash, 0)
 			}
 		case shamap.NodeDuplicate:
 			// Already present, or ahead of its frontier: neither progress nor
 			// a reject. A duplicate still validates the requested frontier.
 			if hash, ok := l.requestByNode[requestNodeKey{transaction: m == l.txMap, nodeID: parsedID}]; ok {
-				l.removeLeaseLocked(hash)
+				l.fulfillLeaseLocked(hash, 0)
 			}
 		case shamap.NodeReRequest:
 			// The requested frontier remains unresolved and is retried by the
@@ -1742,7 +1932,10 @@ func (l *Ledger) filterMissingResultLocked(missing []shamap.MissingNode, isReply
 	}
 	nodeIDs := make([][]byte, 0, len(use))
 	for i := range use {
-		if _, reserved := l.requestLeases[use[i].Hash]; reserved {
+		if lease, reserved := l.requestLeases[use[i].Hash]; reserved {
+			if lease.wireShadow {
+				continue
+			}
 			if isReply {
 				continue
 			}
@@ -2188,9 +2381,18 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 func (l *Ledger) releaseMissingRequests(requests []MissingRequest) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := SystemClock.Now()
 	for _, request := range requests {
 		for _, hash := range request.NodeHashes {
 			if lease, ok := l.requestLeases[hash]; ok && lease.peerID == request.PeerID {
+				if lease.previousPeerID != 0 {
+					// A failed hedge assignment must not discard the original
+					// wire request. Requeue the logical lease while retaining its
+					// previous owner; the next claim can use the ready reserve
+					// without opening a seventh wire slot.
+					l.requeueLeaseLocked(hash, now)
+					continue
+				}
 				l.removeLeaseLocked(hash)
 			}
 		}
@@ -2210,9 +2412,20 @@ func (l *Ledger) ReleaseUnreservedMissingNodes() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for hash, lease := range l.requestLeases {
+		if lease.wireShadow {
+			continue
+		}
 		if lease.peerID == 0 && len(l.readyRequests) < missingRequestReadyReserve {
 			if released, ok := l.removeLeaseLocked(hash); ok {
-				l.enqueueReadyLocked(shamap.MissingNode{Hash: hash, NodeID: released.nodeID}, released.transaction)
+				l.enqueueReadyLeaseLocked(readyMissingNode{
+					node:            shamap.MissingNode{Hash: hash, NodeID: released.nodeID},
+					transaction:     released.transaction,
+					previousPeerID:  released.previousPeerID,
+					previousExpires: released.previousExpires,
+					started:         released.started,
+					retries:         released.retries,
+					hedges:          released.hedges,
+				})
 			}
 		}
 	}
@@ -2222,6 +2435,7 @@ func (l *Ledger) ReleaseUnreservedMissingNodes() {
 // reservations remain until they arrive or the acquisition timer advances.
 func (l *Ledger) ReleaseMissingPeer(peerID uint64) {
 	l.mu.Lock()
+	l.clearHedgePeerLocked(peerID)
 	l.releaseAllPeerLeasesLocked(peerID, time.Now(), false)
 	l.mu.Unlock()
 }
@@ -2241,7 +2455,10 @@ type Snapshot struct {
 	Timeouts                   int
 	ConsecutiveTimeouts        int
 	ByHashMode                 bool
-	OutstandingNodes           int
+	OutstandingNodes           int // includes wire-only shadow slots
+	Hedges                     uint32
+	OldestRequest              time.Time
+	RequestPeerSnapshots       []RequestPeerSnapshot
 	LastUsefulProgress         time.Time
 	Peers                      int
 	RequestPeers               int
@@ -2302,6 +2519,9 @@ func (l *Ledger) Snapshot() Snapshot {
 }
 
 func (l *Ledger) snapshotLocked() Snapshot {
+	if l.transactionOnly {
+		l.refreshRequestPeersLocked()
+	}
 	s := Snapshot{
 		Hash:                l.hash,
 		Seq:                 l.seq,
@@ -2352,7 +2572,83 @@ func (l *Ledger) snapshotLocked() Snapshot {
 	if !l.haveTx {
 		s.NeededTx = cloneHashes(l.neededTx)
 	}
+	if l.transactionOnly {
+		s.OldestRequest = l.oldestRequestLocked()
+		for _, lease := range l.requestLeases {
+			s.Hedges += lease.hedges
+		}
+		for _, ready := range l.readyRequests {
+			s.Hedges += ready.hedges
+		}
+		s.RequestPeerSnapshots = l.requestPeerSnapshotsLocked()
+	}
 	return s
+}
+
+func (l *Ledger) oldestRequestLocked() time.Time {
+	var oldest time.Time
+	for _, lease := range l.requestLeases {
+		if lease.peerID == 0 && lease.previousPeerID == 0 || lease.started.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || lease.started.Before(oldest) {
+			oldest = lease.started
+		}
+	}
+	for _, ready := range l.readyRequests {
+		if ready.previousPeerID == 0 || ready.started.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || ready.started.Before(oldest) {
+			oldest = ready.started
+		}
+	}
+	return oldest
+}
+
+func (l *Ledger) requestPeerSnapshotsLocked() []RequestPeerSnapshot {
+	if len(l.requestPeers) == 0 {
+		return nil
+	}
+	peerIDs := make([]uint64, 0, min(len(l.requestPeers), requestPeerLimit))
+	for peerID := range l.requestPeers {
+		peerIDs = append(peerIDs, peerID)
+	}
+	slices.Sort(peerIDs)
+	if len(peerIDs) > requestPeerLimit {
+		peerIDs = peerIDs[:requestPeerLimit]
+	}
+	now := SystemClock.Now()
+	snapshots := make([]RequestPeerSnapshot, 0, len(peerIDs))
+	for _, peerID := range peerIDs {
+		peerSnapshot := RequestPeerSnapshot{PeerID: peerID}
+		for _, lease := range l.requestLeases {
+			current := lease.peerID == peerID
+			previous := lease.previousPeerID == peerID && lease.previousExpires.After(now)
+			if !current && !previous {
+				continue
+			}
+			peerSnapshot.OutstandingNodes++
+			if current {
+				peerSnapshot.Retries += lease.retries
+				peerSnapshot.Hedges += lease.hedges
+			}
+			if !lease.started.IsZero() && (peerSnapshot.OldestRequest.IsZero() || lease.started.Before(peerSnapshot.OldestRequest)) {
+				peerSnapshot.OldestRequest = lease.started
+			}
+		}
+		for _, ready := range l.readyRequests {
+			if ready.previousPeerID != peerID || !ready.previousExpires.After(now) {
+				continue
+			}
+			peerSnapshot.OutstandingNodes++
+			if !ready.started.IsZero() && (peerSnapshot.OldestRequest.IsZero() || ready.started.Before(peerSnapshot.OldestRequest)) {
+				peerSnapshot.OldestRequest = ready.started
+			}
+		}
+		snapshots = append(snapshots, peerSnapshot)
+	}
+	return snapshots
 }
 
 func (l *Ledger) cacheMissingLocked(transaction bool, missing []shamap.MissingNode) {
@@ -2393,6 +2689,7 @@ func (l *Ledger) publishSnapshotLocked() {
 func snapshotCopy(s Snapshot) *Snapshot {
 	s.NeededState = cloneHashes(s.NeededState)
 	s.NeededTx = cloneHashes(s.NeededTx)
+	s.RequestPeerSnapshots = slices.Clone(s.RequestPeerSnapshots)
 	return &s
 }
 
