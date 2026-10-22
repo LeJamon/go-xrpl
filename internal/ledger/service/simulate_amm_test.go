@@ -280,7 +280,8 @@ func TestService_SimulateTransaction_OrderBooksRemainIsolated(t *testing.T) {
 		Build()
 	rejected, err := svc.SimulateTransaction(rejectedOffer)
 	require.NoError(t, err)
-	require.Equal(t, ter.TerPRE_SEQ, rejected.Result)
+	// A future sequence cannot enter the queue during simulation.
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, rejected.Result)
 	require.False(t, rejected.Applied)
 	require.Equal(t, offerSeq, accountSeq(t, svc, alice.Address))
 
@@ -316,7 +317,7 @@ func TestService_SimulateTransaction_OrderBooksRemainIsolated(t *testing.T) {
 	*ammTx.GetCommon().Sequence = ammSeq + 1
 	rejected, err = svc.SimulateTransaction(ammTx)
 	require.NoError(t, err)
-	require.Equal(t, ter.TerPRE_SEQ, rejected.Result)
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, rejected.Result)
 	require.False(t, rejected.Applied)
 	ammTx.GetCommon().Sequence = &ammSeq
 

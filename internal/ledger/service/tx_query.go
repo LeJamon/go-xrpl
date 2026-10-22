@@ -903,14 +903,32 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		return nil, svcerr.ErrNoOpenLedger
 	}
 
-	// Create a snapshot of the open ledger's state map for isolation
-	snapshot, err := current.StateMapSnapshot()
+	// Fork both the open ledger and TxQ before applying. The simulation must see
+	// the same fee and queue admission state as submission while keeping every
+	// state and queue mutation private to this request.
+	simView, err := current.MutableSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
 	}
-
-	// Create a temporary ledger view backed by the snapshot
-	simView := newSnapshotView(snapshot, current)
+	simQueue := s.txQueue
+	if simQueue == nil {
+		queueConfig := txq.DefaultConfig()
+		if s.config.Standalone {
+			queueConfig = txq.StandaloneConfig()
+		}
+		if s.config.TxQ != nil {
+			queueConfig = *s.config.TxQ
+		}
+		simQueue, err = txq.New(queueConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create transaction queue snapshot: %w", err)
+		}
+	} else {
+		simQueue, err = simQueue.Fork()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create transaction queue snapshot: %w", err)
+		}
+	}
 
 	// Read fee settings from the FeeSettings SLE in the open ledger
 	simBaseFee, simReserveBase, simReserveIncrement := readFeesFromLedger(current)
@@ -919,26 +937,27 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		rules = s.currentOpenLedgerRulesLocked()
 	}
 
-	// Create engine config from current state
-	engineConfig := tx.EngineConfig{
+	applyConfig := openledger.ApplyConfig{
 		BaseFee:          simBaseFee,
 		ReserveBase:      simReserveBase,
 		ReserveIncrement: simReserveIncrement,
 		LedgerSequence:   current.Sequence(),
-		ParentHash:       current.ParentHash(),
-		OpenLedger:       true, // Check fee adequacy for simulation
-		ApplyFlags:       tx.TapDRY_RUN,
 		NetworkID:        s.config.NetworkID,
 		Logger:           s.config.Logger,
 		Rules:            rules,
+		ApplyFlags:       tx.TapDRY_RUN,
 		FeeTrack:         s.feeTrack,
 	}
-
-	// Create engine with the snapshot view
-	engine := txengine.NewEngine(simView, engineConfig)
-
-	// Apply the transaction (changes go to the snapshot, not the real ledger)
-	applyResult := engine.Apply(transaction)
+	adapter := openledger.NewTxqAdapter(simView, applyConfig)
+	queueResult := simQueue.Apply(adapter, transaction, [32]byte{}, [20]byte{})
+	applyResult := tx.ApplyResult{
+		Result:  queueResult.Result,
+		Applied: queueResult.Applied,
+		Message: queueResult.Result.Message(),
+	}
+	if last := adapter.LastApplyResult(); last != nil && last.Result == queueResult.Result {
+		applyResult = *last
+	}
 
 	result := &SubmitResult{
 		Result:                 applyResult.Result,

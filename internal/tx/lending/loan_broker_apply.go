@@ -506,6 +506,32 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx
 		if res := mptutil.CheckWithdrawFreeze(view, b.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
 			return res
 		}
+	} else if !asset.IsNative() {
+		var issuerID [20]byte
+		if asset.IsMPT() {
+			id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			issuerID = mptutil.Issuer(id)
+		} else {
+			id, err := state.DecodeAccountID(asset.Issuer)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			issuerID = id
+		}
+		if dstID != issuerID {
+			if mptutil.IsAssetFrozen(view, asset, b.Account) {
+				if asset.IsMPT() {
+					return ter.TecLOCKED
+				}
+				return ter.TecFROZEN
+			}
+			if res := mptutil.CheckDeepFrozen(view, dstID, asset); res != ter.TesSUCCESS {
+				return res
+			}
+		}
 	}
 
 	amount := amountToLendNumForRules(l.Amount, config.RequireRules())

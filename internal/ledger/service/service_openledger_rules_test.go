@@ -7,6 +7,9 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -29,15 +32,8 @@ func (t *observingAutofillRulesTx) CalculateBaseFee(_ tx.ReadOnlyLedgerView, cfg
 	return cfg.BaseFee, nil
 }
 
-type amendmentRequiredSimulationTx struct {
-	*tx.BaseTx
-}
-
-func (t *amendmentRequiredSimulationTx) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureBatchV1_1}
-}
-
 func TestOpenLedgerAcceptanceUsesLastValidatedRules(t *testing.T) {
+	all.RegisterAll()
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -106,11 +102,17 @@ func TestOpenLedgerAcceptanceUsesLastValidatedRules(t *testing.T) {
 	require.Same(t, current.Rules(), observed.rules,
 		"autofill must use the published open view rules")
 
-	simulationTx := &amendmentRequiredSimulationTx{
-		BaseTx: tx.NewBaseTx(tx.TypeAccountSet, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
-	}
+	simulationTx := batchtx.NewBatch("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	simulationTx.Fee = "10"
 	simulationTx.SetSequence(1)
+	simulationTx.SetFlags(batchtx.BatchFlagAllOrNothing)
+	for sequence := uint32(1); sequence <= 2; sequence++ {
+		inner := account.NewAccountSet(simulationTx.Account)
+		inner.Fee = "0"
+		inner.SetSequence(sequence)
+		inner.SetFlags(tx.TfInnerBatchTxn)
+		simulationTx.AddInnerTransaction(inner)
+	}
 	simulated, err := svc.SimulateTransaction(simulationTx)
 	require.NoError(t, err)
 	require.Equal(t, ter.TemDISABLED, simulated.Result,

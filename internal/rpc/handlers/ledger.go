@@ -708,12 +708,12 @@ func expandStoredTransaction(
 		}
 		// Encode metadata to binary hex
 		if storedTx.Meta != nil {
-			metaBlob, err := binarycodec.Encode(storedTx.Meta)
+			metaBlob, err := binarycodec.EncodeBytesTrusted(storedTx.Meta)
 			if err == nil {
 				if apiVersion > 1 {
-					txEntry["meta_blob"] = metaBlob
+					txEntry["meta_blob"] = strings.ToUpper(hex.EncodeToString(metaBlob))
 				} else {
-					txEntry["meta"] = metaBlob
+					txEntry["meta"] = strings.ToUpper(hex.EncodeToString(metaBlob))
 				}
 			} else {
 				return nil, fmt.Errorf("encode transaction metadata: %w", err)

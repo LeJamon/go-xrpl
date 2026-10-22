@@ -58,10 +58,13 @@ func CanonicalizeSerializedMetadata(fields map[string]any) (map[string]any, erro
 	return canonical, nil
 }
 
-// CanonicalizeSerializedObject validates codec field types and returns the
-// decoded canonical object without applying a higher-level object template.
+// CanonicalizeSerializedObject validates a stored protocol object without a
+// higher-level template or the array limit for untrusted JSON input.
 func CanonicalizeSerializedObject(fields map[string]any) (map[string]any, error) {
-	encoded, err := serializedObjectBytes(fields)
+	if err := validateSerializedJSONNumbers(fields); err != nil {
+		return nil, err
+	}
+	encoded, err := binarycodec.EncodeBytesTrusted(fields)
 	if err != nil {
 		return nil, err
 	}
