@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,10 +126,22 @@ type ownedIngressRun struct {
 
 func runOwnedIngress(t testing.TB, cfg Config, blob []byte, hash [32]byte, mutate func(*openledger.PendingTx)) ownedIngressRun {
 	t.Helper()
+	// Startup closes its initial ledger with wall time; comparisons need a fixed parent.
+	env := jtx.NewTestEnvWithConfig(t, cfg.GenesisConfig)
+	env.Close()
+	parent := env.LastClosedLedger()
+	db := newTestNodeStore(t, 1_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	writer := &Service{nodeStore: db}
+	require.NoError(t, writer.persistToNodeStore(t.Context(), parent, parent.Sequence()))
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = backend.New(db)
+	cfg.Startup = StartupConfig{Mode: StartupLoad, Ledger: fmt.Sprintf("%X", parent.Hash())}
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	require.Equal(t, parent.Hash(), svc.GetClosedLedger().Hash())
 
 	pending, err := openledger.ParsePendingTx(blob)
 	require.NoError(t, err)
