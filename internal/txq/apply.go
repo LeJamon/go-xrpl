@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
@@ -110,24 +111,29 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	}
 	originalFlags := ctx.GetApplyFlags()
 	storedFlags := originalFlags &^ tx.TapRETRY
-	canonicalTxn, blob, canonicalID, canonicalAccount, canonicalErr := canonicalSubmission(txn, txID, account)
-	if canonicalErr != nil {
-		// Same-package tests can use deliberately non-serializable transactions;
-		// external callers cannot implement the private marker.
-		if _, ok := txn.(syntheticTransaction); !ok {
-			return ApplyResult{Result: ter.TemMALFORMED, Applied: false}
+	isDryRun := originalFlags&tx.TapDRY_RUN != 0
+	var blob []byte
+	if !isDryRun {
+		canonicalTxn, canonicalBlob, canonicalID, canonicalAccount, canonicalErr := canonicalSubmission(txn, txID, account)
+		if canonicalErr != nil {
+			// Same-package tests can use deliberately non-serializable transactions;
+			// external callers cannot implement the private marker.
+			if _, ok := txn.(syntheticTransaction); !ok {
+				return ApplyResult{Result: ter.TemMALFORMED, Applied: false}
+			}
+			canonicalTxn = txn
+			canonicalBlob = append([]byte(nil), txn.GetRawBytes()...)
+			canonicalID = txID
+			canonicalAccount = account
 		}
-		canonicalTxn = txn
-		blob = append([]byte(nil), txn.GetRawBytes()...)
-		canonicalID = txID
-		canonicalAccount = account
-	}
-	txn = canonicalTxn
-	if canonicalAccount != ([20]byte{}) {
-		account = canonicalAccount
-	}
-	if canonicalID != ([32]byte{}) {
-		txID = canonicalID
+		txn = canonicalTxn
+		blob = canonicalBlob
+		if canonicalAccount != ([20]byte{}) {
+			account = canonicalAccount
+		}
+		if canonicalID != ([32]byte{}) {
+			txID = canonicalID
+		}
 	}
 	preflightResult := ctx.PreflightTransactionWithFlags(txn, originalFlags)
 	if preflightResult != ter.TesSUCCESS {
@@ -139,12 +145,23 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
 
+	if isDryRun {
+		currentAccount, err := state.DecodeAccountID(common.Account)
+		if err != nil {
+			return ApplyResult{Result: ter.TemBAD_SRC_ACCOUNT}
+		}
+		account = currentAccount
+	}
+
 	// Missing accounts take precedence over fee-calculation errors.
 	accountExists, err := ctx.AccountExists(account)
 	if err != nil {
 		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
 	if !accountExists {
+		if isDryRun {
+			return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+		}
 		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}
 	}
 
@@ -155,12 +172,8 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	txInLedger := ctx.GetTxInLedger()
 	ledgerSeq := ctx.GetLedgerSequence()
 
-	var seqProxy SeqProxy
-	if common.TicketSequence != nil && *common.TicketSequence != 0 {
-		seqProxy = NewSeqProxyTicket(*common.TicketSequence)
-	} else if common.Sequence != nil {
-		seqProxy = NewSeqProxySequence(*common.Sequence)
-	} else {
+	seqProxy, hasSeqProxy := seqProxyFor(common)
+	if !hasSeqProxy {
 		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
 
@@ -228,6 +241,10 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// result. rippled's tryDirectApply never falls through to queueing once
 		// apply has run (TxQ.cpp:1711-1745).
 		return ApplyResult{Result: result, Applied: false}
+	}
+
+	if isDryRun {
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 
 	if seqProxy.IsTicket {
@@ -597,6 +614,19 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	q.insertByFee(candidate)
 
 	return ApplyResult{Result: ter.TerQUEUED, Queued: true}
+}
+
+// seqProxyFor derives the queue key from Common's presence-aware discriminator.
+// A present TicketSequence remains ticket-based even when its value is zero.
+func seqProxyFor(common *tx.Common) (SeqProxy, bool) {
+	if common == nil || (common.Sequence == nil && common.TicketSequence == nil) {
+		return SeqProxy{}, false
+	}
+	key := common.SeqProxyKey()
+	if key&(1<<32) != 0 {
+		return NewSeqProxyTicket(uint32(key)), true
+	}
+	return NewSeqProxySequence(uint32(key)), true
 }
 
 // tryClearAccountQueue attempts to clear all queued transactions for an account

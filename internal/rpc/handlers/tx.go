@@ -220,9 +220,9 @@ func (m *TxMethod) buildResponseV1(
 			response["tx"] = txBlob
 		}
 		if storedTx.Meta != nil {
-			metaBlob, err := binarycodec.Encode(storedTx.Meta)
+			metaBlob, err := binarycodec.EncodeBytesTrusted(storedTx.Meta)
 			if err == nil {
-				response["meta"] = metaBlob
+				response["meta"] = strings.ToUpper(hex.EncodeToString(metaBlob))
 			}
 		}
 	} else {
@@ -274,9 +274,9 @@ func (m *TxMethod) buildResponseV2(
 			response["tx_blob"] = txBlob
 		}
 		if storedTx.Meta != nil {
-			metaBlob, err := binarycodec.Encode(storedTx.Meta)
+			metaBlob, err := binarycodec.EncodeBytesTrusted(storedTx.Meta)
 			if err == nil {
-				response["meta_blob"] = metaBlob
+				response["meta_blob"] = strings.ToUpper(hex.EncodeToString(metaBlob))
 			}
 		}
 	} else {

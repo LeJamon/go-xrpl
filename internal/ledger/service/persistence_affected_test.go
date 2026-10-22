@@ -95,3 +95,152 @@ func TestAddMetaAffectedAccountsAllowsBareModifiedNode(t *testing.T) {
 		t.Fatalf("affected accounts = %d, want 0", len(got))
 	}
 }
+
+func TestAddMetaAffectedAccountsIndexesMPTAmountIssuers(t *testing.T) {
+	issuers := make([]relationaldb.AccountID, 6)
+	for i := range issuers {
+		_, raw := addressFromBytes(t, byte(0x10+i))
+		issuers[i] = relationaldb.AccountID(raw)
+	}
+	issuanceID := func(sequence byte, issuer relationaldb.AccountID) string {
+		id := make([]byte, 24)
+		id[3] = sequence
+		copy(id[4:], issuer[:])
+		return hex.EncodeToString(id)
+	}
+	amount := func(id string) map[string]any {
+		return map[string]any{"mpt_issuance_id": id, "value": "10"}
+	}
+
+	tests := []struct {
+		name string
+		node map[string]any
+		want relationaldb.AccountID
+	}{
+		{
+			name: "created taker pays",
+			node: map[string]any{"CreatedNode": map[string]any{
+				"NewFields": map[string]any{"TakerPays": amount(issuanceID(1, issuers[0]))},
+			}},
+			want: issuers[0],
+		},
+		{
+			name: "created taker gets",
+			node: map[string]any{"CreatedNode": map[string]any{
+				"NewFields": map[string]any{"TakerGets": amount(issuanceID(2, issuers[1]))},
+			}},
+			want: issuers[1],
+		},
+		{
+			name: "modified taker pays",
+			node: map[string]any{"ModifiedNode": map[string]any{
+				"FinalFields": map[string]any{"TakerPays": amount(issuanceID(3, issuers[2]))},
+			}},
+			want: issuers[2],
+		},
+		{
+			name: "modified taker gets",
+			node: map[string]any{"ModifiedNode": map[string]any{
+				"FinalFields": map[string]any{"TakerGets": amount(issuanceID(4, issuers[3]))},
+			}},
+			want: issuers[3],
+		},
+		{
+			name: "deleted taker pays",
+			node: map[string]any{"DeletedNode": map[string]any{
+				"FinalFields": map[string]any{"TakerPays": amount(issuanceID(5, issuers[4]))},
+			}},
+			want: issuers[4],
+		},
+		{
+			name: "deleted taker gets",
+			node: map[string]any{"DeletedNode": map[string]any{
+				"FinalFields": map[string]any{"TakerGets": amount(issuanceID(6, issuers[5]))},
+			}},
+			want: issuers[5],
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := map[relationaldb.AccountID]struct{}{}
+			meta := map[string]any{"AffectedNodes": []any{tt.node}}
+			if err := addMetaAffectedAccounts(meta, got); err != nil {
+				t.Fatalf("addMetaAffectedAccounts: %v", err)
+			}
+			if _, ok := got[tt.want]; !ok {
+				t.Fatalf("missing MPT issuer %x in affected accounts", tt.want)
+			}
+			if len(got) != 1 {
+				t.Fatalf("affected accounts = %d, want 1", len(got))
+			}
+		})
+	}
+}
+
+func TestAddMetaAffectedAccountsMPTAmountFieldSelection(t *testing.T) {
+	_, finalIssuerBytes := addressFromBytes(t, 0x21)
+	_, previousIssuerBytes := addressFromBytes(t, 0x22)
+	finalIssuer := relationaldb.AccountID(finalIssuerBytes)
+	previousIssuer := relationaldb.AccountID(previousIssuerBytes)
+	finalID := "00000001" + hex.EncodeToString(finalIssuer[:])
+	previousID := "00000002" + hex.EncodeToString(previousIssuer[:])
+
+	meta := map[string]any{
+		"AffectedNodes": []any{map[string]any{"ModifiedNode": map[string]any{
+			"FinalFields": map[string]any{
+				"TakerPays": map[string]any{"mpt_issuance_id": finalID, "value": "1"},
+			},
+			"PreviousFields": map[string]any{
+				"TakerGets": map[string]any{"mpt_issuance_id": previousID, "value": "1"},
+			},
+		}}},
+	}
+	got := map[relationaldb.AccountID]struct{}{}
+	if err := addMetaAffectedAccounts(meta, got); err != nil {
+		t.Fatalf("addMetaAffectedAccounts: %v", err)
+	}
+	if _, ok := got[finalIssuer]; !ok {
+		t.Fatalf("missing FinalFields issuer %x", finalIssuer)
+	}
+	if _, ok := got[previousIssuer]; ok {
+		t.Fatalf("PreviousFields issuer %x must not be indexed", previousIssuer)
+	}
+}
+
+func TestAddMetaAffectedAccountsRejectsMalformedMPTAmount(t *testing.T) {
+	meta := map[string]any{
+		"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+			"NewFields": map[string]any{
+				"TakerPays": map[string]any{"mpt_issuance_id": "not-an-issuance-id", "value": "1"},
+			},
+		}}},
+	}
+	got := map[relationaldb.AccountID]struct{}{}
+	if err := addMetaAffectedAccounts(meta, got); err == nil {
+		t.Fatal("addMetaAffectedAccounts accepted malformed MPT amount")
+	}
+	if len(got) != 0 {
+		t.Fatalf("affected accounts = %d after malformed MPT amount, want 0", len(got))
+	}
+}
+
+func TestAddMetaAffectedAccountsSkipsZeroMPTIssuer(t *testing.T) {
+	meta := map[string]any{
+		"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+			"NewFields": map[string]any{
+				"TakerGets": map[string]any{
+					"mpt_issuance_id": "000000010000000000000000000000000000000000000000",
+					"value":           "1",
+				},
+			},
+		}}},
+	}
+	got := map[relationaldb.AccountID]struct{}{}
+	if err := addMetaAffectedAccounts(meta, got); err != nil {
+		t.Fatalf("addMetaAffectedAccounts: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("affected accounts = %d for zero MPT issuer, want 0", len(got))
+	}
+}

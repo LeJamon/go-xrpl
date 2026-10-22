@@ -247,6 +247,17 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 	return computeTransactionHash(tx)
 }
 
+// ComputeTransactionHashWithFlags selects the transaction identity used by an
+// apply path. Normal application hashes the retained canonical wire bytes;
+// simulation hashes the transaction's current fields so a prepared object can
+// be changed before it is applied to the dry-run view.
+func ComputeTransactionHashWithFlags(tx Transaction, flags ApplyFlags) ([32]byte, error) {
+	if flags&TapDRY_RUN != 0 {
+		return ComputeCurrentTransactionHash(tx)
+	}
+	return ComputeTransactionHash(tx)
+}
+
 // SerializeTransaction returns the canonical binary serialization used for a
 // transaction ID and transaction-map leaf.
 func SerializeTransaction(tx Transaction) ([]byte, error) {

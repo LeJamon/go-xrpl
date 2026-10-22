@@ -88,6 +88,17 @@ func TestCreateTxWithMetaBlob_TrustedMetadataOverJSONLimit(t *testing.T) {
 	if len(gotNodes) != affectedNodes {
 		t.Fatalf("AffectedNodes count = %d, want %d", len(gotNodes), affectedNodes)
 	}
+	canonical, err := CanonicalizeSerializedMetadata(decoded)
+	if err != nil {
+		t.Fatalf("canonicalize stored metadata: %v", err)
+	}
+	roundTrip, err := binarycodec.EncodeBytesTrusted(canonical)
+	if err != nil || !bytes.Equal(roundTrip, metaBlob) {
+		t.Fatalf("metadata round trip changed bytes: %v", err)
+	}
+	if _, err := binarycodec.EncodeBytes(decoded); err == nil {
+		t.Fatal("untrusted JSON encoding accepted an oversized array")
+	}
 }
 
 func TestTransactionIndexFromMetadata(t *testing.T) {

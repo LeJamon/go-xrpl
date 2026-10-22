@@ -263,7 +263,7 @@ func validateFixtureTransactions(
 		if err != nil {
 			return nil, nil, fmt.Errorf("expected transaction %d metadata: %w", i, err)
 		}
-		canonicalMetaBlob, err := binarycodec.EncodeBytes(canonicalMeta)
+		canonicalMetaBlob, err := binarycodec.EncodeBytesTrusted(canonicalMeta)
 		if err != nil {
 			return nil, nil, fmt.Errorf("expected transaction %d canonical metadata: %w", i, err)
 		}

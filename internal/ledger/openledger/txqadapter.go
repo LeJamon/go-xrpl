@@ -193,7 +193,7 @@ func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.Appl
 	}
 
 	blob := txn.GetRawBytes()
-	if len(blob) == 0 {
+	if len(blob) == 0 && flags&tx.TapDRY_RUN == 0 {
 		return ter.TefINTERNAL, false
 	}
 
@@ -217,6 +217,11 @@ func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.Appl
 	}
 	engine := txengine.NewEngine(a.view, engineCfg)
 	engine.SetBaseTxCount(a.view.TxCount())
+	if flags&tx.TapDRY_RUN != 0 {
+		applyRes := engine.Apply(txn)
+		a.lastApply = &applyRes
+		return applyRes.Result, applyRes.Applied
+	}
 	bp := txengine.NewBlockProcessor(engine)
 
 	result, err := bp.ApplyTransaction(txn, blob)
@@ -299,7 +304,7 @@ func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID 
 	if len(blob) == 0 {
 		return ter.TefINTERNAL
 	}
-	txHash, hashErr := tx.ComputeTransactionHash(txn)
+	txHash, hashErr := tx.ComputeTransactionHashWithFlags(txn, flags)
 	if hashErr != nil {
 		return ter.TefINTERNAL
 	}

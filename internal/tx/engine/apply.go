@@ -73,7 +73,7 @@ func (e *Engine) applyWithContext(
 	}
 
 	// Step 2: Compute transaction hash (needed by preclaim for tefALREADY check)
-	txHash, err := txcore.ComputeTransactionHash(tx)
+	txHash, err := txcore.ComputeTransactionHashWithFlags(tx, e.config.ApplyFlags)
 	if err != nil {
 		return txcore.ApplyResult{
 			Result:  ter.TefINTERNAL,
@@ -301,7 +301,7 @@ func (e *Engine) ApplyBatchInnerTransactions(
 	}
 	e.resetStateErrors()
 
-	txHash, err := txcore.ComputeTransactionHash(transaction)
+	txHash, err := txcore.ComputeTransactionHashWithFlags(transaction, e.config.ApplyFlags)
 	if err != nil {
 		return txcore.ApplyResult{Result: ter.TefINTERNAL, Message: err.Error()}
 	}
@@ -484,7 +484,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	}
 
 	// Compute transaction hash
-	txHash, err := txcore.ComputeTransactionHash(tx)
+	txHash, err := txcore.ComputeTransactionHashWithFlags(tx, e.config.ApplyFlags)
 	if err != nil {
 		return txcore.ApplyResult{
 			Result:  ter.TefINTERNAL,

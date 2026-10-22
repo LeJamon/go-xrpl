@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
@@ -1048,12 +1049,11 @@ func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.Acco
 	// hex of an MPT issuance; index its issuer so MPToken activity is queryable
 	// by the issuing account.
 	addMPTIssuer := func(hexID string) error {
-		raw, err := hex.DecodeString(hexID)
-		if err != nil || len(raw) != 24 {
-			return errors.New("invalid MPTokenIssuanceID")
+		mptID, err := mptutil.DecodeID(hexID)
+		if err != nil {
+			return err
 		}
-		var id relationaldb.AccountID
-		copy(id[:], raw[4:])
+		id := relationaldb.AccountID(mptutil.Issuer(mptID))
 		if !id.IsZero() {
 			into[id] = struct{}{}
 		}
@@ -1100,7 +1100,11 @@ func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.Acco
 				case map[string]any:
 					switch name {
 					case "LowLimit", "HighLimit", "TakerPays", "TakerGets":
-						if iss, ok := v["issuer"].(string); ok {
+						if mptID, ok := v["mpt_issuance_id"].(string); ok {
+							if err := addMPTIssuer(mptID); err != nil {
+								return err
+							}
+						} else if iss, ok := v["issuer"].(string); ok {
 							addAddr(iss)
 						}
 					}

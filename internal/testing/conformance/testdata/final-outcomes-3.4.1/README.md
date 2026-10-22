@@ -1,6 +1,6 @@
 # Final transaction outcome regressions
 
-These six signed snapshots were recorded from rippled **3.4.1**, commit
+These seven signed snapshots were recorded from rippled **3.4.1**, commit
 `d147fccf54a500fce586522f28d6044c37fd8d29`, through a network-isolated standalone
 server's JSON-RPC interface. Setup used ordinary transactions; no ledger objects
 were injected or edited. The executable reported that exact commit and came from
@@ -18,6 +18,7 @@ the recorded oracle context; these cases do not test clock or consensus scheduli
 
 | Case | Boundary exercised |
 |---|---|
+| LoanBrokerCoverWithdraw legacy freeze | With fixCleanup3_3_0, fixCleanup3_4_0 and LendingProtocolV1_1 disabled from genesis, withdrawing IOU cover to a deep-frozen destination commits fee-only tecFROZEN, preserving exact metadata and ledger hashes. |
 | AMMCreate directory boundary | Two IOUs from one issuer fill and overflow an owner-directory page in transaction Amount/Amount2 order. |
 | AMMDeposit freeze before authorization | With AMMClawback enabled and fixCleanup3_3_0 disabled, a frozen first asset takes precedence over a missing second-asset line. |
 | AMMWithdraw canonical asset precedence | Full withdrawal without explicit amounts checks the AMM's canonical asset order. |
