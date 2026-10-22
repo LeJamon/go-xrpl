@@ -12,6 +12,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 )
 
 func ownedApplyConfig(view *ledger.Ledger, mode openledger.Mode) openledger.ApplyConfig {
@@ -158,6 +159,10 @@ func TestApplyOwnedTxsContext_MatchesDefaultRootsAndMetadata(t *testing.T) {
 			ownedPending, err := openledger.ParsePendingTx(fixture.blob)
 			if err != nil {
 				t.Fatalf("ParsePendingTx owned: %v", err)
+			}
+			rules := amendment.AllSupportedRules()
+			if err := txengine.PrewarmSignatureWithRules(ownedPending.Parsed, rules); err != nil {
+				t.Fatalf("PrewarmSignatureWithRules: %v", err)
 			}
 
 			var mutatedInner tx.Transaction

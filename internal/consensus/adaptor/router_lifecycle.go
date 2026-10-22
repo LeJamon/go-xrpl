@@ -111,6 +111,9 @@ func (r *Router) stopLifecycle() {
 	}
 	r.lifecycleWG.Wait()
 	drainInboundMessages(txJobs)
+	if r.txIngressMemo != nil {
+		r.txIngressMemo.clear()
+	}
 }
 
 func drainInboundMessages(messages <-chan *peermanagement.InboundMessage) {

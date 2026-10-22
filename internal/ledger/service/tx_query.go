@@ -149,6 +149,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	outcome, current, _, _, submitErr := s.submitDetachedIngressOwned(detachedIngressRequest{
 		pendingTx:             ptx,
 		origin:                "rpc",
+		ownedParsed:           true,
 		initialRules:          initialRules,
 		signatureEligible:     signatureEligible,
 		initialSignatureCheck: initialSignatureCheck,
@@ -158,18 +159,18 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 				s.prefetchIngressState(ctx, ptx)
 			}
 		},
-		verifySignature: func(rules *amendment.Rules) error {
-			err := txengine.PrewarmSignatureWithRules(ptx.Parsed, rules)
+		verifySignature: func(parsed tx.Transaction, rules *amendment.Rules) error {
+			err := txengine.PrewarmSignatureWithRules(parsed, rules)
 			preprocessValid = err == nil
 			return err
 		},
 		localReason: localReason,
-		prepareCommit: func(current, validated *ledger.Ledger, txQueue *txq.TxQ, cfg openledger.ApplyConfig, outcome openledger.SubmitOutcome) detachedIngressCommitData {
+		prepareCommit: func(current, validated *ledger.Ledger, txQueue *txq.TxQ, cfg openledger.ApplyConfig, outcome openledger.SubmitOutcome, attempt openledger.PendingTx) detachedIngressCommitData {
 			data := detachedIngressCommitData{
-				proposed: s.prepareProposedTransaction(ptx, ptx.Blob, outcome, current),
+				proposed: s.prepareProposedTransaction(attempt, attempt.Blob, outcome, current),
 			}
 			if validated != nil {
-				data.ledgerState = s.submitLedgerState(current, ptx.Parsed, cfg, validated, txQueue)
+				data.ledgerState = s.submitLedgerState(current, attempt.Parsed, cfg, validated, txQueue)
 			}
 			return data
 		},
@@ -180,7 +181,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			}
 			return cfg
 		},
-		onCommit: func(current *ledger.Ledger, _ *txq.TxQ, localTxs *localtxs.LocalTxs, _ openledger.ApplyConfig, outcome openledger.SubmitOutcome, data detachedIngressCommitData) {
+		onCommit: func(current *ledger.Ledger, _ *txq.TxQ, localTxs *localtxs.LocalTxs, _ openledger.ApplyConfig, outcome openledger.SubmitOutcome, data detachedIngressCommitData, committed openledger.PendingTx) {
 			commitData = data
 			s.mu.RLock()
 			validatedLedger = s.validatedLedger
@@ -191,11 +192,11 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			if signatureEligible && localReason == "" && rawBlob != nil && localTxs != nil {
 				tr := outcome.Result
 				if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
-					localTxs.PushBack(current.Sequence(), ptx)
+					localTxs.PushBack(current.Sequence(), committed)
 				}
 			}
 			if outcome.Applied && rawBlob != nil {
-				s.pendingTxs = append(s.pendingTxs, ptx)
+				s.pendingTxs = append(s.pendingTxs, committed)
 			}
 			s.enqueueProposedTransaction(data.proposed)
 		},

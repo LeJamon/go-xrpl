@@ -631,6 +631,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	jobPhase := false
 	var jobHash [32]byte
 	defer r.recoverTransactionFrame(msg, &jobPhase, &jobHash)
+	r.noteTransactionFrame(msg.ReceivedAt)
 
 	// Frames fanned out from a TMTransactions batch arrive already
 	// decoded in Tx; only wire-sourced frames need decoding from Payload.
@@ -673,18 +674,18 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
-	pending, pendingErr := openledger.ParsePendingTx(blob)
-	if pendingErr != nil {
+	prepared := r.prepareTransaction(blob)
+	if prepared.err != nil {
 		dispatch.submitResult = openledger.ResultFailure
-		dispatch.submitError = pendingErr
+		dispatch.submitError = prepared.err
 		dispatch.charge = resource.FeeInvalidData()
 		dispatch.chargeContext = "transaction-invalid-data"
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
-	canonicalBlob := pending.Blob
-	jobHash = pending.Hash
-	if pending.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+	admission := prepared.admission
+	jobHash = admission.hash
+	if admission.innerBatch {
 		dispatch.charge = resource.FeeModerateBurdenPeer()
 		dispatch.chargeContext = "inner batch txn"
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
@@ -695,11 +696,11 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	if r.adaptor != nil {
 		validatedRules, openRules, validatedAdmission = r.adaptor.peerSignatureSnapshot()
 	}
-	roleBearing := transactionHasRoleSignature(pending.Parsed)
+	roleBearing := admission.roleBearing
 	admittedBad := false
 	if r.txSeen != nil {
 		shouldProcess, bad := r.txSeen.claimWithSignatureContexts(
-			pending.Hash,
+			admission.hash,
 			uint64(msg.PeerID),
 			roleBearing,
 			validatedRules,
@@ -707,6 +708,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 			validatedAdmission,
 		)
 		if !shouldProcess {
+			r.txIngressStats.deduped.Add(1)
 			if bad {
 				dispatch.charge = resource.FeeUselessData()
 				dispatch.chargeContext = "transaction-known-bad"
@@ -716,12 +718,11 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		}
 		admittedBad = bad
 	}
-	jobPhase = true
-	if pending.Parsed.GetCommon().LastLedgerSequence != nil &&
+	if admission.hasLastLedgerSequence &&
 		r.adaptor != nil && r.adaptor.ledgerService != nil &&
-		*pending.Parsed.GetCommon().LastLedgerSequence < r.adaptor.ledgerService.GetValidatedLedgerIndex() {
+		admission.lastLedgerSequence < r.adaptor.ledgerService.GetValidatedLedgerIndex() {
 		if r.txSeen != nil {
-			r.txSeen.markBad(pending.Hash)
+			r.txSeen.markBad(admission.hash)
 		}
 		dispatch.charge = resource.FeeUselessData()
 		dispatch.chargeContext = "transaction-expired"
@@ -734,6 +735,17 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		msg.ChargePeer(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
+	pending, pendingErr := r.parseAdmittedTransaction(prepared)
+	if pendingErr != nil {
+		dispatch.submitResult = openledger.ResultFailure
+		dispatch.submitError = pendingErr
+		dispatch.charge = resource.FeeInvalidData()
+		dispatch.chargeContext = "transaction-invalid-data"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		return dispatch
+	}
+	jobPhase = true
+	canonicalBlob := pending.Blob
 	if validatedAdmission {
 		if err := r.adaptor.validatePeerSignature(pending, validatedRules); err != nil {
 			dispatch.submitResult = openledger.ResultFailure
@@ -767,7 +779,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 
 	// Peer-relay path — the originating peer manages its own resends,
 	// so we don't pin the blob in our LocalTxs held pool.
-	outcome, err := r.adaptor.SubmitPendingTx(canonicalBlob, false)
+	outcome, err := r.adaptor.SubmitPendingTxOwned(pending, false)
 	dispatch.submitResult = outcome.Class
 	dispatch.submitError = err
 	dispatch.deferred = outcome.Queued

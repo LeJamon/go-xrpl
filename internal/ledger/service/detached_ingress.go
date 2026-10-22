@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 )
 
@@ -122,18 +124,22 @@ func (a *detachedIngressAdmission) activeDoneOrClosedLocked() <-chan struct{} {
 type detachedIngressRequest struct {
 	pendingTx openledger.PendingTx
 	origin    string
+	// ownedParsed transfers exclusive ownership of pendingTx.Parsed to the
+	// first private attempt. A stale publication retry reparses Blob instead,
+	// because the apply engine may mutate the parsed object in place.
+	ownedParsed bool
 
 	initialRules          *amendment.Rules
 	signatureEligible     bool
 	initialSignatureCheck bool
 	initialSignatureErr   error
-	verifySignature       func(*amendment.Rules) error
+	verifySignature       func(tx.Transaction, *amendment.Rules) error
 	localReason           string
 
 	prepare       func(context.Context)
 	configure     func(openledger.ApplyConfig) openledger.ApplyConfig
-	prepareCommit func(*ledger.Ledger, *ledger.Ledger, *txq.TxQ, openledger.ApplyConfig, openledger.SubmitOutcome) detachedIngressCommitData
-	onCommit      func(*ledger.Ledger, *txq.TxQ, *localtxs.LocalTxs, openledger.ApplyConfig, openledger.SubmitOutcome, detachedIngressCommitData)
+	prepareCommit func(*ledger.Ledger, *ledger.Ledger, *txq.TxQ, openledger.ApplyConfig, openledger.SubmitOutcome, openledger.PendingTx) detachedIngressCommitData
+	onCommit      func(*ledger.Ledger, *txq.TxQ, *localtxs.LocalTxs, openledger.ApplyConfig, openledger.SubmitOutcome, detachedIngressCommitData, openledger.PendingTx)
 }
 
 type detachedIngressCommitData struct {
@@ -179,6 +185,26 @@ func (e *detachedIngressValidationError) Unwrap() error {
 		return nil
 	}
 	return e.err
+}
+
+func (s *Service) reparseDetachedIngress(blob []byte) (tx.Transaction, error) {
+	started := time.Now()
+	parsed, err := tx.ParseFromBinary(blob)
+	s.recordIngressReparse(started)
+	return parsed, err
+}
+
+func (s *Service) reparseDetachedPending(blob []byte) (openledger.PendingTx, error) {
+	started := time.Now()
+	pending, err := openledger.ParsePendingTx(blob)
+	s.recordIngressReparse(started)
+	return pending, err
+}
+
+func (s *Service) recordIngressReparse(started time.Time) {
+	duration := time.Since(started)
+	s.ingressMetrics.reparses.Add(1)
+	s.ingressMetrics.reparseNanos.Add(uint64(duration))
 }
 
 func (s *Service) captureDetachedIngress(req detachedIngressRequest) (detachedIngressSnapshot, error) {
@@ -269,6 +295,8 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 	}
 
 	retry := memoryAdmissionRetry{origin: req.origin}
+	ownedParsedAvailable := req.ownedParsed
+	var parsedForRetry tx.Transaction
 	defer func() {
 		if retry.last != nil {
 			retry.finish(s, resultErr)
@@ -298,7 +326,17 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 				if req.verifySignature == nil {
 					return failure, snapshot.current, snapshot.queue, snapshot.config, errors.New("detached ingress: signature verifier unavailable")
 				}
-				if err := req.verifySignature(snapshot.rules); err != nil {
+				verificationTx := req.pendingTx.Parsed
+				if !ownedParsedAvailable {
+					if parsedForRetry == nil {
+						parsedForRetry, err = s.reparseDetachedIngress(req.pendingTx.Blob)
+						if err != nil {
+							return failure, snapshot.current, snapshot.queue, snapshot.config, err
+						}
+					}
+					verificationTx = parsedForRetry
+				}
+				if err := req.verifySignature(verificationTx, snapshot.rules); err != nil {
 					current, fenceErr := s.detachedIngressSnapshotCurrent(req, snapshot)
 					if fenceErr != nil {
 						return failure, snapshot.current, snapshot.queue, snapshot.config, fenceErr
@@ -347,22 +385,45 @@ func (s *Service) submitDetachedIngressOwned(req detachedIngressRequest) (
 		}
 
 		// SubmitDetailed may annotate parsed transactions while applying them.
-		// Keep caller-owned state out of private attempts so a stale retry starts
-		// from a fresh parse of the canonical transaction blob.
+		// A transferred parsed value is consumed by the first private attempt;
+		// every later attempt starts from a fresh parse of the canonical blob.
 		attemptTx := req.pendingTx
-		attemptTx.Parsed = nil
+		if !ownedParsedAvailable {
+			if parsedForRetry == nil {
+				parsedForRetry, err = s.reparseDetachedIngress(attemptTx.Blob)
+				if err != nil {
+					releaseMemory()
+					return failure, snapshot.current, snapshot.queue, snapshot.config, err
+				}
+			}
+			attemptTx.Parsed = parsedForRetry
+		}
+		if attemptTx.Parsed == nil {
+			releaseMemory()
+			return failure, snapshot.current, snapshot.queue, snapshot.config, errors.New("detached ingress: parsed transaction unavailable")
+		}
+		attemptStarted := time.Now()
+		s.ingressMetrics.privateAttempts.Add(1)
 		outcome := privateView.SubmitDetailed(attemptTx, snapshot.config, privateQueue)
+		attemptDuration := time.Since(attemptStarted)
+		s.ingressMetrics.privateAttemptNanos.Add(uint64(attemptDuration))
+		ownedParsedAvailable = false
+		parsedForRetry = nil
 		privateCurrent := privateView.Current()
 		commitData := detachedIngressCommitData{}
 		if req.prepareCommit != nil {
-			commitData = req.prepareCommit(privateCurrent, snapshot.validated, privateQueue, snapshot.config, outcome)
+			commitData = req.prepareCommit(privateCurrent, snapshot.validated, privateQueue, snapshot.config, outcome, attemptTx)
 		}
-		committed, err := s.commitDetachedIngress(req, snapshot, privateCurrent, privateQueue, outcome, commitData)
+		commitPending := req.pendingTx
+		commitPending.Parsed = nil
+		committed, err := s.commitDetachedIngress(req, snapshot, privateCurrent, privateQueue, outcome, commitData, commitPending)
 		releaseMemory()
 		if err != nil {
 			return failure, nil, nil, openledger.ApplyConfig{}, err
 		}
 		if !committed {
+			s.ingressMetrics.staleRetries.Add(1)
+			s.ingressMetrics.staleRetryNanos.Add(uint64(attemptDuration))
 			continue
 		}
 		publishedCurrent := snapshot.current
@@ -449,6 +510,7 @@ func (s *Service) commitDetachedIngress(
 	privateQueue *txq.TxQ,
 	outcome openledger.SubmitOutcome,
 	commitData detachedIngressCommitData,
+	commitPending openledger.PendingTx,
 ) (bool, error) {
 	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
 		return false, err
@@ -514,7 +576,7 @@ func (s *Service) commitDetachedIngress(
 		publishedCurrent = privateCurrent
 	}
 	if req.onCommit != nil {
-		req.onCommit(publishedCurrent, privateQueue, snapshot.localTxs, snapshot.config, outcome, commitData)
+		req.onCommit(publishedCurrent, privateQueue, snapshot.localTxs, snapshot.config, outcome, commitData, commitPending)
 	}
 	s.openLedgerMu.Unlock()
 	return true, nil

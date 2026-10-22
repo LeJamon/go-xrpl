@@ -50,6 +50,18 @@ type SignatureVerificationError struct {
 	Err   error
 }
 
+// IngressMetricsSnapshot is the cumulative view of detached private ingress
+// work. Durations are sums in nanoseconds represented as time.Duration values;
+// callers can derive rates or averages without retaining transaction state.
+type IngressMetricsSnapshot struct {
+	PrivateAttempts        uint64
+	PrivateAttemptDuration time.Duration
+	StaleRetries           uint64
+	StaleRetryDuration     time.Duration
+	Reparses               uint64
+	ReparseDuration        time.Duration
+}
+
 func (e *SignatureVerificationError) Error() string {
 	if e == nil || e.Err == nil {
 		return "signature verification failed"
@@ -151,6 +163,29 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 	return networkLedgerReady
 }
 
+type ingressMetrics struct {
+	privateAttempts     atomic.Uint64
+	privateAttemptNanos atomic.Uint64
+	staleRetries        atomic.Uint64
+	staleRetryNanos     atomic.Uint64
+	reparses            atomic.Uint64
+	reparseNanos        atomic.Uint64
+}
+
+func (m *ingressMetrics) snapshot() IngressMetricsSnapshot {
+	if m == nil {
+		return IngressMetricsSnapshot{}
+	}
+	return IngressMetricsSnapshot{
+		PrivateAttempts:        m.privateAttempts.Load(),
+		PrivateAttemptDuration: time.Duration(m.privateAttemptNanos.Load()),
+		StaleRetries:           m.staleRetries.Load(),
+		StaleRetryDuration:     time.Duration(m.staleRetryNanos.Load()),
+		Reparses:               m.reparses.Load(),
+		ReparseDuration:        time.Duration(m.reparseNanos.Load()),
+	}
+}
+
 // Service manages the ledger lifecycle
 type Service struct {
 	replayRepairTarget *ledger.Ledger
@@ -177,6 +212,7 @@ type Service struct {
 	// detachedIngress serializes private open-ledger submission while allowing
 	// consensus and frontier transitions to use openLedgerMu.
 	detachedIngress detachedIngressAdmission
+	ingressMetrics  ingressMetrics
 
 	// openLedgerMu serializes open-ledger submission with lifecycle transitions.
 	// It is acquired before mu so a transition waiting on transaction application
@@ -1259,6 +1295,57 @@ func (s *Service) submitOpenLedgerTx(blob []byte, local bool, origin string) (op
 	if err != nil {
 		return failure, err
 	}
+	return s.submitOpenLedgerPendingTx(ptx, local, origin, cfg)
+}
+
+// SubmitOpenLedgerTxDetailedOwned takes ownership of pending, including Blob and
+// Parsed. The caller must not modify Blob or use Parsed during or after this call.
+// The first private attempt consumes Parsed; a stale publication retry reparses
+// Blob so prior attempt annotations cannot affect the next attempt.
+func (s *Service) SubmitOpenLedgerTxDetailedOwned(pending openledger.PendingTx, local bool) (openledger.SubmitOutcome, error) {
+	failure := openledger.SubmitOutcome{Class: openledger.ResultFailure}
+	s.mu.RLock()
+	cfg, cfgErr := s.applyConfigLocked()
+	haveOpenLedger := s.openLedgerView != nil
+	s.mu.RUnlock()
+
+	if !haveOpenLedger {
+		return failure, errors.New("openLedgerView not initialised")
+	}
+	if cfgErr != nil {
+		return failure, cfgErr
+	}
+	releaseAdmission, err := s.detachedIngress.acquire()
+	if err != nil {
+		return failure, err
+	}
+	defer releaseAdmission()
+	if !pending.ParsedMatchesCanonical() {
+		pending, err = s.reparseDetachedPending(pending.Blob)
+		if err != nil {
+			return failure, err
+		}
+	}
+	return s.submitOpenLedgerPendingTx(pending, local, ingressOrigin(local), cfg)
+}
+
+func ingressOrigin(local bool) string {
+	if local {
+		return "local"
+	}
+	return "peer"
+}
+
+func (s *Service) submitOpenLedgerPendingTx(
+	ptx openledger.PendingTx,
+	local bool,
+	origin string,
+	cfg openledger.ApplyConfig,
+) (openledger.SubmitOutcome, error) {
+	failure := openledger.SubmitOutcome{Class: openledger.ResultFailure}
+	if ptx.Parsed == nil {
+		return failure, errors.New("open-ledger ingress: parsed transaction unavailable")
+	}
 	if ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
 		return failure, fmt.Errorf(
 			"%w: Batch inner transactions are never considered validly signed.",
@@ -1278,6 +1365,7 @@ func (s *Service) submitOpenLedgerTx(blob []byte, local bool, origin string) (op
 	outcome, _, _, _, submitErr := s.submitDetachedIngressOwned(detachedIngressRequest{
 		pendingTx:             ptx,
 		origin:                origin,
+		ownedParsed:           true,
 		initialRules:          initialRules,
 		signatureEligible:     true,
 		initialSignatureCheck: initialSignatureCheck,
@@ -1288,18 +1376,18 @@ func (s *Service) submitOpenLedgerTx(blob []byte, local bool, origin string) (op
 			}
 		},
 		localReason: localReason,
-		verifySignature: func(rules *amendment.Rules) error {
+		verifySignature: func(parsed tx.Transaction, rules *amendment.Rules) error {
 			return signatureVerificationError(
-				txengine.PrewarmSignatureWithRules(ptx.Parsed, rules), rules)
+				txengine.PrewarmSignatureWithRules(parsed, rules), rules)
 		},
-		prepareCommit: func(current *ledger.Ledger, _ *ledger.Ledger, _ *txq.TxQ, _ openledger.ApplyConfig, outcome openledger.SubmitOutcome) detachedIngressCommitData {
+		prepareCommit: func(current *ledger.Ledger, _ *ledger.Ledger, _ *txq.TxQ, _ openledger.ApplyConfig, outcome openledger.SubmitOutcome, attempt openledger.PendingTx) detachedIngressCommitData {
 			return detachedIngressCommitData{
-				proposed: s.prepareProposedTransaction(ptx, ptx.Blob, outcome, current),
+				proposed: s.prepareProposedTransaction(attempt, attempt.Blob, outcome, current),
 			}
 		},
-		onCommit: func(current *ledger.Ledger, _ *txq.TxQ, localTxs *localtxs.LocalTxs, _ openledger.ApplyConfig, _ openledger.SubmitOutcome, data detachedIngressCommitData) {
+		onCommit: func(current *ledger.Ledger, _ *txq.TxQ, localTxs *localtxs.LocalTxs, _ openledger.ApplyConfig, _ openledger.SubmitOutcome, data detachedIngressCommitData, committed openledger.PendingTx) {
 			if local && localTxs != nil && current != nil {
-				localTxs.PushBack(current.Sequence(), ptx)
+				localTxs.PushBack(current.Sequence(), committed)
 			}
 			s.enqueueProposedTransaction(data.proposed)
 		},
@@ -2224,6 +2312,16 @@ func (s *Service) TxQMetrics() txq.Metrics {
 		txInLedger = current.TxCount()
 	}
 	return s.txQueue.Metrics(txInLedger)
+}
+
+// OpenLedgerIngressMetrics returns cumulative detached ingress work. The
+// snapshot is safe to read while submissions are active and contains no
+// transaction or ledger pointers.
+func (s *Service) OpenLedgerIngressMetrics() IngressMetricsSnapshot {
+	if s == nil {
+		return IngressMetricsSnapshot{}
+	}
+	return s.ingressMetrics.snapshot()
 }
 
 // QueueAccountTxs returns the TxQ candidates queued for one account, sorted by

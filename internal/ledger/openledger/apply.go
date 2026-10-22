@@ -1,7 +1,6 @@
 package openledger
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -313,19 +312,10 @@ func orderRetryCandidates(queue []retryCandidate, salt *[32]byte) {
 }
 
 func ownedParsedTransaction(ptx PendingTx) (tx.Transaction, bool) {
-	parsed := ptx.Parsed
-	if parsed == nil || !bytes.Equal(parsed.GetRawBytes(), ptx.Blob) {
+	if !ptx.ParsedMatchesCanonical() {
 		return nil, false
 	}
-	fieldsMatch, err := tx.CurrentFieldsMatchRaw(parsed)
-	if err != nil || !fieldsMatch {
-		return nil, false
-	}
-	hash, err := tx.ComputeTransactionHash(parsed)
-	if err != nil || hash != ptx.Hash {
-		return nil, false
-	}
-	return parsed, true
+	return ptx.Parsed, true
 }
 
 func preparePendingTx(ptx PendingTx, useOwnedParsed bool) (tx.Transaction, error) {
