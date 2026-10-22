@@ -30,18 +30,15 @@ func TestApplyDryRunUsesCurrentIdentityForDuplicateAndAccountTxnID(t *testing.T)
 	}
 	base.data[keylet.Account(accountID).Key] = accountData
 
-	original := accounttx.NewAccountSet(recoveryTestAccount)
-	original.Fee = "10"
-	original.SetSequence(1)
-	raw, err := txcore.SerializeTransaction(original)
+	transaction := accounttx.NewAccountSet(recoveryTestAccount)
+	transaction.Fee = "10"
+	transaction.SetSequence(1)
+	raw, err := txcore.SerializeTransaction(transaction)
 	if err != nil {
 		t.Fatalf("SerializeTransaction: %v", err)
 	}
-	parsed, err := txcore.ParseFromBinary(raw)
-	if err != nil {
-		t.Fatalf("ParseFromBinary: %v", err)
-	}
-	originalID, err := txcore.ComputeTransactionHash(parsed)
+	transaction.SetRawBytes(raw)
+	originalID, err := txcore.ComputeTransactionHash(transaction)
 	if err != nil {
 		t.Fatalf("ComputeTransactionHash: %v", err)
 	}
@@ -49,8 +46,8 @@ func TestApplyDryRunUsesCurrentIdentityForDuplicateAndAccountTxnID(t *testing.T)
 	// Keep the original wire identity while preparing a different simulation
 	// request. The original ID is deliberately present in the view, so hashing
 	// retained bytes would return tefALREADY before applying the current fields.
-	parsed.GetCommon().Fee = "11"
-	currentID, err := txcore.ComputeCurrentTransactionHash(parsed)
+	transaction.GetCommon().Fee = "11"
+	currentID, err := txcore.ComputeCurrentTransactionHash(transaction)
 	if err != nil {
 		t.Fatalf("ComputeCurrentTransactionHash: %v", err)
 	}
@@ -69,9 +66,9 @@ func TestApplyDryRunUsesCurrentIdentityForDuplicateAndAccountTxnID(t *testing.T)
 		ApplyFlags:       txcore.TapDRY_RUN,
 	})
 
-	result := engine.Apply(parsed)
+	result := engine.Apply(transaction)
 	if result.Result != ter.TesSUCCESS {
-		t.Fatalf("dry-run result = %s, want tesSUCCESS", result.Result)
+		t.Fatalf("dry-run result = %s (%s), cause=%v, want tesSUCCESS", result.Result, result.Message, result.Cause)
 	}
 	if result.Applied {
 		t.Fatal("dry-run result reported applied=true")
