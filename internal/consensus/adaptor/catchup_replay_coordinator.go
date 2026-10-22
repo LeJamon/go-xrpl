@@ -121,6 +121,8 @@ type catchupReplayCoordinator struct {
 	consensusRecovery         consensusRecovery
 	lastHandoffSeq            uint32
 	standardReplay            standardReplayPipeline
+	replayHeadDiagnostics     replayHeadDiagnostics
+	replayHeadLogAt           time.Time
 	pendingFrozenPivot        frozenPivotPendingIntent
 	localReplayMu             sync.Mutex
 	localReplayCandidates     []*localReplayCandidate
@@ -729,6 +731,8 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 		c.reserveStandardReplayReplacement(generation, seq, hash, peerID, now)
 	}
 	c.retryInboundLedgerAcquisitions(now)
+	c.retryReplayHeadTail(now)
+	c.reportReplayHead(now)
 	c.tickHeaderDiscovery(now)
 	c.retryStandardReplayReplacement(now)
 	c.rebootstrapFrozenPivotIfStalled(now)

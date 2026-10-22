@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -128,6 +129,10 @@ type Event struct {
 	// post-decompression payload.
 	WireSize uint64
 
+	// ReceivedAt is when the message entered peer dispatch, before downstream
+	// event-lane backpressure.
+	ReceivedAt time.Time
+
 	// Inbound indicates if this is an inbound connection.
 	Inbound bool
 
@@ -162,6 +167,8 @@ func (e *Event) inboundMessage() *InboundMessage {
 		Type:          e.MessageType,
 		Payload:       e.Payload,
 		ManifestFrame: e.ManifestFrame,
+		WireSize:      e.WireSize,
+		ReceivedAt:    e.ReceivedAt,
 		reservation:   e.reservation,
 		charge:        e.charge,
 	}
@@ -185,6 +192,8 @@ func (e *Event) retainedInboundMessage() *InboundMessage {
 		Type:          e.MessageType,
 		Payload:       e.Payload,
 		ManifestFrame: e.ManifestFrame,
+		WireSize:      e.WireSize,
+		ReceivedAt:    e.ReceivedAt,
 		reservation:   e.reservation.retain(),
 		charge:        e.charge.retain(),
 	}
@@ -201,6 +210,13 @@ type InboundMessage struct {
 
 	// Payload is the raw message payload.
 	Payload []byte
+
+	// WireSize is the on-wire payload size in bytes, excluding the header.
+	WireSize uint64
+
+	// ReceivedAt is when the message entered peer dispatch, before downstream
+	// event-lane backpressure.
+	ReceivedAt time.Time
 
 	// ManifestFrame carries an oversized manifest payload spooled to disk.
 	ManifestFrame *ManifestFrame

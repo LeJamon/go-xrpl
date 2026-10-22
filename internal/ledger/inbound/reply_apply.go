@@ -21,6 +21,8 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 	}
 	if len(nodes) == 0 {
 		l.mu.Lock()
+		l.clearHedgePeerLocked(peerID)
+		l.refreshRequestPeersLocked()
 		result.Complete = l.state == StateComplete
 		l.mu.Unlock()
 		return result, nil
@@ -91,9 +93,14 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 		l.mu.Unlock()
 		return result, err
 	}
-	if applyErr == nil && result.Consumed == len(nodes) && matchedPeer {
-		result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
-		l.releaseRequestSlotLocked(peerID, transaction, SystemClock.Now())
+	if applyErr == nil && result.Consumed == len(nodes) {
+		if matchedPeer {
+			result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
+			l.releaseRequestSlotLocked(peerID, transaction, SystemClock.Now())
+		} else {
+			result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
+		}
+		l.clearHedgePeerLocked(peerID)
 	} else {
 		result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
 	}
@@ -162,13 +169,13 @@ func (l *Ledger) applyMissingReplyNodesLocked(
 			}
 			stored = append(stored, entry)
 			if hasLease {
-				l.removeLeaseLocked(leaseHash)
+				l.fulfillLeaseLocked(leaseHash, peerID)
 				result.Fulfilled++
 			}
 			l.removeMissingNodeLocked(transaction, parsedID)
 		case shamap.NodeDuplicate:
 			if hasLease {
-				l.removeLeaseLocked(leaseHash)
+				l.fulfillLeaseLocked(leaseHash, peerID)
 				result.Fulfilled++
 			}
 			l.removeMissingNodeLocked(transaction, parsedID)

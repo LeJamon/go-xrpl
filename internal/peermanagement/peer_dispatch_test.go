@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -66,6 +67,64 @@ func TestPeer_DispatchEvent_NilChannel(t *testing.T) {
 
 	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 	peer.dispatchEvent(Event{Type: EventMessageReceived, PeerID: 1})
+}
+
+func TestPeer_DispatchEventCarriesIngressMetadata(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		id, err := NewIdentity()
+		require.NoError(t, err)
+
+		events := make(chan Event, 1)
+		acquisition := make(chan Event, 1)
+		peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, events)
+		peer.SetAcquisitionEvents(acquisition)
+
+		require.True(t, peer.dispatchEvent(Event{
+			Type:        EventMessageReceived,
+			PeerID:      1,
+			MessageType: message.TypeLedgerData,
+			WireSize:    1,
+		}))
+
+		started := time.Now()
+		done := make(chan bool, 1)
+		go func() {
+			done <- peer.dispatchEvent(Event{
+				Type:        EventMessageReceived,
+				PeerID:      1,
+				MessageType: message.TypeLedgerData,
+				Payload:     []byte{1, 2, 3},
+				WireSize:    17,
+			})
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("acquisition dispatch did not apply backpressure")
+		default:
+		}
+		time.Sleep(time.Nanosecond)
+		released := time.Now()
+		<-acquisition
+		synctest.Wait()
+		require.True(t, <-done)
+		event := <-acquisition
+		require.False(t, event.ReceivedAt.IsZero())
+		assert.False(t, event.ReceivedAt.Before(started))
+		assert.True(t, event.ReceivedAt.Before(released))
+
+		retained := event.retainedInboundMessage()
+		assert.Equal(t, uint64(17), retained.WireSize)
+		assert.Equal(t, event.ReceivedAt, retained.ReceivedAt)
+		assert.Equal(t, []byte{1, 2, 3}, retained.Payload)
+		assert.NoError(t, retained.Close())
+
+		inbound := event.inboundMessage()
+		assert.Equal(t, uint64(17), inbound.WireSize)
+		assert.Equal(t, event.ReceivedAt, inbound.ReceivedAt)
+		assert.Equal(t, []byte{1, 2, 3}, inbound.Payload)
+		assert.NoError(t, inbound.Close())
+	})
 }
 
 func TestPeer_DispatchEvent_BackpressuresAcquisitionSeparately(t *testing.T) {

@@ -15,7 +15,7 @@ func (l *Ledger) fillFromCacheContext(ctx context.Context, m *shamap.SHAMap, tra
 	l.mu.Lock()
 	frontier := make([]shamap.MissingNode, 0, len(l.requestLeases)+len(l.readyRequests))
 	for hash, lease := range l.requestLeases {
-		if lease.transaction == transaction {
+		if lease.transaction == transaction && !lease.wireShadow {
 			frontier = append(frontier, shamap.MissingNode{Hash: hash, NodeID: lease.nodeID})
 		}
 	}
@@ -89,10 +89,11 @@ func (l *Ledger) recordCachePlacements(transaction bool, stored []shamap.FlushEn
 
 func (l *Ledger) fulfillCacheNodeLocked(transaction bool, hash [32]byte) {
 	if lease, ok := l.requestLeases[hash]; ok && lease.transaction == transaction {
-		l.removeLeaseLocked(hash)
+		l.fulfillLeaseLocked(hash, 0)
 		l.removeMissingNodeLocked(transaction, lease.nodeID)
+	} else {
+		l.fulfillReadyNodeLocked(transaction, hash)
 	}
-	l.removeReadyLocked(hash)
 	// A fetch pack can also fulfill an unleased cached frontier.
 	missing := l.missingState
 	if transaction {

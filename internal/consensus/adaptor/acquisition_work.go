@@ -41,6 +41,7 @@ const (
 	acquisitionWorkAdded
 	acquisitionWorkRetarget
 	acquisitionWorkContinue
+	acquisitionWorkTail
 )
 
 type ledgerAcquisitionNetwork interface {
@@ -74,6 +75,8 @@ type acquisitionWorkEvent struct {
 	queryDepth uint32
 	collect    bool
 	at         time.Time
+	queuedAt   time.Time
+	measured   bool
 }
 
 func (e *acquisitionWorkEvent) release() {
@@ -132,6 +135,8 @@ type acquisitionWorkResult struct {
 	err              error
 	persistenceErr   error
 	ack              chan struct{}
+	readyAt          time.Time
+	workDuration     time.Duration
 }
 
 func (r *acquisitionWorkResult) setPersistenceError(ctx context.Context, err error) {
@@ -158,6 +163,11 @@ type acquisitionReplyStat struct {
 	infoType message.LedgerInfoType
 	received int
 	useful   int
+	bytes    uint64
+	wire     uint64
+	ingress  time.Duration
+	queue    time.Duration
+	process  time.Duration
 }
 
 type acquisitionWorkLane struct {
@@ -294,6 +304,9 @@ func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWo
 	if l == nil || ledger == nil {
 		return false
 	}
+	if event.queuedAt.IsZero() {
+		event.queuedAt = time.Now()
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.ctx == nil || l.ctx.Err() != nil {
@@ -380,6 +393,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		}
 	}()
 
+	started := time.Now()
 	previous := batch.ledger.Snapshot()
 	result := l.process(batch.ctx, batch.ledger, events)
 	if errors.Is(result.err, shamap.ErrAcquisitionMemory) && batch.ctx.Err() == nil {
@@ -467,6 +481,8 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		}
 	}
 	result.ack = make(chan struct{})
+	result.readyAt = time.Now()
+	result.workDuration = result.readyAt.Sub(started)
 	select {
 	case <-l.ctx.Done():
 		return false
@@ -579,6 +595,8 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	usefulByPeer := make(map[uint64]int)
 	var addedPeers []uint64
 	var retargetPeers []uint64
+	var tailPeers []uint64
+	var tailAt time.Time
 	var runLocal, runTimerCheck, runTimer, runFailure, runRequests bool
 	var timerAt time.Time
 	var fetch func([32]byte) ([]byte, bool)
@@ -628,14 +646,30 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				}
 				continue
 			}
+			started := time.Now()
 			useful, received, badKind, remove, complete, err := applyAcquisitionReply(ctx, ledger, event)
 			event.resume = !errors.Is(err, shamap.ErrAcquisitionMemory)
 			event.useful += useful
 			if event.data != nil {
-				result.replies = append(result.replies, acquisitionReplyStat{
+				stat := acquisitionReplyStat{
 					peerID: event.peerID, infoType: event.data.InfoType,
 					received: received, useful: useful,
-				})
+					process: time.Since(started),
+				}
+				if !event.measured {
+					if !event.queuedAt.IsZero() {
+						stat.queue = max(0, started.Sub(event.queuedAt))
+					}
+					if event.owner != nil {
+						stat.bytes = uint64(len(event.owner.Payload))
+						stat.wire = event.owner.WireSize
+						if !event.owner.ReceivedAt.IsZero() && !event.queuedAt.IsZero() {
+							stat.ingress = max(0, event.queuedAt.Sub(event.owner.ReceivedAt))
+						}
+					}
+					event.measured = true
+				}
+				result.replies = append(result.replies, stat)
 			}
 			if err != nil {
 				if errors.Is(err, shamap.ErrAcquisitionMemory) {
@@ -706,6 +740,8 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 			}
 		case acquisitionWorkContinue:
 			runRequests = true
+		case acquisitionWorkTail:
+			tailPeers, tailAt = event.peers, event.at
 		case acquisitionWorkLocal:
 			runLocal = true
 			fetch = event.fetch
@@ -750,6 +786,12 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	}
 
 	workCtx := shamap.WithTraversalBudget(ctx, visitBudget)
+	if len(tailPeers) > 0 {
+		plan, err := ledger.PlanTransactionOnlyTailRequestsContext(workCtx, tailPeers, tailAt)
+		if result.applyMissingPlan(plan, err) || len(plan.Requests) > 0 {
+			return result
+		}
+	}
 
 	// Fetch-pack arrivals explicitly enqueue acquisitionWorkLocal. A timeout
 	// must schedule network retries first rather than repeating the full local
@@ -814,6 +856,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 }
 
 func (r *acquisitionWorkResult) applyMissingPlan(plan inbound.MissingRequestPlan, err error) bool {
+	r.requestWait = plan.Outcome
 	r.requests = append(r.requests, plan.Requests...)
 	if err != nil {
 		for _, request := range r.requests {
@@ -894,6 +937,9 @@ func selectUsefulAcquisitionPeers(counts map[uint64]int) []uint64 {
 func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger, event acquisitionWorkEvent) bool {
 	if c.stoppedForShutdown() {
 		return false
+	}
+	if event.queuedAt.IsZero() {
+		event.queuedAt = time.Now()
 	}
 	if lane := c.currentAcquisitionWork(); lane != nil {
 		if lane.submit(ledger, event) {
@@ -987,6 +1033,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 	if result.rearmTimer && !result.complete && !result.remove {
 		defer ledger.RearmTimer(time.Now())
 	}
+	c.recordReplayHeadWork(result)
 	c.reportAcquisitionProgress(ledger, result.yielded)
 	for _, bad := range result.badData {
 		if bad.kind != "" {
@@ -1103,6 +1150,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 }
 
 func (c *catchupReplayCoordinator) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound.MissingRequest) bool {
+	started := time.Now()
 	indirect := ledger.Timeouts() > 0
 	queryDepth := uint32(1)
 	if request.Blind {
@@ -1111,6 +1159,7 @@ func (c *catchupReplayCoordinator) sendMissingReplyRequest(ledger *inbound.Ledge
 		queryDepth = 2
 	}
 	if !c.acquisitionPeerConnected(request.PeerID) {
+		c.recordReplayHeadSend(ledger, request, time.Since(started), true)
 		ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 		c.removeStaleAcquisitionPeer(ledger, request.PeerID)
 		return true
@@ -1131,6 +1180,7 @@ func (c *catchupReplayCoordinator) sendMissingReplyRequest(ledger *inbound.Ledge
 	} else {
 		err = c.acquisition.RequestStateNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
 	}
+	c.recordReplayHeadSend(ledger, request, time.Since(started), err != nil)
 	if err == nil {
 		return false
 	}
