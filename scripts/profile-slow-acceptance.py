@@ -123,18 +123,20 @@ class Store:
                 self.log("incident limit reached; trigger ignored")
                 return None
             directory = self.root / f"incident-{self.count + 1:03d}"
-            directory.mkdir()
-            self.count += 1
-        event = {"dir": directory, "meta": dict(metadata), "artifacts": [],
-                 "sources": set(), "lock": threading.Lock()}
-        with self.lock:
+            event = {"dir": directory, "meta": dict(metadata), "artifacts": [],
+                     "sources": set(), "lock": threading.Lock()}
             data = self._manifest_data(event)
             if (self.bytes + len(data) + self.reserved + self.overlap_reserved +
                     self.metadata_reserved + self.manifest_reserve > self.max_bytes):
-                shutil.rmtree(directory)
                 self.log("incident byte budget exhausted; trigger ignored")
                 return None
-            directory.joinpath("manifest.json").write_bytes(data)
+            directory.mkdir()
+            try:
+                directory.joinpath("manifest.json").write_bytes(data)
+            except Exception:
+                shutil.rmtree(directory)
+                raise
+            self.count += 1
             self.bytes += len(data)
             self.metadata_reserved += self.manifest_reserve
         return event
@@ -373,7 +375,7 @@ class TriggerGate:
 
 
 def follow(path, stop, callback, log, ready=None):
-    handle, identity, carry, discarding = None, None, "", False
+    handle, identity, carry, discarding, initial_open = None, None, "", False, True
     while not stop.is_set():
         try:
             info = path.stat()
@@ -382,8 +384,9 @@ def follow(path, stop, callback, log, ready=None):
                 if handle:
                     handle.close()
                 handle = path.open(encoding="utf-8", errors="replace")
-                if identity is None:
+                if initial_open:
                     handle.seek(0, os.SEEK_END)
+                    initial_open = False
                 identity, carry, discarding = (info.st_dev, info.st_ino), "", False
                 if ready:
                     ready.set()

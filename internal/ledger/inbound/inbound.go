@@ -476,6 +476,7 @@ func (l *Ledger) AddPeerBounded(peerID uint64, max int) bool {
 func (l *Ledger) RemovePeer(peerID uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.clearHedgePeerLocked(peerID)
 	l.releaseAllPeerLeasesLocked(peerID, time.Now(), true)
 	for i, id := range l.peers {
 		if id == peerID {

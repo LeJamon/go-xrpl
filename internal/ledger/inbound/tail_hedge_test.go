@@ -274,6 +274,112 @@ func TestTransactionOnlyTailHedgeInnerReplyRetainsOriginalWireSlot(t *testing.T)
 	ledger.mu.Unlock()
 }
 
+func TestRemovePeerClearsHedgeOwnersBeforeFulfillment(t *testing.T) {
+	ledger, _, _ := seedTransactionOnlyTail(t)
+	now := time.Now()
+	plan, err := ledger.PlanTransactionOnlyTailRequestsContext(t.Context(), []uint64{11, 22}, now)
+	require.NoError(t, err)
+	require.Len(t, plan.Requests, 1)
+
+	require.True(t, ledger.RemovePeer(11))
+	ledger.mu.Lock()
+	require.NotContains(t, ledger.requestPeers, uint64(11))
+	require.Contains(t, ledger.requestPeers, uint64(22))
+	for _, hash := range plan.Requests[0].NodeHashes {
+		lease, ok := ledger.requestLeases[hash]
+		require.True(t, ok)
+		require.Equal(t, uint64(22), lease.peerID)
+		require.Zero(t, lease.previousPeerID)
+	}
+	ledger.mu.Unlock()
+
+	require.True(t, ledger.AddPeer(22))
+	require.True(t, ledger.RemovePeer(22))
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	require.NotContains(t, ledger.requestPeers, uint64(22))
+	require.NotEmpty(t, ledger.readyRequests)
+	for _, ready := range ledger.readyRequests {
+		require.Zero(t, ready.previousPeerID)
+	}
+}
+
+func TestRemovePeerRequeuesAlternateBeforeOriginal(t *testing.T) {
+	ledger, _, _ := seedTransactionOnlyTail(t)
+	now := time.Now()
+	plan, err := ledger.PlanTransactionOnlyTailRequestsContext(t.Context(), []uint64{11, 22}, now)
+	require.NoError(t, err)
+	require.Len(t, plan.Requests, 1)
+	require.True(t, ledger.AddPeer(22))
+
+	require.True(t, ledger.RemovePeer(22))
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	require.NotContains(t, ledger.requestPeers, uint64(22))
+	require.Contains(t, ledger.requestPeers, uint64(11))
+	require.Empty(t, ledger.requestLeases)
+	require.Len(t, ledger.readyRequests, len(plan.Requests[0].NodeHashes))
+	for _, ready := range ledger.readyRequests {
+		if ready.transaction {
+			require.Equal(t, uint64(11), ready.previousPeerID)
+		}
+	}
+}
+
+func TestRemovePeerClearsOriginalWireShadowOwnerAfterFulfillment(t *testing.T) {
+	ledger, _, _ := seedTransactionOnlyTail(t)
+	now := time.Now()
+	plan, err := ledger.PlanTransactionOnlyTailRequestsContext(t.Context(), []uint64{11, 22}, now)
+	require.NoError(t, err)
+	require.Len(t, plan.Requests, 1)
+	hash := plan.Requests[0].NodeHashes[0]
+
+	ledger.mu.Lock()
+	ledger.fulfillCacheNodeLocked(true, hash)
+	shadow, ok := ledger.requestLeases[hash]
+	require.True(t, ok)
+	require.True(t, shadow.wireShadow)
+	require.Equal(t, uint64(22), shadow.peerID)
+	require.Equal(t, uint64(11), shadow.previousPeerID)
+	ledger.mu.Unlock()
+
+	require.True(t, ledger.RemovePeer(11))
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	require.NotContains(t, ledger.requestPeers, uint64(11))
+	require.Contains(t, ledger.requestPeers, uint64(22))
+	shadow, ok = ledger.requestLeases[hash]
+	require.True(t, ok, "the alternate wire frame remains outstanding")
+	require.True(t, shadow.wireShadow)
+	require.Equal(t, uint64(22), shadow.peerID)
+	require.Zero(t, shadow.previousPeerID)
+}
+
+func TestRemovePeerClearsAlternateWireShadowOwnerAfterFulfillment(t *testing.T) {
+	ledger, _, _ := seedTransactionOnlyTail(t)
+	now := time.Now()
+	plan, err := ledger.PlanTransactionOnlyTailRequestsContext(t.Context(), []uint64{11, 22}, now)
+	require.NoError(t, err)
+	require.Len(t, plan.Requests, 1)
+	hash := plan.Requests[0].NodeHashes[0]
+	require.True(t, ledger.AddPeer(22))
+
+	ledger.mu.Lock()
+	ledger.fulfillCacheNodeLocked(true, hash)
+	ledger.mu.Unlock()
+
+	require.True(t, ledger.RemovePeer(22))
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	require.NotContains(t, ledger.requestPeers, uint64(22))
+	require.Contains(t, ledger.requestPeers, uint64(11))
+	shadow, ok := ledger.requestLeases[hash]
+	require.True(t, ok, "the original wire frame remains outstanding")
+	require.True(t, shadow.wireShadow)
+	require.Zero(t, shadow.peerID)
+	require.Equal(t, uint64(11), shadow.previousPeerID)
+}
+
 func TestTransactionOnlyTailHedgeCachedReadyRetainsOriginalWireSlot(t *testing.T) {
 	ledger, _, _ := seedTransactionOnlyTail(t)
 	now := time.Now()
@@ -432,6 +538,61 @@ func TestTransactionOnlyTailHedgeReadyOverflowRetainsOriginalUntilExpiry(t *test
 	}
 	require.True(t, reclaimed, "ready reclamation retains the original wire owner")
 	ledger.mu.Unlock()
+}
+
+func TestRemovePeerClearsReadyHedgeOwnerAndAdmitsReplacement(t *testing.T) {
+	ledger, _, _ := seedTransactionOnlyTail(t)
+	now := time.Now()
+	plan, err := ledger.PlanTransactionOnlyTailRequestsContext(t.Context(), []uint64{11, 22}, now)
+	require.NoError(t, err)
+	require.Len(t, plan.Requests, 1)
+	ledger.ReleaseMissingRequest(plan.Requests[0].PeerID, plan.Requests[0].NodeHashes)
+
+	ledger.mu.Lock()
+	started := now.Add(-time.Second)
+	for i, peerID := range []uint64{21, 22, 23, 24, 25} {
+		var hash [32]byte
+		hash[0] = byte(10+i) << 4
+		hash[31] = byte(i + 1)
+		nodeID, err := shamap.NewNodeID(2, hash)
+		require.NoError(t, err)
+		ledger.requestLeases[hash] = missingRequestLease{
+			peerID:      peerID,
+			transaction: true,
+			nodeID:      nodeID,
+			started:     started,
+			expires:     now.Add(missingRequestLeaseTTL),
+		}
+		ledger.requestByNode[requestNodeKey{transaction: true, nodeID: nodeID}] = hash
+		ledger.recentNodes[hash] = peerID
+	}
+	ledger.refreshRequestPeersAtLocked(now)
+	require.Len(t, ledger.requestPeers, requestPeerLimit)
+	for _, ready := range ledger.readyRequests {
+		if ready.transaction {
+			require.Equal(t, uint64(11), ready.previousPeerID)
+		}
+	}
+	ledger.mu.Unlock()
+
+	require.True(t, ledger.RemovePeer(11))
+	ledger.mu.Lock()
+	require.Len(t, ledger.requestPeers, requestPeerLimit-1)
+	require.NotContains(t, ledger.requestPeers, uint64(11))
+	for _, ready := range ledger.readyRequests {
+		require.Zero(t, ready.previousPeerID)
+	}
+	ledger.mu.Unlock()
+
+	replacement := ledger.CollectMissingCachedAddedRequests([]uint64{33})
+	require.Len(t, replacement, 1)
+	require.Equal(t, uint64(33), replacement[0].PeerID)
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	require.Contains(t, ledger.requestPeers, uint64(33))
+	for _, peerID := range []uint64{21, 22, 23, 24, 25} {
+		require.Contains(t, ledger.requestPeers, peerID)
+	}
 }
 
 func TestTransactionOnlyTailHedgeRespectsFullPeerWindow(t *testing.T) {

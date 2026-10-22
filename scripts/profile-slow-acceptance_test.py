@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -195,6 +196,39 @@ class ProfileRecorderTests(unittest.TestCase):
             store = slow.Store(root / "incidents", 3, 4_096, lambda _: None, overlap_bytes=overlap)
             self.assertIsNotNone(store.new({"total_seconds": 2.0}))
 
+    def test_rejected_incidents_do_not_consume_count_or_directory_numbers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = slow.Store(root / "incidents", 3, 4_096, lambda _: None)
+            self.assertIsNotNone(store.new({"total_seconds": 2.0}))
+            reserved = store.reserve()
+            self.assertIsNone(store.new({"total_seconds": 3.0}))
+            self.assertIsNone(store.new({"total_seconds": 4.0}))
+            self.assertEqual(store.count, 1)
+            self.assertEqual([path.name for path in (root / "incidents").iterdir()],
+                             ["incident-001"])
+            with store.lock:
+                store.reserved -= reserved
+            self.assertIsNotNone(store.new({"total_seconds": 5.0}))
+            self.assertIsNotNone(store.new({"total_seconds": 6.0}))
+            self.assertIsNone(store.new({"total_seconds": 7.0}))
+            self.assertEqual(store.count, 3)
+            self.assertEqual(sorted(path.name for path in (root / "incidents").iterdir()),
+                             ["incident-001", "incident-002", "incident-003"])
+
+    def test_manifest_write_failure_cleans_up_for_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = slow.Store(root / "incidents", 1, 4_096, lambda _: None)
+            with mock.patch.object(Path, "write_bytes", side_effect=OSError("write failed")):
+                with self.assertRaises(OSError):
+                    store.new({"total_seconds": 2.0})
+            self.assertEqual(store.count, 0)
+            self.assertEqual(list((root / "incidents").iterdir()), [])
+            event = store.new({"total_seconds": 2.0})
+            self.assertIsNotNone(event)
+            self.assertEqual(event["dir"].name, "incident-001")
+
     def test_fake_pprof_capture_and_loopback_validation(self):
         with fake_server() as url:
             self.assertEqual(slow.loopback_url(url), url)
@@ -292,6 +326,46 @@ class ProfileRecorderTests(unittest.TestCase):
             stop.set()
             thread.join(2)
             self.assertEqual(lines, ["append", "rotated", "x"])
+
+    def test_follow_reads_event_written_after_missing_path_reappears(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "node.log"
+            path.write_text('msg="Consensus acceptance timings" total=1s\n', encoding="utf-8")
+            stop, ready, missing, seen = (threading.Event() for _ in range(4))
+            lines = []
+
+            class MissingPath:
+                def stat(self):
+                    try:
+                        return path.stat()
+                    except FileNotFoundError:
+                        missing.set()
+                        raise
+
+                def open(self, *args, **kwargs):
+                    return path.open(*args, **kwargs)
+
+            def record(line):
+                lines.append(line)
+                seen.set()
+
+            thread = threading.Thread(target=slow.follow,
+                                      args=(MissingPath(), stop, record, lambda _: None, ready),
+                                      daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(ready.wait(2))
+                rotated = path.with_suffix(".1")
+                path.replace(rotated)
+                self.assertTrue(missing.wait(2))
+                path.write_text('msg="Consensus acceptance timings" total=2s\n', encoding="utf-8")
+                self.assertTrue(seen.wait(2))
+            finally:
+                stop.set()
+                thread.join(2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(lines, ['msg="Consensus acceptance timings" total=2s'])
+            self.assertIsNotNone(slow.acceptance_event(lines[0]))
 
     def test_follow_discards_oversized_unterminated_line(self):
         with tempfile.TemporaryDirectory() as directory:
