@@ -87,8 +87,6 @@ func TestSimulateTransactionUsesIsolatedTxQDryRunAdmission(t *testing.T) {
 	require.Zero(t, result.Fee)
 	require.Nil(t, result.Metadata)
 
-	// Simulation must not publish a new open view, alter its state or insert a
-	// candidate into the live queue.
 	require.Same(t, beforeOpen, svc.GetOpenLedger())
 	afterState, err := current.StateMapHash()
 	require.NoError(t, err)

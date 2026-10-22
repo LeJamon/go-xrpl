@@ -243,7 +243,6 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		return ApplyResult{Result: result, Applied: false}
 	}
 
-	// A dry run cannot enter the queue when direct application is unavailable.
 	if isDryRun {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
