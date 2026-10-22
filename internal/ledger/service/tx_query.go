@@ -942,6 +942,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		ReserveBase:      simReserveBase,
 		ReserveIncrement: simReserveIncrement,
 		LedgerSequence:   current.Sequence(),
+		ParentCloseTime:  protocol.ToRippleTime(current.ParentCloseTime()),
 		NetworkID:        s.config.NetworkID,
 		Logger:           s.config.Logger,
 		Rules:            rules,

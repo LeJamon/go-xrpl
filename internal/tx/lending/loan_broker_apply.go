@@ -31,6 +31,15 @@ func amountAssetMatches(amount tx.Amount, asset tx.Asset) bool {
 		amount.Currency == asset.Currency && amount.Issuer == asset.Issuer
 }
 
+// legacySourceHoldingFrozen reports whether the broker's holding is frozen
+// while fixCleanup3_3_0 is disabled.
+func legacySourceHoldingFrozen(view tx.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) bool {
+	if mptutil.IsAssetFrozen(view, asset, account) {
+		return true
+	}
+	return !asset.IsMPT() && mptutil.CheckDeepFrozen(view, account, asset) != ter.TesSUCCESS
+}
+
 // -------------------- LoanBrokerSet --------------------
 
 func (l *LoanBrokerSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
@@ -547,6 +556,10 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 	if coverAvail.Sub(amount).Cmp(minimumCover) < 0 {
+		return ter.TecINSUFFICIENT_FUNDS
+	}
+	if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) &&
+		legacySourceHoldingFrozen(view, b.Account, asset) {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 	holds, herr := vault.AccountHoldsFull(view, config, b.Account, asset)

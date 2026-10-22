@@ -8,7 +8,7 @@ import (
 
 func TestFinalOutcomeRegressionSnapshots(t *testing.T) {
 	cases := map[string]string{
-		"loan-broker-cover-withdraw-legacy-freeze.json":        "4124779e457cf92d28ced614d84d72923bdcac52df2d50ca7b91a9ea9a9a2069",
+		"loan-broker-cover-withdraw-legacy-freeze.json":        "6b7b4c166282f1ef927cd6cd36c3f87efb038ed5c9c86dbfd8bfa2a61290c133",
 		"amm-withdraw-reversed-owner-directory-boundary.json":  "73c9bb0e31c2524bdf851c79eec46e007def1b376a1c7a8efcc1d31ee61bb9e9",
 		"amm-create-two-iou-directory-boundary.json":           "8d54f572c5285ad9fe29bcbdf3c4daf5decddc8697ce027080b96910af5a7026",
 		"amm-deposit-freeze-before-auth.json":                  "86bc3110adf5b73286dcf6173eb75d2016ea0090bcd426f836b64905b09db57d",

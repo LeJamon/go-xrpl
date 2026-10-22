@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -184,6 +185,64 @@ func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	}
 	if hasZero {
 		t.Errorf("simulated AMMCreate created the AMM pseudo-account at the zero-parent-hash address %s — ParentHash not threaded into the simulate EngineConfig", zeroIdx)
+	}
+}
+
+func TestService_SimulateTransactionUsesParentCloseTimeForExpiration(t *testing.T) {
+	cfg := defaultServiceConfig()
+	cfg.Startup = service.StartupConfig{Mode: service.StartupFresh}
+	svc, err := service.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	primerSequence := accountSeq(t, svc, master.Address)
+	mustApply(t, svc, signedBlob(t, env, accountset.AccountSet(master).
+		Fee(env.BaseFee()).
+		Sequence(primerSequence).
+		Build(), master))
+	closeLedger(t, svc)
+
+	current := svc.GetOpenLedger()
+	expiration := protocol.ToRippleTime(current.ParentCloseTime())
+	require.NotZero(t, expiration, "closed test ledger must have a non-zero parent close time")
+	stateBefore, err := current.StateMapHash()
+	require.NoError(t, err)
+	txBefore, err := current.TxMapHash()
+	require.NoError(t, err)
+
+	cases := []struct {
+		name       string
+		expiration uint32
+		want       ter.Result
+	}{
+		{name: "before parent close", expiration: expiration - 1, want: ter.TecEXPIRED},
+		{name: "at parent close", expiration: expiration, want: ter.TecEXPIRED},
+		{name: "after parent close", expiration: expiration + 1, want: ter.TesSUCCESS},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			offer := offertest.OfferCreate(master, tx.NewXRPAmount(100), master.IOU("USD", 1)).
+				Expiration(tc.expiration).
+				Sequence(accountSeq(t, svc, master.Address)).
+				Build()
+			result, err := svc.SimulateTransaction(offer)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, result.Result)
+			require.False(t, result.Applied)
+			if tc.want == ter.TesSUCCESS {
+				require.NotNil(t, result.Metadata)
+			}
+			require.Same(t, current, svc.GetOpenLedger())
+			stateAfter, err := current.StateMapHash()
+			require.NoError(t, err)
+			require.Equal(t, stateBefore, stateAfter)
+			txAfter, err := current.TxMapHash()
+			require.NoError(t, err)
+			require.Equal(t, txBefore, txAfter)
+		})
 	}
 }
 

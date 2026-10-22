@@ -6,7 +6,7 @@
   "suite": "app/Lending",
   "testcase": "audit-cover-withdraw-legacy-deep-freeze",
   "family": "LoanBrokerCoverWithdraw",
-  "profile": "c0-l1-b1-f1",
+  "profile": "c0-l0-b1-f1",
   "network_id": 0,
   "apply_flags": 0,
   "skip_signature_verification": false,

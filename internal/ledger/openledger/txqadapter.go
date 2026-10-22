@@ -304,7 +304,7 @@ func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID 
 	if len(blob) == 0 {
 		return ter.TefINTERNAL
 	}
-	txHash, hashErr := tx.ComputeTransactionHash(txn)
+	txHash, hashErr := tx.ComputeTransactionHashWithFlags(txn, flags)
 	if hashErr != nil {
 		return ter.TefINTERNAL
 	}
