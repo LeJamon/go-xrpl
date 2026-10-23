@@ -17,9 +17,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Standard Go checks use the repository's provisioned Linux runner.
+  # Docker, native MPT, and final acceptance/evidence jobs retain hosted runners.
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
@@ -52,7 +55,8 @@ jobs:
   # a successful run alongside the required checks.
   lint-advisory:
     name: Lint (advisory)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
@@ -79,7 +83,8 @@ jobs:
 
   generate:
     name: Generate (drift check)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
@@ -121,7 +126,8 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
@@ -180,7 +186,8 @@ jobs:
   # native coverage remains in the regular library and nightly jobs.
   build-386:
     name: Test (libraries, linux/386 — word-size guard)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 30
     env:
       GOOS: linux
       GOARCH: "386"
@@ -276,7 +283,8 @@ jobs:
 
   test:
     name: Test (${{ matrix.group }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -408,7 +416,8 @@ jobs:
 
   test-repeated:
     name: Test (final focused, repeated)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - name: Check out equivalent inventory sources (rippled v3.4.0)
