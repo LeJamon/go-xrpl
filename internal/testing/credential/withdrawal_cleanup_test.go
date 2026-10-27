@@ -248,10 +248,17 @@ func TestPinnedCredentialsBlockPseudoAccountDeletion(t *testing.T) {
 				obj, err := binarycodec.DecodeBytes(raw)
 				require.NoError(t, err)
 				pseudo := jtx.NewAccountWithAddress("pseudo", obj["Account"].(string))
+				// Pinning a pseudo-account needs the pre-fixCleanup3_3_0 and
+				// pre-fixCleanup3_5_0 rules, as on a legacy ledger.
+				fix350 := f.env.FeatureEnabled("fixCleanup3_5_0")
 				f.env.DisableFeature("fixCleanup3_3_0")
+				f.env.DisableFeature("fixCleanup3_5_0")
 				f.env.Close()
 				f.issue(t, pseudo, "pinned", false, 0)
 				f.env.EnableFeature("fixCleanup3_3_0")
+				if fix350 {
+					f.env.EnableFeature("fixCleanup3_5_0")
+				}
 				f.env.Close()
 				id := hex.EncodeToString(f.object.Key[:])
 				var deletion tx.Transaction
