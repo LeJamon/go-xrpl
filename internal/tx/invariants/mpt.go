@@ -33,8 +33,10 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 	var mptokensCreated, mptokensDeleted int
 	var referenceHoldingSetOnCreate, referenceHoldingMutated bool
 	var mptCreatedByIssuer bool
+	var issuanceFlagsCleared uint32
 	var deletedHoldingAccounts [][20]byte
 	fixCleanup := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_2_0)
+	fixCleanup350 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_5_0)
 	mptV2Enabled := rules != nil && rules.Enabled(amendment.FeatureMPTokensV2)
 	enforceCreatedByIssuer := rules != nil &&
 		(rules.Enabled(amendment.FeatureSingleAssetVault) || rules.Enabled(amendment.FeatureLendingProtocol))
@@ -52,7 +54,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					}
 					referenceHoldingSetOnCreate = referenceHoldingSetOnCreate || issuance.ReferenceHolding != nil
 				}
-			} else if fixCleanup {
+			} else if fixCleanup || fixCleanup350 {
 				before, err := state.ParseMPTokenIssuance(e.Before)
 				if err != nil {
 					return invalidMPTEntry("MPTokenIssuance before", err)
@@ -61,8 +63,12 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				if err != nil {
 					return invalidMPTEntry("MPTokenIssuance after", err)
 				}
-				referenceHoldingMutated = referenceHoldingMutated ||
-					!sameOptionalString(before.ReferenceHolding, after.ReferenceHolding)
+				// lsfMPTLocked is the only issuance flag with a legal clear path.
+				issuanceFlagsCleared |= before.Flags &^ after.Flags &^ entry.LsfMPTLocked
+				if fixCleanup {
+					referenceHoldingMutated = referenceHoldingMutated ||
+						!sameOptionalString(before.ReferenceHolding, after.ReferenceHolding)
+				}
 			}
 		}
 		if e.EntryType == entry.TypeMPToken {
@@ -129,6 +135,13 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					}
 				}
 			}
+		}
+	}
+
+	if fixCleanup350 && issuanceFlagsCleared != 0 {
+		return &InvariantViolation{
+			Name:    "ValidMPTIssuance",
+			Message: fmt.Sprintf("immutable MPTokenIssuance flag cleared: %#x", issuanceFlagsCleared),
 		}
 	}
 

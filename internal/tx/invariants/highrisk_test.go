@@ -479,6 +479,48 @@ func TestValidMPTIssuance_CreateAndDestroy(t *testing.T) {
 	}
 }
 
+func TestValidMPTIssuance_ClearedIssuanceFlags(t *testing.T) {
+	issuer, err := state.DecodeAccountID(addrIssuer)
+	if err != nil {
+		t.Fatalf("decode MPT issuer: %v", err)
+	}
+	issuance := func(flags uint32) []byte {
+		data, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{Issuer: issuer, Sequence: 1, Flags: flags})
+		if err != nil {
+			t.Fatalf("serialize MPTokenIssuance: %v", err)
+		}
+		return data
+	}
+	issuanceFlags := []uint32{
+		entry.LsfMPTLocked, entry.LsfMPTCanLock, entry.LsfMPTRequireAuth, entry.LsfMPTCanEscrow,
+		entry.LsfMPTCanTrade, entry.LsfMPTCanTransfer, entry.LsfMPTCanClawback, entry.LsfMPTCanHoldConfidentialBalance,
+	}
+	var all uint32
+	for _, flag := range issuanceFlags {
+		all |= flag
+	}
+	accountSet := stubTx{txType: protocol.TxTypeAccountSet}
+	fixed := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_5_0})
+	legacy := amendment.NewRules(nil)
+
+	for _, flag := range issuanceFlags {
+		cleared := []InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, Before: issuance(all), After: issuance(all &^ flag)}}
+		if v := checkValidMPTIssuance(accountSet, TesSUCCESS, cleared, stubView{}, legacy); v != nil {
+			t.Fatalf("flag %#x cleared without fixCleanup3_5_0: unexpected violation %v", flag, v)
+		}
+		v := checkValidMPTIssuance(accountSet, TesSUCCESS, cleared, stubView{}, fixed)
+		if flag == entry.LsfMPTLocked {
+			if v != nil {
+				t.Fatalf("lsfMPTLocked cleared: unexpected violation %v", v)
+			}
+			continue
+		}
+		if v == nil || v.Name != "ValidMPTIssuance" {
+			t.Fatalf("flag %#x cleared under fixCleanup3_5_0: violation = %v, want ValidMPTIssuance", flag, v)
+		}
+	}
+}
+
 // TestValidMPTIssuance_AuthorizeByActor: MPTokenAuthorize from the holder must
 // create or delete exactly one MPToken; the same change submitted by the issuer
 // (Holder field present) is forbidden.
