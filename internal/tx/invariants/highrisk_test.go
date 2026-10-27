@@ -554,6 +554,13 @@ func TestValidMPTIssuance_DeletedMPTokenBalance(t *testing.T) {
 	if v := checkValidMPTIssuance(unauthorize, TesSUCCESS, drained, stubView{}, fixed); v != nil {
 		t.Fatalf("drained erase under fixCleanup3_5_0: unexpected violation %v", v)
 	}
+
+	sibling := []InvariantEntry{funded[0], drained[0]}
+	for _, order := range [][]InvariantEntry{sibling, {sibling[1], sibling[0]}} {
+		if v := checkValidMPTIssuance(stubTx{txType: TypeAMMWithdraw}, TesSUCCESS, order, stubView{}, fixed); v == nil || !strings.Contains(v.Message, "non-zero balance") {
+			t.Fatalf("funded erase beside an empty sibling under fixCleanup3_5_0: violation = %v", v)
+		}
+	}
 }
 
 // TestValidMPTIssuance_AuthorizeByActor: MPTokenAuthorize from the holder must

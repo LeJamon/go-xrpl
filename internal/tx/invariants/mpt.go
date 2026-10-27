@@ -75,14 +75,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		if e.EntryType == entry.TypeMPToken {
 			if e.IsDelete {
 				mptokensDeleted++
-				if fixCleanup {
-					token, err := state.ParseMPToken(e.Before)
-					if err != nil {
-						return invalidMPTEntry("deleted MPToken", err)
-					}
-					deletedHoldingAccounts = append(deletedHoldingAccounts, token.Account)
-				}
-				if fixCleanup350 {
+				if fixCleanup || fixCleanup350 {
 					final := e.DeleteFinal
 					if final == nil {
 						final = e.Before
@@ -91,7 +84,10 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					if err != nil {
 						return invalidMPTEntry("deleted MPToken", err)
 					}
-					mptokenDeletedWithBalance = mptokenDeletedWithBalance || token.MPTAmount > 0
+					if fixCleanup {
+						deletedHoldingAccounts = append(deletedHoldingAccounts, token.Account)
+					}
+					mptokenDeletedWithBalance = mptokenDeletedWithBalance || (fixCleanup350 && token.MPTAmount > 0)
 				}
 			} else if e.Before == nil {
 				mptokensCreated++
