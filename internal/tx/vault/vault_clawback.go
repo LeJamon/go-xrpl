@@ -146,6 +146,12 @@ func (v *VaultClawback) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 		return ter.TefINTERNAL
 	}
 
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_5_0) {
+		if exists, _ := view.Exists(keylet.Account(holderID)); !exists {
+			return ter.TerNO_ACCOUNT
+		}
+	}
+
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && tx.IsPseudoAccountID(view, holderID) {
 		return ter.TecPSEUDO_ACCOUNT
 	}
