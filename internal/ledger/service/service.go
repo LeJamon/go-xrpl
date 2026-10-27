@@ -207,8 +207,9 @@ type Service struct {
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.
-	consensusWG  sync.WaitGroup
-	ledgerWorkWG sync.WaitGroup
+	consensusWG           sync.WaitGroup
+	ledgerWorkWG          sync.WaitGroup
+	acceptanceDiagnostics consensusAcceptanceDiagnostics
 	// detachedIngress serializes private open-ledger submission while allowing
 	// consensus and frontier transitions to use openLedgerMu.
 	detachedIngress detachedIngressAdmission

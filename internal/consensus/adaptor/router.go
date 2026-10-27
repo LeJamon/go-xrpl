@@ -152,10 +152,11 @@ type Router struct {
 	// reduce-relay slot only feeds on DUPLICATE arrivals. Counting first-seen
 	// messages would accelerate selection and produce earlier squelches for
 	// the same traffic pattern.
-	messageSeen    *messageSuppression
-	txSeen         *transactionSuppression
-	txIngressMemo  *transactionIngressMemo
-	txIngressStats transactionIngressStats
+	messageSeen        *messageSuppression
+	txSeen             *transactionSuppression
+	txIngressMemo      *transactionIngressMemo
+	txIngressStats     transactionIngressStats
+	ingressDiagnostics ingressDiagnostics
 	// validationWork verifies signatures outside the router goroutine. Trusted
 	// and untrusted work use separate bounded queues so untrusted traffic cannot
 	// occupy the trusted capacity.

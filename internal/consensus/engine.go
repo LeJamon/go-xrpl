@@ -181,6 +181,13 @@ type ValidationQuorumRechecker interface {
 	RecheckFullyValidated(ledgerID LedgerID, seq uint32) ([]*Validation, int, bool)
 }
 
+// ValidationPublicationQuorum combines the exact-sequence quorum snapshot
+// with a release function that keeps validation admission from changing the
+// snapshot until the caller's publication fence has completed.
+type ValidationPublicationQuorum interface {
+	BeginValidationPublication(seq uint32) ([]LedgerID, int, bool, func())
+}
+
 // WireableAdaptor is an optional extension engine wires after constructing its
 // ValidationTracker. Implementers emit NegativeUNL pseudo-txs; others (e.g.
 // test mocks) simply skip NegativeUNL voting.

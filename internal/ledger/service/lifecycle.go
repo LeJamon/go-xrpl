@@ -423,7 +423,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 // replay completes asynchronously; ingress waits for that replay outside the
 // publication gate, while later consensus acceptances can advance the frontier.
 func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs, disputedBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
-	return s.acceptConsensusResult(ctx, parent, txBlobs, disputedBlobs, closeTime, closeTimeCorrect)
+	return s.acceptConsensusResult(ctx, parent, txBlobs, disputedBlobs, closeTime, closeTimeCorrect, nil)
 }
 
 // SwitchToPreferredLedger installs the complete ledger selected by consensus as

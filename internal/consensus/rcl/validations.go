@@ -135,6 +135,10 @@ func (lv *ledgerValidations) touch(now time.Time) {
 // ValidationTracker tracks validations and determines ledger finality.
 type ValidationTracker struct {
 	mu sync.RWMutex
+	// publicationQuorumMu fences validation admission and quorum configuration
+	// while the service publishes a consensus-built frontier, preventing the
+	// exact-sequence snapshot from changing before the frontier mutation.
+	publicationQuorumMu sync.RWMutex
 
 	// now returns the clock used for freshness checks in isCurrent.
 	// Defaults to time.Now; the engine rewires it to adaptor.Now so
@@ -292,11 +296,13 @@ func (vt *ValidationTracker) SetNow(fn func() time.Time) {
 
 // SetTrustedAndQuorum updates the trusted set and its quorum atomically.
 func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quorum int) {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.setTrustedLocked(nodes)
 	vt.quorum = quorum
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 	vt.drainFinality()
 	vt.checkAcquired()
 }
@@ -318,12 +324,14 @@ func (vt *ValidationTracker) updateTrustedQuorumAndNegativeUNL(
 	quorum int,
 	negativeUNL []consensus.NodeID,
 ) {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.setTrustedLocked(nodes)
 	vt.quorum = quorum
 	vt.setNegativeUNLLocked(negativeUNL)
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 }
 
 func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
@@ -336,10 +344,12 @@ func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
 
 // setQuorumUnavailableFunc installs the live finality safety gate.
 func (vt *ValidationTracker) setQuorumUnavailableFunc(fn func() bool) {
+	vt.publicationQuorumMu.Lock()
 	vt.mu.Lock()
 	vt.quorumUnavailable = fn
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.Unlock()
 	vt.drainFinality()
 }
 
@@ -380,6 +390,7 @@ func (vt *ValidationTracker) SetSeqToKeep(low, high uint32) {
 // validators without removing them from the config. Pass nil or an
 // empty slice to clear the negUNL.
 func (vt *ValidationTracker) setNegativeUNL(nodes []consensus.NodeID) {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.setNegativeUNLLocked(nodes)
 	// Negative-UNL membership only changes quorum accounting. Trusted
@@ -387,6 +398,7 @@ func (vt *ValidationTracker) setNegativeUNL(nodes []consensus.NodeID) {
 	// in-flight acquisition state are preserved.
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 	vt.drainFinality()
 }
 
@@ -565,13 +577,19 @@ func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validat
 		preResolvedLedger, _ = resolveAncestry(ancestrySnap, validation.LedgerID, &validation.LedgerSeq)
 	}
 
-	vt.mu.Lock()
+	// Admission is fenced only for the state mutation. Freshness checks,
+	// ancestry resolution, and the finality callback all stay outside the
+	// publication lease so a slow ingress path cannot extend the service
+	// frontier's critical section.
+	vt.publicationQuorumMu.RLock()
 	defer func() {
-		vt.mu.Unlock()
+		vt.publicationQuorumMu.RUnlock()
 		if drainFinality {
 			vt.drainFinality()
 		}
 	}()
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 
 	// validation.NodeID is already master-shaped on entry — the
 	// consensus router resolved the ephemeral signing pubkey through
@@ -987,6 +1005,48 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 		delete(vt.fired, key)
 	}
 	return result, quorum, accepted
+}
+
+// BeginValidationPublication fences validation admission and configuration
+// changes until the caller commits its publication decision and releases it.
+func (vt *ValidationTracker) BeginValidationPublication(
+	seq uint32,
+) ([]consensus.LedgerID, int, bool, func()) {
+	vt.publicationQuorumMu.Lock()
+	ids, quorum, available := vt.quorumValidatedLedgers(seq)
+	return ids, quorum, available, vt.publicationQuorumMu.Unlock
+}
+
+// QuorumValidatedLedgers returns retained exact-sequence full-validation
+// quorums under current trust and negative-UNL rules. The final bool reports
+// whether the live quorum-safety gate was available.
+func (vt *ValidationTracker) QuorumValidatedLedgers(seq uint32) ([]consensus.LedgerID, int, bool) {
+	vt.publicationQuorumMu.RLock()
+	defer vt.publicationQuorumMu.RUnlock()
+	return vt.quorumValidatedLedgers(seq)
+}
+
+func (vt *ValidationTracker) quorumValidatedLedgers(seq uint32) ([]consensus.LedgerID, int, bool) {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	quorum := vt.quorum
+	if vt.quorumUnavailableLocked() {
+		return nil, quorum, false
+	}
+
+	result := make([]consensus.LedgerID, 0)
+	for ledgerID, ledgerVals := range vt.validations {
+		if ledgerVals == nil {
+			continue
+		}
+		count := countTrustedAtSeqLocked(ledgerVals.vals, vt.trusted, vt.negUNL, seq)
+		if count > 0 && count >= quorum {
+			result = append(result, ledgerID)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return lexLessLgrID(result[i], result[j]) })
+	return result, quorum, true
 }
 
 // trustedValidationCount returns the count of trusted validations

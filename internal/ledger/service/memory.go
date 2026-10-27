@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // MemoryBudget accounts for buffers retained by the optional relay cache.
@@ -61,29 +62,45 @@ func (s *Service) clearRelayCache() {
 const persistenceAdmissionLimit = 8
 
 func (s *Service) acquireLedgerWork(ctx context.Context) (func(), error) {
+	release, _, err := s.acquireLedgerWorkWithTimings(ctx)
+	return release, err
+}
+
+type ledgerWorkTimings struct {
+	lifecycle, persistence, state time.Duration
+}
+
+func (s *Service) acquireLedgerWorkWithTimings(ctx context.Context) (func(), ledgerWorkTimings, error) {
+	var timings ledgerWorkTimings
+	started := time.Now()
 	s.lifecycleMu.Lock()
+	timings.lifecycle = time.Since(started)
 	if s.lifecycleState == serviceStopping || s.lifecycleState == serviceStopped {
 		s.lifecycleMu.Unlock()
-		return nil, errServiceNotRunning
+		return nil, timings, errServiceNotRunning
 	}
 	s.ledgerWorkWG.Add(1)
 	s.lifecycleMu.Unlock()
+	started = time.Now()
 	releaseMemory, err := s.acquirePersistenceAdmission(ctx)
+	timings.persistence = time.Since(started)
 	if err != nil {
 		s.ledgerWorkWG.Done()
-		return nil, err
+		return nil, timings, err
 	}
+	started = time.Now()
 	releaseState, err := s.AcquireStateAdmission(ctx)
+	timings.state = time.Since(started)
 	if err != nil {
 		releaseMemory()
 		s.ledgerWorkWG.Done()
-		return nil, err
+		return nil, timings, err
 	}
 	return sync.OnceFunc(func() {
 		releaseState()
 		releaseMemory()
 		s.ledgerWorkWG.Done()
-	}), nil
+	}), timings, nil
 }
 
 func (s *Service) acquirePersistenceAdmission(ctx context.Context) (func(), error) {
