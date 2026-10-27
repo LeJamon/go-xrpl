@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -191,5 +192,33 @@ func TestValidConfidentialMPTokenReadError(t *testing.T) {
 	changes := []InvariantEntry{{EntryType: entry.TypeMPToken, After: after}}
 	if violation := checkValidConfidentialMPToken(stubTx{txType: TypePayment}, TesSUCCESS, changes, view, nil); violation == nil {
 		t.Fatal("issuance read error passed")
+	}
+}
+
+func TestValidConfidentialMPTokenPublicBalanceErase(t *testing.T) {
+	issuer := [20]byte{1}
+	holder := [20]byte{2}
+	id := keylet.MakeMPTID(3, issuer)
+	view := confidentialMPTView{entries: map[keylet.Keylet][]byte{
+		keylet.MPTIssuance(id): mustSerializeMPTIssuance(t, &state.MPTokenIssuanceData{
+			Issuer: issuer, Sequence: 3, OutstandingAmount: 100, ConfidentialOutstandingAmount: 10,
+			Flags: entry.LsfMPTCanHoldConfidentialBalance,
+		}),
+	}}
+	// A holder with no confidential state drains and erases its MPToken while
+	// another holder of the issuance keeps a confidential balance.
+	erased := []InvariantEntry{{
+		EntryType:   entry.TypeMPToken,
+		Before:      mustSerializeConfidentialToken(t, &state.MPTokenData{Account: holder, MPTokenIssuanceID: id, MPTAmount: 5}),
+		DeleteFinal: mustSerializeConfidentialToken(t, &state.MPTokenData{Account: holder, MPTokenIssuanceID: id}),
+		IsDelete:    true,
+	}}
+	withdraw := stubTx{txType: TypeAMMWithdraw}
+	if violation := checkValidConfidentialMPToken(withdraw, TesSUCCESS, erased, view, amendment.NewRules(nil)); violation == nil {
+		t.Fatal("pre-fixCleanup3_5_0 drain-then-erase must trip the confidential gate")
+	}
+	fixed := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_5_0})
+	if violation := checkValidConfidentialMPToken(withdraw, TesSUCCESS, erased, view, fixed); violation != nil {
+		t.Fatalf("fixCleanup3_5_0 drain-then-erase: unexpected violation %v", violation)
 	}
 }

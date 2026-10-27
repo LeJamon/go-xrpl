@@ -34,6 +34,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 	var referenceHoldingSetOnCreate, referenceHoldingMutated bool
 	var mptCreatedByIssuer bool
 	var issuanceFlagsCleared uint32
+	var mptokenDeletedWithBalance bool
 	var deletedHoldingAccounts [][20]byte
 	fixCleanup := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_2_0)
 	fixCleanup350 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_5_0)
@@ -80,6 +81,17 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 						return invalidMPTEntry("deleted MPToken", err)
 					}
 					deletedHoldingAccounts = append(deletedHoldingAccounts, token.Account)
+				}
+				if fixCleanup350 {
+					final := e.DeleteFinal
+					if final == nil {
+						final = e.Before
+					}
+					token, err := state.ParseMPToken(final)
+					if err != nil {
+						return invalidMPTEntry("deleted MPToken", err)
+					}
+					mptokenDeletedWithBalance = mptokenDeletedWithBalance || token.MPTAmount > 0
 				}
 			} else if e.Before == nil {
 				mptokensCreated++
@@ -142,6 +154,12 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		return &InvariantViolation{
 			Name:    "ValidMPTIssuance",
 			Message: fmt.Sprintf("immutable MPTokenIssuance flag cleared: %#x", issuanceFlagsCleared),
+		}
+	}
+	if mptokenDeletedWithBalance {
+		return &InvariantViolation{
+			Name:    "ValidMPTIssuance",
+			Message: "MPToken deleted with non-zero balance",
 		}
 	}
 
@@ -332,7 +350,7 @@ func newConfidentialMPTChange() *confidentialMPTChange {
 	}
 }
 
-func checkValidConfidentialMPToken(transaction Transaction, result Result, entries []InvariantEntry, view ReadView, _ *amendment.Rules) *InvariantViolation {
+func checkValidConfidentialMPToken(transaction Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
 	if result != TesSUCCESS {
 		return nil
 	}
@@ -384,7 +402,10 @@ func checkValidConfidentialMPToken(transaction Transaction, result Result, entri
 				change := get(before.MPTokenIssuanceID)
 				change.publicDelta.Sub(change.publicDelta, new(big.Int).SetUint64(before.MPTAmount))
 				if ledgerChange.IsDelete {
-					change.deletedWithBalance = change.deletedWithBalance || before.MPTAmount > 0 || hasEncryptedBalances(before)
+					// fixCleanup3_5_0 moved the public-balance check to ValidMPTIssuance;
+					// before it, a funded erase also fed the confidential gate.
+					publicBalance := before.MPTAmount > 0 && !(rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_5_0))
+					change.deletedWithBalance = change.deletedWithBalance || publicBalance || hasEncryptedBalances(before)
 				}
 			}
 			afterData := ledgerChange.After

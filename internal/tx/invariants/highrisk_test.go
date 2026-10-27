@@ -521,6 +521,41 @@ func TestValidMPTIssuance_ClearedIssuanceFlags(t *testing.T) {
 	}
 }
 
+func TestValidMPTIssuance_DeletedMPTokenBalance(t *testing.T) {
+	token := func(amount uint64) []byte {
+		accountID, err := state.DecodeAccountID(addrHolderA)
+		if err != nil {
+			t.Fatalf("decode MPToken account: %v", err)
+		}
+		issuerID, err := state.DecodeAccountID(addrIssuer)
+		if err != nil {
+			t.Fatalf("decode MPToken issuer: %v", err)
+		}
+		var issuanceID [24]byte
+		issuanceID[3] = 1
+		copy(issuanceID[4:], issuerID[:])
+		data, err := state.SerializeMPToken(&state.MPTokenData{Account: accountID, MPTokenIssuanceID: issuanceID, MPTAmount: amount})
+		if err != nil {
+			t.Fatalf("serialize MPToken: %v", err)
+		}
+		return data
+	}
+	unauthorize := holderTx{stubTx: stubTx{txType: TypeMPTokenAuthorize}}
+	fixed := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_5_0})
+	funded := []InvariantEntry{{EntryType: entry.TypeMPToken, Before: token(5), DeleteFinal: token(5), IsDelete: true}}
+	drained := []InvariantEntry{{EntryType: entry.TypeMPToken, Before: token(5), DeleteFinal: token(0), IsDelete: true}}
+
+	if v := checkValidMPTIssuance(unauthorize, TesSUCCESS, funded, stubView{}, amendment.NewRules(nil)); v != nil {
+		t.Fatalf("funded erase without fixCleanup3_5_0: unexpected violation %v", v)
+	}
+	if v := checkValidMPTIssuance(unauthorize, TesSUCCESS, funded, stubView{}, fixed); v == nil || v.Name != "ValidMPTIssuance" {
+		t.Fatalf("funded erase under fixCleanup3_5_0: violation = %v, want ValidMPTIssuance", v)
+	}
+	if v := checkValidMPTIssuance(unauthorize, TesSUCCESS, drained, stubView{}, fixed); v != nil {
+		t.Fatalf("drained erase under fixCleanup3_5_0: unexpected violation %v", v)
+	}
+}
+
 // TestValidMPTIssuance_AuthorizeByActor: MPTokenAuthorize from the holder must
 // create or delete exactly one MPToken; the same change submitted by the issuer
 // (Holder field present) is forbidden.
