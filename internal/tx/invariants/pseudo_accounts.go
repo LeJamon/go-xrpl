@@ -1,8 +1,10 @@
 package invariants
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -125,9 +127,13 @@ func checkPseudoAccountOwnerDirs(entries []InvariantEntry, view ReadView, rules 
 		return nil
 	}
 
+	// Visit entries and owners in key order so the reported violation is
+	// deterministic.
+	ordered := slices.Clone(entries)
+	slices.SortFunc(ordered, func(a, b InvariantEntry) int { return bytes.Compare(a.Key[:], b.Key[:]) })
 	var owners [][20]byte
 	added := make(map[[20]byte][][32]byte)
-	for _, e := range entries {
+	for _, e := range ordered {
 		if e.IsDelete || e.EntryType != entry.TypeDirectoryNode || e.After == nil {
 			continue
 		}
@@ -161,13 +167,20 @@ func checkPseudoAccountOwnerDirs(entries []InvariantEntry, view ReadView, rules 
 		}
 	}
 
+	slices.SortFunc(owners, func(a, b [20]byte) int { return bytes.Compare(a[:], b[:]) })
 	for _, owner := range owners {
 		data, err := view.Read(keylet.Account(owner))
-		if err != nil || data == nil {
+		if err != nil {
+			return pseudoOwnerViolation(fmt.Sprintf("could not read owner AccountRoot: %v", err))
+		}
+		if data == nil {
 			continue
 		}
 		root, err := state.ParseAccountRoot(data)
-		if err != nil || !root.IsPseudoAccount() {
+		if err != nil {
+			return pseudoOwnerViolation(fmt.Sprintf("could not parse owner AccountRoot: %v", err))
+		}
+		if !root.IsPseudoAccount() {
 			continue
 		}
 		for _, index := range added[owner] {
