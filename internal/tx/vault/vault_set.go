@@ -167,6 +167,9 @@ func (v *VaultSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) 
 	if vd.Owner != accountID {
 		return ter.TecNO_PERMISSION
 	}
+	if !checkAssetsMaximumRepresentable(v.AssetsMaximum, vaultAssetOf(vd), config.RequireRules()) {
+		return ter.TecPRECISION_LOSS
+	}
 
 	shareData, rerr := view.Read(keylet.MPTIssuance(vd.ShareMPTID))
 	if rerr != nil || shareData == nil {

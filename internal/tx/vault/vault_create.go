@@ -168,6 +168,14 @@ func isNativeAsset(a tx.Asset) bool {
 	return a.IsNative()
 }
 
+// PreflightRules rejects an AssetsMaximum out of range for the asset.
+func (v *VaultCreate) PreflightRules(rules *amendment.Rules) error {
+	if !checkAssetsMaximumRepresentable(v.AssetsMaximum, v.Asset, rules) {
+		return ter.Errorf(ter.TemMALFORMED, "AssetsMaximum is out of range for the asset")
+	}
+	return nil
+}
+
 func (v *VaultCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(v)
 }
