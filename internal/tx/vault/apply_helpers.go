@@ -853,6 +853,35 @@ func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, as
 	return tx.RippleSendIOU(ctx.View, vaultAccountID, dstID, amt, true)
 }
 
+// sendAssetThroughIssuer pays a fee-bearing withdrawal: the gross amount is
+// redeemed from the vault pseudo-account to the issuer, then the net amount is
+// issued to dstID. The difference is the issuer's transfer fee.
+func sendAssetThroughIssuer(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, asset tx.Asset, grossN, netN state.XRPLNumber) ter.Result {
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		issuer := mptIDIssuer(id)
+		gross := uint64(grossN.ToInt64WithMode(state.RoundTowardsZero))
+		if r := sendMPTDirect(ctx, id, vaultAccountID, issuer, gross); r != ter.TesSUCCESS {
+			return r
+		}
+		return sendMPTDirect(ctx, id, issuer, dstID, uint64(netN.ToInt64WithMode(state.RoundTowardsZero)))
+	}
+
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	gross := state.NewIssuedAmountFromValue(grossN.Mantissa(), grossN.Exponent(), asset.Currency, asset.Issuer)
+	if r := tx.RippleCreditWithNumberContext(ctx.View, vaultAccountID, issuer, gross, ctx.NumberContext()); r != ter.TesSUCCESS {
+		return r
+	}
+	net := state.NewIssuedAmountFromValue(netN.Mantissa(), netN.Exponent(), asset.Currency, asset.Issuer)
+	return tx.RippleCreditWithNumberContext(ctx.View, issuer, dstID, net, ctx.NumberContext())
+}
+
 // burnShares debits the holder's share MPToken balance by shares, then
 // decreases the share issuance's OutstandingAmount.
 func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, shares uint64) ter.Result {
