@@ -60,6 +60,97 @@ func TestPreferredPreparationKeepsReadersResponsiveAndRetainsIngress(t *testing.
 	require.Equal(t, uint32(2), svc.openLedgerView.Current().TxCount())
 }
 
+func TestPreferredAdmissionDoesNotOwnTransition(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	family.armed.Store(true)
+	type result struct {
+		prepared *PreparedPreferredLedger
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		prepared, err := svc.PreparePreferredLedger(t.Context(), preferred)
+		done <- result{prepared: prepared, err: err}
+	}()
+	awaitPreferredPreparation(t, family.entered)
+	require.False(t, svc.preferredTransitionIsActive(), "state admission must not park ingress behind preferred ownership")
+	require.False(t, svc.openLedgerMu.Snapshot().Held, "state admission must not hold the service gate")
+
+	family.unblock()
+	preparedResult := <-done
+	require.NoError(t, preparedResult.err)
+	prepared := preparedResult.prepared
+	require.NotNil(t, prepared)
+	t.Cleanup(prepared.Release)
+	require.NoError(t, prepared.Wait(t.Context()))
+}
+
+func TestPreferredAdmissionRejectsConcurrentConsensusAcceptance(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	parent := svc.GetClosedLedger()
+	preferred, family := coldAcceptanceParent(t, parent)
+	family.armed.Store(true)
+	switched := make(chan error, 1)
+	go func() { switched <- svc.SwitchToPreferredLedger(preferred) }()
+	awaitPreferredPreparation(t, family.entered)
+
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := svc.AcceptConsensusResult(t.Context(), parent, nil, nil, parent.CloseTime().Add(time.Second), true)
+		accepted <- err
+	}()
+	select {
+	case err := <-accepted:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("preferred admission blocked consensus acceptance")
+	}
+	closed, open := svc.GetClosedLedger(), svc.GetOpenLedger()
+	require.NotEqual(t, preferred.Hash(), closed.Hash())
+	family.unblock()
+	require.ErrorIs(t, <-switched, ErrPreferredTransitionStale)
+	require.Same(t, closed, svc.GetClosedLedger())
+	require.Same(t, open, svc.GetOpenLedger())
+	require.False(t, svc.preferredTransitionIsActive())
+}
+
+func TestPreferredAdmissionRejectsConcurrentTransitionOwnership(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	family.armed.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		prepared, err := svc.PreparePreferredLedger(t.Context(), preferred)
+		if err == nil {
+			prepared.Release()
+		}
+		done <- err
+	}()
+	awaitPreferredPreparation(t, family.entered)
+	owner, err := svc.PreparePreferredLedger(t.Context(), svc.GetClosedLedger())
+	require.NoError(t, err)
+	t.Cleanup(owner.Release)
+	require.NoError(t, owner.Wait(t.Context()))
+	family.unblock()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrPreferredTransitionStale)
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission retried a superseded target behind the new transition owner")
+	}
+}
+
 func TestPreferredPreparationCancellationKeepsPublishedState(t *testing.T) {
 	svc, preferred, family := preferredPreparationFixture(t)
 	closed, open, queue := svc.GetClosedLedger(), svc.openLedgerView.Current(), svc.txQueue
@@ -85,6 +176,136 @@ func TestPreferredPreparationCancellationKeepsPublishedState(t *testing.T) {
 	require.Same(t, closed, svc.GetClosedLedger())
 	require.Same(t, open, svc.openLedgerView.Current())
 	require.Same(t, queue, svc.txQueue)
+	require.False(t, svc.openLedgerMu.Snapshot().Held)
+}
+
+func TestPreferredAdmissionCancellationReleasesLifecycleAdmission(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	family.armed.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		prepared, err := svc.PreparePreferredLedger(ctx, preferred)
+		if err == nil {
+			prepared.Release()
+		}
+		done <- err
+	}()
+	awaitPreferredPreparation(t, family.entered)
+	cancel()
+	family.unblock()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.False(t, svc.preferredTransitionIsActive())
+	require.False(t, svc.openLedgerMu.Snapshot().Held)
+}
+
+func TestPreferredAdmissionStopCancelsBeforeOwnership(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	family.armed.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		prepared, err := svc.PreparePreferredLedger(context.Background(), preferred)
+		if err == nil {
+			prepared.Release()
+		}
+		done <- err
+	}()
+	awaitPreferredPreparation(t, family.entered)
+	stopped := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopped)
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, errServiceNotRunning)
+	case <-time.After(5 * time.Second):
+		family.unblock()
+		t.Fatal("preferred admission did not observe service shutdown")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain preferred admission")
+	}
+	require.False(t, svc.preferredTransitionIsActive())
+	require.False(t, svc.openLedgerMu.Snapshot().Held)
+}
+
+func TestStoredPromotionStopCancelsDetachedAdmission(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	svc.mu.Lock()
+	svc.retainValidationCandidateLocked(preferred)
+	svc.mu.Unlock()
+	family.armed.Store(true)
+	promotionDone := make(chan struct{})
+	go func() {
+		svc.PromoteStoredValidatedLedgerAt(preferred.Sequence(), preferred.Hash(), time.Time{})
+		close(promotionDone)
+	}()
+	awaitPreferredPreparation(t, family.entered)
+
+	stopped := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-promotionDone:
+	case <-time.After(5 * time.Second):
+		family.unblock()
+		t.Fatal("stored promotion did not observe service shutdown")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain stored promotion")
+	}
+	require.False(t, svc.preferredTransitionIsActive())
+	require.False(t, svc.openLedgerMu.Snapshot().Held)
+}
+
+func TestStoredPromotionCallerCancellationStopsDetachedAdmission(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+	svc.mu.Lock()
+	svc.retainValidationCandidateLocked(preferred)
+	svc.mu.Unlock()
+	family.armed.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	promotionDone := make(chan struct{})
+	go func() {
+		svc.PromoteStoredValidatedLedgerAtContext(ctx, preferred.Sequence(), preferred.Hash(), time.Time{})
+		close(promotionDone)
+	}()
+	awaitPreferredPreparation(t, family.entered)
+	cancel()
+	select {
+	case <-promotionDone:
+	case <-time.After(5 * time.Second):
+		family.unblock()
+		t.Fatal("stored promotion did not observe caller cancellation")
+	}
+	require.False(t, svc.preferredTransitionIsActive())
 	require.False(t, svc.openLedgerMu.Snapshot().Held)
 }
 

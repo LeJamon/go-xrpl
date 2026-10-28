@@ -156,11 +156,12 @@ type storedSHAMapVerificationProgress struct {
 	mapType string
 	root    string
 
-	startedAt  time.Time
-	lastReport time.Time
-	lastNodes  uint64
-	interval   time.Duration
-	started    bool
+	startedAt     time.Time
+	lastReport    time.Time
+	lastNodes     uint64
+	interval      time.Duration
+	admissionWait time.Duration
+	started       bool
 
 	nodesChecked     atomic.Uint64
 	branchesComplete atomic.Uint32
@@ -299,7 +300,9 @@ func (p *storedSHAMapVerificationProgress) fields(at time.Time) []any {
 	fields = append(fields,
 		"map_type", p.mapType,
 		"root", p.root,
+		"admission_wait", p.admissionWait.String(),
 		"elapsed", elapsed.String(),
+		"traversal_elapsed", elapsed.String(),
 		"nodes_checked", nodesChecked,
 		"nodes_per_second", nodesPerSecond,
 		"interval_nodes_per_second", intervalNodesPerSecond,

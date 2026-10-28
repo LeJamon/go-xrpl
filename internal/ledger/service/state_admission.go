@@ -47,26 +47,144 @@ func (s *Service) VerifyDetachedMaps(ctx context.Context, stateMap, txMap *shama
 // Ledger snapshots flush dirty backed nodes before the detached completeness
 // proof, while leaving the caller's map ownership unchanged.
 func (s *Service) VerifyDetachedLedger(ctx context.Context, l *ledger.Ledger) error {
+	_, err := s.verifyDetachedLedgerStats(ctx, l)
+	return err
+}
+
+func (s *Service) verifyDetachedLedgerStats(ctx context.Context, l *ledger.Ledger) (stats ReplayAdmissionStats, err error) {
+	startedAt := time.Now()
+	defer func() { stats.Elapsed = time.Since(startedAt) }()
 	if l == nil {
-		return errors.New("state admission: nil ledger")
+		return stats, errors.New("state admission: nil ledger")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return stats, err
 	}
+	snapshotStartedAt := time.Now()
 	stateMap, err := l.StateMapSnapshotContext(ctx)
 	if err != nil {
-		return fmt.Errorf("state admission: snapshot state map: %w", err)
+		return stats, fmt.Errorf("state admission: snapshot state map: %w", err)
 	}
 	txMap, err := l.TxMapSnapshotContext(ctx)
 	if err != nil {
-		return fmt.Errorf("state admission: snapshot transaction map: %w", err)
+		return stats, fmt.Errorf("state admission: snapshot transaction map: %w", err)
 	}
-	if verified, err := s.verifyReplayProof(ctx, l.Header(), stateMap, txMap); err != nil {
-		return err
+	stats.SnapshotElapsed = time.Since(snapshotStartedAt)
+	h := l.Header()
+	if verified, err := s.verifyReplayProof(ctx, h, stateMap, txMap); err != nil {
+		return stats, err
 	} else if verified {
-		return nil
+		stats.ProofCacheChecked = true
+		stats.ProofCacheHit = true
+		return stats, nil
 	}
-	return s.VerifyDetachedMaps(ctx, stateMap, txMap)
+	stats.ProofCacheChecked = true
+	stats.ProofCacheMiss = true
+	if !stateMap.IsBacked() || !s.hasDurableFamily() {
+		s.logReplayVerificationDecision(h, [32]byte{}, "miss", "durable generation pin unavailable", false)
+		stats.State, err = s.verifyDetachedMapStats(ctx, "state", stateMap)
+		if err != nil {
+			return stats, err
+		}
+		stats.Transactions, err = s.verifyDetachedMapStats(ctx, "transaction", txMap)
+		return stats, err
+	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		return stats, fmt.Errorf("state admission: hash state map: %w", err)
+	}
+	if stateRoot != h.AccountHash {
+		return stats, fmt.Errorf("state admission: state root mismatch: got %x want %x", stateRoot[:8], h.AccountHash[:8])
+	}
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		return stats, fmt.Errorf("state admission: hash transaction map: %w", err)
+	}
+	if txRoot != h.TxHash {
+		return stats, fmt.Errorf("state admission: transaction root mismatch: got %x want %x", txRoot[:8], h.TxHash[:8])
+	}
+	pin, pinned, err := s.acquireReplaySnapshot(ctx)
+	if err != nil {
+		return stats, fmt.Errorf("state admission: acquire replay generation: %w", err)
+	}
+	if !pinned {
+		s.logReplayVerificationDecision(h, [32]byte{}, "miss", "durable generation pin unavailable", false)
+		stats.State, err = s.verifyDetachedMapStats(ctx, "state", stateMap)
+		if err != nil {
+			return stats, err
+		}
+		stats.Transactions, err = s.verifyDetachedMapStats(ctx, "transaction", txMap)
+		return stats, err
+	}
+	stats.GenerationPinned = true
+	s.logReplayVerificationDecision(h, pin.fingerprint, "miss", s.replayVerificationMissReason(h, pin.fingerprint, txMap.IsBacked()), true)
+	key := replayVerificationKey{
+		sequence:             h.LedgerIndex,
+		ledgerHash:           h.Hash,
+		parentHash:           h.ParentHash,
+		stateRoot:            h.AccountHash,
+		txRoot:               h.TxHash,
+		transactionBacked:    txMap.IsBacked(),
+		nodeStoreFingerprint: pin.fingerprint,
+	}
+	result, err := s.coalesceReplayVerification(ctx, key, pin, func(ownerCtx context.Context) (replayVerificationResult, error) {
+		if verified, err := s.verifyReplayProof(ownerCtx, h, stateMap, txMap); err != nil {
+			return replayVerificationResult{}, err
+		} else if verified {
+			return replayVerificationResult{proofCacheHit: true}, nil
+		}
+		var stateStats ReplayAdmissionMapStats
+		var current [32]byte
+		var available bool
+		var runErr error
+		stateProofReused := s.lookupReplayProof(h, pin.fingerprint, false)
+		if stateProofReused {
+			s.logReplayVerificationDecision(h, pin.fingerprint, "state_reused", "generation-bound state proof available for transaction upgrade", true)
+		} else {
+			stateStats, runErr = s.verifyDetachedMapStats(ownerCtx, "state", stateMap)
+			if runErr != nil {
+				return replayVerificationResult{}, runErr
+			}
+			current, available, runErr = currentReplayFingerprint(ownerCtx, pin)
+			if runErr != nil {
+				return replayVerificationResult{state: stateStats}, fmt.Errorf("state admission: recheck replay generation: %w", runErr)
+			}
+			if available && current != pin.fingerprint {
+				return replayVerificationResult{state: stateStats}, errors.New("state admission: replay generation changed")
+			}
+			if err := ownerCtx.Err(); err != nil {
+				return replayVerificationResult{state: stateStats}, err
+			}
+			s.rememberReplayProof(h, pin.fingerprint, false)
+		}
+		txStats, runErr := s.verifyDetachedMapStats(ownerCtx, "transaction", txMap)
+		if runErr != nil {
+			s.logReplayVerificationDecision(h, pin.fingerprint, "state_only", "state traversal complete; transaction verification failed", true)
+			return replayVerificationResult{state: stateStats, transactions: txStats}, runErr
+		}
+		current, available, runErr = currentReplayFingerprint(ownerCtx, pin)
+		if runErr != nil {
+			return replayVerificationResult{state: stateStats, transactions: txStats}, fmt.Errorf("state admission: recheck replay generation: %w", runErr)
+		}
+		if available && current != pin.fingerprint {
+			return replayVerificationResult{state: stateStats, transactions: txStats}, errors.New("state admission: replay generation changed")
+		}
+		if err := ownerCtx.Err(); err != nil {
+			return replayVerificationResult{state: stateStats, transactions: txStats}, err
+		}
+		if txMap.IsBacked() {
+			s.rememberReplayProof(h, pin.fingerprint, true)
+		}
+		s.logReplayVerificationDecision(h, pin.fingerprint, "published", "state and transaction traversal complete", true)
+		return replayVerificationResult{state: stateStats, transactions: txStats, proofCacheHit: stateProofReused}, nil
+	})
+	stats.State = result.state
+	stats.Transactions = result.transactions
+	if result.proofCacheHit {
+		stats.ProofCacheHit = true
+		stats.ProofCacheMiss = false
+	}
+	return stats, err
 }
 
 func (s *Service) isServiceOwnedLedger(l *ledger.Ledger) bool {
@@ -79,19 +197,24 @@ func (s *Service) isServiceOwnedLedger(l *ledger.Ledger) bool {
 }
 
 func (s *Service) verifyDetachedMap(ctx context.Context, name string, source *shamap.SHAMap) error {
+	_, err := s.verifyDetachedMapStats(ctx, name, source)
+	return err
+}
+
+func (s *Service) verifyDetachedMapStats(ctx context.Context, name string, source *shamap.SHAMap) (ReplayAdmissionMapStats, error) {
 	if source == nil {
-		return nil
+		return ReplayAdmissionMapStats{}, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return ReplayAdmissionMapStats{}, err
 	}
 	// StartSync changes map state. Always make that change on a detached
 	// snapshot so admission never converts the caller's source map to syncing.
 	snapshot, err := source.SnapshotImmutableContext(ctx)
 	if err != nil {
-		return fmt.Errorf("state admission: snapshot %s map: %w", name, err)
+		return ReplayAdmissionMapStats{}, fmt.Errorf("state admission: snapshot %s map: %w", name, err)
 	}
-	return s.verifyDetachedSnapshot(ctx, name, snapshot, [32]byte{})
+	return s.verifyReplaySnapshot(ctx, name, snapshot, [32]byte{})
 }
 
 // verifyDetachedSnapshot verifies a snapshot without changing the caller's
@@ -110,6 +233,7 @@ func (s *Service) verifyDetachedSnapshotStats(ctx context.Context, name string, 
 	startedAt := time.Now()
 	defer func() {
 		stats.Elapsed = time.Since(startedAt)
+		stats.TraversalElapsed = stats.Elapsed
 	}()
 	mapToVerify, err := s.coldDetachedMap(ctx, snapshot)
 	if err != nil {

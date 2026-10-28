@@ -27,7 +27,11 @@ func (f *acceptanceBlockingFamily) Fetch(ctx context.Context, hash [32]byte) ([]
 	f.fetches.Add(1)
 	if f.armed.CompareAndSwap(true, false) {
 		close(f.entered)
-		<-f.release
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return f.Family.Fetch(ctx, hash)
 }

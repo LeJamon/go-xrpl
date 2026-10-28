@@ -60,8 +60,10 @@ func (s *Service) verifyReplaySnapshot(
 			return ReplayAdmissionMapStats{}, fmt.Errorf("state admission: hash %s root: %w", name, err)
 		}
 		if root == baseRoot {
+			elapsed := time.Since(startedAt)
 			return ReplayAdmissionMapStats{
-				Elapsed:              time.Since(startedAt),
+				Elapsed:              elapsed,
+				TraversalElapsed:     elapsed,
 				EqualSubtreesSkipped: 1,
 				UsedVerifiedBase:     true,
 				Workers:              1,
@@ -105,22 +107,27 @@ func (s *Service) verifyStoredReplaySnapshot(
 	if mapType == shamap.TypeState {
 		release, err := s.acquireForegroundStateVerification(ctx)
 		if err != nil {
-			return ReplayAdmissionMapStats{Elapsed: time.Since(startedAt)}, true, err
+			elapsed := time.Since(startedAt)
+			return ReplayAdmissionMapStats{Elapsed: elapsed, AdmissionWait: elapsed}, true, err
 		}
 		defer release()
 	}
 	workers, workspaceBytes, releaseWorkspace, err := s.acquireReplayWorkspace(ctx, mapType)
 	if err != nil {
-		return ReplayAdmissionMapStats{Elapsed: time.Since(startedAt), Workers: workers, WorkspaceBytes: workspaceBytes}, true, err
+		elapsed := time.Since(startedAt)
+		return ReplayAdmissionMapStats{Elapsed: elapsed, AdmissionWait: elapsed, Workers: workers, WorkspaceBytes: workspaceBytes}, true, err
 	}
 	defer releaseWorkspace()
+	walkStartedAt := time.Now()
+	admissionWait := walkStartedAt.Sub(startedAt)
 
 	logger := s.logger
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
-	progress := newStoredSHAMapVerificationProgress(logger, s.nodeStore, root, mapType, startedAt)
+	progress := newStoredSHAMapVerificationProgress(logger, s.nodeStore, root, mapType, walkStartedAt)
 	progress.operation = "replay admission verification"
+	progress.admissionWait = admissionWait
 	progress.extraFields = []any{"purpose", name}
 	var reads atomic.Uint64
 	fetch := func(fetchCtx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
@@ -153,11 +160,13 @@ func (s *Service) verifyStoredReplaySnapshot(
 	}
 	err = s.walkStoredSHAMapConcurrentWithFetch(ctx, root, mapType, fetch, workers, control, nil)
 	stats := ReplayAdmissionMapStats{
-		Elapsed:        time.Since(startedAt),
-		NodesLoaded:    progress.nodesChecked.Load(),
-		DurableReads:   reads.Load(),
-		Workers:        workers,
-		WorkspaceBytes: workspaceBytes,
+		Elapsed:          time.Since(startedAt),
+		AdmissionWait:    admissionWait,
+		TraversalElapsed: time.Since(walkStartedAt),
+		NodesLoaded:      progress.nodesChecked.Load(),
+		DurableReads:     reads.Load(),
+		Workers:          workers,
+		WorkspaceBytes:   workspaceBytes,
 	}
 	if err != nil {
 		return stats, true, fmt.Errorf("state admission: walk %s tree: %w", name, err)

@@ -3039,7 +3039,7 @@ func (c *catchupReplayCoordinator) promoteCompletedLedger(seq uint32, hash [32]b
 		return
 	}
 	if svc := c.adaptor.LedgerService(); svc != nil {
-		svc.PromoteStoredValidatedLedgerAt(seq, hash, signTime)
+		svc.PromoteStoredValidatedLedgerAtContext(c.lifecycleContext(), seq, hash, signTime)
 	}
 }
 
