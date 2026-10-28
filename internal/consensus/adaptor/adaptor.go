@@ -591,9 +591,22 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	a.mu.Lock()
 	historian := a.validationHistorian
 	a.mu.Unlock()
+	var hashOfSeq func(uint32) (consensus.LedgerID, bool, error)
+	if validation != nil && a.ledgerService != nil {
+		if candidate, err := a.GetLedger(validation.LedgerID); err == nil && candidate != nil {
+			if resolver, ok := candidate.(consensus.LedgerHashOfSeq); ok {
+				hashOfSeq = resolver.HashOfSeq
+			}
+		}
+	}
 	return a.withValidatorDuty(func() error {
 		if validation != nil {
-			release, err := validationPublicationGuard(historian, validation.LedgerID, validation.LedgerSeq)
+			release, err := validationPublicationGuard(
+				historian,
+				validation.LedgerID,
+				validation.LedgerSeq,
+				hashOfSeq,
+			)
 			if err != nil {
 				return err
 			}

@@ -128,6 +128,17 @@ type finalityNotification struct {
 	generation uint64
 }
 
+// retainedQuorumProof is the highest sequence at which the tracker observed
+// a full, trusted, non-negative-UNL quorum while the live safety gate was
+// open. The proof is deliberately a single monotonic entry: once a sequence
+// is recorded, a different ledger at that sequence cannot replace it, and a
+// lower sequence cannot move the floor backwards.
+type retainedQuorumProof struct {
+	ledgerID  consensus.LedgerID
+	ledgerSeq uint32
+	valid     bool
+}
+
 func (lv *ledgerValidations) touch(now time.Time) {
 	lv.lastAccess.Store(now.UnixNano())
 }
@@ -182,6 +193,13 @@ type ValidationTracker struct {
 	// between a publisher-status change and installation of the corresponding
 	// trusted/quorum snapshot.
 	quorumUnavailable func() bool
+
+	// retainedQuorum is the last authenticated quorum proof observed while
+	// quorumUnavailable was open. It survives trust/gate changes, validation
+	// expiry, and flush, matching rippled's lastValidLedger_ safety floor. Guarded by
+	// publicationQuorumMu followed by mu on mutation and by mu on reads made
+	// under a publication snapshot.
+	retainedQuorum retainedQuorumProof
 
 	// fired records ledgers we've already reported as fully validated,
 	// so the callback fires exactly once per ledger even if more
@@ -359,9 +377,11 @@ func (vt *ValidationTracker) setQuorumUnavailableFunc(fn func() bool) {
 // transitions open so evidence collected while the gate was closed can be
 // promoted without waiting for another validation message.
 func (vt *ValidationTracker) recheckFinality() {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 	vt.drainFinality()
 }
 
@@ -426,12 +446,14 @@ func (vt *ValidationTracker) setMinSeq(seq uint32) {
 // threshold. Seq is passed alongside the ledger ID so the callee can look up or
 // stamp the ledger without a secondary map lookup.
 func (vt *ValidationTracker) SetFullyValidatedCallback(fn func(ledgerID consensus.LedgerID, ledgerSeq uint32)) {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.onFullyValidated = fn
 	if fn != nil {
 		vt.recheckFinalityLocked()
 	}
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 	vt.drainFinality()
 }
 
@@ -709,7 +731,7 @@ func (vt *ValidationTracker) trackBySequenceLocked(
 // rippled's LedgerMaster.cpp:952. Same-quorum with a validator
 // temporarily disabled shouldn't require one MORE validation to finalize.
 //
-// Caller MUST hold vt.mu.
+// Caller MUST hold publicationQuorumMu (read or write) followed by vt.mu.
 func (vt *ValidationTracker) checkFullValidationLocked(
 	ledgerID consensus.LedgerID,
 	ledgerSeq uint32,
@@ -729,10 +751,14 @@ func (vt *ValidationTracker) checkFullValidationLocked(
 		vt.cancelFinalityLocked(key)
 		return false
 	}
+	quorumUnavailable := vt.quorumUnavailableLocked()
+	if !quorumUnavailable {
+		vt.retainQuorumLocked(ledgerID, ledgerSeq)
+	}
 	// Keep a delivered marker intact while the live safety gate is closed, but
 	// cancel an event that is still pending so a later gate reopening can
 	// enqueue it again.
-	if respectUnavailable && vt.quorumUnavailableLocked() {
+	if respectUnavailable && quorumUnavailable {
 		if _, pending := vt.pendingGeneration[key]; pending {
 			vt.cancelFinalityLocked(key)
 		}
@@ -749,8 +775,23 @@ func (vt *ValidationTracker) checkFullValidationLocked(
 	return true
 }
 
+// retainQuorumLocked records the first proof at a sequence and advances only
+// to a higher sequence. Caller must hold vt.mu and the publication quorum
+// lease (read or write) that fences admission/configuration mutations.
+func (vt *ValidationTracker) retainQuorumLocked(ledgerID consensus.LedgerID, ledgerSeq uint32) {
+	if vt.retainedQuorum.valid && ledgerSeq <= vt.retainedQuorum.ledgerSeq {
+		return
+	}
+	vt.retainedQuorum = retainedQuorumProof{
+		ledgerID:  ledgerID,
+		ledgerSeq: ledgerSeq,
+		valid:     true,
+	}
+}
+
 // recheckFinalityLocked reevaluates every stored hash/sequence pair after a
-// trust, quorum, negative-UNL, or live-gate mutation. Caller must hold vt.mu.
+// trust, quorum, negative-UNL, or live-gate mutation. Caller must hold
+// publicationQuorumMu (read or write) followed by vt.mu.
 // Keys are sorted so enqueue order is deterministic despite map-backed
 // storage.
 func (vt *ValidationTracker) recheckFinalityLocked() {
@@ -963,6 +1004,8 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 	ledgerID consensus.LedgerID,
 	seq uint32,
 ) ([]*consensus.Validation, int, bool) {
+	vt.publicationQuorumMu.RLock()
+	defer vt.publicationQuorumMu.RUnlock()
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
@@ -988,7 +1031,11 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 		vt.cancelFinalityLocked(key)
 		return result, quorum, false
 	}
-	if vt.quorumUnavailableLocked() {
+	quorumUnavailable := vt.quorumUnavailableLocked()
+	if !quorumUnavailable {
+		vt.retainQuorumLocked(ledgerID, seq)
+	}
+	if quorumUnavailable {
 		// A queued event that has not reached its callback must be re-armed
 		// when the live gate reopens. A previously delivered marker remains
 		// idempotent across a temporary outage.
@@ -1009,44 +1056,70 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 
 // BeginValidationPublication fences validation admission and configuration
 // changes until the caller commits its publication decision and releases it.
+// The returned snapshot includes a retained authenticated proof even when
+// Available is false; Available describes only the live safety gate.
 func (vt *ValidationTracker) BeginValidationPublication(
 	seq uint32,
-) ([]consensus.LedgerID, int, bool, func()) {
+) consensus.ValidationPublicationSnapshot {
 	vt.publicationQuorumMu.Lock()
-	ids, quorum, available := vt.quorumValidatedLedgers(seq)
-	return ids, quorum, available, vt.publicationQuorumMu.Unlock
+	snapshot := vt.quorumValidatedLedgers(seq)
+	return consensus.ValidationPublicationSnapshot{
+		ValidationQuorumSnapshot: snapshot,
+		Release:                  vt.publicationQuorumMu.Unlock,
+	}
 }
 
-// QuorumValidatedLedgers returns retained exact-sequence full-validation
-// quorums under current trust and negative-UNL rules. The final bool reports
-// whether the live quorum-safety gate was available.
-func (vt *ValidationTracker) QuorumValidatedLedgers(seq uint32) ([]consensus.LedgerID, int, bool) {
+// QuorumValidatedLedgers returns current exact-sequence full-validation
+// quorums under current trust and negative-UNL rules, plus the highest
+// authenticated retained proof. Available reports whether the live quorum
+// safety gate is open.
+func (vt *ValidationTracker) QuorumValidatedLedgers(seq uint32) consensus.ValidationQuorumSnapshot {
 	vt.publicationQuorumMu.RLock()
 	defer vt.publicationQuorumMu.RUnlock()
 	return vt.quorumValidatedLedgers(seq)
 }
 
-func (vt *ValidationTracker) quorumValidatedLedgers(seq uint32) ([]consensus.LedgerID, int, bool) {
+func (vt *ValidationTracker) quorumValidatedLedgers(seq uint32) consensus.ValidationQuorumSnapshot {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
 	quorum := vt.quorum
-	if vt.quorumUnavailableLocked() {
-		return nil, quorum, false
-	}
-
+	available := !vt.quorumUnavailableLocked()
 	result := make([]consensus.LedgerID, 0)
-	for ledgerID, ledgerVals := range vt.validations {
-		if ledgerVals == nil {
-			continue
+	if available {
+		for ledgerID, ledgerVals := range vt.validations {
+			if ledgerVals == nil {
+				continue
+			}
+			count := countTrustedAtSeqLocked(ledgerVals.vals, vt.trusted, vt.negUNL, seq)
+			if count > 0 && count >= quorum {
+				result = append(result, ledgerID)
+			}
 		}
-		count := countTrustedAtSeqLocked(ledgerVals.vals, vt.trusted, vt.negUNL, seq)
-		if count > 0 && count >= quorum {
-			result = append(result, ledgerID)
+	}
+	if vt.retainedQuorum.valid && vt.retainedQuorum.ledgerSeq == seq {
+		seen := false
+		for _, ledgerID := range result {
+			if ledgerID == vt.retainedQuorum.ledgerID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			result = append(result, vt.retainedQuorum.ledgerID)
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return lexLessLgrID(result[i], result[j]) })
-	return result, quorum, true
+	snapshot := consensus.ValidationQuorumSnapshot{
+		LedgerIDs: result,
+		Quorum:    quorum,
+		Available: available,
+	}
+	if vt.retainedQuorum.valid {
+		snapshot.RetainedLedgerID = vt.retainedQuorum.ledgerID
+		snapshot.RetainedLedgerSeq = vt.retainedQuorum.ledgerSeq
+	}
+	return snapshot
 }
 
 // trustedValidationCount returns the count of trusted validations
@@ -1443,14 +1516,16 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	}
 }
 
-// flush discards all accumulated validation state — the latest
-// validation per node, the per-ledger maps, the fully-validated firing
-// set, and the trie — while preserving configuration (trusted set,
-// negUNL, quorum, freshness, clock, callbacks, ancestry, and sequence
+// flush discards all current validation state — the latest validation per node,
+// the per-ledger maps, the fully-validated firing set, and the trie — while
+// preserving the retained quorum proof and configuration (trusted set, negUNL,
+// quorum, freshness, clock, callbacks, ancestry, and sequence
 // floor). Called on orderly shutdown and to reset for a clean
 // restart-in-process. It does not fire onStale: the state is dropped,
 // not archived.
 func (vt *ValidationTracker) flush() {
+	vt.publicationQuorumMu.Lock()
+	defer vt.publicationQuorumMu.Unlock()
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 

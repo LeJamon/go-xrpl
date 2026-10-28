@@ -25,6 +25,7 @@ func TestEngine_FailedBuildRequestsAuthenticatedLedger(t *testing.T) {
 	e.buildInProgress = true
 	canonical := consensus.LedgerID{9}
 	seedAcceptanceQuorum(t, e, canonical, a.lastLCL.Seq()+1)
+	e.validationTracker.setQuorumUnavailableFunc(func() bool { return true })
 	e.mu.Lock()
 	e.commitAcceptedLedgerLocked(ledgerAcceptWork{prevLedger: a.lastLCL}, nil, errors.New("publication rejected"))
 	pending := e.takePendingPostUnlockLocked()
@@ -130,6 +131,11 @@ func TestEngine_AcceptLedger_DiscardsBuildAfterAuthenticatedConflict(t *testing.
 			t.Fatalf("OnValidation(%x): %v", node, err)
 		}
 	}
+	// The proof was authenticated while the gate was open. A transient
+	// publisher outage must not make the in-flight build safe to publish.
+	adaptor.mu.Lock()
+	adaptor.quorumUnavailable = true
+	adaptor.mu.Unlock()
 
 	releaseOnce.Do(func() { close(release) })
 	select {
@@ -153,6 +159,172 @@ func TestEngine_AcceptLedger_DiscardsBuildAfterAuthenticatedConflict(t *testing.
 	adaptor.mu.RUnlock()
 	if broadcasts != 0 {
 		t.Fatalf("stale build emitted %d validations, want none", broadcasts)
+	}
+}
+
+func TestEngine_QueuedValidationRejectsRetainedConflictWhileUnavailable(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	tracker := NewValidationTracker(2)
+	tracker.SetNow(a.Now)
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{{2}, {3}}, 2)
+	unavailable := false
+	tracker.setQuorumUnavailableFunc(func() bool { return unavailable })
+	e.validationTracker = tracker
+
+	canonical := consensus.LedgerID{9}
+	now := a.Now()
+	for _, node := range []consensus.NodeID{{2}, {3}} {
+		if !tracker.Add(&consensus.Validation{
+			NodeID: node, LedgerID: canonical, LedgerSeq: 101, Full: true,
+			SignTime: now, SeenTime: now,
+		}) {
+			t.Fatalf("quorum fixture validation from node %x was rejected", node)
+		}
+	}
+	unavailable = true
+
+	e.mu.Lock()
+	e.pendingValidationBroadcasts = append(e.pendingValidationBroadcasts,
+		&consensus.Validation{LedgerID: consensus.LedgerID{8}, LedgerSeq: 101, Full: true})
+	pending := e.takePendingPostUnlockLocked()
+	e.mu.Unlock()
+	runPostUnlock(pending)
+	if len(a.validationsBroadcast) != 0 {
+		t.Fatal("queued validation ignored retained authenticated conflict while unavailable")
+	}
+}
+
+type hashOfSeqTestLedger struct {
+	*mockLedger
+	hashes map[uint32]consensus.LedgerID
+}
+
+func (l *hashOfSeqTestLedger) HashOfSeq(seq uint32) (consensus.LedgerID, bool, error) {
+	hash, ok := l.hashes[seq]
+	return hash, ok, nil
+}
+
+func TestEngine_AuthenticatedQuorumConflictChecksRetainedAncestry(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	tracker := NewValidationTracker(2)
+	tracker.SetNow(a.Now)
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{{2}, {3}}, 2)
+	e.validationTracker = tracker
+
+	canonical := consensus.LedgerID{0xc1}
+	retainedSeq := uint32(101)
+	now := a.Now()
+	for _, node := range []consensus.NodeID{{2}, {3}} {
+		if !tracker.Add(&consensus.Validation{
+			NodeID: node, LedgerID: canonical, LedgerSeq: retainedSeq, Full: true,
+			SignTime: now, SeenTime: now,
+		}) {
+			t.Fatalf("quorum fixture validation from node %x was rejected", node)
+		}
+	}
+
+	localS := chainLedger(retainedSeq, 0x11, 1)
+	localSPlus1 := chainLedger(retainedSeq+1, 0x12, localS.ID()[0])
+	canonicalS := chainLedger(retainedSeq, canonical[0], 1)
+	canonicalSPlus1 := chainLedger(retainedSeq+1, 0x13, canonical[0])
+	localSPlus2 := chainLedger(retainedSeq+2, 0x14, localSPlus1.ID()[0])
+	nonProgressParent := &mockLedger{
+		id:        consensus.LedgerID{0xfb},
+		seq:       retainedSeq + 2,
+		parentID:  localS.ID(),
+		closeTime: time.Now(),
+	}
+	nonProgressCandidate := &mockLedger{
+		id:        consensus.LedgerID{0xd6},
+		seq:       retainedSeq + 2,
+		parentID:  nonProgressParent.ID(),
+		closeTime: time.Now(),
+	}
+	a.mu.Lock()
+	for _, ledger := range []consensus.Ledger{localS, localSPlus1, canonicalS, canonicalSPlus1, localSPlus2, nonProgressParent} {
+		a.ledgers[ledger.ID()] = ledger
+	}
+	a.mu.Unlock()
+
+	optionalMatching := &hashOfSeqTestLedger{
+		mockLedger: chainLedger(retainedSeq+1, 0x15, localS.ID()[0]),
+		hashes:     map[uint32]consensus.LedgerID{retainedSeq: canonical},
+	}
+	optionalWrong := &hashOfSeqTestLedger{
+		mockLedger: chainLedger(retainedSeq+1, 0x16, localS.ID()[0]),
+		hashes:     map[uint32]consensus.LedgerID{retainedSeq: localS.ID()},
+	}
+	optionalUnavailable := &hashOfSeqTestLedger{
+		mockLedger: chainLedger(retainedSeq+1, 0x17, localS.ID()[0]),
+	}
+
+	tests := []struct {
+		name       string
+		candidate  consensus.Ledger
+		wantID     consensus.LedgerID
+		wantReject bool
+	}{
+		{name: "matching retained sequence", candidate: canonicalS},
+		{name: "wrong retained sequence", candidate: chainLedger(retainedSeq, 0xd1, 1), wantID: canonical, wantReject: true},
+		{name: "earlier sequence", candidate: chainLedger(retainedSeq-1, 0xd2, 1)},
+		{name: "matching child", candidate: canonicalSPlus1},
+		{name: "wrong child by parent walk", candidate: localSPlus1, wantID: canonical, wantReject: true},
+		{name: "matching optional ancestry", candidate: optionalMatching},
+		{name: "wrong optional ancestry", candidate: optionalWrong, wantID: canonical, wantReject: true},
+		{name: "optional nullopt ancestry", candidate: optionalUnavailable},
+		{name: "wrong grandchild by parent walk", candidate: localSPlus2, wantID: canonical, wantReject: true},
+		{name: "wrong child with missing parent body", candidate: chainLedger(retainedSeq+1, 0xd4, 0xfa), wantID: canonical, wantReject: true},
+		{name: "non-progressing parent walk", candidate: nonProgressCandidate},
+		{name: "missing ancestry", candidate: chainLedger(retainedSeq+2, 0xd3, 0xfe)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotID, gotReject := e.authenticatedQuorumConflictLocked(tt.candidate)
+			if gotReject != tt.wantReject || gotID != tt.wantID {
+				t.Fatalf("conflict = (%x, %v), want (%x, %v)", gotID, gotReject, tt.wantID, tt.wantReject)
+			}
+		})
+	}
+}
+
+func TestEngine_QueuedValidationRejectsRetainedDescendantWhileUnavailable(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	tracker := NewValidationTracker(2)
+	tracker.SetNow(a.Now)
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{{2}, {3}}, 2)
+	unavailable := false
+	tracker.setQuorumUnavailableFunc(func() bool { return unavailable })
+	e.validationTracker = tracker
+
+	canonical := consensus.LedgerID{0xc1}
+	now := a.Now()
+	for _, node := range []consensus.NodeID{{2}, {3}} {
+		if !tracker.Add(&consensus.Validation{
+			NodeID: node, LedgerID: canonical, LedgerSeq: 101, Full: true,
+			SignTime: now, SeenTime: now,
+		}) {
+			t.Fatalf("quorum fixture validation from node %x was rejected", node)
+		}
+	}
+	localS := chainLedger(101, 0x11, 1)
+	localSPlus1 := chainLedger(102, 0x12, localS.ID()[0])
+	a.mu.Lock()
+	a.ledgers[localS.ID()] = localS
+	a.ledgers[localSPlus1.ID()] = localSPlus1
+	a.mu.Unlock()
+	unavailable = true
+
+	e.mu.Lock()
+	e.pendingValidationBroadcasts = append(e.pendingValidationBroadcasts,
+		&consensus.Validation{LedgerID: localSPlus1.ID(), LedgerSeq: 102, Full: true})
+	pending := e.takePendingPostUnlockLocked()
+	e.mu.Unlock()
+	runPostUnlock(pending)
+	if len(a.validationsBroadcast) != 0 {
+		t.Fatal("queued descendant validation ignored retained authenticated conflict while unavailable")
 	}
 }
 
@@ -181,11 +353,12 @@ func TestEngine_AuthenticatedQuorumConflictIsSequenceAndGateScoped(t *testing.T)
 			wantConflict:    false,
 		},
 		{
-			name:            "behind sequence",
+			name:            "known parent mismatch",
 			ledgerID:        consensus.LedgerID{0xCC},
 			ledgerSeq:       100,
 			validationCount: 2,
-			wantConflict:    false,
+			wantID:          consensus.LedgerID{0xCC},
+			wantConflict:    true,
 		},
 		{
 			name:            "same-sequence conflict",
