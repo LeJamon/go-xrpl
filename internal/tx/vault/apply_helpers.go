@@ -853,9 +853,29 @@ func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, as
 	return tx.RippleSendIOU(ctx.View, vaultAccountID, dstID, amt, true)
 }
 
-// burnShares decreases the share issuance's OutstandingAmount and debits the
-// holder's share MPToken balance by shares.
+// burnShares debits the holder's share MPToken balance by shares, then
+// decreases the share issuance's OutstandingAmount.
 func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, shares uint64) ter.Result {
+	tokenKey := keylet.MPTokenByID(shareMPTID, holderID)
+	token, terr := readMPToken(ctx.View, tokenKey)
+	if terr != nil {
+		return ter.TefINTERNAL
+	}
+	if token == nil {
+		return ter.TecNO_AUTH
+	}
+	if token.MPTAmount < shares {
+		return ter.TecINSUFFICIENT_FUNDS
+	}
+	token.MPTAmount -= shares
+	newTok, serr := state.SerializeMPToken(token)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(tokenKey, newTok); uerr != nil {
+		return ter.TefINTERNAL
+	}
+
 	shareKey := keylet.MPTIssuance(shareMPTID)
 	issData, err := ctx.View.Read(shareKey)
 	if err != nil || issData == nil {
@@ -874,23 +894,6 @@ func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 		return ter.TefINTERNAL
 	}
 	if uerr := ctx.View.Update(shareKey, newIss); uerr != nil {
-		return ter.TefINTERNAL
-	}
-
-	tokenKey := keylet.MPTokenByID(shareMPTID, holderID)
-	token, terr := readMPToken(ctx.View, tokenKey)
-	if terr != nil || token == nil {
-		return ter.TefINTERNAL
-	}
-	if token.MPTAmount < shares {
-		return ter.TecINSUFFICIENT_FUNDS
-	}
-	token.MPTAmount -= shares
-	newTok, serr := state.SerializeMPToken(token)
-	if serr != nil {
-		return ter.TefINTERNAL
-	}
-	if uerr := ctx.View.Update(tokenKey, newTok); uerr != nil {
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
