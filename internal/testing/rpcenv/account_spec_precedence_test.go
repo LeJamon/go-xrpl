@@ -90,3 +90,71 @@ func TestAccountSpecPrecedence8561(t *testing.T) {
 	_, rpcErr = env.RPC("account_offers", map[string]any{"account": bogus})
 	require.Equal(t, "actNotFound", rpcErr.ErrorString)
 }
+
+// Based on rippled AccountInfo_test.cpp, AccountLines_test.cpp and
+// PayChan_test.cpp (account_channels) as of XRPLF/rippled#8573.
+func TestAccountSpecPrecedence8573(t *testing.T) {
+	env := New(t)
+	alice := jtx.NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+	master := env.MasterAccount().Address
+	bogie := jtx.NewAccount("bogie").Address
+
+	runPrecedenceCases(t, env, "account_info", []precedenceCase{
+		{"bad ledger before missing account", map[string]any{"ledger_hash": 1}, "invalidParams", badLedgerHash},
+		{"missing account", map[string]any{}, "invalidParams", "Missing field 'account'."},
+		{"non-string ident", map[string]any{"ident": 1}, "invalidParams", "Invalid field 'ident'."},
+	})
+
+	result, rpcErr := env.RPC("account_info", map[string]any{"account": master, "ident": 1})
+	require.Nil(t, rpcErr, "ident is ignored when account is present")
+	require.Equal(t, master, didJSONMap(t, result)["account_data"].(map[string]any)["Account"])
+
+	_, rpcErr = env.RPC("account_info", map[string]any{"account": "llIIOO"})
+	require.Equal(t, "actMalformed", rpcErr.ErrorString)
+	requireLedgerFieldsOnError(t, rpcErr, true)
+
+	_, rpcErr = env.RPC("account_info", map[string]any{"account": bogie})
+	require.Equal(t, "actNotFound", rpcErr.ErrorString)
+	require.Equal(t, bogie, rpcErr.Extra["account"])
+	requireLedgerFieldsOnError(t, rpcErr, true)
+
+	_, rpcErr = env.RPC("account_info", map[string]any{"account": master, "ledger_index": "validated", "queue": "false"})
+	require.NotNil(t, rpcErr)
+	require.Equal(t, "invalidParams", rpcErr.ErrorString)
+	require.Equal(t, "Invalid parameters.", rpcErr.Message)
+	require.Contains(t, rpcErr.Extra, "ledger_index")
+	require.NotContains(t, rpcErr.Extra, "account_data")
+
+	runPrecedenceCases(t, env, "account_lines", []precedenceCase{
+		{"bad ledger before missing account", map[string]any{"ledger_hash": 1}, "invalidParams", badLedgerHash},
+		{"limit before missing account root", map[string]any{"account": bogie, "limit": -1}, "invalidParams", "Invalid field 'limit', not unsigned integer."},
+		{"limit before malformed account", map[string]any{"account": "llIIOO", "limit": 0}, "invalidParams", "Invalid field 'limit'."},
+		{"peer type before missing ledger", map[string]any{"account": alice.Address, "peer": 1, "ledger_index": 1000}, "invalidParams", "Invalid field 'peer'."},
+		{"marker before malformed peer", map[string]any{"account": alice.Address, "peer": "llIIOO", "marker": "NOT_A_MARKER"}, "invalidParams", "Invalid parameters."},
+		{"marker type", map[string]any{"account": alice.Address, "marker": 1}, "invalidParams", "Invalid field 'marker', not string."},
+		{"malformed marker", map[string]any{"account": alice.Address, "marker": "NOT_A_MARKER"}, "invalidParams", "Invalid parameters."},
+		{"missing account root before malformed peer", map[string]any{"account": bogie, "peer": "llIIOO"}, "actNotFound", "Account not found."},
+	})
+	_, rpcErr = env.RPC("account_lines", map[string]any{"account": "llIIOO"})
+	require.Equal(t, "actMalformed", rpcErr.ErrorString)
+	requireLedgerFieldsOnError(t, rpcErr, true)
+	_, rpcErr = env.RPC("account_lines", map[string]any{"account": alice.Address, "peer": "llIIOO"})
+	require.Equal(t, "actMalformed", rpcErr.ErrorString)
+	requireLedgerFieldsOnError(t, rpcErr, true)
+
+	runPrecedenceCases(t, env, "account_channels", []precedenceCase{
+		{"bad ledger before missing account", map[string]any{"ledger_hash": 1}, "invalidParams", badLedgerHash},
+		{"malformed account before missing ledger", map[string]any{"account": "llIIOO", "ledger_index": 1000}, "actMalformed", "Account malformed."},
+		{"destination before missing account root", map[string]any{"account": bogie, "destination_account": "llIIOO"}, "actMalformed", "Account malformed."},
+		{"destination type before missing ledger", map[string]any{"account": alice.Address, "destination_account": 1, "ledger_index": 1000}, "invalidParams", "Invalid field 'destination_account'."},
+		{"limit before missing account root", map[string]any{"account": bogie, "limit": 0}, "invalidParams", "Invalid field 'limit'."},
+		{"marker type", map[string]any{"account": alice.Address, "marker": 1}, "invalidParams", "Invalid field 'marker', not string."},
+		{"malformed marker before missing ledger", map[string]any{"account": alice.Address, "marker": "NOT_A_MARKER", "ledger_index": 1000}, "invalidParams", "Invalid parameters."},
+		{"missing account root", map[string]any{"account": bogie, "destination_account": ""}, "actNotFound", "Account not found."},
+	})
+	_, rpcErr = env.RPC("account_channels", map[string]any{"account": "llIIOO"})
+	require.Equal(t, "actMalformed", rpcErr.ErrorString)
+	requireLedgerFieldsOnError(t, rpcErr, false)
+}
