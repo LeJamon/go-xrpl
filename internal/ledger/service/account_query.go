@@ -1875,12 +1875,18 @@ func validateCredentialsOnLedger(ctx context.Context, targetLedger *ledger.Ledge
 	}
 
 	for _, credHex := range credentials {
-		credHashBytes, err := hex.DecodeString(credHex)
-		if err != nil {
+		var credHash [32]byte
+		if credHex != "0" {
+			credHashBytes, err := hex.DecodeString(credHex)
+			if err != nil || len(credHashBytes) != len(credHash) {
+				return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
+			}
+			copy(credHash[:], credHashBytes)
+		}
+		// A zero key names an entry that cannot exist.
+		if credHash == ([32]byte{}) {
 			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
-		var credHash [32]byte
-		copy(credHash[:], credHashBytes)
 
 		credKeylet := keylet.CredentialByID(credHash)
 		credData, err := targetLedger.ReadContext(ctx, credKeylet)
