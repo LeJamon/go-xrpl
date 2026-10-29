@@ -89,8 +89,6 @@ func requireNoIssuerReserveMutation(t *testing.T, result jtx.TxResult, issuer *j
 	}
 }
 
-// TestClawback_IOUReserveState verifies that clawback changes only the holder
-// side of an existing IOU line, including transaction metadata.
 func TestClawback_IOUReserveState(t *testing.T) {
 	for _, issuerLow := range []bool{true, false} {
 		t.Run(fmt.Sprintf("issuerLow=%t", issuerLow), func(t *testing.T) {
@@ -121,8 +119,6 @@ func TestClawback_IOUReserveState(t *testing.T) {
 	}
 }
 
-// TestClawback_IOUDefaultLineDeletionMetadata verifies that a full clawback
-// clears the holder reserve before deleting an otherwise default trust line.
 func TestClawback_IOUDefaultLineDeletionMetadata(t *testing.T) {
 	for _, issuerLow := range []bool{true, false} {
 		t.Run(fmt.Sprintf("issuerLow=%t", issuerLow), func(t *testing.T) {
