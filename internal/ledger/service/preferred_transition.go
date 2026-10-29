@@ -116,6 +116,7 @@ type PreparedPreferredLedger struct {
 
 type preferredTransitionTimings struct {
 	started        time.Time
+	transitionWait time.Duration
 	preparation    time.Duration
 	snapshot       time.Duration
 	capture        time.Duration
@@ -184,6 +185,13 @@ func (s *Service) prepareSuccessor(ctx context.Context, parent *ledger.Ledger, o
 			retry.finish(s, nil)
 			return prepared, nil
 		}
+		if errors.Is(err, ErrPreferredTransitionBusy) {
+			if waitErr := s.waitPreferredTransition(ctx); waitErr != nil {
+				retry.finish(s, waitErr)
+				return nil, waitErr
+			}
+			continue
+		}
 		// A failed attempt releases transition ownership before waiting: other
 		// holders may need to publish their work to return these credits.
 		if err = retry.wait(ctx, s, err); err != nil {
@@ -203,6 +211,8 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	if parent == nil || !parent.IsClosed() {
 		return fail(ErrPreferredChainSwitch)
 	}
+	transitionStarted := time.Now()
+	waitStarted := transitionStarted
 	if err := s.waitPreferredTransition(ctx); err != nil {
 		return fail(err)
 	}
@@ -213,13 +223,10 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 		parent:  parent,
 		ready:   make(chan struct{}),
 		state:   preferredTransitionPreparing,
-		timings: preferredTransitionTimings{started: time.Now()},
+		timings: preferredTransitionTimings{started: transitionStarted},
 	}
-	p.ctx, p.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancellation belongs to the prepared ledger and runs on cleanup, Release, or Stop.
-	if err := s.beginPreferredTransition(p); err != nil {
-		p.cancel()
-		return fail(err)
-	}
+	p.ctx, p.cancel = s.ledgerWorkContext(ctx)
+	p.timings.transitionWait = time.Since(waitStarted)
 	failPrepared := func(err error) (*PreparedPreferredLedger, error) {
 		err = s.preferredTransitionError(err)
 		if p.cancel != nil {
@@ -236,10 +243,20 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 			return failPrepared(err)
 		}
 	}
-	if !options.admitted && !options.allowReplayFault && !s.isServiceOwnedLedger(parent) {
+	verifyBeforeOwnership := !options.admitted && !options.allowReplayFault && !s.isServiceOwnedLedger(parent)
+	if verifyBeforeOwnership {
+		s.mu.RLock()
+		p.captureFrontierLocked()
+		s.mu.RUnlock()
 		if err := s.VerifyDetachedLedger(p.ctx, parent); err != nil {
 			return failPrepared(fmt.Errorf("preferred ledger state admission: %w", err))
 		}
+	}
+	if err := s.beginPreferredTransition(p); err != nil {
+		if verifyBeforeOwnership && errors.Is(err, ErrPreferredTransitionBusy) {
+			return failPrepared(fmt.Errorf("%w: frontier transition started during admission: %w", ErrPreferredChainSwitch, ErrPreferredTransitionStale))
+		}
+		return failPrepared(err)
 	}
 	gateWait, err := s.openLedgerMu.LockRoleContext(p.ctx, openLedgerPreferredSwitch)
 	if err != nil {
@@ -273,6 +290,15 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 		s.mu.RUnlock()
 		return failPrepared(svcerr.ErrNoOpenLedger)
 	}
+	if verifyBeforeOwnership {
+		// Promotion of this same ledger may finish while verification is shared.
+		validatedChanged := s.validatedLedger != p.validatedAtPrepare &&
+			(s.validatedLedger == nil || s.validatedLedger.Hash() != parent.Hash())
+		if !p.frontierMatchesLocked() || validatedChanged {
+			s.mu.RUnlock()
+			return failPrepared(fmt.Errorf("%w: ledger ownership changed during admission: %w", ErrPreferredChainSwitch, ErrPreferredTransitionStale))
+		}
+	}
 	if options.check != nil {
 		if err := options.check(s); err != nil {
 			s.mu.RUnlock()
@@ -282,14 +308,8 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	if options.allowReplayFault && s.replayFaults != nil {
 		p.replayFault = s.replayFaults.Snapshot()
 	}
-	p.expectedClosed = s.closedLedger
-	p.expectedOpen = s.openLedger
-	p.expectedView = s.openLedgerView
-	p.expectedQueue = s.txQueue
-	p.expectedLocals = s.localTxs
-	p.expectedReplay = s.startupReplay
+	p.captureFrontierLocked()
 	p.unfinished = s.speculativeSuccessor
-	p.validatedAtPrepare = s.validatedLedger
 	p.networkID = s.config.NetworkID
 	p.lastRoundSlow = options.preferred || options.allowReplayFault || s.lastConsensusRoundTime > slowConsensusThreshold
 	p.relayFn = s.txRelay
@@ -480,6 +500,24 @@ func (p *PreparedPreferredLedger) TryPublish() (bool, error) {
 	return p.publish(p.publishPreferredLocked)
 }
 
+func (p *PreparedPreferredLedger) captureFrontierLocked() {
+	s := p.service
+	p.expectedClosed = s.closedLedger
+	p.expectedOpen = s.openLedger
+	p.expectedView = s.openLedgerView
+	p.expectedQueue = s.txQueue
+	p.expectedLocals = s.localTxs
+	p.expectedReplay = s.startupReplay
+	p.validatedAtPrepare = s.validatedLedger
+}
+
+func (p *PreparedPreferredLedger) frontierMatchesLocked() bool {
+	s := p.service
+	return s.closedLedger == p.expectedClosed && s.openLedger == p.expectedOpen &&
+		s.openLedgerView == p.expectedView && s.txQueue == p.expectedQueue &&
+		s.localTxs == p.expectedLocals && s.startupReplay == p.expectedReplay
+}
+
 func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error) {
 	if p == nil || p.service == nil {
 		return false, ErrPreferredTransitionStale
@@ -539,10 +577,7 @@ func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error
 		s.mu.Unlock()
 		return p.abortLocked(replayfault.ErrBlocked)
 	}
-	if s.closedLedger != p.expectedClosed || s.openLedger != p.expectedOpen ||
-		s.openLedgerView != p.expectedView || s.txQueue != p.expectedQueue ||
-		s.localTxs != p.expectedLocals || s.startupReplay != p.expectedReplay ||
-		s.validatedLedger != p.validatedAtPrepare {
+	if !p.frontierMatchesLocked() || s.validatedLedger != p.validatedAtPrepare {
 		s.mu.Unlock()
 		return p.abortLocked(fmt.Errorf("%w: ledger ownership changed during preparation: %w", ErrPreferredChainSwitch, ErrPreferredTransitionStale))
 	}
@@ -938,6 +973,7 @@ func (p *PreparedPreferredLedger) logTimings() {
 	p.service.logger.Info("Preferred ledger switch timings",
 		"seq", p.parent.Sequence(),
 		"total", time.Since(p.timings.started),
+		"transition_wait", p.timings.transitionWait,
 		"preparation", p.timings.preparation,
 		"snapshot", p.timings.snapshot,
 		"transaction_capture", p.timings.capture,

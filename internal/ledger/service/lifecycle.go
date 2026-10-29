@@ -496,18 +496,26 @@ func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEv
 // SetValidatedLedgerAt marks a ledger validated using the trusted-validation
 // signing-time median. A zero signing time falls back to the ledger close time.
 func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
-	s.setValidatedLedgerAt(seq, expectedHash, signTime, false)
+	s.setValidatedLedgerAt(context.Background(), seq, expectedHash, signTime, false)
 }
 
 // PromoteStoredValidatedLedgerAt installs and validates a hash-stored acquired
 // ledger without changing the closed or open ledger frontiers. The caller must
 // establish live trusted-validation quorum before invoking it.
 func (s *Service) PromoteStoredValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
-	s.setValidatedLedgerAt(seq, expectedHash, signTime, true)
+	s.PromoteStoredValidatedLedgerAtContext(context.Background(), seq, expectedHash, signTime)
 }
 
-func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
-	releaseAdmission, err := s.acquireLedgerWork(context.Background())
+// PromoteStoredValidatedLedgerAtContext cancels admission when ctx or the
+// service stops. The caller must establish live trusted-validation quorum.
+func (s *Service) PromoteStoredValidatedLedgerAtContext(ctx context.Context, seq uint32, expectedHash [32]byte, signTime time.Time) {
+	s.setValidatedLedgerAt(ctx, seq, expectedHash, signTime, true)
+}
+
+func (s *Service) setValidatedLedgerAt(ctx context.Context, seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
+	workCtx, cancel := s.ledgerWorkContext(ctx)
+	defer cancel()
+	releaseAdmission, err := s.acquireLedgerWork(workCtx)
 	if err != nil {
 		return
 	}
@@ -540,7 +548,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	acquireGateAndRetry := func() error {
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
-		if err := s.lockOpenLedgerIfRunning(openLedgerValidation); err != nil {
+		if _, err := s.lockOpenLedgerIfRunningTimed(workCtx, openLedgerValidation); err != nil {
 			return err
 		}
 		gateHeld = true
@@ -564,7 +572,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		}
 		candidate := l
 		unlockForLookup()
-		if err := s.VerifyDetachedLedger(context.Background(), candidate); err != nil {
+		if err := s.VerifyDetachedLedger(workCtx, candidate); err != nil {
 			return true, err
 		}
 		storedVerified = true
@@ -709,7 +717,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		unlockForLookup()
 
 		var err error
-		loadedStored, err = s.loadStoredLedgerByHash(context.Background(), expectedHash)
+		loadedStored, err = s.loadStoredLedgerByHash(workCtx, expectedHash)
 		if err != nil {
 			s.logger.Warn("failed to load stored ledger for validation",
 				"seq", seq,

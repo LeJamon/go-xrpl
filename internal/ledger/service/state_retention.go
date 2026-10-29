@@ -183,9 +183,9 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 			}
 		}
 		admitted = true
-		// Both validated trees are now completely verified and preserved in
-		// the surviving storage generation. Transfer that fact after mutation
-		// instead of asking a background verifier to read them all again.
+		// Retained closed trees are completely verified in the surviving
+		// generation. Transfer that fact after mutation instead of walking them
+		// again; validation eligibility remains independent.
 		validated := s.validatedLedger
 		return func() {
 			defer unlock()
@@ -196,6 +196,7 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 			if err != nil || next == fingerprint {
 				return
 			}
+			s.transferRetainedReplayProofs(preserved, next)
 			h := validated.Header()
 			if _, ok := preserved[retainedStateRoot{h.AccountHash, shamap.TypeState}]; !ok {
 				return
@@ -205,13 +206,14 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 					return
 				}
 			}
-			s.rememberReplayProof(h, next, true)
 			// This certifies the preserved trees, not an early durable-tip
-			// publication. Consumers still check the durable header/tip. Keep
-			// the certificate in the canonical owner so normal successors can
-			// inherit it even if background publication is delayed.
+			// publication. Consumers still check the durable header/tip. Keep the
+			// validated certificate in its canonical owner so normal successors can
+			// inherit it even if background publication is delayed. Replay proofs
+			// for other retained closed owners were transferred above; they do not
+			// alter validation eligibility.
 			s.rememberValidatedStateBase(h, next)
-			s.logger.Info("State retention completeness proof transferred",
+			s.logger.Info("State retention completeness proofs transferred",
 				"sequence", h.LedgerIndex, "state_root", fmt.Sprintf("%x", h.AccountHash))
 			// Publication still checks the exact durable header and tip. The
 			// transferred certificate only eliminates the redundant tree walk.

@@ -202,8 +202,12 @@ type Service struct {
 	replayAcquireParent  func(uint32, [32]byte) error
 	lifecycleMu          sync.Mutex
 	lifecycleState       serviceLifecycleState
-	stopDone             chan struct{}
-	memoryAdmissionStop  chan struct{}
+	// lifecycleCtx is canceled as soon as Stop begins so detached work that is
+	// still doing admission can leave its storage walk before shutdown waits.
+	lifecycleCtx        context.Context
+	lifecycleCancel     context.CancelFunc
+	stopDone            chan struct{}
+	memoryAdmissionStop chan struct{}
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.
@@ -220,11 +224,12 @@ type Service struct {
 	// never blocks closed-ledger readers. Priority roles pass queued ingress.
 	openLedgerMu priorityGate
 
-	// preferredTransitionMu owns the detached successor transition. Preparation
-	// releases openLedgerMu after capturing the published input view, so ingress
-	// must wait on this owner separately rather than entering the old view while
-	// it is being replaced. The owner is cleared before any post-publication
-	// callback or relay work runs.
+	// preferredTransitionMu owns the detached successor transition after its
+	// external admission/proof work has completed. Preparation releases
+	// openLedgerMu after capturing the published input view, so ingress must wait
+	// on this owner separately rather than entering the old view while it is being
+	// replaced. The owner is cleared before any post-publication callback or relay
+	// work runs.
 	preferredTransitionMu     sync.Mutex
 	preferredTransitionActive bool
 	preferredTransitionWake   chan struct{}
@@ -263,6 +268,12 @@ type Service struct {
 	replayPreparedProofs    []*replayPreparedProof
 	replayPreparedSlotCount int
 	replayPreparedProofWake chan struct{}
+	// replayVerificationMu protects the bounded set of in-flight detached
+	// state+transaction completeness walks. Owner work uses the lifecycle
+	// context so one canceled waiter cannot cancel another.
+	replayVerificationMu      sync.Mutex
+	replayVerificationFlights map[replayVerificationKey]*replayVerificationFlight
+	replayVerificationWake    chan struct{}
 	// One foreground state verifier at a time. Transaction verification has
 	// independent admission and background re-certification yields between batches.
 	stateVerificationMu     sync.Mutex
@@ -437,6 +448,31 @@ const (
 )
 
 var errServiceNotRunning = errors.New("ledger service is not running")
+
+func (s *Service) lifecycleContext() context.Context {
+	s.lifecycleMu.Lock()
+	if s.lifecycleCtx == nil {
+		s.lifecycleCtx, s.lifecycleCancel = context.WithCancel(context.Background())
+		if s.lifecycleState == serviceFailed || s.lifecycleState == serviceStopping || s.lifecycleState == serviceStopped {
+			s.lifecycleCancel()
+		}
+	}
+	ctx := s.lifecycleCtx
+	s.lifecycleMu.Unlock()
+	return ctx
+}
+
+func (s *Service) ledgerWorkContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	workCtx, cancel := context.WithCancel(ctx)
+	stopLifecycle := context.AfterFunc(s.lifecycleContext(), cancel)
+	return workCtx, func() {
+		stopLifecycle()
+		cancel()
+	}
+}
 
 func (s *Service) lockOpenLedgerIfRunning(role openLedgerRole) error {
 	_, err := s.lockOpenLedgerIfRunningTimed(context.Background(), role)
@@ -719,8 +755,14 @@ func (s *Service) Start() (err error) {
 		return errors.New("ledger service has been stopped")
 	}
 	s.lifecycleState = serviceStarting
+	if s.lifecycleCtx == nil {
+		s.lifecycleCtx, s.lifecycleCancel = context.WithCancel(context.Background())
+	}
 	defer func() {
 		if err != nil {
+			if s.lifecycleCancel != nil {
+				s.lifecycleCancel()
+			}
 			s.lifecycleState = serviceFailed
 		}
 	}()
