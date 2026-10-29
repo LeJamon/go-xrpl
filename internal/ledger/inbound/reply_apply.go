@@ -77,7 +77,7 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 	}
 	if applyErr != nil && !errors.Is(applyErr, shamap.ErrAcquisitionMemory) {
 		l.mu.Lock()
-		if !errors.Is(applyErr, ErrInvalidPeerNode) && l.state != StateComplete {
+		if acquisitionFatal(applyErr) && l.state != StateComplete {
 			l.state = StateFailed
 			l.err = applyErr
 		}
@@ -188,7 +188,7 @@ func (l *Ledger) applyMissingReplyNodesLocked(
 			if addErr != nil {
 				l.lastRejectErr = addErr.Error()
 			}
-			return result, stored, matchedPeer, fmt.Errorf("%w: %s node rejected", ErrInvalidPeerNode, label)
+			return result, stored, matchedPeer, rejectedNodeError(label, addErr)
 		}
 	}
 	return result, stored, matchedPeer, nil

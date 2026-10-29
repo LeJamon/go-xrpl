@@ -102,7 +102,7 @@ func (sm *SHAMap) acquireBackedWalkGeneration(
 
 // GetMissingNodes returns the nodes referenced by the tree but not
 // present locally. It is gated on the syncing state — for any other state
-// the map is assumed complete and the result is nil.
+// but invalid the map is assumed complete and the result is nil.
 //
 // The bounded scanner may use several slices internally; this compatibility
 // wrapper collects them into the requested result window. maxNodes == 0 is
@@ -121,6 +121,9 @@ func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filt
 	sm.tree.mu.RLock()
 	state := sm.tree.state
 	sm.tree.mu.RUnlock()
+	if state == stateInvalid {
+		return nil, ErrMapInvalid
+	}
 	if state != stateSyncing {
 		return nil, nil
 	}

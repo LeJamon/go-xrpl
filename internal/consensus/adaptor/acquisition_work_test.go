@@ -676,6 +676,41 @@ func TestApplyAcquisitionData_ZeroAccountHashFailsWithoutCharge(t *testing.T) {
 	assert.Equal(t, inbound.StateFailed, ledger.State())
 }
 
+func TestApplyAcquisitionData_InnerAtLeafDepthChargesAndFails(t *testing.T) {
+	const leafDepth = 64
+	wires := make([][]byte, leafDepth+1)
+	child := [32]byte{1}
+	for depth := leafDepth; depth >= 0; depth-- {
+		hashes := make([]byte, shamap.BranchFactor*32)
+		copy(hashes, child[:])
+		wires[depth] = append(append([]byte{}, child[:]...), 0, byte(protocol.WireTypeCompressedInner))
+		child = sha512half.Sum(protocol.HashPrefixInnerNode().Bytes(), hashes)
+	}
+	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 200, AccountHash: child}, false)
+	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	ledger := inbound.New(ledgerHash, 200, 1, serveTestLogger())
+	_, _, _, _, err := applyAcquisitionData(t.Context(), ledger, &message.LedgerData{
+		InfoType: message.LedgerInfoBase,
+		Nodes:    []message.LedgerNode{{NodeData: headerData}, {NodeData: wires[0]}},
+	})
+	require.NoError(t, err)
+
+	nodes := make([]message.LedgerNode, 0, leafDepth)
+	for depth := 1; depth <= leafDepth; depth++ {
+		id, err := shamap.NewNodeID(uint8(depth), [32]byte{})
+		require.NoError(t, err)
+		nodes = append(nodes, message.LedgerNode{NodeData: wires[depth], NodeID: id.Bytes()})
+	}
+	_, badKind, remove, complete, err := applyAcquisitionData(t.Context(), ledger, &message.LedgerData{
+		InfoType: message.LedgerInfoAsNode,
+		Nodes:    nodes,
+	})
+	require.ErrorIs(t, err, shamap.ErrMapInvalid)
+	assert.Equal(t, "ledger-data-state", badKind)
+	assert.True(t, remove)
+	assert.False(t, complete)
+}
+
 func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()

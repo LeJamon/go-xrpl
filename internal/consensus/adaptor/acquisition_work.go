@@ -116,6 +116,7 @@ type acquisitionWorkResult struct {
 	canceled         bool
 	timerFailure     bool
 	policyFailure    bool
+	mapInvalid       bool
 	failureClass     standardReplayFailureClass
 	yielded          bool
 	continueRequests bool
@@ -693,6 +694,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				if remove {
 					result.err = err
 					result.remove = true
+					result.mapInvalid = errors.Is(err, shamap.ErrMapInvalid)
 					result.policyFailure = errors.Is(err, inbound.ErrHeaderRejected)
 					if result.policyFailure {
 						result.failureClass = standardReplayFailureInvalidData
@@ -1030,6 +1032,13 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 		}
 		return
 	}
+	if errors.Is(result.err, shamap.ErrMapInvalid) && !result.remove {
+		// A walk proved the map cannot exist; no peer can finish it.
+		result.remove, result.mapInvalid = true, true
+		if !result.haveSnapshot {
+			result.snapshot, result.haveSnapshot = ledger.Snapshot(), true
+		}
+	}
 	if result.rearmTimer && !result.complete && !result.remove {
 		defer ledger.RearmTimer(time.Now())
 	}
@@ -1064,7 +1073,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 		} else if failureClass == standardReplayFailureNone {
 			failureClass = standardReplayFailureInvalidData
 		}
-		if result.timerFailure || result.policyFailure {
+		if result.timerFailure || result.policyFailure || result.mapInvalid {
 			c.failInboundAcquisitionWithSnapshot(ledger, result.snapshot, cause, failureClass)
 		} else {
 			snapshot := result.snapshot
@@ -1272,7 +1281,8 @@ func applyAcquisitionReply(ctx context.Context, ledger *inbound.Ledger, event *a
 			badKind = "ledger-data-tx"
 		}
 	}
-	remove = errors.Is(err, shamap.ErrNodeSerialization) || errors.Is(err, inbound.ErrPersistence)
+	remove = errors.Is(err, shamap.ErrNodeSerialization) || errors.Is(err, inbound.ErrPersistence) ||
+		errors.Is(err, shamap.ErrMapInvalid)
 	return reply.Useful, reply.Consumed, badKind, remove, reply.Complete, err
 }
 
@@ -1293,7 +1303,7 @@ func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *mes
 	case message.LedgerInfoAsNode:
 		var added int
 		added, err = ledger.GotStateNodesUsefulContext(ctx, data.Nodes)
-		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
+		localFailure := errors.Is(err, shamap.ErrNodeSerialization) || errors.Is(err, shamap.ErrMapInvalid)
 		badKind := ""
 		if errors.Is(err, inbound.ErrInvalidPeerNode) {
 			badKind = "ledger-data-state"
@@ -1302,7 +1312,7 @@ func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *mes
 	case message.LedgerInfoTxNode:
 		var added int
 		added, err = ledger.GotTransactionNodesUsefulContext(ctx, data.Nodes)
-		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
+		localFailure := errors.Is(err, shamap.ErrNodeSerialization) || errors.Is(err, shamap.ErrMapInvalid)
 		badKind := ""
 		if errors.Is(err, inbound.ErrInvalidPeerNode) {
 			badKind = "ledger-data-tx"
