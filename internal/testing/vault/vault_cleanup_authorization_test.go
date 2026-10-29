@@ -387,129 +387,118 @@ func TestPrivateVaultWithdrawValidatesDestinationDomain(t *testing.T) {
 	require.Equal(t, beforeVault, afterVault, "unauthorized destination changed vault state")
 }
 
-func TestVaultClawbackNonexistentHolder(t *testing.T) {
-	for _, explicit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "implicit", true: "explicit"}[explicit], func(t *testing.T) {
-			env := newVaultEnv(t)
-			issuer := jtx.NewAccount("ghost-clawback-issuer")
-			owner := jtx.NewAccount("ghost-clawback-owner")
-			holder := jtx.NewAccount("ghost-clawback-holder")
-			env.Fund(issuer)
-			jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(issuer).AllowClawback().Build()))
-			env.Fund(owner, holder)
-			const currency = "USD"
-			env.Trust(owner, tx.NewIssuedAmountFromFloat64(1_000, currency, issuer.Address))
-			env.Trust(holder, tx.NewIssuedAmountFromFloat64(100, currency, issuer.Address))
-			env.PayIOU(issuer, holder, issuer, currency, 100)
-
-			vaultSequence := env.Seq(owner)
-			create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: currency, Issuer: issuer.Address})
-			create.Common.Fee = createFee
-			jtx.RequireTxSuccess(t, env.Submit(create))
-			vaultID := vaultID(owner, vaultSequence)
-			jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(
-				holder.Address,
-				vaultID,
-				tx.NewIssuedAmountFromFloat64(100, currency, issuer.Address),
-			)))
-
-			claw := vault.NewVaultClawback(issuer.Address, vaultID, jtx.NewAccount("ghost-clawback-target").Address)
-			want := ter.TecPRECISION_LOSS.String()
-			if explicit {
-				amount := tx.NewIssuedAmountFromFloat64(1, currency, issuer.Address)
-				claw.Amount = &amount
-				want = ter.TecNO_AUTH.String()
-			}
-			vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
-			beforeVault, err := env.LedgerEntry(vaultKey)
-			require.NoError(t, err)
-			beforeBalance := env.Balance(issuer)
-			result := env.Submit(claw)
-			require.Equal(t, want, result.Code)
-			require.True(t, result.Applied)
-			require.Equal(t, beforeBalance-env.BaseFee(), env.Balance(issuer))
-			afterVault, err := env.LedgerEntry(vaultKey)
-			require.NoError(t, err)
-			require.Equal(t, beforeVault, afterVault, "nonexistent-holder clawback changed vault state")
-		})
+// Reference: rippled VaultClawback_test.cpp testClawbackInvalidHolder.
+func TestVaultClawbackInvalidHolder(t *testing.T) {
+	cases := []struct {
+		name           string
+		pseudoAccount  bool
+		fix            string
+		guarded        string
+		legacyImplicit string
+		legacyExplicit string
+	}{
+		{
+			name:           "pseudo_account",
+			pseudoAccount:  true,
+			fix:            "fixCleanup3_4_0",
+			guarded:        ter.TecPSEUDO_ACCOUNT.String(),
+			legacyImplicit: ter.TecPRECISION_LOSS.String(),
+			legacyExplicit: jtx.TecINVARIANT_FAILED,
+		},
+		{
+			name:           "nonexistent",
+			fix:            "fixCleanup3_5_0",
+			guarded:        ter.TerNO_ACCOUNT.String(),
+			legacyImplicit: ter.TecPRECISION_LOSS.String(),
+			legacyExplicit: ter.TecNO_AUTH.String(),
+		},
 	}
-}
-
-func TestVaultClawbackPseudoHolderPrecedence(t *testing.T) {
-	for _, cleanup := range []bool{false, true} {
-		name := "without_fixCleanup3_4_0"
-		if cleanup {
-			name = "with_fixCleanup3_4_0"
-		}
-		t.Run(name, func(t *testing.T) {
-			for _, explicit := range []bool{false, true} {
-				t.Run(map[bool]string{false: "implicit", true: "explicit"}[explicit], func(t *testing.T) {
-					env := newVaultEnv(t)
-					if cleanup {
-						env.EnableFeature("fixCleanup3_4_0")
-					} else {
-						env.DisableFeature("fixCleanup3_4_0")
-					}
-					env.Close()
-
-					issuer := jtx.NewAccount("pseudo-clawback-issuer")
-					owner := jtx.NewAccount("pseudo-clawback-owner")
-					holder := jtx.NewAccount("pseudo-clawback-holder")
-					env.Fund(issuer)
-					jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(issuer).AllowClawback().Build()))
-					env.Fund(owner, holder)
-					const currency = "USD"
-					env.Trust(owner, tx.NewIssuedAmountFromFloat64(1_000, currency, issuer.Address))
-					env.Trust(holder, tx.NewIssuedAmountFromFloat64(100, currency, issuer.Address))
-					env.PayIOU(issuer, holder, issuer, currency, 100)
-
-					vaultSequence := env.Seq(owner)
-					create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: currency, Issuer: issuer.Address})
-					create.Common.Fee = createFee
-					jtx.RequireTxSuccess(t, env.Submit(create))
-					vaultID := vaultID(owner, vaultSequence)
-					jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(
-						holder.Address,
-						vaultID,
-						tx.NewIssuedAmountFromFloat64(100, currency, issuer.Address),
-					)))
-					info, err := vault.ReadVaultInfo(env.Ledger(), keylet.Vault(owner.AccountID(), vaultSequence))
-					require.NoError(t, err)
-					require.NotNil(t, info)
-					pseudoAddress, err := state.EncodeAccountID(info.Account)
-					require.NoError(t, err)
-
-					claw := vault.NewVaultClawback(issuer.Address, vaultID, pseudoAddress)
-					if explicit {
-						amount := tx.NewIssuedAmountFromFloat64(1, currency, issuer.Address)
-						claw.Amount = &amount
-					}
-					vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
-					beforeVault, err := env.LedgerEntry(vaultKey)
-					require.NoError(t, err)
-					beforeBalance := env.Balance(issuer)
-					beforeSequence := env.Seq(issuer)
-					result := env.Submit(claw)
-					want := jtx.TecINVARIANT_FAILED
-					if !explicit {
-						want = ter.TecPRECISION_LOSS.String()
-					}
-					if cleanup {
-						want = ter.TecPSEUDO_ACCOUNT.String()
-					}
-					require.Equal(t, want, result.Code)
-					require.True(t, result.Applied)
-					require.Equal(t, env.BaseFee(), result.Fee)
-					require.NotNil(t, result.Metadata)
-					require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
-					require.Equal(t, beforeBalance-env.BaseFee(), env.Balance(issuer))
-					require.Equal(t, beforeSequence+1, env.Seq(issuer))
-					require.True(t, env.VaultExists(vaultID))
-					afterVault, err := env.LedgerEntry(vaultKey)
-					require.NoError(t, err)
-					require.Equal(t, beforeVault, afterVault, "pseudo-holder clawback changed vault state")
-				})
+	for _, c := range cases {
+		for _, guarded := range []bool{false, true} {
+			name := c.name + "/without_" + c.fix
+			if guarded {
+				name = c.name + "/with_" + c.fix
 			}
-		})
+			t.Run(name, func(t *testing.T) {
+				for _, explicit := range []bool{false, true} {
+					t.Run(map[bool]string{false: "implicit", true: "explicit"}[explicit], func(t *testing.T) {
+						env := newVaultEnv(t)
+						if guarded {
+							env.EnableFeature(c.fix)
+						} else {
+							env.DisableFeature(c.fix)
+						}
+						env.Close()
+
+						issuer := jtx.NewAccount("invalid-clawback-issuer")
+						owner := jtx.NewAccount("invalid-clawback-owner")
+						holder := jtx.NewAccount("invalid-clawback-holder")
+						env.Fund(issuer)
+						jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(issuer).AllowClawback().Build()))
+						env.Fund(owner, holder)
+						const currency = "USD"
+						env.Trust(owner, tx.NewIssuedAmountFromFloat64(1_000, currency, issuer.Address))
+						env.Trust(holder, tx.NewIssuedAmountFromFloat64(100, currency, issuer.Address))
+						env.PayIOU(issuer, holder, issuer, currency, 100)
+
+						vaultSequence := env.Seq(owner)
+						create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: currency, Issuer: issuer.Address})
+						create.Common.Fee = createFee
+						jtx.RequireTxSuccess(t, env.Submit(create))
+						vaultID := vaultID(owner, vaultSequence)
+						jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(
+							holder.Address,
+							vaultID,
+							tx.NewIssuedAmountFromFloat64(100, currency, issuer.Address),
+						)))
+
+						target := jtx.NewAccount("invalid-clawback-ghost").Address
+						if c.pseudoAccount {
+							info, err := vault.ReadVaultInfo(env.Ledger(), keylet.Vault(owner.AccountID(), vaultSequence))
+							require.NoError(t, err)
+							require.NotNil(t, info)
+							target, err = state.EncodeAccountID(info.Account)
+							require.NoError(t, err)
+						}
+
+						claw := vault.NewVaultClawback(issuer.Address, vaultID, target)
+						if explicit {
+							amount := tx.NewIssuedAmountFromFloat64(1, currency, issuer.Address)
+							claw.Amount = &amount
+						}
+						vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
+						beforeVault, err := env.LedgerEntry(vaultKey)
+						require.NoError(t, err)
+						beforeBalance := env.Balance(issuer)
+						beforeSequence := env.Seq(issuer)
+						result := env.Submit(claw)
+						want := c.legacyImplicit
+						if explicit {
+							want = c.legacyExplicit
+						}
+						if guarded {
+							want = c.guarded
+						}
+						require.Equal(t, want, result.Code)
+						if strings.HasPrefix(want, "tec") {
+							require.True(t, result.Applied)
+							require.Equal(t, env.BaseFee(), result.Fee)
+							require.NotNil(t, result.Metadata)
+							require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
+							require.Equal(t, beforeBalance-env.BaseFee(), env.Balance(issuer))
+							require.Equal(t, beforeSequence+1, env.Seq(issuer))
+						} else {
+							require.False(t, result.Applied)
+							require.Equal(t, beforeBalance, env.Balance(issuer))
+							require.Equal(t, beforeSequence, env.Seq(issuer))
+						}
+						require.True(t, env.VaultExists(vaultID))
+						afterVault, err := env.LedgerEntry(vaultKey)
+						require.NoError(t, err)
+						require.Equal(t, beforeVault, afterVault, "invalid-holder clawback changed vault state")
+					})
+				}
+			})
+		}
 	}
 }

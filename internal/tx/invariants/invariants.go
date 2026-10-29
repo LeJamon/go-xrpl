@@ -253,7 +253,10 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidAMM(tx, result, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
-			return checkValidPseudoAccounts(entries, rules)
+			if v := checkValidPseudoAccounts(entries, rules); v != nil {
+				return v
+			}
+			return checkPseudoAccountOwnerDirs(entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidLoanForTx(tx, result, entries, view, rules, numberContext...)

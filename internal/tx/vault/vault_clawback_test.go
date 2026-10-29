@@ -90,6 +90,11 @@ func newVaultClawbackFixture(t *testing.T, holderShares uint64) *vaultClawbackFi
 
 	issuerAddr := clawbackTestAddress(t, assetIssuerID)
 	holderAddr := clawbackTestAddress(t, holderID)
+	holderRoot, err := state.SerializeAccountRoot(&state.AccountRoot{Account: holderAddr, Balance: 1_000_000_000, Sequence: 1})
+	if err != nil {
+		t.Fatalf("serialize holder account: %v", err)
+	}
+	view.data[keylet.Account(holderID).Key] = holderRoot
 	issuerAccount := &state.AccountRoot{Account: issuerAddr, Balance: 1_000_000_000, Sequence: 1}
 	ctx := &tx.ApplyContext{
 		View:      view,
