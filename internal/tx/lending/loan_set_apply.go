@@ -123,8 +123,8 @@ func (l *LoanSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 	}
 	asset := vinfo.Asset
 	for _, f := range l.loanSetValueFields() {
-		if !representableAsAsset(number(f), asset) {
-			return ter.TecPRECISION_LOSS
+		if res := checkAssetValue(number(f), asset); res != ter.TesSUCCESS {
+			return res
 		}
 	}
 	if r := vault.CanAddHolding(view, asset); r != ter.TesSUCCESS {
