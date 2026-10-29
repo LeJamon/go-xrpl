@@ -5,15 +5,21 @@ It parses the C++ protocol macros and combines them with construction rules
 transcribed from the pinned sources, independently of go-xrpl. The input must
 be a clean checkout of one of the pinned releases below.
 
-The checked-in fixture tracks the staged rippled 3.5.0-rc1 protocol
-definitions and is regenerated from a clean public checkout with:
+An authorized release job can regenerate and verify the final 3.4.1 fixture
+from the clean private source checkout with:
 
     python3 server_definitions_final_oracle.py \
-        /path/to/rippled-3.5.0-rc1 --release 3.5.0-rc1 --output server_definitions_final_hashes.json
+        /path/to/rippled-worktrees/v3.4.1-oracle --output server_definitions_final_hashes.json
+
+The staged 3.5.0-rc1 fixture, which go-xrpl's own document matches, comes from
+a clean public checkout:
+
+    python3 server_definitions_final_oracle.py \
+        /path/to/rippled-3.5.0-rc1 --release 3.5.0-rc1 --output server_definitions_rc1_hashes.json
 
 The repository, tag, commit, and clean-checkout checks reject mixed-release
-source trees. Ordinary CI verifies the committed snapshot and does not attempt
-this checkout.
+source trees. Ordinary CI verifies the committed snapshots and does not attempt
+these checkouts.
 
 A built daemon of the same release can independently dump the runtime document
 with `xrpld --definitions`; the source-derived checksums below are kept in the
@@ -29,8 +35,16 @@ from pathlib import Path
 
 
 RELEASES = {
-    "3.4.1": ("XRPLF/xrpld-private", "d147fccf54a500fce586522f28d6044c37fd8d29"),
-    "3.5.0-rc1": ("XRPLF/rippled", "3608433514e6b622da7454ff4b8890d75e672e31"),
+    "3.4.1": (
+        "XRPLF/xrpld-private",
+        "d147fccf54a500fce586522f28d6044c37fd8d29",
+        "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
+    ),
+    "3.5.0-rc1": (
+        "XRPLF/rippled",
+        "3608433514e6b622da7454ff4b8890d75e672e31",
+        "python3 server_definitions_final_oracle.py <rippled-3.5.0-rc1> --release 3.5.0-rc1 --output server_definitions_rc1_hashes.json",
+    ),
 }
 
 
@@ -44,7 +58,7 @@ def normalize_repository(url):
 
 
 def verify_oracle(root, tag):
-    repository, commit = RELEASES[tag]
+    repository, commit, _ = RELEASES[tag]
 
     def git(*args):
         return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
@@ -361,11 +375,11 @@ def section_stats(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("oracle_root", type=Path)
-    parser.add_argument("--release", choices=sorted(RELEASES), default="3.5.0-rc1")
+    parser.add_argument("--release", choices=sorted(RELEASES), default="3.4.1")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     root = args.oracle_root.resolve()
-    repository, commit = RELEASES[args.release]
+    repository, commit, regeneration = RELEASES[args.release]
     try:
         verify_oracle(root, args.release)
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
@@ -380,7 +394,7 @@ def main():
         },
         "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
         "regeneration": {
-            "source": f"python3 server_definitions_final_oracle.py <rippled-{args.release}> --release {args.release} --output server_definitions_final_hashes.json",
+            "source": regeneration,
             "runtime": "xrpld --definitions",
         },
         "transaction_results": {

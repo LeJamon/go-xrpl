@@ -1,12 +1,12 @@
 {
   "oracle": {
-    "repository": "XRPLF/rippled",
-    "tag": "3.5.0-rc1",
-    "commit": "3608433514e6b622da7454ff4b8890d75e672e31"
+    "repository": "XRPLF/xrpld-private",
+    "tag": "3.4.1",
+    "commit": "d147fccf54a500fce586522f28d6044c37fd8d29"
   },
   "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
   "regeneration": {
-    "source": "python3 server_definitions_final_oracle.py <rippled-3.5.0-rc1> --release 3.5.0-rc1 --output server_definitions_final_hashes.json",
+    "source": "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
     "runtime": "xrpld --definitions"
   },
   "transaction_results": {
@@ -16,8 +16,8 @@
       "tecNO_DELEGATE_PERMISSION"
     ]
   },
-  "full_document_sha512_half": "E4538EC5BCAC8A5811C7DB7311A426E108C6545E7481652DE8F2A8FDC7425191",
-  "full_document_bytes": 84398,
+  "full_document_sha512_half": "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
+  "full_document_bytes": 79944,
   "sections": {
     "TYPES": {
       "sha512_half": "1271A3D287130AFA02682AC752B376DA7C38CEC9DAB4AB4B10BAC3047B217281",
@@ -26,52 +26,52 @@
       "entries": 31
     },
     "FIELDS": {
-      "sha512_half": "EA7134121C837A1B63A8CB1762CEE701777E8EF95BED82835400DAECE08B877A",
-      "bytes": 40153,
+      "sha512_half": "9BEE52C97DCDF74F5B1C877F3DCDF0FC511A6866474A6F9DAFED75275B5C33AE",
+      "bytes": 38113,
       "groups": 0,
-      "entries": 376
+      "entries": 357
     },
     "LEDGER_ENTRY_TYPES": {
-      "sha512_half": "45E24915FF27377F75DC670C9FE07FCEAAAA6900A26815F7BD02C3ABC1546819",
-      "bytes": 562,
-      "groups": 33,
-      "entries": 33
+      "sha512_half": "C970FBACA727B32DC13FC98DA55E284562E7D903FBB40D245F284788A3E6A71F",
+      "bytes": 536,
+      "groups": 32,
+      "entries": 32
     },
     "TRANSACTION_TYPES": {
-      "sha512_half": "82060EF840C2C32EE14BE76E1FFDA2239FE6DD32E0FB2009CB6FA369AD1DDB98",
-      "bytes": 1802,
-      "groups": 87,
-      "entries": 87
+      "sha512_half": "441B7543A44BEE19F805708CDC604FAFD2EBE2B13F46D10B30392C8B790F97CA",
+      "bytes": 1671,
+      "groups": 83,
+      "entries": 83
     },
     "TRANSACTION_RESULTS": {
-      "sha512_half": "83264AF5AFCA67D0EAEA38E3D0803C93D54C587938C981DF4597BFF46A1D0D3B",
-      "bytes": 5052,
-      "groups": 203,
-      "entries": 203
+      "sha512_half": "173577994C450773F766E21F1990721B886B1DCA61CC557A3D72461A4C3E7764",
+      "bytes": 4851,
+      "groups": 195,
+      "entries": 195
     },
     "TRANSACTION_FORMATS": {
-      "sha512_half": "235A5B7B27E479C37C9A61E6485AD12A715C88A437FED9106ADF4BCB09948770",
-      "bytes": 16421,
-      "groups": 87,
-      "entries": 374
+      "sha512_half": "EFE01E8C987740BF92AE740DF1E0D96B43290EB1AF3A9B6C69BD739AB513B72A",
+      "bytes": 15472,
+      "groups": 83,
+      "entries": 354
     },
     "LEDGER_ENTRY_FORMATS": {
-      "sha512_half": "D1FA5CCE58AFCEB24DAB0C120F1FA3CF50FC03D4763A02303BA45B5CF1C6E68A",
-      "bytes": 15185,
-      "groups": 33,
-      "entries": 364
+      "sha512_half": "A292FE85A1A274B197F4A3C7DBB4206C0149AA22C29BEE338FB126229198DCF3",
+      "bytes": 14286,
+      "groups": 32,
+      "entries": 343
     },
     "TRANSACTION_FLAGS": {
-      "sha512_half": "C05E835079C0B9DE78D42C242220AE0E865CD3A500A31455497D9606E44A5703",
-      "bytes": 2684,
-      "groups": 25,
-      "entries": 90
+      "sha512_half": "1284BECCDC3F81930847278B031DD86ED5B6A2DDD206E402CDF6ACE808573E3A",
+      "bytes": 2520,
+      "groups": 23,
+      "entries": 86
     },
     "LEDGER_ENTRY_FLAGS": {
-      "sha512_half": "467AEABB87E3DEE247F425ACA63EA327F6F2373F1CE5B4C637207BC3C354B21C",
-      "bytes": 1529,
-      "groups": 13,
-      "entries": 52
+      "sha512_half": "30C3773280980D99CD04E41FF48CB9B07A2C46F4596AB787310C1B43E99C4564",
+      "bytes": 1485,
+      "groups": 12,
+      "entries": 51
     },
     "ACCOUNT_SET_FLAGS": {
       "sha512_half": "8E135E94013751453676B34644740826DA520537916142EAEB43C6D92BCD1187",

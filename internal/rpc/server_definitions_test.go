@@ -18,11 +18,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This fixture is generated independently from the pinned rippled source
-// macros; see testdata/server_definitions_final_oracle.py.
-//
-//go:embed testdata/server_definitions_final_hashes.json
-var serverDefinitionsFinalHashFixture []byte
+// These fixtures are generated independently from the pinned rippled source
+// macros; see testdata/server_definitions_final_oracle.py. The final 3.4.1
+// fixture stays pinned for the release oracle checks, and go-xrpl's document
+// matches the staged 3.5.0-rc1 one.
+var (
+	//go:embed testdata/server_definitions_final_hashes.json
+	serverDefinitionsFinalHashFixture []byte
+	//go:embed testdata/server_definitions_rc1_hashes.json
+	serverDefinitionsRC1HashFixture []byte
+)
 
 type serverDefinitionsSectionFixture struct {
 	SHA512Half string `json:"sha512_half"`
@@ -42,10 +47,10 @@ type serverDefinitionsHashFixture struct {
 	Sections               map[string]serverDefinitionsSectionFixture `json:"sections"`
 }
 
-func loadServerDefinitionsFinalHashFixture(t *testing.T) serverDefinitionsHashFixture {
+func loadServerDefinitionsHashFixture(t *testing.T, data []byte) serverDefinitionsHashFixture {
 	t.Helper()
 	var fixture serverDefinitionsHashFixture
-	require.NoError(t, json.Unmarshal(serverDefinitionsFinalHashFixture, &fixture))
+	require.NoError(t, json.Unmarshal(data, &fixture))
 	return fixture
 }
 
@@ -307,8 +312,8 @@ func TestServerDefinitionsHash(t *testing.T) {
 	hash, ok := resp["hash"].(string)
 	require.True(t, ok, "response should contain a string hash")
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
-	// Pinned to the v3.4.1 ServerDefinitions document and its compact
-	// Json::FastWriter serialization from the private release oracle.
+	// Pinned to the staged 3.5.0-rc1 ServerDefinitions document and its
+	// compact Json::FastWriter serialization.
 	assert.Equal(t, "E4538EC5BCAC8A5811C7DB7311A426E108C6545E7481652DE8F2A8FDC7425191", hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
@@ -373,8 +378,8 @@ func TestServerDefinitionsHash(t *testing.T) {
 
 // The section checks make omissions in formats, flags, or type tables visible
 // even when the complete-document hash is accidentally updated.
-func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
-	fixture := loadServerDefinitionsFinalHashFixture(t)
+func TestServerDefinitionsMatchesSourceFixture(t *testing.T) {
+	fixture := loadServerDefinitionsHashFixture(t, serverDefinitionsRC1HashFixture)
 	assert.Equal(t, "XRPLF/rippled", fixture.Oracle.Repository)
 	assert.Equal(t, "3.5.0-rc1", fixture.Oracle.Tag)
 	assert.Equal(t, "3608433514e6b622da7454ff4b8890d75e672e31", fixture.Oracle.Commit)
@@ -426,6 +431,32 @@ func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
 		assert.Equal(t, expected.Entries, entries, "%s entry count", name)
 		assert.Equal(t, expected.SHA512Half, strings.ToUpper(hex.EncodeToString(sum[:])), "%s hash", name)
 	}
+}
+
+// The final 3.4.1 fixture stays pinned to the private release oracle, and
+// only the sections that rc1 extends differ from the staged fixture.
+func TestServerDefinitionsFinalFixtureStaysPinned(t *testing.T) {
+	final := loadServerDefinitionsHashFixture(t, serverDefinitionsFinalHashFixture)
+	assert.Equal(t, "XRPLF/xrpld-private", final.Oracle.Repository)
+	assert.Equal(t, "3.4.1", final.Oracle.Tag)
+	assert.Equal(t, "d147fccf54a500fce586522f28d6044c37fd8d29", final.Oracle.Commit)
+	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", final.FullDocumentSHA512Half)
+	assert.Equal(t, 79944, final.FullDocumentBytes)
+
+	staged := loadServerDefinitionsHashFixture(t, serverDefinitionsRC1HashFixture)
+	require.Len(t, staged.Sections, len(final.Sections))
+	var changed []string
+	for name, section := range final.Sections {
+		rc1, ok := staged.Sections[name]
+		require.True(t, ok, "staged fixture section %s is missing", name)
+		if rc1 != section {
+			changed = append(changed, name)
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"FIELDS", "LEDGER_ENTRY_TYPES", "TRANSACTION_TYPES", "TRANSACTION_RESULTS",
+		"TRANSACTION_FORMATS", "LEDGER_ENTRY_FORMATS", "TRANSACTION_FLAGS", "LEDGER_ENTRY_FLAGS",
+	}, changed)
 }
 
 // TestServerDefinitionsInvalidSentinel verifies the Invalid:-1 sentinel is
