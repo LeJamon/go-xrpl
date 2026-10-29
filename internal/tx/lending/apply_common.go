@@ -55,9 +55,16 @@ func adjustPseudoOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int3
 	return ter.TesSUCCESS
 }
 
-// representableAsAsset reports whether n survives a round-trip through the asset's
-// STAmount precision (rippled STAmount{asset, value} == value). Used for the
-// tecPRECISION_LOSS guards, relevant to integral (XRP/MPT) assets.
-func representableAsAsset(n lmath.N, asset tx.Asset) bool {
-	return n.RoundToAsset(assetIntegral(asset)).Equal(n)
+func checkAssetValue(n lmath.N, asset tx.Asset) ter.Result {
+	rounded := n.RoundToAsset(assetIntegral(asset))
+	if asset.IsNative() {
+		maximum := lmath.FromInt(int64(state.MaxNativeDrops))
+		if rounded.Cmp(maximum) > 0 || rounded.Cmp(maximum.Negate()) < 0 {
+			return ter.TefEXCEPTION
+		}
+	}
+	if !rounded.Equal(n) {
+		return ter.TecPRECISION_LOSS
+	}
+	return ter.TesSUCCESS
 }
