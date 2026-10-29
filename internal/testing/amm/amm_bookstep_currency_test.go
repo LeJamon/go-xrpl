@@ -244,14 +244,13 @@ func TestAMMBookStep_CrossCurrencyBridged(t *testing.T) {
 
 func TestAMMBookStep_GatewayCrossCurrency(t *testing.T) {
 	for _, fixed := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fixAMMv1_1=%t", fixed), func(t *testing.T) {
+		t.Run(fmt.Sprintf("fixAMMv1_3=%t", fixed), func(t *testing.T) {
 			env := newCalcEnv(t)
 			if !fixed {
-				env.DisableFeature("fixAMMv1_1")
 				env.DisableFeature("fixAMMv1_3")
 			}
 			env.Close()
-			if env.Rules().Enabled(amendment.FeatureFixAMMv1_1) != fixed {
+			if env.Rules().Enabled(amendment.FeatureFixAMMv1_3) != fixed {
 				t.Fatal("incorrect rounding amendment profile")
 			}
 			startingXRP := uint64(100_100_000) + env.TestEnv.ReserveBase() + env.TestEnv.ReserveIncrement() + 2*env.BaseFee()
@@ -279,10 +278,7 @@ func TestAMMBookStep_GatewayCrossCurrency(t *testing.T) {
 				NoDirectRipple().PartialPayment().Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
-			poolXTS, bobXTS := "101.010101010101", "98.989898989899"
-			if fixed {
-				poolXTS, bobXTS = "101.0101010101011", "98.9898989898989"
-			}
+			poolXTS, bobXTS := "101.0101010101011", "98.9898989898989"
 			requireAMMAmount(t, ammHolding(t, env, pool, xts), poolXTS)
 			requireAMMAmount(t, ammHolding(t, env, pool, xxx), "99")
 			requireAMMAmount(t, ammHolding(t, env, env.Bob, xts), bobXTS)

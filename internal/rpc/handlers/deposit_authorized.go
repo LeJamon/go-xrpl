@@ -158,14 +158,12 @@ func parseCredentialsFormat(raw json.RawMessage) ([]string, *rpcerrors.RpcError)
 			return nil, rpcerrors.RpcErrorExpectedField("credentials",
 				"an array of CredentialID(hash256)")
 		}
-		// Each credential must be a valid 64-char hex string (32 bytes / 256 bits)
-		if len(credStr) != 64 {
-			return nil, rpcerrors.RpcErrorExpectedField("credentials",
-				"an array of CredentialID(hash256)")
-		}
-		if _, err := hex.DecodeString(credStr); err != nil {
-			return nil, rpcerrors.RpcErrorExpectedField("credentials",
-				"an array of CredentialID(hash256)")
+		// Each credential is a 64-char hex hash256, or "0" for the zero hash.
+		if credStr != "0" {
+			if _, err := hex.DecodeString(credStr); err != nil || len(credStr) != 64 {
+				return nil, rpcerrors.RpcErrorExpectedField("credentials",
+					"an array of CredentialID(hash256)")
+			}
 		}
 		credentials = append(credentials, credStr)
 	}

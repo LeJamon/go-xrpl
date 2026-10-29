@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 112 amendments.
+Total: 117 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -17,7 +17,9 @@ Total: 112 amendments.
 | `CheckCashMakesTrustLine` | yes | no |
 | `Checks` | yes | no |
 | `Clawback` | yes | no |
+| `ConfidentialMPTKeyRotation` | no | no |
 | `ConfidentialTransfer` | no | no |
+| `Cosign` | no | no |
 | `Credentials` | yes | no |
 | `CryptoConditions` | yes | no |
 | `CryptoConditionsSuite` | yes | no |
@@ -41,13 +43,14 @@ Total: 112 amendments.
 | `InvariantsV1_1` | no | no |
 | `LendingProtocol` | yes | no |
 | `LendingProtocolV1_1` | yes | no |
+| `LendingProtocolV1_2` | no | no |
 | `MPTokensV1` | yes | no |
 | `MPTokensV2` | no | no |
 | `MultiSign` | yes | no |
 | `MultiSignReserve` | yes | no |
 | `NFTokenMintOffer` | yes | no |
 | `NegativeUNL` | yes | no |
-| `NonFungibleTokensV1` | yes | no |
+| `NonFungibleTokensV1` | no | no |
 | `NonFungibleTokensV1_1` | yes | no |
 | `PayChan` | yes | no |
 | `PermissionDelegationV1_1` | yes | no |
@@ -56,6 +59,7 @@ Total: 112 amendments.
 | `PriceOracle` | yes | no |
 | `RequireFullyCanonicalSig` | yes | no |
 | `SingleAssetVault` | yes | no |
+| `SmartEscrow` | no | no |
 | `SortedDirectories` | yes | no |
 | `Sponsor` | yes | no |
 | `TickSize` | yes | no |
@@ -89,6 +93,7 @@ Total: 112 amendments.
 | `fixCleanup3_2_0` | yes | no |
 | `fixCleanup3_3_0` | yes | no |
 | `fixCleanup3_4_0` | yes | no |
+| `fixCleanup3_5_0` | no | no |
 | `fixDirectoryLimit` | yes | no |
 | `fixDisallowIncomingV1` | yes | no |
 | `fixEmptyDID` | yes | no |
@@ -102,8 +107,8 @@ Total: 112 amendments.
 | `fixInvalidTxFlags` | yes | no |
 | `fixMPTDeliveredAmount` | yes | no |
 | `fixMasterKeyAsRegularKey` | yes | no |
-| `fixNFTokenDirV1` | yes | no |
-| `fixNFTokenNegOffer` | yes | no |
+| `fixNFTokenDirV1` | no | no |
+| `fixNFTokenNegOffer` | no | no |
 | `fixNFTokenPageLinks` | yes | no |
 | `fixNFTokenRemint` | yes | no |
 | `fixNFTokenReserve` | yes | no |

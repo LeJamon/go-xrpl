@@ -319,7 +319,7 @@ func TestGetBookOffersMPTTransferFeeConsumesRoundedBalance(t *testing.T) {
 		second string
 	}{
 		{"fraction rounds up", 3, "60"},
-		{"even tie rounds down", 2, "62"},
+		{"even tie rounds up", 2, "61"},
 		{"odd tie rounds up", 6, "57"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -352,4 +352,39 @@ func TestGetBookOffersMPTTransferFeeConsumesRoundedBalance(t *testing.T) {
 			require.Equal(t, map[string]string{"mpt_issuance_id": idString, "value": test.second}, result.Offers[1].TakerGetsFunded)
 		})
 	}
+}
+
+// Based on rippled OfferMPT_test.cpp (XRPLF/rippled#8213): with the smallest
+// transfer fee, a maker holding 3 MPT pays 2 for its first 1-MPT offer, which
+// leaves nothing for the second.
+func TestGetBookOffersMPTSmallestTransferFeeRoundsOwnerCostUp(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, issuer := addressFromBytes(t, 0x62)
+	ownerAddr, owner := addressFromBytes(t, 0x72)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000, 0)
+	id := keylet.MakeMPTID(9, issuer)
+	issuanceData, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+		Issuer: issuer, Sequence: 9, OutstandingAmount: 3, TransferFee: 1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.openLedger.Insert(keylet.MPTIssuance(id), issuanceData))
+	holdingData, err := state.SerializeMPToken(&state.MPTokenData{
+		Account: owner, MPTokenIssuanceID: id, MPTAmount: 3,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.openLedger.Insert(keylet.MPTokenByID(id, owner), holdingData))
+	idString := mptutil.EncodeID(id)
+	for seq := uint32(1); seq <= 2; seq++ {
+		insertOffer(t, svc, ownerAddr, seq, tx.NewXRPAmount(1_000_000), state.NewMPTAmountWithIssuanceID(1, issuerAddr, idString))
+	}
+
+	result, err := svc.GetBookOffers(context.Background(), state.NewMPTAmountWithIssuanceID(0, issuerAddr, idString), tx.NewXRPAmount(0), "", "", "current", 10, "", false)
+	require.NoError(t, err)
+	require.Len(t, result.Offers, 2)
+	require.Equal(t, "3", result.Offers[0].OwnerFunds)
+	require.Nil(t, result.Offers[0].TakerGetsFunded)
+	require.Nil(t, result.Offers[0].TakerPaysFunded)
+	require.Equal(t, map[string]string{"mpt_issuance_id": idString, "value": "0"}, result.Offers[1].TakerGetsFunded)
+	require.Equal(t, "0", result.Offers[1].TakerPaysFunded)
 }

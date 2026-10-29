@@ -38,6 +38,7 @@ type LoanBroker struct {
 	CoverAvailable       any
 	CoverRateMinimum     uint32
 	CoverRateLiquidation uint32
+	DomainID             string // Hash256 (uppercase hex)
 	Flags                uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
@@ -65,6 +66,7 @@ const (
 	loanbrokerBitCoverAvailable
 	loanbrokerBitCoverRateMinimum
 	loanbrokerBitCoverRateLiquidation
+	loanbrokerBitDomainID
 	loanbrokerBitFlags
 	loanbrokerBitPreviousTxnID
 	loanbrokerBitPreviousTxnLgrSeq
@@ -206,6 +208,13 @@ func (l *LoanBroker) SetCoverRateLiquidation(value uint32) {
 		return
 	}
 	l.present |= loanbrokerBitCoverRateLiquidation
+}
+
+// SetDomainID assigns DomainID and updates its serialized presence.
+func (l *LoanBroker) SetDomainID(value string) {
+	l.DomainID = value
+	l.dirty = true
+	l.present |= loanbrokerBitDomainID
 }
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -617,6 +626,37 @@ func (l *LoanBroker) SetCoverRateLiquidationValue(value uint32) {
 	l.SetCoverRateLiquidation(value)
 }
 
+// HasDomainID reports whether DomainID is present.
+func (l *LoanBroker) HasDomainID() bool {
+	return l != nil && l.present&loanbrokerBitDomainID != 0
+}
+
+// ClearDomainID removes DomainID from the serialized entry.
+func (l *LoanBroker) ClearDomainID() {
+	if l == nil {
+		return
+	}
+	l.DomainID = ""
+	l.present &^= loanbrokerBitDomainID
+	l.dirty = true
+}
+
+// GetDomainID returns the typed 256-bit hash.
+func (l *LoanBroker) GetDomainID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.DomainID, "LoanBroker.DomainID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetDomainIDValue assigns a typed 256-bit hash.
+func (l *LoanBroker) SetDomainIDValue(value [32]byte) {
+	l.SetDomainID(hashValueToString(value[:]))
+}
+
 // HasFlags reports whether Flags is present.
 func (l *LoanBroker) HasFlags() bool {
 	return l != nil && l.present&loanbrokerBitFlags != 0
@@ -898,6 +938,9 @@ func (l *LoanBroker) decode(data []byte, legacy bool) error {
 			case 5:
 				l.PreviousTxnID = val
 				l.present |= loanbrokerBitPreviousTxnID
+			case 34:
+				l.DomainID = val
+				l.present |= loanbrokerBitDomainID
 			case 35:
 				l.VaultID = val
 				l.present |= loanbrokerBitVaultID
@@ -1015,6 +1058,9 @@ func (l *LoanBroker) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&loanbrokerBitCoverRateLiquidation != 0 && !(skipDefault && l.CoverRateLiquidation == 0) {
 		out["CoverRateLiquidation"] = l.CoverRateLiquidation
 	}
+	if l.present&loanbrokerBitDomainID != 0 && !(skipDefault && isZeroHexString(l.DomainID)) {
+		out["DomainID"] = l.DomainID
+	}
 	if l.present&loanbrokerBitFlags != 0 && !(skipDefault && l.Flags == 0) {
 		out["Flags"] = l.Flags
 	}
@@ -1057,6 +1103,7 @@ func (l *LoanBroker) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "CoverAvailable", prv.CoverAvailable, l.CoverAvailable, prv.present&loanbrokerBitCoverAvailable, l.present&loanbrokerBitCoverAvailable)
 	emitIfChangedUint32(out, "CoverRateMinimum", prv.CoverRateMinimum, l.CoverRateMinimum, prv.present&loanbrokerBitCoverRateMinimum, l.present&loanbrokerBitCoverRateMinimum)
 	emitIfChangedUint32(out, "CoverRateLiquidation", prv.CoverRateLiquidation, l.CoverRateLiquidation, prv.present&loanbrokerBitCoverRateLiquidation, l.present&loanbrokerBitCoverRateLiquidation)
+	emitIfChangedString(out, "DomainID", prv.DomainID, l.DomainID, prv.present&loanbrokerBitDomainID, l.present&loanbrokerBitDomainID)
 	emitIfChangedUint32(out, "Flags", prv.Flags, l.Flags, prv.present&loanbrokerBitFlags, l.present&loanbrokerBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, l.Sponsor, prv.present&loanbrokerBitSponsor, l.present&loanbrokerBitSponsor)
 }
@@ -1111,6 +1158,9 @@ func (l *LoanBroker) EmitChangeOrigFields(out map[string]any) {
 	}
 	if l.present&loanbrokerBitCoverRateLiquidation != 0 {
 		out["CoverRateLiquidation"] = l.CoverRateLiquidation
+	}
+	if l.present&loanbrokerBitDomainID != 0 {
+		out["DomainID"] = l.DomainID
 	}
 	if l.present&loanbrokerBitFlags != 0 {
 		out["Flags"] = l.Flags
@@ -1203,6 +1253,9 @@ func (l *LoanBroker) ToMap() map[string]any {
 	}
 	if l.present&loanbrokerBitCoverRateLiquidation != 0 {
 		out["CoverRateLiquidation"] = l.CoverRateLiquidation
+	}
+	if l.present&loanbrokerBitDomainID != 0 {
+		out["DomainID"] = l.DomainID
 	}
 	if l.present&loanbrokerBitFlags != 0 {
 		out["Flags"] = l.Flags

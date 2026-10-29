@@ -236,6 +236,7 @@ func (f *requestField[T]) UnmarshalJSON(data []byte) error {
 type jsonCppBoolField struct {
 	value   bool
 	present bool
+	isBool  bool
 }
 
 func (f *jsonCppBoolField) UnmarshalJSON(data []byte) error {
@@ -243,6 +244,7 @@ func (f *jsonCppBoolField) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
+	_, f.isBool = value.(bool)
 	f.value = jsonCppBoolRaw(data)
 	f.present = true
 	return nil
@@ -413,6 +415,19 @@ func preflightAccountPage(
 	if rpcErr != nil {
 		return "", nil, rpcErr
 	}
+	return resolveAccountPage(ctx, selection, account, internalDetail, includeLedgerFieldsOnError)
+}
+
+// resolveAccountPage resolves an already parsed ledger selector, then rejects
+// a malformed account (with the ledger fields when includeLedgerFieldsOnError)
+// and an account missing from that ledger.
+func resolveAccountPage(
+	ctx *types.RpcContext,
+	selection ledgerselector.Selector,
+	account string,
+	internalDetail string,
+	includeLedgerFieldsOnError bool,
+) (string, map[string]any, *rpcerrors.RpcError) {
 	resolved, rpcErr := resolveLedgerSelection(ctx, selection)
 	if rpcErr != nil {
 		return "", nil, rpcErr
@@ -432,6 +447,29 @@ func preflightAccountPage(
 		return "", nil, rpcErr
 	}
 	return ledgerIndex, ledgerFields, nil
+}
+
+// validHash256Hex reports whether s parses as a hash256: 64 hex digits, or
+// "0" for the zero hash.
+func validHash256Hex(s string) bool {
+	if s == "0" {
+		return true
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil && len(s) == 64
+}
+
+// validAccountMarker reports whether marker has the "<hash256>,<hint>" shape
+// of an owner-directory resume marker. The hint may carry a leading '+', and
+// anything after a second comma is ignored.
+func validAccountMarker(marker string) bool {
+	key, rest, found := strings.Cut(marker, ",")
+	if !found || !validHash256Hex(key) {
+		return false
+	}
+	hint, _, _ := strings.Cut(rest, ",")
+	_, err := strconv.ParseUint(strings.TrimPrefix(hint, "+"), 10, 64)
+	return err == nil
 }
 
 func mergeLedgerFields(response, ledgerFields map[string]any) {
@@ -575,8 +613,11 @@ func parseRawLedgerSelector(
 		parse = ledgerselector.Parse
 	}
 	selection, err := parse(index.String())
-	if err != nil || selection.Kind() == ledgerselector.KindAbsent {
+	if err != nil {
 		return ledgerselector.Selector{}, errorStyle.indexMalformed(field)
+	}
+	if selection.Kind() == ledgerselector.KindAbsent {
+		return ledgerselector.Current(), nil
 	}
 	return selection, nil
 }

@@ -2,6 +2,7 @@
 package amm_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -14,197 +15,215 @@ import (
 )
 
 func TestAMMBookStep_AdjustedTokens(t *testing.T) {
-	t.Run("USD", func(t *testing.T) {
-		amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
-			mustSubmit := func(txn tx.Transaction) {
-				t.Helper()
-				result := env.Submit(txn)
-				if !result.Success {
-					t.Fatalf("submit failed: %s: %s", result.Code, result.Message)
+	for _, fixAMMv1_3 := range []bool{true, false} {
+		t.Run(fmt.Sprintf("USD/fixAMMv1_3=%t", fixAMMv1_3), func(t *testing.T) {
+			amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
+				// The AMMCreate LP token balance is exact either way.
+				if !fixAMMv1_3 {
+					env.DisableFeature("fixAMMv1_3")
+					env.Close()
 				}
-			}
-
-			bob := jtx.NewAccount("bob")
-			ed := jtx.NewAccount("ed")
-			paul := jtx.NewAccount("paul")
-			dan := jtx.NewAccount("dan")
-			chris := jtx.NewAccount("chris")
-			simon := jtx.NewAccount("simon")
-			ben := jtx.NewAccount("ben")
-			nataly := jtx.NewAccount("nataly")
-
-			// Reference: fund(env, gw, accounts, {USD(1'500'000)}, Fund::Acct)
-			accounts := []*jtx.Account{bob, ed, paul, dan, chris, simon, ben, nataly}
-			for _, acct := range accounts {
-				env.TestEnv.FundAmount(acct, uint64(jtx.XRP(30000)))
-			}
-			env.Close()
-			for _, acct := range accounts {
-				env.Trust(acct, env.GW, "USD", 3_000_000)
-			}
-			env.Close()
-			for _, acct := range accounts {
-				env.PayIOU(env.GW, acct, "USD", 1_500_000)
-			}
-			env.Close()
-
-			xrpAsset := amm.XRP()
-			usdAsset := env.USD
-
-			for range 10 {
-				mustSubmit(amm.AMMDeposit(ben, xrpAsset, usdAsset).
-					Amount(state.NewIssuedAmountFromValue(1, -10, "USD", env.GW.Address)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(ben, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(simon, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0.1)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(simon, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(chris, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 1)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(chris, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(dan, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 10)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(dan, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(bob, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 100)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(bob, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(env.Carol, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 1000)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(env.Carol, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(ed, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 10000)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(ed, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(paul, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 100000)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(paul, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-
-				mustSubmit(amm.AMMDeposit(nataly, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 1000000)).
-					SingleAsset().Build())
-				mustSubmit(amm.AMMWithdraw(nataly, xrpAsset, usdAsset).
-					Amount(amm.IOUAmount(env.GW, "USD", 0)).
-					OneAssetWithdrawAll().Build())
-			}
-
-			// Check pool balances after 10 cycles (fixAMMv1_3 enabled)
-			// XRP should be unchanged (all deposits/withdrawals in USD)
-			poolXRP := env.AMMPoolXRP(ammAcc)
-			if poolXRP != uint64(jtx.XRP(10000)) {
-				t.Errorf("Pool XRP: got %d, want %d", poolXRP, uint64(jtx.XRP(10000)))
-			}
-
-			// Pool USD: STAmount{USD, UINT64_C(10'000'0000000003), -10}
-			// = 100000000000003e-10 → normalized {1000000000000030, -11}
-			poolUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-			expectedPoolUSD := state.NewIssuedAmountFromValue(100000000000003, -10, "USD", env.GW.Address)
-			if poolUSD.Mantissa() != expectedPoolUSD.Mantissa() || poolUSD.Exponent() != expectedPoolUSD.Exponent() {
-				t.Errorf("Pool USD: got %de%d, want %de%d",
-					poolUSD.Mantissa(), poolUSD.Exponent(),
-					expectedPoolUSD.Mantissa(), expectedPoolUSD.Exponent())
-			}
-
-			// ben, simon, chris, dan: exact 1,500,000 USD
-			for _, acct := range []*jtx.Account{ben, simon, chris, dan} {
-				bal := env.TestEnv.IOUBalance(acct, env.GW, "USD")
-				if bal == nil {
-					t.Errorf("%s: no USD balance", acct.Name)
-					continue
+				mustSubmit := func(txn tx.Transaction) {
+					t.Helper()
+					result := env.Submit(txn)
+					if !result.Success {
+						t.Fatalf("submit failed: %s: %s", result.Code, result.Message)
+					}
 				}
-				exp := state.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
-				if bal.Mantissa() != exp.Mantissa() || bal.Exponent() != exp.Exponent() {
-					t.Errorf("%s USD: got %de%d, want %de%d",
-						acct.Name, bal.Mantissa(), bal.Exponent(),
-						exp.Mantissa(), exp.Exponent())
+
+				bob := jtx.NewAccount("bob")
+				ed := jtx.NewAccount("ed")
+				paul := jtx.NewAccount("paul")
+				dan := jtx.NewAccount("dan")
+				chris := jtx.NewAccount("chris")
+				simon := jtx.NewAccount("simon")
+				ben := jtx.NewAccount("ben")
+				nataly := jtx.NewAccount("nataly")
+
+				// Reference: fund(env, gw, accounts, {USD(1'500'000)}, Fund::Acct)
+				accounts := []*jtx.Account{bob, ed, paul, dan, chris, simon, ben, nataly}
+				for _, acct := range accounts {
+					env.TestEnv.FundAmount(acct, uint64(jtx.XRP(30000)))
 				}
-			}
-
-			// carol: 30,000 USD (initial from testAMM setup)
-			carolBal := env.TestEnv.IOUBalance(env.Carol, env.GW, "USD")
-			if carolBal == nil {
-				t.Error("carol: no USD balance")
-			} else {
-				exp := state.NewIssuedAmountFromValue(3, 4, "USD", env.GW.Address)
-				if carolBal.Mantissa() != exp.Mantissa() || carolBal.Exponent() != exp.Exponent() {
-					t.Errorf("carol USD: got %de%d, want %de%d",
-						carolBal.Mantissa(), carolBal.Exponent(),
-						exp.Mantissa(), exp.Exponent())
+				env.Close()
+				for _, acct := range accounts {
+					env.Trust(acct, env.GW, "USD", 3_000_000)
 				}
-			}
-
-			// ed, paul, nataly: exact 1,500,000 USD (fixAMMv1_3)
-			for _, acct := range []*jtx.Account{ed, paul, nataly} {
-				bal := env.TestEnv.IOUBalance(acct, env.GW, "USD")
-				if bal == nil {
-					t.Errorf("%s: no USD balance", acct.Name)
-					continue
+				env.Close()
+				for _, acct := range accounts {
+					env.PayIOU(env.GW, acct, "USD", 1_500_000)
 				}
-				exp := state.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
-				if bal.Mantissa() != exp.Mantissa() || bal.Exponent() != exp.Exponent() {
-					t.Errorf("%s USD: got %de%d, want %de%d",
-						acct.Name, bal.Mantissa(), bal.Exponent(),
-						exp.Mantissa(), exp.Exponent())
+				env.Close()
+
+				xrpAsset := amm.XRP()
+				usdAsset := env.USD
+
+				for range 10 {
+					mustSubmit(amm.AMMDeposit(ben, xrpAsset, usdAsset).
+						Amount(state.NewIssuedAmountFromValue(1, -10, "USD", env.GW.Address)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(ben, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(simon, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0.1)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(simon, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(chris, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 1)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(chris, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(dan, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 10)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(dan, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(bob, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 100)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(bob, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(env.Carol, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 1000)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(env.Carol, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(ed, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 10000)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(ed, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(paul, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 100000)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(paul, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
+
+					mustSubmit(amm.AMMDeposit(nataly, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 1000000)).
+						SingleAsset().Build())
+					mustSubmit(amm.AMMWithdraw(nataly, xrpAsset, usdAsset).
+						Amount(amm.IOUAmount(env.GW, "USD", 0)).
+						OneAssetWithdrawAll().Build())
 				}
-			}
 
-			mustSubmit(amm.AMMWithdraw(env.Alice, xrpAsset, usdAsset).WithdrawAll().Build())
-
-			// AMM should be deleted
-			if ammData := env.ReadAMMData(xrpAsset, usdAsset); ammData != nil {
-				t.Error("AMM should be deleted after alice withdrawAll")
-			}
-
-			// alice USD: 30000.0000000003 = STAmount{USD, 300000000000003, -10}
-			aliceUSD := env.TestEnv.IOUBalance(env.Alice, env.GW, "USD")
-			if aliceUSD == nil {
-				t.Error("alice: no USD balance")
-			} else {
-				exp := state.NewIssuedAmountFromValue(300000000000003, -10, "USD", env.GW.Address)
-				if aliceUSD.Mantissa() != exp.Mantissa() || aliceUSD.Exponent() != exp.Exponent() {
-					t.Errorf("alice USD: got %de%d, want %de%d",
-						aliceUSD.Mantissa(), aliceUSD.Exponent(),
-						exp.Mantissa(), exp.Exponent())
+				// Check pool balances after 10 cycles
+				// XRP should be unchanged (all deposits/withdrawals in USD)
+				poolXRP := env.AMMPoolXRP(ammAcc)
+				if poolXRP != uint64(jtx.XRP(10000)) {
+					t.Errorf("Pool XRP: got %d, want %d", poolXRP, uint64(jtx.XRP(10000)))
 				}
-			}
 
-			// alice XRP: initial(30000 XRP) - trustSetFee(10) - createFee(50M) - withdrawFee(10)
-			// AMMCreate's special fee is one ReserveIncrement (50 XRP).
-			aliceXRP := env.TestEnv.Balance(env.Alice)
-			expectedAliceXRP := uint64(jtx.XRP(30000)) - 10 - env.TestEnv.ReserveIncrement() - 10
-			if aliceXRP != expectedAliceXRP {
-				t.Errorf("alice XRP: got %d, want %d", aliceXRP, expectedAliceXRP)
-			}
+				// Pool USD: STAmount{USD, UINT64_C(10'000'0000000003), -10} with
+				// fixAMMv1_3, USD(10'000) without it.
+				poolUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+				expectedPoolUSD := state.NewIssuedAmountFromValue(100000000000003, -10, "USD", env.GW.Address)
+				if !fixAMMv1_3 {
+					expectedPoolUSD = state.NewIssuedAmountFromValue(10000, 0, "USD", env.GW.Address)
+				}
+				if poolUSD.Mantissa() != expectedPoolUSD.Mantissa() || poolUSD.Exponent() != expectedPoolUSD.Exponent() {
+					t.Errorf("Pool USD: got %de%d, want %de%d",
+						poolUSD.Mantissa(), poolUSD.Exponent(),
+						expectedPoolUSD.Mantissa(), expectedPoolUSD.Exponent())
+				}
+
+				// ben, simon, chris, dan: exact 1,500,000 USD
+				for _, acct := range []*jtx.Account{ben, simon, chris, dan} {
+					bal := env.TestEnv.IOUBalance(acct, env.GW, "USD")
+					if bal == nil {
+						t.Errorf("%s: no USD balance", acct.Name)
+						continue
+					}
+					exp := state.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
+					if bal.Mantissa() != exp.Mantissa() || bal.Exponent() != exp.Exponent() {
+						t.Errorf("%s USD: got %de%d, want %de%d",
+							acct.Name, bal.Mantissa(), bal.Exponent(),
+							exp.Mantissa(), exp.Exponent())
+					}
+				}
+
+				// carol: 30,000 USD (initial from testAMM setup)
+				carolBal := env.TestEnv.IOUBalance(env.Carol, env.GW, "USD")
+				if carolBal == nil {
+					t.Error("carol: no USD balance")
+				} else {
+					exp := state.NewIssuedAmountFromValue(3, 4, "USD", env.GW.Address)
+					if carolBal.Mantissa() != exp.Mantissa() || carolBal.Exponent() != exp.Exponent() {
+						t.Errorf("carol USD: got %de%d, want %de%d",
+							carolBal.Mantissa(), carolBal.Exponent(),
+							exp.Mantissa(), exp.Exponent())
+					}
+				}
+
+				// ed, paul, nataly: exact 1,500,000 USD; without fixAMMv1_3 nataly
+				// gains STAmount{USD, UINT64_C(1'500'000'000000005), -9}.
+				for _, acct := range []*jtx.Account{ed, paul, nataly} {
+					bal := env.TestEnv.IOUBalance(acct, env.GW, "USD")
+					if bal == nil {
+						t.Errorf("%s: no USD balance", acct.Name)
+						continue
+					}
+					exp := state.NewIssuedAmountFromValue(15, 5, "USD", env.GW.Address)
+					if !fixAMMv1_3 && acct == nataly {
+						exp = state.NewIssuedAmountFromValue(1500000000000005, -9, "USD", env.GW.Address)
+					}
+					if bal.Mantissa() != exp.Mantissa() || bal.Exponent() != exp.Exponent() {
+						t.Errorf("%s USD: got %de%d, want %de%d",
+							acct.Name, bal.Mantissa(), bal.Exponent(),
+							exp.Mantissa(), exp.Exponent())
+					}
+				}
+
+				mustSubmit(amm.AMMWithdraw(env.Alice, xrpAsset, usdAsset).WithdrawAll().Build())
+
+				// AMM should be deleted
+				if ammData := env.ReadAMMData(xrpAsset, usdAsset); ammData != nil {
+					t.Error("AMM should be deleted after alice withdrawAll")
+				}
+
+				// alice USD: STAmount{USD, 300000000000003, -10} with fixAMMv1_3,
+				// USD(30'000) without it.
+				aliceUSD := env.TestEnv.IOUBalance(env.Alice, env.GW, "USD")
+				if aliceUSD == nil {
+					t.Error("alice: no USD balance")
+				} else {
+					exp := state.NewIssuedAmountFromValue(300000000000003, -10, "USD", env.GW.Address)
+					if !fixAMMv1_3 {
+						exp = state.NewIssuedAmountFromValue(30000, 0, "USD", env.GW.Address)
+					}
+					if aliceUSD.Mantissa() != exp.Mantissa() || aliceUSD.Exponent() != exp.Exponent() {
+						t.Errorf("alice USD: got %de%d, want %de%d",
+							aliceUSD.Mantissa(), aliceUSD.Exponent(),
+							exp.Mantissa(), exp.Exponent())
+					}
+				}
+
+				// alice XRP: initial(30000 XRP) - trustSetFee(10) - createFee(50M) - withdrawFee(10)
+				// AMMCreate's special fee is one ReserveIncrement (50 XRP).
+				aliceXRP := env.TestEnv.Balance(env.Alice)
+				expectedAliceXRP := uint64(jtx.XRP(30000)) - 10 - env.TestEnv.ReserveIncrement() - 10
+				if aliceXRP != expectedAliceXRP {
+					t.Errorf("alice XRP: got %d, want %d", aliceXRP, expectedAliceXRP)
+				}
+			})
 		})
-	})
+	}
 
 	t.Run("XRP", func(t *testing.T) {
 		amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
@@ -477,7 +496,7 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(wdCarol))
 		env.Close()
 
-		// With fixAMMv1_1 (enabled by default): gw can withdrawAll and AMM is deleted
+		// gw can withdrawAll and the AMM is deleted
 		wdGW := amm.AMMWithdraw(env.GW, amm.XRP(), env.USD).
 			WithdrawAll().
 			Build()

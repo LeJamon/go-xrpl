@@ -81,4 +81,6 @@ const (
 	TypeLoan       = protocol.LedgerEntryTypeLoan
 
 	TypeSponsorship = protocol.LedgerEntryTypeSponsorship
+
+	TypeTransactionProposal = protocol.LedgerEntryTypeTransactionProposal
 )

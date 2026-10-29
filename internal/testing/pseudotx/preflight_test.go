@@ -235,6 +235,34 @@ func TestSetFee_PreclaimXRPFeesDisabled_ForbidsModernFields(t *testing.T) {
 	require.Equal(t, "temDISABLED", result.Result.String())
 }
 
+// TestSetFee_PreclaimSmartEscrowDisabled_ForbidsGasFields rejects a SetFee
+// carrying any SmartEscrow fee field while that amendment is disabled.
+// Reference: rippled Change.cpp Change::preclaim (temDISABLED).
+func TestSetFee_PreclaimSmartEscrowDisabled_ForbidsGasFields(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	value := uint32(1)
+	for name, set := range map[string]func(*pseudo.SetFee){
+		"GasLimit":          func(s *pseudo.SetFee) { s.GasLimit = &value },
+		"BytecodeSizeLimit": func(s *pseudo.SetFee) { s.BytecodeSizeLimit = &value },
+		"GasPrice":          func(s *pseudo.SetFee) { s.GasPrice = &value },
+	} {
+		t.Run(name, func(t *testing.T) {
+			setFee := pseudo.NewSetFee()
+			setFee.Common.Fee = "0"
+			zero := uint32(0)
+			setFee.Common.Sequence = &zero
+			setFee.BaseFeeDrops = "10"
+			setFee.ReserveBaseDrops = "200000000"
+			setFee.ReserveIncrementDrops = "50000000"
+			set(setFee)
+
+			result := engine.ApplyPseudo(setFee)
+			require.False(t, result.Applied)
+			require.Equal(t, "temDISABLED", result.Result.String())
+		})
+	}
+}
+
 // TestSetFee_PreclaimRejectsUnparseableBaseFee rejects a SetFee whose legacy
 // BaseFee contains a non-hex character.
 func TestSetFee_PreclaimRejectsUnparseableBaseFee(t *testing.T) {

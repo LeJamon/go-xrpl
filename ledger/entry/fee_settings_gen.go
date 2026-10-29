@@ -30,6 +30,9 @@ type FeeSettings struct {
 	BaseFeeDrops          any // Amount (XRP string | IOU map)
 	ReserveBaseDrops      any // Amount (XRP string | IOU map)
 	ReserveIncrementDrops any // Amount (XRP string | IOU map)
+	GasLimit              uint32
+	BytecodeSizeLimit     uint32
+	GasPrice              uint32
 	Flags                 uint32
 	PreviousTxnID         string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq     uint32
@@ -49,6 +52,9 @@ const (
 	feesettingsBitBaseFeeDrops
 	feesettingsBitReserveBaseDrops
 	feesettingsBitReserveIncrementDrops
+	feesettingsBitGasLimit
+	feesettingsBitBytecodeSizeLimit
+	feesettingsBitGasPrice
 	feesettingsBitFlags
 	feesettingsBitPreviousTxnID
 	feesettingsBitPreviousTxnLgrSeq
@@ -102,6 +108,27 @@ func (f *FeeSettings) SetReserveIncrementDrops(value any) {
 	f.ReserveIncrementDrops = value
 	f.dirty = true
 	f.present |= feesettingsBitReserveIncrementDrops
+}
+
+// SetGasLimit assigns GasLimit and updates its serialized presence.
+func (f *FeeSettings) SetGasLimit(value uint32) {
+	f.GasLimit = value
+	f.dirty = true
+	f.present |= feesettingsBitGasLimit
+}
+
+// SetBytecodeSizeLimit assigns BytecodeSizeLimit and updates its serialized presence.
+func (f *FeeSettings) SetBytecodeSizeLimit(value uint32) {
+	f.BytecodeSizeLimit = value
+	f.dirty = true
+	f.present |= feesettingsBitBytecodeSizeLimit
+}
+
+// SetGasPrice assigns GasPrice and updates its serialized presence.
+func (f *FeeSettings) SetGasPrice(value uint32) {
+	f.GasPrice = value
+	f.dirty = true
+	f.present |= feesettingsBitGasPrice
 }
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -343,6 +370,90 @@ func (f *FeeSettings) SetReserveIncrementDropsValue(value AmountValue) error {
 	return nil
 }
 
+// HasGasLimit reports whether GasLimit is present.
+func (f *FeeSettings) HasGasLimit() bool {
+	return f != nil && f.present&feesettingsBitGasLimit != 0
+}
+
+// ClearGasLimit removes GasLimit from the serialized entry.
+func (f *FeeSettings) ClearGasLimit() {
+	if f == nil {
+		return
+	}
+	f.GasLimit = 0
+	f.present &^= feesettingsBitGasLimit
+	f.dirty = true
+}
+
+// GetGasLimit returns the typed UInt32 value.
+func (f *FeeSettings) GetGasLimit() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.GasLimit, nil
+}
+
+// SetGasLimitValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetGasLimitValue(value uint32) {
+	f.SetGasLimit(value)
+}
+
+// HasBytecodeSizeLimit reports whether BytecodeSizeLimit is present.
+func (f *FeeSettings) HasBytecodeSizeLimit() bool {
+	return f != nil && f.present&feesettingsBitBytecodeSizeLimit != 0
+}
+
+// ClearBytecodeSizeLimit removes BytecodeSizeLimit from the serialized entry.
+func (f *FeeSettings) ClearBytecodeSizeLimit() {
+	if f == nil {
+		return
+	}
+	f.BytecodeSizeLimit = 0
+	f.present &^= feesettingsBitBytecodeSizeLimit
+	f.dirty = true
+}
+
+// GetBytecodeSizeLimit returns the typed UInt32 value.
+func (f *FeeSettings) GetBytecodeSizeLimit() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.BytecodeSizeLimit, nil
+}
+
+// SetBytecodeSizeLimitValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetBytecodeSizeLimitValue(value uint32) {
+	f.SetBytecodeSizeLimit(value)
+}
+
+// HasGasPrice reports whether GasPrice is present.
+func (f *FeeSettings) HasGasPrice() bool {
+	return f != nil && f.present&feesettingsBitGasPrice != 0
+}
+
+// ClearGasPrice removes GasPrice from the serialized entry.
+func (f *FeeSettings) ClearGasPrice() {
+	if f == nil {
+		return
+	}
+	f.GasPrice = 0
+	f.present &^= feesettingsBitGasPrice
+	f.dirty = true
+}
+
+// GetGasPrice returns the typed UInt32 value.
+func (f *FeeSettings) GetGasPrice() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.GasPrice, nil
+}
+
+// SetGasPriceValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetGasPriceValue(value uint32) {
+	f.SetGasPrice(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (f *FeeSettings) HasFlags() bool {
 	return f != nil && f.present&feesettingsBitFlags != 0
@@ -532,6 +643,15 @@ func (f *FeeSettings) decode(data []byte, legacy bool) error {
 			case 32:
 				f.ReserveIncrement = val
 				f.present |= feesettingsBitReserveIncrement
+			case 81:
+				f.GasLimit = val
+				f.present |= feesettingsBitGasLimit
+			case 82:
+				f.BytecodeSizeLimit = val
+				f.present |= feesettingsBitBytecodeSizeLimit
+			case 83:
+				f.GasPrice = val
+				f.present |= feesettingsBitGasPrice
 			default:
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
@@ -628,6 +748,15 @@ func (f *FeeSettings) emitAll(out map[string]any, skipDefault bool) {
 	if f.present&feesettingsBitReserveIncrementDrops != 0 && !(skipDefault && amountIsDefault(f.ReserveIncrementDrops)) {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
 	}
+	if f.present&feesettingsBitGasLimit != 0 && !(skipDefault && f.GasLimit == 0) {
+		out["GasLimit"] = f.GasLimit
+	}
+	if f.present&feesettingsBitBytecodeSizeLimit != 0 && !(skipDefault && f.BytecodeSizeLimit == 0) {
+		out["BytecodeSizeLimit"] = f.BytecodeSizeLimit
+	}
+	if f.present&feesettingsBitGasPrice != 0 && !(skipDefault && f.GasPrice == 0) {
+		out["GasPrice"] = f.GasPrice
+	}
 	if f.present&feesettingsBitFlags != 0 && !(skipDefault && f.Flags == 0) {
 		out["Flags"] = f.Flags
 	}
@@ -662,6 +791,9 @@ func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "BaseFeeDrops", prv.BaseFeeDrops, f.BaseFeeDrops, prv.present&feesettingsBitBaseFeeDrops, f.present&feesettingsBitBaseFeeDrops)
 	emitIfChangedAmount(out, "ReserveBaseDrops", prv.ReserveBaseDrops, f.ReserveBaseDrops, prv.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
 	emitIfChangedAmount(out, "ReserveIncrementDrops", prv.ReserveIncrementDrops, f.ReserveIncrementDrops, prv.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
+	emitIfChangedUint32(out, "GasLimit", prv.GasLimit, f.GasLimit, prv.present&feesettingsBitGasLimit, f.present&feesettingsBitGasLimit)
+	emitIfChangedUint32(out, "BytecodeSizeLimit", prv.BytecodeSizeLimit, f.BytecodeSizeLimit, prv.present&feesettingsBitBytecodeSizeLimit, f.present&feesettingsBitBytecodeSizeLimit)
+	emitIfChangedUint32(out, "GasPrice", prv.GasPrice, f.GasPrice, prv.present&feesettingsBitGasPrice, f.present&feesettingsBitGasPrice)
 	emitIfChangedUint32(out, "Flags", prv.Flags, f.Flags, prv.present&feesettingsBitFlags, f.present&feesettingsBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, f.Sponsor, prv.present&feesettingsBitSponsor, f.present&feesettingsBitSponsor)
 }
@@ -692,6 +824,15 @@ func (f *FeeSettings) EmitChangeOrigFields(out map[string]any) {
 	}
 	if f.present&feesettingsBitReserveIncrementDrops != 0 {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
+	if f.present&feesettingsBitGasLimit != 0 {
+		out["GasLimit"] = f.GasLimit
+	}
+	if f.present&feesettingsBitBytecodeSizeLimit != 0 {
+		out["BytecodeSizeLimit"] = f.BytecodeSizeLimit
+	}
+	if f.present&feesettingsBitGasPrice != 0 {
+		out["GasPrice"] = f.GasPrice
 	}
 	if f.present&feesettingsBitFlags != 0 {
 		out["Flags"] = f.Flags
@@ -760,6 +901,15 @@ func (f *FeeSettings) ToMap() map[string]any {
 	}
 	if f.present&feesettingsBitReserveIncrementDrops != 0 {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
+	if f.present&feesettingsBitGasLimit != 0 {
+		out["GasLimit"] = f.GasLimit
+	}
+	if f.present&feesettingsBitBytecodeSizeLimit != 0 {
+		out["BytecodeSizeLimit"] = f.BytecodeSizeLimit
+	}
+	if f.present&feesettingsBitGasPrice != 0 {
+		out["GasPrice"] = f.GasPrice
 	}
 	if f.present&feesettingsBitFlags != 0 {
 		out["Flags"] = f.Flags

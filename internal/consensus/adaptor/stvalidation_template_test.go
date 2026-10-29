@@ -467,6 +467,27 @@ func TestParseSTValidation_RequiredSignatureMayBeEmptyStructurally(t *testing.T)
 	assert.Error(t, verifyValidation(validation))
 }
 
+// SmartEscrow fee votes are optional validation fields: they parse and stay in
+// the signed data even though this node does not act on them.
+func TestParseSTValidation_AcceptsSmartEscrowFeeVotes(t *testing.T) {
+	identity, fields := signedValidationFixture(t)
+	for _, fieldCode := range []int{fieldGasLimit, fieldBytecodeSizeLimit, fieldGasPrice} {
+		wire := appendFieldHeader(nil, typeUINT32, fieldCode)
+		fields = insertValidationWireField(fields, validationWireField{
+			key:       validationFieldKey(typeUINT32, fieldCode),
+			typeCode:  typeUINT32,
+			fieldCode: fieldCode,
+			wire:      binary.BigEndian.AppendUint32(wire, uint32(fieldCode)),
+		})
+	}
+	blob, _, digest := signValidationWireFields(t, identity, fields)
+
+	validation, err := parseSTValidation(blob)
+	require.NoError(t, err)
+	require.NoError(t, verifyValidation(validation))
+	assert.Equal(t, digest, sha512half.Sum(protocol.HashPrefixValidation().Bytes(), validation.SigningData))
+}
+
 func TestParseOrVerifyValidation_RejectsEverySerializedByteMutation(t *testing.T) {
 	identity, fields := signedValidationFixture(t)
 	blob, _, _ := signValidationWireFields(t, identity, fields)

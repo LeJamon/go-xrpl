@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""Derive final 3.4.1 server_definitions data from the pinned rippled source tree.
+"""Derive server_definitions data from a pinned rippled source tree.
 
 It parses the C++ protocol macros and combines them with construction rules
-transcribed from the pinned final sources, independently of go-xrpl. The input
-must be a clean checkout of the pinned commit.
+transcribed from the pinned sources, independently of go-xrpl. The input must
+be a clean checkout of one of the pinned releases below.
 
-An authorized release job can regenerate and verify the checked-in fixture from
-the clean private source checkout with:
+An authorized release job can regenerate and verify the final 3.4.1 fixture
+from the clean private source checkout with:
 
     python3 server_definitions_final_oracle.py \
         /path/to/rippled-worktrees/v3.4.1-oracle --output server_definitions_final_hashes.json
 
-The repository, tag, commit, and clean-checkout checks deliberately reject
-public or mixed-release source trees. Ordinary CI verifies the committed
-snapshot and does not attempt this private checkout.
+The staged 3.5.0-rc1 fixture, which go-xrpl's own document matches, comes from
+a clean public checkout:
 
-A built final 3.4.1 daemon can independently dump the runtime document with
-`xrpld --definitions`; the source-derived checksums below are kept in the Go
-suite so normal tests do not require a daemon or a C++ build.
+    python3 server_definitions_final_oracle.py \
+        /path/to/rippled-3.5.0-rc1 --release 3.5.0-rc1 --output server_definitions_rc1_hashes.json
+
+The repository, tag, commit, and clean-checkout checks reject mixed-release
+source trees. Ordinary CI verifies the committed snapshots and does not attempt
+these checkouts.
+
+A built daemon of the same release can independently dump the runtime document
+with `xrpld --definitions`; the source-derived checksums below are kept in the
+Go suite so normal tests do not require a daemon or a C++ build.
 """
 
 import argparse
@@ -28,9 +34,18 @@ import subprocess
 from pathlib import Path
 
 
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
-ORACLE_TAG = "3.4.1"
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+RELEASES = {
+    "3.4.1": (
+        "XRPLF/xrpld-private",
+        "d147fccf54a500fce586522f28d6044c37fd8d29",
+        "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
+    ),
+    "3.5.0-rc1": (
+        "XRPLF/rippled",
+        "3608433514e6b622da7454ff4b8890d75e672e31",
+        "python3 server_definitions_final_oracle.py <rippled-3.5.0-rc1> --release 3.5.0-rc1 --output server_definitions_rc1_hashes.json",
+    ),
+}
 
 
 def normalize_repository(url):
@@ -42,18 +57,20 @@ def normalize_repository(url):
     return url.rstrip("/").removesuffix(".git").lower()
 
 
-def verify_oracle(root):
+def verify_oracle(root, tag):
+    repository, commit, _ = RELEASES[tag]
+
     def git(*args):
         return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
     if Path(git("rev-parse", "--show-toplevel")).resolve() != root:
         raise ValueError("oracle_root must be the checkout root")
-    if normalize_repository(git("remote", "get-url", "origin")) != ORACLE_REPOSITORY.lower():
-        raise ValueError(f"oracle must come from {ORACLE_REPOSITORY}")
-    if git("rev-parse", "HEAD") != ORACLE_COMMIT:
-        raise ValueError(f"oracle must be rippled {ORACLE_TAG} at {ORACLE_COMMIT}")
-    if git("describe", "--tags", "--exact-match", "HEAD") != ORACLE_TAG:
-        raise ValueError(f"oracle must be tagged {ORACLE_TAG}")
+    if normalize_repository(git("remote", "get-url", "origin")) != repository.lower():
+        raise ValueError(f"oracle must come from {repository}")
+    if git("rev-parse", "HEAD") != commit:
+        raise ValueError(f"oracle must be rippled {tag} at {commit}")
+    if git("describe", "--tags", "--exact-match", "HEAD") != tag:
+        raise ValueError(f"oracle must be tagged {tag}")
     if git("status", "--porcelain", "--untracked-files=normal"):
         raise ValueError("oracle checkout must be clean")
 
@@ -358,24 +375,26 @@ def section_stats(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("oracle_root", type=Path)
+    parser.add_argument("--release", choices=sorted(RELEASES), default="3.4.1")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     root = args.oracle_root.resolve()
+    repository, commit, regeneration = RELEASES[args.release]
     try:
-        verify_oracle(root)
+        verify_oracle(root, args.release)
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
         parser.error(str(error))
     document = build(root)
     full_hash, full_payload = digest(document)
     output = {
         "oracle": {
-            "repository": ORACLE_REPOSITORY,
-            "tag": ORACLE_TAG,
-            "commit": ORACLE_COMMIT,
+            "repository": repository,
+            "tag": args.release,
+            "commit": commit,
         },
         "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
         "regeneration": {
-            "source": "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
+            "source": regeneration,
             "runtime": "xrpld --definitions",
         },
         "transaction_results": {

@@ -36,7 +36,11 @@ type MPToken struct {
 	ConfidentialBalanceVersion  uint32
 	IssuerEncryptedBalance      string // Blob (uppercase hex)
 	AuditorEncryptedBalance     string // Blob (uppercase hex)
+	IssuerKeyMirrorEpoch        uint32
+	AuditorKeyMirrorEpoch       uint32
+	IssuerMirrorEncryptionKey   string // Blob (uppercase hex)
 	HolderEncryptionKey         string // Blob (uppercase hex)
+	RecoveryKey                 string // Blob (uppercase hex)
 	Sponsor                     string // AccountID (base58)
 }
 
@@ -59,7 +63,11 @@ const (
 	mptokenBitConfidentialBalanceVersion
 	mptokenBitIssuerEncryptedBalance
 	mptokenBitAuditorEncryptedBalance
+	mptokenBitIssuerKeyMirrorEpoch
+	mptokenBitAuditorKeyMirrorEpoch
+	mptokenBitIssuerMirrorEncryptionKey
 	mptokenBitHolderEncryptionKey
+	mptokenBitRecoveryKey
 	mptokenBitSponsor
 )
 
@@ -162,11 +170,39 @@ func (m *MPToken) SetAuditorEncryptedBalance(value string) {
 	m.present |= mptokenBitAuditorEncryptedBalance
 }
 
+// SetIssuerKeyMirrorEpoch assigns IssuerKeyMirrorEpoch and updates its serialized presence.
+func (m *MPToken) SetIssuerKeyMirrorEpoch(value uint32) {
+	m.IssuerKeyMirrorEpoch = value
+	m.dirty = true
+	m.present |= mptokenBitIssuerKeyMirrorEpoch
+}
+
+// SetAuditorKeyMirrorEpoch assigns AuditorKeyMirrorEpoch and updates its serialized presence.
+func (m *MPToken) SetAuditorKeyMirrorEpoch(value uint32) {
+	m.AuditorKeyMirrorEpoch = value
+	m.dirty = true
+	m.present |= mptokenBitAuditorKeyMirrorEpoch
+}
+
+// SetIssuerMirrorEncryptionKey assigns IssuerMirrorEncryptionKey and updates its serialized presence.
+func (m *MPToken) SetIssuerMirrorEncryptionKey(value string) {
+	m.IssuerMirrorEncryptionKey = value
+	m.dirty = true
+	m.present |= mptokenBitIssuerMirrorEncryptionKey
+}
+
 // SetHolderEncryptionKey assigns HolderEncryptionKey and updates its serialized presence.
 func (m *MPToken) SetHolderEncryptionKey(value string) {
 	m.HolderEncryptionKey = value
 	m.dirty = true
 	m.present |= mptokenBitHolderEncryptionKey
+}
+
+// SetRecoveryKey assigns RecoveryKey and updates its serialized presence.
+func (m *MPToken) SetRecoveryKey(value string) {
+	m.RecoveryKey = value
+	m.dirty = true
+	m.present |= mptokenBitRecoveryKey
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -491,6 +527,90 @@ func (m *MPToken) SetAuditorEncryptedBalanceValue(value []byte) {
 	m.SetAuditorEncryptedBalance(blobValueToString(value))
 }
 
+// HasIssuerKeyMirrorEpoch reports whether IssuerKeyMirrorEpoch is present.
+func (m *MPToken) HasIssuerKeyMirrorEpoch() bool {
+	return m != nil && m.present&mptokenBitIssuerKeyMirrorEpoch != 0
+}
+
+// ClearIssuerKeyMirrorEpoch removes IssuerKeyMirrorEpoch from the serialized entry.
+func (m *MPToken) ClearIssuerKeyMirrorEpoch() {
+	if m == nil {
+		return
+	}
+	m.IssuerKeyMirrorEpoch = 0
+	m.present &^= mptokenBitIssuerKeyMirrorEpoch
+	m.dirty = true
+}
+
+// GetIssuerKeyMirrorEpoch returns the typed UInt32 value.
+func (m *MPToken) GetIssuerKeyMirrorEpoch() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.IssuerKeyMirrorEpoch, nil
+}
+
+// SetIssuerKeyMirrorEpochValue assigns a typed UInt32 value.
+func (m *MPToken) SetIssuerKeyMirrorEpochValue(value uint32) {
+	m.SetIssuerKeyMirrorEpoch(value)
+}
+
+// HasAuditorKeyMirrorEpoch reports whether AuditorKeyMirrorEpoch is present.
+func (m *MPToken) HasAuditorKeyMirrorEpoch() bool {
+	return m != nil && m.present&mptokenBitAuditorKeyMirrorEpoch != 0
+}
+
+// ClearAuditorKeyMirrorEpoch removes AuditorKeyMirrorEpoch from the serialized entry.
+func (m *MPToken) ClearAuditorKeyMirrorEpoch() {
+	if m == nil {
+		return
+	}
+	m.AuditorKeyMirrorEpoch = 0
+	m.present &^= mptokenBitAuditorKeyMirrorEpoch
+	m.dirty = true
+}
+
+// GetAuditorKeyMirrorEpoch returns the typed UInt32 value.
+func (m *MPToken) GetAuditorKeyMirrorEpoch() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.AuditorKeyMirrorEpoch, nil
+}
+
+// SetAuditorKeyMirrorEpochValue assigns a typed UInt32 value.
+func (m *MPToken) SetAuditorKeyMirrorEpochValue(value uint32) {
+	m.SetAuditorKeyMirrorEpoch(value)
+}
+
+// HasIssuerMirrorEncryptionKey reports whether IssuerMirrorEncryptionKey is present.
+func (m *MPToken) HasIssuerMirrorEncryptionKey() bool {
+	return m != nil && m.present&mptokenBitIssuerMirrorEncryptionKey != 0
+}
+
+// ClearIssuerMirrorEncryptionKey removes IssuerMirrorEncryptionKey from the serialized entry.
+func (m *MPToken) ClearIssuerMirrorEncryptionKey() {
+	if m == nil {
+		return
+	}
+	m.IssuerMirrorEncryptionKey = ""
+	m.present &^= mptokenBitIssuerMirrorEncryptionKey
+	m.dirty = true
+}
+
+// GetIssuerMirrorEncryptionKey returns the raw bytes of the Blob field.
+func (m *MPToken) GetIssuerMirrorEncryptionKey() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.IssuerMirrorEncryptionKey, "MPToken.IssuerMirrorEncryptionKey")
+}
+
+// SetIssuerMirrorEncryptionKeyValue assigns a Blob from raw bytes.
+func (m *MPToken) SetIssuerMirrorEncryptionKeyValue(value []byte) {
+	m.SetIssuerMirrorEncryptionKey(blobValueToString(value))
+}
+
 // HasHolderEncryptionKey reports whether HolderEncryptionKey is present.
 func (m *MPToken) HasHolderEncryptionKey() bool {
 	return m != nil && m.present&mptokenBitHolderEncryptionKey != 0
@@ -517,6 +637,34 @@ func (m *MPToken) GetHolderEncryptionKey() ([]byte, error) {
 // SetHolderEncryptionKeyValue assigns a Blob from raw bytes.
 func (m *MPToken) SetHolderEncryptionKeyValue(value []byte) {
 	m.SetHolderEncryptionKey(blobValueToString(value))
+}
+
+// HasRecoveryKey reports whether RecoveryKey is present.
+func (m *MPToken) HasRecoveryKey() bool {
+	return m != nil && m.present&mptokenBitRecoveryKey != 0
+}
+
+// ClearRecoveryKey removes RecoveryKey from the serialized entry.
+func (m *MPToken) ClearRecoveryKey() {
+	if m == nil {
+		return
+	}
+	m.RecoveryKey = ""
+	m.present &^= mptokenBitRecoveryKey
+	m.dirty = true
+}
+
+// GetRecoveryKey returns the raw bytes of the Blob field.
+func (m *MPToken) GetRecoveryKey() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.RecoveryKey, "MPToken.RecoveryKey")
+}
+
+// SetRecoveryKeyValue assigns a Blob from raw bytes.
+func (m *MPToken) SetRecoveryKeyValue(value []byte) {
+	m.SetRecoveryKey(blobValueToString(value))
 }
 
 // HasSponsor reports whether Sponsor is present.
@@ -655,6 +803,12 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			case 69:
 				m.ConfidentialBalanceVersion = val
 				m.present |= mptokenBitConfidentialBalanceVersion
+			case 79:
+				m.IssuerKeyMirrorEpoch = val
+				m.present |= mptokenBitIssuerKeyMirrorEpoch
+			case 80:
+				m.AuditorKeyMirrorEpoch = val
+				m.present |= mptokenBitAuditorKeyMirrorEpoch
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -717,6 +871,12 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			case 42:
 				m.AuditorEncryptedBalance = val
 				m.present |= mptokenBitAuditorEncryptedBalance
+			case 48:
+				m.RecoveryKey = val
+				m.present |= mptokenBitRecoveryKey
+			case 50:
+				m.IssuerMirrorEncryptionKey = val
+				m.present |= mptokenBitIssuerMirrorEncryptionKey
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -798,8 +958,20 @@ func (m *MPToken) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenBitAuditorEncryptedBalance != 0 && !(skipDefault && m.AuditorEncryptedBalance == "") {
 		out["AuditorEncryptedBalance"] = m.AuditorEncryptedBalance
 	}
+	if m.present&mptokenBitIssuerKeyMirrorEpoch != 0 && !(skipDefault && m.IssuerKeyMirrorEpoch == 0) {
+		out["IssuerKeyMirrorEpoch"] = m.IssuerKeyMirrorEpoch
+	}
+	if m.present&mptokenBitAuditorKeyMirrorEpoch != 0 && !(skipDefault && m.AuditorKeyMirrorEpoch == 0) {
+		out["AuditorKeyMirrorEpoch"] = m.AuditorKeyMirrorEpoch
+	}
+	if m.present&mptokenBitIssuerMirrorEncryptionKey != 0 && !(skipDefault && m.IssuerMirrorEncryptionKey == "") {
+		out["IssuerMirrorEncryptionKey"] = m.IssuerMirrorEncryptionKey
+	}
 	if m.present&mptokenBitHolderEncryptionKey != 0 && !(skipDefault && m.HolderEncryptionKey == "") {
 		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitRecoveryKey != 0 && !(skipDefault && m.RecoveryKey == "") {
+		out["RecoveryKey"] = m.RecoveryKey
 	}
 	if m.present&mptokenBitSponsor != 0 && !(skipDefault && m.Sponsor == "") {
 		out["Sponsor"] = m.Sponsor
@@ -836,7 +1008,11 @@ func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "ConfidentialBalanceVersion", prv.ConfidentialBalanceVersion, m.ConfidentialBalanceVersion, prv.present&mptokenBitConfidentialBalanceVersion, m.present&mptokenBitConfidentialBalanceVersion)
 	emitIfChangedString(out, "IssuerEncryptedBalance", prv.IssuerEncryptedBalance, m.IssuerEncryptedBalance, prv.present&mptokenBitIssuerEncryptedBalance, m.present&mptokenBitIssuerEncryptedBalance)
 	emitIfChangedString(out, "AuditorEncryptedBalance", prv.AuditorEncryptedBalance, m.AuditorEncryptedBalance, prv.present&mptokenBitAuditorEncryptedBalance, m.present&mptokenBitAuditorEncryptedBalance)
+	emitIfChangedUint32(out, "IssuerKeyMirrorEpoch", prv.IssuerKeyMirrorEpoch, m.IssuerKeyMirrorEpoch, prv.present&mptokenBitIssuerKeyMirrorEpoch, m.present&mptokenBitIssuerKeyMirrorEpoch)
+	emitIfChangedUint32(out, "AuditorKeyMirrorEpoch", prv.AuditorKeyMirrorEpoch, m.AuditorKeyMirrorEpoch, prv.present&mptokenBitAuditorKeyMirrorEpoch, m.present&mptokenBitAuditorKeyMirrorEpoch)
+	emitIfChangedString(out, "IssuerMirrorEncryptionKey", prv.IssuerMirrorEncryptionKey, m.IssuerMirrorEncryptionKey, prv.present&mptokenBitIssuerMirrorEncryptionKey, m.present&mptokenBitIssuerMirrorEncryptionKey)
 	emitIfChangedString(out, "HolderEncryptionKey", prv.HolderEncryptionKey, m.HolderEncryptionKey, prv.present&mptokenBitHolderEncryptionKey, m.present&mptokenBitHolderEncryptionKey)
+	emitIfChangedString(out, "RecoveryKey", prv.RecoveryKey, m.RecoveryKey, prv.present&mptokenBitRecoveryKey, m.present&mptokenBitRecoveryKey)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenBitSponsor, m.present&mptokenBitSponsor)
 }
 
@@ -879,8 +1055,20 @@ func (m *MPToken) EmitChangeOrigFields(out map[string]any) {
 	if m.present&mptokenBitAuditorEncryptedBalance != 0 {
 		out["AuditorEncryptedBalance"] = m.AuditorEncryptedBalance
 	}
+	if m.present&mptokenBitIssuerKeyMirrorEpoch != 0 {
+		out["IssuerKeyMirrorEpoch"] = m.IssuerKeyMirrorEpoch
+	}
+	if m.present&mptokenBitAuditorKeyMirrorEpoch != 0 {
+		out["AuditorKeyMirrorEpoch"] = m.AuditorKeyMirrorEpoch
+	}
+	if m.present&mptokenBitIssuerMirrorEncryptionKey != 0 {
+		out["IssuerMirrorEncryptionKey"] = m.IssuerMirrorEncryptionKey
+	}
 	if m.present&mptokenBitHolderEncryptionKey != 0 {
 		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitRecoveryKey != 0 {
+		out["RecoveryKey"] = m.RecoveryKey
 	}
 	if m.present&mptokenBitSponsor != 0 {
 		out["Sponsor"] = m.Sponsor
@@ -965,8 +1153,20 @@ func (m *MPToken) ToMap() map[string]any {
 	if m.present&mptokenBitAuditorEncryptedBalance != 0 {
 		out["AuditorEncryptedBalance"] = m.AuditorEncryptedBalance
 	}
+	if m.present&mptokenBitIssuerKeyMirrorEpoch != 0 {
+		out["IssuerKeyMirrorEpoch"] = m.IssuerKeyMirrorEpoch
+	}
+	if m.present&mptokenBitAuditorKeyMirrorEpoch != 0 {
+		out["AuditorKeyMirrorEpoch"] = m.AuditorKeyMirrorEpoch
+	}
+	if m.present&mptokenBitIssuerMirrorEncryptionKey != 0 {
+		out["IssuerMirrorEncryptionKey"] = m.IssuerMirrorEncryptionKey
+	}
 	if m.present&mptokenBitHolderEncryptionKey != 0 {
 		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitRecoveryKey != 0 {
+		out["RecoveryKey"] = m.RecoveryKey
 	}
 	if m.present&mptokenBitSponsor != 0 {
 		out["Sponsor"] = m.Sponsor

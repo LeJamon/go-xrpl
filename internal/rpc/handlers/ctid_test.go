@@ -63,3 +63,34 @@ func TestParseCTID(t *testing.T) {
 		}
 	}
 }
+
+func TestAddExpandedTransactionCTID(t *testing.T) {
+	tests := []struct {
+		name   string
+		tx     map[string]any
+		meta   map[string]any
+		want   string
+		absent bool
+	}{
+		{name: "node network", tx: map[string]any{}, meta: map[string]any{"TransactionIndex": uint32(2)}, want: "C000000700020015"},
+		{name: "transaction network", tx: map[string]any{"NetworkID": uint32(1025)}, meta: map[string]any{"TransactionIndex": uint32(2)}, want: "C000000700020401"},
+		{name: "no metadata", tx: map[string]any{}, absent: true},
+		{name: "network overflow", tx: map[string]any{"NetworkID": uint32(65536)}, meta: map[string]any{"TransactionIndex": uint32(2)}, absent: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := map[string]any{}
+			addExpandedTransactionCTID(entry, StoredTransaction{TxJSON: test.tx, Meta: test.meta}, 7, 21)
+			got, ok := entry["ctid"]
+			if test.absent {
+				if ok {
+					t.Fatalf("ctid = %v, want absent", got)
+				}
+				return
+			}
+			if got != test.want {
+				t.Fatalf("ctid = %v, want %s", got, test.want)
+			}
+		})
+	}
+}

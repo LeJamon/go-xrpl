@@ -102,6 +102,9 @@ func TestLedgerSpecificFlags(t *testing.T) {
 		// ltSPONSORSHIP
 		{"LsfSponsorshipRequireSignForFee", LsfSponsorshipRequireSignForFee, 0x00010000},
 		{"LsfSponsorshipRequireSignForReserve", LsfSponsorshipRequireSignForReserve, 0x00020000},
+
+		// ltLOAN_BROKER, staged from rippled 3.5.0-rc1
+		{"LsfLoanBrokerPrivate", LsfLoanBrokerPrivate, 0x00010000},
 	}
 
 	for _, tt := range tests {
@@ -111,6 +114,10 @@ func TestLedgerSpecificFlags(t *testing.T) {
 	}
 
 	oracle := readOracleLedgerFlags(t)
+	if _, found := oracle["lsfLoanBrokerPrivate"]; found {
+		t.Fatal("staged rc1 lsfLoanBrokerPrivate already exists in the pinned oracle")
+	}
+	oracle["lsfLoanBrokerPrivate"] = 0x00010000
 	if len(oracle) != len(tests) {
 		t.Fatalf("rippled has %d ledger flags, Go has %d", len(oracle), len(tests))
 	}

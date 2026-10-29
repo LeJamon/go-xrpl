@@ -607,6 +607,7 @@ func (o *Overlay) addPeer(peer *Peer) error {
 }
 
 func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
+	peer.clusterMember = func() bool { return o.isClusterPeer(peer) }
 	if o.cluster != nil {
 		if member, ok := o.cluster.Member(peer.RemotePublicKeyBytes()); ok {
 			peer.resourceGossipOrigin(member.Name)

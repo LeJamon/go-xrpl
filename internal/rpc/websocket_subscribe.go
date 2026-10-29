@@ -39,7 +39,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	}
 	serverState := sampleServerSubscriptionState(ctx, request)
 
-	prefix, err := subscriptionRequestExcluding(cmd.Params, "books", "account_history_tx_stream")
+	prefix, err := subscriptionRequestExcluding(cmd.Params, "books", "account_history_tx_stream", "mpt_issuances")
 	if err != nil {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid subscription parameters.")
 	}
@@ -60,6 +60,9 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 		setSubscriptionLoadCost(ctx, bookRequest)
 		return nil
 	}); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, request.OnlyMPTIssuances(), ctx.Role.IsAdmin()); rpcErr != nil {
 		return nil, rpcErr
 	}
 
@@ -150,7 +153,7 @@ func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionReque
 	return request, err
 }
 func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, request types.SubscriptionRequest, params json.RawMessage, ctx *types.RpcContext) *rpcerrors.RpcError {
-	prefix, err := subscriptionRequestExcluding(params, "books", "account_history_tx_stream")
+	prefix, err := subscriptionRequestExcluding(params, "books", "account_history_tx_stream", "mpt_issuances")
 	if err != nil {
 		return rpcerrors.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 	}
@@ -161,9 +164,12 @@ func (ws *WebSocketServer) finishUnsubscribe(wsConn *websocketConnection, reques
 	if rpcErr := applyAccountHistoryUnsubscribe(ctx, wsConn.Connection, request); rpcErr != nil {
 		return rpcErr
 	}
-	return applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
 		return ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, bookRequest)
-	})
+	}); rpcErr != nil {
+		return rpcErr
+	}
+	return ws.subscriptionManager.HandleUnsubscribeScoped(wsConn.registration, scope, request.OnlyMPTIssuances())
 }
 func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRequest) {
 	for _, book := range request.Books {

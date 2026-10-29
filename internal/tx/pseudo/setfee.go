@@ -52,6 +52,11 @@ type SetFee struct {
 	// LedgerSequence is the ledger sequence for this fee change
 	LedgerSequence *uint32 `json:"LedgerSequence,omitempty" xrpl:"LedgerSequence,omitempty"`
 
+	// SmartEscrow fee fields, which this node does not support.
+	GasLimit          *uint32 `json:"GasLimit,omitempty" xrpl:"GasLimit,omitempty"`
+	BytecodeSizeLimit *uint32 `json:"BytecodeSizeLimit,omitempty" xrpl:"BytecodeSizeLimit,omitempty"`
+	GasPrice          *uint32 `json:"GasPrice,omitempty" xrpl:"GasPrice,omitempty"`
+
 	// parsedCache memoises parseFields across Validate / PreclaimPseudo / Apply.
 	parsedCache *parsedFeeFields `json:"-" xrpl:"-"`
 }
@@ -106,6 +111,10 @@ func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) ter.Result {
 		if s.hasModernFields() {
 			return ter.TemDISABLED
 		}
+	}
+	smartEscrow := rules != nil && rules.Enabled(amendment.FeatureSmartEscrow)
+	if !smartEscrow && (s.GasLimit != nil || s.BytecodeSizeLimit != nil || s.GasPrice != nil) {
+		return ter.TemDISABLED
 	}
 
 	if _, err := s.parsedOrError(); err != nil {

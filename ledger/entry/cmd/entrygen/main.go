@@ -443,6 +443,9 @@ func makeFieldRender(f schema.Field, fi *definitions.FieldInstance, entryName, b
 func attachCompound(fr *fieldRender) error {
 	switch fr.XRPLType {
 	case "STObject":
+		if schema.IsFreeFormObject(fr.Name) {
+			return nil
+		}
 		if _, ok := schema.InnerObjectTemplateByName(fr.Name); !ok {
 			return fmt.Errorf("STObject field %s has no inner-object template", fr.Name)
 		}

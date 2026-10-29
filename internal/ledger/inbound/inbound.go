@@ -1126,6 +1126,14 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		return 0, fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",
 			computed[:8], l.hash[:8], h.LedgerIndex, l.seq)
 	}
+	// No ledger has an empty state map, so a header with a zero account hash
+	// cannot name one. The peer sent the header asked for, so it is not to
+	// blame; the acquisition fails at once instead of waiting for a state root.
+	if h.AccountHash == ([32]byte{}) {
+		l.state = StateFailed
+		l.err = fmt.Errorf("%w: ledger %d has a zero account hash", ErrHeaderRejected, h.LedgerIndex)
+		return 0, l.err
+	}
 	if l.headerAdmission != nil {
 		if err := l.headerAdmission(h.LedgerIndex); err != nil {
 			return 0, fmt.Errorf("%w: %w", ErrHeaderRejected, err)
@@ -1253,7 +1261,7 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	added, stored, applyErr := l.applyKnownNodes(ctx, l.stateMap, nodes, "state")
 	l.stateRecv += uint64(len(nodes))
 	l.stateUseful += uint64(added)
-	if applyErr != nil && !errors.Is(applyErr, ErrInvalidPeerNode) && !errors.Is(applyErr, shamap.ErrAcquisitionMemory) {
+	if acquisitionFatal(applyErr) {
 		l.state = StateFailed
 		l.err = applyErr
 		return added, applyErr
@@ -1322,7 +1330,7 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	added, stored, applyErr := l.applyKnownNodes(ctx, l.txMap, nodes, "tx")
 	l.txRecv += uint64(len(nodes))
 	l.txUseful += uint64(added)
-	if applyErr != nil && !errors.Is(applyErr, ErrInvalidPeerNode) && !errors.Is(applyErr, shamap.ErrAcquisitionMemory) {
+	if acquisitionFatal(applyErr) {
 		l.state = StateFailed
 		l.err = applyErr
 		return added, applyErr
@@ -1404,10 +1412,29 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
 				"error", err)
-			return added, stored, fmt.Errorf("%w: %s node rejected", ErrInvalidPeerNode, label)
+			return added, stored, rejectedNodeError(label, err)
 		}
 	}
 	return added, stored, nil
+}
+
+// rejectedNodeError reports a peer node the map refused, keeping the map's
+// reason so a node that proves the map invalid can end the acquisition.
+func rejectedNodeError(label string, err error) error {
+	if err == nil {
+		return fmt.Errorf("%w: %s node rejected", ErrInvalidPeerNode, label)
+	}
+	return fmt.Errorf("%w: %s node rejected: %w", ErrInvalidPeerNode, label, err)
+}
+
+// acquisitionFatal reports whether a node-apply error ends the acquisition:
+// anything but a bad peer node or a memory wait, and always a map the
+// verified nodes prove cannot exist.
+func acquisitionFatal(err error) bool {
+	if err == nil || errors.Is(err, shamap.ErrAcquisitionMemory) {
+		return false
+	}
+	return errors.Is(err, shamap.ErrMapInvalid) || !errors.Is(err, ErrInvalidPeerNode)
 }
 
 func (l *Ledger) retirementError() error {

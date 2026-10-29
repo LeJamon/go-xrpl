@@ -85,3 +85,29 @@ func TestSubscriptionBookWireCoercionAndHexIssuer(t *testing.T) {
 	valid := websocketJSON(t, client, `{"command":"subscribe","id":4,"books":[{"taker_pays":{"currency":"XRP","issuer":"0"},"taker_gets":{"currency":"USD","issuer":"B5F762798A53D543A014CAF8B297CFF8F2F937E8"}}]}`)
 	require.Equal(t, "success", valid["status"])
 }
+
+func TestSubscriptionMPTIssuancesOverWebSocket(t *testing.T) {
+	ws, client := openSubscriptionWebSocket(t)
+
+	invalid := websocketJSON(t, client, `{"command":"subscribe","id":5,"mpt_issuances":["0123456789ABCDEF"]}`)
+	require.Equal(t, "error", invalid["status"])
+	require.Equal(t, "invalidParams", invalid["error"])
+	require.Equal(t, "Invalid parameters.", invalid["error_message"])
+
+	// mpt_issuances is handled after books, so the book error wins.
+	both := websocketJSON(t, client, `{"command":"subscribe","id":6,"books":[{"taker_pays":{"currency":0.0},"taker_gets":{"currency":"XRP"}}],"mpt_issuances":1}`)
+	require.Equal(t, "srcCurMalformed", both["error"])
+
+	response := websocketJSON(t, client, `{"command":"subscribe","id":7,"mpt_issuances":["`+subscriptionTestMPT+`"]}`)
+	require.Equal(t, "success", response["status"])
+	payload := []byte(`{"type":"transaction","marker":"mpt-issuance"}`)
+	ws.SubscriptionManager().BroadcastToMPTIssuancesVersioned(payload, payload, []string{subscriptionTestMPT})
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(time.Second)))
+	_, delivered, err := client.ReadMessage()
+	require.NoError(t, err)
+	require.JSONEq(t, string(payload), string(delivered))
+
+	response = websocketJSON(t, client, `{"command":"unsubscribe","id":8,"mpt_issuances":["`+subscriptionTestMPT+`"]}`)
+	require.Equal(t, "success", response["status"])
+	require.False(t, ws.SubscriptionManager().HasMPTIssuanceSubscribers())
+}

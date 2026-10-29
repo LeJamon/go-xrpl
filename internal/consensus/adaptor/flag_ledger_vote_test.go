@@ -504,7 +504,7 @@ func TestAmendmentStances_ConfigOverridesUpvote(t *testing.T) {
 // an obsolete amendment's vote. Listing such an amendment in
 // Config.AmendmentVote must NOT promote it to VoteUp.
 func TestAmendmentStances_ConfigCannotOverrideObsolete(t *testing.T) {
-	target := amendment.FeatureByName("NonFungibleTokensV1")
+	target := amendment.FeatureByName("MultiSign")
 	require.NotNil(t, target)
 	require.Equal(t, amendment.VoteObsolete, target.Vote,
 		"test premise: target must be VoteObsolete (registry changed?)")

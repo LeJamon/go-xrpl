@@ -541,3 +541,34 @@ func TestChannelAuthorize_BadSeed(t *testing.T) {
 	assert.Equal(t, rpcerrors.RpcBAD_SEED, err.Code)
 	assert.Equal(t, "badSeed", err.ErrorString)
 }
+
+// Based on rippled PayChan_test.cpp testRPC (XRPLF/rippled#7582): a non-string
+// channel_id is invalidParams once the key pair is derived, and a non-string
+// amount is channelAmtMalformed.
+func TestChannelAuthorizeFieldTypes(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		message string
+	}{
+		{"numeric channel_id", `{"amount":"2000","channel_id":2000,"key_type":"secp256k1","passphrase":"passphrase_can_be_anything"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters."},
+		{"missing secret before channel_id type", `{"amount":"2000","channel_id":2000}`, rpcerrors.RpcINVALID_PARAMS, "Missing field 'secret'."},
+		{"numeric amount", `{"amount":2000,"channel_id":"` + strings.Repeat("A", 64) + `","key_type":"secp256k1","passphrase":"passphrase_can_be_anything"}`, rpcerrors.RpcCHANNEL_AMT_MALFORMED, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(channelAuthorizeTestContext(types.ApiVersion1), json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			if tc.message != "" {
+				assert.Equal(t, tc.message, rpcErr.Message)
+			}
+		})
+	}
+
+	result, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(channelAuthorizeTestContext(types.ApiVersion1),
+		json.RawMessage(`{"amount":"2000","channel_id":"0","key_type":"secp256k1","passphrase":"passphrase_can_be_anything"}`))
+	require.Nil(t, rpcErr, "channel_id \"0\" parses as the zero hash")
+	assert.Contains(t, result, "signature")
+}
