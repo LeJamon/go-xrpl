@@ -22,14 +22,14 @@
     "go_runtime_transaction_rows": 82,
     "go_legacy_enum_rows": 4,
     "oracle_amendments": 108,
-    "go_amendments": 113,
-    "go_only_amendments": 5,
+    "go_amendments": 117,
+    "go_only_amendments": 9,
     "common_fields": 20
   },
   "source_sha256": {
     "protocol/transaction_type.go": "56377642056a30ce2610780328cf03701f0e93f35fb6c33865bf348172df1637",
     "internal/tx/template.go": "68b5063c62f9eb6bd313fd562a43e6ab06295981456b618a1392f5fc8e2c247c",
-    "amendment/registry.go": "e447f7cb600acde27f76da27b384991bb7b9c826551f272e924d160315cbbc2f"
+    "amendment/registry.go": "66f605f5291e1ff32451b7db0f45e67c2994f278e2161262dd1c5430741425a5"
   },
   "engine": {
     "registry": {
@@ -1267,6 +1267,17 @@
       "status": "matched"
     },
     {
+      "name": "ConfidentialMPTKeyRotation",
+      "go": {
+        "name": "ConfidentialMPTKeyRotation",
+        "kind": "feature",
+        "supported": "no",
+        "support_condition": null
+      },
+      "oracle": null,
+      "status": "go_only"
+    },
+    {
       "name": "ConfidentialTransfer",
       "go": {
         "name": "ConfidentialTransfer",
@@ -1280,6 +1291,17 @@
         "supported": "yes"
       },
       "status": "matched"
+    },
+    {
+      "name": "Cosign",
+      "go": {
+        "name": "Cosign",
+        "kind": "feature",
+        "supported": "no",
+        "support_condition": null
+      },
+      "oracle": null,
+      "status": "go_only"
     },
     {
       "name": "Credentials",
@@ -1623,6 +1645,17 @@
       "status": "matched"
     },
     {
+      "name": "LendingProtocolV1_2",
+      "go": {
+        "name": "LendingProtocolV1_2",
+        "kind": "feature",
+        "supported": "no",
+        "support_condition": null
+      },
+      "oracle": null,
+      "status": "go_only"
+    },
+    {
       "name": "MPTokensV1",
       "go": {
         "name": "MPTokensV1",
@@ -1842,6 +1875,17 @@
         "supported": "yes"
       },
       "status": "matched"
+    },
+    {
+      "name": "SmartEscrow",
+      "go": {
+        "name": "SmartEscrow",
+        "kind": "feature",
+        "supported": "no",
+        "support_condition": null
+      },
+      "oracle": null,
+      "status": "go_only"
     },
     {
       "name": "SortedDirectories",

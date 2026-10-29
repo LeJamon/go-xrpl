@@ -28,7 +28,11 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureCosign                        = registerFeature("Cosign", SupportedNo, VoteDefaultNo)
+	FeatureSmartEscrow                   = registerFeature("SmartEscrow", SupportedNo, VoteDefaultNo)
+	FeatureLendingProtocolV1_2           = registerFeature("LendingProtocolV1_2", SupportedNo, VoteDefaultNo)
 	FeatureFixCleanup3_5_0               = registerFix("fixCleanup3_5_0", SupportedNo, VoteDefaultNo)
+	FeatureConfidentialMPTKeyRotation    = registerFeature("ConfidentialMPTKeyRotation", SupportedNo, VoteDefaultNo)
 	FeatureFixBatchV1_2                  = registerFix("fixBatchV1_2", SupportedYes, VoteDefaultYes)
 	FeatureFixCleanup3_4_0               = registerFix("fixCleanup3_4_0", SupportedYes, VoteDefaultNo)
 	FeatureSponsor                       = registerFeature("Sponsor", SupportedYes, VoteDefaultNo)

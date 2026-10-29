@@ -124,8 +124,8 @@ func checkInventoryCounts(t *testing.T, inventory coverageInventory) {
 		"go_runtime_transaction_rows": 82,
 		"go_legacy_enum_rows":         4,
 		"oracle_amendments":           108,
-		"go_amendments":               113,
-		"go_only_amendments":          5,
+		"go_amendments":               117,
+		"go_only_amendments":          9,
 		"common_fields":               20,
 	}
 	for name, expected := range want {
@@ -212,14 +212,14 @@ func checkAmendmentRegistry(t *testing.T, rows []coverageAmendment) {
 			goOnlyCount++
 		}
 	}
-	if got := goCount; got != 113 {
-		t.Errorf("inventory Go amendment rows = %d, want 113", got)
+	if got := goCount; got != 117 {
+		t.Errorf("inventory Go amendment rows = %d, want 117", got)
 	}
 	if got := oracleCount; got != 108 {
 		t.Errorf("inventory oracle amendment rows = %d, want 108", got)
 	}
-	if got := goOnlyCount; got != 5 {
-		t.Errorf("inventory Go-only amendment rows = %d, want 5", got)
+	if got := goOnlyCount; got != 9 {
+		t.Errorf("inventory Go-only amendment rows = %d, want 9", got)
 	}
 
 	features := amendment.AllFeatures()

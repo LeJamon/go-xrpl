@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 113 amendments.
+Total: 117 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -17,7 +17,9 @@ Total: 113 amendments.
 | `CheckCashMakesTrustLine` | yes | no |
 | `Checks` | yes | no |
 | `Clawback` | yes | no |
+| `ConfidentialMPTKeyRotation` | no | no |
 | `ConfidentialTransfer` | no | no |
+| `Cosign` | no | no |
 | `Credentials` | yes | no |
 | `CryptoConditions` | yes | no |
 | `CryptoConditionsSuite` | yes | no |
@@ -41,6 +43,7 @@ Total: 113 amendments.
 | `InvariantsV1_1` | no | no |
 | `LendingProtocol` | yes | no |
 | `LendingProtocolV1_1` | yes | no |
+| `LendingProtocolV1_2` | no | no |
 | `MPTokensV1` | yes | no |
 | `MPTokensV2` | no | no |
 | `MultiSign` | yes | no |
@@ -56,6 +59,7 @@ Total: 113 amendments.
 | `PriceOracle` | yes | no |
 | `RequireFullyCanonicalSig` | yes | no |
 | `SingleAssetVault` | yes | no |
+| `SmartEscrow` | no | no |
 | `SortedDirectories` | yes | no |
 | `Sponsor` | yes | no |
 | `TickSize` | yes | no |

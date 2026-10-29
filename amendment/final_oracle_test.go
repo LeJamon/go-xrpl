@@ -54,7 +54,11 @@ var privateV341GoOnlyFeatures = []struct {
 	vote      VoteBehavior
 	retired   bool
 }{
+	{name: "Cosign", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "SmartEscrow", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "LendingProtocolV1_2", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "fixCleanup3_5_0", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "ConfidentialMPTKeyRotation", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "InvariantsV1_1", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "NonFungibleTokensV1", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "fixNFTokenDirV1", supported: SupportedNo, vote: VoteDefaultNo},
