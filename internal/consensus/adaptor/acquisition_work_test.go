@@ -660,6 +660,22 @@ func TestApplyAcquisitionData_DuplicateBaseIsNotUseful(t *testing.T) {
 	assert.Zero(t, duplicate)
 }
 
+func TestApplyAcquisitionData_ZeroAccountHashFailsWithoutCharge(t *testing.T) {
+	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 200, TxHash: [32]byte{1}}, false)
+	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	ledger := inbound.New(ledgerHash, 200, 1, serveTestLogger())
+	useful, badKind, remove, complete, err := applyAcquisitionData(t.Context(), ledger, &message.LedgerData{
+		InfoType: message.LedgerInfoBase,
+		Nodes:    []message.LedgerNode{{NodeData: headerData}},
+	})
+	require.ErrorIs(t, err, inbound.ErrHeaderRejected)
+	assert.Zero(t, useful)
+	assert.Empty(t, badKind, "the peer sent the header asked for")
+	assert.True(t, remove)
+	assert.False(t, complete)
+	assert.Equal(t, inbound.StateFailed, ledger.State())
+}
+
 func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()

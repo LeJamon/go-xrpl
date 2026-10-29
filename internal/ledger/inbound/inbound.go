@@ -1126,6 +1126,14 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		return 0, fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",
 			computed[:8], l.hash[:8], h.LedgerIndex, l.seq)
 	}
+	// No ledger has an empty state map, so a header with a zero account hash
+	// cannot name one. The peer sent the header asked for, so it is not to
+	// blame; the acquisition fails at once instead of waiting for a state root.
+	if h.AccountHash == ([32]byte{}) {
+		l.state = StateFailed
+		l.err = fmt.Errorf("%w: ledger %d has a zero account hash", ErrHeaderRejected, h.LedgerIndex)
+		return 0, l.err
+	}
 	if l.headerAdmission != nil {
 		if err := l.headerAdmission(h.LedgerIndex); err != nil {
 			return 0, fmt.Errorf("%w: %w", ErrHeaderRejected, err)
