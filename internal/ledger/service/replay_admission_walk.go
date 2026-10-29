@@ -97,10 +97,7 @@ func (s *Service) verifyStoredReplaySnapshot(
 	root [32]byte,
 	mapType shamap.Type,
 ) (ReplayAdmissionMapStats, bool, error) {
-	durable, ok := s.shamapFamily.(interface {
-		FetchDurable(context.Context, [32]byte) ([]byte, error)
-	})
-	if !ok {
+	if !s.hasDurableFamily() {
 		return ReplayAdmissionMapStats{}, false, nil
 	}
 	startedAt := time.Now()
@@ -112,10 +109,25 @@ func (s *Service) verifyStoredReplaySnapshot(
 		}
 		defer release()
 	}
+	stats, err := s.walkStoredReplaySnapshot(ctx, name, root, mapType, startedAt)
+	return stats, true, err
+}
+
+// State callers hold foreground verification admission through proof publication.
+func (s *Service) walkStoredReplaySnapshot(
+	ctx context.Context,
+	name string,
+	root [32]byte,
+	mapType shamap.Type,
+	startedAt time.Time,
+) (ReplayAdmissionMapStats, error) {
+	durable := s.shamapFamily.(interface {
+		FetchDurable(context.Context, [32]byte) ([]byte, error)
+	})
 	workers, workspaceBytes, releaseWorkspace, err := s.acquireReplayWorkspace(ctx, mapType)
 	if err != nil {
 		elapsed := time.Since(startedAt)
-		return ReplayAdmissionMapStats{Elapsed: elapsed, AdmissionWait: elapsed, Workers: workers, WorkspaceBytes: workspaceBytes}, true, err
+		return ReplayAdmissionMapStats{Elapsed: elapsed, AdmissionWait: elapsed, Workers: workers, WorkspaceBytes: workspaceBytes}, err
 	}
 	defer releaseWorkspace()
 	walkStartedAt := time.Now()
@@ -169,9 +181,9 @@ func (s *Service) verifyStoredReplaySnapshot(
 		WorkspaceBytes:   workspaceBytes,
 	}
 	if err != nil {
-		return stats, true, fmt.Errorf("state admission: walk %s tree: %w", name, err)
+		return stats, fmt.Errorf("state admission: walk %s tree: %w", name, err)
 	}
-	return stats, true, nil
+	return stats, nil
 }
 
 func (s *Service) acquireReplayColdWorkspace(ctx context.Context) (int, uint64, func(), error) {

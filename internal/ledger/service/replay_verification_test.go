@@ -558,42 +558,149 @@ func TestVerifyDetachedLedgerRetainsOnlyStateProofWhenTransactionsFail(t *testin
 }
 
 func TestVerifyDetachedLedgerSeparatesInMemoryAndBackedTransactionCompleteness(t *testing.T) {
+	for _, firstBacked := range []bool{false, true} {
+		name := "in memory first"
+		if firstBacked {
+			name = "backed first"
+		}
+		for _, missingTransactions := range []bool{false, true} {
+			transactionState := "complete transactions"
+			if missingTransactions {
+				transactionState = "missing transactions"
+			}
+			t.Run(name+"/"+transactionState, func(t *testing.T) {
+				family := newBlockingReplayVerificationFamily(t)
+				svc, err := New(Config{SHAMapFamily: family})
+				require.NoError(t, err)
+				t.Cleanup(svc.Stop)
+				release := sync.OnceFunc(func() { close(family.release) })
+				t.Cleanup(release)
+				state := persistedReplayAdmissionState(t, family.replayAdmissionFamily, 128)
+				backedTx, txRoot := persistedReplayAdmissionTransactions(t, family.replayAdmissionFamily)
+				inMemoryTx := shamap.New(shamap.TypeTransaction)
+				require.NoError(t, inMemoryTx.PutWithNodeType([32]byte{0x43}, []byte("replay-admission-transaction"), shamap.NodeTypeTransactionWithMeta))
+				if missingTransactions {
+					family.hide(txRoot)
+				}
+
+				firstTx, secondTx := inMemoryTx, backedTx
+				if firstBacked {
+					firstTx, secondTx = backedTx, inMemoryTx
+				}
+				firstLedger := replayAdmissionLedger(t, 1205, [32]byte{0xc5}, [32]byte{0x17}, state, firstTx)
+				secondLedger := replayAdmissionLedger(t, 1205, [32]byte{0xc5}, [32]byte{0x17}, state, secondTx)
+				stateRoot := firstLedger.Header().AccountHash
+				family.mu.Lock()
+				readsBefore := family.readHashes[stateRoot]
+				family.mu.Unlock()
+				type result struct {
+					stats ReplayAdmissionStats
+					err   error
+				}
+				firstDone := make(chan result, 1)
+				go func() {
+					stats, err := svc.verifyDetachedLedgerStats(t.Context(), firstLedger)
+					firstDone <- result{stats: stats, err: err}
+				}()
+				awaitPreferredPreparation(t, family.entered)
+				secondDone := make(chan result, 1)
+				go func() {
+					stats, err := svc.verifyDetachedLedgerStats(t.Context(), secondLedger)
+					secondDone <- result{stats: stats, err: err}
+				}()
+				require.Eventually(t, func() bool {
+					flights, _ := svc.replayVerificationFlightStats()
+					return flights == 2
+				}, 5*time.Second, time.Millisecond)
+				release()
+				await := func(done <-chan result) result {
+					t.Helper()
+					select {
+					case completed := <-done:
+						return completed
+					case <-time.After(5 * time.Second):
+						t.Fatal("mixed-backing verification did not finish")
+						return result{}
+					}
+				}
+				first, second := await(firstDone), await(secondDone)
+				backed, inMemory := second, first
+				if firstBacked {
+					backed, inMemory = first, second
+				}
+				require.NoError(t, inMemory.err)
+				if missingTransactions {
+					require.ErrorIs(t, backed.err, shamap.ErrNodeNotInStore)
+				} else {
+					require.NoError(t, backed.err)
+				}
+				require.Positive(t, first.stats.State.NodesLoaded)
+				require.Zero(t, second.stats.State.NodesLoaded, "transaction backing must not cause another state walk")
+				family.mu.Lock()
+				stateReads := family.readHashes[stateRoot] - readsBefore
+				fingerprint := family.fingerprint
+				family.mu.Unlock()
+				require.Equal(t, 1, stateReads, "mixed-backing callers must share the complete state traversal")
+				require.True(t, svc.lookupReplayProof(firstLedger.Header(), fingerprint, false))
+				require.Equal(t, !missingTransactions, svc.lookupReplayProof(firstLedger.Header(), fingerprint, true))
+			})
+		}
+	}
+}
+
+type replayVerificationWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *replayVerificationWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestVerifyDetachedLedgerStateRechecksProofAfterAdmission(t *testing.T) {
 	family := newBlockingReplayVerificationFamily(t)
 	svc, err := New(Config{SHAMapFamily: family})
 	require.NoError(t, err)
 	t.Cleanup(svc.Stop)
+	release := sync.OnceFunc(func() { close(family.release) })
+	t.Cleanup(release)
 	state := persistedReplayAdmissionState(t, family.replayAdmissionFamily, 128)
-	txSource := shamap.New(shamap.TypeTransaction)
-	txKey := [32]byte{0x42}
-	txValue := []byte("shared-transaction-root")
-	require.NoError(t, txSource.PutWithNodeType(txKey, txValue, shamap.NodeTypeTransactionWithMeta))
-	require.NoError(t, txSource.StoreDirty(func(entries []shamap.FlushEntry) error {
-		return family.StoreBatch(t.Context(), entries)
-	}))
-	txRoot, err := txSource.Hash()
-	require.NoError(t, err)
-	backedTx, err := shamap.NewFromRootHashContext(t.Context(), shamap.TypeTransaction, txRoot, family.replayAdmissionFamily)
-	require.NoError(t, err)
-	inMemoryTx := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, inMemoryTx.PutWithNodeType(txKey, txValue, shamap.NodeTypeTransactionWithMeta))
-	family.hide(txRoot)
-
-	ownerLedger := replayAdmissionLedger(t, 1205, [32]byte{0xc5}, [32]byte{0x17}, state, inMemoryTx)
-	backedLedger := replayAdmissionLedger(t, 1205, [32]byte{0xc5}, [32]byte{0x17}, state, backedTx)
+	l := replayAdmissionLedger(t, 1210, [32]byte{0xca}, [32]byte{0x1c}, state, shamap.New(shamap.TypeTransaction))
 	ownerDone := make(chan error, 1)
-	go func() { ownerDone <- svc.VerifyDetachedLedger(t.Context(), ownerLedger) }()
-	select {
-	case <-family.entered:
-	case <-time.After(time.Second):
-		t.Fatal("owner verification did not start")
+	go func() { ownerDone <- svc.VerifyDetachedLedger(t.Context(), l) }()
+	awaitPreferredPreparation(t, family.entered)
+	pin, pinned, err := svc.acquireReplaySnapshot(t.Context())
+	require.NoError(t, err)
+	require.True(t, pinned)
+	defer pin.Release()
+	ctx := &replayVerificationWaitContext{Context: t.Context(), waiting: make(chan struct{})}
+	type result struct {
+		stats  ReplayAdmissionMapStats
+		reused bool
+		err    error
 	}
-	waiterDone := make(chan error, 1)
-	go func() { waiterDone <- svc.VerifyDetachedLedger(t.Context(), backedLedger) }()
-	require.Eventually(t, func() bool {
-		flights, _ := svc.replayVerificationFlightStats()
-		return flights == 2
-	}, time.Second, time.Millisecond)
-	close(family.release)
-	require.NoError(t, <-ownerDone)
-	require.ErrorIs(t, <-waiterDone, shamap.ErrNodeNotInStore)
+	waiterDone := make(chan result, 1)
+	go func() {
+		stats, reused, err := svc.verifyDetachedLedgerState(ctx, l.Header(), state, pin)
+		waiterDone <- result{stats: stats, reused: reused, err: err}
+	}()
+	// Done is consulted by the permit's blocking select after the proof miss.
+	awaitPreferredPreparation(t, ctx.waiting)
+	release()
+	select {
+	case completed := <-waiterDone:
+		require.NoError(t, completed.err)
+		require.True(t, completed.reused)
+		require.Zero(t, completed.stats.NodesLoaded)
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued state verification did not finish")
+	}
+	select {
+	case err := <-ownerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("state verification owner did not finish")
+	}
 }

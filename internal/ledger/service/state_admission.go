@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
@@ -133,36 +134,19 @@ func (s *Service) verifyDetachedLedgerStats(ctx context.Context, l *ledger.Ledge
 		} else if verified {
 			return replayVerificationResult{proofCacheHit: true}, nil
 		}
-		var stateStats ReplayAdmissionMapStats
-		var current [32]byte
-		var available bool
-		var runErr error
-		stateProofReused := s.lookupReplayProof(h, pin.fingerprint, false)
+		stateStats, stateProofReused, runErr := s.verifyDetachedLedgerState(ownerCtx, h, stateMap, pin)
+		if runErr != nil {
+			return replayVerificationResult{state: stateStats}, runErr
+		}
 		if stateProofReused {
 			s.logReplayVerificationDecision(h, pin.fingerprint, "state_reused", "generation-bound state proof available for transaction upgrade", true)
-		} else {
-			stateStats, runErr = s.verifyDetachedMapStats(ownerCtx, "state", stateMap)
-			if runErr != nil {
-				return replayVerificationResult{}, runErr
-			}
-			current, available, runErr = currentReplayFingerprint(ownerCtx, pin)
-			if runErr != nil {
-				return replayVerificationResult{state: stateStats}, fmt.Errorf("state admission: recheck replay generation: %w", runErr)
-			}
-			if available && current != pin.fingerprint {
-				return replayVerificationResult{state: stateStats}, errors.New("state admission: replay generation changed")
-			}
-			if err := ownerCtx.Err(); err != nil {
-				return replayVerificationResult{state: stateStats}, err
-			}
-			s.rememberReplayProof(h, pin.fingerprint, false)
 		}
 		txStats, runErr := s.verifyDetachedMapStats(ownerCtx, "transaction", txMap)
 		if runErr != nil {
 			s.logReplayVerificationDecision(h, pin.fingerprint, "state_only", "state traversal complete; transaction verification failed", true)
 			return replayVerificationResult{state: stateStats, transactions: txStats}, runErr
 		}
-		current, available, runErr = currentReplayFingerprint(ownerCtx, pin)
+		current, available, runErr := currentReplayFingerprint(ownerCtx, pin)
 		if runErr != nil {
 			return replayVerificationResult{state: stateStats, transactions: txStats}, fmt.Errorf("state admission: recheck replay generation: %w", runErr)
 		}
@@ -185,6 +169,54 @@ func (s *Service) verifyDetachedLedgerStats(ctx context.Context, l *ledger.Ledge
 		stats.ProofCacheMiss = false
 	}
 	return stats, err
+}
+
+func (s *Service) verifyDetachedLedgerState(ctx context.Context, h header.LedgerHeader, source *shamap.SHAMap, pin *replaySnapshotPin) (stats ReplayAdmissionMapStats, reused bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return stats, false, err
+	}
+	if s.lookupReplayProof(h, pin.fingerprint, false) {
+		return stats, true, nil
+	}
+	startedAt := time.Now()
+	defer func() { stats.Elapsed = time.Since(startedAt) }()
+	release, err := s.acquireForegroundStateVerification(ctx)
+	stats.AdmissionWait = time.Since(startedAt)
+	if err != nil {
+		return stats, false, err
+	}
+	defer release()
+	// Different transaction backing uses separate flights but the same state
+	// proof. Recheck and publish while holding the traversal permit.
+	if s.lookupReplayProof(h, pin.fingerprint, false) {
+		return stats, true, nil
+	}
+	if h.AccountHash != ([32]byte{}) {
+		stats, err = s.walkStoredReplaySnapshot(ctx, "state", h.AccountHash, source.Type(), startedAt)
+	} else {
+		snapshot, snapshotErr := source.SnapshotImmutableContext(ctx)
+		if snapshotErr != nil {
+			return stats, false, fmt.Errorf("state admission: snapshot state map: %w", snapshotErr)
+		}
+		admissionWait := stats.AdmissionWait
+		stats, err = s.verifyDetachedSnapshotStats(ctx, "state", snapshot, [32]byte{})
+		stats.AdmissionWait = admissionWait
+	}
+	if err != nil {
+		return stats, false, err
+	}
+	current, available, err := currentReplayFingerprint(ctx, pin)
+	if err != nil {
+		return stats, false, fmt.Errorf("state admission: recheck replay generation: %w", err)
+	}
+	if available && current != pin.fingerprint {
+		return stats, false, errors.New("state admission: replay generation changed")
+	}
+	if err := ctx.Err(); err != nil {
+		return stats, false, err
+	}
+	s.rememberReplayProof(h, pin.fingerprint, false)
+	return stats, false, nil
 }
 
 func (s *Service) isServiceOwnedLedger(l *ledger.Ledger) bool {
