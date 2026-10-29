@@ -65,6 +65,12 @@ var privateV341GoOnlyFeatures = []struct {
 	{name: "fixNFTokenNegOffer", supported: SupportedNo, vote: VoteDefaultNo},
 }
 
+// rc1RetiredFeatures are private v3.4.1 registrations that rippled 3.5.0-rc1
+// moved to XRPL_RETIRE_FIX.
+var rc1RetiredFeatures = map[string]bool{
+	"fixAMMv1_1": true,
+}
+
 func loadPrivateV341Fixture(t *testing.T) privateV341Fixture {
 	t.Helper()
 	var fixture privateV341Fixture
@@ -180,11 +186,15 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 		if feature.Supported != wantSupported {
 			t.Errorf("feature %q support = %v, want %v (native backend available=%v)", expected.Name, feature.Supported, wantSupported, mptcrypto.Available())
 		}
+		wantRetired := expected.Retired
+		if rc1RetiredFeatures[expected.Name] {
+			wantVote, wantRetired = VoteObsolete, true
+		}
 		if feature.Vote != wantVote {
 			t.Errorf("feature %q vote = %v, want %v", expected.Name, feature.Vote, wantVote)
 		}
-		if feature.Retired != expected.Retired {
-			t.Errorf("feature %q retired = %v, want %v", expected.Name, feature.Retired, expected.Retired)
+		if feature.Retired != wantRetired {
+			t.Errorf("feature %q retired = %v, want %v", expected.Name, feature.Retired, wantRetired)
 		}
 	}
 

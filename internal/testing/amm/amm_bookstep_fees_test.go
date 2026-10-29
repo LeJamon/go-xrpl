@@ -301,23 +301,20 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		fixAMMv1_1 bool
 		fixAMMv1_3 bool
 		poolUSD    int64
 		carolUSD   int64
 	}{
 		{
-			name:       "fixAMMv1_1",
-			fixAMMv1_1: true,
+			name:       "fixAMMv1_3",
 			fixAMMv1_3: true,
 			poolUSD:    8928571428571429,
 			carolUSD:   1085714285714286,
 		},
 		{
-			name:       "legacy",
-			fixAMMv1_1: false,
+			name:       "noFixAMMv1_3",
 			fixAMMv1_3: false,
-			poolUSD:    8928571428571428,
+			poolUSD:    8928571428571429,
 			carolUSD:   1085714285714286,
 		},
 	} {
@@ -325,9 +322,6 @@ func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 			env := amm.NewAMMTestEnv(t)
 			env.DisableFeature("SingleAssetVault")
 			env.DisableFeature("LendingProtocol")
-			if !tc.fixAMMv1_1 {
-				env.DisableFeature("fixAMMv1_1")
-			}
 			if !tc.fixAMMv1_3 {
 				env.DisableFeature("fixAMMv1_3")
 			}

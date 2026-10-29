@@ -7,11 +7,15 @@ import (
 )
 
 func TestFixAMMOverflowOfferRetirement(t *testing.T) {
-	const (
-		name  = "fixAMMOverflowOffer"
-		idHex = "12523DF04B553A0B1AD74F42DDB741DE8DC06A03FC089A0EF197E2A87F1D8107"
-	)
+	testAMMFixRetirement(t, "fixAMMOverflowOffer", "12523DF04B553A0B1AD74F42DDB741DE8DC06A03FC089A0EF197E2A87F1D8107", FeatureFixAMMOverflowOffer)
+}
 
+func TestFixAMMv1_1Retirement(t *testing.T) {
+	testAMMFixRetirement(t, "fixAMMv1_1", "35291ADD2D79EB6991343BDA0912269C817D0F094B02226C1C14AD2858962ED4", FeatureFixAMMv1_1)
+}
+
+func testAMMFixRetirement(t *testing.T, name, idHex string, exported [32]byte) {
+	t.Helper()
 	feature := FeatureByName(name)
 	if feature == nil {
 		t.Fatalf("%s is not registered", name)
@@ -23,8 +27,8 @@ func TestFixAMMOverflowOfferRetirement(t *testing.T) {
 	var wantID [32]byte
 	copy(wantID[:], decoded)
 
-	if feature.ID != wantID || FeatureFixAMMOverflowOffer != wantID {
-		t.Fatalf("%s ID = %X, exported ID = %X, want %s", name, feature.ID, FeatureFixAMMOverflowOffer, idHex)
+	if feature.ID != wantID || exported != wantID {
+		t.Fatalf("%s ID = %X, exported ID = %X, want %s", name, feature.ID, exported, idHex)
 	}
 	if feature.Supported != SupportedYes || feature.Vote != VoteObsolete || !feature.Retired {
 		t.Fatalf("%s status = supported:%v vote:%v retired:%t, want supported:yes vote:obsolete retired:true", name, feature.Supported, feature.Vote, feature.Retired)

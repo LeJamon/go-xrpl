@@ -1366,10 +1366,14 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		}
 		ids[i] = id
 	}
-	explicitRules := amendment.NewRules(ids)
-	if explicitRules.EnabledCount() != len(ids) {
+	if amendment.NewRules(ids).EnabledCount() != len(ids) {
 		return loadedSnapshotLedger{}, errors.New("duplicate amendment IDs")
 	}
+	// A snapshot recorded before an amendment's retirement may omit it, but a
+	// retired amendment is enabled on every ledger. The four AMM final-outcome
+	// snapshots recorded by 3.4.1 without fixAMMv1_1 thus replay with its
+	// post-fix behaviour and still match, so they do not witness it.
+	explicitRules := amendment.NewRules(append(ids, amendment.PermanentlyEnabledIDs()...))
 	fees, err := parseSnapshotFees(snapshot.Fees)
 	if err != nil {
 		return loadedSnapshotLedger{}, err

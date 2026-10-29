@@ -21,17 +21,12 @@ type clawbackSupplyFixture struct {
 	stateKeys []keylet.Keylet
 }
 
-func newClawbackSupplyFixture(t *testing.T, fixAMMv1_1, fixClawbackRounding bool, recordedSupply string) clawbackSupplyFixture {
+func newClawbackSupplyFixture(t *testing.T, fixClawbackRounding bool, recordedSupply string) clawbackSupplyFixture {
 	t.Helper()
 	env := amm.NewAMMTestEnv(t)
 	env.DisableFeature("SingleAssetVault")
 	env.DisableFeature("LendingProtocol")
 	env.DisableFeature("fixAMMv1_3")
-	if fixAMMv1_1 {
-		env.EnableFeature("fixAMMv1_1")
-	} else {
-		env.DisableFeature("fixAMMv1_1")
-	}
 	if fixClawbackRounding {
 		env.EnableFeature("fixAMMClawbackRounding")
 	} else {
@@ -42,9 +37,6 @@ func newClawbackSupplyFixture(t *testing.T, fixAMMv1_1, fixClawbackRounding bool
 		env.TestEnv.FundAmount(account, uint64(jtx.XRP(100_000)))
 	}
 	env.Close()
-	if env.Rules().Enabled(amendment.FeatureFixAMMv1_1) != fixAMMv1_1 {
-		t.Fatalf("fixAMMv1_1 state: got %t, want %t", env.Rules().Enabled(amendment.FeatureFixAMMv1_1), fixAMMv1_1)
-	}
 	if env.Rules().Enabled(amendment.FeatureFixAMMClawbackRounding) != fixClawbackRounding {
 		t.Fatalf("fixAMMClawbackRounding state: got %t, want %t", env.Rules().Enabled(amendment.FeatureFixAMMClawbackRounding), fixClawbackRounding)
 	}
@@ -95,18 +87,15 @@ func newClawbackSupplyFixture(t *testing.T, fixAMMv1_1, fixClawbackRounding bool
 func TestAMMClawbackSupplyGuard(t *testing.T) {
 	cases := []struct {
 		name             string
-		fixAMMv1_1       bool
 		fixClawbackRound bool
 		wantCode         string
 	}{
-		{name: "AmendmentOn/RoundingOff", fixAMMv1_1: true, fixClawbackRound: false, wantCode: "tecINTERNAL"},
-		{name: "AmendmentOff/RoundingOff", fixAMMv1_1: false, fixClawbackRound: false, wantCode: "tecAMM_BALANCE"},
-		{name: "AmendmentOn/RoundingOn", fixAMMv1_1: true, fixClawbackRound: true, wantCode: "tesSUCCESS"},
-		{name: "AmendmentOff/RoundingOn", fixAMMv1_1: false, fixClawbackRound: true, wantCode: "tesSUCCESS"},
+		{name: "RoundingOff", fixClawbackRound: false, wantCode: "tecINTERNAL"},
+		{name: "RoundingOn", fixClawbackRound: true, wantCode: "tesSUCCESS"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newClawbackSupplyFixture(t, tc.fixAMMv1_1, tc.fixClawbackRound, "1.414213562373")
+			fixture := newClawbackSupplyFixture(t, tc.fixClawbackRound, "1.414213562373")
 			sequence := fixture.env.Seq(fixture.env.GW)
 			balance := fixture.env.Balance(fixture.env.GW)
 			before := snapshotLedgerState(t, fixture.env.TestEnv, fixture.stateKeys)

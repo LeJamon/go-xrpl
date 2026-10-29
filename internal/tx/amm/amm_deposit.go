@@ -449,7 +449,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	}
 
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
-	fixV1_1 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1)
 
 	// In rippled, ammHolds() reorders pool balances to match Amount/Amount2 issues,
 	// so amountBalance always corresponds to sfAmount. In our code, assetBalance1/2
@@ -846,7 +845,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				depositAmt = depositAmount1
 			}
 			adjAmt, _, adjTokens := adjustAmountsByLPTokens(math,
-				depositAssetBalance, depositAmt, nil, lptBalance, lpTokensToIssue, tfee, true, fixV1_3, fixV1_1)
+				depositAssetBalance, depositAmt, nil, lptBalance, lpTokensToIssue, tfee, true, fixV1_3)
 			lpTokensToIssue = adjTokens
 			if singleDepositIsAsset2 {
 				depositAmount2 = adjAmt
@@ -860,7 +859,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				amount2Ptr = &depositAmount2
 			}
 			depositAmount1, amount2Ptr, lpTokensToIssue = adjustAmountsByLPTokens(math,
-				assetBalance1, depositAmount1, amount2Ptr, lptBalance, lpTokensToIssue, tfee, true, fixV1_3, fixV1_1)
+				assetBalance1, depositAmount1, amount2Ptr, lptBalance, lpTokensToIssue, tfee, true, fixV1_3)
 			if amount2Ptr != nil {
 				depositAmount2 = *amount2Ptr
 			}

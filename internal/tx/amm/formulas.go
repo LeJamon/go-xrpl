@@ -71,7 +71,6 @@ func adjustAmountsByLPTokens(
 	tfee uint16,
 	isDeposit bool,
 	fixAMMv1_3 bool,
-	fixAMMv1_1 bool,
 ) (tx.Amount, *tx.Amount, tx.Amount) {
 	// AMMv1_3 amendment adjusts tokens and amounts in deposit/withdraw formulas directly
 	if fixAMMv1_3 {
@@ -96,18 +95,6 @@ func adjustAmountsByLPTokens(
 			fr := math.div(math.fromAmount(lpTokensActual), math.fromAmount(lpTokens), state.RoundToNearest)
 			amountActual := math.multiplyToAmount(math.fromAmount(amount), fr, amount, state.RoundToNearest)
 			amount2Actual := math.multiplyToAmount(math.fromAmount(*amount2), fr, *amount2, state.RoundToNearest)
-			if !fixAMMv1_1 {
-				if math.fromAmount(amountActual).Cmp(math.fromAmount(amount)) < 0 {
-					// keep amountActual
-				} else {
-					amountActual = amount
-				}
-				if math.fromAmount(amount2Actual).Cmp(math.fromAmount(*amount2)) < 0 {
-					// keep amount2Actual
-				} else {
-					amount2Actual = *amount2
-				}
-			}
 			return amountActual, &amount2Actual, lpTokensActual
 		}
 
@@ -115,16 +102,8 @@ func adjustAmountsByLPTokens(
 		var amountActual tx.Amount
 		if isDeposit {
 			amountActual = ammAssetIn(math, amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
-		} else if !fixAMMv1_1 {
-			amountActual = ammAssetOut(math, amountBalance, lptAMMBalance, lpTokens, tfee, false)
 		} else {
 			amountActual = ammAssetOut(math, amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
-		}
-		if !fixAMMv1_1 {
-			if math.fromAmount(amountActual).Cmp(math.fromAmount(amount)) < 0 {
-				return amountActual, nil, lpTokensActual
-			}
-			return amount, nil, lpTokensActual
 		}
 		return amountActual, nil, lpTokensActual
 	}

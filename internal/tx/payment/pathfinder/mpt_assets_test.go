@@ -165,14 +165,12 @@ func (l *configuredPathfinderLedger) IsOpen() bool            { return l.open }
 func TestFlowCalculationSettingsUseLedgerRulesAndTiming(t *testing.T) {
 	rules := amendment.NewRules([][32]byte{
 		amendment.FeatureFixReducedOffersV2,
-		amendment.FeatureFixAMMv1_1,
 		amendment.FeatureFixAMMv1_2,
 	})
 	ledger := &configuredPathfinderLedger{mockLedgerView: newMockLedger(), rules: rules, open: true}
 	settings := newFlowCalculationSettings(ledger, 1234)
 	require.Equal(t, uint32(1234), settings.parentCloseTime)
 	require.True(t, settings.fixReducedOffersV2)
-	require.True(t, settings.fixAMMv1_1)
 	require.True(t, settings.fixAMMv1_2)
 	require.True(t, settings.openLedger)
 }

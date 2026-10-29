@@ -496,7 +496,7 @@ func TestAMMBookStep_LPTokenBalance(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(wdCarol))
 		env.Close()
 
-		// With fixAMMv1_1 (enabled by default): gw can withdrawAll and AMM is deleted
+		// gw can withdrawAll and the AMM is deleted
 		wdGW := amm.AMMWithdraw(env.GW, amm.XRP(), env.USD).
 			WithdrawAll().
 			Build()
