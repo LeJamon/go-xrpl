@@ -1355,7 +1355,8 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		return loadedSnapshotLedger{}, errors.New("ledger TxHash does not match transaction map")
 	}
 
-	ids := make([][32]byte, len(snapshot.Rules))
+	permanent := amendment.PermanentlyEnabledIDs()
+	ids := make([][32]byte, len(snapshot.Rules), len(snapshot.Rules)+len(permanent))
 	for i, value := range snapshot.Rules {
 		id, err := decodeSnapshotHash(fmt.Sprintf("rules[%d]", i), value)
 		if err != nil {
@@ -1373,7 +1374,7 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 	// retired amendment is enabled on every ledger. The four AMM final-outcome
 	// snapshots recorded by 3.4.1 without fixAMMv1_1 thus replay with its
 	// post-fix behaviour and still match, so they do not witness it.
-	explicitRules := amendment.NewRules(append(ids, amendment.PermanentlyEnabledIDs()...))
+	explicitRules := amendment.NewRules(append(ids, permanent...))
 	fees, err := parseSnapshotFees(snapshot.Fees)
 	if err != nil {
 		return loadedSnapshotLedger{}, err
