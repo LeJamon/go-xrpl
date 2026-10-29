@@ -347,10 +347,12 @@ func ammAssetOut(math numberMath, assetBalance, lptBalance, lpTokensIn tx.Amount
 	numerator := t1.MulRounded(t1, mode).
 		AddRounded(t1.MulRounded(twoMinusF, mode).Negate(), mode)
 	denominator := t1.MulRounded(f, mode).AddRounded(math.one().Negate(), mode)
-	frac := math.div(numerator, denominator, mode)
 	if !fixAMMv1_3 {
-		return math.multiplyToAmount(math.fromAmount(assetBalance), frac, assetBalance, mode)
+		// assetBalance * (t1*t1 - t1*(2-f)) / (t1*f - 1), multiplied first.
+		b := math.div(math.fromAmount(assetBalance).MulRounded(numerator, mode), denominator, mode)
+		return math.toAmount(b, assetBalance, mode)
 	}
+	frac := math.div(numerator, denominator, mode)
 	return math.multiplyToAmount(
 		math.fromAmountRounded(assetBalance, state.RoundDownward),
 		frac,
@@ -381,10 +383,13 @@ func calcLPTokensIn(math numberMath, assetBalance, amountOut, lptBalance tx.Amou
 	if disc.Signum() < 0 {
 		return zeroIOU()
 	}
-	halfResult := math.div(c.AddRounded(disc.Root2Rounded(mode).Negate(), mode), two, mode)
+	cMinusRoot := c.AddRounded(disc.Root2Rounded(mode).Negate(), mode)
 	if !fixAMMv1_3 {
-		return math.multiplyToAmount(math.fromAmount(lptBalance), halfResult, lptBalance, mode)
+		// lptAMMBalance * (c - root2(c*c - 4*fr)) / 2, multiplied first.
+		t := math.div(math.fromAmount(lptBalance).MulRounded(cMinusRoot, mode), two, mode)
+		return math.toAmount(t, lptBalance, mode)
 	}
+	halfResult := math.div(cMinusRoot, two, mode)
 	return math.multiplyToAmount(
 		math.fromAmountRounded(lptBalance, state.RoundUpward),
 		halfResult,
