@@ -22,17 +22,25 @@ func (s *Service) acceptConsensusResult(
 	txBlobs, disputedBlobs [][]byte,
 	closeTime time.Time,
 	closeTimeCorrect bool,
+	publicationGuard func(*ledger.Ledger) (func(), error),
 ) (uint32, error) {
 	started := time.Now()
 	var timings consensusAcceptanceTimings
 	replayBlocked := false
+	if parent != nil {
+		timings.sequence = parent.Sequence() + 1
+	}
+	stopDiagnostic := s.acceptanceDiagnostics.watch(s.logger, timings.sequence, started, slowConsensusAcceptance)
+	defer func() { timings.log(s, time.Since(started), replayBlocked) }()
+	defer stopDiagnostic()
 	observeReplayGate := func() bool {
 		gateStarted := time.Now()
 		replayBlocked = s.ReplayBlocked()
 		timings.replayGateWait += time.Since(gateStarted)
 		return replayBlocked
 	}
-	releaseAdmission, err := s.acquireLedgerWork(ctx)
+	releaseAdmission, admission, err := s.acquireLedgerWorkWithTimings(ctx)
+	timings.admission = admission
 	if err != nil {
 		return 0, err
 	}
@@ -43,7 +51,6 @@ func (s *Service) acceptConsensusResult(
 		}
 	}()
 	if observeReplayGate() {
-		timings.log(s, time.Since(started), true)
 		return 0, replayfault.ErrBlocked
 	}
 	lifecycleStarted := time.Now()
@@ -71,7 +78,6 @@ func (s *Service) acceptConsensusResult(
 		}
 		notification.notify()
 		timings.callback = time.Since(callbackStarted)
-		timings.log(s, time.Since(started), replayBlocked)
 	}()
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -244,31 +250,49 @@ func (s *Service) acceptConsensusResult(
 	timings.gateHold = successor.timings.openLedgerHold
 	successor.releaseWork = releaseAdmission
 	publicationStarted := time.Now()
+	var releasePublication func()
 	_, err = successor.publish(func() error {
 		previousValidated := s.validatedLedger
 		historyStarted := time.Now()
 		s.historyComponent.mu.Lock()
 		timings.historyWait += time.Since(historyStarted)
 		defer s.historyComponent.mu.Unlock()
+		if publicationGuard != nil {
+			var err error
+			releasePublication, err = publicationGuard(closed)
+			if err != nil {
+				return err
+			}
+		}
 
 		s.pendingTxs = nil
 		if replay != nil {
 			s.startupReplay = nil
 		}
 
+		var divergentValidated *ledger.Ledger
 		// Validated entry wins the by-seq map; closedLedger still reflects the local
 		// build so divergence is observable via server_info/ledger_closed.
 		if existing, ok := s.ledgerHistory[closedSeq]; ok && existing.Hash() != closedLedgerHash && existing.IsValidated() {
-			existingHash := existing.Hash()
+			divergentValidated = existing
+			s.closedLedger = closed
+		} else {
+			s.closedLedger = closed
+			s.putHistoryLocked(closed)
+		}
+		// The closed-frontier assignment linearizes publication. Release before
+		// persistence; s.mu still hides the remaining successor transition.
+		if releasePublication != nil {
+			releasePublication()
+			releasePublication = nil
+		}
+		if divergentValidated != nil {
+			existingHash := divergentValidated.Hash()
 			s.logger.Warn("local consensus close diverges from validated ledger; preserving validated in history, keeping local-build as closedLedger reference",
 				"seq", closedSeq,
 				"local_hash", fmt.Sprintf("%x", closedLedgerHash[:8]),
 				"validated_hash", fmt.Sprintf("%x", existingHash[:8]),
 			)
-			s.closedLedger = closed
-		} else {
-			s.closedLedger = closed
-			s.putHistoryLocked(closed)
 		}
 
 		s.commitTransactionResultsLocked(stagedResults)
@@ -305,6 +329,9 @@ func (s *Service) acceptConsensusResult(
 		notification = s.validatedLedgerNotificationLocked(previousValidated)
 		return nil
 	})
+	if releasePublication != nil {
+		releasePublication()
+	}
 	timings.publication = time.Since(publicationStarted)
 	if err != nil {
 		return 0, err
@@ -339,6 +366,7 @@ func (s *Service) acceptConsensusResult(
 }
 
 type consensusAcceptanceTimings struct {
+	admission                                                                   ledgerWorkTimings
 	sequence                                                                    uint32
 	lifecycleWait, gateWait, gateHold, serviceWait, historyWait, replayGateWait time.Duration
 	parse, build, apply, stateTxHash, stage, nextOpen, persist, callback, relay time.Duration
@@ -351,6 +379,7 @@ func (t consensusAcceptanceTimings) log(s *Service, total time.Duration, blocked
 	}
 	s.logger.Info("Consensus acceptance timings", "seq", t.sequence,
 		"total", total, "replay_gate_wait", t.replayGateWait, "blocked", blocked,
+		"admission_lifecycle_wait", t.admission.lifecycle, "persistence_admission_wait", t.admission.persistence, "state_admission_wait", t.admission.state,
 		"lifecycle_wait", t.lifecycleWait, "open_ledger_wait", t.gateWait, "open_ledger_hold", t.gateHold,
 		"service_wait", t.serviceWait, "history_wait", t.historyWait,
 		"parse", t.parse, "build", t.build, "transaction_apply", t.apply, "close_state_tx_hash", t.stateTxHash,

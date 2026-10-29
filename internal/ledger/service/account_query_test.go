@@ -322,6 +322,40 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 	})
 }
 
+// TestGetAccountLines_BalancePerspective pins sfBalance's low-account
+// orientation: a positive stored balance is held by the low account, so the
+// low side reports it unchanged and the high side reports its negation.
+func TestGetAccountLines_BalancePerspective(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	// 0x10-account sorts before 0x40-account, so low = holder, high = issuer.
+	holderAddr, _ := addressFromBytes(t, 0x10)
+	issuerAddr, _ := addressFromBytes(t, 0x40)
+	insertAccountRoot(t, svc, holderAddr, 1_000_000_000, 0)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
+	insertLineRaw(t, svc, holderAddr, issuerAddr, "USD", "7", "100", "0", state.LsfLowReserve)
+
+	for _, tc := range []struct {
+		name, account, want string
+	}{
+		{"low holder", holderAddr, "7"},
+		{"high issuer", issuerAddr, "-7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := svc.GetAccountLines(context.Background(), tc.account, "current", "", 0, "")
+			if err != nil {
+				t.Fatalf("GetAccountLines: %v", err)
+			}
+			if len(res.Lines) != 1 {
+				t.Fatalf("expected 1 line, got %d", len(res.Lines))
+			}
+			if got := res.Lines[0].Balance; got != tc.want {
+				t.Errorf("balance = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	svc := newOfferTestService(t)
 	aAddr, _ := addressFromBytes(t, 0x10)

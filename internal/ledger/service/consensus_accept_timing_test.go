@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/require"
@@ -103,10 +104,78 @@ func TestConsensusAcceptanceTimingsLogInitialReplayBlock(t *testing.T) {
 	require.True(t, ok, "blocked acceptance did not emit timing record")
 	require.Equal(t, 1, logger.count())
 	require.True(t, record["blocked"].(bool), "blocked acceptance timing record was not marked blocked")
-	require.Equal(t, uint32(0), record["seq"])
+	require.Equal(t, parent.Sequence()+1, record["seq"])
 	replayGateWait, ok := record["replay_gate_wait"].(time.Duration)
 	require.True(t, ok, "blocked timing record omitted replay gate wait")
 	total, ok := record["total"].(time.Duration)
 	require.True(t, ok, "blocked timing record omitted total")
 	require.GreaterOrEqual(t, total, replayGateWait)
+}
+
+func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
+	for _, phase := range []string{"persistence", "state"} {
+		t.Run(phase, func(t *testing.T) {
+			logger := &consensusAcceptanceTimingCapture{Logger: xrpllog.Discard()}
+			svc := &Service{
+				config: Config{PersistenceMemory: &relayTestMemory{limit: 1 << 20}},
+				logger: logger,
+			}
+			svc.persistStarted = true
+			state := &blockedDiagnosticAdmission{entered: make(chan struct{})}
+			if phase == "persistence" {
+				svc.persistAdmissions = persistenceAdmissionLimit
+			} else {
+				svc.nodeStore = state
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			parent := &ledger.Ledger{}
+			go func() {
+				_, err := svc.AcceptConsensusResult(ctx, parent, nil, nil, time.Time{}, true)
+				done <- err
+			}()
+			if phase == "persistence" {
+				require.Eventually(t, func() bool {
+					svc.persistMu.Lock()
+					defer svc.persistMu.Unlock()
+					return svc.persistCapacityWake != nil
+				}, time.Second, time.Millisecond)
+			} else {
+				select {
+				case <-state.entered:
+				case err := <-done:
+					t.Fatalf("acceptance returned before state admission: %v", err)
+				case <-time.After(time.Second):
+					t.Fatal("acceptance did not reach state admission")
+				}
+			}
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("acceptance did not cancel admission")
+			}
+			record, ok := logger.latest()
+			require.True(t, ok, "canceled admission did not emit timings")
+			require.Equal(t, 1, logger.count())
+			require.Equal(t, parent.Sequence()+1, record["seq"])
+			lifecycle := record["admission_lifecycle_wait"].(time.Duration)
+			persistence := record["persistence_admission_wait"].(time.Duration)
+			stateWait := record["state_admission_wait"].(time.Duration)
+			require.Positive(t, lifecycle)
+			require.Positive(t, persistence)
+			if phase == "persistence" {
+				require.Zero(t, stateWait)
+				require.Equal(t, persistenceAdmissionLimit, svc.persistAdmissions)
+			} else {
+				require.Positive(t, stateWait)
+				require.Zero(t, svc.persistAdmissions)
+			}
+			require.GreaterOrEqual(t, record["total"].(time.Duration), lifecycle+persistence+stateWait)
+			require.Zero(t, record["parse"].(time.Duration))
+			svc.ledgerWorkWG.Wait()
+		})
+	}
 }

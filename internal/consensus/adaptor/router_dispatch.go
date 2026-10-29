@@ -199,27 +199,43 @@ func (r *Router) relayManifests(serialized [][]byte) {
 }
 
 func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
+	handlerStarted := time.Now()
+	admissionElapsed := time.Duration(0)
+	engineElapsed := time.Duration(0)
+	engineStarted := time.Time{}
+	var proposal *consensus.Proposal
+	outcome := "unprocessed"
+	defer func() {
+		if engineStarted.IsZero() {
+			admissionElapsed = time.Since(handlerStarted)
+		}
+		r.logSlowProposalIngress(msg, proposal, handlerStarted, time.Now(), admissionElapsed, engineElapsed, outcome)
+	}()
+
 	decoded, err := message.Decode(message.TypeProposeLedger, msg.Payload)
 	if err != nil {
+		outcome = "decode-rejected"
 		r.logger.Warn("failed to decode proposal", "error", err, "peer", msg.PeerID)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-decode")
 		return
 	}
 	proposeSet, ok := decoded.(*message.ProposeSet)
 	if !ok {
+		outcome = "type-rejected"
 		return
 	}
 
 	// Bounds checks BEFORE the engine sees the frame, so a peer can't
 	// cost-free spam oversized or implausibly-hoppy consensus traffic.
 	if badField, ok := validateProposeBounds(proposeSet); !ok {
+		outcome = "bounds-rejected"
 		r.logger.Debug("dropping malformed proposal",
 			"peer", msg.PeerID, "bad_field", badField)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-"+badField)
 		return
 	}
 
-	proposal := proposalFromMessage(proposeSet)
+	proposal = proposalFromMessage(proposeSet)
 	r.resolveMasterNodeID(&proposal.NodeID, proposal.SigningPubKey)
 	originPeer := uint64(msg.PeerID)
 
@@ -235,6 +251,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// can thread it to Overlay's reverse index without recomputing.
 	suppressionHash, err := hashProposalSuppressionChecked(proposal)
 	if err != nil {
+		outcome = "hash-rejected"
 		r.logger.Debug("dropping malformed proposal", "error", err, "peer", msg.PeerID)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-vl-length")
 		return
@@ -249,33 +266,67 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// was relayed. Sources received before that point are accumulated and
 	// counted atomically by RelayFromValidator.
 	if r.messageSeen.seenRecently(suppressionHash) {
+		outcome = "duplicate"
 		if r.gossip.MessageRelayedRecently(suppressionHash) {
 			r.gossip.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, nil)
 		}
 		return
 	}
 
+	engineStarted = time.Now()
+	admissionElapsed = time.Since(handlerStarted)
 	if err := r.engine.OnProposal(proposal, originPeer); err != nil {
+		engineElapsed = time.Since(engineStarted)
+		outcome = "engine-rejected"
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
+	engineElapsed = time.Since(engineStarted)
+	outcome = "accepted"
 	r.messageSeen.observe(suppressionHash)
 }
 
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
+	handlerStarted := time.Now()
+	timing := validationIngressTiming{
+		receivedAt:       msg.ReceivedAt,
+		handlerStartedAt: handlerStarted,
+	}
+	var validation *consensus.Validation
+	origin := consensus.ValidationOrigin{PeerID: uint64(msg.PeerID)}
+	trusted := false
+	trustChecked := false
+	outcome := "unprocessed"
+	defer func() {
+		completedAt := time.Now()
+		if timing.enqueuedAt.IsZero() {
+			timing.enqueuedAt = completedAt
+		}
+		r.logSlowValidationIngress(validationWorkResult{
+			validation:   validation,
+			origin:       origin,
+			trusted:      trusted,
+			trustChecked: trustChecked,
+			ingress:      timing,
+		}, handlerStarted, completedAt, 0, outcome)
+	}()
+
 	decoded, err := message.Decode(message.TypeValidation, msg.Payload)
 	if err != nil {
+		outcome = "decode-rejected"
 		r.logger.Warn("failed to decode validation", "error", err, "peer", msg.PeerID)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-decode")
 		return
 	}
 	val, ok := decoded.(*message.Validation)
 	if !ok {
+		outcome = "type-rejected"
 		return
 	}
 
-	validation, err := validationFromMessage(val, r.adaptor.Now())
+	validation, err = validationFromMessage(val, r.adaptor.Now())
 	if err != nil {
+		outcome = "parse-rejected"
 		r.logger.Warn("failed to parse validation", "error", err, "peer", msg.PeerID)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-parse")
 		return
@@ -285,6 +336,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// Post-parse bounds: the validation struct must carry sane hash
 	// and signature sizes. Same rationale as in handleProposal.
 	if badField, ok := validateValidationBounds(validation); !ok {
+		outcome = "bounds-rejected"
 		r.logger.Debug("dropping malformed validation",
 			"peer", msg.PeerID, "bad_field", badField)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-malformed-"+badField)
@@ -297,6 +349,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// the same window for quorum/trie accounting, but by the time it
 	// runs the engine has already relayed the validation.
 	if !rcl.IsCurrent(r.adaptor.Now(), validation.SignTime, validation.SeenTime) {
+		outcome = "not-current"
 		r.logger.Debug("dropping non-current validation",
 			"peer", msg.PeerID,
 			"seq", validation.LedgerSeq,
@@ -311,8 +364,10 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// validations signed outside our UNL here, before the engine spends
 	// CPU verifying the signature. rippled's PeerImp does the same under
 	// RELAY_UNTRUSTED_VALIDATIONS == -1.
-	trusted := r.adaptor.IsTrusted(validation.NodeID)
+	trusted = r.adaptor.IsTrusted(validation.NodeID)
+	trustChecked = true
 	if r.adaptor.DropUntrustedValidations() && !trusted {
+		outcome = "untrusted-dropped"
 		return
 	}
 
@@ -339,6 +394,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// Sources received before the verified first relay are accumulated by the
 	// overlay. Later duplicates feed only their current origin into the slot.
 	if !firstSeen {
+		outcome = "duplicate"
 		if r.gossip.MessageRelayedRecently(suppressionHash) {
 			r.gossip.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, nil)
 		}
@@ -347,21 +403,37 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 
 	origin, tracking := r.validationPeerContext(msg.PeerID)
 	if !trusted && (tracking == peermanagement.PeerTrackingDiverged || r.isLoadedLocal()) {
+		outcome = "tracking-rejected"
 		return
 	}
 
 	if _, ok := r.engine.(consensus.VerifiedValidationProcessor); !ok {
+		outcome = "legacy"
 		r.handleLegacyValidation(validation, originPeer, msg.PeerID)
 		return
 	}
 
+	timing.enqueuedAt = time.Now()
 	work := validationWork{
 		validation: validation,
 		origin:     origin,
 		trusted:    trusted,
+		ingress:    timing,
 	}
-	outcome := r.submitValidationWork(work)
-	if outcome != validationWorkQueued && outcome != validationWorkProcessedSynchronously {
+	admissionOutcome := r.submitValidationWork(work)
+	switch admissionOutcome {
+	case validationWorkQueued:
+		outcome = "queued"
+	case validationWorkProcessedSynchronously:
+		outcome = "processed-synchronously"
+	case validationWorkShedUntrusted:
+		outcome = "shed-untrusted"
+	case validationWorkShedTrusted:
+		outcome = "shed-trusted"
+	case validationWorkStopped:
+		outcome = "stopped"
+	}
+	if admissionOutcome != validationWorkQueued && admissionOutcome != validationWorkProcessedSynchronously {
 		r.messageSeen.allowRetry(suppressionHash)
 	}
 }
@@ -397,11 +469,22 @@ func (r *Router) submitValidationWork(work validationWork) validationWorkAdmissi
 		return validationWorkShedTrusted
 	}
 
-	r.handleValidationWorkResult(validationWorkResult{
-		validation: work.validation,
-		origin:     work.origin,
-		err:        r.adaptor.VerifyValidation(work.validation),
-	})
+	dequeuedAt := time.Now()
+	result := validationWorkResult{
+		validation:   work.validation,
+		origin:       work.origin,
+		trusted:      work.trusted,
+		trustChecked: true,
+		ingress: validationIngressTiming{
+			receivedAt:       work.ingress.receivedAt,
+			handlerStartedAt: work.ingress.handlerStartedAt,
+			enqueuedAt:       work.ingress.enqueuedAt,
+			dequeuedAt:       dequeuedAt,
+		},
+	}
+	result.err = r.adaptor.VerifyValidation(work.validation)
+	result.ingress.verifiedAt = time.Now()
+	r.handleValidationWorkResult(result)
 	return validationWorkProcessedSynchronously
 }
 
@@ -424,8 +507,15 @@ func (r *Router) logTrustedValidationSaturation(peerID, count uint64) {
 }
 
 func (r *Router) handleValidationWorkResult(result validationWorkResult) {
+	handlerStarted := time.Now()
+	engineElapsed := time.Duration(0)
+	outcome := "unprocessed"
+	defer func() {
+		r.logSlowValidationIngress(result, handlerStarted, time.Now(), engineElapsed, outcome)
+	}()
 	defer result.permit.release()
 	if result.err != nil {
+		outcome = "invalid-signature"
 		r.logger.Info("invalid validation signature",
 			"t", "consensus",
 			"event", "validation-invalid-signature",
@@ -437,10 +527,14 @@ func (r *Router) handleValidationWorkResult(result validationWorkResult) {
 
 	processor, ok := r.engine.(consensus.VerifiedValidationProcessor)
 	if !ok {
+		outcome = "unsupported"
 		return
 	}
+	engineStarted := time.Now()
 	disposition, err := processor.ProcessVerifiedValidation(result.validation, result.origin)
+	engineElapsed = time.Since(engineStarted)
 	if err != nil {
+		outcome = "engine-rejected"
 		r.logger.Info("engine rejected verified validation",
 			"t", "consensus",
 			"event", "validation-rejected",
@@ -448,6 +542,7 @@ func (r *Router) handleValidationWorkResult(result validationWorkResult) {
 			"peer", result.origin.PeerID)
 		return
 	}
+	outcome = disposition.Status.String()
 
 	if disposition.Status == consensus.ValidationMultiple ||
 		disposition.Status == consensus.ValidationConflicting {

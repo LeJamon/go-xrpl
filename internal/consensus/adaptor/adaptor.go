@@ -588,14 +588,38 @@ func (a *Adaptor) BroadcastProposal(proposal *consensus.Proposal) error {
 }
 
 func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
+	a.mu.Lock()
+	historian := a.validationHistorian
+	a.mu.Unlock()
+	var hashOfSeq func(uint32) (consensus.LedgerID, bool, error)
+	if validation != nil && a.ledgerService != nil {
+		if candidate, err := a.GetLedger(validation.LedgerID); err == nil && candidate != nil {
+			if resolver, ok := candidate.(consensus.LedgerHashOfSeq); ok {
+				hashOfSeq = resolver.HashOfSeq
+			}
+		}
+	}
 	return a.withValidatorDuty(func() error {
 		if validation != nil {
+			release, err := validationPublicationGuard(
+				historian,
+				validation.LedgerID,
+				validation.LedgerSeq,
+				hashOfSeq,
+			)
+			if err != nil {
+				return err
+			}
 			for {
 				cur := a.lastIssuedValidationSeq.Load()
 				if validation.LedgerSeq <= cur ||
 					a.lastIssuedValidationSeq.CompareAndSwap(cur, validation.LedgerSeq) {
 					break
 				}
+			}
+			// Commit the local emission decision before handing off to network I/O.
+			if release != nil {
+				release()
 			}
 		}
 		return a.sender.BroadcastValidation(validation)
@@ -764,7 +788,20 @@ func (a *Adaptor) BuildLedger(ctx context.Context, parent consensus.Ledger, txSe
 	if w, ok := parent.(*LedgerWrapper); ok {
 		parentLedger = w.Unwrap()
 	}
-	seq, err := a.ledgerService.AcceptConsensusResult(ctx, parentLedger, txSet.Txs(), disputedTxs, closeTime, closeTimeCorrect)
+	a.mu.Lock()
+	historian := a.validationHistorian
+	a.mu.Unlock()
+	seq, err := a.ledgerService.AcceptConsensusResultWithPublicationGuard(
+		ctx,
+		parentLedger,
+		txSet.Txs(),
+		disputedTxs,
+		closeTime,
+		closeTimeCorrect,
+		func(candidate *ledger.Ledger) (func(), error) {
+			return consensusPublicationGuard(historian, candidate)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}

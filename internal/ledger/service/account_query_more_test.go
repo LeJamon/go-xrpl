@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -30,8 +31,7 @@ func buildNFTokenID(flags, transferFee uint16, issuerID [20]byte, taxon, serial 
 	binary.BigEndian.PutUint16(id[0:2], flags)
 	binary.BigEndian.PutUint16(id[2:4], transferFee)
 	copy(id[4:24], issuerID[:])
-	cipheredTaxon := taxon ^ ((serial ^ 384160001) * 2357503715)
-	binary.BigEndian.PutUint32(id[24:28], cipheredTaxon)
+	binary.BigEndian.PutUint32(id[24:28], nftoken.CipheredTaxon(serial, taxon))
 	binary.BigEndian.PutUint32(id[28:32], serial)
 	return id
 }
@@ -147,6 +147,32 @@ func TestGetAccountNFTs_DecodesTokenFields(t *testing.T) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
 		}
 	})
+}
+
+// TestExtractNFTInfo_RippledTaxonVectors pins NFTokenIDs minted on rippled
+// 3.4.1 together with the NFTokenTaxon its account_nfts reported for them.
+func TestExtractNFTInfo_RippledTaxonVectors(t *testing.T) {
+	for _, tc := range []struct {
+		id     string
+		taxon  uint32
+		serial uint32
+	}{
+		{"00090000F580736619403C1AB71087A263487F3D3F20130A0665C6C90000002D", 1, 45},
+		{"00090000F580736619403C1AB71087A263487F3D3F20130A0A85CBBF00000022", 2, 34},
+		{"00090000F580736619403C1AB71087A263487F3D3F20130A0EA5D0B200000017", 0, 23},
+		{"00090000F580736619403C1AB71087A263487F3D3F20130A12C5D5A60000000C", 1, 12},
+	} {
+		raw, err := hex.DecodeString(tc.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id [32]byte
+		copy(id[:], raw)
+		info := extractNFTInfo(id, "")
+		if info.NFTokenTaxon != tc.taxon || info.NFTSerial != tc.serial {
+			t.Errorf("%s: taxon/serial = %d/%d, want %d/%d", tc.id, info.NFTokenTaxon, info.NFTSerial, tc.taxon, tc.serial)
+		}
+	}
 }
 
 func TestGetAccountNFTs_MarkerPagination(t *testing.T) {
