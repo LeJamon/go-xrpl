@@ -34,6 +34,14 @@ func (w *LedgerWrapper) ParentID() consensus.LedgerID {
 	return consensus.LedgerID(w.ledger.ParentHash())
 }
 
+// HashOfSeq resolves an ancestor hash from the ledger's embedded skip lists.
+// A false result means the requested ancestry is not available from this
+// ledger; compatibility callers treat that as missing evidence.
+func (w *LedgerWrapper) HashOfSeq(seq uint32) (consensus.LedgerID, bool, error) {
+	hash, ok, err := w.ledger.HashOfSeq(seq)
+	return consensus.LedgerID(hash), ok, err
+}
+
 func (w *LedgerWrapper) CloseTime() time.Time {
 	return w.ledger.CloseTime()
 }

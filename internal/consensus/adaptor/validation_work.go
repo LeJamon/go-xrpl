@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -35,13 +36,17 @@ type validationWork struct {
 	origin     consensus.ValidationOrigin
 	trusted    bool
 	permit     *validationPermit
+	ingress    validationIngressTiming
 }
 
 type validationWorkResult struct {
-	validation *consensus.Validation
-	origin     consensus.ValidationOrigin
-	err        error
-	permit     *validationPermit
+	validation   *consensus.Validation
+	origin       consensus.ValidationOrigin
+	err          error
+	permit       *validationPermit
+	trusted      bool
+	trustChecked bool
+	ingress      validationIngressTiming
 }
 
 type validationResultDelivery uint8
@@ -268,6 +273,7 @@ func (l *validationWorkLane) run(ctx context.Context, trustedWorker bool) {
 		if !ok {
 			return
 		}
+		dequeuedAt := time.Now()
 		if l.peerPresent != nil &&
 			work.origin.PeerID != 0 &&
 			!l.peerPresent(peermanagement.PeerID(work.origin.PeerID)) {
@@ -276,15 +282,25 @@ func (l *validationWorkLane) run(ctx context.Context, trustedWorker bool) {
 		}
 
 		result := validationWorkResult{
-			validation: work.validation,
-			origin:     work.origin,
-			permit:     work.permit,
-			err:        l.verify(work.validation),
+			validation:   work.validation,
+			origin:       work.origin,
+			permit:       work.permit,
+			trusted:      trustedWorker,
+			trustChecked: true,
+			ingress: validationIngressTiming{
+				receivedAt:       work.ingress.receivedAt,
+				handlerStartedAt: work.ingress.handlerStartedAt,
+				enqueuedAt:       work.ingress.enqueuedAt,
+				dequeuedAt:       dequeuedAt,
+			},
 		}
+		result.err = l.verify(work.validation)
+		result.ingress.verifiedAt = time.Now()
 		trustedResult := work.trusted
 		if !trustedResult && l.isTrusted != nil {
 			trustedResult = l.isTrusted(work.validation.NodeID)
 		}
+		result.trusted = trustedResult
 		if l.deliverResult(ctx, result, trustedResult) == validationResultCancelled {
 			work.permit.release()
 			return

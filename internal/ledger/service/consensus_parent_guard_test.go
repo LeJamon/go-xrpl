@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
@@ -55,6 +56,57 @@ func TestAcceptConsensusResultRejectsStaleParentWithoutMutation(t *testing.T) {
 	}
 	if got := svc.GetOpenLedger(); got != openBefore {
 		t.Fatalf("open ledger mutated: got %p, want %p", got, openBefore)
+	}
+}
+
+func TestAcceptConsensusResultPublicationGuardRunsBeforeMutation(t *testing.T) {
+	svc := newConsensusParentGuardService(t)
+	parent := svc.GetClosedLedger()
+	closedBefore := parent
+	openBefore := svc.GetOpenLedger()
+	guardCalled := false
+	_, err := svc.AcceptConsensusResultWithPublicationGuard(
+		context.Background(), parent, nil, nil, parent.CloseTime().Add(time.Second), true,
+		func(candidate *ledger.Ledger) (func(), error) {
+			guardCalled = true
+			if candidate == nil {
+				t.Fatal("publication guard received nil candidate")
+			}
+			return nil, ErrConsensusPublicationStale
+		},
+	)
+	if !errors.Is(err, ErrConsensusPublicationStale) {
+		t.Fatalf("AcceptConsensusResultWithPublicationGuard error = %v, want %v", err, ErrConsensusPublicationStale)
+	}
+	if !guardCalled {
+		t.Fatal("publication guard was not called")
+	}
+	if got := svc.GetClosedLedger(); got != closedBefore {
+		t.Fatalf("closed ledger mutated after rejected publication: got %p, want %p", got, closedBefore)
+	}
+	if got := svc.GetOpenLedger(); got != openBefore {
+		t.Fatalf("open ledger mutated after rejected publication: got %p, want %p", got, openBefore)
+	}
+}
+
+func TestAcceptConsensusResultPublicationGuardReleasesAtFrontierCommit(t *testing.T) {
+	svc := newConsensusParentGuardService(t)
+	parent := svc.GetClosedLedger()
+	released := false
+	_, err := svc.AcceptConsensusResultWithPublicationGuard(
+		context.Background(), parent, nil, nil, parent.CloseTime().Add(time.Second), true,
+		func(candidate *ledger.Ledger) (func(), error) {
+			if candidate == nil {
+				t.Fatal("publication guard received nil candidate")
+			}
+			return func() { released = true }, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("AcceptConsensusResultWithPublicationGuard: %v", err)
+	}
+	if !released {
+		t.Fatal("publication guard release was not called")
 	}
 }
 

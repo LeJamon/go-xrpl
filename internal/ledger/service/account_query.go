@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -238,7 +239,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 
 			// Balance from our account's perspective: positive = peer owes us.
 			if isLowAccount {
-				line.Balance = rs.Balance.Negate().Value()
+				line.Balance = rs.Balance.Value()
 				line.Limit = rs.LowLimit.Value()
 				line.LimitPeer = rs.HighLimit.Value()
 				line.NoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
@@ -253,7 +254,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				line.QualityIn = rs.LowQualityIn
 				line.QualityOut = rs.LowQualityOut
 			} else {
-				line.Balance = rs.Balance.Value()
+				line.Balance = rs.Balance.Negate().Value()
 				line.Limit = rs.HighLimit.Value()
 				line.LimitPeer = rs.LowLimit.Value()
 				line.NoRipple = (rs.Flags & state.LsfHighNoRipple) != 0
@@ -1725,8 +1726,8 @@ func extractNFTInfo(tokenID [32]byte, uri string) NFTInfo {
 	cipheredTaxon := uint32(tokenID[24])<<24 | uint32(tokenID[25])<<16 | uint32(tokenID[26])<<8 | uint32(tokenID[27])
 	sequence := uint32(tokenID[28])<<24 | uint32(tokenID[29])<<16 | uint32(tokenID[30])<<8 | uint32(tokenID[31])
 
-	// Decipher the taxon using the same algorithm
-	taxon := cipheredTaxon ^ ((sequence ^ 384160001) * 2357503715)
+	// The taxon cipher is an XOR mask, so applying it again recovers the taxon.
+	taxon := nftoken.CipheredTaxon(sequence, cipheredTaxon)
 
 	return NFTInfo{
 		Flags:        flags,

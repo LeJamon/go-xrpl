@@ -22,7 +22,7 @@ import (
 //	view.succ(first.key, last.key.next()).value_or(last.key)
 //
 // where succ(start, upperBound) returns the first key > start and < upperBound.
-func succNFTokenPage(view tx.LedgerView, first, last keylet.Keylet) ([32]byte, error) {
+func succNFTokenPage(view tx.ReadOnlyLedgerView, first, last keylet.Keylet) ([32]byte, error) {
 	foundKey, _, found, err := view.Succ(first.Key)
 	if err != nil {
 		return [32]byte{}, err
@@ -38,7 +38,7 @@ func succNFTokenPage(view tx.LedgerView, first, last keylet.Keylet) ([32]byte, e
 // the linked list.
 // Returns (pageKeylet, pageData, err). If the owner has no pages, returns nil data.
 // Reference: rippled NFTokenUtils.cpp locatePage — uses view.succ()
-func locatePage(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Keylet, *state.NFTokenPageData, error) {
+func locatePage(view tx.ReadOnlyLedgerView, owner [20]byte, tokenID [32]byte) (keylet.Keylet, *state.NFTokenPageData, error) {
 	base := keylet.NFTokenPageMin(owner)
 	first := keylet.NFTokenPageForToken(base, tokenID)
 	last := keylet.NFTokenPageMax(owner)
@@ -65,7 +65,7 @@ func locatePage(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Ke
 // findToken searches the owner's pages for a specific NFT ID.
 // Returns the page keylet, the page data, the index of the token within the page,
 // and whether it was found.
-func findToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Keylet, *state.NFTokenPageData, int, bool) {
+func findToken(view tx.ReadOnlyLedgerView, owner [20]byte, tokenID [32]byte) (keylet.Keylet, *state.NFTokenPageData, int, bool) {
 	kl, page, err := locatePage(view, owner, tokenID)
 	if err != nil || page == nil {
 		return keylet.Keylet{}, nil, -1, false
