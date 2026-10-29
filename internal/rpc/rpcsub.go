@@ -188,7 +188,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
-	prefix := request.WithoutBooks().WithoutAccountHistory()
+	prefix := request.WithoutBooks().WithoutAccountHistory().WithoutMPTIssuances()
 	scope := r.manager.NewRequestScope()
 	if rpcErr := r.manager.HandleSubscribeScoped(lookup.sub.registration, scope, prefix, true); rpcErr != nil {
 		return fail(rpcErr)
@@ -209,6 +209,9 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		setSubscriptionLoadCost(ctx, bookRequest)
 		return nil
 	}); rpcErr != nil {
+		return fail(rpcErr)
+	}
+	if rpcErr := r.manager.HandleSubscribeScoped(lookup.sub.registration, scope, request.OnlyMPTIssuances(), true); rpcErr != nil {
 		return fail(rpcErr)
 	}
 	result := buildSubscribeAckSampled(r.ledgerInfoProvider, ctx, request, serverState)
@@ -237,7 +240,7 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		r.mu.Unlock()
 		return map[string]any{}, nil
 	}
-	prefix := request.WithoutBooks().WithoutAccountHistory()
+	prefix := request.WithoutBooks().WithoutAccountHistory().WithoutMPTIssuances()
 	scope := r.manager.NewRequestScope()
 	if rpcErr := r.manager.HandleUnsubscribeScoped(sub.registration, scope, prefix); rpcErr != nil {
 		r.mu.Unlock()
@@ -252,6 +255,10 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
 		return r.manager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
 	}); rpcErr != nil {
+		r.mu.Unlock()
+		return nil, rpcErr
+	}
+	if rpcErr := r.manager.HandleUnsubscribeScoped(sub.registration, scope, request.OnlyMPTIssuances()); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
 	}

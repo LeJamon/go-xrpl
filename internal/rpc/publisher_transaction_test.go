@@ -1,13 +1,16 @@
 package rpc
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -350,4 +353,51 @@ func assertPublishedProposedVersion(t *testing.T, data []byte, apiVersion int, h
 	require.NotContains(t, txJSON, "hash")
 	require.NotContains(t, txJSON, "Amount")
 	require.Equal(t, "100", txJSON["DeliverMax"])
+}
+
+// Based on rippled Subscribe_test.cpp testSubMPT, testSubMPTBatch and
+// testSubMPTAmountFields.
+func TestPublishTransactionToMPTIssuanceSubscribers(t *testing.T) {
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	_, issuerID, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
+	require.NoError(t, err)
+	derived := keylet.MakeMPTID(5, [20]byte(issuerID))
+	derivedID := strings.ToUpper(hex.EncodeToString(derived[:]))
+	tokenID := strings.Repeat("1", 48)
+	amountID := strings.Repeat("2", 48)
+	issueOnlyID := strings.Repeat("3", 48)
+	previousOnlyID := strings.Repeat("4", 48)
+
+	manager := subscription.NewManager()
+	subscribe := func(id string, apiVersion int, mpts ...string) *subscription.Connection {
+		conn := addPublisherTestConnection(t, manager, id)
+		require.Nil(t, manager.HandleSubscribe(testRegistration(t, manager, conn), types.SubscriptionRequest{
+			MPTIssuances: mpts,
+			ApiVersion:   apiVersion,
+		}, false))
+		return conn
+	}
+	derivedSub := subscribe("derived", types.ApiVersion2, strings.ToLower(derivedID))
+	tokenSub := subscribe("token", types.ApiVersion2, tokenID)
+	allSub := subscribe("all", types.ApiVersion1, derivedID, tokenID, amountID)
+	amountSub := subscribe("amount", types.ApiVersion2, amountID)
+	issueSub := subscribe("issue-only", types.ApiVersion2, issueOnlyID)
+	previousSub := subscribe("previous-only", types.ApiVersion2, previousOnlyID)
+
+	event := publisherTestTransactionEvent()
+	event.Meta = json.RawMessage(`{"TransactionResult":"tesSUCCESS","mpt_issuance_id":"ABCD","AffectedNodes":[
+		{"DeletedNode":{"LedgerEntryType":"MPTokenIssuance","FinalFields":{"Issuer":"` + issuer + `","Sequence":5}}},
+		{"ModifiedNode":{"LedgerEntryType":"MPToken","FinalFields":{"MPTokenIssuanceID":"` + tokenID + `"},"PreviousFields":{"MPTokenIssuanceID":"` + previousOnlyID + `"}}},
+		{"CreatedNode":{"LedgerEntryType":"Offer","NewFields":{"TakerGets":{"mpt_issuance_id":"` + amountID + `","value":"10"},"TakerPays":"10"}}},
+		{"CreatedNode":{"LedgerEntryType":"Vault","NewFields":{"Asset":{"mpt_issuance_id":"` + issueOnlyID + `"}}}}
+	]}`)
+	NewPublisher(manager).PublishTransaction(event, nil)
+
+	assertPublishedTransactionVersion(t, readPublisherTestEvent(t, derivedSub), types.ApiVersion2)
+	assertPublishedTransactionVersion(t, readPublisherTestEvent(t, tokenSub), types.ApiVersion2)
+	assertPublishedTransactionVersion(t, readPublisherTestEvent(t, allSub), types.ApiVersion1)
+	assertPublishedTransactionVersion(t, readPublisherTestEvent(t, amountSub), types.ApiVersion2)
+	require.Empty(t, allSub.Outbound(), "a subscriber of several affected issuances gets the transaction once")
+	require.Empty(t, issueSub.Outbound(), "an Issue field is not an MPT amount")
+	require.Empty(t, previousSub.Outbound(), "previous fields are not inspected")
 }
