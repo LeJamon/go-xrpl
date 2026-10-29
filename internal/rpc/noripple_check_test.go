@@ -104,6 +104,23 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 		},
 		{
+			name: "Non-string role field",
+			params: map[string]any{
+				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"role":    1,
+			},
+			expectError:   true,
+			expectedError: "Invalid field 'role', not string.",
+		},
+		{
+			name: "Malformed account reported before missing role",
+			params: map[string]any{
+				"account": "invalid_account_address",
+			},
+			expectError:   true,
+			expectedError: "Account malformed.",
+		},
+		{
 			name: "Malformed account",
 			params: map[string]any{
 				"account": "invalid_account_address",
@@ -138,6 +155,36 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNoRippleCheckMalformedAccountCarriesNoLedger mirrors rippled
+// NoRippleCheck_test.cpp testBadInput: a malformed account is rejected before
+// the ledger lookup, so the error has neither transactions nor ledger fields.
+func TestNoRippleCheckMalformedAccountCarriesNoLedger(t *testing.T) {
+	mock := newMockNoRippleCheckLedgerService()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newNoRippleCheckTestServices(mock),
+	}
+	params := json.RawMessage(`{"account":"paLqQ3Cc6DjVN7ULxSHsXaY4X8WcBR1PoXDNRB41qn2TyzC8z7H","role":"user","ledger":"current","transactions":true}`)
+	resp, rpcErr := (&handlers.NoRippleCheckMethod{}).Handle(ctx, params)
+	require.Nil(t, resp)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+	assert.Equal(t, "Account malformed.", rpcErr.Message)
+	for _, field := range []string{"transactions", "ledger_hash", "ledger_index", "ledger_current_index", "validated"} {
+		assert.NotContains(t, rpcErr.Extra, field)
+	}
+
+	mock.noRippleCheckErr = svcerr.ErrAccountNotFound
+	params = json.RawMessage(`{"account":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK","role":"user","transactions":true}`)
+	resp, rpcErr = (&handlers.NoRippleCheckMethod{}).Handle(ctx, params)
+	require.Nil(t, resp)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "actNotFound", rpcErr.ErrorString)
+	assert.NotContains(t, rpcErr.Extra, "transactions")
 }
 
 // User Role Tests - No Problems
