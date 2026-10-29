@@ -435,3 +435,30 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, verified, "Signature for wrong channel_id should not verify")
 }
+
+// Based on rippled PayChan_test.cpp testRPC (XRPLF/rippled#7582).
+func TestChannelVerifyFieldTypes(t *testing.T) {
+	const publicKey = "021D93E21C44160A1B3B66DA1F37B86BE39FFEA3FC4B95FAA2063F82EE823599F6"
+	const channel = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		message string
+	}{
+		{"numeric channel_id", `{"public_key":"` + publicKey + `","channel_id":2000,"amount":"1000","signature":"DEADBEEF"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters."},
+		{"numeric signature", `{"public_key":"` + publicKey + `","channel_id":"` + channel + `","amount":"1000","signature":1}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters."},
+		{"public key checked before channel_id type", `{"public_key":"bad","channel_id":2000,"amount":"1000","signature":"DEADBEEF"}`, rpcerrors.RpcPUBLIC_MALFORMED, ""},
+		{"numeric amount", `{"public_key":"` + publicKey + `","channel_id":"` + channel + `","amount":1000,"signature":1}`, rpcerrors.RpcCHANNEL_AMT_MALFORMED, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := (&handlers.ChannelVerifyMethod{}).Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			if tc.message != "" {
+				assert.Equal(t, tc.message, rpcErr.Message)
+			}
+		})
+	}
+}
