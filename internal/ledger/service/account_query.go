@@ -239,7 +239,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 
 			// Balance from our account's perspective: positive = peer owes us.
 			if isLowAccount {
-				line.Balance = rs.Balance.Negate().Value()
+				line.Balance = rs.Balance.Value()
 				line.Limit = rs.LowLimit.Value()
 				line.LimitPeer = rs.HighLimit.Value()
 				line.NoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
@@ -254,7 +254,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				line.QualityIn = rs.LowQualityIn
 				line.QualityOut = rs.LowQualityOut
 			} else {
-				line.Balance = rs.Balance.Value()
+				line.Balance = rs.Balance.Negate().Value()
 				line.Limit = rs.HighLimit.Value()
 				line.LimitPeer = rs.LowLimit.Value()
 				line.NoRipple = (rs.Flags & state.LsfHighNoRipple) != 0
