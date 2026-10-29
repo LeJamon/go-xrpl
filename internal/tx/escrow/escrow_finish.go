@@ -99,8 +99,16 @@ func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
 // duplicate → temMALFORMED). rippled runs credentials::checkFields in
 // preflightSigValidated, AFTER the signature is verified, so a mis-signed
 // EscrowFinish surfaces temINVALID rather than this temMALFORMED.
+// Under fixCleanup3_5_0 a malformed Condition is rejected first. Rippled only
+// parses the condition after the fulfillment check fails, which a malformed
+// condition always does, so checking its format alone is equivalent.
 // Reference: rippled Escrow.cpp EscrowFinish::preflightSigValidated.
 func (e *EscrowFinish) PreflightSigValidated(rules *amendment.Rules) error {
+	if e.Condition != nil && e.Fulfillment != nil && rules.Enabled(amendment.FeatureFixCleanup3_5_0) {
+		if err := ValidateConditionFormat(*e.Condition); err != nil {
+			return ter.Errorf(ter.TemMALFORMED, "malformed condition: %v", err)
+		}
+	}
 	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
 	return credential.CheckFieldsWithRules(e.CredentialIDs, present, "Duplicate credential ID", rules)
 }

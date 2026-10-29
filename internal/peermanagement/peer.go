@@ -123,6 +123,9 @@ type Peer struct {
 
 	traffic *TrafficCounter
 	metrics *peerMetrics
+	// clusterMember reports whether the remote node is currently a
+	// configured cluster member. Set by the overlay before Run; nil means no.
+	clusterMember func() bool
 
 	// squelchMap: per-validator squelch deadlines. Messages from a
 	// squelched validator are not relayed to this peer until expiry.
@@ -1240,7 +1243,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(CategorizeMessage(header.MessageType), true, int(header.PayloadSize))
+			p.traffic.AddCount(p.inboundCategory(header.MessageType), true, int(header.PayloadSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
@@ -1370,7 +1373,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			continue
 		}
-		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
+		p.traffic.AddCount(p.inboundCategory(header.MessageType), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
 			Type:        EventMessageReceived,
@@ -1840,6 +1843,17 @@ func (p *Peer) releaseUsage() {
 	}
 	p.onDropDisconnect = nil
 	p.usageReleased = true
+}
+
+// inboundCategory is the traffic category for a received message. Any peer
+// can send a cluster message, so one from outside the cluster counts as
+// unknown, leaving the cluster category to traffic between members.
+func (p *Peer) inboundCategory(msgType message.MessageType) TrafficCategory {
+	category := CategorizeMessage(msgType)
+	if category == CategoryCluster && (p.clusterMember == nil || !p.clusterMember()) {
+		return CategoryUnknown
+	}
+	return category
 }
 
 func (p *Peer) resourceGossipOrigin(name string) string {

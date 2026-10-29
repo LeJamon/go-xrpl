@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -16,18 +17,14 @@ import (
 type AccountLinesMethod struct{ baseHandler }
 
 func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selErr != nil {
+		return nil, selErr
+	}
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := requireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
-	if selErr != nil {
-		return nil, selErr
-	}
-
 	var peer string
 	if peerRaw, ok := fields["peer"]; ok {
 		var valid bool
@@ -36,26 +33,31 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 			return nil, rpcerrors.RpcErrorInvalidField("peer")
 		}
 	}
-	if peer != "" && !types.IsValidClassicAddress(peer) {
-		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
-	}
-
-	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Role.IsUnlimited())
-	if limitErr != nil {
-		return nil, limitErr
-	}
 	ignoreDefault := false
 	if ignoreRaw, ok := fields["ignore_default"]; ok {
 		ignoreDefault = jsonCppBoolRaw(ignoreRaw)
+	}
+	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Role.IsUnlimited())
+	if limitErr != nil {
+		return nil, limitErr
 	}
 	marker, mErr := markerString(fields["marker"])
 	if mErr != nil {
 		return nil, mErr
 	}
-	if _, present := fields["marker"]; present {
-		if marker == "" {
-			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-		}
+	if _, present := fields["marker"]; present && !validAccountMarker(marker) {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+
+	if err := requireLedgerService(ctx.Services); err != nil {
+		return nil, err
+	}
+	ledgerIndex, ledgerFields, selErr := resolveAccountPage(ctx, selection, account, "Failed to get account information", true)
+	if selErr != nil {
+		return nil, selErr
+	}
+	if peer != "" && !types.IsValidClassicAddress(peer) {
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 	result, err := ctx.Services.Ledger().GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
 	if err != nil {

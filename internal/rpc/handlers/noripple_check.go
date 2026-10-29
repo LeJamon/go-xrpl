@@ -24,16 +24,22 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if !hasAccount {
 		return nil, rpcerrors.RpcErrorMissingField("account")
 	}
-	roleRaw, hasRole := rawFields["role"]
-	if !hasRole {
-		return nil, rpcerrors.RpcErrorMissingField("role")
-	}
 	account, validAccount := rawJSONString(accountRaw)
 	if !validAccount {
 		return nil, rpcerrors.RpcErrorInvalidField("account")
 	}
-	role, validRole := jsonCppStringRaw(roleRaw)
-	if !validRole || (role != "gateway" && role != "user") {
+	if !types.IsValidClassicAddress(account) {
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
+	}
+	roleRaw, hasRole := rawFields["role"]
+	if !hasRole {
+		return nil, rpcerrors.RpcErrorMissingField("role")
+	}
+	role, validRole := rawJSONString(roleRaw)
+	if !validRole {
+		return nil, rpcerrors.RpcErrorExpectedField("role", "string")
+	}
+	if role != "gateway" && role != "user" {
 		return nil, rpcerrors.RpcErrorInvalidField("role")
 	}
 
@@ -71,12 +77,6 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	response := ledgerEntryResponseFields(ledger, validated)
-	if transactions {
-		response["transactions"] = []map[string]any{}
-	}
-	if !types.IsValidClassicAddress(account) {
-		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(response)
-	}
 
 	result, err := ctx.Services.Ledger().GetNoRippleCheck(
 		ctx.Context,
@@ -105,9 +105,8 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		response["problems"] = []string{}
 	}
 
-	// When transactions=true, rippled always includes the transactions array
-	// even if empty. Reference: NoRippleCheck.cpp line 108:
-	//   jvTransactions = transactions ? (result[jss::transactions] = Json::arrayValue) : dummy;
+	// A successful request with transactions=true always carries the array,
+	// even when empty.
 	if transactions {
 		if len(result.Transactions) > 0 {
 			transactions := make([]map[string]any, len(result.Transactions))

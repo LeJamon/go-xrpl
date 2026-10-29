@@ -28,6 +28,7 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureFixCleanup3_5_0               = registerFix("fixCleanup3_5_0", SupportedNo, VoteDefaultNo)
 	FeatureFixBatchV1_2                  = registerFix("fixBatchV1_2", SupportedYes, VoteDefaultYes)
 	FeatureFixCleanup3_4_0               = registerFix("fixCleanup3_4_0", SupportedYes, VoteDefaultNo)
 	FeatureSponsor                       = registerFeature("Sponsor", SupportedYes, VoteDefaultNo)

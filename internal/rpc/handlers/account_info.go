@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -46,6 +47,10 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if fieldsErr != nil {
 		return nil, fieldsErr
 	}
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	account := ""
 	if accountRaw, ok := rawFields["account"]; ok {
@@ -68,10 +73,11 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	ledger, lookupValidated, lookupErr := lookupLedger(ctx, params)
+	resolved, lookupErr := resolveLedgerSelection(ctx, selection)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledger, lookupValidated := resolved.Value, resolved.Validated
 	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)

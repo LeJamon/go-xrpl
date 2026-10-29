@@ -46,7 +46,9 @@ func TestLedgerEntryRawSequenceSelectors(t *testing.T) {
 		invalidToken  string
 		expectedKey   [32]byte
 	}{
+		{"check", "account", "seq", "malformedRequest", keylet.Check(accountID, 7).Key},
 		{"escrow", "owner", "seq", "malformedSeq", keylet.Escrow(accountID, 7).Key},
+		{"nft_offer", "owner", "seq", "malformedRequest", keylet.NFTokenOffer(accountID, 7).Key},
 		{"offer", "account", "seq", "malformedRequest", keylet.Offer(accountID, 7).Key},
 		{"oracle", "account", "oracle_document_id", "malformedDocumentID", keylet.Oracle(accountID, 7).Key},
 		{"permissioned_domain", "account", "seq", "malformedRequest", keylet.PermissionedDomain(accountID, 7).Key},
@@ -75,6 +77,93 @@ func TestLedgerEntryRawSequenceSelectors(t *testing.T) {
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
 			assert.Equal(t, "Missing field '"+tc.sequenceField+"'.", rpcErr.Message)
+		})
+	}
+}
+
+// Based on rippled LedgerEntry_test.cpp runLedgerEntryTest for the check,
+// nft_offer, payment_channel and signer_list object selectors.
+func TestLedgerEntryAccountObjectSelectors(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	method, ctx := ledgerEntryParserContext(mock)
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const destination = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	accountID := ledgerEntryTestAccountID(t, account)
+	destinationID := ledgerEntryTestAccountID(t, destination)
+
+	tests := []struct {
+		selector    string
+		valid       map[string]any
+		expectedKey [32]byte
+		accounts    map[string]string
+	}{
+		{
+			selector:    "check",
+			valid:       map[string]any{"account": account, "seq": 7},
+			expectedKey: keylet.Check(accountID, 7).Key,
+			accounts:    map[string]string{"account": "malformedAddress"},
+		},
+		{
+			selector:    "nft_offer",
+			valid:       map[string]any{"owner": account, "seq": 7},
+			expectedKey: keylet.NFTokenOffer(accountID, 7).Key,
+			accounts:    map[string]string{"owner": "malformedOwner"},
+		},
+		{
+			selector:    "payment_channel",
+			valid:       map[string]any{"account": account, "destination": destination, "seq": 7},
+			expectedKey: keylet.PayChannel(accountID, destinationID, 7).Key,
+			accounts:    map[string]string{"account": "malformedAddress", "destination": "malformedAddress"},
+		},
+		{
+			selector:    "signer_list",
+			valid:       map[string]any{"account": account},
+			expectedKey: keylet.SignerList(accountID).Key,
+			accounts:    map[string]string{"account": "malformedAddress"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.selector, func(t *testing.T) {
+			result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{tc.selector: tc.valid})
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.expectedKey, mock.lastRequestedKey)
+
+			for field, token := range tc.accounts {
+				for _, bad := range []any{"r9999", 123, ""} {
+					params := map[string]any{}
+					for k, v := range tc.valid {
+						params[k] = v
+					}
+					params[field] = bad
+					result, rpcErr = handleLedgerEntry(t, method, ctx, map[string]any{tc.selector: params})
+					require.Nil(t, result)
+					require.NotNil(t, rpcErr)
+					assert.Equal(t, token, rpcErr.ErrorString)
+					assert.Equal(t, "Invalid field '"+field+"', not AccountID.", rpcErr.Message)
+				}
+
+				params := map[string]any{}
+				for k, v := range tc.valid {
+					if k != field {
+						params[k] = v
+					}
+				}
+				result, rpcErr = handleLedgerEntry(t, method, ctx, map[string]any{tc.selector: params})
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+				assert.Equal(t, "Missing field '"+field+"'.", rpcErr.Message)
+			}
+
+			for _, bad := range []any{"not-hex", 123, true, []any{}} {
+				result, rpcErr = handleLedgerEntry(t, method, ctx, map[string]any{tc.selector: bad})
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+				assert.Equal(t, "Invalid field '"+tc.selector+"', not hex string or object.", rpcErr.Message)
+			}
 		})
 	}
 }

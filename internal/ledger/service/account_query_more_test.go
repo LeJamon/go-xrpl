@@ -465,6 +465,15 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		}
 	})
 
+	t.Run("zero credential index", func(t *testing.T) {
+		for _, zero := range []string{"0", strings.Repeat("0", 64)} {
+			_, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current", []string{zero})
+			if !errors.Is(err, svcerr.ErrBadCredentials) || !strings.Contains(err.Error(), "credentials don't exist") {
+				t.Fatalf("%q: want ErrBadCredentials \"credentials don't exist\", got %v", zero, err)
+			}
+		}
+	})
+
 	t.Run("non-existent credential", func(t *testing.T) {
 		_, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
 			[]string{strings.Repeat("AB", 32)})

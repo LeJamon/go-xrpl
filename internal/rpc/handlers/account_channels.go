@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -16,16 +17,16 @@ import (
 type AccountChannelsMethod struct{ baseHandler }
 
 func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selErr != nil {
+		return nil, selErr
+	}
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := requireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
-	if selErr != nil {
-		return nil, selErr
+	if !types.IsValidClassicAddress(account) {
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
 	}
 
 	destinationAccount := ""
@@ -48,10 +49,16 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if mErr != nil {
 		return nil, mErr
 	}
-	if _, present := fields["marker"]; present {
-		if marker == "" {
-			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-		}
+	if _, present := fields["marker"]; present && !validAccountMarker(marker) {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+
+	if err := requireLedgerService(ctx.Services); err != nil {
+		return nil, err
+	}
+	ledgerIndex, ledgerFields, selErr := resolveAccountPage(ctx, selection, account, "Failed to get account information", false)
+	if selErr != nil {
+		return nil, selErr
 	}
 	result, err := ctx.Services.Ledger().GetAccountChannels(
 		ctx.Context,

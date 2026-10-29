@@ -745,6 +745,17 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			expectedError: "",
 			expectedCode:  0,
 		},
+		{
+			name: "Zero credential shorthand reaches the ledger check",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{"0"},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials),
+			expectedError: "credentials don't exist",
+			expectedCode:  rpcerrors.RpcBAD_CREDENTIALS,
+		},
 		// Ledger-side credential failures surface from the service as
 		// ErrBadCredentials wrappers; the handler maps each to
 		// rpcBAD_CREDENTIALS with rippled's exact detail message.

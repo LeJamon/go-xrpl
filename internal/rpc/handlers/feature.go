@@ -72,6 +72,9 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		if !ctx.Role.IsAdmin() {
 			return nil, rpcerrors.RpcErrorNoPermission("feature")
 		}
+		if !request.Vetoed.isBool {
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+		}
 		if ctrl == nil || tbl == nil {
 			return nil, rpcerrors.RpcErrorNotSupported("amendment voting is not available on this server")
 		}

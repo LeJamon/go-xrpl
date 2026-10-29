@@ -198,9 +198,14 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 				invalid = true
 			}
 		}
+		// The LoanManage default's own vault asset, not an unrelated MPT the
+		// same accounts hold, is exempt from CanTransfer under fixCleanup3_5_0.
+		isLoanDefaultAsset := loanDefault != nil && loanDefault.hasMPT && loanDefault.mptID == issuanceID
 		waivesCanTransfer := tx.TxType() == protocol.TxTypeAMMWithdraw ||
 			(fix320Enabled(rules) && (tx.TxType() == protocol.TxTypeVaultWithdraw ||
-				tx.TxType() == protocol.TxTypeLoanBrokerCoverWithdraw || tx.TxType() == protocol.TxTypeLoanPay))
+				tx.TxType() == protocol.TxTypeLoanBrokerCoverWithdraw || tx.TxType() == protocol.TxTypeLoanPay)) ||
+			(rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_5_0) &&
+				(isLoanDefaultAsset || tx.TxType() == protocol.TxTypeLoanBrokerDelete))
 		canTransfer := issuance.Flags&entry.LsfMPTCanTransfer != 0 || waivesCanTransfer
 		if senders > 0 && receivers > 0 && (invalid || !canTransfer || (isDEX && issuance.Flags&entry.LsfMPTCanTrade == 0)) {
 			return &InvariantViolation{

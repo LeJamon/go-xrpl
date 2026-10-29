@@ -322,6 +322,9 @@ const (
 	SubPeerStatus           SubscriptionType = "peer_status"
 	SubServer               SubscriptionType = "server"
 	SubConsensus            SubscriptionType = "consensus"
+
+	// SubMPTIssuances keys per-issuance subscriptions; it is not a stream.
+	SubMPTIssuances SubscriptionType = "mpt_issuances"
 )
 
 // Subscription request structure
@@ -332,6 +335,7 @@ type SubscriptionRequest struct {
 	RTAccounts       []string                           `json:"rt_accounts,omitempty"`
 	AccountHistory   *AccountHistorySubscriptionRequest `json:"account_history_tx_stream,omitempty"`
 	Books            []BookRequest                      `json:"books,omitempty"`
+	MPTIssuances     []string                           `json:"mpt_issuances,omitempty"`
 	URL              string                             `json:"url,omitempty"`
 	URLUsername      string                             `json:"url_username,omitempty"`
 	URLPassword      string                             `json:"url_password,omitempty"`
@@ -363,6 +367,7 @@ type wireSubscriptionArrays struct {
 	rtAccounts       json.RawMessage
 	accountHistory   json.RawMessage
 	books            json.RawMessage
+	mptIssuances     json.RawMessage
 	url              json.RawMessage
 	username         json.RawMessage
 	password         json.RawMessage
@@ -379,6 +384,7 @@ type WireSubscriptionArrays struct {
 	RTAccounts       json.RawMessage
 	AccountHistory   json.RawMessage
 	Books            json.RawMessage
+	MPTIssuances     json.RawMessage
 }
 
 // WireArrays returns the raw array-field JSON captured by UnmarshalJSON.
@@ -394,6 +400,7 @@ func (r *SubscriptionRequest) WireArrays() WireSubscriptionArrays {
 		RTAccounts:       r.wire.rtAccounts,
 		AccountHistory:   r.wire.accountHistory,
 		Books:            r.wire.books,
+		MPTIssuances:     r.wire.mptIssuances,
 	}
 }
 
@@ -421,6 +428,28 @@ func (r SubscriptionRequest) WithoutBooks() SubscriptionRequest {
 	return r
 }
 
+// WithoutMPTIssuances returns a copy that preserves every wire field except
+// mpt_issuances.
+func (r SubscriptionRequest) WithoutMPTIssuances() SubscriptionRequest {
+	r.MPTIssuances = nil
+	if r.wire != nil {
+		wire := *r.wire
+		wire.mptIssuances = nil
+		r.wire = &wire
+	}
+	return r
+}
+
+// OnlyMPTIssuances returns a request carrying nothing but mpt_issuances, which
+// subscribe and unsubscribe handle after every other field.
+func (r SubscriptionRequest) OnlyMPTIssuances() SubscriptionRequest {
+	only := SubscriptionRequest{MPTIssuances: r.MPTIssuances, ApiVersion: r.ApiVersion}
+	if r.wire != nil {
+		only.wire = &wireSubscriptionArrays{mptIssuances: r.wire.mptIssuances}
+	}
+	return only
+}
+
 // UnmarshalJSON captures the raw JSON of shape-sensitive fields before
 // decoding the typed fields, so the subscription manager can apply rippled's
 // per-field, per-shape error codes — a typed slice cannot tell an absent field
@@ -442,6 +471,7 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 			rtAccounts:       m["rt_accounts"],
 			accountHistory:   m["account_history_tx_stream"],
 			books:            m["books"],
+			mptIssuances:     m["mpt_issuances"],
 			url:              m["url"],
 			username:         m["username"],
 			password:         m["password"],
@@ -453,6 +483,7 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	_ = json.Unmarshal(m["rt_accounts"], &r.RTAccounts)
 	_ = json.Unmarshal(m["account_history_tx_stream"], &r.AccountHistory)
 	_ = json.Unmarshal(m["books"], &r.Books)
+	_ = json.Unmarshal(m["mpt_issuances"], &r.MPTIssuances)
 	_ = json.Unmarshal(m["url"], &r.URL)
 	_ = json.Unmarshal(m["url_username"], &r.URLUsername)
 	_ = json.Unmarshal(m["url_password"], &r.URLPassword)

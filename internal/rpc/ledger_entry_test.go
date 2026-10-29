@@ -291,7 +291,7 @@ func TestLedgerEntryCheck(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string or object.",
 		},
 		{
 			name: "Check entry not found",
@@ -397,7 +397,7 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 				"ledger_index":    "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string or object.",
 		},
 		{
 			name: "Payment channel not found",
@@ -1249,14 +1249,14 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 			params: map[string]any{
 				"check": "A33EC6BB85FB5674",
 			},
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string or object.",
 		},
 		{
 			name: "Payment channel with invalid hex",
 			params: map[string]any{
 				"payment_channel": "not-valid-hex-at-all",
 			},
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string or object.",
 		},
 		{
 			name: "Directory with invalid hex",
@@ -2606,14 +2606,14 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 			params: map[string]any{
 				"check": 12345,
 			},
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string or object.",
 		},
 		{
 			name: "Payment channel as boolean should fail",
 			params: map[string]any{
 				"payment_channel": true,
 			},
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string or object.",
 		},
 		{
 			name: "Directory as null should fail",
@@ -2776,7 +2776,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "check",
 			paramValue:    "A33EC6BB85FB5674",
 			expectError:   true,
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string or object.",
 		},
 		// Payment channel validation
 		{
@@ -2791,7 +2791,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "payment_channel",
 			paramValue:    "0xA33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			expectError:   true,
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string or object.",
 		},
 		// Directory validation
 		{
