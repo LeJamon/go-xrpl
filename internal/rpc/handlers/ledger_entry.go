@@ -144,10 +144,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// check: string (hex ID)
+	// check: string (hex) or { account, seq }
 	if !keySet {
 		if raw, ok := rawParams["check"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "check")
+			entryKey, rpcErr = parseCheckKeylet(raw)
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -328,10 +328,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// nft_offer: string (hex ID)
+	// nft_offer: string (hex) or { owner, seq }
 	if !keySet {
 		if raw, ok := rawParams["nft_offer"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "nft_offer")
+			entryKey, rpcErr = parseNFTokenOfferKeylet(raw)
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -361,10 +361,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// payment_channel: string (hex ID)
+	// payment_channel: string (hex) or { account, destination, seq }
 	if !keySet {
 		if raw, ok := rawParams["payment_channel"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "payment_channel")
+			entryKey, rpcErr = parsePayChannelKeylet(raw)
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -405,10 +405,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// signer_list: string (hex object index)
+	// signer_list: string (hex) or { account }
 	if !keySet {
 		if raw, ok := rawParams["signer_list"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "signer_list")
+			entryKey, rpcErr = parseSignerListKeylet(raw)
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -1026,6 +1026,23 @@ func parseAMMKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 	return keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key, nil
 }
 
+// parseCheckKeylet parses a check specifier: string (hex) or { account, seq }.
+func parseCheckKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
+	obj, ok := asJSONObject(raw)
+	if !ok {
+		return parseSelectorHexOrObjectID(raw, "check")
+	}
+	account, rpcErr := requiredAccountIDField(obj, "account", "malformedAddress")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	seq, rpcErr := requiredUInt32Field(obj, "seq", "malformedRequest")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	return keylet.Check(account, seq).Key, nil
+}
+
 // parseCredentialKeylet parses a credential specifier: string (hex) or { subject, issuer, credential_type }
 // Reference: rippled LedgerEntry.cpp parseCredential()
 func parseCredentialKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
@@ -1450,6 +1467,24 @@ func parseMPTokenKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 	return keylet.MPTokenByID(mptID, accountID).Key, nil
 }
 
+// parseNFTokenOfferKeylet parses an nft_offer specifier: string (hex) or
+// { owner, seq }.
+func parseNFTokenOfferKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
+	obj, ok := asJSONObject(raw)
+	if !ok {
+		return parseSelectorHexOrObjectID(raw, "nft_offer")
+	}
+	owner, rpcErr := requiredAccountIDField(obj, "owner", "malformedOwner")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	seq, rpcErr := requiredUInt32Field(obj, "seq", "malformedRequest")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	return keylet.NFTokenOffer(owner, seq).Key, nil
+}
+
 // parseOfferKeylet parses an offer specifier: string (hex) or { account, seq }
 // Reference: rippled LedgerEntry.cpp parseOffer()
 func parseOfferKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
@@ -1484,6 +1519,28 @@ func parseOracleKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 		return [32]byte{}, rpcErr
 	}
 	return keylet.Oracle(account, documentID).Key, nil
+}
+
+// parsePayChannelKeylet parses a payment_channel specifier: string (hex) or
+// { account, destination, seq }.
+func parsePayChannelKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
+	obj, ok := asJSONObject(raw)
+	if !ok {
+		return parseSelectorHexOrObjectID(raw, "payment_channel")
+	}
+	account, rpcErr := requiredAccountIDField(obj, "account", "malformedAddress")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	destination, rpcErr := requiredAccountIDField(obj, "destination", "malformedAddress")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	seq, rpcErr := requiredUInt32Field(obj, "seq", "malformedRequest")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	return keylet.PayChannel(account, destination, seq).Key, nil
 }
 
 // parsePermissionedDomainKeylet parses a permissioned_domain specifier: string (hex) or { account, seq }
@@ -1539,6 +1596,20 @@ func parseRippleStateKeylet(raw json.RawMessage, selector string) ([32]byte, *rp
 		return [32]byte{}, rpcerrors.RpcErrorMalformedField("malformedCurrency", "currency", "Currency")
 	}
 	return keylet.Line(account1, account2, currency).Key, nil
+}
+
+// parseSignerListKeylet parses a signer_list specifier: string (hex) or
+// { account }.
+func parseSignerListKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
+	obj, ok := asJSONObject(raw)
+	if !ok {
+		return parseSelectorHexOrObjectID(raw, "signer_list")
+	}
+	account, rpcErr := requiredAccountIDField(obj, "account", "malformedAddress")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	return keylet.SignerList(account).Key, nil
 }
 
 // parseTicketKeylet parses a ticket specifier: string (hex) or { account, ticket_seq }
