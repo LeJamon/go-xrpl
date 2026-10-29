@@ -285,12 +285,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			if err := json.Unmarshal(raw, &idHex); err != nil {
 				return nil, rpcerrors.RpcErrorInvalidParams("Invalid mpt_issuance")
 			}
-			decoded, err := hex.DecodeString(idHex)
-			if err != nil || len(decoded) != 24 {
+			var mptID [24]byte
+			if !decodeHexID(idHex, mptID[:]) {
 				return nil, rpcerrors.RpcErrorInvalidParams("Invalid mpt_issuance: must be 48-character hex string (24 bytes)")
 			}
-			var mptID [24]byte
-			copy(mptID[:], decoded)
 			entryKey = keylet.MPTIssuance(mptID).Key
 			keySet = true
 		}
@@ -968,12 +966,24 @@ func parseHex256(raw json.RawMessage, fieldName string) ([32]byte, *rpcerrors.Rp
 	if err := json.Unmarshal(raw, &hexStr); err != nil {
 		return result, rpcerrors.RpcErrorInvalidParams("Invalid " + fieldName + ": must be hex string")
 	}
-	decoded, err := hex.DecodeString(hexStr)
-	if err != nil || len(decoded) != 32 {
+	if !decodeHexID(hexStr, result[:]) {
 		return result, rpcerrors.RpcErrorInvalidParams("Invalid " + fieldName + ": must be 64-character hex string")
 	}
-	copy(result[:], decoded)
 	return result, nil
+}
+
+// decodeHexID fills out from a hex ID of exactly len(out) bytes, or from "0",
+// which rippled's hex parser reads as the zero ID.
+func decodeHexID(s string, out []byte) bool {
+	if s == "0" {
+		clear(out)
+		return true
+	}
+	if len(s) != 2*len(out) {
+		return false
+	}
+	_, err := hex.Decode(out, []byte(s))
+	return err == nil
 }
 
 // tryParseHex256 attempts to parse raw JSON as a 64-char hex string.
@@ -984,12 +994,10 @@ func tryParseHex256(raw json.RawMessage) ([32]byte, bool) {
 	if err := json.Unmarshal(raw, &hexStr); err != nil {
 		return [32]byte{}, false
 	}
-	decoded, err := hex.DecodeString(hexStr)
-	if err != nil || len(decoded) != 32 {
+	var result [32]byte
+	if !decodeHexID(hexStr, result[:]) {
 		return [32]byte{}, false
 	}
-	var result [32]byte
-	copy(result[:], decoded)
 	return result, true
 }
 
@@ -1261,12 +1269,10 @@ func parseDirectoryKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 			// May not specify both dir_root and owner
 			return [32]byte{}, rpcerrors.RpcErrorInvalidParams("Invalid directory: may not specify both dir_root and owner")
 		}
-		decoded, err := hex.DecodeString(req.DirRoot)
-		if err != nil || len(decoded) != 32 {
+		var rootKey [32]byte
+		if !decodeHexID(req.DirRoot, rootKey[:]) {
 			return [32]byte{}, rpcerrors.RpcErrorInvalidParams("Invalid dir_root")
 		}
-		var rootKey [32]byte
-		copy(rootKey[:], decoded)
 		return keylet.DirPage(rootKey, req.SubIndex).Key, nil
 	}
 
@@ -1454,12 +1460,10 @@ func parseMPTokenKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return [32]byte{}, rpcerrors.RpcErrorInvalidParams("Invalid mptoken params")
 	}
-	idBytes, err := hex.DecodeString(req.MPTIssuanceID)
-	if err != nil || len(idBytes) != 24 {
+	var mptID [24]byte
+	if !decodeHexID(req.MPTIssuanceID, mptID[:]) {
 		return [32]byte{}, rpcerrors.RpcErrorInvalidParams("Invalid mpt_issuance_id")
 	}
-	var mptID [24]byte
-	copy(mptID[:], idBytes)
 	accountID, err := decodeAccountID(req.Account)
 	if err != nil {
 		return [32]byte{}, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid mptoken account: %v", err))
