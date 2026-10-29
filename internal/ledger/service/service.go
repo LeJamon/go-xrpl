@@ -683,7 +683,7 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 	// Persist the name rippled's table holds: a supported amendment's own, or
 	// the one recorded when a vote added it.
 	name, _ := s.amendmentTable.EntryName(id)
-	if f := amendment.FeatureByID(id); f != nil && f.IsSupported() && !f.Subsumed {
+	if f := amendment.FeatureByID(id); f != nil && f.IsSupported() {
 		name = f.Name
 	}
 	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{

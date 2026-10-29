@@ -43,10 +43,6 @@ type Feature struct {
 	// Retired indicates if this feature has been active for at least two years
 	// and its pre-amendment code has been removed.
 	Retired bool
-	// Subsumed marks a feature rippled no longer registers because a successor
-	// replaced it. It remains only as an internal rule ID that the successor
-	// implies, so it is not reported as a known amendment.
-	Subsumed bool
 }
 
 // FeatureID computes the feature ID from a feature name.

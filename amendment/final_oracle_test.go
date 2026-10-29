@@ -56,9 +56,9 @@ var privateV341GoOnlyFeatures = []struct {
 }{
 	{name: "fixCleanup3_5_0", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "InvariantsV1_1", supported: SupportedNo, vote: VoteDefaultNo},
-	{name: "NonFungibleTokensV1", supported: SupportedYes, vote: VoteObsolete},
-	{name: "fixNFTokenDirV1", supported: SupportedYes, vote: VoteObsolete},
-	{name: "fixNFTokenNegOffer", supported: SupportedYes, vote: VoteObsolete},
+	{name: "NonFungibleTokensV1", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "fixNFTokenDirV1", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "fixNFTokenNegOffer", supported: SupportedNo, vote: VoteDefaultNo},
 }
 
 func loadPrivateV341Fixture(t *testing.T) privateV341Fixture {

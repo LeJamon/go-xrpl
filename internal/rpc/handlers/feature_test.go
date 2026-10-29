@@ -107,7 +107,7 @@ func TestFeatureListedMatchesRippledTable(t *testing.T) {
 	unsupported := amendment.FeatureByName("MPTokensV2")
 	subsumed := amendment.FeatureByName("fixNFTokenDirV1")
 	supported := amendment.FeatureByName("DID")
-	if unsupported == nil || unsupported.Supported != amendment.SupportedNo || subsumed == nil || !subsumed.Subsumed || supported == nil {
+	if unsupported == nil || unsupported.Supported != amendment.SupportedNo || subsumed == nil || subsumed.Supported != amendment.SupportedNo || supported == nil {
 		t.Fatal("test amendments are not registered as expected")
 	}
 	unknown := [32]byte{0xAB}

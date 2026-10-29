@@ -119,11 +119,11 @@ func featureHex(id [32]byte) string {
 }
 
 // knownFeature returns the registry feature rippled's amendment table seeds
-// with a name: a supported amendment. Unsupported and subsumed registry
-// features are unknown to it until a ledger, a majority or a vote names them.
+// with a name: a supported amendment. Unsupported registry features are
+// unknown to it until a ledger, a majority or a vote names them.
 func knownFeature(id [32]byte) *amendment.Feature {
 	f := amendment.FeatureByID(id)
-	if f == nil || f.Supported != amendment.SupportedYes || f.Subsumed {
+	if f == nil || f.Supported != amendment.SupportedYes {
 		return nil
 	}
 	return f

@@ -52,7 +52,7 @@ func TestFeatureNoParams(t *testing.T) {
 	// ledger, majority or vote names another one.
 	want := make(map[string]bool)
 	for _, f := range amendment.AllFeatures() {
-		if f.Supported == amendment.SupportedYes && !f.Subsumed {
+		if f.Supported == amendment.SupportedYes {
 			want[strings.ToUpper(hex.EncodeToString(f.ID[:]))] = true
 		}
 	}

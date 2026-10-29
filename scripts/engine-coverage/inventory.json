@@ -29,7 +29,7 @@
   "source_sha256": {
     "protocol/transaction_type.go": "56377642056a30ce2610780328cf03701f0e93f35fb6c33865bf348172df1637",
     "internal/tx/template.go": "68b5063c62f9eb6bd313fd562a43e6ab06295981456b618a1392f5fc8e2c247c",
-    "amendment/registry.go": "7c7fcc2b8f836a055cb7080f8f95f0df18dfd52350ef7f8e7aa903f78668d3ec"
+    "amendment/registry.go": "e447f7cb600acde27f76da27b384991bb7b9c826551f272e924d160315cbbc2f"
   },
   "engine": {
     "registry": {
@@ -1717,7 +1717,7 @@
       "go": {
         "name": "NonFungibleTokensV1",
         "kind": "feature",
-        "supported": "yes",
+        "supported": "no",
         "support_condition": null
       },
       "oracle": null,
@@ -2549,7 +2549,7 @@
       "go": {
         "name": "fixNFTokenDirV1",
         "kind": "fix",
-        "supported": "yes",
+        "supported": "no",
         "support_condition": null
       },
       "oracle": null,
@@ -2560,7 +2560,7 @@
       "go": {
         "name": "fixNFTokenNegOffer",
         "kind": "fix",
-        "supported": "yes",
+        "supported": "no",
         "support_condition": null
       },
       "oracle": null,
