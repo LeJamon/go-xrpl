@@ -43,3 +43,23 @@ func TestLedgerSelectorShortcuts(t *testing.T) {
 		require.Equal(t, "lgrNotValidated", rpcErr.ErrorString, index)
 	}
 }
+
+// Based on rippled TransactionEntry_test.cpp testBadInput as of
+// XRPLF/rippled#8484.
+func TestTransactionEntryDefaultLedgerAndHashShape(t *testing.T) {
+	env := New(t)
+	const hash = "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+
+	_, rpcErr := env.RPC("transaction_entry", map[string]any{"tx_hash": hash})
+	require.NotNil(t, rpcErr)
+	require.Equal(t, "notYetImplemented", rpcErr.ErrorString)
+	require.Contains(t, rpcErr.Extra, "ledger_current_index")
+	require.NotContains(t, rpcErr.Extra, "ledger_hash")
+	require.Equal(t, false, rpcErr.Extra["validated"])
+
+	for _, txHash := range []any{map[string]any{}, []any{}} {
+		_, rpcErr := env.RPC("transaction_entry", map[string]any{"ledger": "closed", "tx_hash": txHash})
+		require.NotNil(t, rpcErr)
+		require.Equal(t, "malformedRequest", rpcErr.ErrorString)
+	}
+}
