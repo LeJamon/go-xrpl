@@ -464,25 +464,20 @@ func (s *Service) buildBookOffer(
 		bookOffer.TakerPaysFunded = amountToJSON(fundedPays)
 	}
 
-	// rippled NetworkOPs.cpp:4596-4601: umBalance updates unconditionally.
-	// saOwnerPays = saTakerGetsFunded when rate == parity, else
-	// min(saOwnerFunds, multiply(saTakerGetsFunded, offerRate)). The
-	// subtraction is mathematically ≥ 0 because saOwnerPays ≤ saOwnerFunds
-	// holds in both branches; surface a programming error if it isn't.
+	// The running balance is charged what the owner pays for this offer:
+	// saTakerGetsFunded when rate == parity, else min(saOwnerFunds,
+	// saTakerGetsFunded grossed up by the transfer fee). An MPT owner's
+	// grossed cost rounds up, as BookStep charges it; IOU rounds to nearest.
+	// The subtraction is ≥ 0 because saOwnerPays ≤ saOwnerFunds in both
+	// branches; surface a programming error if it isn't.
 	ownerPays := takerGetsFunded
 	if offerRate != tx.TransferRateParity {
-		var scaled tx.Amount
-		if takerGetsFunded.IsMPT() {
-			rateAmount := tx.NewIssuedAmount(int64(offerRate), -9, "", "")
-			scaled = multiplyByDirRate(takerGetsFunded, rateAmount, takerGetsFunded)
-		} else {
-			scaled = takerGetsFunded.MulRatioWithNumberContext(
-				offerRate,
-				tx.TransferRateParity,
-				false,
-				numberContext,
-			)
-		}
+		scaled := takerGetsFunded.MulRatioWithNumberContext(
+			offerRate,
+			tx.TransferRateParity,
+			takerGetsFunded.IsMPT(),
+			numberContext,
+		)
 		if scaled.Compare(ownerFunds) > 0 {
 			ownerPays = ownerFunds
 		} else {
