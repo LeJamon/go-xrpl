@@ -13,10 +13,12 @@ import (
 // quorum. Production code uses SetTrustedAndQuorum so the two values always
 // install atomically.
 func (vt *ValidationTracker) setTrusted(nodes []consensus.NodeID) {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.setTrustedLocked(nodes)
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 	vt.drainFinality()
 	vt.checkAcquired()
 }
@@ -24,10 +26,12 @@ func (vt *ValidationTracker) setTrusted(nodes []consensus.NodeID) {
 // setQuorum updates the quorum requirement for tests. Production code sets
 // quorum together with the trusted set via SetTrustedAndQuorum.
 func (vt *ValidationTracker) setQuorum(quorum int) {
+	vt.publicationQuorumMu.RLock()
 	vt.mu.Lock()
 	vt.quorum = quorum
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
+	vt.publicationQuorumMu.RUnlock()
 	vt.drainFinality()
 }
 

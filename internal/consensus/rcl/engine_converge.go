@@ -198,6 +198,12 @@ func (e *Engine) isBuildCompatibleWithValidatedLocked(built consensus.Ledger) bo
 	if built == nil {
 		return true
 	}
+	// The retained quorum floor remains authoritative even when its ledger is
+	// not resident. Check it before consulting the installed validated tip so a
+	// detached descendant cannot be emitted from a superseded local fork.
+	if _, conflict := e.authenticatedQuorumConflictLocked(built); conflict {
+		return false
+	}
 	vh := e.adaptor.GetValidatedLedgerHash()
 	if vh == (consensus.LedgerID{}) {
 		return true
