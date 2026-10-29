@@ -462,3 +462,30 @@ func TestChannelVerifyFieldTypes(t *testing.T) {
 		})
 	}
 }
+
+// rippled decodes public_key and signature with strUnHex, which reads an
+// odd-length string's first digit as a whole leading byte.
+func TestChannelVerifyOddLengthHex(t *testing.T) {
+	const channel = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	authorized, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(channelAuthorizeTestContext(types.ApiVersion1),
+		json.RawMessage(`{"secret":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","channel_id":"`+channel+`","amount":"1000"}`))
+	require.Nil(t, rpcErr)
+	signature := authorized.(map[string]any)["signature"].(string)
+
+	verify := func(publicKey, signature string) (any, *rpcerrors.RpcError) {
+		return (&handlers.ChannelVerifyMethod{}).Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, json.RawMessage(
+			`{"public_key":"`+publicKey+`","channel_id":"`+channel+`","amount":"1000","signature":"`+signature+`"}`))
+	}
+	// The genesis key 03… written without its leading zero digit.
+	result, rpcErr := verify("330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", signature)
+	require.Nil(t, rpcErr)
+	assert.Equal(t, true, result.(map[string]any)["signature_verified"])
+
+	result, rpcErr = verify("0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", "ABC")
+	require.Nil(t, rpcErr, "an odd-length hex signature decodes")
+	assert.Equal(t, false, result.(map[string]any)["signature_verified"])
+
+	_, rpcErr = verify("0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", "ABG")
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+}

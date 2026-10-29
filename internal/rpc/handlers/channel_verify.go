@@ -69,9 +69,9 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if !ok {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
-	sigHex := strings.ToUpper(signature)
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil || len(sigBytes) == 0 {
+	sigBytes, ok := unHexOddLength(signature)
+	sigHex := strings.ToUpper(hex.EncodeToString(sigBytes))
+	if !ok || len(sigBytes) == 0 {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
@@ -114,13 +114,13 @@ func parsePublicKey(pubKey string) (pubKeyHex string, err error) {
 	}()
 
 	// Try to decode as hex first (this is the more common case and safer)
-	pubKeyBytes, hexErr := hex.DecodeString(pubKey)
-	if hexErr == nil && len(pubKeyBytes) == 33 {
+	pubKeyBytes, ok := unHexOddLength(pubKey)
+	if ok && len(pubKeyBytes) == 33 {
 		// Validate public key type
 		// SECP256K1 compressed: 33 bytes, starts with 02 or 03
 		// ED25519: 33 bytes, starts with ED
 		if pubKeyBytes[0] == 0x02 || pubKeyBytes[0] == 0x03 || pubKeyBytes[0] == 0xED {
-			return strings.ToUpper(pubKey), nil
+			return strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
 		}
 	}
 
@@ -131,6 +131,16 @@ func parsePublicKey(pubKey string) (pubKeyHex string, err error) {
 	}
 
 	return "", fmt.Errorf("invalid public key")
+}
+
+// unHexOddLength decodes hex the way rippled's strUnHex does: an odd-length
+// string takes its first digit as a whole leading byte, so "ABC" is 0x0A 0xBC.
+func unHexOddLength(s string) ([]byte, bool) {
+	if len(s)%2 == 1 {
+		s = "0" + s
+	}
+	decoded, err := hex.DecodeString(s)
+	return decoded, err == nil
 }
 
 // verifySignature verifies a signature against a message using the public key
