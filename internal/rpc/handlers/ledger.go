@@ -107,6 +107,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if request.Transactions {
 		var txList []any
 		apiVersion := ctx.ApiVersion
+		networkID := ctx.Services.Ledger().GetServerInfo().NetworkID
 		var decodeErr error
 		var ownerFundsErr error
 		visit := func(txHashKey [32]byte, txData []byte) bool {
@@ -119,6 +120,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 					apiVersion,
 					syntheticContext,
 					targetLedger.IsClosed(),
+					networkID,
 				)
 				if err != nil {
 					decodeErr = err
@@ -671,6 +673,7 @@ func expandTransaction(
 	apiVersion int,
 	ctx SyntheticMetadataContext,
 	includeMetadata bool,
+	networkID uint32,
 ) (map[string]any, error) {
 	storedTx, err := decodeLedgerTransaction(txData, hashStr, includeMetadata)
 	if err != nil {
@@ -679,10 +682,28 @@ func expandTransaction(
 	if !includeMetadata {
 		storedTx.Meta = nil
 	}
-	if storedTx.TxJSON != nil {
-		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
+	if storedTx.TxJSON == nil {
+		return nil, fmt.Errorf("stored transaction has no transaction JSON")
 	}
-	return nil, fmt.Errorf("stored transaction has no transaction JSON")
+	txEntry, err := expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
+	if err != nil {
+		return nil, err
+	}
+	addExpandedTransactionCTID(txEntry, storedTx, ctx.LedgerSequence, networkID)
+	return txEntry, nil
+}
+
+// addExpandedTransactionCTID attaches the transaction's CTID when its
+// metadata carries a TransactionIndex; the transaction's own NetworkID takes
+// precedence over the node's.
+func addExpandedTransactionCTID(txEntry map[string]any, storedTx StoredTransaction, ledgerSeq, networkID uint32) {
+	txIndex, ok := jsonUint32(storedTx.Meta["TransactionIndex"])
+	if !ok {
+		return
+	}
+	if ctid, ok := encodeCTID(ledgerSeq, txIndex, transactionNetworkID(storedTx.TxJSON, networkID)); ok {
+		txEntry["ctid"] = ctid
+	}
 }
 
 // expandStoredTransaction formats a JSON-stored transaction for the response.
