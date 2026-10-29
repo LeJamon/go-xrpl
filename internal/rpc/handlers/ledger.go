@@ -15,6 +15,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -24,15 +25,18 @@ import (
 type LedgerMethod struct{ baseHandler }
 
 func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
-		return nil, boolErr
-	}
-	ledgerSpec, hasLedgerSelector, selectorErr := parseLedgerSpecifier(params)
+	_, hasLedgerSelector, selectorErr := parseLedgerSpecifier(params)
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
+	selection, selectorErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selectorErr != nil {
+		return nil, selectorErr
+	}
+	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
+		return nil, boolErr
+	}
 	var request struct {
-		types.LedgerSpecifier
 		Accounts     bool            `json:"accounts,omitempty"`
 		Full         bool            `json:"full,omitempty"`
 		Transactions bool            `json:"transactions,omitempty"`
@@ -46,7 +50,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
-	request.LedgerSpecifier = ledgerSpec
 
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
@@ -62,10 +65,11 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	dumpQueue := request.Queue && hasLedgerSelector
 
 	// Resolve the target before the permission gate, matching LedgerHandler::check.
-	targetLedger, validated, lerr := lookupLedger(ctx, request.LedgerSpecifier)
+	resolved, lerr := resolveLedgerSelection(ctx, selection)
 	if lerr != nil {
 		return nil, lerr
 	}
+	targetLedger, validated := resolved.Value, resolved.Validated
 
 	if request.Full || request.Accounts {
 		if !ctx.Role.IsUnlimited() {
@@ -397,8 +401,8 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.Rp
 		return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	return map[string]any{
-		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
-		"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
+		"closed": map[string]any{"ledger": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion)},
+		"open":   map[string]any{"ledger": buildLedgerSummaryJSON(open, false, ctx.ApiVersion)},
 	}, nil
 }
 

@@ -613,8 +613,11 @@ func parseRawLedgerSelector(
 		parse = ledgerselector.Parse
 	}
 	selection, err := parse(index.String())
-	if err != nil || selection.Kind() == ledgerselector.KindAbsent {
+	if err != nil {
 		return ledgerselector.Selector{}, errorStyle.indexMalformed(field)
+	}
+	if selection.Kind() == ledgerselector.KindAbsent {
+		return ledgerselector.Current(), nil
 	}
 	return selection, nil
 }
