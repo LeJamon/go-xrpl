@@ -15,7 +15,8 @@ func leafDepthChain(t *testing.T) []*innerNode {
 	if err := bottom.UpdateHash(); err != nil {
 		t.Fatal(err)
 	}
-	chain := []*innerNode{bottom}
+	chain := make([]*innerNode, 0, 1+maxDepth)
+	chain = append(chain, bottom)
 	child := bottom
 	for range maxDepth {
 		parent := newInnerNode()
