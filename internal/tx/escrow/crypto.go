@@ -370,20 +370,24 @@ func parseASN1Length(data []byte) (int, int, error) {
 	if numBytes == 0 {
 		return 0, 0, errors.New("indefinite length not supported")
 	}
-	if numBytes > 4 {
+	if numBytes > 8 {
 		return 0, 0, errors.New("length too large")
 	}
 	if len(data) < 1+numBytes {
 		return 0, 0, errors.New("insufficient length bytes")
 	}
 
-	length := 0
+	var length uint64
 	for i := range numBytes {
-		length = (length << 8) | int(data[1+i])
+		length = length<<8 | uint64(data[1+i])
 	}
 	if length == 0 {
 		return 0, 0, errors.New("zero length must use short form")
 	}
+	// Bound the value before converting to int or adding it to an offset.
+	if length > uint64(len(data)-1-numBytes) {
+		return 0, 0, errors.New("length exceeds data")
+	}
 
-	return length, 1 + numBytes, nil
+	return int(length), 1 + numBytes, nil
 }
