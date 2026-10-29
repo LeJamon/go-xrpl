@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -19,6 +20,10 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	rawFields, fieldsErr := rawJSONFields(params)
 	if fieldsErr != nil {
 		return nil, fieldsErr
+	}
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	account := ""
@@ -41,12 +46,13 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	ledger, validated, lookupErr := lookupLedger(ctx, params)
+	resolved, lookupErr := resolveLedgerSelection(ctx, selection)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledger := resolved.Value
 	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
-	ledgerFields := ledgerEntryResponseFields(ledger, validated)
+	ledgerFields := ledgerEntryResponseFields(ledger, resolved.Validated)
 	if !types.IsValidClassicAddress(account) {
 		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}

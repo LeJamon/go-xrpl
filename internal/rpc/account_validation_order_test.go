@@ -146,32 +146,58 @@ func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 	})
 }
 
-func TestAccountHandlerOptionalValidationFollowsAccountSLE(t *testing.T) {
+// Request fields the spec parses are validated before the account lookup;
+// only account_lines' peer address waits for it.
+func TestAccountHandlerOptionalValidationAndAccountSLE(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	tests := []struct {
-		name   string
-		method types.MethodHandler
-		params string
+		name    string
+		method  types.MethodHandler
+		params  string
+		code    int
+		message string
 	}{
 		{
-			name:   "account_offers limit",
-			method: &handlers.AccountOffersMethod{},
-			params: `{"account":"` + account + `","limit":"bad"}`,
+			name:    "account_offers limit",
+			method:  &handlers.AccountOffersMethod{},
+			params:  `{"account":"` + account + `","limit":"bad"}`,
+			code:    rpcerrors.RpcINVALID_PARAMS,
+			message: "Invalid field 'limit', not unsigned integer.",
 		},
 		{
-			name:   "account_channels destination",
-			method: &handlers.AccountChannelsMethod{},
-			params: `{"account":"` + account + `","destination_account":1}`,
+			name:    "account_offers marker",
+			method:  &handlers.AccountOffersMethod{},
+			params:  `{"account":"` + account + `","marker":"NOT_A_MARKER"}`,
+			code:    rpcerrors.RpcINVALID_PARAMS,
+			message: "Invalid field 'marker'.",
 		},
 		{
-			name:   "account_nfts limit",
-			method: &handlers.AccountNftsMethod{},
-			params: `{"account":"` + account + `","limit":"bad"}`,
+			name:    "account_channels destination",
+			method:  &handlers.AccountChannelsMethod{},
+			params:  `{"account":"` + account + `","destination_account":1}`,
+			code:    rpcerrors.RpcACT_NOT_FOUND,
+			message: "Account not found.",
 		},
 		{
-			name:   "account_lines peer",
-			method: &handlers.AccountLinesMethod{},
-			params: `{"account":"` + account + `","peer":[]}`,
+			name:    "account_nfts limit",
+			method:  &handlers.AccountNftsMethod{},
+			params:  `{"account":"` + account + `","limit":"bad"}`,
+			code:    rpcerrors.RpcINVALID_PARAMS,
+			message: "Invalid field 'limit', not unsigned integer.",
+		},
+		{
+			name:    "account_nfts marker",
+			method:  &handlers.AccountNftsMethod{},
+			params:  `{"account":"` + account + `","marker":"NOT_A_MARKER"}`,
+			code:    rpcerrors.RpcINVALID_PARAMS,
+			message: "Invalid field 'marker'.",
+		},
+		{
+			name:    "account_lines peer",
+			method:  &handlers.AccountLinesMethod{},
+			params:  `{"account":"` + account + `","peer":[]}`,
+			code:    rpcerrors.RpcACT_NOT_FOUND,
+			message: "Account not found.",
 		},
 	}
 
@@ -188,8 +214,8 @@ func TestAccountHandlerOptionalValidationFollowsAccountSLE(t *testing.T) {
 			result, rpcErr := tc.method.Handle(ctx, json.RawMessage(tc.params))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, rpcerrors.RpcACT_NOT_FOUND, rpcErr.Code)
-			assert.Equal(t, "Account not found.", rpcErr.Message)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
 		})
 	}
 }

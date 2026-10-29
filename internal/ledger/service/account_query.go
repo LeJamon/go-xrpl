@@ -45,8 +45,9 @@ type AccountInfoResult struct {
 
 // parseDirMarker decodes the resume marker shared by account_lines,
 // account_offers and account_channels: "<entryKey>,<ownerNode>" — last entry's
-// ledger key plus the owner-directory page it sat on. Empty means start from the
-// beginning; malformed yields svcerr.ErrInvalidMarker.
+// ledger key ("0" for the zero key) plus the owner-directory page it sat on,
+// optionally prefixed with '+'. Empty means start from the beginning;
+// malformed yields svcerr.ErrInvalidMarker.
 func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool, err error) {
 	if marker == "" {
 		return afterKey, 0, false, nil
@@ -56,12 +57,14 @@ func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool
 		return afterKey, 0, false, svcerr.ErrInvalidMarker
 	}
 	var key [32]byte
-	if derr := decodeHex32Into(keyStr, &key); derr != nil {
-		return afterKey, 0, false, svcerr.ErrInvalidMarker
+	if keyStr != "0" {
+		if derr := decodeHex32Into(keyStr, &key); derr != nil {
+			return afterKey, 0, false, svcerr.ErrInvalidMarker
+		}
 	}
 	// hint is the second comma-delimited field; ignore trailing content.
 	pageStr, _, _ := strings.Cut(rest, ",")
-	p, perr := strconv.ParseUint(pageStr, 10, 64)
+	p, perr := strconv.ParseUint(strings.TrimPrefix(pageStr, "+"), 10, 64)
 	if perr != nil {
 		return afterKey, 0, false, svcerr.ErrInvalidMarker
 	}
@@ -176,119 +179,124 @@ type AccountLinesResult struct {
 // GetAccountLines retrieves trust lines for an account
 func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*AccountLinesResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountLinesResult, error) {
-		afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
-		if err != nil {
-			return nil, err
-		}
-
-		var peerID [20]byte
-		hasPeer := false
-		if peer != "" {
-			_, peerIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(peer)
-			if err != nil {
-				return nil, fmt.Errorf("%w: invalid peer address: %v", svcerr.ErrAccountMalformed, err)
-			}
-			copy(peerID[:], peerIDBytes)
-			hasPeer = true
-		}
-
-		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
-		if limit == 0 {
-			limit = 200
-		}
-
-		var lines []TrustLine
-		visit := func(_ [32]byte, data []byte) {
-			entryType, err := state.DecodeType(data)
-			if err != nil || entryType != entry.TypeRippleState {
-				return
-			}
-			rs, perr := state.ParseRippleState(data)
-			if perr != nil {
-				return
-			}
-
-			// Owner-directory membership guarantees one side matches; default is defensive.
-			lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
-			highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
-
-			var isLowAccount bool
-			var peerAccount string
-			if lowID == accountID {
-				isLowAccount = true
-				peerAccount = rs.HighLimit.Issuer
-			} else if highID == accountID {
-				isLowAccount = false
-				peerAccount = rs.LowLimit.Issuer
-			} else {
-				return
-			}
-
-			if hasPeer {
-				peerAccountID, _ := decodeAccountIDLocal(peerAccount)
-				if peerAccountID != peerID {
-					return
-				}
-			}
-
-			line := TrustLine{
-				Account:  peerAccount,
-				Currency: rs.Balance.Currency,
-			}
-
-			// Balance from our account's perspective: positive = peer owes us.
-			if isLowAccount {
-				line.Balance = rs.Balance.Negate().Value()
-				line.Limit = rs.LowLimit.Value()
-				line.LimitPeer = rs.HighLimit.Value()
-				line.NoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
-				line.NoRipplePeer = (rs.Flags & state.LsfHighNoRipple) != 0
-				line.Authorized = (rs.Flags & state.LsfLowAuth) != 0
-				line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
-				line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
-				line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
-				line.DeepFreeze = (rs.Flags & state.LsfLowDeepFreeze) != 0
-				line.DeepFreezePeer = (rs.Flags & state.LsfHighDeepFreeze) != 0
-				line.HasReserve = (rs.Flags & state.LsfLowReserve) != 0
-				line.QualityIn = rs.LowQualityIn
-				line.QualityOut = rs.LowQualityOut
-			} else {
-				line.Balance = rs.Balance.Value()
-				line.Limit = rs.HighLimit.Value()
-				line.LimitPeer = rs.LowLimit.Value()
-				line.NoRipple = (rs.Flags & state.LsfHighNoRipple) != 0
-				line.NoRipplePeer = (rs.Flags & state.LsfLowNoRipple) != 0
-				line.Authorized = (rs.Flags & state.LsfHighAuth) != 0
-				line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
-				line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
-				line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
-				line.DeepFreeze = (rs.Flags & state.LsfHighDeepFreeze) != 0
-				line.DeepFreezePeer = (rs.Flags & state.LsfLowDeepFreeze) != 0
-				line.HasReserve = (rs.Flags & state.LsfHighReserve) != 0
-				line.QualityIn = rs.HighQualityIn
-				line.QualityOut = rs.HighQualityOut
-			}
-
-			lines = append(lines, line)
-		}
-
-		markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
-		if err != nil {
-			return nil, err
-		}
-		if hasMarker && !found {
-			return nil, svcerr.ErrInvalidMarker
-		}
-
-		return &AccountLinesResult{
-			Account:     account,
-			Lines:       lines,
-			LedgerIndex: targetLedger.Sequence(),
-			LedgerHash:  targetLedger.Hash(),
-			Validated:   validated,
-			Marker:      markerStr,
-		}, nil
+		return QueryAccountLines(ctx, targetLedger, account, accountID, validated, peer, limit, marker)
 	})
+}
+
+// QueryAccountLines executes account_lines against an already selected ledger.
+func QueryAccountLines(ctx context.Context, targetLedger *ledger.Ledger, account string, accountID [20]byte, validated bool, peer string, limit uint32, marker string) (*AccountLinesResult, error) {
+	afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
+	if err != nil {
+		return nil, err
+	}
+
+	var peerID [20]byte
+	hasPeer := false
+	if peer != "" {
+		_, peerIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(peer)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid peer address: %v", svcerr.ErrAccountMalformed, err)
+		}
+		copy(peerID[:], peerIDBytes)
+		hasPeer = true
+	}
+
+	// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
+	if limit == 0 {
+		limit = 200
+	}
+
+	var lines []TrustLine
+	visit := func(_ [32]byte, data []byte) {
+		entryType, err := state.DecodeType(data)
+		if err != nil || entryType != entry.TypeRippleState {
+			return
+		}
+		rs, perr := state.ParseRippleState(data)
+		if perr != nil {
+			return
+		}
+
+		// Owner-directory membership guarantees one side matches; default is defensive.
+		lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
+		highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
+
+		var isLowAccount bool
+		var peerAccount string
+		if lowID == accountID {
+			isLowAccount = true
+			peerAccount = rs.HighLimit.Issuer
+		} else if highID == accountID {
+			isLowAccount = false
+			peerAccount = rs.LowLimit.Issuer
+		} else {
+			return
+		}
+
+		if hasPeer {
+			peerAccountID, _ := decodeAccountIDLocal(peerAccount)
+			if peerAccountID != peerID {
+				return
+			}
+		}
+
+		line := TrustLine{
+			Account:  peerAccount,
+			Currency: rs.Balance.Currency,
+		}
+
+		// Balance from our account's perspective: positive = peer owes us.
+		if isLowAccount {
+			line.Balance = rs.Balance.Negate().Value()
+			line.Limit = rs.LowLimit.Value()
+			line.LimitPeer = rs.HighLimit.Value()
+			line.NoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
+			line.NoRipplePeer = (rs.Flags & state.LsfHighNoRipple) != 0
+			line.Authorized = (rs.Flags & state.LsfLowAuth) != 0
+			line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
+			line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
+			line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
+			line.DeepFreeze = (rs.Flags & state.LsfLowDeepFreeze) != 0
+			line.DeepFreezePeer = (rs.Flags & state.LsfHighDeepFreeze) != 0
+			line.HasReserve = (rs.Flags & state.LsfLowReserve) != 0
+			line.QualityIn = rs.LowQualityIn
+			line.QualityOut = rs.LowQualityOut
+		} else {
+			line.Balance = rs.Balance.Value()
+			line.Limit = rs.HighLimit.Value()
+			line.LimitPeer = rs.LowLimit.Value()
+			line.NoRipple = (rs.Flags & state.LsfHighNoRipple) != 0
+			line.NoRipplePeer = (rs.Flags & state.LsfLowNoRipple) != 0
+			line.Authorized = (rs.Flags & state.LsfHighAuth) != 0
+			line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
+			line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
+			line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
+			line.DeepFreeze = (rs.Flags & state.LsfHighDeepFreeze) != 0
+			line.DeepFreezePeer = (rs.Flags & state.LsfLowDeepFreeze) != 0
+			line.HasReserve = (rs.Flags & state.LsfHighReserve) != 0
+			line.QualityIn = rs.HighQualityIn
+			line.QualityOut = rs.HighQualityOut
+		}
+
+		lines = append(lines, line)
+	}
+
+	markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
+	if err != nil {
+		return nil, err
+	}
+	if hasMarker && !found {
+		return nil, svcerr.ErrInvalidMarker
+	}
+
+	return &AccountLinesResult{
+		Account:     account,
+		Lines:       lines,
+		LedgerIndex: targetLedger.Sequence(),
+		LedgerHash:  targetLedger.Hash(),
+		Validated:   validated,
+		Marker:      markerStr,
+	}, nil
 }
 
 // AccountOffer represents an offer from account_offers RPC
@@ -314,87 +322,92 @@ type AccountOffersResult struct {
 // GetAccountOffers retrieves offers for an account
 func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountOffersResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountOffersResult, error) {
-		afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
-		if err != nil {
-			return nil, err
+		return QueryAccountOffers(ctx, targetLedger, account, accountID, validated, limit, marker)
+	})
+}
+
+// QueryAccountOffers executes account_offers against an already selected ledger.
+func QueryAccountOffers(ctx context.Context, targetLedger *ledger.Ledger, account string, accountID [20]byte, validated bool, limit uint32, marker string) (*AccountOffersResult, error) {
+	afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
+	if err != nil {
+		return nil, err
+	}
+	if hasMarker {
+		data, readErr := targetLedger.ReadContext(ctx, keylet.Keylet{Key: afterKey})
+		if readErr != nil {
+			return nil, readErr
 		}
-		if hasMarker {
-			data, readErr := targetLedger.ReadContext(ctx, keylet.Keylet{Key: afterKey})
-			if readErr != nil {
-				return nil, readErr
-			}
-			if data == nil {
-				return nil, svcerr.ErrStaleMarker
-			}
-		}
-
-		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
-		if limit == 0 {
-			limit = 200
-		}
-
-		var offers []AccountOffer
-		visit := func(_ [32]byte, data []byte) {
-			entryType, err := state.DecodeType(data)
-			if err != nil || entryType != entry.TypeOffer {
-				return
-			}
-			offer, perr := state.ParseLedgerOffer(data)
-			if perr != nil {
-				return
-			}
-
-			accountOffer := AccountOffer{
-				Flags: offer.Flags,
-				Seq:   offer.Sequence,
-			}
-
-			if offer.TakerGets.IsNative() {
-				accountOffer.TakerGets = offer.TakerGets.Value()
-			} else {
-				accountOffer.TakerGets = map[string]string{
-					"currency": offer.TakerGets.Currency,
-					"issuer":   offer.TakerGets.Issuer,
-					"value":    offer.TakerGets.Value(),
-				}
-			}
-
-			if offer.TakerPays.IsNative() {
-				accountOffer.TakerPays = offer.TakerPays.Value()
-			} else {
-				accountOffer.TakerPays = map[string]string{
-					"currency": offer.TakerPays.Currency,
-					"issuer":   offer.TakerPays.Issuer,
-					"value":    offer.TakerPays.Value(),
-				}
-			}
-
-			accountOffer.Quality = qualityFromBookDir(offer.BookDirectory)
-
-			if offer.Expiration > 0 {
-				accountOffer.Expiration = offer.Expiration
-			}
-
-			offers = append(offers, accountOffer)
-		}
-
-		markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
-		if err != nil {
-			return nil, err
-		}
-		if hasMarker && !found {
+		if data == nil {
 			return nil, svcerr.ErrStaleMarker
 		}
+	}
 
-		return &AccountOffersResult{
-			Account:     account,
-			Offers:      offers,
-			LedgerIndex: targetLedger.Sequence(),
-			LedgerHash:  targetLedger.Hash(),
-			Validated:   validated,
-			Marker:      markerStr,
-		}, nil
-	})
+	// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
+	if limit == 0 {
+		limit = 200
+	}
+
+	var offers []AccountOffer
+	visit := func(_ [32]byte, data []byte) {
+		entryType, err := state.DecodeType(data)
+		if err != nil || entryType != entry.TypeOffer {
+			return
+		}
+		offer, perr := state.ParseLedgerOffer(data)
+		if perr != nil {
+			return
+		}
+
+		accountOffer := AccountOffer{
+			Flags: offer.Flags,
+			Seq:   offer.Sequence,
+		}
+
+		if offer.TakerGets.IsNative() {
+			accountOffer.TakerGets = offer.TakerGets.Value()
+		} else {
+			accountOffer.TakerGets = map[string]string{
+				"currency": offer.TakerGets.Currency,
+				"issuer":   offer.TakerGets.Issuer,
+				"value":    offer.TakerGets.Value(),
+			}
+		}
+
+		if offer.TakerPays.IsNative() {
+			accountOffer.TakerPays = offer.TakerPays.Value()
+		} else {
+			accountOffer.TakerPays = map[string]string{
+				"currency": offer.TakerPays.Currency,
+				"issuer":   offer.TakerPays.Issuer,
+				"value":    offer.TakerPays.Value(),
+			}
+		}
+
+		accountOffer.Quality = qualityFromBookDir(offer.BookDirectory)
+
+		if offer.Expiration > 0 {
+			accountOffer.Expiration = offer.Expiration
+		}
+
+		offers = append(offers, accountOffer)
+	}
+
+	markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
+	if err != nil {
+		return nil, err
+	}
+	if hasMarker && !found {
+		return nil, svcerr.ErrStaleMarker
+	}
+
+	return &AccountOffersResult{
+		Account:     account,
+		Offers:      offers,
+		LedgerIndex: targetLedger.Sequence(),
+		LedgerHash:  targetLedger.Hash(),
+		Validated:   validated,
+		Marker:      markerStr,
+	}, nil
 }
 
 // AccountObjectsResult contains account objects

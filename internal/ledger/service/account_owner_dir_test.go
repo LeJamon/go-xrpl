@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -280,6 +281,28 @@ func TestAccountChannels_MarkerPagination(t *testing.T) {
 	}
 }
 
+// A "0" key and a '+'-prefixed hint parse like rippled's account markers; the
+// zero key then names no owned entry.
+func TestAccountDirMarkers_ParseLikeRippled(t *testing.T) {
+	key, page, present, err := parseDirMarker(strings.Repeat("AB", 32) + ",+7,ignored")
+	if err != nil || !present || page != 7 || key != [32]byte(bytes.Repeat([]byte{0xAB}, 32)) {
+		t.Fatalf("parseDirMarker = %x, %d, %v, %v", key, page, present, err)
+	}
+
+	svc := newOfferTestService(t)
+	aAddr, _ := addressFromBytes(t, 0x10)
+	insertAccountRoot(t, svc, aAddr, 1_000_000_000_000, 0)
+	if _, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, "0,0"); !errors.Is(err, svcerr.ErrInvalidMarker) {
+		t.Fatalf("lines: want ErrInvalidMarker, got %v", err)
+	}
+	if _, err := svc.GetAccountChannels(context.Background(), aAddr, "", "current", 0, "0,0"); !errors.Is(err, svcerr.ErrInvalidMarker) {
+		t.Fatalf("channels: want ErrInvalidMarker, got %v", err)
+	}
+	if _, err := svc.GetAccountOffers(context.Background(), aAddr, "current", 0, "0,0"); !errors.Is(err, svcerr.ErrStaleMarker) {
+		t.Fatalf("offers: want ErrStaleMarker, got %v", err)
+	}
+}
+
 func TestAccountDirMarkers_Invalid(t *testing.T) {
 	svc := newOfferTestService(t)
 	aAddr, _ := addressFromBytes(t, 0x10)
@@ -295,7 +318,8 @@ func TestAccountDirMarkers_Invalid(t *testing.T) {
 		{"bad hex key", strings.Repeat("z", 64) + ",0"},
 		{"short key", "ABCD,0"},
 		{"bad page", strings.Repeat("AB", 32) + ",notanumber"},
-		{"zero-shorthand key", "0,0"},
+		{"signed page", strings.Repeat("AB", 32) + ",-1"},
+		{"doubly signed page", strings.Repeat("AB", 32) + ",++1"},
 	}
 	for _, tc := range cases {
 		for name, query := range map[string]func() error{
