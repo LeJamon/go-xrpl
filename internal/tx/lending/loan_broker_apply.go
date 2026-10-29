@@ -102,9 +102,7 @@ func (l *LoanBrokerSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 	}
 
 	if l.DebtMaximum != nil {
-		if res := checkAssetValue(number(*l.DebtMaximum), asset); res != ter.TesSUCCESS {
-			return res
-		}
+		return checkAssetValue(number(*l.DebtMaximum), asset)
 	}
 	return ter.TesSUCCESS
 }

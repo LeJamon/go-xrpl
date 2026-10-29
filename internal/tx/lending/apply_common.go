@@ -58,9 +58,8 @@ func adjustPseudoOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int3
 func checkAssetValue(n lmath.N, asset tx.Asset) ter.Result {
 	rounded := n.RoundToAsset(assetIntegral(asset))
 	if asset.IsNative() {
-		// Check the rounded amount: a fractional value can round back into range.
-		drops := rounded.ToInt64WithMode(state.RoundToNearest)
-		if drops > int64(state.MaxNativeDrops) || drops < -int64(state.MaxNativeDrops) {
+		maximum := lmath.FromInt(int64(state.MaxNativeDrops))
+		if rounded.Cmp(maximum) > 0 || rounded.Cmp(maximum.Negate()) < 0 {
 			return ter.TefEXCEPTION
 		}
 	}

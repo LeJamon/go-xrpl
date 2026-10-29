@@ -207,6 +207,9 @@ func (s *Service) acceptConsensusResult(
 		if err := closed.Close(closeTime, closeFlags); err != nil {
 			return 0, fmt.Errorf("failed to close ledger: %w", err)
 		}
+		if _, proofErr := s.rememberLocalChildReplayProof(ctx, expectedClosed, closed); proofErr != nil {
+			s.logger.Debug("local child replay provenance unavailable", "sequence", closed.Sequence(), "err", proofErr)
+		}
 	} else {
 		closeFlags = closed.Header().CloseFlags
 	}
