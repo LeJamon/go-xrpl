@@ -236,6 +236,7 @@ func (f *requestField[T]) UnmarshalJSON(data []byte) error {
 type jsonCppBoolField struct {
 	value   bool
 	present bool
+	isBool  bool
 }
 
 func (f *jsonCppBoolField) UnmarshalJSON(data []byte) error {
@@ -243,6 +244,7 @@ func (f *jsonCppBoolField) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
+	_, f.isBool = value.(bool)
 	f.value = jsonCppBoolRaw(data)
 	f.present = true
 	return nil

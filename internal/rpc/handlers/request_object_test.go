@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -124,14 +125,6 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 	require.Equal(t, true, result.(map[string]any)["clear"])
 
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
-	_, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
-		json.RawMessage(`{"feature":"fixMasterKeyAsRegularKey","vetoed":"true"}`),
-	)
-	require.Nil(t, rpcErr)
-	require.Equal(t, 1, controller.setCalls)
-
-	controller = &requestRejectAmendmentController{table: amendment.NewTable()}
 	result, rpcErr = (&FeatureMethod{}).Handle(
 		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"vetoed":true}`),
@@ -139,6 +132,40 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 	require.Nil(t, rpcErr)
 	require.Zero(t, controller.setCalls)
 	require.Contains(t, result.(map[string]any), "features")
+}
+
+// Based on rippled Feature_test.cpp testSomeEnabled testInvalidVetoed.
+func TestFeatureVetoedMustBeBoolean(t *testing.T) {
+	for _, raw := range []string{`"false"`, `null`, `"true"`, `0`, `1`} {
+		t.Run(raw, func(t *testing.T) {
+			controller := &requestRejectAmendmentController{table: amendment.NewTable()}
+			_, rpcErr := (&FeatureMethod{}).Handle(
+				&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
+				json.RawMessage(`{"feature":"fixMasterKeyAsRegularKey","vetoed":`+raw+`}`),
+			)
+			require.NotNil(t, rpcErr)
+			require.Equal(t, "invalidParams", rpcErr.ErrorString)
+			require.Equal(t, "Invalid parameters.", rpcErr.Message)
+			require.Zero(t, controller.setCalls)
+		})
+	}
+
+	_, rpcErr := (&FeatureMethod{}).Handle(
+		&types.RpcContext{Context: context.Background(), Role: types.RoleGuest},
+		json.RawMessage(`{"feature":"fixMasterKeyAsRegularKey","vetoed":"false"}`),
+	)
+	require.NotNil(t, rpcErr)
+	require.Equal(t, "noPermission", rpcErr.ErrorString)
+
+	for _, vetoed := range []bool{true, false} {
+		controller := &requestRejectAmendmentController{table: amendment.NewTable()}
+		_, rpcErr := (&FeatureMethod{}).Handle(
+			&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
+			json.RawMessage(fmt.Sprintf(`{"feature":"fixMasterKeyAsRegularKey","vetoed":%t}`, vetoed)),
+		)
+		require.Nil(t, rpcErr)
+		require.Equal(t, 1, controller.setCalls)
+	}
 }
 
 func TestJsonCppRequestFields(t *testing.T) {
