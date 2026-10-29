@@ -221,7 +221,7 @@ func TestFeatureVetoFollowsRippledTable(t *testing.T) {
 	require.Nil(t, rpcErr)
 	require.Contains(t, resp["features"], unknown, "the vetoed amendment stays listed")
 
-	resp, rpcErr = call(types.RoleAdmin, `{"feature":"DID","vetoed":true}`)
+	_, rpcErr = call(types.RoleAdmin, `{"feature":"DID","vetoed":true}`)
 	require.Nil(t, rpcErr)
 	require.Zero(t, controller.persisted, "DID already defaults to a down vote")
 

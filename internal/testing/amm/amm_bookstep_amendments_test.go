@@ -434,7 +434,8 @@ func TestAMMBookStep_FixAMMOfferBlockedByLOB(t *testing.T) {
 					jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(env.Carol, carolPays, carolGets).Build()))
 					env.Close()
 
-					wantXRP, wantUSD := poolXRP, poolUSD
+					var wantXRP uint64
+					var wantUSD tx.Amount
 					if !receiveXRP {
 						wantXRP, wantUSD = 200_000_980_005, usd(9_999_951, -2)
 						require.Empty(t, env.AccountOffers(env.Carol))
