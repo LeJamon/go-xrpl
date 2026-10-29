@@ -227,6 +227,11 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		// Build/validate/store failed off-lock; unwind to Establish so the next
 		// heartbeat retries (matches the pre-offload early-return).
 		e.setPhase(consensus.PhaseEstablish)
+		if work.prevLedger != nil {
+			if networkID, conflict := e.authenticatedQuorumConflict(consensus.LedgerID{}, work.prevLedger.Seq()+1); conflict {
+				e.handleWrongLedger(networkID, nil)
+			}
+		}
 		return
 	}
 	result := work.result
@@ -257,6 +262,22 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		"result", result.String(),
 		"mode", e.mode.String(),
 	)
+
+	// The off-lock build may have been overtaken by an authenticated fork.
+	if networkID, conflict := e.authenticatedQuorumConflictLocked(newLedger); conflict {
+		newBytes := newLedger.ID()
+		slog.Warn("discarding stale consensus build",
+			"t", "consensus",
+			"event", "stale-build",
+			"seq", newLedger.Seq(),
+			"built_hash", fmt.Sprintf("%x", newBytes[:8]),
+			"quorum_hash", fmt.Sprintf("%x", networkID[:8]),
+		)
+		e.buildInProgress = false
+		e.buildingLedgerSeq.Store(0)
+		e.handleWrongLedger(networkID, nil)
+		return
+	}
 
 	// Censorship detection: reconcile the txs we've been proposing against the
 	// accepted set now that the LCL is built. Only meaningful with the correct
@@ -324,6 +345,8 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 	// wrongLedger (the old behaviour) caused permanent quorum stalls (#451).
 	// ResultFail is a go-xrpl sentinel mapping to the MovedOn suppress class.
 	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
+	newLedgerID := newLedger.ID()
+	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
 	// blocked kills emission entirely: an amendment-blocked node builds
 	// un-amended ledgers, and even a partial from it would misdirect peers.
 	blocked := e.adaptor.IsAmendmentBlocked()
@@ -336,13 +359,21 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 	// wrongLedger-mode gate that blocked the ahead-but-compatible case (#451)
 	// while still preventing side-chain emits (#401).
 	compatible := e.isBuildCompatibleWithValidatedLocked(newLedger)
+	if networkID, conflict := e.authenticatedQuorumConflictLocked(newLedger); conflict {
+		compatible = false
+		slog.Warn("suppressing validation for stale consensus build",
+			"t", "consensus",
+			"event", "stale-validation",
+			"seq", newLedger.Seq(),
+			"built_hash", hashShort,
+			"quorum_hash", fmt.Sprintf("%x", networkID[:8]),
+		)
+	}
 	if isValidator && !compatible {
 		e.validating.Store(false)
 	}
 	willEmit := isValidator && !blocked && !consensusFail && canValidate && compatible
 
-	newLedgerID := newLedger.ID()
-	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
 	slog.Info("validation gate",
 		"t", "consensus",
 		"event", "validate-gate",

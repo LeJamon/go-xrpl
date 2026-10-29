@@ -451,6 +451,18 @@ func (e *Engine) enqueuePreferredLedgerSwitchedLocked(
 // broadcastValidation emits our own validation, logging on failure. Like
 // broadcastProposal, a silent drop is a liveness-critical invisible bow-out.
 func (e *Engine) broadcastValidation(v *consensus.Validation) {
+	if v != nil {
+		if networkID, conflict := e.authenticatedQuorumConflict(v.LedgerID, v.LedgerSeq); conflict {
+			slog.Warn("suppressing stale validation broadcast",
+				"t", "consensus",
+				"event", "stale-validation-broadcast",
+				"seq", v.LedgerSeq,
+				"built_hash", fmt.Sprintf("%x", v.LedgerID[:8]),
+				"quorum_hash", fmt.Sprintf("%x", networkID[:8]),
+			)
+			return
+		}
+	}
 	if err := e.adaptor.BroadcastValidation(v); err != nil {
 		slog.Warn("failed to broadcast own validation", "t", "consensus", "err", err)
 	}

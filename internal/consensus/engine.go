@@ -181,6 +181,38 @@ type ValidationQuorumRechecker interface {
 	RecheckFullyValidated(ledgerID LedgerID, seq uint32) ([]*Validation, int, bool)
 }
 
+// ValidationQuorumSnapshot is an atomic view of quorum evidence for one
+// ledger sequence. LedgerIDs contains current full-validation quorums at the
+// requested sequence, plus the retained proof when its sequence matches;
+// RetainedLedgerID and RetainedLedgerSeq always carry the highest
+// authenticated quorum floor, which remains usable after the live quorum gate
+// closes. Available describes only the live gate.
+type ValidationQuorumSnapshot struct {
+	LedgerIDs         []LedgerID
+	Quorum            int
+	Available         bool
+	RetainedLedgerID  LedgerID
+	RetainedLedgerSeq uint32
+}
+
+// ValidationPublicationSnapshot is a quorum snapshot held under the
+// publication lease. Call Release exactly once after the publication decision
+// has been committed; no validation admission or quorum configuration change
+// can pass while the lease is held.
+type ValidationPublicationSnapshot struct {
+	ValidationQuorumSnapshot
+	Release func()
+}
+
+// ValidationPublicationQuorum combines the exact-sequence quorum snapshot
+// with a release function that keeps validation admission from changing the
+// snapshot until the caller's publication fence has completed. The snapshot
+// may retain a previously authenticated proof when the live safety gate is
+// unavailable; callers must inspect LedgerIDs independently of Available.
+type ValidationPublicationQuorum interface {
+	BeginValidationPublication(seq uint32) ValidationPublicationSnapshot
+}
+
 // WireableAdaptor is an optional extension engine wires after constructing its
 // ValidationTracker. Implementers emit NegativeUNL pseudo-txs; others (e.g.
 // test mocks) simply skip NegativeUNL voting.
@@ -560,6 +592,14 @@ type Ledger interface {
 	TxSetID() TxSetID
 
 	Bytes() []byte
+}
+
+// LedgerHashOfSeq is an optional consensus.Ledger capability that resolves an
+// ancestor hash from the ledger's embedded skip lists. A false result means
+// the ancestry is unavailable; callers must treat that as missing evidence,
+// matching rippled's nullopt compatibility behavior.
+type LedgerHashOfSeq interface {
+	HashOfSeq(seq uint32) (LedgerID, bool, error)
 }
 
 // TxSet represents a set of transactions for a ledger.
