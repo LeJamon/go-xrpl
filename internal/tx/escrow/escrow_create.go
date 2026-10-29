@@ -31,6 +31,10 @@ type EscrowCreate struct {
 	// Condition is the crypto-condition that must be fulfilled (optional).
 	// Pointer to distinguish "not set" (nil) from "set to empty" (ptr to "").
 	Condition *string `json:"Condition,omitempty" xrpl:"Condition,omitempty"`
+
+	// Bytecode and Data belong to SmartEscrow, which this node does not support.
+	Bytecode *string `json:"Bytecode,omitempty" xrpl:"Bytecode,omitempty"`
+	Data     *string `json:"Data,omitempty" xrpl:"Data,omitempty"`
 }
 
 func NewEscrowCreate(account, destination string, amount tx.Amount) *EscrowCreate {
@@ -79,6 +83,9 @@ func (e *EscrowCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
 func (e *EscrowCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 	if rules.FixCleanup3_2_0Enabled() && e.Amount.IsMPT() && !rules.Enabled(amendment.FeatureMPTokensV1) {
 		return ter.Errorf(ter.TemDISABLED, "MPT escrow requires MPTokensV1")
+	}
+	if (e.Bytecode != nil || e.Data != nil) && !rules.Enabled(amendment.FeatureSmartEscrow) {
+		return ter.Errorf(ter.TemDISABLED, "Bytecode and Data require SmartEscrow")
 	}
 	return nil
 }

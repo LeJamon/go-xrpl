@@ -141,6 +141,8 @@ func New(typ Type) Entry {
 		return new(Sponsorship)
 	case TypeTicket:
 		return new(Ticket)
+	case TypeTransactionProposal:
+		return new(TransactionProposal)
 	case TypeVault:
 		return new(Vault)
 	case TypeXChainOwnedClaimID:

@@ -3569,6 +3569,196 @@
         "nth": 257,
         "type": "Metadata"
       }
+    ],
+    [
+      "IssuerKeyEpoch",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 77,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "AuditorKeyEpoch",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 78,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "IssuerKeyMirrorEpoch",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 79,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "AuditorKeyMirrorEpoch",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 80,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "GasLimit",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 81,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "BytecodeSizeLimit",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 82,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "GasPrice",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 83,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "Gas",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 84,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "GasUsed",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 85,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "ProposalID",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 42,
+        "type": "Hash256"
+      }
+    ],
+    [
+      "YieldUnrealized",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 18,
+        "type": "Number"
+      }
+    ],
+    [
+      "AssetsDeployed",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 19,
+        "type": "Number"
+      }
+    ],
+    [
+      "VMReturnCode",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 3,
+        "type": "Int32"
+      }
+    ],
+    [
+      "Bytecode",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": true,
+        "nth": 47,
+        "type": "Blob"
+      }
+    ],
+    [
+      "RecoveryKey",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": true,
+        "nth": 48,
+        "type": "Blob"
+      }
+    ],
+    [
+      "InitialIssuerEncryptionKey",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": true,
+        "nth": 49,
+        "type": "Blob"
+      }
+    ],
+    [
+      "IssuerMirrorEncryptionKey",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": true,
+        "nth": 50,
+        "type": "Blob"
+      }
+    ],
+    [
+      "SigningFor",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": true,
+        "nth": 32,
+        "type": "AccountID"
+      }
+    ],
+    [
+      "ProposedTransaction",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 39,
+        "type": "STObject"
+      }
     ]
   ],
   "LEDGER_ENTRY_TYPES": {
@@ -3603,7 +3793,8 @@
     "Ticket": 84,
     "Vault": 132,
     "XChainOwnedClaimID": 113,
-    "XChainOwnedCreateAccountClaimID": 116
+    "XChainOwnedCreateAccountClaimID": 116,
+    "TransactionProposal": 145
   },
   "TRANSACTION_RESULTS": {
     "tecAMM_ACCOUNT": 168,
@@ -3802,7 +3993,15 @@
     "terPRE_TICKET": -88,
     "terQUEUED": -89,
     "terRETRY": -99,
-    "tesSUCCESS": 0
+    "tesSUCCESS": 0,
+    "temINVALID_BYTECODE": -247,
+    "tefNO_BYTECODE": -175,
+    "tefBYTECODE_NOT_INCLUDED": -174,
+    "tefTEMP_DISABLED": -173,
+    "tefEXCEEDS_LIMIT": -172,
+    "terTICKET_RESERVED": -82,
+    "tecOUT_OF_GAS": 201,
+    "tecBYTECODE_REJECTED": 202
   },
   "TRANSACTION_TYPES": {
     "AMMBid": 39,
@@ -3887,7 +4086,11 @@
     "XChainCommit": 42,
     "XChainCreateBridge": 48,
     "XChainCreateClaimID": 41,
-    "XChainModifyBridge": 47
+    "XChainModifyBridge": 47,
+    "ConfidentialMPTMirrorUpdate": 92,
+    "ConfidentialMPTHolderKeyUpdate": 93,
+    "TransactionProposalCancel": 94,
+    "TransactionProposalCreate": 95
   },
   "TYPES": {
     "AccountID": 8,

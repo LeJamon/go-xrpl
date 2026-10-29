@@ -191,6 +191,18 @@ var innerObjectTemplates = map[string]InnerObjectTemplate{
 	},
 }
 
+// freeFormObjects are STObject fields serialized without an inner-object
+// template: ProposedTransaction carries a whole transaction.
+var freeFormObjects = map[string]bool{
+	"ProposedTransaction": true,
+}
+
+// IsFreeFormObject reports whether the STObject field name has no inner-object
+// template and accepts any serialized fields.
+func IsFreeFormObject(name string) bool {
+	return freeFormObjects[name]
+}
+
 // InnerObjectTemplateByName returns the canonical template for a nested object.
 func InnerObjectTemplateByName(name string) (InnerObjectTemplate, bool) {
 	template, ok := innerObjectTemplates[name]

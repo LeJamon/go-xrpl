@@ -37,6 +37,9 @@ type MPTokenIssuance struct {
 	ReferenceHolding              string // Hash256 (uppercase hex)
 	IssuerEncryptionKey           string // Blob (uppercase hex)
 	AuditorEncryptionKey          string // Blob (uppercase hex)
+	IssuerKeyEpoch                uint32
+	AuditorKeyEpoch               uint32
+	InitialIssuerEncryptionKey    string // Blob (uppercase hex)
 	ConfidentialOutstandingAmount string // UInt64 (decimal string, sMD_BaseTen)
 	Flags                         uint32
 	PreviousTxnID                 string // Hash256 (uppercase hex)
@@ -64,6 +67,9 @@ const (
 	mptokenissuanceBitReferenceHolding
 	mptokenissuanceBitIssuerEncryptionKey
 	mptokenissuanceBitAuditorEncryptionKey
+	mptokenissuanceBitIssuerKeyEpoch
+	mptokenissuanceBitAuditorKeyEpoch
+	mptokenissuanceBitInitialIssuerEncryptionKey
 	mptokenissuanceBitConfidentialOutstandingAmount
 	mptokenissuanceBitFlags
 	mptokenissuanceBitPreviousTxnID
@@ -179,6 +185,27 @@ func (m *MPTokenIssuance) SetAuditorEncryptionKey(value string) {
 	m.AuditorEncryptionKey = value
 	m.dirty = true
 	m.present |= mptokenissuanceBitAuditorEncryptionKey
+}
+
+// SetIssuerKeyEpoch assigns IssuerKeyEpoch and updates its serialized presence.
+func (m *MPTokenIssuance) SetIssuerKeyEpoch(value uint32) {
+	m.IssuerKeyEpoch = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitIssuerKeyEpoch
+}
+
+// SetAuditorKeyEpoch assigns AuditorKeyEpoch and updates its serialized presence.
+func (m *MPTokenIssuance) SetAuditorKeyEpoch(value uint32) {
+	m.AuditorKeyEpoch = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitAuditorKeyEpoch
+}
+
+// SetInitialIssuerEncryptionKey assigns InitialIssuerEncryptionKey and updates its serialized presence.
+func (m *MPTokenIssuance) SetInitialIssuerEncryptionKey(value string) {
+	m.InitialIssuerEncryptionKey = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitInitialIssuerEncryptionKey
 }
 
 // SetConfidentialOutstandingAmount assigns ConfidentialOutstandingAmount and updates its serialized presence.
@@ -584,6 +611,90 @@ func (m *MPTokenIssuance) SetAuditorEncryptionKeyValue(value []byte) {
 	m.SetAuditorEncryptionKey(blobValueToString(value))
 }
 
+// HasIssuerKeyEpoch reports whether IssuerKeyEpoch is present.
+func (m *MPTokenIssuance) HasIssuerKeyEpoch() bool {
+	return m != nil && m.present&mptokenissuanceBitIssuerKeyEpoch != 0
+}
+
+// ClearIssuerKeyEpoch removes IssuerKeyEpoch from the serialized entry.
+func (m *MPTokenIssuance) ClearIssuerKeyEpoch() {
+	if m == nil {
+		return
+	}
+	m.IssuerKeyEpoch = 0
+	m.present &^= mptokenissuanceBitIssuerKeyEpoch
+	m.dirty = true
+}
+
+// GetIssuerKeyEpoch returns the typed UInt32 value.
+func (m *MPTokenIssuance) GetIssuerKeyEpoch() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.IssuerKeyEpoch, nil
+}
+
+// SetIssuerKeyEpochValue assigns a typed UInt32 value.
+func (m *MPTokenIssuance) SetIssuerKeyEpochValue(value uint32) {
+	m.SetIssuerKeyEpoch(value)
+}
+
+// HasAuditorKeyEpoch reports whether AuditorKeyEpoch is present.
+func (m *MPTokenIssuance) HasAuditorKeyEpoch() bool {
+	return m != nil && m.present&mptokenissuanceBitAuditorKeyEpoch != 0
+}
+
+// ClearAuditorKeyEpoch removes AuditorKeyEpoch from the serialized entry.
+func (m *MPTokenIssuance) ClearAuditorKeyEpoch() {
+	if m == nil {
+		return
+	}
+	m.AuditorKeyEpoch = 0
+	m.present &^= mptokenissuanceBitAuditorKeyEpoch
+	m.dirty = true
+}
+
+// GetAuditorKeyEpoch returns the typed UInt32 value.
+func (m *MPTokenIssuance) GetAuditorKeyEpoch() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.AuditorKeyEpoch, nil
+}
+
+// SetAuditorKeyEpochValue assigns a typed UInt32 value.
+func (m *MPTokenIssuance) SetAuditorKeyEpochValue(value uint32) {
+	m.SetAuditorKeyEpoch(value)
+}
+
+// HasInitialIssuerEncryptionKey reports whether InitialIssuerEncryptionKey is present.
+func (m *MPTokenIssuance) HasInitialIssuerEncryptionKey() bool {
+	return m != nil && m.present&mptokenissuanceBitInitialIssuerEncryptionKey != 0
+}
+
+// ClearInitialIssuerEncryptionKey removes InitialIssuerEncryptionKey from the serialized entry.
+func (m *MPTokenIssuance) ClearInitialIssuerEncryptionKey() {
+	if m == nil {
+		return
+	}
+	m.InitialIssuerEncryptionKey = ""
+	m.present &^= mptokenissuanceBitInitialIssuerEncryptionKey
+	m.dirty = true
+}
+
+// GetInitialIssuerEncryptionKey returns the raw bytes of the Blob field.
+func (m *MPTokenIssuance) GetInitialIssuerEncryptionKey() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.InitialIssuerEncryptionKey, "MPTokenIssuance.InitialIssuerEncryptionKey")
+}
+
+// SetInitialIssuerEncryptionKeyValue assigns a Blob from raw bytes.
+func (m *MPTokenIssuance) SetInitialIssuerEncryptionKeyValue(value []byte) {
+	m.SetInitialIssuerEncryptionKey(blobValueToString(value))
+}
+
 // HasConfidentialOutstandingAmount reports whether ConfidentialOutstandingAmount is present.
 func (m *MPTokenIssuance) HasConfidentialOutstandingAmount() bool {
 	return m != nil && m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0
@@ -823,6 +934,12 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 			case 53:
 				m.ImmutableFlags = val
 				m.present |= mptokenissuanceBitImmutableFlags
+			case 77:
+				m.IssuerKeyEpoch = val
+				m.present |= mptokenissuanceBitIssuerKeyEpoch
+			case 78:
+				m.AuditorKeyEpoch = val
+				m.present |= mptokenissuanceBitAuditorKeyEpoch
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -899,6 +1016,9 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 			case 44:
 				m.AuditorEncryptionKey = val
 				m.present |= mptokenissuanceBitAuditorEncryptionKey
+			case 49:
+				m.InitialIssuerEncryptionKey = val
+				m.present |= mptokenissuanceBitInitialIssuerEncryptionKey
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -990,6 +1110,15 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitAuditorEncryptionKey != 0 && !(skipDefault && m.AuditorEncryptionKey == "") {
 		out["AuditorEncryptionKey"] = m.AuditorEncryptionKey
 	}
+	if m.present&mptokenissuanceBitIssuerKeyEpoch != 0 && !(skipDefault && m.IssuerKeyEpoch == 0) {
+		out["IssuerKeyEpoch"] = m.IssuerKeyEpoch
+	}
+	if m.present&mptokenissuanceBitAuditorKeyEpoch != 0 && !(skipDefault && m.AuditorKeyEpoch == 0) {
+		out["AuditorKeyEpoch"] = m.AuditorKeyEpoch
+	}
+	if m.present&mptokenissuanceBitInitialIssuerEncryptionKey != 0 && !(skipDefault && m.InitialIssuerEncryptionKey == "") {
+		out["InitialIssuerEncryptionKey"] = m.InitialIssuerEncryptionKey
+	}
 	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 && !(skipDefault && isZeroHexString(m.ConfidentialOutstandingAmount)) {
 		out["ConfidentialOutstandingAmount"] = m.ConfidentialOutstandingAmount
 	}
@@ -1034,6 +1163,9 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "ReferenceHolding", prv.ReferenceHolding, m.ReferenceHolding, prv.present&mptokenissuanceBitReferenceHolding, m.present&mptokenissuanceBitReferenceHolding)
 	emitIfChangedString(out, "IssuerEncryptionKey", prv.IssuerEncryptionKey, m.IssuerEncryptionKey, prv.present&mptokenissuanceBitIssuerEncryptionKey, m.present&mptokenissuanceBitIssuerEncryptionKey)
 	emitIfChangedString(out, "AuditorEncryptionKey", prv.AuditorEncryptionKey, m.AuditorEncryptionKey, prv.present&mptokenissuanceBitAuditorEncryptionKey, m.present&mptokenissuanceBitAuditorEncryptionKey)
+	emitIfChangedUint32(out, "IssuerKeyEpoch", prv.IssuerKeyEpoch, m.IssuerKeyEpoch, prv.present&mptokenissuanceBitIssuerKeyEpoch, m.present&mptokenissuanceBitIssuerKeyEpoch)
+	emitIfChangedUint32(out, "AuditorKeyEpoch", prv.AuditorKeyEpoch, m.AuditorKeyEpoch, prv.present&mptokenissuanceBitAuditorKeyEpoch, m.present&mptokenissuanceBitAuditorKeyEpoch)
+	emitIfChangedString(out, "InitialIssuerEncryptionKey", prv.InitialIssuerEncryptionKey, m.InitialIssuerEncryptionKey, prv.present&mptokenissuanceBitInitialIssuerEncryptionKey, m.present&mptokenissuanceBitInitialIssuerEncryptionKey)
 	emitIfChangedString(out, "ConfidentialOutstandingAmount", prv.ConfidentialOutstandingAmount, m.ConfidentialOutstandingAmount, prv.present&mptokenissuanceBitConfidentialOutstandingAmount, m.present&mptokenissuanceBitConfidentialOutstandingAmount)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenissuanceBitSponsor, m.present&mptokenissuanceBitSponsor)
@@ -1086,6 +1218,15 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenissuanceBitAuditorEncryptionKey != 0 {
 		out["AuditorEncryptionKey"] = m.AuditorEncryptionKey
+	}
+	if m.present&mptokenissuanceBitIssuerKeyEpoch != 0 {
+		out["IssuerKeyEpoch"] = m.IssuerKeyEpoch
+	}
+	if m.present&mptokenissuanceBitAuditorKeyEpoch != 0 {
+		out["AuditorKeyEpoch"] = m.AuditorKeyEpoch
+	}
+	if m.present&mptokenissuanceBitInitialIssuerEncryptionKey != 0 {
+		out["InitialIssuerEncryptionKey"] = m.InitialIssuerEncryptionKey
 	}
 	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 {
 		out["ConfidentialOutstandingAmount"] = m.ConfidentialOutstandingAmount
@@ -1178,6 +1319,15 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	}
 	if m.present&mptokenissuanceBitAuditorEncryptionKey != 0 {
 		out["AuditorEncryptionKey"] = m.AuditorEncryptionKey
+	}
+	if m.present&mptokenissuanceBitIssuerKeyEpoch != 0 {
+		out["IssuerKeyEpoch"] = m.IssuerKeyEpoch
+	}
+	if m.present&mptokenissuanceBitAuditorKeyEpoch != 0 {
+		out["AuditorKeyEpoch"] = m.AuditorKeyEpoch
+	}
+	if m.present&mptokenissuanceBitInitialIssuerEncryptionKey != 0 {
+		out["InitialIssuerEncryptionKey"] = m.InitialIssuerEncryptionKey
 	}
 	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 {
 		out["ConfidentialOutstandingAmount"] = m.ConfidentialOutstandingAmount

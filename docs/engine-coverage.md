@@ -43,7 +43,12 @@ The four historical Go enum rows are `NickNameSet` (6), `Contract` (9),
 `Cosign`, `SmartEscrow`, `LendingProtocolV1_2`, `fixCleanup3_5_0`, and
 `ConfidentialMPTKeyRotation` (staged from rippled 3.5.0-rc1, unsupported),
 `InvariantsV1_1`, `NonFungibleTokensV1`, `fixNFTokenDirV1`, and
-`fixNFTokenNegOffer`; there are no oracle-only amendments. Each transaction
+`fixNFTokenNegOffer`; there are no oracle-only amendments. The Go
+`EscrowCreate`, `EscrowFinish`, `LoanBrokerSet`, and `SetFee` formats follow
+rippled 3.5.0-rc1 and differ from their oracle rows, and the rc1
+`ConfidentialMPTMirrorUpdate`, `ConfidentialMPTHolderKeyUpdate`,
+`TransactionProposalCancel`, and `TransactionProposalCreate` templates are
+decode-only, with no runtime registration or row. Each transaction
 row includes both field lists, source paths, typed method locations, static
 amendment references, and explicit status values. Static
 `go_required_amendment_references` can be a union collected from conditional

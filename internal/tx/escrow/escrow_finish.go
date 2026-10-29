@@ -35,6 +35,9 @@ type EscrowFinish struct {
 	// Used for deposit preauth with credentials.
 	// Reference: rippled sfCredentialIDs
 	CredentialIDs []string `json:"CredentialIDs,omitempty" xrpl:"CredentialIDs,omitempty"`
+
+	// Gas belongs to SmartEscrow, which this node does not support.
+	Gas *uint32 `json:"Gas,omitempty" xrpl:"Gas,omitempty"`
 }
 
 func NewEscrowFinish(account, owner string, offerSequence uint32) *EscrowFinish {
@@ -91,6 +94,9 @@ func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
 	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
 	if present && !rules.Enabled(amendment.FeatureCredentials) {
 		return ter.Errorf(ter.TemDISABLED, "Credentials amendment not enabled")
+	}
+	if e.Gas != nil && !rules.Enabled(amendment.FeatureSmartEscrow) {
+		return ter.Errorf(ter.TemDISABLED, "Gas requires SmartEscrow")
 	}
 	return nil
 }

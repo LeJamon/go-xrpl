@@ -270,6 +270,24 @@ func checkAmendmentRegistry(t *testing.T, rows []coverageAmendment) {
 	}
 }
 
+// The rippled 3.5.0-rc1 transaction templates staged on top of the pinned
+// 3.4.1 oracle: changed formats whose Go rows follow rc1, and decode-only
+// types with a template but no runtime registration.
+var (
+	rc1StagedTemplateChanges = map[string]bool{
+		"EscrowCreate":  true,
+		"EscrowFinish":  true,
+		"LoanBrokerSet": true,
+		"SetFee":        true,
+	}
+	rc1StagedTemplateOnlyTypes = map[string]bool{
+		"ConfidentialMPTMirrorUpdate":    true,
+		"ConfidentialMPTHolderKeyUpdate": true,
+		"TransactionProposalCancel":      true,
+		"TransactionProposalCreate":      true,
+	}
+)
+
 func checkTransactionRegistry(t *testing.T, rows []coverageTransaction) {
 	t.Helper()
 	byCode := make(map[uint16]coverageTransaction, len(rows))
@@ -325,7 +343,9 @@ func checkTransactionRegistry(t *testing.T, rows []coverageTransaction) {
 	for name, fields := range tx.FormatTemplates() {
 		code, ok := byName[name]
 		if !ok {
-			t.Errorf("runtime template %q is absent from inventory", name)
+			if !rc1StagedTemplateOnlyTypes[name] {
+				t.Errorf("runtime template %q is absent from inventory", name)
+			}
 			continue
 		}
 		row := byCode[code]
@@ -333,8 +353,11 @@ func checkTransactionRegistry(t *testing.T, rows []coverageTransaction) {
 		for _, field := range fields {
 			actual = append(actual, coverageField{Name: field.Name, Style: coverageStyle(field.Style)})
 		}
-		if !equalCoverageFields(row.OracleFields, row.GoFields) {
+		switch equal := equalCoverageFields(row.OracleFields, row.GoFields); {
+		case !equal && !rc1StagedTemplateChanges[name]:
 			t.Errorf("transaction %s oracle and Go fields differ", name)
+		case equal && rc1StagedTemplateChanges[name]:
+			t.Errorf("transaction %s matches the oracle but is listed as a staged rc1 change", name)
 		}
 		if !equalCoverageFields(actual, row.GoFields) {
 			t.Errorf("transaction %s template differs from inventory", name)

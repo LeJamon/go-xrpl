@@ -309,7 +309,7 @@ func TestServerDefinitionsHash(t *testing.T) {
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
 	// Pinned to the v3.4.1 ServerDefinitions document and its compact
 	// Json::FastWriter serialization from the private release oracle.
-	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", hash)
+	assert.Equal(t, "E4538EC5BCAC8A5811C7DB7311A426E108C6545E7481652DE8F2A8FDC7425191", hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
 		params, err := json.Marshal(map[string]any{"hash": hash})
@@ -375,11 +375,11 @@ func TestServerDefinitionsHash(t *testing.T) {
 // even when the complete-document hash is accidentally updated.
 func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
 	fixture := loadServerDefinitionsFinalHashFixture(t)
-	assert.Equal(t, "XRPLF/xrpld-private", fixture.Oracle.Repository)
-	assert.Equal(t, "3.4.1", fixture.Oracle.Tag)
-	assert.Equal(t, "d147fccf54a500fce586522f28d6044c37fd8d29", fixture.Oracle.Commit)
+	assert.Equal(t, "XRPLF/rippled", fixture.Oracle.Repository)
+	assert.Equal(t, "3.5.0-rc1", fixture.Oracle.Tag)
+	assert.Equal(t, "3608433514e6b622da7454ff4b8890d75e672e31", fixture.Oracle.Commit)
 	assert.Equal(t,
-		"1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
+		"E4538EC5BCAC8A5811C7DB7311A426E108C6545E7481652DE8F2A8FDC7425191",
 		fixture.FullDocumentSHA512Half,
 	)
 
@@ -402,7 +402,7 @@ func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
 	assert.Equal(t, fixture.FullDocumentSHA512Half, strings.ToUpper(hex.EncodeToString(sum[:])))
 	assert.Len(t, document, len(fixture.Sections))
 	codecResults := definitions.Get().TransactionResults()
-	assert.Len(t, codecResults, 197, "codec definitions retain the complete TER enum table")
+	assert.Len(t, codecResults, 205, "codec definitions retain the complete TER enum table")
 	assert.Contains(t, codecResults, "tecHOOK_REJECTED")
 	assert.Contains(t, codecResults, "tecNO_DELEGATE_PERMISSION")
 

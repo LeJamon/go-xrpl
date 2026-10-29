@@ -27,8 +27,8 @@
     "common_fields": 20
   },
   "source_sha256": {
-    "protocol/transaction_type.go": "56377642056a30ce2610780328cf03701f0e93f35fb6c33865bf348172df1637",
-    "internal/tx/template.go": "68b5063c62f9eb6bd313fd562a43e6ab06295981456b618a1392f5fc8e2c247c",
+    "protocol/transaction_type.go": "135dd20956da591c72cbd2aec46c0400f2df1af916e6003cfc764ebd985d33a9",
+    "internal/tx/template.go": "8e9994a135bc62c7afd231658ce297a22ecfcfffaf098f38c2673469d4b19ec9",
     "amendment/registry.go": "0ddd94d3f3f8cbc5ba011c1e8fe008570e1a366be968f673c53fc1e567a6ff62"
   },
   "engine": {
@@ -3401,6 +3401,10 @@
           "style": "required"
         },
         {
+          "name": "DestinationTag",
+          "style": "optional"
+        },
+        {
           "name": "Amount",
           "style": "required"
         },
@@ -3417,7 +3421,11 @@
           "style": "optional"
         },
         {
-          "name": "DestinationTag",
+          "name": "Bytecode",
+          "style": "optional"
+        },
+        {
+          "name": "Data",
           "style": "optional"
         }
       ],
@@ -3433,42 +3441,42 @@
         "Validate": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 49,
+            "line": 53,
             "symbol": "EscrowCreate.Validate"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 70,
+            "line": 74,
             "symbol": "EscrowCreate.GetFlagsMask"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 79,
+            "line": 83,
             "symbol": "EscrowCreate.CheckExtraFeatures"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 92,
+            "line": 99,
             "symbol": "EscrowCreate.PreflightRules"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 152,
+            "line": 159,
             "symbol": "EscrowCreate.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 261,
+            "line": 268,
             "symbol": "EscrowCreate.Apply"
           }
         ]
@@ -3604,6 +3612,10 @@
         {
           "name": "CredentialIDs",
           "style": "optional"
+        },
+        {
+          "name": "Gas",
+          "style": "optional"
         }
       ],
       "methods": [
@@ -3618,42 +3630,42 @@
         "Validate": [
           {
             "path": "internal/tx/escrow/escrow_finish.go",
-            "line": 53,
+            "line": 56,
             "symbol": "EscrowFinish.Validate"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/escrow/escrow_finish.go",
-            "line": 80,
+            "line": 83,
             "symbol": "EscrowFinish.GetFlagsMask"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/escrow/escrow_finish.go",
-            "line": 90,
+            "line": 93,
             "symbol": "EscrowFinish.CheckExtraFeatures"
           }
         ],
         "PreflightSigValidated": [
           {
             "path": "internal/tx/escrow/escrow_finish.go",
-            "line": 106,
+            "line": 112,
             "symbol": "EscrowFinish.PreflightSigValidated"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/escrow/escrow_finish.go",
-            "line": 161,
+            "line": 167,
             "symbol": "EscrowFinish.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/escrow/escrow_finish.go",
-            "line": 204,
+            "line": 210,
             "symbol": "EscrowFinish.Apply"
           }
         ]
@@ -13145,10 +13157,15 @@
         {
           "name": "CoverRateLiquidation",
           "style": "optional"
+        },
+        {
+          "name": "DomainID",
+          "style": "optional"
         }
       ],
       "methods": [
         "Apply",
+        "CheckExtraFeatures",
         "GetFlagsMask",
         "Preclaim",
         "RequiredAmendments",
@@ -13158,22 +13175,29 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 41,
+            "line": 48,
             "symbol": "LoanBrokerSet.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 45,
+            "line": 55,
             "symbol": "LoanBrokerSet.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 87,
+            "line": 97,
             "symbol": "LoanBrokerSet.RequiredAmendments"
+          }
+        ],
+        "CheckExtraFeatures": [
+          {
+            "path": "internal/tx/lending/lending.go",
+            "line": 101,
+            "symbol": "LoanBrokerSet.CheckExtraFeatures"
           }
         ],
         "Preclaim": [
@@ -13195,7 +13219,9 @@
         "validate": "typed Validate method",
         "preflight": {
           "common": true,
-          "typed": []
+          "typed": [
+            "CheckExtraFeatures"
+          ]
         },
         "preclaim": "typed Preclaim",
         "apply": "Appliable.Apply",
@@ -13283,21 +13309,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 108,
+            "line": 127,
             "symbol": "LoanBrokerDelete.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 112,
+            "line": 131,
             "symbol": "LoanBrokerDelete.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 126,
+            "line": 145,
             "symbol": "LoanBrokerDelete.RequiredAmendments"
           }
         ],
@@ -13416,21 +13442,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 149,
+            "line": 168,
             "symbol": "LoanBrokerCoverDeposit.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 153,
+            "line": 172,
             "symbol": "LoanBrokerCoverDeposit.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 170,
+            "line": 189,
             "symbol": "LoanBrokerCoverDeposit.RequiredAmendments"
           }
         ],
@@ -13571,35 +13597,35 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 196,
+            "line": 215,
             "symbol": "LoanBrokerCoverWithdraw.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 200,
+            "line": 219,
             "symbol": "LoanBrokerCoverWithdraw.Validate"
           }
         ],
         "PreflightWithRules": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 204,
+            "line": 223,
             "symbol": "LoanBrokerCoverWithdraw.PreflightWithRules"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 234,
+            "line": 253,
             "symbol": "LoanBrokerCoverWithdraw.CheckExtraFeatures"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 242,
+            "line": 261,
             "symbol": "LoanBrokerCoverWithdraw.RequiredAmendments"
           }
         ],
@@ -13717,21 +13743,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 263,
+            "line": 282,
             "symbol": "LoanBrokerCoverClawback.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 267,
+            "line": 286,
             "symbol": "LoanBrokerCoverClawback.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 298,
+            "line": 317,
             "symbol": "LoanBrokerCoverClawback.RequiredAmendments"
           }
         ],
@@ -13966,21 +13992,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 337,
+            "line": 356,
             "symbol": "LoanSet.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 341,
+            "line": 360,
             "symbol": "LoanSet.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 401,
+            "line": 420,
             "symbol": "LoanSet.RequiredAmendments"
           }
         ],
@@ -14101,21 +14127,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 422,
+            "line": 441,
             "symbol": "LoanDelete.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 426,
+            "line": 445,
             "symbol": "LoanDelete.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 440,
+            "line": 459,
             "symbol": "LoanDelete.RequiredAmendments"
           }
         ],
@@ -14226,21 +14252,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 462,
+            "line": 481,
             "symbol": "LoanManage.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 466,
+            "line": 485,
             "symbol": "LoanManage.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 483,
+            "line": 502,
             "symbol": "LoanManage.RequiredAmendments"
           }
         ],
@@ -14369,21 +14395,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 507,
+            "line": 526,
             "symbol": "LoanPay.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 511,
+            "line": 530,
             "symbol": "LoanPay.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 531,
+            "line": 550,
             "symbol": "LoanPay.RequiredAmendments"
           }
         ],
@@ -16216,6 +16242,18 @@
         {
           "name": "ReserveIncrementDrops",
           "style": "optional"
+        },
+        {
+          "name": "GasLimit",
+          "style": "optional"
+        },
+        {
+          "name": "BytecodeSizeLimit",
+          "style": "optional"
+        },
+        {
+          "name": "GasPrice",
+          "style": "optional"
         }
       ],
       "methods": [
@@ -16227,21 +16265,21 @@
         "Validate": [
           {
             "path": "internal/tx/pseudo/setfee.go",
-            "line": 76,
+            "line": 81,
             "symbol": "SetFee.Validate"
           }
         ],
         "PreclaimPseudo": [
           {
             "path": "internal/tx/pseudo/setfee.go",
-            "line": 91,
+            "line": 96,
             "symbol": "SetFee.PreclaimPseudo"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/pseudo/setfee.go",
-            "line": 194,
+            "line": 203,
             "symbol": "SetFee.Apply"
           }
         ]
