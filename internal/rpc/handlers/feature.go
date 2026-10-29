@@ -49,27 +49,30 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	if tbl != nil {
 		lastVote = tbl.LastVote()
 	}
+	isAdmin := ctx.Role.IsAdmin()
 
 	if !request.Feature.present {
-		allFeatures := amendment.AllFeatures()
-		features := make(map[string]any, len(allFeatures))
-		for _, f := range allFeatures {
-			hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-			features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin())
+		features := make(map[string]any)
+		for _, id := range listedFeatureIDs(enabledSet, majorities, tbl) {
+			info := buildFeatureInfo(id, enabledSet, tbl, lastVote, isAdmin)
+			if ct, ok := majorities[id]; ok {
+				info["majority"] = ct
+			}
+			features[featureHex(id)] = info
 		}
 		return map[string]any{
 			"features": features,
 		}, nil
 	}
 
-	f := resolveFeature(request.Feature.value)
-	if f == nil {
-		return nil, rpcerrors.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
+	id, ok := resolveFeatureID(request.Feature.value, tbl)
+	if !ok {
+		return nil, rpcerrors.RpcErrorBadFeature(badFeatureMessage)
 	}
 
-	// Admin vote mutation: set or clear a veto on a specific amendment.
+	// Admin vote mutation (rippled AmendmentTableImpl::veto / unVeto).
 	if request.Vetoed.present {
-		if !ctx.Role.IsAdmin() {
+		if !isAdmin {
 			return nil, rpcerrors.RpcErrorNoPermission("feature")
 		}
 		if !request.Vetoed.isBool {
@@ -78,32 +81,128 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		if ctrl == nil || tbl == nil {
 			return nil, rpcerrors.RpcErrorNotSupported("amendment voting is not available on this server")
 		}
-		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, request.Vetoed.value); err != nil {
-			return nil, rpcInternalError("feature: recording amendment vote failed", err)
+		listed := featureListed(id, enabledSet, majorities, tbl)
+		vote := featureVote(id, tbl)
+		if request.Vetoed.value {
+			if knownFeature(id) == nil {
+				tbl.AddEntry(id, "")
+			}
+			if vote == featureVoteUp {
+				if err := ctrl.SetAmendmentVote(ctx.Context, id, true); err != nil {
+					return nil, rpcInternalError("feature: recording amendment vote failed", err)
+				}
+			}
+		} else if listed && vote == featureVoteDown {
+			if err := ctrl.SetAmendmentVote(ctx.Context, id, false); err != nil {
+				return nil, rpcInternalError("feature: recording amendment vote failed", err)
+			}
 		}
-		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-		return map[string]any{
-			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin()),
-		}, nil
 	}
 
-	hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-	return map[string]any{
-		hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin()),
-	}, nil
+	if !featureListed(id, enabledSet, majorities, tbl) {
+		return nil, rpcerrors.RpcErrorBadFeature(badFeatureMessage)
+	}
+	response := map[string]any{
+		featureHex(id): buildFeatureInfo(id, enabledSet, tbl, lastVote, isAdmin),
+	}
+	// rippled doFeature sets `majority` beside the entry, not inside it.
+	if ct, ok := majorities[id]; ok {
+		response["majority"] = ct
+	}
+	return response, nil
 }
 
-// resolveFeature looks up an amendment by registry name or 64-char hex ID.
-func resolveFeature(feature string) *amendment.Feature {
-	if f := amendment.FeatureByName(feature); f != nil {
-		return f
+const badFeatureMessage = "Feature unknown or invalid."
+
+func featureHex(id [32]byte) string {
+	return strings.ToUpper(hex.EncodeToString(id[:]))
+}
+
+// knownFeature returns the registry feature rippled's amendment table seeds
+// with a name: a supported amendment. Unsupported and subsumed registry
+// features are unknown to it until a ledger, a majority or a vote names them.
+func knownFeature(id [32]byte) *amendment.Feature {
+	f := amendment.FeatureByID(id)
+	if f == nil || f.Supported != amendment.SupportedYes || f.Subsumed {
+		return nil
 	}
-	if idBytes, err := hex.DecodeString(feature); err == nil && len(idBytes) == 32 {
-		var id [32]byte
-		copy(id[:], idBytes)
-		return amendment.FeatureByID(id)
+	return f
+}
+
+// featureListed reports whether rippled's amendment table holds an entry for
+// the amendment: every supported amendment, plus any enabled or holding a
+// majority on the ledger, upvoted by the operator, or named by a veto request.
+func featureListed(id [32]byte, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.Table) bool {
+	if knownFeature(id) != nil || enabledSet[id] {
+		return true
 	}
-	return nil
+	if _, ok := majorities[id]; ok {
+		return true
+	}
+	if tbl == nil {
+		return false
+	}
+	_, named := tbl.EntryName(id)
+	return named || tbl.IsUpVoted(id)
+}
+
+// listedFeatureIDs returns every amendment featureListed accepts.
+func listedFeatureIDs(enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.Table) [][32]byte {
+	seen := make(map[[32]byte]bool)
+	var ids [][32]byte
+	add := func(id [32]byte) {
+		if !seen[id] && featureListed(id, enabledSet, majorities, tbl) {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for _, f := range amendment.AllFeatures() {
+		add(f.ID)
+	}
+	for id := range enabledSet {
+		add(id)
+	}
+	for id := range majorities {
+		add(id)
+	}
+	if tbl != nil {
+		for _, id := range tbl.EntryIDs() {
+			add(id)
+		}
+	}
+	return ids
+}
+
+// featureName returns the name rippled's table holds for the amendment: a
+// supported amendment's own name, or the name the vote that added it carried.
+func featureName(id [32]byte, tbl *amendment.Table) string {
+	if f := knownFeature(id); f != nil {
+		return f.Name
+	}
+	if tbl != nil {
+		if name, ok := tbl.EntryName(id); ok {
+			return name
+		}
+	}
+	return ""
+}
+
+// resolveFeatureID looks up an amendment by the name rippled's table holds, or
+// by its 64-character hex ID.
+func resolveFeatureID(feature string, tbl *amendment.Table) ([32]byte, bool) {
+	if f := amendment.FeatureByName(feature); f != nil && featureName(f.ID, tbl) == feature {
+		return f.ID, true
+	}
+	var id [32]byte
+	if len(feature) != 64 {
+		return id, false
+	}
+	idBytes, err := hex.DecodeString(feature)
+	if err != nil {
+		return id, false
+	}
+	copy(id[:], idBytes)
+	return id, true
 }
 
 // amendmentController returns the live amendment-vote controller if the wired
@@ -154,47 +253,78 @@ func (m *FeatureMethod) getAmendmentState(services *types.ServiceGraph) (enabled
 	return enabled, majorities
 }
 
-// buildFeatureInfo constructs the response map for a single amendment feature.
+type featureVoteState int
+
+const (
+	featureVoteDown featureVoteState = iota
+	featureVoteUp
+	featureVoteObsolete
+)
+
+// featureVote mirrors rippled's AmendmentState::vote: obsolete amendments keep
+// their vote; otherwise an operator veto or upvote wins over the default, which
+// is up only for a supported DefaultYes amendment.
+func featureVote(id [32]byte, tbl *amendment.Table) featureVoteState {
+	f := knownFeature(id)
+	if f != nil && f.Vote == amendment.VoteObsolete {
+		return featureVoteObsolete
+	}
+	if tbl != nil {
+		if tbl.IsVetoed(id) {
+			return featureVoteDown
+		}
+		if tbl.IsUpVoted(id) {
+			return featureVoteUp
+		}
+	}
+	if f != nil && f.Vote == amendment.VoteDefaultYes {
+		return featureVoteUp
+	}
+	return featureVoteDown
+}
+
+// buildFeatureInfo constructs the response map for one amendment table entry.
 // `enabledSet` (nil ⇒ fall back to registry defaults) gives the on-ledger enabled
-// status; `majorities` (amendment hash → majority close time) yields the `majority`
-// field for amendments holding ledger majority; `tbl` (nil ⇒ registry defaults)
+// status; `tbl` (nil ⇒ registry defaults)
 // provides operator veto/upvote overrides; when admin and the amendment is not yet
 // enabled, `lastVote` supplies the vote tallies. Field emission mirrors rippled
-// AmendmentTableImpl::injectJson + doFeature: `name`/`enabled`/`supported` always;
-// `vetoed` and `count`/`validations`/`threshold` only for an admin viewing a
-// not-yet-enabled amendment; `majority` whenever the amendment is in the majority set.
-func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.Table, lastVote *amendment.LastVote, isAdmin bool) map[string]any {
-	supported := f.Supported == amendment.SupportedYes
+// AmendmentTableImpl::injectJson + doFeature: `name` when the table holds one,
+// `enabled`/`supported` always; `vetoed` and `count`/`validations`/`threshold`
+// only for an admin viewing a not-yet-enabled amendment.
+func buildFeatureInfo(id [32]byte, enabledSet map[[32]byte]bool, tbl *amendment.Table, lastVote *amendment.LastVote, isAdmin bool) map[string]any {
+	known := knownFeature(id)
+	supported := known != nil
 
 	var enabled bool
 	if enabledSet != nil {
-		enabled = enabledSet[f.ID]
+		enabled = enabledSet[id]
 	} else {
-		enabled = supported && f.Vote == amendment.VoteDefaultYes
+		enabled = supported && known.Vote == amendment.VoteDefaultYes
 	}
 
 	info := map[string]any{
 		"enabled":   enabled,
 		"supported": supported,
 	}
-	if f.Name != "" {
-		info["name"] = f.Name
+	if name := featureName(id, tbl); name != "" {
+		info["name"] = name
 	}
 
 	// `vetoed` is admin-only and only for amendments not yet enabled.
 	if !enabled && isAdmin {
-		info["vetoed"] = featureVetoed(f, tbl, supported)
-	}
-
-	// `majority` is the close time at which the amendment reached majority,
-	// present only for amendments currently in the ledger's sfMajorities set.
-	if ct, ok := majorities[f.ID]; ok {
-		info["majority"] = ct
+		switch featureVote(id, tbl) {
+		case featureVoteObsolete:
+			info["vetoed"] = "Obsolete"
+		case featureVoteDown:
+			info["vetoed"] = true
+		default:
+			info["vetoed"] = false
+		}
 	}
 
 	// Admin-only vote tallies for amendments not yet enabled.
 	if isAdmin && !enabled && lastVote != nil {
-		info["count"] = lastVote.Votes[f.ID]
+		info["count"] = lastVote.Votes[id]
 		info["validations"] = lastVote.TrustedValidations
 		if lastVote.Threshold > 0 {
 			info["threshold"] = lastVote.Threshold
@@ -202,21 +332,4 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majori
 	}
 
 	return info
-}
-
-// featureVetoed reports an amendment's veto status: "Obsolete", or a bool. The
-// operator table (when present) takes precedence over the registry default.
-func featureVetoed(f *amendment.Feature, tbl *amendment.Table, supported bool) any {
-	if f.Vote == amendment.VoteObsolete {
-		return "Obsolete"
-	}
-	if tbl != nil {
-		if tbl.IsVetoed(f.ID) {
-			return true
-		}
-		if tbl.IsUpVoted(f.ID) {
-			return false
-		}
-	}
-	return f.Vote == amendment.VoteDefaultNo && supported
 }

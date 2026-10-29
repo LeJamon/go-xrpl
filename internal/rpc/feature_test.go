@@ -48,11 +48,19 @@ func TestFeatureNoParams(t *testing.T) {
 
 	features := resp["features"].(map[string]any)
 
-	// There should be at least some features registered
-	allFeatures := amendment.AllFeatures()
-	require.Greater(t, len(allFeatures), 0, "There should be at least some features")
-	assert.Equal(t, len(allFeatures), len(features),
-		"All registered features should be returned")
+	// rippled's amendment table lists exactly the supported amendments when no
+	// ledger, majority or vote names another one.
+	want := make(map[string]bool)
+	for _, f := range amendment.AllFeatures() {
+		if f.Supported == amendment.SupportedYes && !f.Subsumed {
+			want[strings.ToUpper(hex.EncodeToString(f.ID[:]))] = true
+		}
+	}
+	require.NotEmpty(t, want)
+	assert.Len(t, features, len(want), "only supported amendments should be returned")
+	for hexID := range features {
+		assert.True(t, want[hexID], "feature %s is not a supported amendment", hexID)
+	}
 
 	// Verify each feature has the expected structure
 	for hexID, featureData := range features {
@@ -128,10 +136,8 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 		Services:   services,
 	}
 
-	// Pick the first feature from the registry to test with
-	allFeatures := amendment.AllFeatures()
-	require.Greater(t, len(allFeatures), 0, "Need at least one feature for test")
-	testFeature := allFeatures[0]
+	testFeature := amendment.FeatureByName("DID")
+	require.NotNil(t, testFeature)
 
 	params := map[string]any{
 		"feature": testFeature.Name,
@@ -182,10 +188,8 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 		Services:   services,
 	}
 
-	// Pick a feature and use its hex ID
-	allFeatures := amendment.AllFeatures()
-	require.Greater(t, len(allFeatures), 0, "Need at least one feature for test")
-	testFeature := allFeatures[0]
+	testFeature := amendment.FeatureByName("DID")
+	require.NotNil(t, testFeature)
 
 	hexID := strings.ToUpper(hex.EncodeToString(testFeature.ID[:]))
 
@@ -244,6 +248,13 @@ func TestFeatureInvalidName(t *testing.T) {
 		{"case sensitive mismatch", "multisignreserve"}, // wrong case
 		{"empty-ish string", "x"},
 		{"random string", "notAFeature"},
+		// Unsupported and subsumed registry amendments are unknown to rippled's
+		// table until a ledger, a majority or a vote names them.
+		{"unsupported name", "MPTokensV2"},
+		{"unsupported hex", strings.ToUpper(hex.EncodeToString(amendment.FeatureMPTokensV2[:]))},
+		{"subsumed name", "fixNFTokenDirV1"},
+		{"subsumed hex", strings.ToUpper(hex.EncodeToString(amendment.FeatureFixNFTokenDirV1[:]))},
+		{"unknown hex", strings.Repeat("AB", 32)},
 	}
 
 	for _, tc := range tests {
@@ -259,7 +270,7 @@ func TestFeatureInvalidName(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid feature name")
 			require.NotNil(t, rpcErr, "Expected error for invalid feature name")
 			assert.Equal(t, rpcerrors.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
-			assert.Contains(t, rpcErr.Message, "Feature not found")
+			assert.Equal(t, "Feature unknown or invalid.", rpcErr.Message)
 		})
 	}
 }

@@ -83,7 +83,9 @@ var (
 	FeatureFixRemoveNFTokenAutoTrustLine = registerFix("fixRemoveNFTokenAutoTrustLine", SupportedYes, VoteDefaultYes)
 )
 
-// Obsolete features (supported but no longer voted on).
+// Obsolete features (supported but no longer voted on). rippled dropped all
+// three when NonFungibleTokensV1_1 replaced them; they are subsumed rule IDs
+// that Rules.Enabled derives from NonFungibleTokensV1_1.
 var (
 	FeatureFixNFTokenNegOffer  = registerFix("fixNFTokenNegOffer", SupportedYes, VoteObsolete)
 	FeatureFixNFTokenDirV1     = registerFix("fixNFTokenDirV1", SupportedYes, VoteObsolete)
@@ -156,6 +158,9 @@ var (
 )
 
 func init() {
+	for _, id := range [][32]byte{FeatureFixNFTokenNegOffer, FeatureFixNFTokenDirV1, FeatureNonFungibleTokensV1} {
+		features[id].Subsumed = true
+	}
 	orderedFeatures = make([]*Feature, 0, len(features))
 	for _, f := range features {
 		orderedFeatures = append(orderedFeatures, f)
