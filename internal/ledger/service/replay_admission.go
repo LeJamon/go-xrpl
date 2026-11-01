@@ -583,6 +583,32 @@ func (s *Service) lookupReplayProof(h header.LedgerHeader, fingerprint [32]byte,
 	return false
 }
 
+func (s *Service) replayVerificationMissReason(h header.LedgerHeader, fingerprint [32]byte, transactionBacked bool) string {
+	if s.lookupReplayProof(h, fingerprint, false) {
+		if transactionBacked {
+			return "transaction_upgrade"
+		}
+		return "state_reuse"
+	}
+	s.replayProofMu.Lock()
+	defer s.replayProofMu.Unlock()
+	generationChanged := func(record replayCompletenessRecord) bool {
+		return record.nodeStoreFingerprint != fingerprint &&
+			record.matchesExactHeader(h, record.nodeStoreFingerprint, false)
+	}
+	for _, record := range s.replayProofs {
+		if generationChanged(record) {
+			return "generation_changed"
+		}
+	}
+	for _, proof := range s.replayPreparedProofs {
+		if proof.published && proof.pin != nil && proof.pin.active() && generationChanged(proof.record) {
+			return "generation_changed"
+		}
+	}
+	return "not_retained"
+}
+
 func (s *Service) rememberReplayProof(h header.LedgerHeader, fingerprint [32]byte, transactionComplete bool) {
 	if h.Hash == ([32]byte{}) || h.AccountHash == ([32]byte{}) || fingerprint == ([32]byte{}) {
 		return
@@ -599,6 +625,8 @@ func (s *Service) rememberReplayProof(h header.LedgerHeader, fingerprint [32]byt
 	s.replayProofMu.Lock()
 	for i := range s.replayProofs {
 		if s.replayProofs[i].ledgerHash == record.ledgerHash {
+			record.transactionComplete = record.transactionComplete ||
+				s.replayProofs[i].matchesExactHeader(h, fingerprint, true)
 			copy(s.replayProofs[i:], s.replayProofs[i+1:])
 			s.replayProofs = s.replayProofs[:len(s.replayProofs)-1]
 			break
@@ -999,15 +1027,13 @@ func (s *Service) verifyReplayProof(
 	}
 	defer pin.Release()
 	if txMap.IsBacked() && s.lookupReplayProof(h, pin.fingerprint, true) {
+		s.logReplayVerificationDecision(h, pin.fingerprint, "hit", "exact generation-bound state and transaction proof", true)
 		return true, nil
 	}
-	if !s.lookupReplayProof(h, pin.fingerprint, false) {
-		return false, nil
-	}
-	if err := s.verifyDetachedSnapshot(ctx, "replay proof transactions", txMap, [32]byte{}); err != nil {
-		return false, err
-	}
-	return true, nil
+	// A state-only proof is an admission hint for the shared verifier. Do not
+	// walk the transaction tree here: concurrent callers must coalesce that
+	// upgrade under the exact ledger/generation flight key.
+	return false, nil
 }
 
 // PrepareAcquiredLedger binds a complete acquired state to its header and

@@ -128,6 +128,10 @@ func TestStateBaseRecertificationDoesNotReplaceNewerProof(t *testing.T) {
 func (f *stateBaseRecertificationFixture) invalidate(t *testing.T) {
 	t.Helper()
 	f.svc.InvalidateFastLoadCheckpointEligibility()
+	// Exercise the cold walk even when fixture admission left a reusable proof.
+	f.svc.replayProofMu.Lock()
+	f.svc.replayProofs = nil
+	f.svc.replayProofMu.Unlock()
 	proof, found := f.svc.currentValidatedStateBaseProof()
 	require.False(t, found, "invalidation must clear the old proof: %+v", proof)
 	require.EqualValues(t, fastLoadCheckpointInvalidated, f.svc.fastLoadCheckpointState.Load())
