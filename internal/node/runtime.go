@@ -432,7 +432,11 @@ func (r *nodeRuntime) configureMaintenance() error {
 		}
 	}
 	r.retentionFloor = func() uint32 {
-		floor := uint32(r.appConfig.NodeDB.EarliestSeq)
+		var floor uint32
+		// Standalone ledgers start at genesis, below the network history bound.
+		if !r.standalone {
+			floor = uint32(r.appConfig.NodeDB.EarliestSeq)
+		}
 		if r.rotator != nil && r.rotator.MinimumOnline() > floor {
 			floor = r.rotator.MinimumOnline()
 		}

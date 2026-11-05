@@ -96,3 +96,31 @@ func TestRunWithOptionsBindFailureSuppressesReadyAndClosesStorage(t *testing.T) 
 	require.NotNil(t, reopened)
 	require.NoError(t, reopened.Close())
 }
+
+func TestRuntimeNetworkRetentionFloor(t *testing.T) {
+	dir := t.TempDir()
+	r := newNodeRuntime(t.Context(), &config.Config{
+		NetworkID: config.NetworkID{Set: true, ID: 0},
+		NodeDB: config.NodeDBConfig{
+			Path: filepath.Join(dir, "nodes"), EarliestSeq: 32570, OnlineDelete: 512,
+		},
+	}, "", false, service.StartupConfig{}, xrpllog.Discard(), xrpllog.Discard(), RunOptions{})
+	t.Cleanup(func() {
+		r.stopRuntime()
+		require.NoError(t, r.shutdownWithin(10*time.Second))
+		if r.stopSHAMapMetrics != nil {
+			r.stopSHAMapMetrics()
+		}
+		if r.stopNodeStoreMetrics != nil {
+			r.stopNodeStoreMetrics()
+		}
+	})
+	require.NoError(t, r.configureStorage())
+	require.NoError(t, r.configureLedger())
+	require.NoError(t, r.configureMaintenance())
+	require.NotNil(t, r.rotator)
+	require.Equal(t, uint32(32570), r.retentionFloor())
+
+	require.NoError(t, r.rotator.SetMinimumOnlineFloor(32580))
+	require.Equal(t, uint32(32580), r.retentionFloor())
+}
