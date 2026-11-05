@@ -127,10 +127,10 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	require.True(t, info.HaveValidatedRange)
 	availableMin, availableMax, ok := svc.AvailableLedgerRange()
 	require.True(t, ok)
-	require.Equal(t, closed.Sequence(), availableMin)
+	require.Equal(t, closed.Sequence()-1, availableMin)
 	require.Equal(t, closed.Sequence(), availableMax)
-	require.Zero(t, info.ValidatedRangeMin)
-	require.Zero(t, info.ValidatedRangeMax)
+	require.Equal(t, closed.Sequence()-1, info.ValidatedRangeMin)
+	require.Equal(t, closed.Sequence()-1, info.ValidatedRangeMax)
 
 	unblock()
 	require.Eventually(t, func() bool {

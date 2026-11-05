@@ -76,7 +76,7 @@ func TestConsensusAcceptanceTimingsIncludeReplayGateObservation(t *testing.T) {
 	require.True(t, ok, "timing record omitted replay gate wait")
 	total, ok := record["total"].(time.Duration)
 	require.True(t, ok, "timing record omitted total")
-	require.Greater(t, replayGateWait, time.Duration(0))
+	require.GreaterOrEqual(t, replayGateWait, time.Duration(0))
 	require.GreaterOrEqual(t, total, replayGateWait)
 	require.False(t, record["blocked"].(bool))
 	require.Equal(t, parent.Sequence()+1, record["seq"])

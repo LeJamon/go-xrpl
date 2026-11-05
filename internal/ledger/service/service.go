@@ -844,18 +844,21 @@ func (s *Service) Start() (err error) {
 			return fmt.Errorf("validate startup ledger: %w", err)
 		}
 	}
-	if s.config.Startup.Mode == StartupFresh {
-		if err := s.persistValidatedLedger(context.Background(), genesisLedger, false); err != nil {
-			return fmt.Errorf("persist fresh genesis ledger: %w", err)
-		}
-		if selection.ledger.IsValidated() {
-			if err := s.persistValidatedLedger(context.Background(), selection.ledger, true); err != nil {
-				return fmt.Errorf("persist fresh initial ledger: %w", err)
+	if s.config.Startup.Mode == StartupFresh || (selection.validate && !selection.loaded) {
+		if s.nodeStore != nil {
+			if err := s.persistToNodeStore(context.Background(), genesisLedger, genesisLedger.Sequence()); err != nil {
+				return fmt.Errorf("persist genesis ledger: %w", err)
 			}
-		} else if s.nodeStore != nil {
+		}
+		if !selection.validate && s.nodeStore != nil {
 			if err := s.persistToNodeStore(context.Background(), selection.ledger, selection.ledger.Sequence()); err != nil {
 				return fmt.Errorf("persist fresh initial ledger: %w", err)
 			}
+		}
+	}
+	if selection.validate && !selection.loaded {
+		if err := s.persistValidatedLedger(context.Background(), selection.ledger, true); err != nil {
+			return fmt.Errorf("persist initial ledger: %w", err)
 		}
 	}
 	if selection.loaded {

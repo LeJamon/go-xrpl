@@ -26,6 +26,7 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
@@ -99,6 +100,42 @@ func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) 
 	}
 }
 
+func TestService_StartupNormalDurablyStoresAndFastLoadsInitialLedger(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	cfg := Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	}
+
+	writer, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, writer.Start())
+	initial := writer.GetClosedLedger()
+	require.NotNil(t, initial)
+	writer.Stop()
+
+	for _, hash := range [][32]byte{initial.ParentHash(), initial.Hash()} {
+		node, err := db.Fetch(ctx, nodestore.Hash256(hash))
+		require.NoError(t, err)
+		require.NotNil(t, node)
+	}
+	info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(initial.Sequence()))
+	require.NoError(t, err)
+	require.NotNil(t, info)
+
+	cfg.FastLoad = true
+	reader, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, reader.Start())
+	t.Cleanup(reader.Stop)
+	require.Equal(t, initial.Hash(), reader.GetClosedLedger().Hash())
+	require.Equal(t, "2", reader.GetServerInfo().CompleteLedgers)
+}
+
 func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
 	t.Parallel()
 	base := newTestNodeStore(t, 1_000)
@@ -108,6 +145,22 @@ func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
 	svc, err := New(Config{
 		Standalone:    true,
 		Startup:       StartupConfig{Mode: StartupFresh},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, svc.Start(), sentinel)
+}
+
+func TestService_StartupNormalFailsWhenDurableStoreFails(t *testing.T) {
+	t.Parallel()
+	base := newTestNodeStore(t, 1_000)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	sentinel := errors.New("store failed")
+	db := &failingStartupStore{Database: base, err: sentinel}
+	svc, err := New(Config{
+		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
 		SHAMapFamily:  backend.New(db),
