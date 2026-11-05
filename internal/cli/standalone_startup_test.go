@@ -104,7 +104,7 @@ func TestGeneratedMainConfigStandaloneStartupAdvancesLedgers(t *testing.T) {
 		})
 		require.Equal(t, "tesSUCCESS", result["engine_result"], "payment sequence %d", payment.sequence)
 		require.Equal(t, float64(0), result["engine_result_code"], "payment sequence %d", payment.sequence)
-		require.Equal(t, true, result["applied"], "payment sequence %d", payment.sequence)
+		require.NotContains(t, result, "applied", "payment sequence %d", payment.sequence)
 	}
 
 	for i := uint32(0); i < 3; i++ {
