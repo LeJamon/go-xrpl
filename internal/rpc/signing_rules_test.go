@@ -205,9 +205,9 @@ func TestSigningConstructionRejectsMismatchedNestedRules(t *testing.T) {
 					if method == "submit_blob" {
 						request = map[string]any{"tx_blob": result.(map[string]any)["tx_blob"]}
 					}
-					for _, skip := range []bool{false, true} {
+					for _, standalone := range []bool{false, true} {
 						ctx, ledger := signingRulesContext(rules)
-						ledger.standalone = skip
+						ledger.standalone = standalone
 						switch method {
 						case "sign":
 							result, rpcErr = (&handlers.SignMethod{}).Handle(ctx, signingRulesRequest(t, request))
