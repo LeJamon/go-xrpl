@@ -198,10 +198,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		response["hash"] = txHash
 	}
 
-	if result.Applied {
-		response["applied"] = result.Applied
-	}
-
 	return response, nil
 }
 

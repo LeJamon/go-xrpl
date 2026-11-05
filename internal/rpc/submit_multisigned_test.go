@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -379,29 +380,45 @@ func TestSubmitMultisigned_ValidationOrder_SrcActNotFoundBeforeTxnSignature(t *t
 // to the engine (tefNOT_MULTI_SIGNING / tefBAD_QUORUM), so the RPC layer
 // accepts the submission.
 func TestSubmitMultisigned_HappyPath(t *testing.T) {
-	mock := newMockLedgerServiceSubmit()
-	services := newSubmitTestServices(mock)
-
-	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
-
-	txJSON := validMultisignedTxJSON(t)
-	// Use addresses that pass base58 decoding so binary encoding succeeds.
-	txJSON["Destination"] = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
-	signer := txJSON["Signers"].([]any)[0].(map[string]any)["Signer"].(map[string]any)
-	signer["Account"] = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
-
-	result, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
-	require.Nil(t, rpcErr)
-	require.NotNil(t, result)
-
-	resp, ok := result.(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "tesSUCCESS", resp["engine_result"])
-	assert.NotEmpty(t, resp["tx_blob"])
-	respTxJSON, ok := resp["tx_json"].(map[string]any)
-	require.True(t, ok)
-	assert.NotEmpty(t, respTxJSON["hash"])
+	for _, version := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			mock := newMockLedgerServiceSubmit()
+			mock.submitResult.CurrentLedgerState = &types.SubmitLedgerState{
+				ValidatedLedgerIndex: 2, OpenLedgerCost: 12,
+				AccountSequenceNext: 7, AccountSequenceAvailable: 9,
+			}
+			ctx := &types.RpcContext{ApiVersion: version, Services: newSubmitTestServices(mock)}
+			result, rpcErr := (&handlers.SubmitMultisignedMethod{}).Handle(
+				ctx, makeSubmitMultisignedParams(t, validMultisignedTxJSON(t)),
+			)
+			require.Nil(t, rpcErr)
+			require.Equal(t, 1, mock.submitCalls)
+			wire, err := json.Marshal(result)
+			require.NoError(t, err)
+			var response map[string]any
+			require.NoError(t, json.Unmarshal(wire, &response))
+			assert.Equal(t, "tesSUCCESS", response["engine_result"])
+			assert.Equal(t, float64(0), response["engine_result_code"])
+			assert.Equal(t, mock.submitResult.EngineResultMessage, response["engine_result_message"])
+			assert.Equal(t, mock.lastTxBlob, response["tx_blob"])
+			responseTx, ok := response["tx_json"].(map[string]any)
+			require.True(t, ok)
+			hash := handlers.CalculateTxHash(mock.lastTxBlob)
+			if version == types.ApiVersion1 {
+				assert.Equal(t, hash, responseTx["hash"])
+				assert.NotContains(t, response, "hash")
+			} else {
+				assert.Equal(t, hash, response["hash"])
+				assert.NotContains(t, responseTx, "hash")
+			}
+			for _, field := range []string{
+				"accepted", "applied", "broadcast", "kept", "queued",
+				"account_sequence_next", "account_sequence_available", "open_ledger_cost", "validated_ledger_index",
+			} {
+				assert.NotContains(t, response, field)
+			}
+		})
+	}
 }
 
 func TestSubmitMultisigned_SubmissionErrorUsesFixedMessage(t *testing.T) {
