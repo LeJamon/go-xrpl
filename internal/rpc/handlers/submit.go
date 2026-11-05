@@ -150,19 +150,12 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		projectionPath,
 	)
 
-	// Build response with independent boolean fields matching rippled's
-	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
 	response := map[string]any{
 		"engine_result":         submitResult.EngineResult,
 		"engine_result_code":    submitResult.EngineResultCode,
 		"engine_result_message": submitResult.EngineResultMessage,
 		"tx_json":               projectedTxJSON,
 		"tx_blob":               txBlobHex,
-		"accepted":              submitResult.Accepted(),
-		"applied":               submitResult.Applied,
-		"broadcast":             submitResult.Broadcast,
-		"kept":                  submitResult.Kept,
-		"queued":                submitResult.Queued,
 	}
 
 	// Signed paths use the modern root hash for API v2+. Raw-blob submit keeps
@@ -171,11 +164,18 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		response["hash"] = txHashStr
 	}
 
-	if state := submitResult.CurrentLedgerState; state != nil {
-		response["account_sequence_next"] = state.AccountSequenceNext
-		response["account_sequence_available"] = state.AccountSequenceAvailable
-		response["open_ledger_cost"] = fmt.Sprintf("%d", state.OpenLedgerCost)
-		response["validated_ledger_index"] = state.ValidatedLedgerIndex
+	if hasTxBlob {
+		response["accepted"] = submitResult.Accepted()
+		response["applied"] = submitResult.Applied
+		response["broadcast"] = submitResult.Broadcast
+		response["kept"] = submitResult.Kept
+		response["queued"] = submitResult.Queued
+		if state := submitResult.CurrentLedgerState; state != nil {
+			response["account_sequence_next"] = state.AccountSequenceNext
+			response["account_sequence_available"] = state.AccountSequenceAvailable
+			response["open_ledger_cost"] = fmt.Sprintf("%d", state.OpenLedgerCost)
+			response["validated_ledger_index"] = state.ValidatedLedgerIndex
+		}
 	}
 
 	return response, nil

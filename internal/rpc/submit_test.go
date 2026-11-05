@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -819,6 +820,64 @@ func TestSubmitMethodOmitsLedgerStateFieldsWithoutSnapshot(t *testing.T) {
 	}
 }
 
+func TestSubmitMethodResponseFieldsBySubmissionPath(t *testing.T) {
+	for _, version := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		for _, blob := range []bool{false, true} {
+			t.Run(fmt.Sprintf("v%d/blob=%t", version, blob), func(t *testing.T) {
+				mock := newMockLedgerServiceSubmit()
+				mock.submitResult.CurrentLedgerState = &types.SubmitLedgerState{
+					ValidatedLedgerIndex: 2, OpenLedgerCost: 12,
+					AccountSequenceNext: 7, AccountSequenceAvailable: 9,
+				}
+				ctx := &types.RpcContext{
+					Context: context.Background(), Role: types.RoleUser, ApiVersion: version,
+					Services: newSubmitSigningTestServices(mock),
+				}
+				transaction := map[string]any{
+					"TransactionType": "Payment", "Account": validAccountAddress,
+					"Destination": admissionSubmitDestination, "Amount": "1000000",
+					"Fee": "10", "Sequence": 1,
+				}
+				params := signedSubmitParams(t, transaction, nil)
+				if blob {
+					params = rawSubmitParams(t, transaction, nil)
+				}
+				result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+				require.Nil(t, rpcErr)
+				require.Equal(t, 1, mock.submitCalls)
+				raw, err := json.Marshal(result)
+				require.NoError(t, err)
+				var response map[string]any
+				require.NoError(t, json.Unmarshal(raw, &response))
+				require.Equal(t, "tesSUCCESS", response["engine_result"])
+				require.Equal(t, float64(0), response["engine_result_code"])
+				require.Equal(t, mock.submitResult.EngineResultMessage, response["engine_result_message"])
+				require.Equal(t, mock.lastTxBlob, response["tx_blob"])
+				require.NotEmpty(t, response["tx_json"])
+				for _, field := range []string{
+					"accepted", "applied", "broadcast", "kept", "queued",
+					"account_sequence_next", "account_sequence_available", "open_ledger_cost", "validated_ledger_index",
+				} {
+					if blob {
+						require.Contains(t, response, field)
+					} else {
+						require.NotContains(t, response, field)
+					}
+				}
+				if blob {
+					require.NotContains(t, response, "deprecated")
+					require.NotContains(t, response, "hash")
+				} else {
+					require.NotEmpty(t, response["deprecated"])
+					if version > 1 {
+						require.Equal(t, handlers.CalculateTxHash(mock.lastTxBlob), response["hash"])
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestSubmitMethodEngineResults tests various engine result codes
 func TestSubmitMethodEngineResults(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
@@ -1460,7 +1519,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 			// Engine result should reflect the mock
 			assert.Equal(t, "tesSUCCESS", resp["engine_result"])
-			assert.Equal(t, true, resp["applied"])
+			assert.NotContains(t, resp, "applied")
 		})
 	}
 }

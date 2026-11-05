@@ -220,7 +220,7 @@ func TestSigningConstructionRejectsMismatchedNestedRules(t *testing.T) {
 						case "submit_multisigned":
 							result, rpcErr = (&handlers.SubmitMultisignedMethod{}).Handle(ctx, signingRulesRequest(t, request))
 						}
-						if skip {
+						if skip && method == "submit_blob" {
 							require.Nil(t, rpcErr)
 							require.NotNil(t, result)
 						} else {
@@ -238,6 +238,53 @@ func TestSigningConstructionRejectsMismatchedNestedRules(t *testing.T) {
 						}
 					}
 				})
+			}
+		}
+	}
+}
+
+func TestSigningConstructionRequiresPrimarySignature(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		for _, target := range []string{"CounterpartySignature", "SponsorSignature"} {
+			for _, method := range []string{"sign", "submit"} {
+				for _, primary := range []string{"valid", "missing", "invalid"} {
+					t.Run(fmt.Sprintf("standalone=%t/%s/%s/%s", standalone, target, method, primary), func(t *testing.T) {
+						fields := signingRulesPrimary(t, false)
+						switch primary {
+						case "missing":
+							delete(fields, "TxnSignature")
+						case "invalid":
+							fields["TxnSignature"] = "00"
+						}
+						ctx, ledger := signingRulesContext(amendment.EmptyRules())
+						ledger.standalone = standalone
+						params := signingRulesRequest(t, map[string]any{
+							"tx_json": fields, "signature_target": target, "offline": true,
+							"passphrase": "role signing rules", "key_type": "ed25519",
+						})
+						var result any
+						var rpcErr *rpcerrors.RpcError
+						if method == "sign" {
+							result, rpcErr = (&handlers.SignMethod{}).Handle(ctx, params)
+						} else {
+							result, rpcErr = (&handlers.SubmitMethod{}).Handle(ctx, params)
+						}
+						if primary == "valid" {
+							require.Nil(t, rpcErr)
+							require.NotEmpty(t, result.(map[string]any)["tx_blob"])
+							if method == "submit" {
+								require.Equal(t, 1, ledger.submitCalls)
+							}
+						} else {
+							require.Nil(t, result)
+							require.NotNil(t, rpcErr)
+							require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
+							require.Equal(t, "internal", rpcErr.ErrorString)
+							require.Equal(t, "Invalid signature.", rpcErr.Message)
+							require.Zero(t, ledger.submitCalls)
+						}
+					})
+				}
 			}
 		}
 	}

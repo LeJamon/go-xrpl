@@ -14,7 +14,7 @@ func signingChecksEnabled(ctx *types.RpcContext) bool {
 	return ctx.Services == nil || ctx.Services.Ledger() == nil || !ctx.Services.Ledger().IsStandalone()
 }
 
-func validateSigningConstruction(ctx *types.RpcContext, blob string, rules *amendment.Rules) *rpcerrors.RpcError {
+func validateSigningConstruction(blob string, rules *amendment.Rules) *rpcerrors.RpcError {
 	raw, err := hex.DecodeString(blob)
 	if err != nil {
 		return rpcInternalError("signing: transaction decoding failed", err)
@@ -23,7 +23,7 @@ func validateSigningConstruction(ctx *types.RpcContext, blob string, rules *amen
 	if err != nil {
 		return rpcInternalError("signing: transaction construction failed", err)
 	}
-	if sign.CheckSTTxSignature(transaction, rules, signingChecksEnabled(ctx)) != "" ||
+	if sign.CheckSTTxSignature(transaction, rules, true) != "" ||
 		tx.TransactionLocalChecksFailureReason(transaction) != "" {
 		return rpcerrors.RpcErrorSigningInvalidSignature()
 	}

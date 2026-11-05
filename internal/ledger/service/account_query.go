@@ -951,7 +951,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			}
 
 			if payChan.PublicKey != "" {
-				channel.PublicKeyHex = payChan.PublicKey
+				channel.PublicKeyHex = strings.ToUpper(payChan.PublicKey)
 				pkBytes, derr := hex.DecodeString(payChan.PublicKey)
 				if derr == nil && len(pkBytes) > 0 {
 					if encoded, encErr := addresscodec.EncodeAccountPublicKey(pkBytes); encErr == nil {

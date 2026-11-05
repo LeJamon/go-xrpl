@@ -648,6 +648,7 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 		pc.Expiration = 700000000
 		pc.SourceTag = 42
 		pc.HasSourceTag = true
+		pc.PublicKey = strings.ToLower("023693F15967AE357D0327974AD46FE3C127113B1110D6044FD41E723689F81CC6")
 	})
 	insertPayChannelEntry(t, svc, srcAddr, dst2Addr, 2, func(pc *state.PayChannelData) {
 		pc.Amount = 9_000_000
@@ -683,6 +684,9 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 		}
 		if ch.SettleDelay != 120 {
 			t.Errorf("settle_delay = %d, want 120", ch.SettleDelay)
+		}
+		if ch.PublicKeyHex != "023693F15967AE357D0327974AD46FE3C127113B1110D6044FD41E723689F81CC6" {
+			t.Errorf("public_key_hex = %s, want uppercase hex", ch.PublicKeyHex)
 		}
 		if ch.Expiration != 700000000 {
 			t.Errorf("expiration = %d, want 700000000", ch.Expiration)

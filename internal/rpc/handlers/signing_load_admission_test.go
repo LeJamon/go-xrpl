@@ -10,8 +10,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
 
 const (
@@ -638,14 +640,32 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 				"TxnSignature":  "",
 			}}
 		}
-		params, err := json.Marshal(map[string]any{"tx_json": map[string]any{
+		fields := map[string]any{
 			"TransactionType": "AccountSet",
 			"Account":         loadAdmissionAccount,
 			"Sequence":        1,
 			"Fee":             "10",
 			"SigningPubKey":   "",
 			"Signers":         signers,
-		}})
+		}
+		transaction, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: transactionPreprocessSubmitMultisigned})
+		if rpcErr != nil {
+			t.Fatal(rpcErr)
+		}
+		privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair(make([]byte, 16), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, account := range accounts {
+			signature, err := sign.SignTransactionForMultiSign(transaction, account, privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signer := signers[i].(map[string]any)["Signer"].(map[string]any)
+			signer["SigningPubKey"] = publicKey
+			signer["TxnSignature"] = signature
+		}
+		params, err := json.Marshal(map[string]any{"tx_json": fields})
 		if err != nil {
 			t.Fatal(err)
 		}
