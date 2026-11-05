@@ -11,6 +11,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -589,12 +592,13 @@ func TestServerInfoResponseFields(t *testing.T) {
 		assert.Contains(t, info, "validation_quorum")
 		validationQuorum, ok := info["validation_quorum"].(float64)
 		assert.True(t, ok)
-		assert.GreaterOrEqual(t, validationQuorum, float64(1))
+		assert.Equal(t, float64(0), validationQuorum)
 	})
 }
 
 func TestServerInfoDisabledQuorumUsesRippledWireValue(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
+	mock.standalone = false
 	container := mutableServicesForServerInfo(mock)
 	container.ValidationQuorum = func() int { return math.MaxInt }
 	services := types.NewTestServiceGraph(container)
@@ -738,103 +742,104 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 	})
 }
 
-// Server State Tests
-
-// TestServerInfoServerStates tests different server state values
-// Based on rippled's NetworkOPs operating modes
 func TestServerInfoServerStates(t *testing.T) {
-	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-
-	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-		Services:   services,
-	}
-
-	// Valid server states per XRPL documentation
-	validStates := []struct {
-		name        string
-		standalone  bool
-		description string
-	}{
-		{"standalone", true, "Server is running in standalone mode"},
-		{"full", false, "Server has full history and is synced"},
-	}
-
-	for _, tc := range validStates {
-		t.Run("server_state: "+tc.name, func(t *testing.T) {
-			mock.standalone = tc.standalone
-
-			result, rpcErr := method.Handle(ctx, nil)
-			require.Nil(t, rpcErr)
-
-			resultJSON, _ := json.Marshal(result)
-			var resp map[string]any
-			json.Unmarshal(resultJSON, &resp)
-			info := resp["info"].(map[string]any)
-
-			serverState := info["server_state"].(string)
-			assert.NotEmpty(t, serverState)
-			t.Logf("Server state for standalone=%v: %s", tc.standalone, serverState)
+	for _, state := range []string{"disconnected", "connected", "syncing", "tracking", "full"} {
+		t.Run(state, func(t *testing.T) {
+			mock := newMockLedgerServiceServerInfo()
+			mock.standalone = false
+			mock.serverState = state
+			container := mutableServicesForServerInfo(mock)
+			container.ValidationQuorum = func() int { return 7 }
+			ctx := &types.RpcContext{Context: t.Context(), Services: types.NewTestServiceGraph(container)}
+			for _, human := range []bool{true, false} {
+				info := callServerStatus(t, ctx, human)
+				assert.Equal(t, state, info["server_state"])
+				assert.Equal(t, uint32(7), info["validation_quorum"])
+			}
 		})
 	}
 }
 
-// TestServerInfoStandaloneMode tests standalone-specific behavior
 func TestServerInfoStandaloneMode(t *testing.T) {
-	mock := newMockLedgerServiceServerInfo()
-	mock.standalone = true
-	services := servicesForServerInfo(mock)
+	for _, human := range []bool{true, false} {
+		method := "server_state"
+		if human {
+			method = "server_info"
+		}
+		t.Run(method, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				role   types.Role
+				quorum func() int
+			}{
+				{name: "guest", role: types.RoleGuest},
+				{name: "admin", role: types.RoleAdmin},
+				{name: "guest with quorum hook", role: types.RoleGuest, quorum: func() int { return 7 }},
+				{name: "admin with quorum hook", role: types.RoleAdmin, quorum: func() int { return 7 }},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					mock := newMockLedgerServiceServerInfo()
+					mock.standalone = true
+					container := mutableServicesForServerInfo(mock)
+					container.ValidationQuorum = tc.quorum
+					ctx := &types.RpcContext{
+						Context: t.Context(), Role: tc.role, Services: types.NewTestServiceGraph(container),
+					}
+					encoded, err := json.Marshal(callServerStatus(t, ctx, human))
+					require.NoError(t, err)
+					var info map[string]any
+					require.NoError(t, json.Unmarshal(encoded, &info))
+					assert.Equal(t, "full", info["server_state"])
+					assert.Equal(t, float64(0), info["validation_quorum"])
+					assert.Equal(t, float64(0), info["peers"])
+					assert.NotContains(t, info, "load")
+					assert.NotContains(t, info, "initial_sync_duration_us")
 
-	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-		Services:   services,
+					accounting := info["state_accounting"].(map[string]any)
+					assert.NotContains(t, accounting, "standalone")
+					assert.Equal(t, "1", accounting["full"].(map[string]any)["transitions"])
+				})
+			}
+		})
 	}
+}
 
-	t.Run("Standalone mode returns correct server_state", func(t *testing.T) {
-		result, rpcErr := method.Handle(ctx, nil)
-		require.Nil(t, rpcErr)
-
-		resultJSON, _ := json.Marshal(result)
-		var resp map[string]any
-		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]any)
-
-		serverState := info["server_state"].(string)
-		assert.Equal(t, "standalone", serverState)
-	})
-
-	t.Run("Standalone mode has zero peers", func(t *testing.T) {
-		result, rpcErr := method.Handle(ctx, nil)
-		require.Nil(t, rpcErr)
-
-		resultJSON, _ := json.Marshal(result)
-		var resp map[string]any
-		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]any)
-
-		peers := info["peers"].(float64)
-		assert.Equal(t, float64(0), peers)
-	})
-
-	t.Run("Standalone mode has validation_quorum of 1", func(t *testing.T) {
-		result, rpcErr := method.Handle(ctx, nil)
-		require.Nil(t, rpcErr)
-
-		resultJSON, _ := json.Marshal(result)
-		var resp map[string]any
-		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]any)
-
-		validationQuorum := info["validation_quorum"].(float64)
-		assert.Equal(t, float64(1), validationQuorum)
-	})
+func TestServerInfoStandaloneLedgerAccept(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode service.StartupMode
+	}{
+		{name: "normal", mode: service.StartupNormal},
+		{name: "fresh", mode: service.StartupFresh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, err := service.New(service.Config{
+				Standalone: true, GenesisConfig: genesis.DefaultConfig(),
+				Startup: service.StartupConfig{Mode: tc.mode},
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+			ctx := &types.RpcContext{
+				Context: t.Context(), Role: types.RoleAdmin,
+				Services: types.NewTestServiceGraph(types.NewServiceContainer(rpcadapter.NewLedgerServiceAdapter(svc))),
+			}
+			for i, completeLedgers := range []string{"2", "2-3"} {
+				for _, human := range []bool{true, false} {
+					info := callServerStatus(t, ctx, human)
+					assert.Equal(t, "full", info["server_state"])
+					assert.Equal(t, uint32(0), info["validation_quorum"])
+					assert.Equal(t, completeLedgers, info["complete_ledgers"])
+					assert.Equal(t, uint32(i+2), info["validated_ledger"].(map[string]any)["seq"])
+				}
+				if i == 0 {
+					result, rpcErr := (&handlers.LedgerAcceptMethod{}).Handle(ctx, nil)
+					require.Nil(t, rpcErr)
+					assert.Equal(t, uint32(4), result.(map[string]any)["ledger_current_index"])
+				}
+			}
+		})
+	}
 }
 
 // API Version Tests
@@ -1260,7 +1265,7 @@ func TestServerInfoWithDifferentLedgerStates(t *testing.T) {
 			currentLedgerIndex:   3,
 			closedLedgerIndex:    2,
 			validatedLedgerIndex: 2,
-			completeLedgers:      "1-2",
+			completeLedgers:      "2",
 		},
 		{
 			name:                 "Synced mainnet-like state",
@@ -1356,6 +1361,7 @@ func TestServerInfoWithParams(t *testing.T) {
 // live values from the TxQ, peer, and state-accounting hooks.
 func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
+	mock.standalone = false
 	// Use a recent ripple-epoch close time so the age computation is
 	// non-zero but well under the high-age threshold.
 	nowUnix := time.Now().Unix()

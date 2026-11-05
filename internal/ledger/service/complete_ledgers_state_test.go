@@ -114,6 +114,34 @@ func TestCompleteLedgers_FreshNetworkStartupIsEmpty(t *testing.T) {
 	assert.False(t, info.HavePublished)
 }
 
+func TestCompleteLedgers_StandaloneStartupBeginsAtInitialClosedLedger(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode StartupMode
+	}{
+		{name: "fresh", mode: StartupFresh},
+		{name: "normal", mode: StartupNormal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Startup.Mode = test.mode
+			svc, err := New(cfg)
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+
+			require.Equal(t, "2", svc.GetServerInfo().CompleteLedgers)
+			require.False(t, svc.HasCompleteLedger(1))
+			require.True(t, svc.HasCompleteLedger(2))
+
+			seq, err := svc.AcceptLedger(t.Context())
+			require.NoError(t, err)
+			require.Equal(t, uint32(3), seq)
+			require.Equal(t, "2-3", svc.GetServerInfo().CompleteLedgers)
+		})
+	}
+}
+
 func TestCompleteLedgers_PreservesHoles(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)

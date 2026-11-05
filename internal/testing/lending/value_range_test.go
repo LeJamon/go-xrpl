@@ -160,7 +160,7 @@ func TestLoanSetAssetValueRange(t *testing.T) {
 	}
 }
 
-func TestLoanBrokerSetMPTDebtMaximumLedgerState(t *testing.T) {
+func TestLoanBrokerSetMPTDebtMaximumBoundaries(t *testing.T) {
 	scales := []struct {
 		name   string
 		fix320 bool
