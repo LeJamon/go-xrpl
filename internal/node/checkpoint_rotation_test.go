@@ -20,7 +20,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 		NodeSize:     "small",
 		DatabasePath: filepath.Join(dir, "relational"),
 		NodeDB: config.NodeDBConfig{
-			Path: filepath.Join(dir, "nodes"), OnlineDelete: 4, FastLoad: true,
+			Path: filepath.Join(dir, "nodes"), OnlineDelete: 4, FastLoad: true, EarliestSeq: 32570,
 		},
 	}
 	start := func(mode service.StartupMode, checkpoint bool) (*nodeRuntime, func()) {
@@ -81,6 +81,8 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, before, after)
 	require.Positive(t, runtime.rotator.MinimumOnline())
+	require.Equal(t, runtime.rotator.MinimumOnline(), runtime.nodeFamily.MinimumLedgerSeq())
+	require.Less(t, runtime.nodeFamily.MinimumLedgerSeq(), uint32(cfg.NodeDB.EarliestSeq))
 	require.Eventually(t, func() bool {
 		root, release, available, err := runtime.ledger.AcquireValidatedStateBase(t.Context())
 		if release != nil {

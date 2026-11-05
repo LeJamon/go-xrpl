@@ -129,17 +129,17 @@ func (l *LoanSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 	}
 	needsHolding := true
 	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
-		exists, err := vault.HoldingExists(view, borrower, asset)
+		hasHolding, err := vault.HoldingExists(view, borrower, asset)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		needsHolding = !exists
-		if !needsHolding && l.LoanOriginationFee != nil && number(*l.LoanOriginationFee).Signum() != 0 {
-			exists, err = vault.HoldingExists(view, b.Owner, asset)
+		needsHolding = !hasHolding
+		if hasHolding && l.LoanOriginationFee != nil && number(*l.LoanOriginationFee).Signum() != 0 {
+			hasHolding, err = vault.HoldingExists(view, b.Owner, asset)
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			needsHolding = !exists
+			needsHolding = !hasHolding
 		}
 	}
 	if needsHolding {

@@ -730,17 +730,20 @@ func (o *Overlay) reservePeerKey(peer *Peer, bypassInboundLimit bool) error {
 	if owner, exists := o.peerKeys[key]; exists && owner != peer.ID() {
 		return ErrAlreadyConnected
 	}
-	if peer.Inbound() && !bypassInboundLimit {
-		active := 0
-		for _, current := range o.peers {
-			if current.inbound {
-				active++
+	if peer.Inbound() {
+		peer.slotExempt = bypassInboundLimit
+		if !bypassInboundLimit {
+			active := 0
+			for _, current := range o.peers {
+				if current.inbound && !current.slotExempt {
+					active++
+				}
 			}
+			if active+len(o.pendingInbound) >= o.cfg.MaxInbound {
+				return ErrMaxPeersReached
+			}
+			o.pendingInbound[peer.ID()] = struct{}{}
 		}
-		if active+len(o.pendingInbound) >= o.cfg.MaxInbound {
-			return ErrMaxPeersReached
-		}
-		o.pendingInbound[peer.ID()] = struct{}{}
 	}
 	o.peerKeys[key] = peer.ID()
 	return nil
@@ -869,6 +872,13 @@ func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	}
 	_, ok := o.cluster.Member(pk)
 	return ok
+}
+
+// isFixedPeerAddress reports whether the peer connects from the address of a
+// configured fixed peer. Like reserved and cluster peers, such a peer is
+// admitted beyond the inbound slot limit.
+func (o *Overlay) isFixedPeerAddress(peer *Peer) bool {
+	return o.discovery != nil && o.discovery.IsFixedHost(peer.Endpoint().Host)
 }
 
 func (o *Overlay) isConnectedTo(endpoint Endpoint) bool {

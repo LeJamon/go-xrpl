@@ -10,16 +10,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
 
 const (
-	commit      = "d147fccf54a500fce586522f28d6044c37fd8d29"
-	priorCommit = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
+	commit       = "d147fccf54a500fce586522f28d6044c37fd8d29"
+	publicCommit = "00e640751460c137636fdb6dae6b4280de355d81"
+	priorCommit  = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
 )
 
-// These files are byte-identical at private 3.4.1 and public 3.4.0. The
+// These files are byte-identical at private 3.4.1 and public 3.4.1/3.4.0. The
 // equivalence is limited to these inventory inputs, not release behavior.
 var sourceHashes = map[string]string{
 	"include/xrpl/protocol/SField.h":                    "0566abd201da2c6525b095de1d92a27ad9e4f9d180885583657e9ea9995514e4",
@@ -32,15 +34,15 @@ var sourceHashes = map[string]string{
 }
 
 // File returns an inventory input verified against private rippled 3.4.1.
-// GOXRPL_ORACLE_DIR selects an explicit checkout of that release. Public CI
-// may use the pinned 3.4.0 checkout only for the byte-identical files above.
+// GOXRPL_ORACLE_DIR selects a public or private checkout of that release.
+// A discovered public 3.4.0 checkout is also accepted for these inventory inputs.
 func File(t testing.TB, relative string) string {
 	t.Helper()
 	if _, ok := sourceHashes[relative]; !ok {
 		t.Fatalf("no private rippled 3.4.1 source hash for %q", relative)
 	}
 	root := os.Getenv("GOXRPL_ORACLE_DIR")
-	wantCommit := commit
+	wantCommits := []string{commit, publicCommit}
 	if root == "" {
 		_, caller, _, ok := runtime.Caller(0)
 		if !ok {
@@ -49,19 +51,17 @@ func File(t testing.TB, relative string) string {
 		root = findCheckout(filepath.Dir(caller), "v3.4.1-oracle")
 		if root == "" {
 			root = findCheckout(filepath.Dir(caller), "v3.4.0-oracle")
-			wantCommit = priorCommit
+			wantCommits = []string{priorCommit}
 		}
 	}
 	if root == "" {
-		t.Fatal("private rippled 3.4.1 oracle not found; set GOXRPL_ORACLE_DIR")
+		t.Fatal("rippled 3.4.1 oracle not found; set GOXRPL_ORACLE_DIR to a clean public XRPLF/rippled checkout at tag 3.4.1")
 	}
-	path, err := verifiedFile(t.Context(), root, relative, wantCommit)
+	path, err := verifiedFile(t.Context(), root, relative, wantCommits...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wantCommit == priorCommit {
-		t.Logf("%s: public 3.4.0 bytes match pinned private 3.4.1 SHA-256 %s", relative, sourceHashes[relative])
-	}
+	t.Logf("%s: source bytes match pinned private 3.4.1 SHA-256 %s", relative, sourceHashes[relative])
 	return path
 }
 
@@ -77,23 +77,23 @@ func findCheckout(start, name string) string {
 	}
 }
 
-func verifiedFile(ctx context.Context, root, relative, wantCommit string) (string, error) {
+func verifiedFile(ctx context.Context, root, relative string, wantCommits ...string) (string, error) {
 	wantHash, ok := sourceHashes[relative]
 	if !ok {
 		return "", fmt.Errorf("unrecorded oracle source file %q", relative)
 	}
 	for _, check := range []struct {
 		args []string
-		want string
+		want []string
 	}{
-		{[]string{"rev-parse", "HEAD"}, wantCommit},
-		{[]string{"status", "--porcelain=v1", "--untracked-files=all"}, ""},
+		{[]string{"rev-parse", "HEAD"}, wantCommits},
+		{[]string{"status", "--porcelain=v1", "--untracked-files=all"}, []string{""}},
 	} {
 		args := append([]string{"-C", root}, check.args...)
 		// #nosec G702 -- git is fixed; the trusted checkout path is one argument, never shell code.
 		out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
-		if err != nil || strings.TrimSpace(string(out)) != check.want {
-			return "", fmt.Errorf("oracle %s: git %v: got %q, want %q (error: %v)", root, check.args, strings.TrimSpace(string(out)), check.want, err)
+		if err != nil || !slices.Contains(check.want, strings.TrimSpace(string(out))) {
+			return "", fmt.Errorf("oracle %s: git %v: got %q, want one of %q (error: %v)", root, check.args, strings.TrimSpace(string(out)), check.want, err)
 		}
 	}
 	path := filepath.Join(root, filepath.FromSlash(relative))
