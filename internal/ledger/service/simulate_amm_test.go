@@ -197,6 +197,7 @@ func TestService_SimulateTransactionUsesParentCloseTimeForExpiration(t *testing.
 	t.Cleanup(svc.Stop)
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	primerSequence := accountSeq(t, svc, master.Address)
 	mustApply(t, svc, signedBlob(t, env, accountset.AccountSet(master).
@@ -259,6 +260,7 @@ func TestService_SimulateTransaction_DoesNotAssumeMasterSignature(t *testing.T) 
 	defer svc.Stop()
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	alice := jtx.NewAccount("alice-simulate-master")
 	masterSeq := accountSeq(t, svc, master.Address)
