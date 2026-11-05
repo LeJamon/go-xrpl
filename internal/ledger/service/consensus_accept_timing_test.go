@@ -165,12 +165,12 @@ func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
 			persistence := record["persistence_admission_wait"].(time.Duration)
 			stateWait := record["state_admission_wait"].(time.Duration)
 			require.GreaterOrEqual(t, lifecycle, time.Duration(0))
+			require.GreaterOrEqual(t, persistence, time.Duration(0))
 			if phase == "persistence" {
 				require.Positive(t, persistence)
 				require.Zero(t, stateWait)
 				require.Equal(t, persistenceAdmissionLimit, svc.persistAdmissions)
 			} else {
-				require.GreaterOrEqual(t, persistence, time.Duration(0))
 				require.Positive(t, stateWait)
 				require.Zero(t, svc.persistAdmissions)
 			}
