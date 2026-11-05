@@ -39,18 +39,31 @@ func TestVerifiedSourceRejectsWrongIdentityAndContent(t *testing.T) {
 		return git("rev-parse", "HEAD")
 	}
 	sha := commitFixture()
-	if got, err := verifiedFile(t.Context(), root, relative, sha); err != nil || got != path {
-		t.Fatalf("verified inventory source rejected: path=%s, error=%v", got, err)
-	}
 	for _, test := range []struct {
-		name, relative, sha, diagnostic string
+		name    string
+		commits []string
 	}{
-		{"wrong_commit", relative, commit, "rev-parse"},
-		{"unrecorded_file", "include/xrpl/protocol/detail/features.macro", sha, "unrecorded"},
-		{"path_traversal", "../LedgerFormats.h", sha, "unrecorded"},
+		{"single_commit", []string{sha}},
+		{"first_commit", []string{sha, commit}},
+		{"alternate_commit", []string{commit, sha}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := verifiedFile(t.Context(), root, test.relative, test.sha); err == nil || !strings.Contains(err.Error(), test.diagnostic) {
+			if got, err := verifiedFile(t.Context(), root, relative, test.commits...); err != nil || got != path {
+				t.Fatalf("verified inventory source rejected: path=%s, error=%v", got, err)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name, relative, diagnostic string
+		commits                    []string
+	}{
+		{"wrong_commit", relative, "rev-parse", []string{commit, publicCommit}},
+		{"no_commits", relative, "rev-parse", nil},
+		{"unrecorded_file", "include/xrpl/protocol/detail/features.macro", "unrecorded", []string{sha}},
+		{"path_traversal", "../LedgerFormats.h", "unrecorded", []string{sha}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := verifiedFile(t.Context(), root, test.relative, test.commits...); err == nil || !strings.Contains(err.Error(), test.diagnostic) {
 				t.Fatalf("want rejection containing %q, got %v", test.diagnostic, err)
 			}
 		})
@@ -58,11 +71,11 @@ func TestVerifiedSourceRejectsWrongIdentityAndContent(t *testing.T) {
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifiedFile(t.Context(), root, relative, sha); err == nil || !strings.Contains(err.Error(), "status") {
+	if _, err := verifiedFile(t.Context(), root, relative, commit, sha); err == nil || !strings.Contains(err.Error(), "status") {
 		t.Fatalf("want dirty source rejection, got %v", err)
 	}
 	sha = commitFixture()
-	if _, err := verifiedFile(t.Context(), root, relative, sha); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+	if _, err := verifiedFile(t.Context(), root, relative, commit, sha); err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("want changed content rejection, got %v", err)
 	}
 }
