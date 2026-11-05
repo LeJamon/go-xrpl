@@ -1293,17 +1293,14 @@ func TestSubmitMethodTxBlobSubmitErrorIsSanitized(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   newSubmitTestServices(mock),
 	}
-	txBlob, err := binarycodec.Encode(map[string]any{
+	txBlob := rawSubmitBlob(t, map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		"Amount":          "1000000",
 		"Fee":             "10",
 		"Sequence":        1,
-		"SigningPubKey":   "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
-		"TxnSignature":    "30440220143759437C04F7B61F012563AFE90D8DAFC46E86035E1D965A9CED282C97D4CE02204CFD241E86F17E011298FC1A39B63386C74306A5DE047E213B0F29EFA4571C2C",
 	})
-	require.NoError(t, err)
 	params, err := json.Marshal(map[string]any{"tx_blob": txBlob})
 	require.NoError(t, err)
 
