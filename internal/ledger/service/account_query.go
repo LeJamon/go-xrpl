@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -1535,6 +1537,20 @@ const (
 // limit problems have been collected.
 var errNoRippleLimitReached = errors.New("noripple_check limit reached")
 
+func (s *Service) noRippleCheckFee(ctx context.Context, targetLedger *ledger.Ledger) (string, error) {
+	baseFee, _, _, err := readFeesFromLedgerContext(ctx, targetLedger)
+	if err != nil {
+		return "", fmt.Errorf("read noripple_check fee: %w", err)
+	}
+
+	fee, err := feetrack.ScaleFeeLoad(baseFee, s.feeTrack, false)
+	if err != nil {
+		return "", fmt.Errorf("scale noripple_check fee: %w", err)
+	}
+
+	return strconv.FormatInt(int64(drops.XRPAmount(fee).JSONClipped()), 10), nil
+}
+
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
 func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*NoRippleCheckResult, error) {
@@ -1572,15 +1588,29 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		var problems []string
 		var suggestedTxs []SuggestedTransaction
 		seq := accountRoot.Sequence
-
-		baseFee, _, _ := s.GetCurrentFees()
-		feeStr := strconv.FormatUint(baseFee, 10)
+		feeStr := ""
+		feeLoaded := false
+		loadFee := func() error {
+			if feeLoaded {
+				return nil
+			}
+			var err error
+			feeStr, err = s.noRippleCheckFee(ctx, targetLedger)
+			if err != nil {
+				return err
+			}
+			feeLoaded = true
+			return nil
+		}
 
 		if bDefaultRipple && !roleGateway {
 			problems = append(problems, "You appear to have set your default ripple flag even though you are not a gateway. This is not recommended unless you are experimenting")
 		} else if roleGateway && !bDefaultRipple {
 			problems = append(problems, "You should immediately set your default ripple flag")
 			if transactions {
+				if err := loadFee(); err != nil {
+					return nil, err
+				}
 				suggestedTxs = append(suggestedTxs, SuggestedTransaction{
 					TransactionType: "AccountSet",
 					Account:         account,
@@ -1659,6 +1689,10 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			if needFix {
 				problems = append(problems, problem)
 				problemCount++
+
+				if err := loadFee(); err != nil {
+					return err
+				}
 
 				if transactions {
 					var limitValue string
