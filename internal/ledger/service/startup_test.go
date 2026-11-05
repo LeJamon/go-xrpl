@@ -26,6 +26,7 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/require"
 )
@@ -99,6 +100,113 @@ func TestService_StartupFreshDurablyStoresGenesisAndInitialLedger(t *testing.T) 
 	}
 }
 
+func TestService_StartupNormalDurablyStoresAndFastLoadsInitialLedger(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	cfg := Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	}
+
+	writer, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, writer.Start())
+	initial := writer.GetClosedLedger()
+	require.NotNil(t, initial)
+	writer.Stop()
+
+	for _, hash := range [][32]byte{initial.ParentHash(), initial.Hash()} {
+		node, err := db.Fetch(ctx, nodestore.Hash256(hash))
+		require.NoError(t, err)
+		require.NotNil(t, node)
+	}
+	info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(initial.Sequence()))
+	require.NoError(t, err)
+	require.NotNil(t, info)
+
+	cfg.FastLoad = true
+	reader, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, reader.Start())
+	t.Cleanup(reader.Stop)
+	require.Equal(t, initial.Hash(), reader.GetClosedLedger().Hash())
+	require.Equal(t, "2", reader.GetServerInfo().CompleteLedgers)
+}
+
+func TestService_StandaloneStartupReplacesPreviousInitialLedger(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		startup  StartupConfig
+		fastLoad bool
+	}{
+		{name: "normal"},
+		{name: "fresh", startup: StartupConfig{Mode: StartupFresh}},
+		{name: "network", startup: StartupConfig{Mode: StartupNetwork}},
+		{name: "load fallback", startup: StartupConfig{Mode: StartupLoadFile}, fastLoad: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			db, rm := newStartupTestStorage(t, ctx)
+			cfg := Config{
+				Standalone:    true,
+				GenesisConfig: genesis.DefaultConfig(),
+				Startup:       test.startup,
+				FastLoad:      test.fastLoad,
+				NodeStore:     db,
+				SHAMapFamily:  backend.New(db),
+				RelationalDB:  rm,
+			}
+			writer, err := New(cfg)
+			require.NoError(t, err)
+			t.Cleanup(writer.Stop)
+			require.NoError(t, writer.Start())
+			initial := writer.GetClosedLedger()
+			writer.Stop()
+
+			// Close times are hashed as whole seconds; force the next startup to differ.
+			time.Sleep(time.Until(time.Unix(initial.CloseTime().Unix()+1, 0)))
+			reader, err := New(cfg)
+			require.NoError(t, err)
+			t.Cleanup(reader.Stop)
+			require.NoError(t, reader.Start())
+			restarted := reader.GetClosedLedger()
+			require.Equal(t, uint32(2), restarted.Sequence())
+			require.NotEqual(t, initial.Hash(), restarted.Hash())
+			require.Equal(t, "2", reader.GetServerInfo().CompleteLedgers)
+			require.False(t, reader.HasCompleteLedger(1))
+
+			tip, err := db.Fetch(ctx, validatedTipKey)
+			require.NoError(t, err)
+			require.NotNil(t, tip)
+			hash := restarted.Hash()
+			require.Equal(t, restarted.Sequence(), tip.LedgerSeq)
+			require.Equal(t, hash[:], tip.Data)
+			info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(restarted.Sequence()))
+			require.NoError(t, err)
+			require.NotNil(t, info)
+			require.Equal(t, relationaldb.Hash(hash), info.Hash)
+			require.ErrorContains(t, reader.persistValidatedTip(ctx, initial), "conflicts with persisted hash")
+			reader.Stop()
+
+			cfg.Startup = StartupConfig{}
+			cfg.FastLoad = true
+			reloaded, err := New(cfg)
+			require.NoError(t, err)
+			t.Cleanup(reloaded.Stop)
+			require.NoError(t, reloaded.Start())
+			require.Equal(t, hash, reloaded.GetClosedLedger().Hash())
+			seq, err := reloaded.AcceptLedger(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint32(3), seq)
+			require.Equal(t, "2-3", reloaded.GetServerInfo().CompleteLedgers)
+		})
+	}
+}
+
 func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
 	t.Parallel()
 	base := newTestNodeStore(t, 1_000)
@@ -108,6 +216,22 @@ func TestService_StartupFreshFailsWhenDurableStoreFails(t *testing.T) {
 	svc, err := New(Config{
 		Standalone:    true,
 		Startup:       StartupConfig{Mode: StartupFresh},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, svc.Start(), sentinel)
+}
+
+func TestService_StartupNormalFailsWhenDurableStoreFails(t *testing.T) {
+	t.Parallel()
+	base := newTestNodeStore(t, 1_000)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	sentinel := errors.New("store failed")
+	db := &failingStartupStore{Database: base, err: sentinel}
+	svc, err := New(Config{
+		Standalone:    true,
 		GenesisConfig: genesis.DefaultConfig(),
 		NodeStore:     db,
 		SHAMapFamily:  backend.New(db),

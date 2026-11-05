@@ -31,7 +31,6 @@ type persistenceSpeculativeBudget struct {
 func newPersistenceSpeculativeBudget(account *membudget.Account) *persistenceSpeculativeBudget {
 	return &persistenceSpeculativeBudget{
 		account:      account,
-		blockSmall:   true,
 		gate:         make(chan struct{}),
 		attempted:    make(chan struct{}, 1),
 		sharedDenied: make(chan struct{}, 1),
@@ -127,6 +126,9 @@ func TestPersistenceWaitDoesNotHoldStateTreeForPreferredPreparation(t *testing.T
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	budget.mu.Lock()
+	budget.blockSmall = true
+	budget.mu.Unlock()
 	t.Cleanup(func() {
 		// Production persistence uses context.Background. If an assertion fails
 		// while the worker is waiting, force the small test reservations through

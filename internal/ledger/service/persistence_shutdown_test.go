@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ type gatedStore struct {
 	enteredOnce sync.Once
 	release     chan struct{}
 	entered     chan struct{}
+	bypass      atomic.Bool
 }
 
 func newGatedStore(t *testing.T) *gatedStore {
@@ -37,14 +39,18 @@ func newGatedStore(t *testing.T) *gatedStore {
 }
 
 func (g *gatedStore) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
-	g.enteredOnce.Do(func() { close(g.entered) })
-	<-g.release
+	if !g.bypass.Load() {
+		g.enteredOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
 	return g.Database.StoreBatch(ctx, nodes)
 }
 
 func (g *gatedStore) Store(ctx context.Context, node *nodestore.Node) error {
-	g.enteredOnce.Do(func() { close(g.entered) })
-	<-g.release
+	if !g.bypass.Load() {
+		g.enteredOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
 	return g.Database.Store(ctx, node)
 }
 
@@ -236,11 +242,13 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 
 func TestService_StandaloneCommitPersistsAfterCancellation(t *testing.T) {
 	store := newGatedStore(t)
+	store.bypass.Store(true)
 	cfg := DefaultConfig()
 	cfg.NodeStore = store
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	store.bypass.Store(false)
 	t.Cleanup(func() {
 		store.open()
 		svc.Stop()
