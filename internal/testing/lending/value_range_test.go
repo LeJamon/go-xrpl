@@ -4,10 +4,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +21,7 @@ func TestLoanBrokerSetXRPValueRange(t *testing.T) {
 			want  ter.Result
 		}{
 			{"maximum", "100000000000000000", ter.TesSUCCESS},
+			{"fractional", "1000.5", ter.TecPRECISION_LOSS},
 			{"above_maximum", "100000000000000001", ter.TefEXCEPTION},
 			{"rounds_to_maximum", "100000000000000000.4", ter.TecPRECISION_LOSS},
 			{"tie_rounds_to_maximum", "100000000000000000.5", ter.TecPRECISION_LOSS},
@@ -57,6 +60,14 @@ func TestLoanBrokerSetXRPValueRange(t *testing.T) {
 					require.Equal(t, uint64(10), result.Fee)
 					require.Equal(t, balance-result.Fee, env.Balance(owner))
 					require.Equal(t, sequence+1, env.Seq(owner))
+					if tc.want == ter.TecPRECISION_LOSS {
+						require.NotNil(t, result.Metadata)
+						require.Equal(t, owners, env.OwnerCount(owner))
+						after := loanSetLedgerState(t, env)
+						delete(before, keylet.Account(owner.AccountID()).Key)
+						delete(after, keylet.Account(owner.AccountID()).Key)
+						require.Equal(t, before, after)
+					}
 				}
 			})
 		}
@@ -146,5 +157,70 @@ func TestLoanSetAssetValueRange(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLoanBrokerSetMPTDebtMaximumBoundaries(t *testing.T) {
+	scales := []struct {
+		name   string
+		fix320 bool
+		fix330 bool
+	}{
+		{name: "legacy"},
+		{name: "large320", fix320: true},
+		{name: "large330", fix330: true},
+	}
+	values := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "exact maximum", value: "9223372036854775807", valid: true},
+		{name: "below maximum", value: "9223372036854775806", valid: true},
+		// The mantissa is a valid signed wire value; exponent 1 puts the
+		// canonical value above the MPT maximum without using raw 2^63.
+		{name: "canonical above maximum", value: "922337203685477581e1"},
+	}
+
+	for _, scale := range scales {
+		for _, tc := range values {
+			t.Run(scale.name+"/"+tc.name, func(t *testing.T) {
+				env := newLendingEnv(t)
+				if scale.fix320 {
+					env.EnableFeature("fixCleanup3_2_0")
+				} else {
+					env.DisableFeature("fixCleanup3_2_0")
+				}
+				if scale.fix330 {
+					env.EnableFeature("fixCleanup3_3_0")
+				} else {
+					env.DisableFeature("fixCleanup3_3_0")
+				}
+				env.Close()
+				f := newLoanSetAssetFixtureWithEnv(t, env, "MPT", false)
+				brokerKey := keylet.LoanBrokerByID(f.brokerKey)
+				require.Equal(t, scale.fix320, f.env.Rules().Enabled(amendment.FeatureFixCleanup3_2_0))
+				require.Equal(t, scale.fix330, f.env.Rules().Enabled(amendment.FeatureFixCleanup3_3_0))
+
+				before := loanSetLedgerState(t, f.env)
+				value := tc.value
+				set := lending.NewLoanBrokerSet(f.owner.Address, f.vaultID)
+				set.LoanBrokerID = &f.brokerID
+				set.DebtMaximum = &value
+				result := f.env.Submit(set)
+
+				if tc.valid {
+					jtx.RequireTxSuccess(t, result)
+					assertLendingField(t, "LoanBroker", decodeLendingEntry(t, f.env, brokerKey), "DebtMaximum", tc.value)
+					return
+				}
+
+				require.Equal(t, ter.TemINVALID.String(), result.Code)
+				require.False(t, result.Applied)
+				require.Zero(t, result.Fee)
+				require.Nil(t, result.Metadata)
+				require.Equal(t, before, loanSetLedgerState(t, f.env))
+			})
+		}
 	}
 }
