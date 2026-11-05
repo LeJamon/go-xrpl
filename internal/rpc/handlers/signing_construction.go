@@ -5,14 +5,9 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
-
-func signingChecksEnabled(ctx *types.RpcContext) bool {
-	return ctx.Services == nil || ctx.Services.Ledger() == nil || !ctx.Services.Ledger().IsStandalone()
-}
 
 func validateSigningConstruction(blob string, rules *amendment.Rules) *rpcerrors.RpcError {
 	raw, err := hex.DecodeString(blob)

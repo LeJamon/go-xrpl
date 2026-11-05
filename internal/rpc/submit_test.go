@@ -215,37 +215,69 @@ func TestSubmitMethodRawBlobInvalidTransactionEnvelope(t *testing.T) {
 	assert.Zero(t, mock.submitCalls)
 }
 
-func TestSubmitMethodRawBlobRejectsBadSignatureBeforeSubmission(t *testing.T) {
-	mock := newMockLedgerServiceSubmit()
-	mock.standalone = false
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleUser,
-		ApiVersion: types.ApiVersion2,
-		Services:   newSubmitTestServices(mock),
-	}
-	blob := rawSubmitBlob(t, map[string]any{
-		"TransactionType": "AccountSet",
-		"Account":         validAccountAddress,
-		"Fee":             "10",
-		"Sequence":        1,
-	})
-	decoded, err := binarycodec.Decode(blob)
-	require.NoError(t, err)
-	signature, ok := decoded["TxnSignature"].(string)
-	require.True(t, ok)
-	decoded["TxnSignature"] = strings.Repeat("00", len(signature)/2)
-	badBlob, err := binarycodec.Encode(decoded)
-	require.NoError(t, err)
-	params, err := json.Marshal(map[string]any{"tx_blob": badBlob})
-	require.NoError(t, err)
+func TestSubmitMethodRawBlobSignatureAdmissionAcrossLedgerModes(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("standalone=%t", standalone), func(t *testing.T) {
+			base := rawSubmitBlob(t, map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Fee":             "10",
+				"Sequence":        1,
+			})
+			decoded, err := binarycodec.Decode(base)
+			require.NoError(t, err)
+			signature, ok := decoded["TxnSignature"].(string)
+			require.True(t, ok)
 
-	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
-	assert.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
-	assert.Equal(t, "fails local checks: Invalid signature.", rpcErr.ErrorException)
-	assert.Zero(t, mock.submitCalls)
+			cases := []struct {
+				name       string
+				blob       string
+				wantSubmit bool
+			}{
+				{name: "valid", blob: base, wantSubmit: true},
+				{name: "missing", blob: func() string {
+					missing := maps.Clone(decoded)
+					delete(missing, "TxnSignature")
+					encoded, encodeErr := binarycodec.Encode(missing)
+					require.NoError(t, encodeErr)
+					return encoded
+				}()},
+				{name: "invalid", blob: func() string {
+					invalid := maps.Clone(decoded)
+					invalid["TxnSignature"] = strings.Repeat("00", len(signature)/2)
+					encoded, encodeErr := binarycodec.Encode(invalid)
+					require.NoError(t, encodeErr)
+					return encoded
+				}()},
+			}
+
+			for _, test := range cases {
+				t.Run(test.name, func(t *testing.T) {
+					mock := newMockLedgerServiceSubmit()
+					mock.standalone = standalone
+					ctx := &types.RpcContext{
+						Context: context.Background(), Role: types.RoleUser,
+						ApiVersion: types.ApiVersion2, Services: newSubmitTestServices(mock),
+					}
+					params, marshalErr := json.Marshal(map[string]any{"tx_blob": test.blob})
+					require.NoError(t, marshalErr)
+
+					result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+					if test.wantSubmit {
+						require.Nil(t, rpcErr)
+						require.NotNil(t, result)
+						assert.Equal(t, 1, mock.submitCalls)
+						return
+					}
+					assert.Nil(t, result)
+					require.NotNil(t, rpcErr)
+					assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+					assert.Equal(t, "fails local checks: Invalid signature.", rpcErr.ErrorException)
+					assert.Zero(t, mock.submitCalls)
+				})
+			}
+		})
+	}
 }
 
 func TestSubmitMethodRawBlobCanonicalizesFieldOrder(t *testing.T) {

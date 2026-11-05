@@ -3,6 +3,7 @@ package service_test
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -111,10 +113,9 @@ func innerBatchPaymentBlob(t *testing.T, sender, receiver *jtx.Account) ([]byte,
 	return blob, hash
 }
 
-// memoPaymentBlob builds an (unsigned) Payment blob carrying a memo whose
-// MemoData is the given hex string. It encodes the field map directly rather
-// than via the typed Payment.Flatten, whose reflective memo conversion is a
-// separate concern; the local memo check reads the decoded Memos regardless.
+// memoPaymentBlob builds a signed Payment blob carrying a memo whose MemoData
+// is the given hex string. The local memo check must run after signature
+// admission, so this fixture carries a real signature.
 func memoPaymentBlob(t *testing.T, from, to string, memoDataHex string) []byte {
 	t.Helper()
 	txMap := map[string]any{
@@ -129,6 +130,22 @@ func memoPaymentBlob(t *testing.T, from, to string, memoDataHex string) []byte {
 			{"Memo": map[string]any{"MemoData": memoDataHex}},
 		},
 	}
+	encodedJSON, err := json.Marshal(txMap)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	transaction, err := tx.ParseJSON(encodedJSON)
+	if err != nil {
+		t.Fatalf("ParseJSON: %v", err)
+	}
+	signer := jtx.MasterAccount()
+	transaction.GetCommon().SigningPubKey = signer.PublicKeyHex()
+	transaction.GetCommon().TxnSignature, err = txsign.SignTransaction(transaction, "00"+signer.PrivateKeyHex())
+	if err != nil {
+		t.Fatalf("SignTransaction: %v", err)
+	}
+	txMap["SigningPubKey"] = transaction.GetCommon().SigningPubKey
+	txMap["TxnSignature"] = transaction.GetCommon().TxnSignature
 	hexStr, err := binarycodec.Encode(txMap)
 	if err != nil {
 		t.Fatalf("binarycodec.Encode: %v", err)
@@ -274,60 +291,78 @@ func TestService_SubmitTransaction_AppliesAtOrAboveFeeLevel(t *testing.T) {
 }
 
 func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
-	cfg := defaultServiceConfig()
-	cfg.Standalone = false
-	svc, err := service.New(cfg)
-	if err != nil {
-		t.Fatalf("service.New: %v", err)
-	}
-	if err := svc.Start(); err != nil {
-		t.Fatalf("service.Start: %v", err)
-	}
-	t.Cleanup(svc.Stop)
+	for _, standalone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("standalone=%t", standalone), func(t *testing.T) {
+			cfg := defaultServiceConfig()
+			cfg.Standalone = standalone
+			svc, err := service.New(cfg)
+			if err != nil {
+				t.Fatalf("service.New: %v", err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatalf("service.Start: %v", err)
+			}
+			t.Cleanup(svc.Stop)
+			beforeOpen := svc.GetOpenLedger()
+			beforeState, err := beforeOpen.StateMapHash()
+			if err != nil {
+				t.Fatalf("StateMapHash before submission: %v", err)
+			}
+			beforeTxCount := beforeOpen.TxCount()
 
-	env := jtx.NewTestEnv(t)
-	blob, _ := signedPaymentWithFee(t, env, jtx.MasterAccount(), jtx.NewAccount("alice"), 100_000_000, 10, 1)
-	wire, err := binarycodec.DecodeBytes(blob)
-	if err != nil {
-		t.Fatalf("DecodeBytes: %v", err)
-	}
-	wire["TxnSignature"] = strings.Repeat("00", 64)
-	wire["Memos"] = []map[string]any{{
-		"Memo": map[string]any{"MemoData": strings.Repeat("AA", 1020)},
-	}}
-	badHex, err := binarycodec.Encode(wire)
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	badBlob, err := hex.DecodeString(badHex)
-	if err != nil {
-		t.Fatalf("DecodeString: %v", err)
-	}
-	parsed, err := tx.ParseFromBinary(badBlob)
-	if err != nil {
-		t.Fatalf("ParseFromBinary: %v", err)
-	}
-	hash, err := tx.ComputeTransactionHash(parsed)
-	if err != nil {
-		t.Fatalf("ComputeTransactionHash: %v", err)
-	}
+			env := jtx.NewTestEnv(t)
+			blob, _ := signedPaymentWithFee(t, env, jtx.MasterAccount(), jtx.NewAccount("alice"), 100_000_000, 10, 1)
+			wire, err := binarycodec.DecodeBytes(blob)
+			if err != nil {
+				t.Fatalf("DecodeBytes: %v", err)
+			}
+			wire["TxnSignature"] = strings.Repeat("00", 64)
+			wire["Memos"] = []map[string]any{{
+				"Memo": map[string]any{"MemoData": strings.Repeat("AA", 1020)},
+			}}
+			badHex, err := binarycodec.Encode(wire)
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			badBlob, err := hex.DecodeString(badHex)
+			if err != nil {
+				t.Fatalf("DecodeString: %v", err)
+			}
+			parsed, err := tx.ParseFromBinary(badBlob)
+			if err != nil {
+				t.Fatalf("ParseFromBinary: %v", err)
+			}
+			hash, err := tx.ComputeTransactionHash(parsed)
+			if err != nil {
+				t.Fatalf("ComputeTransactionHash: %v", err)
+			}
 
-	result, err := svc.SubmitTransaction(parsed, badBlob, false)
-	if err != nil {
-		t.Fatalf("SubmitTransaction: %v", err)
-	}
-	if result.Result != ter.TemBAD_SIGNATURE {
-		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
-	}
-	outcome, err := svc.SubmitOpenLedgerTxDetailed(badBlob, true)
-	if !errors.Is(err, txengine.ErrInvalidSignature) {
-		t.Fatalf("SubmitOpenLedgerTxDetailed = %v, want invalid signature before local memo rejection", err)
-	}
-	if outcome.Applied || outcome.Queued || outcome.Fee != 0 || outcome.Metadata != nil {
-		t.Fatalf("invalid signature changed submission state: %+v", outcome)
-	}
-	if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
-		t.Fatalf("GetTransaction(bad signature) = %v, want svcerr.ErrTxnNotFound", err)
+			result, err := svc.SubmitTransaction(parsed, badBlob, false)
+			if err != nil {
+				t.Fatalf("SubmitTransaction: %v", err)
+			}
+			if result.Result != ter.TemBAD_SIGNATURE {
+				t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
+			}
+			outcome, err := svc.SubmitOpenLedgerTxDetailed(badBlob, true)
+			if !errors.Is(err, txengine.ErrInvalidSignature) {
+				t.Fatalf("SubmitOpenLedgerTxDetailed = %v, want invalid signature before local memo rejection", err)
+			}
+			if outcome.Applied || outcome.Queued || outcome.Fee != 0 || outcome.Metadata != nil {
+				t.Fatalf("invalid signature changed submission state: %+v", outcome)
+			}
+			afterOpen := svc.GetOpenLedger()
+			afterState, err := afterOpen.StateMapHash()
+			if err != nil {
+				t.Fatalf("StateMapHash after submission: %v", err)
+			}
+			if afterOpen.TxCount() != beforeTxCount || afterState != beforeState {
+				t.Fatalf("invalid signature changed open ledger: tx count %d (was %d), state %x (was %x)", afterOpen.TxCount(), beforeTxCount, afterState, beforeState)
+			}
+			if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
+				t.Fatalf("GetTransaction(bad signature) = %v, want svcerr.ErrTxnNotFound", err)
+			}
+		})
 	}
 }
 

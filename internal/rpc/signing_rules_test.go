@@ -220,22 +220,17 @@ func TestSigningConstructionRejectsMismatchedNestedRules(t *testing.T) {
 						case "submit_multisigned":
 							result, rpcErr = (&handlers.SubmitMultisignedMethod{}).Handle(ctx, signingRulesRequest(t, request))
 						}
-						if skip && method == "submit_blob" {
-							require.Nil(t, rpcErr)
-							require.NotNil(t, result)
+						require.Nil(t, result)
+						require.NotNil(t, rpcErr)
+						if method == "submit_blob" {
+							require.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+							require.Equal(t, "fails local checks: "+strings.TrimSuffix(target, "Signature")+": Invalid signature.", rpcErr.ErrorException)
 						} else {
-							require.Nil(t, result)
-							require.NotNil(t, rpcErr)
-							if method == "submit_blob" {
-								require.Equal(t, "invalidTransaction", rpcErr.ErrorString)
-								require.Equal(t, "fails local checks: "+strings.TrimSuffix(target, "Signature")+": Invalid signature.", rpcErr.ErrorException)
-							} else {
-								require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
-								require.Equal(t, "internal", rpcErr.ErrorString)
-								require.Equal(t, "Invalid signature.", rpcErr.Message)
-							}
-							require.Zero(t, ledger.submitCalls)
+							require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
+							require.Equal(t, "internal", rpcErr.ErrorString)
+							require.Equal(t, "Invalid signature.", rpcErr.Message)
 						}
+						require.Zero(t, ledger.submitCalls)
 					}
 				})
 			}

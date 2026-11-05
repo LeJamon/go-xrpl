@@ -67,7 +67,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			return nil, rpcerrors.RpcErrorInvalidTransaction(bindErr.Error())
 		}
 
-		signatureReason := sign.CheckSTTxSignature(parsed, transactionRulesForContext(ctx), signingChecksEnabled(ctx))
+		signatureReason := sign.CheckSTTxSignature(parsed, transactionRulesForContext(ctx), true)
 		if signatureReason != "" {
 			return nil, rpcerrors.RpcErrorInvalidTransaction("fails local checks: " + signatureReason)
 		}
