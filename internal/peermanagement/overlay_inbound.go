@@ -446,14 +446,14 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	// onHandoff: a duplicate or slot-full dialer gets a rejection in lieu
 	// of the upgrade, never both on the same stream. The slot check needs
 	// the verified public key (set above) so reserved/cluster peers still
-	// bypass the inbound cap.
+	// bypass the inbound cap; fixed peers bypass it by remote address.
 	if o.isConnectedTo(postHandshakeEndpoint(peer, peer.Endpoint())) {
 		slog.Info("Inbound rejected: already connected",
 			"t", "Overlay", "remote", peer.Endpoint().Host)
 		o.writeInboundRedirect(tlsConn)
 		return errInboundRejected
 	}
-	bypassInboundLimit := o.isClusterPeer(peer) || o.isReservedPeer(peer)
+	bypassInboundLimit := o.isFixedPeerAddress(peer) || o.isClusterPeer(peer) || o.isReservedPeer(peer)
 	if err := o.reservePeerKey(peer, bypassInboundLimit); err != nil {
 		if errors.Is(err, ErrMaxPeersReached) {
 			slog.Info("Inbound rejected: no slots",
