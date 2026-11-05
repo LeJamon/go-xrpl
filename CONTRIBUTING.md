@@ -15,9 +15,29 @@ the spec, so the correctness bar for any change is **"does this behave the way
 rippled behaves?"** — same field ordering, same TER result codes, same state
 mutations, same edge cases. When in doubt about expected behavior, check rippled.
 
-The local `rippled-worktrees/v3.4.1-oracle/` tree at commit
-`d147fccf54a500fce586522f28d6044c37fd8d29` from private `XRPLF/xrpld-private`
-is the working reference. Do not fetch from the web — use the local copy:
+For the source inventory tests in `just test`, use the public
+[`XRPLF/rippled`](https://github.com/XRPLF/rippled) tag `3.4.1`, whose peeled
+commit is `00e640751460c137636fdb6dae6b4280de355d81`. No private-repository
+access is required. From the go-xrpl repository root:
+
+```bash
+git clone --depth 1 --branch 3.4.1 --single-branch https://github.com/XRPLF/rippled.git ../rippled-worktrees/v3.4.1-oracle
+just test
+```
+
+The tests discover `rippled-worktrees/v3.4.1-oracle/` in the repository or an
+ancestor directory. To use a checkout elsewhere, run
+`GOXRPL_ORACLE_DIR=/absolute/path/to/rippled just test`. Keep the checkout clean,
+including untracked files; no rippled build is needed for these tests.
+
+Each inventory input must match its pinned SHA-256 from private 3.4.1 commit
+`d147fccf54a500fce586522f28d6044c37fd8d29`; the tests log that content
+equivalence. The private checkout and the automatically discovered public
+3.4.0 fallback remain supported. This equivalence applies only to the pinned
+inventory files, not to all release behavior. The private commit remains the
+provenance of the recorded behavioral fixtures.
+
+Use the local checkout for source inspection:
 
 | What you need | Where it lives in `rippled-worktrees/v3.4.1-oracle/` |
 |---------------|------------------------------|
