@@ -857,7 +857,10 @@ func (s *Service) Start() (err error) {
 		}
 	}
 	if selection.validate && !selection.loaded {
-		if err := s.persistValidatedLedger(context.Background(), selection.ledger, true); err != nil {
+		// Starting a new chain can replace a previous initial ledger at the same sequence.
+		token := s.beginValidatedPersistence(selection.ledger.Sequence(), selection.ledger.Hash())
+		if err := s.persistValidatedLedgerAtToken(context.Background(), selection.ledger, true, token,
+			true, nil, s.replayPersistenceProof(selection.ledger.Header())); err != nil {
 			return fmt.Errorf("persist initial ledger: %w", err)
 		}
 	}
