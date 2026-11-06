@@ -28,6 +28,7 @@ func TestSimulateTransactionUsesIsolatedTxQDryRunAdmission(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	for sequence := uint32(1); sequence <= 2; sequence++ {
 		primer := accountset.AccountSet(master).
@@ -110,6 +111,7 @@ func TestSimulateTransactionUsesCurrentFieldsForBoundTransaction(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	mutatedAccount := jtx.NewAccount("simulation-mutated-account")
 	transaction := accountset.AccountSet(master).
@@ -141,6 +143,7 @@ func TestSimulateTransactionUsesCurrentIdentityForBoundApply(t *testing.T) {
 	t.Cleanup(svc.Stop)
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 
 	primer := accountset.AccountSet(master).

@@ -124,18 +124,18 @@ func TestSignedPaymentPathsGolden(t *testing.T) {
 			multisigningHash: signedPathsOriginalMultiHash,
 			decodedPaths: []any{
 				[]any{
-					map[string]any{"account": signedPathsAccountA, "type": 1, "type_hex": "0000000000000001"},
-					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48, "type_hex": "0000000000000030"},
-					map[string]any{"currency": "XRP", "type": 16, "type_hex": "0000000000000010"},
+					map[string]any{"account": signedPathsAccountA, "type": 1},
+					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48},
+					map[string]any{"currency": "XRP", "type": 16},
 				},
 				[]any{
-					map[string]any{"account": signedPathsAccountB, "mpt_issuance_id": signedPathsMPTID, "issuer": signedPathsIssuer, "type": 97, "type_hex": "0000000000000061"},
-					map[string]any{"mpt_issuance_id": signedPathsMPTID, "type": 64, "type_hex": "0000000000000040"},
+					map[string]any{"account": signedPathsAccountB, "mpt_issuance_id": signedPathsMPTID, "issuer": signedPathsIssuer, "type": 97},
+					map[string]any{"mpt_issuance_id": signedPathsMPTID, "type": 64},
 				},
 				[]any{
-					map[string]any{"account": signedPathsAccountA, "type": 1, "type_hex": "0000000000000001"},
-					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48, "type_hex": "0000000000000030"},
-					map[string]any{"currency": "XRP", "type": 16, "type_hex": "0000000000000010"},
+					map[string]any{"account": signedPathsAccountA, "type": 1},
+					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48},
+					map[string]any{"currency": "XRP", "type": 16},
 				},
 			},
 		},
@@ -150,18 +150,18 @@ func TestSignedPaymentPathsGolden(t *testing.T) {
 			multisigningHash: signedPathsReorderedMultiHash,
 			decodedPaths: []any{
 				[]any{
-					map[string]any{"account": signedPathsAccountB, "mpt_issuance_id": signedPathsMPTID, "issuer": signedPathsIssuer, "type": 97, "type_hex": "0000000000000061"},
-					map[string]any{"mpt_issuance_id": signedPathsMPTID, "type": 64, "type_hex": "0000000000000040"},
+					map[string]any{"account": signedPathsAccountB, "mpt_issuance_id": signedPathsMPTID, "issuer": signedPathsIssuer, "type": 97},
+					map[string]any{"mpt_issuance_id": signedPathsMPTID, "type": 64},
 				},
 				[]any{
-					map[string]any{"account": signedPathsAccountA, "type": 1, "type_hex": "0000000000000001"},
-					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48, "type_hex": "0000000000000030"},
-					map[string]any{"currency": "XRP", "type": 16, "type_hex": "0000000000000010"},
+					map[string]any{"account": signedPathsAccountA, "type": 1},
+					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48},
+					map[string]any{"currency": "XRP", "type": 16},
 				},
 				[]any{
-					map[string]any{"account": signedPathsAccountA, "type": 1, "type_hex": "0000000000000001"},
-					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48, "type_hex": "0000000000000030"},
-					map[string]any{"currency": "XRP", "type": 16, "type_hex": "0000000000000010"},
+					map[string]any{"account": signedPathsAccountA, "type": 1},
+					map[string]any{"currency": "USD", "issuer": signedPathsIssuer, "type": 48},
+					map[string]any{"currency": "XRP", "type": 16},
 				},
 			},
 		},
