@@ -375,3 +375,64 @@ func TestGotBase_HeaderAdmissionPrecedesAdoptionAndPersistence(t *testing.T) {
 		t.Fatal("rejected header persisted its state root")
 	}
 }
+
+// Based on rippled InboundLedger_test.cpp testPeerZeroAccountHashFails
+// (XRPLF/rippled#8476): a peer header whose account hash is zero fails the
+// acquisition without charging the peer or publishing the header.
+func TestGotBase_ZeroAccountHashFailsAcquisition(t *testing.T) {
+	t.Parallel()
+	source := shamap.New(shamap.TypeTransaction)
+	var key [32]byte
+	key[0] = 0x78
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	txHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 600, TxHash: txHash})
+	family := backend.NewMemory()
+	acquisition := New(ledgerHash, 0, 14, slog.New(slog.NewTextHandler(io.Discard, nil)), WithFamily(family))
+
+	err = acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}})
+	if !errors.Is(err, ErrHeaderRejected) {
+		t.Fatalf("GotBase error = %v, want ErrHeaderRejected", err)
+	}
+	if acquisition.State() != StateFailed || !errors.Is(acquisition.Err(), ErrHeaderRejected) {
+		t.Fatalf("state = %d, err = %v, want a failed acquisition", acquisition.State(), acquisition.Err())
+	}
+	if acquisition.header != nil || acquisition.stateMap != nil || acquisition.txMap != nil {
+		t.Fatal("zero account hash header was published")
+	}
+	if acquisition.Seq() != 0 {
+		t.Fatalf("failed hash-only acquisition adopted seq %d", acquisition.Seq())
+	}
+	if useful, err := acquisition.GotBaseUsefulContext(t.Context(), []message.LedgerNode{{NodeData: headerData}}); useful != 0 || err != nil {
+		t.Fatalf("failed acquisition took another base reply: useful=%d err=%v", useful, err)
+	}
+}
+
+// A header with a zero transaction hash names an empty transaction set and is
+// taken, leaving only the state map to fetch.
+func TestGotBase_ZeroTransactionHashIsTaken(t *testing.T) {
+	t.Parallel()
+	source := shamap.New(shamap.TypeState)
+	var key [32]byte
+	key[0] = 0x79
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 601, AccountHash: rootHash})
+	acquisition := New(ledgerHash, 601, 15, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := acquisition.GotBase([]message.LedgerNode{{NodeData: headerData}}); err != nil {
+		t.Fatalf("GotBase: %v", err)
+	}
+	if acquisition.State() != StateWantBase || acquisition.header == nil || !acquisition.haveTx || acquisition.haveState {
+		t.Fatalf("state=%d header=%v haveTx=%v haveState=%v", acquisition.State(), acquisition.header != nil, acquisition.haveTx, acquisition.haveState)
+	}
+}

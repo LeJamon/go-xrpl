@@ -137,6 +137,9 @@ var txFlagsTable = map[string]map[string]uint32{
 		"tfLoanImpair":   0x00020000,
 		"tfLoanUnimpair": 0x00040000,
 	},
+	"LoanBrokerSet": {
+		"tfLoanBrokerPrivate": 0x00010000,
+	},
 	"SponsorshipSet": {
 		"tfSponsorshipSetRequireSignForFee":       0x00010000,
 		"tfSponsorshipClearRequireSignForFee":     0x00020000,
@@ -148,6 +151,11 @@ var txFlagsTable = map[string]map[string]uint32{
 		"tfSponsorshipEnd":      0x00010000,
 		"tfSponsorshipCreate":   0x00020000,
 		"tfSponsorshipReassign": 0x00040000,
+	},
+	"ConfidentialMPTHolderKeyUpdate": {
+		"tfHolderKeyRotation": 0x00010000,
+		"tfHolderKeyRecovery": 0x00020000,
+		"tfCancelRecovery":    0x00040000,
 	},
 }
 
@@ -229,6 +237,9 @@ var ledgerFlagsTable = map[string]map[string]uint32{
 	"Sponsorship": {
 		"lsfSponsorshipRequireSignForFee":     entry.LsfSponsorshipRequireSignForFee,
 		"lsfSponsorshipRequireSignForReserve": entry.LsfSponsorshipRequireSignForReserve,
+	},
+	"LoanBroker": {
+		"lsfLoanBrokerPrivate": entry.LsfLoanBrokerPrivate,
 	},
 }
 

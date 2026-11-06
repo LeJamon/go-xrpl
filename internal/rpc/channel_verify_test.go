@@ -435,3 +435,57 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, verified, "Signature for wrong channel_id should not verify")
 }
+
+// Based on rippled PayChan_test.cpp testRPC (XRPLF/rippled#7582).
+func TestChannelVerifyFieldTypes(t *testing.T) {
+	const publicKey = "021D93E21C44160A1B3B66DA1F37B86BE39FFEA3FC4B95FAA2063F82EE823599F6"
+	const channel = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		message string
+	}{
+		{"numeric channel_id", `{"public_key":"` + publicKey + `","channel_id":2000,"amount":"1000","signature":"DEADBEEF"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters."},
+		{"numeric signature", `{"public_key":"` + publicKey + `","channel_id":"` + channel + `","amount":"1000","signature":1}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters."},
+		{"public key checked before channel_id type", `{"public_key":"bad","channel_id":2000,"amount":"1000","signature":"DEADBEEF"}`, rpcerrors.RpcPUBLIC_MALFORMED, ""},
+		{"numeric amount", `{"public_key":"` + publicKey + `","channel_id":"` + channel + `","amount":1000,"signature":1}`, rpcerrors.RpcCHANNEL_AMT_MALFORMED, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := (&handlers.ChannelVerifyMethod{}).Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			if tc.message != "" {
+				assert.Equal(t, tc.message, rpcErr.Message)
+			}
+		})
+	}
+}
+
+// rippled decodes public_key and signature with strUnHex, which reads an
+// odd-length string's first digit as a whole leading byte.
+func TestChannelVerifyOddLengthHex(t *testing.T) {
+	const channel = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	authorized, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(channelAuthorizeTestContext(types.ApiVersion1),
+		json.RawMessage(`{"secret":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","channel_id":"`+channel+`","amount":"1000"}`))
+	require.Nil(t, rpcErr)
+	signature := authorized.(map[string]any)["signature"].(string)
+
+	verify := func(publicKey, signature string) (any, *rpcerrors.RpcError) {
+		return (&handlers.ChannelVerifyMethod{}).Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, json.RawMessage(
+			`{"public_key":"`+publicKey+`","channel_id":"`+channel+`","amount":"1000","signature":"`+signature+`"}`))
+	}
+	// The genesis key 03… written without its leading zero digit.
+	result, rpcErr := verify("330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", signature)
+	require.Nil(t, rpcErr)
+	assert.Equal(t, true, result.(map[string]any)["signature_verified"])
+
+	result, rpcErr = verify("0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", "ABC")
+	require.Nil(t, rpcErr, "an odd-length hex signature decodes")
+	assert.Equal(t, false, result.(map[string]any)["signature_verified"])
+
+	_, rpcErr = verify("0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", "ABG")
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+}

@@ -25,6 +25,12 @@ var (
 	ErrNodeSerialization = errors.New("verified node serialization failed")
 	// ErrTraversalBudget means a resumable backed walk reached its visit limit.
 	ErrTraversalBudget = errors.New("SHAMap traversal budget exhausted")
+	// ErrMapInvalid reports a syncing map found to hold a hash-verified inner
+	// node at leaf depth. Its root hash commits to a tree that cannot exist,
+	// so no peer can complete it.
+	ErrMapInvalid = errors.New("SHAMap is invalid: inner node at leaf depth")
+	// errInnerAtLeafDepth is the scanner's internal signal for ErrMapInvalid.
+	errInnerAtLeafDepth = errors.New("inner node at leaf depth")
 	// ErrNodeNotInStore marks a backed-map descend whose child is genuinely
 	// absent from the family store, distinguishing a true miss from a
 	// transient fetch failure (I/O error, cancellation).

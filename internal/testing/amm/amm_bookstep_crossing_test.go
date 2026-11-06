@@ -2,6 +2,7 @@
 package amm_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -70,7 +71,7 @@ func TestAMMBookStep_FillModes(t *testing.T) {
 
 	// Passive: offer stays on books without crossing AMM.
 	// Reference: rippled AMMExtended_test.cpp testFillModes
-	// With fixAMMv1_1, passive offers respect AMM quality threshold properly.
+	// Passive offers respect the AMM quality threshold.
 	t.Run("Passive", func(t *testing.T) {
 		pool := [2]tx.Amount{amm.XRPAmount(10100), amm.IOUAmount(nil, "USD", 10000)}
 		amm.TestAMM(t, &pool, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
@@ -415,17 +416,12 @@ func TestAMMBookStep_StepLimit(t *testing.T) {
 		t.Skip("Skipping step limit test in short mode (creates 2000 offers)")
 	}
 
-	for _, fixAMMv1_1 := range []bool{false, true} {
-		label := "PreFix"
-		if fixAMMv1_1 {
-			label = "PostFix"
-		}
-		t.Run(label, func(t *testing.T) {
+	for _, fixAMMv1_3 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fixAMMv1_3=%t", fixAMMv1_3), func(t *testing.T) {
 			env := amm.NewAMMTestEnv(t)
 			dan := jtx.NewAccount("dan")
 			ed := jtx.NewAccount("ed")
-			if !fixAMMv1_1 {
-				env.DisableFeature("fixAMMv1_1")
+			if !fixAMMv1_3 {
 				env.DisableFeature("fixAMMv1_3")
 			}
 			env.Close()
@@ -469,10 +465,7 @@ func TestAMMBookStep_StepLimit(t *testing.T) {
 
 			aliceUSD, ok := env.LookupIOUBalance(env.Alice, env.GW, "USD")
 			require.True(t, ok, "Alice USD trust line must remain present")
-			wantAliceUSD := state.NewIssuedAmountFromValue(2_050_126_257_867_561, -15, "USD", env.GW.Address)
-			if fixAMMv1_1 {
-				wantAliceUSD = state.NewIssuedAmountFromValue(2_050_125_257_867_587, -15, "USD", env.GW.Address)
-			}
+			wantAliceUSD := state.NewIssuedAmountFromValue(2_050_125_257_867_587, -15, "USD", env.GW.Address)
 			require.Equal(t, 0, aliceUSD.Compare(wantAliceUSD),
 				"Alice USD balance must match the source step-limit vector")
 			require.Equal(t, uint32(2), env.TestEnv.OwnerCount(env.Alice),

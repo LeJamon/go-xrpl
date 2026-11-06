@@ -21,24 +21,11 @@ import (
 // touching ledger state.
 type ChannelVerifyMethod struct{ baseHandler }
 
-// channelVerifyRequest represents the request parameters
-type channelVerifyRequest struct {
-	PublicKey string `json:"public_key"`
-	ChannelID string `json:"channel_id"`
-	Amount    string `json:"amount"`
-	Signature string `json:"signature"`
-}
-
 func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	var request channelVerifyRequest
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
-		}
+	fields, rpcErr := rawJSONFields(params)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(params, &fields)
 
 	// Validate required fields
 	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
@@ -59,34 +46,32 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// rippled:
 	// pk = parseBase58<PublicKey>(TokenType::AccountPublic, strPk);
 	// if (!pk) { pkHex = strUnHex(strPk); if (!pkHex) return rpcError(rpcPUBLIC_MALFORMED); ... }
-	pubKeyHex, err := parsePublicKey(request.PublicKey)
+	publicKey, ok := jsonCppStringRaw(fields["public_key"])
+	if !ok {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	pubKeyHex, err := parsePublicKey(publicKey)
 	if err != nil {
 		return nil, rpcerrors.RpcErrorPublicMalformed()
 	}
 
-	// Validate channel_id - must be valid 256-bit hex (64 characters)
-	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
-	channelIDHex := strings.ToUpper(request.ChannelID)
-	if len(channelIDHex) != 64 {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
+	channelIDHex, rpcErr := parseChannelID(fields["channel_id"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
-	}
-
-	// Validate amount - must be a string that parses to uint64
-	// rippled: std::optional<std::uint64_t> const optDrops = params[jss::amount].isString() ? to_uint64(params[jss::amount].asString()) : std::nullopt;
-	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
-	drops, err := strconv.ParseUint(request.Amount, 10, 64)
-	if err != nil {
-		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
+	drops, rpcErr := parseChannelAmount(fields["amount"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
-	// Validate signature - must be valid hex and non-empty
-	// rippled: auto sig = strUnHex(params[jss::signature].asString()); if (!sig || !sig->size()) return rpcError(rpcINVALID_PARAMS);
-	sigHex := strings.ToUpper(request.Signature)
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil || len(sigBytes) == 0 {
+	// The signature must be a non-empty hex string.
+	signature, ok := rawJSONString(fields["signature"])
+	if !ok {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	sigBytes, ok := unHexOddLength(signature)
+	sigHex := strings.ToUpper(hex.EncodeToString(sigBytes))
+	if !ok || len(sigBytes) == 0 {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
@@ -129,13 +114,13 @@ func parsePublicKey(pubKey string) (pubKeyHex string, err error) {
 	}()
 
 	// Try to decode as hex first (this is the more common case and safer)
-	pubKeyBytes, hexErr := hex.DecodeString(pubKey)
-	if hexErr == nil && len(pubKeyBytes) == 33 {
+	pubKeyBytes, ok := unHexOddLength(pubKey)
+	if ok && len(pubKeyBytes) == 33 {
 		// Validate public key type
 		// SECP256K1 compressed: 33 bytes, starts with 02 or 03
 		// ED25519: 33 bytes, starts with ED
 		if pubKeyBytes[0] == 0x02 || pubKeyBytes[0] == 0x03 || pubKeyBytes[0] == 0xED {
-			return strings.ToUpper(pubKey), nil
+			return strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
 		}
 	}
 
@@ -146,6 +131,16 @@ func parsePublicKey(pubKey string) (pubKeyHex string, err error) {
 	}
 
 	return "", fmt.Errorf("invalid public key")
+}
+
+// unHexOddLength decodes hex the way rippled's strUnHex does: an odd-length
+// string takes its first digit as a whole leading byte, so "ABC" is 0x0A 0xBC.
+func unHexOddLength(s string) ([]byte, bool) {
+	if len(s)%2 == 1 {
+		s = "0" + s
+	}
+	decoded, err := hex.DecodeString(s)
+	return decoded, err == nil
 }
 
 // verifySignature verifies a signature against a message using the public key

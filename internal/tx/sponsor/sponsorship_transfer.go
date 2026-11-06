@@ -73,6 +73,17 @@ func (s *SponsorshipTransfer) Validate() error {
 	return nil
 }
 
+// PreflightRules rejects a zero ObjectID once fixCleanup3_5_0 is enabled.
+func (s *SponsorshipTransfer) PreflightRules(rules *amendment.Rules) error {
+	if s.ObjectID == "" || !rules.Enabled(amendment.FeatureFixCleanup3_5_0) {
+		return nil
+	}
+	if id, err := parseObjectID(s.ObjectID); err == nil && id == ([32]byte{}) {
+		return ter.Errorf(ter.TemMALFORMED, "ObjectID must not be zero")
+	}
+	return nil
+}
+
 func (s *SponsorshipTransfer) sponsee() (string, [20]byte, ter.Result) {
 	account := s.Account
 	if s.Sponsee != "" {

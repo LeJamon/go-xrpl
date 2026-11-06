@@ -203,7 +203,7 @@ func newInterruptedBackedWalk(t *testing.T, cancelFirst bool) (*SHAMap, *oneShot
 	return dest, family, target
 }
 
-func TestBackedWalkRetryDoesNotConsumeInvalidDepthBranch(t *testing.T) {
+func TestBackedWalkMarksInnerAtLeafDepthInvalid(t *testing.T) {
 	bottom := newInnerNode()
 	bottom.hashes[0] = [32]byte{1}
 	bottom.isBranch = 1
@@ -253,11 +253,20 @@ func TestBackedWalkRetryDoesNotConsumeInvalidDepthBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A subtree hash says nothing about depth, so even a full-below entry for
+	// the leaf-depth node must not let the walk skip it.
+	family.FullBelowCache().Insert(family.FullBelowCache().Generation(), bottom.Hash())
+
+	// The walk marks the map invalid rather than retrying it: no peer can
+	// supply a tree whose root commits to an inner node at leaf depth.
 	for attempt := range 2 {
-		_, err := dest.GetMissingNodesContext(t.Context(), 1, nil)
-		if !errors.Is(err, errMaxDepthExceeded) {
-			t.Fatalf("attempt %d: got %v, want %v", attempt+1, err, errMaxDepthExceeded)
+		missing, err := dest.GetMissingNodesContext(t.Context(), 1, nil)
+		if !errors.Is(err, ErrMapInvalid) || len(missing) != 0 {
+			t.Fatalf("attempt %d: got %v, %v, want %v", attempt+1, missing, err, ErrMapInvalid)
 		}
+	}
+	if dest.tree.state != stateInvalid {
+		t.Fatalf("state = %v, want invalid", dest.tree.state)
 	}
 	gen := family.FullBelowCache().Generation()
 	if dest.tree.root.isFullBelow(gen) || family.FullBelowCache().Has(gen, rootHash) {

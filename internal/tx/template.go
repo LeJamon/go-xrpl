@@ -67,11 +67,13 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeEscrowCreate: {
 		{name: "Destination", style: soeREQUIRED},
+		{name: "DestinationTag", style: soeOPTIONAL},
 		{name: "Amount", style: soeREQUIRED},
 		{name: "Condition", style: soeOPTIONAL},
 		{name: "CancelAfter", style: soeOPTIONAL},
 		{name: "FinishAfter", style: soeOPTIONAL},
-		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "Bytecode", style: soeOPTIONAL},
+		{name: "Data", style: soeOPTIONAL},
 	},
 	TypeEscrowFinish: {
 		{name: "Owner", style: soeREQUIRED},
@@ -79,6 +81,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "Fulfillment", style: soeOPTIONAL},
 		{name: "Condition", style: soeOPTIONAL},
 		{name: "CredentialIDs", style: soeOPTIONAL},
+		{name: "Gas", style: soeOPTIONAL},
 	},
 	TypeAccountSet: {
 		{name: "EmailHash", style: soeOPTIONAL},
@@ -431,6 +434,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "DebtMaximum", style: soeOPTIONAL},
 		{name: "CoverRateMinimum", style: soeOPTIONAL},
 		{name: "CoverRateLiquidation", style: soeOPTIONAL},
+		{name: "DomainID", style: soeOPTIONAL},
 	},
 	TypeLoanBrokerDelete: {
 		{name: "LoanBrokerID", style: soeREQUIRED},
@@ -532,6 +536,27 @@ var txTemplates = map[Type][]templateField{
 		{name: "MaxFee", style: soeOPTIONAL},
 		{name: "RemainingOwnerCountDelta", style: soeOPTIONAL},
 	},
+	TypeConfidentialMPTMirrorUpdate: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "Holder", style: soeOPTIONAL},
+		{name: "IssuerEncryptedAmount", style: soeOPTIONAL},
+		{name: "AuditorEncryptedAmount", style: soeOPTIONAL},
+		{name: "ZKProof", style: soeREQUIRED},
+	},
+	TypeConfidentialMPTHolderKeyUpdate: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "HolderEncryptionKey", style: soeOPTIONAL},
+		{name: "ConfidentialBalanceSpending", style: soeOPTIONAL},
+		{name: "ConfidentialBalanceInbox", style: soeOPTIONAL},
+		{name: "ZKProof", style: soeOPTIONAL},
+	},
+	TypeTransactionProposalCreate: {
+		{name: "ProposedTransaction", style: soeREQUIRED},
+		{name: "Expiration", style: soeREQUIRED},
+	},
+	TypeTransactionProposalCancel: {
+		{name: "ProposalID", style: soeREQUIRED},
+	},
 	TypeAmendment: {
 		{name: "LedgerSequence", style: soeREQUIRED},
 		{name: "Amendment", style: soeREQUIRED},
@@ -545,6 +570,9 @@ var txTemplates = map[Type][]templateField{
 		{name: "BaseFeeDrops", style: soeOPTIONAL},
 		{name: "ReserveBaseDrops", style: soeOPTIONAL},
 		{name: "ReserveIncrementDrops", style: soeOPTIONAL},
+		{name: "GasLimit", style: soeOPTIONAL},
+		{name: "BytecodeSizeLimit", style: soeOPTIONAL},
+		{name: "GasPrice", style: soeOPTIONAL},
 	},
 	TypeUNLModify: {
 		{name: "UNLModifyDisabling", style: soeREQUIRED},

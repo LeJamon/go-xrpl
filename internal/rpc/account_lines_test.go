@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -653,7 +654,7 @@ func TestAccountLinesPagination(t *testing.T) {
 			name: "Marker continues pagination from previous result",
 			params: map[string]any{
 				"account": validAccount,
-				"marker":  "some-valid-marker",
+				"marker":  strings.Repeat("A", 64) + ",0",
 			},
 			setupMock: func() {
 				mock.accountLinesResult = &types.AccountLinesResult{
@@ -701,11 +702,8 @@ func TestAccountLinesPagination(t *testing.T) {
 				"account": validAccount,
 				"marker":  "corrupted-marker-value",
 			},
-			setupMock: func() {
-				mock.accountLinesErr = errors.New("invalid marker")
-			},
 			expectError:  true,
-			expectedCode: rpcerrors.RpcINTERNAL,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: non-string marker fails
@@ -756,7 +754,7 @@ func TestAccountLinesPagination(t *testing.T) {
 			params: map[string]any{
 				"account": validAccount,
 				"limit":   3,
-				"marker":  "page-2-marker",
+				"marker":  strings.Repeat("B", 64) + ",0",
 			},
 			setupMock: func() {
 				mock.accountLinesResult = &types.AccountLinesResult{
@@ -1329,7 +1327,7 @@ func TestAccountLinesDeletedEntry(t *testing.T) {
 
 		params := map[string]any{
 			"account": aliceAccount,
-			"marker":  "marker-pointing-to-deleted-trustline",
+			"marker":  strings.Repeat("C", 64) + ",0",
 		}
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)

@@ -4,6 +4,7 @@
 package escrow_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -39,6 +40,15 @@ func fund5000(env *jtx.TestEnv, accounts ...*jtx.Account) {
 // TestEscrow_Enablement
 // Reference: rippled Escrow_test.cpp testEnablement (lines 38-74)
 // --------------------------------------------------------------------------
+
+// malformedConditionCode is the EscrowFinish result for a condition that does
+// not deserialize: rejected in preflight once fixCleanup3_5_0 is enabled.
+func malformedConditionCode(env *jtx.TestEnv) string {
+	if env.FeatureEnabled("fixCleanup3_5_0") {
+		return "temMALFORMED"
+	}
+	return "tecCRYPTOCONDITION_ERROR"
+}
 
 func TestEscrow_Enablement(t *testing.T) {
 	for _, tokenEscrowEnabled := range []bool{false, true} {
@@ -1419,31 +1429,31 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[0:cs]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[0 : cs-1]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[0 : cs-2]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[1:cs]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[1 : cs-2]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[2:cs]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition(cv[2 : cs-1]).Fulfillment(fv[0:fs]).Fee(150 * env.BaseFee()).Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 
 		// Correct condition, malformed fulfillments
 		result = env.Submit(
@@ -1521,7 +1531,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 				Fulfillment([]byte{}).
 				Fee(150 * env.BaseFee()).
 				Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
@@ -1537,7 +1547,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 
 		// Missing Condition or Fulfillment (must both be present or absent)
 		result = env.Submit(
@@ -1586,7 +1596,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 				Fulfillment([]byte{}).
 				Fee(150 * env.BaseFee()).
 				Build())
-		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.Equal(t, malformedConditionCode(env), result.Code)
 		require.True(t, env.LedgerEntryExists(escrowKey))
 
 		jtx.RequireTxSuccess(t, env.Submit(escrow.EscrowFinish(bob, alice, seq).Build()))
@@ -1623,6 +1633,66 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 // TestEscrow_MetaAndOwnership
 // Reference: rippled Escrow_test.cpp testMetaAndOwnership (lines 1162-1338)
 // --------------------------------------------------------------------------
+
+func TestEscrow_FinishMalformedCondition(t *testing.T) {
+	malformed := []byte{0x78, 0x78, 0x78}
+	cases := []struct {
+		name        string
+		condition   []byte
+		fulfillment []byte
+		fixedCode   string
+	}{
+		{"undecodable condition", malformed, escrow.TestFulfillment1(), "temMALFORMED"},
+		{"empty condition and fulfillment", []byte{}, []byte{}, "temMALFORMED"},
+		{"empty condition", []byte{}, escrow.TestFulfillment1(), "temMALFORMED"},
+		{"valid condition, wrong fulfillment", escrow.TestCondition1(), escrow.TestFulfillmentWrong(), "tecCRYPTOCONDITION_ERROR"},
+		{"valid condition, empty fulfillment", escrow.TestCondition1(), []byte{}, "tecCRYPTOCONDITION_ERROR"},
+	}
+	for _, fixed := range []bool{false, true} {
+		for _, c := range cases {
+			t.Run(fmt.Sprintf("fixCleanup3_5_0=%v/%s", fixed, c.name), func(t *testing.T) {
+				env := jtx.NewTestEnv(t)
+				if fixed {
+					env.EnableFeature("fixCleanup3_5_0")
+				} else {
+					env.DisableFeature("fixCleanup3_5_0")
+				}
+				alice := jtx.NewAccount("alice")
+				bob := jtx.NewAccount("bob")
+				carol := jtx.NewAccount("carol")
+				fund5000(env, alice, bob, carol)
+
+				seq := env.Seq(alice)
+				jtx.RequireTxSuccess(t, env.Submit(
+					escrow.EscrowCreate(alice, carol, xrp(1000)).
+						Condition(escrow.TestCondition1()).
+						CancelTime(env.Now().Add(100*time.Second)).
+						Build()))
+				env.Close()
+
+				before := env.Balance(bob)
+				fee := 150 * env.BaseFee()
+				result := env.Submit(
+					escrow.EscrowFinish(bob, alice, seq).
+						Condition(c.condition).
+						Fulfillment(c.fulfillment).
+						Fee(fee).
+						Build())
+				want := "tecCRYPTOCONDITION_ERROR"
+				if fixed {
+					want = c.fixedCode
+				}
+				require.Equal(t, want, result.Code)
+				if want == "temMALFORMED" {
+					require.Equal(t, before, env.Balance(bob))
+				} else {
+					require.Equal(t, before-fee, env.Balance(bob))
+				}
+				require.True(t, env.LedgerEntryExists(keylet.Escrow(alice.ID, seq)))
+			})
+		}
+	}
+}
 
 func TestEscrow_MetaAndOwnership(t *testing.T) {
 	t.Run("MetadataToSelf", func(t *testing.T) {

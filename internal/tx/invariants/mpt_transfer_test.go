@@ -175,6 +175,8 @@ func TestValidMPTTransferRecoveryPathsWaiveCanTransfer(t *testing.T) {
 		{name: "cover withdraw cleanup", txType: protocol.TxTypeLoanBrokerCoverWithdraw, rules: mptTransferRules(amendment.FeatureMPTokensV2, amendment.FeatureFixCleanup3_2_0)},
 		{name: "loan pay cleanup", txType: protocol.TxTypeLoanPay, rules: mptTransferRules(amendment.FeatureMPTokensV2, amendment.FeatureFixCleanup3_2_0)},
 		{name: "loan pay before cleanup", txType: protocol.TxTypeLoanPay, rules: mptTransferRules(amendment.FeatureMPTokensV2), wantErr: true},
+		{name: "broker delete cleanup", txType: protocol.TxTypeLoanBrokerDelete, rules: mptTransferRules(amendment.FeatureMPTokensV2, amendment.FeatureFixCleanup3_5_0)},
+		{name: "broker delete before cleanup", txType: protocol.TxTypeLoanBrokerDelete, rules: mptTransferRules(amendment.FeatureMPTokensV2, amendment.FeatureFixCleanup3_2_0), wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

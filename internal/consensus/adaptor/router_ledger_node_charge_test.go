@@ -25,6 +25,9 @@ func newLedgerNodeChargeAcquisition(t *testing.T, r *Router, transaction bool) (
 	var opts []inbound.Option
 	if transaction {
 		source, h.TxHash, _ = buildTxSetForTest(t, 2)
+		// The state is local to a transaction-only acquisition, but its header
+		// still names one: a zero account hash names no ledger at all.
+		h.AccountHash = [32]byte{0xA5}
 		opts = append(opts, inbound.WithTransactionOnly())
 	} else {
 		source = shamap.New(shamap.TypeState)

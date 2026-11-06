@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
@@ -29,25 +28,17 @@ type withdrawSupplyFixture struct {
 	stateKeys []keylet.Keylet
 }
 
-func newWithdrawSupplyFixture(t *testing.T, extraLP, fixAMMv1_1 bool, recordedSupply string) withdrawSupplyFixture {
+func newWithdrawSupplyFixture(t *testing.T, extraLP bool, recordedSupply string) withdrawSupplyFixture {
 	t.Helper()
 	env := amm.NewAMMTestEnv(t)
 	env.DisableFeature("SingleAssetVault")
 	env.DisableFeature("LendingProtocol")
 	env.DisableFeature("fixAMMv1_3")
-	if fixAMMv1_1 {
-		env.EnableFeature("fixAMMv1_1")
-	} else {
-		env.DisableFeature("fixAMMv1_1")
-	}
 
 	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol} {
 		env.TestEnv.FundAmount(account, uint64(jtx.XRP(30_000)))
 	}
 	env.Close()
-	if env.Rules().Enabled(amendment.FeatureFixAMMv1_1) != fixAMMv1_1 {
-		t.Fatalf("fixAMMv1_1 state: got %t, want %t", env.Rules().Enabled(amendment.FeatureFixAMMv1_1), fixAMMv1_1)
-	}
 
 	asset1 := tx.Asset{Currency: "ABC", Issuer: env.GW.Address}
 	asset2 := tx.Asset{Currency: "USD", Issuer: env.GW.Address}
@@ -187,21 +178,17 @@ func requireClaimedSupplyFailure(t *testing.T, env *jtx.TestEnv, account *jtx.Ac
 func TestAMMWithdrawSupplyGuard(t *testing.T) {
 	cases := []struct {
 		name              string
-		fixAMMv1_1        bool
 		recordedSupply    string
 		holdingVsRecorded int
 		wantCode          string
 	}{
-		{name: "AboveRecorded/AmendmentOn", fixAMMv1_1: true, recordedSupply: "1414.213562373", holdingVsRecorded: 1, wantCode: "tecINTERNAL"},
-		{name: "AboveRecorded/AmendmentOff", fixAMMv1_1: false, recordedSupply: "1414.213562373", holdingVsRecorded: 1, wantCode: "tecAMM_BALANCE"},
-		{name: "EqualRecorded/AmendmentOn", fixAMMv1_1: true, recordedSupply: "", holdingVsRecorded: 0, wantCode: "tesSUCCESS"},
-		{name: "EqualRecorded/AmendmentOff", fixAMMv1_1: false, recordedSupply: "", holdingVsRecorded: 0, wantCode: "tesSUCCESS"},
-		{name: "BelowRecorded/AmendmentOn", fixAMMv1_1: true, recordedSupply: "1414.213562373096", holdingVsRecorded: -1, wantCode: "tesSUCCESS"},
-		{name: "BelowRecorded/AmendmentOff", fixAMMv1_1: false, recordedSupply: "1414.213562373096", holdingVsRecorded: -1, wantCode: "tesSUCCESS"},
+		{name: "AboveRecorded", recordedSupply: "1414.213562373", holdingVsRecorded: 1, wantCode: "tecINTERNAL"},
+		{name: "EqualRecorded", recordedSupply: "", holdingVsRecorded: 0, wantCode: "tesSUCCESS"},
+		{name: "BelowRecorded", recordedSupply: "1414.213562373096", holdingVsRecorded: -1, wantCode: "tesSUCCESS"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := newWithdrawSupplyFixture(t, true, tc.fixAMMv1_1, tc.recordedSupply)
+			fixture := newWithdrawSupplyFixture(t, true, tc.recordedSupply)
 			require.Equal(t, tc.holdingVsRecorded, fixture.holding.Compare(fixture.stored))
 			sequence := fixture.env.Seq(fixture.env.GW)
 			balance := fixture.env.Balance(fixture.env.GW)
@@ -217,8 +204,8 @@ func TestAMMWithdrawSupplyGuard(t *testing.T) {
 }
 
 func TestAMMWithdrawSupplyGuardLPTokenAndHoldingsPrecedence(t *testing.T) {
-	t.Run("LPTokenAboveRecorded/AmendmentOn", func(t *testing.T) {
-		fixture := newWithdrawSupplyFixture(t, true, true, "1414.213562373")
+	t.Run("LPTokenAboveRecorded", func(t *testing.T) {
+		fixture := newWithdrawSupplyFixture(t, true, "1414.213562373")
 		sequence := fixture.env.Seq(fixture.env.GW)
 		balance := fixture.env.Balance(fixture.env.GW)
 		before := snapshotLedgerState(t, fixture.env.TestEnv, fixture.stateKeys)
@@ -227,43 +214,22 @@ func TestAMMWithdrawSupplyGuardLPTokenAndHoldingsPrecedence(t *testing.T) {
 		requireClaimedSupplyFailure(t, fixture.env.TestEnv, fixture.env.GW, result, "tecINTERNAL", before, sequence, balance)
 	})
 
-	for _, fixAMMv1_1 := range []bool{true, false} {
-		name := "LPTokenAboveOwnHoldings/AmendmentOff"
-		if fixAMMv1_1 {
-			name = "LPTokenAboveOwnHoldings/AmendmentOn"
-		}
-		t.Run(name, func(t *testing.T) {
-			fixture := newWithdrawSupplyFixture(t, true, fixAMMv1_1, "1414.213562373")
-			requested, err := state.NewIssuedAmountFromDecimalString("1414.213562373096", fixture.lptIssue.Currency, fixture.amm.Address)
-			require.NoError(t, err)
-			sequence := fixture.env.Seq(fixture.env.GW)
-			balance := fixture.env.Balance(fixture.env.GW)
-			before := snapshotLedgerState(t, fixture.env.TestEnv, fixture.stateKeys)
-			result := fixture.env.Submit(amm.AMMWithdraw(fixture.env.GW, fixture.asset1, fixture.asset2).
-				LPTokenIn(requested).LPToken().Build())
-			requireClaimedSupplyFailure(t, fixture.env.TestEnv, fixture.env.GW, result, "tecAMM_INVALID_TOKENS", before, sequence, balance)
-		})
-	}
+	t.Run("LPTokenAboveOwnHoldings", func(t *testing.T) {
+		fixture := newWithdrawSupplyFixture(t, true, "1414.213562373")
+		requested, err := state.NewIssuedAmountFromDecimalString("1414.213562373096", fixture.lptIssue.Currency, fixture.amm.Address)
+		require.NoError(t, err)
+		sequence := fixture.env.Seq(fixture.env.GW)
+		balance := fixture.env.Balance(fixture.env.GW)
+		before := snapshotLedgerState(t, fixture.env.TestEnv, fixture.stateKeys)
+		result := fixture.env.Submit(amm.AMMWithdraw(fixture.env.GW, fixture.asset1, fixture.asset2).
+			LPTokenIn(requested).LPToken().Build())
+		requireClaimedSupplyFailure(t, fixture.env.TestEnv, fixture.env.GW, result, "tecAMM_INVALID_TOKENS", before, sequence, balance)
+	})
 }
 
 func TestAMMWithdrawSupplyGuardSingleProviderReconciliation(t *testing.T) {
-	for _, fixAMMv1_1 := range []bool{true, false} {
-		name := "AmendmentOff"
-		if fixAMMv1_1 {
-			name = "AmendmentOn"
-		}
-		t.Run(name, func(t *testing.T) {
-			fixture := newWithdrawSupplyFixture(t, false, fixAMMv1_1, "1414.213562373")
-			sequence := fixture.env.Seq(fixture.env.GW)
-			balance := fixture.env.Balance(fixture.env.GW)
-			before := snapshotLedgerState(t, fixture.env.TestEnv, fixture.stateKeys)
-			result := fixture.env.Submit(amm.AMMWithdraw(fixture.env.GW, fixture.asset1, fixture.asset2).WithdrawAll().Build())
-			if fixAMMv1_1 {
-				amm.ExpectTER(t, result, "tesSUCCESS")
-				require.False(t, fixture.env.LedgerEntryExists(fixture.ammKey))
-				return
-			}
-			requireClaimedSupplyFailure(t, fixture.env.TestEnv, fixture.env.GW, result, "tecAMM_BALANCE", before, sequence, balance)
-		})
-	}
+	fixture := newWithdrawSupplyFixture(t, false, "1414.213562373")
+	result := fixture.env.Submit(amm.AMMWithdraw(fixture.env.GW, fixture.asset1, fixture.asset2).WithdrawAll().Build())
+	amm.ExpectTER(t, result, "tesSUCCESS")
+	require.False(t, fixture.env.LedgerEntryExists(fixture.ammKey))
 }

@@ -34,6 +34,7 @@ func TestSponsorCommonFieldAppliedToEveryEntry(t *testing.T) {
 func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	macro := readRippledFile(t, "include/xrpl/protocol/detail/ledger_entries.macro")
 	tagged := parseTaggedStyles(t, macro)
+	addRC1StagedStyles(t, tagged)
 	if len(tagged) != len(Specs) {
 		t.Fatalf("rippled v3.4.1 has %d ledger templates, schema has %d", len(tagged), len(Specs))
 	}

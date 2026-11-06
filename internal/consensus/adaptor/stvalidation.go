@@ -66,6 +66,10 @@ const (
 	fieldLoadFee        = 24
 	fieldReserveBase    = 31
 	fieldReserveInc     = 32
+	// SmartEscrow fee votes.
+	fieldGasLimit          = 81
+	fieldBytecodeSizeLimit = 82
+	fieldGasPrice          = 83
 
 	// UINT64 fields (type 3)
 	fieldBaseFee       = 5
@@ -145,13 +149,16 @@ func validationFieldKey(typeCode, fieldCode int) uint32 {
 }
 
 var validationTemplate = map[uint32]validationFieldSpec{
-	validationFieldKey(typeUINT32, fieldFlags):          {name: "Flags", requiredBit: requiredFlags},
-	validationFieldKey(typeUINT32, fieldLedgerSequence): {name: "LedgerSequence", requiredBit: requiredLedgerSequence},
-	validationFieldKey(typeUINT32, fieldCloseTime):      {name: "CloseTime"},
-	validationFieldKey(typeUINT32, fieldSigningTime):    {name: "SigningTime", requiredBit: requiredSigningTime},
-	validationFieldKey(typeUINT32, fieldLoadFee):        {name: "LoadFee"},
-	validationFieldKey(typeUINT32, fieldReserveBase):    {name: "ReserveBase"},
-	validationFieldKey(typeUINT32, fieldReserveInc):     {name: "ReserveIncrement"},
+	validationFieldKey(typeUINT32, fieldFlags):             {name: "Flags", requiredBit: requiredFlags},
+	validationFieldKey(typeUINT32, fieldLedgerSequence):    {name: "LedgerSequence", requiredBit: requiredLedgerSequence},
+	validationFieldKey(typeUINT32, fieldCloseTime):         {name: "CloseTime"},
+	validationFieldKey(typeUINT32, fieldSigningTime):       {name: "SigningTime", requiredBit: requiredSigningTime},
+	validationFieldKey(typeUINT32, fieldLoadFee):           {name: "LoadFee"},
+	validationFieldKey(typeUINT32, fieldReserveBase):       {name: "ReserveBase"},
+	validationFieldKey(typeUINT32, fieldReserveInc):        {name: "ReserveIncrement"},
+	validationFieldKey(typeUINT32, fieldGasLimit):          {name: "GasLimit"},
+	validationFieldKey(typeUINT32, fieldBytecodeSizeLimit): {name: "BytecodeSizeLimit"},
+	validationFieldKey(typeUINT32, fieldGasPrice):          {name: "GasPrice"},
 
 	validationFieldKey(typeUINT64, fieldBaseFee):       {name: "BaseFee"},
 	validationFieldKey(typeUINT64, fieldCookie):        {name: "Cookie", defaultZero: true},

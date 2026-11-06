@@ -1,7 +1,12 @@
 package rpc
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"strings"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/keylet"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -31,6 +36,77 @@ func (p *Publisher) PublishTransaction(event *TransactionEvent, affectedAccounts
 	if len(affectedAccounts) > 0 {
 		p.manager.BroadcastToAcceptedAccountsVersioned(v1, v2, affectedAccounts)
 	}
+
+	if p.manager.HasMPTIssuanceSubscribers() {
+		if ids := affectedMPTIssuances(event.Meta); len(ids) > 0 {
+			p.manager.BroadcastToMPTIssuancesVersioned(v1, v2, ids)
+		}
+	}
+}
+
+// affectedMPTIssuances lists the MPT issuances a transaction's metadata
+// touches: the ID derived from each MPTokenIssuance node's Sequence and
+// Issuer, plus every MPTokenIssuanceID field and MPT amount among the node's
+// final (or, for a created node, new) fields.
+func affectedMPTIssuances(metaJSON json.RawMessage) []string {
+	var meta struct {
+		AffectedNodes []map[string]struct {
+			LedgerEntryType string                     `json:"LedgerEntryType"`
+			NewFields       map[string]json.RawMessage `json:"NewFields"`
+			FinalFields     map[string]json.RawMessage `json:"FinalFields"`
+		} `json:"AffectedNodes"`
+	}
+	if len(metaJSON) == 0 || json.Unmarshal(metaJSON, &meta) != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	add := func(id string) {
+		if len(id) == 48 {
+			seen[strings.ToUpper(id)] = struct{}{}
+		}
+	}
+	for _, wrapper := range meta.AffectedNodes {
+		for kind, node := range wrapper {
+			fields := node.FinalFields
+			if kind == "CreatedNode" {
+				fields = node.NewFields
+			}
+			if fields == nil {
+				continue
+			}
+			if node.LedgerEntryType == "MPTokenIssuance" {
+				var sequence uint32
+				var issuer string
+				if json.Unmarshal(fields["Sequence"], &sequence) == nil && json.Unmarshal(fields["Issuer"], &issuer) == nil {
+					if _, accountID, err := addresscodec.DecodeClassicAddressToAccountID(issuer); err == nil && len(accountID) == 20 {
+						id := keylet.MakeMPTID(sequence, [20]byte(accountID))
+						add(hex.EncodeToString(id[:]))
+					}
+				}
+			}
+			for name, raw := range fields {
+				if name == "MPTokenIssuanceID" {
+					var id string
+					if json.Unmarshal(raw, &id) == nil {
+						add(id)
+					}
+					continue
+				}
+				var amount struct {
+					MPTIssuanceID *string `json:"mpt_issuance_id"`
+					Value         *string `json:"value"`
+				}
+				if json.Unmarshal(raw, &amount) == nil && amount.MPTIssuanceID != nil && amount.Value != nil {
+					add(*amount.MPTIssuanceID)
+				}
+			}
+		}
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
 }
 func marshalTransactionEvent(event *TransactionEvent, apiVersion int) ([]byte, error) {
 	txJSON, err := txprojection.ProjectRaw(event.Transaction, event.Hash, apiVersion)

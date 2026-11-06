@@ -421,12 +421,70 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 // it, and convert to the result type. The production adapter package has the
 // canonical service-to-types conversions for reference.
 
-func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountLinesResult, error) {
-	return nil, errNotImplemented
+// accountQuery resolves the ledger and account an account query runs against.
+func (a *ledgerAdapter) accountQuery(ctx context.Context, account, ledgerIndex string) (*ledger.Ledger, [20]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, [20]byte{}, false, err
+	}
+	target, validated, err := a.resolveLedger(ledgerIndex)
+	if err != nil {
+		return nil, [20]byte{}, false, err
+	}
+	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return nil, [20]byte{}, false, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	return target, [20]byte(accountIDBytes), validated, nil
 }
 
-func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountOffersResult, error) {
-	return nil, errNotImplemented
+func (a *ledgerAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*types.AccountLinesResult, error) {
+	target, accountID, validated, err := a.accountQuery(ctx, account, ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	result, err := ledgerservice.QueryAccountLines(ctx, target, account, accountID, validated, peer, limit, marker)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]types.TrustLine, len(result.Lines))
+	for i, line := range result.Lines {
+		lines[i] = types.TrustLine{
+			Account: line.Account, Balance: line.Balance, Currency: line.Currency,
+			Limit: line.Limit, LimitPeer: line.LimitPeer,
+			QualityIn: line.QualityIn, QualityOut: line.QualityOut,
+			NoRipple: line.NoRipple, NoRipplePeer: line.NoRipplePeer,
+			Authorized: line.Authorized, PeerAuthorized: line.PeerAuthorized,
+			Freeze: line.Freeze, FreezePeer: line.FreezePeer,
+			DeepFreeze: line.DeepFreeze, DeepFreezePeer: line.DeepFreezePeer,
+			HasReserve: line.HasReserve,
+		}
+	}
+	return &types.AccountLinesResult{
+		Account: result.Account, Lines: lines, LedgerIndex: result.LedgerIndex,
+		LedgerHash: result.LedgerHash, Validated: result.Validated, Marker: result.Marker,
+	}, nil
+}
+
+func (a *ledgerAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountOffersResult, error) {
+	target, accountID, validated, err := a.accountQuery(ctx, account, ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	result, err := ledgerservice.QueryAccountOffers(ctx, target, account, accountID, validated, limit, marker)
+	if err != nil {
+		return nil, err
+	}
+	offers := make([]types.AccountOffer, len(result.Offers))
+	for i, offer := range result.Offers {
+		offers[i] = types.AccountOffer{
+			Flags: offer.Flags, Seq: offer.Seq, TakerGets: offer.TakerGets,
+			TakerPays: offer.TakerPays, Quality: offer.Quality, Expiration: offer.Expiration,
+		}
+	}
+	return &types.AccountOffersResult{
+		Account: result.Account, Offers: offers, LedgerIndex: result.LedgerIndex,
+		LedgerHash: result.LedgerHash, Validated: result.Validated, Marker: result.Marker,
+	}, nil
 }
 
 func (a *ledgerAdapter) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {

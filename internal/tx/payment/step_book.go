@@ -513,7 +513,7 @@ func (s *BookStep) forEachOffer(
 		// to the lower-quality LOB tier (which would block an otherwise crossable
 		// AMM). Reference: rippled BookStep.cpp tryAMM lines 845-851.
 		qualityThreshold := lobQuality
-		if fixAMMv1_1Enabled(sb) && lobQuality != nil {
+		if lobQuality != nil {
 			qualityThreshold = s.tipQualityThreshold(*lobQuality)
 		}
 		ammOffer := s.getAMMOffer(sb, qualityThreshold)
@@ -1450,7 +1450,7 @@ func (s *BookStep) initAMMLiquidity(
 	view *PaymentSandbox,
 	ammCtx *AMMContext,
 	parentCloseTime uint32,
-	fixAMMv1_1, fixAMMv1_2 bool,
+	fixAMMv1_2 bool,
 ) {
 	ammKey := keylet.AMMAsset(bookSideFromIssue(s.book.In), bookSideFromIssue(s.book.Out))
 	ammData, err := view.Read(ammKey)
@@ -1477,7 +1477,7 @@ func (s *BookStep) initAMMLiquidity(
 		tradingFee,
 		s.book.In, s.book.Out,
 		ammCtx,
-		fixAMMv1_1, fixAMMv1_2,
+		fixAMMv1_2,
 	)
 }
 

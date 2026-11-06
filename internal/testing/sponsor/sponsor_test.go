@@ -522,6 +522,24 @@ func TestSponsorshipTransferObjectCreateReassignEnd(t *testing.T) {
 		"ending sponsorship does not refund prefunded reserve capacity")
 }
 
+func TestSponsorshipTransferZeroObjectID(t *testing.T) {
+	env, sponsee, _, sponsor1, _ := sponsorEnv(t)
+	env.EnableFeature("fixCleanup3_5_0")
+	env.Close()
+
+	zero := keylet.Keylet{}
+	seq := env.Seq(sponsee)
+	require.Equal(t, "temMALFORMED", transferObject(env, sponsee, zero, nil, sponsortx.SponsorshipTransferFlagEnd).Code)
+	require.Equal(t, "temMALFORMED", transferObject(env, sponsee, zero, sponsor1, sponsortx.SponsorshipTransferFlagCreate).Code)
+	require.Equal(t, "temMALFORMED", transferObject(env, sponsee, zero, sponsor1, sponsortx.SponsorshipTransferFlagReassign).Code)
+	require.Equal(t, seq, env.Seq(sponsee))
+
+	legacy, legacySponsee, _, _, _ := sponsorEnv(t)
+	legacy.DisableFeature("fixCleanup3_5_0")
+	legacy.Close()
+	require.Equal(t, "tecNO_ENTRY", transferObject(legacy, legacySponsee, zero, nil, sponsortx.SponsorshipTransferFlagEnd).Code)
+}
+
 func TestSponsoredCheckCreateAndDeleteLifecycle(t *testing.T) {
 	env, sponsee, destination, sponsor, _ := sponsorEnv(t)
 	remaining := int32(1)

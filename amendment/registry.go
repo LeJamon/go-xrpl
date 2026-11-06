@@ -28,6 +28,11 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureCosign                        = registerFeature("Cosign", SupportedNo, VoteDefaultNo)
+	FeatureSmartEscrow                   = registerFeature("SmartEscrow", SupportedNo, VoteDefaultNo)
+	FeatureLendingProtocolV1_2           = registerFeature("LendingProtocolV1_2", SupportedNo, VoteDefaultNo)
+	FeatureFixCleanup3_5_0               = registerFix("fixCleanup3_5_0", SupportedNo, VoteDefaultNo)
+	FeatureConfidentialMPTKeyRotation    = registerFeature("ConfidentialMPTKeyRotation", SupportedNo, VoteDefaultNo)
 	FeatureFixBatchV1_2                  = registerFix("fixBatchV1_2", SupportedYes, VoteDefaultYes)
 	FeatureFixCleanup3_4_0               = registerFix("fixCleanup3_4_0", SupportedYes, VoteDefaultNo)
 	FeatureSponsor                       = registerFeature("Sponsor", SupportedYes, VoteDefaultNo)
@@ -68,7 +73,6 @@ var (
 	FeatureFixEnforceNFTokenTrustline    = registerFix("fixEnforceNFTokenTrustline", SupportedYes, VoteDefaultNo)
 	FeatureFixReducedOffersV2            = registerFix("fixReducedOffersV2", SupportedYes, VoteDefaultNo)
 	FeatureNFTokenMintOffer              = registerFeature("NFTokenMintOffer", SupportedYes, VoteDefaultNo)
-	FeatureFixAMMv1_1                    = registerFix("fixAMMv1_1", SupportedYes, VoteDefaultNo)
 	FeatureFixPreviousTxnID              = registerFix("fixPreviousTxnID", SupportedYes, VoteDefaultNo)
 	FeatureFixXChainRewardRounding       = registerFix("fixXChainRewardRounding", SupportedYes, VoteDefaultNo)
 	FeatureFixEmptyDID                   = registerFix("fixEmptyDID", SupportedYes, VoteDefaultNo)
@@ -82,11 +86,13 @@ var (
 	FeatureFixRemoveNFTokenAutoTrustLine = registerFix("fixRemoveNFTokenAutoTrustLine", SupportedYes, VoteDefaultYes)
 )
 
-// Obsolete features (supported but no longer voted on).
+// NonFungibleTokensV1_1 replaced these three and rippled no longer knows them,
+// so they are unsupported: a ledger enabling one amendment-blocks the node.
+// They remain rule IDs that Rules.Enabled derives from NonFungibleTokensV1_1.
 var (
-	FeatureFixNFTokenNegOffer  = registerFix("fixNFTokenNegOffer", SupportedYes, VoteObsolete)
-	FeatureFixNFTokenDirV1     = registerFix("fixNFTokenDirV1", SupportedYes, VoteObsolete)
-	FeatureNonFungibleTokensV1 = registerFeature("NonFungibleTokensV1", SupportedYes, VoteObsolete)
+	FeatureFixNFTokenNegOffer  = registerFix("fixNFTokenNegOffer", SupportedNo, VoteDefaultNo)
+	FeatureFixNFTokenDirV1     = registerFix("fixNFTokenDirV1", SupportedNo, VoteDefaultNo)
+	FeatureNonFungibleTokensV1 = registerFeature("NonFungibleTokensV1", SupportedNo, VoteDefaultNo)
 )
 
 // Retired features (active for 2+ years, pre-amendment code removed). Order
@@ -109,6 +115,7 @@ var (
 	FeatureFix1623                     = registerRetired("fix1623")
 	FeatureFix1781                     = registerRetired("fix1781")
 	FeatureFixAmendmentMajorityCalc    = registerRetired("fixAmendmentMajorityCalc")
+	FeatureFixAMMv1_1                  = registerRetired("fixAMMv1_1")
 	FeatureFixCheckThreading           = registerRetired("fixCheckThreading")
 	FeatureFixDisallowIncomingV1       = registerRetired("fixDisallowIncomingV1")
 	FeatureFixInnerObjTemplate         = registerRetired("fixInnerObjTemplate")

@@ -1,18 +1,9 @@
 package payment
 
 import (
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
-
-// fixAMMv1_1Enabled reports whether fixAMMv1_1 governs this execution,
-// nil-defaulting to the active-network value (enabled) for rules-free contexts
-// such as pathfinding liquidity estimation.
-func fixAMMv1_1Enabled(sb *PaymentSandbox) bool {
-	rules := sb.Rules()
-	return rules == nil || rules.Enabled(amendment.FeatureFixAMMv1_1)
-}
 
 // QualityUpperBound returns an upper bound on the quality of this step.
 // It selects the tip offer (CLOB or AMM), then adjusts the tip quality for
@@ -76,18 +67,18 @@ func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) 
 // lobQuality holds the tip. Returns (nil, nil) when there are no offers.
 //
 // This is the single shared tip resolution used by both QualityUpperBound and
-// GetQualityFunc, so the fixAMMv1_1 quality-threshold logic cannot drift.
+// GetQualityFunc, so the quality-threshold logic cannot drift.
 // Reference: rippled BookStep.cpp tip() lines 938-974.
 func (s *BookStep) tip(sb *PaymentSandbox) (lobQuality *Quality, ammOffer *AMMOffer) {
 	lobQuality = s.getCLOBTipQuality(sb)
 
 	if s.ammLiquidity != nil {
-		// With fixAMMv1_1, pass a quality threshold to getAMMOffer so the AMM
+		// Pass a quality threshold to getAMMOffer so the AMM
 		// doesn't generate tiny offers when its quality barely exceeds CLOB.
 		// This prevents the payment engine from going into many iterations.
 		// Reference: rippled BookStep.cpp tip() lines 962-967
 		var qualityThreshold *Quality
-		if fixAMMv1_1Enabled(sb) && lobQuality != nil {
+		if lobQuality != nil {
 			qualityThreshold = s.tipQualityThreshold(*lobQuality)
 		}
 
@@ -193,12 +184,11 @@ func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevSt
 
 	if s.offerCrossing {
 		// Offer crossing. The quality upper bound assumes no fee unless the
-		// single-path AMM out amount is non-constant under fixAMMv1_1; in all
-		// other cases (pre-fix, CLOB, or multi-path AMM) the quality is
-		// returned unadjusted. AMM never pays the out fee here.
+		// single-path AMM out amount is non-constant; for a CLOB or multi-path
+		// AMM tip the quality is returned unadjusted. AMM never pays the out fee here.
 		// Reference: rippled BookStep.cpp lines 519-558.
 		multiPath := s.ammLiquidity != nil && s.ammLiquidity.ammContext.MultiPath()
-		if !fixAMMv1_1Enabled(v) || !isAMM || multiPath {
+		if !isAMM || multiPath {
 			return ofrQ
 		}
 		trIn = QualityOne

@@ -54,10 +54,21 @@ var privateV341GoOnlyFeatures = []struct {
 	vote      VoteBehavior
 	retired   bool
 }{
+	{name: "Cosign", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "SmartEscrow", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "LendingProtocolV1_2", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "fixCleanup3_5_0", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "ConfidentialMPTKeyRotation", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "InvariantsV1_1", supported: SupportedNo, vote: VoteDefaultNo},
-	{name: "NonFungibleTokensV1", supported: SupportedYes, vote: VoteObsolete},
-	{name: "fixNFTokenDirV1", supported: SupportedYes, vote: VoteObsolete},
-	{name: "fixNFTokenNegOffer", supported: SupportedYes, vote: VoteObsolete},
+	{name: "NonFungibleTokensV1", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "fixNFTokenDirV1", supported: SupportedNo, vote: VoteDefaultNo},
+	{name: "fixNFTokenNegOffer", supported: SupportedNo, vote: VoteDefaultNo},
+}
+
+// rc1RetiredFeatures are private v3.4.1 registrations that rippled 3.5.0-rc1
+// moved to XRPL_RETIRE_FIX.
+var rc1RetiredFeatures = map[string]bool{
+	"fixAMMv1_1": true,
 }
 
 func loadPrivateV341Fixture(t *testing.T) privateV341Fixture {
@@ -175,11 +186,15 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 		if feature.Supported != wantSupported {
 			t.Errorf("feature %q support = %v, want %v (native backend available=%v)", expected.Name, feature.Supported, wantSupported, mptcrypto.Available())
 		}
+		wantRetired := expected.Retired
+		if rc1RetiredFeatures[expected.Name] {
+			wantVote, wantRetired = VoteObsolete, true
+		}
 		if feature.Vote != wantVote {
 			t.Errorf("feature %q vote = %v, want %v", expected.Name, feature.Vote, wantVote)
 		}
-		if feature.Retired != expected.Retired {
-			t.Errorf("feature %q retired = %v, want %v", expected.Name, feature.Retired, expected.Retired)
+		if feature.Retired != wantRetired {
+			t.Errorf("feature %q retired = %v, want %v", expected.Name, feature.Retired, wantRetired)
 		}
 	}
 
@@ -204,7 +219,7 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 		}
 	}
 	if want := len(privateNames) + len(privateV341GoOnlyFeatures); len(registered) != want {
-		t.Fatalf("Go registry has %d features, want %d private registrations plus four intentional entries", len(registered), want)
+		t.Fatalf("Go registry has %d features, want %d private registrations plus %d intentional entries", len(registered), len(privateNames), len(privateV341GoOnlyFeatures))
 	}
 	for name := range registered {
 		if _, inPrivate := privateNames[name]; inPrivate {

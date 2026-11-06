@@ -30,6 +30,10 @@ type Table struct {
 	// upVoted tracks amendments explicitly voted for by the operator
 	upVoted map[[32]byte]bool
 
+	// entries holds amendments beyond the supported ones that a vote named,
+	// with the name it carried, so `feature` reports them.
+	entries map[[32]byte]string
+
 	// unsupportedEnabled is set once an amendment this build does not support
 	// becomes enabled. Cached counterpart of HasUnsupportedEnabled.
 	// Mirrors rippled's AmendmentTableImpl::unsupportedEnabled_.
@@ -73,6 +77,7 @@ func NewTable() *Table {
 		enabled: make(map[[32]byte]bool),
 		vetoed:  make(map[[32]byte]bool),
 		upVoted: make(map[[32]byte]bool),
+		entries: make(map[[32]byte]string),
 	}
 }
 
@@ -154,6 +159,41 @@ func (t *Table) IsVetoed(featureID [32]byte) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.vetoed[featureID]
+}
+
+// AddEntry records an amendment the operator or a `feature` request named,
+// with the name the vote carried, if any. A known name is kept when a later
+// reference carries none. Mirrors the entries rippled's AmendmentTableImpl
+// adds for upvotes and vetoes beyond its supported amendments.
+func (t *Table) AddEntry(featureID [32]byte, name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if existing, ok := t.entries[featureID]; ok && name == "" {
+		name = existing
+	}
+	t.entries[featureID] = name
+}
+
+// EntryName returns the name recorded for an amendment added by AddEntry.
+func (t *Table) EntryName(featureID [32]byte) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	name, ok := t.entries[featureID]
+	return name, ok
+}
+
+// EntryIDs returns the amendments added by AddEntry or upvoted.
+func (t *Table) EntryIDs() [][32]byte {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	ids := make([][32]byte, 0, len(t.upVoted)+len(t.entries))
+	for id := range t.upVoted {
+		ids = append(ids, id)
+	}
+	for id := range t.entries {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // IsUpVoted returns true if the amendment is explicitly upvoted.
@@ -344,6 +384,9 @@ func (t *Table) Clone() *Table {
 	}
 	for id := range t.upVoted {
 		clone.upVoted[id] = true
+	}
+	for id, name := range t.entries {
+		clone.entries[id] = name
 	}
 	clone.unsupportedEnabled = t.unsupportedEnabled
 	clone.blocked = t.blocked

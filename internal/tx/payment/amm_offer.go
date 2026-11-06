@@ -120,7 +120,7 @@ func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool) (Ei
 	newIn := swapAssetOut(
 		o.ammLiquidity.ammContext.numberMath(),
 		o.balanceIn, o.balanceOut, limitAmt,
-		o.ammLiquidity.tradingFee, o.ammLiquidity.fixAMMv1_1,
+		o.ammLiquidity.tradingFee,
 	)
 	return toEitherAmt(newIn), limit
 }
@@ -152,7 +152,7 @@ func (o *AMMOffer) LimitIn(ofrIn, ofrOut, limit EitherAmount, roundUp bool, fixR
 	newOut := swapAssetIn(
 		o.ammLiquidity.ammContext.numberMath(),
 		o.balanceIn, o.balanceOut, limitAmt,
-		o.ammLiquidity.tradingFee, o.ammLiquidity.fixAMMv1_1,
+		o.ammLiquidity.tradingFee,
 	)
 	return limit, toEitherAmt(newOut)
 }
