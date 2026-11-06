@@ -3,8 +3,10 @@ package list
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSitePollerRedirectTargetByStatus(t *testing.T) {
@@ -32,19 +34,22 @@ func TestSitePollerRedirectTargetByStatus(t *testing.T) {
 			targetURL = server.URL + "/target"
 
 			poller := newPollerForLifecycleTest(t, server.URL+"/start")
-			result := poller.fetchWithRedirect(t.Context(), server.URL+"/start", nil)
-			if result.err != nil {
-				t.Fatalf("fetchWithRedirect: %v", result.err)
+			permanentTarget := ""
+			result, err := poller.fetch(t.Context(), server.URL+"/start", func(target string) {
+				permanentTarget = target
+			})
+			if err != nil {
+				t.Fatalf("fetch: %v", err)
 			}
 			if result.responseURI != targetURL {
 				t.Fatalf("response URI = %q, want %q", result.responseURI, targetURL)
 			}
-			wantTarget := server.URL + "/start"
+			wantTarget := ""
 			if tc.permanent {
 				wantTarget = targetURL
 			}
-			if result.targetURI != wantTarget || result.permanentRedirected != tc.permanent {
-				t.Fatalf("redirect state = (%q, %v), want (%q, %v)", result.targetURI, result.permanentRedirected, wantTarget, tc.permanent)
+			if permanentTarget != wantTarget {
+				t.Fatalf("permanent target = %q, want %q", permanentTarget, wantTarget)
 			}
 		})
 	}
@@ -70,11 +75,11 @@ func TestSitePollerRedirectLocationValidation(t *testing.T) {
 			}))
 			defer server.Close()
 			poller := newPollerForLifecycleTest(t, server.URL)
-			result := poller.fetchWithRedirect(t.Context(), server.URL, nil)
-			if result.err == nil {
-				t.Fatal("fetchWithRedirect unexpectedly succeeded")
+			_, err := poller.fetch(t.Context(), server.URL, nil)
+			if err == nil {
+				t.Fatal("fetch unexpectedly succeeded")
 			}
-			if got, _ := fetchDiagnostic(result.err); got != tc.want {
+			if got, _ := fetchDiagnostic(err); got != tc.want {
 				t.Fatalf("diagnostic = %q, want %q", got, tc.want)
 			}
 		})
@@ -82,17 +87,18 @@ func TestSitePollerRedirectLocationValidation(t *testing.T) {
 }
 
 func TestSitePollerPermanentTargetSurvivesTemporaryRedirectAndFailure(t *testing.T) {
-	var permanentHits atomic.Int32
+	var initialHits, permanentHits atomic.Int32
 	var targetURL string
 	var latestURL string
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/start":
+			initialHits.Add(1)
 			w.Header().Set("Location", targetURL)
 			w.WriteHeader(http.StatusMovedPermanently)
 		case "/permanent":
-			if permanentHits.Add(1) == 1 {
+			if permanentHits.Add(1) <= 2 {
 				w.Header().Set("Location", server.URL+"/temporary")
 				w.WriteHeader(http.StatusTemporaryRedirect)
 				return
@@ -110,17 +116,23 @@ func TestSitePollerPermanentTargetSurvivesTemporaryRedirectAndFailure(t *testing
 	latestURL = server.URL + "/latest"
 	poller := newPollerForLifecycleTest(t, server.URL+"/start")
 
-	result := poller.fetchWithRedirect(t.Context(), server.URL+"/start", nil)
-	if result.err != nil || !result.permanentRedirected || result.targetURI != targetURL {
-		t.Fatalf("initial redirect state = (%q, %v), err=%v", result.targetURI, result.permanentRedirected, result.err)
+	for i, wantTarget := range []string{targetURL, targetURL, latestURL, latestURL} {
+		poller.fetchSite(t.Context(), poller.sites[0])
+		snapshot := poller.aggregator.SiteSnapshot()
+		wantURI := server.URL + "/start (redirects to " + wantTarget + ")"
+		if len(snapshot) != 1 || snapshot[0].URI != wantURI {
+			t.Fatalf("poll %d URI = %#v, want %q", i, snapshot, wantURI)
+		}
+		wantError := "missing fields"
+		if i >= 2 {
+			wantError = "fetch error"
+		}
+		if snapshot[0].LastError != wantError {
+			t.Fatalf("poll %d error = %q, want %q", i, snapshot[0].LastError, wantError)
+		}
 	}
-	result = poller.fetchWithRedirect(t.Context(), result.targetURI, nil)
-	if result.err != nil || result.permanentRedirected || result.targetURI != targetURL {
-		t.Fatalf("temporary redirect state = (%q, %v), err=%v", result.targetURI, result.permanentRedirected, result.err)
-	}
-	result = poller.fetchWithRedirect(t.Context(), result.targetURI, nil)
-	if result.err == nil || !result.permanentRedirected || result.targetURI != latestURL {
-		t.Fatalf("failed permanent redirect state = (%q, %v), err=%v", result.targetURI, result.permanentRedirected, result.err)
+	if initialHits.Load() != 1 || permanentHits.Load() != 3 {
+		t.Fatalf("poll targets: initial=%d permanent=%d, want 1 and 3", initialHits.Load(), permanentHits.Load())
 	}
 }
 
@@ -161,7 +173,11 @@ func TestSitePollerPublishesPermanentTargetBeforeFetchCompletes(t *testing.T) {
 		poller.fetchSite(t.Context(), poller.sites[0])
 		close(done)
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("redirected request did not arrive")
+	}
 
 	snapshot := agg.SiteSnapshot()
 	wantURI := server.URL + "/start (redirects to " + targetURL + ")"
@@ -175,6 +191,7 @@ func TestSitePollerPublishesPermanentTargetBeforeFetchCompletes(t *testing.T) {
 func TestSitePollerDuplicateSitesKeepRedirectTargetsIsolated(t *testing.T) {
 	var initialHits atomic.Int32
 	targetHits := map[string]int{}
+	var targetMu sync.Mutex
 	var targetOne, targetTwo string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -186,7 +203,9 @@ func TestSitePollerDuplicateSitesKeepRedirectTargetsIsolated(t *testing.T) {
 			w.WriteHeader(http.StatusMovedPermanently)
 			return
 		}
+		targetMu.Lock()
 		targetHits[r.URL.Path]++
+		targetMu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
@@ -216,6 +235,8 @@ func TestSitePollerDuplicateSitesKeepRedirectTargetsIsolated(t *testing.T) {
 
 	poller.fetchSite(t.Context(), poller.sites[0])
 	poller.fetchSite(t.Context(), poller.sites[1])
+	targetMu.Lock()
+	defer targetMu.Unlock()
 	if initialHits.Load() != 2 || targetHits["/one"] != 2 || targetHits["/two"] != 2 {
 		t.Fatalf("poll targets = initial %d, one %d, two %d; want initial 2 and each target 2", initialHits.Load(), targetHits["/one"], targetHits["/two"])
 	}
@@ -228,9 +249,31 @@ func TestSitePollerFetchDiagnostics(t *testing.T) {
 		want string
 	}{
 		{
-			name: "transport",
+			name: "file transport",
 			uri:  func(*testing.T) string { return "file:///definitely/missing-validator-list" },
 			want: "fetch error",
+		},
+		{
+			name: "http transport",
+			uri: func(t *testing.T) string {
+				server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					panic(http.ErrAbortHandler)
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+			want: "fetch error",
+		},
+		{
+			name: "non-OK success status",
+			uri: func(t *testing.T) string {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+			want: "bad result code",
 		},
 		{
 			name: "http status",

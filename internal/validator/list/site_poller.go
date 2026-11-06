@@ -219,10 +219,8 @@ type siteState struct {
 }
 
 type redirectTrace struct {
-	permanentTarget     string
-	permanentRedirected bool
-	responseURI         string
-	onPermanent         func(string)
+	responseURI string
+	onPermanent func(string)
 }
 
 type redirectTraceKey struct{}
@@ -235,37 +233,17 @@ func (e *redirectError) Error() string {
 	return e.message
 }
 
-type fetchFailureClass uint8
-
-const (
-	fetchFailureTransport fetchFailureClass = iota
-	fetchFailureStatus
-	fetchFailureRedirect
-)
-
-type fetchFailure struct {
-	class  fetchFailureClass
-	err    error
-	detail error
+type httpStatusError struct {
+	status string
 }
 
-func (e *fetchFailure) Error() string {
-	if e.detail != nil {
-		return e.detail.Error()
-	}
-	return e.err.Error()
-}
-
-func (e *fetchFailure) Unwrap() error {
-	return e.err
+func (e *httpStatusError) Error() string {
+	return "HTTP " + e.status
 }
 
 type fetchResult struct {
-	body                []byte
-	responseURI         string
-	targetURI           string
-	permanentRedirected bool
-	err                 error
+	body        []byte
+	responseURI string
 }
 
 // SitePoller fetches publisher list URLs on a periodic cadence and
@@ -400,10 +378,8 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if trace, ok := req.Context().Value(redirectTraceKey{}).(*redirectTrace); ok {
 		trace.responseURI = location
 		if status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect {
-			trace.permanentTarget = location
-			trace.permanentRedirected = true
 			if trace.onPermanent != nil {
-				trace.onPermanent(trace.permanentTarget)
+				trace.onPermanent(location)
 			}
 		}
 	}
@@ -608,15 +584,15 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// next_refresh_time for the duration of an in-flight fetch.
 	p.aggregator.setNextRefreshOccurrence(s.uri, s.occurrence, time.Now().UTC().Add(interval))
 
-	result := p.fetchWithRedirect(ctx, uri, func(target string) {
+	result, err := p.fetch(ctx, uri, func(target string) {
 		p.mu.Lock()
 		s.targetURI = target
 		p.mu.Unlock()
 		p.aggregator.setSiteTargetOccurrence(s.uri, s.occurrence, target)
 	})
-	if result.err != nil {
-		lastErr, retry := fetchDiagnostic(result.err)
-		p.recordFailure(s, retry, lastErr, "validator list site fetch failed", "uri", uri, "error", result.err)
+	if err != nil {
+		lastErr, retry := fetchDiagnostic(err)
+		p.recordFailure(s, retry, lastErr, "validator list site fetch failed", "uri", uri, "error", err)
 		return
 	}
 	responseURI := result.responseURI
@@ -735,107 +711,39 @@ func (p *SitePoller) recordFailure(s *siteState, retry bool, lastErr, logMsg str
 // fetch retrieves the raw envelope body from the given URI. Scheme
 // validation has already happened at construction time, so the switch
 // here is structural rather than defensive.
-func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
-	result := p.fetchWithRedirect(ctx, uri, nil)
-	return result.body, result.err
-}
-
-func (p *SitePoller) fetchWithRedirect(ctx context.Context, uri string, onPermanent func(string)) fetchResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	trace := &redirectTrace{permanentTarget: uri, responseURI: uri, onPermanent: onPermanent}
+func (p *SitePoller) fetch(ctx context.Context, uri string, onPermanent func(string)) (fetchResult, error) {
+	trace := &redirectTrace{responseURI: uri, onPermanent: onPermanent}
 	ctx = context.WithValue(ctx, redirectTraceKey{}, trace)
-	result := fetchResult{targetURI: uri}
 	parsed, err := url.Parse(uri)
 	if err != nil {
-		result.err = &fetchFailure{class: fetchFailureTransport, err: fmt.Errorf("parse URI: %w", err)}
-		return result
+		return fetchResult{}, fmt.Errorf("parse URI: %w", err)
 	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "http", "https":
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 		if err != nil {
-			result.err = &fetchFailure{class: fetchFailureTransport, err: fmt.Errorf("build request: %w", err)}
-			return result
+			return fetchResult{}, fmt.Errorf("build request: %w", err)
 		}
 		resp, err := p.client.Do(req)
 		if err != nil {
-			failureClass := fetchFailureTransport
-			var redirectErr *redirectError
-			if errors.As(err, &redirectErr) {
-				failureClass = fetchFailureRedirect
-			}
-			failure := fmt.Errorf("HTTP GET: %w", err)
-			if failureClass == fetchFailureRedirect {
-				result.targetURI = trace.permanentTarget
-				result.permanentRedirected = trace.permanentRedirected
-				result.err = &fetchFailure{
-					class:  failureClass,
-					err:    redirectErr,
-					detail: failure,
-				}
-				return result
-			}
-			result.targetURI = trace.permanentTarget
-			result.permanentRedirected = trace.permanentRedirected
-			result.err = &fetchFailure{
-				class: failureClass,
-				err:   failure,
-			}
-			return result
+			return fetchResult{}, fmt.Errorf("HTTP GET: %w", err)
 		}
 		defer resp.Body.Close()
 		if isRedirectStatus(resp.StatusCode) && resp.Header.Get("Location") == "" {
-			result.targetURI = trace.permanentTarget
-			result.permanentRedirected = trace.permanentRedirected
-			result.err = &fetchFailure{
-				class: fetchFailureRedirect,
-				err:   errors.New("missing location"),
-			}
-			return result
+			return fetchResult{}, &redirectError{message: "missing location"}
 		}
 		if resp.StatusCode != http.StatusOK {
-			result.targetURI = trace.permanentTarget
-			result.permanentRedirected = trace.permanentRedirected
-			result.err = &fetchFailure{
-				class: fetchFailureStatus,
-				err:   fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status),
-			}
-			return result
+			return fetchResult{}, &httpStatusError{status: resp.Status}
 		}
 		body, err := readBoundedBody(resp.Body)
-		if err != nil {
-			result.targetURI = trace.permanentTarget
-			result.permanentRedirected = trace.permanentRedirected
-			result.err = &fetchFailure{
-				class: fetchFailureTransport,
-				err:   err,
-			}
-			return result
-		}
-		result.responseURI = trace.responseURI
-		result.body = body
-		result.targetURI = trace.permanentTarget
-		result.permanentRedirected = trace.permanentRedirected
-		return result
+		return fetchResult{body: body, responseURI: trace.responseURI}, err
 	case "file":
 		// Host already rejected at construction (see validateSiteURI);
 		// Path already guaranteed non-empty.
 		body, err := readBoundedFile(parsed.Path)
-		if err != nil {
-			result.err = &fetchFailure{class: fetchFailureTransport, err: err}
-			return result
-		}
-		result.body = body
-		result.responseURI = uri
-		return result
+		return fetchResult{body: body, responseURI: uri}, err
 	default:
-		result.err = &fetchFailure{
-			class: fetchFailureTransport,
-			err:   fmt.Errorf("unsupported URI scheme %q", parsed.Scheme),
-		}
-		return result
+		return fetchResult{}, fmt.Errorf("unsupported URI scheme %q", parsed.Scheme)
 	}
 }
 
@@ -849,18 +757,15 @@ func isRedirectStatus(status int) bool {
 }
 
 func fetchDiagnostic(err error) (string, bool) {
-	var failure *fetchFailure
-	if !errors.As(err, &failure) {
-		return "fetch error", true
-	}
-	switch failure.class {
-	case fetchFailureStatus:
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) {
 		return "bad result code", true
-	case fetchFailureRedirect:
-		return failure.err.Error(), false
-	default:
-		return "fetch error", true
 	}
+	var redirectErr *redirectError
+	if errors.As(err, &redirectErr) {
+		return redirectErr.Error(), false
+	}
+	return "fetch error", true
 }
 
 // bestDisposition reduces a collection of dispositions to the single
