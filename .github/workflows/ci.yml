@@ -319,13 +319,13 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (rippled v3.4.0)
+      - name: Check out equivalent inventory sources (public rippled v3.4.1)
         if: matrix.group == 'libs'
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
-          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
-          path: rippled-worktrees/v3.4.0-oracle
+          ref: 00e640751460c137636fdb6dae6b4280de355d81
+          path: rippled-worktrees/v3.4.1-oracle
       - name: Verify private definitions fixture provenance
         if: matrix.group == 'libs'
         run: |
@@ -411,14 +411,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Check out equivalent inventory sources (rippled v3.4.0)
+      - name: Check out equivalent inventory sources (public rippled v3.4.1)
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
-          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
-          path: rippled-worktrees/v3.4.0-oracle
+          ref: 00e640751460c137636fdb6dae6b4280de355d81
+          path: rippled-worktrees/v3.4.1-oracle
       - uses: ./.github/actions/setup
       - name: Run focused release regressions twice
+        env:
+          GOXRPL_ORACLE_DIR: ${{ github.workspace }}/rippled-worktrees/v3.4.1-oracle
         run: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
       - name: Record producer evidence
         if: always()

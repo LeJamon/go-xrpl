@@ -175,7 +175,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name: "Invalid hex format - contains non-hex chars",
@@ -184,7 +184,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name: "Entry not found",
@@ -1235,14 +1235,14 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 			params: map[string]any{
 				"index": "",
 			},
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name: "Index with non-hex characters",
 			params: map[string]any{
 				"index": "ZZZEC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			},
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name: "Check with wrong length",
@@ -1286,6 +1286,23 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 			assert.Contains(t, rpcErr.Message, tc.expectedError)
 		})
 	}
+}
+
+func TestLedgerEntryMalformedIndexMatchesRippled(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newLedgerEntryTestServices(mock),
+	}
+
+	_, rpcErr := method.Handle(ctx, json.RawMessage(`{"index":"xyz"}`))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+	assert.Equal(t, "Invalid field 'index', not hex string.", rpcErr.Message)
 }
 
 // Entry Not Found Error Code Test
@@ -2592,14 +2609,14 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 			params: map[string]any{
 				"index": 12345,
 			},
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name: "Index as array should fail",
 			params: map[string]any{
 				"index": []string{"A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"},
 			},
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name: "Check as integer should fail",
@@ -2726,14 +2743,14 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "index",
 			paramValue:    "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B21",
 			expectError:   true,
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name:          "Index too long (66 chars)",
 			paramName:     "index",
 			paramValue:    "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217DAB",
 			expectError:   true,
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name:          "Index with lowercase hex (valid)",
@@ -2754,14 +2771,14 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "index",
 			paramValue:    "G33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			expectError:   true,
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		{
 			name:          "Index with spaces (invalid)",
 			paramName:     "index",
 			paramValue:    "A33EC6BB 85FB5674 074C4A3A 43373BB1 7645308F 3EAE1933 E3E35252 162B217D",
 			expectError:   true,
-			expectedError: "Invalid index",
+			expectedError: "Invalid field 'index', not hex string.",
 		},
 		// Check validation
 		{

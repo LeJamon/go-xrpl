@@ -108,8 +108,8 @@ func runServiceStandaloneSnapshot(t *testing.T, c conformance.SnapshotCase) {
 	t.Helper()
 	ctx := context.Background()
 	svc := newServiceFromSnapshotHistory(t, c, true)
-	// Standalone SubmitTransaction deliberately bypasses signatures in the
-	// service, so signature evidence comes only from the consensus-mode run.
+	// Standalone changes close semantics, but SubmitTransaction still admits
+	// only transactions with valid signatures.
 	submitServiceSequence(t, svc, c)
 	seq, err := svc.acceptLedgerAt(ctx, protocol.FromRippleTime(c.Fixture.CloseInput.CloseTime))
 	if err != nil {

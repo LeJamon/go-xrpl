@@ -821,7 +821,7 @@ func TestDeserializeMPTIssuanceID(t *testing.T) {
 				0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
 				0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
 			},
-			expectedOutput: "1234567890abcdef1234567890abcdef1234567890abcdef",
+			expectedOutput: "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF",
 			expErr:         nil,
 		},
 		{
@@ -847,7 +847,7 @@ func TestDeserializeMPTIssuanceID(t *testing.T) {
 				0xCC, 0xDD, 0xEE, 0xFF, 0xAA, 0xBB, 0xCC, 0xDD,
 				0xEE, 0xFF, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
 			},
-			expectedOutput: "aabbccddeeffaabbccddeeffaabbccddeeffaabbccddeeff",
+			expectedOutput: "AABBCCDDEEFFAABBCCDDEEFFAABBCCDDEEFFAABBCCDDEEFF",
 			expErr:         nil,
 		},
 	}
@@ -884,7 +884,7 @@ func TestDeserializeMPTAmount(t *testing.T) {
 			},
 			expectedOutput: map[string]any{
 				"value":           "1000000",
-				"mpt_issuance_id": "1234567890abcdef1234567890abcdef1234567890abcdef",
+				"mpt_issuance_id": "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF",
 			},
 			expErr: nil,
 		},
@@ -904,7 +904,7 @@ func TestDeserializeMPTAmount(t *testing.T) {
 			},
 			expectedOutput: map[string]any{
 				"value":           "-1000000",
-				"mpt_issuance_id": "1234567890abcdef1234567890abcdef1234567890abcdef",
+				"mpt_issuance_id": "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF",
 			},
 			expErr: nil,
 		},
@@ -946,6 +946,7 @@ func TestXRPAmountNegativeZero(t *testing.T) {
 
 func TestMPTAmountNegativeZero(t *testing.T) {
 	const issuanceID = "1234567890abcdef1234567890abcdef1234567890abcdef"
+	const canonicalID = "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF"
 	const canonicalHex = "6000000000000000001234567890abcdef1234567890abcdef1234567890abcdef"
 	amount := &Amount{}
 	defs := definitions.Get()
@@ -961,7 +962,7 @@ func TestMPTAmountNegativeZero(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{
 		"value":           "0",
-		"mpt_issuance_id": issuanceID,
+		"mpt_issuance_id": canonicalID,
 	}, decoded)
 
 	_, err = amount.FromJSON(map[string]any{
@@ -978,7 +979,7 @@ func TestMPTAmountNegativeZero(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{
 		"value":           "0",
-		"mpt_issuance_id": issuanceID,
+		"mpt_issuance_id": canonicalID,
 	}, decoded)
 
 	reencoded, err := amount.FromJSON(decoded)
@@ -1270,7 +1271,7 @@ func TestAmount_ToJson(t *testing.T) {
 			},
 			expected: map[string]any{
 				"value":           "1000000",
-				"mpt_issuance_id": "1234567890abcdef1234567890abcdef1234567890abcdef",
+				"mpt_issuance_id": "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF",
 			},
 			expPass: true,
 			err:     nil,

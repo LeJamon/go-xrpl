@@ -34,6 +34,7 @@ func TestSubmitTransactionOmitsStateWithoutValidatedLedger(t *testing.T) {
 	svc.mu.Unlock()
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	destination := jtx.NewAccount("submit-state-destination")
 	txn := payment.Pay(master, destination, 100_000_000).Fee(10).Sequence(1).Build()
@@ -66,6 +67,7 @@ func TestSubmitTransactionBaseFeeFailureLeavesLedgerUnchanged(t *testing.T) {
 	pay.Fee = "10"
 	pay.SetSequence(account.Sequence)
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	env.SignWith(pay, master)
 	blob, err := tx.SerializeTransaction(pay)
 	require.NoError(t, err)
@@ -92,6 +94,7 @@ func TestSubmitTransactionMissingAccountPrecedesBaseFeeFailure(t *testing.T) {
 	pay.Fee = "10"
 	pay.SetSequence(1)
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	env.SignWith(pay, unfunded)
 	blob, err := tx.SerializeTransaction(pay)
 	require.NoError(t, err)

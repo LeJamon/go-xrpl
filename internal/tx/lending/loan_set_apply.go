@@ -127,8 +127,25 @@ func (l *LoanSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 			return r
 		}
 	}
-	if r := vault.CanAddHolding(view, asset); r != ter.TesSUCCESS {
-		return r
+	needsHolding := true
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		hasHolding, err := vault.HoldingExists(view, borrower, asset)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		needsHolding = !hasHolding
+		if hasHolding && l.LoanOriginationFee != nil && number(*l.LoanOriginationFee).Signum() != 0 {
+			hasHolding, err = vault.HoldingExists(view, b.Owner, asset)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			needsHolding = !hasHolding
+		}
+	}
+	if needsHolding {
+		if r := vault.CanAddHolding(view, asset); r != ter.TesSUCCESS {
+			return r
+		}
 	}
 	if r := tx.AssetFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
 		return r

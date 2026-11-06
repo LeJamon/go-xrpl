@@ -387,7 +387,7 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 					NFTokenID:    "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B9000000000000000000",
 					NFTokenTaxon: 0,
 					NFTSerial:    0,
-					URI:          "68747470733A2F2F6578616D706C652E636F6D2F6E66742F31", // https://example.com/nft/1 in hex
+					URI:          "68747470733a2f2f6578616d706c652e636f6d2f6e66742f31", // https://example.com/nft/1 in hex
 				},
 			},
 			LedgerIndex: 3,

@@ -65,7 +65,11 @@ func TestFlowCrossPropagatesMPTFundsCorruption(t *testing.T) {
 	taker[19] = 2
 	id := keylet.MakeMPTID(1, issuer)
 	putMPTIssuance(t, view, id, 1, 0)
-	view.data[keylet.MPTokenByID(id, taker).Key] = []byte{1}
+	putMPTHolding(t, view, id, taker, 1)
+	holdingKey := keylet.MPTokenByID(id, taker)
+	holding := view.data[holdingKey.Key]
+	view.data[holdingKey.Key] = holding[:len(holding)-1]
+	require.True(t, state.MatchesKeyletType(holdingKey, view.data[holdingKey.Key]))
 
 	result := FlowCross(
 		view,

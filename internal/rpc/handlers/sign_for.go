@@ -232,7 +232,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if err != nil {
 		return nil, rpcInternalError("sign_for: transaction encoding failed", err)
 	}
-	if rpcErr := validateSigningConstruction(ctx, txBlob, rules); rpcErr != nil {
+	if rpcErr := validateSigningConstruction(txBlob, rules); rpcErr != nil {
 		return nil, rpcErr
 	}
 

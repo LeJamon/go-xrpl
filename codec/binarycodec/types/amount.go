@@ -402,7 +402,7 @@ func deserializeMPTIssuanceID(data []byte) (string, error) {
 		return "", errInsufficientMPTBytes
 	}
 	idBytes := data[:MPTIssuanceIDByteLength]
-	return hex.EncodeToString(idBytes), nil
+	return strings.ToUpper(hex.EncodeToString(idBytes)), nil
 }
 
 // deserializeMPTAmount deserializes a complete MPT amount binary representation into its

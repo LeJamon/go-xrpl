@@ -356,10 +356,14 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	if serverState == "" {
 		serverState = "full"
 	}
+	var validationQuorum uint32
 	if serverInfo.Standalone {
-		serverState = "standalone"
-	} else if !ctx.Role.IsAdmin() && (serverState == "proposing" || serverState == "validating") {
 		serverState = "full"
+	} else {
+		validationQuorum = resolveValidationQuorum(services)
+		if !ctx.Role.IsAdmin() && (serverState == "proposing" || serverState == "validating") {
+			serverState = "full"
+		}
 	}
 
 	// Fallback used only when consensus hasn't wired a state-accounting tracker.
@@ -375,7 +379,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		"pubkey_node":       services.NodePublicKey(),
 		"server_state":      serverState,
 		"uptime":            uptime,
-		"validation_quorum": resolveValidationQuorum(services),
+		"validation_quorum": validationQuorum,
 		"peers":             getPeerCount(ctx),
 
 		// Overflow/disconnect counters (string in rippled).
@@ -672,11 +676,8 @@ func getPeerCount(ctx *types.RpcContext) int {
 	return ctx.PeerSource.PeerCount()
 }
 
-// resolveValidationQuorum returns the live consensus quorum from the
-// adaptor via the services container, falling back to 1 when the
-// consensus subsystem hasn't been wired (standalone or pre-startup).
-// Rippled exposes the runtime quorum here; previously goxrpl hardcoded
-// 1, which made network-mode soaks misleading (#451).
+// resolveValidationQuorum returns the network consensus quorum, falling back
+// to 1 before the consensus subsystem is wired.
 func resolveValidationQuorum(services *types.ServiceGraph) uint32 {
 	if services != nil && services.ValidationQuorum() != nil {
 		if q := services.ValidationQuorum()(); q > 0 {

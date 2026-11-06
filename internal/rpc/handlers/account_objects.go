@@ -207,7 +207,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 				continue
 			}
 		}
-		decoded["index"] = strings.ToUpper(obj.Index)
+		addLedgerEntryJSONFields(decoded, strings.ToUpper(obj.Index), obj.Data)
 		objects = append(objects, decoded)
 	}
 

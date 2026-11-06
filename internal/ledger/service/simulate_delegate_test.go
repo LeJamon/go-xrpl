@@ -32,6 +32,7 @@ func TestService_SimulateDelegatedMultiSignDryRun(t *testing.T) {
 	defer svc.Stop()
 
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	owner := jtx.NewAccount("owner")
 	delegate := jtx.NewAccount("delegate")
