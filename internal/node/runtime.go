@@ -1046,6 +1046,7 @@ func (r *nodeRuntime) bindRPC() error {
 		return fmt.Errorf("build RPC service graph: %w", err)
 	}
 	r.serviceGraph = graph
+	r.wirePeerHTTPProviders(graph, peerSource)
 	urlSubscriptions := rpc.NewURLSubscriptionService(manager, graph, ledgerInfo)
 
 	// Create HTTP JSON-RPC server. The dispatch timeout stays strictly below

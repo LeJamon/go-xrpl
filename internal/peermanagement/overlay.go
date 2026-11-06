@@ -50,6 +50,7 @@ type Overlay struct {
 	providersMu         sync.RWMutex
 	ledgerHintProvider  func() (LedgerHints, bool)
 	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
+	httpProviders       HTTPProviders
 	// peerStatusPublisher: optional sink for pubPeerStatus updates.
 	// Wired by the RPC layer to broadcast over the peer_status
 	// WebSocket subscription. nil-safe — no-op when unset (tests,

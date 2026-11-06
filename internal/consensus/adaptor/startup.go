@@ -927,7 +927,15 @@ func mergeValidators(aIDs []consensus.NodeID, aMKs [][33]byte, bIDs []consensus.
 
 // OverlayOptionsFromConfig maps app config fields to overlay options.
 func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
-	var opts []peermanagement.Option
+	opts := []peermanagement.Option{
+		peermanagement.WithHTTPConfig(peermanagement.HTTPConfig{
+			CrawlOverlay:  appCfg.Crawl.OverlayEnabled(),
+			CrawlServer:   appCfg.Crawl.ServerEnabled(),
+			CrawlCounts:   appCfg.Crawl.CountsEnabled(),
+			CrawlUNL:      appCfg.Crawl.UNLEnabled(),
+			ValidatorList: appCfg.VL.EnabledValue(),
+		}),
+	}
 
 	// Network ID
 	if networkID, err := appCfg.ResolvedNetworkID(); err == nil {
