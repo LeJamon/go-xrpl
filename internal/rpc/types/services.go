@@ -263,7 +263,7 @@ type ServiceContainer struct {
 	// ValidationQuorum returns the live consensus quorum (number of
 	// trusted-validator signatures required to fully validate a ledger).
 	// Computed by the adaptor from the current UNL minus the negative-UNL.
-	// Nil in standalone mode (server_info falls back to 1).
+	// Nil in standalone mode, where server status reports a quorum of zero.
 	ValidationQuorum func() int
 
 	// ValidatorList is the publisher-trust subsystem's read facet for

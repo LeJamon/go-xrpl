@@ -93,7 +93,6 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	s.mu.RLock()
 	openLedgerView := s.openLedgerView
 	cfg, cfgErr := s.applyConfigLocked()
-	standalone := s.config.Standalone
 	s.mu.RUnlock()
 	if openLedgerView == nil {
 		return nil, svcerr.ErrNoOpenLedger
@@ -112,9 +111,6 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		}
 	}
 	blob := transaction.GetRawBytes()
-	// RPC ingress skips signature verification in standalone mode (the
-	// previous engine path did the same); the network path leaves it on.
-	cfg.SkipSignatureVerification = standalone
 	initialRules := cfg.Rules
 	initialSignatureCheck := !cfg.SkipSignatureVerification
 	if failHard {
@@ -138,8 +134,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	preprocessValid := signatureEligible
 	var signatureErr error
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
-	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
-	// mode, matching cfg.SkipSignatureVerification above.
+	// in-strand check reuses the cached verdict (#1105).
 	if signatureEligible && initialSignatureCheck {
 		signatureErr = txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
 		preprocessValid = signatureErr == nil
@@ -175,7 +170,6 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			return data
 		},
 		configure: func(cfg openledger.ApplyConfig) openledger.ApplyConfig {
-			cfg.SkipSignatureVerification = standalone
 			if failHard {
 				cfg.ApplyFlags |= tx.TapFAIL_HARD
 			}

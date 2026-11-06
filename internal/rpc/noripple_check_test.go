@@ -449,7 +449,17 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 	// Verify TrustSet transaction
 	assert.Equal(t, "TrustSet", transactions[0]["TransactionType"])
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", transactions[0]["Account"])
+	assert.Equal(t, uint64(10), transactions[0]["Fee"])
 	assert.Contains(t, transactions[0], "LimitAmount")
+
+	wire, marshalErr := json.Marshal(resp)
+	require.NoError(t, marshalErr)
+	var wireResponse map[string]any
+	require.NoError(t, json.Unmarshal(wire, &wireResponse))
+	wireTransactions, ok := wireResponse["transactions"].([]any)
+	require.True(t, ok)
+	require.Len(t, wireTransactions, 1)
+	assert.Equal(t, float64(10), wireTransactions[0].(map[string]any)["Fee"])
 }
 
 // TestNoRippleCheckWithTransactionsGateway tests transaction generation for gateway role
@@ -521,10 +531,12 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 	// Verify AccountSet transaction
 	assert.Equal(t, "AccountSet", transactions[0]["TransactionType"])
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", transactions[0]["Account"])
+	assert.Equal(t, uint64(10), transactions[0]["Fee"])
 	assert.Equal(t, uint32(8), transactions[0]["SetFlag"])
 
 	// Verify TrustSet transaction
 	assert.Equal(t, "TrustSet", transactions[1]["TransactionType"])
+	assert.Equal(t, uint64(10), transactions[1]["Fee"])
 	assert.Contains(t, transactions[1], "LimitAmount")
 }
 

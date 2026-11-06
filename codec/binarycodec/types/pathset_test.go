@@ -91,7 +91,6 @@ func TestPathSet_ToJson(t *testing.T) {
 						"currency": "USD",
 						"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 						"type":     49, // 0x31 = TYPE_ACCOUNT (0x01) | TYPE_CURRENCY (0x10) | TYPE_ISSUER (0x20)
-						"type_hex": "0000000000000031",
 					},
 				},
 			},
@@ -281,7 +280,8 @@ func TestNewPathSet(t *testing.T) {
 // back to the same JSON. It also asserts the mutual-exclusion reject when both
 // currency and mpt_issuance_id are present.
 func TestPathSetMPTRoundTrip(t *testing.T) {
-	const mptID = "0102030405060708090A0B0C0D0E0F101112131415161718"
+	const mptID = "0102030405060708090a0b0c0d0e0f101112131415161718"
+	const canonicalMPTID = "0102030405060708090A0B0C0D0E0F101112131415161718"
 	acct := "rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN"
 
 	input := []any{[]any{
@@ -305,9 +305,14 @@ func TestPathSetMPTRoundTrip(t *testing.T) {
 	require.Len(t, paths, 1)
 	step := paths[0].([]any)[0].(map[string]any)
 	require.Equal(t, acct, step["account"])
-	require.Equal(t, mptID, step["mpt_issuance_id"])
+	require.Equal(t, canonicalMPTID, step["mpt_issuance_id"])
 	require.Equal(t, typeAccount|typeMPT, step["type"])
+	require.NotContains(t, step, "type_hex")
 	require.Nil(t, step["currency"])
+
+	reencoded, err := PathSet{}.FromJSON(decoded)
+	require.NoError(t, err)
+	require.Equal(t, encoded, reencoded)
 }
 
 // TestPathSetMPTAndCurrencyRejected mirrors rippled's reject of a path element

@@ -361,149 +361,17 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) ter.Result {
 		actualAmount = clawAmount
 	}
 
-	// 9. Transfer from holder to issuer (rippleCredit equivalent)
-	// Reference: rippled View.cpp rippleCredit()
-	// If holder is LOW: holder pays issuer (HIGH) → balance decreases
-	// If holder is HIGH: holder pays issuer (LOW) → balance increases
+	if result := tx.RippleCreditWithNumberContext(
+		ctx.View, holderID, ctx.AccountID, actualAmount, ctx.NumberContext(),
+	); result != ter.TesSUCCESS {
+		return result
+	}
+
+	holderSponsor := rs.HighSponsor
 	if holderIsLow {
-		rs.Balance, err = rs.Balance.SubWithNumberContext(
-			actualAmount,
-			ctx.NumberContext(),
-			state.RoundToNearest,
-		)
-	} else {
-		rs.Balance, err = rs.Balance.AddWithNumberContext(
-			actualAmount,
-			ctx.NumberContext(),
-			state.RoundToNearest,
-		)
+		holderSponsor = rs.LowSponsor
 	}
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// 10. Check if trust line should be deleted (default state)
-	// Reference: rippled View.cpp rippleCredit() default state check
-	// Same pattern as trustset.go lines 514-570
-	var lowDefRipple, highDefRipple bool
-	if issuerIsLow {
-		lowDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
-		highDefRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
-	} else {
-		lowDefRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
-		highDefRipple = (ctx.Account.Flags & state.LsfDefaultRipple) != 0
-	}
-
-	bLowReserveSet := rs.LowQualityIn != 0 || rs.LowQualityOut != 0 ||
-		((rs.Flags&state.LsfLowNoRipple) == 0) != lowDefRipple ||
-		(rs.Flags&state.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
-		rs.Balance.Signum() > 0
-
-	bHighReserveSet := rs.HighQualityIn != 0 || rs.HighQualityOut != 0 ||
-		((rs.Flags&state.LsfHighNoRipple) == 0) != highDefRipple ||
-		(rs.Flags&state.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
-		rs.Balance.Signum() < 0
-
-	bDefault := !bLowReserveSet && !bHighReserveSet
-
-	if bDefault && rs.Balance.IsZero() {
-		// Remove from both owner directories before erasing
-		var lowAccountID, highAccountID [20]byte
-		if issuerIsLow {
-			lowAccountID = ctx.AccountID
-			highAccountID = holderID
-		} else {
-			lowAccountID = holderID
-			highAccountID = ctx.AccountID
-		}
-		lowDirKey := keylet.OwnerDir(lowAccountID)
-		if res, err := state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false); err != nil || !res.Success {
-			return ter.TefBAD_LEDGER
-		}
-		highDirKey := keylet.OwnerDir(highAccountID)
-		if res, err := state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false); err != nil || !res.Success {
-			return ter.TefBAD_LEDGER
-		}
-
-		if err := ctx.View.Erase(trustKey); err != nil {
-			return ter.TefINTERNAL
-		}
-
-		issuerSponsor, holderSponsor := rs.HighSponsor, rs.LowSponsor
-		issuerReserved, holderReserved := rs.Flags&state.LsfHighReserve != 0, rs.Flags&state.LsfLowReserve != 0
-		if issuerIsLow {
-			issuerSponsor, holderSponsor = rs.LowSponsor, rs.HighSponsor
-			issuerReserved, holderReserved = rs.Flags&state.LsfLowReserve != 0, rs.Flags&state.LsfHighReserve != 0
-		}
-		if issuerReserved {
-			if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, issuerSponsor, 1); err != nil {
-				return ctx.Internal("Clawback.IssuerOwnerCount", err)
-			}
-		}
-		if latest, readErr := tx.ReadAccountRoot(ctx.View, holderID); readErr != nil || latest == nil {
-			return ter.TefINTERNAL
-		} else {
-			holderAccount.SponsoringOwnerCount = latest.SponsoringOwnerCount
-		}
-		if holderReserved {
-			if err := tx.DecreaseOwnerCount(ctx.View, holderAccount, holderSponsor, 1); err != nil {
-				return ctx.Internal("Clawback.HolderOwnerCount", err)
-			}
-			ctx.SyncSenderSponsorCounts(holderSponsor)
-		}
-
-		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != ter.TesSUCCESS {
-			return result
-		}
-	} else {
-		lowID, highID := holderID, ctx.AccountID
-		if issuerIsLow {
-			lowID, highID = ctx.AccountID, holderID
-		}
-		updateReserve := func(ownerID [20]byte, flag uint32, desired bool, sponsorAddress string) (string, ter.Result) {
-			reserved := rs.Flags&flag != 0
-			if reserved == desired {
-				return sponsorAddress, ter.TesSUCCESS
-			}
-			if !desired {
-				if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
-					return sponsorAddress, result
-				}
-				rs.Flags &^= flag
-				return "", ter.TesSUCCESS
-			}
-
-			if ownerID == ctx.AccountID {
-				newSponsor, result := tx.IncreaseOwnerCount(ctx, ownerID, ctx.Account, 1)
-				if result != ter.TesSUCCESS {
-					return sponsorAddress, result
-				}
-				sponsorAddress = newSponsor
-			} else if err := tx.AdjustOwnerCount(ctx.View, ownerID, 1); err != nil {
-				return sponsorAddress, ter.TefINTERNAL
-			}
-			rs.Flags |= flag
-			return sponsorAddress, ter.TesSUCCESS
-		}
-
-		var result ter.Result
-		rs.LowSponsor, result = updateReserve(lowID, state.LsfLowReserve, bLowReserveSet, rs.LowSponsor)
-		if result != ter.TesSUCCESS {
-			return result
-		}
-		rs.HighSponsor, result = updateReserve(highID, state.LsfHighReserve, bHighReserveSet, rs.HighSponsor)
-		if result != ter.TesSUCCESS {
-			return result
-		}
-
-		updatedData, serErr := state.SerializeRippleState(rs)
-		if serErr != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(trustKey, updatedData); err != nil {
-			return ter.TefINTERNAL
-		}
-	}
+	ctx.SyncSenderSponsorCounts(holderSponsor)
 
 	return ter.TesSUCCESS
 }

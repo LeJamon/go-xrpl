@@ -70,6 +70,10 @@ type Peer struct {
 	id       PeerID
 	endpoint Endpoint
 	inbound  bool
+	// slotExempt marks an inbound peer admitted as fixed, reserved or a
+	// cluster member: it is not bound by, and does not use up, the inbound
+	// slot limit. Guarded by Overlay.peersMu.
+	slotExempt bool
 
 	identity     *Identity
 	remotePubKey *PublicKeyToken

@@ -62,6 +62,7 @@ func TestAdapterSubmissionSmoke(t *testing.T) {
 	adapter := NewLedgerServiceAdapter(svc)
 	adapter.SetTxBroadcaster(func(blob []byte) { relayed = append([]byte(nil), blob...) })
 	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
 	master := jtx.MasterAccount()
 	txn := accountset.AccountSet(master).Fee(10).Sequence(1).Build()
 	env.SignWith(txn, master)
@@ -93,6 +94,7 @@ func TestAdapterSubmissionQueueAndFailHardRelayDecisions(t *testing.T) {
 		require.NoError(t, svc.Start())
 		t.Cleanup(svc.Stop)
 		env := jtx.NewTestEnv(t)
+		env.SetVerifySignatures(true)
 		master := jtx.MasterAccount()
 		for sequence, name := range []string{"queue-primer-a", "queue-primer-b"} {
 			txn := payment.Pay(master, jtx.NewAccount(name), 100_000_000).Fee(10).Sequence(uint32(sequence + 1)).Build()
