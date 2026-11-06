@@ -339,3 +339,38 @@ func TestSitePollerFetchDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestSitePollerRedirectLimitPreservesSameURITarget(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		redirects int32
+		want      string
+	}{
+		{name: "three redirects", redirects: 3, want: "missing fields"},
+		{name: "four redirects", redirects: 4, want: "max redirects"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if hits.Add(1) <= tc.redirects {
+					w.Header().Set("Location", server.URL)
+					w.WriteHeader(http.StatusMovedPermanently)
+					return
+				}
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+			poller := newPollerForLifecycleTest(t, server.URL)
+			poller.fetchSite(t.Context(), poller.sites[0])
+			snapshot := poller.aggregator.SiteSnapshot()
+			wantURI := server.URL + " (redirects to " + server.URL + ")"
+			if len(snapshot) != 1 || snapshot[0].URI != wantURI || snapshot[0].LastError != tc.want {
+				t.Fatalf("redirect metadata = %#v, want URI %q and error %q", snapshot, wantURI, tc.want)
+			}
+			if hits.Load() != 4 {
+				t.Fatalf("requests = %d, want 4", hits.Load())
+			}
+		})
+	}
+}
