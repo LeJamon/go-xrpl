@@ -255,6 +255,179 @@ func TestLocalTxs_GetReturnsOwnedTransaction(t *testing.T) {
 	}
 }
 
+func TestLocalTxs_GetPendingReturnsLiveOwnedTransaction(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, bob)
+	ptx, view := pendingFromPay(t, env, alice, bob, env.Seq(alice)+10)
+
+	pool := localtxs.New()
+	pool.PushBack(view.Sequence(), ptx)
+	got, ok, err := pool.GetPending(ptx.Hash, view)
+	if err != nil {
+		t.Fatalf("GetPending: %v", err)
+	}
+	if !ok {
+		t.Fatal("GetPending returned ok=false for a live transaction")
+	}
+	if !bytes.Equal(got.Blob, ptx.Blob) {
+		t.Fatal("GetPending returned a different transaction blob")
+	}
+	got.Blob[0] ^= 0xff
+	again, ok, err := pool.GetPending(ptx.Hash, view)
+	if err != nil || !ok || !bytes.Equal(again.Blob, ptx.Blob) {
+		t.Fatalf("GetPending did not return an owned blob copy: ok=%t err=%v blob=%x", ok, err, again.Blob)
+	}
+	if got := pool.Size(); got != 1 {
+		t.Fatalf("GetPending mutated pool size = %d, want 1", got)
+	}
+}
+
+func TestLocalTxs_GetPendingRejectsCommittedSequenceAdvancedAndExpired(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *localtxs.LocalTxs, openledger.PendingTx, *ledger.Ledger, *jtx.Account)
+	}{
+		{
+			name: "committed",
+			setup: func(t *testing.T, pool *localtxs.LocalTxs, ptx openledger.PendingTx, view *ledger.Ledger, _ *jtx.Account) {
+				if err := view.AddTransaction(ptx.Hash, ptx.Blob); err != nil {
+					t.Fatalf("AddTransaction: %v", err)
+				}
+				pool.PushBack(view.Sequence(), ptx)
+			},
+		},
+		{
+			name: "sequence advanced",
+			setup: func(t *testing.T, pool *localtxs.LocalTxs, ptx openledger.PendingTx, view *ledger.Ledger, alice *jtx.Account) {
+				bumpAccountSequence(t, view, alice, ptx.Sequence+1)
+				pool.PushBack(view.Sequence(), ptx)
+			},
+		},
+		{
+			name: "expired",
+			setup: func(_ *testing.T, pool *localtxs.LocalTxs, ptx openledger.PendingTx, view *ledger.Ledger, _ *jtx.Account) {
+				pool.PushBack(view.Sequence()-holdLedgers-1, ptx)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			env.Fund(alice, bob)
+			if test.name == "expired" {
+				for range holdLedgers + 3 {
+					env.Close()
+				}
+			}
+			ptx, view := pendingFromPay(t, env, alice, bob, env.Seq(alice)+10)
+			pool := localtxs.New()
+			test.setup(t, pool, ptx, view, alice)
+
+			got, ok, err := pool.GetPending(ptx.Hash, view)
+			if err != nil {
+				t.Fatalf("GetPending: %v", err)
+			}
+			if ok || got.Blob != nil {
+				t.Fatalf("GetPending = (%+v, %t), want absent stale transaction", got, ok)
+			}
+			if got := pool.Size(); got != 1 {
+				t.Fatalf("GetPending mutated pool size = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestLocalTxs_GetPendingTicketRequiresBurnedTicket(t *testing.T) {
+	for _, withTicket := range []bool{true, false} {
+		name := "ticket remains"
+		if !withTicket {
+			name = "ticket burned"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			env.Fund(alice, bob)
+			ptx, view := pendingFromPay(t, env, alice, bob, env.Seq(alice)+10)
+			ptx.IsTicket = true
+			bumpAccountSequence(t, view, alice, ptx.Sequence+1)
+			ticketKey := keylet.Ticket(alice.AccountID(), ptx.Sequence)
+			if withTicket {
+				ticketData, err := state.SerializeTicket(alice.AccountID(), ptx.Sequence, 1)
+				if err != nil {
+					t.Fatalf("SerializeTicket: %v", err)
+				}
+				if err := view.Insert(ticketKey, ticketData); err != nil {
+					t.Fatalf("Insert ticket: %v", err)
+				}
+			}
+
+			pool := localtxs.New()
+			pool.PushBack(view.Sequence(), ptx)
+			got, ok, err := pool.GetPending(ptx.Hash, view)
+			if err != nil {
+				t.Fatalf("GetPending: %v", err)
+			}
+			if ok != withTicket || (ok && !bytes.Equal(got.Blob, ptx.Blob)) {
+				t.Fatalf("GetPending = (%+v, %t), want live=%t", got, ok, withTicket)
+			}
+			if got := pool.Size(); got != 1 {
+				t.Fatalf("GetPending mutated pool size = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestLocalTxs_GetPendingErrorsWithoutMutation(t *testing.T) {
+	wantReadErr := errors.New("state read failed")
+	wantMembershipErr := errors.New("transaction membership failed")
+	for _, test := range []struct {
+		name string
+		view errorSweepView
+		want error
+	}{
+		{name: "state read", view: errorSweepView{err: wantReadErr}, want: wantReadErr},
+		{name: "transaction membership", view: errorSweepView{txErr: wantMembershipErr}, want: wantMembershipErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ptx := openledger.PendingTx{
+				Blob:     []byte{1, 2, 3},
+				Hash:     [32]byte{1},
+				Account:  [20]byte{2},
+				Sequence: 1,
+			}
+			pool := localtxs.New()
+			pool.PushBack(10, ptx)
+
+			got, ok, err := pool.GetPending(ptx.Hash, test.view)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("GetPending error = %v, want %v", err, test.want)
+			}
+			if ok || got.Blob != nil {
+				t.Fatalf("GetPending = (%+v, %t), want no result on error", got, ok)
+			}
+			if got := pool.Size(); got != 1 {
+				t.Fatalf("GetPending mutated pool size = %d, want 1", got)
+			}
+		})
+	}
+
+	ptx := openledger.PendingTx{Blob: []byte{4}, Hash: [32]byte{4}}
+	pool := localtxs.New()
+	pool.PushBack(1, ptx)
+	if _, _, err := pool.GetPending(ptx.Hash, nil); err == nil {
+		t.Fatal("GetPending(nil) succeeded")
+	}
+	if got := pool.Size(); got != 1 {
+		t.Fatalf("GetPending(nil) mutated pool size = %d, want 1", got)
+	}
+}
+
 // TestLocalTxs_GetTxSet_SortsBySequenceWithinAccount verifies that two
 // pending txs from the same account are returned in ascending sequence
 // order regardless of push order.
