@@ -329,9 +329,7 @@ func BuildRedirectResponse(userAgent, remoteAddr string, peerIPs []string) *http
 }
 
 func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg HandshakeConfig) {
-	if cfg.NetworkID > 0 {
-		h.Set(HeaderNetworkID, strconv.FormatUint(uint64(cfg.NetworkID), 10))
-	}
+	h.Set(HeaderNetworkID, strconv.FormatUint(uint64(cfg.NetworkID), 10))
 
 	networkTime := uint64(protocol.RippleSeconds(time.Now()))
 	h.Set(HeaderNetworkTime, strconv.FormatUint(networkTime, 10))
@@ -488,15 +486,13 @@ func parseLedgerHashHeader(s string) ([32]byte, error) {
 // Network-ID → Network-Time → Public-Key → Session-Signature →
 // self-connection. Callers must run ValidateServerDomain first.
 func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey string, cfg HandshakeConfig) (*PublicKeyToken, error) {
-	// cfg.NetworkID == 0 means "unconfigured" (mainnet); the header is
-	// only enforced when both sides are seated and disagree.
 	if netIDStr := headers.Get(HeaderNetworkID); netIDStr != "" {
 		netID, err := strconv.ParseUint(netIDStr, 10, 32)
 		if err != nil {
 			return nil, fmt.Errorf("invalid network ID: %w", err)
 		}
-		if cfg.NetworkID != 0 && uint32(netID) != cfg.NetworkID {
-			return nil, fmt.Errorf("%w: expected %d, got %d", ErrNetworkMismatch, cfg.NetworkID, netID)
+		if uint32(netID) != cfg.NetworkID {
+			return nil, ErrNetworkMismatch
 		}
 	}
 

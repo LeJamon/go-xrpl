@@ -71,21 +71,30 @@ func TestBuildHandshakeRequest(t *testing.T) {
 	assert.Equal(t, "private", req.Header.Get(HeaderCrawl))
 }
 
-// TestBuildHandshakeRequest_WithNetworkID tests request with network ID
-func TestBuildHandshakeRequest_WithNetworkID(t *testing.T) {
+func TestBuildHandshake_NetworkID(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
-
 	sharedValue := make([]byte, 32)
 
-	cfg := DefaultHandshakeConfig()
-	cfg.NetworkID = 12345
+	for _, networkID := range []uint32{0, 1, 12345} {
+		value := strconv.FormatUint(uint64(networkID), 10)
+		t.Run(value, func(t *testing.T) {
+			cfg := DefaultHandshakeConfig()
+			cfg.NetworkID = networkID
+			req, err := BuildHandshakeRequest(id, sharedValue, cfg)
+			require.NoError(t, err)
+			assert.Equal(t, value, req.Header.Get(HeaderNetworkID))
+			var requestWire bytes.Buffer
+			require.NoError(t, WriteRawHandshakeRequest(&requestWire, req))
+			assert.Contains(t, requestWire.String(), "\r\nNetwork-ID: "+value+"\r\n")
 
-	req, err := BuildHandshakeRequest(id, sharedValue, cfg)
-	require.NoError(t, err)
-
-	// Network-ID header should be set
-	assert.Equal(t, "12345", req.Header.Get(HeaderNetworkID))
+			resp := BuildHandshakeResponse(req, id, sharedValue, cfg, "")
+			assert.Equal(t, value, resp.Header.Get(HeaderNetworkID))
+			var responseWire bytes.Buffer
+			require.NoError(t, resp.Write(&responseWire))
+			assert.Contains(t, responseWire.String(), "\r\n"+http.CanonicalHeaderKey(HeaderNetworkID)+": "+value+"\r\n")
+		})
+	}
 }
 
 // TestBuildHandshakeResponse tests building an HTTP 101 response
@@ -412,82 +421,74 @@ func TestVerifyPeerHandshake_SelfConnection(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSelfConnection)
 }
 
-// TestVerifyPeerHandshake_NetworkMismatch tests network ID mismatch
-// Reference: rippled Handshake.cpp verifyHandshake - "Peer is on a different network"
-func TestVerifyPeerHandshake_NetworkMismatch(t *testing.T) {
-	localId, _ := NewIdentity()
-	remoteId, _ := NewIdentity()
-	sharedValue := make([]byte, 32)
-
-	// Remote uses network ID 1
-	remoteCfg := DefaultHandshakeConfig()
-	remoteCfg.NetworkID = 1
-	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, remoteCfg, "")
-
-	// Local expects network ID 2
-	localCfg := DefaultHandshakeConfig()
-	localCfg.NetworkID = 2
-
-	_, err := VerifyPeerHandshake(
-		resp.Header,
-		sharedValue,
-		localId.EncodedPublicKey(),
-		localCfg,
-	)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, ErrNetworkMismatch)
+func TestInboundHandshake_NetworkID(t *testing.T) {
+	for _, networkID := range []string{"0", "1", "missing"} {
+		t.Run(networkID, func(t *testing.T) {
+			conn, err := runInboundHandshakeRequest(t, func(req *http.Request) {
+				if networkID == "missing" {
+					req.Header.Del(HeaderNetworkID)
+				} else {
+					req.Header.Set(HeaderNetworkID, networkID)
+				}
+			})
+			if networkID == "1" {
+				require.ErrorIs(t, err, ErrNetworkMismatch)
+				assert.True(t, strings.HasPrefix(conn.writes.String(), "HTTP/1.1 400 Bad Request (Peer is on a different network)\r\n"))
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, strings.HasPrefix(conn.writes.String(), "HTTP/1.1 101 Switching Protocols\r\n"))
+			assert.Contains(t, conn.writes.String(), "\r\n"+http.CanonicalHeaderKey(HeaderNetworkID)+": 0\r\n")
+		})
+	}
 }
 
-// TestVerifyPeerHandshake_MainnetAcceptsNonzeroNetworkIDFromPeer pins
-// rippled parity for Handshake.cpp:241-250: when the local network is
-// the default (NetworkID=0, equivalent to rippled's unseated optional),
-// the Network-ID header is NOT checked. A mainnet node accepts a peer
-// advertising any Network-ID value.
-func TestVerifyPeerHandshake_MainnetAcceptsNonzeroNetworkIDFromPeer(t *testing.T) {
-	localId, _ := NewIdentity()
-	remoteId, _ := NewIdentity()
+func TestVerifyPeerHandshake_NetworkID(t *testing.T) {
+	localID, err := NewIdentity()
+	require.NoError(t, err)
+	remoteID, err := NewIdentity()
+	require.NoError(t, err)
 	sharedValue := make([]byte, 32)
+	response := BuildHandshakeResponse(emptyHandshakeRequest(), remoteID, sharedValue, DefaultHandshakeConfig(), "")
 
-	remoteCfg := DefaultHandshakeConfig()
-	remoteCfg.NetworkID = 1
-	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, remoteCfg, "")
-
-	localCfg := DefaultHandshakeConfig() // NetworkID=0
-	_, err := VerifyPeerHandshake(
-		resp.Header,
-		sharedValue,
-		localId.EncodedPublicKey(),
-		localCfg,
-	)
-	require.NoError(t, err,
-		"rippled parity: mainnet must accept any peer Network-ID — Handshake.cpp only checks when local networkID is seated")
-}
-
-// TestVerifyPeerHandshake_NonDefaultAcceptsMissingNetworkID pins the
-// symmetric case: rippled silently accepts peers that omit Network-ID
-// even when the local node is on a non-default network. The header is
-// only checked when present.
-func TestVerifyPeerHandshake_NonDefaultAcceptsMissingNetworkID(t *testing.T) {
-	localId, _ := NewIdentity()
-	remoteId, _ := NewIdentity()
-	sharedValue := make([]byte, 32)
-
-	// Remote omits NetworkID by using the default (0).
-	remoteCfg := DefaultHandshakeConfig()
-	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, remoteCfg, "")
-
-	// Local is on a non-default network.
-	localCfg := DefaultHandshakeConfig()
-	localCfg.NetworkID = 2
-
-	_, err := VerifyPeerHandshake(
-		resp.Header,
-		sharedValue,
-		localId.EncodedPublicKey(),
-		localCfg,
-	)
-	require.NoError(t, err,
-		"rippled parity: missing Network-ID header is always accepted — Handshake.cpp:241 only enters the check when the header is present")
+	tests := []struct {
+		name     string
+		local    uint32
+		remote   string
+		mismatch bool
+	}{
+		{name: "mainnet_same", local: 0, remote: "0"},
+		{name: "mainnet_testnet", local: 0, remote: "1", mismatch: true},
+		{name: "mainnet_private", local: 0, remote: "12345", mismatch: true},
+		{name: "mainnet_missing", local: 0},
+		{name: "testnet_mainnet", local: 1, remote: "0", mismatch: true},
+		{name: "testnet_same", local: 1, remote: "1"},
+		{name: "testnet_missing", local: 1},
+		{name: "devnet_testnet", local: 2, remote: "1", mismatch: true},
+		{name: "devnet_missing", local: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := response.Header.Clone()
+			if tt.remote == "" {
+				headers.Del(HeaderNetworkID)
+			} else {
+				headers.Set(HeaderNetworkID, tt.remote)
+			}
+			cfg := DefaultHandshakeConfig()
+			cfg.NetworkID = tt.local
+			pubKey, err := VerifyPeerHandshake(headers, sharedValue, localID.EncodedPublicKey(), cfg)
+			if tt.mismatch {
+				require.ErrorIs(t, err, ErrNetworkMismatch)
+				assert.EqualError(t, err, "Peer is on a different network")
+				assert.Nil(t, pubKey)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, pubKey)
+			assert.Equal(t, remoteID.EncodedPublicKey(), pubKey.Encode())
+		})
+	}
 }
 
 // TestVerifyPeerHandshake_InvalidSignature tests invalid signature rejection
