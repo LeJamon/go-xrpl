@@ -131,7 +131,6 @@ func TestLegacyOverCapEscrowRetrievalAfterServiceClose(t *testing.T) {
 	closedLedger := svc.GetClosedLedger()
 	require.NotNil(t, closedLedger)
 	svc.SetValidatedLedger(closedSequence, closedLedger.Hash())
-	svc.FlushPersists()
 
 	closedResult, err := svc.GetTransaction(hash)
 	require.NoError(t, err)

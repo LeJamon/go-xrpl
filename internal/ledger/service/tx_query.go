@@ -831,6 +831,16 @@ func (s *Service) getTransaction(ctx context.Context, txHash [32]byte, ledgerRan
 	if err != nil {
 		return nil, searched, err
 	}
+	if dbResult == nil && cacheErr == nil && cached.Validated {
+		// Validation can publish the ledger before its queued SQL write completes.
+		if err := s.flushPersists(ctx); err != nil {
+			return nil, searched, err
+		}
+		dbResult, searched, err = db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
+		if err != nil {
+			return nil, searched, err
+		}
+	}
 	if dbResult == nil {
 		return nil, searched, svcerr.ErrTxnNotFound
 	}
