@@ -15,6 +15,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -24,15 +25,18 @@ import (
 type LedgerMethod struct{ baseHandler }
 
 func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
-		return nil, boolErr
-	}
-	ledgerSpec, hasLedgerSelector, selectorErr := parseLedgerSpecifier(params)
+	_, hasLedgerSelector, selectorErr := parseLedgerSpecifier(params)
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
+	selection, selectorErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selectorErr != nil {
+		return nil, selectorErr
+	}
+	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
+		return nil, boolErr
+	}
 	var request struct {
-		types.LedgerSpecifier
 		Accounts     bool            `json:"accounts,omitempty"`
 		Full         bool            `json:"full,omitempty"`
 		Transactions bool            `json:"transactions,omitempty"`
@@ -46,7 +50,6 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
-	request.LedgerSpecifier = ledgerSpec
 
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
@@ -62,10 +65,11 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	dumpQueue := request.Queue && hasLedgerSelector
 
 	// Resolve the target before the permission gate, matching LedgerHandler::check.
-	targetLedger, validated, lerr := lookupLedger(ctx, request.LedgerSpecifier)
+	resolved, lerr := resolveLedgerSelection(ctx, selection)
 	if lerr != nil {
 		return nil, lerr
 	}
+	targetLedger, validated := resolved.Value, resolved.Validated
 
 	if request.Full || request.Accounts {
 		if !ctx.Role.IsUnlimited() {
@@ -107,6 +111,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if request.Transactions {
 		var txList []any
 		apiVersion := ctx.ApiVersion
+		networkID := ctx.Services.Ledger().GetServerInfo().NetworkID
 		var decodeErr error
 		var ownerFundsErr error
 		visit := func(txHashKey [32]byte, txData []byte) bool {
@@ -119,6 +124,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 					apiVersion,
 					syntheticContext,
 					targetLedger.IsClosed(),
+					networkID,
 				)
 				if err != nil {
 					decodeErr = err
@@ -395,8 +401,8 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.Rp
 		return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	return map[string]any{
-		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
-		"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
+		"closed": map[string]any{"ledger": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion)},
+		"open":   map[string]any{"ledger": buildLedgerSummaryJSON(open, false, ctx.ApiVersion)},
 	}, nil
 }
 
@@ -671,6 +677,7 @@ func expandTransaction(
 	apiVersion int,
 	ctx SyntheticMetadataContext,
 	includeMetadata bool,
+	networkID uint32,
 ) (map[string]any, error) {
 	storedTx, err := decodeLedgerTransaction(txData, hashStr, includeMetadata)
 	if err != nil {
@@ -679,10 +686,28 @@ func expandTransaction(
 	if !includeMetadata {
 		storedTx.Meta = nil
 	}
-	if storedTx.TxJSON != nil {
-		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
+	if storedTx.TxJSON == nil {
+		return nil, fmt.Errorf("stored transaction has no transaction JSON")
 	}
-	return nil, fmt.Errorf("stored transaction has no transaction JSON")
+	txEntry, err := expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
+	if err != nil {
+		return nil, err
+	}
+	addExpandedTransactionCTID(txEntry, storedTx, ctx.LedgerSequence, networkID)
+	return txEntry, nil
+}
+
+// addExpandedTransactionCTID attaches the transaction's CTID when its
+// metadata carries a TransactionIndex; the transaction's own NetworkID takes
+// precedence over the node's.
+func addExpandedTransactionCTID(txEntry map[string]any, storedTx StoredTransaction, ledgerSeq, networkID uint32) {
+	txIndex, ok := jsonUint32(storedTx.Meta["TransactionIndex"])
+	if !ok {
+		return
+	}
+	if ctid, ok := encodeCTID(ledgerSeq, txIndex, transactionNetworkID(storedTx.TxJSON, networkID)); ok {
+		txEntry["ctid"] = ctid
+	}
 }
 
 // expandStoredTransaction formats a JSON-stored transaction for the response.

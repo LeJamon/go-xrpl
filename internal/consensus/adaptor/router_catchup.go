@@ -3789,6 +3789,9 @@ func (c *catchupReplayCoordinator) handleInboundLedgerDataOwned(
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
 	if target != 0 {
 		requests, complete, err := il.CollectMissingReplyRequestsContext(context.Background(), []uint64{target})
+		if c.failInvalidMapAcquisition(il, err) {
+			return
+		}
 		if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 			c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 			return
@@ -3808,6 +3811,9 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 	}
 
 	stateIDs, txIDs, complete, err := il.CollectMissingRequestContext(context.Background(), false)
+	if c.failInvalidMapAcquisition(il, err) {
+		return
+	}
 	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes", "error", err)
 		return
@@ -3824,8 +3830,22 @@ func (c *catchupReplayCoordinator) requestMissingAcquisitionNodes(il *inbound.Le
 	c.retryMissingAcquisitionNodes(il, retry, 0)
 }
 
+// failInvalidMapAcquisition fails an acquisition whose map turned out to hold
+// an inner node at leaf depth, reporting whether it did. Such a root hash names
+// a tree no peer can supply, so waiting for a timeout is futile.
+func (c *catchupReplayCoordinator) failInvalidMapAcquisition(il *inbound.Ledger, err error) bool {
+	if !errors.Is(err, shamap.ErrMapInvalid) {
+		return false
+	}
+	c.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), err)
+	return true
+}
+
 func (c *catchupReplayCoordinator) requestMissingAcquisitionNodesFromAddedPeer(il *inbound.Ledger, peerID uint64) {
 	requests, complete, err := il.CollectMissingAddedRequestsContext(context.Background(), []uint64{peerID})
+	if c.failInvalidMapAcquisition(il, err) {
+		return
+	}
 	if err != nil && !errors.Is(err, shamap.ErrAcquisitionMemory) && !errors.Is(err, shamap.ErrTraversalBudget) {
 		c.logger.Warn("inbound ledger: failed to collect missing nodes for added peer", "error", err)
 		return

@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -19,29 +18,15 @@ import (
 // This creates a signature that can be used to redeem a specific amount from a payment channel.
 type ChannelAuthorizeMethod struct{ baseHandler }
 
-// channelAuthorizeRequest represents the request parameters
-type channelAuthorizeRequest struct {
-	signCredentials
-
-	// Required fields
-	ChannelID string `json:"channel_id"`
-	Amount    string `json:"amount"`
-}
-
 func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	var request channelAuthorizeRequest
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
-		}
+	fields, rpcErr := rawJSONFields(params)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(params, &fields)
 
 	// Validate required fields: channel_id and amount
 	// rippled: for (auto const& p : {jss::channel_id, jss::amount}) if (!params.isMember(p)) return RPC::missing_field_error(p);
@@ -54,27 +39,18 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	// Parse credentials and derive keypair
 	// rippled: if (!params.isMember(jss::key_type) && !params.isMember(jss::secret)) return RPC::missing_field_error(jss::secret);
-	privateKeyHex, _, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	privateKeyHex, _, keyType, rpcErr := signCredentials{}.deriveKeypair(ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	// Validate channel_id - must be valid 256-bit hex (64 characters)
-	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
-	channelIDHex := strings.ToUpper(request.ChannelID)
-	if len(channelIDHex) != 64 {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
+	channelIDHex, rpcErr := parseChannelID(fields["channel_id"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
-	}
-
-	// Validate amount - must be a string that parses to uint64
-	// rippled: std::optional<std::uint64_t> const optDrops = params[jss::amount].isString() ? to_uint64(params[jss::amount].asString()) : std::nullopt;
-	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
-	drops, err := strconv.ParseUint(request.Amount, 10, 64)
-	if err != nil {
-		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
+	drops, rpcErr := parseChannelAmount(fields["amount"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Serialize the payment channel claim message using EncodeForSigningClaim
@@ -106,6 +82,35 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 
 	return response, nil
+}
+
+// parseChannelID reads a channel_id that must be a string holding a hash256
+// (64 hex digits, or "0"), returned as 64 upper-case hex digits.
+func parseChannelID(raw json.RawMessage) (string, *rpcerrors.RpcError) {
+	channelID, ok := rawJSONString(raw)
+	if !ok {
+		return "", rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	if !validHash256Hex(channelID) {
+		return "", rpcerrors.RpcErrorChannelMalformed()
+	}
+	if channelID == "0" {
+		return strings.Repeat("0", 64), nil
+	}
+	return strings.ToUpper(channelID), nil
+}
+
+// parseChannelAmount reads an amount that must be a string of drops.
+func parseChannelAmount(raw json.RawMessage) (uint64, *rpcerrors.RpcError) {
+	amount, ok := rawJSONString(raw)
+	if !ok {
+		return 0, rpcerrors.RpcErrorChannelAmountMalformed()
+	}
+	drops, err := strconv.ParseUint(amount, 10, 64)
+	if err != nil {
+		return 0, rpcerrors.RpcErrorChannelAmountMalformed()
+	}
+	return drops, nil
 }
 
 // signMessage signs a message using the appropriate algorithm

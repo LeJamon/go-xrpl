@@ -55,13 +55,24 @@ func TestAccountPageLedgerLookupPrecedesAddressAndFilterValidation(t *testing.T)
 		assert.Equal(t, "lgrNotFound", rpcErr.ErrorString)
 	})
 
-	t.Run("account_channels destination", func(t *testing.T) {
+	t.Run("account_channels destination precedes lookup", func(t *testing.T) {
 		mock := newMockAccountChannelsLedgerService()
 		mock.accountInfoErr = svcerr.ErrLedgerNotFound
 		rpcErr := accountPageCall(t, &handlers.AccountChannelsMethod{}, accountPageContext(newAccountChannelsTestServices(mock)), map[string]any{
 			"account": accountPageTestAccount, "destination_account": "bad", "ledger_index": 99,
 		})
-		assert.Equal(t, "lgrNotFound", rpcErr.ErrorString)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.NotContains(t, rpcErr.Extra, "ledger_index")
+	})
+
+	t.Run("account_channels account precedes lookup", func(t *testing.T) {
+		mock := newMockAccountChannelsLedgerService()
+		mock.accountInfoErr = svcerr.ErrLedgerNotFound
+		rpcErr := accountPageCall(t, &handlers.AccountChannelsMethod{}, accountPageContext(newAccountChannelsTestServices(mock)), map[string]any{
+			"account": "bad", "ledger_index": 99,
+		})
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.NotContains(t, rpcErr.Extra, "ledger_index")
 	})
 
 	t.Run("account_objects account", func(t *testing.T) {
@@ -84,13 +95,13 @@ func TestAccountPageExistencePrecedesPeerAndDestinationValidation(t *testing.T) 
 		assert.Equal(t, "actNotFound", rpcErr.ErrorString)
 	})
 
-	t.Run("account_channels destination", func(t *testing.T) {
+	t.Run("account_channels destination precedes existence", func(t *testing.T) {
 		mock := newMockAccountChannelsLedgerService()
 		mock.accountInfoErr = svcerr.ErrAccountNotFound
 		rpcErr := accountPageCall(t, &handlers.AccountChannelsMethod{}, accountPageContext(newAccountChannelsTestServices(mock)), map[string]any{
 			"account": accountPageTestAccount, "destination_account": "bad",
 		})
-		assert.Equal(t, "actNotFound", rpcErr.ErrorString)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
 	})
 }
 

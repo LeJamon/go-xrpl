@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -17,6 +17,10 @@ import (
 type AccountNftsMethod struct{ baseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if selErr != nil {
+		return nil, selErr
+	}
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
@@ -24,15 +28,6 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if !types.IsValidClassicAddress(account) {
 		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
 	}
-	if err := requireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
-	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
-	if selErr != nil {
-		return nil, selErr
-	}
-
 	limit, limitErr := readLimitField(params, limitAccountNFTokens, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
@@ -41,15 +36,15 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if markerErr != nil {
 		return nil, markerErr
 	}
-	if _, present := fields["marker"]; present {
-		if marker != "0" && len(marker) != 64 {
-			return nil, rpcerrors.RpcErrorInvalidField("marker")
-		}
-		if marker != "0" {
-			if _, err := hex.DecodeString(marker); err != nil {
-				return nil, rpcerrors.RpcErrorInvalidField("marker")
-			}
-		}
+	if _, present := fields["marker"]; present && !validHash256Hex(marker) {
+		return nil, rpcerrors.RpcErrorInvalidField("marker")
+	}
+	if err := requireLedgerService(ctx.Services); err != nil {
+		return nil, err
+	}
+	ledgerIndex, ledgerFields, selErr := resolveAccountPage(ctx, selection, account, "Failed to get account information", false)
+	if selErr != nil {
+		return nil, selErr
 	}
 	result, err := ctx.Services.Ledger().GetAccountNFTs(
 		ctx.Context,

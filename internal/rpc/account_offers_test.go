@@ -642,7 +642,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 				LedgerIndex: mock.validatedLedgerIndex,
 				LedgerHash:  [32]byte{0x4B, 0xC5},
 				Validated:   true,
-				Marker:      "page1marker",
+				Marker:      strings.Repeat("A", 64) + ",0",
 			}, nil
 		}
 
@@ -680,14 +680,14 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 				LedgerIndex: mock.validatedLedgerIndex,
 				LedgerHash:  [32]byte{0x4B, 0xC5},
 				Validated:   true,
-				Marker:      "page2marker",
+				Marker:      strings.Repeat("B", 64) + ",1",
 			}, nil
 		}
 
 		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
-			"marker":  "page1marker",
+			"marker":  strings.Repeat("A", 64) + ",0",
 		}
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
@@ -726,7 +726,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		params := map[string]any{
 			"account": validAccount,
 			"limit":   10,
-			"marker":  "page2marker",
+			"marker":  strings.Repeat("B", 64) + ",1",
 		}
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)

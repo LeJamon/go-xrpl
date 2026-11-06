@@ -224,7 +224,7 @@ func (sm *Manager) HandleSubscribeScoped(registration *Registration, scope *Requ
 		return booksErr
 	}
 
-	return nil
+	return sm.applyMPTIssuances(registration, scope, w, request, true)
 }
 
 func (sm *Manager) HandleUnsubscribe(registration *Registration, request types.SubscriptionRequest) *rpcerrors.RpcError {
@@ -354,6 +354,29 @@ func (sm *Manager) HandleUnsubscribeScoped(registration *Registration, scope *Re
 		return booksErr
 	}
 
+	return sm.applyMPTIssuances(registration, scope, w, request, false)
+}
+
+// applyMPTIssuances subscribes or unsubscribes the request's mpt_issuances.
+func (sm *Manager) applyMPTIssuances(registration *Registration, scope *RequestScope, w types.WireSubscriptionArrays, request types.SubscriptionRequest, subscribe bool) *rpcerrors.RpcError {
+	present, ids, rpcErr := resolveMPTIssuances(w.Present, w.MPTIssuances, request.MPTIssuances, scope)
+	if rpcErr != nil || !present {
+		return rpcErr
+	}
+	if !w.Present {
+		if rpcErr := scope.consumeRaw(len(request.MPTIssuances)); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	for _, id := range ids {
+		if rpcErr := scope.add(requestEdge{kind: 2, stream: types.SubMPTIssuances, account: id}); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	if subscribe {
+		return sm.addAccounts(registration, types.SubMPTIssuances, ids)
+	}
+	sm.removeAccounts(registration, types.SubMPTIssuances, ids)
 	return nil
 }
 
@@ -370,6 +393,14 @@ func (sm *Manager) HasStreamSubscriptions(registration *Registration) bool {
 		}
 	}
 	return false
+}
+
+// HasMPTIssuanceSubscribers reports whether any connection subscribes to an
+// MPT issuance.
+func (sm *Manager) HasMPTIssuanceSubscribers() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return len(sm.accountIndex[types.SubMPTIssuances]) != 0
 }
 
 func (sm *Manager) GetSubscriberCount(streamType types.SubscriptionType) int {

@@ -472,9 +472,9 @@ func TestExpandStoredTransactionProjection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, hash, v2Binary["hash"])
 
-	_, err = expandTransaction([]byte{0xFF}, hash, true, 1, modernSyntheticMetadataContext(), true)
+	_, err = expandTransaction([]byte{0xFF}, hash, true, 1, modernSyntheticMetadataContext(), true, 0)
 	assert.Error(t, err)
-	_, err = expandTransaction([]byte{0xFF}, hash, true, 2, modernSyntheticMetadataContext(), true)
+	_, err = expandTransaction([]byte{0xFF}, hash, true, 2, modernSyntheticMetadataContext(), true, 0)
 	assert.Error(t, err)
 
 	accountDelete, err := expandStoredTransaction(StoredTransaction{

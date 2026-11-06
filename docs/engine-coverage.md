@@ -34,12 +34,13 @@ The registry snapshot contains:
 | Go runtime transaction registry | 82 |
 | Go historical enum rows absent from the oracle macro | 4 |
 | Oracle amendment macro | 108 |
-| Go amendment registry | 112 |
-| Go-only amendment rows | 4 |
+| Go amendment registry | 113 |
+| Go-only amendment rows | 5 |
 | Common transaction fields | 20 |
 
 The four historical Go enum rows are `NickNameSet` (6), `Contract` (9),
-`SpinalTap` (11), and `HookSet` (22). The four Go-only amendment rows are
+`SpinalTap` (11), and `HookSet` (22). The five Go-only amendment rows are
+`fixCleanup3_5_0` (staged from rippled 3.5.0-rc1, unsupported),
 `InvariantsV1_1`, `NonFungibleTokensV1`, `fixNFTokenDirV1`, and
 `fixNFTokenNegOffer`; there are no oracle-only amendments. Each transaction
 row includes both field lists, source paths, typed method locations, static

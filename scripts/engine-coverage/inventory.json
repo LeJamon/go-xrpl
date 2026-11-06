@@ -22,14 +22,14 @@
     "go_runtime_transaction_rows": 82,
     "go_legacy_enum_rows": 4,
     "oracle_amendments": 108,
-    "go_amendments": 112,
-    "go_only_amendments": 4,
+    "go_amendments": 113,
+    "go_only_amendments": 5,
     "common_fields": 20
   },
   "source_sha256": {
     "protocol/transaction_type.go": "56377642056a30ce2610780328cf03701f0e93f35fb6c33865bf348172df1637",
     "internal/tx/template.go": "68b5063c62f9eb6bd313fd562a43e6ab06295981456b618a1392f5fc8e2c247c",
-    "amendment/registry.go": "4cb315e95cae13c39297f64e40dbc7ac6e61d6357d6e908f039206bbb54a072d"
+    "amendment/registry.go": "e2235b09d1c1d61a73d86568fd21cf055fdd6cc588f28a498102f7a33045539f"
   },
   "engine": {
     "registry": {
@@ -2337,6 +2337,17 @@
         "supported": "yes"
       },
       "status": "matched"
+    },
+    {
+      "name": "fixCleanup3_5_0",
+      "go": {
+        "name": "fixCleanup3_5_0",
+        "kind": "fix",
+        "supported": "no",
+        "support_condition": null
+      },
+      "oracle": null,
+      "status": "go_only"
     },
     {
       "name": "fixDirectoryLimit",
