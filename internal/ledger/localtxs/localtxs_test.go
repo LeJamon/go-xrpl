@@ -362,8 +362,8 @@ func TestLocalTxs_GetPendingTicketRequiresBurnedTicket(t *testing.T) {
 				if err != nil {
 					t.Fatalf("SerializeTicket: %v", err)
 				}
-				if err := view.Update(ticketKey, ticketData); err != nil {
-					t.Fatalf("Update ticket: %v", err)
+				if err := view.Insert(ticketKey, ticketData); err != nil {
+					t.Fatalf("Insert ticket: %v", err)
 				}
 			}
 
