@@ -111,10 +111,14 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if len(result.Transactions) > 0 {
 			transactions := make([]map[string]any, len(result.Transactions))
 			for i, tx := range result.Transactions {
+				fee, feeErr := strconv.ParseUint(tx.Fee, 10, 64)
+				if feeErr != nil {
+					return nil, rpcInternalError("noripple_check: suggested transaction fee conversion failed", feeErr)
+				}
 				txMap := map[string]any{
 					"TransactionType": tx.TransactionType,
 					"Account":         tx.Account,
-					"Fee":             tx.Fee,
+					"Fee":             fee,
 					"Sequence":        tx.Sequence,
 				}
 				if tx.SetFlag != 0 {

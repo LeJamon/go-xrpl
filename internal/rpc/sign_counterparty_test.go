@@ -207,32 +207,10 @@ func TestSignFor_SignatureTargetPartialTransaction(t *testing.T) {
 	require.Equal(t, "Invalid signature.", rpcErr.Message)
 	ctx.Services = newSubmitTestServices(newMockLedgerServiceSubmit())
 	result, rpcErr = handler.Handle(signingEnabledContext(ctx), params)
-	require.Nil(t, rpcErr)
-	response := result.(map[string]any)
-	resTx := response["tx_json"].(map[string]any)
-	assert.Equal(t, primaryPubKey, resTx["SigningPubKey"])
-	assert.NotContains(t, resTx, "TxnSignature")
-
-	cpObj, ok := resTx["CounterpartySignature"].(map[string]any)
-	require.True(t, ok, "expected CounterpartySignature in %v", resTx)
-	switch signers := cpObj["Signers"].(type) {
-	case []map[string]any:
-		assert.Len(t, signers, 1)
-	case []any:
-		assert.Len(t, signers, 1)
-	default:
-		t.Fatalf("expected nested Signers array, got %T in %v", cpObj["Signers"], cpObj)
-	}
-	// The top-level tx must not have picked up a Signers array.
-	_, topHasSigners := resTx["Signers"]
-	assert.False(t, topHasSigners, "signer must go into the nested object, not the top level")
-
-	blob, err := hex.DecodeString(response["tx_blob"].(string))
-	require.NoError(t, err)
-	parsed, err := txcore.ParseFromBinary(blob)
-	require.NoError(t, err)
-	require.NoError(t, sign.VerifyCounterpartySignature(
-		parsed, parsed.GetCommon().CounterpartySignature, false))
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
+	require.Equal(t, "Invalid signature.", rpcErr.Message)
 }
 
 func TestSignFor_SignatureTarget_DisallowedForTransaction(t *testing.T) {

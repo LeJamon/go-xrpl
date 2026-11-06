@@ -145,7 +145,6 @@ func annotateStepType(step map[string]any) {
 		stepType |= typeIssuer
 	}
 	step["type"] = stepType
-	step["type_hex"] = fmt.Sprintf("%016X", stepType)
 }
 
 // isPathSet determines if an array represents a valid path set.

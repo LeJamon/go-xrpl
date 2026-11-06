@@ -964,9 +964,15 @@ func parseHex256(raw json.RawMessage, fieldName string) ([32]byte, *rpcerrors.Rp
 	var result [32]byte
 	var hexStr string
 	if err := json.Unmarshal(raw, &hexStr); err != nil {
+		if fieldName == "index" {
+			return result, rpcerrors.RpcErrorMalformedField("malformedRequest", fieldName, "hex string")
+		}
 		return result, rpcerrors.RpcErrorInvalidParams("Invalid " + fieldName + ": must be hex string")
 	}
 	if !decodeHexID(hexStr, result[:]) {
+		if fieldName == "index" {
+			return result, rpcerrors.RpcErrorMalformedField("malformedRequest", fieldName, "hex string")
+		}
 		return result, rpcerrors.RpcErrorInvalidParams("Invalid " + fieldName + ": must be 64-character hex string")
 	}
 	return result, nil

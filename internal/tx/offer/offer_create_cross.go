@@ -114,22 +114,6 @@ func (o *OfferCreate) takerCross(
 		uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
 	}
 
-	// If the taker is unfunded before crossing, return tecUNFUNDED_OFFER. This
-	// is checked in preclaim too, but preclaim runs before the fee is charged;
-	// when selling XRP the fee can drop the available balance to zero (by pushing
-	// it below the reserve), so it is re-checked here against the post-fee
-	// sandbox. rippled runs the same check (on the already tick-rounded
-	// saTakerGets) at the top of flowCross. Reference: rippled CreateOffer.cpp
-	// flowCross lines 329-335.
-	disallowUnfunded := offerDisallowUnfunded(saTakerGets, ctx.AccountID)
-	startingFunds, fundsResult := payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-	if fundsResult != ter.TesSUCCESS {
-		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}
-	}
-	if disallowUnfunded && isAmountZeroOrNegative(startingFunds) {
-		return crossOutcome{terminated: true, result: ter.TecUNFUNDED_OFFER, applyMain: false}
-	}
-
 	// Perform offer crossing using the main sandbox (sb)
 	// Reference: lines 687-768
 	// Note: Passive offers still cross, but only against offers with STRICTLY better quality.
@@ -256,6 +240,7 @@ func (o *OfferCreate) takerCross(
 	// DeferredCredits, returning zero for self-crossing round-trips even when the
 	// on-ledger balance is non-zero.
 	var takerInBalance tx.Amount
+	var fundsResult ter.Result
 	if crossResult.Sandbox != nil {
 		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 	} else {
@@ -282,6 +267,7 @@ func (o *OfferCreate) takerCross(
 	// view AFTER applying the sandbox (see ApplyCreate lines 421-424).
 	// Manually adjusting here would DOUBLE-COUNT the XRP changes.
 
+	disallowUnfunded := offerDisallowUnfunded(saTakerGets, ctx.AccountID)
 	if disallowUnfunded && isAmountZeroOrNegative(takerInBalance) {
 		// Apply main sandbox with crossing results
 		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}

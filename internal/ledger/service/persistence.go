@@ -295,7 +295,14 @@ func (s *Service) Stop() {
 	s.stopDone = make(chan struct{})
 	done := s.stopDone
 	replayRecoveryCancel := s.replayRecoveryCancel
+	if s.lifecycleCtx == nil {
+		s.lifecycleCtx, s.lifecycleCancel = context.WithCancel(context.Background())
+	}
+	lifecycleCancel := s.lifecycleCancel
 	s.lifecycleMu.Unlock()
+	if lifecycleCancel != nil {
+		lifecycleCancel()
+	}
 	detachedIngressDone := s.detachedIngress.stop()
 	// Detached preferred-ledger preparation owns a lifecycle admission until
 	// publication or discard. Cancel it before waiting for ledgerWorkWG so

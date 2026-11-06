@@ -30,18 +30,18 @@ func TestParseBinaryPaymentPathsPreservesOrderAndDuplicates(t *testing.T) {
 
 	wantPaths := [][]PathStep{
 		{
-			{Account: "rPDXxSZcuVL3ZWoyU82bcde3zwvmShkRyF", Type: 1, TypeHex: "0000000000000001"},
-			{Currency: "USD", Issuer: "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp", Type: 48, TypeHex: "0000000000000030"},
-			{Currency: "XRP", Type: 16, TypeHex: "0000000000000010"},
+			{Account: "rPDXxSZcuVL3ZWoyU82bcde3zwvmShkRyF", Type: 1},
+			{Currency: "USD", Issuer: "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp", Type: 48},
+			{Currency: "XRP", Type: 16},
 		},
 		{
-			{Account: "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn", MPTIssuanceID: "0102030405060708090A0B0C0D0E0F101112131415161718", Issuer: "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp", Type: 97, TypeHex: "0000000000000061"},
-			{MPTIssuanceID: "0102030405060708090A0B0C0D0E0F101112131415161718", Type: 64, TypeHex: "0000000000000040"},
+			{Account: "rf1BiGeXwwQoi8Z2ueFYTEXSwuJYfV2Jpn", MPTIssuanceID: "0102030405060708090A0B0C0D0E0F101112131415161718", Issuer: "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp", Type: 97},
+			{MPTIssuanceID: "0102030405060708090A0B0C0D0E0F101112131415161718", Type: 64},
 		},
 		{
-			{Account: "rPDXxSZcuVL3ZWoyU82bcde3zwvmShkRyF", Type: 1, TypeHex: "0000000000000001"},
-			{Currency: "USD", Issuer: "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp", Type: 48, TypeHex: "0000000000000030"},
-			{Currency: "XRP", Type: 16, TypeHex: "0000000000000010"},
+			{Account: "rPDXxSZcuVL3ZWoyU82bcde3zwvmShkRyF", Type: 1},
+			{Currency: "USD", Issuer: "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp", Type: 48},
+			{Currency: "XRP", Type: 16},
 		},
 	}
 	if !reflect.DeepEqual(parsed.Paths, wantPaths) {

@@ -159,7 +159,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if encErr != nil {
 		return nil, rpcInternalError("submit_multisigned: transaction encoding failed", encErr)
 	}
-	if rpcErr := validateSigningConstruction(ctx, txBlob, rules); rpcErr != nil {
+	if rpcErr := validateSigningConstruction(txBlob, rules); rpcErr != nil {
 		return nil, rpcErr
 	}
 
@@ -196,10 +196,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 	if ctx.ApiVersion > 1 {
 		response["hash"] = txHash
-	}
-
-	if result.Applied {
-		response["applied"] = result.Applied
 	}
 
 	return response, nil

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -556,6 +557,26 @@ func (d *Discovery) IsFixed(address string) bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.fixedPeers[address]
+}
+
+// IsFixedHost reports whether host is the address of a configured fixed
+// peer. The port is ignored: a fixed peer that dials in does so from an
+// ephemeral port, not the one it is configured with.
+func (d *Discovery) IsFixedHost(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for address := range d.fixedPeers {
+		fixed, err := netip.ParseAddrPort(address)
+		if err == nil && fixed.Addr().Unmap() == addr {
+			return true
+		}
+	}
+	return false
 }
 
 // NeedsMorePeers returns true if we should connect to more peers.

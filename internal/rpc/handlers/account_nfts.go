@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
@@ -81,7 +82,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 		// Add optional fields only if they have values
 		if nft.URI != "" {
-			nftObj["URI"] = nft.URI
+			nftObj["URI"] = strings.ToUpper(nft.URI)
 		}
 		if nft.TransferFee > 0 {
 			nftObj["TransferFee"] = nft.TransferFee

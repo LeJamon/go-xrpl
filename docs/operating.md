@@ -125,6 +125,24 @@ goxrpl server --conf /etc/goxrpl/goxrpl.toml --replay --ledger 32570
 goxrpl server --conf /etc/goxrpl/goxrpl.toml --net
 ```
 
+### Standalone server status
+
+In standalone mode, `server_info` and `server_state` report `server_state: "full"`
+and `validation_quorum: 0`. Fresh startup, with or without `--start`, reports
+`complete_ledgers: "2"`; the first `ledger_accept` extends it to `"2-3"`.
+Genesis ledger 1 is not included. Standalone mode ignores the network-specific
+`[node_db].earliest_seq` retention floor.
+
+Two diagnostic fields intentionally differ from rippled 3.4.1:
+
+- `load` is omitted. Rippled's admin `server_info` and `server_state` report its
+  job queue's thread and job statistics; go-xrpl does not collect equivalent
+  statistics. The separate fee-related `load_factor` fields remain available.
+- `initial_sync_duration_us` is omitted in standalone mode because there is no
+  consensus state-accounting tracker measuring the first transition to `full`.
+  Networked nodes emit the measured duration, as a microsecond string, after
+  their first sync. Standalone `state_accounting` attributes uptime to `full`.
+
 ### Time synchronization
 
 Accurate host time is a hard requirement. The peer handshake rejects a connection

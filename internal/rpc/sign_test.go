@@ -1613,6 +1613,11 @@ func TestSubmitMultisigned_SortsSigners(t *testing.T) {
 			]
 		}
 	}`)
+	var request map[string]any
+	require.NoError(t, json.Unmarshal(params, &request))
+	signMultisignedTxJSON(t, request["tx_json"].(map[string]any))
+	params, marshalErr := json.Marshal(request)
+	require.NoError(t, marshalErr)
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 	signers := result.(map[string]any)["tx_json"].(map[string]any)["Signers"].([]any)

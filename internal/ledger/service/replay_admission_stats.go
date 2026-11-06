@@ -7,12 +7,17 @@ import "time"
 // callers after the opaque admission token has been returned.
 type ReplayAdmissionMapStats struct {
 	Elapsed              time.Duration
+	AdmissionWait        time.Duration
+	TraversalElapsed     time.Duration
 	NodesLoaded          uint64
 	DurableReads         uint64
 	EqualSubtreesSkipped uint64
 	UsedVerifiedBase     bool
 	Workers              int
 	WorkspaceBytes       uint64
+	// Coalesced reports that the caller joined an existing complete walk and
+	// did not perform tree work itself.
+	Coalesced bool
 }
 
 // ReplayAdmissionStats reports the bounded work performed before publication.

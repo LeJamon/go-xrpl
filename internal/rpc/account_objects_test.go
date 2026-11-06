@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -317,6 +318,58 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		assert.Equal(t, expectedMarker, resp["marker"])
 		assert.Equal(t, float64(200), resp["limit"])
 	})
+}
+
+func TestAccountObjectsMPTIssuanceIncludesSyntheticID(t *testing.T) {
+	mock := newAccountObjectsMock()
+	services := newAccountObjectsTestServices(mock)
+	method := &handlers.AccountObjectsMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const sequence = uint32(16909060)
+	const index = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
+		return &types.AccountObjectsResult{
+			Account: account,
+			AccountObjects: []types.AccountObjectItem{{
+				Index:           index,
+				LedgerEntryType: "MPTokenIssuance",
+				Data: encodeSyntheticRPCObject(t, map[string]any{
+					"LedgerEntryType":   "MPTokenIssuance",
+					"Flags":             uint32(0),
+					"Sequence":          sequence,
+					"Issuer":            issuer,
+					"OwnerNode":         "0",
+					"OutstandingAmount": "0",
+					"PreviousTxnID":     strings.Repeat("0", 64),
+					"PreviousTxnLgrSeq": uint32(0),
+				}),
+			}},
+			LedgerIndex: 2,
+			Validated:   true,
+		}, nil
+	}
+
+	result, rpcErr := method.Handle(ctx, []byte(`{"account":"`+account+`","type":"mpt_issuance"}`))
+	require.Nil(t, rpcErr)
+	wire, err := json.Marshal(result)
+	require.NoError(t, err)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(wire, &response))
+	objects, ok := response["account_objects"].([]any)
+	require.True(t, ok)
+	require.Len(t, objects, 1)
+	object, ok := objects[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, strings.ToUpper(index), object["index"])
+	assert.Equal(t, "01020304B5F762798A53D543A014CAF8B297CFF8F2F937E8", object["mpt_issuance_id"])
 }
 
 // Test: Empty objects for funded account with no owned objects

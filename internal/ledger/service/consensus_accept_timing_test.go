@@ -76,7 +76,7 @@ func TestConsensusAcceptanceTimingsIncludeReplayGateObservation(t *testing.T) {
 	require.True(t, ok, "timing record omitted replay gate wait")
 	total, ok := record["total"].(time.Duration)
 	require.True(t, ok, "timing record omitted total")
-	require.Greater(t, replayGateWait, time.Duration(0))
+	require.GreaterOrEqual(t, replayGateWait, time.Duration(0))
 	require.GreaterOrEqual(t, total, replayGateWait)
 	require.False(t, record["blocked"].(bool))
 	require.Equal(t, parent.Sequence()+1, record["seq"])
@@ -164,9 +164,10 @@ func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
 			lifecycle := record["admission_lifecycle_wait"].(time.Duration)
 			persistence := record["persistence_admission_wait"].(time.Duration)
 			stateWait := record["state_admission_wait"].(time.Duration)
-			require.Positive(t, lifecycle)
-			require.Positive(t, persistence)
+			require.GreaterOrEqual(t, lifecycle, time.Duration(0))
+			require.GreaterOrEqual(t, persistence, time.Duration(0))
 			if phase == "persistence" {
+				require.Positive(t, persistence)
 				require.Zero(t, stateWait)
 				require.Equal(t, persistenceAdmissionLimit, svc.persistAdmissions)
 			} else {

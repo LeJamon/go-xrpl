@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -214,37 +215,69 @@ func TestSubmitMethodRawBlobInvalidTransactionEnvelope(t *testing.T) {
 	assert.Zero(t, mock.submitCalls)
 }
 
-func TestSubmitMethodRawBlobRejectsBadSignatureBeforeSubmission(t *testing.T) {
-	mock := newMockLedgerServiceSubmit()
-	mock.standalone = false
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleUser,
-		ApiVersion: types.ApiVersion2,
-		Services:   newSubmitTestServices(mock),
-	}
-	blob := rawSubmitBlob(t, map[string]any{
-		"TransactionType": "AccountSet",
-		"Account":         validAccountAddress,
-		"Fee":             "10",
-		"Sequence":        1,
-	})
-	decoded, err := binarycodec.Decode(blob)
-	require.NoError(t, err)
-	signature, ok := decoded["TxnSignature"].(string)
-	require.True(t, ok)
-	decoded["TxnSignature"] = strings.Repeat("00", len(signature)/2)
-	badBlob, err := binarycodec.Encode(decoded)
-	require.NoError(t, err)
-	params, err := json.Marshal(map[string]any{"tx_blob": badBlob})
-	require.NoError(t, err)
+func TestSubmitMethodRawBlobSignatureAdmissionAcrossLedgerModes(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		t.Run(fmt.Sprintf("standalone=%t", standalone), func(t *testing.T) {
+			base := rawSubmitBlob(t, map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Fee":             "10",
+				"Sequence":        1,
+			})
+			decoded, err := binarycodec.Decode(base)
+			require.NoError(t, err)
+			signature, ok := decoded["TxnSignature"].(string)
+			require.True(t, ok)
 
-	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
-	assert.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
-	assert.Equal(t, "fails local checks: Invalid signature.", rpcErr.ErrorException)
-	assert.Zero(t, mock.submitCalls)
+			cases := []struct {
+				name       string
+				blob       string
+				wantSubmit bool
+			}{
+				{name: "valid", blob: base, wantSubmit: true},
+				{name: "missing", blob: func() string {
+					missing := maps.Clone(decoded)
+					delete(missing, "TxnSignature")
+					encoded, encodeErr := binarycodec.Encode(missing)
+					require.NoError(t, encodeErr)
+					return encoded
+				}()},
+				{name: "invalid", blob: func() string {
+					invalid := maps.Clone(decoded)
+					invalid["TxnSignature"] = strings.Repeat("00", len(signature)/2)
+					encoded, encodeErr := binarycodec.Encode(invalid)
+					require.NoError(t, encodeErr)
+					return encoded
+				}()},
+			}
+
+			for _, test := range cases {
+				t.Run(test.name, func(t *testing.T) {
+					mock := newMockLedgerServiceSubmit()
+					mock.standalone = standalone
+					ctx := &types.RpcContext{
+						Context: context.Background(), Role: types.RoleUser,
+						ApiVersion: types.ApiVersion2, Services: newSubmitTestServices(mock),
+					}
+					params, marshalErr := json.Marshal(map[string]any{"tx_blob": test.blob})
+					require.NoError(t, marshalErr)
+
+					result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+					if test.wantSubmit {
+						require.Nil(t, rpcErr)
+						require.NotNil(t, result)
+						assert.Equal(t, 1, mock.submitCalls)
+						return
+					}
+					assert.Nil(t, result)
+					require.NotNil(t, rpcErr)
+					assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
+					assert.Equal(t, "fails local checks: Invalid signature.", rpcErr.ErrorException)
+					assert.Zero(t, mock.submitCalls)
+				})
+			}
+		})
+	}
 }
 
 func TestSubmitMethodRawBlobCanonicalizesFieldOrder(t *testing.T) {
@@ -819,6 +852,64 @@ func TestSubmitMethodOmitsLedgerStateFieldsWithoutSnapshot(t *testing.T) {
 	}
 }
 
+func TestSubmitMethodResponseFieldsBySubmissionPath(t *testing.T) {
+	for _, version := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		for _, blob := range []bool{false, true} {
+			t.Run(fmt.Sprintf("v%d/blob=%t", version, blob), func(t *testing.T) {
+				mock := newMockLedgerServiceSubmit()
+				mock.submitResult.CurrentLedgerState = &types.SubmitLedgerState{
+					ValidatedLedgerIndex: 2, OpenLedgerCost: 12,
+					AccountSequenceNext: 7, AccountSequenceAvailable: 9,
+				}
+				ctx := &types.RpcContext{
+					Context: context.Background(), Role: types.RoleUser, ApiVersion: version,
+					Services: newSubmitSigningTestServices(mock),
+				}
+				transaction := map[string]any{
+					"TransactionType": "Payment", "Account": validAccountAddress,
+					"Destination": admissionSubmitDestination, "Amount": "1000000",
+					"Fee": "10", "Sequence": 1,
+				}
+				params := signedSubmitParams(t, transaction, nil)
+				if blob {
+					params = rawSubmitParams(t, transaction, nil)
+				}
+				result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+				require.Nil(t, rpcErr)
+				require.Equal(t, 1, mock.submitCalls)
+				raw, err := json.Marshal(result)
+				require.NoError(t, err)
+				var response map[string]any
+				require.NoError(t, json.Unmarshal(raw, &response))
+				require.Equal(t, "tesSUCCESS", response["engine_result"])
+				require.Equal(t, float64(0), response["engine_result_code"])
+				require.Equal(t, mock.submitResult.EngineResultMessage, response["engine_result_message"])
+				require.Equal(t, mock.lastTxBlob, response["tx_blob"])
+				require.NotEmpty(t, response["tx_json"])
+				for _, field := range []string{
+					"accepted", "applied", "broadcast", "kept", "queued",
+					"account_sequence_next", "account_sequence_available", "open_ledger_cost", "validated_ledger_index",
+				} {
+					if blob {
+						require.Contains(t, response, field)
+					} else {
+						require.NotContains(t, response, field)
+					}
+				}
+				if blob {
+					require.NotContains(t, response, "deprecated")
+					require.NotContains(t, response, "hash")
+				} else {
+					require.NotEmpty(t, response["deprecated"])
+					if version > 1 {
+						require.Equal(t, handlers.CalculateTxHash(mock.lastTxBlob), response["hash"])
+					}
+				}
+			})
+		}
+	}
+}
+
 // TestSubmitMethodEngineResults tests various engine result codes
 func TestSubmitMethodEngineResults(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
@@ -1202,17 +1293,14 @@ func TestSubmitMethodTxBlobSubmitErrorIsSanitized(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   newSubmitTestServices(mock),
 	}
-	txBlob, err := binarycodec.Encode(map[string]any{
+	txBlob := rawSubmitBlob(t, map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		"Amount":          "1000000",
 		"Fee":             "10",
 		"Sequence":        1,
-		"SigningPubKey":   "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
-		"TxnSignature":    "30440220143759437C04F7B61F012563AFE90D8DAFC46E86035E1D965A9CED282C97D4CE02204CFD241E86F17E011298FC1A39B63386C74306A5DE047E213B0F29EFA4571C2C",
 	})
-	require.NoError(t, err)
 	params, err := json.Marshal(map[string]any{"tx_blob": txBlob})
 	require.NoError(t, err)
 
@@ -1460,7 +1548,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 			// Engine result should reflect the mock
 			assert.Equal(t, "tesSUCCESS", resp["engine_result"])
-			assert.Equal(t, true, resp["applied"])
+			assert.NotContains(t, resp, "applied")
 		})
 	}
 }
