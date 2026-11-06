@@ -177,7 +177,12 @@ type pendingEmbeddedManifest struct {
 }
 
 type siteInfoState struct {
-	URI             string
+	URI string
+	// StartingURI is the resource used for the next poll after a permanent
+	// redirect. URI remains the configured value so duplicate entries retain
+	// independent lookup identities.
+	StartingURI     string
+	Redirected      bool
 	LastFetched     time.Time
 	LastSuccess     time.Time
 	LastError       string
@@ -435,6 +440,7 @@ func New(cfg Config) (*Aggregator, error) {
 		}
 		sites = append(sites, &siteInfoState{
 			URI:            u,
+			StartingURI:    u,
 			NextRefresh:    initialNextRefresh,
 			RefreshSeconds: defaultRefreshSec,
 		})
@@ -626,8 +632,12 @@ func (a *Aggregator) SiteSnapshot() []SiteInfo {
 	defer a.mu.Unlock()
 	out := make([]SiteInfo, len(a.sites))
 	for i, s := range a.sites {
+		uri := s.URI
+		if s.Redirected {
+			uri += " (redirects to " + s.StartingURI + ")"
+		}
 		out[i] = SiteInfo{
-			URI:                s.URI,
+			URI:                uri,
 			LastFetched:        s.LastFetched,
 			LastSuccess:        s.LastSuccess,
 			LastError:          s.LastError,
@@ -686,6 +696,20 @@ func (a *Aggregator) setNextRefreshOccurrence(uri string, occurrence int, nextRe
 		return
 	}
 	site.NextRefresh = nextRefresh
+}
+
+func (a *Aggregator) setSiteTargetOccurrence(uri string, occurrence int, target string) {
+	if target == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	site := a.siteOccurrenceLocked(uri, occurrence)
+	if site == nil {
+		return
+	}
+	site.StartingURI = target
+	site.Redirected = true
 }
 
 // UpdateSiteState records the outcome of an HTTP poll attempt against a
