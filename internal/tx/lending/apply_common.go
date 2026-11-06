@@ -1,10 +1,12 @@
 package lending
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -55,7 +57,15 @@ func adjustPseudoOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int3
 	return ter.TesSUCCESS
 }
 
-func checkAssetValue(n lmath.N, asset tx.Asset) ter.Result {
+// checkAssetValue reports whether n can be held as an amount of asset. Under
+// fixCleanup3_5_0 a value out of the asset's range fails with
+// tecPRECISION_LOSS; without it, XRP above the native maximum fails with
+// tefEXCEPTION. A value the asset's precision would round fails with
+// tecPRECISION_LOSS.
+func checkAssetValue(n lmath.N, asset tx.Asset, rules *amendment.Rules) ter.Result {
+	if rules.Enabled(amendment.FeatureFixCleanup3_5_0) && !vault.IsRepresentable(asset, n) {
+		return ter.TecPRECISION_LOSS
+	}
 	rounded := n.RoundToAsset(assetIntegral(asset))
 	if asset.IsNative() {
 		maximum := lmath.FromInt(int64(state.MaxNativeDrops))

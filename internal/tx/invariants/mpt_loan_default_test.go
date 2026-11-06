@@ -334,6 +334,37 @@ func TestLoanDefaultMPTFreezeExemptionScope(t *testing.T) {
 	}
 }
 
+func TestLoanDefaultMPTCanTransferWaiver(t *testing.T) {
+	ownID := mptDefaultID(t, 50)
+	otherID := mptDefaultID(t, 51)
+	broker := mptDefaultAccount(t, addrHolderA)
+	vault := mptDefaultAccount(t, addrHolderB)
+	fix350 := amendment.NewRules([][32]byte{
+		amendment.FeatureLendingProtocol, amendment.FeatureFixCleanup3_4_0, amendment.FeatureFixCleanup3_5_0,
+	})
+
+	tests := []struct {
+		name    string
+		assetID [24]byte
+		rules   *amendment.Rules
+		want    bool
+	}{
+		{name: "before fixCleanup3_5_0", assetID: ownID, rules: mptDefaultRules(true, false), want: true},
+		{name: "default asset under fixCleanup3_5_0", assetID: ownID, rules: fix350},
+		{name: "unrelated issuance under fixCleanup3_5_0", assetID: otherID, rules: fix350, want: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx, view, entries := mptDefaultFixture(t, test.assetID, 0, broker, vault, 0)
+			got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, test.rules) != nil
+			if got != test.want {
+				t.Fatalf("violation = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoanDefaultMPTAuthorizationScope(t *testing.T) {
 	assetID := mptDefaultID(t, 50)
 	var ordinary [20]byte

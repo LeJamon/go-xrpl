@@ -44,7 +44,7 @@ func TestVaultWithdrawNumberOverflowReturnsPathDry(t *testing.T) {
 		AssetsAvailable:  "10",
 		WithdrawalPolicy: VaultStrategyFirstComeFirstServe,
 	}
-	_, _, _, _, _, result := withdraw.withdrawalAmounts(ctx, vd, &state.MPTokenIssuanceData{})
+	_, _, _, _, _, result := withdraw.withdrawalAmounts(ctx, vd, &state.MPTokenIssuanceData{}, tx.TransferRateParity)
 	if result != ter.TecPATH_DRY {
 		t.Fatalf("withdrawalAmounts() = %v, want tecPATH_DRY", result)
 	}
