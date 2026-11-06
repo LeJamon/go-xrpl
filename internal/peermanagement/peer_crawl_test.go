@@ -19,7 +19,8 @@ func TestCrawlInboundListeningPort(t *testing.T) {
 	}{
 		{"reachable", true, true, true},
 		{"unreachable", false, true, true},
-		{"outbound", true, false, true},
+		{"outbound reachable", true, false, true},
+		{"outbound unreachable", false, false, true},
 		{"unconverged", true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,8 +33,6 @@ func TestCrawlInboundListeningPort(t *testing.T) {
 				require.NoError(t, listener.Close())
 			}
 			o, peer := newEndpointsTestOverlay(t, 1)
-			peer.portCheckStarted = false
-			peer.listeningPort = 0
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			o.ctx = ctx
@@ -52,8 +51,19 @@ func TestCrawlInboundListeningPort(t *testing.T) {
 			})
 			o.peerStartWG.Wait()
 			o.discovery.mu.RLock()
-			require.Empty(t, o.discovery.peers)
+			if !tc.inbound && tc.converged {
+				require.Len(t, o.discovery.peers, 1)
+				require.Contains(t, o.discovery.peers, endpoint.String())
+			} else {
+				require.Empty(t, o.discovery.peers)
+			}
 			o.discovery.mu.RUnlock()
+			if !tc.inbound {
+				peer.mu.RLock()
+				require.False(t, peer.portCheckStarted)
+				require.Zero(t, peer.listeningPort)
+				peer.mu.RUnlock()
+			}
 			entry := o.crawlOverlay()["active"].([]map[string]any)[0]
 			require.Equal(t, "127.0.0.1", entry["ip"])
 			if !tc.inbound {
@@ -85,7 +95,7 @@ func TestCrawlInboundListeningPort(t *testing.T) {
 				}),
 			})
 			o.discovery.mu.RLock()
-			if tc.listening && tc.converged {
+			if (!tc.inbound || tc.listening) && tc.converged {
 				require.Len(t, o.discovery.peers, 1)
 				require.Contains(t, o.discovery.peers, endpoint.String())
 			} else {

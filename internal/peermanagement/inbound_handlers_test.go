@@ -690,8 +690,6 @@ func newEndpointsTestOverlay(t *testing.T, peerID PeerID) (*Overlay, *Peer) {
 
 	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
 	peer := NewPeer(peerID, endpoint, false, id, make(chan Event, 1))
-	peer.portCheckStarted = true
-	peer.listeningPort = endpoint.Port
 	peer.setTracking(PeerTrackingConverged)
 	o.peers[peer.ID()] = peer
 	return o, peer

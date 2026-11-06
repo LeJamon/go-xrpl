@@ -705,7 +705,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			continue
 		}
 		address := e.endpoint.String()
-		if e.hops == 0 && !o.checkPeerListeningPort(peer, address) {
+		if e.hops == 0 && peer.Inbound() && !o.checkPeerListeningPort(peer, address) {
 			continue
 		}
 		o.discovery.AddPeer(address, e.hops, evt.PeerID)
