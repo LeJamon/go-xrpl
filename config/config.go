@@ -25,11 +25,13 @@ type Config struct {
 	ClusterNodes    []string `toml:"cluster_nodes" mapstructure:"cluster_nodes"`
 	MaxTransactions int      `toml:"max_transactions" mapstructure:"max_transactions"` // 0 = use default (250)
 	// FeeDefault is the legacy reference-fee override applied after [voting].
-	FeeDefault       *int                   `toml:"fee_default" mapstructure:"fee_default"`
-	Overlay          OverlayConfig          `toml:"overlay" mapstructure:"overlay"`
-	TransactionQueue TransactionQueueConfig `toml:"transaction_queue" mapstructure:"transaction_queue"`
-	Acquisition      AcquisitionConfig      `toml:"acquisition" mapstructure:"acquisition"`
-	Resources        ResourcesConfig        `toml:"resources" mapstructure:"resources"`
+	FeeDefault       *int                    `toml:"fee_default" mapstructure:"fee_default"`
+	Overlay          OverlayConfig           `toml:"overlay" mapstructure:"overlay"`
+	Crawl            CrawlConfig             `toml:"crawl" mapstructure:"crawl"`
+	VL               ValidatorListHTTPConfig `toml:"vl" mapstructure:"vl"`
+	TransactionQueue TransactionQueueConfig  `toml:"transaction_queue" mapstructure:"transaction_queue"`
+	Acquisition      AcquisitionConfig       `toml:"acquisition" mapstructure:"acquisition"`
+	Resources        ResourcesConfig         `toml:"resources" mapstructure:"resources"`
 
 	// 3. Ripple Protocol
 	RelayProposals   string        `toml:"relay_proposals" mapstructure:"relay_proposals"`     // optional; "" = default ("trusted")

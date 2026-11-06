@@ -340,10 +340,10 @@ func newStoredVerificationFixture(
 		SHAMapFamily:  backend.New(db),
 	})
 	require.NoError(t, err)
-	require.NoError(t, svc.Start())
 	svc.recertificationMu.Lock()
 	svc.recertificationStopped = true
 	svc.recertificationMu.Unlock()
+	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
 	for branch := range branches {

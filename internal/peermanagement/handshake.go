@@ -846,6 +846,7 @@ func FeatureEnabled(headers http.Header, feature string) bool {
 // surfaces. Instance-Cookie / Local-IP / Remote-IP round-trip on the
 // wire but are validated-and-discarded.
 type HandshakeExtras struct {
+	CrawlPublic       bool
 	ServerDomain      string
 	NetworkID         string
 	ClosedLedger      [32]byte
@@ -901,6 +902,7 @@ func ParseHandshakeExtras(
 
 	out.UserAgentHeader = headers.Get(HeaderUserAgent)
 	out.ServerHeader = headers.Get(HeaderServer)
+	out.CrawlPublic = strings.EqualFold(headers.Get(HeaderCrawl), "public")
 
 	if v := headers.Get(HeaderClosedLedger); v != "" {
 		h, err := parseLedgerHashHeader(v)

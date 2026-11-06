@@ -45,6 +45,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 	if err := validatePositiveDurationSetting(v, "server.checkpoint_shutdown_grace"); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
+	if err := validateHTTPSettings(v); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
 
 	// Unmarshal into struct.
 	// The custom decode hook is required so viper can decode the typed

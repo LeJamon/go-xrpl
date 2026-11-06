@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -213,8 +214,37 @@ func (e *envelope) validateShape() error {
 type siteState struct {
 	occurrence  int
 	uri         string
+	targetURI   string
 	interval    time.Duration
 	nextRefresh time.Time
+}
+
+type redirectTrace struct {
+	responseURI string
+	onPermanent func(string)
+}
+
+type redirectTraceKey struct{}
+
+type redirectError struct {
+	message string
+}
+
+func (e *redirectError) Error() string {
+	return e.message
+}
+
+type httpStatusError struct {
+	status string
+}
+
+func (e *httpStatusError) Error() string {
+	return "HTTP " + e.status
+}
+
+type fetchResult struct {
+	body        []byte
+	responseURI string
 }
 
 // SitePoller fetches publisher list URLs on a periodic cadence and
@@ -261,7 +291,12 @@ func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) (*SitePo
 		if err := validateSiteURI(u); err != nil {
 			return nil, fmt.Errorf("invalid validator site uri %q: %w", u, err)
 		}
-		sites = append(sites, &siteState{occurrence: occurrences[u], uri: u, interval: defaultRefreshInterval})
+		sites = append(sites, &siteState{
+			occurrence: occurrences[u],
+			uri:        u,
+			targetURI:  u,
+			interval:   defaultRefreshInterval,
+		})
 		occurrences[u]++
 	}
 	p := &SitePoller{
@@ -318,14 +353,76 @@ func validateSiteURI(uri string) error {
 // any intermediate redirect target) could send the fetcher at a
 // `file:///etc/passwd` URL and read arbitrary local files.
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return fmt.Errorf("max redirects (%d) exceeded", maxRedirects)
+	status := 0
+	if req.Response != nil {
+		status = req.Response.StatusCode
 	}
-	scheme := strings.ToLower(req.URL.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("invalid scheme in redirect %q", scheme)
+	switch status {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		// These are the only redirect statuses rippled follows.
+	default:
+		return http.ErrUseLastResponse
+	}
+	location := ""
+	if req.Response != nil {
+		location = req.Response.Header.Get("Location")
+	}
+	if location == "" {
+		return &redirectError{message: "missing location"}
+	}
+	if len(via) > maxRedirects {
+		return &redirectError{message: "max redirects"}
+	}
+	if err := validateRedirectLocation(location); err != nil {
+		return err
+	}
+	if trace, ok := req.Context().Value(redirectTraceKey{}).(*redirectTrace); ok {
+		trace.responseURI = location
+		if status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect {
+			if trace.onPermanent != nil {
+				trace.onPermanent(location)
+			}
+		}
 	}
 	return nil
+}
+
+func validateRedirectLocation(location string) *redirectError {
+	parsed, err := url.Parse(location)
+	invalidURI := &redirectError{message: "URI '" + location + "' cannot be parsed"}
+	if err != nil || parsed.Scheme == "" || !strings.HasPrefix(location[len(parsed.Scheme)+1:], "//") {
+		return invalidURI
+	}
+	if parsed.Path == "" && (parsed.ForceQuery || parsed.RawQuery != "" || strings.Contains(location, "#")) {
+		return invalidURI
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return invalidURI
+	}
+	if port := parsed.Port(); port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || n == 0 {
+			return invalidURI
+		}
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "file":
+		if parsed.Host != "" {
+			return &redirectError{message: "file URI cannot contain a hostname"}
+		}
+		if parsed.Path == "" {
+			return &redirectError{message: "file URI must contain a path"}
+		}
+		return &redirectError{message: "invalid scheme in redirect " + scheme}
+	case "http", "https":
+		if parsed.Hostname() == "" {
+			return &redirectError{message: scheme + " URI must contain a hostname"}
+		}
+		return nil
+	default:
+		return &redirectError{message: "Unsupported scheme: '" + scheme + "'"}
+	}
 }
 
 // SetInterval overrides the default poll interval. Useful for tests
@@ -487,23 +584,39 @@ func (p *SitePoller) pickNext() *siteState {
 // the site's internal interval/nextRefresh cursor and pushes the
 // outcome through to the aggregator for RPC visibility.
 func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
-	uri := s.uri
+	p.mu.Lock()
+	uri := s.targetURI
+	interval := s.interval
+	p.mu.Unlock()
+	if uri == "" {
+		uri = s.uri
+	}
 	// Surface the upcoming refresh time before the (possibly slow) fetch
 	// runs, mirroring rippled's onTimer ordering at ValidatorSite.cpp:354-355
 	// where nextRefresh is set before makeRequest. Without this the
 	// validator_list_sites RPC reports a stale, already-past
 	// next_refresh_time for the duration of an in-flight fetch.
-	p.aggregator.setNextRefreshOccurrence(uri, s.occurrence, time.Now().UTC().Add(s.interval))
+	p.aggregator.setNextRefreshOccurrence(s.uri, s.occurrence, time.Now().UTC().Add(interval))
 
-	body, err := p.fetch(ctx, uri)
+	result, err := p.fetch(ctx, uri, func(target string) {
+		p.mu.Lock()
+		s.targetURI = target
+		p.mu.Unlock()
+		p.aggregator.setSiteTargetOccurrence(s.uri, s.occurrence, target)
+	})
 	if err != nil {
-		p.recordFailure(s, true, err.Error(), "validator list site fetch failed", "error", err)
+		lastErr, retry := fetchDiagnostic(err)
+		p.recordFailure(s, retry, lastErr, "validator list site fetch failed", "uri", uri, "error", err)
 		return
+	}
+	responseURI := result.responseURI
+	if responseURI == "" {
+		responseURI = uri
 	}
 
 	var env envelope
-	if jsonErr := json.Unmarshal(body, &env); jsonErr != nil {
-		p.recordFailure(s, false, "bad json", "validator list site JSON decode failed", "uri", uri, "error", jsonErr)
+	if jsonErr := json.Unmarshal(result.body, &env); jsonErr != nil {
+		p.recordFailure(s, false, "bad json", "validator list site JSON decode failed", "uri", responseURI, "error", jsonErr)
 		return
 	}
 
@@ -512,7 +625,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// and ValidatorSite.cpp:391-410. The literal "Missing fields in
 	// JSON response" message is the rippled-faithful error text.
 	if err := env.validateShape(); err != nil {
-		p.recordFailure(s, false, missingFieldsStatusMessage, missingFieldsMessage, "uri", uri)
+		p.recordFailure(s, false, missingFieldsStatusMessage, missingFieldsMessage, "uri", responseURI)
 		return
 	}
 
@@ -526,7 +639,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	var pubKey PublisherKey
 	switch {
 	case env.Version.Value != 1:
-		dispList, pubKey, _ = p.aggregator.applyCollectionFromSite(env.toCollection(), uri)
+		dispList, pubKey, _ = p.aggregator.applyCollectionFromSite(env.toCollection(), responseURI)
 		disp = bestDisposition(dispList)
 	case env.Version.Value == 1:
 		disp, pubKey, _ = p.aggregator.applyListInternal(
@@ -536,7 +649,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 			[]byte(env.Blob.Value),
 			[]byte(env.Signature.Value),
 			env.Version.Value,
-			uri,
+			responseURI,
 			true,
 		)
 	}
@@ -576,7 +689,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 		lastSuccess = applyTime
 	}
 	nextAt := applyTime.Add(chosenInterval)
-	p.aggregator.updateSiteStateOccurrence(uri, s.occurrence, applyTime, lastSuccess, "", disp, refreshSec, nextAt)
+	p.aggregator.updateSiteStateOccurrence(s.uri, s.occurrence, applyTime, lastSuccess, "", disp, refreshSec, nextAt)
 
 	p.mu.Lock()
 	s.interval = chosenInterval
@@ -585,8 +698,8 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 }
 
 // recordFailure pushes a fetch / parse failure through to the aggregator
-// and the per-site scheduling cursor. The error message becomes both the
-// log line and the `last_refresh_message` surfaced via RPC.
+// and the per-site scheduling cursor. The normalized message becomes the
+// `last_refresh_message` surfaced via RPC; detailed errors remain in logs.
 //
 // retry distinguishes a transient transport failure from a permanent
 // parse/validation failure, mirroring rippled's `retry` flag in
@@ -612,33 +725,61 @@ func (p *SitePoller) recordFailure(s *siteState, retry bool, lastErr, logMsg str
 // fetch retrieves the raw envelope body from the given URI. Scheme
 // validation has already happened at construction time, so the switch
 // here is structural rather than defensive.
-func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
+func (p *SitePoller) fetch(ctx context.Context, uri string, onPermanent func(string)) (fetchResult, error) {
+	trace := &redirectTrace{responseURI: uri, onPermanent: onPermanent}
+	ctx = context.WithValue(ctx, redirectTraceKey{}, trace)
 	parsed, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("parse URI: %w", err)
+		return fetchResult{}, fmt.Errorf("parse URI: %w", err)
 	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "http", "https":
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
+			return fetchResult{}, fmt.Errorf("build request: %w", err)
 		}
 		resp, err := p.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("HTTP GET: %w", err)
+			return fetchResult{}, fmt.Errorf("HTTP GET: %w", err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status)
+		if isRedirectStatus(resp.StatusCode) && resp.Header.Get("Location") == "" {
+			return fetchResult{}, &redirectError{message: "missing location"}
 		}
-		return readBoundedBody(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return fetchResult{}, &httpStatusError{status: resp.Status}
+		}
+		body, err := readBoundedBody(resp.Body)
+		return fetchResult{body: body, responseURI: trace.responseURI}, err
 	case "file":
 		// Host already rejected at construction (see validateSiteURI);
 		// Path already guaranteed non-empty.
-		return readBoundedFile(parsed.Path)
+		body, err := readBoundedFile(parsed.Path)
+		return fetchResult{body: body, responseURI: uri}, err
 	default:
-		return nil, fmt.Errorf("unsupported URI scheme %q", parsed.Scheme)
+		return fetchResult{}, fmt.Errorf("unsupported URI scheme %q", parsed.Scheme)
 	}
+}
+
+func isRedirectStatus(status int) bool {
+	switch status {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	default:
+		return false
+	}
+}
+
+func fetchDiagnostic(err error) (string, bool) {
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) {
+		return "bad result code", true
+	}
+	var redirectErr *redirectError
+	if errors.As(err, &redirectErr) {
+		return redirectErr.Error(), false
+	}
+	return "fetch error", true
 }
 
 // bestDisposition reduces a collection of dispositions to the single

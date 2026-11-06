@@ -192,6 +192,9 @@ type Peer struct {
 	serverDomain      string
 	networkID         string
 	userAgent         string
+	crawlPublic       bool
+	listeningPort     uint16
+	portCheckStarted  bool
 	closedLedger      [32]byte
 	previousLedger    [32]byte
 	hasClosedLedger   bool
@@ -564,6 +567,7 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 	defer p.mu.Unlock()
 	p.serverDomain = x.ServerDomain
 	p.networkID = x.NetworkID
+	p.crawlPublic = x.CrawlPublic
 	// PeerImp::getVersion (PeerImp.cpp:381-386) picks by direction.
 	if p.inbound {
 		p.userAgent = x.UserAgentHeader
