@@ -95,40 +95,43 @@ func (l *LocalTxs) Sweep(view sweepView) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	currentSeq := view.Sequence()
 	kept := make(map[[32]byte]localTx, len(l.txs))
 	for hash, lt := range l.txs {
-		if currentSeq > lt.ExpireLedgerSeq {
-			continue
-		}
-		exists, err := view.TxExists(lt.Ptx.Hash)
+		pending, err := lt.pending(view)
 		if err != nil {
-			return fmt.Errorf("localtxs.Sweep: inspect transaction %x: %w", hash, err)
+			return fmt.Errorf("localtxs.Sweep: %w", err)
 		}
-		if exists {
-			continue
+		if pending {
+			kept[hash] = lt
 		}
-		if lt.Ptx.IsTicket {
-			burned, err := ticketBurned(view, lt.Ptx)
-			if err != nil {
-				return fmt.Errorf("localtxs.Sweep: inspect ticket transaction %x: %w", hash, err)
-			}
-			if burned {
-				continue
-			}
-		} else {
-			advanced, err := seqAdvancedPast(view, lt.Ptx)
-			if err != nil {
-				return fmt.Errorf("localtxs.Sweep: inspect sequence transaction %x: %w", hash, err)
-			}
-			if advanced {
-				continue
-			}
-		}
-		kept[hash] = lt
 	}
 	l.txs = kept
 	return nil
+}
+
+func (lt localTx) pending(view sweepView) (bool, error) {
+	if view.Sequence() > lt.ExpireLedgerSeq {
+		return false, nil
+	}
+	exists, err := view.TxExists(lt.Ptx.Hash)
+	if err != nil {
+		return false, fmt.Errorf("inspect transaction %x: %w", lt.Ptx.Hash, err)
+	}
+	if exists {
+		return false, nil
+	}
+	if lt.Ptx.IsTicket {
+		burned, err := ticketBurned(view, lt.Ptx)
+		if err != nil {
+			return false, fmt.Errorf("inspect ticket transaction %x: %w", lt.Ptx.Hash, err)
+		}
+		return !burned, nil
+	}
+	advanced, err := seqAdvancedPast(view, lt.Ptx)
+	if err != nil {
+		return false, fmt.Errorf("inspect sequence transaction %x: %w", lt.Ptx.Hash, err)
+	}
+	return !advanced, nil
 }
 
 // seqAdvancedPast reports whether view's AccountRoot.Sequence for the
@@ -201,6 +204,28 @@ func (l *LocalTxs) Get(hash [32]byte) (openledger.PendingTx, bool) {
 		return openledger.PendingTx{}, false
 	}
 	return entry.Ptx, true
+}
+
+// GetPending returns an owned copy only while the transaction remains live in view.
+func (l *LocalTxs) GetPending(hash [32]byte, view sweepView) (openledger.PendingTx, bool, error) {
+	viewValue := reflect.ValueOf(view)
+	if view == nil || viewValue.Kind() == reflect.Pointer && viewValue.IsNil() {
+		return openledger.PendingTx{}, false, errors.New("localtxs.GetPending: view is nil")
+	}
+	l.mu.RLock()
+	entry, ok := l.txs[hash]
+	l.mu.RUnlock()
+	if !ok {
+		return openledger.PendingTx{}, false, nil
+	}
+	pending, err := entry.pending(view)
+	if err != nil {
+		return openledger.PendingTx{}, false, fmt.Errorf("localtxs.GetPending: %w", err)
+	}
+	if !pending {
+		return openledger.PendingTx{}, false, nil
+	}
+	return clonePendingTx(entry.Ptx), true, nil
 }
 
 func (l *LocalTxs) Size() int {

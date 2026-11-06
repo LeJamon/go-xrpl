@@ -7,12 +7,12 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -80,11 +80,18 @@ func TestGetTransactionOpenHashMismatchIsOperationalError(t *testing.T) {
 	}
 }
 
-func TestGetTransactionIgnoresRetryAndRelayCaches(t *testing.T) {
+func TestGetTransactionIgnoresRelayCachesButReturnsHeldPool(t *testing.T) {
 	raw, hash := validRelationalTestTransaction(t, 1)
 	for _, source := range []string{"relay", "corrupt relay", "held"} {
 		t.Run(source, func(t *testing.T) {
-			svc := &Service{localTxs: localtxs.New()}
+			svc, err := New(DefaultConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(svc.Stop)
 			switch source {
 			case "relay":
 				svc.rememberRelayTransaction(hash, raw, false)
@@ -95,6 +102,15 @@ func TestGetTransactionIgnoresRetryAndRelayCaches(t *testing.T) {
 			}
 
 			result, err := svc.GetTransaction(hash)
+			if source == "held" {
+				requireHeldTxOnly(t, result, err, raw)
+				result, searched, err := svc.GetTransactionWithRange(t.Context(), hash, 1, 2)
+				requireHeldTxOnly(t, result, err, raw)
+				if searched != relationaldb.TxSearchAll {
+					t.Fatalf("GetTransactionWithRange search = %v, want TxSearchAll", searched)
+				}
+				return
+			}
 			if result != nil || !errors.Is(err, svcerr.ErrTxnNotFound) {
 				t.Fatalf("GetTransaction = (%+v, %v), want txnNotFound", result, err)
 			}
@@ -104,6 +120,95 @@ func TestGetTransactionIgnoresRetryAndRelayCaches(t *testing.T) {
 			}
 		})
 	}
+}
+
+func requireHeldTxOnly(t *testing.T, result *TransactionResult, err error, raw []byte) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("held transaction lookup: %v", err)
+	}
+	if result == nil {
+		t.Fatal("held transaction lookup returned nil")
+	}
+	if result.LedgerIndex != 0 || result.Validated || result.TxIndex != invalidTransactionIndex {
+		t.Fatalf("held transaction advertised closed-ledger state: %+v", result)
+	}
+	txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(result.TxData)
+	if err != nil {
+		t.Fatalf("split held transaction: %v", err)
+	}
+	if string(txBlob) != string(raw) || metaBlob != nil {
+		t.Fatalf("held transaction payload = (%x, %x), want tx-only input", txBlob, metaBlob)
+	}
+}
+
+func TestGetTransactionHeldPoolExpiresAfterRetention(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	transaction := payment.Pay(master, jtx.NewAccount("held-expiration"), 50_000_000).Sequence(2).Build()
+	env.SignWith(transaction, master)
+	blob, err := tx.SerializeTransaction(transaction)
+	if err != nil {
+		t.Fatalf("SerializeTransaction: %v", err)
+	}
+	hash, err := tx.ComputeTransactionHash(transaction)
+	if err != nil {
+		t.Fatalf("ComputeTransactionHash: %v", err)
+	}
+	anchor := svc.GetOpenLedger().Sequence()
+	outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
+	if err != nil {
+		t.Fatalf("SubmitOpenLedgerTxDetailed: %v", err)
+	}
+	if outcome.Result != ter.TerPRE_SEQ || outcome.Applied || outcome.Queued {
+		t.Fatalf("future-sequence submission = %+v, want terPRE_SEQ held outside open ledger/TxQ", outcome)
+	}
+	if found, err := svc.OpenLedgerHasTx(hash); err != nil || found {
+		t.Fatalf("future transaction open-ledger membership = (%t, %v), want absent", found, err)
+	}
+	for _, candidate := range svc.QueueAllTxs() {
+		if candidate.TxID == hash {
+			t.Fatal("future transaction entered TxQ")
+		}
+	}
+	result, err := svc.GetTransaction(hash)
+	requireHeldTxOnly(t, result, err, blob)
+	ranged, searched, err := svc.GetTransactionWithRange(t.Context(), hash, 1, anchor+10)
+	requireHeldTxOnly(t, ranged, err, blob)
+	if searched != relationaldb.TxSearchAll {
+		t.Fatalf("held range search = %v, want TxSearchAll", searched)
+	}
+
+	for attempts := 0; attempts < 10; attempts++ {
+		closedSeq, err := svc.AcceptLedger(t.Context())
+		if err != nil {
+			t.Fatalf("AcceptLedger: %v", err)
+		}
+		result, lookupErr := svc.GetTransaction(hash)
+		if closedSeq <= anchor+5 {
+			requireHeldTxOnly(t, result, lookupErr, blob)
+			continue
+		}
+		if result != nil || !errors.Is(lookupErr, svcerr.ErrTxnNotFound) {
+			t.Fatalf("expired held transaction lookup = (%+v, %v), want txnNotFound", result, lookupErr)
+		}
+		result, searched, lookupErr = svc.GetTransactionWithRange(t.Context(), hash, 1, closedSeq)
+		if result != nil || !errors.Is(lookupErr, svcerr.ErrTxnNotFound) || searched != relationaldb.TxSearchUnknown {
+			t.Fatalf("expired held range lookup = (%+v, %v, %v), want txnNotFound and unknown search coverage", result, lookupErr, searched)
+		}
+		return
+	}
+	t.Fatal("held transaction did not expire within the retention window")
 }
 
 func TestGetTransactionOpenRawCanonicalValidatesHash(t *testing.T) {
