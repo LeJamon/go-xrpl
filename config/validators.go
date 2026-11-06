@@ -196,6 +196,17 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			currentSection = line[1 : len(line)-1]
+			// Preserve declared empty trust sections for file validation.
+			switch currentSection {
+			case "validators", "validator_keys":
+				if config.Validators == nil {
+					config.Validators = []string{}
+				}
+			case "validator_list_keys":
+				if config.ValidatorListKeys == nil {
+					config.ValidatorListKeys = []string{}
+				}
+			}
 			continue
 		}
 
