@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -388,8 +389,21 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 
 func validateRedirectLocation(location string) *redirectError {
 	parsed, err := url.Parse(location)
-	if err != nil || parsed.Scheme == "" {
-		return &redirectError{message: "URI '" + location + "' cannot be parsed"}
+	invalidURI := &redirectError{message: "URI '" + location + "' cannot be parsed"}
+	if err != nil || parsed.Scheme == "" || !strings.HasPrefix(location[len(parsed.Scheme)+1:], "//") {
+		return invalidURI
+	}
+	if parsed.Path == "" && (parsed.ForceQuery || parsed.RawQuery != "" || strings.Contains(location, "#")) {
+		return invalidURI
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return invalidURI
+	}
+	if port := parsed.Port(); port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || n == 0 {
+			return invalidURI
+		}
 	}
 	scheme := strings.ToLower(parsed.Scheme)
 	switch scheme {
@@ -402,8 +416,8 @@ func validateRedirectLocation(location string) *redirectError {
 		}
 		return &redirectError{message: "invalid scheme in redirect " + scheme}
 	case "http", "https":
-		if parsed.Host == "" {
-			return &redirectError{message: "URI '" + location + "' cannot be parsed"}
+		if parsed.Hostname() == "" {
+			return &redirectError{message: scheme + " URI must contain a hostname"}
 		}
 		return nil
 	default:

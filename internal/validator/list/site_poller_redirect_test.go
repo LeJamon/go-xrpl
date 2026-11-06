@@ -65,6 +65,12 @@ func TestSitePollerRedirectLocationValidation(t *testing.T) {
 		{name: "unsupported scheme", location: "ftp://example.com/list", want: "Unsupported scheme: 'ftp'"},
 		{name: "file scheme", location: "file:///tmp/list", want: "invalid scheme in redirect file"},
 		{name: "missing location", want: "missing location"},
+		{name: "zero port", location: "http://example.com:0/list", want: "URI 'http://example.com:0/list' cannot be parsed"},
+		{name: "overflowing port", location: "http://example.com:65536/list", want: "URI 'http://example.com:65536/list' cannot be parsed"},
+		{name: "query without path", location: "http://example.com?list", want: "URI 'http://example.com?list' cannot be parsed"},
+		{name: "fragment without path", location: "http://example.com#list", want: "URI 'http://example.com#list' cannot be parsed"},
+		{name: "missing authority", location: "http:relative", want: "URI 'http:relative' cannot be parsed"},
+		{name: "missing hostname", location: "http:///list", want: "http URI must contain a hostname"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -79,8 +85,8 @@ func TestSitePollerRedirectLocationValidation(t *testing.T) {
 			if err == nil {
 				t.Fatal("fetch unexpectedly succeeded")
 			}
-			if got, _ := fetchDiagnostic(err); got != tc.want {
-				t.Fatalf("diagnostic = %q, want %q", got, tc.want)
+			if got, retry := fetchDiagnostic(err); got != tc.want || retry {
+				t.Fatalf("diagnostic = (%q, retry=%v), want (%q, false)", got, retry, tc.want)
 			}
 		})
 	}
