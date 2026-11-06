@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -486,10 +487,10 @@ func parseLedgerHashHeader(s string) ([32]byte, error) {
 // Network-ID → Network-Time → Public-Key → Session-Signature →
 // self-connection. Callers must run ValidateServerDomain first.
 func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey string, cfg HandshakeConfig) (*PublicKeyToken, error) {
-	if netIDStr := headers.Get(HeaderNetworkID); netIDStr != "" {
-		netID, err := strconv.ParseUint(netIDStr, 10, 32)
+	if values := headers.Values(HeaderNetworkID); len(values) > 0 {
+		netID, err := strconv.ParseUint(strings.TrimPrefix(values[0], "+"), 10, 32)
 		if err != nil {
-			return nil, fmt.Errorf("invalid network ID: %w", err)
+			return nil, errors.New("Invalid peer network identifier")
 		}
 		if uint32(netID) != cfg.NetworkID {
 			return nil, ErrNetworkMismatch

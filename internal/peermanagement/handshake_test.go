@@ -422,18 +422,46 @@ func TestVerifyPeerHandshake_SelfConnection(t *testing.T) {
 }
 
 func TestInboundHandshake_NetworkID(t *testing.T) {
-	for _, networkID := range []string{"0", "1", "missing"} {
-		t.Run(networkID, func(t *testing.T) {
+	const mismatch = "Peer is on a different network"
+	const invalid = "Invalid peer network identifier"
+	tests := []struct {
+		name    string
+		remote  string
+		missing bool
+		wantErr string
+	}{
+		{name: "same", remote: "0"},
+		{name: "different", remote: "1", wantErr: mismatch},
+		{name: "missing", missing: true},
+		{name: "empty", wantErr: invalid},
+		{name: "whitespace_only", remote: " \t ", wantErr: invalid},
+		{name: "plus_same", remote: "+0"},
+		{name: "plus_different", remote: "+1", wantErr: mismatch},
+		{name: "surrounding_whitespace", remote: "\t+0 \t"},
+		{name: "maximum", remote: "4294967295", wantErr: mismatch},
+		{name: "overflow", remote: "4294967296", wantErr: invalid},
+		{name: "negative_zero", remote: "-0", wantErr: invalid},
+		{name: "double_plus", remote: "++0", wantErr: invalid},
+		{name: "malformed", remote: "not-a-number", wantErr: invalid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			conn, err := runInboundHandshakeRequest(t, func(req *http.Request) {
-				if networkID == "missing" {
+				if tt.missing {
 					req.Header.Del(HeaderNetworkID)
 				} else {
-					req.Header.Set(HeaderNetworkID, networkID)
+					req.Header.Set(HeaderNetworkID, tt.remote)
 				}
 			})
-			if networkID == "1" {
-				require.ErrorIs(t, err, ErrNetworkMismatch)
-				assert.True(t, strings.HasPrefix(conn.writes.String(), "HTTP/1.1 400 Bad Request (Peer is on a different network)\r\n"))
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				if tt.wantErr == mismatch {
+					assert.ErrorIs(t, err, ErrNetworkMismatch)
+				} else {
+					assert.NotErrorIs(t, err, ErrNetworkMismatch)
+				}
+				assert.True(t, strings.HasPrefix(conn.writes.String(), "HTTP/1.1 400 Bad Request ("+tt.wantErr+")\r\n"))
+				assert.NotContains(t, conn.writes.String(), "101 Switching Protocols")
 				return
 			}
 			require.NoError(t, err)
@@ -451,26 +479,52 @@ func TestVerifyPeerHandshake_NetworkID(t *testing.T) {
 	sharedValue := make([]byte, 32)
 	response := BuildHandshakeResponse(emptyHandshakeRequest(), remoteID, sharedValue, DefaultHandshakeConfig(), "")
 
+	const mismatch = "Peer is on a different network"
+	const invalid = "Invalid peer network identifier"
 	tests := []struct {
-		name     string
-		local    uint32
-		remote   string
-		mismatch bool
+		name    string
+		local   uint32
+		remote  string
+		missing bool
+		wantErr string
 	}{
 		{name: "mainnet_same", local: 0, remote: "0"},
-		{name: "mainnet_testnet", local: 0, remote: "1", mismatch: true},
-		{name: "mainnet_private", local: 0, remote: "12345", mismatch: true},
-		{name: "mainnet_missing", local: 0},
-		{name: "testnet_mainnet", local: 1, remote: "0", mismatch: true},
+		{name: "mainnet_testnet", local: 0, remote: "1", wantErr: mismatch},
+		{name: "mainnet_private", local: 0, remote: "12345", wantErr: mismatch},
+		{name: "mainnet_missing", local: 0, missing: true},
+		{name: "testnet_mainnet", local: 1, remote: "0", wantErr: mismatch},
 		{name: "testnet_same", local: 1, remote: "1"},
-		{name: "testnet_missing", local: 1},
-		{name: "devnet_testnet", local: 2, remote: "1", mismatch: true},
-		{name: "devnet_missing", local: 2},
+		{name: "testnet_missing", local: 1, missing: true},
+		{name: "devnet_testnet", local: 2, remote: "1", wantErr: mismatch},
+		{name: "devnet_missing", local: 2, missing: true},
+		{name: "mainnet_empty", wantErr: invalid},
+		{name: "testnet_empty", local: 1, wantErr: invalid},
+		{name: "plus_same", remote: "+0"},
+		{name: "plus_different", remote: "+1", wantErr: mismatch},
+		{name: "testnet_plus_same", local: 1, remote: "+1"},
+		{name: "leading_zeroes", local: 1, remote: "0001"},
+		{name: "maximum", local: 4294967295, remote: "4294967295"},
+		{name: "plus_maximum", local: 4294967295, remote: "+4294967295"},
+		{name: "overflow", remote: "4294967296", wantErr: invalid},
+		{name: "plus_overflow", remote: "+4294967296", wantErr: invalid},
+		{name: "negative_zero", remote: "-0", wantErr: invalid},
+		{name: "negative", remote: "-1", wantErr: invalid},
+		{name: "bare_plus", remote: "+", wantErr: invalid},
+		{name: "double_plus", remote: "++0", wantErr: invalid},
+		{name: "mixed_signs", remote: "+-0", wantErr: invalid},
+		{name: "whitespace_only", remote: " \t ", wantErr: invalid},
+		{name: "leading_whitespace", remote: " 0", wantErr: invalid},
+		{name: "trailing_whitespace", remote: "0 ", wantErr: invalid},
+		{name: "fraction", remote: "0.0", wantErr: invalid},
+		{name: "trailing_junk", remote: "0x", wantErr: invalid},
+		{name: "hexadecimal", remote: "0x0", wantErr: invalid},
+		{name: "underscore", remote: "0_0", wantErr: invalid},
+		{name: "unicode_digit", remote: "０", wantErr: invalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			headers := response.Header.Clone()
-			if tt.remote == "" {
+			if tt.missing {
 				headers.Del(HeaderNetworkID)
 			} else {
 				headers.Set(HeaderNetworkID, tt.remote)
@@ -478,9 +532,13 @@ func TestVerifyPeerHandshake_NetworkID(t *testing.T) {
 			cfg := DefaultHandshakeConfig()
 			cfg.NetworkID = tt.local
 			pubKey, err := VerifyPeerHandshake(headers, sharedValue, localID.EncodedPublicKey(), cfg)
-			if tt.mismatch {
-				require.ErrorIs(t, err, ErrNetworkMismatch)
-				assert.EqualError(t, err, "Peer is on a different network")
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				if tt.wantErr == mismatch {
+					assert.ErrorIs(t, err, ErrNetworkMismatch)
+				} else {
+					assert.NotErrorIs(t, err, ErrNetworkMismatch)
+				}
 				assert.Nil(t, pubKey)
 				return
 			}
