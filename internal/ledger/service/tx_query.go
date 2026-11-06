@@ -696,35 +696,12 @@ func transactionResultFromRawBlob(blob []byte, txHash [32]byte, source string) (
 	}, nil
 }
 
-func (s *Service) getPendingTransaction(queue *txq.TxQ, locals *localtxs.LocalTxs, txHash [32]byte) (*TransactionResult, bool, error) {
-	if queue != nil {
-		if blob, ok := queue.GetTxBlob(txHash); ok {
-			result, err := transactionResultFromRawBlob(blob, txHash, "queued")
-			return result, true, err
-		}
-	}
-	blob, _, _, ok := s.relayCacheGet(txHash)
-	if ok {
-		result, err := transactionResultFromRawBlob(blob, txHash, "relay-cache")
-		return result, true, err
-	}
-	if locals != nil {
-		if pending, ok := locals.Get(txHash); ok {
-			result, err := transactionResultFromRawBlob(pending.Blob, txHash, "held")
-			return result, true, err
-		}
-	}
-	return nil, false, nil
-}
-
-// GetTransaction retrieves a transaction by its hash. The current open view
-// is checked first, before historical/index lookups, matching rippled's
-// transaction-cache behavior.
+// GetTransaction retrieves a transaction from the open ledger, cached history,
+// or active transaction queue.
 func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	s.mu.RLock()
 	openResult, found, openErr := s.getOpenTransactionLocked(txHash)
 	queue := s.txQueue
-	locals := s.localTxs
 	s.mu.RUnlock()
 	if openErr != nil {
 		return nil, openErr
@@ -740,12 +717,10 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	if !errors.Is(historyErr, svcerr.ErrTxnNotFound) {
 		return nil, historyErr
 	}
-	queuedResult, found, queuedErr := s.getPendingTransaction(queue, locals, txHash)
-	if queuedErr != nil {
-		return nil, queuedErr
-	}
-	if found {
-		return queuedResult, nil
+	if queue != nil {
+		if blob, ok := queue.GetTxBlob(txHash); ok {
+			return transactionResultFromRawBlob(blob, txHash, "queued")
+		}
 	}
 	return nil, svcerr.ErrTxnNotFound
 }

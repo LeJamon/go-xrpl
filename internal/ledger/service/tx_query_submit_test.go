@@ -24,6 +24,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // signedPaymentWithFee builds a signed Payment blob carrying an explicit
@@ -489,6 +490,13 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 	}
 	if string(queuedBlob) != string(blob) || metaBlob != nil {
 		t.Fatalf("queued tx payload = (%x, %x), want tx-only input", queuedBlob, metaBlob)
+	}
+	ranged, searched, err := svc.GetTransactionWithRange(t.Context(), hash, 999, 1000)
+	if err != nil || ranged == nil || ranged.Validated || ranged.LedgerIndex != 0 || string(ranged.TxData) != string(queuedResult.TxData) {
+		t.Fatalf("ranged queued tx lookup = (%+v, %v), want the same pending transaction", ranged, err)
+	}
+	if searched != relationaldb.TxSearchAll {
+		t.Fatalf("ranged queued tx search = %v, want TxSearchAll", searched)
 	}
 	if res.CurrentLedgerState == nil {
 		t.Fatal("queued submit must include current-ledger state")

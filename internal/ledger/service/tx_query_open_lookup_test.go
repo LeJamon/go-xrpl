@@ -13,6 +13,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 func TestGetTransactionOpenHashMismatchIsOperationalError(t *testing.T) {
@@ -79,36 +80,29 @@ func TestGetTransactionOpenHashMismatchIsOperationalError(t *testing.T) {
 	}
 }
 
-func TestGetTransactionRelayCacheRejectsCorruptData(t *testing.T) {
-	svc := &Service{relayTxCache: make(map[[32]byte]relayTxRecord)}
-	var hash [32]byte
-	hash[0] = 0xC1
-	svc.rememberRelayTransaction(hash, []byte{0x01, 0x02}, false)
-
-	_, err := svc.GetTransaction(hash)
-	if !errors.Is(err, svcerr.ErrTxnDataCorrupt) {
-		t.Fatalf("corrupt relay-cache error = %v, want svcerr.ErrTxnDataCorrupt", err)
-	}
-}
-
-func TestGetTransactionHeldPoolReturnsTxOnly(t *testing.T) {
+func TestGetTransactionIgnoresRetryAndRelayCaches(t *testing.T) {
 	raw, hash := validRelationalTestTransaction(t, 1)
-	svc := &Service{localTxs: localtxs.New()}
-	svc.localTxs.PushBack(1, openledger.PendingTx{Hash: hash, Blob: raw})
+	for _, source := range []string{"relay", "corrupt relay", "held"} {
+		t.Run(source, func(t *testing.T) {
+			svc := &Service{localTxs: localtxs.New()}
+			switch source {
+			case "relay":
+				svc.rememberRelayTransaction(hash, raw, false)
+			case "corrupt relay":
+				svc.rememberRelayTransaction(hash, []byte{0x01, 0x02}, false)
+			case "held":
+				svc.localTxs.PushBack(1, openledger.PendingTx{Hash: hash, Blob: raw})
+			}
 
-	result, err := svc.GetTransaction(hash)
-	if err != nil {
-		t.Fatalf("held transaction lookup: %v", err)
-	}
-	if result.LedgerIndex != 0 || result.Validated || result.TxIndex != invalidTransactionIndex {
-		t.Fatalf("held transaction advertised closed-ledger state: %+v", result)
-	}
-	txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(result.TxData)
-	if err != nil {
-		t.Fatalf("split held transaction: %v", err)
-	}
-	if string(txBlob) != string(raw) || metaBlob != nil {
-		t.Fatalf("held transaction payload = (%x, %x), want tx-only input", txBlob, metaBlob)
+			result, err := svc.GetTransaction(hash)
+			if result != nil || !errors.Is(err, svcerr.ErrTxnNotFound) {
+				t.Fatalf("GetTransaction = (%+v, %v), want txnNotFound", result, err)
+			}
+			result, searched, err := svc.GetTransactionWithRange(t.Context(), hash, 1, 2)
+			if result != nil || !errors.Is(err, svcerr.ErrTxnNotFound) || searched != relationaldb.TxSearchUnknown {
+				t.Fatalf("GetTransactionWithRange = (%+v, %v, %v), want txnNotFound and unknown search coverage", result, searched, err)
+			}
+		})
 	}
 }
 
