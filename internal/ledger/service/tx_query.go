@@ -696,35 +696,16 @@ func transactionResultFromRawBlob(blob []byte, txHash [32]byte, source string) (
 	}, nil
 }
 
-func (s *Service) getPendingTransaction(queue *txq.TxQ, locals *localtxs.LocalTxs, txHash [32]byte) (*TransactionResult, bool, error) {
-	if queue != nil {
-		if blob, ok := queue.GetTxBlob(txHash); ok {
-			result, err := transactionResultFromRawBlob(blob, txHash, "queued")
-			return result, true, err
-		}
-	}
-	blob, _, _, ok := s.relayCacheGet(txHash)
-	if ok {
-		result, err := transactionResultFromRawBlob(blob, txHash, "relay-cache")
-		return result, true, err
-	}
-	if locals != nil {
-		if pending, ok := locals.Get(txHash); ok {
-			result, err := transactionResultFromRawBlob(pending.Blob, txHash, "held")
-			return result, true, err
-		}
-	}
-	return nil, false, nil
+// GetTransaction retrieves a pending or historical transaction by hash.
+func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
+	result, _, err := s.getTransaction(context.Background(), txHash, nil)
+	return result, err
 }
 
-// GetTransaction retrieves a transaction by its hash. The current open view
-// is checked first, before historical/index lookups, matching rippled's
-// transaction-cache behavior.
-func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
+func (s *Service) getCachedTransaction(txHash [32]byte) (*TransactionResult, error) {
 	s.mu.RLock()
 	openResult, found, openErr := s.getOpenTransactionLocked(txHash)
 	queue := s.txQueue
-	locals := s.localTxs
 	s.mu.RUnlock()
 	if openErr != nil {
 		return nil, openErr
@@ -740,12 +721,21 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	if !errors.Is(historyErr, svcerr.ErrTxnNotFound) {
 		return nil, historyErr
 	}
-	queuedResult, found, queuedErr := s.getPendingTransaction(queue, locals, txHash)
-	if queuedErr != nil {
-		return nil, queuedErr
+	if queue != nil {
+		if blob, ok := queue.GetTxBlob(txHash); ok {
+			return transactionResultFromRawBlob(blob, txHash, "queued")
+		}
 	}
-	if found {
-		return queuedResult, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.localTxs != nil && s.validatedLedger != nil {
+		pending, ok, err := s.localTxs.GetPending(txHash, s.validatedLedger)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return transactionResultFromRawBlob(pending.Blob, txHash, "held")
+		}
 	}
 	return nil, svcerr.ErrTxnNotFound
 }
@@ -816,7 +806,14 @@ func (s *Service) GetLedgerContext(ctx context.Context, sequence uint32) (*Ledge
 // GetTransactionWithRange returns an unvalidated in-memory transaction before
 // consulting the relational transaction table for the requested range.
 func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionResult, relationaldb.TxSearchResult, error) {
-	cached, cacheErr := s.GetTransaction(txHash)
+	return s.getTransaction(ctx, txHash, &relationaldb.LedgerRange{
+		Min: relationaldb.LedgerIndex(minLedger),
+		Max: relationaldb.LedgerIndex(maxLedger),
+	})
+}
+
+func (s *Service) getTransaction(ctx context.Context, txHash [32]byte, ledgerRange *relationaldb.LedgerRange) (*TransactionResult, relationaldb.TxSearchResult, error) {
+	cached, cacheErr := s.getCachedTransaction(txHash)
 	if cacheErr != nil && !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
 		return nil, relationaldb.TxSearchUnknown, cacheErr
 	}
@@ -830,12 +827,19 @@ func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, 
 		return cached, relationaldb.TxSearchUnknown, cacheErr
 	}
 
-	dbResult, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), &relationaldb.LedgerRange{
-		Min: relationaldb.LedgerIndex(minLedger),
-		Max: relationaldb.LedgerIndex(maxLedger),
-	})
+	dbResult, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
 	if err != nil {
 		return nil, searched, err
+	}
+	if dbResult == nil && cacheErr == nil && cached.Validated {
+		// Validation can publish the ledger before its queued SQL write completes.
+		if err := s.flushPersists(ctx); err != nil {
+			return nil, searched, err
+		}
+		dbResult, searched, err = db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
+		if err != nil {
+			return nil, searched, err
+		}
 	}
 	if dbResult == nil {
 		return nil, searched, svcerr.ErrTxnNotFound

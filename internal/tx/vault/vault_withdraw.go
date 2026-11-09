@@ -211,6 +211,9 @@ func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 			return res
 		}
 		limitAmount = assets
+		if rate := withdrawalTransferRate(view, config.RequireRules(), accountID, dstID, asset); rate != tx.TransferRateParity {
+			limitAmount = assets.MulRatioWithNumberContext(tx.TransferRateParity, rate, false, config.NumberContext())
+		}
 	}
 	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil, v.CredentialIDs, config.NumberContext()); res != ter.TesSUCCESS {
 		return res
@@ -333,6 +336,7 @@ func (v *VaultWithdraw) withdrawalAmounts(
 	ctx *tx.ApplyContext,
 	vd *vaultData,
 	issuance *state.MPTokenIssuanceData,
+	rate uint32,
 ) (
 	assetsTotalN, availN, assetsWithdrawnN state.XRPLNumber,
 	shares uint64,
@@ -384,6 +388,7 @@ func (v *VaultWithdraw) withdrawalAmounts(
 		if err != nil {
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TefINTERNAL
 		}
+		assetsN = addTransferFee(assetsN, integral, rate, ctx.NumberContext())
 		sharesRedeemedN, assetsWithdrawnN = assetWithdrawalAmounts(assetsTotalN, lossN, shareTotalN, assetsN, integral, rules.Enabled(amendment.FeatureFixCleanup3_4_0))
 		if sharesRedeemedN.IsZero() {
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TecPRECISION_LOSS
@@ -456,7 +461,12 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 
 	rules := ctx.Rules()
 	asset := vaultAssetOf(vd)
-	assetsTotalN, availN, assetsWithdrawnN, shares, fix320, result := v.withdrawalAmounts(ctx, vd, issuance)
+	dstID, derr := v.destination(ctx.AccountID)
+	if derr != nil {
+		return ter.TefINTERNAL
+	}
+	rate := withdrawalTransferRate(ctx.View, rules, ctx.AccountID, dstID, asset)
+	assetsTotalN, availN, assetsWithdrawnN, shares, fix320, result := v.withdrawalAmounts(ctx, vd, issuance, rate)
 	if result != ter.TesSUCCESS {
 		return result
 	}
@@ -505,6 +515,10 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsWithdrawnN))
 		vd.AssetsAvailable = numberToString(availN.Sub(assetsWithdrawnN))
 	}
+	assetsDeliveredN := SubtractTransferFee(assetsWithdrawnN, integral, rate, ctx.NumberContext())
+	if assetsWithdrawnN.Signum() > 0 && assetsDeliveredN.IsZero() {
+		return ter.TecPRECISION_LOSS
+	}
 	if err := associateVaultAsset(vd, rules); err != nil {
 		return ter.TefINTERNAL
 	}
@@ -528,10 +542,6 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 
 	// Deliver the asset to the destination, creating a holding when withdrawing
 	// to self.
-	dstID, derr := v.destination(ctx.AccountID)
-	if derr != nil {
-		return ter.TefINTERNAL
-	}
 	if dstID == ctx.AccountID {
 		if !rules.Enabled(amendment.FeatureFixCleanup3_4_0) || !assetsWithdrawnN.IsZero() {
 			if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
@@ -551,9 +561,62 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	if herr != nil || holding.Cmp(assetsWithdrawnN) < 0 {
 		return ter.TefINTERNAL
 	}
+	if assetsDeliveredN.Cmp(assetsWithdrawnN) != 0 {
+		return sendAssetThroughIssuer(ctx, vd.Account, dstID, asset, assetsWithdrawnN, assetsDeliveredN)
+	}
 	if res := sendAssetFromVault(ctx, vd.Account, dstID, asset, assetsWithdrawnN); res != ter.TesSUCCESS {
 		return res
 	}
 
 	return ter.TesSUCCESS
+}
+
+// withdrawalTransferRate returns the transfer rate a withdrawal pays. Under
+// fixCleanup3_5_0 a holder other than the issuer withdrawing to another such
+// holder pays the issuer's fee; every other withdrawal is fee-free.
+func withdrawalTransferRate(view tx.ReadOnlyLedgerView, rules *amendment.Rules, account, destination [20]byte, asset tx.Asset) uint32 {
+	if !rules.Enabled(amendment.FeatureFixCleanup3_5_0) || asset.IsNative() || destination == account {
+		return tx.TransferRateParity
+	}
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok || mptIDIssuer(id) == account || mptIDIssuer(id) == destination {
+			return tx.TransferRateParity
+		}
+		return mptutil.TransferRate(view, id)
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil || issuer == account || issuer == destination {
+		return tx.TransferRateParity
+	}
+	return tx.GetTransferRateByID(view, issuer)
+}
+
+// addTransferFee returns what must leave the sender for n to reach the
+// receiver once the issuer keeps its fee at rate, rounded up.
+func addTransferFee(n state.XRPLNumber, integral bool, rate uint32, numberContext state.NumberContext) state.XRPLNumber {
+	if rate == tx.TransferRateParity {
+		return n
+	}
+	return mulAssetRatio(n, integral, rate, tx.TransferRateParity, true, numberContext)
+}
+
+// SubtractTransferFee returns what reaches the receiver when n leaves the
+// sender and the issuer keeps its fee at rate, rounded down.
+func SubtractTransferFee(n state.XRPLNumber, integral bool, rate uint32, numberContext state.NumberContext) state.XRPLNumber {
+	if rate == tx.TransferRateParity {
+		return n
+	}
+	return mulAssetRatio(n, integral, tx.TransferRateParity, rate, false, numberContext)
+}
+
+// mulAssetRatio returns n * num / den at the asset's precision: exact for an
+// integral asset, rounded to the 16-digit IOU mantissa otherwise.
+func mulAssetRatio(n state.XRPLNumber, integral bool, num, den uint32, roundUp bool, numberContext state.NumberContext) state.XRPLNumber {
+	prototype := state.NewIssuedAmountFromValue(0, 0, "", "")
+	if integral {
+		prototype = state.NewMPTAmountDirect(0, "", "")
+	}
+	amount := numberContext.ToAmount(n, prototype, state.RoundToNearest)
+	return numberContext.FromAmount(amount.MulRatioWithNumberContext(num, den, roundUp, numberContext), state.RoundToNearest)
 }

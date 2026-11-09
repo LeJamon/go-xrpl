@@ -5,12 +5,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	codecTypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/stretchr/testify/require"
 )
+
+// assetValueRules returns rules with fixCleanup3_5_0 enabled or not.
+func assetValueRules(cleanup bool) *amendment.Rules {
+	if cleanup {
+		return amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_5_0})
+	}
+	return amendment.EmptyRules()
+}
 
 func TestCheckAssetValueNativeBoundary(t *testing.T) {
 	for _, tc := range []struct {
@@ -30,14 +39,23 @@ func TestCheckAssetValueNativeBoundary(t *testing.T) {
 		{"-100000000000000000.6", ter.TefEXCEPTION},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
-			for _, scale := range []state.MantissaScale{
-				state.MantissaScaleLargeLegacy,
-				state.MantissaScaleLarge320,
-				state.MantissaScaleLarge330,
-			} {
-				n, err := state.ParseXRPLNumber(tc.value, scale, state.RoundToNearest)
-				require.NoError(t, err)
-				require.Equal(t, tc.want, checkAssetValue(n, tx.Asset{Currency: "XRP"}), "scale %d", scale)
+			for _, cleanup := range []bool{false, true} {
+				// Under fixCleanup3_5_0 a value outside the native range is
+				// tecPRECISION_LOSS instead of tefEXCEPTION.
+				want := tc.want
+				if cleanup && want == ter.TefEXCEPTION {
+					want = ter.TecPRECISION_LOSS
+				}
+				for _, scale := range []state.MantissaScale{
+					state.MantissaScaleLargeLegacy,
+					state.MantissaScaleLarge320,
+					state.MantissaScaleLarge330,
+				} {
+					n, err := state.ParseXRPLNumber(tc.value, scale, state.RoundToNearest)
+					require.NoError(t, err)
+					require.Equal(t, want, checkAssetValue(n, tx.Asset{Currency: "XRP"}, assetValueRules(cleanup)),
+						"scale %d, fixCleanup3_5_0 %t", scale, cleanup)
+				}
 			}
 		})
 	}
@@ -69,7 +87,10 @@ func TestCheckAssetValueMPTWireBoundaries(t *testing.T) {
 			} {
 				n, err := state.ParseXRPLNumber(tc.value, scale, state.RoundToNearest)
 				require.NoError(t, err)
-				require.Equal(t, ter.TesSUCCESS, checkAssetValue(n, asset), "scale %d", scale)
+				for _, cleanup := range []bool{false, true} {
+					require.Equal(t, ter.TesSUCCESS, checkAssetValue(n, asset, assetValueRules(cleanup)),
+						"scale %d, fixCleanup3_5_0 %t", scale, cleanup)
+				}
 			}
 		})
 	}
@@ -82,7 +103,9 @@ func TestCheckAssetValueMPTWireBoundaries(t *testing.T) {
 	max := state.NewXRPLNumberScaled(math.MaxInt64, 0, state.MantissaScaleLarge330, state.RoundToNearest)
 	cusp := max.Add(state.NewXRPLNumberScaled(3, -1, state.MantissaScaleLarge330, state.RoundToNearest))
 	require.Equal(t, max, cusp)
-	require.Equal(t, ter.TesSUCCESS, checkAssetValue(cusp, asset))
+	for _, cleanup := range []bool{false, true} {
+		require.Equal(t, ter.TesSUCCESS, checkAssetValue(cusp, asset, assetValueRules(cleanup)))
+	}
 }
 
 func TestCheckAssetValueIOUPrecisionAndUnderflow(t *testing.T) {
@@ -121,7 +144,10 @@ func TestCheckAssetValueIOUPrecisionAndUnderflow(t *testing.T) {
 				state.MantissaScaleLarge330,
 			} {
 				value := state.NewXRPLNumberScaled(tc.mantissa, tc.exponent, scale, state.RoundToNearest)
-				require.Equal(t, tc.want, checkAssetValue(value, asset), "scale %d", scale)
+				for _, cleanup := range []bool{false, true} {
+					require.Equal(t, tc.want, checkAssetValue(value, asset, assetValueRules(cleanup)),
+						"scale %d, fixCleanup3_5_0 %t", scale, cleanup)
+				}
 			}
 		})
 	}

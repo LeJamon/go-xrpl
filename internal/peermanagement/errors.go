@@ -32,7 +32,7 @@ var (
 	ErrProtocolMismatch         = errors.New("protocol version mismatch")
 	ErrInvalidPublicKey         = errors.New("invalid public key")
 	ErrInvalidSignature         = errors.New("invalid signature")
-	ErrNetworkMismatch          = errors.New("network ID mismatch")
+	ErrNetworkMismatch          = errors.New("Peer is on a different network")
 
 	// Discovery errors
 	ErrPeerNotFound    = errors.New("peer not found")

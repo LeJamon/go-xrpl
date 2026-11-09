@@ -267,6 +267,14 @@ keys to precede any `[section]` header.
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
 | `genesis_file` | — | Custom genesis; omit for built-in defaults. Optional. |
 
+Validator files may declare empty trust lists: `[validators]`, `[validator_keys]`,
+or `[validator_list_keys]` in TXT, or `validators = []` or
+`validator_list_keys = []` in TOML. This lets `goxrpl rpc --conf` load the
+configuration without local trust anchors. A networked server still requires
+at least one trusted validator or validator-list publisher key at startup;
+`--standalone` skips the validators file. A file with no trust declaration is
+rejected, as are nonempty validator-list sites without publisher keys.
+
 ### `[resources]` and `[acquisition]`
 
 | Setting | Default | Meaning |

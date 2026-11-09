@@ -300,7 +300,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		// Admission rejections (non-peer Connect-As, slot-full, duplicate)
 		// already emitted their response in lieu of the 101 upgrade and are
 		// not handshake failures, so they raise no lifecycle event.
-		if errors.Is(err, errInboundRejected) {
+		if errors.Is(err, errInboundRejected) || errors.Is(err, errInboundHTTPHandled) {
 			return
 		}
 		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
@@ -353,11 +353,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		return NewHandshakeError(peer.Endpoint(), "tls", err)
 	}
 
-	sharedValue, err := tlsConn.SharedValue()
-	if err != nil {
-		return NewHandshakeError(peer.Endpoint(), "shared_value", err)
-	}
-
 	deadline := time.Now().Add(o.cfg.HandshakeTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
@@ -384,6 +379,16 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	if err := readHandshakeBody(req); err != nil {
 		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
 		return NewHandshakeError(peer.Endpoint(), "read_body", err)
+	}
+	if handled, err := o.processHTTPRequest(req, tlsConn); handled {
+		if err != nil {
+			return fmt.Errorf("%w: %w", errInboundHTTPHandled, err)
+		}
+		return errInboundHTTPHandled
+	}
+	sharedValue, err := tlsConn.SharedValue()
+	if err != nil {
+		return NewHandshakeError(peer.Endpoint(), "shared_value", err)
 	}
 	if err := validateHandshakeRequest(req); err != nil {
 		writeInboundHandshakeError(tlsConn, hsCfg, tcpRemoteIP(tlsConn), err)
@@ -511,7 +516,7 @@ func (o *Overlay) handshakeConfigFor() HandshakeConfig {
 	return HandshakeConfig{
 		UserAgent:           o.cfg.UserAgent,
 		NetworkID:           o.cfg.NetworkID,
-		CrawlPublic:         false,
+		CrawlPublic:         !o.cfg.PrivateMode,
 		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
 		EnableCompression:   o.cfg.EnableCompression,
 		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,

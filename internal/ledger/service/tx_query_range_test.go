@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -105,6 +107,36 @@ func TestGetTransactionWithRangeRelationalFallback(t *testing.T) {
 	}
 }
 
+func TestGetTransactionPreservesRelationalErrors(t *testing.T) {
+	repositories, err := sqlitedb.NewRepositoryManager(t.Context(), t.TempDir(), sqlitedb.Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.RelationalDB = repositories
+	svc, err := New(cfg)
+	if err != nil {
+		_ = repositories.Close()
+		t.Fatal(err)
+	}
+	if err := repositories.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ranged := range []bool{false, true} {
+		var result *TransactionResult
+		var lookupErr error
+		if ranged {
+			result, _, lookupErr = svc.GetTransactionWithRange(t.Context(), [32]byte{1}, 1, 2)
+		} else {
+			result, lookupErr = svc.GetTransaction([32]byte{1})
+		}
+		if result != nil || lookupErr == nil || errors.Is(lookupErr, svcerr.ErrTxnNotFound) {
+			t.Fatalf("ranged=%t: lookup = (%+v, %v), want database failure", ranged, result, lookupErr)
+		}
+	}
+}
+
 func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) {
 	ctx := context.Background()
 	repositories, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
@@ -145,6 +177,10 @@ func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) 
 	if searched != relationaldb.TxSearchAll {
 		t.Fatalf("range search = %d, want TxSearchAll", searched)
 	}
+	plain, err := svc.GetTransaction(hash)
+	if err != nil || plain == nil || plain.Validated || plain.LedgerIndex != historyLedger.Sequence() {
+		t.Fatalf("plain lookup = (%+v, %v), want unvalidated history result", plain, err)
+	}
 
 	if err := historyLedger.SetValidated(); err != nil {
 		t.Fatalf("SetValidated: %v", err)
@@ -183,5 +219,18 @@ func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) 
 	}
 	if validatedRange == nil || !validatedRange.Validated || validatedRange.TxIndex != 9 {
 		t.Fatalf("validated range lookup = %+v, want DB result with index 9", validatedRange)
+	}
+	plain, err = svc.GetTransaction(hash)
+	if err != nil || plain == nil || !plain.Validated || plain.TxIndex != 9 {
+		t.Fatalf("validated plain lookup = (%+v, %v), want DB result with index 9", plain, err)
+	}
+	if err := repositories.Transaction().DeleteTransactionsBeforeLedgerSeq(ctx, relationaldb.LedgerIndex(historyLedger.Sequence()+1)); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := svc.GetTransaction(hash); result != nil || !errors.Is(err, svcerr.ErrTxnNotFound) {
+		t.Fatalf("pruned plain lookup = (%+v, %v), want txnNotFound", result, err)
+	}
+	if result, _, err := svc.GetTransactionWithRange(ctx, hash, 1, historyLedger.Sequence()); result != nil || !errors.Is(err, svcerr.ErrTxnNotFound) {
+		t.Fatalf("pruned range lookup = (%+v, %v), want txnNotFound", result, err)
 	}
 }

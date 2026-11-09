@@ -27,15 +27,15 @@ func TestSitePollerFetchBoundedHTTPAndFileBodies(t *testing.T) {
 			}))
 			defer server.Close()
 			poller := newPollerForLifecycleTest(t, server.URL)
-			got, err := poller.fetch(t.Context(), server.URL)
+			got, err := poller.fetch(t.Context(), server.URL, nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected HTTP body limit error")
 				}
 				return
 			}
-			if err != nil || len(got) != tc.bodyLen {
-				t.Fatalf("HTTP fetch: len=%d err=%v", len(got), err)
+			if err != nil || len(got.body) != tc.bodyLen {
+				t.Fatalf("HTTP fetch: len=%d err=%v", len(got.body), err)
 			}
 		})
 	}
@@ -45,7 +45,7 @@ func TestSitePollerFetchBoundedHTTPAndFileBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 	poller := newPollerForLifecycleTest(t, "file://"+path)
-	if _, err := poller.fetch(t.Context(), "file://"+path); err == nil {
+	if _, err := poller.fetch(t.Context(), "file://"+path, nil); err == nil {
 		t.Fatal("expected file body limit error")
 	}
 }

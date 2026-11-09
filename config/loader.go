@@ -45,6 +45,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 	if err := validatePositiveDurationSetting(v, "server.checkpoint_shutdown_grace"); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
+	if err := validateHTTPSettings(v); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
 
 	// Unmarshal into struct.
 	// The custom decode hook is required so viper can decode the typed
@@ -319,8 +322,8 @@ func validateValidatorsFile(validators *ValidatorsConfig) error {
 	if len(validators.ValidatorListSites) > 0 && len(validators.ValidatorListKeys) == 0 {
 		return fmt.Errorf("validator_list_sites requires at least one validator_list_keys entry")
 	}
-	if len(validators.Validators) == 0 && len(validators.ValidatorListKeys) == 0 {
-		return fmt.Errorf("validators file must configure validators or validator_list_keys")
+	if validators.Validators == nil && validators.ValidatorListKeys == nil {
+		return fmt.Errorf("validators file must contain a validators, validator_keys (TXT), or validator_list_keys declaration")
 	}
 	return nil
 }

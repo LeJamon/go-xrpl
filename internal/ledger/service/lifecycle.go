@@ -146,6 +146,11 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.syncTable(s.validatedLedger)
 
 	s.commitTransactionResultsLocked(stagedResults)
+	if s.localTxs != nil {
+		if err := s.localTxs.Sweep(closed); err != nil {
+			s.logger.Warn("failed to sweep local transactions", "ledger_seq", closedSeq, "err", err)
+		}
+	}
 	var txResults []TransactionResultEvent
 	if s.hasEventSink() {
 		txResults = stagedResults.results

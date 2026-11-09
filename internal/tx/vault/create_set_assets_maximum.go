@@ -61,6 +61,16 @@ func validateAssetsMaximum(value *string) error {
 	return nil
 }
 
+// checkAssetsMaximumRepresentable rejects, under fixCleanup3_5_0, an
+// AssetsMaximum that would overflow the asset when rounded to it.
+func checkAssetsMaximumRepresentable(value *string, asset tx.Asset, rules *amendment.Rules) bool {
+	if value == nil || !rules.Enabled(amendment.FeatureFixCleanup3_5_0) {
+		return true
+	}
+	maximum, err := parseCreateSetNumberForRules(*value, rules)
+	return err == nil && IsRepresentable(asset, maximum)
+}
+
 func parseCreateSetNumber(s string) (state.XRPLNumber, error) {
 	return state.ParseXRPLNumber(
 		s,

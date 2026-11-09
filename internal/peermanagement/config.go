@@ -96,6 +96,7 @@ type Config struct {
 	NetworkID  uint32
 	UserAgent  string
 	SSLCiphers string
+	HTTP       HTTPConfig
 
 	// Peer limits
 	MaxPeers    int
@@ -226,6 +227,12 @@ func DefaultConfig() Config {
 		MaxInbound:  DefaultMaxInbound,
 		MaxOutbound: DefaultMaxOutbound,
 		IPLimit:     0,
+		HTTP: HTTPConfig{
+			CrawlOverlay:  true,
+			CrawlServer:   true,
+			CrawlUNL:      true,
+			ValidatorList: true,
+		},
 
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,

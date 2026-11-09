@@ -637,8 +637,8 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 
 	remoteIP := peer.RemoteIP()
 	type ingestEndpoint struct {
-		address string
-		hops    uint32
+		endpoint Endpoint
+		hops     uint32
 	}
 	accepted := make([]ingestEndpoint, 0, len(eps.EndpointsV2))
 	for _, tm := range eps.EndpointsV2 {
@@ -652,29 +652,15 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			continue
 		}
 
-		address := tm.Endpoint
-		host := parsed.Host
 		if tm.Hops == 0 {
 			// hops==0 describes the sender; trust the socket IP over
 			// the self-reported host (PeerImp.cpp:1234-1235).
 			if remoteIP == "" {
 				continue
 			}
-			host = remoteIP
-			address = Endpoint{Host: remoteIP, Port: parsed.Port}.String()
+			parsed.Host = remoteIP
 		}
-
-		// Discard addresses that aren't publicly routable when endpoint
-		// verification is on (rippled PeerFinder is_valid_address, gated
-		// on config verifyEndpoints). The check runs on the post-rewrite
-		// host so a hops==0 peer behind a private socket is dropped too.
-		// A silent drop, not a charge: the address parsed fine, it is
-		// just not gossip-worthy.
-		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(host), parsed.Port) {
-			continue
-		}
-
-		accepted = append(accepted, ingestEndpoint{address: address, hops: tm.Hops})
+		accepted = append(accepted, ingestEndpoint{endpoint: parsed, hops: tm.Hops})
 	}
 
 	// rippled hands the parsed set to PeerFinder only when at least one
@@ -701,6 +687,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		return
 	}
 
+	neighborSeen := false
 	for _, e := range accepted {
 		// Drop endpoints beyond our discovery horizon rather than storing
 		// addresses SelectPeersToConnect would never dial; mirrors
@@ -708,7 +695,20 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		if e.hops > MaxHops {
 			continue
 		}
-		o.discovery.AddPeer(e.address, e.hops, evt.PeerID)
+		if e.hops == 0 {
+			if neighborSeen {
+				continue
+			}
+			neighborSeen = true
+		}
+		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(e.endpoint.Host), e.endpoint.Port) {
+			continue
+		}
+		address := e.endpoint.String()
+		if e.hops == 0 && peer.Inbound() && !o.checkPeerListeningPort(peer, address) {
+			continue
+		}
+		o.discovery.AddPeer(address, e.hops, evt.PeerID)
 	}
 }
 

@@ -164,13 +164,23 @@ func TestApplyValidatorReload_MalformedFileIsNoOp(t *testing.T) {
 }
 
 func TestApplyValidatorReload_RejectsEmptyTrust(t *testing.T) {
-	path := writeReloadConfig(t, "")
-	sink := &recordingSink{validateErr: errors.New("trusted validator configuration cannot be empty")}
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{"missing file", ""},
+		{"empty section", "[validators]\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeReloadConfig(t, test.content)
+			sink := &recordingSink{validateErr: errors.New("trusted validator configuration cannot be empty")}
 
-	applyValidatorReload(xrpllog.Discard(), sink, path)
+			applyValidatorReload(xrpllog.Discard(), sink, path)
 
-	assert.Equal(t, 1, sink.validations)
-	assert.Empty(t, sink.calls)
+			assert.Equal(t, 1, sink.validations)
+			assert.Empty(t, sink.calls)
+		})
+	}
 }
 
 func TestApplyValidatorReload_RejectsPublisherChanges(t *testing.T) {

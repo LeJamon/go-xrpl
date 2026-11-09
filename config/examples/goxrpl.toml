@@ -204,6 +204,17 @@ max_diverged_time = 300  # seconds (60-900)
                          # addresses for local dev — a security risk on
                          # a public network
 
+# Peer crawler responses (all optional; omitted values use rippled defaults).
+# [crawl]
+# enabled = true
+# overlay = true
+# server = true
+# counts = false
+# unl = true
+#
+# [vl]
+# enabled = true
+
 [transaction_queue]
 ledgers_in_queue = 20
 minimum_queue_size = 2000
