@@ -33,6 +33,10 @@ type ApplyContext struct {
 	// rippled's mPriorBalance.
 	SourceFeeCharged uint64
 
+	// PreclaimView is the ledger as the preclaim checks read it: before the
+	// fee, the sequence or ticket and any change made by Apply.
+	PreclaimView ReadOnlyLedgerView
+
 	// Config holds engine configuration (reserves, ledger sequence, etc.)
 	Config EngineConfig
 
@@ -185,6 +189,24 @@ func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, 
 // SourceFeeCharged is 0 and the prior balance is the untouched source balance.
 func (ctx *ApplyContext) PriorBalance() uint64 {
 	return ctx.Account.Balance + ctx.SourceFeeCharged
+}
+
+// PreclaimAccount returns the source account as the preclaim checks read it.
+// A ticketed transaction has already consumed its ticket when Apply runs, so
+// checks that rippled performs in preclaim must count that ticket.
+func (ctx *ApplyContext) PreclaimAccount() *state.AccountRoot {
+	if ctx.PreclaimView == nil {
+		return ctx.Account
+	}
+	data, err := ctx.PreclaimView.Read(keylet.Account(ctx.AccountID))
+	if err != nil || data == nil {
+		return ctx.Account
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return ctx.Account
+	}
+	return account
 }
 
 // CheckReserveWithFee validates that the source can afford the reserve for the

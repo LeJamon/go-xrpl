@@ -329,6 +329,7 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 		AccountID:        st.accountID,
 		Common:           st.common,
 		SourceFeeCharged: st.sourceFeeCharged(),
+		PreclaimView:     rulesView{ReadOnlyLedgerView: txcore.NewReadOnlyLedgerView(e.view), rules: e.rules()},
 		Config:           e.config,
 		TxHash:           st.txHash,
 		Metadata:         st.metadata,

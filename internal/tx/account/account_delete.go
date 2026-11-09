@@ -92,6 +92,8 @@ func (a *AccountDelete) CalculateBaseFee(view tx.ReadOnlyLedgerView, config tx.E
 
 func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFlatten(a) }
 
+var errStopScan = errors.New("stop owner directory scan")
+
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("account delete apply",
 		"account", a.Account,
@@ -173,6 +175,39 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if uint64(firstNFTSeq)+uint64(ctx.Account.MintedNFTokens)+uint64(seqDelta) > uint64(ctx.Config.LedgerSequence) {
 		return ter.TecTOO_SOON
 	}
+	// The owner directory is checked as preclaim sees it, so a ticket this
+	// transaction consumes still counts toward the deletable entries.
+	const maxDeletableDirEntries = 1000
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	preclaimView := ctx.PreclaimView
+	if preclaimView == nil {
+		preclaimView = ctx.View
+	}
+	deletableCount := 0
+	scanResult := ter.TesSUCCESS
+	if err := state.DirForEach(preclaimView, ownerDirKey, func(itemKey [32]byte) error {
+		data, err := preclaimView.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			scanResult = ter.TefBAD_LEDGER
+			return errStopScan
+		}
+		et, err := state.DecodeType(data)
+		if err != nil || nonObligationDeleter(et) == nil {
+			scanResult = ter.TecHAS_OBLIGATIONS
+			return errStopScan
+		}
+		deletableCount++
+		if deletableCount > maxDeletableDirEntries {
+			scanResult = ter.TefTOO_BIG
+			return errStopScan
+		}
+		return nil
+	}); err != nil && !errors.Is(err, errStopScan) {
+		return ter.TefINTERNAL
+	}
+	if scanResult != ter.TesSUCCESS {
+		return scanResult
+	}
 	// Verify deposit preauth with credentials BEFORE cleaning up owned objects.
 	// Credentials in the owner directory will be deleted during cleanup, so this
 	// check must happen first.
@@ -183,10 +218,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 			return r
 		}
 	}
-	const maxDeletableDirEntries = 1000
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	var entryKeys [][32]byte
-	deletableCount := 0
 	if err := state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
 		entryKeys = append(entryKeys, itemKey)
 		return nil
@@ -209,10 +241,6 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 				"entryType", et,
 			)
 			return ter.TecHAS_OBLIGATIONS
-		}
-		deletableCount++
-		if deletableCount > maxDeletableDirEntries {
-			return ter.TefTOO_BIG
 		}
 		if r := deleter(ctx, ownerDirKey, ik, data); r != ter.TesSUCCESS {
 			return r

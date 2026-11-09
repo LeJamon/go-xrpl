@@ -1224,7 +1224,7 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 // for each item key. If fn returns a non-nil error, iteration stops and the error
 // is returned. Returns nil if the directory does not exist.
 // Reference: rippled cdirFirst/cdirNext pattern.
-func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte) error) error {
+func DirForEach(view ReadOnlyLedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte) error) error {
 	// Read root page. A real storage error must propagate; only a genuinely
 	// absent root means "directory doesn't exist — nothing to iterate".
 	rootData, err := view.Read(dirKey)
