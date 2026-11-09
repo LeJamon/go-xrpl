@@ -54,6 +54,7 @@ var privateV341GoOnlyFeatures = []struct {
 	vote      VoteBehavior
 	retired   bool
 }{
+	{name: "fixCleanup3_5_0", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "InvariantsV1_1", supported: SupportedNo, vote: VoteDefaultNo},
 	{name: "NonFungibleTokensV1", supported: SupportedYes, vote: VoteObsolete},
 	{name: "fixNFTokenDirV1", supported: SupportedYes, vote: VoteObsolete},
@@ -204,7 +205,7 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 		}
 	}
 	if want := len(privateNames) + len(privateV341GoOnlyFeatures); len(registered) != want {
-		t.Fatalf("Go registry has %d features, want %d private registrations plus four intentional entries", len(registered), want)
+		t.Fatalf("Go registry has %d features, want %d private registrations plus %d intentional entries", len(registered), len(privateNames), len(privateV341GoOnlyFeatures))
 	}
 	for name := range registered {
 		if _, inPrivate := privateNames[name]; inPrivate {

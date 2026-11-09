@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -156,13 +157,14 @@ func checkValidVault(tx Transaction, result Result, fee uint64, entries []Invari
 		numberContext = numberContexts[0]
 	}
 	c := &vvChecker{
-		deltas:      map[[32]byte]vvDelta{},
-		view:        view,
-		fee:         fee,
-		txType:      tx.TxType(),
-		rules:       rules,
-		numberScale: numberContext.Scale(),
-		hasTxField:  tx.TxHasField,
+		deltas:        map[[32]byte]vvDelta{},
+		view:          view,
+		fee:           fee,
+		txType:        tx.TxType(),
+		rules:         rules,
+		numberContext: numberContext,
+		numberScale:   numberContext.Scale(),
+		hasTxField:    tx.TxHasField,
 	}
 	if flat, err := tx.Flatten(); err == nil {
 		c.flat = flat
@@ -200,6 +202,7 @@ type vvChecker struct {
 	flat                  map[string]any
 	txAccountID           [20]byte
 	rules                 *amendment.Rules
+	numberContext         state.NumberContext
 	numberScale           state.MantissaScale
 	hasTxField            func(string) bool
 	feePayerID            [20]byte
@@ -818,6 +821,21 @@ func (c *vvChecker) finalizeWithdraw(afterVault vvVault) string {
 	return ""
 }
 
+// transferRate returns the transfer rate the vault asset's issuer charges.
+func (c *vvChecker) transferRate(a vvAsset) uint32 {
+	if a.isXRP {
+		return txcore.TransferRateParity
+	}
+	if a.isMPT {
+		return mptutil.TransferRate(mptInvariantView{ReadView: c.view, rules: c.rules}, a.mptID)
+	}
+	issuer, err := txcore.ReadAccountRoot(c.view, a.issuer)
+	if err != nil || issuer == nil || issuer.TransferRate == 0 {
+		return txcore.TransferRateParity
+	}
+	return issuer.TransferRate
+}
+
 func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vaultAsset vvAsset) string {
 	maybeVaultDeltaAssets, ok := c.deltaAssets(vaultAsset, afterVault.pseudoID)
 	zeroDeltaIsLegitimate := c.rules != nil && c.fixCleanup3_4_0Enabled() &&
@@ -878,12 +896,21 @@ func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vau
 				return "withdrawal must increase destination balance"
 			}
 			localPseudoDeltaAssets := vaultAsset.round(vaultPseudoDeltaAssets, localMinScale)
+			expectedDestinationDelta := localPseudoDeltaAssets.Negate()
+			rate := c.transferRate(vaultAsset)
+			feeAdjusted := c.rules != nil && c.rules.Enabled(amendment.FeatureFixCleanup3_5_0) &&
+				distinctDestination && !vaultAsset.isXRP && c.txAccountID != vaultAsset.issuerID() &&
+				rate != txcore.TransferRateParity
+			if feeAdjusted {
+				expectedDestinationDelta = vault.SubtractTransferFee(
+					expectedDestinationDelta, vaultAsset.integral(), rate, c.numberContext)
+			}
 			destroyedAssets := maybeVaultDeltaAssets.delta.Negate().Sub(destinationDelta.delta)
-			destroyedIsSubULP := tolerateZeroDelta &&
+			destroyedIsSubULP := !feeAdjusted && tolerateZeroDelta &&
 				vaultAsset.roundMode(destroyedAssets, destinationDelta.scale, state.RoundDownward).IsZero()
-			addsUp := localPseudoDeltaAssets.Negate().Cmp(roundedDestinationDelta) == 0
+			addsUp := expectedDestinationDelta.Cmp(roundedDestinationDelta) == 0
 			if c.rules != nil && c.fixCleanup3_4_0Enabled() {
-				addsUp = c.agreesWithinOneUnit(localPseudoDeltaAssets.Negate(), roundedDestinationDelta, vaultAsset, localMinScale)
+				addsUp = c.agreesWithinOneUnit(expectedDestinationDelta, roundedDestinationDelta, vaultAsset, localMinScale)
 			}
 			if !destroyedIsSubULP && !addsUp {
 				return "withdrawal must change vault and destination balance by equal amount"
