@@ -65,6 +65,12 @@ func (sm *Manager) BroadcastToAcceptedAccountsVersioned(v1, v2 []byte, accounts 
 	}, accounts), v1, v2)
 }
 
+// BroadcastToMPTIssuancesVersioned delivers a validated transaction once to
+// every connection subscribed to at least one of the given issuance IDs.
+func (sm *Manager) BroadcastToMPTIssuancesVersioned(v1, v2 []byte, mptIssuanceIDs []string) {
+	sm.deliverVersioned(sm.collectAccountTargets(types.SubMPTIssuances, mptIssuanceIDs), v1, v2)
+}
+
 func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []*connectionRecord {
 	return sm.collectAccountTargetsForStreams([]types.SubscriptionType{stream}, accounts)
 }

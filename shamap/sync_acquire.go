@@ -70,6 +70,9 @@ func (sm *SHAMap) addKnownNodeFromPrefix(ctx context.Context, nodeID NodeID, dat
 	sm.acquisition.attachmentMu.Lock()
 	defer sm.acquisition.attachmentMu.Unlock()
 
+	if sm.tree.state == stateInvalid {
+		return NodeDuplicate, FlushEntry{}, nil
+	}
 	if sm.tree.state != stateSyncing {
 		return NodeInvalid, FlushEntry{}, errSyncNotInProgress
 	}
@@ -132,6 +135,9 @@ func (sm *SHAMap) addKnownNodeByID(ctx context.Context, nodeID NodeID, data []by
 	sm.acquisition.attachmentMu.Lock()
 	defer sm.acquisition.attachmentMu.Unlock()
 
+	if sm.tree.state == stateInvalid {
+		return NodeDuplicate, FlushEntry{}, nil
+	}
 	if sm.tree.state != stateSyncing {
 		return NodeInvalid, FlushEntry{}, errSyncNotInProgress
 	}
@@ -200,17 +206,19 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 			if err != nil {
 				return NodeInvalid, fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 			}
-			// At leaf depth, an inner node is provably invalid — mark the
-			// map and bail.
-			if _, isInner := newNode.(*innerNode); isInner && targetDepth == maxDepth {
-				sm.tree.state = stateInvalid
-				return NodeInvalid, errUnexpectedNode
-			}
 			if err := newNode.UpdateHash(); err != nil {
 				return NodeInvalid, fmt.Errorf("failed to compute node hash: %w", err)
 			}
 			if newNode.Hash() != childHash {
 				return NodeInvalid, errNodeHashMismatch
+			}
+			// Only a leaf fits at leaf depth. The node hash-verified against
+			// its parent, so the requested root hash itself commits to a tree
+			// that cannot exist: the map is invalid, and the sender is still
+			// reported for the bad node.
+			if _, isInner := newNode.(*innerNode); isInner && targetDepth >= maxDepth {
+				sm.tree.state = stateInvalid
+				return NodeInvalid, ErrMapInvalid
 			}
 			if leaf, ok := newNode.(mapLeaf); ok {
 				expectedNodeID, err := createNodeID(nodeID.Depth(), leaf.Item().Key())

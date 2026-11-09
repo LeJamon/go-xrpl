@@ -2,7 +2,9 @@ package subscription
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -148,6 +150,65 @@ func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookReque
 		books = append(books, book)
 	}
 	return true, books, rpcErr
+}
+
+// resolveMPTIssuances returns the requested MPT issuance IDs, upper-case and
+// deduplicated. A present field that is not a non-empty array of 192-bit hex
+// IDs is invalidParams.
+func resolveMPTIssuances(wireDecoded bool, raw json.RawMessage, typed []string, scope *RequestScope) (bool, []string, *rpcerrors.RpcError) {
+	var values []string
+	if wireDecoded {
+		present, isArray, elements, rpcErr := wireArrayElements(raw, scope)
+		if rpcErr != nil {
+			return present, nil, rpcErr
+		}
+		if !present {
+			return false, nil, nil
+		}
+		if !isArray {
+			return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+		}
+		values = make([]string, 0, len(elements))
+		for _, element := range elements {
+			var value string
+			if json.Unmarshal(element, &value) != nil {
+				return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+			}
+			values = append(values, value)
+		}
+	} else {
+		if typed == nil {
+			return false, nil, nil
+		}
+		values = typed
+	}
+	if len(values) == 0 {
+		return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		id, ok := parseMPTIssuanceID(value)
+		if !ok {
+			return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+		}
+		ids = append(ids, id)
+	}
+	return true, uniqueStrings(ids), nil
+}
+
+// parseMPTIssuanceID accepts a 48-character hex MPT issuance ID, or "0" for
+// the zero ID, and returns its upper-case form.
+func parseMPTIssuanceID(value string) (string, bool) {
+	if value == "0" {
+		return strings.Repeat("0", 48), true
+	}
+	if len(value) != 48 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", false
+	}
+	return strings.ToUpper(value), true
 }
 
 func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *rpcerrors.RpcError) {

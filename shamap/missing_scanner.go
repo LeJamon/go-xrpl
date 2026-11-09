@@ -282,13 +282,16 @@ func (sm *SHAMap) scanBackedLane(
 		}
 		frame := &lane.stack[len(lane.stack)-1]
 		if !frame.loaded {
-			if frame.item.baseHash != ([32]byte{}) && frame.item.baseHash == frame.item.hash {
+			// A subtree hash says nothing about its depth, so neither shortcut
+			// may vouch for a node at leaf depth; it is loaded and judged.
+			atLeafDepth := frame.item.depth >= maxDepth
+			if !atLeafDepth && frame.item.baseHash != ([32]byte{}) && frame.item.baseHash == frame.item.hash {
 				sm.acquisition.stats.equalSubtreesSkipped.Add(1)
 				frame.full, frame.stored, frame.usedBase, frame.loaded = true, true, true, true
 				sm.observeBackedScanFrame(lane, frame)
 				continue
 			}
-			if cache.Has(generation, frame.item.hash) {
+			if !atLeafDepth && cache.Has(generation, frame.item.hash) {
 				frame.full, frame.stored, frame.loaded = true, true, true
 				sm.observeBackedScanFrame(lane, frame)
 				continue
@@ -325,6 +328,9 @@ func (sm *SHAMap) scanBackedLane(
 					return true, nil
 				}
 				continue
+			}
+			if view.inner && atLeafDepth {
+				return false, errInnerAtLeafDepth
 			}
 			frame.view = view
 			if frame.proof != nil {
@@ -566,7 +572,24 @@ func (sm *SHAMap) ScanMissingNodesContext(ctx context.Context, maxNodes int, fil
 	return sm.scanMissingNodesContext(ctx, maxNodes, filter, false)
 }
 
+// scanMissingNodesContext runs one scanner slice. A map found to hold an
+// inner node at leaf depth is marked invalid and reported as ErrMapInvalid,
+// as is any later scan of it.
 func (sm *SHAMap) scanMissingNodesContext(ctx context.Context, maxNodes int, filter SyncFilter, probe bool) (MissingNodesResult, error) {
+	result, err := sm.scanMissingNodesSlice(ctx, maxNodes, filter, probe)
+	if errors.Is(err, errInnerAtLeafDepth) {
+		sm.acquisition.walkMu.Lock()
+		sm.tree.mu.Lock()
+		sm.tree.state = stateInvalid
+		sm.releaseBackedScanCursorLocked()
+		sm.tree.mu.Unlock()
+		sm.acquisition.walkMu.Unlock()
+		return MissingNodesResult{}, ErrMapInvalid
+	}
+	return result, err
+}
+
+func (sm *SHAMap) scanMissingNodesSlice(ctx context.Context, maxNodes int, filter SyncFilter, probe bool) (MissingNodesResult, error) {
 	if err := ctx.Err(); err != nil {
 		return MissingNodesResult{}, err
 	}
@@ -582,7 +605,10 @@ func (sm *SHAMap) scanMissingNodesContext(ctx context.Context, maxNodes int, fil
 	state := sm.tree.state
 	root := sm.tree.root
 	sm.tree.mu.RUnlock()
-	if state == stateInvalid || root == nil {
+	if state == stateInvalid {
+		return MissingNodesResult{}, ErrMapInvalid
+	}
+	if root == nil {
 		return MissingNodesResult{Status: MissingNodesComplete}, nil
 	}
 	sm.backing.mu.RLock()

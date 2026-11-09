@@ -196,8 +196,8 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		closed := resp["closed"].(map[string]any)
-		open := resp["open"].(map[string]any)
+		closed := resp["closed"].(map[string]any)["ledger"].(map[string]any)
+		open := resp["open"].(map[string]any)["ledger"].(map[string]any)
 		assert.Equal(t, true, closed["closed"])
 		assert.Equal(t, "2", closed["ledger_index"])
 		assert.Contains(t, closed, "ledger_hash")
@@ -434,6 +434,36 @@ func TestLedgerBadInput(t *testing.T) {
 				assert.Nil(t, result)
 				require.NotNil(t, rpcErr, "Expected RPC error")
 			}
+		})
+	}
+}
+
+// TestLedgerSelectorErrorPrecedesBooleanError mirrors rippled 3.5.0, where
+// the ledger selector is parsed before the boolean options.
+func TestLedgerSelectorErrorPrecedesBooleanError(t *testing.T) {
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: &ledgerMock{mockLedgerService: newMockLedgerService()}}),
+	}
+	tests := []struct {
+		params  string
+		message string
+	}{
+		{`{"ledger_index":{},"full":"yes"}`, "Invalid field 'ledger_index', not string or number."},
+		{`{"ledger_index":"potato","transactions":1}`, "Invalid field 'ledger_index', not string or number."},
+		{`{"ledger_hash":1,"expand":null}`, "Invalid field 'ledger_hash', not hex string."},
+		{`{"ledger_index":1,"ledger_hash":"` + strings.Repeat("A", 64) + `","binary":"x"}`, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified."},
+		{`{"ledger_index":"validated","queue":"x"}`, "Invalid parameters."},
+	}
+	for _, tc := range tests {
+		t.Run(tc.params, func(t *testing.T) {
+			result, rpcErr := (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(tc.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+			assert.Equal(t, tc.message, rpcErr.Message)
 		})
 	}
 }

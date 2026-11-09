@@ -72,7 +72,7 @@ func TestDecodeLedgerTransactionRawCanonicalOpen(t *testing.T) {
 		{name: "binary v2", binary: true, api: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			entry, err := expandTransaction(raw, hashString, test.binary, test.api, SyntheticMetadataContext{}, false)
+			entry, err := expandTransaction(raw, hashString, test.binary, test.api, SyntheticMetadataContext{}, false, 0)
 			require.NoError(t, err)
 			if test.api > 1 || !test.binary {
 				require.Equal(t, hashString, entry["hash"])

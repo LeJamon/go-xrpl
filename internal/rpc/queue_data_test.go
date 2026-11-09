@@ -245,7 +245,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, "Invalid parameters.", rpcErr.Message)
+	assert.Equal(t, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified.", rpcErr.Message)
 
 	paramsJSON = json.RawMessage(`{"ledger_index":1.5,"queue":true}`)
 	result, rpcErr = method.Handle(ctx, paramsJSON)
