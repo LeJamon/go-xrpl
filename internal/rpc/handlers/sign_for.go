@@ -107,7 +107,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		}
 	}
 
-	privateKey, publicKey, _, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	privateKey, publicKey, _, rpcErr := request.signCredentials.deriveKeypair(types.DefaultApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
