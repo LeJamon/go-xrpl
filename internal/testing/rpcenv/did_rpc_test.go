@@ -21,7 +21,7 @@ func TestDIDRPCLifecycle(t *testing.T) {
 	_, rpcErr := env.RPC("ledger_entry", map[string]any{"did": alice.Address, "ledger_index": "validated"})
 	requireRPCError(t, rpcErr, "entryNotFound")
 	_, rpcErr = env.RPC("ledger_entry", map[string]any{"did": "not-an-address"})
-	requireRPCError(t, rpcErr, "invalidParams")
+	requireRPCError(t, rpcErr, "malformedAddress")
 
 	jtx.RequireTxSuccess(t, env.Submit(did.DIDSet(alice).URI("uri1").Document("doc1").Build()))
 	current := requireDIDLedgerEntry(t, env, alice.Address, "current")

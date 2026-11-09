@@ -291,7 +291,7 @@ func TestLedgerEntryCheck(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string.",
 		},
 		{
 			name: "Check entry not found",
@@ -397,7 +397,7 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 				"ledger_index":    "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string.",
 		},
 		{
 			name: "Payment channel not found",
@@ -504,7 +504,7 @@ func TestLedgerEntryDirectory(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid directory",
+			expectedError: "Invalid field 'directory', not hex string or object.",
 		},
 		{
 			name: "Directory not found",
@@ -609,7 +609,7 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 				"ledger_index": "validated",
 			},
 			expectError:   true,
-			expectedError: "Invalid nft_page",
+			expectedError: "Invalid field 'nft_page', not hex string.",
 		},
 		{
 			name: "NFT page not found",
@@ -1249,28 +1249,28 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 			params: map[string]any{
 				"check": "A33EC6BB85FB5674",
 			},
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string.",
 		},
 		{
 			name: "Payment channel with invalid hex",
 			params: map[string]any{
 				"payment_channel": "not-valid-hex-at-all",
 			},
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string.",
 		},
 		{
 			name: "Directory with invalid hex",
 			params: map[string]any{
 				"directory": "invalid-directory-hex",
 			},
-			expectedError: "Invalid directory",
+			expectedError: "Invalid field 'directory', not hex string or object.",
 		},
 		{
 			name: "NFT page with wrong length",
 			params: map[string]any{
 				"nft_page": "A33EC6BB",
 			},
-			expectedError: "Invalid nft_page",
+			expectedError: "Invalid field 'nft_page', not hex string.",
 		},
 	}
 
@@ -2623,28 +2623,28 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 			params: map[string]any{
 				"check": 12345,
 			},
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string.",
 		},
 		{
 			name: "Payment channel as boolean should fail",
 			params: map[string]any{
 				"payment_channel": true,
 			},
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string.",
 		},
 		{
 			name: "Directory as null should fail",
 			params: map[string]any{
 				"directory": nil,
 			},
-			expectedError: "Invalid directory",
+			expectedError: "Invalid field 'directory', not hex string or object.",
 		},
 		{
 			name: "NFT page as empty string should fail",
 			params: map[string]any{
 				"nft_page": "",
 			},
-			expectedError: "Invalid nft_page",
+			expectedError: "Invalid field 'nft_page', not hex string.",
 		},
 	}
 
@@ -2793,7 +2793,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "check",
 			paramValue:    "A33EC6BB85FB5674",
 			expectError:   true,
-			expectedError: "Invalid check",
+			expectedError: "Invalid field 'check', not hex string.",
 		},
 		// Payment channel validation
 		{
@@ -2808,7 +2808,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "payment_channel",
 			paramValue:    "0xA33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			expectError:   true,
-			expectedError: "Invalid payment_channel",
+			expectedError: "Invalid field 'payment_channel', not hex string.",
 		},
 		// Directory validation
 		{
@@ -2823,7 +2823,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "directory",
 			paramValue:    "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217!",
 			expectError:   true,
-			expectedError: "Invalid directory",
+			expectedError: "Invalid field 'directory', not hex string or object.",
 		},
 		// NFT page validation
 		{
@@ -2838,7 +2838,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 			paramName:     "nft_page",
 			paramValue:    "",
 			expectError:   true,
-			expectedError: "Invalid nft_page",
+			expectedError: "Invalid field 'nft_page', not hex string.",
 		},
 	}
 
@@ -3070,7 +3070,7 @@ func TestLedgerEntryDelegate(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "account and authorize required")
+		assert.Equal(t, "Missing field 'authorize'.", rpcErr.Message)
 	})
 }
 
@@ -3443,7 +3443,7 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "asset and asset2 required")
+		assert.Equal(t, "Missing field 'asset2'.", rpcErr.Message)
 	})
 }
 
@@ -3494,7 +3494,7 @@ func TestLedgerEntryAccountSelector(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "Invalid account")
+		assert.Equal(t, "Invalid field 'account', not AccountID.", rpcErr.Message)
 	})
 }
 
@@ -3538,4 +3538,80 @@ func TestLedgerEntryLoanSelectors(t *testing.T) {
 			assert.Equal(t, "Invalid field '"+field+"', not hex string.", rpcErr.Message)
 		})
 	}
+}
+
+// TestLedgerEntrySelectorErrorTokens pins the malformed-selector errors to the
+// tokens and messages rippled returns for each selector.
+func TestLedgerEntrySelectorErrorTokens(t *testing.T) {
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion2,
+		Services:   newLedgerEntryTestServices(newMockLedgerEntryService()),
+	}
+	const (
+		account = `"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"`
+		mptID   = `"00000013A23DA217AF9DFA4C10EA150523D8CEA293BBF223"`
+		hash    = `"27B715C442782E136EB08DDFDC4456EAFB0BB8D18ADC7B4BDDE7EC6DF531629B"`
+	)
+
+	tests := []struct {
+		name     string
+		selector string
+		token    string
+		message  string
+	}{
+		{"account_root malformed", `"account_root":"notanaccount"`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
+		{"account_root zero account", `"account_root":"rrrrrrrrrrrrrrrrrrrrrhoLvTp"`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
+		{"account_root number", `"account_root":1`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
+		{"did malformed", `"did":"zz"`, "malformedAddress", "Invalid field 'did', not AccountID."},
+		{"check object", `"check":{"index":` + hash + `}`, "malformedRequest", "Invalid field 'check', not hex string."},
+		{"payment_channel malformed", `"payment_channel":"zz"`, "malformedRequest", "Invalid field 'payment_channel', not hex string."},
+		{"nft_offer malformed", `"nft_offer":"zz"`, "malformedRequest", "Invalid field 'nft_offer', not hex string."},
+		{"signer_list account", `"signer_list":` + account, "malformedRequest", "Invalid field 'signer_list', not hex string."},
+		{"directory number", `"directory":7`, "malformedRequest", "Invalid field 'directory', not hex string or object."},
+		{"directory empty", `"directory":{}`, "malformedRequest", "Must have exactly one of `owner` and `dir_root` fields."},
+		{"directory owner and root", `"directory":{"owner":` + account + `,"dir_root":` + hash + `}`, "malformedRequest", "Must have exactly one of `owner` and `dir_root` fields."},
+		{"directory string sub_index", `"directory":{"owner":` + account + `,"sub_index":"1"}`, "malformedRequest", "Invalid field 'sub_index', not number."},
+		{"directory negative sub_index", `"directory":{"owner":` + account + `,"sub_index":-1}`, "malformedRequest", "Invalid field 'sub_index', not number."},
+		{"directory boolean sub_index", `"directory":{"owner":` + account + `,"sub_index":true}`, "malformedRequest", "Invalid field 'sub_index', not number."},
+		{"directory malformed root", `"directory":{"dir_root":"zz"}`, "malformedDirRoot", "Invalid field 'dir_root', not hash."},
+		{"directory malformed owner", `"directory":{"owner":"zz"}`, "malformedAddress", "Invalid field 'owner', not AccountID."},
+		{"credential number", `"credential":1`, "malformedRequest", "Invalid field 'credential', not hex string or object."},
+		{"credential missing type", `"credential":{"subject":` + account + `,"issuer":` + account + `}`, "malformedRequest", "Missing field 'credential_type'."},
+		{"credential empty type", `"credential":{"subject":` + account + `,"issuer":` + account + `,"credential_type":""}`, "malformedRequest", "Invalid field 'credential_type', not hex string."},
+		{"credential malformed type", `"credential":{"subject":` + account + `,"issuer":` + account + `,"credential_type":"zz"}`, "malformedRequest", "Invalid field 'credential_type', not hex string."},
+		{"credential missing subject", `"credential":{"issuer":` + account + `,"credential_type":"4B5943"}`, "malformedRequest", "Missing field 'subject'."},
+		{"delegate missing authorize", `"delegate":{"account":` + account + `}`, "malformedRequest", "Missing field 'authorize'."},
+		{"delegate malformed authorize", `"delegate":{"account":` + account + `,"authorize":"zz"}`, "malformedAddress", "Invalid field 'authorize', not AccountID."},
+		{"mpt_issuance malformed", `"mpt_issuance":"zz"`, "malformedMPTokenIssuance", "Invalid field 'mpt_issuance', not Hash192."},
+		{"mpt_issuance number", `"mpt_issuance":1`, "malformedMPTokenIssuance", "Invalid field 'mpt_issuance', not Hash192."},
+		{"mptoken missing account", `"mptoken":{"mpt_issuance_id":` + mptID + `}`, "malformedRequest", "Missing field 'account'."},
+		{"mptoken malformed id", `"mptoken":{"mpt_issuance_id":"zz","account":` + account + `}`, "malformedMPTIssuanceID", "Invalid field 'mpt_issuance_id', not Hash192."},
+		{"mptoken malformed account", `"mptoken":{"mpt_issuance_id":` + mptID + `,"account":"zz"}`, "malformedAccount", "Invalid field 'account', not AccountID."},
+		{"amm number", `"amm":1`, "malformedRequest", "Invalid field 'amm', not hex string or object."},
+		{"amm missing asset2", `"amm":{"asset":{"currency":"XRP"}}`, "malformedRequest", "Missing field 'asset2'."},
+		{"amm issue without issuer", `"amm":{"asset":{"currency":"USD"},"asset2":{"currency":"XRP"}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
+		{"amm XRP with issuer", `"amm":{"asset":{"currency":"XRP","issuer":` + account + `},"asset2":{"currency":"USD","issuer":` + account + `}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
+		{"amm string asset", `"amm":{"asset":"XRP","asset2":{"currency":"USD","issuer":` + account + `}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
+		{"sponsorship missing sponsee", `"sponsorship":{"sponsor":` + account + `}`, "malformedRequest", "Missing field 'sponsee'."},
+		{"sponsorship malformed sponsor", `"sponsorship":{"sponsor":"zz","sponsee":` + account + `}`, "malformedSponsor", "Invalid field 'sponsor', not AccountID."},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated",`+tc.selector+`}`))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, tc.token, rpcErr.ErrorString)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+
+	t.Run("sponsorship is a known selector", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","sponsorship":{"sponsor":`+account+`,"sponsee":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"}}`))
+		require.Nil(t, rpcErr)
+		assert.Equal(t, "EC1D45890C4BE4E13B1385D1E1D5C809403A49234365671FBA38A4F129999527", result.(map[string]any)["index"])
+	})
 }
