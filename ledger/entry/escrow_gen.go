@@ -30,6 +30,8 @@ type Escrow struct {
 	Condition         string // Blob (uppercase hex)
 	CancelAfter       uint32
 	FinishAfter       uint32
+	Bytecode          string // Blob (uppercase hex)
+	Data              string // Blob (uppercase hex)
 	SourceTag         uint32
 	DestinationTag    uint32
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
@@ -55,6 +57,8 @@ const (
 	escrowBitCondition
 	escrowBitCancelAfter
 	escrowBitFinishAfter
+	escrowBitBytecode
+	escrowBitData
 	escrowBitSourceTag
 	escrowBitDestinationTag
 	escrowBitOwnerNode
@@ -114,6 +118,20 @@ func (e *Escrow) SetFinishAfter(value uint32) {
 	e.FinishAfter = value
 	e.dirty = true
 	e.present |= escrowBitFinishAfter
+}
+
+// SetBytecode assigns Bytecode and updates its serialized presence.
+func (e *Escrow) SetBytecode(value string) {
+	e.Bytecode = value
+	e.dirty = true
+	e.present |= escrowBitBytecode
+}
+
+// SetData assigns Data and updates its serialized presence.
+func (e *Escrow) SetData(value string) {
+	e.Data = value
+	e.dirty = true
+	e.present |= escrowBitData
 }
 
 // SetSourceTag assigns SourceTag and updates its serialized presence.
@@ -365,6 +383,62 @@ func (e *Escrow) GetFinishAfter() (uint32, error) {
 // SetFinishAfterValue assigns a typed UInt32 value.
 func (e *Escrow) SetFinishAfterValue(value uint32) {
 	e.SetFinishAfter(value)
+}
+
+// HasBytecode reports whether Bytecode is present.
+func (e *Escrow) HasBytecode() bool {
+	return e != nil && e.present&escrowBitBytecode != 0
+}
+
+// ClearBytecode removes Bytecode from the serialized entry.
+func (e *Escrow) ClearBytecode() {
+	if e == nil {
+		return
+	}
+	e.Bytecode = ""
+	e.present &^= escrowBitBytecode
+	e.dirty = true
+}
+
+// GetBytecode returns the raw bytes of the Blob field.
+func (e *Escrow) GetBytecode() ([]byte, error) {
+	if e == nil {
+		return nil, nil
+	}
+	return blobValueFromString(e.Bytecode, "Escrow.Bytecode")
+}
+
+// SetBytecodeValue assigns a Blob from raw bytes.
+func (e *Escrow) SetBytecodeValue(value []byte) {
+	e.SetBytecode(blobValueToString(value))
+}
+
+// HasData reports whether Data is present.
+func (e *Escrow) HasData() bool {
+	return e != nil && e.present&escrowBitData != 0
+}
+
+// ClearData removes Data from the serialized entry.
+func (e *Escrow) ClearData() {
+	if e == nil {
+		return
+	}
+	e.Data = ""
+	e.present &^= escrowBitData
+	e.dirty = true
+}
+
+// GetData returns the raw bytes of the Blob field.
+func (e *Escrow) GetData() ([]byte, error) {
+	if e == nil {
+		return nil, nil
+	}
+	return blobValueFromString(e.Data, "Escrow.Data")
+}
+
+// SetDataValue assigns a Blob from raw bytes.
+func (e *Escrow) SetDataValue(value []byte) {
+	e.SetData(blobValueToString(value))
 }
 
 // HasSourceTag reports whether SourceTag is present.
@@ -795,6 +869,12 @@ func (e *Escrow) decode(data []byte, legacy bool) error {
 			case 17:
 				e.Condition = val
 				e.present |= escrowBitCondition
+			case 27:
+				e.Data = val
+				e.present |= escrowBitData
+			case 47:
+				e.Bytecode = val
+				e.present |= escrowBitBytecode
 			default:
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
@@ -855,6 +935,12 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	if e.present&escrowBitFinishAfter != 0 && !(skipDefault && e.FinishAfter == 0) {
 		out["FinishAfter"] = e.FinishAfter
 	}
+	if e.present&escrowBitBytecode != 0 && !(skipDefault && e.Bytecode == "") {
+		out["Bytecode"] = e.Bytecode
+	}
+	if e.present&escrowBitData != 0 && !(skipDefault && e.Data == "") {
+		out["Data"] = e.Data
+	}
 	if e.present&escrowBitSourceTag != 0 && !(skipDefault && e.SourceTag == 0) {
 		out["SourceTag"] = e.SourceTag
 	}
@@ -907,6 +993,8 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Condition", prv.Condition, e.Condition, prv.present&escrowBitCondition, e.present&escrowBitCondition)
 	emitIfChangedUint32(out, "CancelAfter", prv.CancelAfter, e.CancelAfter, prv.present&escrowBitCancelAfter, e.present&escrowBitCancelAfter)
 	emitIfChangedUint32(out, "FinishAfter", prv.FinishAfter, e.FinishAfter, prv.present&escrowBitFinishAfter, e.present&escrowBitFinishAfter)
+	emitIfChangedString(out, "Bytecode", prv.Bytecode, e.Bytecode, prv.present&escrowBitBytecode, e.present&escrowBitBytecode)
+	emitIfChangedString(out, "Data", prv.Data, e.Data, prv.present&escrowBitData, e.present&escrowBitData)
 	emitIfChangedUint32(out, "SourceTag", prv.SourceTag, e.SourceTag, prv.present&escrowBitSourceTag, e.present&escrowBitSourceTag)
 	emitIfChangedUint32(out, "DestinationTag", prv.DestinationTag, e.DestinationTag, prv.present&escrowBitDestinationTag, e.present&escrowBitDestinationTag)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, e.OwnerNode, prv.present&escrowBitOwnerNode, e.present&escrowBitOwnerNode)
@@ -943,6 +1031,12 @@ func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
 	}
 	if e.present&escrowBitFinishAfter != 0 {
 		out["FinishAfter"] = e.FinishAfter
+	}
+	if e.present&escrowBitBytecode != 0 {
+		out["Bytecode"] = e.Bytecode
+	}
+	if e.present&escrowBitData != 0 {
+		out["Data"] = e.Data
 	}
 	if e.present&escrowBitSourceTag != 0 {
 		out["SourceTag"] = e.SourceTag
@@ -1029,6 +1123,12 @@ func (e *Escrow) ToMap() map[string]any {
 	}
 	if e.present&escrowBitFinishAfter != 0 {
 		out["FinishAfter"] = e.FinishAfter
+	}
+	if e.present&escrowBitBytecode != 0 {
+		out["Bytecode"] = e.Bytecode
+	}
+	if e.present&escrowBitData != 0 {
+		out["Data"] = e.Data
 	}
 	if e.present&escrowBitSourceTag != 0 {
 		out["SourceTag"] = e.SourceTag

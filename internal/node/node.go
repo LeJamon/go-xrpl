@@ -675,6 +675,7 @@ func buildTable(ctx context.Context, cfg config.AmendmentsConfig, repo relationa
 			continue
 		}
 		t.UpVote(f.ID)
+		t.AddEntry(f.ID, f.Name)
 	}
 	for _, name := range cfg.Veto {
 		f := amendment.FeatureByName(name)
@@ -705,6 +706,7 @@ func buildTable(ctx context.Context, cfg config.AmendmentsConfig, repo relationa
 			t.Veto(id)
 		} else {
 			t.UpVote(id)
+			t.AddEntry(id, rec.Name)
 		}
 	}
 	return t

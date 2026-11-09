@@ -24,6 +24,7 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse %s: %v", macroPath, err)
 	}
+	addRC1StagedEntries(t, rippled)
 
 	if len(rippled) != len(Specs) {
 		t.Fatalf("rippled v3.4.1 has %d ledger templates, schema has %d", len(rippled), len(Specs))

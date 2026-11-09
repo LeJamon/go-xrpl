@@ -33,6 +33,8 @@ type Vault struct {
 	AssetsAvailable   any
 	AssetsMaximum     any
 	LossUnrealized    any
+	YieldUnrealized   any
+	AssetsDeployed    any
 	ShareMPTID        string
 	WithdrawalPolicy  int
 	Scale             int
@@ -62,6 +64,8 @@ const (
 	vaultBitAssetsAvailable
 	vaultBitAssetsMaximum
 	vaultBitLossUnrealized
+	vaultBitYieldUnrealized
+	vaultBitAssetsDeployed
 	vaultBitShareMPTID
 	vaultBitWithdrawalPolicy
 	vaultBitScale
@@ -159,6 +163,28 @@ func (v *Vault) SetLossUnrealized(value any) {
 		return
 	}
 	v.present |= vaultBitLossUnrealized
+}
+
+// SetYieldUnrealized assigns YieldUnrealized and updates its serialized presence.
+func (v *Vault) SetYieldUnrealized(value any) {
+	v.YieldUnrealized = value
+	v.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		v.present &^= vaultBitYieldUnrealized
+		return
+	}
+	v.present |= vaultBitYieldUnrealized
+}
+
+// SetAssetsDeployed assigns AssetsDeployed and updates its serialized presence.
+func (v *Vault) SetAssetsDeployed(value any) {
+	v.AssetsDeployed = value
+	v.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		v.present &^= vaultBitAssetsDeployed
+		return
+	}
+	v.present |= vaultBitAssetsDeployed
 }
 
 // SetShareMPTID assigns ShareMPTID and updates its serialized presence.
@@ -515,6 +541,72 @@ func (v *Vault) SetLossUnrealizedValue(value NumberValue) error {
 	return nil
 }
 
+// HasYieldUnrealized reports whether YieldUnrealized is present.
+func (v *Vault) HasYieldUnrealized() bool {
+	return v != nil && v.present&vaultBitYieldUnrealized != 0
+}
+
+// ClearYieldUnrealized removes YieldUnrealized from the serialized entry.
+func (v *Vault) ClearYieldUnrealized() {
+	if v == nil {
+		return
+	}
+	v.YieldUnrealized = nil
+	v.present &^= vaultBitYieldUnrealized
+	v.dirty = true
+}
+
+// GetYieldUnrealized returns the exact decoded Number text.
+func (v *Vault) GetYieldUnrealized() (NumberValue, error) {
+	if v == nil || v.YieldUnrealized == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(v.YieldUnrealized, "Vault.YieldUnrealized")
+}
+
+// SetYieldUnrealizedValue assigns an exact Number text value.
+func (v *Vault) SetYieldUnrealizedValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.YieldUnrealized")
+	if err != nil {
+		return err
+	}
+	v.SetYieldUnrealized(encoded)
+	return nil
+}
+
+// HasAssetsDeployed reports whether AssetsDeployed is present.
+func (v *Vault) HasAssetsDeployed() bool {
+	return v != nil && v.present&vaultBitAssetsDeployed != 0
+}
+
+// ClearAssetsDeployed removes AssetsDeployed from the serialized entry.
+func (v *Vault) ClearAssetsDeployed() {
+	if v == nil {
+		return
+	}
+	v.AssetsDeployed = nil
+	v.present &^= vaultBitAssetsDeployed
+	v.dirty = true
+}
+
+// GetAssetsDeployed returns the exact decoded Number text.
+func (v *Vault) GetAssetsDeployed() (NumberValue, error) {
+	if v == nil || v.AssetsDeployed == nil {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsDeployed, "Vault.AssetsDeployed")
+}
+
+// SetAssetsDeployedValue assigns an exact Number text value.
+func (v *Vault) SetAssetsDeployedValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsDeployed")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsDeployed(encoded)
+	return nil
+}
+
 // HasShareMPTID reports whether ShareMPTID is present.
 func (v *Vault) HasShareMPTID() bool {
 	return v != nil && v.present&vaultBitShareMPTID != 0
@@ -835,6 +927,12 @@ func (v *Vault) validateDecoded() error {
 	if v.present&vaultBitLossUnrealized != 0 && numberIsDefault(v.LossUnrealized) {
 		return errors.New("ledgerfields: Vault: default field LossUnrealized is explicitly set")
 	}
+	if v.present&vaultBitYieldUnrealized != 0 && numberIsDefault(v.YieldUnrealized) {
+		return errors.New("ledgerfields: Vault: default field YieldUnrealized is explicitly set")
+	}
+	if v.present&vaultBitAssetsDeployed != 0 && numberIsDefault(v.AssetsDeployed) {
+		return errors.New("ledgerfields: Vault: default field AssetsDeployed is explicitly set")
+	}
 	if v.present&vaultBitShareMPTID == 0 {
 		return errors.New("ledgerfields: Vault: required field ShareMPTID is missing")
 	}
@@ -999,6 +1097,12 @@ func (v *Vault) decode(data []byte, legacy bool) error {
 			case 5:
 				v.LossUnrealized = val
 				v.present |= vaultBitLossUnrealized
+			case 18:
+				v.YieldUnrealized = val
+				v.present |= vaultBitYieldUnrealized
+			case 19:
+				v.AssetsDeployed = val
+				v.present |= vaultBitAssetsDeployed
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -1096,6 +1200,12 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitLossUnrealized != 0 && !(skipDefault && numberIsDefault(v.LossUnrealized)) {
 		out["LossUnrealized"] = v.LossUnrealized
 	}
+	if v.present&vaultBitYieldUnrealized != 0 && !(skipDefault && numberIsDefault(v.YieldUnrealized)) {
+		out["YieldUnrealized"] = v.YieldUnrealized
+	}
+	if v.present&vaultBitAssetsDeployed != 0 && !(skipDefault && numberIsDefault(v.AssetsDeployed)) {
+		out["AssetsDeployed"] = v.AssetsDeployed
+	}
 	if v.present&vaultBitShareMPTID != 0 && !(skipDefault && isZeroHexString(v.ShareMPTID)) {
 		out["ShareMPTID"] = v.ShareMPTID
 	}
@@ -1154,6 +1264,8 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "AssetsAvailable", prv.AssetsAvailable, v.AssetsAvailable, prv.present&vaultBitAssetsAvailable, v.present&vaultBitAssetsAvailable)
 	emitIfChangedDeep(out, "AssetsMaximum", prv.AssetsMaximum, v.AssetsMaximum, prv.present&vaultBitAssetsMaximum, v.present&vaultBitAssetsMaximum)
 	emitIfChangedDeep(out, "LossUnrealized", prv.LossUnrealized, v.LossUnrealized, prv.present&vaultBitLossUnrealized, v.present&vaultBitLossUnrealized)
+	emitIfChangedDeep(out, "YieldUnrealized", prv.YieldUnrealized, v.YieldUnrealized, prv.present&vaultBitYieldUnrealized, v.present&vaultBitYieldUnrealized)
+	emitIfChangedDeep(out, "AssetsDeployed", prv.AssetsDeployed, v.AssetsDeployed, prv.present&vaultBitAssetsDeployed, v.present&vaultBitAssetsDeployed)
 	emitIfChangedString(out, "ShareMPTID", prv.ShareMPTID, v.ShareMPTID, prv.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
 	emitIfChangedInt(out, "WithdrawalPolicy", prv.WithdrawalPolicy, v.WithdrawalPolicy, prv.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
 	emitIfChangedInt(out, "Scale", prv.Scale, v.Scale, prv.present&vaultBitScale, v.present&vaultBitScale)
@@ -1200,6 +1312,12 @@ func (v *Vault) EmitChangeOrigFields(out map[string]any) {
 	}
 	if v.present&vaultBitLossUnrealized != 0 {
 		out["LossUnrealized"] = v.LossUnrealized
+	}
+	if v.present&vaultBitYieldUnrealized != 0 {
+		out["YieldUnrealized"] = v.YieldUnrealized
+	}
+	if v.present&vaultBitAssetsDeployed != 0 {
+		out["AssetsDeployed"] = v.AssetsDeployed
 	}
 	if v.present&vaultBitShareMPTID != 0 {
 		out["ShareMPTID"] = v.ShareMPTID
@@ -1298,6 +1416,12 @@ func (v *Vault) ToMap() map[string]any {
 	}
 	if v.present&vaultBitLossUnrealized != 0 {
 		out["LossUnrealized"] = v.LossUnrealized
+	}
+	if v.present&vaultBitYieldUnrealized != 0 {
+		out["YieldUnrealized"] = v.YieldUnrealized
+	}
+	if v.present&vaultBitAssetsDeployed != 0 {
+		out["AssetsDeployed"] = v.AssetsDeployed
 	}
 	if v.present&vaultBitShareMPTID != 0 {
 		out["ShareMPTID"] = v.ShareMPTID

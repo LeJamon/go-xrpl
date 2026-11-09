@@ -44,6 +44,7 @@ const (
 	LedgerEntryTypeLoanBroker                      LedgerEntryType = 0x0088
 	LedgerEntryTypeLoan                            LedgerEntryType = 0x0089
 	LedgerEntryTypeSponsorship                     LedgerEntryType = 0x0090
+	LedgerEntryTypeTransactionProposal             LedgerEntryType = 0x0091
 )
 
 // LedgerEntryTypeInfo describes one concrete ledger-entry type.
@@ -89,6 +90,7 @@ var ledgerEntryTypes = [...]LedgerEntryTypeInfo{
 	{LedgerEntryTypeLoanBroker, "LoanBroker", "loan_broker", false},
 	{LedgerEntryTypeLoan, "Loan", "loan", false},
 	{LedgerEntryTypeSponsorship, "Sponsorship", "sponsorship", false},
+	{LedgerEntryTypeTransactionProposal, "TransactionProposal", "transaction_proposal", false},
 }
 
 // LedgerEntryTypes returns every concrete ledger-entry type in wire-code order.

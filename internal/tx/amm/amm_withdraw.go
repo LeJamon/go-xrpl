@@ -367,13 +367,11 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// Due to rounding, the LPTokenBalance of the last LP
 	// might not match the LP's trustline balance.
 	// Reference: rippled AMMWithdraw.cpp:311-317
-	if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1) {
-		if result := verifyAndAdjustLPTokenBalance(math, ctx.View, ammKey, lpTokensHeld, amm, accountID); result != ter.TesSUCCESS {
-			return result
-		}
-		// Refresh lptBalance since verifyAndAdjustLPTokenBalance may have modified amm.LPTokenBalance
-		lptBalance = amm.LPTokenBalance
+	if result := verifyAndAdjustLPTokenBalance(math, ctx.View, ammKey, lpTokensHeld, amm, accountID); result != ter.TesSUCCESS {
+		return result
 	}
+	// Refresh lptBalance since verifyAndAdjustLPTokenBalance may have modified amm.LPTokenBalance
+	lptBalance = amm.LPTokenBalance
 
 	var lpTokensToRedeem tx.Amount
 	var withdrawAmount1, withdrawAmount2 tx.Amount
@@ -706,7 +704,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// where amountBalance is the withdrawn asset's balance. Two-asset modes call
 	// withdraw(amountBalance, amount, amount2, ...) with both amounts.
 	if !isWithdrawAll {
-		fixV1_1 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1)
 		if isSingleAssetWithdraw {
 			var withdrawAmt tx.Amount
 			if singleWithdrawIsAsset2 {
@@ -715,7 +712,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				withdrawAmt = withdrawAmount1
 			}
 			adjAmt, _, adjTokens := adjustAmountsByLPTokens(math,
-				withdrawAssetBalance, withdrawAmt, nil, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3, fixV1_1)
+				withdrawAssetBalance, withdrawAmt, nil, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3)
 			lpTokensToRedeem = adjTokens
 			if singleWithdrawIsAsset2 {
 				withdrawAmount2 = adjAmt
@@ -728,7 +725,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				amount2Ptr = &withdrawAmount2
 			}
 			withdrawAmount1, amount2Ptr, lpTokensToRedeem = adjustAmountsByLPTokens(math,
-				assetBalance1, withdrawAmount1, amount2Ptr, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3, fixV1_1)
+				assetBalance1, withdrawAmount1, amount2Ptr, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3)
 			if amount2Ptr != nil {
 				withdrawAmount2 = *amount2Ptr
 			}
@@ -739,7 +736,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	if lpTokensToRedeem.IsZero() || math.fromAmount(lpTokensToRedeem).Cmp(math.fromAmount(lpTokensHeld)) > 0 {
 		return ter.TecAMM_INVALID_TOKENS
 	}
-	if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1) && isGreater(lpTokensToRedeem, lptBalance) {
+	if isGreater(lpTokensToRedeem, lptBalance) {
 		return ter.TecINTERNAL
 	}
 

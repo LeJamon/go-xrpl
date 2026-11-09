@@ -144,8 +144,8 @@ func TestFeatureRegistry(t *testing.T) {
 	if nftV1 == nil {
 		t.Fatal("NonFungibleTokensV1 feature not found")
 	}
-	if nftV1.Vote != VoteObsolete {
-		t.Error("NonFungibleTokensV1 should be obsolete")
+	if nftV1.IsSupported() || nftV1.Vote != VoteDefaultNo {
+		t.Error("NonFungibleTokensV1 should be unsupported and default no")
 	}
 }
 
@@ -564,8 +564,8 @@ func TestFeatureHelperMethods(t *testing.T) {
 	if nftV1 == nil {
 		t.Fatal("NonFungibleTokensV1 feature not found")
 	}
-	if !nftV1.IsObsolete() {
-		t.Error("NonFungibleTokensV1.IsObsolete() should return true")
+	if nftV1.IsObsolete() || nftV1.IsSupported() {
+		t.Error("NonFungibleTokensV1 should be unsupported, not obsolete")
 	}
 }
 
@@ -661,7 +661,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"Escrow",
 		"EnforceInvariants",
 		"FlowCross",
-		// Obsolete
+		// Unsupported NonFungibleTokensV1_1 predecessor
 		"NonFungibleTokensV1",
 		"CryptoConditionsSuite",
 	}

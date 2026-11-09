@@ -328,7 +328,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if lpTokensToWithdraw.IsZero() || lpTokensToWithdraw.IsNegative() || isGreater(lpTokensToWithdraw, holdLPTokens) {
 		return ter.TecAMM_INVALID_TOKENS
 	}
-	if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1) && isGreater(lpTokensToWithdraw, lptAMMBalance) {
+	if isGreater(lpTokensToWithdraw, lptAMMBalance) {
 		return ter.TecINTERNAL
 	}
 
