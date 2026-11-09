@@ -393,8 +393,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount1, true); result != ter.TesSUCCESS {
 				return result
 			}
-		} else if err := debitAMMTrustline(ammAccountID, a.Asset, withdrawAmount1, ctx.View, ctx.NumberContext()); err != nil {
-			return ammResultFromError(err, ter.TefINTERNAL)
+		} else if result := clawIOUThroughHolder(ctx, holderID, issuerID, ammAccountID, a.Asset, withdrawAmount1); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
@@ -410,8 +410,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount2, true); result != ter.TesSUCCESS {
 					return result
 				}
-			} else if err := debitAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
-				return ammResultFromError(err, ter.TefINTERNAL)
+			} else if result := clawIOUThroughHolder(ctx, holderID, issuerID, ammAccountID, a.Asset2, withdrawAmount2); result != ter.TesSUCCESS {
+				return result
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
 			// XRP clawback: AMM loses XRP, issuer gains
@@ -517,4 +517,20 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	}
 
 	return ter.TesSUCCESS
+}
+
+// clawIOUThroughHolder withdraws an IOU from the pool to the holder, then claws
+// it back to the issuer. Both legs round on the holder's trust line, so a
+// holder balance far below the withdrawn amount can be rounded away.
+func clawIOUThroughHolder(ctx *tx.ApplyContext, holderID, issuerID, ammAccountID [20]byte, asset tx.Asset, amount tx.Amount) ter.Result {
+	if result := withdrawIOUToAccount(ctx, holderID, issuerID, ammAccountID, asset, amount, clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
+		return result
+	}
+	issuerAddress, err := state.EncodeAccountID(issuerID)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	clawed := amount
+	clawed.Issuer = issuerAddress
+	return tx.RippleCreditWithNumberContext(ctx.View, holderID, issuerID, clawed, ctx.NumberContext())
 }
