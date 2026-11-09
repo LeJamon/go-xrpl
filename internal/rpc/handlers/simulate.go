@@ -218,6 +218,9 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if parsedTx.TxType() == tx.TypeBatch {
 		return nil, rpcerrors.RpcErrorNotImpl()
 	}
+	if parsedTx.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+		return nil, rpcerrors.RpcErrorInvalidParams("tfInnerBatchTxn flag is not allowed on top-level transactions.")
+	}
 
 	canonicalMap, err := flattenCanonicalTransaction(parsedTx, txJsonMap)
 	if err != nil {

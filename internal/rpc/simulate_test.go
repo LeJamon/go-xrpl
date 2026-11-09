@@ -542,6 +542,41 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 	}
 }
 
+func TestSimulateMethod_InnerBatchFlagRejected(t *testing.T) {
+	mock := newMockLedgerServiceSimulate()
+	method := &handlers.SimulateMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+
+	txJSON := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         validAccountAddress,
+		"Flags":           0x40000000,
+	}
+	txBlob, err := binarycodec.Encode(txJSON)
+	require.NoError(t, err)
+
+	for name, params := range map[string]map[string]any{
+		"tx_json": {"tx_json": txJSON},
+		"tx_blob": {"tx_blob": txBlob},
+	} {
+		t.Run(name, func(t *testing.T) {
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+			assert.Equal(t, "tfInnerBatchTxn flag is not allowed on top-level transactions.", rpcErr.Message)
+		})
+	}
+}
+
 func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
 	services := newSimulateTestServices(mock)
