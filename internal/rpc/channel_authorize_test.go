@@ -541,3 +541,48 @@ func TestChannelAuthorize_BadSeed(t *testing.T) {
 	assert.Equal(t, rpcerrors.RpcBAD_SEED, err.Code)
 	assert.Equal(t, "badSeed", err.ErrorString)
 }
+
+func TestChannelAuthorize_ParamTypes(t *testing.T) {
+	const channelID = `"D45FB631561136C1BFF7AE706AC13CCAF687A8216AF3189B6A04163507F97591"`
+	const secret = `"secret":"shEonzD7pxzzjWbWBWD9jRfk1QJYu"`
+
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		message string
+	}{
+		{name: "numeric amount", params: `{"channel_id":` + channelID + `,"amount":1000,` + secret + `}`, code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "boolean amount", params: `{"channel_id":` + channelID + `,"amount":true,` + secret + `}`, code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "object amount", params: `{"channel_id":` + channelID + `,"amount":{},` + secret + `}`, code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "null amount", params: `{"channel_id":` + channelID + `,"amount":null,` + secret + `}`, code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "two plus signs", params: `{"channel_id":` + channelID + `,"amount":"++1000",` + secret + `}`, code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "numeric channel id", params: `{"channel_id":5,"amount":"1000",` + secret + `}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "key checked before channel id", params: `{"channel_id":5,"amount":"1000","secret":5}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'secret', not string."},
+		{name: "seed without key type", params: `{"channel_id":` + channelID + `,"amount":"1000","seed":"shEonzD7pxzzjWbWBWD9jRfk1QJYu"}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Missing field 'secret'."},
+	}
+
+	handler := &handlers.ChannelAuthorizeMethod{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := handler.Handle(channelAuthorizeTestContext(types.ApiVersion1), json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+}
+
+func TestChannelAuthorize_PlusSignedAmount(t *testing.T) {
+	handler := &handlers.ChannelAuthorizeMethod{}
+	sign := func(amount string) string {
+		result, rpcErr := handler.Handle(channelAuthorizeTestContext(types.ApiVersion1), json.RawMessage(`{
+			"channel_id": "D45FB631561136C1BFF7AE706AC13CCAF687A8216AF3189B6A04163507F97591",
+			"amount": "`+amount+`",
+			"secret": "shEonzD7pxzzjWbWBWD9jRfk1QJYu"
+		}`))
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["signature"].(string)
+	}
+	assert.Equal(t, sign("1000"), sign("+1000"))
+}

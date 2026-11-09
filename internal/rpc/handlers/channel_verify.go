@@ -21,74 +21,50 @@ import (
 // touching ledger state.
 type ChannelVerifyMethod struct{ baseHandler }
 
-// channelVerifyRequest represents the request parameters
-type channelVerifyRequest struct {
-	PublicKey string `json:"public_key"`
-	ChannelID string `json:"channel_id"`
-	Amount    string `json:"amount"`
-	Signature string `json:"signature"`
-}
-
 func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	var request channelVerifyRequest
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
+	var fields map[string]json.RawMessage
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
 			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(params, &fields)
 
-	// Validate required fields
-	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
-	if _, ok := fields["public_key"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("public_key")
-	}
-	if _, ok := fields["channel_id"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("channel_id")
-	}
-	if _, ok := fields["amount"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("amount")
-	}
-	if _, ok := fields["signature"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("signature")
+	for _, name := range []string{"public_key", "channel_id", "amount", "signature"} {
+		if _, ok := fields[name]; !ok {
+			return nil, rpcerrors.RpcErrorMissingField(name)
+		}
 	}
 
-	// Parse public key - can be base58 (AccountPublic) or hex
-	// rippled:
-	// pk = parseBase58<PublicKey>(TokenType::AccountPublic, strPk);
-	// if (!pk) { pkHex = strUnHex(strPk); if (!pkHex) return rpcError(rpcPUBLIC_MALFORMED); ... }
-	pubKeyHex, err := parsePublicKey(request.PublicKey)
+	publicKey, ok := rawString(fields["public_key"])
+	if !ok {
+		return nil, rpcerrors.RpcErrorPublicMalformed()
+	}
+	pubKeyHex, err := parsePublicKey(publicKey)
 	if err != nil {
 		return nil, rpcerrors.RpcErrorPublicMalformed()
 	}
 
-	// Validate channel_id - must be valid 256-bit hex (64 characters)
-	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
-	channelIDHex := strings.ToUpper(request.ChannelID)
-	if len(channelIDHex) != 64 {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
+	channelIDHex, rpcErr := parseChannelID(fields["channel_id"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
-	}
-
-	// Validate amount - must be a string that parses to uint64
-	// rippled: std::optional<std::uint64_t> const optDrops = params[jss::amount].isString() ? to_uint64(params[jss::amount].asString()) : std::nullopt;
-	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
-	drops, err := strconv.ParseUint(request.Amount, 10, 64)
-	if err != nil {
+	drops, ok := parseChannelDrops(fields["amount"])
+	if !ok {
 		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
 	}
 
-	// Validate signature - must be valid hex and non-empty
-	// rippled: auto sig = strUnHex(params[jss::signature].asString()); if (!sig || !sig->size()) return rpcError(rpcINVALID_PARAMS);
-	sigHex := strings.ToUpper(request.Signature)
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil || len(sigBytes) == 0 {
-		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	signature, ok := rawString(fields["signature"])
+	if !ok {
+		return nil, rpcerrors.RpcErrorInvalidParams("")
 	}
+	if len(signature)%2 == 1 {
+		signature = "0" + signature
+	}
+	sigBytes, err := hex.DecodeString(signature)
+	if err != nil || len(sigBytes) == 0 {
+		return nil, rpcerrors.RpcErrorInvalidParams("")
+	}
+	sigHex := strings.ToUpper(hex.EncodeToString(sigBytes))
 
 	// Serialize the payment channel claim message
 	// Message format: HashPrefix('CLM\0') + channel_id (32 bytes) + amount (8 bytes)

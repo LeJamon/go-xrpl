@@ -435,3 +435,48 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, verified, "Signature for wrong channel_id should not verify")
 }
+
+func TestChannelVerify_ParamTypes(t *testing.T) {
+	const (
+		channelID = `"D45FB631561136C1BFF7AE706AC13CCAF687A8216AF3189B6A04163507F97591"`
+		publicKey = `"03EF6575F9E187A7749BE02C34753BFA11F87FA0CAD96B7C5442BA64589DAF3388"`
+		signature = `"3045022100B248116D21BE0BDA1D25AF3A18A1F85EDD759FFD9F8F17A15DB3DA5C83713033022029719D29280EEAD08121539EBCE9C4E439780FFBCA4ACEAB3B7D0D2570D70145"`
+	)
+	request := func(pk, id, amount, sig string) json.RawMessage {
+		return json.RawMessage(`{"public_key":` + pk + `,"channel_id":` + id + `,"amount":` + amount + `,"signature":` + sig + `}`)
+	}
+
+	errTests := []struct {
+		name    string
+		params  json.RawMessage
+		code    int
+		message string
+	}{
+		{name: "numeric amount", params: request(publicKey, channelID, `1000`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "boolean amount", params: request(publicKey, channelID, `false`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "numeric public key", params: request(`5`, channelID, `"1000"`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "boolean public key", params: request(`true`, channelID, `"1000"`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "public key checked before amount", params: request(`5`, channelID, `5`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "numeric channel id", params: request(publicKey, `5`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "numeric signature", params: request(publicKey, channelID, `"1000"`, `5`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+	}
+
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1}
+	for _, tc := range errTests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := handler.Handle(ctx, tc.params)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+
+	verified := func(amount, sig string) bool {
+		result, rpcErr := handler.Handle(ctx, request(publicKey, channelID, amount, sig))
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["signature_verified"].(bool)
+	}
+	assert.True(t, verified(`"+1000"`, signature), "a leading plus sign is accepted")
+	assert.False(t, verified(`"1000"`, `"ABC"`), "an odd-length signature is decoded and checked")
+}
