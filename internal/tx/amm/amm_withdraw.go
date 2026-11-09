@@ -290,12 +290,21 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 
 // Reference: rippled AMMWithdraw.cpp applyGuts
 func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	calculationComplete := false
+	withdrawing := true
+	equalWithdraw := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
-				result = ter.TecAMM_FAILED
-				return
+			if withdrawing && isAMMAmountOverflowPanic(recovered) {
+				// A proportional withdrawal fails with tecINTERNAL whatever
+				// the amendments; the other modes need fixCleanup3_4_0.
+				if equalWithdraw {
+					result = ter.TecINTERNAL
+					return
+				}
+				if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+					result = ter.TecAMM_FAILED
+					return
+				}
 			}
 			panic(recovered)
 		}
@@ -393,6 +402,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	case flags&tfLPToken != 0, flags&tfWithdrawAll != 0:
 		// Proportional withdrawal (equalWithdrawTokens)
 		// Reference: rippled AMMWithdraw.cpp equalWithdrawTokens()
+		equalWithdraw = true
 		if lpTokensWithdraw.IsZero() || lptBalance.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
 		}
@@ -811,10 +821,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
-	// All remaining operations mutate the transaction view. Keep overflow
-	// recovery limited to the calculation stage above so a post-transfer fault
-	// remains a normal apply exception and is rolled back by the engine.
-	calculationComplete = true
 	if isXRP1 && !withdrawAmount1.IsZero() {
 		// Convert to drops, handling IOU representation from calculations
 		drops := uint64(withdrawAmount1.Drops())
@@ -854,6 +860,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			return r
 		}
 	}
+	// Overflows past this point are not recovered.
+	withdrawing = false
+
 	// NOTE: Asset balances are NOT stored in AMM entry
 	// They are updated by the balance transfers above:
 	// - XRP: via ammAccount.Balance -= drops
