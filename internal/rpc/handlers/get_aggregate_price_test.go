@@ -118,3 +118,32 @@ func TestAggregatePriceUnsignedStats(t *testing.T) {
 		t.Fatalf("trimmed standard deviation = %s, want 6521908912666389825", got)
 	}
 }
+
+func TestAggregatePriceTextKeepsSTAmountMantissa(t *testing.T) {
+	tests := []struct {
+		name  string
+		price aggregatePriceAmount
+		want  string
+	}{
+		{name: "large whole price", price: newAggregatePriceAmountUnsigned(1_000_000_000_000, 0), want: "1000000000000000e-3"},
+		{name: "small price", price: newAggregatePriceAmountUnsigned(1, -11), want: "1000000000000000e-26"},
+		{name: "large mean", price: newAggregatePriceAmountUnsigned(1_000_000_000_000_500, -3), want: "1000000000000500e-3"},
+		{name: "decimal range", price: newAggregatePriceAmountUnsigned(1_234_500, -4), want: "123.45"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.price.text(); got != test.want {
+				t.Fatalf("text = %s, want %s", got, test.want)
+			}
+		})
+	}
+
+	prices := []aggregatePricePoint{
+		{price: newAggregatePriceAmountUnsigned(1_000_000_000_000, 0)},
+		{price: newAggregatePriceAmountUnsigned(7, 0)},
+	}
+	mean, _ := aggregatePriceStats(prices)
+	if got := mean.text(); got != "5000000000035000e-4" {
+		t.Fatalf("mean = %s, want 5000000000035000e-4", got)
+	}
+}
