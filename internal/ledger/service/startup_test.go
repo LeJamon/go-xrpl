@@ -167,8 +167,10 @@ func TestService_StandaloneStartupReplacesPreviousInitialLedger(t *testing.T) {
 			initial := writer.GetClosedLedger()
 			writer.Stop()
 
-			// Close times are hashed as whole seconds; force the next startup to differ.
-			time.Sleep(time.Until(time.Unix(initial.CloseTime().Unix()+1, 0)))
+			// The startup close time is rounded to the resolution; wait until the
+			// next startup rounds to a different value.
+			resolution := time.Duration(initial.CloseTimeResolution()) * time.Second
+			time.Sleep(time.Until(initial.CloseTime().Add(resolution / 2)))
 			reader, err := New(cfg)
 			require.NoError(t, err)
 			t.Cleanup(reader.Stop)

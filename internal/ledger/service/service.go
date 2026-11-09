@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	appconfig "github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -831,7 +832,8 @@ func (s *Service) Start() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create initial closed ledger: %w", err)
 	}
-	if err := initialClosed.Close(time.Now(), 0); err != nil {
+	resolution := time.Duration(initialClosed.CloseTimeResolution()) * time.Second
+	if err := initialClosed.Close(consensus.RoundCloseTime(time.Now(), resolution), 0); err != nil {
 		return fmt.Errorf("failed to close initial ledger: %w", err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -63,7 +64,8 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 
 	closeTime := explicitCloseTime
 	if closeTime.IsZero() {
-		closeTime = time.Now()
+		resolution := time.Duration(s.currentOpenLedgerLocked().CloseTimeResolution()) * time.Second
+		closeTime = consensus.EffCloseTime(time.Now(), resolution, s.closedLedger.CloseTime())
 	}
 
 	// Re-apply pending in canonical order on a fresh ledger built from the LCL.
