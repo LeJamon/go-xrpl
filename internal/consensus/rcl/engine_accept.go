@@ -71,7 +71,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 			closeTime = priorClose.Add(time.Second)
 			ctBranch = "consensus-disagree"
 		} else {
-			closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
+			closeTime = consensus.EffCloseTime(rawCloseTime, resolution, priorClose)
 			closeTimeCorrect = true
 			ctBranch = "consensus"
 		}
@@ -523,7 +523,7 @@ func (e *Engine) updateCloseTimePosition() {
 	participants := 0
 	for nodeID, proposal := range e.proposalTracker.all() {
 		if trusted(nodeID) {
-			rounded := roundCloseTime(proposal.CloseTime, resolution)
+			rounded := consensus.RoundCloseTime(proposal.CloseTime, resolution)
 			closeTimeVotes[rounded]++
 			participants++
 		}
@@ -532,9 +532,9 @@ func (e *Engine) updateCloseTimePosition() {
 	if participants == 0 {
 		e.closeTime.haveConsensus = true // trivially
 		if e.state.OurPosition != nil {
-			e.closeTime.consensusCloseTime = roundCloseTime(e.state.OurPosition.CloseTime, resolution)
+			e.closeTime.consensusCloseTime = consensus.RoundCloseTime(e.state.OurPosition.CloseTime, resolution)
 		} else {
-			e.closeTime.consensusCloseTime = roundCloseTime(e.state.CloseTimes.Self, resolution)
+			e.closeTime.consensusCloseTime = consensus.RoundCloseTime(e.state.CloseTimes.Self, resolution)
 		}
 		e.closeTime.consensusCloseTimeSet = true
 		return
@@ -542,7 +542,7 @@ func (e *Engine) updateCloseTimePosition() {
 
 	// Add our own vote if proposing
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
-		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
+		ourRounded := consensus.RoundCloseTime(e.state.OurPosition.CloseTime, resolution)
 		closeTimeVotes[ourRounded]++
 		participants++
 	}
@@ -587,7 +587,7 @@ func (e *Engine) updateCloseTimePosition() {
 
 	// Update our proposal if close time changed
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
-		ourRounded := roundCloseTime(e.state.OurPosition.CloseTime, resolution)
+		ourRounded := consensus.RoundCloseTime(e.state.OurPosition.CloseTime, resolution)
 		if consensusCloseTime != ourRounded {
 			oldCT := e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
 			e.state.OurPosition.CloseTime = consensusCloseTime
@@ -633,7 +633,7 @@ func (e *Engine) determineCloseTime() time.Time {
 	if len(e.state.CloseTimes.Peers) > 0 {
 		roundedVotes := make(map[time.Time]int)
 		for t, count := range e.state.CloseTimes.Peers {
-			rounded := roundCloseTime(t, resolution)
+			rounded := consensus.RoundCloseTime(t, resolution)
 			roundedVotes[rounded] += count
 		}
 
@@ -645,7 +645,7 @@ func (e *Engine) determineCloseTime() time.Time {
 		}
 	}
 
-	return roundCloseTime(e.state.CloseTimes.Self, resolution)
+	return consensus.RoundCloseTime(e.state.CloseTimes.Self, resolution)
 }
 
 // peekCanValidateSeqLocked is the non-mutating SeqEnforcer predicate.
@@ -826,24 +826,6 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	e.enqueueValidationBroadcastLocked(validation)
 }
 
-// roundCloseTime rounds to the nearest multiple of resolution (up at the
-// midpoint). Truncates sub-second precision first so nanosecond-skewed
-// validators round identically; does the modulo in XRPL-epoch space to
-// match rippled byte-for-byte.
-func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
-	if closeTime.IsZero() {
-		return closeTime
-	}
-	resSec := int64(resolution.Seconds())
-	if resSec <= 0 {
-		return closeTime
-	}
-	xrplSec := closeTime.Unix() - protocol.RippleEpochUnix
-	xrplSec += resSec / 2
-	xrplSec -= xrplSec % resSec
-	return time.Unix(xrplSec+protocol.RippleEpochUnix, 0).UTC()
-}
-
 // emitDecision labels which arm of the validation gate fired. wrongLedger
 // is intentionally NOT a skip reason (rippled emits a partial there, #451).
 func emitDecision(emit, isValidator, blocked, consensusFail, canValidate, compatible bool) string {
@@ -866,17 +848,4 @@ func emitDecision(emit, isValidator, blocked, consensusFail, canValidate, compat
 		return "skip:incompatible-with-validated"
 	}
 	return "skip:unknown"
-}
-
-// effCloseTime rounds to resolution, then floors at priorCloseTime + 1s.
-func effCloseTime(closeTime time.Time, resolution time.Duration, priorCloseTime time.Time) time.Time {
-	if closeTime.IsZero() {
-		return closeTime
-	}
-	rounded := roundCloseTime(closeTime, resolution)
-	minTime := priorCloseTime.Add(time.Second)
-	if rounded.Before(minTime) {
-		return minTime
-	}
-	return rounded
 }
