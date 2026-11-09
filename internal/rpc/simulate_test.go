@@ -542,6 +542,69 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 	}
 }
 
+// rippled 3.5.0-rc1 (#8568) lets only admins simulate a transaction carrying
+// Bytecode or Gas, since simulate cannot charge for running WASM.
+func TestSimulateMethod_WasmFieldsRequireAdmin(t *testing.T) {
+	escrowCreate := func() map[string]any {
+		return map[string]any{
+			"TransactionType": "EscrowCreate",
+			"Account":         validAccountAddress,
+			"Destination":     validAccountAddress,
+			"Amount":          "1000000",
+			"CancelAfter":     1_000_000_000,
+		}
+	}
+	escrowFinish := func() map[string]any {
+		return map[string]any{
+			"TransactionType": "EscrowFinish",
+			"Account":         validAccountAddress,
+			"Owner":           validAccountAddress,
+			"OfferSequence":   1,
+		}
+	}
+	withField := func(build func() map[string]any, field string, value any) func() map[string]any {
+		return func() map[string]any {
+			tx := build()
+			tx[field] = value
+			return tx
+		}
+	}
+	wasmTxs := map[string]func() map[string]any{
+		"bytecode":         withField(escrowCreate, "Bytecode", "0061736D01000000"),
+		"invalid_bytecode": withField(escrowCreate, "Bytecode", "DEADBEEF"),
+		"gas":              withField(escrowFinish, "Gas", 10_000),
+	}
+	simulate := func(role types.Role, txJSON map[string]any) *rpcerrors.RpcError {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       role,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+		}
+		paramsJSON, err := json.Marshal(map[string]any{"tx_json": txJSON})
+		require.NoError(t, err)
+		_, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+		return rpcErr
+	}
+
+	for name, txJSON := range wasmTxs {
+		t.Run(name, func(t *testing.T) {
+			for _, role := range []types.Role{types.RoleGuest, types.RoleUser, types.RoleIdentified, types.RoleProxy} {
+				rpcErr := simulate(role, txJSON())
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, rpcerrors.RpcNO_PERMISSION, rpcErr.Code)
+				assert.Equal(t, "noPermission", rpcErr.ErrorString)
+				assert.Equal(t, "WASM transactions are only supported in admin mode.", rpcErr.Message)
+			}
+			assert.Nil(t, simulate(types.RoleAdmin, txJSON()))
+		})
+	}
+
+	// Without these fields, simulate runs as usual.
+	assert.Nil(t, simulate(types.RoleUser, escrowCreate()))
+	assert.Nil(t, simulate(types.RoleUser, escrowFinish()))
+}
+
 func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	mock := newMockLedgerServiceSimulate()
 	services := newSimulateTestServices(mock)
