@@ -109,11 +109,13 @@ func (m *ChannelAuthorizeMethod) RequiredRole() types.Role {
 	return types.RoleUser
 }
 
-// parseChannelID requires a JSON string holding a 256-bit hex channel ID.
 func parseChannelID(raw json.RawMessage) (string, *rpcerrors.RpcError) {
-	value, ok := rawString(raw)
-	if !ok {
-		return "", rpcerrors.RpcErrorInvalidParams("")
+	value, rpcErr := jsonCppStringValue(raw)
+	if rpcErr != nil {
+		return "", rpcErr
+	}
+	if value == "0" {
+		return strings.Repeat("0", 64), nil
 	}
 	channelID := strings.ToUpper(value)
 	if len(channelID) != 64 {
@@ -132,6 +134,7 @@ func parseChannelDrops(raw json.RawMessage) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
+	value, _, _ = strings.Cut(value, "\x00")
 	drops, err := strconv.ParseUint(strings.TrimPrefix(value, "+"), 10, 64)
 	return drops, err == nil
 }

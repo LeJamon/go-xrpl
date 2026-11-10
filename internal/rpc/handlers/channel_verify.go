@@ -12,6 +12,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
@@ -35,9 +36,9 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	publicKey, ok := rawString(fields["public_key"])
-	if !ok {
-		return nil, rpcerrors.RpcErrorPublicMalformed()
+	publicKey, rpcErr := jsonCppStringValue(fields["public_key"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 	pubKeyHex, err := parsePublicKey(publicKey)
 	if err != nil {
@@ -53,14 +54,11 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
 	}
 
-	signature, ok := rawString(fields["signature"])
-	if !ok {
-		return nil, rpcerrors.RpcErrorInvalidParams("")
+	signature, rpcErr := jsonCppStringValue(fields["signature"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	if len(signature)%2 == 1 {
-		signature = "0" + signature
-	}
-	sigBytes, err := hex.DecodeString(signature)
+	sigBytes, err := decodeChannelHex(signature)
 	if err != nil || len(sigBytes) == 0 {
 		return nil, rpcerrors.RpcErrorInvalidParams("")
 	}
@@ -104,24 +102,23 @@ func parsePublicKey(pubKey string) (pubKeyHex string, err error) {
 		}
 	}()
 
-	// Try to decode as hex first (this is the more common case and safer)
-	pubKeyBytes, hexErr := hex.DecodeString(pubKey)
-	if hexErr == nil && len(pubKeyBytes) == 33 {
-		// Validate public key type
-		// SECP256K1 compressed: 33 bytes, starts with 02 or 03
-		// ED25519: 33 bytes, starts with ED
-		if pubKeyBytes[0] == 0x02 || pubKeyBytes[0] == 0x03 || pubKeyBytes[0] == 0xED {
-			return strings.ToUpper(pubKey), nil
-		}
-	}
-
-	// Try to decode as base58 AccountPublic
 	pubKeyBytes, decodeErr := addresscodec.DecodeAccountPublicKey(pubKey)
-	if decodeErr == nil && len(pubKeyBytes) == 33 {
+	if decodeErr == nil && crypto.PublicKeyType(pubKeyBytes) != crypto.KeyTypeUnknown {
+		return strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
+	}
+	pubKeyBytes, hexErr := decodeChannelHex(pubKey)
+	if hexErr == nil && crypto.PublicKeyType(pubKeyBytes) != crypto.KeyTypeUnknown {
 		return strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
 	}
 
 	return "", fmt.Errorf("invalid public key")
+}
+
+func decodeChannelHex(value string) ([]byte, error) {
+	if len(value)%2 == 1 {
+		value = "0" + value
+	}
+	return hex.DecodeString(value)
 }
 
 // verifySignature verifies a signature against a message using the public key
