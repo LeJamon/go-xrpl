@@ -1,6 +1,7 @@
 package amm
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -62,6 +63,33 @@ func TestAMMOverflowCleanupPropagatesUnrelatedPanic(t *testing.T) {
 	require.PanicsWithValue(t, unrelatedAMMPanic{}, func() {
 		deposit.Apply(ctx)
 	})
+}
+
+func TestAMMOverflowLPTokenPropagatesUnrelatedPanic(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanup=%t", cleanup), func(t *testing.T) {
+			view, account, deposit := overflowDepositFixture(t, cleanup)
+			ammKey := computeAMMKeylet(deposit.Asset, deposit.Asset2)
+			raw, err := view.Read(ammKey)
+			require.NoError(t, err)
+			amm, err := parseAMMData(raw)
+			require.NoError(t, err)
+
+			lpTokenOut := state.NewIssuedAmountFromValue(
+				1, 0, amm.LPTokenBalance.Currency, amm.LPTokenBalance.Issuer,
+			)
+			deposit.Amount = nil
+			deposit.Amount2 = nil
+			deposit.LPTokenOut = &lpTokenOut
+			deposit.SetFlags(tfLPToken)
+
+			ctx := ammMPTContext(view, account, accountIDForFixture(account))
+			ctx.Log = panicAMMLogger{Logger: xrpllog.Discard()}
+			require.PanicsWithValue(t, unrelatedAMMPanic{}, func() {
+				deposit.Apply(ctx)
+			})
+		})
+	}
 }
 
 func accountIDForFixture(account *state.AccountRoot) [20]byte {
