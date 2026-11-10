@@ -149,3 +149,35 @@ func TestParseAndCreateSession_Domain(t *testing.T) {
 		})
 	}
 }
+
+// Missing or malformed accounts and a missing destination_amount carry
+// rippled's PathRequest::parseJson error codes, as ripple_path_find does.
+func TestParseAndCreateSession_RequiredFieldErrors(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		token   string
+		message string
+	}{
+		{"missing source", `{"destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcSRC_ACT_MISSING, "srcActMissing", "Source account not provided."},
+		{"missing destination", `{"source_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcDST_ACT_MISSING, "dstActMissing", "Destination account not provided."},
+		{"missing amount", `{"source_account":"` + acct + `","destination_account":"` + acct + `"}`, rpcerrors.RpcDST_AMT_MISSING, "dstAmtMissing", "Destination amount/currency/issuer is missing."},
+		{"empty source", `{"source_account":"","destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed."},
+		{"bad source", `{"source_account":"bad","destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed."},
+		{"numeric source", `{"source_account":5,"destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed."},
+		{"bad destination", `{"source_account":"` + acct + `","destination_account":"bad","destination_amount":"1000"}`, rpcerrors.RpcDST_ACT_MALFORMED, "dstActMalformed", "Destination account is malformed."},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := ParseAndCreateSession(json.RawMessage(test.params), nil)
+			if rpcErr == nil {
+				t.Fatal("expected error")
+			}
+			if rpcErr.Code != test.code || rpcErr.ErrorString != test.token || rpcErr.Message != test.message {
+				t.Fatalf("error = %d %q %q, want %d %q %q", rpcErr.Code, rpcErr.ErrorString, rpcErr.Message, test.code, test.token, test.message)
+			}
+		})
+	}
+}
