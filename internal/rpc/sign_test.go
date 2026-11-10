@@ -333,8 +333,8 @@ func TestSign_CredentialFieldPresence(t *testing.T) {
 			name:        "empty key type is present",
 			apiVersion:  types.ApiVersion2,
 			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":""`,
-			code:        rpcerrors.RpcBAD_KEY_TYPE,
-			message:     "Bad key type.",
+			code:        rpcerrors.RpcINVALID_PARAMS,
+			message:     "Invalid field 'key_type'.",
 		},
 		{
 			name:        "key type must be a string",
@@ -347,8 +347,8 @@ func TestSign_CredentialFieldPresence(t *testing.T) {
 			name:        "key type is case sensitive",
 			apiVersion:  types.ApiVersion2,
 			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":"SECP256K1"`,
-			code:        rpcerrors.RpcBAD_KEY_TYPE,
-			message:     "Bad key type.",
+			code:        rpcerrors.RpcINVALID_PARAMS,
+			message:     "Invalid field 'key_type'.",
 		},
 		{
 			name:        "passphrase must be a string",
@@ -1248,27 +1248,30 @@ func TestSignFor_InvalidAccountPrecedesMissingTxJson(t *testing.T) {
 
 func TestSignFor_InvalidKeyType(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		ApiVersion: types.ApiVersion1,
-	}
-
 	params := json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {
 			"TransactionType": "Payment",
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			"Amount": "1000000"
+			"Amount": "1000000",
+			"Sequence": 1,
+			"Fee": "10"
 		},
 		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
-		"key_type": "invalid"
+		"key_type": "invalid",
+		"offline": true
 	}`)
-	_, err := handler.Handle(signingEnabledContext(ctx), params)
-	require.NotNil(t, err)
-	// API v1: rippled returns invalidParams for bad key_type
-	// API v2+: returns RpcBAD_KEY_TYPE
-	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
+
+	// Signing commands validate key_type with the default API version, so
+	// every version reports the v1 invalid-field error.
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		ctx := &types.RpcContext{Context: context.Background(), ApiVersion: apiVersion}
+		_, err := handler.Handle(signingEnabledContext(ctx), params)
+		require.NotNil(t, err)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
+		assert.Equal(t, "Invalid field 'key_type'.", err.Message)
+	}
 }
 
 func TestSignFor_ValidMultiSign(t *testing.T) {

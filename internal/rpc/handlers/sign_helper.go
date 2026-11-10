@@ -445,7 +445,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	rules := transactionRulesForContext(rpcCtx)
 
 	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, _, rpcErr := creds.deriveKeypair(apiVersion, rawParams)
+	privateKey, publicKey, _, rpcErr := creds.deriveKeypair(types.DefaultApiVersion, rawParams)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
