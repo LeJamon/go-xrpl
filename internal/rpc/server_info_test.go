@@ -1999,7 +1999,7 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 	summary := adminInfo["validator_list"].(map[string]any)
 	assert.Equal(t, 1, summary["count"])
 	assert.Equal(t, "active", summary["status"])
-	assert.Equal(t, time.Unix(expiryUnix, 0).UTC().Format("2006-Jan-02 15:04:05 UTC"), summary["expiration"])
+	assert.Equal(t, time.Unix(expiryUnix, 0).UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"), summary["expiration"])
 	assert.NotContains(t, summary, "validator_list_threshold")
 
 	stateFor := func(t *testing.T, admin bool) map[string]any {

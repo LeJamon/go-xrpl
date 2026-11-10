@@ -317,7 +317,7 @@ func buildServerWarnings(services *types.ServiceGraph, isAdmin bool) []types.War
 						Message: "One or more unsupported amendments have reached majority. Upgrade to the latest version before they are activated to avoid being amendment blocked.",
 						Details: map[string]any{
 							"expected_date":     exp,
-							"expected_date_UTC": time.Unix(int64(exp)+protocol.RippleEpochUnix, 0).UTC().Format("2006-Jan-02 15:04:05 UTC"),
+							"expected_date_UTC": formatRippledTime(time.Unix(int64(exp)+protocol.RippleEpochUnix, 0)),
 						},
 					})
 				}

@@ -119,7 +119,7 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 
 		// close_time_human should be present when closeTime > 0
 		if reader.closeTime > 0 {
-			assert.Equal(t, "2024-Aug-03 11:33:50 UTC", ledger["close_time_human"])
+			assert.Equal(t, "2024-Aug-03 11:33:50.000000000 UTC", ledger["close_time_human"])
 			assert.Contains(t, ledger, "close_time_iso")
 		}
 	})

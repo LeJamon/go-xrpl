@@ -9,11 +9,12 @@ import (
 	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// rippledTimeLayout mirrors rippled's to_string(NetClock::time_point)
-// format `%Y-%b-%d %T %Z` (chrono.h:75-88) — e.g.
-// "2026-May-18 10:30:00 UTC". Used for every timestamp field exposed
-// via the validators / validator_list_sites RPCs.
-const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
+// rippledTimeLayout mirrors rippled's to_string of a time_point
+// (include/xrpl/basics/chrono.h): date::format("%Y-%b-%d %T %Z") on a
+// nanosecond system_clock time_point, e.g. "2026-May-18 10:30:00.000000000 UTC".
+// Used for every timestamp field exposed via the validators and
+// validator_list_sites RPCs.
+const rippledTimeLayout = "2006-Jan-02 15:04:05.000000000 UTC"
 
 // RPCReader wraps an *Aggregator so it satisfies the
 // rpctypes.ValidatorListReader interface used by the validators and
