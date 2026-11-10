@@ -303,6 +303,56 @@ func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 		"malformed-pubkey squelch must not have installed a squelch entry")
 }
 
+// A 33-byte TMSquelch key that is neither secp256k1 (0x02/0x03) nor Ed25519
+// (0xED) is not a public key: rippled charges invalid data and ignores the
+// squelch. Valid Ed25519 and secp256k1 keys are honoured.
+func TestOverlay_InboundSquelch_PubkeyType(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prefix  byte
+		applied bool
+	}{
+		{"zero prefix", 0x00, false},
+		{"uncompressed prefix", 0x04, false},
+		{"secp256k1", 0x02, true},
+		{"ed25519", 0xED, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := NewIdentity()
+			require.NoError(t, err)
+			o := &Overlay{
+				peers:  make(map[PeerID]*Peer),
+				events: make(chan Event, 8),
+			}
+			peer := NewPeer(PeerID(78), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+			o.peers[peer.ID()] = peer
+
+			validator := make([]byte, 33)
+			validator[0] = tc.prefix
+			validator[32] = 1
+			payload, err := message.Encode(&message.Squelch{
+				Squelch:         true,
+				ValidatorPubKey: validator,
+				SquelchDuration: uint32(MinUnsquelchExpire / time.Second),
+			})
+			require.NoError(t, err)
+
+			o.onMessageReceived(Event{
+				PeerID:      peer.ID(),
+				MessageType: message.TypeSquelch,
+				Payload:     payload,
+			})
+
+			assert.Equal(t, tc.applied, !peer.ExpireSquelch(validator))
+			if tc.applied {
+				assert.Zero(t, peer.BadDataCount())
+			} else {
+				assert.Greater(t, peer.BadDataCount(), uint32(0))
+			}
+		})
+	}
+}
+
 // TestHandleSquelchMessage_DropsSelfTargetingSquelch pins Task 4.2 (G3):
 // an inbound TMSquelch whose ValidatorPubKey equals the local validator
 // pubkey must be dropped WITHOUT installing a squelch — otherwise a
@@ -318,6 +368,7 @@ func TestHandleSquelchMessage_DropsSelfTargetingSquelch(t *testing.T) {
 	for i := range localValidator {
 		localValidator[i] = byte(0xAA)
 	}
+	localValidator[0] = 0x02
 
 	o := &Overlay{
 		cfg:    Config{LocalValidatorPubKey: localValidator},
@@ -370,12 +421,14 @@ func TestHandleSquelchMessage_AllowsOtherValidatorSquelch(t *testing.T) {
 	for i := range localValidator {
 		localValidator[i] = byte(0xAA)
 	}
+	localValidator[0] = 0x02
 
 	// Other validator pubkey Q, distinct from P.
 	otherValidator := make([]byte, 33)
 	for i := range otherValidator {
 		otherValidator[i] = byte(0xBB)
 	}
+	otherValidator[0] = 0x03
 
 	o := &Overlay{
 		cfg:    Config{LocalValidatorPubKey: localValidator},
@@ -439,6 +492,7 @@ func TestOverlay_InboundSquelch_FromUnnegotiatedPeer(t *testing.T) {
 	for i := range validator {
 		validator[i] = byte(i + 1)
 	}
+	validator[0] = 0x02
 
 	sq := &message.Squelch{
 		Squelch:         true,

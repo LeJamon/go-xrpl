@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -567,10 +568,10 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	if !ok {
 		return
 	}
-	// Validator pubkey must be a 33-byte compressed secp256k1 point.
+	// Validator pubkey must be a secp256k1 or Ed25519 public key.
 	// Silently dropping would let a peer spam bogus TMSquelch frames
 	// without penalty, so charge bad data.
-	if len(sq.ValidatorPubKey) != 33 {
+	if rootcrypto.PublicKeyType(sq.ValidatorPubKey) == rootcrypto.KeyTypeUnknown {
 		slog.Debug("Squelch malformed pubkey",
 			"t", "Overlay", "peer", evt.PeerID, "len", len(sq.ValidatorPubKey))
 		o.selectMessageChargeReason(&evt, "squelch-malformed-pubkey")
