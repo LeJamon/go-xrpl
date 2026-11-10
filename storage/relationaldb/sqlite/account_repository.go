@@ -54,12 +54,10 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 		args = append(args, options.MaxLedger)
 	}
 
+	// The marker row is included: BuildAccountTxPage resumes on it, as
+	// rippled accountTxPage does.
 	if options.Marker != nil {
-		sequenceCmp := markerCmp
-		if options.Delegate != nil {
-			sequenceCmp += "="
-		}
-		query += " AND (at.ledger_seq " + markerCmp + " ? OR (at.ledger_seq = ? AND at.txn_seq " + sequenceCmp + " ?))"
+		query += " AND (at.ledger_seq " + markerCmp + " ? OR (at.ledger_seq = ? AND at.txn_seq " + markerCmp + "= ?))"
 		args = append(args, options.Marker.LedgerSeq, options.Marker.LedgerSeq, options.Marker.TxnSeq)
 	}
 

@@ -583,7 +583,8 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 		t.Fatal(err)
 	}
 	assertAccountPage(t, oldest, options, values[0], values[1])
-	assertMarker(t, oldest.Marker, 10, 2)
+	// rippled accountTxPage: the marker is the first row of the next page.
+	assertMarker(t, oldest.Marker, 11, 1)
 	options.Marker = oldest.Marker
 	oldest, err = repository.GetOldestAccountTxsPage(ctx, options)
 	if err != nil {
@@ -600,7 +601,7 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 		t.Fatal(err)
 	}
 	assertAccountPage(t, newest, options, values[3], values[2])
-	assertMarker(t, newest.Marker, 11, 1)
+	assertMarker(t, newest.Marker, 10, 2)
 	options.Marker = newest.Marker
 	newest, err = repository.GetNewestAccountTxsPage(ctx, options)
 	if err != nil {
@@ -609,6 +610,22 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 	assertAccountPage(t, newest, options, values[1], values[0])
 	if newest.Marker != nil {
 		t.Fatalf("last newest page marker = %+v, want nil", newest.Marker)
+	}
+
+	// A marker that names no stored row yields an empty page, as rippled
+	// skips every row while it looks for the marker.
+	options.Marker = &relationaldb.AccountTxMarker{LedgerSeq: 11, TxnSeq: 0}
+	for name, page := range map[string]func(context.Context, relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error){
+		"oldest": repository.GetOldestAccountTxsPage,
+		"newest": repository.GetNewestAccountTxsPage,
+	} {
+		missing, err := page(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(missing.Transactions) != 0 || missing.Marker != nil {
+			t.Fatalf("%s page from unknown marker = %+v, want empty without marker", name, missing)
+		}
 	}
 
 	boundedOptions := relationaldb.AccountTxPageOptions{
