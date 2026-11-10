@@ -606,9 +606,11 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Ensure the destination can hold the asset when it is the submitter.
 	if dstID == accountID && (amount.Signum() > 0 || !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)) {
-		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+		delta, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance())
+		if res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
 			return res
 		}
+		ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(delta))
 	} else {
 		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
 		if err != nil {
