@@ -172,7 +172,3 @@ func parseCredentialsFormat(raw json.RawMessage) ([]string, *rpcerrors.RpcError)
 
 	return credentials, nil
 }
-
-func (m *DepositAuthorizedMethod) RequiredCondition() types.Condition {
-	return types.NeedsCurrentLedger
-}
