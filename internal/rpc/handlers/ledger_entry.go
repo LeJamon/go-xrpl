@@ -1371,7 +1371,7 @@ func parseUInt32(raw json.RawMessage) (uint32, bool) {
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		n, err := strconv.ParseUint(s, 10, 32)
+		n, err := strconv.ParseUint(strings.TrimPrefix(s, "+"), 10, 32)
 		return uint32(n), err == nil
 	}
 	var num json.Number

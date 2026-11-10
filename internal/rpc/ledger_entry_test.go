@@ -2514,6 +2514,27 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 		assert.Equal(t, "Unexpected ledger type.", rpcErr.Message)
 	})
 
+	t.Run("sponsorship selector on mismatched entry returns unexpectedLedgerType", func(t *testing.T) {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:       accountRootIndex,
+			LedgerIndex: 3,
+			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Node:        []byte(`{"LedgerEntryType": "AccountRoot"}`),
+			Validated:   true,
+		}
+		mock.ledgerEntryErr = nil
+
+		result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+			"sponsorship":  accountRootIndex,
+			"ledger_index": "validated",
+		})
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
+		assert.Equal(t, "unexpectedLedgerType", rpcErr.ErrorString)
+		assert.Equal(t, "Unexpected ledger type.", rpcErr.Message)
+	})
+
 	// The `index` alias (ltANY) accepts any entry type — no type check.
 	t.Run("index selector accepts any entry type", func(t *testing.T) {
 		mock.ledgerEntryResult = &types.LedgerEntryResult{
@@ -2576,6 +2597,22 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+		assert.Equal(t, "Too many fields provided.", rpcErr.Message)
+	})
+
+	t.Run("sponsorship and index are rejected", func(t *testing.T) {
+		params := map[string]any{
+			"sponsorship":  index1,
+			"index":        index2,
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
@@ -3445,6 +3482,72 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "Missing field 'asset2'.", rpcErr.Message)
 	})
+}
+
+func TestLedgerEntryAMMHandleRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		params    map[string]any
+		wantIndex string
+	}{
+		{
+			name: "MPT and issued currency",
+			params: map[string]any{
+				"amm": map[string]any{
+					"asset":  map[string]any{"mpt_issuance_id": "00000013A23DA217AF9DFA4C10EA150523D8CEA293BBF223"},
+					"asset2": map[string]any{"currency": "USD", "issuer": "rE8iJRdfDkzVrVdV5djo25UnS6ici3pYMs"},
+				},
+				"ledger_index": "validated",
+			},
+			wantIndex: "A191A066AAD80491DA1255D3C858A448D237FCB5FCE09834F59BA606974BF578",
+		},
+		{
+			name: "currency zero and issued currency",
+			params: map[string]any{
+				"amm": map[string]any{
+					"asset":  map[string]any{"currency": "0"},
+					"asset2": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				},
+				"ledger_index": "validated",
+			},
+			wantIndex: "11033730E52312E5E7E878372345FB4311EC631952362D0B43AE771576745082",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			mock.ledgerEntryResult = &types.LedgerEntryResult{
+				Index:       tc.wantIndex,
+				LedgerIndex: 2,
+				LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+				Node:        []byte(`{"LedgerEntryType":"AMM"}`),
+				Validated:   true,
+			}
+			method := &handlers.LedgerEntryMethod{}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newLedgerEntryTestServices(mock),
+			}
+
+			result, rpcErr := handleLedgerEntry(t, method, ctx, tc.params)
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+
+			resultJSON, err := json.Marshal(result)
+			require.NoError(t, err)
+			var roundTrip map[string]any
+			require.NoError(t, json.Unmarshal(resultJSON, &roundTrip))
+			assert.Equal(t, tc.wantIndex, roundTrip["index"])
+			assert.Equal(t, tc.wantIndex, strings.ToUpper(hex.EncodeToString(mock.lastRequestedKey[:])))
+			node, ok := roundTrip["node"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "AMM", node["LedgerEntryType"])
+			assert.Equal(t, tc.wantIndex, node["index"])
+		})
+	}
 }
 
 // TestLedgerEntryAccountSelector covers rippled's canonical AccountRoot

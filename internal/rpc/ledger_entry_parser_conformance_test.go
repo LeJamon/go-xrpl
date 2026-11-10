@@ -81,6 +81,170 @@ func TestLedgerEntryRawSequenceSelectors(t *testing.T) {
 	}
 }
 
+func TestLedgerEntryNumericStringSequenceSelectors(t *testing.T) {
+	const (
+		account     = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		brokerHash  = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+		lockingDoor = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		issuingDoor = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	)
+	accountID := ledgerEntryTestAccountID(t, account)
+	lockingDoorID := ledgerEntryTestAccountID(t, lockingDoor)
+	issuingDoorID := ledgerEntryTestAccountID(t, issuingDoor)
+	var brokerID [32]byte
+	brokerBytes, err := hex.DecodeString(brokerHash)
+	require.NoError(t, err)
+	copy(brokerID[:], brokerBytes)
+	bridge := func() map[string]any {
+		return map[string]any{
+			"LockingChainDoor":  lockingDoor,
+			"LockingChainIssue": map[string]any{"currency": "XRP", "issuer": nil},
+			"IssuingChainDoor":  issuingDoor,
+			"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": issuingDoor},
+		}
+	}
+	bridgeKey := keylet.XChainBridge{
+		LockingDoor:     lockingDoorID,
+		LockingCurrency: [20]byte{},
+		LockingIssuer:   [20]byte{},
+		IssuingDoor:     issuingDoorID,
+		IssuingCurrency: keylet.CurrencyBytes("USD"),
+		IssuingIssuer:   issuingDoorID,
+	}
+
+	type sequenceSelector struct {
+		selector string
+		field    string
+		base     map[string]any
+		key      func(uint32) [32]byte
+		token    string
+	}
+	selectors := []sequenceSelector{
+		{
+			selector: "offer", field: "seq", token: "malformedRequest",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.Offer(accountID, value).Key },
+		},
+		{
+			selector: "escrow", field: "seq", token: "malformedSeq",
+			base: map[string]any{"owner": account},
+			key:  func(value uint32) [32]byte { return keylet.Escrow(accountID, value).Key },
+		},
+		{
+			selector: "oracle", field: "oracle_document_id", token: "malformedDocumentID",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.Oracle(accountID, value).Key },
+		},
+		{
+			selector: "permissioned_domain", field: "seq", token: "malformedRequest",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.PermissionedDomain(accountID, value).Key },
+		},
+		{
+			selector: "ticket", field: "ticket_seq", token: "malformedRequest",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.Ticket(accountID, value).Key },
+		},
+		{
+			selector: "vault", field: "seq", token: "malformedRequest",
+			base: map[string]any{"owner": account},
+			key:  func(value uint32) [32]byte { return keylet.Vault(accountID, value).Key },
+		},
+		{
+			selector: "loan", field: "loan_seq", token: "malformedSeq",
+			base: map[string]any{"loan_broker_id": brokerHash},
+			key:  func(value uint32) [32]byte { return keylet.Loan(brokerID, value).Key },
+		},
+		{
+			selector: "loan_broker", field: "seq", token: "malformedSeq",
+			base: map[string]any{"owner": account},
+			key:  func(value uint32) [32]byte { return keylet.LoanBroker(accountID, value).Key },
+		},
+		{
+			selector: "xchain_owned_claim_id", field: "xchain_owned_claim_id", token: "malformedXChainOwnedClaimID",
+			base: bridge(),
+			key:  func(value uint32) [32]byte { return keylet.XChainClaimID(bridgeKey, uint64(value)).Key },
+		},
+		{
+			selector: "xchain_owned_create_account_claim_id", field: "xchain_owned_create_account_claim_id", token: "malformedXChainOwnedCreateAccountClaimID",
+			base: bridge(),
+			key: func(value uint32) [32]byte {
+				return keylet.XChainCreateAccountClaimID(bridgeKey, uint64(value)).Key
+			},
+		},
+	}
+
+	accepted := []struct {
+		name  string
+		value string
+		seq   uint32
+	}{
+		{name: "plus zero", value: "+0", seq: 0},
+		{name: "plus one", value: "+1", seq: 1},
+		{name: "plus leading zeros", value: "+0001", seq: 1},
+		{name: "plus maximum uint32", value: "+4294967295", seq: 4294967295},
+	}
+	invalid := []struct {
+		name  string
+		value string
+	}{
+		{name: "negative", value: "-1"},
+		{name: "negative zero", value: "-0"},
+		{name: "leading whitespace", value: " 1"},
+		{name: "trailing whitespace", value: "1 "},
+		{name: "lone plus", value: "+"},
+		{name: "double plus", value: "++1"},
+		{name: "plus negative", value: "+-1"},
+		{name: "plus whitespace", value: "+ 1"},
+		{name: "uint32 overflow", value: "4294967296"},
+		{name: "plus uint32 overflow", value: "+4294967296"},
+	}
+
+	request := func(base map[string]any, field, value string) map[string]any {
+		result := make(map[string]any, len(base)+1)
+		for key, item := range base {
+			result[key] = item
+		}
+		result[field] = value
+		return result
+	}
+	for _, tc := range selectors {
+		t.Run(tc.selector, func(t *testing.T) {
+			for _, value := range accepted {
+				t.Run(value.name, func(t *testing.T) {
+					mock := newMockLedgerEntryService()
+					method, ctx := ledgerEntryParserContext(mock)
+					result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+						tc.selector: request(tc.base, tc.field, value.value),
+					})
+					require.Nil(t, rpcErr)
+					require.NotNil(t, result)
+					assert.Equal(t, tc.key(value.seq), mock.lastRequestedKey)
+				})
+			}
+			invalidValues := invalid
+			if tc.selector != "escrow" {
+				invalidValues = invalid[:1]
+			}
+			for _, value := range invalidValues {
+				t.Run("reject "+value.name, func(t *testing.T) {
+					mock := newMockLedgerEntryService()
+					method, ctx := ledgerEntryParserContext(mock)
+					result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+						tc.selector: request(tc.base, tc.field, value.value),
+					})
+					require.Nil(t, result)
+					require.NotNil(t, rpcErr)
+					assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+					assert.Equal(t, tc.token, rpcErr.ErrorString)
+					assert.Equal(t, "Invalid field '"+tc.field+"', not number.", rpcErr.Message)
+					assert.Equal(t, [32]byte{}, mock.lastRequestedKey)
+				})
+			}
+		})
+	}
+}
+
 func TestLedgerEntryRippleStateSelectorParsing(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	method, ctx := ledgerEntryParserContext(mock)
