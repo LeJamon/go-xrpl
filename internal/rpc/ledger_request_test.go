@@ -65,7 +65,7 @@ func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, strings.ToUpper(hex.EncodeToString(hash[:])), ledger["ledger_hash"])
 	assert.Equal(t, "5", ledger["ledger_index"])
-	assert.Equal(t, "2024-Aug-03 11:33:50 UTC", ledger["close_time_human"])
+	assert.Equal(t, "2024-Aug-03 11:33:50.000000000 UTC", ledger["close_time_human"])
 	assert.Equal(t, "2024-08-03T11:33:50Z", ledger["close_time_iso"])
 }
 
