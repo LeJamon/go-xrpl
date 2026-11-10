@@ -292,6 +292,9 @@ func TestLoanSetHoldingReserve(t *testing.T) {
 		t.Run(tc.kind, func(t *testing.T) {
 			f := newLoanSetAssetFixture(t, tc.kind)
 			f.createHolding(f.owner)
+			if tc.kind == "MPT" {
+				f.env.Trust(f.borrower, tx.NewIssuedAmountFromFloat64(1, "EUR", f.issuer.Address))
+			}
 			before := f.env.OwnerCount(f.borrower)
 			target := f.env.ReserveBase() + uint64(before+1)*f.env.ReserveIncrement()
 			balance := f.env.Balance(f.borrower)
@@ -305,7 +308,7 @@ func TestLoanSetHoldingReserve(t *testing.T) {
 				t.Fatal("failed LoanSet committed holding or Loan")
 			}
 
-			f.env.Pay(f.borrower, f.env.ReserveIncrement()+20)
+			f.env.Pay(f.borrower, f.env.ReserveIncrement()+40)
 			jtx.RequireTxSuccess(t, submitLoanSet(t, f, f.borrower, f.owner, false))
 			if got := f.env.OwnerCount(f.borrower); got != before+2 {
 				t.Fatalf("borrower OwnerCount after top-up = %d, want %d", got, before+2)
