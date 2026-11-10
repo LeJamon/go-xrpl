@@ -17,7 +17,7 @@ type TxHistoryMethod struct{ baseHandler }
 
 func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
-		Start uint32 `json:"start,omitempty"`
+		Start *uint32 `json:"start"`
 	}
 
 	// notEnabled takes precedence over any parameter validation, matching
@@ -30,8 +30,16 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
+	// rippled TxHistory.cpp:26-32: start is required, and only unlimited
+	// roles may page past the first 10000 transactions.
+	if request.Start == nil {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	if *request.Start > 10000 && !ctx.Role.IsUnlimited() {
+		return nil, rpcerrors.RpcErrorNoPermission("tx_history")
+	}
 
-	result, err := ctx.Services.Ledger().GetTransactionHistory(ctx.Context, request.Start)
+	result, err := ctx.Services.Ledger().GetTransactionHistory(ctx.Context, *request.Start)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, rpcerrors.RpcErrorNotEnabled("")
@@ -50,6 +58,9 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 
 		decoded["hash"] = hashStr
+		// Transaction::getJson adds inLedger before API v2; tx_history is
+		// v1 only.
+		decoded["inLedger"] = tx.LedgerIndex
 		decoded["ledger_index"] = tx.LedgerIndex
 
 		// Inject DeliverMax for Payment transactions
@@ -65,6 +76,11 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	response := map[string]any{
 		"index": result.Index,
 		"txs":   txs,
+	}
+	if len(txs) == 0 {
+		// rippled takes a reference to obj[txs] and appends nothing, so an
+		// empty page serializes txs as null.
+		response["txs"] = nil
 	}
 
 	return response, nil
