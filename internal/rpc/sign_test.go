@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -176,8 +177,9 @@ func TestWalletPropose_InvalidKeyType(t *testing.T) {
 	params := json.RawMessage(`{"key_type": "invalid"}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, rpcerrors.RpcBAD_KEY_TYPE, err.Code)
-	assert.Equal(t, "badKeyType", err.ErrorString)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
+	assert.Equal(t, "Invalid parameters.", err.Message)
 }
 
 func TestWalletPropose_InvalidSeed(t *testing.T) {
@@ -258,6 +260,142 @@ func TestWalletPropose_Metadata(t *testing.T) {
 		assert.Contains(t, versions, types.ApiVersion2)
 		assert.Contains(t, versions, types.ApiVersion3)
 	})
+}
+
+func TestWalletPropose_SeedResolution(t *testing.T) {
+	const (
+		aliceAccount = "rpUVSDF5SLDWfw67yPEx16eU7p7UHmDSCp"
+		aliceSeed    = "shEonzD7pxzzjWbWBWD9jRfk1QJYu"
+		aliceEdSeed  = "sEdTi8ntuTcRaJnYLjaCV4CAeURcHVD"
+		aliceEdAcct  = "rwSSkb6d767oywc87bYSeHhpzmUhwQRRdm"
+		lowEntropy   = "This wallet was generated using a user-supplied passphrase that has low entropy and is vulnerable to brute-force attacks."
+		highEntropy  = "This wallet was generated using a user-supplied passphrase. It may be vulnerable to brute-force attacks."
+	)
+
+	tests := []struct {
+		name       string
+		params     string
+		account    string
+		keyType    string
+		masterSeed string
+		warning    string
+	}{
+		{name: "passphrase holding a base58 seed", params: `{"passphrase":"` + aliceSeed + `"}`, account: aliceAccount, keyType: "secp256k1", masterSeed: aliceSeed},
+		{name: "passphrase holding a hex seed", params: `{"passphrase":"00000000000000000000000000000000"}`, account: "rGCkuB7PBr5tNy68tPEABEtcdno4hE6Y7f", keyType: "secp256k1", masterSeed: "sp6JS7f14BuwFY8Mw6bTtLKWauoUs"},
+		{name: "passphrase holding RFC 1751 words", params: `{"passphrase":"MAD BODY ACE MINT OKAY HUB WHAT DATA SACK FLAT DANA MATH"}`, account: "rhcfR9Cg98qCxHpCcPBmMonbDBXo84wyTn", keyType: "secp256k1", masterSeed: "shHM53KPZ87Gwdqarm1bAmPeXg8Tn"},
+		{name: "seed in xrpl.js Ed25519 encoding", params: `{"seed":"` + aliceEdSeed + `"}`, account: aliceEdAcct, keyType: "ed25519", masterSeed: aliceSeed},
+		{name: "passphrase in xrpl.js Ed25519 encoding", params: `{"passphrase":"` + aliceEdSeed + `"}`, account: aliceEdAcct, keyType: "ed25519", masterSeed: aliceSeed},
+		{name: "Ed25519 seed takes precedence over seed_hex", params: `{"seed":"` + aliceEdSeed + `","seed_hex":"zz"}`, account: aliceEdAcct, keyType: "ed25519", masterSeed: aliceSeed},
+		{name: "Ed25519 wallet reports a family seed", params: `{"key_type":"ed25519","passphrase":"masterpassphrase"}`, account: "rGWrZyQqhTp9Xu7G5Pkayo7bXjH4k4QYpf", keyType: "ed25519", masterSeed: "snoPBrXtMeMyMHUVTgbuqAfg1SUTb", warning: lowEntropy},
+		{name: "entropy counts bytes", params: `{"passphrase":"日本語のパスフレーズ"}`, account: "rBVC5wLP2gzskAkRDJNHAmd8ZfPijedpD8", keyType: "secp256k1", masterSeed: "ssbxRUF8kALUVyQ6XAUnpNBXomEeR", warning: highEntropy},
+	}
+
+	handler := &handlers.WalletProposeMethod{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, json.RawMessage(tc.params))
+			require.Nil(t, rpcErr)
+			resultMap := result.(map[string]any)
+			assert.Equal(t, tc.account, resultMap["account_id"])
+			assert.Equal(t, tc.keyType, resultMap["key_type"])
+			assert.Equal(t, tc.masterSeed, resultMap["master_seed"])
+			if tc.warning == "" {
+				assert.NotContains(t, resultMap, "warning")
+			} else {
+				assert.Equal(t, tc.warning, resultMap["warning"])
+			}
+		})
+	}
+}
+
+func TestWalletPropose_PassphraseWhitespace(t *testing.T) {
+	const phrase = "MAD BODY ACE MINT OKAY HUB WHAT DATA SACK FLAT DANA MATH"
+	tests := []struct {
+		name       string
+		passphrase string
+		seedHex    string
+		account    string
+	}{
+		{
+			name:       "ASCII whitespace",
+			passphrase: "\t\n" + strings.ReplaceAll(phrase, " ", " \t\r\n\v\f") + "\r\n",
+			seedHex:    "71ED064155FFADFA38782C5E0158CB26",
+			account:    "rhcfR9Cg98qCxHpCcPBmMonbDBXo84wyTn",
+		},
+		{
+			name:       "nonbreaking separators",
+			passphrase: strings.ReplaceAll(phrase, " ", "\u00a0"),
+			seedHex:    "F12FE7EC3CBC28E029080A892823DAC4",
+			account:    "rG5oq9gDT9HJj5fZXpZ2UXPRLTbvqEqSQ4",
+		},
+		{
+			name:       "nonbreaking prefix",
+			passphrase: "\u00a0" + phrase,
+			seedHex:    "B8158A3517D9ADC3480D543489419BF9",
+			account:    "rhfBmNS8zZaZzso422chkZsSFaLdW6fktL",
+		},
+		{
+			name:       "nonbreaking suffix",
+			passphrase: phrase + "\u00a0",
+			seedHex:    "DD33F1F6A003A1FB12D4C9E6D0707049",
+			account:    "rhp1oe8VS7MfJgRAYDAS3kcCE9RoAnkira",
+		},
+		{
+			name:       "em space separators",
+			passphrase: strings.ReplaceAll(phrase, " ", "\u2003"),
+			seedHex:    "D9C806380C2F3A6AB011C2B096775321",
+			account:    "r9K3izv4ojKRxfgbdwp7apE1jyRK5oD5qv",
+		},
+	}
+
+	handler := &handlers.WalletProposeMethod{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]string{"passphrase": tc.passphrase})
+			require.NoError(t, err)
+			result, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, params)
+			require.Nil(t, rpcErr)
+			resultMap := result.(map[string]any)
+			assert.Equal(t, tc.seedHex, resultMap["master_seed_hex"])
+			assert.Equal(t, tc.account, resultMap["account_id"])
+			assert.Equal(t, "secp256k1", resultMap["key_type"])
+			assert.Equal(t, "This wallet was generated using a user-supplied passphrase. It may be vulnerable to brute-force attacks.", resultMap["warning"])
+		})
+	}
+}
+
+func TestWalletPropose_SeedErrors(t *testing.T) {
+	const exactlyOne = "Exactly one of the following must be specified: passphrase, seed or seed_hex"
+
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		message string
+	}{
+		{name: "empty passphrase", params: `{"passphrase":""}`, code: rpcerrors.RpcBAD_SEED, message: "Disallowed seed."},
+		{name: "empty seed", params: `{"seed":""}`, code: rpcerrors.RpcBAD_SEED, message: "Disallowed seed."},
+		{name: "empty seed_hex", params: `{"seed_hex":""}`, code: rpcerrors.RpcBAD_SEED, message: "Disallowed seed."},
+		{name: "passphrase holding an account", params: `{"passphrase":"rpUVSDF5SLDWfw67yPEx16eU7p7UHmDSCp"}`, code: rpcerrors.RpcBAD_SEED, message: "Disallowed seed."},
+		{name: "Ed25519 seed with secp256k1 key type", params: `{"seed":"sEdTi8ntuTcRaJnYLjaCV4CAeURcHVD","key_type":"secp256k1"}`, code: rpcerrors.RpcBAD_SEED, message: "Disallowed seed."},
+		{name: "seed and passphrase", params: `{"seed":"shEonzD7pxzzjWbWBWD9jRfk1QJYu","passphrase":"x"}`, code: rpcerrors.RpcINVALID_PARAMS, message: exactlyOne},
+		{name: "passphrase checked before an Ed25519 seed", params: `{"passphrase":"x","seed":"sEdTi8ntuTcRaJnYLjaCV4CAeURcHVD"}`, code: rpcerrors.RpcINVALID_PARAMS, message: exactlyOne},
+		{name: "seed_hex and passphrase", params: `{"seed_hex":"00000000000000000000000000000000","passphrase":"x"}`, code: rpcerrors.RpcINVALID_PARAMS, message: exactlyOne},
+		{name: "non-string seed", params: `{"seed":5}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'seed', not string."},
+		{name: "non-string passphrase", params: `{"passphrase":5}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'passphrase', not string."},
+		{name: "non-string key type", params: `{"key_type":5}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'key_type', not string."},
+		{name: "key type is case sensitive", params: `{"key_type":"ED25519","passphrase":"x"}`, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+	}
+
+	handler := &handlers.WalletProposeMethod{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
 }
 
 // Sign Tests
