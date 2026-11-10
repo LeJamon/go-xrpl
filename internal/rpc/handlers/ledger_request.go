@@ -63,12 +63,9 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 type LedgerRequestMethod struct{ adminHandler }
 
 func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	var request struct {
-		LedgerHash  string          `json:"ledger_hash,omitempty"`
-		LedgerIndex json.RawMessage `json:"ledger_index,omitempty"`
-	}
+	probe := map[string]json.RawMessage{}
 	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
+		if err := json.Unmarshal(params, &probe); err != nil {
 			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters")
 		}
 	}
@@ -77,18 +74,24 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	hasHash := request.LedgerHash != ""
-	hasIndex := len(request.LedgerIndex) > 0
-	if (hasHash && hasIndex) || (!hasHash && !hasIndex) {
-		return nil, rpcerrors.RpcErrorInvalidParams("Exactly one of ledger_hash and ledger_index can be set.")
+	// rippled getOrAcquireLedger (RPCLedgerHelpers.cpp:396-440): presence is
+	// isMember, so an empty or null selector still counts as given.
+	rawHash, hasHash := probe["ledger_hash"]
+	rawIndex, hasIndex := probe["ledger_index"]
+	if hasHash == hasIndex {
+		return nil, rpcerrors.RpcErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
 	}
 	var targetHash [32]byte
 	var targetSeq uint32
 
 	if hasHash {
-		hb, err := hex.DecodeString(request.LedgerHash)
+		var hashString string
+		if err := json.Unmarshal(rawHash, &hashString); err != nil || !isJSONString(rawHash) {
+			return nil, rpcerrors.RpcErrorExpectedField("ledger_hash", "hex string")
+		}
+		hb, err := hex.DecodeString(hashString)
 		if err != nil || len(hb) != 32 {
-			return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'ledger_hash'.")
+			return nil, rpcerrors.RpcErrorExpectedField("ledger_hash", "hex string")
 		}
 		copy(targetHash[:], hb)
 
@@ -101,14 +104,14 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	} else {
 		var idx int64
-		if err := json.Unmarshal(request.LedgerIndex, &idx); err != nil {
-			return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'ledger_index'.")
+		if err := json.Unmarshal(rawIndex, &idx); err != nil || isJSONNull(rawIndex) {
+			return nil, rpcerrors.RpcErrorExpectedField("ledger_index", "number")
 		}
 
 		// A sequence request needs a validated ledger to bound it and to
 		// resolve the sequence to a hash (rippled's getValidatedLedger gate).
 		// rippled distinguishes API v1 (rpcNO_CURRENT) from later versions
-		// (rpcNOT_SYNCED) here — RPCHelpers.cpp:1060-1062.
+		// (rpcNOT_SYNCED) here.
 		validatedSeq := ctx.Services.Ledger().GetValidatedLedgerIndex()
 		if validatedSeq == 0 {
 			if ctx.ApiVersion == types.ApiVersion1 {
@@ -118,13 +121,13 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			return nil, rpcerrors.NewRpcError(rpcerrors.RpcNOT_SYNCED, "notSynced", "notSynced",
 				"Not synced to the network")
 		}
-		if idx <= 0 {
-			return nil, rpcerrors.RpcErrorInvalidParams("Ledger index too small")
-		}
-		// Bound before the uint32 cast so a value past uint32 range can't wrap
-		// to a small in-range sequence and silently target a different ledger.
-		if idx > math.MaxUint32 || uint32(idx) >= validatedSeq {
+		// rippled stores asInt() in a uint32 and checks "too large" first,
+		// so a negative index wraps and is reported as too large.
+		if idx < 0 || idx > math.MaxUint32 || uint32(idx) >= validatedSeq {
 			return nil, rpcerrors.RpcErrorInvalidParams("Ledger index too large")
+		}
+		if idx == 0 {
+			return nil, rpcerrors.RpcErrorInvalidParams("Ledger index too small")
 		}
 		targetSeq = uint32(idx)
 
