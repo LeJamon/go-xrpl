@@ -145,11 +145,11 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 
 // maintenanceLoop performs periodic maintenance tasks.
 func (o *Overlay) maintenanceLoop(ctx context.Context) error {
-	// idleSweepTicker drives the reduce-relay idle-peer sweep (G2).
-	// Cadence is Idled/2 (4s) so no relay peer stays referenced more
-	// than ~1.5x the idle threshold before being evicted. Without
-	// this sweep, r.slots only shrinks on explicit RemovePeer and
-	// accumulates stale entries for validators we no longer see.
+	// idleSweepTicker drives the reduce-relay idle sweep. Cadence is
+	// Idled/2 (4s) so an idle peer is reset within ~1.5x the idle
+	// threshold. The sweep also drops slots whose last selection has
+	// aged out, so r.slots does not accumulate entries for validators
+	// we no longer see.
 	idleSweepTicker := time.NewTicker(Idled / 2)
 	defer idleSweepTicker.Stop()
 
