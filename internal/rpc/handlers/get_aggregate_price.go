@@ -551,7 +551,3 @@ func aggregatePriceMedian(prices []aggregatePricePoint) aggregatePriceAmount {
 	}
 	return prices[middle-1].price.add(prices[middle].price).divide(newAggregatePriceAmount(2, 0))
 }
-
-func (m *GetAggregatePriceMethod) RequiredCondition() types.Condition {
-	return types.NeedsCurrentLedger
-}
