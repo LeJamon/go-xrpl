@@ -494,3 +494,25 @@ func TestSubmitMultisignedSignatureTargetPresence(t *testing.T) {
 		})
 	}
 }
+
+// rippled answers a non-object tx_json with objectFieldError(tx_json):
+// "Invalid field 'tx_json', not object." (TransactionSign.cpp:358 for
+// submit_multisigned, :1202 for sign_for). A null tx_json counts too.
+func TestMultisignNonObjectTxJSON(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Role: types.RoleAdmin, Services: newSubmitTestServices(mock)}
+	for _, txJSON := range []string{`"x"`, `null`, `5`, `[]`} {
+		t.Run("submit_multisigned "+txJSON, func(t *testing.T) {
+			_, rpcErr := (&handlers.SubmitMultisignedMethod{}).Handle(ctx, json.RawMessage(`{"tx_json":`+txJSON+`}`))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "Invalid field 'tx_json', not object.", rpcErr.Message)
+		})
+		t.Run("sign_for "+txJSON, func(t *testing.T) {
+			_, rpcErr := (&handlers.SignForMethod{}).Handle(ctx, json.RawMessage(`{"account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","secret":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","tx_json":`+txJSON+`}`))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "Invalid field 'tx_json', not object.", rpcErr.Message)
+		})
+	}
+}
