@@ -185,7 +185,18 @@ func (a *AMMClawback) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) te
 // For non-clawed asset2: AMM pool decreases, holder gains.
 //
 // Reference: rippled AMMClawback.cpp preclaim + applyGuts
-func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
+func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	proportionalWithdrawal := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if proportionalWithdrawal && isAMMAmountOverflowPanic(recovered) {
+				result = ter.TecINTERNAL
+				return
+			}
+			panic(recovered)
+		}
+	}()
+
 	ctx.Log.Trace("amm clawback apply",
 		"account", a.Account,
 		"holder", a.Holder,
@@ -254,6 +265,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	var withdrawAmount1, withdrawAmount2 tx.Amount
 
 	if a.Amount == nil {
+		proportionalWithdrawal = true
 		// No amount specified - withdraw all LP tokens the holder has.
 		// Reference: rippled calls equalWithdrawTokens with WithdrawAll::Yes
 		lpTokensToWithdraw = holdLPTokens
@@ -286,6 +298,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		if (ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isGreaterOrEqual(lpTokensNeeded, holdLPTokens)) ||
 			(!ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isGreater(lpTokensNeeded, holdLPTokens)) {
+			proportionalWithdrawal = true
 			// Holder doesn't have enough LP tokens — clawback all they have.
 			lpTokensToWithdraw = holdLPTokens
 			if math.fromAmount(holdLPTokens).Equal(math.fromAmount(lptAMMBalance)) {
@@ -447,6 +460,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	proportionalWithdrawal = false
+
 	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
 	if err != nil {
 		return ter.TefINTERNAL
