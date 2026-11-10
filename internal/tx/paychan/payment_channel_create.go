@@ -128,12 +128,12 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	amount := uint64(p.Amount.Drops())
 	priorBalance := ctx.PriorBalance()
-	checkFunding := func() ter.Result {
-		if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+	checkFunding := func(account *state.AccountRoot, priorBalance uint64) ter.Result {
+		if result := ctx.CheckReserveFor(ctx.AccountID, account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 			ctx.Log.Warn("payment channel create: insufficient reserve", "balance", priorBalance)
 			return result
 		}
-		usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
+		usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, account)
 		if result != ter.TesSUCCESS {
 			return result
 		}
@@ -141,7 +141,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if usesSponsor {
 			ownerDelta = 0
 		}
-		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, ownerDelta, 0)
+		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, account, ownerDelta, 0)
 		if !ok {
 			return ter.TefINTERNAL
 		}
@@ -178,7 +178,11 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	sponsorEnabled := ctx.Rules().Enabled(amendment.FeatureSponsor)
 	if !sponsorEnabled {
-		if result := checkFunding(); result != ter.TesSUCCESS {
+		account, result := ctx.PreclaimAccount()
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if result := checkFunding(account, account.Balance); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -197,7 +201,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 	if sponsorEnabled {
-		if result := checkFunding(); result != ter.TesSUCCESS {
+		if result := checkFunding(ctx.Account, priorBalance); result != ter.TesSUCCESS {
 			return result
 		}
 	}
