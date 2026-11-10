@@ -12,6 +12,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
@@ -21,74 +22,47 @@ import (
 // touching ledger state.
 type ChannelVerifyMethod struct{ baseHandler }
 
-// channelVerifyRequest represents the request parameters
-type channelVerifyRequest struct {
-	PublicKey string `json:"public_key"`
-	ChannelID string `json:"channel_id"`
-	Amount    string `json:"amount"`
-	Signature string `json:"signature"`
-}
-
 func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	var request channelVerifyRequest
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
+	var fields map[string]json.RawMessage
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
 			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(params, &fields)
 
-	// Validate required fields
-	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
-	if _, ok := fields["public_key"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("public_key")
-	}
-	if _, ok := fields["channel_id"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("channel_id")
-	}
-	if _, ok := fields["amount"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("amount")
-	}
-	if _, ok := fields["signature"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("signature")
+	for _, name := range []string{"public_key", "channel_id", "amount", "signature"} {
+		if _, ok := fields[name]; !ok {
+			return nil, rpcerrors.RpcErrorMissingField(name)
+		}
 	}
 
-	// Parse public key - can be base58 (AccountPublic) or hex
-	// rippled:
-	// pk = parseBase58<PublicKey>(TokenType::AccountPublic, strPk);
-	// if (!pk) { pkHex = strUnHex(strPk); if (!pkHex) return rpcError(rpcPUBLIC_MALFORMED); ... }
-	pubKeyHex, err := parsePublicKey(request.PublicKey)
+	publicKey, rpcErr := jsonCppStringValue(fields["public_key"])
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	pubKeyHex, err := parsePublicKey(publicKey)
 	if err != nil {
 		return nil, rpcerrors.RpcErrorPublicMalformed()
 	}
 
-	// Validate channel_id - must be valid 256-bit hex (64 characters)
-	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
-	channelIDHex := strings.ToUpper(request.ChannelID)
-	if len(channelIDHex) != 64 {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
+	channelIDHex, rpcErr := parseChannelID(fields["channel_id"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
-	}
-
-	// Validate amount - must be a string that parses to uint64
-	// rippled: std::optional<std::uint64_t> const optDrops = params[jss::amount].isString() ? to_uint64(params[jss::amount].asString()) : std::nullopt;
-	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
-	drops, err := strconv.ParseUint(request.Amount, 10, 64)
-	if err != nil {
+	drops, ok := parseChannelDrops(fields["amount"])
+	if !ok {
 		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
 	}
 
-	// Validate signature - must be valid hex and non-empty
-	// rippled: auto sig = strUnHex(params[jss::signature].asString()); if (!sig || !sig->size()) return rpcError(rpcINVALID_PARAMS);
-	sigHex := strings.ToUpper(request.Signature)
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil || len(sigBytes) == 0 {
-		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	signature, rpcErr := jsonCppStringValue(fields["signature"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
+	sigBytes, err := decodeChannelHex(signature)
+	if err != nil || len(sigBytes) == 0 {
+		return nil, rpcerrors.RpcErrorInvalidParams("")
+	}
+	sigHex := strings.ToUpper(hex.EncodeToString(sigBytes))
 
 	// Serialize the payment channel claim message
 	// Message format: HashPrefix('CLM\0') + channel_id (32 bytes) + amount (8 bytes)
@@ -128,24 +102,23 @@ func parsePublicKey(pubKey string) (pubKeyHex string, err error) {
 		}
 	}()
 
-	// Try to decode as hex first (this is the more common case and safer)
-	pubKeyBytes, hexErr := hex.DecodeString(pubKey)
-	if hexErr == nil && len(pubKeyBytes) == 33 {
-		// Validate public key type
-		// SECP256K1 compressed: 33 bytes, starts with 02 or 03
-		// ED25519: 33 bytes, starts with ED
-		if pubKeyBytes[0] == 0x02 || pubKeyBytes[0] == 0x03 || pubKeyBytes[0] == 0xED {
-			return strings.ToUpper(pubKey), nil
-		}
-	}
-
-	// Try to decode as base58 AccountPublic
 	pubKeyBytes, decodeErr := addresscodec.DecodeAccountPublicKey(pubKey)
-	if decodeErr == nil && len(pubKeyBytes) == 33 {
+	if decodeErr == nil && crypto.PublicKeyType(pubKeyBytes) != crypto.KeyTypeUnknown {
+		return strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
+	}
+	pubKeyBytes, hexErr := decodeChannelHex(pubKey)
+	if hexErr == nil && crypto.PublicKeyType(pubKeyBytes) != crypto.KeyTypeUnknown {
 		return strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
 	}
 
 	return "", fmt.Errorf("invalid public key")
+}
+
+func decodeChannelHex(value string) ([]byte, error) {
+	if len(value)%2 == 1 {
+		value = "0" + value
+	}
+	return hex.DecodeString(value)
 }
 
 // verifySignature verifies a signature against a message using the public key

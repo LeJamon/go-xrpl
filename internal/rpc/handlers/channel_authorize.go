@@ -19,61 +19,40 @@ import (
 // This creates a signature that can be used to redeem a specific amount from a payment channel.
 type ChannelAuthorizeMethod struct{ baseHandler }
 
-// channelAuthorizeRequest represents the request parameters
-type channelAuthorizeRequest struct {
-	signCredentials
-
-	// Required fields
-	ChannelID string `json:"channel_id"`
-	Amount    string `json:"amount"`
-}
-
 func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	var request channelAuthorizeRequest
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
+	var fields map[string]json.RawMessage
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
 			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
-	var fields map[string]json.RawMessage
-	_ = json.Unmarshal(params, &fields)
 
-	// Validate required fields: channel_id and amount
-	// rippled: for (auto const& p : {jss::channel_id, jss::amount}) if (!params.isMember(p)) return RPC::missing_field_error(p);
-	if _, ok := fields["channel_id"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("channel_id")
+	for _, name := range []string{"channel_id", "amount"} {
+		if _, ok := fields[name]; !ok {
+			return nil, rpcerrors.RpcErrorMissingField(name)
+		}
 	}
-	if _, ok := fields["amount"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("amount")
+	_, hasKeyType := fields["key_type"]
+	_, hasSecret := fields["secret"]
+	if !hasKeyType && !hasSecret {
+		return nil, rpcerrors.RpcErrorMissingField("secret")
 	}
 
-	// Parse credentials and derive keypair
-	// rippled: if (!params.isMember(jss::key_type) && !params.isMember(jss::secret)) return RPC::missing_field_error(jss::secret);
-	privateKeyHex, _, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	privateKeyHex, _, keyType, rpcErr := parseCredentialsAndDeriveKeypair(ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	// Validate channel_id - must be valid 256-bit hex (64 characters)
-	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
-	channelIDHex := strings.ToUpper(request.ChannelID)
-	if len(channelIDHex) != 64 {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
+	channelIDHex, rpcErr := parseChannelID(fields["channel_id"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, rpcerrors.RpcErrorChannelMalformed()
-	}
-
-	// Validate amount - must be a string that parses to uint64
-	// rippled: std::optional<std::uint64_t> const optDrops = params[jss::amount].isString() ? to_uint64(params[jss::amount].asString()) : std::nullopt;
-	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
-	drops, err := strconv.ParseUint(request.Amount, 10, 64)
-	if err != nil {
+	drops, ok := parseChannelDrops(fields["amount"])
+	if !ok {
 		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
 	}
 
@@ -128,4 +107,34 @@ func signMessage(message []byte, privateKeyHex string, keyType string) (string, 
 
 func (m *ChannelAuthorizeMethod) RequiredRole() types.Role {
 	return types.RoleUser
+}
+
+func parseChannelID(raw json.RawMessage) (string, *rpcerrors.RpcError) {
+	value, rpcErr := jsonCppStringValue(raw)
+	if rpcErr != nil {
+		return "", rpcErr
+	}
+	if value == "0" {
+		return strings.Repeat("0", 64), nil
+	}
+	channelID := strings.ToUpper(value)
+	if len(channelID) != 64 {
+		return "", rpcerrors.RpcErrorChannelMalformed()
+	}
+	if _, err := hex.DecodeString(channelID); err != nil {
+		return "", rpcerrors.RpcErrorChannelMalformed()
+	}
+	return channelID, nil
+}
+
+// parseChannelDrops requires a JSON string holding an unsigned 64-bit drop
+// count, optionally prefixed with a single '+'.
+func parseChannelDrops(raw json.RawMessage) (uint64, bool) {
+	value, ok := rawString(raw)
+	if !ok {
+		return 0, false
+	}
+	value, _, _ = strings.Cut(value, "\x00")
+	drops, err := strconv.ParseUint(strings.TrimPrefix(value, "+"), 10, 64)
+	return drops, err == nil
 }

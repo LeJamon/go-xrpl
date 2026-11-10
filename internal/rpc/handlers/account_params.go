@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -107,5 +109,40 @@ func jsonCppStringRaw(raw json.RawMessage) (string, bool) {
 		return value.String(), true
 	default:
 		return "", false
+	}
+}
+
+func jsonCppStringValue(raw json.RawMessage) (string, *rpcerrors.RpcError) {
+	value, err := decodeRawJSONValue(raw)
+	if err != nil {
+		return "", rpcerrors.RpcErrorInvalidParams("")
+	}
+	switch value := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		value, _, _ = strings.Cut(value, "\x00")
+		return value, nil
+	case bool:
+		return strconv.FormatBool(value), nil
+	case json.Number:
+		if strings.ContainsAny(value.String(), ".eE") {
+			number, err := value.Float64()
+			if err != nil {
+				return "", rpcerrors.RpcErrorInvalidParams("")
+			}
+			return strconv.FormatFloat(number, 'f', 6, 64), nil
+		}
+		if strings.HasPrefix(value.String(), "-") {
+			number, err := strconv.ParseInt(value.String(), 10, 32)
+			if err == nil {
+				return strconv.FormatInt(number, 10), nil
+			}
+		} else if number, err := strconv.ParseUint(value.String(), 10, 32); err == nil {
+			return strconv.FormatUint(number, 10), nil
+		}
+		return "", rpcerrors.RpcErrorInvalidParams("")
+	default:
+		return "", rpcerrors.RpcErrorInternal()
 	}
 }
