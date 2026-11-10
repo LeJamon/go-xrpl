@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -168,7 +169,8 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			if err := json.Unmarshal(rawCurrency, &currency); err != nil || !keylet.IsValidCurrencyCode(currency) {
 				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
-			if currency == "" {
+			// rippled toCurrency also parses the 40-hex all-zero code as XRP.
+			if currency == "" || (len(currency) == 40 && strings.Trim(currency, "0") == "") {
 				currency = "XRP"
 			}
 			var issuer [20]byte

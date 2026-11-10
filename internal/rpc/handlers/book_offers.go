@@ -217,6 +217,11 @@ func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Am
 			return types.Amount{}, [20]byte{}, rpcerrors.RpcErrorDstAmtMalformed(
 				"Invalid field 'taker_gets.currency', bad currency.")
 		}
+		// rippled toCurrency parses the 40-hex all-zero code as xrpCurrency,
+		// so it takes the XRP issuer checks and book like "XRP".
+		if isZeroHexCurrency(currency) {
+			currency = "XRP"
+		}
 		return types.Amount{Currency: currency}, [20]byte{}, nil
 	}
 
@@ -304,13 +309,19 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 	return issuerStr, issuerID, nil
 }
 
-// canonCurrency folds the two valid XRP spellings ("" and "XRP") to a single
-// form for equality checks.
+// canonCurrency folds the XRP spellings ("", "XRP" and the all-zero hex code)
+// to a single form for equality checks.
 func canonCurrency(c string) string {
-	if c == "" {
+	if c == "" || isZeroHexCurrency(c) {
 		return "XRP"
 	}
 	return c
+}
+
+// isZeroHexCurrency reports whether c is the 40-hex all-zero currency code,
+// which rippled's toCurrency parses as xrpCurrency.
+func isZeroHexCurrency(c string) bool {
+	return len(c) == 40 && strings.Trim(c, "0") == ""
 }
 
 // canonIssuerString returns the issuer string to pass downstream. For XRP

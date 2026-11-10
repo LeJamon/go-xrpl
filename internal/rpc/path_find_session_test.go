@@ -181,3 +181,24 @@ func TestParseAndCreateSession_RequiredFieldErrors(t *testing.T) {
 		})
 	}
 }
+
+// The path_find session reads source currencies like ripple_path_find: the
+// 40-hex all-zero code is XRP and may not carry an issuer.
+func TestParseAndCreateSession_HexZeroSourceCurrencyIsXRP(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const zero = "0000000000000000000000000000000000000000"
+	base := `{"source_account":"` + acct + `","destination_account":"` + acct + `","destination_amount":"1000",`
+
+	session, rpcErr := ParseAndCreateSession(json.RawMessage(base+`"source_currencies":[{"currency":"`+zero+`"}]}`), nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	if len(session.srcCurrencies) != 1 || session.srcCurrencies[0].Currency != "XRP" || session.srcCurrencies[0].Issuer != ([20]byte{}) {
+		t.Fatalf("source currencies = %+v, want XRP", session.srcCurrencies)
+	}
+
+	_, rpcErr = ParseAndCreateSession(json.RawMessage(base+`"source_currencies":[{"currency":"`+zero+`","issuer":"`+acct+`"}]}`), nil)
+	if rpcErr == nil || rpcErr.ErrorString != "srcCurMalformed" || rpcErr.Code != rpcerrors.RpcSRC_CUR_MALFORMED {
+		t.Fatalf("error = %v, want srcCurMalformed", rpcErr)
+	}
+}
