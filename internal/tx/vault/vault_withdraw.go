@@ -286,7 +286,7 @@ func (v *VaultWithdraw) sharesToAssetAmount(
 		return tx.Amount{}, ter.TefINTERNAL
 	}
 	issuance, perr := state.ParseMPTokenIssuance(shareData)
-	if perr != nil || issuance.OutstandingAmount == 0 {
+	if perr != nil {
 		return tx.Amount{}, ter.TefINTERNAL
 	}
 	sharesN, aerr := amountToNumberForRules(v.Amount, rules)
