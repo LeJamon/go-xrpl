@@ -207,8 +207,9 @@ func KeyToEnglish(key []byte) (string, error) {
 // EnglishToKey converts 12 English words to a 16-byte (128-bit) key.
 // Returns the key in big-endian format.
 func EnglishToKey(english string) ([]byte, error) {
-	trimmed := strings.TrimSpace(english)
-	words := strings.Fields(trimmed)
+	words := strings.FieldsFunc(english, func(r rune) bool {
+		return r == ' ' || r >= '\t' && r <= '\r'
+	})
 
 	if len(words) != 12 {
 		return nil, fmt.Errorf("expected 12 words, got %d", len(words))

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -303,6 +304,62 @@ func TestWalletPropose_SeedResolution(t *testing.T) {
 			} else {
 				assert.Equal(t, tc.warning, resultMap["warning"])
 			}
+		})
+	}
+}
+
+func TestWalletPropose_PassphraseWhitespace(t *testing.T) {
+	const phrase = "MAD BODY ACE MINT OKAY HUB WHAT DATA SACK FLAT DANA MATH"
+	tests := []struct {
+		name       string
+		passphrase string
+		seedHex    string
+		account    string
+	}{
+		{
+			name:       "ASCII whitespace",
+			passphrase: "\t\n" + strings.ReplaceAll(phrase, " ", " \t\r\n\v\f") + "\r\n",
+			seedHex:    "71ED064155FFADFA38782C5E0158CB26",
+			account:    "rhcfR9Cg98qCxHpCcPBmMonbDBXo84wyTn",
+		},
+		{
+			name:       "nonbreaking separators",
+			passphrase: strings.ReplaceAll(phrase, " ", "\u00a0"),
+			seedHex:    "F12FE7EC3CBC28E029080A892823DAC4",
+			account:    "rG5oq9gDT9HJj5fZXpZ2UXPRLTbvqEqSQ4",
+		},
+		{
+			name:       "nonbreaking prefix",
+			passphrase: "\u00a0" + phrase,
+			seedHex:    "B8158A3517D9ADC3480D543489419BF9",
+			account:    "rhfBmNS8zZaZzso422chkZsSFaLdW6fktL",
+		},
+		{
+			name:       "nonbreaking suffix",
+			passphrase: phrase + "\u00a0",
+			seedHex:    "DD33F1F6A003A1FB12D4C9E6D0707049",
+			account:    "rhp1oe8VS7MfJgRAYDAS3kcCE9RoAnkira",
+		},
+		{
+			name:       "em space separators",
+			passphrase: strings.ReplaceAll(phrase, " ", "\u2003"),
+			seedHex:    "D9C806380C2F3A6AB011C2B096775321",
+			account:    "r9K3izv4ojKRxfgbdwp7apE1jyRK5oD5qv",
+		},
+	}
+
+	handler := &handlers.WalletProposeMethod{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]string{"passphrase": tc.passphrase})
+			require.NoError(t, err)
+			result, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, params)
+			require.Nil(t, rpcErr)
+			resultMap := result.(map[string]any)
+			assert.Equal(t, tc.seedHex, resultMap["master_seed_hex"])
+			assert.Equal(t, tc.account, resultMap["account_id"])
+			assert.Equal(t, "secp256k1", resultMap["key_type"])
+			assert.Equal(t, "This wallet was generated using a user-supplied passphrase. It may be vulnerable to brute-force attacks.", resultMap["warning"])
 		})
 	}
 }

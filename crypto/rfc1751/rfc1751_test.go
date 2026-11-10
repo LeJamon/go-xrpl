@@ -239,6 +239,31 @@ func TestEnglishToKeyParityError(t *testing.T) {
 	}
 }
 
+func TestEnglishToKeyWhitespace(t *testing.T) {
+	const phrase = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
+	want := mustHex(t, "CCAC2AED591056BE4F90FD441C534766")
+
+	for _, separator := range []string{" ", "\t", "\n", "\v", "\f", "\r"} {
+		input := separator + strings.ReplaceAll(phrase, " ", separator+separator) + separator
+		got, err := EnglishToKey(input)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("EnglishToKey(%q) = %X, %v; want %X, nil", input, got, err, want)
+		}
+	}
+
+	for _, space := range []string{"\u0085", "\u00a0", "\u2003", "\u202f", "\u3000"} {
+		for _, input := range []string{
+			strings.ReplaceAll(phrase, " ", space),
+			space + phrase,
+			phrase + space,
+		} {
+			if _, err := EnglishToKey(input); err == nil {
+				t.Errorf("EnglishToKey(%q): expected error, got nil", input)
+			}
+		}
+	}
+}
+
 func TestStandardNormalization(t *testing.T) {
 	const canonical = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
 	want, err := EnglishToKey(canonical)
