@@ -42,11 +42,18 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	rules := transactionRulesForContext(ctx)
 
 	// Parse the transaction JSON
-	var txMap map[string]any
+	var txValue any
 	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
 	decoder.UseNumber()
-	if err := decoder.Decode(&txMap); err != nil {
+	if err := decoder.Decode(&txValue); err != nil {
 		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+	}
+	// rippled checkMultiSignFields only builds a message string for a
+	// non-object tx_json, which containsError ignores, so the first error is
+	// checkTxJsonFields' objectFieldError(tx_json).
+	txMap, ok := txValue.(map[string]any)
+	if !ok {
+		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
 	}
 
 	// --- checkMultiSignFields (rippled TransactionSign.cpp:1032-1057) ---
