@@ -79,10 +79,6 @@ func (p *PaymentChannelFund) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(p)
 }
 
-func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeaturePayChan}
-}
-
 // GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
 // non-universal flag is rejected.
 // Reference: rippled PayChan.cpp PayChanFund::getFlagsMask.

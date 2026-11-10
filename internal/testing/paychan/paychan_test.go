@@ -1751,9 +1751,12 @@ func TestPayChan_UsingTickets(t *testing.T) {
 	require.Equal(t, bobSeq, env.Seq(bob))
 }
 
-// TestEnabled tests that PayChan operations are disabled without the PayChan amendment.
+// TestEnabled tests that payment channel transactions do not depend on the
+// PayChan amendment. rippled 3.4.1 retires it (XRPL_RETIRE_FEATURE), and its
+// PayChan transactors never check it, so even a test environment that turns
+// it off still runs them.
 func TestEnabled(t *testing.T) {
-	t.Run("Disabled", func(t *testing.T) {
+	t.Run("RetiredAmendmentDisabled", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
 		alice := jtx.NewAccount("alice")
@@ -1765,11 +1768,11 @@ func TestEnabled(t *testing.T) {
 		env.DisableFeature("PayChan")
 		env.Close()
 
-		submitExpect(t, env, ChannelCreate(alice, bob, xrp(1000), 100, alice.PublicKeyHex()).Build(), "temDISABLED")
+		submitExpect(t, env, ChannelCreate(alice, bob, xrp(1000), 100, alice.PublicKeyHex()).Build(), "tesSUCCESS")
 
-		fakeChannelID := "0000000000000000000000000000000000000000000000000000000000000000"
-		submitExpect(t, env, ChannelFund(alice, fakeChannelID, xrp(100)).Build(), "temDISABLED")
-		submitExpect(t, env, ChannelClaim(alice, fakeChannelID).Build(), "temDISABLED")
+		missingChannelID := "1111111111111111111111111111111111111111111111111111111111111111"
+		submitExpect(t, env, ChannelFund(alice, missingChannelID, xrp(100)).Build(), "tecNO_ENTRY")
+		submitExpect(t, env, ChannelClaim(alice, missingChannelID).Build(), "tecNO_TARGET")
 	})
 
 	t.Run("Enabled", func(t *testing.T) {
