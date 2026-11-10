@@ -148,3 +148,47 @@ func TestLedgerEntryAMMSelectorKeysMPTAssets(t *testing.T) {
 	require.Nil(t, rpcErr)
 	assert.Equal(t, "A191A066AAD80491DA1255D3C858A448D237FCB5FCE09834F59BA606974BF578", strings.ToUpper(hex.EncodeToString(key[:])))
 }
+
+func TestLedgerEntryAMMSelectorCurrencyZeroIsXRP(t *testing.T) {
+	const issuer = "rE8iJRdfDkzVrVdV5djo25UnS6ici3pYMs"
+
+	keyFor := func(currency string) [32]byte {
+		t.Helper()
+		raw := json.RawMessage(`{"asset":{"currency":"` + currency + `"},"asset2":{"currency":"USD","issuer":"` + issuer + `"}}`)
+		key, rpcErr := parseAMMKeylet(raw)
+		require.Nil(t, rpcErr)
+		return key
+	}
+
+	assert.Equal(t, keyFor("XRP"), keyFor("0"))
+}
+
+func TestLedgerEntryAMMSelectorMPTAssetOrdering(t *testing.T) {
+	const issuer = "rE8iJRdfDkzVrVdV5djo25UnS6ici3pYMs"
+	const mptID = "00000013A23DA217AF9DFA4C10EA150523D8CEA293BBF223"
+
+	parse := func(asset1, asset2 string) [32]byte {
+		t.Helper()
+		raw := json.RawMessage(`{"asset":` + asset1 + `,"asset2":` + asset2 + `}`)
+		key, rpcErr := parseAMMKeylet(raw)
+		require.Nil(t, rpcErr)
+		return key
+	}
+
+	issue := `{"currency":"USD","issuer":"` + issuer + `"}`
+	mpt := `{"mpt_issuance_id":"` + mptID + `"}`
+	wantMixed := "A191A066AAD80491DA1255D3C858A448D237FCB5FCE09834F59BA606974BF578"
+	formatKey := func(key [32]byte) string {
+		return strings.ToUpper(hex.EncodeToString(key[:]))
+	}
+	assert.Equal(t, wantMixed, formatKey(parse(mpt, issue)))
+	assert.Equal(t, wantMixed, formatKey(parse(issue, mpt)))
+
+	mpt1 := strings.Repeat("0", 47) + "1"
+	mpt2 := strings.Repeat("0", 47) + "2"
+	mptMPTWant := "1E079232DBA88CA61AD805438EA39A873EB1076CA717DE2899303DBB780C1D0E"
+	first := `{"mpt_issuance_id":"` + mpt1 + `"}`
+	second := `{"mpt_issuance_id":"` + mpt2 + `"}`
+	assert.Equal(t, mptMPTWant, formatKey(parse(first, second)))
+	assert.Equal(t, mptMPTWant, formatKey(parse(second, first)))
+}

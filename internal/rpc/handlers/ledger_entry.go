@@ -470,6 +470,9 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	computedIndex := strings.ToUpper(hex.EncodeToString(entryKey[:]))
 	response["index"] = computedIndex
+	if entryKey == ([32]byte{}) {
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
+	}
 
 	result, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
@@ -960,13 +963,16 @@ func fixedIndexShortcut(s string) ([32]byte, bool) {
 	return [32]byte{}, false
 }
 
-// tryParseHex256 attempts to parse raw JSON as a 64-char hex string.
+// tryParseHex256 attempts to parse raw JSON as a 64-char hex string or "0".
 // Returns the parsed key and true on success, or zero-value and false if the
 // raw value is not a string or not valid 32-byte hex (caller should try object form).
 func tryParseHex256(raw json.RawMessage) ([32]byte, bool) {
 	var hexStr string
 	if err := json.Unmarshal(raw, &hexStr); err != nil {
 		return [32]byte{}, false
+	}
+	if hexStr == "0" {
+		return [32]byte{}, true
 	}
 	decoded, err := hex.DecodeString(hexStr)
 	if err != nil || len(decoded) != 32 {
@@ -1152,14 +1158,8 @@ func parseAuthorizedCredentials(raw json.RawMessage) ([]keylet.CredentialPair, *
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		var credentialTypeText string
-		if err := json.Unmarshal(entry["credential_type"], &credentialTypeText); err != nil {
-			return nil, rpcerrors.RpcErrorMalformedField(
-				"malformedAuthorizedCredentials", "credential_type", "hex string",
-			)
-		}
-		credentialType, err := hex.DecodeString(credentialTypeText)
-		if err != nil || len(credentialType) == 0 || len(credentialType) > maxCredentialTypeLength {
+		credentialType, ok := parseHexBlobRaw(entry["credential_type"], maxCredentialTypeLength)
+		if !ok {
 			return nil, rpcerrors.RpcErrorMalformedField(
 				"malformedAuthorizedCredentials", "credential_type", "hex string",
 			)
@@ -1295,7 +1295,7 @@ func asJSONObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {
 }
 
 // parseSelectorHexID resolves a non-object selector as a 64-char hex object
-// index, mirroring rippled's parseObjectID: an unparseable value yields the
+// index or "0", mirroring rippled's parseObjectID: an unparseable value yields the
 // "malformedRequest" token with an expected-hex-string message.
 func parseSelectorHexID(raw json.RawMessage, field string) ([32]byte, *rpcerrors.RpcError) {
 	if key, ok := tryParseHex256(raw); ok {
@@ -1319,7 +1319,7 @@ func isJSONFieldAbsent(obj map[string]json.RawMessage, field string) bool {
 }
 
 // requiredHash256Field mirrors rippled requiredUInt256: a required 64-char hex
-// field. Absent → malformedRequest; present but unparseable → field token.
+// field or "0". Absent → malformedRequest; present but unparseable → field token.
 func requiredHash256Field(obj map[string]json.RawMessage, field, token string) ([32]byte, *rpcerrors.RpcError) {
 	if isJSONFieldAbsent(obj, field) {
 		return [32]byte{}, rpcerrors.RpcErrorMalformedRequestMissingField(field)
@@ -1402,11 +1402,17 @@ func parseMPTokenKeylet(raw json.RawMessage) ([32]byte, *rpcerrors.RpcError) {
 	return keylet.MPTokenByID(mptID, account).Key, nil
 }
 
-// parseHash192Raw accepts a JSON string holding exactly 48 hex characters.
+// parseHash192Raw accepts a JSON string holding 48 hex characters or "0".
 func parseHash192Raw(raw json.RawMessage) ([24]byte, bool) {
 	var id [24]byte
 	value, ok := rawString(raw)
-	if !ok || len(value) != 2*len(id) {
+	if !ok {
+		return id, false
+	}
+	if value == "0" {
+		return id, true
+	}
+	if len(value) != 2*len(id) {
 		return id, false
 	}
 	if _, err := hex.Decode(id[:], []byte(value)); err != nil {
@@ -1434,8 +1440,8 @@ func parseHexBlobRaw(raw json.RawMessage, maxLength int) ([]byte, bool) {
 	return blob, true
 }
 
-// parseJSONConvertibleUInt accepts the JSON values that convert to a uint32:
-// null, non-negative integers and integral non-negative reals in range.
+// parseJSONConvertibleUInt accepts null and non-negative uint32 values,
+// allowing a double-epsilon tolerance for real values before truncation.
 func parseJSONConvertibleUInt(raw json.RawMessage) (uint32, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if bytes.Equal(trimmed, []byte("null")) {
@@ -1452,7 +1458,7 @@ func parseJSONConvertibleUInt(raw json.RawMessage) (uint32, bool) {
 		return uint32(value), true
 	}
 	value, err := number.Float64()
-	if err != nil || value < 0 || value > math.MaxUint32 || value != math.Trunc(value) {
+	if err != nil || value < 0 || value > math.MaxUint32 || math.Abs(math.Round(value)-value) >= 0x1p-52 {
 		return 0, false
 	}
 	return uint32(value), true

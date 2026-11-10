@@ -3544,12 +3544,6 @@ func TestLedgerEntryLoanSelectors(t *testing.T) {
 // tokens and messages rippled returns for each selector.
 func TestLedgerEntrySelectorErrorTokens(t *testing.T) {
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion2,
-		Services:   newLedgerEntryTestServices(newMockLedgerEntryService()),
-	}
 	const (
 		account = `"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"`
 		mptID   = `"00000013A23DA217AF9DFA4C10EA150523D8CEA293BBF223"`
@@ -3565,12 +3559,15 @@ func TestLedgerEntrySelectorErrorTokens(t *testing.T) {
 		{"account_root malformed", `"account_root":"notanaccount"`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
 		{"account_root zero account", `"account_root":"rrrrrrrrrrrrrrrrrrrrrhoLvTp"`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
 		{"account_root number", `"account_root":1`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
+		{"account_root null", `"account_root":null`, "malformedAddress", "Invalid field 'account_root', not AccountID."},
 		{"did malformed", `"did":"zz"`, "malformedAddress", "Invalid field 'did', not AccountID."},
 		{"check object", `"check":{"index":` + hash + `}`, "malformedRequest", "Invalid field 'check', not hex string."},
+		{"check array", `"check":[]`, "malformedRequest", "Invalid field 'check', not hex string."},
 		{"payment_channel malformed", `"payment_channel":"zz"`, "malformedRequest", "Invalid field 'payment_channel', not hex string."},
 		{"nft_offer malformed", `"nft_offer":"zz"`, "malformedRequest", "Invalid field 'nft_offer', not hex string."},
 		{"signer_list account", `"signer_list":` + account, "malformedRequest", "Invalid field 'signer_list', not hex string."},
 		{"directory number", `"directory":7`, "malformedRequest", "Invalid field 'directory', not hex string or object."},
+		{"directory null", `"directory":null`, "malformedRequest", "Invalid field 'directory', not hex string or object."},
 		{"directory empty", `"directory":{}`, "malformedRequest", "Must have exactly one of `owner` and `dir_root` fields."},
 		{"directory owner and root", `"directory":{"owner":` + account + `,"dir_root":` + hash + `}`, "malformedRequest", "Must have exactly one of `owner` and `dir_root` fields."},
 		{"directory string sub_index", `"directory":{"owner":` + account + `,"sub_index":"1"}`, "malformedRequest", "Invalid field 'sub_index', not number."},
@@ -3580,6 +3577,8 @@ func TestLedgerEntrySelectorErrorTokens(t *testing.T) {
 		{"directory malformed owner", `"directory":{"owner":"zz"}`, "malformedAddress", "Invalid field 'owner', not AccountID."},
 		{"credential number", `"credential":1`, "malformedRequest", "Invalid field 'credential', not hex string or object."},
 		{"credential missing type", `"credential":{"subject":` + account + `,"issuer":` + account + `}`, "malformedRequest", "Missing field 'credential_type'."},
+		{"credential null type", `"credential":{"subject":` + account + `,"issuer":` + account + `,"credential_type":null}`, "malformedRequest", "Missing field 'credential_type'."},
+		{"credential object type", `"credential":{"subject":` + account + `,"issuer":` + account + `,"credential_type":{}}`, "malformedRequest", "Invalid field 'credential_type', not hex string."},
 		{"credential empty type", `"credential":{"subject":` + account + `,"issuer":` + account + `,"credential_type":""}`, "malformedRequest", "Invalid field 'credential_type', not hex string."},
 		{"credential malformed type", `"credential":{"subject":` + account + `,"issuer":` + account + `,"credential_type":"zz"}`, "malformedRequest", "Invalid field 'credential_type', not hex string."},
 		{"credential missing subject", `"credential":{"issuer":` + account + `,"credential_type":"4B5943"}`, "malformedRequest", "Missing field 'subject'."},
@@ -3594,24 +3593,278 @@ func TestLedgerEntrySelectorErrorTokens(t *testing.T) {
 		{"amm missing asset2", `"amm":{"asset":{"currency":"XRP"}}`, "malformedRequest", "Missing field 'asset2'."},
 		{"amm issue without issuer", `"amm":{"asset":{"currency":"USD"},"asset2":{"currency":"XRP"}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
 		{"amm XRP with issuer", `"amm":{"asset":{"currency":"XRP","issuer":` + account + `},"asset2":{"currency":"USD","issuer":` + account + `}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
+		{"amm zero XRP with issuer", `"amm":{"asset":{"currency":"0","issuer":` + account + `},"asset2":{"currency":"USD","issuer":` + account + `}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
+		{"amm array asset", `"amm":{"asset":[],"asset2":{"currency":"XRP"}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
+		{"amm null asset", `"amm":{"asset":null,"asset2":{"currency":"XRP"}}`, "malformedRequest", "Missing field 'asset'."},
 		{"amm string asset", `"amm":{"asset":"XRP","asset2":{"currency":"USD","issuer":` + account + `}}`, "malformedRequest", "Invalid field 'asset', not Asset."},
 		{"sponsorship missing sponsee", `"sponsorship":{"sponsor":` + account + `}`, "malformedRequest", "Missing field 'sponsee'."},
+		{"sponsorship null sponsee", `"sponsorship":{"sponsor":` + account + `,"sponsee":null}`, "malformedRequest", "Missing field 'sponsee'."},
 		{"sponsorship malformed sponsor", `"sponsorship":{"sponsor":"zz","sponsee":` + account + `}`, "malformedSponsor", "Invalid field 'sponsor', not AccountID."},
+		{"sponsorship malformed sponsee", `"sponsorship":{"sponsor":` + account + `,"sponsee":"zz"}`, "malformedSponsee", "Invalid field 'sponsee', not AccountID."},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated",`+tc.selector+`}`))
-			require.NotNil(t, rpcErr)
-			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
-			assert.Equal(t, tc.token, rpcErr.ErrorString)
-			assert.Equal(t, tc.message, rpcErr.Message)
+			for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+				ctx := &types.RpcContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: apiVersion,
+					Services:   newLedgerEntryTestServices(newMockLedgerEntryService()),
+				}
+				_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated",`+tc.selector+`}`))
+				require.NotNil(t, rpcErr, "API version %d", apiVersion)
+				assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code, "API version %d", apiVersion)
+				assert.Equal(t, tc.token, rpcErr.ErrorString, "API version %d", apiVersion)
+				assert.Equal(t, tc.message, rpcErr.Message, "API version %d", apiVersion)
+			}
 		})
 	}
 
 	t.Run("sponsorship is a known selector", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion2,
+			Services:   newLedgerEntryTestServices(newMockLedgerEntryService()),
+		}
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","sponsorship":{"sponsor":`+account+`,"sponsee":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"}}`))
 		require.Nil(t, rpcErr)
 		assert.Equal(t, "EC1D45890C4BE4E13B1385D1E1D5C809403A49234365671FBA38A4F129999527", result.(map[string]any)["index"])
 	})
+}
+
+func TestLedgerEntryZeroHashSelectorForms(t *testing.T) {
+	fields := []string{
+		"index", "amendments", "fee", "hashes", "nunl",
+		"check", "nft_page", "nft_offer", "payment_channel", "signer_list",
+		"loan", "loan_broker", "amm", "credential", "delegate", "deposit_preauth",
+		"directory", "escrow", "mptoken", "offer", "oracle", "permissioned_domain",
+		"sponsorship", "ticket", "vault",
+	}
+	for _, value := range []string{"0", strings.Repeat("0", 64)} {
+		for _, field := range fields {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				mock := newMockLedgerEntryService()
+				sentinel := [32]byte{0xA5}
+				mock.lastRequestedKey = sentinel
+				method := &handlers.LedgerEntryMethod{}
+				ctx := &types.RpcContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: types.ApiVersion1,
+					Services:   newLedgerEntryTestServices(mock),
+				}
+
+				result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","`+field+`":"`+value+`"}`))
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code)
+				assert.Equal(t, "entryNotFound", rpcErr.ErrorString)
+				assert.Equal(t, "Entry not found.", rpcErr.Message)
+				require.NotNil(t, rpcErr.Extra)
+				assert.Equal(t, strings.Repeat("0", 64), rpcErr.Extra["index"])
+				assert.Equal(t, sentinel, mock.lastRequestedKey, "zero index must not query the ledger")
+			})
+		}
+	}
+}
+
+func TestLedgerEntrySponsorshipDirectIndex(t *testing.T) {
+	const index = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+	var expected [32]byte
+	decoded, err := hex.DecodeString(index)
+	require.NoError(t, err)
+	copy(expected[:], decoded)
+
+	mock := newMockLedgerEntryService()
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newLedgerEntryTestServices(mock),
+	}
+	result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+		"sponsorship": index,
+	})
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+	assert.Equal(t, expected, mock.lastRequestedKey)
+}
+
+func TestLedgerEntryZeroMPTSelectorForms(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	accountID := ledgerEntryTestAccountID(t, account)
+	var zeroID [24]byte
+	var zeroRoot [32]byte
+
+	tests := []struct {
+		name     string
+		params   map[string]any
+		key      [32]byte
+		notFound bool
+	}{
+		{
+			name:   "mpt issuance shorthand",
+			params: map[string]any{"mpt_issuance": "0"},
+			key:    keylet.MPTIssuance(zeroID).Key,
+		},
+		{
+			name:   "mpt issuance full width",
+			params: map[string]any{"mpt_issuance": strings.Repeat("0", 48)},
+			key:    keylet.MPTIssuance(zeroID).Key,
+		},
+		{
+			name: "mptoken nested shorthand",
+			params: map[string]any{
+				"mptoken": map[string]any{"mpt_issuance_id": "0", "account": account},
+			},
+			key: keylet.MPTokenByID(zeroID, accountID).Key,
+		},
+		{
+			name: "mptoken nested full width",
+			params: map[string]any{
+				"mptoken": map[string]any{"mpt_issuance_id": strings.Repeat("0", 48), "account": account},
+			},
+			key: keylet.MPTokenByID(zeroID, accountID).Key,
+		},
+		{
+			name: "directory nested shorthand",
+			params: map[string]any{
+				"directory": map[string]any{"dir_root": "0"},
+			},
+			key:      keylet.DirPage(zeroRoot, 0).Key,
+			notFound: true,
+		},
+		{
+			name: "directory nested full width",
+			params: map[string]any{
+				"directory": map[string]any{"dir_root": strings.Repeat("0", 64)},
+			},
+			key:      keylet.DirPage(zeroRoot, 0).Key,
+			notFound: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			sentinel := [32]byte{0xA5}
+			if tc.notFound {
+				mock.lastRequestedKey = sentinel
+			}
+			method := &handlers.LedgerEntryMethod{}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newLedgerEntryTestServices(mock),
+			}
+			tc.params["ledger_index"] = "validated"
+			result, rpcErr := handleLedgerEntry(t, method, ctx, tc.params)
+			if tc.notFound {
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code)
+				assert.Equal(t, "entryNotFound", rpcErr.ErrorString)
+				assert.Equal(t, "Entry not found.", rpcErr.Message)
+				require.NotNil(t, rpcErr.Extra)
+				assert.Equal(t, strings.Repeat("0", 64), rpcErr.Extra["index"])
+				assert.Equal(t, sentinel, mock.lastRequestedKey)
+				return
+			}
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.key, mock.lastRequestedKey)
+		})
+	}
+}
+
+func TestLedgerEntryDirectorySubIndexConversion(t *testing.T) {
+	const (
+		owner    = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		dirRoot  = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+		zeroHash = "0000000000000000000000000000000000000000000000000000000000000000"
+	)
+	ownerID := ledgerEntryTestAccountID(t, owner)
+	var root [32]byte
+	rootBytes, err := hex.DecodeString(dirRoot)
+	require.NoError(t, err)
+	copy(root[:], rootBytes)
+
+	valid := []struct {
+		name  string
+		raw   string
+		index uint64
+	}{
+		{name: "null", raw: "null", index: 0},
+		{name: "negative zero", raw: "-0", index: 0},
+		{name: "integral real", raw: "1.0", index: 1},
+		{name: "maximum uint32", raw: "4294967295", index: 4294967295},
+		{name: "epsilon inside", raw: "2.2204460492503128e-16", index: 0},
+		{name: "near one truncates to zero", raw: "0.9999999999999999", index: 0},
+	}
+	forms := []struct {
+		name  string
+		field string
+		base  [32]byte
+	}{
+		{name: "dir_root", field: `"dir_root":"` + dirRoot + `"`, base: root},
+		{name: "owner", field: `"owner":"` + owner + `"`, base: keylet.OwnerDir(ownerID).Key},
+	}
+
+	for _, form := range forms {
+		for _, tc := range valid {
+			t.Run(form.name+"/"+tc.name, func(t *testing.T) {
+				mock := newMockLedgerEntryService()
+				method := &handlers.LedgerEntryMethod{}
+				ctx := &types.RpcContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: types.ApiVersion1,
+					Services:   newLedgerEntryTestServices(mock),
+				}
+				raw := json.RawMessage(`{"ledger_index":"validated","directory":{` + form.field + `,"sub_index":` + tc.raw + `}}`)
+				_, rpcErr := method.Handle(ctx, raw)
+				require.Nil(t, rpcErr)
+				assert.Equal(t, keylet.DirPage(form.base, tc.index).Key, mock.lastRequestedKey)
+				if form.name == "owner" && tc.name == "maximum uint32" {
+					assert.Equal(t, "F1A166FC1DC1D1CD34BB89DA4194718824C418395E483F2B661CC52C7CE72D42", strings.ToUpper(hex.EncodeToString(mock.lastRequestedKey[:])))
+				}
+			})
+		}
+	}
+
+	invalid := []struct {
+		name string
+		raw  string
+	}{
+		{name: "epsilon equal", raw: "2.220446049250313e-16"},
+		{name: "epsilon outside", raw: "2.2204460492503136e-16"},
+		{name: "near one equal", raw: "0.9999999999999998"},
+		{name: "near one outside", raw: "0.9999999999999997"},
+		{name: "fractional", raw: "1.1"},
+		{name: "negative", raw: "-1"},
+		{name: "boolean", raw: "true"},
+		{name: "string", raw: `"1"`},
+		{name: "real above uint32", raw: "4294967296.0"},
+	}
+	for _, tc := range invalid {
+		t.Run("invalid/"+tc.name, func(t *testing.T) {
+			method := &handlers.LedgerEntryMethod{}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   newLedgerEntryTestServices(newMockLedgerEntryService()),
+			}
+			raw := json.RawMessage(`{"ledger_index":"validated","directory":{"dir_root":"` + zeroHash + `","sub_index":` + tc.raw + `}}`)
+			_, rpcErr := method.Handle(ctx, raw)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+			assert.Equal(t, "Invalid field 'sub_index', not number.", rpcErr.Message)
+		})
+	}
 }
