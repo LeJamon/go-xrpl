@@ -429,11 +429,11 @@ func parseIssue(raw json.RawMessage) ([20]byte, [20]byte, error) {
 }
 
 // currencyFromString validates a currency code against to_currency's rules and
-// encodes it, treating empty/"XRP" as native XRP. It delegates to
+// encodes it, treating empty/"XRP"/"0" as native XRP. It delegates to
 // keylet.ParseCurrency, which both validates the form and rejects the reserved
 // noCurrency/badCurrency sentinels.
 func currencyFromString(code string) ([20]byte, error) {
-	if code == "" || code == "XRP" {
+	if code == "" || code == "XRP" || code == "0" {
 		return [20]byte{}, nil
 	}
 	return keylet.ParseCurrency(code)
