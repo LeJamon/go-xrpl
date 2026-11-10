@@ -117,7 +117,7 @@ func TestServerInfoAmendmentWarnings(t *testing.T) {
 	tbl.DoValidatedLedger(256, nil, map[[32]byte]uint32{unsupportedAmendmentID: majorityClose})
 	expDate, ok := tbl.FirstUnsupportedExpected()
 	require.True(t, ok, "test setup: firstUnsupportedExpected must be set")
-	wantUTC := time.Unix(int64(expDate)+protocol.RippleEpochUnix, 0).UTC().Format("2006-Jan-02 15:04:05 UTC")
+	wantUTC := time.Unix(int64(expDate)+protocol.RippleEpochUnix, 0).UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
 
 	t.Run("admin sees unsupported-majority (1001) with rippled date format", func(t *testing.T) {
 		mock := &mockServerInfoWarnings{mockLedgerServiceServerInfo: newMockLedgerServiceServerInfo(), table: tbl}

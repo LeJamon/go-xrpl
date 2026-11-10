@@ -266,11 +266,11 @@ func nonNilStrings(s []string) []string {
 }
 
 // rippledTimeLayout matches rippled's to_string(NetClock::time_point)
-// at rippled/include/xrpl/basics/chrono.h:75-88 — `date::format("%Y-%b-%d %T %Z", tp)`
-// which produces strings like `"2026-May-18 10:30:00 UTC"`. Use for
-// the `expiration` / `effective` / `last_refresh_time` / `next_refresh_time`
-// fields exposed by the validators and validator_list_sites RPCs.
-const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
+// (include/xrpl/basics/chrono.h): the time is converted to a nanosecond
+// system_clock time_point before date::format("%Y-%b-%d %T %Z", tp), which
+// produces strings like "2026-May-18 10:30:00.000000000 UTC". Use for the
+// validator list `expiration` field.
+const rippledTimeLayout = "2006-Jan-02 15:04:05.000000000 UTC"
 
 func formatRippledTime(t time.Time) string {
 	return t.UTC().Format(rippledTimeLayout)
