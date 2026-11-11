@@ -1040,7 +1040,10 @@ func (r *nodeRuntime) bindRPC() error {
 	manager := subscription.NewManager()
 	r.services.Shutdown = r.shutdowner
 	r.services.SubscriptionMetrics = manager.Metrics
-	ledgerInfo := &ledgerInfoAdapter{ledgerService: r.ledger}
+	ledgerInfo := &ledgerInfoAdapter{}
+	if r.ledger != nil {
+		ledgerInfo.ledgerService = r.ledger
+	}
 	graph, err := r.services.Build()
 	if err != nil {
 		return fmt.Errorf("build RPC service graph: %w", err)
