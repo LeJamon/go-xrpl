@@ -31,7 +31,7 @@ type replayHeadDiagnostics struct {
 func (c *catchupReplayCoordinator) replayHeadDiagnosticsLocked(ledger *inbound.Ledger) *replayHeadDiagnostics {
 	pipeline := &c.standardReplay
 	entry := pipeline.entries[pipeline.anchorSeq+1]
-	if ledger == nil || !pipeline.active || !pipeline.pivotReady || entry == nil || entry.acquisition != ledger {
+	if ledger == nil || !pipeline.isActive() || !pipeline.isPivotReady() || entry == nil || entry.acquisition != ledger {
 		return nil
 	}
 	if c.replayHeadDiagnostics.ledger != ledger {
@@ -97,7 +97,7 @@ func (c *catchupReplayCoordinator) reportReplayHead(now time.Time) {
 	c.acquisitionMu.Lock()
 	pipeline := &c.standardReplay
 	entry := pipeline.entries[pipeline.anchorSeq+1]
-	if !pipeline.active || !pipeline.pivotReady || entry == nil || entry.acquisition == nil {
+	if !pipeline.isActive() || !pipeline.isPivotReady() || entry == nil || entry.acquisition == nil {
 		c.replayHeadDiagnostics = replayHeadDiagnostics{}
 		c.acquisitionMu.Unlock()
 		return

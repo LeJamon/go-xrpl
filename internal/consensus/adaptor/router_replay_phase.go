@@ -19,9 +19,7 @@ const (
 	// standardReplayCompleteDraining: a verified frozen pivot equal to the
 	// target completed the pipeline while a drain reservation was still held.
 	standardReplayCompleteDraining
-	// standardReplayPhaseIllegal is never stored; phaseOf returns it for a
-	// flag combination outside the enumerated set.
-	standardReplayPhaseIllegal
+	standardReplayPhaseCount
 )
 
 func (p standardReplayPhase) String() string {
@@ -39,34 +37,40 @@ func (p standardReplayPhase) String() string {
 	case standardReplayCompleteDraining:
 		return "complete_draining"
 	default:
-		return "illegal"
+		return "unknown"
 	}
 }
 
-// standardReplayPhaseOf maps the legacy (active, pivotReady, applying) flags
-// to a phase.
-func standardReplayPhaseOf(active, pivotReady, applying bool) standardReplayPhase {
-	switch {
-	case !active && !pivotReady && !applying:
+// deactivated is the phase after the pipeline stops owning recovery. A
+// verified pivot stays recorded.
+func (p standardReplayPhase) deactivated() standardReplayPhase {
+	switch p {
+	case standardReplayAcquiringPivot:
 		return standardReplayIdle
-	case active && !pivotReady && !applying:
-		return standardReplayAcquiringPivot
-	case active && pivotReady && !applying:
-		return standardReplayPivotReady
-	case active && pivotReady && applying:
-		return standardReplayDraining
-	case !active && pivotReady && !applying:
+	case standardReplayPivotReady:
 		return standardReplayComplete
-	case !active && pivotReady && applying:
+	case standardReplayDraining:
 		return standardReplayCompleteDraining
 	default:
-		return standardReplayPhaseIllegal
+		return p
+	}
+}
+
+// withoutDrain is the phase after a drain reservation is released.
+func (p standardReplayPhase) withoutDrain() standardReplayPhase {
+	switch p {
+	case standardReplayDraining:
+		return standardReplayPivotReady
+	case standardReplayCompleteDraining:
+		return standardReplayComplete
+	default:
+		return p
 	}
 }
 
 // standardReplayTransitions lists the legal successors of each phase.
 // Self-transitions are always legal.
-var standardReplayTransitions = [standardReplayPhaseIllegal][]standardReplayPhase{
+var standardReplayTransitions = [standardReplayPhaseCount][]standardReplayPhase{
 	standardReplayIdle:           {standardReplayAcquiringPivot, standardReplayPivotReady},
 	standardReplayAcquiringPivot: {standardReplayPivotReady, standardReplayIdle},
 	standardReplayPivotReady:     {standardReplayDraining, standardReplayComplete, standardReplayIdle},
@@ -80,7 +84,7 @@ var standardReplayTransitions = [standardReplayPhaseIllegal][]standardReplayPhas
 }
 
 func standardReplayTransitionAllowed(from, to standardReplayPhase) bool {
-	if from >= standardReplayPhaseIllegal || to >= standardReplayPhaseIllegal {
+	if from >= standardReplayPhaseCount || to >= standardReplayPhaseCount {
 		return false
 	}
 	if from == to {
@@ -94,14 +98,54 @@ func standardReplayTransitionAllowed(from, to standardReplayPhase) bool {
 	return false
 }
 
+// isActive reports whether the pipeline owns recovery toward its target.
+func (p *standardReplayPipeline) isActive() bool {
+	switch p.phase {
+	case standardReplayAcquiringPivot, standardReplayPivotReady, standardReplayDraining:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPivotReady reports whether the pivot is verified and anchors the chain.
+func (p *standardReplayPipeline) isPivotReady() bool {
+	switch p.phase {
+	case standardReplayPivotReady, standardReplayDraining, standardReplayComplete, standardReplayCompleteDraining:
+		return true
+	default:
+		return false
+	}
+}
+
+// isApplying reports whether a drain is reserved or running.
+func (p *standardReplayPipeline) isApplying() bool {
+	return p.phase == standardReplayDraining || p.phase == standardReplayCompleteDraining
+}
+
 // standardReplayPhaseHook observes every phase write. Tests install it before
 // any coordinator exists; it is nil in production.
-var standardReplayPhaseHook func(p *standardReplayPipeline, phase standardReplayPhase)
+var standardReplayPhaseHook func(c *catchupReplayCoordinator, from, to standardReplayPhase, allowed bool)
+
+// setStandardReplayPhaseLocked always performs the transition; an edge outside
+// standardReplayTransitions is logged. Caller holds acquisitionMu.
+func (c *catchupReplayCoordinator) setStandardReplayPhaseLocked(next standardReplayPhase) {
+	from := c.standardReplay.phase
+	allowed := standardReplayTransitionAllowed(from, next)
+	if hook := standardReplayPhaseHook; hook != nil {
+		hook(c, from, next, allowed)
+	}
+	if !allowed && c.logger != nil {
+		c.logger.Error("illegal standard replay phase transition",
+			"from", from.String(),
+			"to", next.String(),
+			"generation", c.standardReplay.generation,
+		)
+	}
+	c.standardReplay.phase = next
+}
 
 // Caller holds acquisitionMu.
-func (c *catchupReplayCoordinator) checkStandardReplayPhaseLocked() {
-	if hook := standardReplayPhaseHook; hook != nil {
-		p := &c.standardReplay
-		hook(p, standardReplayPhaseOf(p.active, p.pivotReady, p.applying))
-	}
+func (c *catchupReplayCoordinator) releaseStandardReplayDrainLocked() {
+	c.setStandardReplayPhaseLocked(c.standardReplay.phase.withoutDrain())
 }

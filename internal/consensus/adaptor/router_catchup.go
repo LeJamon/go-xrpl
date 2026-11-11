@@ -1517,7 +1517,7 @@ func (c *catchupReplayCoordinator) startLedgerReplayAcquisitionLegacyLocked(seq 
 	if c.replayFaultBlocked() {
 		return nil, false
 	}
-	if entry := c.standardReplay.entries[seq]; c.standardReplay.active && entry != nil &&
+	if entry := c.standardReplay.entries[seq]; c.standardReplay.isActive() && entry != nil &&
 		entry.generation == c.standardReplay.generation && entry.hash == hash &&
 		(!entry.readyAt.IsZero() || entry.replayMemoryPending || entry.replayMemoryActive != 0) {
 		return nil, false
@@ -1677,7 +1677,7 @@ func (c *catchupReplayCoordinator) admitFullStateLocked(
 	}
 
 	// Prepared successors and targets also belong to the replay owner.
-	if c.standardReplay.active && !purpose.bypassesReplayOwnership() {
+	if c.standardReplay.isActive() && !purpose.bypassesReplayOwnership() {
 		return fullStateAdmission{outcome: fullStateAdmissionDeferred}
 	}
 	if !c.canAdmitProvisionalFullStateLocked(hash) {
@@ -1937,7 +1937,7 @@ func (c *catchupReplayCoordinator) useCompatiblePreparedReplayLocked(
 	parentUsable bool,
 	parent *ledger.Ledger,
 ) (prepared, startDrain bool) {
-	if !parentUsable || parent == nil || !c.standardReplay.active {
+	if !parentUsable || parent == nil || !c.standardReplay.isActive() {
 		return false, false
 	}
 	entry := c.standardReplay.entries[seq]
@@ -1951,11 +1951,10 @@ func (c *catchupReplayCoordinator) useCompatiblePreparedReplayLocked(
 	if entry.acquisition != nil && !entry.acquisition.TransactionOnly() {
 		return false, false
 	}
-	startDrain = c.standardReplay.pivotReady && !c.standardReplay.applying &&
+	startDrain = c.standardReplay.isPivotReady() && !c.standardReplay.isApplying() &&
 		entry.seq == c.standardReplay.anchorSeq+1 && !entry.readyAt.IsZero()
 	if startDrain {
-		c.standardReplay.applying = true
-		c.checkStandardReplayPhaseLocked()
+		c.setStandardReplayPhaseLocked(standardReplayDraining)
 	}
 	return true, startDrain
 }
@@ -2253,7 +2252,7 @@ func (c *catchupReplayCoordinator) onLedgerFullyValidated(seq uint32, hash [32]b
 	for _, replayHash := range c.replayer.AbandonOtherAtSequence(seq, hash) {
 		removed[replayHash] = struct{}{}
 	}
-	pipelineConflict := c.standardReplay.active &&
+	pipelineConflict := c.standardReplay.isActive() &&
 		((seq == c.standardReplay.anchorSeq && hash != c.standardReplay.anchorHash) ||
 			(seq == c.standardReplay.targetSeq && hash != c.standardReplay.targetHash))
 	if entry := c.standardReplay.entries[seq]; entry != nil && entry.hash != hash {
@@ -2546,7 +2545,7 @@ func (c *catchupReplayCoordinator) FastSyncMetrics() FastSyncMetrics {
 	}
 	headSeq := uint32(0)
 	blockedUs := uint64(0)
-	if c.standardReplay.active {
+	if c.standardReplay.isActive() {
 		headSeq = c.standardReplay.anchorSeq + 1
 		if !c.standardReplay.headBlockedAt.IsZero() {
 			blockedUs = durationMicros(time.Since(c.standardReplay.headBlockedAt))

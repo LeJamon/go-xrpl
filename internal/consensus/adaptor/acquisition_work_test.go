@@ -750,10 +750,10 @@ func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing
 
 	result := <-lane.results()
 	require.Equal(t, pivotHeader.LedgerIndex, pivotAcquisition.Seq())
-	require.False(t, router.catchupReplay.standardReplay.active)
+	require.False(t, router.catchupReplay.standardReplay.isActive())
 	router.catchupReplay.handleAcquisitionWorkResult(result)
 
-	require.True(t, router.catchupReplay.standardReplay.active)
+	require.True(t, router.catchupReplay.standardReplay.isActive())
 	require.Equal(t, pivotHeader.LedgerIndex, router.catchupReplay.standardReplay.pivotSeq)
 	require.Equal(t, pivotHeader.Hash, router.catchupReplay.standardReplay.pivotHash)
 	require.Same(t, pivotAcquisition, router.catchupReplay.fetchTracker.Find(pivotHeader.Hash))

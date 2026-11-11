@@ -31,7 +31,7 @@ func TestLocalReplayReplacementResumesWithoutPeer(t *testing.T) {
 	require.True(t, c.reserveStandardReplayReplacement(generation, links[1].seq, links[1].hash, 0, time.Now()))
 	drainStandardReplayTestPipeline(t, r)
 	assert.Nil(t, c.standardReplay.replacement)
-	assert.False(t, c.standardReplay.active)
+	assert.False(t, c.standardReplay.isActive())
 	assert.Equal(t, generation, c.standardReplay.generation)
 	assert.Len(t, sender.legacyCalls(), requests)
 	assert.Equal(t, uint64(2), c.replayPipelineApplied.Load())

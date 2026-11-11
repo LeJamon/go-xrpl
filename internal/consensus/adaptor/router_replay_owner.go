@@ -38,16 +38,14 @@ func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDra
 		// also handles a wake consumed during a concurrent/reentrant drain.
 		return nil
 	}
-	if !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
-		c.standardReplay.applying = false
-		c.checkStandardReplayPhaseLocked()
+	if !c.standardReplay.isActive() || !c.standardReplay.isPivotReady() || c.standardReplay.memoryWait {
+		c.releaseStandardReplayDrainLocked()
 		return nil
 	}
 	workCtx, cancel := context.WithCancel(c.lifecycleContext())
 	if err := workCtx.Err(); err != nil {
 		cancel()
-		c.standardReplay.applying = false
-		c.checkStandardReplayPhaseLocked()
+		c.releaseStandardReplayDrainLocked()
 		return nil
 	}
 	owner := &standardReplayDrainOwner{
@@ -56,8 +54,7 @@ func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDra
 		cancel:     cancel,
 	}
 	c.standardReplayDrainOwner = owner
-	c.standardReplay.applying = true
-	c.checkStandardReplayPhaseLocked()
+	c.setStandardReplayPhaseLocked(standardReplayDraining)
 	return owner
 }
 
@@ -73,15 +70,13 @@ func (c *catchupReplayCoordinator) finishStandardReplayDrain(owner *standardRepl
 	// No drain can begin while acquisitionMu is held. Reconcile the current
 	// generation's reservation instead of leaving the old flag behind or
 	// dropping a replacement wake that arrived during the old handoff.
-	c.standardReplay.applying = false
-	c.checkStandardReplayPhaseLocked()
+	c.releaseStandardReplayDrainLocked()
 	if c.stoppedForShutdown() {
 		return
 	}
-	if owner.yielded && c.standardReplay.active && c.standardReplay.pivotReady &&
+	if owner.yielded && c.standardReplay.isActive() && c.standardReplay.isPivotReady() &&
 		c.standardReplay.generation == owner.generation {
-		c.standardReplay.applying = true
-		c.checkStandardReplayPhaseLocked()
+		c.setStandardReplayPhaseLocked(standardReplayDraining)
 		c.scheduleStandardReplayDrain()
 		return
 	}
@@ -94,15 +89,14 @@ func (c *catchupReplayCoordinator) finishStandardReplayDrain(owner *standardRepl
 // Caller holds acquisitionMu. A pending wake is not an executing applier.
 // Re-sending an edge-triggered wake is safe and repairs an orphaned reservation.
 func (c *catchupReplayCoordinator) scheduleReadyStandardReplayDrainLocked() bool {
-	if c.stoppedForShutdown() || c.standardReplayDrainOwner != nil || !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
+	if c.stoppedForShutdown() || c.standardReplayDrainOwner != nil || !c.standardReplay.isActive() || !c.standardReplay.isPivotReady() || c.standardReplay.memoryWait {
 		return false
 	}
 	head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
 	if head == nil || (head.readyAt.IsZero() && !head.failed) {
 		return false
 	}
-	c.standardReplay.applying = true
-	c.checkStandardReplayPhaseLocked()
+	c.setStandardReplayPhaseLocked(standardReplayDraining)
 	c.scheduleStandardReplayDrain()
 	return true
 }

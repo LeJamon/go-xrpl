@@ -29,9 +29,7 @@ type standardReplayLegacyMemoryWait struct {
 
 type standardReplayPipeline struct {
 	generation              uint64
-	active                  bool
-	applying                bool
-	pivotReady              bool
+	phase                   standardReplayPhase
 	initialCandidate        bool
 	pivotSeq                uint32
 	pivotHash               [32]byte
@@ -319,13 +317,12 @@ func (c *catchupReplayCoordinator) advanceStandardReplayAnchor(
 	// collector cursor may point into that prefix, while entries beyond it can
 	// already be complete and ready to drain.
 	c.recomputeStandardReplayCollectorLocked()
-	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
+	startDrain := c.standardReplay.isPivotReady() && !c.standardReplay.isApplying()
 	if startDrain {
 		head := c.standardReplay.entries[anchorSeq+1]
 		startDrain = head != nil && (!head.readyAt.IsZero() || head.failed)
 		if startDrain {
-			c.standardReplay.applying = true
-			c.checkStandardReplayPhaseLocked()
+			c.setStandardReplayPhaseLocked(standardReplayDraining)
 		}
 	}
 	c.updateStandardReplayHeadBlockLocked(time.Now())
@@ -350,7 +347,7 @@ func (c *catchupReplayCoordinator) standardReplayHeaderDiscoveryCompatibleLocked
 	targetSeq uint32,
 	targetHash [32]byte,
 ) bool {
-	if !c.standardReplay.active || !c.standardReplay.pivotReady ||
+	if !c.standardReplay.isActive() || !c.standardReplay.isPivotReady() ||
 		baseSeq > c.standardReplay.anchorSeq ||
 		targetSeq < baseSeq || targetHash == ([32]byte{}) {
 		return false
@@ -429,12 +426,12 @@ func (c *catchupReplayCoordinator) reconcileStandardReplayAfterHeaderDiscovery(
 
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
 		return
 	}
-	if !c.standardReplay.pivotReady || c.standardReplay.anchorSeq < baseSeq ||
+	if !c.standardReplay.isPivotReady() || c.standardReplay.anchorSeq < baseSeq ||
 		(c.standardReplay.anchorSeq == baseSeq && c.standardReplay.anchorHash != baseHash) ||
 		targetHash == ([32]byte{}) {
 		retired := c.cancelStandardReplayPipelineLocked("header_discovery_conflict")
@@ -583,13 +580,12 @@ func (c *catchupReplayCoordinator) reconcileStandardReplayAfterHeaderDiscovery(
 	if head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]; head != nil {
 		c.promoteStandardReplayHeadLocked(head)
 	}
-	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
+	startDrain := c.standardReplay.isPivotReady() && !c.standardReplay.isApplying()
 	if startDrain {
 		head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
 		startDrain = head != nil && (!head.readyAt.IsZero() || head.failed)
 		if startDrain {
-			c.standardReplay.applying = true
-			c.checkStandardReplayPhaseLocked()
+			c.setStandardReplayPhaseLocked(standardReplayDraining)
 		}
 	}
 	c.updateStandardReplayHeadBlockLocked(time.Now())
@@ -698,7 +694,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		c.acquisitionMu.Unlock()
 		return false
 	}
-	initial := !c.standardReplay.active
+	initial := !c.standardReplay.isActive()
 	if initial && len(links) < 2 {
 		c.acquisitionMu.Unlock()
 		return false
@@ -715,10 +711,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 	}
 	if initial {
 		c.standardReplay.generation++
-		c.standardReplay.active = true
-		c.standardReplay.applying = false
-		c.standardReplay.pivotReady = true
-		c.checkStandardReplayPhaseLocked()
+		c.setStandardReplayPhaseLocked(standardReplayPivotReady)
 		c.standardReplay.pivotSeq = anchor.Sequence()
 		c.standardReplay.pivotHash = anchor.Hash()
 		c.standardReplay.anchorSeq = anchor.Sequence()
@@ -801,7 +794,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		// this successor chain. The hash-keyed tracker would return that fetch
 		// to the tx-only collector forever. Once the pivot is verified, replay
 		// owns these proven successors; replace the redundant state walk.
-		if c.standardReplay.pivotReady && link.seq > c.standardReplay.anchorSeq {
+		if c.standardReplay.isPivotReady() && link.seq > c.standardReplay.anchorSeq {
 			if existing := c.fetchTracker.Find(link.hash); existing != nil && !existing.TransactionOnly() &&
 				c.discardInboundAcquisitionLocked(existing) {
 				superseded = append(superseded, existing)
@@ -840,7 +833,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		c.standardReplay.backpressured = false
 	}
 	backpressurePivotSeq := c.standardReplay.pivotSeq
-	backpressurePivotReady := c.standardReplay.pivotReady
+	backpressurePivotReady := c.standardReplay.isPivotReady()
 	backpressureTailSeq := c.standardReplay.collectSeq
 	backpressureTargetSeq := c.standardReplay.targetSeq
 	backpressureOccupancy := len(c.standardReplay.entries)
@@ -886,8 +879,8 @@ func (c *catchupReplayCoordinator) standardReplayResidentCountLocked() int {
 func (c *catchupReplayCoordinator) standardReplayIdentityLocked() standardReplayIdentity {
 	return standardReplayIdentity{
 		generation:       c.standardReplay.generation,
-		active:           c.standardReplay.active,
-		pivotReady:       c.standardReplay.pivotReady,
+		active:           c.standardReplay.isActive(),
+		pivotReady:       c.standardReplay.isPivotReady(),
 		initialCandidate: c.standardReplay.initialCandidate,
 		pivotSeq:         c.standardReplay.pivotSeq,
 		pivotHash:        c.standardReplay.pivotHash,
@@ -907,8 +900,8 @@ func (c *catchupReplayCoordinator) standardReplayIdentityMatchesLocked(identity 
 }
 
 func (c *catchupReplayCoordinator) ownsFrozenPivotAcquisitionLocked(il *inbound.Ledger) bool {
-	return il != nil && !il.TransactionOnly() && c.standardReplay.active &&
-		!c.standardReplay.pivotReady && c.standardReplay.pivotHandoff == nil &&
+	return il != nil && !il.TransactionOnly() && c.standardReplay.isActive() &&
+		!c.standardReplay.isPivotReady() && c.standardReplay.pivotHandoff == nil &&
 		c.standardReplay.pivotHash == il.Hash() && c.standardReplay.pivotSeq == il.Seq()
 }
 
@@ -927,7 +920,7 @@ func (c *catchupReplayCoordinator) claimStandardReplayPivotHandoffLocked(il *inb
 }
 
 func (c *catchupReplayCoordinator) standardReplayPivotHandoffMatchesLocked(handoff standardReplayPivotHandoff) bool {
-	return handoff.acquisition != nil && c.standardReplay.active &&
+	return handoff.acquisition != nil && c.standardReplay.isActive() &&
 		c.standardReplay.pivotHandoff != nil &&
 		c.standardReplay.pivotHandoff.generation == handoff.generation &&
 		c.standardReplay.pivotHandoff.acquisition == handoff.acquisition &&
@@ -997,7 +990,7 @@ func (c *catchupReplayCoordinator) logStandardReplayCancellation(
 }
 
 func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason string) standardReplayRetirement {
-	if !c.standardReplay.active && len(c.standardReplay.entries) == 0 && c.standardReplay.baseRelease == nil && len(c.standardReplay.legacyMemoryWait) == 0 && c.standardReplayDrainOwner == nil {
+	if !c.standardReplay.isActive() && len(c.standardReplay.entries) == 0 && c.standardReplay.baseRelease == nil && len(c.standardReplay.legacyMemoryWait) == 0 && c.standardReplayDrainOwner == nil {
 		return standardReplayRetirement{}
 	}
 	generation := c.standardReplay.generation
@@ -1026,7 +1019,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 		}
 		c.standardReplay.replacement = nil
 	}
-	if !c.standardReplay.pivotReady {
+	if !c.standardReplay.isPivotReady() {
 		if pivot := c.fetchTracker.Find(c.standardReplay.pivotHash); pivot != nil &&
 			!pivot.TransactionOnly() && c.discardInboundAcquisitionLocked(pivot) {
 			retired = append(retired, pivot)
@@ -1054,10 +1047,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 		}
 	}
 	c.standardReplay.generation++
-	c.standardReplay.active = false
-	c.standardReplay.applying = false
-	c.standardReplay.pivotReady = false
-	c.checkStandardReplayPhaseLocked()
+	c.setStandardReplayPhaseLocked(standardReplayIdle)
 	c.standardReplay.initialCandidate = false
 	c.standardReplay.pivotSeq = 0
 	c.standardReplay.pivotHash = [32]byte{}
@@ -1137,10 +1127,10 @@ func (c *catchupReplayCoordinator) releaseStandardReplayBaseLocked() {
 }
 
 func (c *catchupReplayCoordinator) standardReplayOwnsLocked(hash [32]byte) bool {
-	if replacement := c.standardReplay.replacement; c.standardReplay.active && replacement != nil && replacement.hash == hash {
+	if replacement := c.standardReplay.replacement; c.standardReplay.isActive() && replacement != nil && replacement.hash == hash {
 		return true
 	}
-	if c.standardReplay.active &&
+	if c.standardReplay.isActive() &&
 		(hash == c.standardReplay.pivotHash || hash == c.standardReplay.targetHash) {
 		return true
 	}
@@ -1157,7 +1147,7 @@ func (c *catchupReplayCoordinator) standardReplayOwnsLocked(hash [32]byte) bool 
 // publication are not gaps in ownership. Availability/memory retries also belong
 // to the pipeline, not to speculative recovery. Caller holds acquisitionMu.
 func (c *catchupReplayCoordinator) standardReplayEntryOwnedLocked(hash [32]byte) bool {
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		return false
 	}
 	for _, entry := range c.standardReplay.entries {
@@ -1190,7 +1180,7 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	}
 	now := time.Now()
 	entry := c.standardReplay.entries[h.LedgerIndex]
-	if !c.standardReplay.active || entry == nil || entry.seq != h.LedgerIndex || entry.hash != h.Hash ||
+	if !c.standardReplay.isActive() || entry == nil || entry.seq != h.LedgerIndex || entry.hash != h.Hash ||
 		entry.generation != c.standardReplay.generation {
 		return false, false, false
 	}
@@ -1263,23 +1253,22 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	c.replayPipelineReady.Add(1)
 	c.replayPipelineRetried.Add(uint64(il.Timeouts()))
 	c.replayPipelineAcquireUs.Add(durationMicros(now.Sub(entry.requestedAt)))
-	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
+	startDrain := c.standardReplay.isPivotReady() && !c.standardReplay.isApplying()
 	if startDrain {
-		c.standardReplay.applying = true
-		c.checkStandardReplayPhaseLocked()
+		c.setStandardReplayPhaseLocked(standardReplayDraining)
 	}
 	c.updateStandardReplayHeadBlockLocked(now)
 	return true, startDrain, false
 }
 
 func (c *catchupReplayCoordinator) retryStandardReplayMemoryEntriesLocked() []*inbound.Ledger {
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		return nil
 	}
 	now := time.Now()
 	var retired []*inbound.Ledger
 	head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
-	headOnly := c.standardReplay.pivotReady && head != nil && head.replayMemoryPending
+	headOnly := c.standardReplay.isPivotReady() && head != nil && head.replayMemoryPending
 	if headOnly {
 		c.promoteStandardReplayHeadLocked(head)
 	}
@@ -1342,7 +1331,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayMemoryEntriesLocked() []*i
 
 func (c *catchupReplayCoordinator) refillStandardReplayCollector(peerHint uint64) bool {
 	c.acquisitionMu.Lock()
-	active := c.standardReplay.active
+	active := c.standardReplay.isActive()
 	targetSeq := c.standardReplay.targetSeq
 	targetHash := c.standardReplay.targetHash
 	c.acquisitionMu.Unlock()
@@ -1377,7 +1366,7 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntryAt(
 	}
 	c.acquisitionMu.Lock()
 	entry := c.standardReplay.entries[il.Seq()]
-	if !c.standardReplay.active || entry == nil || entry.seq != il.Seq() || entry.hash != il.Hash() || entry.acquisition != il {
+	if !c.standardReplay.isActive() || entry == nil || entry.seq != il.Seq() || entry.hash != il.Hash() || entry.acquisition != il {
 		c.acquisitionMu.Unlock()
 		return false
 	}
@@ -1415,10 +1404,9 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntryAt(
 	// installed: the prepared head has no locally available parent until then,
 	// so applying it would cancel the replay pipeline and incorrectly fall back
 	// to another full-state acquisition.
-	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
+	startDrain := c.standardReplay.isPivotReady() && !c.standardReplay.isApplying()
 	if startDrain {
-		c.standardReplay.applying = true
-		c.checkStandardReplayPhaseLocked()
+		c.setStandardReplayPhaseLocked(standardReplayDraining)
 	}
 	c.updateStandardReplayHeadBlockLocked(now)
 	c.acquisitionMu.Unlock()
@@ -1429,7 +1417,7 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntryAt(
 }
 
 func (c *catchupReplayCoordinator) updateStandardReplayHeadBlockLocked(now time.Time) {
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		c.standardReplay.headBlockedAt = time.Time{}
 		return
 	}
@@ -1496,7 +1484,7 @@ func (c *catchupReplayCoordinator) drainStandardReplayPipeline() {
 			return
 		}
 		c.acquisitionMu.Lock()
-		active := c.standardReplay.active
+		active := c.standardReplay.isActive()
 		c.acquisitionMu.Unlock()
 		if !active {
 			return
@@ -1512,11 +1500,10 @@ func (c *catchupReplayCoordinator) discardStandardReplayHeadLocked(
 		seq:  c.standardReplay.targetSeq,
 		hash: c.standardReplay.targetHash,
 	}
-	if !c.standardReplay.active || c.standardReplay.generation != generation ||
+	if !c.standardReplay.isActive() || c.standardReplay.generation != generation ||
 		c.standardReplay.entries[entry.seq] != entry || c.standardReplay.anchorSeq+1 != entry.seq {
-		if !c.standardReplay.active {
-			c.standardReplay.applying = false
-			c.checkStandardReplayPhaseLocked()
+		if !c.standardReplay.isActive() {
+			c.releaseStandardReplayDrainLocked()
 		}
 		return standardReplayRetirement{}, standardReplayTarget{}, false
 	}
@@ -1525,8 +1512,7 @@ func (c *catchupReplayCoordinator) discardStandardReplayHeadLocked(
 	if c.consensusRecovery.targetHash != ([32]byte{}) {
 		c.consensusRecovery.stepHash = entry.hash
 	}
-	c.standardReplay.applying = false
-	c.checkStandardReplayPhaseLocked()
+	c.releaseStandardReplayDrainLocked()
 	return retired, target, true
 }
 

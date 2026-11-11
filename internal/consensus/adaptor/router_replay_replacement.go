@@ -117,7 +117,7 @@ func (c *catchupReplayCoordinator) localReplayReplacementCandidate(
 
 func (c *catchupReplayCoordinator) reserveStandardReplayReplacement(generation uint64, seq uint32, hash [32]byte, peerID uint64, now time.Time) bool {
 	c.acquisitionMu.Lock()
-	if c.stoppedForShutdown() || !c.standardReplay.active || !c.standardReplay.pivotReady ||
+	if c.stoppedForShutdown() || !c.standardReplay.isActive() || !c.standardReplay.isPivotReady() ||
 		c.standardReplay.generation != generation || seq <= c.standardReplay.anchorSeq || hash == ([32]byte{}) {
 		c.acquisitionMu.Unlock()
 		return false
@@ -143,7 +143,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
 	replacement := c.standardReplay.replacement
-	if c.stoppedForShutdown() || !c.standardReplay.active || replacement == nil ||
+	if c.stoppedForShutdown() || !c.standardReplay.isActive() || replacement == nil ||
 		replacement.generation != c.standardReplay.generation {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
@@ -203,7 +203,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 		}
 	}
 	c.acquisitionMu.Lock()
-	if c.stoppedForShutdown() || !c.standardReplay.active || c.standardReplay.generation != generation ||
+	if c.stoppedForShutdown() || !c.standardReplay.isActive() || c.standardReplay.generation != generation ||
 		c.standardReplay.replacement != replacement || replacement.acquisition != nil ||
 		c.standardReplay.targetSeq != targetSeq || c.standardReplay.targetHash != targetHash ||
 		c.standardReplay.anchorSeq >= seq ||
@@ -239,7 +239,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayReplacement(now time.Time)
 // Caller holds replayCommitMu and acquisitionMu.
 func (c *catchupReplayCoordinator) discardObsoleteStandardReplayReplacementLocked() *inbound.Ledger {
 	replacement := c.standardReplay.replacement
-	if !c.standardReplay.active || replacement == nil || replacement.generation != c.standardReplay.generation ||
+	if !c.standardReplay.isActive() || replacement == nil || replacement.generation != c.standardReplay.generation ||
 		replacement.seq > c.standardReplay.anchorSeq {
 		return nil
 	}
@@ -275,7 +275,7 @@ func (c *catchupReplayCoordinator) completeStandardReplayReplacement(il *inbound
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
 	replacement := c.standardReplay.replacement
-	if !c.standardReplay.active || replacement == nil || replacement.acquisition != il ||
+	if !c.standardReplay.isActive() || replacement == nil || replacement.acquisition != il ||
 		replacement.generation != c.standardReplay.generation {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
@@ -321,7 +321,7 @@ func (c *catchupReplayCoordinator) completeLocalStandardReplayReplacement(
 	}
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	if c.stoppedForShutdown() || !c.standardReplay.active || c.standardReplay.generation != generation ||
+	if c.stoppedForShutdown() || !c.standardReplay.isActive() || c.standardReplay.generation != generation ||
 		c.standardReplay.replacement != replacement || replacement.generation != generation ||
 		replacement.acquisition != nil || replacement.installing || replacement.seq != h.LedgerIndex ||
 		replacement.hash != h.Hash || c.standardReplay.anchorSeq >= h.LedgerIndex {
@@ -337,7 +337,7 @@ func (c *catchupReplayCoordinator) completeLocalStandardReplayReplacement(
 	initial, err := c.adaptor.LedgerService().BootstrapLedgerWithState(ctx, h, stateMap, txMap)
 	if err != nil {
 		c.acquisitionMu.Lock()
-		if c.standardReplay.active && c.standardReplay.generation == generation &&
+		if c.standardReplay.isActive() && c.standardReplay.generation == generation &&
 			c.standardReplay.replacement == replacement && replacement.installing {
 			replacement.installing = false
 		}
@@ -363,7 +363,7 @@ func (c *catchupReplayCoordinator) installStandardReplayReplacementLocked(
 	h *header.LedgerHeader,
 	initial bool,
 ) (standardReplayRetirement, bool) {
-	if replacement == nil || h == nil || !c.standardReplay.active ||
+	if replacement == nil || h == nil || !c.standardReplay.isActive() ||
 		c.standardReplay.replacement != replacement || replacement.generation != c.standardReplay.generation ||
 		replacement.seq != h.LedgerIndex || replacement.hash != h.Hash {
 		return standardReplayRetirement{}, false
@@ -415,9 +415,7 @@ func (c *catchupReplayCoordinator) installStandardReplayReplacementLocked(
 	if reachedTarget {
 		retirement.baseLedger, retirement.release = c.standardReplay.baseLedger, c.standardReplay.baseRelease
 		c.standardReplay.baseLedger, c.standardReplay.baseRelease = nil, nil
-		c.standardReplay.active = false
-		c.standardReplay.applying = false
-		c.checkStandardReplayPhaseLocked()
+		c.setStandardReplayPhaseLocked(c.standardReplay.phase.deactivated().withoutDrain())
 		c.standardReplay.backpressured = false
 		for _, entry := range c.standardReplay.entries {
 			c.releaseStandardReplayEntryMemoryLocked(entry)
@@ -436,7 +434,7 @@ func (c *catchupReplayCoordinator) finishStandardReplayReplacement(
 	c.retireStandardReplay(retirement)
 	c.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initial)
 	c.acquisitionMu.Lock()
-	current := c.standardReplay.active && c.standardReplay.generation == replacement.generation
+	current := c.standardReplay.isActive() && c.standardReplay.generation == replacement.generation
 	c.acquisitionMu.Unlock()
 	if !current {
 		return true
