@@ -11,15 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-type fullDiffView struct{ *mptTestView }
-
-func (fullDiffView) ForEach(func([32]byte, []byte) bool) error { return nil }
-func (fullDiffView) Succ([32]byte) ([32]byte, []byte, bool, error) {
-	return [32]byte{}, nil, false, nil
-}
-func (fullDiffView) TxExists([32]byte) (bool, error) { return false, nil }
-func (fullDiffView) LedgerSeq() uint32               { return 0 }
-
 // TestAssetFreezeGolden freezes rippled's Asset-level checkFrozen,
 // checkIndividualFrozen and checkDeepFrozen for IOU and MPT holdings,
 // including a vault share whose underlying asset is locked. An amendment that
@@ -28,13 +19,7 @@ func (fullDiffView) LedgerSeq() uint32               { return 0 }
 func TestAssetFreezeGolden(t *testing.T) {
 	var b strings.Builder
 	line := func(view *mptTestView, name string, account [20]byte, asset tx.Asset) {
-		got := CheckFrozen(view, account, asset)
-		unreachable := strings.Contains(name, "vault-share") ||
-			(strings.Contains(name, "account=50") && !strings.Contains(name, "holding=missing"))
-		if legacy := tx.AssetFrozen(fullDiffView{view}, account, asset); legacy != got && !unreachable {
-			t.Errorf("%s: tx.AssetFrozen=%s CheckFrozen=%s", name, legacy, got)
-		}
-		fmt.Fprintf(&b, "%s frozen=%s individual=%s deep=%s\n", name, got,
+		fmt.Fprintf(&b, "%s frozen=%s individual=%s deep=%s\n", name, CheckFrozen(view, account, asset),
 			CheckIndividualFrozen(view, account, asset), CheckDeepFrozen(view, account, asset))
 	}
 

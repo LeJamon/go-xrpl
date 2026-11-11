@@ -241,11 +241,11 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 				return result
 			}
 		} else {
-			if assetFrozen(view, ammAccountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckFrozen(view, ammAccountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
-			if assetIndividuallyFrozen(view, accountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckIndividualFrozen(view, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 		return ter.TesSUCCESS

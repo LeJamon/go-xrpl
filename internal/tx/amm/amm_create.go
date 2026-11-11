@@ -139,11 +139,11 @@ func (a *AMMCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig)
 	}
 
 	// Reference: rippled AMMCreate.cpp line 119-124
-	if assetFrozen(view, accountID, asset1) {
-		return frozenAssetResult(asset1)
+	if result := mptutil.CheckFrozen(view, accountID, asset1); result != ter.TesSUCCESS {
+		return result
 	}
-	if assetFrozen(view, accountID, asset2) {
-		return frozenAssetResult(asset2)
+	if result := mptutil.CheckFrozen(view, accountID, asset2); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Reference: rippled AMMCreate.cpp line 126-142
