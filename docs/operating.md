@@ -481,6 +481,14 @@ synced and the swap is durable. An interrupted refresh restarts its state-tree
 walk from the root; any records that remain in the writable generation are
 reused, but every live node is read again.
 
+The node store records its record-format version (currently `1`) in a reserved
+marker record. A database created before the marker existed is stamped on its
+first writable open, with no manual step. Startup fails with
+`unsupported nodestore format version` when the database was written by a build
+using a different format; run a build that supports that version. The marker is
+separate from the rotating store's `<path>.generations.json` manifest, which
+versions the generation directories rather than the records inside them.
+
 ### `[sqlite]` — relational index databases
 
 Schema version 6 stores ledger headers alongside transaction and account indexes

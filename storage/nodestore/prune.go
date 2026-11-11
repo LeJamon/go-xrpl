@@ -1,6 +1,7 @@
 package nodestore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -105,6 +106,9 @@ func (d *KVDatabase) DeleteBeforeWithRetention(
 		}
 
 		key := iterator.Key()
+		if bytes.Equal(key, formatMarkerKey) {
+			continue
+		}
 		if len(key) != len(Hash256{}) {
 			return finishWith(fmt.Errorf("%w: invalid key length %d", ErrDataCorrupt, len(key)))
 		}

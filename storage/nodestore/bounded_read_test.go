@@ -17,7 +17,10 @@ type boundedReadStore struct {
 	limits []int
 }
 
-func (s *boundedReadStore) Get([]byte) ([]byte, error) {
+func (s *boundedReadStore) Get(key []byte) ([]byte, error) {
+	if bytes.Equal(key, formatMarkerKey) {
+		return s.MemDatabase.Get(key)
+	}
 	panic("bounded read fell back to an unbounded copy")
 }
 

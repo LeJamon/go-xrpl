@@ -152,12 +152,16 @@ func (d *KVDatabase) lockMutation(ctx context.Context) error {
 	}
 }
 
-// NewKVDatabase constructs a NodeStore over store using config.
+// NewKVDatabase constructs a NodeStore over store using config. It fails with
+// ErrUnsupportedFormat when store was written in another FormatVersion.
 func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatabase, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: nil store", ErrInvalidConfig)
 	}
 	if err := config.validate(); err != nil {
+		return nil, err
+	}
+	if err := checkFormat(store); err != nil {
 		return nil, err
 	}
 
