@@ -59,14 +59,12 @@ func decodeCapturingGenerated(t *testing.T, msgType MessageType, wire []byte) (p
 	t.Helper()
 	codec := codecs[msgType]
 	var generated pb.Message
-	codecs[msgType] = msgCodec{
-		newProto: codec.newProto,
-		encode:   codec.encode,
-		decode: func(pmsg pb.Message) (Message, error) {
-			generated = pmsg
-			return codec.decode(pmsg)
-		},
+	capturing := *codec
+	capturing.decode = func(pmsg pb.Message) (Message, error) {
+		generated = pmsg
+		return codec.decode(pmsg)
 	}
+	codecs[msgType] = &capturing
 	defer func() { codecs[msgType] = codec }()
 
 	decoded, err := Decode(msgType, wire)
