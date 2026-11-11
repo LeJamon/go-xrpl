@@ -3,6 +3,7 @@ package invariants
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -41,8 +42,8 @@ func TestPrivilegeTable(t *testing.T) {
 		{protocol.TxTypeLoanPay, mayAuthorizeMPT | mustModifyVault},
 	}
 	for _, c := range cases {
-		if got := txPrivileges[c.txType]; got != c.priv {
-			t.Errorf("txPrivileges[%d] = 0x%04x, want 0x%04x", c.txType, got, c.priv)
+		if got := tx.PrivilegesOf(c.txType); got != c.priv {
+			t.Errorf("PrivilegesOf(%d) = 0x%04x, want 0x%04x", c.txType, got, c.priv)
 		}
 		// Every set bit must be individually reported by hasPrivilege.
 		for bit := Privilege(1); bit != 0; bit <<= 1 {
@@ -58,8 +59,8 @@ func TestPrivilegeTable(t *testing.T) {
 		protocol.TxTypeBatch,
 		protocol.TxTypeEscrowFinish,
 	} {
-		if txPrivileges[tt] != noPriv {
-			t.Errorf("txPrivileges[%d] = 0x%04x, want noPriv", tt, txPrivileges[tt])
+		if got := tx.PrivilegesOf(tt); got != 0 {
+			t.Errorf("PrivilegesOf(%d) = 0x%04x, want none", tt, got)
 		}
 		if hasPrivilege(tt, mustDeleteAcct|createAcct|changeNFTCounts) {
 			t.Errorf("hasPrivilege(%d, ...) unexpectedly true", tt)

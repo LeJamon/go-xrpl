@@ -6,15 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/account"
-	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
-	"github.com/LeJamon/go-xrpl/internal/tx/offer"
-	"github.com/LeJamon/go-xrpl/internal/tx/paychan"
-	"github.com/LeJamon/go-xrpl/internal/tx/payment"
-	"github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
-	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
-	"github.com/LeJamon/go-xrpl/internal/tx/xchain"
 )
 
 // ApplyResult represents the result of trying to apply or queue a transaction.
@@ -876,121 +868,26 @@ func (q *TxQ) getNextQueuableSeq(aq *accountQueue, acctSeq uint32) uint32 {
 
 // computeConsequences determines the potential impact of a transaction.
 func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) txConsequences {
-	common := txn.GetCommon()
-	fee, _ := strconv.ParseUint(common.Fee, 10, 64)
+	fee, _ := strconv.ParseUint(txn.GetCommon().Fee, 10, 64)
+
+	// A type's consequences come from its descriptor: Normal and Blocker are
+	// declared there, Custom types compute their own.
+	var c tx.Consequences
+	if calc, ok := txn.(tx.ConsequencesCalculator); ok {
+		c = calc.Consequences()
+	} else if d, _ := tx.Lookup(txn.TxType()); d.Consequences == tx.BlockerConsequences {
+		c.Blocker = true
+	}
+
 	cons := txConsequences{
-		Fee: fee,
+		Fee:            fee,
+		PotentialSpend: c.PotentialSpend,
+		IsBlocker:      c.Blocker,
+		FollowingSeq:   seqProxy,
 	}
-
-	// Compute following sequence
-	if seqProxy.IsTicket {
-		// Tickets don't advance sequence
-		cons.FollowingSeq = seqProxy
-	} else {
-		nextSeq := seqProxy.Value + 1
-		// TicketCreate consumes TicketCount sequences (including the tx itself).
-		// Reference: TicketCreate.cpp makeTxConsequences returns
-		// TxConsequences{tx, ticketCount}, and followingSeq() does
-		// seqProx.advanceBy(sequencesConsumed) = seq + ticketCount.
-		if tc, ok := txn.(*ticket.TicketCreate); ok && tc.TicketCount > 0 {
-			nextSeq = seqProxy.Value + tc.TicketCount
-		}
-		cons.FollowingSeq = NewSeqProxySequence(nextSeq)
+	// Tickets don't advance the account sequence.
+	if !seqProxy.IsTicket {
+		cons.FollowingSeq = NewSeqProxySequence(seqProxy.Value + max(c.SequencesConsumed, 1))
 	}
-
-	// Check if this is a blocker transaction.
-	// Reference: SetAccount.cpp:34-55 (makeTxConsequences), applySteps.cpp:140
-	switch txn.TxType() {
-	case tx.TypeRegularKeySet, tx.TypeSignerListSet,
-		tx.TypeAccountDelete, tx.TypeXChainClaim,
-		tx.TypeXChainAddClaimAttestation, tx.TypeXChainAddAccountCreateAttest:
-		cons.IsBlocker = true
-	case tx.TypeAccountSet:
-		cons.IsBlocker = isAccountSetBlocker(txn)
-	}
-
-	// Compute potential XRP spend (the max XRP an account could move beyond the
-	// fee). Each case mirrors the corresponding rippled makeTxConsequences.
-	switch t := txn.(type) {
-	case *payment.Payment:
-		// SendMax when present, else Amount; XRP only (Payment.cpp:35-48).
-		maxAmount := t.Amount
-		if t.SendMax != nil {
-			maxAmount = *t.SendMax
-		}
-		if maxAmount.IsNative() {
-			cons.PotentialSpend = uint64(maxAmount.Drops())
-		}
-	case *offer.OfferCreate:
-		if t.TakerGets.IsNative() {
-			cons.PotentialSpend = uint64(t.TakerGets.Drops())
-		}
-	case *escrow.EscrowCreate:
-		// isXRP(Amount) ? xrp : 0 — IOU/MPT escrows spend no XRP (Escrow.cpp:81-86).
-		if t.Amount.IsNative() {
-			cons.PotentialSpend = uint64(t.Amount.Drops())
-		}
-	case *paychan.PaymentChannelCreate:
-		// Amount is XRP-only (preflight-guaranteed); PayChan.cpp:168.
-		if t.Amount.IsNative() {
-			cons.PotentialSpend = uint64(t.Amount.Drops())
-		}
-	case *paychan.PaymentChannelFund:
-		if t.Amount.IsNative() {
-			cons.PotentialSpend = uint64(t.Amount.Drops())
-		}
-	case *xchain.XChainCommit:
-		// native && signum>0 ? xrp : 0 — IOU commits spend no XRP
-		// (XChainBridge.cpp:1895-1906).
-		if t.Amount.IsNative() && uint64(t.Amount.Drops()) > 0 {
-			cons.PotentialSpend = uint64(t.Amount.Drops())
-		}
-	case *sponsor.SponsorshipSet:
-		if t.FeeAmountDelta != nil && t.FeeAmountDelta.IsNative() && t.FeeAmountDelta.Signum() > 0 {
-			cons.PotentialSpend = uint64(t.FeeAmountDelta.Drops())
-		}
-	}
-
 	return cons
-}
-
-// isAccountSetBlocker returns true if the AccountSet transaction is a blocker.
-// An AccountSet is a blocker if it sets/clears flags that affect auth behavior.
-// Reference: SetAccount.cpp:34-55 (makeTxConsequences)
-func isAccountSetBlocker(txn tx.Transaction) bool {
-	as, ok := txn.(*account.AccountSet)
-	if !ok {
-		return false
-	}
-
-	// Check transaction flags (tfRequireAuth | tfOptionalAuth)
-	common := txn.GetCommon()
-	if common.Flags != nil {
-		flags := *common.Flags
-		if flags&(account.AccountSetTxFlagRequireAuth|account.AccountSetTxFlagOptionalAuth) != 0 {
-			return true
-		}
-	}
-
-	// Check SetFlag for asfRequireAuth(2), asfDisableMaster(4), asfAccountTxnID(5)
-	if as.SetFlag != nil {
-		switch *as.SetFlag {
-		case account.AccountSetFlagRequireAuth,
-			account.AccountSetFlagDisableMaster,
-			account.AccountSetFlagAccountTxnID:
-			return true
-		}
-	}
-
-	// Check ClearFlag for asfRequireAuth(2), asfDisableMaster(4), asfAccountTxnID(5)
-	if as.ClearFlag != nil {
-		switch *as.ClearFlag {
-		case account.AccountSetFlagRequireAuth,
-			account.AccountSetFlagDisableMaster,
-			account.AccountSetFlagAccountTxnID:
-			return true
-		}
-	}
-
-	return false
 }

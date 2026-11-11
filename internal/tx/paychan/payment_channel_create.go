@@ -52,6 +52,14 @@ func (p *PaymentChannelCreate) TxType() tx.Type {
 	return tx.TypePaymentChannelCreate
 }
 
+// Consequences reports the XRP Amount moved into the channel.
+func (p *PaymentChannelCreate) Consequences() tx.Consequences {
+	if !p.Amount.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(p.Amount.Drops())}
+}
+
 // Reference: rippled PayChan.cpp PayChanCreate::preflight()
 func (p *PaymentChannelCreate) Validate() error {
 	if err := p.BaseTx.Validate(); err != nil {

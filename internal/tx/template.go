@@ -19,6 +19,8 @@ const (
 type templateField struct {
 	name  string
 	style fieldStyle
+	// mptSupported admits an MPT amount or issue in the field.
+	mptSupported bool
 }
 
 // commonFields are the fields permitted on every transaction type, regardless
@@ -56,18 +58,18 @@ var commonFields = []templateField{
 var txTemplates = map[Type][]templateField{
 	TypePayment: {
 		{name: "Destination", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
-		{name: "SendMax", style: soeOPTIONAL},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
+		{name: "SendMax", style: soeOPTIONAL, mptSupported: true},
 		{name: "Paths", style: soeDEFAULT},
 		{name: "InvoiceID", style: soeOPTIONAL},
 		{name: "DestinationTag", style: soeOPTIONAL},
-		{name: "DeliverMin", style: soeOPTIONAL},
+		{name: "DeliverMin", style: soeOPTIONAL, mptSupported: true},
 		{name: "CredentialIDs", style: soeOPTIONAL},
 		{name: "DomainID", style: soeOPTIONAL},
 	},
 	TypeEscrowCreate: {
 		{name: "Destination", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 		{name: "Condition", style: soeOPTIONAL},
 		{name: "CancelAfter", style: soeOPTIONAL},
 		{name: "FinishAfter", style: soeOPTIONAL},
@@ -100,8 +102,8 @@ var txTemplates = map[Type][]templateField{
 		{name: "RegularKey", style: soeOPTIONAL},
 	},
 	TypeOfferCreate: {
-		{name: "TakerPays", style: soeREQUIRED},
-		{name: "TakerGets", style: soeREQUIRED},
+		{name: "TakerPays", style: soeREQUIRED, mptSupported: true},
+		{name: "TakerGets", style: soeREQUIRED, mptSupported: true},
 		{name: "Expiration", style: soeOPTIONAL},
 		{name: "OfferSequence", style: soeOPTIONAL},
 		{name: "DomainID", style: soeOPTIONAL},
@@ -139,15 +141,15 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeCheckCreate: {
 		{name: "Destination", style: soeREQUIRED},
-		{name: "SendMax", style: soeREQUIRED},
+		{name: "SendMax", style: soeREQUIRED, mptSupported: true},
 		{name: "Expiration", style: soeOPTIONAL},
 		{name: "DestinationTag", style: soeOPTIONAL},
 		{name: "InvoiceID", style: soeOPTIONAL},
 	},
 	TypeCheckCash: {
 		{name: "CheckID", style: soeREQUIRED},
-		{name: "Amount", style: soeOPTIONAL},
-		{name: "DeliverMin", style: soeOPTIONAL},
+		{name: "Amount", style: soeOPTIONAL, mptSupported: true},
+		{name: "DeliverMin", style: soeOPTIONAL, mptSupported: true},
 	},
 	TypeCheckCancel: {
 		{name: "CheckID", style: soeREQUIRED},
@@ -197,52 +199,52 @@ var txTemplates = map[Type][]templateField{
 		{name: "NFTokenBrokerFee", style: soeOPTIONAL},
 	},
 	TypeClawback: {
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 		{name: "Holder", style: soeOPTIONAL},
 	},
 	TypeAMMClawback: {
 		{name: "Holder", style: soeREQUIRED},
-		{name: "Asset", style: soeREQUIRED},
-		{name: "Asset2", style: soeREQUIRED},
-		{name: "Amount", style: soeOPTIONAL},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
+		{name: "Asset2", style: soeREQUIRED, mptSupported: true},
+		{name: "Amount", style: soeOPTIONAL, mptSupported: true},
 	},
 	TypeAMMCreate: {
-		{name: "Amount", style: soeREQUIRED},
-		{name: "Amount2", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
+		{name: "Amount2", style: soeREQUIRED, mptSupported: true},
 		{name: "TradingFee", style: soeREQUIRED},
 	},
 	TypeAMMDeposit: {
-		{name: "Asset", style: soeREQUIRED},
-		{name: "Asset2", style: soeREQUIRED},
-		{name: "Amount", style: soeOPTIONAL},
-		{name: "Amount2", style: soeOPTIONAL},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
+		{name: "Asset2", style: soeREQUIRED, mptSupported: true},
+		{name: "Amount", style: soeOPTIONAL, mptSupported: true},
+		{name: "Amount2", style: soeOPTIONAL, mptSupported: true},
 		{name: "EPrice", style: soeOPTIONAL},
 		{name: "LPTokenOut", style: soeOPTIONAL},
 		{name: "TradingFee", style: soeOPTIONAL},
 	},
 	TypeAMMWithdraw: {
-		{name: "Asset", style: soeREQUIRED},
-		{name: "Asset2", style: soeREQUIRED},
-		{name: "Amount", style: soeOPTIONAL},
-		{name: "Amount2", style: soeOPTIONAL},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
+		{name: "Asset2", style: soeREQUIRED, mptSupported: true},
+		{name: "Amount", style: soeOPTIONAL, mptSupported: true},
+		{name: "Amount2", style: soeOPTIONAL, mptSupported: true},
 		{name: "EPrice", style: soeOPTIONAL},
 		{name: "LPTokenIn", style: soeOPTIONAL},
 	},
 	TypeAMMVote: {
-		{name: "Asset", style: soeREQUIRED},
-		{name: "Asset2", style: soeREQUIRED},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
+		{name: "Asset2", style: soeREQUIRED, mptSupported: true},
 		{name: "TradingFee", style: soeREQUIRED},
 	},
 	TypeAMMBid: {
-		{name: "Asset", style: soeREQUIRED},
-		{name: "Asset2", style: soeREQUIRED},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
+		{name: "Asset2", style: soeREQUIRED, mptSupported: true},
 		{name: "BidMin", style: soeOPTIONAL},
 		{name: "BidMax", style: soeOPTIONAL},
 		{name: "AuthAccounts", style: soeOPTIONAL},
 	},
 	TypeAMMDelete: {
-		{name: "Asset", style: soeREQUIRED},
-		{name: "Asset2", style: soeREQUIRED},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
+		{name: "Asset2", style: soeREQUIRED, mptSupported: true},
 	},
 	TypeXChainCreateClaimID: {
 		{name: "XChainBridge", style: soeREQUIRED},
@@ -382,7 +384,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "Permissions", style: soeREQUIRED},
 	},
 	TypeVaultCreate: {
-		{name: "Asset", style: soeREQUIRED},
+		{name: "Asset", style: soeREQUIRED, mptSupported: true},
 		{name: "AssetsMaximum", style: soeOPTIONAL},
 		{name: "MPTokenMetadata", style: soeOPTIONAL},
 		{name: "DomainID", style: soeOPTIONAL},
@@ -405,11 +407,11 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeVaultDeposit: {
 		{name: "VaultID", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 	},
 	TypeVaultWithdraw: {
 		{name: "VaultID", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 		{name: "Destination", style: soeOPTIONAL},
 		{name: "DestinationTag", style: soeOPTIONAL},
 		{name: "CredentialIDs", style: soeOPTIONAL},
@@ -417,7 +419,7 @@ var txTemplates = map[Type][]templateField{
 	TypeVaultClawback: {
 		{name: "VaultID", style: soeREQUIRED},
 		{name: "Holder", style: soeREQUIRED},
-		{name: "Amount", style: soeOPTIONAL},
+		{name: "Amount", style: soeOPTIONAL, mptSupported: true},
 	},
 	TypeBatch: {
 		{name: "RawTransactions", style: soeREQUIRED},
@@ -437,18 +439,18 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeLoanBrokerCoverDeposit: {
 		{name: "LoanBrokerID", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 	},
 	TypeLoanBrokerCoverWithdraw: {
 		{name: "LoanBrokerID", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 		{name: "Destination", style: soeOPTIONAL},
 		{name: "DestinationTag", style: soeOPTIONAL},
 		{name: "CredentialIDs", style: soeOPTIONAL},
 	},
 	TypeLoanBrokerCoverClawback: {
 		{name: "LoanBrokerID", style: soeOPTIONAL},
-		{name: "Amount", style: soeOPTIONAL},
+		{name: "Amount", style: soeOPTIONAL, mptSupported: true},
 	},
 	TypeLoanSet: {
 		{name: "LoanBrokerID", style: soeREQUIRED},
@@ -477,7 +479,7 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeLoanPay: {
 		{name: "LoanID", style: soeREQUIRED},
-		{name: "Amount", style: soeREQUIRED},
+		{name: "Amount", style: soeREQUIRED, mptSupported: true},
 	},
 	TypeConfidentialMPTConvert: {
 		{name: "MPTokenIssuanceID", style: soeREQUIRED},
@@ -555,6 +557,7 @@ var txTemplates = map[Type][]templateField{
 
 var commonFieldStyles = indexTemplate(commonFields)
 var txTemplateStyles = indexTemplates(txTemplates)
+var txTemplateMPTFields = indexMPTFields(txTemplates)
 var innerObjectTemplateStyles = map[string]map[string]fieldStyle{
 	"Signer": indexTemplate([]templateField{
 		{name: "Account", style: soeREQUIRED},
@@ -615,6 +618,22 @@ func indexTemplates(templates map[Type][]templateField) map[Type]map[string]fiel
 	indexes := make(map[Type]map[string]fieldStyle, len(templates))
 	for txType, fields := range templates {
 		indexes[txType] = indexTemplate(fields)
+	}
+	return indexes
+}
+
+func indexMPTFields(templates map[Type][]templateField) map[Type]map[string]bool {
+	indexes := make(map[Type]map[string]bool)
+	for txType, fields := range templates {
+		for _, field := range fields {
+			if !field.mptSupported {
+				continue
+			}
+			if indexes[txType] == nil {
+				indexes[txType] = make(map[string]bool)
+			}
+			indexes[txType][field.name] = true
+		}
 	}
 	return indexes
 }

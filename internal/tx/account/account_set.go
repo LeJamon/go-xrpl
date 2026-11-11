@@ -155,6 +155,25 @@ func (a *AccountSet) TxType() tx.Type {
 	return tx.TypeAccountSet
 }
 
+// Consequences marks the transaction a blocker when it changes authorization
+// requirements or the master key, which can invalidate later queued
+// transactions from the account.
+func (a *AccountSet) Consequences() tx.Consequences {
+	if a.GetFlags()&(AccountSetTxFlagRequireAuth|AccountSetTxFlagOptionalAuth) != 0 {
+		return tx.Consequences{Blocker: true}
+	}
+	for _, flag := range []*uint32{a.SetFlag, a.ClearFlag} {
+		if flag == nil {
+			continue
+		}
+		switch *flag {
+		case AccountSetFlagRequireAuth, AccountSetFlagDisableMaster, AccountSetFlagAccountTxnID:
+			return tx.Consequences{Blocker: true}
+		}
+	}
+	return tx.Consequences{}
+}
+
 // Reference: rippled SetAccount.cpp preflight()
 func (a *AccountSet) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {

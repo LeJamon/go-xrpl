@@ -665,11 +665,9 @@ def parse_go_transaction_types(repo: Path) -> tuple[dict[int, dict[str, Any]], l
             "code": int(match.group(2), 0),
             "go_const": f"Type{match.group(1)}",
         }
-    for match in re.finditer(
-        r"(?m)^\s*case\s+TxType(\w+)\s*:\s*\n\s*return\s+\"([^\"]+)\"", text
-    ):
-        if match.group(1) in constants:
-            constants[match.group(1)]["name"] = match.group(2)
+    for match in re.finditer(r'(?m)^\s*"([^"]+)"\s*:\s*TxType(\w+),', text):
+        if match.group(2) in constants:
+            constants[match.group(2)]["name"] = match.group(1)
     by_code: dict[int, dict[str, Any]] = {}
     for suffix, value in constants.items():
         if "name" in value:
@@ -692,7 +690,7 @@ def parse_go_registrations(repo: Path) -> dict[int, dict[str, Any]]:
     for path in sorted((repo / "internal/tx").rglob("register.go")):
         text = read(path)
         for match in re.finditer(
-            r"tx\.Register\(tx\.(Type\w+),\s*func\(\) tx\.Transaction\s*\{\s*return &([A-Za-z_]\w*)\{",
+            r"tx\.Register\(tx\.Descriptor\{\s*Type:\s*tx\.(Type\w+),\s*New:\s*func\(\) tx\.Transaction\s*\{\s*return &([A-Za-z_]\w*)\{",
             text,
             re.S,
         ):
@@ -719,7 +717,7 @@ def parse_go_templates(repo: Path) -> dict[str, list[dict[str, str]]]:
         fields_body, _ = balanced(body, match.end() - 1, "{", "}")
         fields = []
         for field in re.finditer(
-            r'\{name:\s*"([^"]+)",\s*style:\s*soe(\w+)\}', fields_body
+            r'\{name:\s*"([^"]+)",\s*style:\s*soe(\w+)(?:,\s*mptSupported:\s*true)?\}', fields_body
         ):
             fields.append({"name": field.group(1), "style": STYLE_NAMES[field.group(2).title()]})
         templates[match.group(1)] = fields
