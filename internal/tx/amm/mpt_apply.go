@@ -31,17 +31,6 @@ func assetIssuerID(asset tx.Asset) ([20]byte, ter.Result) {
 	return issuer, ter.TesSUCCESS
 }
 
-func requireAssetAuth(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32) ter.Result {
-	if !asset.IsMPT() {
-		return tx.RequireAuth(view, asset, account)
-	}
-	id, result := decodeMPTAsset(asset)
-	if result != ter.TesSUCCESS {
-		return result
-	}
-	return mptutil.RequireAuthAt(view, id, account, strong, parentCloseTime)
-}
-
 func assetFrozen(view tx.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) bool {
 	if !asset.IsMPT() {
 		return tx.IsFrozen(view, account, asset)

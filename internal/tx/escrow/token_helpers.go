@@ -81,12 +81,12 @@ func escrowCreatePreclaimIOU(
 	}
 
 	// requireAuth for sender
-	if tr := requireAuthIOU(view, issuerID, accountID, amount.Currency); tr != ter.TesSUCCESS {
+	if tr := mptutil.RequireIOUAuth(view, issuerID, amount.Currency, accountID, mptutil.LegacyAuth); tr != ter.TesSUCCESS {
 		return tr
 	}
 
 	// requireAuth for destination
-	if tr := requireAuthIOU(view, issuerID, destID, amount.Currency); tr != ter.TesSUCCESS {
+	if tr := mptutil.RequireIOUAuth(view, issuerID, amount.Currency, destID, mptutil.LegacyAuth); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -245,7 +245,7 @@ func escrowFinishPreclaimIOU(view tx.ReadOnlyLedgerView, destID [20]byte, amount
 	}
 
 	// requireAuth on destination
-	if tr := requireAuthIOU(view, issuerID, destID, amount.Currency); tr != ter.TesSUCCESS {
+	if tr := mptutil.RequireIOUAuth(view, issuerID, amount.Currency, destID, mptutil.LegacyAuth); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -325,7 +325,7 @@ func escrowCancelPreclaimIOU(view tx.ReadOnlyLedgerView, accountID [20]byte, amo
 	}
 
 	// requireAuth on account
-	if tr := requireAuthIOU(view, issuerID, accountID, amount.Currency); tr != ter.TesSUCCESS {
+	if tr := mptutil.RequireIOUAuth(view, issuerID, amount.Currency, accountID, mptutil.LegacyAuth); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -810,63 +810,6 @@ func escrowUnlockMPT(
 }
 
 // 6. Shared Utilities
-
-// requireAuthIOU checks if an issuer requires authorization and if the account
-// is authorized on the trust line.
-// Reference: rippled View.cpp requireAuth(view, Issue, account) for IOU
-// Uses the default (legacy) auth type: trust line must exist if requireAuth is set.
-func requireAuthIOU(view tx.ReadOnlyLedgerView, issuerID, accountID [20]byte, currency string) ter.Result {
-	// Issuer is always authorized for own currency
-	if issuerID == accountID {
-		return ter.TesSUCCESS
-	}
-
-	// Read issuer account. A missing issuer carries no auth requirement, matching
-	// rippled's `if (issuerAccount && requireAuth)` guard, so it passes.
-	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if issuerAccount == nil {
-		return ter.TesSUCCESS
-	}
-
-	// If issuer doesn't require auth, pass
-	if issuerAccount.Flags&state.LsfRequireAuth == 0 {
-		return ter.TesSUCCESS
-	}
-
-	// Issuer requires auth — check if the trust line exists and is authorized
-	trustLineKey := keylet.Line(accountID, issuerID, currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if trustLineData == nil {
-		return ter.TecNO_LINE
-	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Check authorization flag based on account ordering
-	// Reference: rippled — if (account > issue.account) check lsfLowAuth else lsfHighAuth
-	// When account > issuer: issuer is the LOW account → check LsfLowAuth
-	// When account < issuer: issuer is the HIGH account → check LsfHighAuth
-	if state.CompareAccountIDs(accountID, issuerID) > 0 {
-		if rs.Flags&state.LsfLowAuth == 0 {
-			return ter.TecNO_AUTH
-		}
-	} else {
-		if rs.Flags&state.LsfHighAuth == 0 {
-			return ter.TecNO_AUTH
-		}
-	}
-
-	return ter.TesSUCCESS
-}
 
 func requireMPTAuthForEscrow(view tx.ReadOnlyLedgerView, issuanceID string, accountID [20]byte, parentCloseTime uint32) ter.Result {
 	id, err := mptutil.DecodeID(issuanceID)
