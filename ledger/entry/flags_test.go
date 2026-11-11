@@ -111,8 +111,14 @@ func TestLedgerSpecificFlags(t *testing.T) {
 	}
 
 	oracle := readOracleLedgerFlags(t)
-	if len(oracle) != len(tests) {
-		t.Fatalf("rippled has %d ledger flags, Go has %d", len(oracle), len(tests))
+	have := make(map[string]bool, len(tests))
+	for _, tt := range tests {
+		have[strings.ToLower(tt.name[:1])+tt.name[1:]] = true
+	}
+	for name := range oracle {
+		if !have[name] {
+			t.Errorf("rippled flag %s has no Go constant in flags.go", name)
+		}
 	}
 	for _, tt := range tests {
 		oracleName := strings.ToLower(tt.name[:1]) + tt.name[1:]

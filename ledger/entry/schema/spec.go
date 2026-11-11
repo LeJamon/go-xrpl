@@ -5,6 +5,24 @@
 // for fields that diverge from the sMD_Default rule. cmd/entrygen
 // reads this list, looks up each field's XRPL type and ordinal from
 // codec/binarycodec/definitions, and emits one Go file per entry type.
+//
+// Adding a ledger-entry type:
+//
+//  1. Add the type code and any new fields to
+//     codec/binarycodec/definitions/definitions.json.
+//  2. Register the type in protocol/ledger_entry_type.go (constant and
+//     registry row).
+//  3. Add the Entry to Specs and its rippled format to formats.go.
+//  4. Run go generate ./ledger/entry/...; this emits the typed model, the
+//     entry.Type constant and the entry.New dispatch.
+//  5. Add by hand what the schema cannot express: Lsf flag constants in
+//     ledger/entry/flags.go (pinned in flags_test.go), a keylet constructor
+//     in keylet (listed in keylet/coverage_test.go), a fixture in
+//     ledger/entry/coverage_test.go and a full vector in
+//     ledger/entry/testdata/sle-corpus.json.
+//
+// Tests fail, naming the type, when any of these is missing or disagrees
+// with rippled.
 package schema
 
 // Meta classifies a field's contribution to metadata. The values match the
