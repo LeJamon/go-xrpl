@@ -15,14 +15,18 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 const (
-	pinnedOracleRepository = "XRPLF/xrpld-private"
-	pinnedOracleTag        = "3.4.1"
-	pinnedOracleCommit     = "d147fccf54a500fce586522f28d6044c37fd8d29"
-	pinnedFixtureVersion   = "v4"
-	pinnedManifestSchema   = 4
+	pinnedFixtureVersion = "v4"
+	pinnedManifestSchema = 4
+)
+
+var (
+	pinnedOracleRepository = rippled.Pin.Repository
+	pinnedOracleTag        = rippled.Pin.Tag
+	pinnedOracleCommit     = rippled.Pin.Commit
 )
 
 var pinnedRecorderSources = []string{
@@ -97,7 +101,7 @@ func resolvePinnedCorpus(required bool) (*pinnedCorpus, error) {
 		if required {
 			return nil, fmt.Errorf("%w: set GOXRPL_FIXTURES_DIR", errCorpusNotConfigured)
 		}
-		root = filepath.Join(conformanceRepositoryRoot(), "internal/testing/conformance/testdata/rippled-3.4.1-v4")
+		root = filepath.Join(conformanceRepositoryRoot(), rippled.Pin.Corpus)
 	} else if !filepath.IsAbs(root) {
 		root = filepath.Join(conformanceRepositoryRoot(), root)
 	}
@@ -394,7 +398,7 @@ func validatePinnedBuildIdentity(data []byte, manifest pinnedManifest) error {
 	if err != nil {
 		return err
 	}
-	if version != "xrpld version 3.4.1" {
+	if version != rippled.Pin.VersionLine() {
 		return errors.New("build identity verified binary version does not match the pinned oracle")
 	}
 	return nil

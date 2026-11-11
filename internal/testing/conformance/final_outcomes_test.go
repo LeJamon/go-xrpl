@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 func TestFinalOutcomeRegressionSnapshots(t *testing.T) {
@@ -18,7 +20,7 @@ func TestFinalOutcomeRegressionSnapshots(t *testing.T) {
 	}
 	for name, digest := range cases {
 		t.Run(name, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join("testdata", "final-outcomes-3.4.1", name))
+			data, err := os.ReadFile(filepath.Join(conformanceRepositoryRoot(), rippled.Pin.FinalOutcomes, name))
 			if err != nil {
 				t.Fatal(err)
 			}

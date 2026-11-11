@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func copyPinnedCorpus(t *testing.T) (string, pinnedManifest) {
 	t.Helper()
 	root := t.TempDir()
-	source := filepath.Join(conformanceRepositoryRoot(), "internal/testing/conformance/testdata/rippled-3.4.1-v4")
+	source := filepath.Join(conformanceRepositoryRoot(), rippled.Pin.Corpus)
 	if err := os.CopyFS(root, os.DirFS(source)); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestPinnedCorpusAcceptsRecordedCorpus(t *testing.T) {
 }
 
 func TestPinnedCorpusResolvesRelativeSelectionFromRepository(t *testing.T) {
-	t.Setenv("GOXRPL_FIXTURES_DIR", "internal/testing/conformance/testdata/rippled-3.4.1-v4")
+	t.Setenv("GOXRPL_FIXTURES_DIR", rippled.Pin.Corpus)
 	t.Chdir(t.TempDir())
 	corpus, err := resolvePinnedCorpus(true)
 	if err != nil {
@@ -449,7 +450,7 @@ func TestPinnedRequiredEntrypointRejectsFilteredExecution(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.json")
 	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestConformance$/^does-not-exist$")
 	cmd.Env = append(os.Environ(),
-		"GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4",
+		"GOXRPL_FIXTURES_DIR="+rippled.Pin.Corpus,
 		"GOXRPL_CONFORMANCE_REQUIRED=1", "GOXRPL_CONFORMANCE_REPORT="+path)
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "incomplete conformance execution") {
