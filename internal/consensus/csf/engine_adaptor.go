@@ -185,6 +185,16 @@ func (p *Peer) SetParms(timing consensus.Timing) error {
 	return nil
 }
 
+// engineConfig is the production engine configuration driven by the peer's
+// timing and virtual clock instead of the wall clock and heartbeat.
+func (p *Peer) engineConfig() rcl.Config {
+	cfg := rcl.DefaultConfig()
+	cfg.Timing = p.timing
+	cfg.Clock = p.Now
+	cfg.ManualTick = true
+	return cfg
+}
+
 func (p *Peer) SetClockSkew(skew time.Duration) {
 	p.mu.Lock()
 	p.clockSkew = skew
@@ -307,16 +317,10 @@ func (p *Peer) Start() error {
 		p.mu.Lock()
 		p.standalone = len(p.network.Peers(p.ID)) == 0
 		p.mu.Unlock()
-		cfg := rcl.Config{
-			Timing:     p.timing,
-			Thresholds: consensus.DefaultThresholds(),
-			Clock:      p.Now,
-			ManualTick: true,
-		}
 		lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 		p.lifecycleCtx = lifecycleCtx
 		p.lifecycleCancel = lifecycleCancel
-		p.engine = rcl.NewEngine(p, cfg)
+		p.engine = rcl.NewEngine(p, p.engineConfig())
 		p.engine.SetLedgerAncestryProvider(p)
 		if err := p.engine.Start(lifecycleCtx); err != nil {
 			lifecycleCancel()
