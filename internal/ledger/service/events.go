@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -628,8 +629,9 @@ func (s *Service) commitTransactionResultsLocked(staged *stagedTransactionResult
 	if staged == nil {
 		return
 	}
+	s.txHashesBySeq[staged.ledgerSeq] = slices.Grow(s.txHashesBySeq[staged.ledgerSeq], len(staged.results))
 	for _, result := range staged.results {
-		s.txIndex[result.TxHash] = staged.ledgerSeq
+		s.indexTxLocked(result.TxHash, staged.ledgerSeq)
 	}
 	for txHash, txIndex := range staged.positions {
 		s.txPositionIndex[txHash] = txIndex
