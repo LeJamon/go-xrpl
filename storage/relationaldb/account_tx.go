@@ -16,13 +16,17 @@ func BuildAccountTxPage(opName string, options AccountTxPageOptions, scanned []T
 	}
 
 	if options.Delegate == nil {
+		// rippled accountTxPage (Node.cpp:1109-1238): the marker names the
+		// first row of the next page. The query starts at the marker
+		// inclusively, rows are skipped until the marker row itself is seen,
+		// and the row after the last returned one becomes the new marker.
+		if options.Marker != nil && (len(scanned) == 0 || !isAccountTxMarkerRow(scanned[0], *options.Marker)) {
+			return result, nil
+		}
 		result.Transactions = scanned
 		if uint64(len(scanned)) > uint64(options.Limit) {
 			result.Transactions = scanned[:options.Limit]
-			if len(result.Transactions) > 0 {
-				last := result.Transactions[len(result.Transactions)-1]
-				result.Marker = accountTxMarker(last)
-			}
+			result.Marker = accountTxMarker(scanned[options.Limit])
 		}
 		return result, nil
 	}
@@ -32,7 +36,7 @@ func BuildAccountTxPage(opName string, options AccountTxPageOptions, scanned []T
 	if options.Marker != nil {
 		markerIndex := -1
 		for index, transaction := range scanned {
-			if transaction.LedgerSeq == options.Marker.LedgerSeq && transaction.TxnSeq == options.Marker.TxnSeq {
+			if isAccountTxMarkerRow(transaction, *options.Marker) {
 				markerIndex = index
 				break
 			}
@@ -65,6 +69,10 @@ func BuildAccountTxPage(opName string, options AccountTxPageOptions, scanned []T
 		result.Marker = lastScanned
 	}
 	return result, nil
+}
+
+func isAccountTxMarkerRow(transaction TransactionInfo, marker AccountTxMarker) bool {
+	return transaction.LedgerSeq == marker.LedgerSeq && transaction.TxnSeq == marker.TxnSeq
 }
 
 func accountTxMarker(transaction TransactionInfo) *AccountTxMarker {

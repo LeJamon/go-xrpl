@@ -467,6 +467,29 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			expectedCode:  rpcerrors.RpcBAD_MARKET,
 		},
 		{
+			// rippled toCurrency parses the 40-hex all-zero code as XRP, so an
+			// issuer on it is unneeded.
+			name: "Hex zero pay currency with issuer is unneeded",
+			params: map[string]any{
+				"taker_pays": map[string]any{
+					"currency": "0000000000000000000000000000000000000000",
+					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			},
+			expectedError: "Unneeded field 'taker_pays.issuer' for XRP currency specification.",
+			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
+		},
+		{
+			name: "Hex zero currency against XRP is badMarket",
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "0000000000000000000000000000000000000000"},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			},
+			expectedError: "No such market.",
+			expectedCode:  rpcerrors.RpcBAD_MARKET,
+		},
+		{
 			// Book_test.cpp:1620-1634 — string-typed limit is rejected with
 			// rippled's specific message instead of a generic JSON-parse error.
 			name: "Limit as string returns expected_field message",
@@ -570,6 +593,18 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 			},
 			expectedPays: types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			expectedGets: types.Amount{Currency: "EUR", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		},
+		{
+			name: "Hex zero taker_pays currency is XRP",
+			takerPays: map[string]any{
+				"currency": "0000000000000000000000000000000000000000",
+			},
+			takerGets: map[string]any{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+			expectedPays: types.Amount{Currency: "XRP"},
+			expectedGets: types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		},
 	}
 

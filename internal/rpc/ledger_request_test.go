@@ -65,7 +65,7 @@ func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, strings.ToUpper(hex.EncodeToString(hash[:])), ledger["ledger_hash"])
 	assert.Equal(t, "5", ledger["ledger_index"])
-	assert.Equal(t, "2024-Aug-03 11:33:50 UTC", ledger["close_time_human"])
+	assert.Equal(t, "2024-Aug-03 11:33:50.000000000 UTC", ledger["close_time_human"])
 	assert.Equal(t, "2024-08-03T11:33:50Z", ledger["close_time_iso"])
 }
 
@@ -195,4 +195,45 @@ func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
+}
+
+// rippled getOrAcquireLedger (RPCLedgerHelpers.cpp:396-440): selector
+// presence is isMember, a bad hash is "not hex string", a non-integer
+// index is "not number", and the uint32 index is checked against the
+// validated ledger before the zero check, so a negative one is too large.
+func TestLedgerRequest_SelectorErrorsMatchRippled(t *testing.T) {
+	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	mock.validatedLedgerIndex = 10
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+	const exactlyOne = "Exactly one of 'ledger_hash' or 'ledger_index' can be specified."
+	tests := []struct {
+		name    string
+		params  string
+		message string
+	}{
+		{"none", `{}`, exactlyOne},
+		{"both", `{"ledger_index":1,"ledger_hash":"` + strings.Repeat("0", 64) + `"}`, exactlyOne},
+		{"empty hash and index", `{"ledger_index":1,"ledger_hash":""}`, exactlyOne},
+		{"empty hash", `{"ledger_hash":""}`, "Invalid field 'ledger_hash', not hex string."},
+		{"short hash", `{"ledger_hash":"x"}`, "Invalid field 'ledger_hash', not hex string."},
+		{"numeric hash", `{"ledger_hash":5}`, "Invalid field 'ledger_hash', not hex string."},
+		{"string index", `{"ledger_index":"1"}`, "Invalid field 'ledger_index', not number."},
+		{"null index", `{"ledger_index":null}`, "Invalid field 'ledger_index', not number."},
+		{"negative index", `{"ledger_index":-1}`, "Ledger index too large"},
+		{"zero index", `{"ledger_index":0}`, "Ledger index too small"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx, json.RawMessage(test.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, test.message, rpcErr.Message)
+		})
+	}
 }

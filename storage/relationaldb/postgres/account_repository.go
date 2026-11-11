@@ -90,17 +90,13 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", len(args))
 	}
 
-	// Marker-based pagination: for ASC pages resume after the marker (>),
-	// for DESC pages resume before it (<).
+	// Marker-based pagination includes the marker row: BuildAccountTxPage
+	// resumes on it, as rippled accountTxPage does.
 	if options.Marker != nil {
 		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
 		seqArg, txnArg := len(args)-1, len(args)
-		sequenceCmp := markerCmp
-		if options.Delegate != nil {
-			sequenceCmp += "="
-		}
-		query += fmt.Sprintf(" AND (at.ledger_seq %s $%d OR (at.ledger_seq = $%d AND at.txn_seq %s $%d))",
-			markerCmp, seqArg, seqArg, sequenceCmp, txnArg)
+		query += fmt.Sprintf(" AND (at.ledger_seq %s $%d OR (at.ledger_seq = $%d AND at.txn_seq %s= $%d))",
+			markerCmp, seqArg, seqArg, markerCmp, txnArg)
 	}
 
 	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir

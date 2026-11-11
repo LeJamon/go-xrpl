@@ -532,14 +532,14 @@ func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account stri
 		for i := range transactions {
 			if transactions[i].LedgerIndex == marker.LedgerSeq && transactions[i].TxnSeq == marker.TxnSeq {
 				start = i
-				if delegate == nil {
-					start++
-				}
 				found = true
 				break
 			}
 		}
 		if !found {
+			if delegate == nil {
+				return result, nil
+			}
 			return nil, errors.New("rpcenv: account_tx marker not found")
 		}
 	}
@@ -549,9 +549,9 @@ func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account stri
 
 	end := min(start+int(limit), len(transactions))
 	result.Transactions = transactions[start:end]
-	if end < len(transactions) && end > start {
-		last := transactions[end-1]
-		result.Marker = &types.AccountTxMarker{LedgerSeq: last.LedgerIndex, TxnSeq: last.TxnSeq}
+	if end < len(transactions) {
+		next := transactions[end]
+		result.Marker = &types.AccountTxMarker{LedgerSeq: next.LedgerIndex, TxnSeq: next.TxnSeq}
 	}
 	return result, nil
 }

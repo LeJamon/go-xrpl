@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -45,10 +46,11 @@ type PathFindSession struct {
 }
 
 // pathFindCreateRequest represents the path_find create subcommand parameters.
+// The account fields stay raw so that a missing field and a field of the wrong
+// JSON type map to rippled's distinct error codes.
 type pathFindCreateRequest struct {
-	Subcommand         string          `json:"subcommand"`
-	SourceAccount      string          `json:"source_account"`
-	DestinationAccount string          `json:"destination_account"`
+	SourceAccount      json.RawMessage `json:"source_account"`
+	DestinationAccount json.RawMessage `json:"destination_account"`
 	DestinationAmount  json.RawMessage `json:"destination_amount"`
 	SendMax            json.RawMessage `json:"send_max,omitempty"`
 	SourceCurrencies   json.RawMessage `json:"source_currencies,omitempty"`
@@ -63,27 +65,25 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	// Validate required fields
-	if request.SourceAccount == "" {
-		return nil, rpcerrors.RpcErrorInvalidParams("Missing field 'source_account'.")
+	// Field validation follows rippled PathRequest::parseJson order exactly,
+	// like the ripple_path_find handler.
+	if request.SourceAccount == nil {
+		return nil, rpcerrors.RpcErrorSrcActMissing("Source account not provided.")
 	}
-	if request.DestinationAccount == "" {
-		return nil, rpcerrors.RpcErrorInvalidParams("Missing field 'destination_account'.")
+	if request.DestinationAccount == nil {
+		return nil, rpcerrors.RpcErrorDstActMissing("Destination account not provided.")
 	}
 	if request.DestinationAmount == nil {
-		return nil, rpcerrors.RpcErrorInvalidParams("Missing field 'destination_amount'.")
+		return nil, rpcerrors.RpcErrorDstAmtMissing("Destination amount/currency/issuer is missing.")
 	}
 
-	// Decode accounts
-	srcAccount, err := state.DecodeAccountID(request.SourceAccount)
-	if err != nil {
-		return nil, rpcerrors.NewRpcError(rpcerrors.RpcACT_MALFORMED, "srcActMalformed", "invalidParams",
-			"Source account is malformed.")
+	srcAccount, ok := decodePathFindAccount(request.SourceAccount)
+	if !ok {
+		return nil, rpcerrors.RpcErrorSrcActMalformed("Source account is malformed.")
 	}
-	dstAccount, err := state.DecodeAccountID(request.DestinationAccount)
-	if err != nil {
-		return nil, rpcerrors.NewRpcError(rpcerrors.RpcACT_MALFORMED, "dstActMalformed", "invalidParams",
-			"Destination account is malformed.")
+	dstAccount, ok := decodePathFindAccount(request.DestinationAccount)
+	if !ok {
+		return nil, rpcerrors.RpcErrorDstActMalformed("Destination account is malformed.")
 	}
 
 	dstAmount, amtErr := state.AmountFromJSON(request.DestinationAmount)
@@ -169,7 +169,8 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			if err := json.Unmarshal(rawCurrency, &currency); err != nil || !keylet.IsValidCurrencyCode(currency) {
 				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
-			if currency == "" {
+			// rippled toCurrency also parses the 40-hex all-zero code as XRP.
+			if currency == "" || (len(currency) == 40 && strings.Trim(currency, "0") == "") {
 				currency = "XRP"
 			}
 			var issuer [20]byte
@@ -404,4 +405,18 @@ func convertToRPCPathSteps(paths [][]payment.PathStep) [][]rpctypes.PathStep {
 		result[i] = steps
 	}
 	return result
+}
+
+// decodePathFindAccount decodes a classic address given as a JSON string. Any
+// other JSON value is malformed, as rippled parses asString() of it.
+func decodePathFindAccount(raw json.RawMessage) ([20]byte, bool) {
+	var address string
+	if err := json.Unmarshal(raw, &address); err != nil {
+		return [20]byte{}, false
+	}
+	id, err := state.DecodeAccountID(address)
+	if err != nil {
+		return [20]byte{}, false
+	}
+	return id, true
 }
