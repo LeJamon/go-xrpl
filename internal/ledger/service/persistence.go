@@ -17,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -505,13 +504,14 @@ func (p *persistenceWorker) waitForNodePersists(ctx context.Context) error {
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
 	s.beginNodePersist()
 	defer s.endNodePersist()
+	family, familyStores := s.shamapFamily.(nodeStoreFamily)
 	var releaseClean func()
-	if family, ok := s.shamapFamily.(*backend.NodeStore); ok && family.UsesDatabase(s.nodeStore.database()) {
+	if familyStores && family.UsesDatabase(s.nodeStore.database()) {
 		releaseClean = l.PrepareCleanResidencyRelease(family)
 	}
 	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
 		return func(entries []shamap.FlushEntry) error {
-			if family, ok := s.shamapFamily.(*backend.NodeStore); ok {
+			if familyStores {
 				return family.StoreBatch(ctx, entries)
 			}
 			const batchSize = 4096
