@@ -23,7 +23,7 @@ type ReadOnlyLedgerView interface {
 }
 
 // LedgerView is the minimal read/write view the state package's directory
-// helpers (DirInsert/DirRemove/DirForEach) operate on. It is the state-layer
+// helpers (DirInsert/DirRemove) operate on. It is the state-layer
 // view abstraction and cannot import the richer tx.LedgerView (state is a leaf
 // package); tx.LedgerView is a superset and satisfies this interface, so tx-tree
 // callers pass their view directly.
