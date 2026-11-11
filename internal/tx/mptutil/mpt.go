@@ -196,6 +196,18 @@ func IsAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]by
 	return tx.IsFrozen(view, account, asset)
 }
 
+// CheckFrozen implements rippled's checkFrozen(view, account, Asset): tecLOCKED
+// for a frozen MPT, tecFROZEN for a frozen IOU.
+func CheckFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if !IsAssetFrozen(view, asset, account) {
+		return ter.TesSUCCESS
+	}
+	if asset.IsMPT() {
+		return ter.TecLOCKED
+	}
+	return ter.TecFROZEN
+}
+
 // CheckDepositFreeze applies the freeze rules for sending an asset from a
 // regular account into a pseudo-account. A regular freeze on the source is
 // bypassed when the source is the issuer; pseudo-accounts must always be able
@@ -213,11 +225,11 @@ func CheckDepositFreeze(view state.ReadOnlyLedgerView, srcAcct, pseudoAcct [20]b
 		return result
 	}
 	if srcAcct != issuer {
-		if result := checkIndividualFrozen(view, srcAcct, asset); result != ter.TesSUCCESS {
+		if result := CheckIndividualFrozen(view, srcAcct, asset); result != ter.TesSUCCESS {
 			return result
 		}
 	}
-	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+	if result := CheckIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
 		return result
 	}
 	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
@@ -242,11 +254,11 @@ func CheckWithdrawFreeze(view state.ReadOnlyLedgerView, pseudoAcct, submitterAcc
 	if result := checkGlobalFrozen(view, asset); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+	if result := CheckIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
 		return result
 	}
 	if submitterAcct != dstAcct {
-		if result := checkIndividualFrozen(view, submitterAcct, asset); result != ter.TesSUCCESS {
+		if result := CheckIndividualFrozen(view, submitterAcct, asset); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -302,7 +314,9 @@ func checkGlobalFrozen(view state.ReadOnlyLedgerView, asset tx.Asset) ter.Result
 	return ter.TesSUCCESS
 }
 
-func checkIndividualFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
+// CheckIndividualFrozen implements rippled's checkIndividualFrozen(view,
+// account, Asset).
+func CheckIndividualFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
