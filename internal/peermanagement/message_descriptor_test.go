@@ -351,21 +351,45 @@ func TestWireMessageTypesMatchProtoEnum(t *testing.T) {
 	assert.Equal(t, fromProto, pinned)
 }
 
+// TestMessageDescriptorsComplete requires exactly one descriptor per wire
+// type the codec table knows, an explicit routing pin for each, and a gate
+// reason wherever a gate is declared.
+func TestMessageDescriptorsComplete(t *testing.T) {
+	for code, d := range messageDescriptors {
+		msgType := message.MessageType(code)
+		if d == nil {
+			assert.False(t, message.IsKnownMessageType(msgType), "wire type %s has no descriptor", msgType)
+			continue
+		}
+		assert.True(t, message.IsKnownMessageType(msgType), "descriptor for %d has no codec", code)
+		_, pinned := wantOverlayRouting[msgType]
+		assert.True(t, pinned, "%s has no routing pin", msgType)
+		if d.gate != nil {
+			assert.NotEmpty(t, d.gate.reason, msgType.String())
+		}
+	}
+	for _, msgType := range allWireMessageTypes {
+		assert.NotSame(t, &unlistedMessage, describeMessage(msgType), msgType.String())
+	}
+	for _, msgType := range unlistedMessageTypes {
+		assert.Same(t, &unlistedMessage, describeMessage(msgType), msgType.String())
+	}
+}
+
 var benchClassifySink int
 
 func BenchmarkInboundMessageClassification(b *testing.B) {
 	types := classifiedMessageTypes()
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
-		msgType := types[i%len(types)]
-		n := int(CategorizeMessage(msgType))
-		if isConsensusPriorityMessageType(msgType) {
+		d := describeMessage(types[i%len(types)])
+		n := int(d.traffic)
+		switch d.lane {
+		case laneConsensus:
 			n++
-		}
-		if isConsensusControlMessageType(msgType) {
+		case laneConsensusControl:
 			n += 2
-		}
-		if isAcquisitionMessageType(msgType) {
+		case laneAcquisition:
 			n += 3
 		}
 		benchClassifySink += n
