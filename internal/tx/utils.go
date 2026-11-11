@@ -153,57 +153,6 @@ func IsFrozen(view state.ReadOnlyLedgerView, accountID [20]byte, asset Asset) bo
 	return IsGlobalFrozen(view, asset.Issuer) || IsIndividualFrozen(view, accountID, asset)
 }
 
-// RequireAuth reports whether account is authorized to hold the asset, using the
-// legacy (weak) auth semantics: a missing trust line is only fatal when the
-// issuer has lsfRequireAuth set. Returns TecNO_LINE when auth is required but no
-// trust line exists, TecNO_AUTH when the line exists but lacks the issuer's auth
-// flag, and TesSUCCESS otherwise (including XRP, self-issued, or a missing issuer
-// account). Reference: rippled ledger/View.cpp requireAuth(view, Issue, account)
-// with AuthType::Legacy.
-func RequireAuth(view ReadOnlyLedgerView, asset Asset, accountID [20]byte) ter.Result {
-	if asset.Currency == "" || asset.Currency == "XRP" {
-		return ter.TesSUCCESS
-	}
-
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return ter.TesSUCCESS
-	}
-	if accountID == issuerID {
-		return ter.TesSUCCESS
-	}
-
-	trustLineData, _ := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
-
-	issuerAccount, err := ReadAccountRoot(view, issuerID)
-	if err != nil || issuerAccount == nil {
-		return ter.TesSUCCESS
-	}
-	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
-		return ter.TesSUCCESS
-	}
-
-	if trustLineData == nil {
-		return ter.TecNO_LINE
-	}
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return ter.TecNO_AUTH
-	}
-
-	// (account > issuer) ? lsfLowAuth : lsfHighAuth
-	if state.CompareAccountIDs(accountID, issuerID) > 0 {
-		if (rs.Flags & state.LsfLowAuth) == 0 {
-			return ter.TecNO_AUTH
-		}
-	} else {
-		if (rs.Flags & state.LsfHighAuth) == 0 {
-			return ter.TecNO_AUTH
-		}
-	}
-	return ter.TesSUCCESS
-}
-
 // TransferRateParity is the transfer-rate value (1e9) that means "no fee".
 // Reference: rippled basics/Rate.h parityRate.
 const TransferRateParity uint32 = protocol.QualityOne
