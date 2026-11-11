@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/testing/metadata"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -157,6 +159,124 @@ func TestAMMClawbackHolderCreditOverflow(t *testing.T) {
 			} else {
 				require.Equal(t, issuerBalance, env.Balance(env.GW))
 				require.Equal(t, issuerSequence, env.Seq(env.GW))
+			}
+		})
+	}
+}
+
+func setupAMMClawbackIssuerReserve(t *testing.T, zeroLimit bool) (*amm.AMMTestEnv, *jtx.Account, tx.Asset) {
+	t.Helper()
+
+	env, issuer2, eur := setupClawbackHolderPool(t, 1000, 0, false, true)
+	issuedByAlice := tx.NewIssuedAmountFromFloat64(50, "USD", env.Alice.Address)
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(env.GW, issuedByAlice).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(env.Alice, env.GW, issuedByAlice).Build()))
+	env.Close()
+	if zeroLimit {
+		zeroLimitAmount := tx.NewIssuedAmountFromFloat64(0, "USD", env.Alice.Address)
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(env.GW, zeroLimitAmount).Build()))
+		env.Close()
+	}
+	return env, issuer2, eur
+}
+
+func ammClawbackRippleStateMetadataNode(meta *tx.Metadata, lineKey keylet.Keylet) *tx.AffectedNode {
+	if meta == nil {
+		return nil
+	}
+	ledgerIndex := fmt.Sprintf("%X", lineKey.Key)
+	for i := range meta.AffectedNodes {
+		node := &meta.AffectedNodes[i]
+		if node.LedgerEntryType == "RippleState" && node.LedgerIndex == ledgerIndex {
+			return node
+		}
+	}
+	return nil
+}
+
+func TestAMMClawbackIssuerReserveOnCreditCrossing(t *testing.T) {
+	issuerReserveFlag := func(account, counterparty *jtx.Account) uint32 {
+		if keylet.IsLowAccount(account.ID, counterparty.ID) {
+			return state.LsfLowReserve
+		}
+		return state.LsfHighReserve
+	}
+
+	for _, tc := range []struct {
+		name        string
+		amount      float64
+		zeroLimit   bool
+		wantRelease bool
+		withdrawAll bool
+	}{
+		{name: "PartialCrossing", amount: 100, zeroLimit: true, wantRelease: true},
+		{name: "FullCrossing", amount: 1000, zeroLimit: true, wantRelease: true, withdrawAll: true},
+		{name: "NoCrossing", amount: 25, zeroLimit: true},
+		{name: "NonDefaultLimit", amount: 100, wantRelease: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, issuer2, eur := setupAMMClawbackIssuerReserve(t, tc.zeroLimit)
+			lineKey := keylet.Line(env.Alice.ID, env.GW.ID, "USD")
+			reserveFlag := issuerReserveFlag(env.GW, env.Alice)
+			require.Equal(t, "-50", env.IOUBalance(env.Alice, env.GW, "USD").Value())
+			require.NotZero(t, env.TrustLineFlags(env.GW, env.Alice, "USD")&reserveFlag)
+			require.False(t, env.HasNoRipple(env.Alice, env.GW, "USD"))
+			require.False(t, env.HasNoRipple(env.GW, env.Alice, "USD"))
+			if tc.zeroLimit {
+				require.Zero(t, env.Limit(env.GW, env.Alice, "USD"))
+			} else {
+				require.Equal(t, 50.0, env.Limit(env.GW, env.Alice, "USD"))
+			}
+
+			ownerCount := env.OwnerCount(env.GW)
+			ammAccount := amm.AMMAccount(t, env, env.USD, eur)
+			poolUSD, poolEUR, lpSupply := env.AMMIOUBalances(env.USD, eur)
+			require.Equal(t, "1000", poolUSD.Value())
+			require.Equal(t, "1000", poolEUR.Value())
+			require.Equal(t, "1000", lpSupply.Value())
+
+			claw := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, eur)
+			if !tc.withdrawAll {
+				claw.Amount(amm.IOUAmount(env.GW, "USD", tc.amount))
+			}
+			result := env.Submit(claw.Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			require.Equal(t, "-50", env.IOUBalance(env.Alice, env.GW, "USD").Value())
+			require.True(t, env.TrustLineExists(env.Alice, env.GW, "USD"))
+			if tc.wantRelease {
+				require.Zero(t, env.TrustLineFlags(env.GW, env.Alice, "USD")&reserveFlag)
+				require.Equal(t, ownerCount-1, env.OwnerCount(env.GW))
+			} else {
+				require.NotZero(t, env.TrustLineFlags(env.GW, env.Alice, "USD")&reserveFlag)
+				require.Equal(t, ownerCount, env.OwnerCount(env.GW))
+			}
+
+			if tc.withdrawAll {
+				require.True(t, ammIsDeleted(t, env, env.USD, eur))
+				require.False(t, env.TrustLineExists(env.Alice, ammAccount, lpSupply.Currency))
+				require.Zero(t, amm.IOUAmount(issuer2, "EUR", 1000).Compare(*env.IOUBalance(env.Alice, issuer2, "EUR")))
+			} else {
+				usdAfter, eurAfter, lpAfter := env.AMMIOUBalances(env.USD, eur)
+				poolRemaining := 1000 - tc.amount
+				require.Zero(t, amm.IOUAmount(env.GW, "USD", poolRemaining).Compare(usdAfter))
+				require.Zero(t, amm.IOUAmount(issuer2, "EUR", poolRemaining).Compare(eurAfter))
+				require.Zero(t, amm.LPTokenAmount(env, env.USD, eur, poolRemaining).Compare(lpAfter))
+				require.Zero(t, amm.IOUAmount(ammAccount, lpSupply.Currency, poolRemaining).Compare(*env.IOUBalance(env.Alice, ammAccount, lpSupply.Currency)))
+				require.Zero(t, amm.IOUAmount(issuer2, "EUR", tc.amount).Compare(*env.IOUBalance(env.Alice, issuer2, "EUR")))
+			}
+
+			if tc.wantRelease {
+				lineNode := ammClawbackRippleStateMetadataNode(result.Metadata, lineKey)
+				require.NotNil(t, lineNode)
+				require.NotZero(t, metadata.ToUint32(lineNode.PreviousFields["Flags"])&reserveFlag)
+				require.Zero(t, metadata.ToUint32(lineNode.FinalFields["Flags"])&reserveFlag)
+				issuerNode := accountRootMetadataNode(result.Metadata, env.GW.ID)
+				require.NotNil(t, issuerNode)
+				require.Equal(t, ownerCount, metadata.ToUint32(issuerNode.PreviousFields["OwnerCount"]))
+				require.Equal(t, ownerCount-1, metadata.ToUint32(issuerNode.FinalFields["OwnerCount"]))
 			}
 		})
 	}
