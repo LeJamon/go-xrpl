@@ -403,36 +403,8 @@ func checkSponsorFields(transaction txcore.Transaction, common *txcore.Common, r
 }
 
 func reserveSponsorAllowed(txType txcore.Type) bool {
-	switch txType {
-	case txcore.TypeDelegateSet,
-		txcore.TypeDepositPreauth,
-		txcore.TypePayment,
-		txcore.TypeSignerListSet,
-		txcore.TypeCheckCancel,
-		txcore.TypeCheckCash,
-		txcore.TypeCheckCreate,
-		txcore.TypeEscrowCancel,
-		txcore.TypeEscrowCreate,
-		txcore.TypeEscrowFinish,
-		txcore.TypePaymentChannelClaim,
-		txcore.TypePaymentChannelCreate,
-		txcore.TypePaymentChannelFund,
-		txcore.TypeClawback,
-		txcore.TypeMPTokenAuthorize,
-		txcore.TypeMPTokenIssuanceCreate,
-		txcore.TypeMPTokenIssuanceDestroy,
-		txcore.TypeMPTokenIssuanceSet,
-		txcore.TypeTrustSet,
-		txcore.TypeCredentialAccept,
-		txcore.TypeCredentialCreate,
-		txcore.TypeCredentialDelete,
-		txcore.TypeAccountSet,
-		txcore.TypeRegularKeySet,
-		txcore.TypeSponsorshipTransfer:
-		return true
-	default:
-		return false
-	}
+	d, _ := txcore.Lookup(txType)
+	return d.ReserveSponsorable
 }
 
 // checkAccountPresent rejects a zero/empty source account.

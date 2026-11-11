@@ -9,20 +9,23 @@ func Register() {
 		New: func() tx.Transaction {
 			return &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypePaymentChannelFund,
 		New: func() tx.Transaction {
 			return &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypePaymentChannelClaim,
 		New: func() tx.Transaction {
 			return &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 }

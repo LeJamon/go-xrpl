@@ -9,31 +9,35 @@ func Register() {
 		New: func() tx.Transaction {
 			return &MPTokenIssuanceCreate{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceCreate, "")}
 		},
-		Delegation: tx.Delegable,
-		Privileges: tx.PrivCreateMPTIssuance,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
+		Privileges:         tx.PrivCreateMPTIssuance,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeMPTokenIssuanceDestroy,
 		New: func() tx.Transaction {
 			return &MPTokenIssuanceDestroy{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "")}
 		},
-		Delegation: tx.Delegable,
-		Privileges: tx.PrivDestroyMPTIssuance,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
+		Privileges:         tx.PrivDestroyMPTIssuance,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeMPTokenIssuanceSet,
 		New: func() tx.Transaction {
 			return &MPTokenIssuanceSet{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeMPTokenAuthorize,
 		New: func() tx.Transaction {
 			return &MPTokenAuthorize{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "")}
 		},
-		Delegation: tx.Delegable,
-		Privileges: tx.PrivMustAuthorizeMPT,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
+		Privileges:         tx.PrivMustAuthorizeMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeConfidentialMPTConvert,
