@@ -60,8 +60,13 @@ When implementing or fixing a feature:
    codes (e.g. `temBAD_OFFER: ...`).
 3. **Mirror the tests** in Go under `internal/testing/<feature>/` — one directory
    per feature (e.g. `internal/testing/offer/`, `internal/testing/amm/`).
-   Transaction types live under `internal/tx/<type>/` and self-register via
-   `init()` + `tx.Register()`.
+   Transaction types live under `internal/tx/<type>/`. Each declares one
+   `tx.Descriptor` (constructor, delegation, privileges, queue consequences,
+   Batch and reserve-sponsor eligibility) in its package's `Register()` via
+   `tx.Register()`; `internal/tx/all.RegisterAll()` calls every package's
+   `Register()` explicitly at startup. A new type also needs its code and name
+   in `protocol/transaction_type.go`, its field template in
+   `internal/tx/template.go`, and its wire definition in `definitions.json`.
 4. **Run the build, tests, and lint** (below) until green, plus the conformance
    summary for the area you touched.
 
