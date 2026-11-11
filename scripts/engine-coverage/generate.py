@@ -665,11 +665,9 @@ def parse_go_transaction_types(repo: Path) -> tuple[dict[int, dict[str, Any]], l
             "code": int(match.group(2), 0),
             "go_const": f"Type{match.group(1)}",
         }
-    for match in re.finditer(
-        r"(?m)^\s*case\s+TxType(\w+)\s*:\s*\n\s*return\s+\"([^\"]+)\"", text
-    ):
-        if match.group(1) in constants:
-            constants[match.group(1)]["name"] = match.group(2)
+    for match in re.finditer(r'(?m)^\s*"([^"]+)"\s*:\s*TxType(\w+),', text):
+        if match.group(2) in constants:
+            constants[match.group(2)]["name"] = match.group(1)
     by_code: dict[int, dict[str, Any]] = {}
     for suffix, value in constants.items():
         if "name" in value:
