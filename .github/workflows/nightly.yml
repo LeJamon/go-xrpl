@@ -38,24 +38,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
         uses: actions/checkout@v5
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
       - run: go test -count=1 -timeout 30m ./codec/... ./crypto/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./internal/tx/...
 
@@ -72,24 +61,13 @@ jobs:
       CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
         uses: actions/checkout@v5
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -113,13 +91,14 @@ jobs:
           ./internal/observability/...
 
   consensus-soak:
-    name: Consensus soak (private rippled 3.4.1)
+    name: Consensus soak (pinned private rippled)
     runs-on: ubuntu-latest
     env:
-      ORACLE_IMAGE: goxrpl-oracle:3.4.1
       EVIDENCE_DIR: /tmp/issue-2017-nightly-oracle
     steps:
       - uses: actions/checkout@v5
+      # Supplies ORACLE_IMAGE.
+      - uses: ./.github/actions/oracle-pin
 
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
@@ -164,24 +143,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
         uses: actions/checkout@v5
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
       - name: Run tests with coverage
         run: >
