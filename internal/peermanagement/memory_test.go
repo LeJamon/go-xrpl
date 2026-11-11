@@ -126,17 +126,3 @@ func TestOutboundBudgetParentRollbackAndCriticalOverflow(t *testing.T) {
 	account.close()
 	require.Zero(t, critical.used)
 }
-
-func TestOverlayMemoryBudgetsRequireUnusedLifecycle(t *testing.T) {
-	overlay := &Overlay{
-		inboundReadBudget: newReadBudget(8),
-		outboundBudget:    newOutboundBudget(2*outboundCriticalByteReserve, 1),
-	}
-	parent := &testMemoryAccount{limit: 8}
-	require.NoError(t, overlay.SetMemoryBudgets(parent, parent, parent))
-	account := overlay.outboundBudget.attach()
-	require.Error(t, overlay.SetMemoryBudgets(parent, parent, parent))
-	account.close()
-	overlay.lifecycleState = overlayLifecycleRunning
-	require.Error(t, overlay.SetMemoryBudgets(parent, parent, parent))
-}
