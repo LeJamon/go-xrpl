@@ -203,7 +203,7 @@ func TestOnlineDeleteRefreshPromotionMetricsReportPartialPrefixAndSources(t *tes
 	root, err := svc.GetValidatedLedger().StateMapHash()
 	require.NoError(t, err)
 	probe := &promotionBatchProbe{BatchGenerationDatabase: db}
-	refresh := &Service{nodeStore: probe, logger: logger}
+	refresh := &Service{nodeStore: bindNodeStore(probe), logger: logger}
 
 	require.NoError(t, refresh.refreshGenerationStateWithBatch(
 		t.Context(), root, seq, probe, nil, 1, 64, 1,
@@ -313,7 +313,7 @@ func TestOnlineDeleteRefreshPromotionMetricsRetainBackendErrorAndFailureLog(t *t
 	wantErr := errors.New("promotion batch failed")
 	probe := &failingPromotionDatabase{BatchGenerationDatabase: db, failure: wantErr}
 	capture, logger := newVerificationLogCapture()
-	refresh := &Service{nodeStore: probe, logger: logger}
+	refresh := &Service{nodeStore: bindNodeStore(probe), logger: logger}
 
 	err = refresh.refreshGenerationStateWithBatch(
 		context.Background(), root, seq, probe, nil, 1, 64, storedSHAMapPromotionBatchBytes,

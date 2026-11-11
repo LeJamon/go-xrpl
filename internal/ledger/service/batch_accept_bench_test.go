@@ -405,7 +405,7 @@ func newBatchBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64
 	require.NoError(b, err)
 	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)

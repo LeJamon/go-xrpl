@@ -62,7 +62,7 @@ func TestService_RefreshBatchFailureDoesNotSyncIncompleteTraversal(t *testing.T)
 				probe.failure = nil
 				probe.cancel = cancel
 			}
-			refresh := &Service{nodeStore: probe, logger: svc.logger}
+			refresh := &Service{nodeStore: bindNodeStore(probe), logger: svc.logger}
 			err = refresh.refreshGenerationStateWithBatch(ctx, root, seq, probe, nil, 1, 64, 4<<20)
 			require.ErrorIs(t, err, wantErr)
 			require.Positive(t, probe.batchCalls.Load())

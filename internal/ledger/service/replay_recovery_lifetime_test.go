@@ -102,11 +102,11 @@ func TestStateBaseRepairRetainsExactTargetAfterTipPersistenceFailure(t *testing.
 	path := filepath.Join(t.TempDir(), "fault.json")
 	f, fault, repaired, repairCalls := prepareStateBaseRepairLifetime(t, path)
 	persistenceFailure := errors.New("repaired validated tip sync failed")
-	f.svc.nodeStore = &replayRecoverySyncFailureDatabase{
+	f.svc.nodeStore = bindNodeStore(&replayRecoverySyncFailureDatabase{
 		checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 		failAt:                     2,
 		fail:                       persistenceFailure,
-	}
+	})
 
 	err := f.svc.RevalidateReplayFault(t.Context(), fault.ID)
 	require.ErrorContains(t, err, "publish repaired validated tip")
@@ -116,7 +116,7 @@ func TestStateBaseRepairRetainsExactTargetAfterTipPersistenceFailure(t *testing.
 	require.Same(t, repaired, f.svc.GetValidatedLedger())
 	assertRepairRetained(t, f.svc, repaired)
 
-	f.svc.nodeStore = f.db
+	f.svc.nodeStore = bindNodeStore(f.db)
 	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
 	require.False(t, f.svc.ReplayBlocked())
 	require.Equal(t, 1, *repairCalls)
@@ -126,9 +126,9 @@ func TestStateBaseRepairRetainsExactTargetAfterTipPersistenceFailure(t *testing.
 func TestStateBaseRepairRetainsExactTargetAfterRecertificationFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault.json")
 	f, fault, repaired, repairCalls := prepareStateBaseRepairLifetime(t, path)
-	f.svc.nodeStore = &staleFingerprintStateBaseRecertificationDatabase{
+	f.svc.nodeStore = bindNodeStore(&staleFingerprintStateBaseRecertificationDatabase{
 		checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
-	}
+	})
 
 	err := f.svc.RevalidateReplayFault(t.Context(), fault.ID)
 	require.ErrorContains(t, err, "re-certify repaired state base")
@@ -138,7 +138,7 @@ func TestStateBaseRepairRetainsExactTargetAfterRecertificationFailure(t *testing
 	require.Same(t, repaired, f.svc.GetValidatedLedger())
 	assertRepairRetained(t, f.svc, repaired)
 
-	f.svc.nodeStore = f.db
+	f.svc.nodeStore = bindNodeStore(f.db)
 	require.NoError(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID))
 	require.False(t, f.svc.ReplayBlocked())
 	require.Equal(t, 1, *repairCalls)
