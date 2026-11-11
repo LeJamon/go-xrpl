@@ -305,27 +305,15 @@ jobs:
             race: "-race"
     steps:
       - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
+      - uses: ./.github/actions/oracle-pin
+        if: matrix.group == 'libs'
+      - name: Check out equivalent inventory sources (public rippled)
         if: matrix.group == 'libs'
         uses: actions/checkout@v5
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        if: matrix.group == 'libs'
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        if: matrix.group == 'libs'
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - name: Verify private definitions fixture provenance
         if: matrix.group == 'libs'
         run: |
@@ -335,12 +323,14 @@ jobs:
             exit 1
           fi
           test ! -e "$RUNNER_TEMP/wrong-oracle.json"
-          jq -e '
-            .oracle.repository == "XRPLF/xrpld-private" and
-            .oracle.tag == "3.4.1" and
-            .oracle.commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
-            .full_document_sha512_half == "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5" and
-            .full_document_bytes == 79944
+          jq -e \
+            --arg repository "$ORACLE_REPOSITORY" --arg tag "$ORACLE_TAG" --arg commit "$ORACLE_COMMIT" \
+            --arg hash "$ORACLE_DEFINITIONS_SHA512_HALF" --argjson bytes "$ORACLE_DEFINITIONS_BYTES" '
+            .oracle.repository == $repository and
+            .oracle.tag == $tag and
+            .oracle.commit == $commit and
+            .full_document_sha512_half == $hash and
+            .full_document_bytes == $bytes
           ' internal/rpc/testdata/server_definitions_final_hashes.json >/dev/null
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
@@ -411,16 +401,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
         uses: actions/checkout@v5
         with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
       - name: Run focused release regressions twice
         env:
-          GOXRPL_ORACLE_DIR: ${{ github.workspace }}/rippled-worktrees/v3.4.1-oracle
+          GOXRPL_ORACLE_DIR: ${{ github.workspace }}/${{ env.ORACLE_CHECKOUT }}
         run: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
       - name: Record producer evidence
         if: always()
@@ -442,17 +433,17 @@ jobs:
     name: Conformance (pinned rippled 3.4.1 corpus)
     runs-on: ubuntu-latest
     env:
-      GOXRPL_FIXTURES_DIR: internal/testing/conformance/testdata/rippled-3.4.1-v4
       GOXRPL_CONFORMANCE_REQUIRED: "1"
       GOXRPL_CONFORMANCE_REPORT: /tmp/issue-2015-conformance-final/conformance-report.json
       GOXRPL_ENGINE_EVIDENCE_REPORT: /tmp/issue-2015-conformance-final/engine-execution-report.json
       GOXRPL_ENGINE_SOAK_SECONDS: "10"
-      ORACLE_REPOSITORY: XRPLF/xrpld-private
-      ORACLE_TAG: 3.4.1
-      ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
       EVIDENCE_DIR: /tmp/issue-2015-conformance-final
     steps:
       - uses: actions/checkout@v5
+      # Supplies ORACLE_REPOSITORY / ORACLE_TAG / ORACLE_COMMIT / ORACLE_CORPUS.
+      - uses: ./.github/actions/oracle-pin
+      - name: Select pinned corpus
+        run: printf 'GOXRPL_FIXTURES_DIR=%s\n' "$ORACLE_CORPUS" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup
       - name: Verify oracle tooling provenance guards
         run: |
@@ -463,7 +454,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$EVIDENCE_DIR"
-          GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 GOXRPL_CONFORMANCE_REQUIRED=1 go test -race -count=1 -v ./internal/testing/conformance 2>&1 | tee "$EVIDENCE_DIR/conformance.log"
+          GOXRPL_FIXTURES_DIR="$ORACLE_CORPUS" GOXRPL_CONFORMANCE_REQUIRED=1 go test -race -count=1 -v ./internal/testing/conformance 2>&1 | tee "$EVIDENCE_DIR/conformance.log"
       - name: Run pinned ledger service boundaries
         shell: bash
         run: |
@@ -473,10 +464,10 @@ jobs:
         shell: bash
         run: |
           test -s "$GOXRPL_CONFORMANCE_REPORT"
-          jq -e '
-            .oracle_repository == "XRPLF/xrpld-private" and
-            .oracle_tag == "3.4.1" and
-            .oracle_commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
+          jq -e --arg repository "$ORACLE_REPOSITORY" --arg tag "$ORACLE_TAG" --arg commit "$ORACLE_COMMIT" '
+            .oracle_repository == $repository and
+            .oracle_tag == $tag and
+            .oracle_commit == $commit and
             (.total.executed | type == "number" and . > 0) and
             .total.failed == 0 and
             .total.skipped == 0 and
@@ -485,9 +476,9 @@ jobs:
             .total.executed == (.total.passed + .total.failed)
           ' "$GOXRPL_CONFORMANCE_REPORT" >/dev/null
           test -s "$GOXRPL_ENGINE_EVIDENCE_REPORT"
-          jq -e --arg sha "$(git rev-parse HEAD)" '
+          jq -e --arg sha "$(git rev-parse HEAD)" --arg commit "$ORACLE_COMMIT" '
             .tested_sha == $sha and .dirty == false and
-            .oracle_commit == "d147fccf54a500fce586522f28d6044c37fd8d29" and
+            .oracle_commit == $commit and
             .discovered > 0 and .excluded == 0 and .failed == 0 and
             .requested_soak_seconds == 10 and .soak_executed > 0 and
             .executed == (.discovered * (.seeds | length) + .soak_executed) and
@@ -527,7 +518,7 @@ jobs:
           EVIDENCE_LABEL: conformance-final
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
-            GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4
+            GOXRPL_FIXTURES_DIR=${{ env.ORACLE_CORPUS }}
             GOXRPL_CONFORMANCE_REQUIRED=1
             go test -race -count=1 -v ./internal/testing/conformance
         run: scripts/acceptance/final-evidence.sh producer
@@ -570,14 +561,13 @@ jobs:
       PEERTLS_DOCKER_INTEROP: "1"
       PEERTLS_LEDGER_NODE_DEPTH_INTEROP: "1"
       PEERTLS_VALIDATOR_LIST_INTEROP: "1"
-      PEERTLS_RIPPLED_VERSION: 3.4.1
-      PEERTLS_RIPPLED_IMAGE: goxrpl-oracle:3.4.1
-      ORACLE_REPOSITORY: XRPLF/xrpld-private
-      ORACLE_TAG: 3.4.1
-      ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
       EVIDENCE_DIR: /tmp/issue-2017-peer-interop
     steps:
       - uses: actions/checkout@v5
+      # Supplies ORACLE_REPOSITORY / ORACLE_TAG / ORACLE_COMMIT / ORACLE_IMAGE.
+      - uses: ./.github/actions/oracle-pin
+      - name: Select pinned oracle release
+        run: printf 'PEERTLS_RIPPLED_VERSION=%s\nPEERTLS_RIPPLED_IMAGE=%s\n' "$ORACLE_TAG" "$ORACLE_IMAGE" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup
       - name: Build pinned final oracle image
         run: docker build --platform linux/amd64 -t "$PEERTLS_RIPPLED_IMAGE" scripts/peer-interop
@@ -588,7 +578,7 @@ jobs:
           printf 'PEERTLS_RIPPLED_IMAGE=%s\n' "$image_id" >> "$GITHUB_ENV"
       - name: Check consensus smoke rejection controls
         run: go test -tags docker -count=1 ./internal/testutil/rippled -run '^TestConsensusSmoke'
-      - name: Run live final 3.4.1 peer interop
+      - name: Run live final peer interop
         run: go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
       - name: Record producer evidence
         if: always()
@@ -596,8 +586,8 @@ jobs:
           EVIDENCE_LABEL: peer-interop-final
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
-            docker build --platform linux/amd64 -t goxrpl-oracle:3.4.1 scripts/peer-interop;
-            ORACLE_IMAGE=goxrpl-oracle:3.4.1 scripts/acceptance/oracle-image.sh;
+            docker build --platform linux/amd64 -t ${{ env.ORACLE_IMAGE }} scripts/peer-interop;
+            ORACLE_IMAGE=${{ env.ORACLE_IMAGE }} scripts/acceptance/oracle-image.sh;
             go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
@@ -663,10 +653,6 @@ jobs:
     name: Consensus smoke (rippled 3.4.1 final)
     runs-on: ubuntu-latest
     env:
-      ORACLE_TAG: 3.4.1
-      ORACLE_REPOSITORY: XRPLF/xrpld-private
-      ORACLE_COMMIT: d147fccf54a500fce586522f28d6044c37fd8d29
-      ORACLE_IMAGE: goxrpl-oracle:3.4.1
       GOXRPL_IMAGE: goxrpl-final:${{ github.sha }}
       EVIDENCE_DIR: /tmp/issue-2017-final-evidence
     steps:
@@ -674,6 +660,9 @@ jobs:
         shell: bash
         run: mkdir -p "$EVIDENCE_DIR"
       - uses: actions/checkout@v5
+      # Supplies ORACLE_TAG / ORACLE_REPOSITORY / ORACLE_COMMIT / ORACLE_IMAGE /
+      # ORACLE_CHECKOUT.
+      - uses: ./.github/actions/oracle-pin
 
       - name: Record Go checkout provenance
         shell: bash
@@ -703,7 +692,7 @@ jobs:
           }
 
           run_recorded tested_sha 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
-          run_recorded go_worktree_clean 'test -z "$(git status --porcelain=v1 --untracked-files=all -- . ":(exclude)rippled-worktrees/v3.4.1-oracle")"'
+          run_recorded go_worktree_clean 'test -z "$(git status --porcelain=v1 --untracked-files=all -- . ":(exclude)$ORACLE_CHECKOUT")"'
           run_recorded tool_go_version 'go version'
           run_recorded tool_python_version 'python3 --version'
           run_recorded tool_bash_version 'bash --version | awk "NR == 1 {print}"'
@@ -731,7 +720,7 @@ jobs:
           run_recorded consensus_smoke_log 'test -s "$EVIDENCE_DIR/consensus-smoke.log" && cat "$EVIDENCE_DIR/consensus-smoke.log"'
 
           go_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-          dirty_status="$(git status --porcelain=v1 --untracked-files=all -- . ":(exclude)rippled-worktrees/v3.4.1-oracle")"
+          dirty_status="$(git status --porcelain=v1 --untracked-files=all -- . ":(exclude)$ORACLE_CHECKOUT")"
           if [[ -n "$dirty_status" ]]; then
             go_dirty=true
           else
