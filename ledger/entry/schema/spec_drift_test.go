@@ -26,7 +26,7 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 	}
 
 	if len(rippled) != len(Specs) {
-		t.Fatalf("rippled v3.4.1 has %d ledger templates, schema has %d", len(rippled), len(Specs))
+		t.Fatalf("pinned rippled has %d ledger templates, schema has %d", len(rippled), len(Specs))
 	}
 	haveEntries := make(map[string]bool, len(Specs))
 	for _, entry := range Specs {
@@ -80,7 +80,7 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 		}
 	}
 	if canonical != len(rippled) {
-		t.Errorf("registry has %d canonical entries, rippled v3.4.1 has %d", canonical, len(rippled))
+		t.Errorf("registry has %d canonical entries, pinned rippled has %d", canonical, len(rippled))
 	}
 }
 
