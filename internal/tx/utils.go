@@ -233,36 +233,12 @@ func IsIOUDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte
 	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, nil
 }
 
-// isFrozenForLPToken reports whether account cannot spend the given asset because
-// the issuer globally froze it or individually froze the account's trust line.
-// This is the IOU overload of rippled's isFrozen (global freeze + issuer-side
-// individual freeze); deep freeze is intentionally not consulted, matching the
-// overload used by isLPTokenFrozen.
-// Reference: rippled ledger/View.cpp isFrozen().
-func isFrozenForLPToken(view ReadOnlyLedgerView, accountID [20]byte, asset Asset) bool {
-	if asset.Currency == "" || asset.Currency == "XRP" {
-		return false
-	}
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return false
-	}
-	if accountID == issuerID {
-		return false
-	}
-	if IsGlobalFrozen(view, asset.Issuer) {
-		return true
-	}
-	return IsTrustlineFrozen(view, accountID, issuerID, asset.Currency)
-}
-
-// IsLPTokenFrozen reports whether either of an AMM pool's underlying assets is
-// frozen for the holder, in which case the holder's LP tokens must count as zero
-// funds. The caller resolves the pool assets from the LP-token issuer's AMM SLE.
-// Reference: rippled ledger/View.cpp isLPTokenFrozen().
+// IsLPTokenFrozen implements rippled's isLPTokenFrozen: either AMM pool asset
+// is frozen for the holder under isFrozen, so a pool-asset issuer that globally
+// froze its currency is frozen too. MPT pool assets are not consulted; they need
+// MPTokensV2, which rippled 3.4.1 does not support.
 func IsLPTokenFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset, asset2 Asset) bool {
-	return isFrozenForLPToken(view, accountID, asset) ||
-		isFrozenForLPToken(view, accountID, asset2)
+	return IsFrozen(view, accountID, asset) || IsFrozen(view, accountID, asset2)
 }
 
 // decodeAMMPoolAssets extracts the sfAsset and sfAsset2 issues from a serialized
