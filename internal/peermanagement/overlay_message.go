@@ -495,7 +495,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	// ledger. The gate must NOT short-circuit the publish below,
 	// which runs unconditionally for non-lostSync messages.
 	if sc.HasLedgerSeq() {
-		if provider := o.validLedgerProviderSnapshot(); provider != nil {
+		if provider := o.validLedgerProvider; provider != nil {
 			if validSeq, age, ok := provider(); ok && validSeq != 0 && age < 2*time.Minute {
 				peer.CheckTracking(sc.LedgerSeq, validSeq)
 			}

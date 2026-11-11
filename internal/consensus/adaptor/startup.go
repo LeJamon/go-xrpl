@@ -399,12 +399,14 @@ func manifestCountSource(configured bool) string {
 // floor is the online-delete retention floor (a *shamapstore.Rotator in
 // production). Pass nil when online_delete is off: acquisition and serving are
 // then unrestricted, leaving the standalone / feature-disabled path unchanged.
+// overlayOpts are applied after the config-derived overlay options.
 func NewFromConfig(
 	ctx context.Context,
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
 	validationRepo relationaldb.ValidationRepository,
 	floor MinimumOnlineFloor,
+	overlayOpts ...peermanagement.Option,
 ) (_ *Components, err error) {
 	if err := appCfg.Overlay.Validate(); err != nil {
 		return nil, fmt.Errorf("validate overlay config: %w", err)
@@ -454,14 +456,14 @@ func NewFromConfig(
 	restoreManifests("validator", validatorManifests, stored.Validators)
 	restoreManifests("publisher", publisherManifests, stored.Publishers)
 
-	// Build overlay options from app config
-	overlayOpts := OverlayOptionsFromConfig(appCfg)
+	opts := OverlayOptionsFromConfig(appCfg)
 	if identity != nil {
-		overlayOpts = append(overlayOpts,
+		opts = append(opts,
 			peermanagement.WithLocalValidatorPubKey(identity.SigningPubKey()))
 	}
+	opts = append(opts, overlayOpts...)
 
-	overlay, err := peermanagement.New(overlayOpts...)
+	overlay, err := peermanagement.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create overlay: %w", err)
 	}
@@ -488,9 +490,35 @@ func NewFromConfig(
 	staticValidators, staticMasterKeys = excludeLocalValidator(staticValidators, staticMasterKeys, identity)
 	validators, masterKeys := includeLocalValidator(staticValidators, staticMasterKeys, identity)
 
+	// Build the publisher-list aggregator when validator_list_keys are
+	// configured. Lists are then ingested both via peer gossip
+	// (ValidatorListCollection through the router) and via HTTP polling of
+	// validator_list_sites. The aggregator pushes its recomputed
+	// trusted UNL into adaptor.SetTrustedValidators on every change —
+	// the same write path SIGHUP reload uses.
+	var vlAgg *validatorlist.Aggregator
+	if len(publisherKeys) > 0 {
+		pkSlice := make([]validatorlist.PublisherKey, len(publisherKeys))
+		for i, k := range publisherKeys {
+			pkSlice[i] = validatorlist.PublisherKey(k)
+		}
+		vlAgg, err = validatorlist.New(validatorlist.Config{
+			PublisherKeys:        pkSlice,
+			SiteURIs:             append([]string(nil), appCfg.Validators.ValidatorListSites...),
+			Threshold:            appCfg.Validators.EffectiveListThreshold(),
+			StaticValidatorCount: len(masterKeys),
+			ValidatorManifests:   validatorManifests,
+			PublisherManifests:   publisherManifests,
+			Logger:               slog.Default().With("component", "validator-list-aggregator"),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("validator-list aggregator: %w", err)
+		}
+	}
+
 	sender := NewOverlaySender(overlay)
 
-	adaptor := New(Config{
+	adaptorCfg := Config{
 		LedgerService:       ledgerSvc,
 		Sender:              sender,
 		Identity:            identity,
@@ -506,7 +534,17 @@ func NewFromConfig(
 		// The operator's [voting] stanza.
 		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
 		RelayValidations: parseRelayValidationsPolicy(appCfg.RelayValidations),
-	})
+	}
+	if vlAgg != nil {
+		adaptorCfg.UNLBlocked = vlAgg.IsUNLBlocked
+		adaptorCfg.QuorumUnavailable = vlAgg.IsQuorumUnavailable
+		adaptorCfg.RefreshUNL = vlAgg.Tick
+		// Listed-but-untrusted signers (published below the trust
+		// threshold) get their validations stored by the engine so a later
+		// trust change promotes what was already seen.
+		adaptorCfg.Listed = vlAgg.IsListed
+	}
+	adaptor := New(adaptorCfg)
 
 	// Seed the local token manifest after durable validator state has loaded.
 	if identity != nil && identity.Manifest != nil {
@@ -528,58 +566,30 @@ func NewFromConfig(
 		acquisition:          sender,
 		serve:                sender,
 		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
+	}, routerDeps{
+		consensusControlInbox: overlay.ConsensusControlMessages(),
+		serviceInbox:          overlay.Messages(),
+		txInbox:               overlay.TxMessages(),
+		acqInbox:              overlay.LedgerDataMessages(),
+		manifestInbox:         overlay.ManifestMessages(),
+		manifests:             validatorManifests,
+		overlay:               overlay,
+		manifestClassify: func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
+			nodeID := consensus.CalcNodeID(master)
+			if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
+				return manifest.Uncapped
+			}
+			return manifest.Capped
+		},
+		manifestUntrustedLimit: &maxUntrustedCount,
+		peerSessions:           overlay,
+		floor:                  floor,
+		validatorList:          vlAgg,
 	})
-	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
 	router.catchupReplay.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32())
-	router.SetServiceInbox(overlay.Messages())
-	router.SetTxInbox(overlay.TxMessages())
-	router.SetAcqInbox(overlay.LedgerDataMessages())
-	router.SetManifestInbox(overlay.ManifestMessages())
-	router.SetManifestCache(validatorManifests, overlay)
-	router.SetManifestUntrustedLimit(appCfg.Overlay.EffectiveMaxUntrustedCount())
-	router.SetManifestClassifier(func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
-		nodeID := consensus.CalcNodeID(master)
-		if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
-			return manifest.Uncapped
-		}
-		return manifest.Capped
-	})
-	router.setPeerSessionView(overlay)
-	router.SetMinimumOnlineFloor(floor)
 
-	// Build the publisher-list aggregator when validator_list_keys are
-	// configured. Lists are then ingested both via peer gossip
-	// (ValidatorListCollection through the router) and via HTTP polling of
-	// validator_list_sites. The aggregator pushes its recomputed
-	// trusted UNL into adaptor.SetTrustedValidators on every change —
-	// the same write path SIGHUP reload uses.
-	var vlAgg *validatorlist.Aggregator
 	var vlPoller *validatorlist.SitePoller
-	if len(publisherKeys) > 0 {
-		pkSlice := make([]validatorlist.PublisherKey, len(publisherKeys))
-		for i, k := range publisherKeys {
-			pkSlice[i] = validatorlist.PublisherKey(k)
-		}
-		vlAgg, err = validatorlist.New(validatorlist.Config{
-			PublisherKeys:        pkSlice,
-			SiteURIs:             append([]string(nil), appCfg.Validators.ValidatorListSites...),
-			Threshold:            appCfg.Validators.EffectiveListThreshold(),
-			StaticValidatorCount: len(masterKeys),
-			ValidatorManifests:   validatorManifests,
-			PublisherManifests:   publisherManifests,
-			Logger:               slog.Default().With("component", "validator-list-aggregator"),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("validator-list aggregator: %w", err)
-		}
-		router.SetValidatorListAggregator(vlAgg)
-		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
-		adaptor.SetQuorumUnavailableFunc(vlAgg.IsQuorumUnavailable)
-		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
-		// Listed-but-untrusted signers (published below the trust
-		// threshold) get their validations stored by the engine so a later
-		// trust change promotes what was already seen.
-		adaptor.SetListedLookup(vlAgg.IsListed)
+	if vlAgg != nil {
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after
 		// every successful apply, and hydrated on cold start so the

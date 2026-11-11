@@ -73,22 +73,10 @@ func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
 	return ok
 }
 
-// SetListedLookup installs the validator-list membership resolver
-// (Aggregator.IsListed). Wired once at startup when publisher trust is
-// configured; nil (the default) means nothing is listed.
-func (a *Adaptor) SetListedLookup(fn func(consensus.NodeID) bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.listedFn = fn
-}
-
 // IsListed implements consensus.ListedOracle: whether node appears in at
 // least one live publisher list without (necessarily) being trusted.
 func (a *Adaptor) IsListed(node consensus.NodeID) bool {
-	a.mu.Lock()
-	fn := a.listedFn
-	a.mu.Unlock()
-	return fn != nil && fn(node)
+	return a.listedFn != nil && a.listedFn(node)
 }
 
 // RelayUntrustedValidations implements consensus.ValidationRelayPolicy:
@@ -269,11 +257,6 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 func (a *Adaptor) GetQuorum() int {
 	_, quorum := a.GetTrustedValidatorsAndQuorum()
 	return quorum
-}
-
-// SetQuorumUnavailableFunc wires the publisher-availability quorum gate.
-func (a *Adaptor) SetQuorumUnavailableFunc(fn func() bool) {
-	a.quorumUnavailable = fn
 }
 
 func (a *Adaptor) publisherQuorumUnavailable() bool {
@@ -594,12 +577,6 @@ func (a *Adaptor) IsStandalone() bool {
 	return a.ledgerService.IsStandalone()
 }
 
-// SetUNLBlockedFunc wires the validator-list aggregator's lock-down flag
-// into the consensus bow-out gate. Must be called before the engine starts.
-func (a *Adaptor) SetUNLBlockedFunc(fn func() bool) {
-	a.unlBlocked = fn
-}
-
 // IsUNLBlocked reports the validator-list UNL lock-down. Always false when
 // no publisher lists are configured.
 func (a *Adaptor) IsUNLBlocked() bool {
@@ -607,12 +584,6 @@ func (a *Adaptor) IsUNLBlocked() bool {
 		return false
 	}
 	return a.unlBlocked()
-}
-
-// SetUNLRefreshFunc wires the aggregator's per-round trust refresh. Must be
-// called before the engine starts.
-func (a *Adaptor) SetUNLRefreshFunc(fn func()) {
-	a.refreshUNL = fn
 }
 
 // RefreshUNLState kicks off a live re-evaluation of the aggregator's trust

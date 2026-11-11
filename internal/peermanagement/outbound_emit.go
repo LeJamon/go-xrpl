@@ -120,7 +120,7 @@ func (o *Overlay) sendClusterUpdate() {
 	// older than four minutes, matching rippled's stale-ledger gate.
 	if len(o.localNodeIdentity) > 0 {
 		var selfFee uint32
-		if provider := o.localLoadFeeProviderSnapshot(); provider != nil {
+		if provider := o.localLoadFeeProvider; provider != nil {
 			fee, validatedAge := provider()
 			if validatedAge <= clusterLocalLoadMaxValidatedAge {
 				selfFee = fee

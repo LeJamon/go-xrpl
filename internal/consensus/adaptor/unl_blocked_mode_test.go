@@ -10,8 +10,7 @@ import (
 
 func TestUNLBlockedOperatingMode(t *testing.T) {
 	blocked := false
-	a := New(Config{})
-	a.SetUNLBlockedFunc(func() bool { return blocked })
+	a := New(Config{UNLBlocked: func() bool { return blocked }})
 
 	a.SetOperatingMode(consensus.OpModeFull)
 	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())

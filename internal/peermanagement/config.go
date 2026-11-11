@@ -216,6 +216,21 @@ type Config struct {
 
 	// Clock function for testing
 	Clock func() time.Time
+
+	// Higher-layer hooks, fixed at construction. Each is optional; nil
+	// disables the path described on its With* option.
+	LedgerHintProvider   func() (LedgerHints, bool)
+	ValidLedgerProvider  func() (seq uint32, age time.Duration, ok bool)
+	TxRecordProvider     func(hash [32]byte) (TxRecord, bool)
+	NodeObjectProvider   func(hash [32]byte) ([]byte, bool)
+	ClusterFeeSink       func(fee uint32)
+	LocalLoadFeeProvider func() (uint32, time.Duration)
+
+	// Node-owned parent accounts for retained peer payload bytes. Nil leaves
+	// the corresponding overlay budget unparented.
+	InboundMemory          MemoryBudget
+	OutboundMemory         MemoryBudget
+	OutboundCriticalMemory MemoryBudget
 }
 
 // DefaultConfig returns the default configuration.
@@ -495,6 +510,56 @@ func WithMaxTransactions(n int) Option {
 func WithMaxManifestPayload(size uint32) Option {
 	return func(c *Config) {
 		c.MaxManifestPayload = size
+	}
+}
+
+// WithLedgerHintProvider supplies the Closed-Ledger / Previous-Ledger
+// handshake hints. Without it the headers are omitted.
+func WithLedgerHintProvider(fn func() (LedgerHints, bool)) Option {
+	return func(c *Config) { c.LedgerHintProvider = fn }
+}
+
+// WithValidLedgerProvider supplies the validated-ledger source used by
+// TMStatusChange tracking. Without it, or when it reports ok=false, peer
+// tracking is not updated.
+func WithValidLedgerProvider(fn func() (seq uint32, age time.Duration, ok bool)) Option {
+	return func(c *Config) { c.ValidLedgerProvider = fn }
+}
+
+// WithTxRecordProvider supplies the transaction-cache lookup (including
+// queued transactions) for tx-reduce-relay replies. Without it those
+// requests are dropped without charging.
+func WithTxRecordProvider(fn func(hash [32]byte) (TxRecord, bool)) Option {
+	return func(c *Config) { c.TxRecordProvider = fn }
+}
+
+// WithNodeObjectProvider supplies the node-store lookup for the generic
+// TMGetObjectByHash serve path. Without it those requests are dropped
+// without charging.
+func WithNodeObjectProvider(fn func(hash [32]byte) ([]byte, bool)) Option {
+	return func(c *Config) { c.NodeObjectProvider = fn }
+}
+
+// WithClusterFeeSink supplies the receiver of the median cluster LoadFee
+// computed on inbound TMCluster frames. Without it the median is skipped.
+func WithClusterFeeSink(fn func(fee uint32)) Option {
+	return func(c *Config) { c.ClusterFeeSink = fn }
+}
+
+// WithLocalLoadFeeProvider supplies our LoadFee and validated-ledger age for
+// the outbound TMCluster self-entry. Without it the advertised fee is 0.
+func WithLocalLoadFeeProvider(fn func() (uint32, time.Duration)) Option {
+	return func(c *Config) { c.LocalLoadFeeProvider = fn }
+}
+
+// WithMemoryBudgets attaches node-owned parent accounts. Critical outbound
+// reservations are charged to critical, separate from the general outbound
+// account.
+func WithMemoryBudgets(inbound, outbound, critical MemoryBudget) Option {
+	return func(c *Config) {
+		c.InboundMemory = inbound
+		c.OutboundMemory = outbound
+		c.OutboundCriticalMemory = critical
 	}
 }
 

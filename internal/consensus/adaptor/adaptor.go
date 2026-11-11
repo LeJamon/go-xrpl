@@ -155,24 +155,19 @@ type Adaptor struct {
 	acceptWorkerMu sync.Mutex
 	acceptWorker   *ledgerAcceptWorker
 
-	// unlBlocked reports the validator-list aggregator's UNL lock-down flag.
-	// Wired at startup when publisher lists are configured; nil (no
-	// publishers) means never blocked. Written once before the engine
-	// starts, then only read.
-	unlBlocked func() bool
-	// quorumUnavailable reports whether publisher availability makes a safe
-	// validation quorum unachievable. It is distinct from the consensus
-	// participation lock-down when multiple publishers are configured.
+	// Validator-list hooks from Config; immutable after New, read without
+	// a.mu.
+	//
+	// unlBlocked reports the aggregator's UNL lock-down flag. quorumUnavailable
+	// is distinct from it when multiple publishers are configured.
+	unlBlocked        func() bool
 	quorumUnavailable func() bool
-
-	// refreshUNL re-evaluates the aggregator's trust view against the live
-	// clock (promote rotations, latch/clear the lock-down flag). Wired to
-	// the aggregator's Tick so consensus can drive it once per round —
-	// rippled refreshes via updateTrusted at every ledger close, but
-	// goXRPL's standalone 30s ticker leaves the flag stale for several
-	// rounds after a list lapses. nil (no publishers) means no-op. Same
-	// write-once-before-start lifetime as unlBlocked.
+	// refreshUNL is the aggregator's Tick, driven once per round so the
+	// lock-down flag tracks a lapsing list faster than the 30s ticker
+	// (rippled refreshes via updateTrusted at every ledger close).
 	refreshUNL func()
+	// listedFn resolves validator-list membership (Aggregator.IsListed).
+	listedFn func(consensus.NodeID) bool
 
 	// refreshInFlight single-flights RefreshUNLState's background refresh so
 	// per-round dispatches can't pile up goroutines if a tick runs slow.
@@ -181,10 +176,6 @@ type Adaptor struct {
 	// relayValidations is the operator's [relay_validations] stance.
 	// Immutable after New — read without a.mu.
 	relayValidations RelayValidationsPolicy
-
-	// listedFn resolves validator-list membership (Aggregator.IsListed).
-	// nil when no publisher trust is configured — nothing is listed.
-	listedFn func(consensus.NodeID) bool
 
 	// onTrustChanged publishes the matching trusted/quorum snapshot after
 	// every SetTrustedValidators swap. nil-safe.
@@ -321,6 +312,17 @@ type Config struct {
 	// RelayValidations is the operator's [relay_validations] stance; the
 	// zero value relays untrusted validations (rippled's default).
 	RelayValidations RelayValidationsPolicy
+
+	// Validator-list hooks, all nil when no publisher lists are configured.
+	// UNLBlocked reports the UNL lock-down (nil: never blocked).
+	UNLBlocked func() bool
+	// QuorumUnavailable reports that publisher availability makes a safe
+	// validation quorum unachievable (nil: never).
+	QuorumUnavailable func() bool
+	// RefreshUNL re-evaluates the list trust view (nil: no-op).
+	RefreshUNL func()
+	// Listed resolves list membership (nil: nothing is listed).
+	Listed func(consensus.NodeID) bool
 }
 
 // generateCookie returns a non-zero random 64-bit cookie. On a read error it
@@ -457,6 +459,10 @@ func New(cfg Config) *Adaptor {
 		amendmentTable:    cfg.Table,
 		trustedVotes:      trustedVotes,
 		relayValidations:  cfg.RelayValidations,
+		unlBlocked:        cfg.UNLBlocked,
+		quorumUnavailable: cfg.QuorumUnavailable,
+		refreshUNL:        cfg.RefreshUNL,
+		listedFn:          cfg.Listed,
 		logger:            logger,
 		acceptWorker:      newLedgerAcceptWorker(),
 	}
@@ -512,8 +518,9 @@ func (a *Adaptor) onValidatedLedger(seq uint32, hash, parentHash [32]byte) {
 }
 
 // SetValidationHistorian wires per-ledger trusted-validation lookups into the
-// adaptor; the engine calls it once after building its ValidationTracker.
-// Until set, GenerateNegativeUNLPseudoTx emits no votes.
+// adaptor; the engine, which is built from the adaptor, calls it once after
+// building its ValidationTracker. Until set, GenerateNegativeUNLPseudoTx emits
+// no votes.
 func (a *Adaptor) SetValidationHistorian(h consensus.ValidationHistorian) {
 	a.mu.Lock()
 	a.validationHistorian = h
@@ -644,9 +651,13 @@ func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPe
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
+// The router callbacks below are installed by newRouter, which needs the
+// adaptor to be built first; they are set once before Start and not
+// concurrency-safe.
+
 // SetOnTxSetRequested registers a callback invoked at the start of every
 // RequestTxSet, so the router can reset throttle/attempt bookkeeping on the
-// in-flight acquisition. Set once at startup; not concurrency-safe.
+// in-flight acquisition.
 func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
 	a.onTxSetRequested = cb
 }

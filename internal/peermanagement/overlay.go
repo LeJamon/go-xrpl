@@ -46,11 +46,20 @@ type Overlay struct {
 	// instanceCookie: immutable post-New, lock-free.
 	instanceCookie uint64
 
-	// Higher-layer callbacks (avoid importing internal/ledger here).
-	providersMu         sync.RWMutex
-	ledgerHintProvider  func() (LedgerHints, bool)
-	validLedgerProvider func() (seq uint32, age time.Duration, ok bool)
-	httpProviders       HTTPProviders
+	// Higher-layer hooks fixed by New from Config (avoid importing
+	// internal/ledger here). Immutable afterwards, so read without locking;
+	// each is nil-safe.
+	ledgerHintProvider   func() (LedgerHints, bool)
+	validLedgerProvider  func() (seq uint32, age time.Duration, ok bool)
+	txRecordProvider     func(hash [32]byte) (TxRecord, bool)
+	nodeObjectProvider   func(hash [32]byte) ([]byte, bool)
+	clusterFeeSink       func(fee uint32)
+	localLoadFeeProvider func() (uint32, time.Duration)
+
+	// providersMu guards the late-bound hooks below. Their implementers are
+	// built from the overlay itself, so they cannot be supplied to New.
+	providersMu   sync.RWMutex
+	httpProviders HTTPProviders
 	// peerStatusPublisher: optional sink for pubPeerStatus updates.
 	// Wired by the RPC layer to broadcast over the peer_status
 	// WebSocket subscription. nil-safe — no-op when unset (tests,
@@ -167,43 +176,6 @@ type Overlay struct {
 	// contract as onPeerDisconnect: runs on the event loop, must not
 	// block. Guarded by providersMu.
 	onPeerConnect func(PeerID)
-
-	// txProvider is the legacy open-ledger-only lookup retained for embedded
-	// callers. Production wiring uses txRecordProvider so queued transactions
-	// are included in reduce-relay replies. Guarded by providersMu.
-	txProvider func(hash [32]byte) ([]byte, bool)
-
-	// txRecordProvider is the authoritative transaction-cache lookup used by
-	// reduce-relay replies. It includes queued transactions, which are not part
-	// of the open-ledger view exposed by txProvider.
-	txRecordProvider func(hash [32]byte) (TxRecord, bool)
-
-	// nodeObjectProvider returns the raw node-store blob for a content
-	// hash. Wired by the server at startup so the generic TMGetObjectByHash serve
-	// path (handleGetObjectsMessage → serveGetObjects) can answer a
-	// peer's by-hash query without importing storage/nodestore lifecycle
-	// into this package. nil-safe — the serve path drops without
-	// charging when unwired (an overlay deployed without a backing
-	// store, or tests). Guarded by providersMu.
-	nodeObjectProvider func(hash [32]byte) ([]byte, bool)
-
-	// openLedgerHashesProvider is retained for compatibility with older
-	// embedded callers; per-peer deferred queues now drive
-	// TMHaveTransactions emission. Guarded by providersMu.
-	openLedgerHashesProvider func() [][32]byte
-
-	// clusterFeeSink is invoked by handleClusterMessage after the
-	// registry-update loop with the median LoadFee across members
-	// reported within the last cluster-fee window. nil-safe — the
-	// inbound handler skips the median computation when unwired.
-	// Guarded by providersMu.
-	clusterFeeSink func(fee uint32)
-
-	// localLoadFeeProvider returns the local node's current load fee and
-	// validated-ledger age. Wired into sendClusterUpdate so stale nodes
-	// advertise zero load. nil-safe — sendClusterUpdate falls back to 0
-	// when unwired. Guarded by providersMu.
-	localLoadFeeProvider func() (uint32, time.Duration)
 
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into
@@ -481,7 +453,6 @@ func (o *Overlay) NotePeerHasTxSet(peerID PeerID, hash [32]byte) bool {
 	return false
 }
 
-// SetLedgerHintProvider wires the hint source; nil suppresses headers.
 // generateInstanceCookie draws a cookie uniform in [1, MaxUint64];
 // only 0 is rejected.
 func generateInstanceCookie() (uint64, error) {
@@ -782,7 +753,16 @@ func New(opts ...Option) (*Overlay, error) {
 		outboundSem:              make(chan struct{}, outboundCap),
 		resourceManager:          resource.NewManagerWithLimits(cfg.Clock, nil, cfg.ResourceLimits),
 		outboundBudget:           newOutboundBudget(cfg.OutboundRetainedBytes, cfg.MaxPeers),
+		ledgerHintProvider:       cfg.LedgerHintProvider,
+		validLedgerProvider:      cfg.ValidLedgerProvider,
+		txRecordProvider:         cfg.TxRecordProvider,
+		nodeObjectProvider:       cfg.NodeObjectProvider,
+		clusterFeeSink:           cfg.ClusterFeeSink,
+		localLoadFeeProvider:     cfg.LocalLoadFeeProvider,
 	}
+	o.inboundReadBudget.parent = cfg.InboundMemory
+	o.outboundBudget.parent = cfg.OutboundMemory
+	o.outboundBudget.criticalParent = cfg.OutboundCriticalMemory
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()
 	}
