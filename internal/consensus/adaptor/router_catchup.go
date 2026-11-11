@@ -1955,6 +1955,7 @@ func (c *catchupReplayCoordinator) useCompatiblePreparedReplayLocked(
 		entry.seq == c.standardReplay.anchorSeq+1 && !entry.readyAt.IsZero()
 	if startDrain {
 		c.standardReplay.applying = true
+		c.checkStandardReplayPhaseLocked()
 	}
 	return true, startDrain
 }

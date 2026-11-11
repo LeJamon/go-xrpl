@@ -276,6 +276,7 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 	c.standardReplay.applying = false
 	c.standardReplay.pivotReady = false
 	c.standardReplay.initialCandidate = false
+	c.checkStandardReplayPhaseLocked()
 	c.standardReplay.pivotSeq = pivotSeq
 	c.standardReplay.pivotHash = pivotHash
 	c.standardReplay.anchorSeq = pivotSeq
@@ -531,6 +532,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 		return false
 	}
 	c.standardReplay.pivotReady = true
+	c.checkStandardReplayPhaseLocked()
 	c.standardReplay.initialCandidate = initialCandidate
 	now := time.Now()
 	c.standardReplay.progressSampleAt = now
@@ -543,6 +545,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 	if entry := c.standardReplay.entries[h.LedgerIndex+1]; entry != nil &&
 		(!entry.readyAt.IsZero() || entry.failed) && !c.standardReplay.applying {
 		c.standardReplay.applying = true
+		c.checkStandardReplayPhaseLocked()
 		startDrain = true
 	}
 	c.acquisitionMu.Unlock()
@@ -585,6 +588,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 			c.standardReplay.pivotHash == h.Hash
 		if current && c.standardReplay.targetSeq == h.LedgerIndex && c.standardReplay.targetHash == h.Hash {
 			c.standardReplay.active = false
+			c.checkStandardReplayPhaseLocked()
 			c.standardReplay.entries = nil
 			c.standardReplay.backpressured = false
 			c.releaseStandardReplayBaseLocked()
@@ -694,6 +698,7 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 	// A flag without an executing owner or a ready head is not progress.
 	// Clear it so a missing-head stall can still reach normal recovery.
 	c.standardReplay.applying = false
+	c.checkStandardReplayPhaseLocked()
 	if c.standardReplay.targetSeq <= c.standardReplay.anchorSeq {
 		c.acquisitionMu.Unlock()
 		return false
