@@ -235,9 +235,6 @@ func TestSitePollerDuplicateSitesKeepRedirectTargetsIsolated(t *testing.T) {
 	if len(snapshot) != 2 || snapshot[0].URI != wantOne || snapshot[1].URI != wantTwo {
 		t.Fatalf("site snapshot URIs = %#v, want [%q, %q]", snapshot, wantOne, wantTwo)
 	}
-	if sites := NewRPCReader(agg).Sites(); len(sites) != 2 || sites[0].URI != wantOne || sites[1].URI != wantTwo {
-		t.Fatalf("RPC site URIs = %#v, want [%q, %q]", sites, wantOne, wantTwo)
-	}
 
 	poller.fetchSite(t.Context(), poller.sites[0])
 	poller.fetchSite(t.Context(), poller.sites[1])

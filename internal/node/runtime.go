@@ -27,7 +27,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -920,10 +919,10 @@ func (r *nodeRuntime) configureConsensus() error {
 
 		// Expose the publisher-list aggregator (when configured) to
 		// the `validators` and `validator_list_sites` RPC methods.
-		// nil-safe: NewRPCReader returns an inert reader when the
-		// aggregator is nil, so the handlers return empty arrays in
-		// that case rather than panicking.
-		r.services.ValidatorList = validatorlist.NewRPCReader(r.consensus.ValidatorList)
+		// nil-safe: the reader is inert when the aggregator is nil, so
+		// the handlers return empty arrays in that case rather than
+		// panicking.
+		r.services.ValidatorList = newValidatorListReader(r.consensus.ValidatorList)
 
 		// Surface UNL-blocked state (validator list expired) so conditionMet
 		// can return rpcEXPIRED_VALIDATOR_LIST, mirroring rippled's

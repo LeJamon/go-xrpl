@@ -150,6 +150,7 @@ type Ledger struct {
 	mu                       sync.Mutex
 	workMu                   sync.Mutex
 	logger                   *slog.Logger
+	clock                    Clock
 	snapshot                 atomic.Pointer[Snapshot]
 
 	// family backs the acquisition SHAMaps with the persistent node store when
@@ -284,6 +285,16 @@ func WithHeaderAdmission(admit func(uint32) error) Option {
 	}
 }
 
+// WithClock sets the clock behind the acquisition's internal time reads. A
+// nil clock keeps SystemClock.
+func WithClock(clock Clock) Option {
+	return func(l *Ledger) {
+		if clock != nil {
+			l.clock = clock
+		}
+	}
+}
+
 // WithTransactionOnly configures a standard-protocol acquisition to fetch the
 // target header and transaction SHAMap without walking its account-state
 // SHAMap. The result must be replayed against a locally-held parent and its
@@ -309,8 +320,8 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 		seq:                      seq,
 		sequenceInitiallyUnknown: seq == 0,
 		state:                    StateWantBase,
-		lastTimer:                SystemClock.Now(),
 		logger:                   logger,
+		clock:                    SystemClock,
 		recentNodes:              make(map[[32]byte]uint64),
 		requestPeers:             make(map[uint64]struct{}),
 		requestLeases:            make(map[[32]byte]missingRequestLease),
@@ -323,6 +334,7 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 	for _, opt := range opts {
 		opt(l)
 	}
+	l.lastTimer = l.clock.Now()
 	l.publishSnapshotLocked()
 	return l
 }
@@ -477,7 +489,7 @@ func (l *Ledger) RemovePeer(peerID uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.clearHedgePeerLocked(peerID)
-	l.releaseAllPeerLeasesLocked(peerID, time.Now(), true)
+	l.releaseAllPeerLeasesLocked(peerID, l.clock.Now(), true)
 	for i, id := range l.peers {
 		if id == peerID {
 			l.peers = slices.Delete(l.peers, i, i+1)
@@ -717,7 +729,7 @@ func (l *Ledger) AcquisitionMemoryWaiting() bool {
 func (l *Ledger) markProgressLocked() {
 	l.progress = true
 	l.consecutiveTimeouts = 0
-	l.lastUsefulProgress = SystemClock.Now()
+	l.lastUsefulProgress = l.clock.Now()
 }
 
 // ByHashMode reports whether content-addressed requests replaced path-based
@@ -1659,7 +1671,7 @@ func (l *Ledger) finishReceivedTree(ctx context.Context, m *shamap.SHAMap, trans
 		l.missingState = nil
 		l.neededState = nil
 	}
-	l.clearTreeReservationsLocked(transaction, SystemClock.Now())
+	l.clearTreeReservationsLocked(transaction, l.clock.Now())
 	l.recomputeComplete()
 }
 
@@ -1809,7 +1821,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 		l.mu.Unlock()
 	}
 
-	started := time.Now()
+	started := l.clock.Now()
 	missing, scanStatus, scanErr := scanMissingNodesContext(ctx, m, missingNodesFind, nil)
 	if scanErr == nil && scanStatus == shamap.MissingNodesWaiting && len(missing) == 0 {
 		// A backed scanner pass can finish with no IDs while it is still
@@ -1842,7 +1854,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	if err != nil && (!missingWalkYield(err) || len(missing) == 0) {
 		return nil, nil, false, err
 	}
-	if elapsed := time.Since(started); elapsed >= time.Second {
+	if elapsed := l.clock.Now().Sub(started); elapsed >= time.Second {
 		l.logger.Info("inbound ledger: missing-node walk delayed", "elapsed", elapsed, "missing", len(missing), "reply", isReply)
 	}
 
@@ -1943,7 +1955,7 @@ func (l *Ledger) filterMissingResultLocked(missing []shamap.MissingNode, isReply
 			nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
 			continue
 		}
-		if l.requestAvailableLocked() == 0 || !l.reserveMissingNodeLocked(use[i], transaction, 0, time.Now()) {
+		if l.requestAvailableLocked() == 0 || !l.reserveMissingNodeLocked(use[i], transaction, 0, l.clock.Now()) {
 			break
 		}
 		nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
@@ -2032,7 +2044,7 @@ func (l *Ledger) CollectMissingCachedAddedRequests(peerIDs []uint64) []MissingRe
 			for i := range batch {
 				request.NodeIDs = append(request.NodeIDs, batch[i].NodeID.Bytes())
 				request.NodeHashes = append(request.NodeHashes, batch[i].Hash)
-				if !l.reserveMissingNodeLocked(batch[i], transaction, peerID, time.Now()) {
+				if !l.reserveMissingNodeLocked(batch[i], transaction, peerID, l.clock.Now()) {
 					request.NodeIDs = request.NodeIDs[:len(request.NodeIDs)-1]
 					request.NodeHashes = request.NodeHashes[:len(request.NodeHashes)-1]
 					break
@@ -2061,7 +2073,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		return nil, l.IsComplete(), nil
 	}
 	l.mu.Lock()
-	l.expireMissingLeasesLocked(time.Now(), false)
+	l.expireMissingLeasesLocked(l.clock.Now(), false)
 	available := requestPeerLimit - len(l.requestPeers)
 	peers := make([]uint64, 0, min(len(peerIDs), available))
 	for _, peerID := range peerIDs {
@@ -2134,7 +2146,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 			peerID := peers[0]
 			ready := make([]shamap.MissingNode, 0, batchLimit)
 			for len(ready) < batchLimit {
-				node, ok := l.claimReadyNodeLocked(transaction, peerID, time.Now(), useScanner)
+				node, ok := l.claimReadyNodeLocked(transaction, peerID, l.clock.Now(), useScanner)
 				if !ok {
 					break
 				}
@@ -2230,7 +2242,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 					l.haveState = true
 					l.missingState = nil
 					l.neededState = nil
-					l.clearTreeReservationsLocked(false, time.Now())
+					l.clearTreeReservationsLocked(false, l.clock.Now())
 				}
 				l.recomputeComplete()
 				complete := l.state == StateComplete
@@ -2320,7 +2332,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				for i := range batch {
 					request.NodeIDs = append(request.NodeIDs, batch[i].NodeID.Bytes())
 					request.NodeHashes = append(request.NodeHashes, batch[i].Hash)
-					if !l.reserveMissingNodeLocked(batch[i], transaction, request.PeerID, time.Now()) {
+					if !l.reserveMissingNodeLocked(batch[i], transaction, request.PeerID, l.clock.Now()) {
 						request.NodeIDs = request.NodeIDs[:len(request.NodeIDs)-1]
 						request.NodeHashes = request.NodeHashes[:len(request.NodeHashes)-1]
 						break
@@ -2382,7 +2394,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 func (l *Ledger) releaseMissingRequests(requests []MissingRequest) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := SystemClock.Now()
+	now := l.clock.Now()
 	for _, request := range requests {
 		for _, hash := range request.NodeHashes {
 			if lease, ok := l.requestLeases[hash]; ok && lease.peerID == request.PeerID {
@@ -2437,7 +2449,7 @@ func (l *Ledger) ReleaseUnreservedMissingNodes() {
 func (l *Ledger) ReleaseMissingPeer(peerID uint64) {
 	l.mu.Lock()
 	l.clearHedgePeerLocked(peerID)
-	l.releaseAllPeerLeasesLocked(peerID, time.Now(), false)
+	l.releaseAllPeerLeasesLocked(peerID, l.clock.Now(), false)
 	l.mu.Unlock()
 }
 
@@ -2619,7 +2631,7 @@ func (l *Ledger) requestPeerSnapshotsLocked() []RequestPeerSnapshot {
 	if len(peerIDs) > requestPeerLimit {
 		peerIDs = peerIDs[:requestPeerLimit]
 	}
-	now := SystemClock.Now()
+	now := l.clock.Now()
 	snapshots := make([]RequestPeerSnapshot, 0, len(peerIDs))
 	for _, peerID := range peerIDs {
 		peerSnapshot := RequestPeerSnapshot{PeerID: peerID}
@@ -2889,7 +2901,7 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 			l.haveState = true
 			l.missingState = nil
 			l.neededState = nil
-			l.clearTreeReservationsLocked(false, SystemClock.Now())
+			l.clearTreeReservationsLocked(false, l.clock.Now())
 		} else if len(stateMissing) > 0 {
 			l.cacheMissingLocked(false, stateMissing)
 		}
@@ -2899,7 +2911,7 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 			l.haveTx = true
 			l.missingTx = nil
 			l.neededTx = nil
-			l.clearTreeReservationsLocked(true, SystemClock.Now())
+			l.clearTreeReservationsLocked(true, l.clock.Now())
 		} else if len(txMissing) > 0 {
 			l.cacheMissingLocked(true, txMissing)
 		}

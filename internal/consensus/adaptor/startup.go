@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/archive"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -520,13 +521,14 @@ func NewFromConfig(
 
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
-	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
+	engine.SetLedgerAncestryProvider(newAncestryProvider(ledgerSvc))
 
 	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
 		gossip:               sender,
 		txSet:                sender,
 		acquisition:          sender,
 		serve:                sender,
+		inboundClock:         inbound.SystemClock,
 		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
 	})
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
