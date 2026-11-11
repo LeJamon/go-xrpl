@@ -15,7 +15,6 @@ import (
 
 func batchCacheMutationFixture(t *testing.T) (*batch.Batch, []byte) {
 	t.Helper()
-	registerBatchCacheTypes()
 	privateKey, publicKey, account := cacheMutationKeypair(t, "batch-cache-structural-mutation")
 
 	inner := func(sequence uint32, amount int64) txcore.Transaction {

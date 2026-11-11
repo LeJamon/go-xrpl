@@ -10,6 +10,7 @@ func Register() {
 			return &MPTokenIssuanceCreate{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceCreate, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivCreateMPTIssuance,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeMPTokenIssuanceDestroy,
@@ -17,6 +18,7 @@ func Register() {
 			return &MPTokenIssuanceDestroy{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivDestroyMPTIssuance,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeMPTokenIssuanceSet,
@@ -31,6 +33,7 @@ func Register() {
 			return &MPTokenAuthorize{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivMustAuthorizeMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeConfidentialMPTConvert,

@@ -28,6 +28,24 @@ var (
 	oraclePrivilegePattern = regexp.MustCompile(`\.privileges\s*=\s*([^,}]+)`)
 )
 
+var oraclePrivileges = map[string]tx.Privilege{
+	"NoPriv":             0,
+	"CreateAcct":         tx.PrivCreateAcct,
+	"CreatePseudoAcct":   tx.PrivCreatePseudoAcct,
+	"MustDeleteAcct":     tx.PrivMustDeleteAcct,
+	"MayDeleteAcct":      tx.PrivMayDeleteAcct,
+	"OverrideFreeze":     tx.PrivOverrideFreeze,
+	"ChangeNftCounts":    tx.PrivChangeNFTCounts,
+	"CreateMptIssuance":  tx.PrivCreateMPTIssuance,
+	"DestroyMptIssuance": tx.PrivDestroyMPTIssuance,
+	"MustAuthorizeMpt":   tx.PrivMustAuthorizeMPT,
+	"MayAuthorizeMpt":    tx.PrivMayAuthorizeMPT,
+	"MayDeleteMpt":       tx.PrivMayDeleteMPT,
+	"MustModifyVault":    tx.PrivMustModifyVault,
+	"MayModifyVault":     tx.PrivMayModifyVault,
+	"MayCreateMpt":       tx.PrivMayCreateMPT,
+}
+
 func readOracleTxSettings(t *testing.T) []oracleTxSettings {
 	t.Helper()
 	data, err := os.ReadFile(rippled.File(t, "include/xrpl/protocol/detail/transactions.macro"))
@@ -93,6 +111,17 @@ func TestDescriptorsMatchOracleTxSettings(t *testing.T) {
 			}
 			if got := tx.IsTransactionDelegable(row.code); got != row.delegable {
 				t.Errorf("delegable = %t, oracle %t", got, row.delegable)
+			}
+			var want tx.Privilege
+			for _, name := range row.privileges {
+				bit, ok := oraclePrivileges[name]
+				if !ok {
+					t.Fatalf("unknown oracle privilege %q", name)
+				}
+				want |= bit
+			}
+			if got := tx.PrivilegesOf(row.code); got != want {
+				t.Errorf("privileges = 0x%04x, oracle 0x%04x %v", got, want, row.privileges)
 			}
 			// Retired amendments are permanently enabled, so gating on one is
 			// equivalent to the oracle's "no amendment".

@@ -10,6 +10,7 @@ func Register() {
 			return &AMMCreate{BaseTx: *tx.NewBaseTx(tx.TypeAMMCreate, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivCreatePseudoAcct | tx.PrivMayCreateMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeAMMDeposit,
@@ -24,6 +25,7 @@ func Register() {
 			return &AMMWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeAMMWithdraw, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivMayDeleteAcct | tx.PrivMayAuthorizeMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeAMMVote,
@@ -45,6 +47,7 @@ func Register() {
 			return &AMMDelete{BaseTx: *tx.NewBaseTx(tx.TypeAMMDelete, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivMustDeleteAcct | tx.PrivMayDeleteMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeAMMClawback,
@@ -52,5 +55,6 @@ func Register() {
 			return &AMMClawback{BaseTx: *tx.NewBaseTx(tx.TypeAMMClawback, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivMayDeleteAcct | tx.PrivOverrideFreeze | tx.PrivMayAuthorizeMPT,
 	})
 }
