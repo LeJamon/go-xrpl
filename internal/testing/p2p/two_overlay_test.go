@@ -486,13 +486,15 @@ func TestTwoOverlay_Squelch_RoundTrip(t *testing.T) {
 	peerBOnA := infosA[0].ID // A's view of B (inbound)
 	peerAOnB := infosB[0].ID // B's view of A (outbound)
 
-	// A 33-byte validator pub-key — matches rippled's secp256k1-compressed
-	// format. The exact bytes are irrelevant; only the map-key round-trip
-	// is under test.
+	// A 33-byte secp256k1-compressed validator pub-key. The receiver
+	// rejects keys without a 0x02, 0x03 or 0xED prefix, like rippled's
+	// publicKeyType; the remaining bytes are irrelevant, only the map-key
+	// round-trip is under test.
 	validator := make([]byte, 33)
 	for i := range validator {
 		validator[i] = byte(0x10 | i)
 	}
+	validator[0] = 0x02
 
 	// A squelches V on its view of B (peerBOnA). The overlay sends a
 	// TMSquelch frame to B; B's handleSquelchMessage records it on its

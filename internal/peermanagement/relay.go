@@ -252,25 +252,26 @@ func (s *ValidatorSlot) selectPeers(now time.Time) []squelchCall {
 
 // DeletePeer handles peer disconnection.
 func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) {
-	var pendingSquelch []squelchCall
 	s.mu.Lock()
+	pendingSquelch := s.deletePeerLocked(peerID, time.Now(), erase)
 	onSquelch := s.onSquelch
-	defer func() {
-		s.mu.Unlock()
-		if onSquelch != nil {
-			for _, c := range pendingSquelch {
-				onSquelch(validator, c.peerID, c.squelch, c.duration)
-			}
+	s.mu.Unlock()
+	if onSquelch != nil {
+		for _, c := range pendingSquelch {
+			onSquelch(validator, c.peerID, c.squelch, c.duration)
 		}
-	}()
+	}
+}
 
+// deletePeerLocked runs under s.mu. Removing a selected peer resets the slot
+// to Counting and returns the unsquelch calls for the squelched peers.
+func (s *ValidatorSlot) deletePeerLocked(peerID PeerID, now time.Time, erase bool) []squelchCall {
 	peer, exists := s.peers[peerID]
 	if !exists {
-		return
+		return nil
 	}
 
-	now := time.Now()
-
+	var pendingSquelch []squelchCall
 	if peer.State == RelayPeerSelected {
 		for id, p := range s.peers {
 			if p.State == RelayPeerSquelched {
@@ -290,100 +291,30 @@ func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) 
 		delete(s.considered, peerID)
 	}
 
-	// Unconditionally reset Count and LastMessage on the deleted peer,
-	// regardless of whether it was Selected or in Considered, so a
-	// later re-appearance of the same peer ID starts from a clean
-	// slate instead of inheriting whatever Count it had when it left.
 	peer.Count = 0
 	peer.LastMessage = now
 
 	if erase {
 		delete(s.peers, peerID)
 	}
+	return pendingSquelch
 }
 
-// deleteIdlePeers evicts every peer in this slot whose LastMessage is
-// older than Idled from `now`, and — if the remaining peer count drops
-// below maxSelectedPeers while the slot was in RelaySlotSelected —
-// demotes the slot back to RelaySlotCounting so future Updates can
-// retry selection.
-//
-// The per-peer eviction path reuses the DeletePeer logic under this
-// slot's own lock to keep the peer-map transitions consistent with
-// the normal disconnect path (Selected-peer removal cascades into
-// unsquelching the rest of the slot and resetting slot state).
-//
-// Called under Relay.mu write-lock by Relay.deleteIdlePeers, but
-// takes this slot's own mu independently — the two locks always
-// nest in the order (relay, slot) just as RemovePeer does.
+// deleteIdlePeers resets every peer whose last message is older than Idled
+// without erasing it, so a peer that honours our squelch and goes quiet is
+// still unsquelched when a selected peer leaves. An idle selected peer resets
+// the slot to Counting.
 func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 	s.mu.Lock()
-
-	// First pass: collect the IDs to evict under lock. We cannot call
-	// DeletePeer (which takes s.mu) while holding it, so do the per-
-	// peer eviction inline here mirroring DeletePeer's semantics.
-	var toEvict []PeerID
+	var pendingSquelch []squelchCall
 	for id, peer := range s.peers {
 		if now.Sub(peer.LastMessage) > Idled {
-			toEvict = append(toEvict, id)
+			pendingSquelch = append(pendingSquelch, s.deletePeerLocked(id, now, false)...)
 		}
 	}
-
-	// Track whether any Selected peer was among the evicted — if so,
-	// the eviction cascade unsquelches the rest of the slot and
-	// resets state. We collect the unsquelch callbacks to fire AFTER
-	// we release s.mu, matching the DeletePeer ordering above.
-	var pendingSquelch []squelchCall
-
-	for _, id := range toEvict {
-		peer, exists := s.peers[id]
-		if !exists {
-			continue
-		}
-
-		if peer.State == RelayPeerSelected {
-			// Cascade: unsquelch all other Squelched peers, reset
-			// every remaining peer to Counting, and demote the slot.
-			for k, v := range s.peers {
-				if k == id {
-					continue
-				}
-				if v.State == RelayPeerSquelched {
-					pendingSquelch = append(pendingSquelch, squelchCall{peerID: k, squelch: false})
-				}
-				v.State = RelayPeerCounting
-				v.Count = 0
-				v.Expire = now
-			}
-			s.considered = make(map[PeerID]struct{})
-			s.reachedThreshold = 0
-			s.state = RelaySlotCounting
-		} else if _, inConsidered := s.considered[id]; inConsidered {
-			if peer.Count > MaxMessageThreshold {
-				s.reachedThreshold--
-			}
-			delete(s.considered, id)
-		}
-
-		peer.Count = 0
-		peer.LastMessage = now
-		delete(s.peers, id)
-	}
-
-	// Safety-net per G2 spec: if the slot was still in Selected state
-	// after the walk (e.g., only Squelched peers were evicted) and the
-	// remaining peer count dropped below maxSelectedPeers, demote to
-	// Counting so the selection state machine can retry with whatever
-	// peers are left.
-	if s.state == RelaySlotSelected && len(s.peers) < s.maxSelectedPeers {
-		s.initCounting()
-	}
-
 	callback := s.onSquelch
 	s.mu.Unlock()
 
-	// Fire unsquelch callbacks outside the lock, matching the
-	// DeletePeer ordering.
 	if callback != nil {
 		for _, c := range pendingSquelch {
 			callback(validator, c.peerID, c.squelch, c.duration)
@@ -506,16 +437,12 @@ func (r *Relay) RemovePeer(peerID PeerID) {
 	}
 }
 
-// deleteIdlePeers is the periodic sweep that evicts peers whose
-// last-message timestamp is older than Idled from every validator
-// slot, demotes slots that dropped below MaxSelectedPeers while in
-// Selected state back to Counting, and drops slots that lost all
-// peers entirely.
-//
-// Without this sweep r.slots only shrinks on explicit RemovePeer — a
-// selected peer that silently stops relaying is never demoted back to
-// Counting, so the slot permanently points at a dead source and the
-// relay never retries selection for that validator.
+// deleteIdlePeers is the periodic sweep: it resets idle peers in every slot
+// and drops each slot whose last selection is older than
+// MaxUnsquelchExpireDefault. A dropped slot is recreated by the next message
+// with a fresh selection clock; keeping it would leave a slot that fell back
+// to Counting long after its last selection resetting its counts on every
+// message, so it would never select again.
 //
 // Takes `now` explicitly so tests can drive the sweep clock
 // deterministically; callers in production pass time.Now().
@@ -526,13 +453,10 @@ func (r *Relay) deleteIdlePeers(now time.Time) {
 	for key, slot := range r.slots {
 		slot.deleteIdlePeers([]byte(key), now)
 
-		// After the per-slot walk, drop the slot entirely if it has
-		// zero peers left — otherwise r.slots would leak entries for
-		// validators we no longer hear from.
 		slot.mu.RLock()
-		empty := len(slot.peers) == 0
+		lastSelected := slot.lastSelected
 		slot.mu.RUnlock()
-		if empty {
+		if now.Sub(lastSelected) > MaxUnsquelchExpireDefault {
 			delete(r.slots, key)
 		}
 	}

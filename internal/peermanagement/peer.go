@@ -1808,11 +1808,22 @@ func (p *Peer) addSquelch(validator []byte, duration time.Duration) (bool, strin
 		return false, "squelch-duration"
 	}
 	key := string(validator)
+	now := time.Now()
 	p.squelchMu.Lock()
 	_, exists := p.squelchMap[key]
+	if !exists && len(p.squelchMap) >= maxSquelchesPerPeer {
+		// Squelches for keys we no longer relay (for example a rotated
+		// validator signing key) are only cleared on send, so drop the
+		// expired ones before deciding the table is full.
+		for k, deadline := range p.squelchMap {
+			if !deadline.After(now) {
+				delete(p.squelchMap, k)
+			}
+		}
+	}
 	full := !exists && len(p.squelchMap) >= maxSquelchesPerPeer
 	if !full {
-		p.squelchMap[key] = time.Now().Add(duration)
+		p.squelchMap[key] = now.Add(duration)
 	}
 	p.squelchMu.Unlock()
 	if full {
