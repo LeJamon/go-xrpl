@@ -46,7 +46,7 @@ func TestPendingFrozenPivotWaitsForConnectedPeerAfterCapacityDeferral(t *testing
 				r.maintenanceTick()
 				require.Empty(t, c.fetchTracker.Active())
 				require.Equal(t, generation, c.standardReplay.generation)
-				require.False(t, c.standardReplay.active)
+				require.False(t, c.standardReplay.isActive())
 				require.Equal(t, intent, c.pendingFrozenPivot)
 				require.False(t, c.catchupRetryBlocked(targetHash, time.Now()))
 			}
@@ -65,7 +65,7 @@ func TestPendingFrozenPivotWaitsForConnectedPeerAfterCapacityDeferral(t *testing
 			}
 			r.maintenanceTick()
 
-			require.True(t, c.standardReplay.active)
+			require.True(t, c.standardReplay.isActive())
 			assert.Equal(t, generation+1, c.standardReplay.generation)
 			assert.Equal(t, targetHash, c.standardReplay.pivotHash)
 			assert.Empty(t, c.pendingFrozenPivot)
@@ -108,7 +108,7 @@ func TestHashOnlyConsensusAcquisitionUsesPeerWithoutAdmittedStatus(t *testing.T)
 			assert.Zero(t, acquisition.Seq())
 			assert.Equal(t, hash, c.consensusRecovery.targetHash)
 			assert.Equal(t, hash, c.consensusRecovery.stepHash)
-			assert.False(t, c.standardReplay.active)
+			assert.False(t, c.standardReplay.isActive())
 			assert.Equal(t, []legacyBaseCall{{peerID: 7, hash: hash}}, sender.legacyCalls())
 		})
 	}
@@ -133,7 +133,7 @@ func TestPendingFrozenPivotJoinsExistingAcquisitionWithoutPeers(t *testing.T) {
 	require.True(t, c.retryPendingFrozenPivot())
 	assert.Same(t, existing, c.fetchTracker.Find(hash))
 	assert.Equal(t, generation+1, c.standardReplay.generation)
-	assert.True(t, c.standardReplay.active)
+	assert.True(t, c.standardReplay.isActive())
 	assert.Equal(t, hash, c.standardReplay.pivotHash)
 	assert.Empty(t, c.pendingFrozenPivot)
 	assert.Len(t, sender.legacyCalls(), 1)

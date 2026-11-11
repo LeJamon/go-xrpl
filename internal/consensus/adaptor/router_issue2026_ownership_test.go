@@ -24,7 +24,7 @@ func TestFrozenPivotRecoveryDefersAtCapacityAndRetriesOnePendingIntent(t *testin
 
 	assert.False(t, r.catchupReplay.beginFrozenPivotRecovery(targetSeq, targetHash, 8))
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Same(t, survivor, r.catchupReplay.fetchTracker.Find(survivorHash))
 	r.catchupReplay.acquisitionMu.Lock()
 	assert.Equal(t, frozenPivotPendingIntent{seq: targetSeq, hash: targetHash, peerID: 8}, r.catchupReplay.pendingFrozenPivot)
@@ -38,7 +38,7 @@ func TestFrozenPivotRecoveryDefersAtCapacityAndRetriesOnePendingIntent(t *testin
 	require.Eventually(t, func() bool {
 		r.catchupReplay.acquisitionMu.Lock()
 		defer r.catchupReplay.acquisitionMu.Unlock()
-		return r.catchupReplay.standardReplay.active &&
+		return r.catchupReplay.standardReplay.isActive() &&
 			r.catchupReplay.standardReplay.pivotHash == targetHash
 	}, time.Second, time.Millisecond)
 	assert.Equal(t, generation+1, r.catchupReplay.standardReplay.generation)
@@ -72,7 +72,7 @@ func TestFrozenPivotRecoveryAdoptsVerifiedKnownSequenceSurvivor(t *testing.T) {
 
 	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(targetSeq, targetHash, 8))
 	r.catchupReplay.acquisitionMu.Lock()
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 	assert.Equal(t, targetSeq, r.catchupReplay.standardReplay.targetSeq)
@@ -154,7 +154,7 @@ func TestPendingFrozenPivotUsesLatestTrustedTarget(t *testing.T) {
 
 	require.True(t, r.catchupReplay.retryPendingFrozenPivot())
 	r.catchupReplay.acquisitionMu.Lock()
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, oldSeq, r.catchupReplay.standardReplay.targetSeq)
 	assert.Equal(t, newHash, r.catchupReplay.standardReplay.targetHash)
 	r.catchupReplay.acquisitionMu.Unlock()
@@ -174,7 +174,7 @@ func TestFrozenPivotRecoveryBlocksRegularFullStateDuringActiveSession(t *testing
 	generation := r.catchupReplay.standardReplay.generation
 
 	r.catchupReplay.acquisitionMu.Lock()
-	r.catchupReplay.standardReplay.pivotReady = true
+	r.catchupReplay.standardReplay.phase = standardReplayPivotReady
 	r.catchupReplay.standardReplay.targetSeq = pivotSeq + 1
 	r.catchupReplay.standardReplay.targetHash = targetHash
 	r.catchupReplay.standardReplay.entries[pivotSeq+1] = &standardReplayEntry{
@@ -274,7 +274,7 @@ func TestFullStateAdmissionRejectsConflictingKnownSequence(t *testing.T) {
 	c.acquisitionMu.Unlock()
 	assert.Equal(t, fullStateAdmissionRejected, admission.outcome)
 	assert.Equal(t, seq, original.Seq())
-	assert.False(t, c.standardReplay.active)
+	assert.False(t, c.standardReplay.isActive())
 }
 
 func TestPendingFrozenPivotPrefersTrustedTargetOverHigherPendingSequence(t *testing.T) {

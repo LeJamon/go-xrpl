@@ -57,8 +57,8 @@ func TestStandardReplayDrainCancellationDuringHandoff(t *testing.T) {
 					owner := r.catchupReplay.standardReplayDrainOwner
 					require.NotNil(t, owner)
 					require.True(t, r.catchupReplay.tryArmStandardReplayPipeline(svc, nil, terminal.seq, terminal.hash, 7))
-					require.False(t, r.catchupReplay.standardReplay.active)
-					require.False(t, r.catchupReplay.standardReplay.applying)
+					require.False(t, r.catchupReplay.standardReplay.isActive())
+					require.False(t, r.catchupReplay.standardReplay.isApplying())
 					require.Same(t, owner, r.catchupReplay.standardReplayDrainOwner)
 					if replaceDuringHandoff {
 						completeReplacement()
@@ -77,13 +77,13 @@ func TestStandardReplayDrainCancellationDuringHandoff(t *testing.T) {
 			require.True(t, canceled)
 			require.Nil(t, r.catchupReplay.standardReplayDrainOwner)
 			if !replaceDuringHandoff {
-				require.False(t, r.catchupReplay.standardReplay.applying)
+				require.False(t, r.catchupReplay.standardReplay.isApplying())
 				completeReplacement()
 				drainStandardReplayTestWakes(t, r)
 			}
 			require.Equal(t, uint64(len(links)+len(next)), r.FastSyncMetrics().ReplayPipelineApplied)
 			require.Zero(t, r.FastSyncMetrics().ReplayPipelineReadyDepth)
-			require.False(t, r.catchupReplay.standardReplay.applying)
+			require.False(t, r.catchupReplay.standardReplay.isApplying())
 			require.Nil(t, r.catchupReplay.standardReplayDrainOwner)
 		})
 	}
@@ -91,7 +91,7 @@ func TestStandardReplayDrainCancellationDuringHandoff(t *testing.T) {
 
 func TestStandardReplayDrainOwnerSingleFlightAndStaleRelease(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
-	r.catchupReplay.standardReplay = standardReplayPipeline{active: true, pivotReady: true, generation: 1}
+	r.catchupReplay.standardReplay = standardReplayPipeline{phase: standardReplayPivotReady, generation: 1}
 	owners := make(chan *standardReplayDrainOwner, 16)
 	var wg sync.WaitGroup
 	for range cap(owners) {
@@ -114,7 +114,7 @@ func TestStandardReplayDrainOwnerSingleFlightAndStaleRelease(t *testing.T) {
 	r.catchupReplay.acquisitionMu.Lock()
 	r.catchupReplay.cancelStandardReplayPipelineLocked("test_replacement")
 	r.catchupReplay.standardReplay = standardReplayPipeline{
-		active: true, pivotReady: true, generation: 3, anchorSeq: 10,
+		phase: standardReplayPivotReady, generation: 3, anchorSeq: 10,
 		entries: map[uint32]*standardReplayEntry{11: {readyAt: time.Now()}},
 	}
 	r.catchupReplay.acquisitionMu.Unlock()
@@ -126,7 +126,7 @@ func TestStandardReplayDrainOwnerSingleFlightAndStaleRelease(t *testing.T) {
 	require.Equal(t, uint64(3), next.generation)
 	r.catchupReplay.finishStandardReplayDrain(owner)
 	require.Same(t, next, r.catchupReplay.standardReplayDrainOwner, "stale release cannot unlock a newer owner")
-	require.True(t, r.catchupReplay.standardReplay.applying)
+	require.True(t, r.catchupReplay.standardReplay.isApplying())
 	r.catchupReplay.finishStandardReplayDrain(next)
 }
 
@@ -137,7 +137,7 @@ func TestStandardReplayWatchdogRepairsOrphanedReadyDrain(t *testing.T) {
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 2)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 	// Model a lost wake/reservation from an older session, without an owner.
-	r.catchupReplay.standardReplay.applying = true
+	r.catchupReplay.standardReplay.phase = standardReplayDraining
 	for _, link := range links {
 		completeStandardReplayTestLink(t, r, link)
 	}
@@ -150,13 +150,13 @@ func TestStandardReplayWatchdogRepairsOrphanedReadyDrain(t *testing.T) {
 	drainStandardReplayTestWakes(t, r)
 	require.Equal(t, uint64(len(links)), r.FastSyncMetrics().ReplayPipelineApplied)
 	require.Zero(t, r.FastSyncMetrics().ReplayPipelineFallbacks)
-	require.False(t, r.catchupReplay.standardReplay.applying)
+	require.False(t, r.catchupReplay.standardReplay.isApplying())
 }
 
 func TestStandardReplayWatchdogProtectsExecutingOwner(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	r.catchupReplay.standardReplay = standardReplayPipeline{
-		active: true, pivotReady: true, generation: 1, anchorSeq: 10, targetSeq: 20,
+		phase: standardReplayPivotReady, generation: 1, anchorSeq: 10, targetSeq: 20,
 		entries: map[uint32]*standardReplayEntry{11: {readyAt: time.Now()}},
 	}
 	owner := r.catchupReplay.beginStandardReplayDrain()
@@ -175,16 +175,16 @@ func TestStandardReplayWatchdogMissingHeadDoesNotKeepOrphanedFlag(t *testing.T) 
 	trackCatchupPeer(r, 7, 200, targetHash)
 	r.catchupReplay.recordValidationCatchupTarget(200, targetHash, 7, catchupSourceQuorum)
 	r.catchupReplay.standardReplay = standardReplayPipeline{
-		generation: 3, active: true, applying: true, pivotReady: true,
+		generation: 3, phase: standardReplayDraining,
 		pivotSeq: 100, anchorSeq: 100, targetSeq: 200, targetHash: targetHash,
 		entries:          make(map[uint32]*standardReplayEntry),
 		progressSampleAt: started, sampleAnchorSeq: 100,
 	}
 	require.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
-	require.False(t, r.catchupReplay.standardReplay.applying)
+	require.False(t, r.catchupReplay.standardReplay.isApplying())
 	require.Equal(t, uint8(1), r.catchupReplay.standardReplay.stalledSamples)
 	require.True(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(2*standardReplayProgressWindow)))
-	require.True(t, r.catchupReplay.standardReplay.pivotReady)
+	require.True(t, r.catchupReplay.standardReplay.isPivotReady())
 	require.Equal(t, uint32(100), r.catchupReplay.standardReplay.pivotSeq)
 	require.NotNil(t, r.catchupReplay.standardReplay.replacement)
 	require.Equal(t, uint32(200), r.catchupReplay.standardReplay.replacement.seq)

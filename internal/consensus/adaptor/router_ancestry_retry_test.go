@@ -17,7 +17,7 @@ func TestHeaderDiscoveryRepairsEmptyReplayPipelineWithoutAdvancingBase(t *testin
 	newer := buildAlternativeReplaySuccessor(t, second.ledger, time.Second)
 	trackCatchupPeer(r, 8, newer.seq)
 	r.catchupReplay.standardReplay = standardReplayPipeline{
-		active: true, pivotReady: true, generation: 9,
+		phase: standardReplayPivotReady, generation: 9,
 		pivotSeq: base.Sequence(), pivotHash: base.Hash(),
 		anchorSeq: base.Sequence(), anchorHash: base.Hash(),
 		collectSeq: base.Sequence(), collectHash: base.Hash(),

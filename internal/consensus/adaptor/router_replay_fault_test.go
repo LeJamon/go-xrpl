@@ -53,7 +53,7 @@ func TestFrozenPivotRecoveryDefersPersistedReplayFault(t *testing.T) {
 
 	assert.True(t, r.catchupReplay.replayFaultBlocked())
 	assert.False(t, a.IsValidator())
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Zero(t, r.catchupReplay.standardReplay.generation)
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Equal(t, 1, strings.Count(logs.String(), "frozen recovery pivot admission deferred by replay fault"))

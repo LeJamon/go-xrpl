@@ -31,7 +31,7 @@ func TestReplayHeadTailRecoversFromSilentOrPartialPeer(t *testing.T) {
 				ledger.AddPeer(8)
 				ledger.AddPeer(9)
 				c.standardReplay = standardReplayPipeline{
-					active: true, pivotReady: true, anchorSeq: ledger.Seq() - 1,
+					phase: standardReplayPivotReady, anchorSeq: ledger.Seq() - 1,
 					entries: map[uint32]*standardReplayEntry{
 						ledger.Seq(): {seq: ledger.Seq(), hash: ledger.Hash(), acquisition: ledger, requestedAt: time.Now()},
 					},
@@ -55,10 +55,10 @@ func TestReplayHeadTailRecoversFromSilentOrPartialPeer(t *testing.T) {
 				time.Sleep(time.Second)
 				c.retryInboundLedgerAcquisitions(time.Now())
 				require.Len(t, sender.txInd, before, "the ordinary retry timer has not fired")
-				c.standardReplay.pivotReady = false
+				c.standardReplay.phase = standardReplayAcquiringPivot
 				c.retryReplayHeadTail(time.Now())
 				require.Len(t, sender.txInd, before, "a missing parent must not enable head hedging")
-				c.standardReplay.pivotReady = true
+				c.standardReplay.phase = standardReplayPivotReady
 				c.standardReplay.anchorSeq--
 				c.retryReplayHeadTail(time.Now())
 				require.Len(t, sender.txInd, before, "future entries must not hedge")

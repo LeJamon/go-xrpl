@@ -138,8 +138,8 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 	r.catchupReplay.onLedgerFullyValidated(child.seq, child.hash)
 	require.Same(t, pivotAcquisition, r.catchupReplay.fetchTracker.Find(pivot.hash),
 		"quorum eviction must retain the active automatic recovery pivot")
-	require.True(t, r.catchupReplay.standardReplay.active)
-	require.False(t, r.catchupReplay.standardReplay.pivotReady)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
+	require.False(t, r.catchupReplay.standardReplay.isPivotReady())
 	require.Equal(t, pivot.hash, r.catchupReplay.standardReplay.pivotHash)
 
 	successor := r.catchupReplay.fetchTracker.Find(child.hash)

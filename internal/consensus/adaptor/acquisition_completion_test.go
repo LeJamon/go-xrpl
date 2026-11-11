@@ -73,7 +73,7 @@ func TestFullAcquisitionCompletionReleasesRequestMemory(t *testing.T) {
 			if mode == "replacement" {
 				parent := svc.GetClosedLedger()
 				c.standardReplay = standardReplayPipeline{
-					generation: 1, active: true, pivotReady: true,
+					generation: 1, phase: standardReplayPivotReady,
 					anchorSeq: parent.Sequence(), anchorHash: parent.Hash(),
 					targetSeq: il.Seq(), targetHash: il.Hash(),
 					replacement: &standardReplayReplacement{generation: 1, seq: il.Seq(), hash: il.Hash(), acquisition: il},
@@ -111,7 +111,7 @@ func TestAcquisitionCompletionKeepsRouterAndSuccessorCollectionResponsive(t *tes
 			router.SetAcqInbox(acquisition)
 			links := buildStandardReplayTestChain(t, router, svc.GetClosedLedger(), 2)
 			armStandardReplayTestPipeline(t, router, router.adaptor, router.adaptor.sender.(*recordingSender), links)
-			c.standardReplay.pivotReady = false
+			c.standardReplay.phase = standardReplayAcquiringPivot
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan struct{})
 			go func() { router.Run(ctx); close(done) }()

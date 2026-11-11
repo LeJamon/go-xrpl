@@ -77,12 +77,12 @@ func TestRouterReplayPublicationKeepsMessageLanesResponsive(t *testing.T) {
 			c := router.catchupReplay
 			links := buildStandardReplayTestChain(t, router, svc.GetClosedLedger(), 2)
 			armStandardReplayTestPipeline(t, router, adaptor, sender, links)
-			c.standardReplay.pivotReady = false
+			c.standardReplay.phase = standardReplayAcquiringPivot
 			completeStandardReplayTestLink(t, router, links[0])
 			family.root = links[0].ledger.Header().AccountHash
 			require.NotEqual(t, svc.GetClosedLedger().Header().AccountHash, family.root)
 			family.blocked.Store(true)
-			c.standardReplay.pivotReady = true
+			c.standardReplay.phase = standardReplayPivotReady
 			c.scheduleStandardReplayDrain()
 
 			ctx, cancel := context.WithCancel(t.Context())

@@ -58,8 +58,8 @@ func TestIssue1863AutomaticPivotSurvivesNoProgressAndDistanceEviction(t *testing
 
 			require.Same(t, other, victim)
 			assert.Same(t, pivot, r.catchupReplay.fetchTracker.Find(pivotHash))
-			assert.True(t, r.catchupReplay.standardReplay.active)
-			assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+			assert.True(t, r.catchupReplay.standardReplay.isActive())
+			assert.False(t, r.catchupReplay.standardReplay.isPivotReady())
 			assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 		})
 	}
@@ -83,8 +83,8 @@ func TestIssue1863OrphanedAutomaticPivotRearmsSameGeneration(t *testing.T) {
 	require.NotNil(t, rearmed)
 	assert.NotSame(t, pivot, rearmed)
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.False(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 	assert.Len(t, sender.legacyCalls(), 2)
 }
@@ -153,8 +153,8 @@ func TestIssue1863StalePivotCompletionCannotInstallReplacementGeneration(t *test
 	replacementGeneration := r.catchupReplay.standardReplay.generation
 	pivotHeader := header.LedgerHeader{LedgerIndex: pivotSeq, Hash: pivotHash}
 	require.False(t, r.catchupReplay.completeFrozenPivotAcquisitionOwned(&pivotHeader, false, handoff))
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.False(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, replacementGeneration, r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 }
@@ -173,7 +173,7 @@ func TestIssue1863MalformedPivotReplyRetiresSession(t *testing.T) {
 	}, 7)
 
 	assert.True(t, consumed)
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 }
 
@@ -222,8 +222,8 @@ func TestIssue1863MaintenancePreservesCompletionHandoff(t *testing.T) {
 	r.maintenanceTick()
 	require.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(time.Now().Add(24*time.Hour)))
 	r.catchupReplay.acquisitionMu.Lock()
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.False(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.NotNil(t, r.catchupReplay.standardReplay.pivotHandoff)
 	r.catchupReplay.acquisitionMu.Unlock()
@@ -233,8 +233,8 @@ func TestIssue1863MaintenancePreservesCompletionHandoff(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("completion did not finish")
 	}
-	assert.False(t, r.catchupReplay.standardReplay.active)
-	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
+	assert.True(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Nil(t, r.catchupReplay.standardReplay.pivotHandoff)
 }
 

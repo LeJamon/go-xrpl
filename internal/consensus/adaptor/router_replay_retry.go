@@ -33,7 +33,7 @@ const (
 )
 
 func (c *catchupReplayCoordinator) standardReplayHasAvailabilityBlockLocked() bool {
-	if !c.standardReplay.active || c.standardReplay.replacement != nil {
+	if !c.standardReplay.isActive() || c.standardReplay.replacement != nil {
 		return false
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
@@ -42,7 +42,7 @@ func (c *catchupReplayCoordinator) standardReplayHasAvailabilityBlockLocked() bo
 }
 
 func (c *catchupReplayCoordinator) standardReplayAvailabilityHeadLocked() *standardReplayEntry {
-	if !c.standardReplay.active || !c.standardReplay.pivotReady {
+	if !c.standardReplay.isActive() || !c.standardReplay.isPivotReady() {
 		return nil
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
@@ -139,7 +139,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayAvailability(now time.Time
 func (c *catchupReplayCoordinator) standardReplayAvailabilityExhaustedState() (uint64, uint32, [32]byte, uint64, bool) {
 	c.acquisitionMu.Lock()
 	defer c.acquisitionMu.Unlock()
-	if !c.standardReplay.active || !c.standardReplay.pivotReady {
+	if !c.standardReplay.isActive() || !c.standardReplay.isPivotReady() {
 		return 0, 0, [32]byte{}, 0, false
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
@@ -152,7 +152,7 @@ func (c *catchupReplayCoordinator) standardReplayAvailabilityExhaustedState() (u
 }
 
 func (c *catchupReplayCoordinator) standardReplayAvailabilityRetryActiveLocked(now time.Time) bool {
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		return false
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]

@@ -106,8 +106,7 @@ func TestLocalReplayReplacementProgressesAcrossVerificationBudgets(t *testing.T)
 			c := r.catchupReplay
 			c.standardReplay = standardReplayPipeline{
 				generation: 1,
-				active:     true,
-				pivotReady: true,
+				phase:      standardReplayPivotReady,
 				pivotSeq:   closed.Sequence(),
 				pivotHash:  closed.Hash(),
 				anchorSeq:  closed.Sequence(),
@@ -131,7 +130,7 @@ func TestLocalReplayReplacementProgressesAcrossVerificationBudgets(t *testing.T)
 			}
 			require.Nil(t, c.standardReplay.replacement)
 			assert.Equal(t, target.hash, c.standardReplay.anchorHash)
-			assert.False(t, c.standardReplay.active)
+			assert.False(t, c.standardReplay.isActive())
 			assert.Empty(t, sender.legacyCalls())
 		})
 	}

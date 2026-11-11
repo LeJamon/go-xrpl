@@ -58,12 +58,12 @@ func TestReplayCancellationKeepsActiveDrainMemoryUntilItReturns(t *testing.T) {
 	sender.peerSupportsReplay = false
 	trackCatchupPeer(r, 7, tail.seq, tail.hash)
 	require.True(t, c.tryArmStandardReplayPipeline(svc, svc.GetClosedLedger(), tail.seq, tail.hash, 7))
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completePaymentReplayTestLink(t, r, head, target)
 	entry := c.standardReplay.entries[head.seq]
 	require.True(t, entry.durable)
 	family.blocked.Store(true)
-	c.standardReplay.pivotReady = true
+	c.standardReplay.phase = standardReplayPivotReady
 	done := make(chan struct{})
 	go func() { c.drainStandardReplayPipeline(); close(done) }()
 	select {

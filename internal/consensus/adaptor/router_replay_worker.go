@@ -160,18 +160,18 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	if owner == nil || c.standardReplayDrainOwner != owner || owner.workCtx == nil || owner.workCtx.Err() != nil {
 		return standardReplayWorkerClaim{status: standardReplayWorkerCanceled}
 	}
-	if c.standardReplay.generation != owner.generation || !c.standardReplay.active {
-		c.standardReplay.applying = false
+	if c.standardReplay.generation != owner.generation || !c.standardReplay.isActive() {
+		c.releaseStandardReplayDrainLocked()
 		return standardReplayWorkerClaim{status: standardReplayWorkerIdle}
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
 	if entry == nil || (entry.readyAt.IsZero() && !entry.failed) {
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		return standardReplayWorkerClaim{status: standardReplayWorkerIdle}
 	}
 	if entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted {
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		return standardReplayWorkerClaim{status: standardReplayWorkerIdle}
 	}
@@ -184,21 +184,21 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 		}
 	}
 	if entry.replayMemory.kind != standardReplayMemoryHead && !c.promoteStandardReplayHeadLocked(entry) {
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitHead, entry.replayMemory.bytes)
 		owner.memoryWait = true
 		return standardReplayWorkerClaim{status: standardReplayWorkerMemoryWait}
 	}
 	if entry.replayMemoryPending {
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		owner.memoryWait = true
 		return standardReplayWorkerClaim{status: standardReplayWorkerMemoryWait}
 	}
 	processingAccount := c.standardReplayMemoryAccount()
 	if !reserveStandardReplayProcessing(processingAccount, standardReplayProcessingBytes) {
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, standardReplayProcessingBytes)
 		owner.memoryWait = true
@@ -209,14 +209,14 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	c.standardReplay.memoryWaitBytes = 0
 	if !c.retainStandardReplayEntryMemoryLocked(entry) {
 		releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		return standardReplayWorkerClaim{status: standardReplayWorkerCanceled}
 	}
 	if owner.workCtx.Err() != nil {
 		c.releaseStandardReplayEntryMemoryLocked(entry)
 		releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
-		c.standardReplay.applying = false
+		c.releaseStandardReplayDrainLocked()
 		return standardReplayWorkerClaim{status: standardReplayWorkerCanceled}
 	}
 	return standardReplayWorkerClaim{
@@ -371,7 +371,7 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 	persistStarted := time.Now()
 	current := false
 	c.acquisitionMu.Lock()
-	current = c.standardReplayDrainOwner == owner && c.standardReplay.active &&
+	current = c.standardReplayDrainOwner == owner && c.standardReplay.isActive() &&
 		c.standardReplay.generation == claim.generation &&
 		c.standardReplay.entries[claim.entry.seq] == claim.entry &&
 		c.standardReplay.anchorSeq+1 == claim.entry.seq
@@ -405,7 +405,7 @@ func (c *catchupReplayCoordinator) finishStandardReplayWorkerFailure(
 		return result
 	}
 	c.acquisitionMu.Lock()
-	current := c.standardReplayDrainOwner == result.owner && c.standardReplay.active &&
+	current := c.standardReplayDrainOwner == result.owner && c.standardReplay.isActive() &&
 		c.standardReplay.generation == result.generation &&
 		c.standardReplay.entries[entry.seq] == result.entry && c.standardReplay.anchorSeq+1 == entry.seq
 	c.acquisitionMu.Unlock()
@@ -476,7 +476,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 	defer result.releaseResources()
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	current := c.standardReplayDrainOwner == owner && c.standardReplay.active &&
+	current := c.standardReplayDrainOwner == owner && c.standardReplay.isActive() &&
 		c.standardReplay.generation == result.generation &&
 		c.standardReplay.entries[result.entry.seq] == result.entry &&
 		c.standardReplay.anchorSeq+1 == result.entry.seq
@@ -495,7 +495,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 			return
 		}
 		if errors.Is(result.err, inbound.ErrReplayMemory) {
-			c.standardReplay.applying = false
+			c.releaseStandardReplayDrainLocked()
 			required := uint64(standardReplayProcessingBytes)
 			if result.memoryRequired > ^uint64(0)-required {
 				required = ^uint64(0)
@@ -558,7 +558,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 	c.completeStoredConsensusRecovery(result.header.LedgerIndex, result.header.Hash, result.header.ParentHash, initialCandidate)
 
 	c.acquisitionMu.Lock()
-	current = c.standardReplayDrainOwner == owner && c.standardReplay.active &&
+	current = c.standardReplayDrainOwner == owner && c.standardReplay.isActive() &&
 		c.standardReplay.generation == result.generation &&
 		c.standardReplay.anchorSeq == result.entry.seq && c.standardReplay.anchorHash == result.entry.hash
 	if !current {
@@ -567,8 +567,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 		return
 	}
 	if reachedTarget && c.standardReplay.targetSeq == result.entry.seq && c.standardReplay.targetHash == result.entry.hash {
-		c.standardReplay.active = false
-		c.standardReplay.applying = false
+		c.setStandardReplayPhaseLocked(c.standardReplay.phase.deactivated().withoutDrain())
 		for _, remaining := range c.standardReplay.entries {
 			c.releaseStandardReplayEntryMemoryLocked(remaining)
 		}
@@ -577,7 +576,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 		c.standardReplay.backpressured = false
 		c.releaseStandardReplayBaseLocked()
 	}
-	active := c.standardReplay.active
+	active := c.standardReplay.isActive()
 	c.acquisitionMu.Unlock()
 	if active {
 		c.refillStandardReplayCollector(result.entry.peerID)

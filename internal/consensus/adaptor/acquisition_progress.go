@@ -15,6 +15,7 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 	c.acquisitionMu.Lock()
 	identity := c.standardReplayIdentityLocked()
 	occupancy := len(c.standardReplay.entries)
+	replayPhase := c.standardReplay.phase
 	c.acquisitionMu.Unlock()
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
@@ -77,7 +78,7 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 		"peers", snapshot.Peers, "request_peers", snapshot.RequestPeers,
 		"state_received", snapshot.StateReceived, "state_useful", snapshot.StateUseful,
 		"tx_received", snapshot.TxReceived, "tx_useful", snapshot.TxUseful,
-		"pivot_seq", identity.pivotSeq, "pivot_ready", identity.pivotReady,
+		"pivot_seq", identity.pivotSeq, "pivot_ready", identity.pivotReady, "replay_phase", replayPhase.String(),
 		"prepared_occupancy", occupancy, "prepared_limit", standardReplayPreparedLimit,
 	)
 }

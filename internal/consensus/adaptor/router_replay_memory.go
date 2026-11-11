@@ -215,7 +215,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayMemory() {
 		c.acquisitionMu.Unlock()
 		return
 	}
-	if c.standardReplay.active && c.standardReplay.memoryWait {
+	if c.standardReplay.isActive() && c.standardReplay.memoryWait {
 		if !probeStandardReplayMemory(account, c.standardReplay.memoryWaitKind, c.standardReplay.memoryWaitBytes) {
 			c.acquisitionMu.Unlock()
 			return
@@ -224,7 +224,7 @@ func (c *catchupReplayCoordinator) retryStandardReplayMemory() {
 		c.standardReplay.memoryWaitKind = 0
 		c.standardReplay.memoryWaitBytes = 0
 	}
-	if c.standardReplay.active && (c.standardReplay.applying || c.scheduleReadyStandardReplayDrainLocked()) {
+	if c.standardReplay.isActive() && (c.standardReplay.isApplying() || c.scheduleReadyStandardReplayDrainLocked()) {
 		c.acquisitionMu.Unlock()
 		return
 	}
@@ -247,12 +247,12 @@ func (c *catchupReplayCoordinator) retryStandardReplayMemory() {
 		return
 	}
 	var retired []*inbound.Ledger
-	if c.standardReplay.active && c.standardReplay.memoryFutureWait {
+	if c.standardReplay.isActive() && c.standardReplay.memoryFutureWait {
 		retired = c.retryStandardReplayMemoryEntriesLocked()
 	}
 	ready := c.scheduleReadyStandardReplayDrainLocked()
-	collectorRetry := c.standardReplay.active && c.standardReplay.memoryCollectorBlocked && !ready
-	if head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]; c.standardReplay.pivotReady && head != nil && head.replayMemoryPending {
+	collectorRetry := c.standardReplay.isActive() && c.standardReplay.memoryCollectorBlocked && !ready
+	if head := c.standardReplay.entries[c.standardReplay.anchorSeq+1]; c.standardReplay.isPivotReady() && head != nil && head.replayMemoryPending {
 		collectorRetry = false
 	}
 	collectorPeer := c.standardReplay.memoryCollectorPeerHint
