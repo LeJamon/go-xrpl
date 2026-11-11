@@ -48,6 +48,7 @@ func TestReplayHeadDiagnosticsBoundedAcrossHeadChanges(t *testing.T) {
 	require.Equal(t, float64(100), record["reply_payload_bytes"])
 	require.Equal(t, float64(20*time.Millisecond), record["worker_queue_max"])
 	require.Equal(t, "reply", record["planner_wait"])
+	require.Equal(t, "pivot_ready", record["replay_phase"])
 	require.Equal(t, float64(1), record["ready_blocked"])
 	require.Equal(t, float64(time.Second), record["ready_wait_max"])
 	output.Reset()
