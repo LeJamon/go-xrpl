@@ -27,6 +27,23 @@ type standardReplayLegacyMemoryWait struct {
 	required uint64
 }
 
+// standardReplayPipeline is guarded by acquisitionMu, including phase, which
+// changes only through setStandardReplayPhaseLocked:
+//
+//	from               to                 event
+//	idle, complete*    acquiring_pivot    beginFrozenPivotRecovery admits a full-state pivot
+//	idle, complete*    pivot_ready        tryArmStandardReplayPipeline arms on a local anchor
+//	acquiring_pivot    pivot_ready        completeFrozenPivotAcquisitionOwned verifies the pivot
+//	pivot_ready        draining           the anchor's successor is ready and a drain is reserved
+//	draining           pivot_ready        the drain is released (finished, idle head, memory wait)
+//	pivot_ready        complete           the target is installed (drain result, replacement, pivot)
+//	draining           complete           the target is installed by the drain or a replacement
+//	draining           complete_draining  the verified pivot is the target while a drain is reserved
+//	complete_draining  complete           the drain is released
+//	any                idle               cancelStandardReplayPipelineLocked
+//
+// complete* is complete or complete_draining. backpressured and the memory
+// wait flags are conditions orthogonal to phase.
 type standardReplayPipeline struct {
 	generation              uint64
 	phase                   standardReplayPhase
