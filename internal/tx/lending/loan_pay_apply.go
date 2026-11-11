@@ -190,7 +190,7 @@ func (l *LoanPay) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 	if r := mptutil.CheckDeepFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
 		return r
 	}
-	if r := tx.RequireAuth(view, asset, accountID); r != ter.TesSUCCESS {
+	if r := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.LegacyAuth, config.ParentCloseTime); r != ter.TesSUCCESS {
 		return r
 	}
 	holds, herr := vault.AccountHoldsFull(view, config, accountID, asset)
@@ -309,7 +309,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Auth + holdings for the receivers, then move the funds.
 	if toVaultRounded.Signum() != 0 {
 		if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
-			if r := tx.RequireAuth(ctx.View, asset, vinfo.Account); r != ter.TesSUCCESS {
+			if r := mptutil.RequireAssetAuthAt(ctx.View, asset, vinfo.Account, mptutil.StrongAuth, ctx.Config.ParentCloseTime); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -321,7 +321,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 		}
 		if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
-			if r := tx.RequireAuth(ctx.View, asset, brokerPayee); r != ter.TesSUCCESS {
+			if r := mptutil.RequireAssetAuthAt(ctx.View, asset, brokerPayee, mptutil.StrongAuth, ctx.Config.ParentCloseTime); r != ter.TesSUCCESS {
 				return r
 			}
 		}
