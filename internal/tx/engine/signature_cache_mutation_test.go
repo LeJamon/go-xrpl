@@ -3,23 +3,15 @@ package engine
 import (
 	"bytes"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
-
-var cacheMutationRegisterAccount sync.Once
-
-func registerCacheMutationAccount() {
-	cacheMutationRegisterAccount.Do(account.Register)
-}
 
 func cacheMutationKeypair(t *testing.T, seed string) (privateKey, publicKey, account string) {
 	t.Helper()
@@ -159,7 +151,6 @@ func TestSetRawBytesInvalidatesCachedVerdicts(t *testing.T) {
 }
 
 func TestSetRawBytesRequiresBindingBeforeSignatureVerification(t *testing.T) {
-	registerCacheMutationAccount()
 	original := cacheMutationBaseTx(t)
 	blob, err := txcore.SerializeTransaction(original)
 	if err != nil {
@@ -183,7 +174,6 @@ func TestSetRawBytesRequiresBindingBeforeSignatureVerification(t *testing.T) {
 }
 
 func TestBindRawBytesRejectsMismatchedFieldsAndOwnsBytes(t *testing.T) {
-	registerCacheMutationAccount()
 	first := cacheMutationBaseTx(t)
 	firstRaw, err := txcore.SerializeTransaction(first)
 	if err != nil {
@@ -230,7 +220,6 @@ func TestBindRawBytesRejectsMismatchedFieldsAndOwnsBytes(t *testing.T) {
 }
 
 func TestParsedSignatureVerificationUsesCurrentSignedFields(t *testing.T) {
-	registerCacheMutationAccount()
 	_, _, replacementAccount := cacheMutationKeypair(t, "cache-mutation-replacement")
 	_, _, delegateAccount := cacheMutationKeypair(t, "cache-mutation-delegate")
 	sequence := uint32(2)

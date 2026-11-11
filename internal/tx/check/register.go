@@ -17,6 +17,7 @@ func Register() {
 			return &CheckCash{BaseTx: *tx.NewBaseTx(tx.TypeCheckCash, "")}
 		},
 		Delegation: tx.Delegable,
+		Privileges: tx.PrivMayCreateMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeCheckCancel,

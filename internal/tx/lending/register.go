@@ -11,6 +11,7 @@ func Register() {
 			return &LoanBrokerSet{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerSet, "")}
 		},
 		Delegation: tx.NotDelegable,
+		Privileges: tx.PrivCreatePseudoAcct | tx.PrivMayAuthorizeMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeLoanBrokerDelete,
@@ -18,6 +19,7 @@ func Register() {
 			return &LoanBrokerDelete{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerDelete, "")}
 		},
 		Delegation: tx.NotDelegable,
+		Privileges: tx.PrivMustDeleteAcct | tx.PrivMayAuthorizeMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeLoanBrokerCoverDeposit,
@@ -32,6 +34,7 @@ func Register() {
 			return &LoanBrokerCoverWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerCoverWithdraw, "")}
 		},
 		Delegation: tx.NotDelegable,
+		Privileges: tx.PrivMayAuthorizeMPT,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeLoanBrokerCoverClawback,
@@ -46,6 +49,7 @@ func Register() {
 			return &LoanSet{BaseTx: *tx.NewBaseTx(tx.TypeLoanSet, "")}
 		},
 		Delegation: tx.NotDelegable,
+		Privileges: tx.PrivMayAuthorizeMPT | tx.PrivMustModifyVault,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeLoanDelete,
@@ -60,6 +64,7 @@ func Register() {
 			return &LoanManage{BaseTx: *tx.NewBaseTx(tx.TypeLoanManage, "")}
 		},
 		Delegation: tx.NotDelegable,
+		Privileges: tx.PrivMayModifyVault,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeLoanPay,
@@ -67,5 +72,6 @@ func Register() {
 			return &LoanPay{BaseTx: *tx.NewBaseTx(tx.TypeLoanPay, "")}
 		},
 		Delegation: tx.NotDelegable,
+		Privileges: tx.PrivMayAuthorizeMPT | tx.PrivMustModifyVault,
 	})
 }

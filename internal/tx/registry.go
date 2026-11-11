@@ -23,6 +23,27 @@ const (
 	NotDelegable
 )
 
+// Privilege is a bitfield of ledger operations a transaction type may perform.
+// Invariant checks consult it instead of listing transaction types.
+type Privilege uint16
+
+const (
+	PrivCreateAcct         Privilege = 0x0001 // may create an AccountRoot
+	PrivCreatePseudoAcct   Privilege = 0x0002 // may create a pseudo-account
+	PrivMustDeleteAcct     Privilege = 0x0004 // must delete an AccountRoot
+	PrivMayDeleteAcct      Privilege = 0x0008 // may delete an AccountRoot
+	PrivOverrideFreeze     Privilege = 0x0010 // may override some freeze rules
+	PrivChangeNFTCounts    Privilege = 0x0020 // may mint or burn an NFT
+	PrivCreateMPTIssuance  Privilege = 0x0040 // may create an MPT issuance
+	PrivDestroyMPTIssuance Privilege = 0x0080 // may destroy an MPT issuance
+	PrivMustAuthorizeMPT   Privilege = 0x0100 // must create or delete an MPToken (except by issuer)
+	PrivMayAuthorizeMPT    Privilege = 0x0200 // may create or delete an MPToken (except by issuer)
+	PrivMayDeleteMPT       Privilege = 0x0400 // may delete, not create, an MPToken
+	PrivMustModifyVault    Privilege = 0x0800 // must create, modify or delete a vault
+	PrivMayModifyVault     Privilege = 0x1000 // may create, modify or delete a vault
+	PrivMayCreateMPT       Privilege = 0x2000 // may create, not delete, an MPToken
+)
+
 // Descriptor is the single declaration of a transaction type's static
 // protocol attributes. Every consumer that varies by transaction type reads it
 // through the registry instead of keeping its own table.
@@ -30,6 +51,7 @@ type Descriptor struct {
 	Type       Type
 	New        func() Transaction
 	Delegation Delegation
+	Privileges Privilege
 }
 
 var (
@@ -74,6 +96,13 @@ func Lookup(t Type) (Descriptor, bool) {
 	d, ok := registry[t]
 	registryMu.RUnlock()
 	return d, ok
+}
+
+// PrivilegesOf returns the privileges declared for txType; an unregistered
+// type has none.
+func PrivilegesOf(txType Type) Privilege {
+	d, _ := Lookup(txType)
+	return d.Privileges
 }
 
 // NewFromType creates a new transaction of the given type using the registered factory.

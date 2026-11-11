@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,17 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-var registerBatchCacheTransactionTypes sync.Once
-
-func registerBatchCacheTypes() {
-	registerBatchCacheTransactionTypes.Do(func() {
-		batch.Register()
-		payment.Register()
-	})
-}
-
 func TestBatchSigCacheCoversEverySignature(t *testing.T) {
-	registerBatchCacheTypes()
 	outerPrivate, outerPublic, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-cache-outer"), false)
 	require.NoError(t, err)
 	outerAccount, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(outerPublic)

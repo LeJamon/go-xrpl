@@ -2,7 +2,6 @@ package engine_test
 
 import (
 	"bytes"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,21 +12,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
-	txpseudo "github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-var pseudoRegisterOnce sync.Once
-
-func registerPseudo() {
-	pseudoRegisterOnce.Do(txpseudo.Register)
-}
-
 func pseudoWireTransaction(t *testing.T, includeEmptySigners bool) (txcore.Transaction, []byte) {
 	t.Helper()
-	registerPseudo()
 	fields := map[string]any{
 		"TransactionType": "EnableAmendment",
 		"Account":         protocol.ZeroAccount,
