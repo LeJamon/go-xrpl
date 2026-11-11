@@ -162,16 +162,19 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	}
 	if c.standardReplay.generation != owner.generation || !c.standardReplay.active {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		return standardReplayWorkerClaim{status: standardReplayWorkerIdle}
 	}
 	entry := c.standardReplay.entries[c.standardReplay.anchorSeq+1]
 	if entry == nil || (entry.readyAt.IsZero() && !entry.failed) {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		return standardReplayWorkerClaim{status: standardReplayWorkerIdle}
 	}
 	if entry.availabilityPending || entry.availabilityRetrying || entry.availabilityExhausted {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		return standardReplayWorkerClaim{status: standardReplayWorkerIdle}
 	}
@@ -185,6 +188,7 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	}
 	if entry.replayMemory.kind != standardReplayMemoryHead && !c.promoteStandardReplayHeadLocked(entry) {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitHead, entry.replayMemory.bytes)
 		owner.memoryWait = true
@@ -192,6 +196,7 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	}
 	if entry.replayMemoryPending {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		owner.memoryWait = true
 		return standardReplayWorkerClaim{status: standardReplayWorkerMemoryWait}
@@ -199,6 +204,7 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	processingAccount := c.standardReplayMemoryAccount()
 	if !reserveStandardReplayProcessing(processingAccount, standardReplayProcessingBytes) {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		c.markStandardReplayMemoryWaitLocked(standardReplayMemoryWaitProcessing, standardReplayProcessingBytes)
 		owner.memoryWait = true
@@ -210,6 +216,7 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 	if !c.retainStandardReplayEntryMemoryLocked(entry) {
 		releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.updateStandardReplayHeadBlockLocked(time.Now())
 		return standardReplayWorkerClaim{status: standardReplayWorkerCanceled}
 	}
@@ -217,6 +224,7 @@ func (c *catchupReplayCoordinator) claimStandardReplayWorker(owner *standardRepl
 		c.releaseStandardReplayEntryMemoryLocked(entry)
 		releaseStandardReplayProcessing(processingAccount, standardReplayProcessingBytes)
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		return standardReplayWorkerClaim{status: standardReplayWorkerCanceled}
 	}
 	return standardReplayWorkerClaim{
@@ -496,6 +504,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 		}
 		if errors.Is(result.err, inbound.ErrReplayMemory) {
 			c.standardReplay.applying = false
+			c.checkStandardReplayPhaseLocked()
 			required := uint64(standardReplayProcessingBytes)
 			if result.memoryRequired > ^uint64(0)-required {
 				required = ^uint64(0)
@@ -569,6 +578,7 @@ func (c *catchupReplayCoordinator) handleStandardReplayDrainResult(result *stand
 	if reachedTarget && c.standardReplay.targetSeq == result.entry.seq && c.standardReplay.targetHash == result.entry.hash {
 		c.standardReplay.active = false
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		for _, remaining := range c.standardReplay.entries {
 			c.releaseStandardReplayEntryMemoryLocked(remaining)
 		}

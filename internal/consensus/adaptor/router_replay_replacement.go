@@ -417,6 +417,7 @@ func (c *catchupReplayCoordinator) installStandardReplayReplacementLocked(
 		c.standardReplay.baseLedger, c.standardReplay.baseRelease = nil, nil
 		c.standardReplay.active = false
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		c.standardReplay.backpressured = false
 		for _, entry := range c.standardReplay.entries {
 			c.releaseStandardReplayEntryMemoryLocked(entry)

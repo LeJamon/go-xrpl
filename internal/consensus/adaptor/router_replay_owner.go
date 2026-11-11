@@ -40,12 +40,14 @@ func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDra
 	}
 	if !c.standardReplay.active || !c.standardReplay.pivotReady || c.standardReplay.memoryWait {
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		return nil
 	}
 	workCtx, cancel := context.WithCancel(c.lifecycleContext())
 	if err := workCtx.Err(); err != nil {
 		cancel()
 		c.standardReplay.applying = false
+		c.checkStandardReplayPhaseLocked()
 		return nil
 	}
 	owner := &standardReplayDrainOwner{
@@ -55,6 +57,7 @@ func (c *catchupReplayCoordinator) beginStandardReplayDrain() *standardReplayDra
 	}
 	c.standardReplayDrainOwner = owner
 	c.standardReplay.applying = true
+	c.checkStandardReplayPhaseLocked()
 	return owner
 }
 
@@ -71,12 +74,14 @@ func (c *catchupReplayCoordinator) finishStandardReplayDrain(owner *standardRepl
 	// generation's reservation instead of leaving the old flag behind or
 	// dropping a replacement wake that arrived during the old handoff.
 	c.standardReplay.applying = false
+	c.checkStandardReplayPhaseLocked()
 	if c.stoppedForShutdown() {
 		return
 	}
 	if owner.yielded && c.standardReplay.active && c.standardReplay.pivotReady &&
 		c.standardReplay.generation == owner.generation {
 		c.standardReplay.applying = true
+		c.checkStandardReplayPhaseLocked()
 		c.scheduleStandardReplayDrain()
 		return
 	}
@@ -97,6 +102,7 @@ func (c *catchupReplayCoordinator) scheduleReadyStandardReplayDrainLocked() bool
 		return false
 	}
 	c.standardReplay.applying = true
+	c.checkStandardReplayPhaseLocked()
 	c.scheduleStandardReplayDrain()
 	return true
 }

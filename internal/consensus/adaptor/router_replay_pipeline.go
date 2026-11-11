@@ -325,6 +325,7 @@ func (c *catchupReplayCoordinator) advanceStandardReplayAnchor(
 		startDrain = head != nil && (!head.readyAt.IsZero() || head.failed)
 		if startDrain {
 			c.standardReplay.applying = true
+			c.checkStandardReplayPhaseLocked()
 		}
 	}
 	c.updateStandardReplayHeadBlockLocked(time.Now())
@@ -588,6 +589,7 @@ func (c *catchupReplayCoordinator) reconcileStandardReplayAfterHeaderDiscovery(
 		startDrain = head != nil && (!head.readyAt.IsZero() || head.failed)
 		if startDrain {
 			c.standardReplay.applying = true
+			c.checkStandardReplayPhaseLocked()
 		}
 	}
 	c.updateStandardReplayHeadBlockLocked(time.Now())
@@ -716,6 +718,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		c.standardReplay.active = true
 		c.standardReplay.applying = false
 		c.standardReplay.pivotReady = true
+		c.checkStandardReplayPhaseLocked()
 		c.standardReplay.pivotSeq = anchor.Sequence()
 		c.standardReplay.pivotHash = anchor.Hash()
 		c.standardReplay.anchorSeq = anchor.Sequence()
@@ -1054,6 +1057,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	c.standardReplay.active = false
 	c.standardReplay.applying = false
 	c.standardReplay.pivotReady = false
+	c.checkStandardReplayPhaseLocked()
 	c.standardReplay.initialCandidate = false
 	c.standardReplay.pivotSeq = 0
 	c.standardReplay.pivotHash = [32]byte{}
@@ -1262,6 +1266,7 @@ func (c *catchupReplayCoordinator) completeStandardReplayPipelineEntryLocked(
 	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
 	if startDrain {
 		c.standardReplay.applying = true
+		c.checkStandardReplayPhaseLocked()
 	}
 	c.updateStandardReplayHeadBlockLocked(now)
 	return true, startDrain, false
@@ -1413,6 +1418,7 @@ func (c *catchupReplayCoordinator) failStandardReplayPipelineEntryAt(
 	startDrain := c.standardReplay.pivotReady && !c.standardReplay.applying
 	if startDrain {
 		c.standardReplay.applying = true
+		c.checkStandardReplayPhaseLocked()
 	}
 	c.updateStandardReplayHeadBlockLocked(now)
 	c.acquisitionMu.Unlock()
@@ -1510,6 +1516,7 @@ func (c *catchupReplayCoordinator) discardStandardReplayHeadLocked(
 		c.standardReplay.entries[entry.seq] != entry || c.standardReplay.anchorSeq+1 != entry.seq {
 		if !c.standardReplay.active {
 			c.standardReplay.applying = false
+			c.checkStandardReplayPhaseLocked()
 		}
 		return standardReplayRetirement{}, standardReplayTarget{}, false
 	}
@@ -1519,6 +1526,7 @@ func (c *catchupReplayCoordinator) discardStandardReplayHeadLocked(
 		c.consensusRecovery.stepHash = entry.hash
 	}
 	c.standardReplay.applying = false
+	c.checkStandardReplayPhaseLocked()
 	return retired, target, true
 }
 
