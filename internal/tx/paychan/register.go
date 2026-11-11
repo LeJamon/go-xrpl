@@ -10,6 +10,7 @@ func Register() {
 			return &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.CustomConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -18,6 +19,7 @@ func Register() {
 			return &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.CustomConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -26,6 +28,7 @@ func Register() {
 			return &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

@@ -45,6 +45,15 @@ func (e *EscrowCreate) TxType() tx.Type {
 	return tx.TypeEscrowCreate
 }
 
+// Consequences reports Amount as the potential spend when it is XRP; token
+// escrows spend no XRP.
+func (e *EscrowCreate) Consequences() tx.Consequences {
+	if !e.Amount.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(e.Amount.Drops())}
+}
+
 // Reference: rippled Escrow.cpp EscrowCreate::preflight()
 func (e *EscrowCreate) Validate() error {
 	if err := e.BaseTx.Validate(); err != nil {

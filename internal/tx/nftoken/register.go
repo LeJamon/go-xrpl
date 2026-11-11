@@ -9,43 +9,49 @@ func Register() {
 		New: func() tx.Transaction {
 			return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
 		},
-		Delegation: tx.Delegable,
-		Privileges: tx.PrivChangeNFTCounts,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
+		Privileges:   tx.PrivChangeNFTCounts,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenBurn,
 		New: func() tx.Transaction {
 			return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
 		},
-		Delegation: tx.Delegable,
-		Privileges: tx.PrivChangeNFTCounts,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
+		Privileges:   tx.PrivChangeNFTCounts,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenCreateOffer,
 		New: func() tx.Transaction {
 			return &NFTokenCreateOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCreateOffer, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenCancelOffer,
 		New: func() tx.Transaction {
 			return &NFTokenCancelOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCancelOffer, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenAcceptOffer,
 		New: func() tx.Transaction {
 			return &NFTokenAcceptOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenAcceptOffer, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenModify,
 		New: func() tx.Transaction {
 			return &NFTokenModify{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenModify, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 }

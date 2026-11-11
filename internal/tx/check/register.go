@@ -10,6 +10,7 @@ func Register() {
 			return &CheckCreate{BaseTx: *tx.NewBaseTx(tx.TypeCheckCreate, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -18,6 +19,7 @@ func Register() {
 			return &CheckCash{BaseTx: *tx.NewBaseTx(tx.TypeCheckCash, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 		Privileges:         tx.PrivMayCreateMPT,
 	})
@@ -27,6 +29,7 @@ func Register() {
 			return &CheckCancel{BaseTx: *tx.NewBaseTx(tx.TypeCheckCancel, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

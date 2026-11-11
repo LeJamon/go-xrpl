@@ -85,6 +85,14 @@ func NewSponsorshipSet(account string) *SponsorshipSet {
 
 func (s *SponsorshipSet) TxType() tx.Type { return tx.TypeSponsorshipSet }
 
+// Consequences reports a positive XRP FeeAmountDelta as the potential spend.
+func (s *SponsorshipSet) Consequences() tx.Consequences {
+	if s.FeeAmountDelta == nil || !s.FeeAmountDelta.IsNative() || s.FeeAmountDelta.Signum() <= 0 {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(s.FeeAmountDelta.Drops())}
+}
+
 func (s *SponsorshipSet) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureSponsor}
 }

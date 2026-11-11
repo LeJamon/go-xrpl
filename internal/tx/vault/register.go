@@ -10,6 +10,7 @@ func Register() {
 			return &VaultCreate{BaseTx: *tx.NewBaseTx(tx.TypeVaultCreate, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivCreatePseudoAcct | tx.PrivCreateMPTIssuance | tx.PrivMustModifyVault,
 	})
@@ -19,6 +20,7 @@ func Register() {
 			return &VaultSet{BaseTx: *tx.NewBaseTx(tx.TypeVaultSet, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMustModifyVault,
 	})
@@ -28,6 +30,7 @@ func Register() {
 			return &VaultDelete{BaseTx: *tx.NewBaseTx(tx.TypeVaultDelete, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMustDeleteAcct | tx.PrivDestroyMPTIssuance | tx.PrivMustModifyVault,
 	})
@@ -37,6 +40,7 @@ func Register() {
 			return &VaultDeposit{BaseTx: *tx.NewBaseTx(tx.TypeVaultDeposit, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayAuthorizeMPT | tx.PrivMustModifyVault,
 	})
@@ -46,6 +50,7 @@ func Register() {
 			return &VaultWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeVaultWithdraw, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayDeleteMPT | tx.PrivMayAuthorizeMPT | tx.PrivMustModifyVault,
 	})
@@ -55,6 +60,7 @@ func Register() {
 			return &VaultClawback{BaseTx: *tx.NewBaseTx(tx.TypeVaultClawback, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayDeleteMPT | tx.PrivMustModifyVault,
 	})

@@ -10,6 +10,7 @@ func Register() {
 			return &AccountSet{BaseTx: *tx.NewBaseTx(tx.TypeAccountSet, "")}
 		},
 		Delegation:         tx.NotDelegable,
+		Consequences:       tx.CustomConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -17,7 +18,8 @@ func Register() {
 		New: func() tx.Transaction {
 			return &AccountDelete{BaseTx: *tx.NewBaseTx(tx.TypeAccountDelete, "")}
 		},
-		Delegation: tx.NotDelegable,
-		Privileges: tx.PrivMustDeleteAcct,
+		Delegation:   tx.NotDelegable,
+		Consequences: tx.BlockerConsequences,
+		Privileges:   tx.PrivMustDeleteAcct,
 	})
 }

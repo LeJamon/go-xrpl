@@ -10,6 +10,7 @@ func Register() {
 			return &DepositPreauth{BaseTx: *tx.NewBaseTx(tx.TypeDepositPreauth, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

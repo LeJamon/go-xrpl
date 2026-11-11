@@ -28,6 +28,11 @@ func (t *TicketCreate) TxType() tx.Type {
 	return tx.TypeTicketCreate
 }
 
+// Consequences reports one sequence consumed per ticket created.
+func (t *TicketCreate) Consequences() tx.Consequences {
+	return tx.Consequences{SequencesConsumed: t.TicketCount}
+}
+
 func (t *TicketCreate) RequiredAmendments() [][32]byte {
 	return nil
 }

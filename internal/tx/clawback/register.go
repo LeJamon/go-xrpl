@@ -10,6 +10,7 @@ func Register() {
 			return &Clawback{BaseTx: *tx.NewBaseTx(tx.TypeClawback, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

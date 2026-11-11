@@ -10,6 +10,7 @@ func Register() {
 			return &TrustSet{BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

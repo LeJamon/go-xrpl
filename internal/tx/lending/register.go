@@ -11,6 +11,7 @@ func Register() {
 			return &LoanBrokerSet{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerSet, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivCreatePseudoAcct | tx.PrivMayAuthorizeMPT,
 	})
@@ -20,6 +21,7 @@ func Register() {
 			return &LoanBrokerDelete{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerDelete, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMustDeleteAcct | tx.PrivMayAuthorizeMPT,
 	})
@@ -29,6 +31,7 @@ func Register() {
 			return &LoanBrokerCoverDeposit{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerCoverDeposit, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -37,6 +40,7 @@ func Register() {
 			return &LoanBrokerCoverWithdraw{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerCoverWithdraw, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayAuthorizeMPT,
 	})
@@ -46,6 +50,7 @@ func Register() {
 			return &LoanBrokerCoverClawback{BaseTx: *tx.NewBaseTx(tx.TypeLoanBrokerCoverClawback, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -54,6 +59,7 @@ func Register() {
 			return &LoanSet{BaseTx: *tx.NewBaseTx(tx.TypeLoanSet, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayAuthorizeMPT | tx.PrivMustModifyVault,
 	})
@@ -63,6 +69,7 @@ func Register() {
 			return &LoanDelete{BaseTx: *tx.NewBaseTx(tx.TypeLoanDelete, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -71,6 +78,7 @@ func Register() {
 			return &LoanManage{BaseTx: *tx.NewBaseTx(tx.TypeLoanManage, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayModifyVault,
 	})
@@ -80,6 +88,7 @@ func Register() {
 			return &LoanPay{BaseTx: *tx.NewBaseTx(tx.TypeLoanPay, "")}
 		},
 		Delegation:        tx.NotDelegable,
+		Consequences:      tx.NormalConsequences,
 		DisallowedInBatch: true,
 		Privileges:        tx.PrivMayAuthorizeMPT | tx.PrivMustModifyVault,
 	})

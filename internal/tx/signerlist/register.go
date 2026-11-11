@@ -10,6 +10,7 @@ func Register() {
 			return &SignerListSet{BaseTx: *tx.NewBaseTx(tx.TypeSignerListSet, "")}
 		},
 		Delegation:         tx.NotDelegable,
+		Consequences:       tx.BlockerConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -18,6 +19,7 @@ func Register() {
 			return &SetRegularKey{BaseTx: *tx.NewBaseTx(tx.TypeRegularKeySet, "")}
 		},
 		Delegation:         tx.NotDelegable,
+		Consequences:       tx.BlockerConsequences,
 		ReserveSponsorable: true,
 	})
 }

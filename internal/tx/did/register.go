@@ -9,13 +9,15 @@ func Register() {
 		New: func() tx.Transaction {
 			return &DIDSet{BaseTx: *tx.NewBaseTx(tx.TypeDIDSet, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeDIDDelete,
 		New: func() tx.Transaction {
 			return &DIDDelete{BaseTx: *tx.NewBaseTx(tx.TypeDIDDelete, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 }
