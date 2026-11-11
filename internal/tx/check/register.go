@@ -4,13 +4,25 @@ import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Register registers all Check-related transaction types with the tx registry.
 func Register() {
-	tx.Register(tx.TypeCheckCreate, func() tx.Transaction {
-		return &CheckCreate{BaseTx: *tx.NewBaseTx(tx.TypeCheckCreate, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeCheckCreate,
+		New: func() tx.Transaction {
+			return &CheckCreate{BaseTx: *tx.NewBaseTx(tx.TypeCheckCreate, "")}
+		},
+		Delegation: tx.Delegable,
 	})
-	tx.Register(tx.TypeCheckCash, func() tx.Transaction {
-		return &CheckCash{BaseTx: *tx.NewBaseTx(tx.TypeCheckCash, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeCheckCash,
+		New: func() tx.Transaction {
+			return &CheckCash{BaseTx: *tx.NewBaseTx(tx.TypeCheckCash, "")}
+		},
+		Delegation: tx.Delegable,
 	})
-	tx.Register(tx.TypeCheckCancel, func() tx.Transaction {
-		return &CheckCancel{BaseTx: *tx.NewBaseTx(tx.TypeCheckCancel, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeCheckCancel,
+		New: func() tx.Transaction {
+			return &CheckCancel{BaseTx: *tx.NewBaseTx(tx.TypeCheckCancel, "")}
+		},
+		Delegation: tx.Delegable,
 	})
 }

@@ -4,10 +4,18 @@ import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Register registers all Offer-related transaction types with the tx registry.
 func Register() {
-	tx.Register(tx.TypeOfferCreate, func() tx.Transaction {
-		return &OfferCreate{BaseTx: *tx.NewBaseTx(tx.TypeOfferCreate, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeOfferCreate,
+		New: func() tx.Transaction {
+			return &OfferCreate{BaseTx: *tx.NewBaseTx(tx.TypeOfferCreate, "")}
+		},
+		Delegation: tx.Delegable,
 	})
-	tx.Register(tx.TypeOfferCancel, func() tx.Transaction {
-		return &OfferCancel{BaseTx: *tx.NewBaseTx(tx.TypeOfferCancel, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeOfferCancel,
+		New: func() tx.Transaction {
+			return &OfferCancel{BaseTx: *tx.NewBaseTx(tx.TypeOfferCancel, "")}
+		},
+		Delegation: tx.Delegable,
 	})
 }
