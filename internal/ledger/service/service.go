@@ -626,6 +626,7 @@ func New(cfg Config) (*Service, error) {
 			persistedLedgers:     make(map[[32]byte]*ledger.Ledger),
 			txIndex:              make(map[[32]byte]uint32),
 			txPositionIndex:      make(map[[32]byte]uint32),
+			txHashesBySeq:        make(map[uint32][][32]byte),
 			completedLedgers:     newCompleteLedgerSet(),
 			completeLedgerHashes: make(map[uint32][32]byte),
 			completeLedgerTokens: make(map[uint32]uint64),
