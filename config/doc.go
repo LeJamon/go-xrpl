@@ -7,6 +7,10 @@
 // keys must be present in the file, while optional tuning keys fall back to
 // documented built-in defaults at their consumers.
 //
+// Loading is strict: a key that no setting consumes fails [LoadConfig] with an
+// [UnknownKeysError] naming every such key. Port sections and
+// [LoggingConfig.Partitions] are the only free-form parts of the file.
+//
 // Several fields accept rippled's mixed integer/keyword forms (for example
 // ledger_history as an integer, "full", or "none"; network_id as an integer or a
 // named network) and are represented by dedicated types that decode either form.
