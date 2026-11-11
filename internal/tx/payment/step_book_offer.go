@@ -577,45 +577,15 @@ func (s *BookStep) isOfferOwnerAuthorized(
 	return false, nil
 }
 
-// isDeepFrozen checks if an account's trust line for the given currency/issuer
-// has either the high or low deep freeze flag set.
-// Deep freeze is more restrictive than regular freeze — it prevents both
-// sending AND receiving, and causes existing offers to be removed.
-// XRP cannot be frozen, so this always returns false for XRP.
-// If the account is the issuer, deep freeze does not apply.
-// Reference: rippled View.cpp isDeepFrozen(view, account, currency, issuer)
-func (s *BookStep) isDeepFrozen(sb *PaymentSandbox, account [20]byte, currency string, issuer [20]byte) (bool, error) {
-	// XRP cannot be frozen
-	if currency == "" || currency == "XRP" {
-		return false, nil
-	}
-
-	// Issuer is never deep frozen for their own currency
-	if issuer == account {
-		return false, nil
-	}
-
-	lineKey := keylet.Line(account, issuer, currency)
-	lineData, err := sb.Read(lineKey)
-	if err != nil {
-		return false, fmt.Errorf("read deep-freeze trust line: %w", err)
-	}
-	if lineData == nil {
-		return false, nil
-	}
-	rs, err := state.ParseRippleState(lineData)
-	if err != nil {
-		return false, fmt.Errorf("parse deep-freeze trust line: %w", err)
-	}
-
-	return (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0, nil
-}
-
 func (s *BookStep) isDeepFrozenIssue(sb *PaymentSandbox, account [20]byte, issue Issue) (bool, error) {
 	if issue.IsMPT {
 		return mptutil.IsFrozen(sb, issue.MPTID, account), nil
 	}
-	return s.isDeepFrozen(sb, account, issue.Currency, issue.Issuer)
+	frozen, err := tx.IsIOUDeepFrozen(sb, account, issue.Issuer, issue.Currency)
+	if err != nil {
+		return false, fmt.Errorf("deep-freeze trust line: %w", err)
+	}
+	return frozen, nil
 }
 
 // getOfferFundedAmount returns the actual amount an offer can deliver based on owner's balance.
@@ -717,7 +687,7 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	if offerOwner != issuer {
 		frozen := tx.IsFrozen(sb, offerOwner, tx.Asset{Currency: currency, Issuer: state.EncodeAccountIDSafe(issuer)})
 		if !frozen {
-			frozen, err = s.isDeepFrozen(sb, offerOwner, currency, issuer)
+			frozen, err = s.isDeepFrozenIssue(sb, offerOwner, Issue{Currency: currency, Issuer: issuer})
 			if err != nil {
 				return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), err
 			}

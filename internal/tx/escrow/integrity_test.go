@@ -146,32 +146,23 @@ func TestIOUStateHelpersFailClosed(t *testing.T) {
 	issuerID[0] = 5
 	holderID[0] = 6
 	issuerKey := keylet.Account(issuerID)
+	amount := tx.NewIssuedAmount(1, 0, "USD", state.EncodeAccountIDSafe(issuerID))
 
 	view := newFaultView()
 	_, result := getIOUTransferRate(view, issuerID)
 	require.Equal(t, ter.TecNO_ISSUER, result)
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TecNO_ISSUER, result)
 
 	view.readErrors[issuerKey.Key] = errors.New("read failed")
 	_, result = getIOUTransferRate(view, issuerID)
-	require.Equal(t, ter.TefINTERNAL, result)
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
 	require.Equal(t, ter.TefINTERNAL, result)
 
 	delete(view.readErrors, issuerKey.Key)
 	seedAccountForEscrow(t, view.mapView, issuerID, 0)
 	lineKey := keylet.Line(holderID, issuerID, "USD")
 	view.readErrors[lineKey.Key] = errors.New("read failed")
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
-	_, result = isIOUDeepFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
+	require.Equal(t, ter.TefINTERNAL, escrowFinishPreclaimIOU(view, holderID, amount))
 
 	delete(view.readErrors, lineKey.Key)
 	require.NoError(t, view.Insert(lineKey, []byte{0xff}))
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
-	_, result = isIOUDeepFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
+	require.Equal(t, ter.TefINTERNAL, escrowFinishPreclaimIOU(view, holderID, amount))
 }

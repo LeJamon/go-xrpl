@@ -84,16 +84,6 @@ func iouDiffScenarios(t *testing.T) []iouDiffScenario {
 	return out
 }
 
-func TestIOUDeepFrozenDifferential(t *testing.T) {
-	for _, sc := range iouDiffScenarios(t) {
-		view := newMPTTestView()
-		view.data = sc.data
-		if got, want := isIOUDeepFrozen(view, sc.holder, sc.issuer, sc.currency), tx.IsDeepFrozen(view, sc.holder, sc.issuer, sc.currency); got != want {
-			t.Errorf("%s: mptutil=%v tx=%v", sc.name, got, want)
-		}
-	}
-}
-
 func TestIOURequireAuthDifferential(t *testing.T) {
 	for _, rules := range []*amendment.Rules{amendment.AllSupportedRules(), amendment.GenesisRules()} {
 		for _, sc := range iouDiffScenarios(t) {

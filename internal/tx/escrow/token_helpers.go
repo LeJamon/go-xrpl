@@ -91,19 +91,14 @@ func escrowCreatePreclaimIOU(
 	}
 
 	// Freeze checks (global freeze + issuer-side individual freeze)
-	frozen, freezeResult := isIOUFrozen(view, accountID, issuerID, amount.Currency)
-	if freezeResult != ter.TesSUCCESS {
-		return freezeResult
-	}
-	if frozen {
-		return ter.TecFROZEN
-	}
-	frozen, freezeResult = isIOUFrozen(view, destID, issuerID, amount.Currency)
-	if freezeResult != ter.TesSUCCESS {
-		return freezeResult
-	}
-	if frozen {
-		return ter.TecFROZEN
+	for _, holder := range [][20]byte{accountID, destID} {
+		frozen, err := tx.IsIOUFrozen(view, holder, issuerID, amount.Currency)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if frozen {
+			return ter.TecFROZEN
+		}
 	}
 
 	// Spendable amount check (ignore freeze since we already checked)
@@ -255,9 +250,9 @@ func escrowFinishPreclaimIOU(view tx.ReadOnlyLedgerView, destID [20]byte, amount
 	}
 
 	// Deep freeze check on destination
-	deepFrozen, deepFreezeResult := isIOUDeepFrozen(view, destID, issuerID, amount.Currency)
-	if deepFreezeResult != ter.TesSUCCESS {
-		return deepFreezeResult
+	deepFrozen, err := tx.IsIOUDeepFrozen(view, destID, issuerID, amount.Currency)
+	if err != nil {
+		return ter.TefINTERNAL
 	}
 	if deepFrozen {
 		return ter.TecFROZEN
@@ -828,50 +823,6 @@ func getIOUTransferRate(view tx.ReadOnlyLedgerView, issuerID [20]byte) (uint32, 
 		return parityRate, ter.TesSUCCESS
 	}
 	return issuer.TransferRate, ter.TesSUCCESS
-}
-
-func isIOUFrozen(
-	view tx.ReadOnlyLedgerView,
-	accountID, issuerID [20]byte,
-	currency string,
-) (bool, ter.Result) {
-	issuer, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-	if issuer == nil {
-		return false, ter.TecNO_ISSUER
-	}
-	if issuer.Flags&state.LsfGlobalFreeze != 0 {
-		return true, ter.TesSUCCESS
-	}
-	frozen, err := tx.IsTrustlineFrozenBy(view, issuerID, accountID, currency)
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-	return frozen, ter.TesSUCCESS
-}
-
-func isIOUDeepFrozen(
-	view tx.ReadOnlyLedgerView,
-	accountID, issuerID [20]byte,
-	currency string,
-) (bool, ter.Result) {
-	if currency == "" || currency == "XRP" || accountID == issuerID {
-		return false, ter.TesSUCCESS
-	}
-	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-	if data == nil {
-		return false, ter.TesSUCCESS
-	}
-	line, err := state.ParseRippleState(data)
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, ter.TesSUCCESS
 }
 
 // requireAuthIOU checks if an issuer requires authorization and if the account

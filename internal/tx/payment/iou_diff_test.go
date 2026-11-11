@@ -14,16 +14,10 @@ func TestPaymentIOUPredicatesDifferential(t *testing.T) {
 	if len(scenarios) < 600 {
 		t.Fatalf("matrix too small: %d", len(scenarios))
 	}
-	step := &BookStep{}
 	for _, sc := range scenarios {
 		view := newPaymentMockLedgerView()
 		view.data = sc.data
 		sb := NewPaymentSandbox(view)
-		got, gotErr := step.isDeepFrozen(sb, sc.holder, sc.currency, sc.issuer)
-		want, wantErr := tx.IsIOUDeepFrozen(sb, sc.holder, sc.issuer, sc.currency)
-		if gotErr != nil || wantErr != nil || got != want {
-			t.Errorf("%s deep: payment=%v/%v tx=%v/%v", sc.name, got, gotErr, want, wantErr)
-		}
 		if got, want := GetTransferRate(sb, sc.issuer), tx.GetTransferRateByID(sb, sc.issuer); got != want {
 			t.Errorf("%s rate: payment=%v tx=%v", sc.name, got, want)
 		}
