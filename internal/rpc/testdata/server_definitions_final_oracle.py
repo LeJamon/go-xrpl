@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive final 3.4.1 server_definitions data from the pinned rippled source tree.
+"""Derive final server_definitions data from the pinned rippled source tree.
 
 It parses the C++ protocol macros and combines them with construction rules
 transcribed from the pinned final sources, independently of go-xrpl. The input
@@ -9,13 +9,13 @@ An authorized release job can regenerate and verify the checked-in fixture from
 the clean private source checkout with:
 
     python3 server_definitions_final_oracle.py \
-        /path/to/rippled-worktrees/v3.4.1-oracle --output server_definitions_final_hashes.json
+        /path/to/<ORACLE_CHECKOUT from pin.env> --output server_definitions_final_hashes.json
 
 The repository, tag, commit, and clean-checkout checks deliberately reject
 public or mixed-release source trees. Ordinary CI verifies the committed
 snapshot and does not attempt this private checkout.
 
-A built final 3.4.1 daemon can independently dump the runtime document with
+A built daemon of the pinned release can independently dump the runtime document with
 `xrpld --definitions`; the source-derived checksums below are kept in the Go
 suite so normal tests do not require a daemon or a C++ build.
 """
@@ -28,9 +28,14 @@ import subprocess
 from pathlib import Path
 
 
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
-ORACLE_TAG = "3.4.1"
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[3] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
 
 
 def normalize_repository(url):
@@ -375,7 +380,7 @@ def main():
         },
         "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
         "regeneration": {
-            "source": "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
+            "source": f"python3 server_definitions_final_oracle.py <{PIN['ORACLE_CHECKOUT']}> --output server_definitions_final_hashes.json",
             "runtime": "xrpld --definitions",
         },
         "transaction_results": {

@@ -15,14 +15,9 @@ import (
 	"testing"
 )
 
-const (
-	commit       = "d147fccf54a500fce586522f28d6044c37fd8d29"
-	publicCommit = "00e640751460c137636fdb6dae6b4280de355d81"
-	priorCommit  = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
-)
-
-// These files are byte-identical at private 3.4.1 and public 3.4.1/3.4.0. The
-// equivalence is limited to these inventory inputs, not release behavior.
+// These files are byte-identical at the pinned private commit, its public
+// equivalent and the prior public release. The equivalence is limited to these
+// inventory inputs, not release behavior.
 var sourceHashes = map[string]string{
 	"include/xrpl/protocol/SField.h":                    "0566abd201da2c6525b095de1d92a27ad9e4f9d180885583657e9ea9995514e4",
 	"include/xrpl/protocol/detail/sfields.macro":        "777a602cb7b2359c6cf7d5f9fa38b0d7782814f9ef684d10a849c166889e76df",
@@ -33,41 +28,42 @@ var sourceHashes = map[string]string{
 	"src/libxrpl/protocol/LedgerFormats.cpp":            "6775a368d73f659e81ddef30b742489d7f7bcac96089296e747aaab34b983b28",
 }
 
-// File returns an inventory input verified against private rippled 3.4.1.
+// File returns an inventory input verified against the pinned rippled release.
 // GOXRPL_ORACLE_DIR selects a public or private checkout of that release.
-// A discovered public 3.4.0 checkout is also accepted for these inventory inputs.
+// A discovered checkout of the prior release is also accepted for these
+// inventory inputs.
 func File(t testing.TB, relative string) string {
 	t.Helper()
 	if _, ok := sourceHashes[relative]; !ok {
-		t.Fatalf("no private rippled 3.4.1 source hash for %q", relative)
+		t.Fatalf("no pinned rippled %s source hash for %q", Pin.Tag, relative)
 	}
 	root := os.Getenv("GOXRPL_ORACLE_DIR")
-	wantCommits := []string{commit, publicCommit}
+	wantCommits := []string{Pin.Commit, Pin.PublicCommit}
 	if root == "" {
 		_, caller, _, ok := runtime.Caller(0)
 		if !ok {
 			t.Fatal("resolve oracle helper source path")
 		}
-		root = findCheckout(filepath.Dir(caller), "v3.4.1-oracle")
+		root = findCheckout(filepath.Dir(caller), Pin.Checkout)
 		if root == "" {
-			root = findCheckout(filepath.Dir(caller), "v3.4.0-oracle")
-			wantCommits = []string{priorCommit}
+			root = findCheckout(filepath.Dir(caller), Pin.Prior.Checkout)
+			wantCommits = []string{Pin.Prior.Commit}
 		}
 	}
 	if root == "" {
-		t.Fatal("rippled 3.4.1 oracle not found; set GOXRPL_ORACLE_DIR to a clean public XRPLF/rippled checkout at tag 3.4.1")
+		t.Fatalf("rippled %s oracle not found; set GOXRPL_ORACLE_DIR to a clean %s checkout at tag %[1]s", Pin.Tag, Pin.PublicRepository)
 	}
 	path, err := verifiedFile(t.Context(), root, relative, wantCommits...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%s: source bytes match pinned private 3.4.1 SHA-256 %s", relative, sourceHashes[relative])
+	t.Logf("%s: source bytes match pinned %s SHA-256 %s", relative, Pin.Tag, sourceHashes[relative])
 	return path
 }
 
-func findCheckout(start, name string) string {
+func findCheckout(start, relative string) string {
 	for dir := start; ; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, "rippled-worktrees", name)
+		candidate := filepath.Join(dir, filepath.FromSlash(relative))
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
 		}
@@ -112,7 +108,7 @@ func verifiedFile(ctx context.Context, root, relative string, wantCommits ...str
 		return "", fmt.Errorf("read oracle source: %w", err)
 	}
 	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != wantHash {
-		return "", fmt.Errorf("oracle %s SHA-256 = %s, want private 3.4.1 %s", relative, got, wantHash)
+		return "", fmt.Errorf("oracle %s SHA-256 = %s, want pinned %s %s", relative, got, Pin.Tag, wantHash)
 	}
 	return path, nil
 }

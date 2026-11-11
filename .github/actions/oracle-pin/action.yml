@@ -1,0 +1,19 @@
+name: "Load rippled oracle pin"
+description: >
+  Exports every KEY=value of internal/testutil/rippled/pin.env (the targeted
+  rippled release: tag, commits, checkout path, image, corpus) into the job
+  environment, so later steps read env.ORACLE_TAG / $ORACLE_COMMIT instead of
+  hard-coding them. Requires the repository to be checked out.
+
+runs:
+  using: composite
+  steps:
+    - name: Export pin.env
+      shell: bash
+      run: |
+        pin=internal/testutil/rippled/pin.env
+        if grep -vE '^(#.*|[A-Z][A-Z0-9_]*=[^[:space:]]+)?$' "$pin"; then
+          echo "::error file=$pin::malformed pin line"
+          exit 1
+        fi
+        grep -E '^[A-Z]' "$pin" >> "$GITHUB_ENV"

@@ -62,17 +62,17 @@ test-libs:
 test-pkg pkg:
     go test -v {{pkg}}
 
-# Build and verify the private 3.4.1 oracle, then exercise the production peer path.
+# Build and verify the pinned private oracle, then exercise the production peer path.
 test-docker:
     #!/usr/bin/env bash
     set -euo pipefail
-    export ORACLE_IMAGE=goxrpl-oracle:3.4.1
+    set -a; . internal/testutil/rippled/pin.env; set +a
     export EVIDENCE_DIR="${EVIDENCE_DIR:-$(mktemp -d)}"
     docker build --platform linux/amd64 -t "$ORACLE_IMAGE" scripts/peer-interop
     scripts/acceptance/oracle-image.sh
     read -r image_id < "$EVIDENCE_DIR/oracle-image-id.txt"
     PEERTLS_DOCKER_INTEROP=1 PEERTLS_LEDGER_NODE_DEPTH_INTEROP=1 PEERTLS_VALIDATOR_LIST_INTEROP=1 \
-      PEERTLS_RIPPLED_VERSION=3.4.1 PEERTLS_RIPPLED_IMAGE="$image_id" \
+      PEERTLS_RIPPLED_VERSION="$ORACLE_TAG" PEERTLS_RIPPLED_IMAGE="$image_id" \
       go test -race -tags docker -count=1 -timeout 10m -v \
       -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
 
@@ -95,9 +95,9 @@ fuzz-determinism fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDeterminism$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
 
 # Differential-vs-rippled fuzzer (issue #682, scope 2): replays recorded rippled
-# fixtures and diffs goXRPL's TER + post-state. Needs the pinned private-3.4.1
-# conformance corpus; set GOXRPL_FIXTURES_DIR explicitly. e.g.
-# `GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 just fuzz-differential 5m`.
+# fixtures and diffs goXRPL's TER + post-state. Uses the pinned conformance
+# corpus (ORACLE_CORPUS in internal/testutil/rippled/pin.env) unless
+# GOXRPL_FIXTURES_DIR selects another. e.g. `just fuzz-differential 5m`.
 fuzz-differential fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDifferential$' -fuzztime {{fuzztime}} ./internal/testing/conformance/
 
@@ -152,9 +152,9 @@ fmt:
 tidy:
     go mod tidy
 
-# Required final-oracle conformance summary. Pass the corpus explicitly, e.g.
-# `just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4` or use
-# `GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 just conformance`.
+# Required final-oracle conformance summary. Runs the pinned corpus
+# (ORACLE_CORPUS in internal/testutil/rippled/pin.env) unless `--corpus PATH` or
+# GOXRPL_FIXTURES_DIR selects another.
 conformance *args:
     ./scripts/conformance-summary.sh {{args}}
 

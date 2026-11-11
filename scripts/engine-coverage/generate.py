@@ -9,7 +9,7 @@ claims to an explicit evidence section.  Run from the go-xrpl repository root:
     python3 scripts/engine-coverage/generate.py
     python3 scripts/engine-coverage/generate.py --check
 
-The default oracle is the sibling read-only v3.4.1 checkout used by issue
+The default oracle is the sibling read-only pinned checkout used by issue
 #2016.  ``--oracle`` is useful for a different local checkout, but the pinned
 commit is still checked before an inventory is written.
 """
@@ -28,9 +28,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
-ORACLE_TAG = "3.4.1"
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[2] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
 GO_BASE_COMMIT = "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f"
 GO_PREREQUISITE_BASELINE = "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f"
 SCHEMA = 1
@@ -38,7 +43,7 @@ SCHEMA = 1
 TRANSACTION_MACRO = "include/xrpl/protocol/detail/transactions.macro"
 TX_FORMATS = "src/libxrpl/protocol/TxFormats.cpp"
 FEATURE_MACRO = "include/xrpl/protocol/detail/features.macro"
-V4_MANIFEST = "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json"
+V4_MANIFEST = PIN["ORACLE_CORPUS"] + "/manifest.json"
 
 GO_TRANSACTION_TYPES = "protocol/transaction_type.go"
 GO_TEMPLATE = "internal/tx/template.go"
@@ -378,7 +383,7 @@ def common_field_stage_mapping() -> list[dict[str, Any]]:
             "oracle": [
                 {"path": TX_FORMATS, "symbols": ["TxFormats::getCommonFields"]},
             ],
-            "behavior": "The field is accepted as a common wire/template field; no v3.4.1 common engine check or mutation was found.",
+            "behavior": f"The field is accepted as a common wire/template field; no v{ORACLE_TAG} common engine check or mutation was found.",
             "unexecuted_edges": "Presence, value bounds, signing, and any type-specific interpretation remain unexecuted; do not call it behaviorally covered.",
         },
         {
@@ -1215,7 +1220,7 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
             "go_only_contracts": [
                 {"path": "internal/tx/common_wire_coverage_test.go", "test": "TestCommonTemplateFieldsSurviveRegisteredTypedProjection", "scope": "all registered types × common fields; Go codec round-trip only"},
                 {"path": "internal/tx/template_registry_test.go", "test": "TestParseFromBinary_EveryRegisteredTypeAcceptsCommonFields", "scope": "registered type parsing; Go-only"},
-                {"path": "codec/binarycodec/definitions/final_inventory_test.go", "test": "TestFinalDefinitionsMatchRippled", "scope": "definitions registry against hash-pinned private v3.4.1 source; not engine execution"},
+                {"path": "codec/binarycodec/definitions/final_inventory_test.go", "test": "TestFinalDefinitionsMatchRippled", "scope": f"definitions registry against hash-pinned private v{ORACLE_TAG} source; not engine execution"},
             ],
             "oracle_source_contracts": [
                 {"path": TRANSACTION_MACRO, "scope": "transaction tags, codes, settings, unique fields"},
@@ -1228,14 +1233,14 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--oracle", type=Path, help="local rippled v3.4.1 oracle checkout")
+    parser.add_argument("--oracle", type=Path, help="local pinned rippled oracle checkout")
     parser.add_argument("--output", type=Path, help="inventory JSON output path")
     parser.add_argument("--check", action="store_true", help="fail if the checked-in snapshot is stale")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     oracle = args.oracle
     if oracle is None:
-        candidates = [parent / "rippled-worktrees/v3.4.1-oracle" for parent in (repo.parent, repo.parent.parent)]
+        candidates = [parent / PIN["ORACLE_CHECKOUT"] for parent in (repo.parent, repo.parent.parent)]
         oracle = next((path for path in candidates if path.is_dir()), candidates[0])
     output = args.output or repo / "scripts/engine-coverage/inventory.json"
     if not oracle.is_dir():

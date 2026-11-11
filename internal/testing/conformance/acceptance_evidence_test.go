@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
@@ -57,7 +59,7 @@ func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
 				if producer != missing {
 					content := fmt.Sprintf("tested_sha=%s\ngo_dirty=false\nstatus=success\n", sha)
 					if isFinalOracleProducer(producer) {
-						content += "oracle_repository=XRPLF/xrpld-private\noracle_tag=3.4.1\noracle_commit=d147fccf54a500fce586522f28d6044c37fd8d29\n"
+						content += oracleIdentity(rippled.Pin.Repository, rippled.Pin.Tag, rippled.Pin.Commit)
 					}
 					if producer == "test-core" && tc.replace != "" {
 						content = strings.ReplaceAll(content, tc.replace, tc.with)
@@ -116,15 +118,16 @@ func TestAcceptanceEvidenceRejectsMixedOracle(t *testing.T) {
 	}
 	write("needs-results.txt", strings.Join(jobs, "=success\n")+"=success\n")
 	write("workflow-commands.txt", "fixture commands\n")
+	prior := rippled.Pin.Prior
 	for _, producer := range producers {
 		content := fmt.Sprintf("tested_sha=%s\ngo_dirty=false\nstatus=success\n", sha)
 		switch producer {
 		case "peer-interop-final":
-			content += "oracle_repository=XRPLF/rippled\noracle_tag=3.4.0\noracle_commit=4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17\n"
+			content += oracleIdentity(prior.Repository, prior.Tag, prior.Commit)
 		case "consensus-smoke-final":
-			content += "oracle_repository=XRPLF/xrpld-private\noracle_tag=3.4.0\noracle_commit=d147fccf54a500fce586522f28d6044c37fd8d29\n"
+			content += oracleIdentity(rippled.Pin.Repository, prior.Tag, rippled.Pin.Commit)
 		case "conformance-final":
-			content += "oracle_repository=XRPLF/xrpld-private\noracle_tag=3.4.1\noracle_commit=4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17\n"
+			content += oracleIdentity(rippled.Pin.Repository, rippled.Pin.Tag, prior.Commit)
 		}
 		write(filepath.Join("producers", "producer-"+producer+".txt"), content)
 	}
@@ -148,6 +151,10 @@ func TestAcceptanceEvidenceRejectsMixedOracle(t *testing.T) {
 			t.Fatalf("mixed oracle identity was not diagnosed for %s:\n%s", producer, manifest)
 		}
 	}
+}
+
+func oracleIdentity(repository, tag, commit string) string {
+	return fmt.Sprintf("oracle_repository=%s\noracle_tag=%s\noracle_commit=%s\n", repository, tag, commit)
 }
 
 func isFinalOracleProducer(name string) bool {
@@ -232,8 +239,8 @@ func TestAcceptanceEvidenceRejectsDirtyCorpus(t *testing.T) {
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"EVIDENCE_DIR="+t.TempDir(), "FINAL_CONFORMANCE_CORPUS="+repo,
 				"FINAL_CONFORMANCE_REPOSITORY=fixture/corpus", "FINAL_CONFORMANCE_COMMIT="+strings.TrimSpace(string(sha)),
-				"FINAL_CONFORMANCE_MANIFEST="+fixture, "ORACLE_REPOSITORY=XRPLF/xrpld-private", "ORACLE_TAG=3.4.1",
-				"ORACLE_COMMIT=d147fccf54a500fce586522f28d6044c37fd8d29")
+				"FINAL_CONFORMANCE_MANIFEST="+fixture, "ORACLE_REPOSITORY="+rippled.Pin.Repository, "ORACLE_TAG="+rippled.Pin.Tag,
+				"ORACLE_COMMIT="+rippled.Pin.Commit)
 			output, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatal("incomplete corpus unexpectedly accepted")
@@ -253,8 +260,7 @@ func TestProducerEvidenceTracksCorpusAndExcludesReferenceCheckouts(t *testing.T)
 	script, repo, sha := acceptanceEvidenceRepo(t)
 	for _, path := range []string{
 		"rippled-worktrees/v3.2.0-oracle", "rippled-worktrees/v3.3.0-oracle",
-		"rippled-worktrees/v3.4.0-oracle", "rippled-worktrees/v3.4.1-oracle",
-		"internal/testing/conformance/testdata/rippled-3.4.1-v4",
+		rippled.Pin.Prior.Checkout, rippled.Pin.Checkout, rippled.Pin.Corpus,
 	} {
 		dir := filepath.Join(repo, path)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -264,9 +270,9 @@ func TestProducerEvidenceTracksCorpusAndExcludesReferenceCheckouts(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	corpusFile := filepath.Join(repo, "internal/testing/conformance/testdata/rippled-3.4.1-v4/reference.txt")
+	corpusFile := filepath.Join(repo, rippled.Pin.Corpus, "reference.txt")
 	for _, args := range [][]string{
-		{"add", "--", "internal/testing/conformance/testdata/rippled-3.4.1-v4/reference.txt"},
+		{"add", "--", rippled.Pin.Corpus + "/reference.txt"},
 		{"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "corpus"},
 	} {
 		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", repo}, args...)...)

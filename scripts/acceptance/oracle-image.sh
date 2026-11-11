@@ -6,6 +6,20 @@ die() {
   exit 1
 }
 
+pin_file="$(dirname "${BASH_SOURCE[0]}")/../../internal/testutil/rippled/pin.env"
+pin() {
+  local value
+  value="$(sed -n "s/^$1=//p" "$pin_file")"
+  [[ -n "$value" ]] || die "$1 is missing from $pin_file"
+  printf '%s' "$value"
+}
+oracle_repository="$(pin ORACLE_REPOSITORY)"
+oracle_tag="$(pin ORACLE_TAG)"
+oracle_commit="$(pin ORACLE_COMMIT)"
+package_url="$(pin ORACLE_PACKAGE_URL)"
+package_sha256="$(pin ORACLE_PACKAGE_SHA256)"
+binary_sha256="$(pin ORACLE_BINARY_SHA256)"
+
 : "${ORACLE_IMAGE:?ORACLE_IMAGE is required}"
 : "${EVIDENCE_DIR:?EVIDENCE_DIR is required}"
 mkdir -p "$EVIDENCE_DIR"
@@ -19,22 +33,22 @@ platform="$(docker image inspect "$image_id" --format '{{.Os}}/{{.Architecture}}
 docker run --rm --platform linux/amd64 --entrypoint /usr/bin/sha256sum \
   "$image_id" /usr/bin/xrpld > "$EVIDENCE_DIR/oracle-binary.sha256"
 grep --fixed-strings --line-regexp \
-  'fb8430dfdbee9d8016818dab22881e48a125598beebf9b5b8c90ca7fdba1faaa  /usr/bin/xrpld' \
+  "$binary_sha256  /usr/bin/xrpld" \
   "$EVIDENCE_DIR/oracle-binary.sha256"
 
 docker run --rm --platform linux/amd64 --entrypoint /usr/bin/xrpld \
   "$image_id" --version > "$EVIDENCE_DIR/oracle-version.txt"
-grep --fixed-strings --line-regexp 'xrpld version 3.4.1' "$EVIDENCE_DIR/oracle-version.txt"
+grep --fixed-strings --line-regexp "xrpld version $oracle_tag" "$EVIDENCE_DIR/oracle-version.txt"
 grep --fixed-strings --line-regexp \
-  'Git commit hash: d147fccf54a500fce586522f28d6044c37fd8d29' "$EVIDENCE_DIR/oracle-version.txt"
+  "Git commit hash: $oracle_commit" "$EVIDENCE_DIR/oracle-version.txt"
 
 {
-  printf 'oracle_repository=XRPLF/xrpld-private\n'
-  printf 'oracle_tag=3.4.1\n'
-  printf 'oracle_commit=d147fccf54a500fce586522f28d6044c37fd8d29\n'
-  printf 'package_url=https://packages.xrplf.org/repository/deb-stable/pool/x/xrpld/xrpld_3.4.1-1_amd64.deb\n'
-  printf 'package_sha256=cae8ce3b9bc9451b19975c890714ba789d2004987cdfff9cbd55522c612c6f26\n'
-  printf 'binary_sha256=fb8430dfdbee9d8016818dab22881e48a125598beebf9b5b8c90ca7fdba1faaa\n'
+  printf 'oracle_repository=%s\n' "$oracle_repository"
+  printf 'oracle_tag=%s\n' "$oracle_tag"
+  printf 'oracle_commit=%s\n' "$oracle_commit"
+  printf 'package_url=%s\n' "$package_url"
+  printf 'package_sha256=%s\n' "$package_sha256"
+  printf 'binary_sha256=%s\n' "$binary_sha256"
   printf 'image_id=%s\nplatform=%s\n' "$image_id" "$platform"
 } > "$EVIDENCE_DIR/oracle-artifact.txt"
 printf '%s\n' "$image_id" > "$EVIDENCE_DIR/oracle-image-id.txt"

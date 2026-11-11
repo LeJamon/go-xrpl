@@ -11,15 +11,17 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 )
 
-const (
-	coverageInventorySchema = 1
-	coverageOracleRepo      = "XRPLF/xrpld-private"
-	coverageOracleTag       = "3.4.1"
-	coverageOracleCommit    = "d147fccf54a500fce586522f28d6044c37fd8d29"
+const coverageInventorySchema = 1
+
+var (
+	coverageOracleRepo   = rippled.Pin.Repository
+	coverageOracleTag    = rippled.Pin.Tag
+	coverageOracleCommit = rippled.Pin.Commit
 )
 
 type coverageInventory struct {

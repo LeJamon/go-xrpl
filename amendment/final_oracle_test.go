@@ -1,26 +1,22 @@
 package amendment
 
 import (
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 const (
-	privateV341OracleRepository = "XRPLF/xrpld-private"
-	privateV341OracleTag        = "3.4.1"
-	privateV341OracleCommit     = "d147fccf54a500fce586522f28d6044c37fd8d29"
-	privateV341FeatureSource    = "include/xrpl/protocol/detail/features.macro"
-	privateV341FeatureSHA256    = "1708df2ea0150a3105f13f7f39c42c798ac5addae9833c073fe6df9e9e17208b"
+	privateV341FeatureSource = "include/xrpl/protocol/detail/features.macro"
+	privateV341FeatureSHA256 = "1708df2ea0150a3105f13f7f39c42c798ac5addae9833c073fe6df9e9e17208b"
 )
-
-//go:embed testdata/private3.4.1_registry.json
-var privateV341RegistryFixture []byte
 
 type privateV341Fixture struct {
 	Oracle        privateV341Oracle         `json:"oracle"`
@@ -62,18 +58,22 @@ var privateV341GoOnlyFeatures = []struct {
 
 func loadPrivateV341Fixture(t *testing.T) privateV341Fixture {
 	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(rippled.Pin.AmendmentRegistry)))
+	if err != nil {
+		t.Fatalf("read pinned amendment fixture: %v", err)
+	}
 	var fixture privateV341Fixture
-	if err := json.Unmarshal(privateV341RegistryFixture, &fixture); err != nil {
-		t.Fatalf("decode private v3.4.1 amendment fixture: %v", err)
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("decode pinned amendment fixture: %v", err)
 	}
-	if fixture.Oracle.Repository != privateV341OracleRepository {
-		t.Fatalf("fixture repository = %q, want %q", fixture.Oracle.Repository, privateV341OracleRepository)
+	if fixture.Oracle.Repository != rippled.Pin.Repository {
+		t.Fatalf("fixture repository = %q, want %q", fixture.Oracle.Repository, rippled.Pin.Repository)
 	}
-	if fixture.Oracle.Tag != privateV341OracleTag {
-		t.Fatalf("fixture tag = %q, want %q", fixture.Oracle.Tag, privateV341OracleTag)
+	if fixture.Oracle.Tag != rippled.Pin.Tag {
+		t.Fatalf("fixture tag = %q, want %q", fixture.Oracle.Tag, rippled.Pin.Tag)
 	}
-	if fixture.Oracle.Commit != privateV341OracleCommit {
-		t.Fatalf("fixture commit = %q, want %q", fixture.Oracle.Commit, privateV341OracleCommit)
+	if fixture.Oracle.Commit != rippled.Pin.Commit {
+		t.Fatalf("fixture commit = %q, want %q", fixture.Oracle.Commit, rippled.Pin.Commit)
 	}
 	if fixture.Oracle.Source != privateV341FeatureSource {
 		t.Fatalf("fixture source = %q, want %q", fixture.Oracle.Source, privateV341FeatureSource)
@@ -160,7 +160,7 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 		}
 		feature := FeatureByName(expected.Name)
 		if feature == nil {
-			t.Errorf("private v3.4.1 feature %q is missing from the Go registry", expected.Name)
+			t.Errorf("pinned oracle feature %q is missing from the Go registry", expected.Name)
 			continue
 		}
 		if feature.ID != FeatureID(expected.Name) {
@@ -218,7 +218,7 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 			}
 		}
 		if !foundExtra {
-			t.Errorf("Go registry feature %q is neither pinned in private v3.4.1 nor an intentional extra", name)
+			t.Errorf("Go registry feature %q is neither pinned in the oracle nor an intentional extra", name)
 		}
 	}
 }
@@ -237,7 +237,7 @@ func TestPrivateV341DefaultVotingAcrossProfiles(t *testing.T) {
 		gotDefaultYes[feature.Name] = true
 	}
 	if len(gotDefaultYes) != len(wantDefaultYes) {
-		t.Fatalf("Go default-yes feature count = %d, private v3.4.1 count = %d", len(gotDefaultYes), len(wantDefaultYes))
+		t.Fatalf("Go default-yes feature count = %d, pinned oracle count = %d", len(gotDefaultYes), len(wantDefaultYes))
 	}
 	for name := range wantDefaultYes {
 		if !gotDefaultYes[name] {

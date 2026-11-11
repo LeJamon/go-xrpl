@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -264,7 +265,7 @@ func TestEngineExecutionOrderRejectsFilteredCases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "engine-report.json")
 	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestEngineExecutionOrder$/^does-not-exist$")
 	cmd.Env = append(os.Environ(),
-		"GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4",
+		"GOXRPL_FIXTURES_DIR="+rippled.Pin.Corpus,
 		"GOXRPL_CONFORMANCE_REQUIRED=1", "GOXRPL_ENGINE_SOAK_SECONDS=",
 		"GOXRPL_ENGINE_EVIDENCE_REPORT="+path)
 	output, err := cmd.CombinedOutput()
