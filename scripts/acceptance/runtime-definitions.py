@@ -6,15 +6,21 @@ import json
 import sys
 from pathlib import Path
 
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[2] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+
 
 def verify(runtime_path, fixture_path):
     fixture = json.loads(Path(fixture_path).read_text())
     if fixture["oracle"] != {
-        "repository": "XRPLF/xrpld-private",
-        "tag": "3.4.1",
-        "commit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+        "repository": PIN["ORACLE_REPOSITORY"],
+        "tag": PIN["ORACLE_TAG"],
+        "commit": PIN["ORACLE_COMMIT"],
     }:
-        raise ValueError("definitions fixture does not identify the private 3.4.1 oracle")
+        raise ValueError("definitions fixture does not identify the pinned oracle")
     document = json.loads(Path(runtime_path).read_text())
     advertised = document.pop("hash")
     payload = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()

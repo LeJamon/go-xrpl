@@ -2,7 +2,7 @@
 # The required run executes the complete corpus; filters affect reporting only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-corpus="${GOXRPL_FIXTURES_DIR:-}"
+corpus="${GOXRPL_FIXTURES_DIR:-$(sed -n 's/^ORACLE_CORPUS=//p' internal/testutil/rippled/pin.env)}"
 filter=""
 failing=false
 list_fail=false
@@ -15,15 +15,16 @@ while [[ $# -gt 0 ]]; do
     --failing) failing=true; shift ;;
     --list-fail) list_fail=true; shift ;;
     --help|-h)
-      echo "Usage: $0 --corpus PATH [SUITE_FILTER] [--failing] [--list-fail]"
-      echo 'The complete pinned corpus always executes. SUITE_FILTER filters the report.'
+      echo "Usage: $0 [--corpus PATH] [SUITE_FILTER] [--failing] [--list-fail]"
+      echo 'The complete corpus always executes; it defaults to ORACLE_CORPUS from'
+      echo 'internal/testutil/rippled/pin.env. SUITE_FILTER filters the report.'
       exit 0 ;;
     --*) echo "error: unknown option $1" >&2; exit 2 ;;
     *) [[ -z "$filter" ]] || { echo 'error: only one suite filter is supported' >&2; exit 2; }
        filter="$1"; shift ;;
   esac
 done
-[[ -n "$corpus" ]] || { echo 'error: --corpus PATH or GOXRPL_FIXTURES_DIR is required' >&2; exit 2; }
+[[ -n "$corpus" ]] || { echo 'error: no corpus: pin.env has no ORACLE_CORPUS and none was given' >&2; exit 2; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 report="${GOXRPL_CONFORMANCE_REPORT:-$work/report.json}"

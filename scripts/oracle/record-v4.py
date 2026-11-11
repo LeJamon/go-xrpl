@@ -15,9 +15,15 @@ import tarfile
 from pathlib import Path
 
 
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
-ORACLE_TAG = "3.4.1"
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[2] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_VERSION = f"xrpld version {ORACLE_TAG}"
 OLD_BINARY_SHA256 = "f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3d6113"
 CONAN_REMOTE_NAME = "xrplf"
 CONAN_REMOTE_URL = "https://conan.xrplf.org/repository/conan/"
@@ -579,7 +585,7 @@ def main() -> None:
     parser.add_argument(
         "--oracle",
         type=Path,
-        default=Path(__file__).resolve().parents[4] / "rippled-worktrees/v3.4.1-oracle",
+        default=Path(__file__).resolve().parents[4] / PIN["ORACLE_CHECKOUT"],
     )
     parser.add_argument(
         "--old-build", type=Path, default=Path("/private/tmp/issue-2011-oracle-build")
@@ -590,8 +596,7 @@ def main() -> None:
     parser.add_argument(
         "--fixture-dir",
         type=Path,
-        default=Path(__file__).resolve().parents[2]
-        / "internal/testing/conformance/testdata/rippled-3.4.1-v4",
+        default=Path(__file__).resolve().parents[2] / PIN["ORACLE_CORPUS"],
     )
     parser.add_argument(
         "--clean-build",
@@ -625,13 +630,13 @@ def main() -> None:
             raise SystemExit("verified old build is required unless --clean-build is used")
         production_binary = old_build / "build/xrpld"
         if sha256(production_binary) != OLD_BINARY_SHA256:
-            raise SystemExit("verified 3.4.1 production binary hash changed")
+            raise SystemExit(f"verified {ORACLE_TAG} production binary hash changed")
         instrumented_batch_hash = verify_instrumented_source(
             oracle, old_build / "source"
         )
         version_output = subprocess.check_output([str(production_binary), "--version"], text=True)
         version = version_output.splitlines()[0].strip()
-        if version != "xrpld version 3.4.1":
+        if version != ORACLE_VERSION:
             raise SystemExit(f"unexpected production binary version: {version_output.strip()}")
         copy_build(old_build / "build", build)
         strict_binary, compile_hash, link_hash = compile_recorder(
@@ -644,7 +649,7 @@ def main() -> None:
     if args.clean_build:
         version_output = subprocess.check_output([str(strict_binary), "--version"], text=True)
         version = version_output.splitlines()[0].strip()
-    if version != "xrpld version 3.4.1":
+    if version != ORACLE_VERSION:
         raise SystemExit(f"unexpected recorder binary version: {version_output.strip()}")
     strict_hash = sha256(strict_binary)
     identity = {
