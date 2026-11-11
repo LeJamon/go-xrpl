@@ -114,9 +114,61 @@ func TestPreflightRootCollectionLimitsPinned(t *testing.T) {
 
 func wireDescriptorFor(t *testing.T, msgType MessageType) protoreflect.MessageDescriptor {
 	t.Helper()
-	c, ok := codecs[msgType]
+	c, ok := codecFor(msgType)
 	require.True(t, ok, "no codec for %s", msgType)
 	return c.newProto().ProtoReflect().Descriptor()
+}
+
+// TestCodecTableComplete requires exactly one well-formed codec per wire
+// type in the protobuf enum and nothing else in the table.
+func TestCodecTableComplete(t *testing.T) {
+	for code, c := range codecs {
+		msgType := MessageType(code)
+		_, inEnum := proto.MessageType_name[int32(code)]
+		if c == nil {
+			assert.False(t, inEnum, "wire type %s has no codec", msgType)
+			continue
+		}
+		require.True(t, inEnum, "codec for %d is not a protobuf wire type", code)
+		assert.NotZero(t, c.maxPayload, msgType.String())
+		assert.LessOrEqual(t, c.maxPayload, uint32(MaxMessageSize), msgType.String())
+		assert.LessOrEqual(t, len(c.collections), maxCollectionLimits, msgType.String())
+		fields := wireDescriptors[code].Fields()
+		for _, limit := range c.collections {
+			field := fields.ByNumber(limit.field)
+			require.NotNil(t, field, "%s collection field %d", msgType, limit.field)
+			assert.True(t, field.IsList() && field.Kind() == protoreflect.MessageKind,
+				"%s collection field %d must be a repeated message", msgType, limit.field)
+			assert.Positive(t, limit.max)
+		}
+	}
+	for code := range proto.MessageType_name {
+		assert.True(t, IsKnownMessageType(MessageType(code)), "wire type %d", code)
+	}
+}
+
+// TestCodecsRoundTripEmptyMessage encodes the message decoded from an empty
+// protobuf and requires decode/encode to be stable and type-consistent.
+func TestCodecsRoundTripEmptyMessage(t *testing.T) {
+	for code, c := range codecs {
+		if c == nil {
+			continue
+		}
+		msgType := MessageType(code)
+		t.Run(msgType.String(), func(t *testing.T) {
+			empty, err := c.decode(c.newProto())
+			require.NoError(t, err)
+			require.Equal(t, msgType, empty.Type())
+			wire, err := Encode(empty)
+			require.NoError(t, err)
+			decoded, err := Decode(msgType, wire)
+			require.NoError(t, err)
+			require.Equal(t, msgType, decoded.Type())
+			again, err := Encode(decoded)
+			require.NoError(t, err)
+			assert.Equal(t, wire, again)
+		})
+	}
 }
 
 var benchLimitSink uint32

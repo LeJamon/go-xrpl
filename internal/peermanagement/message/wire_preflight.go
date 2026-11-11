@@ -57,19 +57,31 @@ func (e *WireLimitError) Unwrap() error {
 	return ErrWireLimit
 }
 
-var wireDescriptors = func() map[MessageType]protoreflect.MessageDescriptor {
-	descriptors := make(map[MessageType]protoreflect.MessageDescriptor, len(codecs))
+// collectionLimit bounds the element count of one repeated root message
+// field.
+type collectionLimit struct {
+	field  protowire.Number
+	reason WireLimitReason
+	max    int
+}
+
+// maxCollectionLimits is the most collection limits one type may declare.
+const maxCollectionLimits = 2
+
+var wireDescriptors = func() (descriptors [len(codecs)]protoreflect.MessageDescriptor) {
 	for msgType, codec := range codecs {
-		descriptors[msgType] = codec.newProto().ProtoReflect().Descriptor()
+		if codec != nil {
+			descriptors[msgType] = codec.newProto().ProtoReflect().Descriptor()
+		}
 	}
 	return descriptors
 }()
 
 type wireScanState struct {
 	msgType               MessageType
+	collections           []collectionLimit
+	collectionCounts      [maxCollectionLimits]int
 	fields                int
-	collection            int
-	loadSources           int
 	getObjects            int
 	getObjectTransactions bool
 	getLedgerNodes        int
@@ -77,11 +89,12 @@ type wireScanState struct {
 }
 
 func Preflight(msgType MessageType, data []byte) error {
-	descriptor, ok := wireDescriptors[msgType]
+	codec, ok := codecFor(msgType)
 	if !ok {
 		return fmt.Errorf("unknown message type: %d", msgType)
 	}
-	state := wireScanState{msgType: msgType}
+	descriptor := wireDescriptors[msgType]
+	state := wireScanState{msgType: msgType, collections: codec.collections}
 	consumed, err := state.scanMessage(data, descriptor, 1, 0)
 	if err != nil {
 		return err
@@ -238,62 +251,23 @@ func (s *wireScanState) observeRootField(
 		return nil
 	}
 
-	var reason WireLimitReason
-	limit := 0
-	switch s.msgType {
-	case TypeTransactions:
-		if field.Number() == 1 {
-			reason, limit = WireLimitTransactions, maxTransactions
-		}
-	case TypeGetObjects:
-		if field.Number() == 6 {
-			s.getObjects++
-			return nil
-		}
-	case TypeLedgerData:
-		if field.Number() == 4 {
-			reason, limit = WireLimitLedgerData, maxLedgerDataNodes
-		}
-	case TypeEndpoints:
-		if field.Number() == 3 {
-			reason, limit = WireLimitEndpoints, maxEndpoints
-		}
-	case TypeValidatorListCollection:
-		if field.Number() == 3 {
-			reason, limit = WireLimitValidatorBlobs, maxValidatorBlobs
-		}
-	case TypeCluster:
-		switch field.Number() {
-		case 1:
-			reason, limit = WireLimitClusterNodes, maxClusterNodes
-		case 2:
-			reason, limit = WireLimitLoadSources, maxLoadSources
-		}
-	}
-	if limit == 0 {
+	// The GetObjects object count is bounded after the scan because its
+	// limit depends on the object type, which may follow the objects.
+	if s.msgType == TypeGetObjects && field.Number() == 6 {
+		s.getObjects++
 		return nil
 	}
-	count := s.collectionCount(reason) + 1
-	s.setCollectionCount(reason, count)
-	if count > limit {
-		return wireLimit(reason, limit, count)
+	for i, limit := range s.collections {
+		if limit.field != field.Number() {
+			continue
+		}
+		s.collectionCounts[i]++
+		if count := s.collectionCounts[i]; count > limit.max {
+			return wireLimit(limit.reason, limit.max, count)
+		}
+		return nil
 	}
 	return nil
-}
-
-func (s *wireScanState) collectionCount(reason WireLimitReason) int {
-	if reason == WireLimitLoadSources {
-		return s.loadSources
-	}
-	return s.collection
-}
-
-func (s *wireScanState) setCollectionCount(reason WireLimitReason, count int) {
-	if reason == WireLimitLoadSources {
-		s.loadSources = count
-		return
-	}
-	s.collection = count
 }
 
 func wireLimit(reason WireLimitReason, limit, observed int) error {

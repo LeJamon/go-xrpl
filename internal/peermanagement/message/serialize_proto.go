@@ -13,13 +13,25 @@ import (
 
 var ErrNilMessage = errors.New("cannot encode nil message")
 
-// msgCodec bundles the three operations every message type needs:
-// proto constructor, encoder, decoder. A missing table entry surfaces
-// as a single "unknown message type" at both encode and decode.
+// msgCodec describes one wire message type: its payload cap (applied to
+// both the on-wire and the uncompressed size before allocating), the
+// repeated root fields whose element count preflight bounds, and the
+// protobuf constructor, encoder and decoder.
 type msgCodec struct {
-	newProto func() pb.Message
-	encode   func(Message) (pb.Message, error)
-	decode   func(pb.Message) (Message, error)
+	maxPayload  uint32
+	collections []collectionLimit
+	newProto    func() pb.Message
+	encode      func(Message) (pb.Message, error)
+	decode      func(pb.Message) (Message, error)
+}
+
+func codecFor(t MessageType) (*msgCodec, bool) {
+	if int(t) < len(codecs) {
+		if c := codecs[t]; c != nil {
+			return c, true
+		}
+	}
+	return nil, false
 }
 
 // assertMessage type-asserts msg to the concrete type expected for its
@@ -135,12 +147,13 @@ func normalizeEnumWire(data []byte, descriptor protoreflect.MessageDescriptor) (
 	return normalized, nil
 }
 
-// codecs is the per-MessageType registry. Order in this map carries
-// no semantics — keep it sorted by MessageType constant order for
-// reviewer sanity.
-var codecs = map[MessageType]msgCodec{
+// codecs is the wire descriptor table, indexed by MessageType. A nil slot
+// is an unknown type: Encode and Decode reject it and framing bounds it
+// only by MaxMessageSize.
+var codecs = [...]*msgCodec{
 	TypeManifests: {
-		newProto: func() pb.Message { return &proto.TMManifests{} },
+		maxPayload: bulkMsgMax,
+		newProto:   func() pb.Message { return &proto.TMManifests{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Manifests](msg)
 			if err != nil {
@@ -166,7 +179,9 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypePing: {
-		newProto: func() pb.Message { return &proto.TMPing{} },
+		// Header validation bounds ping by maxPingSize instead.
+		maxPayload: MaxMessageSize,
+		newProto:   func() pb.Message { return &proto.TMPing{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Ping](msg)
 			if err != nil {
@@ -189,7 +204,9 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeCluster: {
-		newProto: func() pb.Message { return &proto.TMCluster{} },
+		maxPayload:  smallMsgMax,
+		collections: []collectionLimit{{1, WireLimitClusterNodes, maxClusterNodes}, {2, WireLimitLoadSources, maxLoadSources}},
+		newProto:    func() pb.Message { return &proto.TMCluster{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Cluster](msg)
 			if err != nil {
@@ -247,7 +264,9 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeEndpoints: {
-		newProto: func() pb.Message { return &proto.TMEndpoints{} },
+		maxPayload:  smallMsgMax,
+		collections: []collectionLimit{{3, WireLimitEndpoints, maxEndpoints}},
+		newProto:    func() pb.Message { return &proto.TMEndpoints{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Endpoints](msg)
 			if err != nil {
@@ -275,7 +294,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeTransaction: {
-		newProto: func() pb.Message { return &proto.TMTransaction{} },
+		maxPayload: mediumMsgMax,
+		newProto:   func() pb.Message { return &proto.TMTransaction{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Transaction](msg)
 			if err != nil {
@@ -305,7 +325,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeGetLedger: {
-		newProto: func() pb.Message { return &proto.TMGetLedger{} },
+		maxPayload: mediumMsgMax,
+		newProto:   func() pb.Message { return &proto.TMGetLedger{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*GetLedger](msg)
 			if err != nil {
@@ -359,7 +380,9 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeLedgerData: {
-		newProto: func() pb.Message { return &proto.TMLedgerData{} },
+		maxPayload:  bulkMsgMax,
+		collections: []collectionLimit{{4, WireLimitLedgerData, maxLedgerDataNodes}},
+		newProto:    func() pb.Message { return &proto.TMLedgerData{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*LedgerData](msg)
 			if err != nil {
@@ -427,7 +450,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeProposeLedger: {
-		newProto: func() pb.Message { return &proto.TMProposeSet{} },
+		maxPayload: smallMsgMax,
+		newProto:   func() pb.Message { return &proto.TMProposeSet{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*ProposeSet](msg)
 			if err != nil {
@@ -459,7 +483,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeStatusChange: {
-		newProto: func() pb.Message { return &proto.TMStatusChange{} },
+		maxPayload: smallMsgMax,
+		newProto:   func() pb.Message { return &proto.TMStatusChange{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*StatusChange](msg)
 			if err != nil {
@@ -511,7 +536,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeHaveSet: {
-		newProto: func() pb.Message { return &proto.TMHaveTransactionSet{} },
+		maxPayload: smallMsgMax,
+		newProto:   func() pb.Message { return &proto.TMHaveTransactionSet{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*HaveTransactionSet](msg)
 			if err != nil {
@@ -532,7 +558,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeValidation: {
-		newProto: func() pb.Message { return &proto.TMValidation{} },
+		maxPayload: smallMsgMax,
+		newProto:   func() pb.Message { return &proto.TMValidation{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Validation](msg)
 			if err != nil {
@@ -546,7 +573,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeGetObjects: {
-		newProto: func() pb.Message { return &proto.TMGetObjectByHash{} },
+		maxPayload: bulkMsgMax,
+		newProto:   func() pb.Message { return &proto.TMGetObjectByHash{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*GetObjectByHash](msg)
 			if err != nil {
@@ -598,7 +626,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeSquelch: {
-		newProto: func() pb.Message { return &proto.TMSquelch{} },
+		maxPayload: maxSquelchSize,
+		newProto:   func() pb.Message { return &proto.TMSquelch{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Squelch](msg)
 			if err != nil {
@@ -623,7 +652,9 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeValidatorListCollection: {
-		newProto: func() pb.Message { return &proto.TMValidatorListCollection{} },
+		maxPayload:  bulkMsgMax,
+		collections: []collectionLimit{{3, WireLimitValidatorBlobs, maxValidatorBlobs}},
+		newProto:    func() pb.Message { return &proto.TMValidatorListCollection{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*ValidatorListCollection](msg)
 			if err != nil {
@@ -661,7 +692,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeProofPathReq: {
-		newProto: func() pb.Message { return &proto.TMProofPathRequest{} },
+		maxPayload: mediumMsgMax,
+		newProto:   func() pb.Message { return &proto.TMProofPathRequest{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*ProofPathRequest](msg)
 			if err != nil {
@@ -684,7 +716,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeProofPathResponse: {
-		newProto: func() pb.Message { return &proto.TMProofPathResponse{} },
+		maxPayload: MaxMessageSize,
+		newProto:   func() pb.Message { return &proto.TMProofPathResponse{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*ProofPathResponse](msg)
 			if err != nil {
@@ -721,7 +754,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeReplayDeltaReq: {
-		newProto: func() pb.Message { return &proto.TMReplayDeltaRequest{} },
+		maxPayload: mediumMsgMax,
+		newProto:   func() pb.Message { return &proto.TMReplayDeltaRequest{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*ReplayDeltaRequest](msg)
 			if err != nil {
@@ -735,7 +769,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeReplayDeltaResponse: {
-		newProto: func() pb.Message { return &proto.TMReplayDeltaResponse{} },
+		maxPayload: MaxMessageSize,
+		newProto:   func() pb.Message { return &proto.TMReplayDeltaResponse{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*ReplayDeltaResponse](msg)
 			if err != nil {
@@ -767,7 +802,8 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeHaveTransactions: {
-		newProto: func() pb.Message { return &proto.TMHaveTransactions{} },
+		maxPayload: smallMsgMax,
+		newProto:   func() pb.Message { return &proto.TMHaveTransactions{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*HaveTransactions](msg)
 			if err != nil {
@@ -781,7 +817,9 @@ var codecs = map[MessageType]msgCodec{
 		},
 	},
 	TypeTransactions: {
-		newProto: func() pb.Message { return &proto.TMTransactions{} },
+		maxPayload:  bulkMsgMax,
+		collections: []collectionLimit{{1, WireLimitTransactions, maxTransactions}},
+		newProto:    func() pb.Message { return &proto.TMTransactions{} },
 		encode: func(msg Message) (pb.Message, error) {
 			m, err := assertMessage[*Transactions](msg)
 			if err != nil {
@@ -843,7 +881,7 @@ func typeOfMessage(msg Message) (MessageType, error) {
 }
 
 func encode(msg Message, msgType MessageType) ([]byte, error) {
-	c, ok := codecs[msgType]
+	c, ok := codecFor(msgType)
 	if !ok {
 		return nil, fmt.Errorf("unknown message type: %d", msgType)
 	}
@@ -866,7 +904,7 @@ func encode(msg Message, msgType MessageType) ([]byte, error) {
 
 // Decode decodes a message from bytes using protobuf.
 func Decode(msgType MessageType, data []byte) (Message, error) {
-	c, ok := codecs[msgType]
+	c, ok := codecFor(msgType)
 	if !ok {
 		return nil, fmt.Errorf("unknown message type: %d", msgType)
 	}
