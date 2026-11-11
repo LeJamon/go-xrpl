@@ -336,9 +336,8 @@ func TestStup_ReloadStaticValidators_WithNonNilValidatorList(t *testing.T) {
 func TestStup_WireValidatorListTrustInitializesUnavailableQuorum(t *testing.T) {
 	static := consensus.NodeID{0xBB}
 	master := [33]byte{0x02, 0xBB}
-	a := New(Config{Validators: []consensus.NodeID{static}})
 	agg := stup_newAggregator(t)
-	a.SetQuorumUnavailableFunc(agg.IsQuorumUnavailable)
+	a := New(Config{Validators: []consensus.NodeID{static}, QuorumUnavailable: agg.IsQuorumUnavailable})
 	c := &Components{
 		Adaptor:          a,
 		ValidatorList:    agg,

@@ -338,15 +338,18 @@ func TestAdaptorQuorumCalculation(t *testing.T) {
 }
 
 func TestAdaptorQuorumUnavailableValidatorList(t *testing.T) {
-	a := New(Config{Validators: []consensus.NodeID{{1}, {2}, {3}}})
-	a.SetUNLBlockedFunc(func() bool { return true })
-	a.SetQuorumUnavailableFunc(func() bool { return false })
+	quorumUnavailable := false
+	a := New(Config{
+		Validators:        []consensus.NodeID{{1}, {2}, {3}},
+		UNLBlocked:        func() bool { return true },
+		QuorumUnavailable: func() bool { return quorumUnavailable },
+	})
 	assert.Equal(t, 3, a.GetQuorum(), "UNL lock-down alone does not disable quorum")
 
-	a.SetQuorumUnavailableFunc(func() bool { return true })
+	quorumUnavailable = true
 	assert.Equal(t, math.MaxInt, a.GetQuorum())
 
-	a.SetQuorumUnavailableFunc(func() bool { return false })
+	quorumUnavailable = false
 	assert.Equal(t, 3, a.GetQuorum())
 }
 
