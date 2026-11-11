@@ -1,4 +1,22 @@
 // Package peermanagement implements XRPL peer-to-peer networking.
+//
+// # Adding a peer message type
+//
+// Per-type policy is data in two tables, one per layer:
+//
+//  1. Add the message to proto/xrpl.proto and regenerate.
+//  2. In the message package, add the Type constant, the Go message
+//     struct, and one codecs entry: payload cap, bounded repeated root
+//     fields, and the protobuf codec.
+//  3. Add one messageDescriptors entry: inbound peer lane, overlay route,
+//     feature gate, outbound send class and traffic category.
+//  4. Write the handler: a handleLocally case when the overlay consumes
+//     the message (routeNone, or a pre-forward observer), otherwise the
+//     consumer of the route's channel.
+//
+// The completeness and pinning tests in message_descriptor_test.go and
+// message/descriptor_test.go fail until every wire type has both entries
+// and a routing pin.
 package peermanagement
 
 import (

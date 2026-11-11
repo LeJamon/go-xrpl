@@ -373,42 +373,30 @@ func inboundFrameReservation(header message.Header) int64 {
 func (p *Peer) dispatchEvent(evt Event) bool {
 	if evt.Type == EventMessageReceived {
 		evt.ReceivedAt = time.Now()
-	}
-	if evt.Type == EventMessageReceived && evt.MessageType == message.TypeManifests && p.manifestMessages != nil {
-		msg := evt.inboundMessage()
-		select {
-		case p.manifestMessages <- msg:
-			return true
-		case <-p.closeCh:
-			_ = msg.Close()
-			return false
-		}
-	}
-	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(evt.MessageType) && p.consensusEvents != nil {
-		select {
-		case p.consensusEvents <- evt:
-			return true
-		case <-p.closeCh:
-			evt.release()
-			return false
-		}
-	}
-	if evt.Type == EventMessageReceived && isConsensusControlMessageType(evt.MessageType) && p.consensusControlEvents != nil {
-		select {
-		case p.consensusControlEvents <- evt:
-			return true
-		case <-p.closeCh:
-			evt.release()
-			return false
-		}
-	}
-	if evt.Type == EventMessageReceived && isAcquisitionMessageType(evt.MessageType) && p.acquisitionEvents != nil {
-		select {
-		case p.acquisitionEvents <- evt:
-			return true
-		case <-p.closeCh:
-			evt.release()
-			return false
+		switch describeMessage(evt.MessageType).lane {
+		case laneManifests:
+			if p.manifestMessages != nil {
+				msg := evt.inboundMessage()
+				select {
+				case p.manifestMessages <- msg:
+					return true
+				case <-p.closeCh:
+					_ = msg.Close()
+					return false
+				}
+			}
+		case laneConsensus:
+			if p.consensusEvents != nil {
+				return p.dispatchBackpressured(p.consensusEvents, evt)
+			}
+		case laneConsensusControl:
+			if p.consensusControlEvents != nil {
+				return p.dispatchBackpressured(p.consensusControlEvents, evt)
+			}
+		case laneAcquisition:
+			if p.acquisitionEvents != nil {
+				return p.dispatchBackpressured(p.acquisitionEvents, evt)
+			}
 		}
 	}
 	if p.events == nil {
@@ -427,34 +415,12 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 	}
 }
 
-func isConsensusPriorityMessageType(msgType message.MessageType) bool {
-	switch msgType {
-	case message.TypeProposeLedger,
-		message.TypeValidation,
-		message.TypeValidatorListCollection:
+func (p *Peer) dispatchBackpressured(lane chan<- Event, evt Event) bool {
+	select {
+	case lane <- evt:
 		return true
-	default:
-		return false
-	}
-}
-
-func isConsensusControlMessageType(msgType message.MessageType) bool {
-	switch msgType {
-	case message.TypeStatusChange, message.TypeHaveSet:
-		return true
-	default:
-		return false
-	}
-}
-
-func isAcquisitionMessageType(msgType message.MessageType) bool {
-	switch msgType {
-	case message.TypeLedgerData,
-		message.TypeReplayDeltaResponse,
-		message.TypeProofPathResponse,
-		message.TypeGetObjects:
-		return true
-	default:
+	case <-p.closeCh:
+		evt.release()
 		return false
 	}
 }
@@ -2120,16 +2086,7 @@ func outboundClassForFrame(data []byte) OutboundSendClass {
 	if err != nil {
 		return OutboundClassOrdinary
 	}
-	switch {
-	case isConsensusPriorityMessageType(header.MessageType):
-		return OutboundClassConsensus
-	case header.MessageType == message.TypePing,
-		header.MessageType == message.TypeSquelch,
-		isConsensusControlMessageType(header.MessageType):
-		return OutboundClassControl
-	default:
-		return OutboundClassOrdinary
-	}
+	return describeMessage(header.MessageType).outbound
 }
 
 // SendPriority admits acquisition traffic to the same reliable FIFO while

@@ -69,7 +69,7 @@ func EncodeLedgerDataFrame(m *LedgerData, maxFrameBytes int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: LedgerData frame size %d exceeds limit %d", ErrMessageTooLarge, frameSize, maxFrameBytes)
 	}
 
-	codec, ok := codecs[TypeLedgerData]
+	codec, ok := codecFor(TypeLedgerData)
 	if !ok {
 		return nil, fmt.Errorf("unknown message type: %d", TypeLedgerData)
 	}
