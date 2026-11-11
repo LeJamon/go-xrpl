@@ -9,13 +9,15 @@ func Register() {
 		New: func() tx.Transaction {
 			return &PermissionedDomainSet{BaseTx: *tx.NewBaseTx(tx.TypePermissionedDomainSet, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypePermissionedDomainDelete,
 		New: func() tx.Transaction {
 			return &PermissionedDomainDelete{BaseTx: *tx.NewBaseTx(tx.TypePermissionedDomainDelete, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 }

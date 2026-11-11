@@ -9,6 +9,7 @@ func Register() {
 		New: func() tx.Transaction {
 			return &TicketCreate{BaseTx: *tx.NewBaseTx(tx.TypeTicketCreate, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.CustomConsequences,
 	})
 }

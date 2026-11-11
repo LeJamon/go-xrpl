@@ -9,7 +9,8 @@ func Register() {
 		New: func() tx.Transaction {
 			return &SponsorshipSet{BaseTx: *tx.NewBaseTx(tx.TypeSponsorshipSet, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.CustomConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeSponsorshipTransfer,
@@ -17,6 +18,7 @@ func Register() {
 			return &SponsorshipTransfer{BaseTx: *tx.NewBaseTx(tx.TypeSponsorshipTransfer, "")}
 		},
 		Delegation:         tx.NotDelegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

@@ -9,13 +9,15 @@ func Register() {
 		New: func() tx.Transaction {
 			return &OracleSet{BaseTx: *tx.NewBaseTx(tx.TypeOracleSet, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeOracleDelete,
 		New: func() tx.Transaction {
 			return &OracleDelete{BaseTx: *tx.NewBaseTx(tx.TypeOracleDelete, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 }

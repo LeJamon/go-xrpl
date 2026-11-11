@@ -10,6 +10,7 @@ func Register() {
 			return &MPTokenIssuanceCreate{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceCreate, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 		Privileges:         tx.PrivCreateMPTIssuance,
 	})
@@ -19,6 +20,7 @@ func Register() {
 			return &MPTokenIssuanceDestroy{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceDestroy, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 		Privileges:         tx.PrivDestroyMPTIssuance,
 	})
@@ -28,6 +30,7 @@ func Register() {
 			return &MPTokenIssuanceSet{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenIssuanceSet, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -36,6 +39,7 @@ func Register() {
 			return &MPTokenAuthorize{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 		Privileges:         tx.PrivMustAuthorizeMPT,
 	})
@@ -44,34 +48,39 @@ func Register() {
 		New: func() tx.Transaction {
 			return &ConfidentialMPTConvert{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTConvert, "")}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:   tx.NotDelegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeConfidentialMPTMergeInbox,
 		New: func() tx.Transaction {
 			return &ConfidentialMPTMergeInbox{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTMergeInbox, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeConfidentialMPTConvertBack,
 		New: func() tx.Transaction {
 			return &ConfidentialMPTConvertBack{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTConvertBack, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeConfidentialMPTSend,
 		New: func() tx.Transaction {
 			return &ConfidentialMPTSend{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTSend, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeConfidentialMPTClawback,
 		New: func() tx.Transaction {
 			return &ConfidentialMPTClawback{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTClawback, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 }

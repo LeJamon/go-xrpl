@@ -209,6 +209,15 @@ func (x *XChainCommit) TxType() tx.Type {
 	return tx.TypeXChainCommit
 }
 
+// Consequences reports a positive XRP Amount as the potential spend; token
+// commits spend no XRP.
+func (x *XChainCommit) Consequences() tx.Consequences {
+	if !x.Amount.IsNative() || uint64(x.Amount.Drops()) == 0 {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(x.Amount.Drops())}
+}
+
 // GetFlagsMask adopts the engine FlagsMasker seam. XChainCommit defines no
 // type-specific flags, so it uses the base universal mask, checked at preflight0.
 func (x *XChainCommit) GetFlagsMask(rules *amendment.Rules) uint32 {

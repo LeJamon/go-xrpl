@@ -9,6 +9,7 @@ func Register() {
 		New: func() tx.Transaction {
 			return &Batch{BaseTx: *tx.NewBaseTx(tx.TypeBatch, "")}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:   tx.NotDelegable,
+		Consequences: tx.NormalConsequences,
 	})
 }

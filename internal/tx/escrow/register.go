@@ -10,6 +10,7 @@ func Register() {
 			return &EscrowCreate{BaseTx: *tx.NewBaseTx(tx.TypeEscrowCreate, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.CustomConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -18,6 +19,7 @@ func Register() {
 			return &EscrowFinish{BaseTx: *tx.NewBaseTx(tx.TypeEscrowFinish, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
@@ -26,6 +28,7 @@ func Register() {
 			return &EscrowCancel{BaseTx: *tx.NewBaseTx(tx.TypeEscrowCancel, "")}
 		},
 		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
 		ReserveSponsorable: true,
 	})
 }

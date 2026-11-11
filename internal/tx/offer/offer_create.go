@@ -81,6 +81,14 @@ func (o *OfferCreate) TxType() tx.Type {
 	return tx.TypeOfferCreate
 }
 
+// Consequences reports TakerGets as the potential spend when it is XRP.
+func (o *OfferCreate) Consequences() tx.Consequences {
+	if !o.TakerGets.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(o.TakerGets.Drops())}
+}
+
 func (o *OfferCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(o)
 }

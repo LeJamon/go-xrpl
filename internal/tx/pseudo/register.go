@@ -12,20 +12,23 @@ func Register() {
 		New: func() tx.Transaction {
 			return &EnableAmendment{BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount)}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:   tx.NotDelegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeFee,
 		New: func() tx.Transaction {
 			return &SetFee{BaseTx: *tx.NewBaseTx(tx.TypeFee, protocol.ZeroAccount)}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:   tx.NotDelegable,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeUNLModify,
 		New: func() tx.Transaction {
 			return &UNLModify{BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount)}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:   tx.NotDelegable,
+		Consequences: tx.NormalConsequences,
 	})
 }
