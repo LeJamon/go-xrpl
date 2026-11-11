@@ -42,21 +42,24 @@ test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./crypto/secp256
 test:
     go test ./...
 
-# CI group: integration tests.
+# The CI groups below come from scripts/test-shard.sh, which partitions every
+# package in the module across the shards CI runs.
+
+# CI groups: integration tests (both the offer shard and the rest).
 test-integration:
-    go test ./internal/testing/...
+    go test $(./scripts/test-shard.sh integration-offer integration)
 
 # CI group: transaction-engine tests.
 test-tx:
-    go test ./internal/tx/...
+    go test $(./scripts/test-shard.sh tx)
 
-# CI group: ledger / txq / rpc / grpc / consensus / peermanagement / manifest.
+# CI group: every other internal package (ledger / txq / rpc / consensus / peers / node / ...).
 test-core:
-    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
+    go test $(./scripts/test-shard.sh core)
 
-# CI group: codec / crypto / shamap / storage / etc.
+# CI group: the public packages (codec / crypto / shamap / storage / ...).
 test-libs:
-    go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./internal/testutil/...
+    go test $(./scripts/test-shard.sh libs)
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:
@@ -135,10 +138,19 @@ fuzz-corpus *pkgs:
 vet:
     go vet -stdmethods=false ./...
 
-# Run golangci-lint pinned to the CI version (auto-installs if missing).
+# Run the lint configuration CI gates merges on (auto-installs the pinned version).
 lint:
-    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
+    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
+    golangci-lint run --config .golangci.yml
+
+# Run the broader advisory lint configuration (non-blocking in CI).
+lint-advisory:
+    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
     golangci-lint run --config .golangci-warnings.yml
+
+# Report changes to the public packages' exported API since a base ref.
+api-diff base="origin/main":
+    ./scripts/apidiff.sh {{base}}
 
 lint-fix: 
     @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
