@@ -58,8 +58,8 @@ func Register() {
 			return &XChainAddClaimAttestation{BaseTx: *tx.NewBaseTx(tx.TypeXChainAddClaimAttestation, "")}
 		},
 		Delegation:   tx.Delegable,
-		Consequences: tx.BlockerConsequences,
 		Privileges:   tx.PrivCreateAcct,
+		Consequences: tx.BlockerConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeXChainAddAccountCreateAttest,
@@ -67,7 +67,7 @@ func Register() {
 			return &XChainAddAccountCreateAttestation{BaseTx: *tx.NewBaseTx(tx.TypeXChainAddAccountCreateAttest, "")}
 		},
 		Delegation:   tx.Delegable,
-		Consequences: tx.BlockerConsequences,
 		Privileges:   tx.PrivCreateAcct,
+		Consequences: tx.BlockerConsequences,
 	})
 }

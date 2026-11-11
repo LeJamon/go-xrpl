@@ -10,8 +10,8 @@ func Register() {
 			return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
 		},
 		Delegation:   tx.Delegable,
-		Consequences: tx.NormalConsequences,
 		Privileges:   tx.PrivChangeNFTCounts,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenBurn,
@@ -19,8 +19,8 @@ func Register() {
 			return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
 		},
 		Delegation:   tx.Delegable,
-		Consequences: tx.NormalConsequences,
 		Privileges:   tx.PrivChangeNFTCounts,
+		Consequences: tx.NormalConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeNFTokenCreateOffer,

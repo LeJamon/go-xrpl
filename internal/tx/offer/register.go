@@ -10,8 +10,8 @@ func Register() {
 			return &OfferCreate{BaseTx: *tx.NewBaseTx(tx.TypeOfferCreate, "")}
 		},
 		Delegation:   tx.Delegable,
-		Consequences: tx.CustomConsequences,
 		Privileges:   tx.PrivMayCreateMPT,
+		Consequences: tx.CustomConsequences,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeOfferCancel,

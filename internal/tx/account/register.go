@@ -19,7 +19,7 @@ func Register() {
 			return &AccountDelete{BaseTx: *tx.NewBaseTx(tx.TypeAccountDelete, "")}
 		},
 		Delegation:   tx.NotDelegable,
-		Consequences: tx.BlockerConsequences,
 		Privileges:   tx.PrivMustDeleteAcct,
+		Consequences: tx.BlockerConsequences,
 	})
 }
