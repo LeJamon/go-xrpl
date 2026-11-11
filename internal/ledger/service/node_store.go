@@ -33,9 +33,11 @@ type nodeStoreCapabilities struct {
 }
 
 // boundNodeStore is a node store whose optional capabilities were resolved
-// once, when it was bound. A nil *boundNodeStore means no node store.
+// once, when it was bound. A nil *boundNodeStore means no node store. It
+// deliberately does not implement nodestore.Database: reach the store through
+// database().
 type boundNodeStore struct {
-	nodestore.Database
+	db nodestore.Database
 	nodeStoreCapabilities
 }
 
@@ -43,7 +45,7 @@ func bindNodeStore(db nodestore.Database) *boundNodeStore {
 	if db == nil {
 		return nil
 	}
-	bound := &boundNodeStore{Database: db}
+	bound := &boundNodeStore{db: db}
 	bound.durable, _ = db.(nodestore.DurableDatabase)
 	bound.durableSnapshot, _ = db.(nodestore.DurableSnapshotDatabase)
 	bound.generations, _ = db.(nodestore.GenerationDatabase)
@@ -52,13 +54,12 @@ func bindNodeStore(db nodestore.Database) *boundNodeStore {
 	return bound
 }
 
-// database returns the unwrapped store, nil when there is none. Pass this,
-// never the *boundNodeStore, where a nodestore.Database is expected.
+// database returns the store, nil when there is none.
 func (b *boundNodeStore) database() nodestore.Database {
 	if b == nil {
 		return nil
 	}
-	return b.Database
+	return b.db
 }
 
 func (b *boundNodeStore) capabilities() nodeStoreCapabilities {

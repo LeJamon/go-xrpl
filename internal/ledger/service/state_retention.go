@@ -79,7 +79,7 @@ func (s *Service) PrepareStateRetention(
 			previous[root.kind] = root.hash
 			changed = true
 		}
-		if err := s.nodeStore.Sync(ctx); err != nil {
+		if err := s.nodeStore.database().Sync(ctx); err != nil {
 			return 0, nil, err
 		}
 		if !changed || pass == 7 {
@@ -178,7 +178,7 @@ func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, pre
 				}
 				bases[root.kind] = root.hash
 			}
-			if err := s.nodeStore.Sync(catchupCtx); err != nil {
+			if err := s.nodeStore.database().Sync(catchupCtx); err != nil {
 				return nil, err
 			}
 		}
@@ -283,7 +283,7 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 					for i, entry := range part {
 						nodes[i] = &nodestore.Node{Type: kind, Hash: nodestore.Hash256(entry.Hash), Data: entry.Data, LedgerSeq: l.Sequence()}
 					}
-					if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
+					if err := s.nodeStore.database().StoreBatch(ctx, nodes); err != nil {
 						return err
 					}
 				}
@@ -297,7 +297,7 @@ func (s *Service) stateRetentionRootsLocked(ctx context.Context, persist bool) (
 				return nil, err
 			}
 			if !l.IsOpen() {
-				if err := s.nodeStore.Store(ctx, &nodestore.Node{Type: nodestore.NodeLedger, Hash: nodestore.Hash256(l.Hash()), Data: l.SerializeHeader(), LedgerSeq: s.validatedLedger.Sequence()}); err != nil {
+				if err := s.nodeStore.database().Store(ctx, &nodestore.Node{Type: nodestore.NodeLedger, Hash: nodestore.Hash256(l.Hash()), Data: l.SerializeHeader(), LedgerSeq: s.validatedLedger.Sequence()}); err != nil {
 					return nil, err
 				}
 			}
@@ -378,13 +378,13 @@ func (s *Service) preserveStateDifference(ctx context.Context, root retainedStat
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := s.nodeStore.StoreBatch(ctx, batch); err != nil {
+		if err := s.nodeStore.database().StoreBatch(ctx, batch); err != nil {
 			return err
 		}
 		batch = batch[:0]
 		return nil
 	}
-	fetch := s.nodeStore.Fetch
+	fetch := s.nodeStore.database().Fetch
 	if rotating {
 		fetch = generations.FetchForPromotion
 	}

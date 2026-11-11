@@ -49,7 +49,7 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if err != nil || info == nil {
 		return nil, err
 	}
-	tip, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	tip, err := s.nodeStore.database().Fetch(ctx, validatedTipKey)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	if s.nodeStore == nil || s.shamapFamily == nil {
 		return nil, nil
 	}
-	stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
+	stored, err := s.nodeStore.database().Fetch(ctx, nodestore.Hash256(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -884,7 +884,7 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {
 	uncached := s.nodeStore.capabilities().uncached
 	if uncached == nil {
-		return s.nodeStore.Fetch
+		return s.nodeStore.database().Fetch
 	}
 	return func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
 		data, err := uncached.FetchDataUncached(ctx, hash)
@@ -972,7 +972,7 @@ func (s *Service) walkStoredSHAMap(
 	mapType shamap.Type,
 	visit func([32]byte, *nodestore.Node) error,
 ) error {
-	return s.walkStoredSHAMapWithFetch(ctx, root, mapType, s.nodeStore.Fetch, visit)
+	return s.walkStoredSHAMapWithFetch(ctx, root, mapType, s.nodeStore.database().Fetch, visit)
 }
 
 func (s *Service) walkStoredSHAMapWithFetch(
@@ -1125,7 +1125,7 @@ func (s *Service) loadStoredSHAMapNode(
 	pending storedSHAMapNode,
 	mapType shamap.Type,
 ) (shamap.NodeReader, *nodestore.Node, error) {
-	return s.loadStoredSHAMapNodeWithFetch(ctx, pending, mapType, s.nodeStore.Fetch)
+	return s.loadStoredSHAMapNodeWithFetch(ctx, pending, mapType, s.nodeStore.database().Fetch)
 }
 
 func (s *Service) loadStoredSHAMapNodeWithFetch(

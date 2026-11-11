@@ -173,7 +173,7 @@ func TestValidatedStateBaseLateTipPublicationPromotesCandidate(t *testing.T) {
 		validated:       true,
 		completionToken: svc.beginValidatedPersistence(candidate.Sequence(), candidate.Hash()),
 	}
-	svc.nodeStore.Database.(*stateBaseLateTipDatabase).beforeSync = func() { job.updatesTip.Store(true) }
+	svc.nodeStore.database().(*stateBaseLateTipDatabase).beforeSync = func() { job.updatesTip.Store(true) }
 	svc.runPersistJob(job)
 	proof, found := svc.currentValidatedStateBaseProof()
 	require.True(t, found)
