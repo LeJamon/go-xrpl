@@ -184,7 +184,7 @@ func (l *LoanPay) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 	if !amountAssetMatches(l.Amount, asset) {
 		return ter.TecWRONG_ASSET
 	}
-	if r := tx.AssetFrozen(view, accountID, asset); r != ter.TesSUCCESS {
+	if r := mptutil.CheckFrozen(view, accountID, asset); r != ter.TesSUCCESS {
 		return r
 	}
 	if r := mptutil.CheckDeepFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {

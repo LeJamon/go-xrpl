@@ -82,10 +82,10 @@ func ammPoolHolds(view tx.ReadOnlyLedgerView, ammAccountID [20]byte, asset1, ass
 
 	// Check for frozen assets if requested
 	if fhZeroIfFrozen {
-		if assetFrozen(view, ammAccountID, asset1) {
+		if mptutil.IsAssetFrozen(view, asset1, ammAccountID) {
 			balance1 = zeroAmount(asset1)
 		}
-		if assetFrozen(view, ammAccountID, asset2) {
+		if mptutil.IsAssetFrozen(view, asset2, ammAccountID) {
 			balance2 = zeroAmount(asset2)
 		}
 	}

@@ -269,8 +269,8 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			if result := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 				return result
 			}
-			if assetFrozen(view, accountID, asset) {
-				return frozenAssetResult(asset)
+			if result := mptutil.CheckFrozen(view, accountID, asset); result != ter.TesSUCCESS {
+				return result
 			}
 			return ter.TesSUCCESS
 		}
@@ -291,11 +291,11 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			return result
 		}
 		if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
-			if assetFrozen(view, ammAccountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckFrozen(view, ammAccountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
-			if assetIndividuallyFrozen(view, accountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckIndividualFrozen(view, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 		if checkBalance {

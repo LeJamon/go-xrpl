@@ -103,16 +103,6 @@ func requireAuth(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, a
 	return mptutil.RequireAssetAuthAt(view, asset, account, authType, parentCloseTime)
 }
 
-func checkFrozen(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte) ter.Result {
-	if !mptutil.IsAssetFrozen(view, asset, account) {
-		return ter.TesSUCCESS
-	}
-	if asset.IsMPT() {
-		return ter.TecLOCKED
-	}
-	return ter.TecFROZEN
-}
-
 // addEmptyMPTHolding creates a zero-balance MPToken for accountID under the MPT
 // asset (nothing when the account is the issuer). Returns the owner-count delta.
 func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {

@@ -1,14 +1,12 @@
 package tx
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -192,54 +190,6 @@ func ReadTransferRate(view ledgerEntryReader, issuerID [20]byte) (uint32, error)
 		return TransferRateParity, err
 	}
 	return account.TransferRate, nil
-}
-
-// IsMPTLocked reports whether the MPT identified by mptID is locked for account —
-// either globally (the issuance carries lsfMPTLocked) or individually (the
-// holder's MPToken carries lsfMPTLocked). Absent or unparseable entries are
-// treated as unlocked. Reference: rippled ledger/View.cpp isFrozen(view, account,
-// MPTIssue).
-func IsMPTLocked(view ReadOnlyLedgerView, mptID [24]byte, accountID [20]byte) bool {
-	if data, err := view.Read(keylet.MPTIssuance(mptID)); err == nil && data != nil {
-		if iss, err := state.ParseMPTokenIssuance(data); err == nil && iss.Flags&entry.LsfMPTLocked != 0 {
-			return true
-		}
-	}
-	if data, err := view.Read(keylet.MPTokenByID(mptID, accountID)); err == nil && data != nil {
-		if tok, err := state.ParseMPToken(data); err == nil && tok.Flags&entry.LsfMPTLocked != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// AssetFrozen reports whether account is frozen or locked out of asset, returning
-// the matching TER (tecFROZEN for a frozen IOU, tecLOCKED for a locked MPT) or
-// tesSUCCESS. XRP is never frozen. This is the asset-kind dispatch over the
-// underlying [20]byte freeze primitives (IsFrozen for an Issue, IsMPTLocked for
-// an MPT). Reference: rippled ledger/View.cpp isFrozen dispatch.
-func AssetFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset Asset) ter.Result {
-	if asset.IsMPT() {
-		if id, ok := decodeAssetMPTID(asset); ok && IsMPTLocked(view, id, accountID) {
-			return ter.TecLOCKED
-		}
-		return ter.TesSUCCESS
-	}
-	if IsFrozen(view, accountID, asset) {
-		return ter.TecFROZEN
-	}
-	return ter.TesSUCCESS
-}
-
-// decodeAssetMPTID decodes an MPT asset's 24-byte issuance ID from its hex form.
-func decodeAssetMPTID(a Asset) ([24]byte, bool) {
-	var id [24]byte
-	b, err := hex.DecodeString(a.MPTIssuanceID)
-	if err != nil || len(b) != 24 {
-		return id, false
-	}
-	copy(id[:], b)
-	return id, true
 }
 
 // IsGlobalFrozen checks if an issuer has globally frozen assets.

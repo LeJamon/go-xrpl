@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -397,8 +398,8 @@ func TestAssetDispatchPreservesMPTPrecedenceAndFreezeTER(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.MPTIssuance(id), issuanceRaw))
 	require.Equal(t, ter.TesSUCCESS, canTransfer(view, asset, issuer, holder, false))
-	require.Equal(t, ter.TecLOCKED, checkFrozen(view, asset, holder))
-	require.Equal(t, ter.TesSUCCESS, checkFrozen(view, tx.Asset{Currency: "XRP"}, holder))
+	require.Equal(t, ter.TecLOCKED, mptutil.CheckFrozen(view, holder, asset))
+	require.Equal(t, ter.TesSUCCESS, mptutil.CheckFrozen(view, holder, tx.Asset{Currency: "XRP"}))
 }
 
 func TestRemoveVaultAssetMPTHoldingHonorsLockedAmountAmendment(t *testing.T) {

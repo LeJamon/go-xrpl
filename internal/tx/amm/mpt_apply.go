@@ -31,29 +31,6 @@ func assetIssuerID(asset tx.Asset) ([20]byte, ter.Result) {
 	return issuer, ter.TesSUCCESS
 }
 
-func assetFrozen(view tx.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) bool {
-	if !asset.IsMPT() {
-		return tx.IsFrozen(view, account, asset)
-	}
-	id, result := decodeMPTAsset(asset)
-	return result == ter.TesSUCCESS && mptutil.IsFrozen(view, id, account)
-}
-
-func assetIndividuallyFrozen(view tx.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) bool {
-	if !asset.IsMPT() {
-		return tx.IsIndividualFrozen(view, account, asset)
-	}
-	id, result := decodeMPTAsset(asset)
-	return result == ter.TesSUCCESS && mptutil.IsIndividualFrozen(view, id, account)
-}
-
-func frozenAssetResult(asset tx.Asset) ter.Result {
-	if asset.IsMPT() {
-		return ter.TecLOCKED
-	}
-	return ter.TecFROZEN
-}
-
 func canMPTTradeAndTransfer(view tx.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte) ter.Result {
 	if !asset.IsMPT() {
 		return ter.TesSUCCESS
