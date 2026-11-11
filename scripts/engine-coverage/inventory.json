@@ -2948,42 +2948,42 @@
         "RequiredAmendments": [
           {
             "path": "internal/tx/payment/payment.go",
-            "line": 126,
+            "line": 139,
             "symbol": "Payment.RequiredAmendments"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/payment/payment.go",
-            "line": 140,
+            "line": 153,
             "symbol": "Payment.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/payment/payment.go",
-            "line": 147,
+            "line": 160,
             "symbol": "Payment.Validate"
           }
         ],
         "PreflightWithRules": [
           {
             "path": "internal/tx/payment/payment.go",
-            "line": 151,
+            "line": 164,
             "symbol": "Payment.PreflightWithRules"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/payment/payment.go",
-            "line": 329,
+            "line": 342,
             "symbol": "Payment.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/payment/payment.go",
-            "line": 487,
+            "line": 500,
             "symbol": "Payment.Apply"
           }
         ]
@@ -3022,6 +3022,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/batch/parser_regression_test.go",
+          "tests": [
+            {
+              "name": "TestBatchDirectJSONNormalizesXAddressAndHighPrecisionAmount",
+              "line": 223
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/delegate/registry_test.go",
           "tests": [
             {
@@ -3041,6 +3051,16 @@
             {
               "name": "TestGranularPermissionTemplates",
               "line": 54
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 39
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3188,7 +3208,7 @@
           "tests": [
             {
               "name": "TestTransactionLocalChecksBatchLimits",
-              "line": 236
+              "line": 235
             },
             {
               "name": "TestTransactionLocalChecksFailureReason",
@@ -3196,7 +3216,7 @@
             },
             {
               "name": "TestTransactionMapLocalChecksCountsPresentEmptyMemoFields",
-              "line": 230
+              "line": 229
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3368,42 +3388,42 @@
         "Validate": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 49,
+            "line": 58,
             "symbol": "EscrowCreate.Validate"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 70,
+            "line": 79,
             "symbol": "EscrowCreate.GetFlagsMask"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 79,
+            "line": 88,
             "symbol": "EscrowCreate.CheckExtraFeatures"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 92,
+            "line": 101,
             "symbol": "EscrowCreate.PreflightRules"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 152,
+            "line": 161,
             "symbol": "EscrowCreate.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 261,
+            "line": 270,
             "symbol": "EscrowCreate.Apply"
           }
         ]
@@ -3438,6 +3458,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 26
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 41
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3628,6 +3658,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 42
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/escrow/escrow_finish_nodst_test.go",
           "tests": [
             {
@@ -3791,35 +3831,35 @@
         "Validate": [
           {
             "path": "internal/tx/account/account_set.go",
-            "line": 159,
+            "line": 178,
             "symbol": "AccountSet.Validate"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/account/account_set.go",
-            "line": 265,
+            "line": 284,
             "symbol": "AccountSet.GetFlagsMask"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/account/account_set.go",
-            "line": 271,
+            "line": 290,
             "symbol": "AccountSet.PreflightRules"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/account/account_set.go",
-            "line": 325,
+            "line": 344,
             "symbol": "AccountSet.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/account/account_set.go",
-            "line": 370,
+            "line": 389,
             "symbol": "AccountSet.Apply"
           }
         ]
@@ -3888,11 +3928,39 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/admission_wire_test.go",
+          "tests": [
+            {
+              "name": "TestTransactionLocalChecksDistinguishDefaultAndExplicitZeroAccounts",
+              "line": 158
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/canonical_order_test.go",
           "tests": [
             {
               "name": "TestParseFromBinaryCanonicalizesFieldOrder",
               "line": 47
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/current_fields_identity_test.go",
+          "tests": [
+            {
+              "name": "TestBindRawBytesSerializesCurrentFieldsOnce",
+              "line": 102
+            },
+            {
+              "name": "TestCurrentFieldsIdentity",
+              "line": 48
+            },
+            {
+              "name": "TestSerializeCurrentTransactionMatchesHexEncoding",
+              "line": 170
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3917,6 +3985,16 @@
             {
               "name": "TestGranularPermissionTemplates",
               "line": 49
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 48
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3998,11 +4076,11 @@
           "tests": [
             {
               "name": "TestBindRawBytesRejectsMismatchedFieldsAndOwnsBytes",
-              "line": 194
+              "line": 184
             },
             {
               "name": "TestPrewarmSignatureVerdictRejectsSignatureObjectMutation",
-              "line": 88
+              "line": 80
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -4162,6 +4240,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 41
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/escrow/escrow_test.go",
           "tests": [
             {
@@ -4291,6 +4379,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 30
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 48
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -4733,35 +4831,35 @@
         "RequiredAmendments": [
           {
             "path": "internal/tx/ticket/ticket_create.go",
-            "line": 31,
+            "line": 36,
             "symbol": "TicketCreate.RequiredAmendments"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/ticket/ticket_create.go",
-            "line": 38,
+            "line": 43,
             "symbol": "TicketCreate.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/ticket/ticket_create.go",
-            "line": 43,
+            "line": 48,
             "symbol": "TicketCreate.Validate"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/ticket/ticket_create.go",
-            "line": 70,
+            "line": 75,
             "symbol": "TicketCreate.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/ticket/ticket_create.go",
-            "line": 94,
+            "line": 99,
             "symbol": "TicketCreate.Apply"
           }
         ]
@@ -4922,6 +5020,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 40
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/engine/preflight_precedence_test.go",
           "tests": [
             {
@@ -5012,28 +5120,28 @@
         "Validate": [
           {
             "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 56,
+            "line": 64,
             "symbol": "PaymentChannelCreate.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 109,
+            "line": 117,
             "symbol": "PaymentChannelCreate.RequiredAmendments"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 116,
+            "line": 124,
             "symbol": "PaymentChannelCreate.GetFlagsMask"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 121,
+            "line": 129,
             "symbol": "PaymentChannelCreate.Apply"
           }
         ]
@@ -5070,11 +5178,21 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 43
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/local_checks_test.go",
           "tests": [
             {
               "name": "TestTransactionLocalChecksFailureReason",
-              "line": 177
+              "line": 176
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5159,35 +5277,35 @@
         "Validate": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 42,
+            "line": 50,
             "symbol": "PaymentChannelFund.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 82,
+            "line": 90,
             "symbol": "PaymentChannelFund.RequiredAmendments"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 89,
+            "line": 97,
             "symbol": "PaymentChannelFund.GetFlagsMask"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 95,
+            "line": 103,
             "symbol": "PaymentChannelFund.PreflightRules"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 103,
+            "line": 111,
             "symbol": "PaymentChannelFund.Apply"
           }
         ]
@@ -5221,6 +5339,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 36
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 43
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5400,6 +5528,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 37
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 42
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5613,6 +5751,16 @@
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 41
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
         }
       ]
     },
@@ -5663,6 +5811,7 @@
         "Apply",
         "CheckExtraFeatures",
         "GetFlagsMask",
+        "Preclaim",
         "PreflightWithRules",
         "RequiredAmendments",
         "Validate"
@@ -5696,17 +5845,24 @@
             "symbol": "CheckCash.RequiredAmendments"
           }
         ],
+        "Preclaim": [
+          {
+            "path": "internal/tx/check/check_cash.go",
+            "line": 124,
+            "symbol": "CheckCash.Preclaim"
+          }
+        ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/check/check_cash.go",
-            "line": 126,
+            "line": 408,
             "symbol": "CheckCash.CheckExtraFeatures"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/check/check_cash.go",
-            "line": 137,
+            "line": 418,
             "symbol": "CheckCash.Apply"
           }
         ]
@@ -5720,7 +5876,7 @@
             "CheckExtraFeatures"
           ]
         },
-        "preclaim": "engine common checks only",
+        "preclaim": "typed Preclaim",
         "apply": "Appliable.Apply",
         "invariants": "outer invariant seam"
       },
@@ -5759,6 +5915,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 39
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 40
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5890,6 +6056,16 @@
           "tests": [
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
+              "line": 40
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
               "line": 40
             }
           ],
@@ -6034,6 +6210,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 39
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/sponsor/lifecycle_test.go",
           "tests": [
             {
@@ -6158,6 +6344,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/batch/parser_regression_test.go",
+          "tests": [
+            {
+              "name": "TestBatchBinaryParserBindsInnerNoCurrencyIdentity",
+              "line": 139
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/delegate/registry_test.go",
           "tests": [
             {
@@ -6172,6 +6368,16 @@
           "tests": [
             {
               "name": "TestGranularPermissionTemplates",
+              "line": 46
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
               "line": 46
             }
           ],
@@ -6438,6 +6644,7 @@
       "methods": [
         "Apply",
         "GetFlagsMask",
+        "Preclaim",
         "PreflightRules",
         "RequiredAmendments",
         "Validate"
@@ -6471,10 +6678,17 @@
             "symbol": "NFTokenMint.RequiredAmendments"
           }
         ],
+        "Preclaim": [
+          {
+            "path": "internal/tx/nftoken/nftoken_mint.go",
+            "line": 191,
+            "symbol": "NFTokenMint.Preclaim"
+          }
+        ],
         "Apply": [
           {
             "path": "internal/tx/nftoken/nftoken_mint.go",
-            "line": 187,
+            "line": 311,
             "symbol": "NFTokenMint.Apply"
           }
         ]
@@ -6487,7 +6701,7 @@
             "PreflightRules"
           ]
         },
-        "preclaim": "engine common checks only",
+        "preclaim": "typed Preclaim",
         "apply": "Appliable.Apply",
         "invariants": "outer invariant seam"
       },
@@ -6680,6 +6894,7 @@
       "methods": [
         "Apply",
         "GetFlagsMask",
+        "Preclaim",
         "PreflightRules",
         "RequiredAmendments",
         "Validate"
@@ -6713,10 +6928,17 @@
             "symbol": "NFTokenCreateOffer.RequiredAmendments"
           }
         ],
-        "Apply": [
+        "Preclaim": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
             "line": 117,
+            "symbol": "NFTokenCreateOffer.Preclaim"
+          }
+        ],
+        "Apply": [
+          {
+            "path": "internal/tx/nftoken/nftoken_create_offer.go",
+            "line": 242,
             "symbol": "NFTokenCreateOffer.Apply"
           }
         ]
@@ -6729,7 +6951,7 @@
             "PreflightRules"
           ]
         },
-        "preclaim": "engine common checks only",
+        "preclaim": "typed Preclaim",
         "apply": "Appliable.Apply",
         "invariants": "outer invariant seam"
       },
@@ -7058,7 +7280,7 @@
         "RequiredAmendments": [
           {
             "path": "internal/tx/clawback/clawback.go",
-            "line": 527,
+            "line": 395,
             "symbol": "Clawback.RequiredAmendments"
           }
         ]
@@ -7118,6 +7340,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 49
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 44
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -7250,7 +7482,7 @@
         "Apply": [
           {
             "path": "internal/tx/amm/amm_clawback.go",
-            "line": 188,
+            "line": 181,
             "symbol": "AMMClawback.Apply"
           }
         ]
@@ -7588,7 +7820,7 @@
         "Apply": [
           {
             "path": "internal/tx/amm/amm_deposit.go",
-            "line": 392,
+            "line": 394,
             "symbol": "AMMDeposit.Apply"
           }
         ]
@@ -7761,7 +7993,7 @@
         "Apply": [
           {
             "path": "internal/tx/amm/amm_withdraw.go",
-            "line": 291,
+            "line": 292,
             "symbol": "AMMWithdraw.Apply"
           }
         ]
@@ -8482,21 +8714,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 214,
+            "line": 223,
             "symbol": "XChainCommit.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 218,
+            "line": 227,
             "symbol": "XChainCommit.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 240,
+            "line": 249,
             "symbol": "XChainCommit.RequiredAmendments"
           }
         ]
@@ -8542,6 +8774,16 @@
             {
               "name": "TestXChainUInt64BinaryRoundTrip",
               "line": 62
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/xchain/json_parse_regression_test.go",
+          "tests": [
+            {
+              "name": "TestXChainClaimIDJSONBatchPreservesUint64",
+              "line": 32
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -8651,21 +8893,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 281,
+            "line": 290,
             "symbol": "XChainClaim.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 285,
+            "line": 294,
             "symbol": "XChainClaim.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 309,
+            "line": 318,
             "symbol": "XChainClaim.RequiredAmendments"
           }
         ]
@@ -8810,21 +9052,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 348,
+            "line": 357,
             "symbol": "XChainAccountCreateCommit.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 352,
+            "line": 361,
             "symbol": "XChainAccountCreateCommit.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 378,
+            "line": 387,
             "symbol": "XChainAccountCreateCommit.RequiredAmendments"
           }
         ]
@@ -9005,21 +9247,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 433,
+            "line": 442,
             "symbol": "XChainAddClaimAttestation.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 437,
+            "line": 446,
             "symbol": "XChainAddClaimAttestation.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 472,
+            "line": 481,
             "symbol": "XChainAddClaimAttestation.RequiredAmendments"
           }
         ]
@@ -9214,21 +9456,21 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 529,
+            "line": 538,
             "symbol": "XChainAddAccountCreateAttestation.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 533,
+            "line": 542,
             "symbol": "XChainAddAccountCreateAttestation.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/xchain/xchain.go",
-            "line": 556,
+            "line": 565,
             "symbol": "XChainAddAccountCreateAttestation.RequiredAmendments"
           }
         ]
@@ -10297,6 +10539,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 45
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/invariants/highrisk_test.go",
           "tests": [
             {
@@ -10424,6 +10676,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 71
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 45
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -10635,6 +10897,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 46
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/mpt/mptoken_test.go",
           "tests": [
             {
@@ -10756,6 +11028,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 73
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 44
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -10929,6 +11211,16 @@
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 47
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
         }
       ]
     },
@@ -11042,6 +11334,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 80
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 47
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -11166,6 +11468,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 81
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 48
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -11339,35 +11651,35 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/permissioneddomain/permissioned_domain_set.go",
-            "line": 43,
+            "line": 44,
             "symbol": "PermissionedDomainSet.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/permissioneddomain/permissioned_domain_set.go",
-            "line": 48,
+            "line": 49,
             "symbol": "PermissionedDomainSet.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/permissioneddomain/permissioned_domain_set.go",
-            "line": 139,
+            "line": 140,
             "symbol": "PermissionedDomainSet.RequiredAmendments"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/permissioneddomain/permissioned_domain_set.go",
-            "line": 148,
+            "line": 149,
             "symbol": "PermissionedDomainSet.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/permissioneddomain/permissioned_domain_set.go",
-            "line": 186,
+            "line": 187,
             "symbol": "PermissionedDomainSet.Apply"
           }
         ]
@@ -11696,6 +12008,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 39
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/engine/preflight_precedence_test.go",
           "tests": [
             {
@@ -11898,6 +12220,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 58
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/engine/preflight_precedence_test.go",
           "tests": [
             {
@@ -12070,6 +12402,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 58
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/vault/vault_lifecycle_test.go",
           "tests": [
             {
@@ -12216,6 +12558,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 58
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/invariants/highrisk_test.go",
           "tests": [
             {
@@ -12347,6 +12699,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 89
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 59
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12491,7 +12853,7 @@
         "Apply": [
           {
             "path": "internal/tx/vault/vault_withdraw.go",
-            "line": 435,
+            "line": 421,
             "symbol": "VaultWithdraw.Apply"
           }
         ]
@@ -12526,6 +12888,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 90
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 59
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12665,6 +13037,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 59
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/vault/vault_test.go",
           "tests": [
             {
@@ -12730,63 +13112,63 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 269,
+            "line": 303,
             "symbol": "Batch.GetFlagsMask"
           }
         ],
         "PreflightInnerTransactions": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 310,
+            "line": 344,
             "symbol": "Batch.PreflightInnerTransactions"
           }
         ],
         "ValidateBatchOuter": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 496,
+            "line": 531,
             "symbol": "Batch.ValidateBatchOuter"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 534,
+            "line": 569,
             "symbol": "Batch.Validate"
           }
         ],
         "PreflightSigValidated": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 545,
+            "line": 580,
             "symbol": "Batch.PreflightSigValidated"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 693,
+            "line": 728,
             "symbol": "Batch.Preclaim"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 710,
+            "line": 745,
             "symbol": "Batch.RequiredAmendments"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 738,
+            "line": 773,
             "symbol": "Batch.Apply"
           }
         ],
         "ApplyInnerTransactions": [
           {
             "path": "internal/tx/batch/batch.go",
-            "line": 744,
+            "line": 779,
             "symbol": "Batch.ApplyInnerTransactions"
           }
         ]
@@ -12820,6 +13202,20 @@
             {
               "name": "TestBatchConstructors",
               "line": 757
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/batch/parser_regression_test.go",
+          "tests": [
+            {
+              "name": "TestBatchBinaryParserBindsInnerNoCurrencyIdentity",
+              "line": 153
+            },
+            {
+              "name": "TestBatchDirectJSONNormalizesXAddressAndHighPrecisionAmount",
+              "line": 238
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12859,15 +13255,15 @@
           "tests": [
             {
               "name": "TestTransactionLocalChecksBatchLimits",
-              "line": 237
+              "line": 236
             },
             {
               "name": "TestTransactionMapLocalChecksBatchInnerType",
-              "line": 216
+              "line": 215
             },
             {
               "name": "TestTransactionMapLocalChecksBatchLimits",
-              "line": 320
+              "line": 319
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12888,6 +13284,16 @@
             {
               "name": "TestXChainUInt64BatchBinaryRoundTrip",
               "line": 191
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/xchain/json_parse_regression_test.go",
+          "tests": [
+            {
+              "name": "TestXChainClaimIDJSONBatchPreservesUint64",
+              "line": 46
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13008,14 +13414,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 36,
+            "line": 45,
             "symbol": "LoanBrokerSet.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 101,
+            "line": 110,
             "symbol": "LoanBrokerSet.Apply"
           }
         ]
@@ -13047,6 +13453,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 93
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 60
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13133,14 +13549,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 219,
+            "line": 228,
             "symbol": "LoanBrokerDelete.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 267,
+            "line": 276,
             "symbol": "LoanBrokerDelete.Apply"
           }
         ]
@@ -13172,6 +13588,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 94
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 60
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13266,14 +13692,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 340,
+            "line": 349,
             "symbol": "LoanBrokerCoverDeposit.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 400,
+            "line": 409,
             "symbol": "LoanBrokerCoverDeposit.Apply"
           }
         ]
@@ -13305,6 +13731,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 95
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 61
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13435,14 +13871,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 433,
+            "line": 442,
             "symbol": "LoanBrokerCoverWithdraw.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 536,
+            "line": 575,
             "symbol": "LoanBrokerCoverWithdraw.Apply"
           }
         ]
@@ -13477,6 +13913,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 96
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 61
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13567,14 +14013,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 644,
+            "line": 685,
             "symbol": "LoanBrokerCoverClawback.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 734,
+            "line": 775,
             "symbol": "LoanBrokerCoverClawback.Apply"
           }
         ]
@@ -13606,6 +14052,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 97
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 62
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13823,7 +14279,7 @@
         "Apply": [
           {
             "path": "internal/tx/lending/loan_set_apply.go",
-            "line": 148,
+            "line": 165,
             "symbol": "LoanSet.Apply"
           }
         ]
@@ -13855,6 +14311,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 98
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 62
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13995,6 +14461,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 62
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/lending/lending_test.go",
           "tests": [
             {
@@ -14115,6 +14591,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 100
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 63
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -14258,6 +14744,16 @@
             {
               "name": "TestDelegateSet_EveryRegisteredTypeHasDelegationDecision",
               "line": 101
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorDisallowedInBatch",
+              "line": 63
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -15643,6 +16139,16 @@
           "kind": "Go source reference; execution is tracked separately"
         },
         {
+          "path": "internal/tx/descriptor_test.go",
+          "tests": [
+            {
+              "name": "TestDescriptorReserveSponsorable",
+              "line": 49
+            }
+          ],
+          "kind": "Go source reference; execution is tracked separately"
+        },
+        {
           "path": "internal/tx/engine/preflight_precedence_test.go",
           "tests": [
             {
@@ -15738,35 +16244,35 @@
         "RequiredAmendments": [
           {
             "path": "internal/tx/sponsor/sponsorship_set.go",
-            "line": 88,
+            "line": 96,
             "symbol": "SponsorshipSet.RequiredAmendments"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/sponsor/sponsorship_set.go",
-            "line": 92,
+            "line": 100,
             "symbol": "SponsorshipSet.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/sponsor/sponsorship_set.go",
-            "line": 98,
+            "line": 106,
             "symbol": "SponsorshipSet.Validate"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/sponsor/sponsorship_set.go",
-            "line": 176,
+            "line": 184,
             "symbol": "SponsorshipSet.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/sponsor/sponsorship_set.go",
-            "line": 219,
+            "line": 227,
             "symbol": "SponsorshipSet.Apply"
           }
         ]
@@ -15817,7 +16323,7 @@
           "tests": [
             {
               "name": "TestSponsorCommonFieldsJSONRoundTrip",
-              "line": 348
+              "line": 366
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -16111,7 +16617,7 @@
           "tests": [
             {
               "name": "TestTransactionLocalChecksFailureReason",
-              "line": 163
+              "line": 162
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
