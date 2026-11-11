@@ -8,9 +8,14 @@ import json
 import subprocess
 from pathlib import Path
 
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
-ORACLE_TAG = "3.4.1"
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[1] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
 RECORDER_SOURCES = {
     "scripts/oracle/record-v4.py",
     "scripts/oracle/record-v4.sh",
@@ -86,7 +91,7 @@ def main():
     if Path(git(oracle, "rev-parse", "--show-toplevel").decode()).resolve() != oracle:
         parser.error("--oracle must name the checkout root")
     if git(oracle, "rev-parse", "HEAD").decode() != ORACLE_COMMIT:
-        parser.error("oracle HEAD does not match the pinned private 3.4.1 commit")
+        parser.error(f"oracle HEAD does not match the pinned private {ORACLE_TAG} commit")
     if git(oracle, "rev-parse", f"refs/tags/{ORACLE_TAG}^{{commit}}").decode() != ORACLE_COMMIT:
         parser.error("oracle tag does not resolve to the pinned commit")
     remote = git(oracle, "remote", "get-url", "origin").decode()
@@ -134,8 +139,8 @@ def main():
     except ValueError as error:
         parser.error(str(error))
     version = subprocess.check_output([str(binary), "--version"], text=True)
-    if version.splitlines()[0] != "xrpld version 3.4.1":
-        parser.error("binary does not report pinned version 3.4.1")
+    if version.splitlines()[0] != f"xrpld version {ORACLE_TAG}":
+        parser.error(f"binary does not report pinned version {ORACLE_TAG}")
     try:
         build_identity = regular_file(Path(args.build_identity), "--build-identity")
     except ValueError as error:
