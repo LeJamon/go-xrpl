@@ -52,6 +52,8 @@ type Descriptor struct {
 	New        func() Transaction
 	Delegation Delegation
 	Privileges Privilege
+	// DisallowedInBatch rejects the type as a Batch inner transaction.
+	DisallowedInBatch bool
 }
 
 var (
