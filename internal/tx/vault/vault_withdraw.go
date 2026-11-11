@@ -136,7 +136,7 @@ func (v *VaultWithdraw) destination(accountID [20]byte) ([20]byte, error) {
 
 func checkVaultShareFrozen(view tx.ReadOnlyLedgerView, account [20]byte, vd *vaultData) ter.Result {
 	share := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
-	return checkFrozen(view, share, account)
+	return mptutil.CheckFrozen(view, account, share)
 }
 
 // Preclaim checks the vault exists, the amount denominates the asset or shares,
@@ -220,7 +220,7 @@ func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 	if dstID != accountID {
 		authType = mptutil.StrongAuth
 	}
-	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAssetAuthAt(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
 	if fix340 && dstID == accountID {
@@ -254,7 +254,7 @@ func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 			return res
 		}
 	} else {
-		if res := checkFrozen(view, asset, dstID); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, dstID, asset); res != ter.TesSUCCESS {
 			return res
 		}
 		if res := checkVaultShareFrozen(view, accountID, vd); res != ter.TesSUCCESS {

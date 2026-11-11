@@ -185,7 +185,7 @@ func TestMPTAuthorizationPropagatesMalformedTrustLine(t *testing.T) {
 	view.data[keylet.Line(holder, issuer, "USD").Key] = []byte{1}
 	asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
 
-	require.Equal(t, ter.TefINTERNAL, requireAssetAuthAt(view, asset, holder, true, 0, 0))
+	require.Equal(t, ter.TefINTERNAL, RequireAssetAuthAt(view, asset, holder, StrongAuth, 0))
 }
 
 func TestDomainAuthorizationPropagatesLedgerErrors(t *testing.T) {

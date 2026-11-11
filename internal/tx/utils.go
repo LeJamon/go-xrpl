@@ -1,14 +1,12 @@
 package tx
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -153,57 +151,6 @@ func IsFrozen(view state.ReadOnlyLedgerView, accountID [20]byte, asset Asset) bo
 	return IsGlobalFrozen(view, asset.Issuer) || IsIndividualFrozen(view, accountID, asset)
 }
 
-// RequireAuth reports whether account is authorized to hold the asset, using the
-// legacy (weak) auth semantics: a missing trust line is only fatal when the
-// issuer has lsfRequireAuth set. Returns TecNO_LINE when auth is required but no
-// trust line exists, TecNO_AUTH when the line exists but lacks the issuer's auth
-// flag, and TesSUCCESS otherwise (including XRP, self-issued, or a missing issuer
-// account). Reference: rippled ledger/View.cpp requireAuth(view, Issue, account)
-// with AuthType::Legacy.
-func RequireAuth(view ReadOnlyLedgerView, asset Asset, accountID [20]byte) ter.Result {
-	if asset.Currency == "" || asset.Currency == "XRP" {
-		return ter.TesSUCCESS
-	}
-
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return ter.TesSUCCESS
-	}
-	if accountID == issuerID {
-		return ter.TesSUCCESS
-	}
-
-	trustLineData, _ := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
-
-	issuerAccount, err := ReadAccountRoot(view, issuerID)
-	if err != nil || issuerAccount == nil {
-		return ter.TesSUCCESS
-	}
-	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
-		return ter.TesSUCCESS
-	}
-
-	if trustLineData == nil {
-		return ter.TecNO_LINE
-	}
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return ter.TecNO_AUTH
-	}
-
-	// (account > issuer) ? lsfLowAuth : lsfHighAuth
-	if state.CompareAccountIDs(accountID, issuerID) > 0 {
-		if (rs.Flags & state.LsfLowAuth) == 0 {
-			return ter.TecNO_AUTH
-		}
-	} else {
-		if (rs.Flags & state.LsfHighAuth) == 0 {
-			return ter.TecNO_AUTH
-		}
-	}
-	return ter.TesSUCCESS
-}
-
 // TransferRateParity is the transfer-rate value (1e9) that means "no fee".
 // Reference: rippled basics/Rate.h parityRate.
 const TransferRateParity uint32 = protocol.QualityOne
@@ -228,64 +175,21 @@ func GetTransferRate(view ReadOnlyLedgerView, issuerAddress string) uint32 {
 }
 
 // GetTransferRateByID is GetTransferRate for callers that already hold the
-// issuer's decoded [20]byte account ID, avoiding a re-encode/decode round-trip.
-func GetTransferRateByID(view ReadOnlyLedgerView, issuerID [20]byte) uint32 {
+// issuer's decoded [20]byte account ID. Read and parse failures report parity.
+func GetTransferRateByID(view state.ReadOnlyLedgerView, issuerID [20]byte) uint32 {
+	rate, _ := ReadTransferRate(view, issuerID)
+	return rate
+}
+
+// ReadTransferRate implements rippled's transferRate(view, issuer) for callers
+// that must fail closed: a missing issuer or unset rate is parity, while read
+// and parse errors are returned alongside parity.
+func ReadTransferRate(view ledgerEntryReader, issuerID [20]byte) (uint32, error) {
 	account, err := ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil {
-		return TransferRateParity
+	if err != nil || account == nil || account.TransferRate == 0 {
+		return TransferRateParity, err
 	}
-	if account.TransferRate == 0 {
-		return TransferRateParity
-	}
-	return account.TransferRate
-}
-
-// IsMPTLocked reports whether the MPT identified by mptID is locked for account —
-// either globally (the issuance carries lsfMPTLocked) or individually (the
-// holder's MPToken carries lsfMPTLocked). Absent or unparseable entries are
-// treated as unlocked. Reference: rippled ledger/View.cpp isFrozen(view, account,
-// MPTIssue).
-func IsMPTLocked(view ReadOnlyLedgerView, mptID [24]byte, accountID [20]byte) bool {
-	if data, err := view.Read(keylet.MPTIssuance(mptID)); err == nil && data != nil {
-		if iss, err := state.ParseMPTokenIssuance(data); err == nil && iss.Flags&entry.LsfMPTLocked != 0 {
-			return true
-		}
-	}
-	if data, err := view.Read(keylet.MPTokenByID(mptID, accountID)); err == nil && data != nil {
-		if tok, err := state.ParseMPToken(data); err == nil && tok.Flags&entry.LsfMPTLocked != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// AssetFrozen reports whether account is frozen or locked out of asset, returning
-// the matching TER (tecFROZEN for a frozen IOU, tecLOCKED for a locked MPT) or
-// tesSUCCESS. XRP is never frozen. This is the asset-kind dispatch over the
-// underlying [20]byte freeze primitives (IsFrozen for an Issue, IsMPTLocked for
-// an MPT). Reference: rippled ledger/View.cpp isFrozen dispatch.
-func AssetFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset Asset) ter.Result {
-	if asset.IsMPT() {
-		if id, ok := decodeAssetMPTID(asset); ok && IsMPTLocked(view, id, accountID) {
-			return ter.TecLOCKED
-		}
-		return ter.TesSUCCESS
-	}
-	if IsFrozen(view, accountID, asset) {
-		return ter.TecFROZEN
-	}
-	return ter.TesSUCCESS
-}
-
-// decodeAssetMPTID decodes an MPT asset's 24-byte issuance ID from its hex form.
-func decodeAssetMPTID(a Asset) ([24]byte, bool) {
-	var id [24]byte
-	b, err := hex.DecodeString(a.MPTIssuanceID)
-	if err != nil || len(b) != 24 {
-		return id, false
-	}
-	copy(id[:], b)
-	return id, true
+	return account.TransferRate, nil
 }
 
 // IsGlobalFrozen checks if an issuer has globally frozen assets.
@@ -308,66 +212,33 @@ func IsGlobalFrozen(view state.ReadOnlyLedgerView, issuerAddress string) bool {
 	return (account.Flags & state.LsfGlobalFreeze) != 0
 }
 
-// IsDeepFrozen checks if a trust line between account and issuer is deep-frozen.
-// Deep freeze can be set by either side of the trust line. Unlike regular freeze
-// (which only checks the issuer's side), deep freeze checks both lsfLowDeepFreeze
-// and lsfHighDeepFreeze.
-// Reference: rippled ledger/View.cpp isDeepFrozen()
-func IsDeepFrozen(view ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) bool {
-	// XRP cannot be frozen
-	if currency == "" || currency == "XRP" {
-		return false
-	}
-
-	// If account is issuer, not frozen
-	if accountID == issuerID {
-		return false
-	}
-
-	trustLineKey := keylet.Line(accountID, issuerID, currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		return false
-	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return false
-	}
-
-	return (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
+// IsDeepFrozen implements rippled's isDeepFrozen for an IOU: either side of the
+// trust line set a deep-freeze flag. Read and parse failures report false.
+func IsDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) bool {
+	frozen, _ := IsIOUDeepFrozen(view, accountID, issuerID, currency)
+	return frozen
 }
 
-// isFrozenForLPToken reports whether account cannot spend the given asset because
-// the issuer globally froze it or individually froze the account's trust line.
-// This is the IOU overload of rippled's isFrozen (global freeze + issuer-side
-// individual freeze); deep freeze is intentionally not consulted, matching the
-// overload used by isLPTokenFrozen.
-// Reference: rippled ledger/View.cpp isFrozen().
-func isFrozenForLPToken(view ReadOnlyLedgerView, accountID [20]byte, asset Asset) bool {
-	if asset.Currency == "" || asset.Currency == "XRP" {
-		return false
+// IsIOUDeepFrozen is IsDeepFrozen for callers that must fail closed: read and
+// parse errors are returned. XRP, the issuer itself and a missing line are not
+// deep-frozen.
+func IsIOUDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
+	if currency == "" || currency == "XRP" || accountID == issuerID {
+		return false, nil
 	}
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return false
+	line, err := ReadRippleState(view, accountID, issuerID, currency)
+	if err != nil || line == nil {
+		return false, err
 	}
-	if accountID == issuerID {
-		return false
-	}
-	if IsGlobalFrozen(view, asset.Issuer) {
-		return true
-	}
-	return IsTrustlineFrozen(view, accountID, issuerID, asset.Currency)
+	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, nil
 }
 
-// IsLPTokenFrozen reports whether either of an AMM pool's underlying assets is
-// frozen for the holder, in which case the holder's LP tokens must count as zero
-// funds. The caller resolves the pool assets from the LP-token issuer's AMM SLE.
-// Reference: rippled ledger/View.cpp isLPTokenFrozen().
+// IsLPTokenFrozen implements rippled's isLPTokenFrozen: either AMM pool asset
+// is frozen for the holder under isFrozen, so a pool-asset issuer that globally
+// froze its currency is frozen too. MPT pool assets are not consulted; they need
+// MPTokensV2, which rippled 3.4.1 does not support.
 func IsLPTokenFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset, asset2 Asset) bool {
-	return isFrozenForLPToken(view, accountID, asset) ||
-		isFrozenForLPToken(view, accountID, asset2)
+	return IsFrozen(view, accountID, asset) || IsFrozen(view, accountID, asset2)
 }
 
 // decodeAMMPoolAssets extracts the sfAsset and sfAsset2 issues from a serialized

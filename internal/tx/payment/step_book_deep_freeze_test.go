@@ -40,7 +40,7 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 			err:                   errors.New("unexpected read"),
 			failAll:               true,
 		}
-		frozen, err := step.isDeepFrozen(NewPaymentSandbox(view), account, "XRP", issuer)
+		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), account, Issue{Currency: "XRP", Issuer: issuer})
 		require.NoError(t, err)
 		require.False(t, frozen)
 		require.Zero(t, view.reads)
@@ -52,14 +52,14 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 			err:                   errors.New("unexpected read"),
 			failAll:               true,
 		}
-		frozen, err := step.isDeepFrozen(NewPaymentSandbox(view), issuer, "USD", issuer)
+		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), issuer, Issue{Currency: "USD", Issuer: issuer})
 		require.NoError(t, err)
 		require.False(t, frozen)
 		require.Zero(t, view.reads)
 	})
 
 	t.Run("missing trust line is not frozen", func(t *testing.T) {
-		frozen, err := step.isDeepFrozen(NewPaymentSandbox(newPaymentMockLedgerView()), account, "USD", issuer)
+		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(newPaymentMockLedgerView()), account, Issue{Currency: "USD", Issuer: issuer})
 		require.NoError(t, err)
 		require.False(t, frozen)
 	})
@@ -71,10 +71,10 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 			key:                   keylet.Line(account, issuer, "USD").Key,
 			err:                   sentinel,
 		}
-		frozen, err := step.isDeepFrozen(NewPaymentSandbox(view), account, "USD", issuer)
+		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), account, Issue{Currency: "USD", Issuer: issuer})
 		require.False(t, frozen)
 		require.ErrorIs(t, err, sentinel)
-		require.ErrorContains(t, err, "read deep-freeze trust line")
+		require.ErrorContains(t, err, "deep-freeze trust line")
 	})
 
 	t.Run("malformed trust line returns an error", func(t *testing.T) {
@@ -82,9 +82,9 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 		view.createTrustLine(account, issuer, "USD", 10, 100, 100)
 		lineKey := keylet.Line(account, issuer, "USD").Key
 		view.data[lineKey] = view.data[lineKey][:3]
-		frozen, err := step.isDeepFrozen(NewPaymentSandbox(view), account, "USD", issuer)
+		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), account, Issue{Currency: "USD", Issuer: issuer})
 		require.False(t, frozen)
-		require.ErrorContains(t, err, "parse deep-freeze trust line")
+		require.ErrorContains(t, err, "deep-freeze trust line")
 	})
 
 	for _, tc := range []struct {
@@ -107,7 +107,7 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 			view.data[lineKey.Key], err = state.SerializeRippleState(line)
 			require.NoError(t, err)
 
-			frozen, err := step.isDeepFrozen(NewPaymentSandbox(view), account, "USD", issuer)
+			frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), account, Issue{Currency: "USD", Issuer: issuer})
 			require.NoError(t, err)
 			require.Equal(t, tc.frozen, frozen)
 		})
@@ -129,7 +129,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 			},
 			checkErr: func(t *testing.T, err error) {
 				require.ErrorIs(t, err, readSentinel)
-				require.ErrorContains(t, err, "read deep-freeze trust line")
+				require.ErrorContains(t, err, "deep-freeze trust line")
 			},
 		},
 		{
@@ -139,7 +139,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 				return view
 			},
 			checkErr: func(t *testing.T, err error) {
-				require.ErrorContains(t, err, "parse deep-freeze trust line")
+				require.ErrorContains(t, err, "deep-freeze trust line")
 			},
 		},
 		{
@@ -150,7 +150,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 			},
 			checkErr: func(t *testing.T, err error) {
 				require.ErrorIs(t, err, readSentinel)
-				require.ErrorContains(t, err, "read deep-freeze trust line")
+				require.ErrorContains(t, err, "deep-freeze trust line")
 			},
 		},
 		{
@@ -161,7 +161,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 				return view
 			},
 			checkErr: func(t *testing.T, err error) {
-				require.ErrorContains(t, err, "parse deep-freeze trust line")
+				require.ErrorContains(t, err, "deep-freeze trust line")
 			},
 		},
 	} {

@@ -233,7 +233,7 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 		if isGreater(*amt, balance) {
 			return ter.TecAMM_BALANCE
 		}
-		if result := requireAssetAuth(view, amtAsset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(view, amtAsset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
@@ -241,11 +241,11 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 				return result
 			}
 		} else {
-			if assetFrozen(view, ammAccountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckFrozen(view, ammAccountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
-			if assetIndividuallyFrozen(view, accountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckIndividualFrozen(view, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 		return ter.TesSUCCESS

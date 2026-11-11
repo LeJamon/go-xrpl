@@ -141,7 +141,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 
 			// Decrement owner count (only via view for non-self accounts)
 			if !isSelf {
-				adjustOwnerCountViaView(view, offer.Owner, -1)
+				_ = tx.AdjustOwnerCount(view, offer.Owner, -1)
 			}
 
 			ownerDirKey := keylet.OwnerDir(offer.Owner)
@@ -178,12 +178,6 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 	}
 
 	return result, ter.TesSUCCESS
-}
-
-// adjustOwnerCountViaView adjusts an account's OwnerCount through the view.
-// Use this for accounts that are NOT ctx.Account (the submitter).
-func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, delta int) {
-	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
 // tokenOfferCreateApply creates a sell offer for a newly minted NFToken.

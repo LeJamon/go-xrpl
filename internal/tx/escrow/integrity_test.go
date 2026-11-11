@@ -64,39 +64,35 @@ func TestMapDirInsertErrorOnlyReportsDirectoryFull(t *testing.T) {
 	require.Equal(t, ter.TefINTERNAL, mapDirInsertError(errors.New("write failed")))
 }
 
-func TestAdjustOwnerCountViaViewFailsClosed(t *testing.T) {
+func TestEscrowCreatedHoldingOwnerCountFailsClosed(t *testing.T) {
 	var accountID [20]byte
 	accountID[0] = 2
 	accountKey := keylet.Account(accountID)
-
-	t.Run("missing account", func(t *testing.T) {
-		require.Equal(t, ter.TefBAD_LEDGER, adjustOwnerCountViaView(newFaultView(), accountID, 1))
-	})
+	const mptHexID = "0000000100000000000000000000000000000000000000AB"
+	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
+	require.NoError(t, err)
 
 	t.Run("read error", func(t *testing.T) {
 		view := newFaultView()
+		seedAccountForEscrow(t, view.mapView, accountID, 1)
 		view.readErrors[accountKey.Key] = errors.New("read failed")
-		require.Equal(t, ter.TefINTERNAL, adjustOwnerCountViaView(view, accountID, 1))
+		require.Equal(t, ter.TefINTERNAL,
+			createMPTokenForEscrow(view, nil, issuanceKey, mptHexID, accountID, accountID, true))
 	})
 
 	t.Run("corrupt account", func(t *testing.T) {
 		view := newFaultView()
 		require.NoError(t, view.Insert(accountKey, []byte{0xff}))
-		require.Equal(t, ter.TefINTERNAL, adjustOwnerCountViaView(view, accountID, 1))
-	})
-
-	t.Run("underflow", func(t *testing.T) {
-		view := newFaultView()
-		seedAccountForEscrow(t, view.mapView, accountID, 0)
-		require.Equal(t, ter.TefBAD_LEDGER, adjustOwnerCountViaView(view, accountID, -1))
-		require.Equal(t, uint32(0), ownerCountOf(t, view.mapView, accountID))
+		require.Equal(t, ter.TefINTERNAL,
+			createMPTokenForEscrow(view, nil, issuanceKey, mptHexID, accountID, accountID, true))
 	})
 
 	t.Run("update error", func(t *testing.T) {
 		view := newFaultView()
 		seedAccountForEscrow(t, view.mapView, accountID, 1)
 		view.updateErrors[accountKey.Key] = errors.New("update failed")
-		require.Equal(t, ter.TefINTERNAL, adjustOwnerCountViaView(view, accountID, -1))
+		require.Equal(t, ter.TefINTERNAL,
+			createMPTokenForEscrow(view, nil, issuanceKey, mptHexID, accountID, accountID, true))
 		require.Equal(t, uint32(1), ownerCountOf(t, view.mapView, accountID))
 	})
 }
@@ -150,32 +146,19 @@ func TestIOUStateHelpersFailClosed(t *testing.T) {
 	issuerID[0] = 5
 	holderID[0] = 6
 	issuerKey := keylet.Account(issuerID)
+	amount := tx.NewIssuedAmount(1, 0, "USD", state.EncodeAccountIDSafe(issuerID))
 
 	view := newFaultView()
-	_, result := getIOUTransferRate(view, issuerID)
-	require.Equal(t, ter.TecNO_ISSUER, result)
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TecNO_ISSUER, result)
-
 	view.readErrors[issuerKey.Key] = errors.New("read failed")
-	_, result = getIOUTransferRate(view, issuerID)
-	require.Equal(t, ter.TefINTERNAL, result)
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
+	require.Equal(t, ter.TefINTERNAL, escrowFinishPreclaimIOU(view, holderID, amount))
 
 	delete(view.readErrors, issuerKey.Key)
 	seedAccountForEscrow(t, view.mapView, issuerID, 0)
 	lineKey := keylet.Line(holderID, issuerID, "USD")
 	view.readErrors[lineKey.Key] = errors.New("read failed")
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
-	_, result = isIOUDeepFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
+	require.Equal(t, ter.TefINTERNAL, escrowFinishPreclaimIOU(view, holderID, amount))
 
 	delete(view.readErrors, lineKey.Key)
 	require.NoError(t, view.Insert(lineKey, []byte{0xff}))
-	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
-	_, result = isIOUDeepFrozen(view, holderID, issuerID, "USD")
-	require.Equal(t, ter.TefINTERNAL, result)
+	require.Equal(t, ter.TefINTERNAL, escrowFinishPreclaimIOU(view, holderID, amount))
 }

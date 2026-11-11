@@ -147,13 +147,13 @@ func (l *LoanSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) t
 			return r
 		}
 	}
-	if r := tx.AssetFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
+	if r := mptutil.CheckFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
 		return r
 	}
 	if r := mptutil.CheckDeepFrozen(view, b.Account, asset); r != ter.TesSUCCESS {
 		return r
 	}
-	if r := tx.AssetFrozen(view, borrower, asset); r != ter.TesSUCCESS {
+	if r := mptutil.CheckFrozen(view, borrower, asset); r != ter.TesSUCCESS {
 		return r
 	}
 	if r := mptutil.CheckDeepFrozen(view, b.Owner, asset); r != ter.TesSUCCESS {

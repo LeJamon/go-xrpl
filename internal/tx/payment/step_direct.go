@@ -506,7 +506,7 @@ func (s *DirectStepI) qualitiesSrcIssuesDir(sb *PaymentSandbox, prevStepDir Debt
 	// Charge transfer rate when issuing and previous step redeems
 	var srcQOut uint32 = QualityOne
 	if Redeems(prevStepDir) {
-		srcQOut = s.transferRate(sb)
+		srcQOut = tx.GetTransferRateByID(sb, s.src)
 	}
 
 	dstQIn := s.quality(sb, true) // QualityDirection::in
@@ -629,11 +629,6 @@ func (s *DirectStepI) creditLimit(sb *PaymentSandbox) tx.Amount {
 	}
 	// dst is high account
 	return rs.HighLimit
-}
-
-// transferRate returns the transfer rate for src account
-func (s *DirectStepI) transferRate(sb *PaymentSandbox) uint32 {
-	return GetTransferRate(sb, s.src)
 }
 
 // DirectStepSrcAcct returns the source account for NoRipple checking

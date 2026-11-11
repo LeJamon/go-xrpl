@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -370,23 +371,17 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			if parseErr != nil {
 				return ctx.Internal("parse MPT issuance", parseErr)
 			}
-			capturedTransferRate = getMPTTransferRate(issuance.TransferFee)
+			capturedTransferRate = mptutil.TransferRateFromFee(issuance.TransferFee)
 		} else {
 			issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
 			if issuerErr != nil {
 				return ctx.Internal("decode IOU issuer", issuerErr)
 			}
-			issuer, readErr := tx.ReadAccountRoot(ctx.View, issuerID)
+			rate, readErr := tx.ReadTransferRate(ctx.View, issuerID)
 			if readErr != nil {
 				return ctx.Internal("read IOU issuer", readErr)
 			}
-			if issuer == nil {
-				return ter.TecNO_ISSUER
-			}
-			capturedTransferRate = issuer.TransferRate
-			if capturedTransferRate == 0 {
-				capturedTransferRate = parityRate
-			}
+			capturedTransferRate = rate
 		}
 	}
 
