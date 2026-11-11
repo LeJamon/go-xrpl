@@ -717,7 +717,7 @@ def parse_go_templates(repo: Path) -> dict[str, list[dict[str, str]]]:
         fields_body, _ = balanced(body, match.end() - 1, "{", "}")
         fields = []
         for field in re.finditer(
-            r'\{name:\s*"([^"]+)",\s*style:\s*soe(\w+)\}', fields_body
+            r'\{name:\s*"([^"]+)",\s*style:\s*soe(\w+)(?:,\s*mptSupported:\s*true)?\}', fields_body
         ):
             fields.append({"name": field.group(1), "style": STYLE_NAMES[field.group(2).title()]})
         templates[match.group(1)] = fields
