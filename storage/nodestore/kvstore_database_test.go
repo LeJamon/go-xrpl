@@ -48,6 +48,9 @@ func (c *blockingPutCache) Put(node *Node) {
 }
 
 func (s *blockingGetStore) Get(key []byte) ([]byte, error) {
+	if bytes.Equal(key, formatMarkerKey) {
+		return s.KeyValueStore.Get(key)
+	}
 	s.once.Do(func() {
 		close(s.started)
 		<-s.release
@@ -57,6 +60,9 @@ func (s *blockingGetStore) Get(key []byte) ([]byte, error) {
 
 func (s *staleReadStore) Get(key []byte) ([]byte, error) {
 	data, err := s.KeyValueStore.Get(key)
+	if bytes.Equal(key, formatMarkerKey) {
+		return data, err
+	}
 	s.once.Do(func() {
 		close(s.started)
 		<-s.release
