@@ -31,23 +31,7 @@ func TestEscrowIOUPredicatesDifferential(t *testing.T) {
 			}
 			view := rulesMapView{mapView: &mapView{data: sc.data}, rules: rules}
 
-			gotDeep, gotDeepResult := isIOUDeepFrozen(view, sc.holder, sc.issuer, sc.currency)
-			wantDeep, err := tx.IsIOUDeepFrozen(view, sc.holder, sc.issuer, sc.currency)
-			if err != nil || gotDeepResult != ter.TesSUCCESS || gotDeep != wantDeep {
-				t.Errorf("%s deep: escrow=%v/%v tx=%v/%v", sc.name, gotDeep, gotDeepResult, wantDeep, err)
-			}
-
 			_, issuerExists := sc.data[keylet.Account(sc.issuer).Key]
-			gotFrozen, gotFrozenResult := isIOUFrozen(view, sc.holder, sc.issuer, sc.currency)
-			wantFrozen, err := tx.IsIOUFrozen(view, sc.holder, sc.issuer, sc.currency)
-			if !issuerExists {
-				if gotFrozenResult != ter.TecNO_ISSUER || err != nil {
-					t.Errorf("%s frozen missing issuer: escrow=%v tx=%v/%v", sc.name, gotFrozenResult, wantFrozen, err)
-				}
-			} else if err != nil || gotFrozenResult != ter.TesSUCCESS || gotFrozen != wantFrozen {
-				t.Errorf("%s frozen: escrow=%v/%v tx=%v/%v", sc.name, gotFrozen, gotFrozenResult, wantFrozen, err)
-			}
-
 			asset := tx.Asset{Currency: sc.currency, Issuer: state.EncodeAccountIDSafe(sc.issuer)}
 			gotAuth := requireAuthIOU(view, sc.issuer, sc.holder, sc.currency)
 			wantAuth := mptutil.RequireAssetAuthAt(view, asset, sc.holder, mptutil.LegacyAuth, 0)

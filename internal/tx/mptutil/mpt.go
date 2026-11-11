@@ -338,22 +338,10 @@ func CheckDeepFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.A
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if isIOUDeepFrozen(view, account, issuer, asset.Currency) {
+	if tx.IsDeepFrozen(view, account, issuer, asset.Currency) {
 		return ter.TecFROZEN
 	}
 	return ter.TesSUCCESS
-}
-
-func isIOUDeepFrozen(view state.ReadOnlyLedgerView, account, issuer [20]byte, currency string) bool {
-	if currency == "" || currency == "XRP" || account == issuer {
-		return false
-	}
-	raw, err := view.Read(keylet.Line(account, issuer, currency))
-	if err != nil || raw == nil {
-		return false
-	}
-	line, err := state.ParseRippleState(raw)
-	return err == nil && line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0
 }
 
 func isAnyAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, accounts [][20]byte, depth uint8) bool {
