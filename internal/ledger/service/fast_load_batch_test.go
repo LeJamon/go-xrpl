@@ -109,7 +109,7 @@ func (d *batchVerificationDatabase) counts() (batch, uncached int, requests [][]
 func TestService_VerifyStoredSHAMapUsesOptionalUncachedBatchFetch(t *testing.T) {
 	svc, db, root, _ := newParallelStoredVerificationFixture(t)
 	tracked := &batchVerificationDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.config.FastLoadWorkers = 4
 	var expectedNodes uint64
 	require.NoError(t, svc.walkStoredSHAMap(t.Context(), root, shamap.TypeState,
@@ -197,7 +197,7 @@ func TestService_VerifyStoredSHAMapBatchPreservesValidation(t *testing.T) {
 				}
 				return data, nil
 			}
-			svc.nodeStore = tracked
+			svc.nodeStore = bindNodeStore(tracked)
 			svc.config.FastLoadWorkers = 1
 			provider, ok := svc.shamapFamily.(interface {
 				FullBelowCache() *shamap.FullBelowCache
@@ -244,7 +244,7 @@ func TestService_VerifyStoredSHAMapBatchRejectsWrongLeafType(t *testing.T) {
 	})
 	require.NoError(t, err)
 	tracked := &batchVerificationDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 
 	err = svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState)
 	require.ErrorContains(t, err, "state tree contains")
@@ -286,7 +286,7 @@ func TestService_VerifyStoredSHAMapBatchRejectsExcessiveDepth(t *testing.T) {
 	})
 	require.NoError(t, err)
 	tracked := &batchVerificationDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 
 	err = svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState)
 	require.ErrorContains(t, err, "exceeds maximum depth")
@@ -312,7 +312,7 @@ func TestService_VerifyStoredSHAMapBatchCancellationDoesNotPublishProofs(t *test
 		Database:     db,
 		batchStarted: make(chan struct{}),
 	}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.config.FastLoadWorkers = 1
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

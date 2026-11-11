@@ -145,8 +145,8 @@ func (s *Service) verifyFastLoadStrictState(
 		return nil
 	}
 
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return metrics, [32]byte{}, false, verify()
 	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
@@ -392,7 +392,7 @@ func (s *Service) verifyStoredSHAMapWithTicksReportPolicy(
 	report func(storedSHAMapVerificationMetrics),
 	policy storedSHAMapVerificationPolicy,
 ) (err error) {
-	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore, root, mapType, startedAt)
+	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore.database(), root, mapType, startedAt)
 	defer func() {
 		finishedAt := now()
 		progress.finish(finishedAt, err)
@@ -882,10 +882,8 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 }
 
 func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {
-	uncached, ok := s.nodeStore.(interface {
-		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
-	})
-	if !ok {
+	uncached := s.nodeStore.capabilities().uncached
+	if uncached == nil {
 		return s.nodeStore.Fetch
 	}
 	return func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
@@ -898,10 +896,8 @@ func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {
 }
 
 func (s *Service) storedSHAMapVerificationBatchFetch() storedSHAMapBatchFetch {
-	uncached, ok := s.nodeStore.(interface {
-		FetchBatchUncached(context.Context, []nodestore.Hash256, int, int) ([]*nodestore.Node, error)
-	})
-	if !ok {
+	uncached := s.nodeStore.capabilities().uncachedBatch
+	if uncached == nil {
 		return nil
 	}
 	return func(

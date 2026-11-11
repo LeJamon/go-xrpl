@@ -32,8 +32,8 @@ func (s *Service) PrepareStateRetention(
 	minimumSeq uint32,
 	checkpoint func(context.Context, time.Duration) error,
 ) (uint32, func(context.Context) (func(), error), error) {
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return 0, nil, errors.New("state retention requires durable snapshots")
 	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
@@ -109,7 +109,7 @@ func (s *Service) recordStateRetentionFailure(ctx context.Context, root retained
 
 func (s *Service) stateRetentionGuard(fingerprint [32]byte, sequence uint32, preserved map[retainedStateRoot]struct{}, preparedOpen []retainedStateRoot) func(context.Context) (func(), error) {
 	return func(ctx context.Context) (func(), error) {
-		durable := s.nodeStore.(nodestore.DurableSnapshotDatabase)
+		durable := s.nodeStore.capabilities().durableSnapshot
 		current, err := durable.DurableFingerprint(ctx)
 		if err != nil {
 			return nil, err
@@ -368,7 +368,8 @@ func (s *Service) stateRetentionLedgersLocked() []*ledger.Ledger {
 // Equal subtree hashes inherit preservation from the previous complete tree.
 // Memory is bounded by tree depth; ordinary successors visit only changed paths.
 func (s *Service) preserveStateDifference(ctx context.Context, root retainedStateRoot, previous [32]byte, sequence uint32, checkpoint func(context.Context, time.Duration) error, limit int) error {
-	generations, rotating := s.nodeStore.(nodestore.GenerationDatabase)
+	generations := s.nodeStore.capabilities().generations
+	rotating := generations != nil
 	if rotating && previous == ([32]byte{}) && root.kind == shamap.TypeState && limit == 0 {
 		return s.refreshGenerationState(ctx, root.hash, sequence, generations, checkpoint)
 	}

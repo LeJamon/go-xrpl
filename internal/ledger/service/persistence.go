@@ -506,7 +506,7 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 	s.beginNodePersist()
 	defer s.endNodePersist()
 	var releaseClean func()
-	if family, ok := s.shamapFamily.(*backend.NodeStore); ok && family.UsesDatabase(s.nodeStore) {
+	if family, ok := s.shamapFamily.(*backend.NodeStore); ok && family.UsesDatabase(s.nodeStore.database()) {
 		releaseClean = l.PrepareCleanResidencyRelease(family)
 	}
 	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
@@ -731,7 +731,7 @@ func (s *Service) refreshGenerationStateWithBatch(
 	startedAt := time.Now()
 	progress := newOnlineDeleteRefreshProgress(
 		s.logger,
-		s.nodeStore,
+		s.nodeStore.database(),
 		root,
 		shamap.TypeState,
 		sequence,
@@ -815,7 +815,7 @@ func (s *Service) RefreshValidatedState(
 	}
 	seq := validated.Sequence()
 
-	if generations, ok := s.nodeStore.(nodestore.GenerationDatabase); ok {
+	if generations := s.nodeStore.capabilities().generations; generations != nil {
 		skipRefresh, err := generations.CanRotateWithoutRefresh(ctx)
 		if err != nil {
 			return 0, err

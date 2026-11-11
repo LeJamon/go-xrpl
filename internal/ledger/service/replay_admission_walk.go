@@ -137,7 +137,7 @@ func (s *Service) walkStoredReplaySnapshot(
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
-	progress := newStoredSHAMapVerificationProgress(logger, s.nodeStore, root, mapType, walkStartedAt)
+	progress := newStoredSHAMapVerificationProgress(logger, s.nodeStore.database(), root, mapType, walkStartedAt)
 	progress.operation = "replay admission verification"
 	progress.admissionWait = admissionWait
 	progress.extraFields = []any{"purpose", name}

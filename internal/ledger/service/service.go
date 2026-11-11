@@ -257,7 +257,7 @@ type Service struct {
 	configuredFees drops.Fees
 
 	// NodeStore for persistent storage (nil if in-memory only)
-	nodeStore    nodestore.Database
+	nodeStore    *boundNodeStore
 	shamapFamily shamap.Family
 
 	// replayProofMu protects the bounded in-memory certificates used by
@@ -608,7 +608,7 @@ func New(cfg Config) (*Service, error) {
 		config:         cfg,
 		logger:         logger.Named(xrpllog.PartitionLedger),
 		configuredFees: configuredFees,
-		nodeStore:      cfg.NodeStore,
+		nodeStore:      bindNodeStore(cfg.NodeStore),
 		shamapFamily:   cfg.SHAMapFamily,
 		relationalDB:   cfg.RelationalDB,
 		amendmentTable: cfg.Table,
