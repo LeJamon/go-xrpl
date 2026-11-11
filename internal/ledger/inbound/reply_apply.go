@@ -96,7 +96,7 @@ func (l *Ledger) ApplyMissingReplyContext(ctx context.Context, peerID uint64, tr
 	if applyErr == nil && result.Consumed == len(nodes) {
 		if matchedPeer {
 			result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
-			l.releaseRequestSlotLocked(peerID, transaction, SystemClock.Now())
+			l.releaseRequestSlotLocked(peerID, transaction, l.clock.Now())
 		} else {
 			result.Unfulfilled = l.countPeerLeasesLocked(peerID, transaction)
 		}

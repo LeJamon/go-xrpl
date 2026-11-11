@@ -82,7 +82,7 @@ func (l *Ledger) removeReadyLocked(hash [32]byte) {
 // moved the logical lease into readyRequests while its original wire frame is
 // still outstanding; retain that peer credit as a wire-only shadow.
 func (l *Ledger) fulfillReadyNodeLocked(transaction bool, hash [32]byte) {
-	now := SystemClock.Now()
+	now := l.clock.Now()
 	for i := range l.readyRequests {
 		ready := l.readyRequests[i]
 		if ready.transaction != transaction || ready.node.Hash != hash {
@@ -214,7 +214,7 @@ func (l *Ledger) fulfillLeaseLocked(hash [32]byte, replyPeerID uint64) {
 	if !ok {
 		return
 	}
-	now := SystemClock.Now()
+	now := l.clock.Now()
 	keepPrevious := lease.previousPeerID != 0 && lease.previousPeerID != replyPeerID && lease.previousExpires.After(now)
 	keepCurrent := lease.hedges != 0 && lease.peerID != 0 && lease.peerID != replyPeerID && lease.expires.After(now)
 	if keepPrevious || keepCurrent {
@@ -277,7 +277,7 @@ func (l *Ledger) refreshPeerLeaseLocked(peerID uint64) {
 	if peerID == 0 {
 		return
 	}
-	now := SystemClock.Now()
+	now := l.clock.Now()
 	for _, lease := range l.requestLeases {
 		if lease.peerID == peerID {
 			l.requestPeers[peerID] = struct{}{}
@@ -292,7 +292,7 @@ func (l *Ledger) refreshPeerLeaseLocked(peerID uint64) {
 }
 
 func (l *Ledger) refreshRequestPeersLocked() {
-	l.refreshRequestPeersAtLocked(SystemClock.Now())
+	l.refreshRequestPeersAtLocked(l.clock.Now())
 }
 
 func (l *Ledger) refreshRequestPeersAtLocked(now time.Time) {
