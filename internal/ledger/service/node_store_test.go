@@ -89,6 +89,14 @@ func TestBindNodeStore(t *testing.T) {
 	})
 }
 
+func TestNodeStoreFamilyCapability(t *testing.T) {
+	var family shamap.Family = shamapbackend.New(nil)
+	_, ok := family.(nodeStoreFamily)
+	require.True(t, ok)
+	_, ok = shamap.Family(&plainPersistFamily{Family: family}).(nodeStoreFamily)
+	require.False(t, ok)
+}
+
 func TestNodeStoreCapabilityAbsentPaths(t *testing.T) {
 	plain := &Service{nodeStore: bindNodeStore(&plainCapabilityDatabase{})}
 	empty := &Service{}
