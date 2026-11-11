@@ -149,7 +149,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 
 	// Recompute the cluster-fee median and forward it through the
 	// LoadFeeTrack sink. An empty fresh set publishes zero.
-	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
+	if sink := o.clusterFeeSink; sink != nil {
 		now := time.Now()
 		if o.clock != nil {
 			now = o.clock()
@@ -506,7 +506,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	// hash would amplify network load for a load-reduction feature.
 	// Drop the announcement silently in that case (the peer that
 	// negotiated tx-reduce-relay isn't malformed).
-	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
+	if o.txRecordProvider == nil {
 		return
 	}
 
@@ -734,7 +734,7 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-too-big")
 		return
 	}
-	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
+	if o.txRecordProvider == nil {
 		// Negotiated tx-reduce-relay but no lookup wired — silently
 		// drop. An operator who flipped EnableTxReduceRelay but
 		// hasn't wired a transaction provider would otherwise spam this log.
@@ -794,25 +794,14 @@ func (o *Overlay) chargeMalformedTransactionRequest(peerID PeerID, reason string
 }
 
 func (o *Overlay) lookupTxRecord(hash [32]byte) (TxRecord, bool) {
-	if provider := o.txRecordProviderSnapshot(); provider != nil {
-		record, ok := provider(hash)
-		if ok {
-			record.RawTransaction = append([]byte(nil), record.RawTransaction...)
-		}
-		return record, ok
-	}
-	provider := o.txProviderSnapshot()
-	if provider == nil {
+	if o.txRecordProvider == nil {
 		return TxRecord{}, false
 	}
-	blob, ok := provider(hash)
-	if !ok {
-		return TxRecord{}, false
+	record, ok := o.txRecordProvider(hash)
+	if ok {
+		record.RawTransaction = append([]byte(nil), record.RawTransaction...)
 	}
-	return TxRecord{
-		RawTransaction: append([]byte(nil), blob...),
-		Status:         message.TxStatusCurrent,
-	}, true
+	return record, ok
 }
 
 // hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
@@ -884,7 +873,7 @@ func getObjectByHashFee(requested, found int) resource.Charge {
 // PeerImp.cpp:2538 so a requester polling several peers can tell "I
 // don't have these" from a peer that never answered.
 func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
-	if o.nodeObjectProviderSnapshot() != nil &&
+	if o.nodeObjectProvider != nil &&
 		(len(req.LedgerHash) == 0 || len(req.LedgerHash) == 32) &&
 		len(req.Objects) <= hardMaxReplyNodes {
 		if peer, ok := o.getPeer(peerID); ok {
@@ -903,7 +892,7 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 		return
 	}
 
-	fetch := o.nodeObjectProviderSnapshot()
+	fetch := o.nodeObjectProvider
 	if fetch == nil {
 		// No node store wired (tests, or an overlay deployed without a
 		// backing store). Drop without charging — the peer issued a

@@ -524,6 +524,6 @@ func (o *Overlay) handshakeConfigFor() HandshakeConfig {
 		InstanceCookie:      o.instanceCookie,
 		ServerDomain:        o.cfg.ServerDomain,
 		PublicIP:            o.cfg.PublicIP,
-		LedgerHintProvider:  o.ledgerHintProviderSnapshot(),
+		LedgerHintProvider:  o.ledgerHintProvider,
 	}
 }

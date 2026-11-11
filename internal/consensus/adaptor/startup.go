@@ -399,12 +399,14 @@ func manifestCountSource(configured bool) string {
 // floor is the online-delete retention floor (a *shamapstore.Rotator in
 // production). Pass nil when online_delete is off: acquisition and serving are
 // then unrestricted, leaving the standalone / feature-disabled path unchanged.
+// overlayOpts are applied after the config-derived overlay options.
 func NewFromConfig(
 	ctx context.Context,
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
 	validationRepo relationaldb.ValidationRepository,
 	floor MinimumOnlineFloor,
+	overlayOpts ...peermanagement.Option,
 ) (_ *Components, err error) {
 	if err := appCfg.Overlay.Validate(); err != nil {
 		return nil, fmt.Errorf("validate overlay config: %w", err)
@@ -454,14 +456,14 @@ func NewFromConfig(
 	restoreManifests("validator", validatorManifests, stored.Validators)
 	restoreManifests("publisher", publisherManifests, stored.Publishers)
 
-	// Build overlay options from app config
-	overlayOpts := OverlayOptionsFromConfig(appCfg)
+	opts := OverlayOptionsFromConfig(appCfg)
 	if identity != nil {
-		overlayOpts = append(overlayOpts,
+		opts = append(opts,
 			peermanagement.WithLocalValidatorPubKey(identity.SigningPubKey()))
 	}
+	opts = append(opts, overlayOpts...)
 
-	overlay, err := peermanagement.New(overlayOpts...)
+	overlay, err := peermanagement.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create overlay: %w", err)
 	}

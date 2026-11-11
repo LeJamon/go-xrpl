@@ -130,10 +130,10 @@ func TestSendClusterUpdate_GatesSelfLoadOnValidatedLedgerAge(t *testing.T) {
 				events:            make(chan Event, 8),
 				cluster:           clusterReg,
 				localNodeIdentity: localIdentity.PublicKey(),
+				localLoadFeeProvider: func() (uint32, time.Duration) {
+					return 512, test.age
+				},
 			}
-			o.SetLocalLoadFeeProvider(func() (uint32, time.Duration) {
-				return 512, test.age
-			})
 
 			peer := NewPeer(
 				PeerID(304),
@@ -177,26 +177,29 @@ func TestSendTxQueueAnnounce_FeatureDisabled_NoEmit(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 
-	hashesProvided := false
 	o := &Overlay{
 		cfg:     Config{EnableTxReduceRelay: false},
 		peers:   make(map[PeerID]*Peer),
 		events:  make(chan Event, 8),
 		cluster: cluster.New(),
-		openLedgerHashesProvider: func() [][32]byte {
-			hashesProvided = true
-			return [][32]byte{{0x01}, {0x02}}
-		},
 	}
 
+	caps := NewPeerCapabilities()
+	caps.Features.Enable(FeatureTxReduceRelay)
 	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
 	peer := NewPeer(PeerID(202), endpoint, false, id, make(chan Event, 1))
+	peer.setState(PeerStateConnected)
+	peer.capabilities = caps
 	o.peers[peer.ID()] = peer
 
-	o.sendTxQueueAnnounce()
+	sent := false
+	o.sendTxQueueAnnounceWith(func(*Peer) error {
+		sent = true
+		return nil
+	})
 
-	assert.False(t, hashesProvided,
-		"sendTxQueueAnnounce must skip the provider call when EnableTxReduceRelay=false")
+	assert.False(t, sent,
+		"sendTxQueueAnnounce must not emit when EnableTxReduceRelay=false")
 }
 
 func TestSendTxQueueAnnounce_NoProvider_NoOp(t *testing.T) {
@@ -333,7 +336,7 @@ func TestBroadcastHaveTxSet_BuildsValidFrame(t *testing.T) {
 
 // TestServeDoTransactions_FetchesViaProvider verifies the
 // TMGetObjectByHash{otTRANSACTIONS} reply path: requested hashes are
-// looked up via the configured txProvider, found blobs are packed
+// looked up via the configured txRecordProvider, found blobs are packed
 // into a TMTransactions reply, and a missing hash aborts with a malformed
 // request charge.
 // Mirrors rippled's PeerImp::doTransactions
@@ -354,10 +357,10 @@ func TestServeDoTransactions_FetchesViaProvider(t *testing.T) {
 		peers:   make(map[PeerID]*Peer),
 		events:  make(chan Event, 8),
 		cluster: cluster.New(),
-		txProvider: func(h [32]byte) ([]byte, bool) {
+		txRecordProvider: func(h [32]byte) (TxRecord, bool) {
 			lookups++
 			blob, ok := provided[h]
-			return blob, ok
+			return TxRecord{RawTransaction: blob, Status: message.TxStatusCurrent}, ok
 		},
 	}
 

@@ -599,7 +599,76 @@ func (r *nodeRuntime) configureConsensus() error {
 		if r.appConfig.NodeDB.EarliestSeq > 0 || r.rotator != nil {
 			floor = minimumOnlineFloorFunc(r.retentionFloor)
 		}
-		r.consensus, compErr = adaptor.NewFromConfig(ctx, r.appConfig, r.ledger, validationRepo, floor)
+
+		overlayOpts := []peermanagement.Option{
+			// Closed-Ledger / Previous-Ledger hints (Handshake.cpp:219-223).
+			peermanagement.WithLedgerHintProvider(func() (peermanagement.LedgerHints, bool) {
+				cl := r.ledger.GetClosedLedger()
+				if cl == nil {
+					return peermanagement.LedgerHints{}, false
+				}
+				return peermanagement.LedgerHints{Closed: cl.Hash(), Parent: cl.ParentHash()}, true
+			}),
+			peermanagement.WithValidLedgerProvider(func() (uint32, time.Duration, bool) {
+				vl := r.ledger.GetValidatedLedger()
+				if vl == nil {
+					return 0, 0, false
+				}
+				age := time.Since(vl.CloseTime())
+				return vl.Sequence(), age, true
+			}),
+			// Authoritative transaction-cache lookup for the tx-reduce-relay
+			// reply path (TMGetObjectByHash{otTRANSACTIONS} → TMTransactions
+			// reply). It includes queued transactions, not just the current
+			// open-ledger view. Always wired; Config.EnableTxReduceRelay gates
+			// its use downstream.
+			peermanagement.WithTxRecordProvider(func(hash [32]byte) (peermanagement.TxRecord, bool) {
+				blob, included, deferred, ok := r.ledger.TransactionForRelay(hash)
+				if !ok {
+					return peermanagement.TxRecord{}, false
+				}
+				status := message.TxStatusNew
+				if included {
+					status = message.TxStatusCurrent
+				}
+				return peermanagement.TxRecord{
+					RawTransaction: blob,
+					Status:         status,
+					Deferred:       deferred,
+				}, true
+			}),
+		}
+		// Generic node-object lookup for the TMGetObjectByHash by-hash serve
+		// path (PeerImp.cpp:2483-2538). An in-memory deployment leaves it
+		// unset and the serve path drops the request without charging.
+		if r.nodeStore != nil {
+			overlayOpts = append(overlayOpts, peermanagement.WithNodeObjectProvider(func(hash [32]byte) ([]byte, bool) {
+				node, err := r.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
+				if err != nil || node == nil {
+					return nil, false
+				}
+				return node.Data, true
+			}))
+		}
+		// LoadFeeTrack ingress + outbound self-load advertisement.
+		// Mirrors the rippled wiring split:
+		//   - PeerImp.cpp:1193 setClusterFee(median) on inbound TMCluster
+		//   - NetworkOPs.cpp:1189-1195 self-entry sources getLocalFee()
+		//     only while the validated ledger is at most four minutes old
+		if ft := r.ledger.FeeTrack(); ft != nil {
+			overlayOpts = append(overlayOpts,
+				peermanagement.WithClusterFeeSink(ft.SetClusterFee),
+				peermanagement.WithLocalLoadFeeProvider(func() (uint32, time.Duration) {
+					return ft.LocalFee(), r.ledger.GetValidatedLedgerAge()
+				}),
+			)
+		}
+		if r.memory != nil {
+			overlayOpts = append(overlayOpts,
+				peermanagement.WithMemoryBudgets(r.memory.inbound, r.memory.outbound, r.memory.outboundCritical))
+		}
+
+		r.consensus, compErr = adaptor.NewFromConfig(ctx, r.appConfig, r.ledger, validationRepo, floor, overlayOpts...)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
@@ -611,11 +680,6 @@ func (r *nodeRuntime) configureConsensus() error {
 					TxSet:  snapshot.TxSet,
 				}
 			})
-		}
-		if r.memory != nil {
-			if err := r.consensus.Overlay.SetMemoryBudgets(r.memory.inbound, r.memory.outbound, r.memory.outboundCritical); err != nil {
-				return fmt.Errorf("configure peer memory: %w", err)
-			}
 		}
 		r.resourceManager = r.consensus.Overlay.ResourceManager()
 		if r.rotator != nil {
@@ -671,81 +735,11 @@ func (r *nodeRuntime) configureConsensus() error {
 		// Wire transaction relay: when a tx is submitted via RPC,
 		// broadcast it to peers. LocalTxs holding is handled inside
 		// service.SubmitTransaction so the broadcaster only relays.
-		overlay := r.consensus.Overlay
-
-		// Closed-Ledger / Previous-Ledger hints (Handshake.cpp:219-223).
-		overlay.SetLedgerHintProvider(func() (peermanagement.LedgerHints, bool) {
-			cl := r.ledger.GetClosedLedger()
-			if cl == nil {
-				return peermanagement.LedgerHints{}, false
-			}
-			return peermanagement.LedgerHints{Closed: cl.Hash(), Parent: cl.ParentHash()}, true
-		})
-
-		overlay.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
-			vl := r.ledger.GetValidatedLedger()
-			if vl == nil {
-				return 0, 0, false
-			}
-			age := time.Since(vl.CloseTime())
-			return vl.Sequence(), age, true
-		})
-		broadcastTx := newTxBroadcaster(overlay)
+		broadcastTx := newTxBroadcaster(r.consensus.Overlay)
 		r.ledgerAdapter.SetTxBroadcaster(broadcastTx)
 		// Wire OpenLedger.Accept's relay callback so recovered txs are
 		// re-broadcast post-LCL (rippled OpenLedger.cpp:120-150).
 		r.ledger.SetTxRelay(broadcastTx)
-
-		// Wire the authoritative transaction-cache lookup used by the
-		// tx-reduce-relay reply path (TMGetObjectByHash{otTRANSACTIONS} →
-		// TMTransactions reply). It includes queued transactions, not just
-		// the current open-ledger view.
-		// Feature-gated downstream by Config.EnableTxReduceRelay; the
-		// providers themselves are always wired so a flip of the
-		// config flag doesn't require a restart-and-rewire.
-		overlay.SetTxRecordProvider(func(hash [32]byte) (peermanagement.TxRecord, bool) {
-			blob, included, deferred, ok := r.ledger.TransactionForRelay(hash)
-			if !ok {
-				return peermanagement.TxRecord{}, false
-			}
-			status := message.TxStatusNew
-			if included {
-				status = message.TxStatusCurrent
-			}
-			return peermanagement.TxRecord{
-				RawTransaction: blob,
-				Status:         status,
-				Deferred:       deferred,
-			}, true
-		})
-		overlay.SetOpenLedgerHashesProvider(r.ledger.OpenLedgerTxHashes)
-
-		// Wire the generic node-object lookup used by the
-		// TMGetObjectByHash by-hash serve path (PeerImp.cpp:2483-2538).
-		// Only wired when a node store is configured; an in-memory
-		// deployment leaves the provider nil and the serve path drops
-		// the request without charging.
-		if r.nodeStore != nil {
-			overlay.SetNodeObjectProvider(func(hash [32]byte) ([]byte, bool) {
-				node, err := r.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
-				if err != nil || node == nil {
-					return nil, false
-				}
-				return node.Data, true
-			})
-		}
-
-		// LoadFeeTrack ingress + outbound self-load advertisement.
-		// Mirrors the rippled wiring split:
-		//   - PeerImp.cpp:1193 setClusterFee(median) on inbound TMCluster
-		//   - NetworkOPs.cpp:1189-1195 self-entry sources getLocalFee()
-		//     only while the validated ledger is at most four minutes old
-		if ft := r.ledger.FeeTrack(); ft != nil {
-			overlay.SetClusterFeeSink(ft.SetClusterFee)
-			overlay.SetLocalLoadFeeProvider(func() (uint32, time.Duration) {
-				return ft.LocalFee(), r.ledger.GetValidatedLedgerAge()
-			})
-		}
 
 		r.services.NodePublicKey = r.consensus.Overlay.NodePublicKey()
 		engine := r.consensus.Engine

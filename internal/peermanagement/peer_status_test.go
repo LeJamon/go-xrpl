@@ -323,10 +323,10 @@ func TestOverlay_handleStatusChange_PreservesExplicitZeroScalarPresence(t *testi
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
 
 	providerCalls := 0
-	o.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
+	o.validLedgerProvider = func() (uint32, time.Duration, bool) {
 		providerCalls++
 		return 1, 0, true
-	})
+	}
 	var got PeerStatusUpdate
 	o.SetPeerStatusPublisher(func(update PeerStatusUpdate) { got = update })
 
