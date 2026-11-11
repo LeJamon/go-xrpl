@@ -19,12 +19,12 @@ func TestHeaderDiscoveryPreservesVerifiedReplayPipeline(t *testing.T) {
 	base := svc.GetClosedLedger()
 	links := buildStandardReplayTestChain(t, r, base, 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	require.True(t, r.catchupReplay.standardReplay.active)
-	require.True(t, r.catchupReplay.standardReplay.pivotReady)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
+	require.True(t, r.catchupReplay.standardReplay.isPivotReady())
 	generation := r.catchupReplay.standardReplay.generation
 
 	startTestHeaderDiscovery(t, r, base.Sequence(), links[len(links)-1], 7, catchupSourceQuorum)
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[0].hash))
 	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[1].hash))
@@ -33,7 +33,7 @@ func TestHeaderDiscoveryPreservesVerifiedReplayPipeline(t *testing.T) {
 		sendTestHeaderReply(t, r, 7, links[i])
 	}
 	require.Nil(t, r.catchupReplay.headerDiscovery)
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[0].hash))
 	require.NotNil(t, r.catchupReplay.fetchTracker.Find(links[1].hash))
@@ -46,11 +46,11 @@ func TestHeaderDiscoveryRetiresContradictoryVerifiedReplayPipeline(t *testing.T)
 	base := svc.GetClosedLedger()
 	links := buildStandardReplayTestChain(t, r, base, 3)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 
 	contradictory := buildAlternativeReplaySuccessor(t, base, 2*time.Second)
 	startTestHeaderDiscovery(t, r, base.Sequence(), contradictory, 7, catchupSourceQuorum)
-	require.False(t, r.catchupReplay.standardReplay.active)
+	require.False(t, r.catchupReplay.standardReplay.isActive())
 	for _, link := range links {
 		require.Nil(t, r.catchupReplay.fetchTracker.Find(link.hash))
 	}
@@ -76,7 +76,7 @@ func TestStandardReplayBaseConsumesStoredPrefixAndKeepsPreparedSuffix(t *testing
 	require.NotNil(t, r.catchupReplay.standardReplay.entries[links[1].seq])
 	require.NotNil(t, r.catchupReplay.standardReplay.entries[links[2].seq])
 	require.Nil(t, r.catchupReplay.fetchTracker.Find(links[0].hash))
-	require.True(t, r.catchupReplay.standardReplay.applying)
+	require.True(t, r.catchupReplay.standardReplay.isApplying())
 	require.Len(t, r.catchupReplay.standardReplayDrainWake, 1)
 }
 
@@ -94,7 +94,7 @@ func TestHeaderDiscoveryKeepsPreparedTailWhenTrustedTargetFallsBehind(t *testing
 		sendTestHeaderReply(t, r, 7, links[i])
 	}
 
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, oldTarget.seq, r.catchupReplay.standardReplay.targetSeq)
 	require.Equal(t, oldTarget.hash, r.catchupReplay.standardReplay.targetHash)
 	require.NotNil(t, r.catchupReplay.standardReplay.entries[links[3].seq])
@@ -122,7 +122,7 @@ func TestHeaderDiscoveryKeepsTailBeyondPreparedWindowWhenTargetFallsBehind(t *te
 		sendTestHeaderReply(t, r, 7, links[i])
 	}
 
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, links[standardReplayPipelineWindow-1].seq, r.catchupReplay.standardReplay.targetSeq)
 	require.Equal(t, links[standardReplayPipelineWindow-1].hash, r.catchupReplay.standardReplay.targetHash)
 	for i := 5; i < len(links); i++ {
@@ -154,7 +154,7 @@ func TestHeaderDiscoverySuffixRetirementLogsIdentity(t *testing.T) {
 		[]header.LedgerHeader{links[0].ledger.Header()},
 	)
 
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, links[0].seq, r.catchupReplay.standardReplay.targetSeq)
 	require.Nil(t, r.catchupReplay.standardReplay.entries[links[1].seq])
 	require.Nil(t, r.catchupReplay.standardReplay.entries[links[2].seq])
@@ -180,7 +180,7 @@ func TestContinueFrozenPivotRecoveryKeepsPreparedTailForLowerTarget(t *testing.T
 	}
 	r.catchupReplay.catchupMu.Unlock()
 	require.True(t, r.catchupReplay.continueFrozenPivotRecovery(links[0].seq, links[0].hash, 7))
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.NotNil(t, r.catchupReplay.standardReplay.entries[links[1].seq])
 	require.NotNil(t, r.catchupReplay.standardReplay.entries[links[2].seq])
 }
@@ -250,7 +250,7 @@ func TestHeaderDiscoveryPreservesPipelineAlreadyPastFrozenTarget(t *testing.T) {
 	for i := 2; i >= 0; i-- {
 		sendTestHeaderReply(t, r, 7, links[i])
 	}
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, links[3].seq, r.catchupReplay.standardReplay.anchorSeq)
 	require.NotNil(t, r.catchupReplay.standardReplay.entries[links[4].seq])
 }

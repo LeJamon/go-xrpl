@@ -25,13 +25,13 @@ func TestFrozenPivotRecoveryWaitsForUnknownSuccessorLink(t *testing.T) {
 	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
 	generation := r.catchupReplay.standardReplay.generation
 	require.True(t, r.catchupReplay.continueFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 
 	targetSeq := pivotSeq + 2
 	targetHash := [32]byte{0xa3}
 	require.True(t, r.catchupReplay.continueFrozenPivotRecovery(targetSeq, targetHash, 7))
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	require.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
 	require.Equal(t, targetSeq, r.catchupReplay.standardReplay.targetSeq)
@@ -47,7 +47,7 @@ func TestFrozenPivotRecoveryRejectsUnknownSequenceTarget(t *testing.T) {
 	generation := r.catchupReplay.standardReplay.generation
 
 	assert.False(t, r.catchupReplay.continueFrozenPivotRecovery(0, [32]byte{0xa5}, 7))
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.targetSeq)
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.targetHash)
@@ -69,7 +69,7 @@ func TestFrozenPivotRecoverySurvivesUnknownSequenceConsensusRequest(t *testing.T
 	// not cancel it and replace it with an ordinary seq=0 acquisition.
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(pivotHash)))
 
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
@@ -98,7 +98,7 @@ func TestHashOnlyConsensusAcquisitionPromotesAfterHeaderResolution(t *testing.T)
 	require.NotNil(t, pivotAcquisition)
 	require.True(t, pivotAcquisition.SequenceInitiallyUnknown())
 	require.Zero(t, pivotAcquisition.Seq())
-	require.False(t, r.catchupReplay.standardReplay.active)
+	require.False(t, r.catchupReplay.standardReplay.isActive())
 	require.Len(t, r.catchupReplay.fetchTracker.Active(), 1)
 
 	// The verified base header resolves the sequence. The router must promote
@@ -113,7 +113,7 @@ func TestHashOnlyConsensusAcquisitionPromotesAfterHeaderResolution(t *testing.T)
 		},
 	}, 7))
 	require.Equal(t, pivotHeader.LedgerIndex, pivotAcquisition.Seq())
-	require.True(t, r.catchupReplay.standardReplay.active)
+	require.True(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, pivotHeader.LedgerIndex, r.catchupReplay.standardReplay.pivotSeq)
 	require.Equal(t, pivotHeader.Hash, r.catchupReplay.standardReplay.pivotHash)
 	require.Same(t, pivotAcquisition, r.catchupReplay.fetchTracker.Find(pivotHeader.Hash))
@@ -177,7 +177,7 @@ func TestFrozenPivotRecoveryCancelsConflictingPivotEvidence(t *testing.T) {
 	generation := r.catchupReplay.standardReplay.generation
 
 	require.False(t, r.catchupReplay.continueFrozenPivotRecovery(pivotSeq, [32]byte{0xb2}, 7))
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Greater(t, r.catchupReplay.standardReplay.generation, generation)
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Len(t, sender.legacyCalls(), 1)
@@ -193,7 +193,7 @@ func TestFrozenPivotRecoveryFailureReleasesPivotGeneration(t *testing.T) {
 	r.catchupReplay.standardReplay.baseRelease = func() { released++ }
 
 	r.catchupReplay.discardFailedInboundAcquisition(r.catchupReplay.fetchTracker.Find(pivotHash), nil)
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Greater(t, r.catchupReplay.standardReplay.generation, generation)
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Equal(t, 1, released)
@@ -209,7 +209,7 @@ func TestFrozenPivotRecoveryDoesNotStartForHeldLedger(t *testing.T) {
 	generation := r.catchupReplay.standardReplay.generation
 	assert.False(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Empty(t, sender.legacyCalls())
 }
@@ -252,7 +252,7 @@ func TestLedgerBuiltRetiresFrozenPivotAndContinuesCatchup(t *testing.T) {
 
 	r.catchupReplay.onLedgerBuilt(pivotSeq, pivotHash)
 
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Equal(t, 1, released)
 	assert.Equal(t, targetHash, r.catchupReplay.consensusRecovery.targetHash)
@@ -271,7 +271,7 @@ func TestLedgerFullyValidatedRetiresHeldFrozenPivot(t *testing.T) {
 
 	r.catchupReplay.onLedgerFullyValidated(pivotSeq, pivotHash)
 
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 }
 
@@ -291,7 +291,7 @@ func TestConsensusCatchupRetiresLocallySatisfiedFrozenPivot(t *testing.T) {
 
 	r.catchupReplay.armConsensusCatchup()
 
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Equal(t, consensusRecovery{}, r.catchupReplay.consensusRecovery)
 	assert.Equal(t, uint64(1), r.FastSyncMetrics().RecoveryLocallySatisfied)
@@ -312,7 +312,7 @@ func TestConsensusCatchupHandsHeldPivotToConsensus(t *testing.T) {
 
 	r.catchupReplay.armConsensusCatchup()
 
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(pivotHash)}, engine.getLedgers())
 	assert.Equal(t, pivotSeq, r.catchupReplay.consensusRecovery.anchorSeq)
@@ -331,7 +331,7 @@ func TestFrozenPivotRecoveryWaitsForRetryCooldownWithoutGenerationChurn(t *testi
 	assert.False(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
 	r.catchupReplay.acquisitionMu.Lock()
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, frozenPivotPendingIntent{seq: pivotSeq, hash: pivotHash, peerID: 7}, r.catchupReplay.pendingFrozenPivot)
 	r.catchupReplay.acquisitionMu.Unlock()
 	require.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
@@ -345,8 +345,7 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) 
 	r.catchupReplay.recordValidationCatchupTarget(200, targetHash, 7, catchupSourceQuorum)
 	r.catchupReplay.standardReplay = standardReplayPipeline{
 		generation:       3,
-		active:           true,
-		pivotReady:       true,
+		phase:            standardReplayPivotReady,
 		pivotSeq:         100,
 		anchorSeq:        100,
 		targetSeq:        200,
@@ -357,12 +356,12 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) 
 	}
 
 	assert.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, uint8(1), r.catchupReplay.standardReplay.stalledSamples)
 
 	assert.True(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(2*standardReplayProgressWindow)))
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.True(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, uint64(3), r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, uint32(100), r.catchupReplay.standardReplay.pivotSeq)
 	require.NotNil(t, r.catchupReplay.standardReplay.replacement)
@@ -389,8 +388,7 @@ func TestFrozenPivotRecoveryRebootstrapWaitsForProvisionalFullState(t *testing.T
 	r.catchupReplay.startLedgerAcquisitionLegacyLocked(obsoleteSeq, obsoleteHash, 7)
 	r.catchupReplay.standardReplay = standardReplayPipeline{
 		generation:       3,
-		active:           true,
-		pivotReady:       true,
+		phase:            standardReplayPivotReady,
 		pivotSeq:         frontierSeq,
 		pivotHash:        oldPivotHash,
 		anchorSeq:        frontierSeq,
@@ -416,8 +414,8 @@ func TestFrozenPivotRecoveryRebootstrapWaitsForProvisionalFullState(t *testing.T
 	replacement := r.catchupReplay.fetchTracker.Find(targetHash)
 	require.NotNil(t, replacement)
 	assert.False(t, replacement.TransactionOnly())
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.True(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, frontierSeq, r.catchupReplay.standardReplay.pivotSeq)
 	assert.Equal(t, oldPivotHash, r.catchupReplay.standardReplay.pivotHash)
 	replacementGeneration := r.catchupReplay.standardReplay.generation
@@ -481,8 +479,8 @@ func TestFrozenPivotRecoveryBackpressuresAtPreparedCapacity(t *testing.T) {
 	}
 
 	assert.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(time.Now()))
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.False(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
@@ -555,8 +553,8 @@ func TestFrozenPivotBackpressureRefillsAsReplayDrains(t *testing.T) {
 	pivotHeader := pivot.Header()
 	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, false))
 
-	assert.True(t, r.catchupReplay.standardReplay.active)
-	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
+	assert.True(t, r.catchupReplay.standardReplay.isPivotReady())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, pivotSeq, r.catchupReplay.standardReplay.pivotSeq)
 	assert.Equal(t, head.seq, r.catchupReplay.standardReplay.anchorSeq)
@@ -621,7 +619,7 @@ func TestFrozenPivotRecoveryReplaysToMovingTrustedHead(t *testing.T) {
 		}
 	}
 
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, 1, released)
 	assert.False(t, r.catchupReplay.standardReplay.backpressured)
 	assert.Equal(t, wantApplied, r.FastSyncMetrics().ReplayPipelineApplied)
@@ -640,8 +638,7 @@ func TestFrozenPivotRecoveryKeepsAdvancingReplayAtMovingTipRate(t *testing.T) {
 	started := time.Unix(200, 0)
 	r.catchupReplay.standardReplay = standardReplayPipeline{
 		generation:       5,
-		active:           true,
-		pivotReady:       true,
+		phase:            standardReplayPivotReady,
 		pivotSeq:         100,
 		anchorSeq:        100,
 		targetSeq:        200,
@@ -655,7 +652,7 @@ func TestFrozenPivotRecoveryKeepsAdvancingReplayAtMovingTipRate(t *testing.T) {
 	r.catchupReplay.standardReplay.targetSeq = 210
 
 	assert.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Zero(t, r.catchupReplay.standardReplay.stalledSamples)
 	assert.Equal(t, uint64(5), r.catchupReplay.standardReplay.generation)
 }
@@ -670,7 +667,7 @@ func TestFrozenPivotRecoveryDoesNotTimeoutPivotDownload(t *testing.T) {
 	require.NotNil(t, pivot)
 
 	assert.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(time.Now().Add(24*time.Hour)))
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.Same(t, pivot, r.catchupReplay.fetchTracker.Find(pivotHash))
 }
@@ -705,7 +702,7 @@ func TestFrozenPivotBootstrapFailureRearmsTrustedTarget(t *testing.T) {
 	r.catchupReplay.completeInboundLedger(pivot)
 
 	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
-	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, replacement.Seq(), r.catchupReplay.catchup.seq)
 	assert.Equal(t, replacement.Hash(), r.catchupReplay.catchup.hash)
 	require.Len(t, rs.headerRequests(), 1)
@@ -762,7 +759,7 @@ func TestFrozenPivotHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	}
 	trackCatchupPeer(r, 7, links[0].seq, links[0].hash)
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[0].hash)))
-	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.isActive())
 	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
 	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 	next := r.catchupReplay.fetchTracker.Find(links[0].hash)

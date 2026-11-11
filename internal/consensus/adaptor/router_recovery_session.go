@@ -168,7 +168,7 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 	}
 
 	c.acquisitionMu.Lock()
-	if c.standardReplay.active {
+	if c.standardReplay.isActive() {
 		c.acquisitionMu.Unlock()
 		return c.continueFrozenPivotRecovery(seq, hash, peerID)
 	}
@@ -230,7 +230,7 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 		}
 		return false
 	}
-	if c.standardReplay.active {
+	if c.standardReplay.isActive() {
 		c.acquisitionMu.Unlock()
 		if baseRelease != nil {
 			baseRelease()
@@ -272,11 +272,8 @@ func (c *catchupReplayCoordinator) beginFrozenPivotRecovery(seq uint32, hash [32
 		return false
 	}
 	c.standardReplay.generation++
-	c.standardReplay.active = true
-	c.standardReplay.applying = false
-	c.standardReplay.pivotReady = false
+	c.setStandardReplayPhaseLocked(standardReplayAcquiringPivot)
 	c.standardReplay.initialCandidate = false
-	c.checkStandardReplayPhaseLocked()
 	c.standardReplay.pivotSeq = pivotSeq
 	c.standardReplay.pivotHash = pivotHash
 	c.standardReplay.anchorSeq = pivotSeq
@@ -332,7 +329,7 @@ func (c *catchupReplayCoordinator) promoteResolvedFrozenPivot(il *inbound.Ledger
 	}
 
 	c.acquisitionMu.Lock()
-	active := c.standardReplay.active
+	active := c.standardReplay.isActive()
 	eligible := c.consensusRecovery.targetHash == il.Hash() || c.consensusRecovery.stepHash == il.Hash()
 	c.acquisitionMu.Unlock()
 	if active {
@@ -364,7 +361,7 @@ func (c *catchupReplayCoordinator) continueFrozenPivotRecovery(seq uint32, hash 
 	c.catchupMu.Unlock()
 
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		c.acquisitionMu.Unlock()
 		return false
 	}
@@ -436,7 +433,7 @@ func (c *catchupReplayCoordinator) consensusHandoffComplete(seq uint32, hash [32
 
 func (c *catchupReplayCoordinator) retireLocallySatisfiedFrozenPivot(reason string) bool {
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active || c.standardReplay.pivotReady || c.standardReplay.pivotHandoff != nil {
+	if !c.standardReplay.isActive() || c.standardReplay.isPivotReady() || c.standardReplay.pivotHandoff != nil {
 		c.acquisitionMu.Unlock()
 		return false
 	}
@@ -458,14 +455,14 @@ func (c *catchupReplayCoordinator) retireLocallySatisfiedLedger(seq uint32, hash
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
 	c.clearFrozenPivotPendingLocked(seq, hash)
-	if c.standardReplay.active && c.standardReplay.pivotHandoff != nil &&
+	if c.standardReplay.isActive() && c.standardReplay.pivotHandoff != nil &&
 		c.standardReplay.pivotSeq == seq && c.standardReplay.pivotHash == hash {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
 		return false
 	}
 	retirement := standardReplayRetirement{}
-	retiredPipeline := c.standardReplay.active && !c.standardReplay.pivotReady && c.standardReplay.pivotSeq == seq &&
+	retiredPipeline := c.standardReplay.isActive() && !c.standardReplay.isPivotReady() && c.standardReplay.pivotSeq == seq &&
 		c.standardReplay.pivotHash == hash
 	if retiredPipeline {
 		retirement = c.cancelStandardReplayPipelineLocked(reason)
@@ -522,7 +519,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 	}
 
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active || c.standardReplay.pivotReady ||
+	if !c.standardReplay.isActive() || c.standardReplay.isPivotReady() ||
 		c.standardReplay.pivotSeq != h.LedgerIndex || c.standardReplay.pivotHash != h.Hash {
 		c.acquisitionMu.Unlock()
 		return false
@@ -531,8 +528,7 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 		c.acquisitionMu.Unlock()
 		return false
 	}
-	c.standardReplay.pivotReady = true
-	c.checkStandardReplayPhaseLocked()
+	c.setStandardReplayPhaseLocked(standardReplayPivotReady)
 	c.standardReplay.initialCandidate = initialCandidate
 	now := time.Now()
 	c.standardReplay.progressSampleAt = now
@@ -543,9 +539,8 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 	reachedTarget := c.standardReplay.targetSeq == h.LedgerIndex && c.standardReplay.targetHash == h.Hash
 	startDrain := false
 	if entry := c.standardReplay.entries[h.LedgerIndex+1]; entry != nil &&
-		(!entry.readyAt.IsZero() || entry.failed) && !c.standardReplay.applying {
-		c.standardReplay.applying = true
-		c.checkStandardReplayPhaseLocked()
+		(!entry.readyAt.IsZero() || entry.failed) && !c.standardReplay.isApplying() {
+		c.setStandardReplayPhaseLocked(standardReplayDraining)
 		startDrain = true
 	}
 	c.acquisitionMu.Unlock()
@@ -564,8 +559,8 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 		}
 	}
 	c.acquisitionMu.Lock()
-	current := c.standardReplay.active && c.standardReplay.generation == generation &&
-		c.standardReplay.pivotReady && c.standardReplay.pivotSeq == h.LedgerIndex &&
+	current := c.standardReplay.isActive() && c.standardReplay.generation == generation &&
+		c.standardReplay.isPivotReady() && c.standardReplay.pivotSeq == h.LedgerIndex &&
 		c.standardReplay.pivotHash == h.Hash
 	if current {
 		if c.consensusRecovery.stepHash == h.Hash {
@@ -583,12 +578,11 @@ func (c *catchupReplayCoordinator) completeFrozenPivotAcquisitionOwned(
 	if reachedTarget {
 		c.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
 		c.acquisitionMu.Lock()
-		current = c.standardReplay.active && c.standardReplay.generation == generation &&
-			c.standardReplay.pivotReady && c.standardReplay.pivotSeq == h.LedgerIndex &&
+		current = c.standardReplay.isActive() && c.standardReplay.generation == generation &&
+			c.standardReplay.isPivotReady() && c.standardReplay.pivotSeq == h.LedgerIndex &&
 			c.standardReplay.pivotHash == h.Hash
 		if current && c.standardReplay.targetSeq == h.LedgerIndex && c.standardReplay.targetHash == h.Hash {
-			c.standardReplay.active = false
-			c.checkStandardReplayPhaseLocked()
+			c.setStandardReplayPhaseLocked(c.standardReplay.phase.deactivated())
 			c.standardReplay.entries = nil
 			c.standardReplay.backpressured = false
 			c.releaseStandardReplayBaseLocked()
@@ -622,8 +616,8 @@ func (c *catchupReplayCoordinator) rearmFrozenPivotAcquisition(
 
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active || c.standardReplay.generation != generation ||
-		c.standardReplay.pivotReady || c.standardReplay.pivotHandoff != nil ||
+	if !c.standardReplay.isActive() || c.standardReplay.generation != generation ||
+		c.standardReplay.isPivotReady() || c.standardReplay.pivotHandoff != nil ||
 		c.standardReplay.pivotSeq != seq || c.standardReplay.pivotHash != hash ||
 		c.fetchTracker.Find(hash) != nil || c.replayer.Has(hash) ||
 		!c.canAdmitCatchupLocked(hash, maxConcurrentSpeculativeCatchup) {
@@ -662,12 +656,12 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 		return false
 	}
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active || c.standardReplay.replacement != nil {
+	if !c.standardReplay.isActive() || c.standardReplay.replacement != nil {
 		c.acquisitionMu.Unlock()
 		return false
 	}
 
-	if !c.standardReplay.pivotReady {
+	if !c.standardReplay.isPivotReady() {
 		if c.standardReplay.pivotHandoff != nil {
 			c.acquisitionMu.Unlock()
 			return false
@@ -697,8 +691,7 @@ func (c *catchupReplayCoordinator) rebootstrapFrozenPivotIfStalled(now time.Time
 	}
 	// A flag without an executing owner or a ready head is not progress.
 	// Clear it so a missing-head stall can still reach normal recovery.
-	c.standardReplay.applying = false
-	c.checkStandardReplayPhaseLocked()
+	c.releaseStandardReplayDrainLocked()
 	if c.standardReplay.targetSeq <= c.standardReplay.anchorSeq {
 		c.acquisitionMu.Unlock()
 		return false
@@ -786,9 +779,9 @@ func (c *catchupReplayCoordinator) retargetFrozenPivot(
 
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	stallCurrent := reason == frozenPivotRetargetStalled && c.standardReplay.pivotReady &&
-		!c.standardReplay.applying && c.standardReplay.stalledSamples >= standardReplayStallWindows
-	if !c.standardReplay.active || c.standardReplay.generation != generation ||
+	stallCurrent := reason == frozenPivotRetargetStalled && c.standardReplay.isPivotReady() &&
+		!c.standardReplay.isApplying() && c.standardReplay.stalledSamples >= standardReplayStallWindows
+	if !c.standardReplay.isActive() || c.standardReplay.generation != generation ||
 		c.standardReplay.anchorSeq != frontierSeq || !stallCurrent {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
@@ -802,7 +795,7 @@ func (c *catchupReplayCoordinator) retargetFrozenPivot(
 func (c *catchupReplayCoordinator) failFrozenPivotHandoff(handoff standardReplayPivotHandoff) bool {
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	if !c.standardReplayPivotHandoffMatchesLocked(handoff) || c.standardReplay.pivotReady {
+	if !c.standardReplayPivotHandoffMatchesLocked(handoff) || c.standardReplay.isPivotReady() {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
 		return false

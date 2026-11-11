@@ -27,8 +27,8 @@ func TestReplayReplacementRetainsVerifiedProgressWhileAcquiring(t *testing.T) {
 	c.recordValidationCatchupTarget(links[2].seq, links[2].hash, 7, catchupSourceQuorum)
 	c.standardReplay.stalledSamples = standardReplayStallWindows
 	require.True(t, c.retargetFrozenPivot(generation, anchorSeq, c.standardReplay.pivotSeq, frozenPivotRetargetStalled, time.Now()))
-	assert.True(t, c.standardReplay.active)
-	assert.True(t, c.standardReplay.pivotReady)
+	assert.True(t, c.standardReplay.isActive())
+	assert.True(t, c.standardReplay.isPivotReady())
 	assert.Equal(t, generation, c.standardReplay.generation)
 	assert.Equal(t, anchorSeq, c.standardReplay.anchorSeq)
 	assert.Equal(t, anchorHash, c.standardReplay.anchorHash)
@@ -81,7 +81,7 @@ func TestReplayReplacementTimeoutRetainsAnchorAndRetriesAfterCooldown(t *testing
 	old := c.fetchTracker.Find(links[1].hash)
 	require.NotNil(t, old)
 	c.failInboundAcquisition(old)
-	assert.True(t, c.standardReplay.active)
+	assert.True(t, c.standardReplay.isActive())
 	assert.Equal(t, anchor, c.standardReplay.anchorHash)
 	assert.Equal(t, generation, c.standardReplay.generation)
 	require.NotNil(t, c.standardReplay.replacement)
@@ -110,7 +110,7 @@ func TestReplayReplacementRejectsStaleCancellation(t *testing.T) {
 	require.NotNil(t, acquisition)
 	_, canceled := c.cancelStandardReplayPipelineIdentity(before, "stale_retarget")
 	assert.False(t, canceled)
-	assert.True(t, c.standardReplay.active)
+	assert.True(t, c.standardReplay.isActive())
 	assert.Same(t, acquisition, c.standardReplay.replacement.acquisition)
 	current := c.standardReplayIdentityLocked()
 	_, canceled = c.cancelStandardReplayPipelineIdentity(current, "current_retarget")
@@ -119,7 +119,7 @@ func TestReplayReplacementRejectsStaleCancellation(t *testing.T) {
 	assert.Nil(t, c.fetchTracker.Find(links[0].hash))
 	assert.NotEqual(t, links[0].hash, c.consensusRecovery.stepHash)
 	c.failInboundAcquisition(acquisition)
-	assert.False(t, c.standardReplay.active)
+	assert.False(t, c.standardReplay.isActive())
 }
 
 func TestReplayCompletionRetiresUnneededReplacement(t *testing.T) {
@@ -196,7 +196,7 @@ func TestReplayRecoveryRetains177AppliedLedgersAndPreparedSuffix(t *testing.T) {
 	require.Equal(t, standardReplayAvailabilityRetryStarted, c.retryStandardReplayAvailability(entry.availabilityNextRetryAt))
 	completeStandardReplayTestLink(t, r, links[179])
 	drainStandardReplayTestPipeline(t, r)
-	assert.False(t, c.standardReplay.active)
+	assert.False(t, c.standardReplay.isActive())
 	assert.Equal(t, uint64(180), c.replayPipelineApplied.Load())
 	assert.Equal(t, generation, c.standardReplay.generation)
 	for _, link := range []standardReplayTestLink{links[176], links[177], links[180]} {
@@ -239,7 +239,7 @@ func TestReplayReplacementAdoptsInFlightAncestorAndKeepsTarget(t *testing.T) {
 	completeIssue1863FullStatePivot(t, r, pivot)
 	drainStandardReplayTestPipeline(t, r)
 	assert.Equal(t, generation, c.standardReplay.generation)
-	assert.False(t, c.standardReplay.active)
+	assert.False(t, c.standardReplay.isActive())
 	held, err := svc.GetLedgerByHash(target.hash)
 	require.NoError(t, err)
 	require.NotNil(t, held)
@@ -255,14 +255,14 @@ func TestReplayRetryReservesResidentCapacityDuringDelayedPivot(t *testing.T) {
 	target := links[len(links)-1]
 	c.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
 	require.True(t, c.continueFrozenPivotRecovery(target.seq, target.hash, 7))
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, r, links[0])
 	c.standardReplay.entries[links[0].seq].durable = true
 	failed := c.fetchTracker.Find(links[1].hash)
 	require.NotNil(t, failed)
 	c.failInboundAcquisition(failed)
 	require.True(t, c.refillStandardReplayCollector(7))
-	c.standardReplay.pivotReady = true
+	c.standardReplay.phase = standardReplayPivotReady
 	c.drainStandardReplayPipeline()
 	require.Equal(t, links[0].hash, c.standardReplay.anchorHash)
 	sender.mu.Lock()
