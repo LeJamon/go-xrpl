@@ -2,103 +2,65 @@
 
 # Conformance status
 
-A snapshot of the rippled-parity conformance suite, produced by
-[`scripts/conformance-summary.sh`](../scripts/conformance-summary.sh). The
-**in-scope** percentage is the one that matters; out-of-scope suites are
-intentionally not yet covered — see [conformance.md](conformance.md) and
-[`scripts/conformance-out-of-scope.txt`](../scripts/conformance-out-of-scope.txt).
+The result of executing the committed conformance corpus
+`internal/testing/conformance/testdata/rippled-3.4.1-v4`,
+produced by [`scripts/conformance-summary.sh`](../scripts/conformance-summary.sh).
+The required CI conformance job executes the same corpus.
 
-Regenerate with `just docs-gen` (runs the full suite).
+The table reconciles `discovered = executed + skipped + excluded` and
+`executed = passed + failed`, overall and by suite, transaction family and
+amendment profile. The listed coverage limits state what the corpus does not
+establish. See [conformance.md](conformance.md) for how to read this evidence.
+
+Regenerate with `just docs-gen`. `just docs-check` and the Docs workflow fail
+when this file differs from a fresh run.
 
 ```
-Running conformance tests (timeout=300s)...
+Oracle: XRPLF/xrpld-private 3.4.1 d147fccf54a500fce586522f28d6044c37fd8d29
+Manifest SHA-256: 55ef9157dfcc40bf3abebe8ddda8aed6a333ccc7038177e7fabbe7f1c0f73b63
+                                               discovered   executed     passed     failed    skipped   excluded
+Total                                                 118        118        118          0          0          0
 
-=========================================
- CONFORMANCE SUMMARY
-=========================================
- Total:    1334 pass /  120 fail / 1454  (91.7%)
- Skipped:    64
- In scope: 1260 pass /    0 fail / 1260  (100.0%)
- Out:        74 pass /  120 fail /  194
-=========================================
+Suites
+app/StrictOracleRecorder                              118        118        118          0          0          0
 
-Per-suite breakdown:
+Families
+AccountSet                                             29         29         29          0          0          0
+Batch                                                  48         48         48          0          0          0
+EscrowCancel                                            1          1          1          0          0          0
+EscrowToken                                             2          2          2          0          0          0
+LoanBrokerSet                                           1          1          1          0          0          0
+NFTokenAcceptOffer                                      1          1          1          0          0          0
+NFTokenAuth                                             4          4          4          0          0          0
+OfferCreate                                             1          1          1          0          0          0
+Payment                                                18         18         18          0          0          0
+TicketCreate                                            5          5          5          0          0          0
+TrustSet                                                4          4          4          0          0          0
+VaultCreate                                             4          4          4          0          0          0
 
-Suite                                          Pass  Fail Total   Rate
------                                          ----  ---- -----   ----
-app/AccountDelete                                16     0    16   100%
-app/AccountTxPaging                               1     0     1   100%
-app/AMM                                          42     0    42   100%
-app/AMMClawback                                  12     0    12   100%
-app/AMMExtended                                  44     0    44   100%
-app/Batch                                         5    25    30    16%
-app/Check                                        14     0    14   100%
-app/Clawback                                     10     0    10   100%
-app/Credentials                                  42     0    42   100%
-app/Delegate                                     16     0    16   100%
-app/DeliverMin                                    1     0     1   100%
-app/DepositAuth                                   4     0     4   100%
-app/DepositPreauth                               11     0    11   100%
-app/DID                                           5     0     5   100%
-app/Discrepancy                                   1     0     1   100%
-app/Escrow                                       18     0    18   100%
-app/EscrowToken                                  32     0    32   100%
-app/FixNFTokenPageLinks                           3     0     3   100%
-app/Flow                                         17     0    17   100%
-app/Freeze                                       13     0    13   100%
-app/Invariants                                   22     0    22   100%
-app/LPTokenTransfer                               6     0     6   100%
-app/MPToken                                      20     0    20   100%
-app/MultiSign                                    21     0    21   100%
-app/NetworkID                                     1     0     1   100%
-app/NetworkOPs                                    1     0     1   100%
-app/NFTokenAllFeatures                           36     0    36   100%
-app/NFTokenAuth                                   5     0     5   100%
-app/NFTokenBaseUtil                              36     0    36   100%
-app/NFTokenBurnAllFeatures                        4     0     4   100%
-app/NFTokenBurnBaseUtil                           5     0     5   100%
-app/NFTokenBurnWOfixFungTokens                    5     0     5   100%
-app/NFTokenBurnWOFixNFTPageLinks                  5     0     5   100%
-app/NFTokenBurnWOFixTokenRemint                   5     0     5   100%
-app/NFTokenDir                                    5     0     5   100%
-app/NFTokenDisallowIncoming                      36     0    36   100%
-app/NFTokenWOfixV1                               36     0    36   100%
-app/NFTokenWOMintOffer                           36     0    36   100%
-app/NFTokenWOModify                              36     0    36   100%
-app/NFTokenWOTokenRemint                         36     0    36   100%
-app/NFTokenWOTokenReserve                        36     0    36   100%
-app/OfferAllFeatures                             59     0    59   100%
-app/OfferBaseUtil                                60     0    60   100%
-app/OfferWOFillOrKill                            59     0    59   100%
-app/OfferWOPermDEX                               59     0    59   100%
-app/OfferWOSmallQOffers                          59     0    59   100%
-app/OfferWTakerDryOffer                          59     0    59   100%
-app/Oracle                                        7     0     7   100%
-app/Path                                         45     0    45   100%
-app/PayChan                                      24     0    24   100%
-app/PayStrand                                     4     0     4   100%
-app/PermissionedDEX                              11     0    11   100%
-app/PermissionedDomains                           6     0     6   100%
-app/ReducedOffer                                  5     0     5   100%
-app/Regression                                    7     0     7   100%
-app/SetAuth                                       1     0     1   100%
-app/SetRegularKey                                 9     0     9   100%
-app/SetTrust                                     14     0    14   100%
-app/TheoreticalQuality                            3     0     3   100%
-app/ThinBook                                      1     0     1   100%
-app/Ticket                                        8     0     8   100%
-app/Transaction_ordering                          3     0     3   100%
-app/TrustAndBalance                              13     0    13   100%
-app/TxQMetaInfo                                  19     0    19   100%
-app/TxQPosNegFlows                               17     0    17   100%
-app/Vault                                        52    80   132    39%
-app/XChain                                        1    14    15     6%
-app/XChainSim                                     0     1     1     0%
-ledger/BookDirs                                   1     0     1   100%
-ledger/Directory                                  8     0     8   100%
-ledger/GetAmendments                              1     0     1   100%
-ledger/PaymentSandbox                             5     0     5   100%
-ledger/PendingSaves                               1     0     1   100%
-ledger/SkipList                                   1     0     1   100%
-ledger/View                                      12     0    12   100%
+Profiles
+c0-l0-b0-f0                                             1          1          1          0          0          0
+c0-l0-b0-f1                                             1          1          1          0          0          0
+c0-l0-b1-f0                                             6          6          6          0          0          0
+c0-l0-b1-f1                                            11         11         11          0          0          0
+c0-l1-b0-f0                                             1          1          1          0          0          0
+c0-l1-b0-f1                                             1          1          1          0          0          0
+c0-l1-b1-f0                                             6          6          6          0          0          0
+c0-l1-b1-f1                                            11         11         11          0          0          0
+c1-l0-b0-f0                                             1          1          1          0          0          0
+c1-l0-b0-f1                                             1          1          1          0          0          0
+c1-l0-b1-f0                                             6          6          6          0          0          0
+c1-l0-b1-f1                                            11         11         11          0          0          0
+c1-l1-b0-f0                                             1          1          1          0          0          0
+c1-l1-b0-f1                                             1          1          1          0          0          0
+c1-l1-b1-f0                                             6          6          6          0          0          0
+c1-l1-b1-f1                                            53         53         53          0          0          0
+
+Coverage limits:
+- Bounded common-engine evidence: 118 signed cases across 16 amendment profiles and 12 submitted transaction families; it is not exhaustive transactor or whole-node parity.
+- Fresh parents persist Amendments and start with an empty queue. Queue evidence includes default network thresholds, five-candidate fee ordering and eviction, and a three-close history with an authenticated empty warmup and exact post-close queue snapshots.
+- Seed 2016 generates four signed XRP Payment samples only. The bounded Go soak permutes and replays recorded cases; it does not generate fresh oracle inputs at runtime.
+- Invariant recovery includes malformed Escrow tecINVARIANT_FAILED fee-only recovery and malformed AccountRoot tefINVARIANT_FAILED persistent recovery; the fatal diagnostic is an intentional oracle row.
+- The six transient open-ledger rows cover four NFTokenAuth and two EscrowToken cases using authenticated rawInsert/rawErase deltas without closing before submission; AMM test-fidelity gap #1498 remains outside this corpus.
+- Full native cryptography capability, live peer/consensus and protocol-facing RPC parity are not established by this corpus.
 ```

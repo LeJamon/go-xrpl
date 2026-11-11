@@ -49,22 +49,13 @@ func LoadConfig(paths Paths) (*Config, error) {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 
-	// Unmarshal into struct.
-	// The custom decode hook is required so viper can decode the typed
-	// union fields (LedgerHistory, FetchDepth, NetworkID) from raw TOML
-	// scalars. The remaining hooks preserve viper's default behaviour
-	// for time durations and slices.
-	var config Config
-	if err := v.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
-		configDecodeHook(),
-		mapstructure.StringToTimeDurationHookFunc(),
-		mapstructure.StringToSliceHookFunc(","),
-	))); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	config, unknown, err := decodeConfig(v)
+	if err != nil {
+		return nil, err
 	}
-	config.Voting.ReferenceFeeSet = v.IsSet("voting.reference_fee")
-	config.Voting.AccountReserveSet = v.IsSet("voting.account_reserve")
-	config.Voting.OwnerReserveSet = v.IsSet("voting.owner_reserve")
+	if len(unknown) > 0 {
+		return nil, newUnknownKeysError(paths.Main, unknown)
+	}
 
 	if !paths.SkipValidators {
 		validators, err := loadValidatorsConfig(paths, config.ValidatorsFile)
@@ -74,17 +65,40 @@ func LoadConfig(paths Paths) (*Config, error) {
 		config.Validators = *validators
 	}
 
-	// Process dynamic port configurations
-	if err := processPorts(&config, v); err != nil {
-		return nil, fmt.Errorf("failed to process ports: %w", err)
-	}
-
 	// Validate the complete configuration (reports ALL errors at once)
-	if err := ValidateConfig(&config); err != nil {
+	if err := ValidateConfig(config); err != nil {
 		return nil, err
 	}
 
-	return &config, nil
+	return config, nil
+}
+
+// decodeConfig decodes the main configuration and its port sections. It
+// returns the keys that neither the Config struct nor a port section defines.
+func decodeConfig(v *viper.Viper) (*Config, []string, error) {
+	// The custom decode hook is required so viper can decode the typed
+	// union fields (LedgerHistory, FetchDepth, NetworkID) from raw TOML
+	// scalars. The remaining hooks preserve viper's default behaviour
+	// for time durations and slices.
+	var config Config
+	unused, err := unmarshalTrackingUnused(v, &config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		configDecodeHook(),
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+	)))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	config.Voting.ReferenceFeeSet = v.IsSet("voting.reference_fee")
+	config.Voting.AccountReserveSet = v.IsSet("voting.account_reserve")
+	config.Voting.OwnerReserveSet = v.IsSet("voting.owner_reserve")
+
+	unusedPortKeys, err := processPorts(&config, v)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to process ports: %w", err)
+	}
+
+	return &config, append(dropPortSections(unused, config.Server.Ports), unusedPortKeys...), nil
 }
 
 func validatePositiveDurationSetting(v *viper.Viper, key string) error {
@@ -290,8 +304,12 @@ func loadValidatorsTomlFile(filePath string) (*ValidatorsConfig, error) {
 	}
 
 	var validators ValidatorsConfig
-	if err := v.Unmarshal(&validators); err != nil {
+	unused, err := unmarshalTrackingUnused(v, &validators)
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal validators config: %w", err)
+	}
+	if len(unused) > 0 {
+		return nil, newUnknownKeysError(filePath, unused)
 	}
 	if err := validateValidatorsFile(&validators); err != nil {
 		return nil, err
@@ -328,9 +346,11 @@ func validateValidatorsFile(validators *ValidatorsConfig) error {
 	return nil
 }
 
-// processPorts processes dynamic port configurations
-func processPorts(config *Config, v *viper.Viper) error {
+// processPorts processes dynamic port configurations. It returns the keys
+// found in the loaded port sections that PortConfig does not define.
+func processPorts(config *Config, v *viper.Viper) ([]string, error) {
 	config.Ports = make(map[string]PortConfig)
+	var unused []string
 
 	serverPorts := config.Server.Ports
 	if len(serverPorts) == 0 {
@@ -338,14 +358,17 @@ func processPorts(config *Config, v *viper.Viper) error {
 	}
 
 	for _, portName := range serverPorts {
-		portConfig, err := loadPortConfig(v, portName, config.Server)
+		portConfig, portUnused, err := loadPortConfig(v, portName, config.Server)
 		if err != nil {
-			return fmt.Errorf("failed to load port config %s: %w", portName, err)
+			return nil, fmt.Errorf("failed to load port config %s: %w", portName, err)
 		}
 		config.Ports[portName] = portConfig
+		for _, key := range portUnused {
+			unused = append(unused, strings.ToLower(portName)+"."+key)
+		}
 	}
 
-	return nil
+	return unused, nil
 }
 
 // findPortSections scans viper for sections that start with "port_"
@@ -370,23 +393,24 @@ func findPortSections(v *viper.Viper) []string {
 }
 
 // loadPortConfig loads configuration for a specific port
-func loadPortConfig(v *viper.Viper, portName string, serverDefaults ServerConfig) (PortConfig, error) {
+func loadPortConfig(v *viper.Viper, portName string, serverDefaults ServerConfig) (PortConfig, []string, error) {
 	var portConfig PortConfig
 
 	portViper := v.Sub(portName)
 	if portViper == nil {
-		return PortConfig{}, fmt.Errorf("no configuration found for port %s", portName)
+		return PortConfig{}, nil, fmt.Errorf("no configuration found for port %s", portName)
 	}
 
 	applyServerDefaults(portViper, serverDefaults)
 
-	if err := portViper.Unmarshal(&portConfig); err != nil {
-		return PortConfig{}, fmt.Errorf("failed to unmarshal port config: %w", err)
+	unused, err := unmarshalTrackingUnused(portViper, &portConfig)
+	if err != nil {
+		return PortConfig{}, nil, fmt.Errorf("failed to unmarshal port config: %w", err)
 	}
 	portConfig.Admin = append(append([]string(nil), serverDefaults.Admin...), portConfig.Admin...)
 	portConfig.SecureGateway = append(append([]string(nil), serverDefaults.SecureGateway...), portConfig.SecureGateway...)
 
-	return portConfig, nil
+	return portConfig, unused, nil
 }
 
 // applyServerDefaults applies server-level defaults to a port
