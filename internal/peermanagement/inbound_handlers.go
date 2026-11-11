@@ -482,15 +482,9 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 // Semantics: the peer announces a list of tx hashes it holds; we reply
 // with a TMGetObjectByHash{otTRANSACTIONS, query=true} for the subset
 // we don't have. Both directions are part of the tx-reduce-relay
-// feature bundle — rippled charges feeMalformedRequest "disabled"
-// when the local node isn't running tx-reduce-relay.
+// feature bundle; the message descriptor's gate refuses the frame when
+// tx-reduce-relay is not negotiated.
 func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
-	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
-		slog.Debug("TMHaveTransactions without negotiated tx-reduce-relay; dropping",
-			"t", "Overlay", "peer", evt.PeerID)
-		o.IncPeerBadData(evt.PeerID, "have-transactions-unnegotiated")
-		return
-	}
 	decoded, err := message.Decode(message.TypeHaveTransactions, evt.Payload)
 	if err != nil {
 		o.IncPeerBadData(evt.PeerID, "have-transactions-decode")
@@ -1010,14 +1004,10 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 // re-serialize: the decode happened once when the batch was parsed.
 // The batched path shares the same per-peer deferred queue as the unbatched
 // path; HAVE_TRANSACTIONS acknowledgements remove queued hashes before this
-// handler forwards the batch to the transaction router.
+// handler forwards the batch to the transaction router. The message
+// descriptor's gate refuses the frame when tx-reduce-relay is not
+// negotiated.
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
-	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
-		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",
-			"t", "Overlay", "peer", evt.PeerID)
-		o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "transactions-batch-unnegotiated")
-		return
-	}
 	decoded, err := message.Decode(message.TypeTransactions, evt.Payload)
 	if err != nil {
 		var limitErr *message.WireLimitError

@@ -97,6 +97,9 @@ func (o *Overlay) onPeerFailed(evt Event) {
 	}
 }
 
+// onMessageReceived dispatches one inbound message by its descriptor: the
+// feature gate first, then the overlay's own handler, then forwarding to
+// the descriptor's route.
 func (o *Overlay) onMessageReceived(evt Event) {
 	if evt.charge == nil {
 		if peer, ok := o.getPeer(evt.PeerID); ok {
@@ -104,157 +107,101 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		}
 	}
 	defer evt.release()
-	msgType := evt.MessageType
+	desc := describeMessage(evt.MessageType)
 
 	// Record transport metrics before dispatch, including TMTransactions
 	// frames that the batch handler later rejects. Transaction-processing
 	// metrics for the batch contents are recorded only after admission.
 	if o.shouldRecordTxMetrics(evt.PeerID) {
-		o.recordInboundTxMetric(msgType, evt.Payload, evt.WireSize)
+		o.recordInboundTxMetric(evt.MessageType, evt.Payload, evt.WireSize)
 	}
 
-	// Handle PING at transport level — respond with PONG immediately
-	if msgType == message.TypePing {
+	if !o.admitGated(&evt, desc.gate) {
+		return
+	}
+	o.handleLocally(evt)
+	if desc.route != routeNone {
+		o.forwardInbound(&evt, desc.route)
+	}
+}
+
+// admitGated reports whether the peer satisfies gate, charging and
+// dropping the message when it does not.
+func (o *Overlay) admitGated(evt *Event, gate *featureGate) bool {
+	if gate == nil {
+		return true
+	}
+	if (!gate.localTxReduceRelay || o.cfg.EnableTxReduceRelay) && o.PeerSupports(evt.PeerID, gate.feature) {
+		return true
+	}
+	slog.Debug("Message from peer without negotiated feature; dropping", "t", "Overlay",
+		"type", evt.MessageType.String(), "feature", gate.feature.String(), "peer", evt.PeerID)
+	if gate.immediate {
+		o.IncPeerBadData(evt.PeerID, gate.reason)
+	} else {
+		o.selectMessageCharge(evt, resource.FeeMalformedRequest(), gate.reason)
+	}
+	return false
+}
+
+// handleLocally runs the overlay's own handler for the message types it
+// processes itself; other types pass through untouched.
+func (o *Overlay) handleLocally(evt Event) {
+	switch evt.MessageType {
+	case message.TypePing:
 		if o.handlePing(evt) {
 			o.acknowledgePeerBootstrapPing(evt.PeerID)
 		}
-		return
-	}
-
-	// Inbound TMSquelch is accepted UNCONDITIONALLY, matching rippled —
-	// there is no per-peer gating on vpReduceRelay for incoming
-	// squelches. Feature negotiation governs what WE SEND (we only
-	// emit TMSquelch to peers who advertised reduce-relay), not what
-	// we accept: a squelch directive is harmless when applied — it
-	// only suppresses what we send next — and rejecting it creates an
-	// attack surface where a hostile peer could advertise one
-	// capability set to us and another to a neighbor to desync
-	// squelch state.
-	if msgType == message.TypeSquelch {
+	case message.TypeSquelch:
 		if !o.PeerSupports(evt.PeerID, FeatureVpReduceRelay) {
 			slog.Debug("TMSquelch from peer without vprr feature; accepting (matches rippled)",
 				"t", "Overlay", "peer", evt.PeerID)
 		}
 		o.handleSquelchMessage(evt)
-		return
-	}
-
-	// mtSTATUS_CHANGE refreshes Closed-/Previous-Ledger hints and is
-	// then forwarded to the consensus
-	// router. The overlay handler updates per-peer state +
-	// peer_status WS publishing; the consensus router needs the same
-	// frame to update its peer-LCL view (Adaptor.UpdatePeerLCL feeds
-	// getNetworkLedger) and to drive initial-sync ledger acquisition
-	// (startLedgerAcquisition / checkBehind). Splitting at the
-	// overlay and dropping here would leave the router blind to peer
-	// status — a fresh node would never leave OpModeDisconnected and
-	// the engine's timerEntry would never advance (issue #381).
-	if msgType == message.TypeStatusChange {
+	case message.TypeStatusChange:
+		// The router also needs this frame for its peer-LCL view and
+		// initial-sync acquisition (issue #381); the descriptor forwards it.
 		o.handleStatusChange(evt)
-	}
-
-	// Serve mtREPLAY_DELTA_REQ from the local ledger sync handler.
-	// Before dispatching we verify the peer actually negotiated
-	// ledger-replay in its handshake; a peer sending these without the
-	// feature is silently dropped and charged bad data.
-	if msgType == message.TypeReplayDeltaReq {
-		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
-			slog.Debug("ReplayDeltaRequest from peer without ledgerreplay feature; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
-			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "replay delta request disabled")
-			return
-		}
+	case message.TypeReplayDeltaReq:
 		o.dispatchReplayDeltaRequest(evt)
-		return
-	}
-
-	// Serve mtPROOF_PATH_REQ from the local ledger sync handler. Same
-	// handshake-negotiation gate as mtREPLAY_DELTA_REQ above — the
-	// proof-path protocol is part of the ledger-replay feature bundle.
-	if msgType == message.TypeProofPathReq {
-		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
-			slog.Debug("ProofPathRequest from peer without ledgerreplay feature; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
-			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "proof path request disabled")
-			return
-		}
+	case message.TypeProofPathReq:
 		o.dispatchProofPathRequest(evt)
-		return
-	}
-
-	// Response-path feature gate. A peer that didn't negotiate
-	// ledgerreplay in handshake shouldn't be sending us
-	// TMReplayDeltaResponse or TMProofPathResponse unsolicited. Gate
-	// BEFORE forwarding to the router so a non-negotiated peer can't
-	// wedge the inbound acquisition state with bogus responses.
-	if msgType == message.TypeReplayDeltaResponse {
-		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
-			slog.Debug("TMReplayDeltaResponse from peer without ledgerreplay feature; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
-			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "replay delta response disabled")
-			return
-		}
-	}
-	if msgType == message.TypeProofPathResponse {
-		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
-			slog.Debug("TMProofPathResponse from peer without ledgerreplay feature; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
-			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "proof path response disabled")
-			return
-		}
-	}
-
-	// Transport-level messages with no consensus-router impact are
-	// handled inline here and NOT forwarded to o.messages.
-	switch msgType {
 	case message.TypeCluster:
 		o.handleClusterMessage(evt)
-		return
 	case message.TypeGetObjects:
 		o.handleGetObjectsMessage(evt)
-		return
 	case message.TypeHaveTransactions:
 		o.handleHaveTransactionsMessage(evt)
-		return
 	case message.TypeTransactions:
 		o.handleTransactionsBatchMessage(evt)
-		return
 	case message.TypeEndpoints:
 		o.handleEndpointsMessage(evt)
-		return
 	}
+}
 
+func (o *Overlay) forwardInbound(evt *Event, route overlayRoute) {
+	msgType := evt.MessageType
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
-
-	if msgType == message.TypeTransaction {
-		o.forwardTransaction(evt.inboundMessage())
-		return
-	}
-
-	switch msgType {
-	case message.TypeLedgerData, message.TypeReplayDeltaResponse, message.TypeProofPathResponse:
-		o.forwardLedgerData(evt.inboundMessage())
-		return
-	}
-
-	switch describeMessage(msgType).route {
-	case routeConsensus:
-		o.forwardConsensus(evt.inboundMessage())
-		return
-	case routeConsensusControl:
-		o.forwardConsensusControl(evt.inboundMessage())
-		return
-	}
-
 	msg := evt.inboundMessage()
-	select {
-	case o.messages <- msg:
+	switch route {
+	case routeTransaction:
+		o.forwardTransaction(msg)
+	case routeLedgerData:
+		o.forwardLedgerData(msg)
+	case routeConsensus:
+		o.forwardConsensus(msg)
+	case routeConsensusControl:
+		o.forwardConsensusControl(msg)
 	default:
-		_ = msg.Close()
-		o.droppedMessages.Add(1)
-		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
-		if msgType == message.TypeManifests {
-			o.RejectPeerBootstrap(evt.PeerID)
+		select {
+		case o.messages <- msg:
+		default:
+			_ = msg.Close()
+			o.droppedMessages.Add(1)
+			slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
+			if msgType == message.TypeManifests {
+				o.RejectPeerBootstrap(evt.PeerID)
+			}
 		}
 	}
 }
