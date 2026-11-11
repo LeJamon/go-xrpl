@@ -308,12 +308,35 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 	// The transaction indexes are authoritative for the in-memory lookup
 	// window. Sweeping them by sequence avoids reopening an evicted ledger's
 	// transaction SHAMap, which may be backed by cold storage.
-	for txHash, txSeq := range s.txIndex {
-		if txSeq <= cutoff {
+	for seq := range s.txHashesBySeq {
+		if seq <= cutoff {
+			s.unindexLedgerTxsLocked(seq)
+		}
+	}
+}
+
+// indexTxLocked maps txHash to the ledger that contains it and records the
+// hash under that sequence so unindexing a ledger costs only its own
+// transactions. txHashesBySeq may hold stale hashes; txIndex is authoritative.
+// Caller holds historyComponent.mu.
+func (s *historyComponent) indexTxLocked(txHash [32]byte, seq uint32) {
+	if indexed, ok := s.txIndex[txHash]; ok && indexed == seq {
+		return
+	}
+	s.txIndex[txHash] = seq
+	s.txHashesBySeq[seq] = append(s.txHashesBySeq[seq], txHash)
+}
+
+// unindexLedgerTxsLocked drops the transaction-index entries that resolve to
+// seq. Caller holds historyComponent.mu.
+func (s *historyComponent) unindexLedgerTxsLocked(seq uint32) {
+	for _, txHash := range s.txHashesBySeq[seq] {
+		if indexed, ok := s.txIndex[txHash]; ok && indexed == seq {
 			delete(s.txIndex, txHash)
 			delete(s.txPositionIndex, txHash)
 		}
 	}
+	delete(s.txHashesBySeq, seq)
 }
 
 // putHistoryLocked installs l into ledgerHistory, keeping the by-hash index in

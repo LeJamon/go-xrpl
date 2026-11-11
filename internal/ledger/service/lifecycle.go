@@ -308,12 +308,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 				"hash", fmt.Sprintf("%x", staleHash),
 			)
 		}
-		for txHash, txSeq := range s.txIndex {
-			if txSeq == adoptedSeq-1 {
-				delete(s.txIndex, txHash)
-				delete(s.txPositionIndex, txHash)
-			}
-		}
+		s.unindexLedgerTxsLocked(adoptedSeq - 1)
 		s.invalidateCompleteLedger(adoptedSeq - 1)
 		s.dropValidationCandidateLocked(adoptedSeq - 1)
 		s.drainPendingValidationLocked(staleHash)
@@ -369,14 +364,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 			validatedHashPurged = h
 		}
 
-		// Drop tx-index entries resolving to this invalidated seq.
-		for txHash, txSeq := range s.txIndex {
-			if txSeq == seq {
-				delete(s.txIndex, txHash)
-				delete(s.txPositionIndex, txHash)
-			}
-		}
-
+		s.unindexLedgerTxsLocked(seq)
 		s.deleteHistoryLocked(seq)
 	}
 
@@ -449,22 +437,15 @@ func (s *Service) purgeConflictingHistoryLocked(parent *ledger.Ledger) {
 	if parentSeq != ^uint32(0) {
 		s.invalidateCompleteLedgerRange(parentSeq+1, ^uint32(0))
 	}
-	removed := make(map[uint32]struct{})
 	for seq, existing := range s.ledgerHistory {
 		if seq < parentSeq || (seq == parentSeq && existing.Hash() == parentHash) {
 			continue
 		}
-		removed[seq] = struct{}{}
 		if seq == parentSeq {
 			s.invalidateCompleteLedgerHash(seq, existing.Hash())
 		}
+		s.unindexLedgerTxsLocked(seq)
 		s.deleteHistoryLocked(seq)
-	}
-	for txHash, txSeq := range s.txIndex {
-		if _, ok := removed[txSeq]; ok {
-			delete(s.txIndex, txHash)
-			delete(s.txPositionIndex, txHash)
-		}
 	}
 }
 
