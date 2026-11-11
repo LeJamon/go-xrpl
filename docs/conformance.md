@@ -109,4 +109,5 @@ by required conformance or differential fuzz replay. The old
 it cannot silently exclude Batch, Vault or other v4 cases.
 
 - [Architecture](architecture.md) describes the transaction pipeline.
+- [Upgrading rippled](upgrading-rippled.md) is the runbook for moving to the next release.
 - [Contributing](../CONTRIBUTING.md) describes the oracle-based implementation workflow.
