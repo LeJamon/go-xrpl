@@ -3,13 +3,12 @@ package adapter
 import (
 	"context"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerServiceAdapter adapts the ledger service to the RPC LedgerService interface
 type LedgerServiceAdapter struct {
-	svc           *service.Service
+	svc           Backend
 	txBroadcaster func(txBlob []byte) // called after successful submit to relay tx to peers
 }
 
@@ -29,7 +28,10 @@ var _ types.OpenLedgerViewSource = (*LedgerServiceAdapter)(nil)
 var _ types.TransactionRulesSource = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
-func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
+func NewLedgerServiceAdapter(svc Backend) *LedgerServiceAdapter {
+	if isNilBackend(svc) {
+		svc = nil
+	}
 	return &LedgerServiceAdapter{svc: svc}
 }
 
