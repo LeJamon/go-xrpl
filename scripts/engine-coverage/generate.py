@@ -692,7 +692,7 @@ def parse_go_registrations(repo: Path) -> dict[int, dict[str, Any]]:
     for path in sorted((repo / "internal/tx").rglob("register.go")):
         text = read(path)
         for match in re.finditer(
-            r"tx\.Register\(tx\.(Type\w+),\s*func\(\) tx\.Transaction\s*\{\s*return &([A-Za-z_]\w*)\{",
+            r"tx\.Register\(tx\.Descriptor\{\s*Type:\s*tx\.(Type\w+),\s*New:\s*func\(\) tx\.Transaction\s*\{\s*return &([A-Za-z_]\w*)\{",
             text,
             re.S,
         ):
