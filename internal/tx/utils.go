@@ -308,34 +308,25 @@ func IsGlobalFrozen(view state.ReadOnlyLedgerView, issuerAddress string) bool {
 	return (account.Flags & state.LsfGlobalFreeze) != 0
 }
 
-// IsDeepFrozen checks if a trust line between account and issuer is deep-frozen.
-// Deep freeze can be set by either side of the trust line. Unlike regular freeze
-// (which only checks the issuer's side), deep freeze checks both lsfLowDeepFreeze
-// and lsfHighDeepFreeze.
-// Reference: rippled ledger/View.cpp isDeepFrozen()
-func IsDeepFrozen(view ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) bool {
-	// XRP cannot be frozen
-	if currency == "" || currency == "XRP" {
-		return false
-	}
+// IsDeepFrozen implements rippled's isDeepFrozen for an IOU: either side of the
+// trust line set a deep-freeze flag. Read and parse failures report false.
+func IsDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) bool {
+	frozen, _ := IsIOUDeepFrozen(view, accountID, issuerID, currency)
+	return frozen
+}
 
-	// If account is issuer, not frozen
-	if accountID == issuerID {
-		return false
+// IsIOUDeepFrozen is IsDeepFrozen for callers that must fail closed: read and
+// parse errors are returned. XRP, the issuer itself and a missing line are not
+// deep-frozen.
+func IsIOUDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
+	if currency == "" || currency == "XRP" || accountID == issuerID {
+		return false, nil
 	}
-
-	trustLineKey := keylet.Line(accountID, issuerID, currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		return false
+	line, err := ReadRippleState(view, accountID, issuerID, currency)
+	if err != nil || line == nil {
+		return false, err
 	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return false
-	}
-
-	return (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
+	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, nil
 }
 
 // isFrozenForLPToken reports whether account cannot spend the given asset because
