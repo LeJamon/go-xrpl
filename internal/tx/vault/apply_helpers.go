@@ -99,10 +99,6 @@ func canTransfer(view tx.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, 
 	return mptutil.CanTransferAsset(view, asset, from, to, waiveMPTCanTransfer)
 }
 
-func requireAuth(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType mptutil.AuthType, parentCloseTime uint32) ter.Result {
-	return mptutil.RequireAssetAuthAt(view, asset, account, authType, parentCloseTime)
-}
-
 // addEmptyMPTHolding creates a zero-balance MPToken for accountID under the MPT
 // asset (nothing when the account is the issuer). Returns the owner-count delta.
 func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {

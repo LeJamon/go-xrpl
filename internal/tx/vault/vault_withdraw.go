@@ -220,7 +220,7 @@ func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 	if dstID != accountID {
 		authType = mptutil.StrongAuth
 	}
-	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAssetAuthAt(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
 	if fix340 && dstID == accountID {
