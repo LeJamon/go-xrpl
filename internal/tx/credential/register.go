@@ -9,20 +9,23 @@ func Register() {
 		New: func() tx.Transaction {
 			return &CredentialAccept{BaseTx: *tx.NewBaseTx(tx.TypeCredentialAccept, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeCredentialCreate,
 		New: func() tx.Transaction {
 			return &CredentialCreate{BaseTx: *tx.NewBaseTx(tx.TypeCredentialCreate, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeCredentialDelete,
 		New: func() tx.Transaction {
 			return &CredentialDelete{BaseTx: *tx.NewBaseTx(tx.TypeCredentialDelete, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 }

@@ -54,6 +54,8 @@ type Descriptor struct {
 	Privileges Privilege
 	// DisallowedInBatch rejects the type as a Batch inner transaction.
 	DisallowedInBatch bool
+	// ReserveSponsorable permits spfSponsorReserve on the type.
+	ReserveSponsorable bool
 }
 
 var (

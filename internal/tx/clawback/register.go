@@ -9,6 +9,7 @@ func Register() {
 		New: func() tx.Transaction {
 			return &Clawback{BaseTx: *tx.NewBaseTx(tx.TypeClawback, "")}
 		},
-		Delegation: tx.Delegable,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
 	})
 }

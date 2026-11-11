@@ -9,7 +9,8 @@ func Register() {
 		New: func() tx.Transaction {
 			return &AccountSet{BaseTx: *tx.NewBaseTx(tx.TypeAccountSet, "")}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:         tx.NotDelegable,
+		ReserveSponsorable: true,
 	})
 	tx.Register(tx.Descriptor{
 		Type: tx.TypeAccountDelete,

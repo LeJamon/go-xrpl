@@ -16,6 +16,7 @@ func Register() {
 		New: func() tx.Transaction {
 			return &SponsorshipTransfer{BaseTx: *tx.NewBaseTx(tx.TypeSponsorshipTransfer, "")}
 		},
-		Delegation: tx.NotDelegable,
+		Delegation:         tx.NotDelegable,
+		ReserveSponsorable: true,
 	})
 }

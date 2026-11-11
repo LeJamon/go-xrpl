@@ -9,7 +9,8 @@ func Register() {
 		New: func() tx.Transaction {
 			return &Payment{BaseTx: *tx.NewBaseTx(tx.TypePayment, "")}
 		},
-		Delegation: tx.Delegable,
-		Privileges: tx.PrivCreateAcct | tx.PrivMayCreateMPT,
+		Delegation:         tx.Delegable,
+		ReserveSponsorable: true,
+		Privileges:         tx.PrivCreateAcct | tx.PrivMayCreateMPT,
 	})
 }

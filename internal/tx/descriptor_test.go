@@ -31,6 +31,25 @@ func assertTypeSet(t *testing.T, attribute string, got, want []tx.Type) {
 	}
 }
 
+// SponsorHelpers.cpp isReserveSponsorAllowed.
+func TestDescriptorReserveSponsorable(t *testing.T) {
+	assertTypeSet(t, "ReserveSponsorable",
+		registeredWith(func(d tx.Descriptor) bool { return d.ReserveSponsorable }),
+		[]tx.Type{
+			tx.TypeDelegateSet, tx.TypeDepositPreauth, tx.TypePayment,
+			tx.TypeSignerListSet, tx.TypeCheckCancel, tx.TypeCheckCash,
+			tx.TypeCheckCreate, tx.TypeEscrowCancel, tx.TypeEscrowCreate,
+			tx.TypeEscrowFinish, tx.TypePaymentChannelClaim,
+			tx.TypePaymentChannelCreate, tx.TypePaymentChannelFund,
+			tx.TypeClawback, tx.TypeMPTokenAuthorize,
+			tx.TypeMPTokenIssuanceCreate, tx.TypeMPTokenIssuanceDestroy,
+			tx.TypeMPTokenIssuanceSet, tx.TypeTrustSet,
+			tx.TypeCredentialAccept, tx.TypeCredentialCreate,
+			tx.TypeCredentialDelete, tx.TypeAccountSet, tx.TypeRegularKeySet,
+			tx.TypeSponsorshipTransfer,
+		})
+}
+
 // Batch.h kDisabledTxTypes.
 func TestDescriptorDisallowedInBatch(t *testing.T) {
 	assertTypeSet(t, "DisallowedInBatch",
