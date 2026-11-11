@@ -490,9 +490,35 @@ func NewFromConfig(
 	staticValidators, staticMasterKeys = excludeLocalValidator(staticValidators, staticMasterKeys, identity)
 	validators, masterKeys := includeLocalValidator(staticValidators, staticMasterKeys, identity)
 
+	// Build the publisher-list aggregator when validator_list_keys are
+	// configured. Lists are then ingested both via peer gossip
+	// (ValidatorListCollection through the router) and via HTTP polling of
+	// validator_list_sites. The aggregator pushes its recomputed
+	// trusted UNL into adaptor.SetTrustedValidators on every change —
+	// the same write path SIGHUP reload uses.
+	var vlAgg *validatorlist.Aggregator
+	if len(publisherKeys) > 0 {
+		pkSlice := make([]validatorlist.PublisherKey, len(publisherKeys))
+		for i, k := range publisherKeys {
+			pkSlice[i] = validatorlist.PublisherKey(k)
+		}
+		vlAgg, err = validatorlist.New(validatorlist.Config{
+			PublisherKeys:        pkSlice,
+			SiteURIs:             append([]string(nil), appCfg.Validators.ValidatorListSites...),
+			Threshold:            appCfg.Validators.EffectiveListThreshold(),
+			StaticValidatorCount: len(masterKeys),
+			ValidatorManifests:   validatorManifests,
+			PublisherManifests:   publisherManifests,
+			Logger:               slog.Default().With("component", "validator-list-aggregator"),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("validator-list aggregator: %w", err)
+		}
+	}
+
 	sender := NewOverlaySender(overlay)
 
-	adaptor := New(Config{
+	adaptorCfg := Config{
 		LedgerService:       ledgerSvc,
 		Sender:              sender,
 		Identity:            identity,
@@ -508,7 +534,17 @@ func NewFromConfig(
 		// The operator's [voting] stanza.
 		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
 		RelayValidations: parseRelayValidationsPolicy(appCfg.RelayValidations),
-	})
+	}
+	if vlAgg != nil {
+		adaptorCfg.UNLBlocked = vlAgg.IsUNLBlocked
+		adaptorCfg.QuorumUnavailable = vlAgg.IsQuorumUnavailable
+		adaptorCfg.RefreshUNL = vlAgg.Tick
+		// Listed-but-untrusted signers (published below the trust
+		// threshold) get their validations stored by the engine so a later
+		// trust change promotes what was already seen.
+		adaptorCfg.Listed = vlAgg.IsListed
+	}
+	adaptor := New(adaptorCfg)
 
 	// Seed the local token manifest after durable validator state has loaded.
 	if identity != nil && identity.Manifest != nil {
@@ -549,39 +585,9 @@ func NewFromConfig(
 	router.setPeerSessionView(overlay)
 	router.SetMinimumOnlineFloor(floor)
 
-	// Build the publisher-list aggregator when validator_list_keys are
-	// configured. Lists are then ingested both via peer gossip
-	// (ValidatorListCollection through the router) and via HTTP polling of
-	// validator_list_sites. The aggregator pushes its recomputed
-	// trusted UNL into adaptor.SetTrustedValidators on every change —
-	// the same write path SIGHUP reload uses.
-	var vlAgg *validatorlist.Aggregator
 	var vlPoller *validatorlist.SitePoller
-	if len(publisherKeys) > 0 {
-		pkSlice := make([]validatorlist.PublisherKey, len(publisherKeys))
-		for i, k := range publisherKeys {
-			pkSlice[i] = validatorlist.PublisherKey(k)
-		}
-		vlAgg, err = validatorlist.New(validatorlist.Config{
-			PublisherKeys:        pkSlice,
-			SiteURIs:             append([]string(nil), appCfg.Validators.ValidatorListSites...),
-			Threshold:            appCfg.Validators.EffectiveListThreshold(),
-			StaticValidatorCount: len(masterKeys),
-			ValidatorManifests:   validatorManifests,
-			PublisherManifests:   publisherManifests,
-			Logger:               slog.Default().With("component", "validator-list-aggregator"),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("validator-list aggregator: %w", err)
-		}
+	if vlAgg != nil {
 		router.SetValidatorListAggregator(vlAgg)
-		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
-		adaptor.SetQuorumUnavailableFunc(vlAgg.IsQuorumUnavailable)
-		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
-		// Listed-but-untrusted signers (published below the trust
-		// threshold) get their validations stored by the engine so a later
-		// trust change promotes what was already seen.
-		adaptor.SetListedLookup(vlAgg.IsListed)
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after
 		// every successful apply, and hydrated on cold start so the

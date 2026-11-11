@@ -51,15 +51,14 @@ func TestAdaptor_RelayValidationsPolicyAccessors(t *testing.T) {
 	}
 }
 
-// TestAdaptor_IsListed: nothing is listed until a lookup is wired; then the
+// TestAdaptor_IsListed: nothing is listed without a lookup; with one the
 // adaptor defers to it (Aggregator.IsListed in production).
 func TestAdaptor_IsListed(t *testing.T) {
-	a := New(Config{})
 	listed := consensus.NodeID{0x11}
 
-	assert.False(t, a.IsListed(listed), "no lookup wired")
+	assert.False(t, New(Config{}).IsListed(listed), "no lookup wired")
 
-	a.SetListedLookup(func(n consensus.NodeID) bool { return n == listed })
+	a := New(Config{Listed: func(n consensus.NodeID) bool { return n == listed }})
 	assert.True(t, a.IsListed(listed))
 	assert.False(t, a.IsListed(consensus.NodeID{0x22}))
 }

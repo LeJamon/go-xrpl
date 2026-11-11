@@ -63,7 +63,9 @@ func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) bool {
 	return true
 }
 
-// SetOnOperatingModeChange installs a callback for effective mode changes.
+// SetOnOperatingModeChange installs a callback for effective mode changes. A
+// setter because the subscriber (the RPC server-status publisher) is built
+// from the consensus components.
 func (a *Adaptor) SetOnOperatingModeChange(fn func(consensus.OperatingMode)) {
 	a.mu.Lock()
 	a.onModeChange = fn
