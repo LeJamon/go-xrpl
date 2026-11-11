@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -31,22 +30,11 @@ func TestEscrowIOUPredicatesDifferential(t *testing.T) {
 			}
 			view := rulesMapView{mapView: &mapView{data: sc.data}, rules: rules}
 
-			_, issuerExists := sc.data[keylet.Account(sc.issuer).Key]
 			asset := tx.Asset{Currency: sc.currency, Issuer: state.EncodeAccountIDSafe(sc.issuer)}
 			gotAuth := requireAuthIOU(view, sc.issuer, sc.holder, sc.currency)
 			wantAuth := mptutil.RequireAssetAuthAt(view, asset, sc.holder, mptutil.LegacyAuth, 0)
 			if gotAuth != wantAuth {
 				t.Errorf("%s auth: escrow=%v mptutil=%v", sc.name, gotAuth, wantAuth)
-			}
-
-			gotRate, gotRateResult := getIOUTransferRate(view, sc.issuer)
-			wantRate := tx.GetTransferRateByID(view, sc.issuer)
-			if !issuerExists {
-				if gotRateResult != ter.TecNO_ISSUER {
-					t.Errorf("%s rate missing issuer: escrow=%v", sc.name, gotRateResult)
-				}
-			} else if gotRateResult != ter.TesSUCCESS || gotRate != wantRate {
-				t.Errorf("%s rate: escrow=%v/%v tx=%v", sc.name, gotRate, gotRateResult, wantRate)
 			}
 		}
 	}

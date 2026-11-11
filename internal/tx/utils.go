@@ -228,16 +228,21 @@ func GetTransferRate(view ReadOnlyLedgerView, issuerAddress string) uint32 {
 }
 
 // GetTransferRateByID is GetTransferRate for callers that already hold the
-// issuer's decoded [20]byte account ID, avoiding a re-encode/decode round-trip.
-func GetTransferRateByID(view ReadOnlyLedgerView, issuerID [20]byte) uint32 {
+// issuer's decoded [20]byte account ID. Read and parse failures report parity.
+func GetTransferRateByID(view state.ReadOnlyLedgerView, issuerID [20]byte) uint32 {
+	rate, _ := ReadTransferRate(view, issuerID)
+	return rate
+}
+
+// ReadTransferRate implements rippled's transferRate(view, issuer) for callers
+// that must fail closed: a missing issuer or unset rate is parity, while read
+// and parse errors are returned alongside parity.
+func ReadTransferRate(view ledgerEntryReader, issuerID [20]byte) (uint32, error) {
 	account, err := ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil {
-		return TransferRateParity
+	if err != nil || account == nil || account.TransferRate == 0 {
+		return TransferRateParity, err
 	}
-	if account.TransferRate == 0 {
-		return TransferRateParity
-	}
-	return account.TransferRate
+	return account.TransferRate, nil
 }
 
 // IsMPTLocked reports whether the MPT identified by mptID is locked for account —

@@ -550,9 +550,9 @@ func escrowUnlockIOU(
 
 	// Compute transfer fee
 	// Get current rate from issuer, use min(lockedRate, currentRate)
-	currentRate, rateResult := getIOUTransferRate(view, issuerID)
-	if rateResult != ter.TesSUCCESS {
-		return rateResult
+	currentRate, err := tx.ReadTransferRate(view, issuerID)
+	if err != nil {
+		return ter.TefINTERNAL
 	}
 	effectiveRate := lockedRate
 	if currentRate != 0 && currentRate < effectiveRate {
@@ -811,20 +811,6 @@ func escrowUnlockMPT(
 
 // 6. Shared Utilities
 
-func getIOUTransferRate(view tx.ReadOnlyLedgerView, issuerID [20]byte) (uint32, ter.Result) {
-	issuer, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil {
-		return 0, ter.TefINTERNAL
-	}
-	if issuer == nil {
-		return 0, ter.TecNO_ISSUER
-	}
-	if issuer.TransferRate == 0 {
-		return parityRate, ter.TesSUCCESS
-	}
-	return issuer.TransferRate, ter.TesSUCCESS
-}
-
 // requireAuthIOU checks if an issuer requires authorization and if the account
 // is authorized on the trust line.
 // Reference: rippled View.cpp requireAuth(view, Issue, account) for IOU
@@ -936,13 +922,6 @@ func canTransferMPT(issuance *state.MPTokenIssuanceData, fromID, toID [20]byte) 
 	}
 
 	return ter.TesSUCCESS
-}
-
-// getMPTTransferRate computes the transfer rate from an MPT transfer fee.
-// Formula: uint32(transferFee) * 10_000 + 1_000_000_000
-// Reference: rippled View.cpp transferRate(view, MPTID) — "1'000'000'000u + 10'000 * sle->getFieldU16(sfTransferFee)"
-func getMPTTransferRate(transferFee uint16) uint32 {
-	return uint32(transferFee)*10_000 + 1_000_000_000
 }
 
 // mptIssuanceKeyFromHex decodes a hex MPT issuance ID and returns the keylet.
@@ -1422,7 +1401,7 @@ func computeMPTTransferFee(
 
 	currentRate := parityRate
 	if issuance.TransferFee > 0 {
-		currentRate = getMPTTransferRate(issuance.TransferFee)
+		currentRate = mptutil.TransferRateFromFee(issuance.TransferFee)
 	}
 
 	// Use min(lockedRate, currentRate)

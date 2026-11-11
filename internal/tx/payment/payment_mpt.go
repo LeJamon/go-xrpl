@@ -102,10 +102,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 			return ter.TecLOCKED
 		}
 
-		// Transfer fee: rate = 1_000_000_000 + 10_000 * TransferFee
-		if issuance.TransferFee > 0 {
-			rate = mptRateOne + 10_000*uint64(issuance.TransferFee)
-		}
+		rate = uint64(mptutil.TransferRateFromFee(issuance.TransferFee))
 	}
 
 	// maxSourceAmount: SendMax if present, otherwise dstAmount
