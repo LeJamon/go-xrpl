@@ -395,9 +395,15 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	calculationComplete := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
-				result = ter.TecAMM_FAILED
-				return
+			if !calculationComplete && isAMMAmountOverflowPanic(recovered) {
+				if a.GetFlags()&tfLPToken != 0 {
+					result = ter.TecINTERNAL
+					return
+				}
+				if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+					result = ter.TecAMM_FAILED
+					return
+				}
 			}
 			panic(recovered)
 		}
