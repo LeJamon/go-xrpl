@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -87,6 +88,14 @@ func TestBindNodeStore(t *testing.T) {
 		require.Nil(t, bound.database())
 		require.Equal(t, nodeStoreCapabilities{}, bound.capabilities())
 	})
+}
+
+// Passing the wrapper where a raw store is expected would silently break
+// identity checks such as UsesDatabase; keep that a compile error.
+func TestBoundNodeStoreIsNotADatabase(t *testing.T) {
+	database := reflect.TypeOf((*nodestore.Database)(nil)).Elem()
+	require.False(t, reflect.TypeOf((*boundNodeStore)(nil)).Implements(database))
+	require.False(t, reflect.TypeOf(boundNodeStore{}).Implements(database))
 }
 
 func TestNodeStoreFamilyCapability(t *testing.T) {

@@ -526,7 +526,7 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 						LedgerSeq: entry.LedgerSeq,
 					}
 				}
-				if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
+				if err := s.nodeStore.database().StoreBatch(ctx, nodes); err != nil {
 					return err
 				}
 			}
@@ -554,14 +554,14 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		Data:      headerData,
 		LedgerSeq: seq,
 	}
-	if err := s.nodeStore.Store(ctx, headerNode); err != nil {
+	if err := s.nodeStore.database().Store(ctx, headerNode); err != nil {
 		return fmt.Errorf("store ledger %d header: %w", seq, err)
 	}
 
 	// Single fsync once both state nodes and header are durable.
 	// Sync is uninterruptible at the backend; ctx cancellation only
 	// unblocks the caller (see KVDatabaseImpl.Sync).
-	if err := s.nodeStore.Sync(ctx); err != nil {
+	if err := s.nodeStore.database().Sync(ctx); err != nil {
 		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
 	if releaseClean != nil {
@@ -597,7 +597,7 @@ func (s *Service) persistValidatedTipLocked(
 	allowSameSequenceReplacement bool,
 ) error {
 	hash := l.Hash()
-	current, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	current, err := s.nodeStore.database().Fetch(ctx, validatedTipKey)
 	if err != nil {
 		return fmt.Errorf("fetch validated ledger tip: %w", err)
 	}
@@ -614,7 +614,7 @@ func (s *Service) persistValidatedTipLocked(
 			}
 		}
 	}
-	if err := s.nodeStore.Store(ctx, &nodestore.Node{
+	if err := s.nodeStore.database().Store(ctx, &nodestore.Node{
 		Type:      nodestore.NodeLedger,
 		Hash:      validatedTipKey,
 		Data:      append([]byte(nil), hash[:]...),
@@ -622,7 +622,7 @@ func (s *Service) persistValidatedTipLocked(
 	}); err != nil {
 		return fmt.Errorf("store validated ledger tip %d: %w", l.Sequence(), err)
 	}
-	if err := s.nodeStore.Sync(ctx); err != nil {
+	if err := s.nodeStore.database().Sync(ctx); err != nil {
 		return fmt.Errorf("sync validated ledger tip %d: %w", l.Sequence(), err)
 	}
 	return nil
@@ -667,7 +667,7 @@ func (s *Service) invalidateEvictedValidatedTip(tip evictedLedgerTip) {
 
 func (s *Service) invalidatePersistedValidatedTipMatchingLocked(start, end uint32, expectedHash *[32]byte) {
 	ctx := context.Background()
-	current, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	current, err := s.nodeStore.database().Fetch(ctx, validatedTipKey)
 	if err != nil {
 		s.logger.Error("failed to inspect validated ledger tip during invalidation", "err", err)
 		return
@@ -680,7 +680,7 @@ func (s *Service) invalidatePersistedValidatedTipMatchingLocked(start, end uint3
 		return
 	}
 	s.invalidateFastLoadCheckpointEligibility("durable validated tip invalidated")
-	if err := s.nodeStore.Store(ctx, &nodestore.Node{
+	if err := s.nodeStore.database().Store(ctx, &nodestore.Node{
 		Type:      nodestore.NodeLedger,
 		Hash:      validatedTipKey,
 		Data:      make([]byte, 32),
@@ -689,7 +689,7 @@ func (s *Service) invalidatePersistedValidatedTipMatchingLocked(start, end uint3
 		s.logger.Error("failed to invalidate validated ledger tip", "seq", current.LedgerSeq, "err", err)
 		return
 	}
-	if err := s.nodeStore.Sync(ctx); err != nil {
+	if err := s.nodeStore.database().Sync(ctx); err != nil {
 		s.logger.Error("failed to sync invalidated validated ledger tip", "seq", current.LedgerSeq, "err", err)
 	}
 }
@@ -792,7 +792,7 @@ func (s *Service) refreshGenerationStateWithBatch(
 	if err != nil {
 		return err
 	}
-	return s.nodeStore.Sync(ctx)
+	return s.nodeStore.database().Sync(ctx)
 }
 
 // RefreshValidatedState preserves the complete live state tree before online
@@ -821,7 +821,7 @@ func (s *Service) RefreshValidatedState(
 			return 0, err
 		}
 		if skipRefresh {
-			if err := s.nodeStore.Sync(ctx); err != nil {
+			if err := s.nodeStore.database().Sync(ctx); err != nil {
 				return 0, err
 			}
 			return seq, nil
@@ -846,7 +846,7 @@ func (s *Service) RefreshValidatedState(
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := s.nodeStore.StoreBatch(ctx, batch); err != nil {
+		if err := s.nodeStore.database().StoreBatch(ctx, batch); err != nil {
 			return err
 		}
 		batch = batch[:0]
@@ -884,7 +884,7 @@ func (s *Service) RefreshValidatedState(
 	if err := flush(); err != nil {
 		return 0, err
 	}
-	if err := s.nodeStore.Sync(ctx); err != nil {
+	if err := s.nodeStore.database().Sync(ctx); err != nil {
 		return 0, err
 	}
 	return seq, nil

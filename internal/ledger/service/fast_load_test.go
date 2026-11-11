@@ -751,7 +751,7 @@ func TestService_VerifyStoredSHAMapRebalancesBelowRoot(t *testing.T) {
 		[][32]byte{rootChild},
 		4*storedSHAMapFrontierTasksPerWorker,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1068,7 +1068,7 @@ func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 		[][32]byte{rootChild},
 		target,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1114,7 +1114,7 @@ func TestService_StoredSHAMapFrontierSplitsEveryRootBranch(t *testing.T) {
 		branches,
 		32,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1171,7 +1171,7 @@ func TestService_StoredSHAMapFrontierRedistributesUnusedCapacity(t *testing.T) {
 		branches,
 		target,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
