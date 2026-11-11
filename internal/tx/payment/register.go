@@ -10,8 +10,8 @@ func Register() {
 			return &Payment{BaseTx: *tx.NewBaseTx(tx.TypePayment, "")}
 		},
 		Delegation:         tx.Delegable,
+		Privileges:         tx.PrivCreateAcct | tx.PrivMayCreateMPT,
 		Consequences:       tx.CustomConsequences,
 		ReserveSponsorable: true,
-		Privileges:         tx.PrivCreateAcct | tx.PrivMayCreateMPT,
 	})
 }

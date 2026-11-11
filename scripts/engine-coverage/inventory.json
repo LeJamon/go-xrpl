@@ -3060,7 +3060,11 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 39
+              "line": 78
+            },
+            {
+              "name": "TestRegisterRejectsIncompleteDescriptor",
+              "line": 41
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3467,7 +3471,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 41
+              "line": 80
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3662,7 +3666,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 42
+              "line": 81
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -3994,7 +3998,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 48
+              "line": 87
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -4244,7 +4248,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 41
+              "line": 80
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -4388,7 +4392,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 48
+              "line": 87
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5024,7 +5028,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 40
+              "line": 79
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5182,7 +5186,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 43
+              "line": 82
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5348,7 +5352,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 43
+              "line": 82
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5537,7 +5541,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 42
+              "line": 81
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5757,7 +5761,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 41
+              "line": 80
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -5924,7 +5928,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 40
+              "line": 79
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -6066,7 +6070,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 40
+              "line": 79
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -6214,7 +6218,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 39
+              "line": 78
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -6378,7 +6382,11 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 46
+              "line": 85
+            },
+            {
+              "name": "TestRegisterRejectsIncompleteDescriptor",
+              "line": 40
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -7349,7 +7357,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 44
+              "line": 83
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -10543,7 +10551,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 45
+              "line": 84
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -10685,7 +10693,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 45
+              "line": 84
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -10901,7 +10909,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 46
+              "line": 85
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -11037,7 +11045,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 44
+              "line": 83
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -11217,7 +11225,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 47
+              "line": 86
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -11343,7 +11351,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 47
+              "line": 86
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -11477,7 +11485,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 48
+              "line": 87
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12012,7 +12020,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 39
+              "line": 78
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12224,7 +12232,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 58
+              "line": 97
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12406,7 +12414,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 58
+              "line": 97
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12562,7 +12570,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 58
+              "line": 97
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12708,7 +12716,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 59
+              "line": 98
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -12897,7 +12905,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 59
+              "line": 98
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13041,7 +13049,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 59
+              "line": 98
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13462,7 +13470,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 60
+              "line": 99
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13597,7 +13605,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 60
+              "line": 99
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13740,7 +13748,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 61
+              "line": 100
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -13922,7 +13930,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 61
+              "line": 100
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -14061,7 +14069,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 62
+              "line": 101
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -14320,7 +14328,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 62
+              "line": 101
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -14465,7 +14473,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 62
+              "line": 101
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -14600,7 +14608,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 63
+              "line": 102
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -14753,7 +14761,7 @@
           "tests": [
             {
               "name": "TestDescriptorDisallowedInBatch",
-              "line": 63
+              "line": 102
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
@@ -16143,7 +16151,7 @@
           "tests": [
             {
               "name": "TestDescriptorReserveSponsorable",
-              "line": 49
+              "line": 88
             }
           ],
           "kind": "Go source reference; execution is tracked separately"

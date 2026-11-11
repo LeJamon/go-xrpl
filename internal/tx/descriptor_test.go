@@ -2,10 +2,13 @@ package tx_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/trustset"
 )
 
 // registeredWith returns the registered types whose descriptor satisfies pred,
@@ -28,6 +31,42 @@ func assertTypeSet(t *testing.T, attribute string, got, want []tx.Type) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("%s types = %v, want %v", attribute, got, want)
+	}
+}
+
+func TestRegisterRejectsIncompleteDescriptor(t *testing.T) {
+	all.RegisterAll()
+	newPayment := func() tx.Transaction { return payment.NewPayment("", "", tx.Amount{}) }
+	newTrustSet := func() tx.Transaction { return &trustset.TrustSet{BaseTx: *tx.NewBaseTx(tx.TypeTrustSet, "")} }
+	complete := tx.Descriptor{Type: tx.TypePayment, New: newPayment, Delegation: tx.Delegable, Consequences: tx.CustomConsequences}
+	cases := []struct {
+		name   string
+		mutate func(*tx.Descriptor)
+		want   string
+	}{
+		{"unnamed type", func(d *tx.Descriptor) { d.Type = tx.TypeNickNameSet }, "no canonical name"},
+		{"no constructor", func(d *tx.Descriptor) { d.New = nil }, "missing constructor"},
+		{"wrong constructor", func(d *tx.Descriptor) { d.New = newTrustSet }, "constructor builds"},
+		{"no delegation", func(d *tx.Descriptor) { d.Delegation = 0 }, "delegation not declared"},
+		{"no consequences", func(d *tx.Descriptor) { d.Consequences = 0 }, "consequences not declared"},
+		{"custom not declared", func(d *tx.Descriptor) { d.Consequences = tx.NormalConsequences }, "ConsequencesCalculator"},
+		{"custom not implemented", func(d *tx.Descriptor) {
+			d.Type, d.New = tx.TypeTrustSet, newTrustSet
+		}, "ConsequencesCalculator"},
+		{"duplicate", func(*tx.Descriptor) {}, "already registered"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := complete
+			c.mutate(&d)
+			defer func() {
+				msg, _ := recover().(string)
+				if !strings.Contains(msg, c.want) {
+					t.Errorf("panic = %q, want it to mention %q", msg, c.want)
+				}
+			}()
+			tx.Register(d)
+		})
 	}
 }
 
