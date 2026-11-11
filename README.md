@@ -23,7 +23,7 @@ go-xrpl has its own architecture and software version policy.
 
 ## Building from source
 
-Building `goxrpl` requires Go 1.24 or later, a C compiler, OpenSSL 3,
+Building `goxrpl` requires Go 1.25 or later, a C compiler, OpenSSL 3,
 libsecp256k1, and `pkg-config`. The examples use
 [`just`](https://just.systems/) as the task runner, with a raw Go command shown
 for environments where it is not installed.
