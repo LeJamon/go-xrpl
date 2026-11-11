@@ -237,11 +237,11 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	if isConsensusPriorityMessageType(msgType) {
+	switch describeMessage(msgType).route {
+	case routeConsensus:
 		o.forwardConsensus(evt.inboundMessage())
 		return
-	}
-	if isConsensusControlMessageType(msgType) {
+	case routeConsensusControl:
 		o.forwardConsensusControl(evt.inboundMessage())
 		return
 	}
