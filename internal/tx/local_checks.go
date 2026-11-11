@@ -266,35 +266,11 @@ func hasUnsupportedMPTField(txType Type, fields map[string]any) bool {
 		if _, isMPT := object["mpt_issuance_id"]; !isMPT {
 			continue
 		}
-		if !mptSupportedFields[txType][name] {
+		if !txTemplateMPTFields[txType][name] {
 			return true
 		}
 	}
 	return false
-}
-
-var mptSupportedFields = map[Type]map[string]bool{
-	TypePayment:                 {"Amount": true, "SendMax": true, "DeliverMin": true},
-	TypeEscrowCreate:            {"Amount": true},
-	TypeOfferCreate:             {"TakerPays": true, "TakerGets": true},
-	TypeCheckCreate:             {"SendMax": true},
-	TypeCheckCash:               {"Amount": true, "DeliverMin": true},
-	TypeClawback:                {"Amount": true},
-	TypeAMMClawback:             {"Asset": true, "Asset2": true, "Amount": true},
-	TypeAMMCreate:               {"Amount": true, "Amount2": true},
-	TypeAMMDeposit:              {"Asset": true, "Asset2": true, "Amount": true, "Amount2": true},
-	TypeAMMWithdraw:             {"Asset": true, "Asset2": true, "Amount": true, "Amount2": true},
-	TypeAMMVote:                 {"Asset": true, "Asset2": true},
-	TypeAMMBid:                  {"Asset": true, "Asset2": true},
-	TypeAMMDelete:               {"Asset": true, "Asset2": true},
-	TypeVaultCreate:             {"Asset": true},
-	TypeVaultDeposit:            {"Amount": true},
-	TypeVaultWithdraw:           {"Amount": true},
-	TypeVaultClawback:           {"Amount": true},
-	TypeLoanBrokerCoverDeposit:  {"Amount": true},
-	TypeLoanBrokerCoverWithdraw: {"Amount": true},
-	TypeLoanBrokerCoverClawback: {"Amount": true},
-	TypeLoanPay:                 {"Amount": true},
 }
 
 func LocalChecksFailureReason(common *Common) string {

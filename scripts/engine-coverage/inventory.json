@@ -28,7 +28,7 @@
   },
   "source_sha256": {
     "protocol/transaction_type.go": "2b8eb3a4d313eaa22d0a2a98cfbf371593c90969f8e76c6ffcf66824d5271daf",
-    "internal/tx/template.go": "68b5063c62f9eb6bd313fd562a43e6ab06295981456b618a1392f5fc8e2c247c",
+    "internal/tx/template.go": "9ced629bf6c44537686a3d80b2a590bfbdf16ba424259dc489bbda161936b32e",
     "amendment/registry.go": "4cb315e95cae13c39297f64e40dbc7ac6e61d6357d6e908f039206bbb54a072d"
   },
   "engine": {
