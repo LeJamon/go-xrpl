@@ -365,12 +365,19 @@ func isAnyAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, accounts []
 	return false
 }
 
+// TransferRate implements rippled's transferRate(view, MPTID); a missing or
+// unreadable issuance is parity.
 func TransferRate(view state.ReadOnlyLedgerView, id [24]byte) uint32 {
 	issuance, _, result := ReadIssuance(view, id)
-	if result != ter.TesSUCCESS || issuance.TransferFee == 0 {
+	if result != ter.TesSUCCESS {
 		return RateOne
 	}
-	return RateOne + 10_000*uint32(issuance.TransferFee)
+	return TransferRateFromFee(issuance.TransferFee)
+}
+
+// TransferRateFromFee converts an issuance's sfTransferFee to a rate.
+func TransferRateFromFee(fee uint16) uint32 {
+	return RateOne + 10_000*uint32(fee)
 }
 
 func RequireAuth(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, strong bool) ter.Result {

@@ -156,6 +156,9 @@ func TestIOUTokenSemanticsGolden(t *testing.T) {
 		if IsDeepFrozen(sc.view, sc.holder, sc.issuer, sc.currency) != deep {
 			t.Fatalf("%s: IsDeepFrozen disagrees with IsIOUDeepFrozen", sc.name)
 		}
+		if rate, err := ReadTransferRate(sc.view, sc.issuer); err != nil || rate != GetTransferRateByID(sc.view, sc.issuer) {
+			t.Fatalf("%s: ReadTransferRate = %d, %v", sc.name, rate, err)
+		}
 		fmt.Fprintf(&b, "%s global=%d individual=%d frozen=%d iouFrozen=%d deep=%d rate=%d\n",
 			sc.name,
 			b2i(IsGlobalFrozen(sc.view, asset.Issuer)),

@@ -149,12 +149,8 @@ func TestIOUStateHelpersFailClosed(t *testing.T) {
 	amount := tx.NewIssuedAmount(1, 0, "USD", state.EncodeAccountIDSafe(issuerID))
 
 	view := newFaultView()
-	_, result := getIOUTransferRate(view, issuerID)
-	require.Equal(t, ter.TecNO_ISSUER, result)
-
 	view.readErrors[issuerKey.Key] = errors.New("read failed")
-	_, result = getIOUTransferRate(view, issuerID)
-	require.Equal(t, ter.TefINTERNAL, result)
+	require.Equal(t, ter.TefINTERNAL, escrowFinishPreclaimIOU(view, holderID, amount))
 
 	delete(view.readErrors, issuerKey.Key)
 	seedAccountForEscrow(t, view.mapView, issuerID, 0)
