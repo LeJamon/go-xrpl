@@ -22,7 +22,7 @@ type ancestryJob struct {
 
 // All mutable fields other than wg are guarded by the provider's mutex.
 type ancestryBackground struct {
-	lookup  func(context.Context, [32]byte) (ledgerHeader, error)
+	lookup  func(context.Context, [32]byte) (LedgerHeader, error)
 	ctx     context.Context
 	cancel  context.CancelFunc
 	jobs    chan ancestryJob
@@ -38,7 +38,7 @@ func (b *ancestryBackground) stop() {
 	b.cancel()
 }
 
-func newBackgroundAncestryProvider(lookup func(context.Context, [32]byte) (ledgerHeader, error)) *AncestryProvider {
+func newBackgroundAncestryProvider(lookup func(context.Context, [32]byte) (LedgerHeader, error)) *AncestryProvider {
 	p := newAncestryProviderFromLookup(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	p.background = &ancestryBackground{
@@ -106,7 +106,7 @@ func (p *AncestryProvider) runAncestryWorker() {
 			// background execution needs the same containment in the worker.
 			safeAncestryCall("background ancestry", func() {
 				p.buildAndFinishUsing(job.id, job.flight, func() *providerLedger {
-					return p.buildChainContext(ctx, job.id, func(hash [32]byte) (ledgerHeader, error) {
+					return p.buildChainContext(ctx, job.id, func(hash [32]byte) (LedgerHeader, error) {
 						return b.lookup(ctx, hash)
 					})
 				})

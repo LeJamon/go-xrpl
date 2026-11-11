@@ -520,7 +520,7 @@ func NewFromConfig(
 
 	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
 
-	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
+	engine.SetLedgerAncestryProvider(newAncestryProvider(ledgerSvc))
 
 	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
 		gossip:               sender,

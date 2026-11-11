@@ -7,8 +7,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
-	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 )
 
 // maxProviderAncestors mirrors rippled's keylet::skip window — ledgers
@@ -17,16 +15,14 @@ const maxProviderAncestors = uint32(256)
 
 const providerCacheCapacity = 1024
 
-// ledgerHeader is the narrow slice of *ledger.Ledger the provider needs.
-type ledgerHeader interface {
+// LedgerHeader is the narrow slice of a ledger the provider needs.
+type LedgerHeader interface {
 	Sequence() uint32
 	Hash() [32]byte
 	ParentHash() [32]byte
 }
 
-var _ ledgerHeader = (*ledger.Ledger)(nil)
-
-type hashLookupFunc func(hash [32]byte) (ledgerHeader, error)
+type hashLookupFunc func(hash [32]byte) (LedgerHeader, error)
 
 type hashOfSeqHeader interface {
 	HashOfSeq(seq uint32) ([32]byte, bool, error)
@@ -59,19 +55,14 @@ type ancestryFlight struct {
 	fallback *providerLedger
 }
 
-// NewAncestryProvider wraps the ledger service. A nil svc returns a
-// disabled provider that always reports (nil, false).
-func NewAncestryProvider(svc *service.Service) *AncestryProvider {
-	if svc == nil {
+// NewAncestryProvider resolves ledgers by hash through lookup on background
+// workers. A nil lookup returns a disabled provider that always reports
+// (nil, false).
+func NewAncestryProvider(lookup func(ctx context.Context, hash [32]byte) (LedgerHeader, error)) *AncestryProvider {
+	if lookup == nil {
 		return newAncestryProviderFromLookup(nil)
 	}
-	return newBackgroundAncestryProvider(func(ctx context.Context, hash [32]byte) (ledgerHeader, error) {
-		l, err := svc.GetLedgerByHashContext(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
-		return l, nil
-	})
+	return newBackgroundAncestryProvider(lookup)
 }
 
 func newAncestryProviderFromLookup(fn hashLookupFunc) *AncestryProvider {
