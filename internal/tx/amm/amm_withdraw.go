@@ -233,7 +233,7 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 		if isGreater(*amt, balance) {
 			return ter.TecAMM_BALANCE
 		}
-		if result := requireAssetAuth(view, amtAsset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(view, amtAsset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {

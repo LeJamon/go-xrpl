@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -130,10 +131,10 @@ func (a *AMMCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig)
 	}
 
 	// Reference: rippled AMMCreate.cpp line 102-116
-	if result := requireAssetAuth(view, asset1, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
+	if result := mptutil.RequireAssetAuthAt(view, asset1, accountID, mptutil.LegacyAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := requireAssetAuth(view, asset2, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
+	if result := mptutil.RequireAssetAuthAt(view, asset2, accountID, mptutil.LegacyAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -376,7 +377,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else if asset1.IsMPT() {
-		if result := requireAssetAuth(ctx.View, asset1, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(ctx.View, asset1, ammAccountID, mptutil.WeakAuth, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if result := ensureAMMMPTHolding(ctx.View, asset1, ammAccountID); result != ter.TesSUCCESS {
@@ -421,7 +422,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else if asset2.IsMPT() {
-		if result := requireAssetAuth(ctx.View, asset2, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(ctx.View, asset2, ammAccountID, mptutil.WeakAuth, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if result := ensureAMMMPTHolding(ctx.View, asset2, ammAccountID); result != ter.TesSUCCESS {

@@ -253,7 +253,7 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		checkAsset := func(asset tx.Asset) ter.Result {
-			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+			if result := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 				return result
 			}
 			return mptutil.CheckDepositFreeze(view, accountID, ammAccountID, asset)
@@ -266,7 +266,7 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 		}
 	} else if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		checkAsset := func(asset tx.Asset) ter.Result {
-			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+			if result := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 				return result
 			}
 			if assetFrozen(view, accountID, asset) {
@@ -287,7 +287,7 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			return ter.TesSUCCESS
 		}
 		amtAsset := amountAsset(*amt)
-		if result := requireAssetAuth(view, amtAsset, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(view, amtAsset, accountID, mptutil.LegacyAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {

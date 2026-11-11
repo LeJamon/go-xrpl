@@ -510,14 +510,6 @@ func RequireAssetAuthAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [
 	return requireAssetAuthWithTypeAt(view, asset, account, authType, parentCloseTime, 0)
 }
 
-func requireAssetAuthAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32, depth uint8) ter.Result {
-	authType := WeakAuth
-	if strong {
-		authType = StrongAuth
-	}
-	return requireAssetAuthWithTypeAt(view, asset, account, authType, parentCloseTime, depth)
-}
-
 func requireAssetAuthWithTypeAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32, depth uint8) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
@@ -533,10 +525,16 @@ func requireAssetAuthWithTypeAt(view state.ReadOnlyLedgerView, asset tx.Asset, a
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	return RequireIOUAuth(view, issuer, asset.Currency, account, authType)
+}
+
+// RequireIOUAuth implements rippled's requireAuth(view, Issue, account,
+// authType); read and parse failures return tefINTERNAL.
+func RequireIOUAuth(view state.ReadOnlyLedgerView, issuer [20]byte, currency string, account [20]byte, authType AuthType) ter.Result {
 	if account == issuer {
 		return ter.TesSUCCESS
 	}
-	lineRaw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
+	lineRaw, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil {
 		return ter.TefINTERNAL
 	}
