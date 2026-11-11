@@ -12,34 +12,77 @@ import (
 // ErrUnknownTransactionType is returned when a transaction type is unknown
 var ErrUnknownTransactionType = errors.New("unknown transaction type")
 
-// registry holds all registered transaction type factories
-var (
-	registryMu sync.RWMutex
-	registry   = make(map[Type]func() Transaction)
+// Delegation states whether a delegate holding a transaction-level permission
+// may submit a transaction type. It has no usable zero value, so every
+// descriptor must choose.
+type Delegation uint8
+
+const (
+	delegationUnset Delegation = iota
+	Delegable
+	NotDelegable
 )
 
-// Register registers a transaction type factory. Called from init() in each
-// transaction type file. Panics on duplicate registration so a copy-paste bug
-// that swaps one tx type's behavior for another's fails loudly at init time
-// instead of silently overwriting.
-func Register(t Type, factory func() Transaction) {
+// Descriptor is the single declaration of a transaction type's static
+// protocol attributes. Every consumer that varies by transaction type reads it
+// through the registry instead of keeping its own table.
+type Descriptor struct {
+	Type       Type
+	New        func() Transaction
+	Delegation Delegation
+}
+
+var (
+	registryMu sync.RWMutex
+	registry   = make(map[Type]Descriptor)
+)
+
+// Register records a transaction type's descriptor. It panics on a duplicate
+// type or an incomplete or inconsistent descriptor, so a forgotten attribute
+// fails at startup instead of silently taking a default.
+func Register(d Descriptor) {
+	if err := d.validate(); err != nil {
+		panic(fmt.Sprintf("tx: invalid descriptor for transaction type %d (%s): %v", d.Type, d.Type.String(), err))
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	if _, exists := registry[t]; exists {
-		panic(fmt.Sprintf("tx: transaction type %d (%s) already registered", t, t.String()))
+	if _, exists := registry[d.Type]; exists {
+		panic(fmt.Sprintf("tx: transaction type %d (%s) already registered", d.Type, d.Type.String()))
 	}
-	registry[t] = factory
+	registry[d.Type] = d
+}
+
+func (d Descriptor) validate() error {
+	if t, ok := TypeFromName(d.Type.String()); !ok || t != d.Type {
+		return errors.New("type has no canonical name")
+	}
+	if d.New == nil {
+		return errors.New("missing constructor")
+	}
+	if got := d.New().TxType(); got != d.Type {
+		return fmt.Errorf("constructor builds %s", got)
+	}
+	if d.Delegation == delegationUnset {
+		return errors.New("delegation not declared")
+	}
+	return nil
+}
+
+// Lookup returns the descriptor registered for t.
+func Lookup(t Type) (Descriptor, bool) {
+	registryMu.RLock()
+	d, ok := registry[t]
+	registryMu.RUnlock()
+	return d, ok
 }
 
 // NewFromType creates a new transaction of the given type using the registered factory.
 func NewFromType(txType Type) (Transaction, error) {
-	registryMu.RLock()
-	factory, ok := registry[txType]
-	registryMu.RUnlock()
+	d, ok := Lookup(txType)
 	if !ok {
 		return nil, ErrUnknownTransactionType
 	}
-	return factory(), nil
+	return d.New(), nil
 }
 
 // FromJSON creates a Transaction from a JSON object
