@@ -202,7 +202,7 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				ctx.Account.OwnerCount--
 			}
 		} else {
-			adjustOwnerCountViaView(ctx.View, offer.Owner, -1)
+			_ = tx.AdjustOwnerCount(ctx.View, offer.Owner, -1)
 		}
 	}
 
