@@ -1126,8 +1126,8 @@ func createTrustLineForEscrow(
 	// rippled bumps the soon-erased escrow SLE instead of a real account, so the
 	// caller passes bumpOwnerCount=false and no account is charged for the line.
 	if bumpOwnerCount && !accountedByContext {
-		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
-			return result
+		if err := tx.AdjustOwnerCount(view, destID, 1); err != nil {
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -1361,8 +1361,8 @@ func createMPTokenForEscrow(
 	// On the cancel path rippled bumps the soon-erased escrow SLE rather than a
 	// real account, so the caller passes bumpOwnerCount=false.
 	if bumpOwnerCount && !accountedByContext {
-		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
-			return result
+		if err := tx.AdjustOwnerCount(view, destID, 1); err != nil {
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -1426,32 +1426,6 @@ func accountHoldsMPT(view tx.ReadOnlyLedgerView, issuanceKey keylet.Keylet, acco
 	}
 
 	return int64(token.MPTAmount), ter.TesSUCCESS
-}
-
-func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, adj int) ter.Result {
-	data, err := view.Read(keylet.Account(accountID))
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if data == nil {
-		return ter.TefBAD_LEDGER
-	}
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if adj < 0 && account.OwnerCount < uint32(-adj) {
-		return ter.TefBAD_LEDGER
-	}
-	account.OwnerCount = tx.ConfineOwnerCount(account.OwnerCount, adj)
-	updated, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := view.Update(keylet.Account(accountID), updated); err != nil {
-		return ter.TefINTERNAL
-	}
-	return ter.TesSUCCESS
 }
 
 func mapDirInsertError(err error) ter.Result {
