@@ -124,7 +124,7 @@ func buildStateForPersistenceProgress(t *testing.T) *shamap.SHAMap {
 func TestColdReplayVerificationUsesBoundedUncachedBatches(t *testing.T) {
 	svc, db, root, _ := newParallelStoredVerificationFixture(t)
 	tracked := &batchVerificationDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.shamapFamily = backend.New(tracked)
 	var expectedNodes uint64
 	require.NoError(t, svc.walkStoredSHAMap(t.Context(), root, shamap.TypeState, func([32]byte, *nodestore.Node) error {

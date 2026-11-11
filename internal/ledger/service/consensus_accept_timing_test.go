@@ -125,7 +125,7 @@ func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
 			if phase == "persistence" {
 				svc.persistAdmissions = persistenceAdmissionLimit
 			} else {
-				svc.nodeStore = state
+				svc.nodeStore = bindNodeStore(state)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()

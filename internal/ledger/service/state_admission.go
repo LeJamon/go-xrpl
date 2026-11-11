@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 // AcquireStateAdmission pins the current durable generation before detached
@@ -23,8 +22,8 @@ func (s *Service) AcquireStateAdmission(ctx context.Context) (func(), error) {
 	if s.nodeStore == nil {
 		return func() {}, nil
 	}
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return func() {}, nil
 	}
 	_, release, err := durable.AcquireDurableSnapshot(ctx)

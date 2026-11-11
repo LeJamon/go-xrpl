@@ -323,7 +323,7 @@ func TestStateBaseRecertificationRepairSyncFailureRetainsExactTarget(t *testing.
 
 	syncFailure := errors.New("repaired state sync failed")
 	tracking := &checkpointTrackingDatabase{Database: f.db, uncached: f.db, syncErr: syncFailure}
-	f.svc.nodeStore = tracking
+	f.svc.nodeStore = bindNodeStore(tracking)
 	require.ErrorIs(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID), syncFailure)
 	require.True(t, f.svc.ReplayBlocked())
 	require.Equal(t, 1, repairCalls)
@@ -381,10 +381,10 @@ func TestStateBaseRecertificationRejectsMissingTransactionDescendant(t *testing.
 	cached, err := f.db.Fetch(t.Context(), nodestore.Hash256(child))
 	require.NoError(t, err)
 	require.NotNil(t, cached)
-	f.svc.nodeStore = &missingRecertificationNodeDatabase{
+	f.svc.nodeStore = bindNodeStore(&missingRecertificationNodeDatabase{
 		checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 		missing:                    nodestore.Hash256(child),
-	}
+	})
 	f.invalidate(t)
 	err = f.svc.recertifyValidatedStateBase(t.Context())
 	require.ErrorContains(t, err, "transaction tree")
@@ -419,7 +419,7 @@ func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testin
 		started:                    make(chan struct{}),
 		release:                    make(chan struct{}),
 	}
-	f.svc.nodeStore = blocked
+	f.svc.nodeStore = bindNodeStore(blocked)
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
@@ -449,7 +449,7 @@ func TestStateBaseRecertificationMutationDuringWalkPreventsPublication(t *testin
 				checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 				target:                     nodestore.Hash256(f.childHash), started: make(chan struct{}), release: make(chan struct{}),
 			}
-			f.svc.nodeStore = blocked
+			f.svc.nodeStore = bindNodeStore(blocked)
 			done := make(chan error, 1)
 			go func() { done <- f.svc.recertifyValidatedStateBase(t.Context()) }()
 			select {
@@ -517,7 +517,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 				db := &staleFingerprintStateBaseRecertificationDatabase{
 					checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 				}
-				f.svc.nodeStore = db
+				f.svc.nodeStore = bindNodeStore(db)
 			},
 		},
 		{
@@ -549,7 +549,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 			started:                    make(chan struct{}),
 			release:                    make(chan struct{}),
 		}
-		f.svc.nodeStore = blocked
+		f.svc.nodeStore = bindNodeStore(blocked)
 		alternateHeader := f.validated.Header()
 		alternateHeader.CloseFlags ^= header.LCFNoConsensusTime
 		alternateHeader.Validated = false
@@ -589,7 +589,7 @@ func TestStateBaseRecertificationCarriesProofAcrossValidationDuringWalk(t *testi
 		started:                    make(chan struct{}),
 		release:                    make(chan struct{}),
 	}
-	f.svc.nodeStore = blocked
+	f.svc.nodeStore = bindNodeStore(blocked)
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
@@ -661,7 +661,7 @@ func TestStateBaseRecertificationRejectsMutationAtPublication(t *testing.T) {
 				checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 				checked:                    make(chan struct{}),
 			}
-			f.svc.nodeStore = db
+			f.svc.nodeStore = bindNodeStore(db)
 			var floor atomic.Uint32
 			f.svc.SetMinimumOnlineFunc(floor.Load)
 			release := f.svc.BeginStateBaseRetentionChange()

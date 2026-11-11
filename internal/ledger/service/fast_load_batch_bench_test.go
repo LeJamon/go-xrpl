@@ -37,7 +37,7 @@ func benchmarkStoredSHAMapBatch(b *testing.B, warm bool, batchNodes int) {
 		cacheBytes = 8 << 20
 	}
 	fixture := newBenchmarkRefreshFixture(b, benchmarkVerificationLeaves, cacheBytes)
-	fixture.svc.nodeStore = fixture.base
+	fixture.svc.nodeStore = bindNodeStore(fixture.base)
 	b.Logf(
 		"fixture leaves=%d root=%x workers=%d mode=%s batch-bytes=%d cache-bytes=%d reopened-persisted=true",
 		benchmarkVerificationLeaves,
@@ -63,7 +63,7 @@ func benchmarkStoredSHAMapBatch(b *testing.B, warm bool, batchNodes int) {
 			fixture.close(b)
 		}
 		fixture.open(b)
-		fixture.svc.nodeStore = fixture.base
+		fixture.svc.nodeStore = bindNodeStore(fixture.base)
 		fetch := fixture.svc.storedSHAMapVerificationFetch()
 		batchFetch := benchmarkBatchFetch(fixture, batchNodes)
 		if warm {
@@ -153,7 +153,7 @@ func benchmarkWalkStoredSHAMap(
 ) (uint64, error) {
 	progress := newStoredSHAMapVerificationProgress(
 		fixture.svc.logger,
-		fixture.svc.nodeStore,
+		fixture.svc.nodeStore.database(),
 		fixture.root,
 		shamap.TypeState,
 		time.Now(),

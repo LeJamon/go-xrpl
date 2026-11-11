@@ -567,7 +567,7 @@ func TestService_ConcurrentRefreshChecksHealthDuringFrontierBuild(t *testing.T) 
 			storedSHAMapWalkControl{
 				progress: newOnlineDeleteRefreshProgress(
 					svc.logger,
-					svc.nodeStore,
+					svc.nodeStore.database(),
 					root,
 					shamap.TypeState,
 					svc.GetValidatedLedger().Sequence(),
@@ -628,7 +628,7 @@ func TestService_ConcurrentRefreshDoesNotBlockAfterFetchError(t *testing.T) {
 			storedSHAMapWalkControl{
 				progress: newOnlineDeleteRefreshProgress(
 					svc.logger,
-					svc.nodeStore,
+					svc.nodeStore.database(),
 					root,
 					shamap.TypeState,
 					svc.GetValidatedLedger().Sequence(),
@@ -683,7 +683,7 @@ func TestService_ConcurrentRefreshChecksHealthBeforeCompletion(t *testing.T) {
 		storedSHAMapWalkControl{
 			progress: newOnlineDeleteRefreshProgress(
 				svc.logger,
-				svc.nodeStore,
+				svc.nodeStore.database(),
 				root,
 				shamap.TypeState,
 				validated.Sequence(),
@@ -940,7 +940,7 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *be
 	require.NoError(b, err)
 	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)
@@ -998,7 +998,7 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	family := shamapbackend.New(db)
 	svc := &Service{
-		nodeStore:    db,
+		nodeStore:    bindNodeStore(db),
 		shamapFamily: family,
 		logger:       xrpllog.Discard(),
 	}

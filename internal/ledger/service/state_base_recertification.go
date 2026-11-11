@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 // Guarded by validatedStateBaseMu; tentative successors are never public proofs.
@@ -160,13 +159,11 @@ func (s *Service) recertifyValidatedStateBase(ctx context.Context) (retErr error
 		}
 		cancel(nil)
 	}()
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return errors.New("NodeStore cannot pin a durable generation for re-certification")
 	}
-	if _, ok := s.nodeStore.(interface {
-		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
-	}); !ok {
+	if s.nodeStore.capabilities().uncached == nil {
 		return errors.New("NodeStore has no uncached durable verification reader")
 	}
 	provider, ok := s.shamapFamily.(interface{ FullBelowCache() *shamap.FullBelowCache })
