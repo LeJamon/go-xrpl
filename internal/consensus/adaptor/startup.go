@@ -566,28 +566,30 @@ func NewFromConfig(
 		acquisition:          sender,
 		serve:                sender,
 		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
+	}, routerDeps{
+		consensusControlInbox: overlay.ConsensusControlMessages(),
+		serviceInbox:          overlay.Messages(),
+		txInbox:               overlay.TxMessages(),
+		acqInbox:              overlay.LedgerDataMessages(),
+		manifestInbox:         overlay.ManifestMessages(),
+		manifests:             validatorManifests,
+		overlay:               overlay,
+		manifestClassify: func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
+			nodeID := consensus.CalcNodeID(master)
+			if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
+				return manifest.Uncapped
+			}
+			return manifest.Capped
+		},
+		manifestUntrustedLimit: &maxUntrustedCount,
+		peerSessions:           overlay,
+		floor:                  floor,
+		validatorList:          vlAgg,
 	})
-	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
 	router.catchupReplay.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32())
-	router.SetServiceInbox(overlay.Messages())
-	router.SetTxInbox(overlay.TxMessages())
-	router.SetAcqInbox(overlay.LedgerDataMessages())
-	router.SetManifestInbox(overlay.ManifestMessages())
-	router.SetManifestCache(validatorManifests, overlay)
-	router.SetManifestUntrustedLimit(appCfg.Overlay.EffectiveMaxUntrustedCount())
-	router.SetManifestClassifier(func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
-		nodeID := consensus.CalcNodeID(master)
-		if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
-			return manifest.Uncapped
-		}
-		return manifest.Capped
-	})
-	router.setPeerSessionView(overlay)
-	router.SetMinimumOnlineFloor(floor)
 
 	var vlPoller *validatorlist.SitePoller
 	if vlAgg != nil {
-		router.SetValidatorListAggregator(vlAgg)
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after
 		// every successful apply, and hydrated on cold start so the

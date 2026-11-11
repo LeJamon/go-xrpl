@@ -43,7 +43,7 @@ func newTestRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peer
 		network.acquisition, _ = adaptor.sender.(ledgerAcquisitionNetwork)
 		network.serve, _ = adaptor.sender.(ledgerServeNetwork)
 	}
-	return newRouter(engine, adaptor, inbox, network)
+	return newRouter(engine, adaptor, inbox, network, routerDeps{})
 }
 
 // newRouterBroadcaster wires the overlay (for peer enumeration + feature
