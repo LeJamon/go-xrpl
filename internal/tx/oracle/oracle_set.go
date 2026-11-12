@@ -321,14 +321,18 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecARRAY_TOO_LARGE
 	}
 
-	// Reserve check: use prior balance (before deducting the fee actually paid).
-	ownerCountAfter := uint32(int(ctx.Account.OwnerCount) + adjustReserve)
-	if res := ctx.CheckReserveWithFee(ownerCountAfter); res != ter.TesSUCCESS {
+	account, result := ctx.PreclaimAccount()
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	ownerCountAfter := uint32(int(account.OwnerCount) + adjustReserve)
+	reserve := ctx.AccountReserveFor(account, ownerCountAfter)
+	if account.Balance < reserve {
 		ctx.Log.Warn("oracle set: insufficient reserve",
-			"balance", ctx.PriorBalance(),
-			"reserve", ctx.AccountReserve(ownerCountAfter),
+			"balance", account.Balance,
+			"reserve", reserve,
 		)
-		return res
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	// ========== doApply ==========

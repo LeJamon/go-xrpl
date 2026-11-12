@@ -178,20 +178,13 @@ func (a *AMMClawback) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) te
 	return ter.TesSUCCESS
 }
 
-// Rippled flow: AMMClawback delegates to AMMWithdraw infrastructure which
-// performs accountSend (AMM -> holder) + redeemIOU (LP tokens), then
-// rippleCredit (holder -> issuer) for the clawback. The net effect for
-// clawed-back assets: AMM pool decreases, holder unchanged, issuer absorbs.
-// For non-clawed asset2: AMM pool decreases, holder gains.
-//
-// Reference: rippled AMMClawback.cpp preclaim + applyGuts
 func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	equalWithdraw := false
+	// Withdraw-all catches arithmetic failures through LP redemption, before
+	// pool cleanup and the holder-to-issuer transfers.
+	withdrawAllActive := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			// A proportional withdrawal of the holder's whole position fails
-			// with tecINTERNAL when its amounts or transfers overflow.
-			if equalWithdraw && isAMMAmountOverflowPanic(recovered) {
+			if withdrawAllActive && isAMMAmountOverflowPanic(recovered) {
 				result = ter.TecINTERNAL
 				return
 			}
@@ -267,9 +260,9 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	var withdrawAmount1, withdrawAmount2 tx.Amount
 
 	if a.Amount == nil {
+		withdrawAllActive = true
 		// No amount specified - withdraw all LP tokens the holder has.
 		// Reference: rippled calls equalWithdrawTokens with WithdrawAll::Yes
-		equalWithdraw = true
 		lpTokensToWithdraw = holdLPTokens
 
 		if math.fromAmount(holdLPTokens).Equal(math.fromAmount(lptAMMBalance)) {
@@ -300,8 +293,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 
 		if (ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isGreaterOrEqual(lpTokensNeeded, holdLPTokens)) ||
 			(!ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isGreater(lpTokensNeeded, holdLPTokens)) {
+			withdrawAllActive = true
 			// Holder doesn't have enough LP tokens — clawback all they have.
-			equalWithdraw = true
 			lpTokensToWithdraw = holdLPTokens
 			if math.fromAmount(holdLPTokens).Equal(math.fromAmount(lptAMMBalance)) {
 				withdrawAmount1 = assetBalance1
@@ -368,81 +361,21 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		return ter.TecAMM_BALANCE
 	}
 
-	// Rippled flow per asset:
-	//   1. accountSend(ammAccount, holder, amount): AMM->holder
-	//      Internally: redeemIOU(ammAccount, amount) + rippleCredit(issuer, holder, amount)
-	//   2. rippleCredit(holder, issuer, amount): holder->issuer (clawback)
-	//      The net effect on holder's trustline: +amount - amount = 0
-	//      The net effect on AMM's trustline: -amount
-	//      The issuer absorbs (tokens destroyed).
-	//
-	// For non-clawed asset2:
-	//   Only step 1: AMM->holder. AMM trustline decreases, holder trustline increases.
-	isXRP1 := isXRPAsset(a.Asset)
-	isXRP2 := isXRPAsset(a.Asset2)
-
-	// Asset1 is ALWAYS clawed back (sent from AMM to issuer).
-	// Net effect: debit AMM's trust line, tokens returned to issuer (destroyed).
-	// Asset1 cannot be XRP (enforced in preflight).
-	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if a.Asset.IsMPT() {
-			if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset, withdrawAmount1,
-				clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
-				return result
-			}
-			if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount1, true); result != ter.TesSUCCESS {
-				return result
-			}
-		} else if result := clawIOUThroughHolder(ctx, holderID, issuerID, ammAccountID, a.Asset, withdrawAmount1); result != ter.TesSUCCESS {
+	// Credit both assets before clawing them back: the intermediate IOU
+	// balance can round or overflow even when the net transfer is zero.
+	options := clawbackWithdrawalOptions(issuerID)
+	if !withdrawAmount1.IsZero() {
+		if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset, withdrawAmount1, options); result != ter.TesSUCCESS {
 			return result
 		}
 	}
-
-	// Asset2: depends on tfClawTwoAssets flag
-	if flags&tfClawTwoAssets != 0 {
-		// Clawback asset2 too. Same net effect as asset1.
-		if !isXRP2 && !withdrawAmount2.IsZero() {
-			if a.Asset2.IsMPT() {
-				if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2,
-					clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
-					return result
-				}
-				if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount2, true); result != ter.TesSUCCESS {
-					return result
-				}
-			} else if result := clawIOUThroughHolder(ctx, holderID, issuerID, ammAccountID, a.Asset2, withdrawAmount2); result != ter.TesSUCCESS {
-				return result
-			}
-		} else if isXRP2 && !withdrawAmount2.IsZero() {
-			// XRP clawback: AMM loses XRP, issuer gains
-			drops := uint64(withdrawAmount2.Drops())
-			ammAccount.Balance -= drops
-			ctx.Account.Balance += drops
-		}
-	} else {
-		// NOT clawing asset2 — holder receives it.
-		// Transfer from AMM to holder.
-		if !isXRP2 && !withdrawAmount2.IsZero() {
-			if a.Asset2.IsMPT() {
-				if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2,
-					clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
-					return result
-				}
-			} else {
-				issuer2ID, err := state.DecodeAccountID(a.Asset2.Issuer)
-				if err != nil {
-					return ter.TefINTERNAL
-				}
-				if result := withdrawIOUToAccount(ctx, holderID, issuer2ID, ammAccountID, a.Asset2, withdrawAmount2,
-					clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
-					return result
-				}
-			}
-		} else if isXRP2 && !withdrawAmount2.IsZero() {
-			// XRP: AMM sends to holder
+	if !withdrawAmount2.IsZero() {
+		if isXRPAsset(a.Asset2) {
 			drops := uint64(withdrawAmount2.Drops())
 			ammAccount.Balance -= drops
 			holderAccount.Balance += drops
+		} else if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2, options); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
@@ -457,12 +390,12 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			return r
 		}
 	}
-	equalWithdraw = false
 
 	newLPBalance, err := lptAMMBalance.SubWithNumberContext(lpTokensToWithdraw, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	withdrawAllActive = false
 	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -483,6 +416,21 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		return deleteResult
 	}
 
+	clawback := func(amount tx.Amount) ter.Result {
+		if amount.IsMPT() {
+			return sendMPT(ctx.View, holderID, issuerID, amount, true)
+		}
+		return tx.RippleCreditWithNumberContext(ctx.View, holderID, issuerID, amount, ctx.NumberContext())
+	}
+	if result := clawback(withdrawAmount1); result != ter.TesSUCCESS {
+		return result
+	}
+	if flags&tfClawTwoAssets != 0 {
+		if result := clawback(withdrawAmount2); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	accountKey := keylet.Account(issuerID)
 	ctx.SyncSenderOwnerCount()
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
@@ -493,10 +441,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		return ter.TefINTERNAL
 	}
 
-	// Re-read holder account from view — redeemIOUWithCleanup may have
-	// decremented OwnerCount when deleting the LP token trust line.
-	// We must merge our local changes (XRP balance) with whatever
-	// redeemIOUWithCleanup wrote.
+	// Preserve reserve changes from LP redemption and clawback while merging
+	// the paired asset's XRP credit.
 	holderData2, err := ctx.View.Read(holderKey)
 	if err != nil || holderData2 == nil {
 		return ter.TefINTERNAL
@@ -517,20 +463,4 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	}
 
 	return ter.TesSUCCESS
-}
-
-// clawIOUThroughHolder withdraws an IOU from the pool to the holder, then claws
-// it back to the issuer. Both legs round on the holder's trust line, so a
-// holder balance far below the withdrawn amount can be rounded away.
-func clawIOUThroughHolder(ctx *tx.ApplyContext, holderID, issuerID, ammAccountID [20]byte, asset tx.Asset, amount tx.Amount) ter.Result {
-	if result := withdrawIOUToAccount(ctx, holderID, issuerID, ammAccountID, asset, amount, clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
-		return result
-	}
-	issuerAddress, err := state.EncodeAccountID(issuerID)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	clawed := amount
-	clawed.Issuer = issuerAddress
-	return tx.RippleCreditWithNumberContext(ctx.View, holderID, issuerID, clawed, ctx.NumberContext())
 }

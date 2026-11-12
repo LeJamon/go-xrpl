@@ -1038,11 +1038,8 @@ func withdrawIOUToAccount(
 		if result := createWithdrawTrustLine(ctx, accountID, issuerID, asset, amount); result != ter.TesSUCCESS {
 			return result
 		}
-	} else {
-		// Trust line exists — just credit the withdrawer's balance.
-		if err := updateTrustlineBalanceInView(accountID, issuerID, asset.Currency, amount, ctx.View, ctx.NumberContext()); err != nil {
-			return ammResultFromError(err, ter.TefINTERNAL)
-		}
+	} else if result := tx.RippleCreditWithNumberContext(ctx.View, issuerID, accountID, amount, ctx.NumberContext()); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Debit AMM's trust line (negative delta)

@@ -173,20 +173,39 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if uint64(firstNFTSeq)+uint64(ctx.Account.MintedNFTokens)+uint64(seqDelta) > uint64(ctx.Config.LedgerSequence) {
 		return ter.TecTOO_SOON
 	}
-	// Verify deposit preauth with credentials BEFORE cleaning up owned objects.
-	// Credentials in the owner directory will be deleted during cleanup, so this
-	// check must happen first.
-	// Reference: rippled DeleteAccount.cpp doApply() — verifyDepositPreauth
-	// is called before cleanupOnAccountDelete.
+	const maxDeletableDirEntries = 1000
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	preclaimView := ctx.PreclaimView
+	if preclaimView == nil {
+		preclaimView = ctx.View
+	}
+	deletableCount := 0
+	if err := state.DirForEach(preclaimView, ownerDirKey, func(itemKey [32]byte) error {
+		data, err := preclaimView.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			return ter.Errorf(ter.TefBAD_LEDGER, "owner directory entry is missing")
+		}
+		et, err := state.DecodeType(data)
+		if err != nil || nonObligationDeleter(et) == nil {
+			return ter.Errorf(ter.TecHAS_OBLIGATIONS, "owner directory entry cannot be deleted")
+		}
+		deletableCount++
+		if deletableCount > maxDeletableDirEntries {
+			return ter.Errorf(ter.TefTOO_BIG, "too many owner directory entries")
+		}
+		return nil
+	}); err != nil {
+		if resultErr, ok := ter.AsResultError(err); ok {
+			return resultErr.Code
+		}
+		return ter.TefINTERNAL
+	}
 	if a.credentialIDsPresent() {
 		if r := credential.VerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != ter.TesSUCCESS {
 			return r
 		}
 	}
-	const maxDeletableDirEntries = 1000
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	var entryKeys [][32]byte
-	deletableCount := 0
 	if err := state.DirForEach(ctx.View, ownerDirKey, func(itemKey [32]byte) error {
 		entryKeys = append(entryKeys, itemKey)
 		return nil
@@ -205,14 +224,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 		deleter := nonObligationDeleter(et)
 		if deleter == nil {
-			ctx.Log.Error("account delete: undeletable item in owner directory",
-				"entryType", et,
-			)
 			return ter.TecHAS_OBLIGATIONS
-		}
-		deletableCount++
-		if deletableCount > maxDeletableDirEntries {
-			return ter.TefTOO_BIG
 		}
 		if r := deleter(ctx, ownerDirKey, ik, data); r != ter.TesSUCCESS {
 			return r

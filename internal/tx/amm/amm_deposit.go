@@ -393,18 +393,17 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 // Reference: rippled AMMDeposit.cpp applyGuts
 func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	calculationComplete := false
-	equalDepositTokens := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			// A proportional tfLPToken deposit turns an arithmetic overflow
-			// into tecINTERNAL, whatever the amendments.
-			if equalDepositTokens && isAMMAmountOverflowPanic(recovered) {
-				result = ter.TecINTERNAL
-				return
-			}
-			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
-				result = ter.TecAMM_FAILED
-				return
+			if !calculationComplete && isAMMAmountOverflowPanic(recovered) {
+				if a.GetFlags()&tfLPToken != 0 {
+					result = ter.TecINTERNAL
+					return
+				}
+				if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+					result = ter.TecAMM_FAILED
+					return
+				}
 			}
 			panic(recovered)
 		}
@@ -511,7 +510,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	case flags&tfLPToken != 0:
 		// Proportional deposit for specified LP tokens (equalDepositTokens)
 		// Reference: rippled AMMDeposit.cpp equalDepositTokens()
-		equalDepositTokens = true
 		if lpTokensRequested.IsZero() || lptBalance.IsZero() {
 			return ter.TecAMM_INVALID_TOKENS
 		}
