@@ -190,6 +190,36 @@ func TestAMMWithdrawCreditOverflowResultsAndRollback(t *testing.T) {
 			legacyCode:  "tefEXCEPTION",
 			cleanupCode: "tecAMM_FAILED",
 		},
+		{
+			name: "tfOneAssetWithdrawAll",
+			build: func(fixture *withdrawalCreditOverflowFixture) tx.Transaction {
+				env := fixture.env
+				env.FundBob(1000, 0)
+				jtx.RequireTxSuccess(env.T(), env.Submit(trustset.TrustSet(env.Bob, fixture.lpHalf).Build()))
+				env.Close()
+				env.PayIOUAmount(env.Alice, env.Bob, fixture.lpHalf)
+				env.Close()
+				return amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
+					Amount(amm.IOUAmount(env.GW, "USD", 0)).
+					OneAssetWithdrawAll().
+					Build()
+			},
+			legacyCode:  "tefEXCEPTION",
+			cleanupCode: "tecAMM_FAILED",
+		},
+		{
+			name: "tfLimitLPToken",
+			build: func(fixture *withdrawalCreditOverflowFixture) tx.Transaction {
+				ePrice := tx.NewIssuedAmount(1, -44, fixture.lpHalf.Currency, fixture.lpHalf.Issuer)
+				return amm.AMMWithdraw(fixture.env.Alice, amm.XRP(), fixture.env.USD).
+					Amount(amm.IOUAmount(fixture.env.GW, "USD", 0)).
+					EPrice(ePrice).
+					LimitLPToken().
+					Build()
+			},
+			legacyCode:  "tefEXCEPTION",
+			cleanupCode: "tecAMM_FAILED",
+		},
 	}
 
 	for _, cleanup := range []bool{false, true} {
