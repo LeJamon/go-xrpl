@@ -145,8 +145,18 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.AccountReserveFor(holder, tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
-		return 0, ter.TecINSUFFICIENT_RESERVE
+	usesSponsor, result := ctx.UsesReserveSponsorFor(accountID, holder)
+	if result != ter.TesSUCCESS {
+		return 0, result
+	}
+	effectiveOwners, ok := tx.EffectiveOwnerCount(holder, 0)
+	if !ok {
+		return 0, ter.TefINTERNAL
+	}
+	if usesSponsor || effectiveOwners >= 2 {
+		if result := ctx.CheckReserveFor(accountID, holder, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+			return 0, result
+		}
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
 	dir, err := state.DirInsert(ctx.View, keylet.OwnerDir(accountID), tokenKey.Key, false, func(d *state.DirectoryNode) {

@@ -324,7 +324,11 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 	sigWithMaster := txcore.SignedWithMasterKey(e.config.SkipSignatureVerification, st.common)
 
 	ctx := &txcore.ApplyContext{
-		View:             st.table,
+		View: st.table,
+		PreclaimView: rulesView{
+			ReadOnlyLedgerView: txcore.NewReadOnlyLedgerView(e.view),
+			rules:              e.rules(),
+		},
 		Account:          st.account,
 		AccountID:        st.accountID,
 		Common:           st.common,

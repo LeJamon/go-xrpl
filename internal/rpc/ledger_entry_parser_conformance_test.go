@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/hex"
 	"sort"
+	"strings"
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/assert"
@@ -75,6 +77,170 @@ func TestLedgerEntryRawSequenceSelectors(t *testing.T) {
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
 			assert.Equal(t, "Missing field '"+tc.sequenceField+"'.", rpcErr.Message)
+		})
+	}
+}
+
+func TestLedgerEntryNumericStringSequenceSelectors(t *testing.T) {
+	const (
+		account     = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		brokerHash  = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+		lockingDoor = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		issuingDoor = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	)
+	accountID := ledgerEntryTestAccountID(t, account)
+	lockingDoorID := ledgerEntryTestAccountID(t, lockingDoor)
+	issuingDoorID := ledgerEntryTestAccountID(t, issuingDoor)
+	var brokerID [32]byte
+	brokerBytes, err := hex.DecodeString(brokerHash)
+	require.NoError(t, err)
+	copy(brokerID[:], brokerBytes)
+	bridge := func() map[string]any {
+		return map[string]any{
+			"LockingChainDoor":  lockingDoor,
+			"LockingChainIssue": map[string]any{"currency": "XRP", "issuer": nil},
+			"IssuingChainDoor":  issuingDoor,
+			"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": issuingDoor},
+		}
+	}
+	bridgeKey := keylet.XChainBridge{
+		LockingDoor:     lockingDoorID,
+		LockingCurrency: [20]byte{},
+		LockingIssuer:   [20]byte{},
+		IssuingDoor:     issuingDoorID,
+		IssuingCurrency: keylet.CurrencyBytes("USD"),
+		IssuingIssuer:   issuingDoorID,
+	}
+
+	type sequenceSelector struct {
+		selector string
+		field    string
+		base     map[string]any
+		key      func(uint32) [32]byte
+		token    string
+	}
+	selectors := []sequenceSelector{
+		{
+			selector: "offer", field: "seq", token: "malformedRequest",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.Offer(accountID, value).Key },
+		},
+		{
+			selector: "escrow", field: "seq", token: "malformedSeq",
+			base: map[string]any{"owner": account},
+			key:  func(value uint32) [32]byte { return keylet.Escrow(accountID, value).Key },
+		},
+		{
+			selector: "oracle", field: "oracle_document_id", token: "malformedDocumentID",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.Oracle(accountID, value).Key },
+		},
+		{
+			selector: "permissioned_domain", field: "seq", token: "malformedRequest",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.PermissionedDomain(accountID, value).Key },
+		},
+		{
+			selector: "ticket", field: "ticket_seq", token: "malformedRequest",
+			base: map[string]any{"account": account},
+			key:  func(value uint32) [32]byte { return keylet.Ticket(accountID, value).Key },
+		},
+		{
+			selector: "vault", field: "seq", token: "malformedRequest",
+			base: map[string]any{"owner": account},
+			key:  func(value uint32) [32]byte { return keylet.Vault(accountID, value).Key },
+		},
+		{
+			selector: "loan", field: "loan_seq", token: "malformedSeq",
+			base: map[string]any{"loan_broker_id": brokerHash},
+			key:  func(value uint32) [32]byte { return keylet.Loan(brokerID, value).Key },
+		},
+		{
+			selector: "loan_broker", field: "seq", token: "malformedSeq",
+			base: map[string]any{"owner": account},
+			key:  func(value uint32) [32]byte { return keylet.LoanBroker(accountID, value).Key },
+		},
+		{
+			selector: "xchain_owned_claim_id", field: "xchain_owned_claim_id", token: "malformedXChainOwnedClaimID",
+			base: bridge(),
+			key:  func(value uint32) [32]byte { return keylet.XChainClaimID(bridgeKey, uint64(value)).Key },
+		},
+		{
+			selector: "xchain_owned_create_account_claim_id", field: "xchain_owned_create_account_claim_id", token: "malformedXChainOwnedCreateAccountClaimID",
+			base: bridge(),
+			key: func(value uint32) [32]byte {
+				return keylet.XChainCreateAccountClaimID(bridgeKey, uint64(value)).Key
+			},
+		},
+	}
+
+	accepted := []struct {
+		name  string
+		value string
+		seq   uint32
+	}{
+		{name: "plus zero", value: "+0", seq: 0},
+		{name: "plus one", value: "+1", seq: 1},
+		{name: "plus leading zeros", value: "+0001", seq: 1},
+		{name: "plus maximum uint32", value: "+4294967295", seq: 4294967295},
+	}
+	invalid := []struct {
+		name  string
+		value string
+	}{
+		{name: "negative", value: "-1"},
+		{name: "negative zero", value: "-0"},
+		{name: "leading whitespace", value: " 1"},
+		{name: "trailing whitespace", value: "1 "},
+		{name: "lone plus", value: "+"},
+		{name: "double plus", value: "++1"},
+		{name: "plus negative", value: "+-1"},
+		{name: "plus whitespace", value: "+ 1"},
+		{name: "uint32 overflow", value: "4294967296"},
+		{name: "plus uint32 overflow", value: "+4294967296"},
+	}
+
+	request := func(base map[string]any, field, value string) map[string]any {
+		result := make(map[string]any, len(base)+1)
+		for key, item := range base {
+			result[key] = item
+		}
+		result[field] = value
+		return result
+	}
+	for _, tc := range selectors {
+		t.Run(tc.selector, func(t *testing.T) {
+			for _, value := range accepted {
+				t.Run(value.name, func(t *testing.T) {
+					mock := newMockLedgerEntryService()
+					method, ctx := ledgerEntryParserContext(mock)
+					result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+						tc.selector: request(tc.base, tc.field, value.value),
+					})
+					require.Nil(t, rpcErr)
+					require.NotNil(t, result)
+					assert.Equal(t, tc.key(value.seq), mock.lastRequestedKey)
+				})
+			}
+			invalidValues := invalid
+			if tc.selector != "escrow" {
+				invalidValues = invalid[:1]
+			}
+			for _, value := range invalidValues {
+				t.Run("reject "+value.name, func(t *testing.T) {
+					mock := newMockLedgerEntryService()
+					method, ctx := ledgerEntryParserContext(mock)
+					result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+						tc.selector: request(tc.base, tc.field, value.value),
+					})
+					require.Nil(t, result)
+					require.NotNil(t, rpcErr)
+					assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+					assert.Equal(t, tc.token, rpcErr.ErrorString)
+					assert.Equal(t, "Invalid field '"+tc.field+"', not number.", rpcErr.Message)
+					assert.Equal(t, [32]byte{}, mock.lastRequestedKey)
+				})
+			}
 		})
 	}
 }
@@ -231,6 +397,150 @@ func TestLedgerEntryDepositPreauthAuthorizedCredentials(t *testing.T) {
 		})
 		require.Nil(t, result)
 		require.NotNil(t, rpcErr)
+		assert.Equal(t, "malformedAuthorizedCredentials", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid field 'authorized_credentials', not array.", rpcErr.Message)
+	})
+}
+
+func TestLedgerEntryCredentialHexParityAndBounds(t *testing.T) {
+	const (
+		subject = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		issuer  = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	)
+	subjectID := ledgerEntryTestAccountID(t, subject)
+	issuerID := ledgerEntryTestAccountID(t, issuer)
+	owner := subject
+	ownerID := subjectID
+
+	for _, credentialType := range []string{"F", "0F"} {
+		t.Run("credential odd/even "+credentialType, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			method, ctx := ledgerEntryParserContext(mock)
+			result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+				"credential": map[string]any{
+					"subject":         subject,
+					"issuer":          issuer,
+					"credential_type": credentialType,
+				},
+			})
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, keylet.Credential(subjectID, issuerID, []byte{0x0F}).Key, mock.lastRequestedKey)
+		})
+	}
+
+	credentialBounds := []struct {
+		name        string
+		credential  string
+		wantSuccess bool
+	}{
+		{name: "64 bytes", credential: strings.Repeat("AB", 64), wantSuccess: true},
+		{name: "65 bytes", credential: strings.Repeat("AB", 65), wantSuccess: false},
+	}
+	for _, tc := range credentialBounds {
+		t.Run("credential "+tc.name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			method, ctx := ledgerEntryParserContext(mock)
+			result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+				"credential": map[string]any{
+					"subject":         subject,
+					"issuer":          issuer,
+					"credential_type": tc.credential,
+				},
+			})
+			if tc.wantSuccess {
+				require.Nil(t, rpcErr)
+				require.NotNil(t, result)
+				credentialBytes, err := hex.DecodeString(tc.credential)
+				require.NoError(t, err)
+				assert.Equal(t, keylet.Credential(subjectID, issuerID, credentialBytes).Key, mock.lastRequestedKey)
+				return
+			}
+			require.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+			assert.Equal(t, "Invalid field 'credential_type', not hex string.", rpcErr.Message)
+		})
+	}
+
+	depositKey := func(credentialType string) ([32]byte, *rpcerrors.RpcError) {
+		mock := newMockLedgerEntryService()
+		method, ctx := ledgerEntryParserContext(mock)
+		result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+			"deposit_preauth": map[string]any{
+				"owner": owner,
+				"authorized_credentials": []map[string]any{
+					{"issuer": issuer, "credential_type": credentialType},
+				},
+			},
+		})
+		if rpcErr == nil {
+			require.NotNil(t, result)
+		}
+		return mock.lastRequestedKey, rpcErr
+	}
+
+	t.Run("authorized credential odd/even have the same key", func(t *testing.T) {
+		oddKey, oddErr := depositKey("F")
+		evenKey, evenErr := depositKey("0F")
+		require.Nil(t, oddErr)
+		require.Nil(t, evenErr)
+		assert.Equal(t, evenKey, oddKey)
+		want := keylet.DepositPreauthCredentials(ownerID, []keylet.CredentialPair{{
+			Issuer:         issuerID,
+			CredentialType: []byte{0x0F},
+		}}).Key
+		assert.Equal(t, want, oddKey)
+	})
+
+	for _, tc := range credentialBounds {
+		t.Run("authorized credential "+tc.name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			method, ctx := ledgerEntryParserContext(mock)
+			result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+				"deposit_preauth": map[string]any{
+					"owner": owner,
+					"authorized_credentials": []map[string]any{
+						{"issuer": issuer, "credential_type": tc.credential},
+					},
+				},
+			})
+			if tc.wantSuccess {
+				require.Nil(t, rpcErr)
+				require.NotNil(t, result)
+				credentialBytes, err := hex.DecodeString(tc.credential)
+				require.NoError(t, err)
+				want := keylet.DepositPreauthCredentials(ownerID, []keylet.CredentialPair{{
+					Issuer:         issuerID,
+					CredentialType: credentialBytes,
+				}}).Key
+				assert.Equal(t, want, mock.lastRequestedKey)
+				return
+			}
+			require.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, "malformedAuthorizedCredentials", rpcErr.ErrorString)
+			assert.Equal(t, "Invalid field 'credential_type', not hex string.", rpcErr.Message)
+		})
+	}
+
+	t.Run("authorized credential odd/even forms are duplicate", func(t *testing.T) {
+		mock := newMockLedgerEntryService()
+		method, ctx := ledgerEntryParserContext(mock)
+		result, rpcErr := handleLedgerEntry(t, method, ctx, map[string]any{
+			"deposit_preauth": map[string]any{
+				"owner": owner,
+				"authorized_credentials": []map[string]any{
+					{"issuer": issuer, "credential_type": "F"},
+					{"issuer": issuer, "credential_type": "0F"},
+				},
+			},
+		})
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "malformedAuthorizedCredentials", rpcErr.ErrorString)
 		assert.Equal(t, "Invalid field 'authorized_credentials', not array.", rpcErr.Message)
 	})

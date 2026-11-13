@@ -286,7 +286,7 @@ func (v *VaultWithdraw) sharesToAssetAmount(
 		return tx.Amount{}, ter.TefINTERNAL
 	}
 	issuance, perr := state.ParseMPTokenIssuance(shareData)
-	if perr != nil || issuance.OutstandingAmount == 0 {
+	if perr != nil {
 		return tx.Amount{}, ter.TefINTERNAL
 	}
 	sharesN, aerr := amountToNumberForRules(v.Amount, rules)
@@ -403,20 +403,6 @@ func (v *VaultWithdraw) withdrawalAmounts(
 }
 
 func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Result {
-	if asset.IsMPT() {
-		id, ok := assetMPTID(asset)
-		if !ok {
-			return ter.TefINTERNAL
-		}
-		exists, err := ctx.View.Exists(keylet.MPTokenByID(id, ctx.AccountID))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if !exists && mptIDIssuer(id) != ctx.AccountID && ctx.Account.OwnerCount >= 2 &&
-			ctx.PriorBalance() < ctx.AccountReserve(tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)) {
-			return ter.TecINSUFFICIENT_RESERVE
-		}
-	}
 	delta, result := addEmptyHolding(ctx, ctx.AccountID, asset, ctx.PriorBalance())
 	if result == ter.TecDUPLICATE {
 		return ter.TesSUCCESS

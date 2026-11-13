@@ -222,15 +222,6 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	return tx.AdjustOwnerCount(view, ammAccountID, 1)
 }
 
-// updateTrustlineBalanceInView updates the balance of a trust line for IOU transfers.
-// This reads the trust line, modifies the balance, and writes it back.
-// delta is the amount to add (positive) or subtract (negative) from the account's perspective.
-func updateTrustlineBalanceInView(accountID [20]byte, issuerID [20]byte, currency string, delta tx.Amount, view tx.LedgerView, numberContext state.NumberContext) error {
-	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, delta, view, numberContext)
-	_ = result
-	return err
-}
-
 func debitAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx.Amount, view tx.LedgerView, numberContext state.NumberContext) error {
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {

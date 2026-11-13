@@ -247,11 +247,11 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !borrowerReserveOK {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
-	borrowerPriorBalance, r := loanSetHoldingPriorBalance(ctx, borrower)
+	borrowerBalance, r := loanSetHoldingBalance(ctx, borrower)
 	if r != ter.TesSUCCESS {
 		return r
 	}
-	borrowerHoldingDelta, r := vault.AddEmptyHolding(ctx, borrower, asset, borrowerPriorBalance)
+	borrowerHoldingDelta, r := vault.AddEmptyHolding(ctx, borrower, asset, borrowerBalance)
 	if r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
 		return r
 	}
@@ -262,11 +262,11 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return r
 	}
 	if originationFee.Signum() != 0 {
-		ownerPriorBalance, r := loanSetHoldingPriorBalance(ctx, b.Owner)
+		ownerBalance, r := loanSetHoldingBalance(ctx, b.Owner)
 		if r != ter.TesSUCCESS {
 			return r
 		}
-		ownerHoldingDelta, r := vault.AddEmptyHolding(ctx, b.Owner, asset, ownerPriorBalance)
+		ownerHoldingDelta, r := vault.AddEmptyHolding(ctx, b.Owner, asset, ownerBalance)
 		if r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
 			return r
 		}
@@ -407,9 +407,9 @@ func applyLoanSetHoldingOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, del
 	return ter.TesSUCCESS
 }
 
-func loanSetHoldingPriorBalance(ctx *tx.ApplyContext, accountID [20]byte) (uint64, ter.Result) {
+func loanSetHoldingBalance(ctx *tx.ApplyContext, accountID [20]byte) (uint64, ter.Result) {
 	if accountID == ctx.AccountID {
-		return ctx.PriorBalance(), ter.TesSUCCESS
+		return ctx.Account.Balance, ter.TesSUCCESS
 	}
 	account, err := tx.ReadAccountRoot(ctx.View, accountID)
 	if err != nil || account == nil {

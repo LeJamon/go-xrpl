@@ -316,7 +316,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	if toBroker.Signum() != 0 {
 		if brokerPayee == accountID {
-			if _, r := vault.AddEmptyHolding(ctx, brokerPayee, asset, ctx.PriorBalance()); r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
+			if _, r := vault.AddEmptyHolding(ctx, brokerPayee, asset, ctx.Account.Balance); r != ter.TesSUCCESS && r != ter.TecDUPLICATE {
 				return r
 			}
 		}

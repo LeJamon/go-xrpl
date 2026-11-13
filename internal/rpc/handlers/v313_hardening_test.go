@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -43,21 +44,20 @@ func TestIssueFromJSON_RejectsSentinelIssuers(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("ledger_entry parseCurrencyIssuer rejects xrpAccount", func(t *testing.T) {
-		_, _, err := parseCurrencyIssuer(json.RawMessage(`{"currency":"USD","issuer":"` + xrpAddr + `"}`))
-		require.Error(t, err)
+	ammSelector := func(asset string) json.RawMessage {
+		return json.RawMessage(`{"asset":` + asset + `,"asset2":{"currency":"XRP"}}`)
+	}
+	t.Run("ledger_entry amm rejects xrpAccount", func(t *testing.T) {
+		_, rpcErr := parseAMMKeylet(ammSelector(`{"currency":"USD","issuer":"` + xrpAddr + `"}`))
+		require.NotNil(t, rpcErr)
 	})
-	t.Run("ledger_entry parseCurrencyIssuer rejects noAccount", func(t *testing.T) {
-		_, _, err := parseCurrencyIssuer(json.RawMessage(`{"currency":"USD","issuer":"` + noAddr + `"}`))
-		require.Error(t, err)
+	t.Run("ledger_entry amm rejects noAccount", func(t *testing.T) {
+		_, rpcErr := parseAMMKeylet(ammSelector(`{"currency":"USD","issuer":"` + noAddr + `"}`))
+		require.NotNil(t, rpcErr)
 	})
-	t.Run("ledger_entry parseCurrencyIssuer accepts a valid issuer", func(t *testing.T) {
-		_, _, err := parseCurrencyIssuer(json.RawMessage(`{"currency":"USD","issuer":"` + validIssuer + `"}`))
-		require.NoError(t, err)
-	})
-	t.Run("ledger_entry parseCurrencyIssuer accepts XRP without issuer", func(t *testing.T) {
-		_, _, err := parseCurrencyIssuer(json.RawMessage(`{"currency":"XRP"}`))
-		require.NoError(t, err)
+	t.Run("ledger_entry amm accepts a valid issuer", func(t *testing.T) {
+		_, rpcErr := parseAMMKeylet(ammSelector(`{"currency":"USD","issuer":"` + validIssuer + `"}`))
+		require.Nil(t, rpcErr)
 	})
 }
 
@@ -139,4 +139,56 @@ func TestReadLimitField(t *testing.T) {
 		require.Nil(t, err)
 		assert.Equal(t, uint32(9999), v)
 	})
+}
+
+// TestLedgerEntryAMMSelectorKeysMPTAssets checks that an MPT asset in the amm
+// selector keys the MPT pool instead of being read as XRP.
+func TestLedgerEntryAMMSelectorKeysMPTAssets(t *testing.T) {
+	key, rpcErr := parseAMMKeylet(json.RawMessage(`{"asset":{"mpt_issuance_id":"00000013A23DA217AF9DFA4C10EA150523D8CEA293BBF223"},"asset2":{"currency":"USD","issuer":"rE8iJRdfDkzVrVdV5djo25UnS6ici3pYMs"}}`))
+	require.Nil(t, rpcErr)
+	assert.Equal(t, "A191A066AAD80491DA1255D3C858A448D237FCB5FCE09834F59BA606974BF578", strings.ToUpper(hex.EncodeToString(key[:])))
+}
+
+func TestLedgerEntryAMMSelectorCurrencyZeroIsXRP(t *testing.T) {
+	const issuer = "rE8iJRdfDkzVrVdV5djo25UnS6ici3pYMs"
+
+	keyFor := func(currency string) [32]byte {
+		t.Helper()
+		raw := json.RawMessage(`{"asset":{"currency":"` + currency + `"},"asset2":{"currency":"USD","issuer":"` + issuer + `"}}`)
+		key, rpcErr := parseAMMKeylet(raw)
+		require.Nil(t, rpcErr)
+		return key
+	}
+
+	assert.Equal(t, keyFor("XRP"), keyFor("0"))
+}
+
+func TestLedgerEntryAMMSelectorMPTAssetOrdering(t *testing.T) {
+	const issuer = "rE8iJRdfDkzVrVdV5djo25UnS6ici3pYMs"
+	const mptID = "00000013A23DA217AF9DFA4C10EA150523D8CEA293BBF223"
+
+	parse := func(asset1, asset2 string) [32]byte {
+		t.Helper()
+		raw := json.RawMessage(`{"asset":` + asset1 + `,"asset2":` + asset2 + `}`)
+		key, rpcErr := parseAMMKeylet(raw)
+		require.Nil(t, rpcErr)
+		return key
+	}
+
+	issue := `{"currency":"USD","issuer":"` + issuer + `"}`
+	mpt := `{"mpt_issuance_id":"` + mptID + `"}`
+	wantMixed := "A191A066AAD80491DA1255D3C858A448D237FCB5FCE09834F59BA606974BF578"
+	formatKey := func(key [32]byte) string {
+		return strings.ToUpper(hex.EncodeToString(key[:]))
+	}
+	assert.Equal(t, wantMixed, formatKey(parse(mpt, issue)))
+	assert.Equal(t, wantMixed, formatKey(parse(issue, mpt)))
+
+	mpt1 := strings.Repeat("0", 47) + "1"
+	mpt2 := strings.Repeat("0", 47) + "2"
+	mptMPTWant := "1E079232DBA88CA61AD805438EA39A873EB1076CA717DE2899303DBB780C1D0E"
+	first := `{"mpt_issuance_id":"` + mpt1 + `"}`
+	second := `{"mpt_issuance_id":"` + mpt2 + `"}`
+	assert.Equal(t, mptMPTWant, formatKey(parse(first, second)))
+	assert.Equal(t, mptMPTWant, formatKey(parse(second, first)))
 }
