@@ -290,12 +290,18 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 
 // Reference: rippled AMMWithdraw.cpp applyGuts
 func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	calculationComplete := false
+	withdrawalActive := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
-				result = ter.TecAMM_FAILED
-				return
+			if withdrawalActive && isAMMAmountOverflowPanic(recovered) {
+				if a.GetFlags()&(tfLPToken|tfWithdrawAll) != 0 {
+					result = ter.TecINTERNAL
+					return
+				}
+				if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+					result = ter.TecAMM_FAILED
+					return
+				}
 			}
 			panic(recovered)
 		}
@@ -389,6 +395,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 
 	// Handle different withdrawal modes
 	// Reference: rippled AMMWithdraw.cpp applyGuts()
+	withdrawalActive = true
 	switch {
 	case flags&tfLPToken != 0, flags&tfWithdrawAll != 0:
 		// Proportional withdrawal (equalWithdrawTokens)
@@ -797,24 +804,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
-		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
-			return result
-		}
-	}
-
-	// All remaining operations mutate the transaction view. Keep overflow
-	// recovery limited to the calculation stage above so a post-transfer fault
-	// remains a normal apply exception and is rolled back by the engine.
-	calculationComplete = true
 	if isXRP1 && !withdrawAmount1.IsZero() {
 		// Convert to drops, handling IOU representation from calculations
 		drops := uint64(withdrawAmount1.Drops())
@@ -854,6 +843,22 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			return r
 		}
 	}
+	withdrawalActive = false
+
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	// NOTE: Asset balances are NOT stored in AMM entry
 	// They are updated by the balance transfers above:
 	// - XRP: via ammAccount.Balance -= drops
