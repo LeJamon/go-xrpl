@@ -126,7 +126,9 @@ go-xrpl also exposes reusable Go packages for applications and tooling:
 Internal node services include transaction execution, the transaction queue,
 ledger acquisition and lifecycle, consensus, peer networking, JSON-RPC,
 WebSocket subscriptions, and gRPC. API documentation for public packages is
-available on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
+available on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl). The
+compatibility promise for these packages is in
+[docs/api-stability.md](docs/api-stability.md).
 
 ## Testing
 

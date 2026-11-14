@@ -10,6 +10,7 @@ project overview is in the top-level [README](../README.md).
 |----------|--------------------|
 | [architecture.md](architecture.md) | Anyone — how the node is structured, the transaction pipeline, ledger lifecycle, consensus, and storage layering. |
 | [operating.md](operating.md) | **Node operators** — building (incl. CGO requirements), running, and the full `goxrpl.toml` configuration reference. |
+| [api-stability.md](api-stability.md) | **Importers** — which packages are public API, how they are versioned, and what may change between releases. |
 | [conformance.md](conformance.md) | **Contributors** — how rippled-parity is verified and how to run the conformance suite. |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | **Contributors** — the implement-against-rippled workflow, test layout, and build/test/lint commands. |
 | [adr/](adr/) | Anyone — Architecture Decision Records: the load-bearing design choices and their rationale. |

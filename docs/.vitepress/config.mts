@@ -46,6 +46,7 @@ export default defineConfig({
           { text: 'Introduction', link: '/' },
           { text: 'Architecture', link: '/architecture' },
           { text: 'Operating a node', link: '/operating' },
+          { text: 'API stability', link: '/api-stability' },
         ],
       },
       {
@@ -77,6 +78,7 @@ export default defineConfig({
           { text: 'Introduction', link: '/' },
           { text: 'Architecture', link: '/architecture' },
           { text: 'Operating a node', link: '/operating' },
+          { text: 'API stability', link: '/api-stability' },
         ],
       },
       {

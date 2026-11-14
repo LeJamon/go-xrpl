@@ -77,6 +77,20 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-lint-advisory
           if-no-files-found: error
 
+  # Report-only: makes changes to the public packages' exported API visible on
+  # the PR. See docs/api-stability.md.
+  api-diff:
+    name: Public API diff
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - name: Diff exported API against the base branch
+        run: scripts/apidiff.sh "origin/${{ github.base_ref }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
   generate:
     name: Generate (drift check)
     runs-on: ubuntu-latest
@@ -288,20 +302,23 @@ jobs:
           # that the detector slowed ~9x (900s -> ~96s) while the engine's
           # concurrency is already exercised under -race by the other shards.
           # (The nightly workflow runs this suite *with* -race, off the hot path.)
+          #
+          # scripts/test-shard.sh partitions `go list ./...` across these
+          # groups, so every package in the module runs in exactly one shard.
           - group: integration-offer
-            packages: ./internal/testing/offer/...
+            packages: "$(scripts/test-shard.sh integration-offer)"
             race: ""
           - group: integration
-            packages: "$(go list ./internal/testing/... | grep -v '/internal/testing/offer$')"
+            packages: "$(scripts/test-shard.sh integration)"
             race: "-race"
           - group: tx
-            packages: ./internal/tx/...
+            packages: "$(scripts/test-shard.sh tx)"
             race: "-race"
           - group: core
-            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/... ./internal/validator/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/... ./internal/statecompare/...
+            packages: "$(scripts/test-shard.sh core)"
             race: "-race"
           - group: libs
-            packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./internal/testutil/...
+            packages: "$(scripts/test-shard.sh libs)"
             race: "-race"
     steps:
       - uses: actions/checkout@v5
