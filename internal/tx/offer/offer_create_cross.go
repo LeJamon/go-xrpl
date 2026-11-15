@@ -105,7 +105,11 @@ func (o *OfferCreate) takerCross(
 	unrepresentableRate := rules.MPTokensV2Enabled() && uRate == 0
 	if !unrepresentableRate {
 		// Reference: lines 643-685
-		saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
+		var tickResult ter.Result
+		saTakerPays, saTakerGets, tickResult = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
+		if tickResult != ter.TesSUCCESS {
+			return crossOutcome{terminated: true, result: tickResult, applyMain: false}
+		}
 		if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
 			// Offer rounded to zero
 			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
