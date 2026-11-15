@@ -52,7 +52,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Reference: lines 884-893
 	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
 		_ = setBookDirectoryAssets(dir, saTakerPays, saTakerGets)
-		dir.ExchangeRate = uRate
+		dir.SetExchangeRate(uRate)
 		if o.DomainID != nil {
 			dir.DomainID = *o.DomainID
 		}

@@ -46,6 +46,13 @@ type DirectoryNode struct {
 	indexNextSet     bool
 	indexPreviousSet bool
 
+	// exchangeRateSet marks sfExchangeRate as present independent of its
+	// value. rippled's book describer calls setFieldU64(sfExchangeRate, uRate),
+	// which keeps the field present when getRate returns 0 (a quotient that
+	// underflows or overflows). Dropping it at 0 changes the SLE and fails
+	// ValidBookDirectory, which requires the field on every book root.
+	exchangeRateSet bool
+
 	// Owner directory specific
 	Owner [20]byte // Account that owns this directory (only for owner dirs)
 
@@ -94,6 +101,14 @@ func (d *DirectoryNode) SetIndexNext(page uint64) {
 func (d *DirectoryNode) SetIndexPrevious(page uint64) {
 	d.IndexPrevious = page
 	d.indexPreviousSet = true
+}
+
+// SetExchangeRate sets the book quality and marks it present, mirroring
+// rippled's setFieldU64(sfExchangeRate): the field then serializes even at
+// value 0.
+func (d *DirectoryNode) SetExchangeRate(rate uint64) {
+	d.ExchangeRate = rate
+	d.exchangeRateSet = true
 }
 
 // cMinValue is the minimum normalized mantissa value (10^15)
@@ -314,7 +329,7 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 			}
 			exchangeRateUnchanged = original == dir.ExchangeRate
 		}
-		if dir.ExchangeRate != 0 || exchangeRateUnchanged {
+		if dir.ExchangeRate != 0 || dir.exchangeRateSet || exchangeRateUnchanged {
 			entry.SetExchangeRateValue(dir.ExchangeRate)
 		} else {
 			entry.ClearExchangeRate()
