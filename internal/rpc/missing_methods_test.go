@@ -220,8 +220,8 @@ func TestOwnerInfoMethod(t *testing.T) {
 // Reference: rippled/src/test/rpc/LedgerRequestRPC_test.cpp
 
 func TestLedgerRequestMethod(t *testing.T) {
-	mock := newMockLedgerServiceMissingMethods()
-	services := servicesForMissingMethods(mock)
+	mock := newLedgerRequestMock()
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerRequestMethod{}
 
