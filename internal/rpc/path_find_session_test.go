@@ -182,8 +182,6 @@ func TestParseAndCreateSession_RequiredFieldErrors(t *testing.T) {
 	}
 }
 
-// The path_find session reads source currencies like ripple_path_find: the
-// 40-hex all-zero code is XRP and may not carry an issuer.
 func TestParseAndCreateSession_HexZeroSourceCurrencyIsXRP(t *testing.T) {
 	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const zero = "0000000000000000000000000000000000000000"
