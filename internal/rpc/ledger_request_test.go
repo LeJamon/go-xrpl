@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -280,9 +281,37 @@ func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
 }
 
 func TestLedgerRequest_ValidatedLedgerAgeBoundary(t *testing.T) {
-	mock := newLedgerRequestMock()
-	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 120
-	assert.False(t, types.ValidatedLedgerStale(mock.GetServerInfo()))
+	synctest.Test(t, func(t *testing.T) {
+		time.Sleep(time.Hour)
+		mock := newLedgerRequestMock()
+		mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 120
+		mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
+		ctx := &types.RpcContext{
+			Context:  context.Background(),
+			Role:     types.RoleAdmin,
+			Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+		}
+		method := &handlers.LedgerRequestMethod{}
+		params := json.RawMessage(`{"ledger_index":1}`)
+		for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
+			ctx.ApiVersion = version
+			result, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, rpcErr, "API v%d at 120 seconds", version)
+			require.NotNil(t, result)
+		}
+		time.Sleep(time.Second)
+		for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
+			ctx.ApiVersion = version
+			result, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			if version == types.ApiVersion1 {
+				assert.Equal(t, rpcerrors.RpcNO_CURRENT, rpcErr.Code)
+			} else {
+				assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
+			}
+		}
+	})
 }
 
 func TestLedgerRequest_HashDoesNotRequireFreshValidatedLedger(t *testing.T) {
@@ -316,12 +345,95 @@ func TestLedgerRequest_IndexTypePrecedesFreshness(t *testing.T) {
 		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
+	for _, test := range []struct {
+		params  string
+		code    int
+		message string
+	}{
+		{`{"ledger_index":"1"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid field 'ledger_index', not number."},
+		{`{"ledger_index":0}`, rpcerrors.RpcNOT_SYNCED, "Not synced to the network."},
+		{`{"ledger_index":2147483648}`, rpcerrors.RpcNOT_SYNCED, "Not synced to the network."},
+	} {
+		result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx, json.RawMessage(test.params))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, test.code, rpcErr.Code)
+		assert.Equal(t, test.message, rpcErr.Message)
+	}
+}
+
+func TestLedgerRequest_IndexSignedConversion(t *testing.T) {
+	mock := newLedgerRequestMock()
+	mock.validatedLedgerIndex = 10
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion2,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+
+	for _, test := range []struct {
+		name      string
+		params    string
+		wantCode  int
+		wantToken string
+		wantMsg   string
+	}{
+		{
+			name:      "signed int maximum is bounded normally",
+			params:    `{"ledger_index":2147483647}`,
+			wantCode:  rpcerrors.RpcINVALID_PARAMS,
+			wantToken: "invalidParams",
+			wantMsg:   "Ledger index too large",
+		},
+		{
+			name:      "unsigned value above signed range is internal",
+			params:    `{"ledger_index":2147483648}`,
+			wantCode:  rpcerrors.RpcINTERNAL,
+			wantToken: "internal",
+			wantMsg:   "Internal error.",
+		},
+		{
+			name:      "unsigned maximum is internal",
+			params:    `{"ledger_index":4294967295}`,
+			wantCode:  rpcerrors.RpcINTERNAL,
+			wantToken: "internal",
+			wantMsg:   "Internal error.",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx, json.RawMessage(test.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, test.wantCode, rpcErr.Code)
+			assert.Equal(t, test.wantToken, rpcErr.ErrorString)
+			assert.Equal(t, test.wantMsg, rpcErr.Message)
+		})
+	}
+}
+
+func TestLedgerRequest_NegativeSignedIndexWrapsBeforeBounds(t *testing.T) {
+	const wrapped = uint32(1 << 31)
+	var hash [32]byte
+	hash[0] = 0x11
+	mock := newLedgerRequestMock()
+	mock.validatedLedgerIndex = 3_000_000_000
+	mock.bySeq = map[uint32]types.LedgerReader{
+		wrapped: &mockLedgerReader{seq: wrapped, hash: hash, closed: true, validated: true},
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion2,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+
 	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
-		json.RawMessage(`{"ledger_index":"1"}`))
-	assert.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Equal(t, "Invalid field 'ledger_index', not number.", rpcErr.Message)
+		json.RawMessage(`{"ledger_index":-2147483648}`))
+	require.Nil(t, rpcErr)
+	response, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, wrapped, response["ledger_index"])
 }
 
 // rippled getOrAcquireLedger (RPCLedgerHelpers.cpp:396-440): selector
