@@ -141,9 +141,6 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			if hasMPT {
-				if _, hasIssuer := fields["issuer"]; hasIssuer {
-					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-				}
 				var value string
 				if err := json.Unmarshal(rawMPT, &value); err != nil {
 					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
@@ -151,6 +148,9 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 				mptID, ok := pathfinder.ParseSourceMPTID(value)
 				if !ok {
 					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				}
+				if _, hasIssuer := fields["issuer"]; hasIssuer {
+					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 				}
 				issue := payment.NewMPTIssue(mptID)
 				if sendMax != nil {
