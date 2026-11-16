@@ -141,6 +141,78 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 	})
 }
 
+func TestTxHistoryStartUsesJsonCppUIntConversion(t *testing.T) {
+	mock := newMockLedgerServiceTxHistory()
+	services := newTxHistoryTestServices(mock)
+	method := &handlers.TxHistoryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	valid := []struct {
+		name   string
+		params string
+		want   uint32
+	}{
+		{name: "null", params: `{"start":null}`, want: 0},
+		{name: "false", params: `{"start":false}`, want: 0},
+		{name: "true", params: `{"start":true}`, want: 1},
+		{name: "real truncates", params: `{"start":1.9}`, want: 1},
+		{name: "numeric string", params: `{"start":"7"}`, want: 7},
+		{name: "leading plus numeric string", params: `{"start":"+7"}`, want: 7},
+		{name: "numeric string stops at nul", params: `{"start":"1\u0000junk"}`, want: 1},
+		{name: "uint32 maximum", params: `{"start":4294967295}`, want: ^uint32(0)},
+	}
+	for _, test := range valid {
+		t.Run(test.name, func(t *testing.T) {
+			mock.txHistoryResult = nil
+			result, rpcErr := method.Handle(ctx, json.RawMessage(test.params))
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, test.want, response["index"])
+		})
+	}
+
+	invalid := []struct {
+		name   string
+		params string
+	}{
+		{name: "negative", params: `{"start":-1}`},
+		{name: "invalid string", params: `{"start":"not-a-number"}`},
+		{name: "repeated plus", params: `{"start":"++7"}`},
+		{name: "string overflow", params: `{"start":"4294967296"}`},
+		{name: "real overflow", params: `{"start":4294967296.0}`},
+		{name: "array", params: `{"start":[]}`},
+		{name: "object", params: `{"start":{}}`},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			result, rpcErr := method.Handle(ctx, json.RawMessage(test.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, "internal", rpcErr.ErrorString)
+			assert.Equal(t, "Internal error.", rpcErr.Message)
+		})
+	}
+
+	user := *ctx
+	user.Role = types.RoleUser
+	result, rpcErr := method.Handle(&user, json.RawMessage(`{"start":10000.9}`))
+	require.Nil(t, rpcErr)
+	assert.Equal(t, uint32(10000), result.(map[string]any)["index"])
+	result, rpcErr = method.Handle(&user, json.RawMessage(`{"start":"10001"}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcNO_PERMISSION, rpcErr.Code)
+	assert.Equal(t, "noPermission", rpcErr.ErrorString)
+	assert.Equal(t, "You don't have permission for this command.", rpcErr.Message)
+}
+
 // TestTxHistoryEmptyResult tests the response when there are no transactions.
 // Based on rippled TransactionHistory_test.cpp empty history scenario.
 func TestTxHistoryEmptyResult(t *testing.T) {
