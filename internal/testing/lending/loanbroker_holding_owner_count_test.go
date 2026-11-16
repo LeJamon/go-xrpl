@@ -13,8 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// holdingOwnerCountFixture is an owner that put all of its asset into a vault
-// and 5,000 of broker cover, then removed its now empty holding.
 type holdingOwnerCountFixture struct {
 	env      *jtx.TestEnv
 	owner    *jtx.Account
@@ -83,8 +81,6 @@ func newHoldingOwnerCountFixture(t *testing.T, kind string, fix340 bool) *holdin
 	return f
 }
 
-// TestLoanBrokerRecreatedHoldingOwnerCount pins that a holding recreated for the
-// broker owner counts toward its OwnerCount.
 func TestLoanBrokerRecreatedHoldingOwnerCount(t *testing.T) {
 	for _, fix340 := range []bool{false, true} {
 		for _, kind := range []string{"IOU", "MPT"} {
