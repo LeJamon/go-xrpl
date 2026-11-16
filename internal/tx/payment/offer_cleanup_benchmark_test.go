@@ -90,9 +90,6 @@ func selfOfferCleanupConfig() tx.EngineConfig {
 }
 
 func TestSelfOfferCleanupStateAndMetadata(t *testing.T) {
-	// Captured with book directories carrying their ExchangeRate; the values are
-	// identical before and after zero ExchangeRate serialization was fixed.
-	// Check consensus-visible output, not just tesSUCCESS.
 	for _, tc := range []struct {
 		count        int
 		metadataHash string

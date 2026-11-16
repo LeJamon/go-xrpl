@@ -55,10 +55,6 @@ func parseHistoricalLedgerFixture(t *testing.T, data []byte) historicalLedgerFix
 	return fixture
 }
 
-// replayHistoricalLedgerFixture applies every fixture transaction in order on
-// top of the parent state subset and requires each result and serialized
-// metadata to match the canonical peer record byte for byte. It returns the
-// rules loaded from the parent Amendments entry.
 func replayHistoricalLedgerFixture(t *testing.T, fixture historicalLedgerFixture) *amendment.Rules {
 	t.Helper()
 	all.RegisterAll()
