@@ -50,7 +50,7 @@ cites the rippled source file it follows.
 |---------|----------------|
 | `cmd/goxrpl`, `internal/cli` | CLI entrypoint (Cobra) and subcommands (server, rpc, replay, compare) |
 | `internal/tx` | Transaction engine and one subpackage per transaction type; `all` registers them |
-| `internal/ledger` | Ledger lifecycle: `genesis`, `header`, `manager`, `service`, `state`, `store`, `openledger` |
+| `internal/ledger` | Ledger lifecycle: `genesis`, `header`, `inbound`, `openledger`, `service`, `state` |
 | `internal/consensus` | Consensus protocol: `rcl` (real), `csf` (simulation framework), plus fee/amendment/UNL voting |
 | `internal/txq` | Transaction queue and fee escalation |
 | `internal/rpc` | JSON-RPC + WebSocket server, `handlers`, subscription system |
@@ -63,7 +63,7 @@ cites the rippled source file it follows.
 
 Every transaction implements the `Transaction` interface (`internal/tx/transaction.go`)
 and moves through a four-stage pipeline. The engine
-(`internal/tx/engine.go`) orchestrates the stages; transaction types opt into the
+(`internal/tx/engine/`) orchestrates the stages; transaction types opt into the
 stateful stages by implementing the corresponding interfaces.
 
 1. **Validate** — `Transaction.Validate()`. Structural, context-free checks on a

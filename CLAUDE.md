@@ -81,8 +81,10 @@ go test ./internal/tx/offer/...            # one package
 ./scripts/conformance-summary.sh --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
 ```
 
-The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions at
-`ws://localhost:8080/ws`, and a health check at `http://localhost:8080/health`.
+The server listens on the ports named in the configuration's `[server].ports`.
+The configuration written by `goxrpl generate-config` serves admin JSON-RPC at
+`http://127.0.0.1:5005/` and WebSocket subscriptions at `ws://127.0.0.1:6006/`;
+every HTTP RPC port also answers a health check at `/health`.
 
 ## Architecture
 
@@ -112,12 +114,12 @@ The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions
 - `internal/tx/` — Transaction engine, types, and processing
   - One subpackage per tx type: `account/`, `amm/`, `batch/`, `check/`, `clawback/`,
     `credential/`, `delegate/`, `depositpreauth/`, `did/`, `escrow/`,
-    `ledgerstatefix/`, `mpt/`, `nftoken/`, `offer/`, `oracle/`, `paychan/`,
-    `payment/`, `permissioneddomain/`, `pseudo/`, `signerlist/`, `ticket/`,
-    `trustset/`, `vault/`, `xchain/`
+    `ledgerstatefix/`, `lending/`, `mpt/`, `nftoken/`, `offer/`, `oracle/`,
+    `paychan/`, `payment/`, `permissioneddomain/`, `pseudo/`, `signerlist/`,
+    `sponsor/`, `ticket/`, `trustset/`, `vault/`, `xchain/`
   - `all/` — registry that imports all tx subpackages
-- `internal/ledger/` — Ledger management (`genesis/`, `header/`, `manager/`,
-  `service/`, `state/`, `store/`)
+- `internal/ledger/` — Ledger management (`genesis/`, `header/`, `inbound/`,
+  `openledger/`, `service/`, `state/`)
 - `internal/consensus/` — Consensus protocol (`csf/` simulation framework, `rcl/`)
 - `internal/txq/` — Transaction queue
 - `internal/rpc/` — JSON-RPC server with 60+ methods (`handlers/`, `types/`) and
@@ -136,7 +138,7 @@ Transactions flow through `Validate()` → `Preflight()` → `Preclaim()` → `A
 3. **Preclaim** — ledger-aware checks (account exists, sufficient balance)
 4. **Apply** — execute against ledger state
 
-The engine in `internal/tx/engine.go` orchestrates validation and applies
+The engine in `internal/tx/engine/` orchestrates validation and applies
 transactions to ledger state. Transaction types self-register via `init()` +
 `tx.Register()` in their subpackages.
 
