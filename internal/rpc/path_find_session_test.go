@@ -202,3 +202,32 @@ func TestParseAndCreateSession_HexZeroSourceCurrencyIsXRP(t *testing.T) {
 		t.Fatalf("error = %v, want srcCurMalformed", rpcErr)
 	}
 }
+
+func TestParseAndCreateSession_MPTIssuerErrors(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const mptID = "000000010000000000000000000000000000000000000000"
+	base := `{"source_account":"` + account + `","destination_account":"` + account + `","destination_amount":"1000","source_currencies":[`
+	for _, test := range []struct {
+		name    string
+		asset   string
+		code    int
+		token   string
+		message string
+	}{
+		{"valid issuer", `{"mpt_issuance_id":"` + mptID + `","issuer":"` + account + `"}`, rpcerrors.RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "Source issuer is malformed."},
+		{"null issuer", `{"mpt_issuance_id":"` + mptID + `","issuer":null}`, rpcerrors.RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "Source issuer is malformed."},
+		{"malformed issuer", `{"mpt_issuance_id":"0","issuer":5}`, rpcerrors.RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "Source issuer is malformed."},
+		{"invalid ID precedes issuer", `{"mpt_issuance_id":"bad","issuer":"` + account + `"}`, rpcerrors.RpcSRC_CUR_MALFORMED, "srcCurMalformed", "Source currency is malformed."},
+		{"nonstring ID precedes issuer", `{"mpt_issuance_id":5,"issuer":null}`, rpcerrors.RpcSRC_CUR_MALFORMED, "srcCurMalformed", "Source currency is malformed."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session, rpcErr := ParseAndCreateSession(json.RawMessage(base+test.asset+`]}`), nil)
+			if session != nil || rpcErr == nil {
+				t.Fatalf("session = %v, error = %v, want validation error", session, rpcErr)
+			}
+			if rpcErr.Code != test.code || rpcErr.ErrorString != test.token || rpcErr.Message != test.message {
+				t.Fatalf("error = %#v, want %d %q %q", rpcErr, test.code, test.token, test.message)
+			}
+		})
+	}
+}
