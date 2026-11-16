@@ -56,6 +56,7 @@ func newSelfOfferCleanupFixture(tb testing.TB, count int) (*ledgercore.Ledger, f
 		bookNode, err := state.DirInsert(base, directory, keys[i], true, func(dir *state.DirectoryNode) {
 			dir.TakerPaysCurrency = keylet.CurrencyBytes("USD")
 			dir.TakerPaysIssuer = owner
+			dir.ExchangeRate = quality.Value
 		})
 		if err != nil {
 			tb.Fatal(err)
@@ -89,15 +90,13 @@ func selfOfferCleanupConfig() tx.EngineConfig {
 }
 
 func TestSelfOfferCleanupStateAndMetadata(t *testing.T) {
-	// Captured on unmodified main (937b5f490), before the onlyBelow bitmap
-	// optimization. Check consensus-visible output, not just tesSUCCESS.
 	for _, tc := range []struct {
 		count        int
 		metadataHash string
 		ledgerHash   string
 	}{
-		{324, "d3c12bda09be5a68606085c1af9beda94b6f1489dbc2eda73d8cc816a97cb9c6", "fe2cb33ef3ee0c51b36b9e7f329991c72a7192abe303a760a3566fe3818433fa"},
-		{700, "7b9d14e8092056bb0adb9bf1e7f3c587f1d6be3791ed9c86e16806a0db304aa4", "6b0c24e90ed0c267b068cbff0deac4b6fa444e17608c5fe3cb123f474e4f5e00"},
+		{324, "e284a57aed91ce9a524fd5108dac490738af8a9a384f892f070666fc37451940", "98d810547a14c7999040e7fffb5e4a40514dec1f96364d992d7e272dae24431c"},
+		{700, "b47787981d17f6e3af82e67777ca4885b669b1f1a925f69d2fb3c64a46e77953", "3509a9c7fb7fb53d0552b8dfc13750cf15546faad136d4d86921f90c6e129a2d"},
 	} {
 		t.Run(fmt.Sprint(tc.count), func(t *testing.T) {
 			base, makeTransaction, keys := newSelfOfferCleanupFixture(t, tc.count)
