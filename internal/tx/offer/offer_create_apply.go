@@ -233,7 +233,7 @@ func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey
 
 	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
 		_ = setBookDirectoryAssets(dir, takerPays, takerGets)
-		dir.SetExchangeRate(openRate)
+		dir.ExchangeRate = openRate
 		// No DomainID for open book
 	})
 	if err != nil {

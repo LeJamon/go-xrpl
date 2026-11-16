@@ -157,10 +157,6 @@ func (p *PaymentChannelClaim) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(p)
 }
 
-func (p *PaymentChannelClaim) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeaturePayChan}
-}
-
 // tfPayChanClaimMask is the invalid-flags mask for a claim once fix1543 is
 // active: everything except the universal flags plus tfRenew/tfClose.
 const tfPayChanClaimMask = ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)

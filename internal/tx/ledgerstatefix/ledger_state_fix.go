@@ -264,7 +264,7 @@ func (l *LedgerStateFix) applyBookExchangeRate(ctx *tx.ApplyContext) ter.Result 
 	if perr != nil {
 		return ter.TecINTERNAL
 	}
-	dir.SetExchangeRate(quality)
+	dir.ExchangeRate = quality
 	serialized, serr := state.SerializeDirectoryNode(dir, true)
 	if serr != nil {
 		return ter.TecINTERNAL
