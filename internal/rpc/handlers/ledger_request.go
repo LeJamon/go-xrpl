@@ -117,14 +117,18 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 
 		// rippled stores asInt() in a uint32 and checks "too large" first,
-		// so a negative index wraps and is reported as too large.
-		if idx < 0 || idx > math.MaxUint32 || uint32(idx) >= validatedSeq {
+		// so a negative index wraps before the bounds checks. Values outside
+		// JsonCpp's signed-int range throw and become internal errors.
+		if idx < math.MinInt32 || idx > math.MaxInt32 {
+			return nil, rpcerrors.RpcErrorInternal()
+		}
+		targetSeq = uint32(int32(idx))
+		if targetSeq >= validatedSeq {
 			return nil, rpcerrors.RpcErrorInvalidParams("Ledger index too large")
 		}
-		if idx == 0 {
+		if targetSeq == 0 {
 			return nil, rpcerrors.RpcErrorInvalidParams("Ledger index too small")
 		}
-		targetSeq = uint32(idx)
 
 		if l, err := ledger.GetLedgerBySequence(targetSeq); err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
