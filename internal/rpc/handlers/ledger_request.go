@@ -110,17 +110,12 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 		// A sequence request needs a validated ledger to bound it and to
 		// resolve the sequence to a hash (rippled's getValidatedLedger gate).
-		// rippled distinguishes API v1 (rpcNO_CURRENT) from later versions
-		// (rpcNOT_SYNCED) here.
-		validatedSeq := ctx.Services.Ledger().GetValidatedLedgerIndex()
-		if validatedSeq == 0 {
-			if ctx.ApiVersion == types.ApiVersion1 {
-				return nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent",
-					"Current ledger is unavailable.")
-			}
-			return nil, rpcerrors.NewRpcError(rpcerrors.RpcNOT_SYNCED, "notSynced", "notSynced",
-				"Not synced to the network")
+		ledger := ctx.Services.Ledger()
+		validatedSeq := ledger.GetValidatedLedgerIndex()
+		if types.ValidatedLedgerStale(ledger.GetServerInfo()) || validatedSeq == 0 {
+			return nil, types.CurrentLedgerUnavailable(ctx.ApiVersion)
 		}
+
 		// rippled stores asInt() in a uint32 and checks "too large" first,
 		// so a negative index wraps and is reported as too large.
 		if idx < 0 || idx > math.MaxUint32 || uint32(idx) >= validatedSeq {
@@ -131,7 +126,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		targetSeq = uint32(idx)
 
-		if l, err := ctx.Services.Ledger().GetLedgerBySequence(targetSeq); err == nil && l != nil {
+		if l, err := ledger.GetLedgerBySequence(targetSeq); err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
 		}
 	}

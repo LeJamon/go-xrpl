@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,15 +40,21 @@ func (m *ledgerRequestMock) GetLedgerBySequence(seq uint32) (types.LedgerReader,
 	return nil, svcerr.ErrLedgerNotFound
 }
 
+func newLedgerRequestMock() *ledgerRequestMock {
+	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	mock.serverInfo.HaveValidated = true
+	mock.serverInfo.ValidatedLedgerSeq = mock.validatedLedgerIndex
+	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix
+	return mock
+}
+
 func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 	var hash [32]byte
 	hash[0], hash[31] = 0xAB, 0xCD
 	lr := &mockLedgerReader{seq: 5, hash: hash, closed: true, validated: true, totalDrops: 99000000, closeTime: 776000030}
 
-	mock := &ledgerRequestMock{
-		mockLedgerService: newMockLedgerService(),
-		byHash:            map[[32]byte]types.LedgerReader{hash: lr},
-	}
+	mock := newLedgerRequestMock()
+	mock.byHash = map[[32]byte]types.LedgerReader{hash: lr}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
@@ -74,10 +82,8 @@ func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
 	hash[0] = 0x11
 	lr := &mockLedgerReader{seq: 1, hash: hash, closed: true, validated: true}
 
-	mock := &ledgerRequestMock{
-		mockLedgerService: newMockLedgerService(), // validated ledger is seq 2
-		bySeq:             map[uint32]types.LedgerReader{1: lr},
-	}
+	mock := newLedgerRequestMock() // validated ledger is seq 2
+	mock.bySeq = map[uint32]types.LedgerReader{1: lr}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
@@ -114,7 +120,7 @@ func TestLedgerRequest_AcquiringTargetReturnsBareSnapshot(t *testing.T) {
 		"timeouts":    0,
 	}
 	var gotHash [32]byte
-	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	mock := newLedgerRequestMock()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
@@ -154,7 +160,7 @@ func TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound(t *testing.T) {
 		"peers":       1,
 		"timeouts":    0,
 	}
-	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	mock := newLedgerRequestMock()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
@@ -182,7 +188,7 @@ func TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound(t *testing.T) {
 func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
 	var hash [32]byte
 	hash[0] = 0x77
-	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	mock := newLedgerRequestMock()
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
@@ -197,12 +203,133 @@ func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
 	assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 }
 
+func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
+	const staleAge = 121
+	tests := []struct {
+		name       string
+		apiVersion int
+		setup      func(*ledgerRequestMock)
+		wantCode   int
+		wantToken  string
+		wantMsg    string
+	}{
+		{
+			name:       "stale API v1",
+			apiVersion: types.ApiVersion1,
+			setup: func(mock *ledgerRequestMock) {
+				mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - staleAge
+				mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
+			},
+			wantCode:  rpcerrors.RpcNO_CURRENT,
+			wantToken: "noCurrent",
+			wantMsg:   "Current ledger is unavailable.",
+		},
+		{
+			name:       "stale API v2",
+			apiVersion: types.ApiVersion2,
+			setup: func(mock *ledgerRequestMock) {
+				mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - staleAge
+				mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
+			},
+			wantCode:  rpcerrors.RpcNOT_SYNCED,
+			wantToken: "notSynced",
+			wantMsg:   "Not synced to the network.",
+		},
+		{
+			name:       "missing validated ledger",
+			apiVersion: types.ApiVersion2,
+			setup: func(mock *ledgerRequestMock) {
+				mock.serverInfo.HaveValidated = false
+			},
+			wantCode:  rpcerrors.RpcNOT_SYNCED,
+			wantToken: "notSynced",
+			wantMsg:   "Not synced to the network.",
+		},
+		{
+			name:       "zero validated sequence",
+			apiVersion: types.ApiVersion1,
+			setup: func(mock *ledgerRequestMock) {
+				mock.validatedLedgerIndex = 0
+			},
+			wantCode:  rpcerrors.RpcNO_CURRENT,
+			wantToken: "noCurrent",
+			wantMsg:   "Current ledger is unavailable.",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newLedgerRequestMock()
+			test.setup(mock)
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleAdmin,
+				ApiVersion: test.apiVersion,
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+			}
+
+			result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
+				json.RawMessage(`{"ledger_index":1}`))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, test.wantCode, rpcErr.Code)
+			assert.Equal(t, test.wantToken, rpcErr.ErrorString)
+			assert.Equal(t, test.wantMsg, rpcErr.Message)
+		})
+	}
+}
+
+func TestLedgerRequest_ValidatedLedgerAgeBoundary(t *testing.T) {
+	mock := newLedgerRequestMock()
+	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 120
+	assert.False(t, types.ValidatedLedgerStale(mock.GetServerInfo()))
+}
+
+func TestLedgerRequest_HashDoesNotRequireFreshValidatedLedger(t *testing.T) {
+	var hash [32]byte
+	hash[0] = 0xAB
+	mock := newLedgerRequestMock()
+	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 121
+	mock.byHash = map[[32]byte]types.LedgerReader{
+		hash: &mockLedgerReader{seq: 1, hash: hash, closed: true, validated: true},
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion2,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+
+	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
+		json.RawMessage(`{"ledger_hash":"`+hex.EncodeToString(hash[:])+`"}`))
+	require.Nil(t, rpcErr)
+	assert.NotNil(t, result)
+}
+
+func TestLedgerRequest_IndexTypePrecedesFreshness(t *testing.T) {
+	mock := newLedgerRequestMock()
+	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 121
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion2,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+
+	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
+		json.RawMessage(`{"ledger_index":"1"}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "Invalid field 'ledger_index', not number.", rpcErr.Message)
+}
+
 // rippled getOrAcquireLedger (RPCLedgerHelpers.cpp:396-440): selector
 // presence is isMember, a bad hash is "not hex string", a non-integer
 // index is "not number", and the uint32 index is checked against the
 // validated ledger before the zero check, so a negative one is too large.
 func TestLedgerRequest_SelectorErrorsMatchRippled(t *testing.T) {
-	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	mock := newLedgerRequestMock()
 	mock.validatedLedgerIndex = 10
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
