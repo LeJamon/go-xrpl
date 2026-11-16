@@ -309,8 +309,6 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 	return issuerStr, issuerID, nil
 }
 
-// canonCurrency folds the XRP spellings ("", "XRP" and the all-zero hex code)
-// to a single form for equality checks.
 func canonCurrency(c string) string {
 	if c == "" || isZeroHexCurrency(c) {
 		return "XRP"

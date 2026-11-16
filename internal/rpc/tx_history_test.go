@@ -317,7 +317,6 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	// Validate index is correct
 	assert.Equal(t, float64(5), resp["index"])
 
-	// An empty page leaves txs null, as rippled does.
 	assert.Nil(t, resp["txs"], "empty txs must be null")
 }
 
