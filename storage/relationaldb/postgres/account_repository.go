@@ -80,23 +80,35 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	query := accountTxSelect
 	args := []any{options.Account.String()}
 
-	if options.MinLedger > 0 {
-		args = append(args, options.MinLedger)
-		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", len(args))
-	}
+	if options.Marker == nil {
+		if options.MinLedger > 0 {
+			args = append(args, options.MinLedger)
+			query += fmt.Sprintf(" AND at.ledger_seq >= $%d", len(args))
+		}
 
-	if options.MaxLedger > 0 {
-		args = append(args, options.MaxLedger)
-		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", len(args))
-	}
-
-	// Marker-based pagination includes the marker row: BuildAccountTxPage
-	// resumes on it, as rippled accountTxPage does.
-	if options.Marker != nil {
+		if options.MaxLedger > 0 {
+			args = append(args, options.MaxLedger)
+			query += fmt.Sprintf(" AND at.ledger_seq <= $%d", len(args))
+		}
+	} else {
+		// rippled's continuation query keeps the marker ledger as an inclusive
+		// UNION branch and applies only the bound on the continuation side. This
+		// lets a client change the range between pages without losing the marker
+		// (or later transactions in its ledger).
+		args = append(args, options.Marker.LedgerSeq)
+		seqArg := len(args)
+		continuationBound := ""
+		if markerCmp == ">" && options.MaxLedger > 0 {
+			args = append(args, options.MaxLedger)
+			continuationBound = fmt.Sprintf(" AND at.ledger_seq <= $%d", len(args))
+		} else if markerCmp == "<" && options.MinLedger > 0 {
+			args = append(args, options.MinLedger)
+			continuationBound = fmt.Sprintf(" AND at.ledger_seq >= $%d", len(args))
+		}
 		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
-		seqArg, txnArg := len(args)-1, len(args)
-		query += fmt.Sprintf(" AND (at.ledger_seq %s $%d OR (at.ledger_seq = $%d AND at.txn_seq %s= $%d))",
-			markerCmp, seqArg, seqArg, markerCmp, txnArg)
+		equalSeqArg, txnArg := len(args)-1, len(args)
+		query += fmt.Sprintf(" AND ((at.ledger_seq %s $%d%s) OR (at.ledger_seq = $%d AND at.txn_seq %s= $%d))",
+			markerCmp, seqArg, continuationBound, equalSeqArg, markerCmp, txnArg)
 	}
 
 	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir

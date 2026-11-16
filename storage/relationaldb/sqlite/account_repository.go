@@ -45,20 +45,29 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 
 	args := []any{options.Account.String()}
 
-	if options.MinLedger > 0 {
-		query += " AND at.ledger_seq >= ?"
-		args = append(args, options.MinLedger)
-	}
-	if options.MaxLedger > 0 {
-		query += " AND at.ledger_seq <= ?"
-		args = append(args, options.MaxLedger)
-	}
-
-	// The marker row is included: BuildAccountTxPage resumes on it, as
-	// rippled accountTxPage does.
-	if options.Marker != nil {
-		query += " AND (at.ledger_seq " + markerCmp + " ? OR (at.ledger_seq = ? AND at.txn_seq " + markerCmp + "= ?))"
-		args = append(args, options.Marker.LedgerSeq, options.Marker.LedgerSeq, options.Marker.TxnSeq)
+	if options.Marker == nil {
+		if options.MinLedger > 0 {
+			query += " AND at.ledger_seq >= ?"
+			args = append(args, options.MinLedger)
+		}
+		if options.MaxLedger > 0 {
+			query += " AND at.ledger_seq <= ?"
+			args = append(args, options.MaxLedger)
+		}
+	} else {
+		// Match rippled's continuation UNION: preserve the inclusive marker
+		// ledger while applying only the bound on rows after the marker.
+		query += " AND ((at.ledger_seq " + markerCmp + " ?"
+		args = append(args, options.Marker.LedgerSeq)
+		if markerCmp == ">" && options.MaxLedger > 0 {
+			query += " AND at.ledger_seq <= ?"
+			args = append(args, options.MaxLedger)
+		} else if markerCmp == "<" && options.MinLedger > 0 {
+			query += " AND at.ledger_seq >= ?"
+			args = append(args, options.MinLedger)
+		}
+		query += ") OR (at.ledger_seq = ? AND at.txn_seq " + markerCmp + "= ?))"
+		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
 	}
 
 	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
