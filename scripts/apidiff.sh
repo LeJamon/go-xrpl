@@ -6,11 +6,10 @@
 set -euo pipefail
 
 base=${1:?usage: $0 <base-ref>}
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 mkdir "$tmp/base"
-git -C "$root" archive --format=tar "$base" | tar -x -C "$tmp/base"
-cd "$root"
-GOWORK=off go run ./scripts/apidiff --base "$tmp/base" --new "$root"
+git archive --format=tar "$base" | tar -x -C "$tmp/base"
+GOWORK=off go run ./scripts/apidiff "$tmp/base" "$PWD"

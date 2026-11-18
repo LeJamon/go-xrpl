@@ -1,16 +1,11 @@
-// Command apidiff compares the supported public Go packages in two module
-// trees. It intentionally keeps the package selection here instead of relying
-// on an entire-module comparison, which would include commands and tooling.
+// Command apidiff compares the public Go packages in two module trees.
 package main
 
 import (
-	"errors"
-	"flag"
 	"fmt"
-	"go/types"
+	"log"
 	"os"
-	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"golang.org/x/exp/apidiff"
@@ -18,108 +13,63 @@ import (
 )
 
 func main() {
-	base := flag.String("base", "", "base module directory")
-	newTree := flag.String("new", "", "new module directory")
-	flag.Parse()
-	if *base == "" || *newTree == "" || flag.NArg() != 0 {
-		flag.Usage()
-		os.Exit(2)
+	log.SetFlags(0)
+	if len(os.Args) != 3 {
+		log.Fatal("usage: apidiff <base-directory> <new-directory>")
+	}
+	base, err := loadModule(os.Args[1])
+	if err != nil {
+		log.Fatalf("load base module: %v", err)
+	}
+	current, err := loadModule(os.Args[2])
+	if err != nil {
+		log.Fatalf("load current module: %v", err)
 	}
 
-	oldModule, err := loadModule(*base)
-	if err != nil {
-		fatal("load base module: %v", err)
+	report := apidiff.ModuleChanges(base, current)
+	if base.Path != current.Path {
+		report.Changes = append(report.Changes, apidiff.Change{
+			Message: fmt.Sprintf("module path changed from %s to %s", base.Path, current.Path),
+		})
 	}
-	newModule, err := loadModule(*newTree)
-	if err != nil {
-		fatal("load new module: %v", err)
-	}
-	if oldModule.Path != newModule.Path {
-		fatal("module paths differ: %q and %q", oldModule.Path, newModule.Path)
-	}
-
-	report := apidiff.ModuleChanges(oldModule, newModule)
-	sort.Slice(report.Changes, func(i, j int) bool {
-		if report.Changes[i].Message != report.Changes[j].Message {
-			return report.Changes[i].Message < report.Changes[j].Message
-		}
-		return !report.Changes[i].Compatible && report.Changes[j].Compatible
-	})
 	if len(report.Changes) == 0 {
 		fmt.Println("No changes to the public API.")
 		return
 	}
+	slices.SortFunc(report.Changes, func(a, b apidiff.Change) int {
+		return strings.Compare(a.Message, b.Message)
+	})
 	if err := report.Text(os.Stdout); err != nil {
-		fatal("write report: %v", err)
+		log.Fatal(err)
 	}
 }
 
-func loadModule(root string) (*apidiff.Module, error) {
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return nil, err
-	}
-	packagesFound, err := packages.Load(&packages.Config{
-		Dir:  root,
+func loadModule(dir string) (*apidiff.Module, error) {
+	pkgs, err := packages.Load(&packages.Config{
+		Dir:  dir,
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedModule,
 	}, "./...")
 	if err != nil {
 		return nil, err
 	}
-
-	var loadErrors []error
-	var modulePath string
-	for _, pkg := range packagesFound {
-		for _, pkgErr := range pkg.Errors {
-			loadErrors = append(loadErrors, pkgErr)
+	var module apidiff.Module
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 {
+			return nil, pkg.Errors[0]
 		}
-		if pkg.Module != nil && pkg.Module.Main {
-			if modulePath == "" {
-				modulePath = pkg.Module.Path
-			} else if modulePath != pkg.Module.Path {
-				loadErrors = append(loadErrors, fmt.Errorf("multiple main modules: %q and %q", modulePath, pkg.Module.Path))
-			}
-		}
-	}
-	if len(loadErrors) != 0 {
-		return nil, errors.Join(loadErrors...)
-	}
-	if modulePath == "" {
-		return nil, fmt.Errorf("module path not found in %s", root)
-	}
-
-	selected := make([]*types.Package, 0, len(packagesFound))
-	for _, pkg := range packagesFound {
-		if pkg.Module == nil || pkg.Module.Path != modulePath || !isPublic(pkg.PkgPath, pkg.Name, modulePath) {
+		if pkg.Module == nil || !pkg.Module.Main {
 			continue
 		}
-		if pkg.Types == nil {
-			return nil, fmt.Errorf("package %s has no type information", pkg.PkgPath)
+		module.Path = pkg.Module.Path
+		rel := strings.TrimPrefix(pkg.PkgPath, module.Path)
+		parts := strings.Split(strings.TrimPrefix(rel, "/"), "/")
+		if pkg.Name == "main" || parts[0] == "cmd" || parts[0] == "scripts" || slices.Contains(parts, "internal") {
+			continue
 		}
-		selected = append(selected, pkg.Types)
+		module.Packages = append(module.Packages, pkg.Types)
 	}
-	sort.Slice(selected, func(i, j int) bool { return selected[i].Path() < selected[j].Path() })
-	return &apidiff.Module{Path: modulePath, Packages: selected}, nil
-}
-
-func isPublic(pkgPath, name, modulePath string) bool {
-	rel, ok := strings.CutPrefix(pkgPath, modulePath+"/")
-	if !ok || name == "main" {
-		return false
+	if module.Path == "" {
+		return nil, fmt.Errorf("no module packages found in %s", dir)
 	}
-	parts := strings.Split(rel, "/")
-	if len(parts) == 0 || parts[0] == "cmd" || parts[0] == "scripts" {
-		return false
-	}
-	for _, part := range parts {
-		if part == "internal" {
-			return false
-		}
-	}
-	return true
-}
-
-func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
+	return &module, nil
 }

@@ -5,26 +5,26 @@ can import. This page says what each of them promises.
 
 ## What is public
 
-The supported importable API is every non-`main` package outside `internal/`,
-`cmd/`, and `scripts/`:
+The public API includes importable libraries such as `codec/addresscodec`,
+`ledger/entry`, and `storage/kvstore`. It covers new library packages automatically.
 
 Everything under `internal/` (the transaction engine, ledger service, consensus,
 peer networking, RPC) is private to this module. The Go toolchain refuses to
 import it from outside, and it changes without notice. A lint rule keeps public
 packages from depending on it.
 
-This rule includes nested library packages and future library packages without a
-second allowlist. Command packages and tooling remain implementation details.
+The API report excludes every `internal` directory, executable packages,
+and the top-level `cmd/` and `scripts/` tooling trees.
 
 ## Two version numbers
 
 - **Module version** — the Go module's git tag (`vX.Y.Z`), which is what
   `go get` resolves. It describes the Go API of the public packages.
 - **Software version** — `version.SemanticVersion`, currently `3.4.0`, is the
-  protocol version encoded in validations and consensus data. The exported
+  software version encoded in validations. The exported
   `version.Version` variable defaults to it and is the build version shown by
-  `server_info`, the CLI, and metrics. Release builds may replace `Version`
-  with `-ldflags`; that does not change the encoded protocol version.
+  `server_info`, the CLI, and metrics. Builds can override `Version` with `-ldflags`.
+  Validations always use the canonical software version.
 
 The two are independent. The rippled release whose behaviour the node tracks is a
 third thing again; see [conformance.md](conformance.md).
