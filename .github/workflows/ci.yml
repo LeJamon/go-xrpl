@@ -306,19 +306,14 @@ jobs:
           # scripts/test-shard.sh partitions `go list ./...` across these
           # groups, so every package in the module runs in exactly one shard.
           - group: integration-offer
-            packages: "$(scripts/test-shard.sh integration-offer)"
             race: ""
           - group: integration
-            packages: "$(scripts/test-shard.sh integration)"
             race: "-race"
           - group: tx
-            packages: "$(scripts/test-shard.sh tx)"
             race: "-race"
           - group: core
-            packages: "$(scripts/test-shard.sh core)"
             race: "-race"
           - group: libs
-            packages: "$(scripts/test-shard.sh libs)"
             race: "-race"
     steps:
       - uses: actions/checkout@v5
@@ -360,7 +355,12 @@ jobs:
             .full_document_bytes == 79944
           ' internal/rpc/testdata/server_definitions_final_hashes.json >/dev/null
       - uses: ./.github/actions/setup
-      - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
+      - name: Run package tests
+        env:
+          GOFLAGS: ${{ matrix.race }}
+        run: |
+          packages=$(scripts/test-shard.sh "${{ matrix.group }}")
+          go test -count=1 -timeout 15m $packages
       - name: Record producer evidence
         if: always()
         env:
@@ -368,7 +368,9 @@ jobs:
           EVIDENCE_LABEL: test-${{ matrix.group }}
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
-            go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
+            export GOFLAGS="${{ matrix.race }}";
+            packages=$(scripts/test-shard.sh "${{ matrix.group }}") &&
+            go test -count=1 -timeout 15m $packages
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()

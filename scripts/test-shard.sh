@@ -16,39 +16,42 @@ if [ "$#" -eq 0 ]; then
     echo "usage: $0 --list | <shard>..." >&2
     exit 2
 fi
-if [ "$1" = "--list" ]; then
+if [ "$#" -eq 1 ] && [ "$1" = "--list" ]; then
     printf '%s\n' "${shards[@]}"
     exit 0
 fi
 for want in "$@"; do
-    case " ${shards[*]} " in
-        *" $want "*) ;;
-        *) echo "unknown shard: $want (have: ${shards[*]})" >&2; exit 2 ;;
-    esac
+    for shard in "${shards[@]}"; do
+        [[ $shard == "$want" ]] && continue 2
+    done
+    echo "unknown shard: $want (have: ${shards[*]})" >&2
+    exit 2
 done
 
 cd "$(dirname "$0")/.."
-module=$(go list -m)
-
-shard_of() {
-    case "$1" in
-        internal/testing/offer | internal/testing/offer/*) echo integration-offer ;;
-        internal/testing | internal/testing/*) echo integration ;;
-        internal/tx | internal/tx/*) echo tx ;;
+packages=$(go list -f '{{.ImportPath}} {{.Module.Path}}' ./...)
+matched=false
+while read -r pkg module; do
+    [[ -n $pkg ]] || continue
+    case "${pkg#"$module"/}" in
+        internal/testing/offer | internal/testing/offer/*) shard=integration-offer ;;
+        internal/testing | internal/testing/*) shard=integration ;;
+        internal/tx | internal/tx/*) shard=tx ;;
         # Runs with libs because that shard checks out the rippled oracles.
-        internal/testutil | internal/testutil/*) echo libs ;;
-        internal/* | cmd/* | scripts/*) echo core ;;
-        *) echo libs ;;
+        internal/testutil | internal/testutil/*) shard=libs ;;
+        internal | internal/* | cmd | cmd/* | scripts | scripts/*) shard=core ;;
+        *) shard=libs ;;
     esac
-}
-
-go list ./... | while read -r pkg; do
-    rel=${pkg#"$module"}
-    rel=${rel#/}
-    shard=$(shard_of "$rel")
     for want in "$@"; do
         if [ "$shard" = "$want" ]; then
             echo "$pkg"
+            matched=true
+            break
         fi
     done
-done
+done <<< "$packages"
+
+if [[ $matched == false ]]; then
+    echo "no packages in requested shards: $*" >&2
+    exit 1
+fi

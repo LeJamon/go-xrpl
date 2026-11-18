@@ -81,14 +81,14 @@ just build-all        # compile every package
 just test             # all tests
 just test-tx          # transaction-engine tests (./internal/tx/...)
 just test-integration # conformance/integration suites (./internal/testing/...)
-just test-core        # every other internal package (ledger / rpc / consensus / ...)
-just test-libs        # the public packages (codec / crypto / shamap / storage / ...)
+just test-core        # remaining node packages and tools
+just test-libs        # libraries and oracle-backed test utilities
 just test-pkg ./internal/tx/offer/...                  # one package
 just test-pkg './internal/tx/payment/... -run TestX'   # one test (quote the args)
 
 just vet              # go vet
 just lint             # the lint config CI gates on (auto-installs the pinned version)
-just lint-advisory    # broader, non-blocking findings
+just lint-advisory    # broader advisory checks used in release evidence
 just api-diff         # exported-API changes in the public packages vs origin/main
 just fmt              # gofmt -w the module
 

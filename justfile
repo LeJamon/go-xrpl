@@ -47,19 +47,19 @@ test:
 
 # CI groups: integration tests (both the offer shard and the rest).
 test-integration:
-    go test $(./scripts/test-shard.sh integration-offer integration)
+    packages=$(./scripts/test-shard.sh integration-offer integration) && go test $packages
 
 # CI group: transaction-engine tests.
 test-tx:
-    go test $(./scripts/test-shard.sh tx)
+    packages=$(./scripts/test-shard.sh tx) && go test $packages
 
-# CI group: every other internal package (ledger / txq / rpc / consensus / peers / node / ...).
+# CI group: remaining node packages and tools.
 test-core:
-    go test $(./scripts/test-shard.sh core)
+    packages=$(./scripts/test-shard.sh core) && go test $packages
 
-# CI group: the public packages (codec / crypto / shamap / storage / ...).
+# CI group: libraries and oracle-backed test utilities.
 test-libs:
-    go test $(./scripts/test-shard.sh libs)
+    packages=$(./scripts/test-shard.sh libs) && go test $packages
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:
