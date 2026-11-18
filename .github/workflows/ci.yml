@@ -81,6 +81,7 @@ jobs:
   # the PR. See docs/api-stability.md.
   api-diff:
     name: Public API diff
+    continue-on-error: true
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -89,7 +90,14 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup
       - name: Diff exported API against the base branch
-        run: scripts/apidiff.sh "origin/${{ github.base_ref }}" | tee -a "$GITHUB_STEP_SUMMARY"
+        shell: bash
+        env:
+          API_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! scripts/apidiff.sh "$API_BASE" | tee -a "$GITHUB_STEP_SUMMARY"; then
+            echo "Public API comparison failed. See the step log." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
   generate:
     name: Generate (drift check)

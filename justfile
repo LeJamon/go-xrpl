@@ -143,14 +143,14 @@ lint:
     @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
     golangci-lint run --config .golangci.yml
 
-# Run the broader advisory lint configuration (non-blocking in CI).
+# Run the broader advisory lint configuration used in release evidence.
 lint-advisory:
     @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
     golangci-lint run --config .golangci-warnings.yml
 
 # Report changes to the public packages' exported API since a base ref.
 api-diff base="origin/main":
-    ./scripts/apidiff.sh {{base}}
+    ./scripts/apidiff.sh {{quote(base)}}
 
 lint-fix: 
     @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
