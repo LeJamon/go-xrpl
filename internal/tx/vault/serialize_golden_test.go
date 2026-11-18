@@ -74,7 +74,7 @@ func vaultGoldenCases() []struct {
 
 	emptyData := base()
 	emptyData.DataPresent = true
-	emptyData.AssetsTotal, emptyData.AssetsAvailable, emptyData.AssetsMaximum, emptyData.LossUnrealized = "0", "0", "0", "0"
+	emptyData.AssetsTotal, emptyData.AssetsAvailable, emptyData.AssetsMaximum, emptyData.LossUnrealized = "0", "-0", "0.000e6", "1e-32768"
 
 	mpt := base()
 	mpt.AssetIsMPT, mpt.AssetMPTID = true, mptID

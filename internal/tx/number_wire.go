@@ -12,15 +12,17 @@ import (
 func WireNumbers(scale state.MantissaScale, values ...string) ([]string, error) {
 	numbers := make([]string, len(values))
 	for i, value := range values {
+		numbers[i] = "0"
 		if value == "" || value == "0" {
-			numbers[i] = "0"
 			continue
 		}
 		number, err := state.ParseXRPLNumber(value, scale, state.RoundToNearest)
 		if err != nil {
 			return nil, err
 		}
-		numbers[i] = fmt.Sprintf("%de%d", number.Mantissa(), number.Exponent())
+		if !number.IsZero() {
+			numbers[i] = fmt.Sprintf("%de%d", number.Mantissa(), number.Exponent())
+		}
 	}
 	return numbers, nil
 }
