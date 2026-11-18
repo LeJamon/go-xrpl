@@ -917,7 +917,7 @@ func (o *Overlay) ordinaryOutboundCount() int {
 
 	count := 0
 	for _, peer := range peers {
-		if !o.discovery.IsFixed(peer.Endpoint().String()) {
+		if !o.discovery.IsFixed(peer.Endpoint().String()) && !o.isClusterPeer(peer) {
 			count++
 		}
 	}
