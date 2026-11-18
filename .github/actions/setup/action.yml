@@ -18,8 +18,10 @@ runs:
       shell: bash
       run: echo "CGO_ENABLED=${{ inputs.cgo == 'true' && '1' || '0' }}" >> "$GITHUB_ENV"
 
-    - name: Install CGO dev headers (Linux)
-      if: inputs.cgo == 'true' && runner.os == 'Linux'
+    # Persistent runners have these packages provisioned by the host admin.
+    # Keep CI unprivileged and verify the same pkg-config metadata below.
+    - name: Install CGO dev headers (GitHub-hosted Linux)
+      if: inputs.cgo == 'true' && runner.os == 'Linux' && runner.environment == 'github-hosted'
       shell: bash
       run: |
         cgo_apt_sources=/etc/apt/sources.list.d/ubuntu.sources

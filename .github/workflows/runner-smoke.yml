@@ -1,0 +1,38 @@
+name: Runner smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/runner-smoke.yml
+      - .github/actions/setup/action.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Self-hosted Linux build and native tests
+    runs-on: [self-hosted, linux, x64, go-xrpl]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Verify runner identity and native dependencies
+        run: |
+          test "$(id -u)" -ne 0
+          go version
+          pkg-config --modversion libssl libcrypto libsecp256k1
+          df -h "$RUNNER_TEMP" "$RUNNER_TOOL_CACHE"
+      - name: Build versioned binary
+        run: ./scripts/build.sh
+      - name: Check binary and native crypto
+        run: |
+          expected="$(git describe --tags --always --dirty)"
+          ../tmp/goxrpl version |
+            grep --fixed-strings --line-regexp "go-xrpl version ${expected}"
+          go test -race -count=1 -timeout 5m ./crypto/secp256k1/... ./crypto/sha512half/...
