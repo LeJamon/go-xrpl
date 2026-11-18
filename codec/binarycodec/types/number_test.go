@@ -34,6 +34,8 @@ func TestNumberNormalizeRoundHalfEven(t *testing.T) {
 		{"multi exactly half odd", "1234567890123456789500", "1234567890123456790", 3},
 		// Sign is preserved through rounding.
 		{"negative tie odd rounds up", "-12345678901234567895", "-1234567890123456790", 1},
+		{"below signed boundary midpoint", "92233720368547758084", "9223372036854775807", 1},
+		{"at signed boundary midpoint", "92233720368547758085", "9223372036854775810", 1},
 	}
 
 	for _, tc := range cases {

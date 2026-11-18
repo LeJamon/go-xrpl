@@ -24,6 +24,10 @@ func TestEngineConfigMatchesProductionDefaults(t *testing.T) {
 	if got.Clock == nil {
 		t.Fatal("Clock is nil, want the peer's virtual clock")
 	}
+	peer.SetClockSkew(7 * time.Second)
+	if now, want := got.Clock(), peer.Now(); !now.Equal(want) {
+		t.Fatalf("Clock() = %v, want peer time %v", now, want)
+	}
 	if !got.ManualTick {
 		t.Fatal("ManualTick = false, want true")
 	}
