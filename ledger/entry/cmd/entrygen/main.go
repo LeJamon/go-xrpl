@@ -57,8 +57,6 @@ func main() {
 	}
 }
 
-// writeSource gofmts content and writes it to path. On a format failure the
-// raw source is written to path+".broken" for debugging.
 func writeSource(path string, content []byte) {
 	formatted, err := format.Source(content)
 	if err != nil {
@@ -75,8 +73,6 @@ type registryRender struct {
 	Models []string
 }
 
-// generateRegistry emits the Type constants for every registered ledger-entry
-// type and the New constructor dispatch for every schema entry.
 func generateRegistry(outDir string) (string, []byte, error) {
 	r := registryRender{Types: protocol.LedgerEntryTypes()}
 	for _, entry := range schema.Specs {

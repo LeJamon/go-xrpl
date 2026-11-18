@@ -6,8 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
 
-// TestEveryLedgerEntryTypeHasKeylet fails when a ledger-entry type in the
-// schema has no keylet constructor, or one that reports a different type.
 func TestEveryLedgerEntryTypeHasKeylet(t *testing.T) {
 	var account [20]byte
 	var key [32]byte
