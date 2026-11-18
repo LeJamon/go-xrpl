@@ -583,7 +583,8 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 		t.Fatal(err)
 	}
 	assertAccountPage(t, oldest, options, values[0], values[1])
-	assertMarker(t, oldest.Marker, 10, 2)
+	// rippled accountTxPage: the marker is the first row of the next page.
+	assertMarker(t, oldest.Marker, 11, 1)
 	options.Marker = oldest.Marker
 	oldest, err = repository.GetOldestAccountTxsPage(ctx, options)
 	if err != nil {
@@ -600,7 +601,7 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 		t.Fatal(err)
 	}
 	assertAccountPage(t, newest, options, values[3], values[2])
-	assertMarker(t, newest.Marker, 11, 1)
+	assertMarker(t, newest.Marker, 10, 2)
 	options.Marker = newest.Marker
 	newest, err = repository.GetNewestAccountTxsPage(ctx, options)
 	if err != nil {
@@ -609,6 +610,22 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 	assertAccountPage(t, newest, options, values[1], values[0])
 	if newest.Marker != nil {
 		t.Fatalf("last newest page marker = %+v, want nil", newest.Marker)
+	}
+
+	// A marker that names no stored row yields an empty page, as rippled
+	// skips every row while it looks for the marker.
+	options.Marker = &relationaldb.AccountTxMarker{LedgerSeq: 11, TxnSeq: 0}
+	for name, page := range map[string]func(context.Context, relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error){
+		"oldest": repository.GetOldestAccountTxsPage,
+		"newest": repository.GetNewestAccountTxsPage,
+	} {
+		missing, err := page(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(missing.Transactions) != 0 || missing.Marker != nil {
+			t.Fatalf("%s page from unknown marker = %+v, want empty without marker", name, missing)
+		}
 	}
 
 	boundedOptions := relationaldb.AccountTxPageOptions{
@@ -651,6 +668,90 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 	}
 	if got, _, err := transactionRepository.GetTransaction(ctx, values[0].Hash, nil); err != nil || got == nil {
 		t.Fatalf("account delete removed base transaction: %+v, %v", got, err)
+	}
+
+	// A continuation keeps the marker ledger inclusive when a caller narrows
+	// the range between pages. This also covers multiple transactions after the
+	// marker in the same ledger in both directions.
+	windowAccount := accountID(4)
+	windowValues := []relationaldb.TransactionInfo{
+		transactionAt(54, 9, 1),
+		transactionAt(55, 10, 3),
+		transactionAt(56, 10, 4),
+		transactionAt(57, 11, 2),
+		transactionAt(58, 12, 1),
+		transactionAt(59, 12, 2),
+		transactionAt(60, 12, 3),
+	}
+	for _, value := range windowValues {
+		if err := transactionRepository.SaveTransaction(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.SaveAccountTransaction(ctx, windowAccount, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	forwardOptions := relationaldb.AccountTxPageOptions{
+		Account:   windowAccount,
+		MinLedger: 9,
+		MaxLedger: 12,
+		Limit:     1,
+	}
+	forward, err := repository.GetOldestAccountTxsPage(ctx, forwardOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, forward, forwardOptions, windowValues[0])
+	assertMarker(t, forward.Marker, 10, 3)
+	forwardOptions.Marker = forward.Marker
+	forwardOptions.MinLedger = 11
+	forwardOptions.Limit = 3
+	forward, err = repository.GetOldestAccountTxsPage(ctx, forwardOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, forward, forwardOptions, windowValues[1], windowValues[2], windowValues[3])
+	assertMarker(t, forward.Marker, 12, 1)
+	forwardOptions.Marker = forward.Marker
+	forward, err = repository.GetOldestAccountTxsPage(ctx, forwardOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, forward, forwardOptions, windowValues[4], windowValues[5], windowValues[6])
+	if forward.Marker != nil {
+		t.Fatalf("last bounded oldest page marker = %+v, want nil", forward.Marker)
+	}
+
+	reverseOptions := relationaldb.AccountTxPageOptions{
+		Account:   windowAccount,
+		MinLedger: 9,
+		MaxLedger: 12,
+		Limit:     1,
+	}
+	reverse, err := repository.GetNewestAccountTxsPage(ctx, reverseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, reverse, reverseOptions, windowValues[6])
+	assertMarker(t, reverse.Marker, 12, 2)
+	reverseOptions.Marker = reverse.Marker
+	reverseOptions.MaxLedger = 11
+	reverseOptions.Limit = 3
+	reverse, err = repository.GetNewestAccountTxsPage(ctx, reverseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, reverse, reverseOptions, windowValues[5], windowValues[4], windowValues[3])
+	assertMarker(t, reverse.Marker, 10, 4)
+	reverseOptions.Marker = reverse.Marker
+	reverse, err = repository.GetNewestAccountTxsPage(ctx, reverseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, reverse, reverseOptions, windowValues[2], windowValues[1], windowValues[0])
+	if reverse.Marker != nil {
+		t.Fatalf("last bounded newest page marker = %+v, want nil", reverse.Marker)
 	}
 }
 

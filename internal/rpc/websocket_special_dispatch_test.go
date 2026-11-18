@@ -252,7 +252,7 @@ func TestWebSocketPathFindCreateDoesNotUseLegacyBusyGate(t *testing.T) {
 	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{
 		Params: json.RawMessage(`{"subcommand":"create"}`),
 	})
-	if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Missing field 'source_account'." {
+	if rpcErr == nil || rpcErr.ErrorString != "srcActMissing" || rpcErr.Message != "Source account not provided." {
 		t.Fatalf("path_find create error = %v, want field validation after admission", rpcErr)
 	}
 }

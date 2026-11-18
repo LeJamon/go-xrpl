@@ -259,7 +259,10 @@ func TestFeatureInvalidName(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid feature name")
 			require.NotNil(t, rpcErr, "Expected error for invalid feature name")
 			assert.Equal(t, rpcerrors.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
-			assert.Contains(t, rpcErr.Message, "Feature not found")
+			assert.Equal(t, "badFeature", rpcErr.ErrorString)
+			// rippled Feature.cpp returns rpcError(rpcBAD_FEATURE) with the
+			// table message, without echoing the request.
+			assert.Equal(t, "Feature unknown or invalid.", rpcErr.Message)
 		})
 	}
 }

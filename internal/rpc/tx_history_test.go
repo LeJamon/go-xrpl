@@ -2,10 +2,12 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -112,23 +114,103 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 		assert.Equal(t, float64(10), resp["index"])
 	})
 
-	t.Run("no params defaults to start=0", func(t *testing.T) {
-		mock.txHistoryResult = &types.TxHistoryResult{
-			Index:        0,
-			Transactions: []types.AccountTransaction{},
+	// rippled TransactionHistory_test.cpp testBadInput: start is required.
+	t.Run("missing start is invalidParams", func(t *testing.T) {
+		for _, params := range []json.RawMessage{nil, json.RawMessage(`{}`)} {
+			result, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		}
-
-		result, rpcErr := method.Handle(ctx, nil)
-
-		require.Nil(t, rpcErr, "Expected no error with nil params")
-		require.NotNil(t, result)
-
-		respJSON, _ := json.Marshal(result)
-		var resp map[string]any
-		json.Unmarshal(respJSON, &resp)
-
-		assert.Equal(t, float64(0), resp["index"])
 	})
+
+	// rippled TransactionHistory_test.cpp testBadInput: start above 10000
+	// needs an unlimited role.
+	t.Run("start above 10000 needs an unlimited role", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"start":10001}`))
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "noPermission", rpcErr.ErrorString)
+
+		admin := *ctx
+		admin.Role = types.RoleAdmin
+		mock.txHistoryResult = &types.TxHistoryResult{Index: 10001}
+		_, rpcErr = method.Handle(&admin, json.RawMessage(`{"start":10001}`))
+		require.Nil(t, rpcErr)
+	})
+}
+
+func TestTxHistoryStartUsesJsonCppUIntConversion(t *testing.T) {
+	mock := newMockLedgerServiceTxHistory()
+	services := newTxHistoryTestServices(mock)
+	method := &handlers.TxHistoryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	valid := []struct {
+		name   string
+		params string
+		want   uint32
+	}{
+		{name: "null", params: `{"start":null}`, want: 0},
+		{name: "false", params: `{"start":false}`, want: 0},
+		{name: "true", params: `{"start":true}`, want: 1},
+		{name: "real truncates", params: `{"start":1.9}`, want: 1},
+		{name: "numeric string", params: `{"start":"7"}`, want: 7},
+		{name: "leading plus numeric string", params: `{"start":"+7"}`, want: 7},
+		{name: "numeric string stops at nul", params: `{"start":"1\u0000junk"}`, want: 1},
+		{name: "uint32 maximum", params: `{"start":4294967295}`, want: ^uint32(0)},
+	}
+	for _, test := range valid {
+		t.Run(test.name, func(t *testing.T) {
+			mock.txHistoryResult = nil
+			result, rpcErr := method.Handle(ctx, json.RawMessage(test.params))
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, test.want, response["index"])
+		})
+	}
+
+	invalid := []struct {
+		name   string
+		params string
+	}{
+		{name: "negative", params: `{"start":-1}`},
+		{name: "invalid string", params: `{"start":"not-a-number"}`},
+		{name: "repeated plus", params: `{"start":"++7"}`},
+		{name: "string overflow", params: `{"start":"4294967296"}`},
+		{name: "real overflow", params: `{"start":4294967296.0}`},
+		{name: "array", params: `{"start":[]}`},
+		{name: "object", params: `{"start":{}}`},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			result, rpcErr := method.Handle(ctx, json.RawMessage(test.params))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, "internal", rpcErr.ErrorString)
+			assert.Equal(t, "Internal error.", rpcErr.Message)
+		})
+	}
+
+	user := *ctx
+	user.Role = types.RoleUser
+	result, rpcErr := method.Handle(&user, json.RawMessage(`{"start":10000.9}`))
+	require.Nil(t, rpcErr)
+	assert.Equal(t, uint32(10000), result.(map[string]any)["index"])
+	result, rpcErr = method.Handle(&user, json.RawMessage(`{"start":"10001"}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcNO_PERMISSION, rpcErr.Code)
+	assert.Equal(t, "noPermission", rpcErr.ErrorString)
+	assert.Equal(t, "You don't have permission for this command.", rpcErr.Message)
 }
 
 // TestTxHistoryEmptyResult tests the response when there are no transactions.
@@ -164,9 +246,10 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	var resp map[string]any
 	json.Unmarshal(respJSON, &resp)
 
-	txs, ok := resp["txs"].([]any)
-	require.True(t, ok, "txs must be an array")
-	assert.Empty(t, txs, "txs should be empty when no transactions exist")
+	// rippled appends nothing to obj[txs], so it serializes as null.
+	txs, present := resp["txs"]
+	require.True(t, present, "txs must be present")
+	assert.Nil(t, txs, "txs should be null when no transactions exist")
 }
 
 func TestTxHistoryMalformedTransactionReturnsInternal(t *testing.T) {
@@ -234,9 +317,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	// Validate index is correct
 	assert.Equal(t, float64(5), resp["index"])
 
-	// Validate txs is an array
-	_, ok := resp["txs"].([]any)
-	assert.True(t, ok, "txs must be an array")
+	assert.Nil(t, resp["txs"], "empty txs must be null")
 }
 
 // TestTxHistoryDatabaseNotConfigured tests the error when the database is not configured.
@@ -359,4 +440,47 @@ func TestTxHistoryMethodMetadata(t *testing.T) {
 		assert.NotContains(t, versions, types.ApiVersion2)
 		assert.NotContains(t, versions, types.ApiVersion3)
 	})
+}
+
+// Transaction::getJson adds inLedger next to ledger_index before API v2,
+// and tx_history only exists in API v1.
+func TestTxHistoryTransactionCarriesInLedger(t *testing.T) {
+	encoded, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+	})
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+
+	mock := newMockLedgerServiceTxHistory()
+	mock.txHistoryResult = &types.TxHistoryResult{
+		Index: 0,
+		Transactions: []types.AccountTransaction{{
+			Hash:        [32]byte{1},
+			LedgerIndex: 7,
+			TxBlob:      blob,
+		}},
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTxHistoryTestServices(mock),
+	}
+
+	result, rpcErr := (&handlers.TxHistoryMethod{}).Handle(ctx, json.RawMessage(`{"start":0}`))
+	require.Nil(t, rpcErr)
+	respJSON, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp struct {
+		Txs []map[string]any `json:"txs"`
+	}
+	require.NoError(t, json.Unmarshal(respJSON, &resp))
+	require.Len(t, resp.Txs, 1)
+	assert.Equal(t, float64(7), resp.Txs[0]["inLedger"])
+	assert.Equal(t, float64(7), resp.Txs[0]["ledger_index"])
 }
