@@ -6,9 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
-// WireNumbers rounds each Number field string into scale and renders it as the
-// exact mantissa/exponent pair the binary codec serializes unchanged. "" and
-// "0" render as "0".
+// WireNumbers rounds Number fields at the ledger's mantissa scale before encoding.
 func WireNumbers(scale state.MantissaScale, values ...string) ([]string, error) {
 	numbers := make([]string, len(values))
 	for i, value := range values {

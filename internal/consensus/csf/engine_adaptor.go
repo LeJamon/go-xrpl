@@ -185,8 +185,6 @@ func (p *Peer) SetParms(timing consensus.Timing) error {
 	return nil
 }
 
-// engineConfig is the production engine configuration driven by the peer's
-// timing and virtual clock instead of the wall clock and heartbeat.
 func (p *Peer) engineConfig() rcl.Config {
 	cfg := rcl.DefaultConfig()
 	cfg.Timing = p.timing
