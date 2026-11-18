@@ -156,3 +156,26 @@ func TestNumberLargeScaleWireParity(t *testing.T) {
 	require.Equal(t, int64(9223372036854775800), int64(binary.BigEndian.Uint64(b[:8])))
 	require.Equal(t, int32(0), int32(binary.BigEndian.Uint32(b[8:])))
 }
+
+func TestNumberMaxExponentWireParity(t *testing.T) {
+	n := &Number{}
+	for _, tc := range []struct {
+		input    string
+		mantissa int64
+	}{
+		{"9223372036854775810e32768", 922337203685477581},
+		{"-9223372036854775810e32768", -922337203685477581},
+	} {
+		wire, err := n.FromJSON(tc.input)
+		require.NoError(t, err)
+		require.Equal(t, tc.mantissa, int64(binary.BigEndian.Uint64(wire[:8])))
+		require.Equal(t, int32(32769), int32(binary.BigEndian.Uint32(wire[8:])))
+		got, err := n.ToJSON(serdes.NewBinaryParser(wire, nil))
+		require.NoError(t, err)
+		require.Equal(t, tc.input, got)
+	}
+	for _, input := range []string{"9223372036854775808e32768", "9223372036854775809e32768", "9223372036854775820e32768"} {
+		_, err := n.FromJSON(input)
+		require.Error(t, err, input)
+	}
+}
