@@ -104,32 +104,24 @@ func TestLedgerSpecificFlags(t *testing.T) {
 		{"LsfSponsorshipRequireSignForReserve", LsfSponsorshipRequireSignForReserve, 0x00020000},
 	}
 
+	oracle := readOracleLedgerFlags(t)
 	for _, tt := range tests {
 		if tt.got != tt.want {
 			t.Errorf("%s = 0x%08X, want 0x%08X", tt.name, tt.got, tt.want)
 		}
-	}
-
-	oracle := readOracleLedgerFlags(t)
-	have := make(map[string]bool, len(tests))
-	for _, tt := range tests {
-		have[strings.ToLower(tt.name[:1])+tt.name[1:]] = true
-	}
-	for name := range oracle {
-		if !have[name] {
-			t.Errorf("rippled flag %s has no Go constant in flags.go", name)
-		}
-	}
-	for _, tt := range tests {
 		oracleName := strings.ToLower(tt.name[:1]) + tt.name[1:]
 		want, ok := oracle[oracleName]
 		if !ok {
-			t.Errorf("%s is absent from rippled LedgerFormats.h", tt.name)
+			t.Errorf("%s is duplicated in the test table or absent from rippled LedgerFormats.h", tt.name)
 			continue
 		}
 		if tt.got != want {
 			t.Errorf("%s = 0x%08X, rippled = 0x%08X", tt.name, tt.got, want)
 		}
+		delete(oracle, oracleName)
+	}
+	for name := range oracle {
+		t.Errorf("rippled flag %s is missing from the Go flag table", name)
 	}
 }
 
