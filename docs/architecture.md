@@ -260,10 +260,9 @@ rippled's split between its NodeStore and its relational databases
 
 ## RPC and gRPC
 
-- **Transports** — `internal/node` binds one listener per named, configured
-  port section (the names listed in `[server].ports`, plus conventional
-  `[port_*]` tables): HTTP JSON-RPC, WebSocket, or gRPC. Peer ports belong to
-  the overlay.
+- **Transports** — `internal/node` binds HTTP JSON-RPC, WebSocket and gRPC
+  listeners from the named port sections in `[server].ports`. The peer overlay
+  owns the peer listener.
 - **Methods** — `internal/rpc/handlers` holds one handler per method, built into
   a registry. [rpc-methods.md](rpc-methods.md) is the generated catalog.
 - **Admission** — each request gets a role (guest, user, admin, identified,
