@@ -503,6 +503,20 @@ synced and the swap is durable. An interrupted refresh restarts its state-tree
 walk from the root; any records that remain in the writable generation are
 reused, but every live node is read again.
 
+The node store records its record-format version (currently `1`) in a reserved
+marker record. A database created before the marker existed is stamped on its
+first writable open, with no manual step. Startup fails with
+`unsupported nodestore format version` when the database was written by a build
+using a different format; run a build that supports that version. The marker is
+separate from the rotating store's `<path>.generations.json` manifest, which
+versions the generation directories rather than the records inside them.
+
+Before upgrading a plain Pebble store, take an offline backup if you may need
+to roll back. Builds that predate the marker can read version 1 nodes, but
+their `DeleteBefore` pruning scan stops at the marker with `data corrupt`.
+Restore the pre-upgrade backup before using that pruning path on an older
+build. Generation-based pruning uses a directory swap and is unaffected.
+
 ### `[sqlite]` — relational index databases
 
 Schema version 6 stores ledger headers alongside transaction and account indexes
