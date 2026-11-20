@@ -125,6 +125,13 @@ func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, canSkip)
 
+	committed, err := db.RotateGeneration(ctx, 10, 1)
+	require.NoError(t, err)
+	require.True(t, committed)
+	canSkip, err = db.CanRotateWithoutRefresh(ctx)
+	require.NoError(t, err)
+	require.True(t, canSkip, "an archive containing only the format marker needs no refresh")
+
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	_, err = db.CanRotateWithoutRefresh(cancelled)
@@ -137,7 +144,7 @@ func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {
 		LedgerSeq: 10,
 	}
 	require.NoError(t, db.Store(ctx, node))
-	committed, err := db.RotateGeneration(ctx, 11, 1)
+	committed, err = db.RotateGeneration(ctx, 11, 1)
 	require.True(t, committed)
 	require.NoError(t, err)
 	canSkip, err = db.CanRotateWithoutRefresh(ctx)

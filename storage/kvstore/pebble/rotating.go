@@ -569,7 +569,12 @@ func (r *RotatingStore) GetBatch(
 }
 
 // CanRotateWithoutRefresh reports whether the archive is empty.
-func (r *RotatingStore) CanRotateWithoutRefresh() (canRotate bool, resultErr error) {
+func (r *RotatingStore) CanRotateWithoutRefresh() (bool, error) {
+	return r.CanRotateWithoutRefreshExcept(nil)
+}
+
+// CanRotateWithoutRefreshExcept ignores a key the caller preserves at rotation.
+func (r *RotatingStore) CanRotateWithoutRefreshExcept(key []byte) (canRotate bool, resultErr error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.closed {
@@ -583,6 +588,9 @@ func (r *RotatingStore) CanRotateWithoutRefresh() (canRotate bool, resultErr err
 		resultErr = errors.Join(resultErr, iter.Close())
 	}()
 	hasRecords := iter.Next()
+	if hasRecords && key != nil && bytes.Equal(iter.Key(), key) {
+		hasRecords = iter.Next()
+	}
 	if err := iter.Error(); err != nil {
 		return false, err
 	}

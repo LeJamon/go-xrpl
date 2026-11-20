@@ -194,6 +194,11 @@ func (d *RotatingKVDatabase) CanRotateWithoutRefresh(ctx context.Context) (bool,
 		return false, err
 	}
 	defer d.lifecycleMu.RUnlock()
+	if store, ok := d.rotating.(interface {
+		CanRotateWithoutRefreshExcept(key []byte) (bool, error)
+	}); ok {
+		return store.CanRotateWithoutRefreshExcept(formatMarkerKey)
+	}
 	return d.rotating.CanRotateWithoutRefresh()
 }
 
