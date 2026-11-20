@@ -187,9 +187,6 @@ validators = ["n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5"]
 	assert.Equal(t, []string{"unknown"}, unknownErr.Keys)
 }
 
-// TestTrackedExampleConfigsLoad keeps every node configuration tracked in the
-// repository loadable. The smoke configuration names a validators file by its
-// in-container path, so its validators file is loaded on its own.
 func TestTrackedExampleConfigsLoad(t *testing.T) {
 	root := filepath.Join("..")
 	smoke := filepath.Join(root, "scripts", "consensus-smoke", "configs")
@@ -197,6 +194,7 @@ func TestTrackedExampleConfigsLoad(t *testing.T) {
 	_, err := LoadConfig(Paths{Main: filepath.Join("examples", "goxrpl.toml")})
 	require.NoError(t, err)
 
+	// The smoke config names its validators file by its in-container path.
 	_, err = LoadConfig(Paths{Main: filepath.Join(smoke, "goxrpl-0.toml"), SkipValidators: true})
 	require.NoError(t, err)
 
@@ -209,8 +207,6 @@ func TestTrackedExampleConfigsLoad(t *testing.T) {
 	}
 }
 
-// TestOperatingGuideSnippetsUseKnownKeys checks the TOML fragments in
-// docs/operating.md against the same key set the loader enforces.
 func TestOperatingGuideSnippetsUseKnownKeys(t *testing.T) {
 	guide, err := os.ReadFile(filepath.Join("..", "docs", "operating.md"))
 	require.NoError(t, err)

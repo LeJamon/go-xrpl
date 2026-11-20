@@ -8,13 +8,10 @@ import (
 	"github.com/go-viper/mapstructure/v2"
 )
 
-// portSectionPrefix marks a top-level table as a port section even when
-// server.ports does not list it.
 const portSectionPrefix = "port_"
 
 // UnknownKeysError reports keys in a configuration file that no setting
-// consumes. Loading fails on them so a mistyped key cannot silently fall
-// back to its default.
+// consumes.
 type UnknownKeysError struct {
 	// File is the path of the configuration file holding the keys.
 	File string
@@ -22,7 +19,6 @@ type UnknownKeysError struct {
 	Keys []string
 }
 
-// Error implements the error interface.
 func (e *UnknownKeysError) Error() string {
 	noun := "key"
 	if len(e.Keys) > 1 {

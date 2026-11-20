@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# conformance.sh — generate docs/conformance-status.md from the pinned
-# conformance corpus, the same one the required CI job executes. Wraps
-# scripts/conformance-summary.sh and embeds its output in a fenced block.
-# The corpus is fixed here and the output carries no timestamps, so the
-# result is deterministic and `just docs-check` can fail on drift.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

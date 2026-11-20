@@ -178,9 +178,7 @@ dev:
 run:
     go run ./cmd/goxrpl
 
-# Regenerate all generated docs (RPC catalog, tx/amendment catalogs, and the
-# conformance-status snapshot). The conformance step executes the pinned v4
-# corpus; it is the only way docs/conformance-status.md is refreshed.
+# Regenerate the registry catalogs and the pinned corpus status page.
 docs-gen:
     go run ./scripts/docsgen/rpcmethods
     go run ./scripts/docsgen/registries
@@ -191,7 +189,6 @@ docs-gen-fast:
     go run ./scripts/docsgen/rpcmethods
     go run ./scripts/docsgen/registries
 
-# Fail if any generated doc is stale (run in CI), including the
-# conformance-status snapshot of the pinned v4 corpus.
+# Check generated docs for drift.
 docs-check: docs-gen
     git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md docs/ledger-entries.md docs/conformance-status.md

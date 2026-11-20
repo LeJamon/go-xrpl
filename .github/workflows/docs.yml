@@ -20,9 +20,6 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
 
-      # Mirror `just docs-check`: regenerate the registry-derived catalogs and
-      # the conformance-status snapshot of the pinned v4 corpus, and fail if
-      # they drift from what's committed.
       - name: Regenerate doc catalogs
         run: |
           go run ./scripts/docsgen/rpcmethods
