@@ -140,7 +140,6 @@ func TestFormatMarkerSurvivesRotation(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "nodes")
 
-	// A plain legacy database becomes the first writable generation.
 	legacy, err := kvpebble.New(path, formatTestPebbleOptions)
 	require.NoError(t, err)
 	putLegacyNode(t, legacy)

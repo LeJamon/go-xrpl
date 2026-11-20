@@ -13,18 +13,9 @@ import (
 // a 32-byte node hash keying [type:1][ledger sequence:4][payload]. It must be
 // raised whenever that encoding changes incompatibly.
 //
-// The version is persisted once per store in a marker record rather than in
-// every value, so stores written before the marker existed stay readable: a
-// store without a marker is by definition version 1 and is stamped on its
-// first writable open. A store whose marker names any other version is refused
-// with ErrUnsupportedFormat instead of being decoded as garbage.
-//
 // The marker is independent of the Pebble generation manifest. The manifest
 // versions how a rotating store's generation directories are laid out and
-// owned; the marker versions the records inside them, for every backend. It
-// lives in the key space so it follows the data: a plain database adopted as
-// the first generation of a rotating store keeps its marker, and each rotation
-// rewrites it into the generation about to become the archive.
+// owned. The marker versions the records inside them.
 const FormatVersion uint32 = 1
 
 // ErrUnsupportedFormat indicates that a store was written in a node record
