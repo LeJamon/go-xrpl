@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -257,7 +258,7 @@ func offerDivRoundStrictLikeWithNumberContext(
 
 // applyTickSize applies tick size rounding to offer amounts.
 // Reference: rippled CreateOffer.cpp lines 643-685
-func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules, numberContexts ...state.NumberContext) (tx.Amount, tx.Amount) {
+func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules, numberContexts ...state.NumberContext) (tx.Amount, tx.Amount, ter.Result) {
 	numberContext := tx.NumberContextForRules(rules)
 	if len(numberContexts) > 0 {
 		numberContext = numberContexts[0]
@@ -280,7 +281,7 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 
 	// If no tick size applies, return unchanged
 	if tickSize >= maxTickSize {
-		return takerPays, takerGets
+		return takerPays, takerGets, ter.TesSUCCESS
 	}
 
 	// Apply tick size rounding
@@ -294,6 +295,12 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 			takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer, rules, numberContext)
 		}
 	} else if !takerGets.IsMPT() {
+		// A zero quality (in/out underflowed or overflowed) is a division by
+		// zero, which rippled raises as an exception: the transaction is
+		// discarded with tefEXCEPTION.
+		if roundedQuality == 0 {
+			return takerPays, takerGets, ter.TefEXCEPTION
+		}
 		// Round TakerGets
 		takerGets = divideByQualityWithNumberContext(
 			takerPays,
@@ -304,7 +311,7 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 		)
 	}
 
-	return takerPays, takerGets
+	return takerPays, takerGets, ter.TesSUCCESS
 }
 
 // getTickSize returns the tick size for an issuer.

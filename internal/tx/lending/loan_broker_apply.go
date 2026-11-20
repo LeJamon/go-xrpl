@@ -296,6 +296,8 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		if res := vault.SendAsset(ctx, b.Account, accountID, asset, cover); res != ter.TesSUCCESS {
 			return res
 		}
+		// The payout recreates a deleted owner trust line through the view.
+		ctx.SyncSenderOwnerCount()
 	}
 
 	// Remove the pseudo-account's asset holding and destroy the pseudo-account.

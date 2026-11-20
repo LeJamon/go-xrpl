@@ -749,18 +749,9 @@ func TestPaymentChannelClaimFlags(t *testing.T) {
 // Amendment Tests
 
 func TestPaymentChannelRequiredAmendments(t *testing.T) {
-	t.Run("PaymentChannelCreate", func(t *testing.T) {
-		pcc := &PaymentChannelCreate{}
-		assert.Contains(t, pcc.RequiredAmendments(), amendment.FeaturePayChan)
-	})
-
-	t.Run("PaymentChannelFund", func(t *testing.T) {
-		pcf := &PaymentChannelFund{}
-		assert.Contains(t, pcf.RequiredAmendments(), amendment.FeaturePayChan)
-	})
-
-	t.Run("PaymentChannelClaim", func(t *testing.T) {
-		pcc := &PaymentChannelClaim{}
-		assert.Contains(t, pcc.RequiredAmendments(), amendment.FeaturePayChan)
-	})
+	// PayChan is retired in rippled 3.4.1, so no payment channel transaction
+	// is gated on it.
+	assert.Empty(t, (&PaymentChannelCreate{}).RequiredAmendments())
+	assert.Empty(t, (&PaymentChannelFund{}).RequiredAmendments())
+	assert.Empty(t, (&PaymentChannelClaim{}).RequiredAmendments())
 }

@@ -88,7 +88,7 @@ each one its dependencies.
 
 Every transaction implements the `Transaction` interface (`internal/tx/transaction.go`)
 and moves through a four-stage pipeline. The engine
-(`internal/tx/engine`) orchestrates the stages; transaction types opt into the
+(`internal/tx/engine/`) orchestrates the stages; transaction types opt into the
 stateful stages by implementing the corresponding interfaces.
 
 1. **Validate** — `Transaction.Validate()`. Structural, context-free checks on a

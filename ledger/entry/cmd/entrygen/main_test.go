@@ -82,6 +82,36 @@ func TestGenerateInnerValuesDeterministicAndCurrent(t *testing.T) {
 	}
 }
 
+func TestGenerateRegistryDeterministicAndCurrent(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	generatedDir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	path, first, err := generateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("first generate: %v", err)
+	}
+	_, second, err := generateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("second generate: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("successive registry generator runs produced different source")
+	}
+	formatted, err := format.Source(first)
+	if err != nil {
+		t.Fatalf("format generated registry: %v", err)
+	}
+	current, err := os.ReadFile(filepath.Join(generatedDir, filepath.Base(path)))
+	if err != nil {
+		t.Fatalf("read generated registry: %v", err)
+	}
+	if !bytes.Equal(formatted, current) {
+		t.Fatalf("%s is stale; run go generate ./ledger/entry/...", path)
+	}
+}
+
 func TestGenerateRejectsInvalidStyles(t *testing.T) {
 	defs := definitions.Get()
 	tests := []struct {
