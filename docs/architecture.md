@@ -53,7 +53,7 @@ each one its dependencies.
 | [`crypto`](../crypto) | native libsecp256k1-backed secp256k1 keys/signing/verification plus Ed25519; `common` has SHA-512Half | `PublicKey.cpp`, `SecretKey.cpp` |
 | [`drops`](../drops) | Type-safe XRP amount arithmetic and reserve math | `XRPAmount.h` |
 | [`keylet`](../keylet) | Derivation of the 256-bit keys identifying ledger entries | `Indexes.cpp` (`keylet::`) |
-| [`ledger/entry`](../ledger/entry) | Serializable Ledger Entries (SLEs) for all 40+ object types | `SLE`, `LedgerFormats` |
+| [`ledger/entry`](../ledger/entry) | Serializable Ledger Entries (SLEs) and ledger-object definitions | `SLE`, `LedgerFormats` |
 | [`log`](../log) | Structured logging on `log/slog` with Trace/Fatal levels and named partitions | `Journal`, `Logs` |
 | [`protocol`](../protocol) | Protocol constants, hash prefixes, wire-type tags | `HashPrefix.h`, `Protocol.h` |
 | [`shamap`](../shamap) | SHA-512Half tree (SHAMap) backing ledger state and tx-set hashing; `shamap/backend` adapts a node store to it | `SHAMap` |
@@ -107,12 +107,14 @@ stateful stages by implementing the corresponding interfaces.
    rippled's `PreclaimResult.likelyToClaimFee` in `applySteps.h`.
 
 4. **Apply** — `Appliable.Apply(ctx)`. Executes the transaction against ledger
-   state, mutating SLEs through the view and producing metadata. On a `tec`
-   result the engine discards the transaction's changes, charges the fee and
-   sequence, and re-applies only the cleanup rippled performs (removal of
-   unfunded and expired offers, AMM trust lines and expired credentials).
-   Invariant checks
-   (`internal/tx/invariants`) run on the result before it is committed.
+   state, mutating SLEs through the view and producing metadata. For a normal
+   applied `tec` result, the engine discards the transaction's changes, charges
+   the fee and sequence (or consumes the ticket), and re-applies only the
+   result-specific cleanup rippled performs (unfunded offers, AMM trust lines,
+   and expired NFTokenOffers or credentials). `TapFAIL_HARD` and retry handling
+   can leave a generic `tec` unapplied, with no fee or sequence change.
+   Invariant checks (`internal/tx/invariants`) run on the result before it is
+   committed.
 
 Each stage returns a `Result` carrying a TER code. Result codes and their prefixes
 (`tem`, `tef`, `ter`, `tec`, `tes`) match rippled's `TER.h`. Each family
@@ -258,8 +260,9 @@ rippled's split between its NodeStore and its relational databases
 
 ## RPC and gRPC
 
-- **Transports** — `internal/node` binds one listener per configured
-  `[port_*]` section: HTTP JSON-RPC, WebSocket, or gRPC. Peer ports belong to
+- **Transports** — `internal/node` binds one listener per named, configured
+  port section (the names listed in `[server].ports`, plus conventional
+  `[port_*]` tables): HTTP JSON-RPC, WebSocket, or gRPC. Peer ports belong to
   the overlay.
 - **Methods** — `internal/rpc/handlers` holds one handler per method, built into
   a registry. [rpc-methods.md](rpc-methods.md) is the generated catalog.

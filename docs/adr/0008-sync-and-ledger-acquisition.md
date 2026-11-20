@@ -41,7 +41,7 @@ They do read and write the node store and, for replay, execute transactions.
 
 | Component | Where | Owns |
 |-----------|-------|------|
-| Router | `router.go`, `router_dispatch.go` | Reads the overlay's inbound lanes, dispatches peer frames, and drives the coordinator from its run loop and a 100 ms tick. Holds no catch-up state. |
+| Router | `router.go`, `router_dispatch.go` | Reads the overlay's inbound lanes, dispatches peer frames, and drives the coordinator from its run loop and a 100 ms tick; the coordinator owns the catch-up state. |
 | Catch-up replay coordinator | `catchup_replay_coordinator.go`, `router_catchup.go` | The catch-up target, every acquisition, the replay machinery, ancestry and history backfill. |
 | Standard replay pipeline | `router_replay_pipeline.go`, `router_replay_worker.go`, `router_replay_owner.go` | A window of consecutive ledgers fetched transaction-only and applied in order onto an anchor. Preparation runs on workers; only the router advances the frontier. |
 | Acquisition work lane | `acquisition_work.go` | One goroutine that walks SHAMaps for in-flight acquisitions off the router loop. |
@@ -75,7 +75,8 @@ A node moves through these phases. The names below are descriptive; see
 4. **Tracking, then Full.** The node reaches `Tracking` when it follows the
    network and `Full` when it is within one ledger of its peers on the same
    chain, or after it completes a consensus round on the validated chain. Only a
-   `Full` node proposes and validates.
+   `Full` node proposes and emits full validations; a configured validator
+   outside `Full` may still emit a partial validation.
 5. **Falling behind.** A `Full` node that sees a preferred peer ledger more than
    two sequences ahead leaves `Full` before it starts catching up, so it stops
    proposing on a stale ledger. Consensus on the wrong ledger requests the

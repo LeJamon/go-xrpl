@@ -127,8 +127,11 @@ that input enters, so it costs one frame, one peer or one request.
 | HTTP and WebSocket | `rpc/server.go`, `rpc/server_dispatch.go`, `rpc/websocket_dispatch.go` | The request fails; the connection's read loop survives |
 | gRPC | `node/grpc.go` unary interceptor | The call returns `codes.Internal` |
 
-The transaction engine (`internal/tx`) and the queue (`internal/txq`) contain
-no recovery: a panic while applying a transaction is not caught there.
+Neither the transaction engine (`internal/tx/engine`) nor the queue
+(`internal/txq`) provides a general panic boundary for transaction application.
+Some transaction implementations recover only known arithmetic-overflow panics
+and convert them to a `tec` result; unrelated panics are rethrown and can
+escape the engine.
 
 ### Lock ordering
 
