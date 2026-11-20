@@ -288,6 +288,12 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
 	require.Equal(t, canonical.Hash(), base.ledgerService.GetValidatedLedger().Hash())
 
+	// A recovery request made while the production build is still running must
+	// remain busy until the acceptance job has reconciled its result.
+	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
+	require.NoError(t, err)
+	require.Equal(t, consensus.LedgerSwitchBusy, result)
+
 	validationTime := base.Now()
 	for _, identity := range []*ValidatorIdentity{base.identity, secondIdentity} {
 		validation := &consensus.Validation{
@@ -307,14 +313,13 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("stale production acceptance did not complete")
 	}
+	require.Eventually(t, func() bool {
+		return engine.BuildingLedgerSeq() == 0
+	}, time.Second, time.Millisecond, "engine acceptance did not reconcile the completed build")
 	require.Empty(t, sender.snapshot(), "stale build must not emit a validation")
 
 	// The canonical candidate is already held locally. The normal recovery path
 	// should adopt it without requesting full state.
-	clock.Advance(time.Second)
-	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
-	require.NoError(t, err)
-	require.Equal(t, consensus.LedgerSwitchBusy, result)
 	require.Eventually(t, func() bool {
 		closed := base.ledgerService.GetClosedLedger()
 		return closed != nil && closed.Hash() == canonical.Hash()
