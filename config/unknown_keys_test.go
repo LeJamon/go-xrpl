@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +28,11 @@ func TestLoadConfig_RejectsUnknownKeys(t *testing.T) {
 			unknown: []string{"node_dbb"},
 		},
 		{
+			name:    "empty top-level table",
+			mutate:  func(c string) string { return c + "\n[node_dbb]\n" },
+			unknown: []string{"node_dbb"},
+		},
+		{
 			name:    "nested key",
 			mutate:  func(c string) string { return c + "online_delette = 512\n" },
 			unknown: []string{"node_db.online_delette"},
@@ -39,11 +43,26 @@ func TestLoadConfig_RejectsUnknownKeys(t *testing.T) {
 			unknown: []string{"overlay.resource_limits.max_entriess"},
 		},
 		{
+			name:    "empty nested table",
+			mutate:  func(c string) string { return c + "\n[node_db.cache_mbb]\n" },
+			unknown: []string{"node_db.cache_mbb"},
+		},
+		{
 			name: "port section key",
 			mutate: func(c string) string {
 				return strings.Replace(c, "protocol = \"http\"", "protocol = \"http\"\nadmn = [\"127.0.0.1\"]", 1)
 			},
 			unknown: []string{"port_test.admn"},
+		},
+		{
+			name:    "empty unknown port table",
+			mutate:  func(c string) string { return c + "\n[port_test.unknown]\n" },
+			unknown: []string{"port_test.unknown"},
+		},
+		{
+			name:    "scalar port section is not exempt",
+			mutate:  func(c string) string { return "port_typo = 1\n" + c },
+			unknown: []string{"port_typo"},
 		},
 		{
 			name: "all unknown keys reported together",
@@ -89,9 +108,21 @@ func TestLoadConfig_AcceptsFreeFormSections(t *testing.T) {
 			},
 		},
 		{
+			name: "dotted port section named freely in server.ports",
+			mutate: func(c string) string {
+				return strings.ReplaceAll(c, "port_test", "Admin.RPC")
+			},
+		},
+		{
 			name: "port_ section not listed in server.ports",
 			mutate: func(c string) string {
 				return c + "\n[port_unused]\nport = 9090\nnot_a_port_key = true\n"
+			},
+		},
+		{
+			name: "empty port_ section not listed in server.ports",
+			mutate: func(c string) string {
+				return c + "\n[port_unused]\n"
 			},
 		},
 	}
@@ -121,6 +152,23 @@ validator_list_site = ["https://vl.example.com"]
 	require.ErrorAs(t, err, &unknownErr)
 	assert.Equal(t, validatorsPath, unknownErr.File)
 	assert.Equal(t, []string{"validator_list_site"}, unknownErr.Keys)
+}
+
+func TestLoadConfig_RejectsEmptyUnknownValidatorsTable(t *testing.T) {
+	dir := t.TempDir()
+	validatorsPath := writeConfig(t, dir, "validators.toml", `
+validators = ["n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5"]
+
+[unknown]
+`)
+	path := writeConfig(t, dir, "goxrpl.toml", "validators_file = \"validators.toml\"\n"+minimalTestConfig())
+
+	_, err := LoadConfig(Paths{Main: path})
+
+	var unknownErr *UnknownKeysError
+	require.ErrorAs(t, err, &unknownErr)
+	assert.Equal(t, validatorsPath, unknownErr.File)
+	assert.Equal(t, []string{"unknown"}, unknownErr.Keys)
 }
 
 // TestTrackedExampleConfigsLoad keeps every node configuration tracked in the
@@ -155,11 +203,11 @@ func TestOperatingGuideSnippetsUseKnownKeys(t *testing.T) {
 	require.NotEmpty(t, snippets)
 
 	for _, snippet := range snippets {
-		v := viper.New()
-		v.SetConfigType("toml")
-		require.NoError(t, v.ReadConfig(strings.NewReader(string(snippet[1]))), string(snippet[1]))
+		path := writeConfig(t, t.TempDir(), "snippet.toml", string(snippet[1]))
+		raw, err := readConfigFile(path)
+		require.NoError(t, err, string(snippet[1]))
 
-		_, unknown, err := decodeConfig(v)
+		_, unknown, err := decodeConfig(raw)
 
 		require.NoError(t, err, string(snippet[1]))
 		assert.Empty(t, unknown, string(snippet[1]))
