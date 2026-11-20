@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,8 +121,9 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}
 	config := rcl.DefaultConfig()
 	config.ManualTick = true
-	clockNow := time.Now()
-	config.Clock = func() time.Time { return clockNow }
+	clock := jtx.NewManualClock()
+	clock.Set(time.Now())
+	config.Clock = clock.Now
 	config.Timing.LedgerMinClose = 0
 	config.Timing.LedgerIdleInterval = 0
 	config.Timing.LedgerMinConsensus = 0
@@ -161,7 +163,7 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}
 	runTick()
 	runTick()
-	clockNow = clockNow.Add(2 * time.Millisecond)
+	clock.Advance(2 * time.Millisecond)
 	runTick()
 
 	select {
@@ -236,8 +238,6 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	require.NoError(t, base.ledgerService.StoreLedgerWithState(t.Context(), &header, stateMap, txMap))
 	_, held := base.ledgerService.GetCachedLedgerByHash(canonical.Hash())
 	require.True(t, held, "canonical recovery ledger was not held locally")
-	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
-	require.Equal(t, canonical.Hash(), base.ledgerService.GetValidatedLedger().Hash())
 	require.Equal(t, parent.Hash(), base.ledgerService.GetClosedLedger().Hash())
 
 	blocked := &blockedBuildAdaptor{
@@ -248,8 +248,9 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	}
 	config := rcl.DefaultConfig()
 	config.ManualTick = true
-	clockNow := time.Now()
-	config.Clock = func() time.Time { return clockNow }
+	clock := jtx.NewManualClock()
+	clock.Set(time.Now())
+	config.Clock = clock.Now
 	config.Timing.LedgerMinClose = 0
 	config.Timing.LedgerIdleInterval = 0
 	config.Timing.LedgerMinConsensus = 0
@@ -275,7 +276,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 		for range 3 {
 			engine.TimerEntry()
 		}
-		clockNow = clockNow.Add(2 * time.Millisecond)
+		clock.Advance(2 * time.Millisecond)
 		engine.TimerEntry()
 	}
 	driveToAcceptance()
@@ -284,6 +285,14 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("production acceptance did not enter the blocked build")
 	}
+	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
+	require.Equal(t, canonical.Hash(), base.ledgerService.GetValidatedLedger().Hash())
+
+	// A recovery request made while the production build is still running must
+	// remain busy until the acceptance job has reconciled its result.
+	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
+	require.NoError(t, err)
+	require.Equal(t, consensus.LedgerSwitchBusy, result)
 
 	validationTime := base.Now()
 	for _, identity := range []*ValidatorIdentity{base.identity, secondIdentity} {
@@ -304,14 +313,13 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("stale production acceptance did not complete")
 	}
+	require.Eventually(t, func() bool {
+		return engine.BuildingLedgerSeq() == 0
+	}, time.Second, time.Millisecond, "engine acceptance did not reconcile the completed build")
 	require.Empty(t, sender.snapshot(), "stale build must not emit a validation")
 
 	// The canonical candidate is already held locally. The normal recovery path
 	// should adopt it without requesting full state.
-	clockNow = clockNow.Add(time.Second)
-	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
-	require.NoError(t, err)
-	require.Equal(t, consensus.LedgerSwitchBusy, result)
 	require.Eventually(t, func() bool {
 		closed := base.ledgerService.GetClosedLedger()
 		return closed != nil && closed.Hash() == canonical.Hash()
