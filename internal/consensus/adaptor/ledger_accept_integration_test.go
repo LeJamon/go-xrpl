@@ -120,8 +120,9 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}
 	config := rcl.DefaultConfig()
 	config.ManualTick = true
-	clockNow := time.Now()
-	config.Clock = func() time.Time { return clockNow }
+	var clockNanos atomic.Int64
+	clockNanos.Store(time.Now().UnixNano())
+	config.Clock = func() time.Time { return time.Unix(0, clockNanos.Load()) }
 	config.Timing.LedgerMinClose = 0
 	config.Timing.LedgerIdleInterval = 0
 	config.Timing.LedgerMinConsensus = 0
@@ -161,7 +162,7 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}
 	runTick()
 	runTick()
-	clockNow = clockNow.Add(2 * time.Millisecond)
+	clockNanos.Add(2 * time.Millisecond.Nanoseconds())
 	runTick()
 
 	select {
@@ -248,8 +249,9 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	}
 	config := rcl.DefaultConfig()
 	config.ManualTick = true
-	clockNow := time.Now()
-	config.Clock = func() time.Time { return clockNow }
+	var clockNanos atomic.Int64
+	clockNanos.Store(time.Now().UnixNano())
+	config.Clock = func() time.Time { return time.Unix(0, clockNanos.Load()) }
 	config.Timing.LedgerMinClose = 0
 	config.Timing.LedgerIdleInterval = 0
 	config.Timing.LedgerMinConsensus = 0
@@ -275,7 +277,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 		for range 3 {
 			engine.TimerEntry()
 		}
-		clockNow = clockNow.Add(2 * time.Millisecond)
+		clockNanos.Add(2 * time.Millisecond.Nanoseconds())
 		engine.TimerEntry()
 	}
 	driveToAcceptance()
@@ -308,7 +310,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 
 	// The canonical candidate is already held locally. The normal recovery path
 	// should adopt it without requesting full state.
-	clockNow = clockNow.Add(time.Second)
+	clockNanos.Add(time.Second.Nanoseconds())
 	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
 	require.NoError(t, err)
 	require.Equal(t, consensus.LedgerSwitchBusy, result)
