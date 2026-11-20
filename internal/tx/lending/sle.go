@@ -90,7 +90,7 @@ func serializeLoanBrokerForRules(b *loanBrokerData, rules *amendment.Rules) ([]b
 	entry.SetData(strings.ToUpper(b.Data))
 	entry.SetManagementFeeRate(b.ManagementFeeRate)
 	entry.SetOwnerCount(b.OwnerCount)
-	numbers, err := lendingWireNumbers(lendingNumberScale(rules), b.DebtTotal, b.DebtMaximum, b.CoverAvailable)
+	numbers, err := tx.WireNumbers(lendingNumberScale(rules), b.DebtTotal, b.DebtMaximum, b.CoverAvailable)
 	if err != nil {
 		return nil, fmt.Errorf("encode loan broker Number: %w", err)
 	}
@@ -258,7 +258,7 @@ func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) 
 	if err := entry.SetBorrowerValue(l.Borrower); err != nil {
 		return nil, fmt.Errorf("encode borrower: %w", err)
 	}
-	numbers, err := lendingWireNumbers(
+	numbers, err := tx.WireNumbers(
 		lendingNumberScale(rules),
 		l.LoanOriginationFee,
 		l.LoanServiceFee,
@@ -477,20 +477,4 @@ func readNumber(has func() bool, get func() (ledgerfields.NumberValue, error)) (
 		return "", err
 	}
 	return normNum(value), nil
-}
-
-func lendingWireNumbers(scale state.MantissaScale, values ...string) ([]string, error) {
-	numbers := make([]string, len(values))
-	for i, value := range values {
-		if value == "" || value == "0" {
-			numbers[i] = "0"
-			continue
-		}
-		number, err := state.ParseXRPLNumber(value, scale, state.RoundToNearest)
-		if err != nil {
-			return nil, err
-		}
-		numbers[i] = fmt.Sprintf("%de%d", number.Mantissa(), number.Exponent())
-	}
-	return numbers, nil
 }

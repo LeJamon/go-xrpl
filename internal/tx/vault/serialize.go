@@ -1,17 +1,11 @@
 package vault
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -77,16 +71,20 @@ func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error
 	if err := entry.SetAssetValue(v.assetToIssueValue()); err != nil {
 		return nil, fmt.Errorf("encode asset: %w", err)
 	}
-	if err := entry.SetAssetsTotalValue(vaultWireNumber(v.AssetsTotal)); err != nil {
+	numbers, err := tx.WireNumbers(vaultNumberScale(rules), v.AssetsTotal, v.AssetsAvailable, v.AssetsMaximum, v.LossUnrealized)
+	if err != nil {
+		return nil, fmt.Errorf("encode vault Number: %w", err)
+	}
+	if err := entry.SetAssetsTotalValue(numbers[0]); err != nil {
 		return nil, fmt.Errorf("encode assets total: %w", err)
 	}
-	if err := entry.SetAssetsAvailableValue(vaultWireNumber(v.AssetsAvailable)); err != nil {
+	if err := entry.SetAssetsAvailableValue(numbers[1]); err != nil {
 		return nil, fmt.Errorf("encode assets available: %w", err)
 	}
-	if err := entry.SetAssetsMaximumValue(vaultWireNumber(v.AssetsMaximum)); err != nil {
+	if err := entry.SetAssetsMaximumValue(numbers[2]); err != nil {
 		return nil, fmt.Errorf("encode assets maximum: %w", err)
 	}
-	if err := entry.SetLossUnrealizedValue(vaultWireNumber(v.LossUnrealized)); err != nil {
+	if err := entry.SetLossUnrealizedValue(numbers[3]); err != nil {
 		return nil, fmt.Errorf("encode unrealized loss: %w", err)
 	}
 	entry.SetShareMPTIDValue(v.ShareMPTID)
@@ -107,79 +105,11 @@ func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error
 	entry.SetPreviousTxnIDValue(v.PreviousTxnID)
 	entry.SetPreviousTxnLgrSeq(v.PreviousTxnLgrSeq)
 
-	return encodeVaultObject(entry.ToMap(), vaultNumberScale(rules))
-}
-
-func vaultWireNumber(value string) string {
-	if value == "" {
-		return "0"
-	}
-	return value
-}
-
-func encodeVaultObject(obj map[string]any, scale state.MantissaScale) ([]byte, error) {
-	defs := definitions.Get()
-	fields := make([]*definitions.FieldInstance, 0, len(obj))
-	for name := range obj {
-		field, err := defs.FieldInstanceByName(name)
-		if err != nil {
-			return nil, fmt.Errorf("encode vault field %s: %w", name, err)
-		}
-		fields = append(fields, field)
-	}
-	sort.Slice(fields, func(i, j int) bool { return fields[i].Ordinal < fields[j].Ordinal })
-
-	serializer := serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec())
-	for _, field := range fields {
-		if !field.IsSerialized {
-			continue
-		}
-		value := obj[field.FieldName]
-		var encoded []byte
-		var err error
-		if field.Type == "Number" {
-			s, ok := value.(string)
-			if !ok {
-				return nil, fmt.Errorf("encode vault field %s: expected Number string", field.FieldName)
-			}
-			encoded, err = encodeVaultNumber(s, scale)
-		} else {
-			serializedType := types.SerializedTypeFor(field.Type)
-			if serializedType == nil {
-				return nil, fmt.Errorf("encode vault field %s: unknown type %s", field.FieldName, field.Type)
-			}
-			if field.FieldName == "LedgerEntryType" {
-				name, ok := value.(string)
-				if !ok {
-					return nil, fmt.Errorf("encode vault field %s: expected ledger entry type string", field.FieldName)
-				}
-				code, err := defs.LedgerEntryTypeCode(name)
-				if err != nil {
-					return nil, fmt.Errorf("encode vault field %s: %w", field.FieldName, err)
-				}
-				value = int(code)
-			}
-			encoded, err = serializedType.FromJSON(value)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("encode vault field %s: %w", field.FieldName, err)
-		}
-		if err := serializer.WriteFieldAndValue(*field, encoded); err != nil {
-			return nil, fmt.Errorf("encode vault field %s: %w", field.FieldName, err)
-		}
-	}
-	return serializer.Bytes(), nil
-}
-
-func encodeVaultNumber(s string, scale state.MantissaScale) ([]byte, error) {
-	number, err := state.ParseXRPLNumber(s, scale, state.RoundToNearest)
+	data, err := entry.Encode()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encode vault: %w", err)
 	}
-	encoded := make([]byte, 12)
-	binary.BigEndian.PutUint64(encoded[:8], uint64(number.Mantissa()))
-	binary.BigEndian.PutUint32(encoded[8:], uint32(int32(number.Exponent())))
-	return encoded, nil
+	return data, nil
 }
 
 // parseVault decodes a vault ledger entry via the canonical ledgerfields
