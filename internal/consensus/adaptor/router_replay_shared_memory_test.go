@@ -222,6 +222,12 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 		t.Fatal("memory wake did not schedule the parked replay head")
 	}
 	r.catchupReplay.drainStandardReplayPipeline()
+	// Applying the payment can exhaust the drain's time budget and queue one continuation.
+	select {
+	case <-r.catchupReplay.standardReplayDrainWake:
+		r.catchupReplay.drainStandardReplayPipeline()
+	default:
+	}
 
 	require.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineApplied)
 	require.Zero(t, r.FastSyncMetrics().ReplayPipelineFallbacks)
