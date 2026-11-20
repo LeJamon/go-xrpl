@@ -65,6 +65,13 @@ func TestLoadConfig_RejectsUnknownKeys(t *testing.T) {
 			unknown: []string{"port_typo"},
 		},
 		{
+			name: "ignore tags are not file keys",
+			mutate: func(c string) string {
+				return "'-' = {}\n" + c + "\n[voting]\n'-' = true\n"
+			},
+			unknown: []string{"-", "voting.-"},
+		},
+		{
 			name: "all unknown keys reported together",
 			mutate: func(c string) string {
 				return "zeta = 1\nalpha = 2\n" + c + "cache_mbb = 1\n"
@@ -136,6 +143,15 @@ func TestLoadConfig_AcceptsFreeFormSections(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestLoadConfig_PortUsesServerTable(t *testing.T) {
+	contents := strings.Replace(minimalTestConfig(), `ports = ["port_test"]`, `ports = ["server"]`, 1)
+	contents = strings.Replace(contents, "[port_test]", "send_queue_limit = 42", 1)
+	path := writeConfig(t, t.TempDir(), "goxrpl.toml", contents)
+	cfg, err := LoadConfig(Paths{Main: path})
+	require.NoError(t, err)
+	assert.Equal(t, 42, cfg.Ports["server"].SendQueueLimit)
 }
 
 func TestLoadConfig_RejectsUnknownValidatorsFileKey(t *testing.T) {

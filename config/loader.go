@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -55,28 +57,47 @@ func decodeConfig(settings map[string]any) (*Config, []string, error) {
 		return nil, nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 
-	var document struct {
-		Config `mapstructure:",squash"`
-		Extra  map[string]any `mapstructure:",remain"`
+	// mapstructure v2.4 treats the ignore tag on runtime-only fields as a
+	// literal key when decoding. Leave those keys for the unused-key check.
+	fields := maps.Clone(settings)
+	_, rootDash := fields["-"]
+	delete(fields, "-")
+	voting, _ := fields["voting"].(map[string]any)
+	_, votingDash := voting["-"]
+	if votingDash {
+		voting = maps.Clone(voting)
+		delete(voting, "-")
+		fields["voting"] = voting
 	}
-	unused, err := decodeSettings(settings, &document)
+	config := new(Config)
+	mainKeys, err := decodeSettings(fields, config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-	config := &document.Config
+	if rootDash {
+		mainKeys.Unused = append(mainKeys.Unused, "-")
+	}
+	if votingDash {
+		mainKeys.Unused = append(mainKeys.Unused, "voting.-")
+	}
 	config.Voting.ReferenceFeeSet = v.IsSet("voting.reference_fee")
 	config.Voting.AccountReserveSet = v.IsSet("voting.account_reserve")
 	config.Voting.OwnerReserveSet = v.IsSet("voting.owner_reserve")
 
 	portNames := config.Server.Ports
 	if len(portNames) == 0 {
-		for name, value := range document.Extra {
+		for name, value := range settings {
 			if _, table := value.(map[string]any); table && strings.HasPrefix(name, portSectionPrefix) {
 				portNames = append(portNames, name)
 			}
 		}
 		slices.Sort(portNames)
 	}
+	extra := make(map[string]any, len(mainKeys.Unused))
+	for _, path := range mainKeys.Unused {
+		extra[path] = v.Get(path)
+	}
+	var unused []string
 	config.Ports = make(map[string]PortConfig, len(portNames))
 	for _, name := range portNames {
 		section, ok := v.Get(name).(map[string]any)
@@ -88,14 +109,22 @@ func decodeConfig(settings map[string]any) (*Config, []string, error) {
 			return nil, nil, fmt.Errorf("failed to load port config %s: %w", name, err)
 		}
 		config.Ports[name] = port
-		for _, key := range keys {
-			unused = append(unused, strings.ToLower(name)+"."+key)
+		// A named port can share a table with main settings, such as [server].
+		prefix := strings.ToLower(name) + "."
+		for _, key := range keys.Keys {
+			delete(extra, prefix+key)
+		}
+		for _, key := range keys.Unused {
+			path := prefix + key
+			if !slices.Contains(mainKeys.Keys, path) {
+				unused = append(unused, path)
+			}
 		}
 	}
 	for _, name := range portNames {
-		removePortSection(document.Extra, strings.ToLower(name))
+		removePortSection(extra, strings.ToLower(name))
 	}
-	for key, value := range document.Extra {
+	for key, value := range extra {
 		if _, table := value.(map[string]any); table && strings.HasPrefix(key, portSectionPrefix) {
 			continue
 		}
@@ -335,12 +364,12 @@ func loadValidatorsTomlFile(filePath string) (*ValidatorsConfig, error) {
 		return nil, fmt.Errorf("failed to read validators file %s: %w", filePath, err)
 	}
 	var validators ValidatorsConfig
-	unused, err := decodeSettings(settings, &validators)
+	keys, err := decodeSettings(settings, &validators)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal validators config: %w", err)
 	}
-	if len(unused) > 0 {
-		return nil, newUnknownKeysError(filePath, unused)
+	if len(keys.Unused) > 0 {
+		return nil, newUnknownKeysError(filePath, keys.Unused)
 	}
 	if err := validateValidatorsFile(&validators); err != nil {
 		return nil, err
@@ -377,7 +406,7 @@ func validateValidatorsFile(validators *ValidatorsConfig) error {
 	return nil
 }
 
-func loadPortConfig(settings map[string]any, defaults ServerConfig) (PortConfig, []string, error) {
+func loadPortConfig(settings map[string]any, defaults ServerConfig) (PortConfig, mapstructure.Metadata, error) {
 	port := PortConfig{
 		Port: defaults.Port, IP: defaults.IP, Protocol: defaults.Protocol, Limit: defaults.Limit,
 		User: defaults.User, Password: defaults.Password,
@@ -386,7 +415,7 @@ func loadPortConfig(settings map[string]any, defaults ServerConfig) (PortConfig,
 	}
 	unused, err := decodeSettings(settings, &port)
 	if err != nil {
-		return PortConfig{}, nil, err
+		return PortConfig{}, unused, err
 	}
 	port.Admin = append(slices.Clone(defaults.Admin), port.Admin...)
 	port.SecureGateway = append(slices.Clone(defaults.SecureGateway), port.SecureGateway...)

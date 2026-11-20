@@ -39,7 +39,7 @@ func newUnknownKeysError(file string, keys []string) *UnknownKeysError {
 	return &UnknownKeysError{File: file, Keys: slices.Compact(keys)}
 }
 
-func decodeSettings(settings map[string]any, target any) ([]string, error) {
+func decodeSettings(settings map[string]any, target any) (mapstructure.Metadata, error) {
 	var metadata mapstructure.Metadata
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result: target, Metadata: &metadata, WeaklyTypedInput: true,
@@ -50,12 +50,12 @@ func decodeSettings(settings map[string]any, target any) ([]string, error) {
 		),
 	})
 	if err != nil {
-		return nil, err
+		return metadata, err
 	}
 	if err := decoder.Decode(settings); err != nil {
-		return nil, err
+		return metadata, err
 	}
-	return metadata.Unused, nil
+	return metadata, nil
 }
 
 // Match Viper's longest-key lookup for both ["admin.rpc"] and [admin.rpc].
