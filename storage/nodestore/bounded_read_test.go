@@ -17,10 +17,7 @@ type boundedReadStore struct {
 	limits []int
 }
 
-func (s *boundedReadStore) Get(key []byte) ([]byte, error) {
-	if bytes.Equal(key, formatMarkerKey) {
-		return s.MemDatabase.Get(key)
-	}
+func (s *boundedReadStore) Get([]byte) ([]byte, error) {
 	panic("bounded read fell back to an unbounded copy")
 }
 
@@ -34,6 +31,8 @@ func TestFetchPeerBoundedColdAndCached(t *testing.T) {
 	db, err := NewKVDatabase(store, DatabaseConfig{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.Equal(t, []int{4}, store.limits)
+	store.limits = nil
 	node := testNode(NodeAccount, bytes.Repeat([]byte{42}, 4096), 0)
 	require.NoError(t, db.Store(t.Context(), node))
 

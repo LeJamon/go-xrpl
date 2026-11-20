@@ -68,6 +68,7 @@ func TestFormatMarkerRejectsOtherVersions(t *testing.T) {
 		{"newer", binary.BigEndian.AppendUint32(nil, FormatVersion+1), ErrUnsupportedFormat},
 		{"zero", binary.BigEndian.AppendUint32(nil, 0), ErrUnsupportedFormat},
 		{"truncated", []byte{1}, ErrDataCorrupt},
+		{"oversized", []byte{0, 0, 0, 1, 0}, ErrDataCorrupt},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

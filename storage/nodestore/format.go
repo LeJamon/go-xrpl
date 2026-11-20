@@ -1,6 +1,7 @@
 package nodestore
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -38,7 +39,16 @@ var formatMarkerKey = []byte("goxrpl:nodestore:format")
 // later write in the backend's log, and losing it leaves an unmarked store
 // that is stamped again on the next open.
 func checkFormat(store kvstore.KeyValueStore) error {
-	value, err := store.Get(formatMarkerKey)
+	var value []byte
+	var err error
+	if reader, ok := store.(kvstore.BoundedReadingStore); ok {
+		value, err = reader.GetBounded(context.Background(), formatMarkerKey, 4)
+		if errors.Is(err, kvstore.ErrValueTooLarge) {
+			return fmt.Errorf("%w: nodestore format marker exceeds 4 bytes", ErrDataCorrupt)
+		}
+	} else {
+		value, err = store.Get(formatMarkerKey)
+	}
 	if errors.Is(err, kvstore.ErrNotFound) {
 		if readOnly, ok := store.(kvstore.ReadOnlyStore); ok && readOnly.ReadOnly() {
 			return nil
