@@ -40,17 +40,18 @@ var wantPayloadLimits = map[MessageType]uint32{
 // known-type answer for every type code below 128 and the top of the range.
 // Unlisted codes are unknown and bounded only by the protocol ceiling.
 func TestPayloadLimitsAndKnownTypesPinned(t *testing.T) {
-	codes := []MessageType{0xFFFF}
-	for code := range MessageType(128) {
-		codes = append(codes, code)
-	}
-	for _, msgType := range codes {
+	check := func(msgType MessageType) {
+		t.Helper()
 		want, known := wantPayloadLimits[msgType]
 		if !known {
 			want = MaxMessageSize
 		}
 		assert.Equal(t, want, MaxPayloadSizeForType(msgType), "limit %d", msgType)
 		assert.Equal(t, known, IsKnownMessageType(msgType), "known %d", msgType)
+	}
+	check(0xFFFF)
+	for code := range MessageType(128) {
+		check(code)
 	}
 	for code := range proto.MessageType_name {
 		_, pinned := wantPayloadLimits[MessageType(code)]

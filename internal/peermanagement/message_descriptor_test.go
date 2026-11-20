@@ -338,13 +338,13 @@ func (r *chargeRecorder) String() string {
 // TestWireMessageTypesMatchProtoEnum guards the classification pins against
 // a wire type being added to the protobuf enum without being covered here.
 func TestWireMessageTypesMatchProtoEnum(t *testing.T) {
-	var fromProto []int
+	fromProto := make([]int, 0, len(proto.MessageType_name))
 	for code := range proto.MessageType_name {
 		fromProto = append(fromProto, int(code))
 	}
-	var pinned []int
-	for _, msgType := range allWireMessageTypes {
-		pinned = append(pinned, int(msgType))
+	pinned := make([]int, len(allWireMessageTypes))
+	for i, msgType := range allWireMessageTypes {
+		pinned[i] = int(msgType)
 	}
 	sort.Ints(fromProto)
 	sort.Ints(pinned)
