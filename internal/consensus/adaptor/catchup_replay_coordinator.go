@@ -594,6 +594,9 @@ func (c *catchupReplayCoordinator) stoppedForShutdown() bool {
 }
 
 func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor, network routerNetworkConfig, logger *slog.Logger) *catchupReplayCoordinator {
+	if network.inboundClock == nil {
+		network.inboundClock = inbound.SystemClock
+	}
 	return &catchupReplayCoordinator{
 		engine:                    engine,
 		adaptor:                   adaptor,
@@ -732,7 +735,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	if generation, seq, hash, peerID, ok := c.standardReplayAvailabilityExhaustedState(); ok {
 		c.reserveStandardReplayReplacement(generation, seq, hash, peerID, now)
 	}
-	c.retryInboundLedgerAcquisitions(now)
+	c.retryInboundLedgerAcquisitions(c.inboundClock.Now())
 	c.retryReplayHeadTail(now)
 	c.reportReplayHead(now)
 	c.tickHeaderDiscovery(now)

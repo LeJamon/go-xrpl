@@ -428,7 +428,7 @@ func TestRouter_GenericAcquisitionWaitsForReplacementPeer(t *testing.T) {
 
 	sessions.set(2, true)
 	trackCatchupPeer(r, 2, targetSeq, targetHash)
-	r.catchupReplay.escalateAcquisition(il, time.Now().Add(4*time.Second))
+	r.catchupReplay.escalateAcquisition(il)
 
 	calls := sender.legacyCalls()
 	require.Len(t, calls, 2)
@@ -447,7 +447,7 @@ func TestRouter_PeerlessAcquisitionSkipsFetchPackEscalation(t *testing.T) {
 	require.NoError(t, il.GotBase(r.buildLedgerBaseNodes(context.Background(), parent)))
 	require.True(t, il.RemovePeer(1))
 
-	r.catchupReplay.escalateAcquisition(il, time.Now().Add(4*time.Second))
+	r.catchupReplay.escalateAcquisition(il)
 
 	assert.False(t, il.FetchPackRequested())
 }
@@ -482,14 +482,14 @@ func TestRouter_CatchupBaseRequestFailureUsesInboundRetryTimer(t *testing.T) {
 
 	now := time.Now().Add(4 * time.Second)
 	require.Equal(t, inbound.TimerEscalate, il.OnTimer(now))
-	r.catchupReplay.escalateAcquisition(il, now)
+	r.catchupReplay.escalateAcquisition(il)
 	require.Len(t, sender.legacyCalls(), 2)
 	assert.Equal(t, 1, il.Timeouts())
 
 	for timeout := 2; timeout <= 6; timeout++ {
 		now = now.Add(4 * time.Second)
 		require.Equal(t, inbound.TimerEscalate, il.OnTimer(now))
-		r.catchupReplay.escalateAcquisition(il, now)
+		r.catchupReplay.escalateAcquisition(il)
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, il.OnTimer(now))

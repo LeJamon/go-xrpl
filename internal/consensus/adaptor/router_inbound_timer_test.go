@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound/inboundtest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRetryInboundLedgerAcquisitionsDoesNotDeferForUnrelatedQueuedReply(t *testing.T) {
@@ -31,5 +33,27 @@ func TestRetryInboundLedgerAcquisitionsDoesNotDeferForUnrelatedQueuedReply(t *te
 	}
 	if got := r.catchupReplay.fetchTracker.Find(il.Hash()); got != nil {
 		t.Fatalf("failed acquisition still tracked: %p", got)
+	}
+}
+
+func TestMaintenanceRetriesOnConfiguredAcquisitionClock(t *testing.T) {
+	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
+	sender := &recordingSender{acquisitionPeers: []uint64{7}}
+	router := newRouter(nil, New(Config{}), nil, routerNetworkConfig{acquisition: sender, inboundClock: clock})
+	hash := [32]byte{0x92}
+	trackCatchupPeer(router, 7, 42, hash)
+	_, started, _ := router.RequestLedger(hash, 42)
+	require.True(t, started)
+	acquisition := router.catchupReplay.fetchTracker.Find(hash)
+	require.NotNil(t, acquisition)
+
+	for retry := 0; retry < 2; retry++ {
+		clock.Advance(3*time.Second - time.Nanosecond)
+		router.maintenanceTick()
+		require.Equal(t, retry, acquisition.Timeouts())
+		clock.Advance(time.Nanosecond)
+		router.maintenanceTick()
+		require.Equal(t, retry+1, acquisition.Timeouts())
+		require.Len(t, sender.legacyCalls(), retry+2)
 	}
 }

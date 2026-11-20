@@ -603,6 +603,11 @@ func (l *Ledger) ConsecutiveTimeouts() int {
 	return l.consecutiveTimeouts
 }
 
+// Now returns the time used for this acquisition's deadlines and leases.
+func (l *Ledger) Now() time.Time {
+	return l.clock.Now()
+}
+
 // TimerDue reports whether the acquisition retry interval has elapsed.
 func (l *Ledger) TimerDue(now time.Time) bool {
 	l.mu.Lock()
