@@ -21,11 +21,11 @@ func requireFormatMarker(t *testing.T, store kvstore.KeyValueStore) {
 	require.Equal(t, binary.BigEndian.AppendUint32(nil, FormatVersion), value)
 }
 
-func putRawNode(t *testing.T, store kvstore.KeyValueStore, node *Node) {
+func putLegacyNode(t *testing.T, store kvstore.KeyValueStore) *Node {
 	t.Helper()
-	encoded := encodeNodeData(node)
-	defer releaseEncodeBuf(encoded)
-	require.NoError(t, store.Put(node.Hash[:], encoded))
+	node := testNode(NodeAccount, []byte("legacy-node"), 7)
+	require.NoError(t, store.Put(node.Hash[:], []byte("\x03\x00\x00\x00\x07legacy-node")))
+	return node
 }
 
 func TestFormatMarkerStampedOnNewStore(t *testing.T) {
@@ -36,11 +36,9 @@ func TestFormatMarkerStampedOnNewStore(t *testing.T) {
 
 func TestFormatMarkerAdoptsLegacyStoreAndSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	node := testNode(NodeAccount, []byte("legacy-node"), 7)
-
 	legacy, err := kvpebble.New(path, formatTestPebbleOptions)
 	require.NoError(t, err)
-	putRawNode(t, legacy, node)
+	node := putLegacyNode(t, legacy)
 	_, err = legacy.Get(formatMarkerKey)
 	require.ErrorIs(t, err, kvstore.ErrNotFound)
 	require.NoError(t, legacy.Close())
@@ -96,10 +94,9 @@ func TestFormatMarkerOpenPropagatesBackendErrors(t *testing.T) {
 
 func TestFormatMarkerReadOnlyOpenDoesNotStamp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nodes")
-	node := testNode(NodeAccount, []byte("legacy-node"), 7)
 	legacy, err := kvpebble.New(path, formatTestPebbleOptions)
 	require.NoError(t, err)
-	putRawNode(t, legacy, node)
+	node := putLegacyNode(t, legacy)
 	require.NoError(t, legacy.Close())
 
 	store, err := kvpebble.NewReadOnly(path, formatTestPebbleOptions)
@@ -146,7 +143,7 @@ func TestFormatMarkerSurvivesRotation(t *testing.T) {
 	// A plain legacy database becomes the first writable generation.
 	legacy, err := kvpebble.New(path, formatTestPebbleOptions)
 	require.NoError(t, err)
-	putRawNode(t, legacy, testNode(NodeAccount, []byte("legacy-node"), 7))
+	putLegacyNode(t, legacy)
 	require.NoError(t, legacy.Close())
 
 	store, err := kvpebble.NewRotating(path, formatTestPebbleOptions)
