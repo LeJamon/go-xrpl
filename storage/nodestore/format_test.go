@@ -172,3 +172,27 @@ func TestFormatMarkerSurvivesRotation(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnsupportedFormat)
 	require.NoError(t, reopened.Close())
 }
+
+func TestFormatMarkerWriteFailureDuringRotation(t *testing.T) {
+	backend := &databaseErrorStore{KeyValueStore: memorydb.New()}
+	store := &retentionRotatingStore{KeyValueStore: backend}
+	db, err := NewRotatingKVDatabase(store, noCacheConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	ctx := t.Context()
+	committed, err := db.RotateGeneration(ctx, 10, 1)
+	require.NoError(t, err)
+	require.True(t, committed)
+
+	backend.putErr = errors.New("marker write failed")
+	committed, err = db.RotateGeneration(ctx, 10, 1)
+	require.NoError(t, err)
+	require.True(t, committed)
+
+	committed, err = db.RotateGeneration(ctx, 20, 11)
+	require.ErrorIs(t, err, backend.putErr)
+	require.False(t, committed)
+	last, minimum := db.GenerationState()
+	require.Equal(t, uint32(10), last)
+	require.Equal(t, uint32(1), minimum)
+}

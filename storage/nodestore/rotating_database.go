@@ -276,8 +276,10 @@ func (d *RotatingKVDatabase) RotateGenerationWithRetention(
 		// The fresh writable generation starts empty, so the marker must be in
 		// the generation that becomes the archive to stay readable until the
 		// next rotation rewrites it.
-		if err := writeFormatMarker(d.store); err != nil {
-			return false, err
+		if completed, _ := d.rotating.RotationState(); lastRotated > completed {
+			if err := writeFormatMarker(d.store); err != nil {
+				return false, err
+			}
 		}
 		var committed bool
 		var err error
