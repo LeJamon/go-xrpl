@@ -128,7 +128,7 @@ func TestValidatorListSitesRPC(t *testing.T) {
 		Clock:    func() time.Time { return now },
 	})
 	require.NoError(t, err)
-	reader := newValidatorListReader(agg)
+	reader := &validatorListReader{agg: agg}
 	require.JSONEq(t, `{"validator_sites":[{
 		"uri":"https://validators.example/list", "refresh_interval_min":5,
 		"next_refresh_time":"2026-Nov-20 12:05:00 UTC"
@@ -144,7 +144,7 @@ func TestValidatorListSitesRPC(t *testing.T) {
 }
 
 func TestValidatorListReaderNilIsSafe(t *testing.T) {
-	for _, reader := range []*validatorListReader{nil, newValidatorListReader(nil)} {
+	for _, reader := range []*validatorListReader{nil, {}} {
 		if reader.HasConfiguredPublishers() || reader.PublisherCount() != 0 || reader.Threshold() != 0 || reader.IsUNLBlocked() {
 			t.Fatal("nil reader returned configured state")
 		}

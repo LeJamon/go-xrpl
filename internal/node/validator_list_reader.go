@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"encoding/hex"
 	"slices"
 	"strings"
@@ -16,16 +17,14 @@ const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
 
 var _ rpctypes.ValidatorListReader = (*validatorListReader)(nil)
 
-// validatorListReader projects the publisher-list aggregator into the view
-// served by the validators and validator_list_sites RPC methods. A nil
-// reader or aggregator yields empty responses, so it can be installed
-// unconditionally.
+// validatorListReader projects validator-list state into the view served by
+// the validators and validator_list_sites RPC methods. The effective-master
+// snapshot is also used by unl_list, whose listed-key set includes static and
+// local validators even when no publisher aggregator is configured.
 type validatorListReader struct {
-	agg *validatorlist.Aggregator
-}
-
-func newValidatorListReader(agg *validatorlist.Aggregator) *validatorListReader {
-	return &validatorListReader{agg: agg}
+	agg               *validatorlist.Aggregator
+	trustedMasterKeys func() [][33]byte
+	revokedMasterKey  func([33]byte) bool
 }
 
 func (r *validatorListReader) HasConfiguredPublishers() bool {
@@ -77,30 +76,50 @@ func (r *validatorListReader) TrustedMasterKeys() [][33]byte {
 	return masters
 }
 
-// ListedValidators returns the union of every validator master key listed by
-// any publisher, each tagged with whether it is currently in the effective
-// trusted UNL.
+// ListedValidators returns the union of every publisher-listed key and every
+// key in the effective trusted set, each tagged with current trust membership.
+// The latter includes static and local validators, matching rippled's
+// keyListings_ entries used by unl_list when no publisher list is configured.
 func (r *validatorListReader) ListedValidators() []rpctypes.ListedValidator {
-	if r == nil || r.agg == nil {
+	if r == nil {
 		return nil
 	}
-	_, trustedMasters := r.agg.TrustedValidators()
-	trusted := make(map[[33]byte]bool, len(trustedMasters))
-	for _, k := range trustedMasters {
-		trusted[k] = true
+	var trustedMasters [][33]byte
+	if r.trustedMasterKeys != nil {
+		trustedMasters = r.trustedMasterKeys()
 	}
+	var publishers []validatorlist.PublisherInfo
+	if r.agg != nil {
+		publishers = r.agg.PublisherSnapshot()
+	}
+	return projectListedValidators(publishers, trustedMasters, r.revokedMasterKey)
+}
 
-	seen := make(map[[33]byte]struct{})
-	var out []rpctypes.ListedValidator
-	for _, p := range r.agg.PublisherSnapshot() {
-		for _, mk := range p.Validators {
-			if _, dup := seen[mk]; dup {
-				continue
-			}
-			seen[mk] = struct{}{}
-			out = append(out, rpctypes.ListedValidator{MasterKey: mk, Trusted: trusted[mk]})
+func projectListedValidators(
+	publishers []validatorlist.PublisherInfo,
+	trustedMasters [][33]byte,
+	revokedMasterKey func([33]byte) bool,
+) []rpctypes.ListedValidator {
+	listed := make(map[[33]byte]bool, len(trustedMasters))
+	for _, publisher := range publishers {
+		for _, key := range publisher.Validators {
+			listed[key] = false
 		}
 	}
+	for _, key := range trustedMasters {
+		listed[key] = revokedMasterKey == nil || !revokedMasterKey(key)
+	}
+
+	if len(listed) == 0 {
+		return nil
+	}
+	out := make([]rpctypes.ListedValidator, 0, len(listed))
+	for mk, trusted := range listed {
+		out = append(out, rpctypes.ListedValidator{MasterKey: mk, Trusted: trusted})
+	}
+	slices.SortFunc(out, func(a, b rpctypes.ListedValidator) int {
+		return bytes.Compare(a.MasterKey[:], b.MasterKey[:])
+	})
 	return out
 }
 

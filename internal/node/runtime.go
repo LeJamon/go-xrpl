@@ -917,12 +917,19 @@ func (r *nodeRuntime) configureConsensus() error {
 		// RPC reads for external queries.
 		r.services.Manifests = r.consensus.ValidatorManifests
 
-		// Expose the publisher-list aggregator (when configured) to
-		// the `validators` and `validator_list_sites` RPC methods.
-		// nil-safe: the reader is inert when the aggregator is nil, so
-		// the handlers return empty arrays in that case rather than
-		// panicking.
-		r.services.ValidatorList = newValidatorListReader(r.consensus.ValidatorList)
+		// Expose validator-list state to the `validators`, `validator_list_sites`,
+		// and `unl_list` RPC methods. The effective-master callback keeps
+		// static and local validators visible when no publisher aggregator is
+		// configured, and keeps trusted flags aligned with the live UNL.
+		var revokedMasterKey func([33]byte) bool
+		if manifests := r.consensus.ValidatorManifests; manifests != nil {
+			revokedMasterKey = manifests.Revoked
+		}
+		r.services.ValidatorList = &validatorListReader{
+			agg:               r.consensus.ValidatorList,
+			trustedMasterKeys: r.consensus.Adaptor.GetTrustedMasterKeys,
+			revokedMasterKey:  revokedMasterKey,
+		}
 
 		// Surface UNL-blocked state (validator list expired) so conditionMet
 		// can return rpcEXPIRED_VALIDATOR_LIST, mirroring rippled's
