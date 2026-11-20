@@ -489,6 +489,12 @@ using a different format; run a build that supports that version. The marker is
 separate from the rotating store's `<path>.generations.json` manifest, which
 versions the generation directories rather than the records inside them.
 
+Before upgrading a plain Pebble store, take an offline backup if you may need
+to roll back. Builds that predate the marker can read version 1 nodes, but
+their `DeleteBefore` pruning scan stops at the marker with `data corrupt`.
+Restore the pre-upgrade backup before using that pruning path on an older
+build. Generation-based pruning uses a directory swap and is unaffected.
+
 ### `[sqlite]` — relational index databases
 
 Schema version 6 stores ledger headers alongside transaction and account indexes
