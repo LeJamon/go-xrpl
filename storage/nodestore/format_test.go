@@ -170,28 +170,48 @@ func TestFormatMarkerSurvivesRotation(t *testing.T) {
 	require.NoError(t, reopened.Close())
 }
 
+type failingRotationPut struct {
+	*kvpebble.RotatingStore
+	putErr error
+}
+
+func (s *failingRotationPut) Put(key, value []byte) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	return s.RotatingStore.Put(key, value)
+}
+
 func TestFormatMarkerWriteFailureDuringRotation(t *testing.T) {
-	backend := &databaseErrorStore{KeyValueStore: memorydb.New()}
-	store := &retentionRotatingStore{KeyValueStore: backend}
+	backend, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), formatTestPebbleOptions)
+	require.NoError(t, err)
+	store := &failingRotationPut{RotatingStore: backend}
 	db, err := NewRotatingKVDatabase(store, noCacheConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	ctx := t.Context()
-	committed, err := db.RotateGeneration(ctx, 10, 1)
+	committed, err := db.RotateGeneration(ctx, 10, 2)
 	require.NoError(t, err)
 	require.True(t, committed)
 
-	backend.putErr = errors.New("marker write failed")
-	committed, err = db.RotateGeneration(ctx, 10, 1)
+	store.putErr = errors.New("marker write failed")
+	committed, err = db.RotateGeneration(ctx, 10, 2)
 	require.NoError(t, err)
 	require.True(t, committed)
+
+	for _, floor := range []uint32{0, 1, 21} {
+		committed, err = db.RotateGeneration(ctx, 20, floor)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, store.putErr)
+		require.False(t, committed)
+	}
 
 	committed, err = db.RotateGeneration(ctx, 20, 11)
-	require.ErrorIs(t, err, backend.putErr)
+	require.ErrorIs(t, err, store.putErr)
 	require.False(t, committed)
 	last, minimum := db.GenerationState()
 	require.Equal(t, uint32(10), last)
-	require.Equal(t, uint32(1), minimum)
+	require.Equal(t, uint32(2), minimum)
 }
 
 func TestFormatMarkerChecksShadowedArchive(t *testing.T) {
