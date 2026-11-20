@@ -34,11 +34,13 @@ var ErrUnsupportedFormat = errors.New("unsupported nodestore format version")
 // formatMarkerKey is not 32 bytes long, so it cannot collide with a node hash.
 var formatMarkerKey = []byte("goxrpl:nodestore:format")
 
-// checkFormat verifies the store's format marker, stamping an unmarked store
-// unless it is read-only. The stamp needs no explicit sync: it precedes every
-// later write in the backend's log, and losing it leaves an unmarked store
-// that is stamped again on the next open.
-func checkFormat(store kvstore.KeyValueStore) error {
+// VerifyFormat checks a generation before it is adopted into a rotating store.
+// An unmarked generation is readable as version 1.
+func VerifyFormat(store kvstore.KeyValueStore) error {
+	return checkFormat(store, false)
+}
+
+func checkFormat(store kvstore.KeyValueStore, stampMissing bool) error {
 	var value []byte
 	var err error
 	if reader, ok := store.(kvstore.BoundedReadingStore); ok {
@@ -50,6 +52,9 @@ func checkFormat(store kvstore.KeyValueStore) error {
 		value, err = store.Get(formatMarkerKey)
 	}
 	if errors.Is(err, kvstore.ErrNotFound) {
+		if !stampMissing {
+			return nil
+		}
 		if readOnly, ok := store.(kvstore.ReadOnlyStore); ok && readOnly.ReadOnly() {
 			return nil
 		}

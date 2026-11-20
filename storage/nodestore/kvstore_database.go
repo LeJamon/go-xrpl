@@ -161,7 +161,7 @@ func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatab
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	if err := checkFormat(store); err != nil {
+	if err := checkFormat(store, true); err != nil {
 		return nil, err
 	}
 

@@ -364,6 +364,12 @@ func MigrateLegacyRotationState(path string) error {
 // path becomes the initial writable generation, so enabling online deletion
 // does not copy or rename an operator's current database.
 func NewRotating(path string, options Options) (*RotatingStore, error) {
+	return NewRotatingWithCheck(path, options, nil)
+}
+
+// NewRotatingWithCheck validates each opened generation before publishing a
+// new manifest or retiring orphaned generations. The check must be read-only.
+func NewRotatingWithCheck(path string, options Options, check func(kvstore.KeyValueStore) error) (*RotatingStore, error) {
 	if path == "" {
 		return nil, errors.New("kvstore/pebble: rotating store path is empty")
 	}
@@ -375,7 +381,19 @@ func NewRotating(path string, options Options) (*RotatingStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := r.openGenerations(resolved.BlockCacheBytes, found, newWithCache); err != nil {
+	open := func(path string, cache *cockroachpebble.Cache, options Options) (*Store, error) {
+		store, err := newWithCache(path, cache, options)
+		if err != nil {
+			return nil, err
+		}
+		if check != nil {
+			if err := check(store); err != nil {
+				return nil, errors.Join(err, store.Close())
+			}
+		}
+		return store, nil
+	}
+	if err := r.openGenerations(resolved.BlockCacheBytes, found, open); err != nil {
 		return nil, err
 	}
 	return r, nil
