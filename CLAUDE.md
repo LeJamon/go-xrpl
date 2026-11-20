@@ -54,14 +54,15 @@ just build-all       # full module compile
 just test            # everything
 just test-integration   # ./internal/testing/...
 just test-tx            # ./internal/tx/...
-just test-core          # ledger / txq / rpc / consensus / peermanagement
-just test-libs          # codec / crypto / shamap / storage / ...
+just test-core          # remaining node packages and tools
+just test-libs          # libraries and oracle-backed test utilities
 just test-pkg ./internal/tx/offer/...                  # one package
 just test-pkg './internal/tx/payment/... -run TestX'   # one test (quote args)
 just test-docker        # checksum-pinned private rippled 3.4.1 peer/manifest interop
 
 just vet
-just lint            # auto-installs golangci-lint at the CI-pinned version
+just lint            # the strict config CI gates on (auto-installs the pinned version)
+just lint-advisory   # broader advisory checks used in release evidence
 just fmt
 just tidy
 
