@@ -17,10 +17,6 @@ const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
 
 var _ rpctypes.ValidatorListReader = (*validatorListReader)(nil)
 
-// validatorListReader projects validator-list state into the view served by
-// the validators and validator_list_sites RPC methods. The effective-master
-// snapshot is also used by unl_list, whose listed-key set includes static and
-// local validators even when no publisher aggregator is configured.
 type validatorListReader struct {
 	agg               *validatorlist.Aggregator
 	trustedMasterKeys func() [][33]byte
@@ -189,8 +185,6 @@ func siteInfos(snap []validatorlist.SiteInfo) []rpctypes.ValidatorListSiteInfo {
 			LastError:          s.LastError,
 			LastDispositionSet: s.LastDispositionSet,
 			RefreshIntervalSec: s.RefreshSeconds,
-			// rippled stores whole minutes, so truncation only affects the
-			// never-clamped initial value (0 → 0).
 			RefreshIntervalMin: s.RefreshSeconds / 60,
 		}
 		if s.LastDispositionSet {

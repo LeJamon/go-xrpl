@@ -15,7 +15,6 @@ const maxProviderAncestors = uint32(256)
 
 const providerCacheCapacity = 1024
 
-// LedgerHeader is the narrow slice of a ledger the provider needs.
 type LedgerHeader interface {
 	Sequence() uint32
 	Hash() [32]byte

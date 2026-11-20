@@ -917,10 +917,6 @@ func (r *nodeRuntime) configureConsensus() error {
 		// RPC reads for external queries.
 		r.services.Manifests = r.consensus.ValidatorManifests
 
-		// Expose validator-list state to the `validators`, `validator_list_sites`,
-		// and `unl_list` RPC methods. The effective-master callback keeps
-		// static and local validators visible when no publisher aggregator is
-		// configured, and keeps trusted flags aligned with the live UNL.
 		var revokedMasterKey func([33]byte) bool
 		if manifests := r.consensus.ValidatorManifests; manifests != nil {
 			revokedMasterKey = manifests.Revoked

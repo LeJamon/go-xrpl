@@ -6,8 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 )
 
-// newAncestryProvider backs the engine's ledger-trie ancestry with the ledger
-// service. A nil svc yields a disabled provider.
 func newAncestryProvider(svc ledgerLookupContext) *rcl.AncestryProvider {
 	if svc == nil {
 		return rcl.NewAncestryProvider(nil)
