@@ -78,7 +78,7 @@ jobs:
           fi
       # Persist the evolving corpus between nightly runs so coverage compounds.
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build/fuzz
           key: fuzz-corpus-${{ matrix.name }}-${{ github.run_id }}
