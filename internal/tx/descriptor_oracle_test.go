@@ -52,8 +52,9 @@ func readOracleTxSettings(t *testing.T) []oracleTxSettings {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []oracleTxSettings
-	for _, m := range oracleTxPattern.FindAllStringSubmatch(string(data), -1) {
+	matches := oracleTxPattern.FindAllStringSubmatch(string(data), -1)
+	out := make([]oracleTxSettings, 0, len(matches))
+	for _, m := range matches {
 		code, err := strconv.ParseUint(m[2], 10, 16)
 		if err != nil {
 			t.Fatalf("parse code for %s: %v", m[3], err)
