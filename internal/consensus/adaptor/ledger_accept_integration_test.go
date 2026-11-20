@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,9 +121,9 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}
 	config := rcl.DefaultConfig()
 	config.ManualTick = true
-	var clockNanos atomic.Int64
-	clockNanos.Store(time.Now().UnixNano())
-	config.Clock = func() time.Time { return time.Unix(0, clockNanos.Load()) }
+	clock := jtx.NewManualClock()
+	clock.Set(time.Now())
+	config.Clock = clock.Now
 	config.Timing.LedgerMinClose = 0
 	config.Timing.LedgerIdleInterval = 0
 	config.Timing.LedgerMinConsensus = 0
@@ -162,7 +163,7 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}
 	runTick()
 	runTick()
-	clockNanos.Add(2 * time.Millisecond.Nanoseconds())
+	clock.Advance(2 * time.Millisecond)
 	runTick()
 
 	select {
@@ -237,8 +238,6 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	require.NoError(t, base.ledgerService.StoreLedgerWithState(t.Context(), &header, stateMap, txMap))
 	_, held := base.ledgerService.GetCachedLedgerByHash(canonical.Hash())
 	require.True(t, held, "canonical recovery ledger was not held locally")
-	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
-	require.Equal(t, canonical.Hash(), base.ledgerService.GetValidatedLedger().Hash())
 	require.Equal(t, parent.Hash(), base.ledgerService.GetClosedLedger().Hash())
 
 	blocked := &blockedBuildAdaptor{
@@ -249,9 +248,9 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	}
 	config := rcl.DefaultConfig()
 	config.ManualTick = true
-	var clockNanos atomic.Int64
-	clockNanos.Store(time.Now().UnixNano())
-	config.Clock = func() time.Time { return time.Unix(0, clockNanos.Load()) }
+	clock := jtx.NewManualClock()
+	clock.Set(time.Now())
+	config.Clock = clock.Now
 	config.Timing.LedgerMinClose = 0
 	config.Timing.LedgerIdleInterval = 0
 	config.Timing.LedgerMinConsensus = 0
@@ -277,7 +276,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 		for range 3 {
 			engine.TimerEntry()
 		}
-		clockNanos.Add(2 * time.Millisecond.Nanoseconds())
+		clock.Advance(2 * time.Millisecond)
 		engine.TimerEntry()
 	}
 	driveToAcceptance()
@@ -286,6 +285,8 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("production acceptance did not enter the blocked build")
 	}
+	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
+	require.Equal(t, canonical.Hash(), base.ledgerService.GetValidatedLedger().Hash())
 
 	validationTime := base.Now()
 	for _, identity := range []*ValidatorIdentity{base.identity, secondIdentity} {
@@ -310,7 +311,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 
 	// The canonical candidate is already held locally. The normal recovery path
 	// should adopt it without requesting full state.
-	clockNanos.Add(time.Second.Nanoseconds())
+	clock.Advance(time.Second)
 	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
 	require.NoError(t, err)
 	require.Equal(t, consensus.LedgerSwitchBusy, result)
