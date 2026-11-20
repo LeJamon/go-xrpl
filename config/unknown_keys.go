@@ -2,11 +2,10 @@ package config
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/spf13/viper"
 )
 
 // portSectionPrefix marks a top-level table as a port section even when
@@ -33,36 +32,52 @@ func (e *UnknownKeysError) Error() string {
 }
 
 func newUnknownKeysError(file string, keys []string) *UnknownKeysError {
-	sorted := append([]string(nil), keys...)
-	sort.Strings(sorted)
-	return &UnknownKeysError{File: file, Keys: sorted}
+	for i, key := range keys {
+		keys[i] = strings.ToLower(key)
+	}
+	slices.Sort(keys)
+	return &UnknownKeysError{File: file, Keys: slices.Compact(keys)}
 }
 
-// unmarshalTrackingUnused decodes v into target and returns the dotted paths
-// of the keys the target does not define.
-func unmarshalTrackingUnused(v *viper.Viper, target any, opts ...viper.DecoderConfigOption) ([]string, error) {
+func decodeSettings(settings map[string]any, target any) ([]string, error) {
 	var metadata mapstructure.Metadata
-	opts = append(opts, func(dc *mapstructure.DecoderConfig) { dc.Metadata = &metadata })
-	if err := v.Unmarshal(target, opts...); err != nil {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result: target, Metadata: &metadata, WeaklyTypedInput: true,
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			configDecodeHook(),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+		),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(settings); err != nil {
 		return nil, err
 	}
 	return metadata.Unused, nil
 }
 
-// dropPortSections removes the top-level port tables from the unused keys of
-// the main configuration. Port tables are decoded separately: the ones named
-// by server.ports under any name, and by convention every port_* table.
-func dropPortSections(unused, serverPorts []string) []string {
-	listed := make(map[string]struct{}, len(serverPorts))
-	for _, name := range serverPorts {
-		listed[strings.ToLower(name)] = struct{}{}
-	}
-	var kept []string
-	for _, key := range unused {
-		if _, ok := listed[key]; ok || strings.HasPrefix(key, portSectionPrefix) {
-			continue
+// Match Viper's longest-key lookup for both ["admin.rpc"] and [admin.rpc].
+func removePortSection(extra map[string]any, name string) bool {
+	for prefix := name; ; {
+		if value, ok := extra[prefix]; ok {
+			if prefix == name {
+				delete(extra, prefix)
+				return true
+			}
+			table, ok := value.(map[string]any)
+			if ok && removePortSection(table, name[len(prefix)+1:]) {
+				if len(table) == 0 {
+					delete(extra, prefix)
+				}
+				return true
+			}
 		}
-		kept = append(kept, key)
+		cut := strings.LastIndexByte(prefix, '.')
+		if cut < 0 {
+			return false
+		}
+		prefix = prefix[:cut]
 	}
-	return kept
 }

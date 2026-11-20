@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -16,40 +16,11 @@ import (
 // No defaults are applied — every required value must be present in the config file.
 // Returns an error listing ALL missing/invalid fields at once.
 func LoadConfig(paths Paths) (*Config, error) {
-	v := viper.New()
-
-	// Load main configuration file (required)
-	if err := loadMainConfig(v, paths.Main); err != nil {
+	settings, err := readConfigFile(paths.Main)
+	if err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
-	if err := validateManifestCounts(v); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-	if err := validateAcquisitionMemory(v); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-	if err := validateResources(v); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-	if v.IsSet("backfill") {
-		if _, ok := v.Get("backfill").(bool); !ok {
-			return nil, fmt.Errorf("backfill must be a boolean")
-		}
-	}
-	if err := validateIntegerSetting(v, "ledger_cache_size", MinLedgerCacheSize, MaxLedgerCacheSize); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-	if err := validateIntegerSetting(v, "sweep_interval", minSweepIntervalSeconds, maxSweepIntervalSeconds); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-	if err := validatePositiveDurationSetting(v, "server.checkpoint_shutdown_grace"); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-	if err := validateHTTPSettings(v); err != nil {
-		return nil, fmt.Errorf("failed to load main config: %w", err)
-	}
-
-	config, unknown, err := decodeConfig(v)
+	config, unknown, err := decodeConfig(settings)
 	if err != nil {
 		return nil, err
 	}
@@ -73,32 +44,91 @@ func LoadConfig(paths Paths) (*Config, error) {
 	return config, nil
 }
 
-// decodeConfig decodes the main configuration and its port sections. It
-// returns the keys that neither the Config struct nor a port section defines.
-func decodeConfig(v *viper.Viper) (*Config, []string, error) {
-	// The custom decode hook is required so viper can decode the typed
-	// union fields (LedgerHistory, FetchDepth, NetworkID) from raw TOML
-	// scalars. The remaining hooks preserve viper's default behaviour
-	// for time durations and slices.
-	var config Config
-	unused, err := unmarshalTrackingUnused(v, &config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
-		configDecodeHook(),
-		mapstructure.StringToTimeDurationHookFunc(),
-		mapstructure.StringToSliceHookFunc(","),
-	)))
+func decodeConfig(settings map[string]any) (*Config, []string, error) {
+	v := viper.New()
+	// MergeConfigMap normalizes the input keys for case-insensitive lookup.
+	// Decode the map itself because Viper's flattened settings omit empty tables.
+	if err := v.MergeConfigMap(settings); err != nil {
+		return nil, nil, err
+	}
+	if err := validateConfigSettings(v); err != nil {
+		return nil, nil, fmt.Errorf("failed to load main config: %w", err)
+	}
+
+	var document struct {
+		Config `mapstructure:",squash"`
+		Extra  map[string]any `mapstructure:",remain"`
+	}
+	unused, err := decodeSettings(settings, &document)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	config := &document.Config
 	config.Voting.ReferenceFeeSet = v.IsSet("voting.reference_fee")
 	config.Voting.AccountReserveSet = v.IsSet("voting.account_reserve")
 	config.Voting.OwnerReserveSet = v.IsSet("voting.owner_reserve")
 
-	unusedPortKeys, err := processPorts(&config, v)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to process ports: %w", err)
+	portNames := config.Server.Ports
+	if len(portNames) == 0 {
+		for name, value := range document.Extra {
+			if _, table := value.(map[string]any); table && strings.HasPrefix(name, portSectionPrefix) {
+				portNames = append(portNames, name)
+			}
+		}
+		slices.Sort(portNames)
 	}
+	config.Ports = make(map[string]PortConfig, len(portNames))
+	for _, name := range portNames {
+		section, ok := v.Get(name).(map[string]any)
+		if !ok {
+			return nil, nil, fmt.Errorf("no configuration found for port %s", name)
+		}
+		port, keys, err := loadPortConfig(section, config.Server)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load port config %s: %w", name, err)
+		}
+		config.Ports[name] = port
+		for _, key := range keys {
+			unused = append(unused, strings.ToLower(name)+"."+key)
+		}
+	}
+	for _, name := range portNames {
+		removePortSection(document.Extra, strings.ToLower(name))
+	}
+	for key, value := range document.Extra {
+		if _, table := value.(map[string]any); table && strings.HasPrefix(key, portSectionPrefix) {
+			continue
+		}
+		unused = append(unused, key)
+	}
+	return config, unused, nil
+}
 
-	return &config, append(dropPortSections(unused, config.Server.Ports), unusedPortKeys...), nil
+func validateConfigSettings(v *viper.Viper) error {
+	if err := validateManifestCounts(v); err != nil {
+		return err
+	}
+	if err := validateAcquisitionMemory(v); err != nil {
+		return err
+	}
+	if err := validateResources(v); err != nil {
+		return err
+	}
+	if v.IsSet("backfill") {
+		if _, ok := v.Get("backfill").(bool); !ok {
+			return fmt.Errorf("backfill must be a boolean")
+		}
+	}
+	if err := validateIntegerSetting(v, "ledger_cache_size", MinLedgerCacheSize, MaxLedgerCacheSize); err != nil {
+		return err
+	}
+	if err := validateIntegerSetting(v, "sweep_interval", minSweepIntervalSeconds, maxSweepIntervalSeconds); err != nil {
+		return err
+	}
+	if err := validatePositiveDurationSetting(v, "server.checkpoint_shutdown_grace"); err != nil {
+		return err
+	}
+	return validateHTTPSettings(v)
 }
 
 func validatePositiveDurationSetting(v *viper.Viper, key string) error {
@@ -226,23 +256,27 @@ func validateIntegerSetting(v *viper.Viper, key string, minValue, maxValue int) 
 	return nil
 }
 
-// loadMainConfig loads the main configuration file
-func loadMainConfig(v *viper.Viper, configPath string) error {
-	if configPath == "" {
-		return fmt.Errorf("config path cannot be empty")
+func readConfigFile(path string) (map[string]any, error) {
+	if path == "" {
+		return nil, fmt.Errorf("config path cannot be empty")
 	}
-
-	v.SetConfigFile(configPath)
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return fmt.Errorf("config file does not exist: %s", configPath)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("config file does not exist: %s", path)
 	}
-
-	if err := v.ReadInConfig(); err != nil {
-		return fmt.Errorf("failed to read config file %s: %w", configPath, err)
+	if err != nil {
+		return nil, err
 	}
-
-	return nil
+	format := strings.TrimPrefix(filepath.Ext(path), ".")
+	decoder, err := viper.NewCodecRegistry().Decoder(format)
+	if err != nil {
+		return nil, fmt.Errorf("read config file %s: %w", path, err)
+	}
+	settings := make(map[string]any)
+	if err := decoder.Decode(data, settings); err != nil {
+		return nil, fmt.Errorf("read config file %s: %w", path, err)
+	}
+	return settings, nil
 }
 
 // loadValidatorsConfig loads the validators configuration.
@@ -296,15 +330,12 @@ func loadValidatorsConfig(paths Paths, validatorsFile string) (*ValidatorsConfig
 
 // loadValidatorsTomlFile loads validators from TOML format
 func loadValidatorsTomlFile(filePath string) (*ValidatorsConfig, error) {
-	v := viper.New()
-	v.SetConfigFile(filePath)
-
-	if err := v.ReadInConfig(); err != nil {
+	settings, err := readConfigFile(filePath)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read validators file %s: %w", filePath, err)
 	}
-
 	var validators ValidatorsConfig
-	unused, err := unmarshalTrackingUnused(v, &validators)
+	unused, err := decodeSettings(settings, &validators)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal validators config: %w", err)
 	}
@@ -346,105 +377,18 @@ func validateValidatorsFile(validators *ValidatorsConfig) error {
 	return nil
 }
 
-// processPorts processes dynamic port configurations. It returns the keys
-// found in the loaded port sections that PortConfig does not define.
-func processPorts(config *Config, v *viper.Viper) ([]string, error) {
-	config.Ports = make(map[string]PortConfig)
-	var unused []string
-
-	serverPorts := config.Server.Ports
-	if len(serverPorts) == 0 {
-		serverPorts = findPortSections(v)
+func loadPortConfig(settings map[string]any, defaults ServerConfig) (PortConfig, []string, error) {
+	port := PortConfig{
+		Port: defaults.Port, IP: defaults.IP, Protocol: defaults.Protocol, Limit: defaults.Limit,
+		User: defaults.User, Password: defaults.Password,
+		AdminUser: defaults.AdminUser, AdminPassword: defaults.AdminPassword,
+		AllowedOrigins: slices.Clone(defaults.AllowedOrigins), SSLCiphers: defaults.SSLCiphers,
 	}
-
-	for _, portName := range serverPorts {
-		portConfig, portUnused, err := loadPortConfig(v, portName, config.Server)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load port config %s: %w", portName, err)
-		}
-		config.Ports[portName] = portConfig
-		for _, key := range portUnused {
-			unused = append(unused, strings.ToLower(portName)+"."+key)
-		}
-	}
-
-	return unused, nil
-}
-
-// findPortSections scans viper for sections that start with "port_"
-func findPortSections(v *viper.Viper) []string {
-	var ports []string
-
-	allKeys := v.AllKeys()
-	portMap := make(map[string]bool)
-
-	for _, key := range allKeys {
-		parts := strings.Split(key, ".")
-		if len(parts) >= 2 && strings.HasPrefix(parts[0], "port_") {
-			portName := parts[0]
-			if !portMap[portName] {
-				ports = append(ports, portName)
-				portMap[portName] = true
-			}
-		}
-	}
-
-	return ports
-}
-
-// loadPortConfig loads configuration for a specific port
-func loadPortConfig(v *viper.Viper, portName string, serverDefaults ServerConfig) (PortConfig, []string, error) {
-	var portConfig PortConfig
-
-	portViper := v.Sub(portName)
-	if portViper == nil {
-		return PortConfig{}, nil, fmt.Errorf("no configuration found for port %s", portName)
-	}
-
-	applyServerDefaults(portViper, serverDefaults)
-
-	unused, err := unmarshalTrackingUnused(portViper, &portConfig)
+	unused, err := decodeSettings(settings, &port)
 	if err != nil {
-		return PortConfig{}, nil, fmt.Errorf("failed to unmarshal port config: %w", err)
+		return PortConfig{}, nil, err
 	}
-	portConfig.Admin = append(append([]string(nil), serverDefaults.Admin...), portConfig.Admin...)
-	portConfig.SecureGateway = append(append([]string(nil), serverDefaults.SecureGateway...), portConfig.SecureGateway...)
-
-	return portConfig, unused, nil
-}
-
-// applyServerDefaults applies server-level defaults to a port
-// configuration. SetDefault already yields to values set explicitly in
-// the port section, so no IsSet guards are needed.
-func applyServerDefaults(portViper *viper.Viper, serverDefaults ServerConfig) {
-	if serverDefaults.Port != 0 {
-		portViper.SetDefault("port", serverDefaults.Port)
-	}
-	if serverDefaults.IP != "" {
-		portViper.SetDefault("ip", serverDefaults.IP)
-	}
-	if serverDefaults.Protocol != "" {
-		portViper.SetDefault("protocol", serverDefaults.Protocol)
-	}
-	if serverDefaults.Limit != 0 {
-		portViper.SetDefault("limit", serverDefaults.Limit)
-	}
-	if serverDefaults.User != "" {
-		portViper.SetDefault("user", serverDefaults.User)
-	}
-	if serverDefaults.Password != "" {
-		portViper.SetDefault("password", serverDefaults.Password)
-	}
-	if serverDefaults.AdminUser != "" {
-		portViper.SetDefault("admin_user", serverDefaults.AdminUser)
-	}
-	if serverDefaults.AdminPassword != "" {
-		portViper.SetDefault("admin_password", serverDefaults.AdminPassword)
-	}
-	if len(serverDefaults.AllowedOrigins) > 0 {
-		portViper.SetDefault("allowed_origins", serverDefaults.AllowedOrigins)
-	}
-	if serverDefaults.SSLCiphers != "" {
-		portViper.SetDefault("ssl_ciphers", serverDefaults.SSLCiphers)
-	}
+	port.Admin = append(slices.Clone(defaults.Admin), port.Admin...)
+	port.SecureGateway = append(slices.Clone(defaults.SecureGateway), port.SecureGateway...)
+	return port, unused, nil
 }
