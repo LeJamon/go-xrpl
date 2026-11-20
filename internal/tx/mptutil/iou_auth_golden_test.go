@@ -113,7 +113,8 @@ func iouScenarios(t *testing.T) []iouScenario {
 		rate    uint32
 	}{{missing: true}, {}, {flags: state.LsfGlobalFreeze}, {flags: state.LsfRequireAuth}, {flags: state.LsfGlobalFreeze | state.LsfRequireAuth}, {flags: state.LsfRequireAuth, rate: 1_005_000_000}}
 	lineFlags := []uint32{state.LsfLowFreeze, state.LsfHighFreeze, state.LsfLowDeepFreeze, state.LsfHighDeepFreeze, state.LsfLowAuth, state.LsfHighAuth}
-	var out []iouScenario
+	maxLines := 1 + (1 << len(lineFlags))
+	out := make([]iouScenario, 0, 2*maxLines*3*len(issuerFlags))
 	for _, is := range issuerFlags {
 		for _, holder := range [][20]byte{low, high, issuer} {
 			lines := []int{-1}
