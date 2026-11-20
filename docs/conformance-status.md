@@ -4,7 +4,7 @@
 
 The result of executing the committed conformance corpus
 `internal/testing/conformance/testdata/rippled-3.4.1-v4`,
-produced by [`scripts/conformance-summary.sh`](../scripts/conformance-summary.sh).
+produced by [`scripts/conformance-summary.sh`](https://github.com/LeJamon/go-xrpl/blob/main/scripts/conformance-summary.sh).
 The required CI conformance job executes the same corpus.
 
 The table reconciles `discovered = executed + skipped + excluded` and

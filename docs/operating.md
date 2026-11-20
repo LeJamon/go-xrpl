@@ -233,27 +233,25 @@ keys to precede any `[section]` header.
 
 ### Unknown keys
 
-The loader rejects any key it does not define. A mistyped key stops startup
-instead of silently leaving the setting at its default. The error names the
-file and every unknown key as a lower-case dotted path:
+A misspelled key stops startup. The loader reports the file and the unknown
+keys in sorted order. For example, two typos in the main configuration produce
+this error.
 
 ```text
 unknown configuration keys in /etc/goxrpl/goxrpl.toml: node_db.online_delette, peers_maxx
 ```
 
-The check covers top-level keys, every section, nested tables such as
-`[overlay.resource_limits]`, each loaded port section, and a TOML
-`validators_file`. Key names are matched case-insensitively. Three places are
-free-form by design:
+Key names are case-insensitive. The check covers the main file, including
+nested tables and active port sections, and a TOML `validators_file`.
 
-- `[logging.partitions]` accepts any partition name as a key.
-- A port section may have any name, provided `[server].ports` lists it.
-- A `[port_*]` section that `[server].ports` does not list is not loaded and its
-  keys are not checked. When `[server].ports` is empty, every `[port_*]`
-  section is loaded and checked.
+- `[logging.partitions]` accepts arbitrary partition names.
+- `[server].ports` must list at least one port. Each name identifies a table
+  whose settings follow the port schema.
+- An unlisted `[port_*]` table can stay in the file while its port is disabled.
+  The loader ignores the contents of that table.
 
-The node reads no configuration from environment variables; a setting is either
-in the file or supplied by a command-line flag.
+Environment variables do not override TOML keys. The server separately reads
+`GOXRPL_PPROF` and `GOXRPL_METRICS` to configure diagnostic listeners.
 
 ### Top-level — peer protocol
 

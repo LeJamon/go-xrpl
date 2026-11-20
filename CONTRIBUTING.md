@@ -17,21 +17,19 @@ mutations, same edge cases. When in doubt about expected behavior, check rippled
 
 ### Getting a rippled checkout
 
-The release oracle is a private repository (`XRPLF/xrpld-private`, tag `3.4.1`,
-commit `d147fccf54a500fce586522f28d6044c37fd8d29`). **You do not need access to
-it.** The public [`XRPLF/rippled`](https://github.com/XRPLF/rippled) tag `3.4.1`
-(commit `00e640751460c137636fdb6dae6b4280de355d81`) is what CI checks out, and
-it is enough to run every test in this repository. From the go-xrpl repository
-root:
+The recorded behavioral fixtures come from `XRPLF/xrpld-private` at commit
+`d147fccf54a500fce586522f28d6044c37fd8d29`. For the source-inventory tests,
+CI and contributors can use the public [`XRPLF/rippled`](https://github.com/XRPLF/rippled)
+tag `3.4.1`, commit `00e640751460c137636fdb6dae6b4280de355d81`.
+Run these commands from the go-xrpl repository root.
 
 ```bash
 git clone --depth 1 --branch 3.4.1 --single-branch https://github.com/XRPLF/rippled.git ../rippled-worktrees/v3.4.1-oracle
 just test
 ```
 
-The checkout must be at `rippled-worktrees/v3.4.1-oracle/` inside the
-repository or any ancestor directory; the command above puts it next to the
-repository. To use a checkout elsewhere, run
+The tests look for `rippled-worktrees/v3.4.1-oracle/` in the repository and its
+ancestor directories. To use a checkout elsewhere, run
 `GOXRPL_ORACLE_DIR=/absolute/path/to/rippled just test`. The tests verify the
 checkout's `HEAD` commit and require a clean working tree, including untracked
 files. No rippled build is needed.
@@ -43,9 +41,9 @@ What depends on the checkout:
 | `just build`, `just lint`, `just docs-check` | No |
 | `just test-tx`, `just test-integration`, `just test-core` | No |
 | `just conformance --corpus …` and `go test ./internal/testing/conformance` | No. The recorded corpus is committed under `internal/testing/conformance/testdata/rippled-3.4.1-v4`. |
-| `just test-libs`, `just test` | Yes. Four source-inventory tests in `codec/binarycodec/definitions`, `ledger/entry` and `ledger/entry/schema` read rippled headers. Without a checkout they **fail** (they are not skipped) with `rippled 3.4.1 oracle not found`. Every other test in those packages still runs. |
+| `just test-libs`, `just test` | Yes. Four source-inventory tests in `codec/binarycodec/definitions`, `ledger/entry` and `ledger/entry/schema` read pinned rippled source files. Without a checkout they **fail** (they are not skipped) with `rippled 3.4.1 oracle not found`. Every other test in those packages still runs. |
 | `just test-docker` (peer interop) | No checkout. Needs Docker; `scripts/peer-interop/Dockerfile` downloads the checksum-pinned `xrpld` 3.4.1 package from `packages.xrplf.org`. |
-| Re-recording the conformance corpus (`scripts/oracle/`) | Needs the private oracle. Contributors do not do this; replaying the committed corpus does not need it. |
+| Re-recording the conformance corpus (`scripts/oracle/`) | Requires the pinned private oracle checkout. |
 
 The inventory tests read seven files (`SField.h`, `sfields.macro`,
 `transactions.macro`, `ledger_entries.macro`, `TER.h`, `LedgerFormats.h`,
