@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +16,7 @@ func TestBackgroundAncestryProvider_ColdLookupDoesNotBlockOrDuplicate(t *testing
 	tip, headers := buildChain(5, 'q')
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	var calls atomic.Int32
-	p := newBackgroundAncestryProvider(func(ctx context.Context, hash [32]byte) (ledgerHeader, error) {
+	p := newBackgroundAncestryProvider(func(ctx context.Context, hash [32]byte) (LedgerHeader, error) {
 		if hash == tip.hash {
 			calls.Add(1)
 			started <- struct{}{}
@@ -60,7 +59,7 @@ func TestBackgroundAncestryProvider_ColdLookupDoesNotBlockOrDuplicate(t *testing
 
 func TestBackgroundAncestryProvider_BoundedQueueAndCancelableShutdown(t *testing.T) {
 	var active, peak atomic.Int32
-	p := newBackgroundAncestryProvider(func(ctx context.Context, _ [32]byte) (ledgerHeader, error) {
+	p := newBackgroundAncestryProvider(func(ctx context.Context, _ [32]byte) (LedgerHeader, error) {
 		n := active.Add(1)
 		defer active.Add(-1)
 		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
@@ -109,7 +108,7 @@ func TestBackgroundAncestryProvider_RepairsPartialWithoutBlockingFallback(t *tes
 	saved := headers[missing]
 	delete(headers, missing)
 	var mu sync.RWMutex
-	p := newBackgroundAncestryProvider(func(_ context.Context, hash [32]byte) (ledgerHeader, error) {
+	p := newBackgroundAncestryProvider(func(_ context.Context, hash [32]byte) (LedgerHeader, error) {
 		mu.RLock()
 		defer mu.RUnlock()
 		h, ok := headers[hash]
@@ -133,7 +132,7 @@ func TestBackgroundAncestryProvider_PanicDoesNotStrandWorkerOrFlight(t *testing.
 	var panicNext atomic.Bool
 	panicNext.Store(true)
 	tip, _ := buildChain(1, 'x')
-	p := newBackgroundAncestryProvider(func(context.Context, [32]byte) (ledgerHeader, error) {
+	p := newBackgroundAncestryProvider(func(context.Context, [32]byte) (LedgerHeader, error) {
 		if panicNext.Swap(false) {
 			panic("injected read panic")
 		}
@@ -146,7 +145,7 @@ func TestBackgroundAncestryProvider_PanicDoesNotStrandWorkerOrFlight(t *testing.
 
 func TestBackgroundAncestryProvider_EngineOwnsReplacementAndShutdown(t *testing.T) {
 	e := NewEngine(newMockAdaptor(), DefaultConfig())
-	p := NewAncestryProvider(&service.Service{})
+	p := NewAncestryProvider(func(context.Context, [32]byte) (LedgerHeader, error) { return nil, errors.New("unused") })
 	require.NotNil(t, p.background, "production provider must use background lookup")
 	e.SetLedgerAncestryProvider(p)
 	e.SetLedgerAncestryProvider(p) // Reinstalling the same instance must not stop it.
@@ -169,7 +168,7 @@ func TestBackgroundAncestryProvider_EngineOwnsReplacementAndShutdown(t *testing.
 func TestBackgroundAncestryProvider_TrackerProgressesDuringBlockedRead(t *testing.T) {
 	tip, headers := buildChain(5, 't')
 	release := make(chan struct{})
-	p := newBackgroundAncestryProvider(func(ctx context.Context, hash [32]byte) (ledgerHeader, error) {
+	p := newBackgroundAncestryProvider(func(ctx context.Context, hash [32]byte) (LedgerHeader, error) {
 		select {
 		case <-release:
 			return headers[hash], nil

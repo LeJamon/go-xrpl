@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound/inboundtest"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -116,8 +117,13 @@ func replayPeerSnapshot(t *testing.T, acquisition *inbound.Ledger, peerID uint64
 
 func TestReplayHeadTailRecoversCanonicalPaymentSuccessor(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		router, adaptor, sender, svc := makeRouter(t)
+		svc := newTestLedgerService(t)
 		t.Cleanup(svc.Stop)
+		adaptor, sender := newRecordingAdaptor(t, svc)
+		clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
+		router := newRouter(nil, adaptor, nil, routerNetworkConfig{
+			acquisition: sender, gossip: sender, txSet: sender, serve: sender, inboundClock: clock,
+		})
 		parent := svc.GetClosedLedger()
 		require.NotNil(t, parent)
 		_, first, second := buildCanonicalReplayPaymentSuccessors(t, parent)
@@ -191,7 +197,7 @@ func TestReplayHeadTailRecoversCanonicalPaymentSuccessor(t *testing.T) {
 		require.False(t, tailReady.IsZero(), "successor completion must be retained behind the blocked head")
 
 		require.True(t, head.AddPeer(8))
-		time.Sleep(time.Second)
+		clock.Advance(time.Second)
 		coordinator.retryReplayHeadTail(time.Now())
 		synctest.Wait()
 		headSnapshot = head.Snapshot()

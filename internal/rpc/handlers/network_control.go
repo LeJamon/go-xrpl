@@ -277,13 +277,14 @@ func connectMessage(ip string, port int) map[string]any {
 
 // UnlListMethod handles the unl_list RPC method.
 // Mirrors rippled UNLList.cpp doUnlList: iterates every listed validator
-// (ValidatorList::for_each_listed) and emits a {pubkey_validator, trusted}
-// entry, where trusted reflects whether the key is in the effective UNL. With
-// no publisher-trust subsystem configured (e.g. standalone) the list is empty.
+// (ValidatorList::forEachListed) and emits a {pubkey_validator, trusted}
+// entry, where trusted reflects whether the key is in the effective UNL. A
+// node with only static or local validators still reports those keys; with no
+// listed keys, json::Value's lazily-created `unl` member remains null.
 type UnlListMethod struct{ adminHandler }
 
 func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
-	unl := make([]any, 0)
+	var unl []any
 	if ctx.Services != nil && ctx.Services.ValidatorList() != nil {
 		for _, v := range ctx.Services.ValidatorList().ListedValidators() {
 			enc, err := addresscodec.EncodeNodePublicKey(v.MasterKey[:])
