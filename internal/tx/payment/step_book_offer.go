@@ -69,6 +69,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				}
 			}
 			if !reYieldOwnOffer {
+				if err := DeleteOfferAtomically(sb, offerKey); err != nil {
+					return nil, [32]byte{}, &offerCleanupError{cause: err}
+				}
 				continue
 			}
 		}
@@ -198,8 +201,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			continue
 		}
 		if offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
 		}
 		deepFrozen, err := s.isDeepFrozenIssue(sb, offerOwner, s.book.In)
@@ -207,8 +209,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			return nil, [32]byte{}, err
 		}
 		if deepFrozen {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
 		}
 
@@ -409,8 +410,7 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 			return false, err
 		}
 		if fundsAf.IsZero() {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, owner, ofrsToRm)
 		} else {
 			s.dropBecameOffer(sb, offer, owner)
 		}
@@ -418,8 +418,7 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 	}
 	shouldRemove, overflow := s.shouldRmSmallIncreasedQOfferSafe(sb, offer, funds)
 	if overflow {
-		ofrsToRm[offerKey] = true
-		s.recordPermRm(offerKey)
+		s.removeSteppedOffer(sb, offer, offerKey, owner, ofrsToRm)
 		return true, nil
 	}
 	if shouldRemove {
@@ -428,14 +427,25 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 			return false, err
 		}
 		if fundsAf.Compare(funds) == 0 {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, owner, ofrsToRm)
 		} else {
 			s.dropBecameOffer(sb, offer, owner)
 		}
 		return true, nil
 	}
 	return false, nil
+}
+
+// removeSteppedOffer permanently removes an offer the book walk stepped over.
+// Besides recording it for the flow's cleanup, the offer is erased from the
+// working sandbox right away: BookTip::step deletes each tip from the view as the
+// walk advances past it, so the removals land in book order. Left to the flow's
+// key-sorted cleanup alone, offers sharing owner-directory pages would empty and
+// unlink those pages in a different order (testnet ledger 22465396).
+func (s *BookStep) removeSteppedOffer(sb *PaymentSandbox, offer *state.LedgerOffer, offerKey [32]byte, owner [20]byte, ofrsToRm map[[32]byte]bool) {
+	ofrsToRm[offerKey] = true
+	s.recordPermRm(offerKey)
+	_ = s.deleteOffer(sb, offer, owner)
 }
 
 // dropBecameOffer deletes a BECAME-unfunded/tiny offer straight from the working
