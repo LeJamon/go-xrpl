@@ -713,10 +713,10 @@ func TestAncestryProvider_BypassesWrongSequenceCachedParent(t *testing.T) {
 	}
 }
 
-func TestAncestryProvider_NilServiceDisables(t *testing.T) {
+func TestAncestryProvider_NilLookupDisables(t *testing.T) {
 	p := NewAncestryProvider(nil)
 	if _, ok := p.LedgerByID(consensus.LedgerID{0x01}); ok {
-		t.Fatal("nil-service provider should always return false")
+		t.Fatal("provider with nil lookup should always return false")
 	}
 }
 
