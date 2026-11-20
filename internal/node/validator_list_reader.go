@@ -7,6 +7,7 @@ import (
 
 	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // rippledTimeLayout mirrors rippled's to_string(NetClock::time_point)
@@ -116,9 +117,9 @@ func publisherInfos(snap []validatorlist.PublisherInfo) []rpctypes.ValidatorList
 			ValidatorsBase58: nodeKeysBase58(s.Validators),
 			EffectiveSet:     s.EffectiveSet,
 		}
-		// The zero time.Time is not a usable "unset" sentinel: ripple epoch
-		// zero resolves to year 2000, so emission is gated on EffectiveSet.
-		if s.EffectiveSet && !s.Effective.IsZero() {
+		// Rippled's zero validFrom is the ripple epoch, so explicit effective=0
+		// is omitted just like an absent field.
+		if s.EffectiveSet && protocol.RippleSeconds(s.Effective) != 0 {
 			info.EffectiveUnix = s.Effective.Unix()
 			info.EffectiveISO = s.Effective.UTC().Format(rippledTimeLayout)
 		}
@@ -144,7 +145,7 @@ func publisherInfos(snap []validatorlist.PublisherInfo) []rpctypes.ValidatorList
 					EffectiveSet:     p.EffectiveSet,
 					ValidatorsBase58: nodeKeysBase58(p.Validators),
 				}
-				if p.EffectiveSet && !p.Effective.IsZero() {
+				if p.EffectiveSet && protocol.RippleSeconds(p.Effective) != 0 {
 					e.EffectiveUnix = p.Effective.Unix()
 					e.EffectiveISO = p.Effective.UTC().Format(rippledTimeLayout)
 				}
