@@ -534,6 +534,19 @@ func (r *RotatingStore) Get(key []byte) ([]byte, error) {
 	return r.getLocked(key, false)
 }
 
+// CheckArchive pins the archive while check inspects records that the
+// writable generation might shadow. The callback must only read the store.
+func (r *RotatingStore) CheckArchive(check func(kvstore.KeyValueStore) error) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed {
+		return kvstore.ErrClosed
+	}
+	r.archiveMu.RLock()
+	defer r.archiveMu.RUnlock()
+	return check(r.archive)
+}
+
 // GetBatch reads an explicit set of keys in sorted order, preferring the
 // writable generation for keys present in both generations. It never promotes
 // archive records.

@@ -193,3 +193,17 @@ func TestFormatMarkerWriteFailureDuringRotation(t *testing.T) {
 	require.Equal(t, uint32(10), last)
 	require.Equal(t, uint32(1), minimum)
 }
+
+func TestFormatMarkerChecksShadowedArchive(t *testing.T) {
+	store, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), formatTestPebbleOptions)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.Put(formatMarkerKey, []byte{1}))
+	committed, err := store.Rotate(10, 1)
+	require.NoError(t, err)
+	require.True(t, committed)
+	require.NoError(t, writeFormatMarker(store))
+
+	_, err = NewRotatingKVDatabase(store, noCacheConfig())
+	require.ErrorIs(t, err, ErrDataCorrupt)
+}
