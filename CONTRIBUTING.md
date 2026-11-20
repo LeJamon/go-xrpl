@@ -15,27 +15,48 @@ the spec, so the correctness bar for any change is **"does this behave the way
 rippled behaves?"** — same field ordering, same TER result codes, same state
 mutations, same edge cases. When in doubt about expected behavior, check rippled.
 
-For the source inventory tests in `just test`, use the public
-[`XRPLF/rippled`](https://github.com/XRPLF/rippled) tag `3.4.1`, whose peeled
-commit is `00e640751460c137636fdb6dae6b4280de355d81`. No private-repository
-access is required. From the go-xrpl repository root:
+### Getting a rippled checkout
+
+The recorded behavioral fixtures come from `XRPLF/xrpld-private` at commit
+`d147fccf54a500fce586522f28d6044c37fd8d29`. For the source-inventory tests,
+CI and contributors can use the public [`XRPLF/rippled`](https://github.com/XRPLF/rippled)
+tag `3.4.1`, commit `00e640751460c137636fdb6dae6b4280de355d81`.
+Run these commands from the go-xrpl repository root.
 
 ```bash
 git clone --depth 1 --branch 3.4.1 --single-branch https://github.com/XRPLF/rippled.git ../rippled-worktrees/v3.4.1-oracle
 just test
 ```
 
-The tests discover `rippled-worktrees/v3.4.1-oracle/` in the repository or an
-ancestor directory. To use a checkout elsewhere, run
-`GOXRPL_ORACLE_DIR=/absolute/path/to/rippled just test`. Keep the checkout clean,
-including untracked files; no rippled build is needed for these tests.
+The tests look for `rippled-worktrees/v3.4.1-oracle/` in the repository and its
+ancestor directories. To use a checkout elsewhere, run
+`GOXRPL_ORACLE_DIR=/absolute/path/to/rippled just test`. The tests verify the
+checkout's `HEAD` commit and require a clean working tree, including untracked
+files. No rippled build is needed.
 
-Each inventory input must match its pinned SHA-256 from private 3.4.1 commit
-`d147fccf54a500fce586522f28d6044c37fd8d29`; the tests log that content
-equivalence. The private checkout and the automatically discovered public
-3.4.0 fallback remain supported. This equivalence applies only to the pinned
-inventory files, not to all release behavior. The private commit remains the
-provenance of the recorded behavioral fixtures.
+What depends on the checkout:
+
+| Task | Needs a rippled checkout? |
+|------|---------------------------|
+| `just build`, `just lint`, `just docs-check` | No |
+| `just test-tx`, `just test-integration`, `just test-core` | No |
+| `just conformance --corpus …` and `go test ./internal/testing/conformance` | No. The recorded corpus is committed under `internal/testing/conformance/testdata/rippled-3.4.1-v4`. |
+| `just test-libs`, `just test` | Yes. Four source-inventory tests in `codec/binarycodec/definitions`, `ledger/entry` and `ledger/entry/schema` read pinned rippled source files. Without a checkout they **fail** (they are not skipped) with `rippled 3.4.1 oracle not found`. Every other test in those packages still runs. |
+| `just test-docker` (peer interop) | No checkout. Needs Docker; `scripts/peer-interop/Dockerfile` downloads the checksum-pinned `xrpld` 3.4.1 package from `packages.xrplf.org`. |
+| Re-recording the conformance corpus (`scripts/oracle/`) | Requires the pinned private oracle checkout. |
+
+The inventory tests read seven files (`SField.h`, `sfields.macro`,
+`transactions.macro`, `ledger_entries.macro`, `TER.h`, `LedgerFormats.h`,
+`LedgerFormats.cpp`) and check each against a pinned SHA-256. Those files are
+byte-identical in the public and private 3.4.1 trees, which is why the public
+checkout is accepted. That equivalence covers these files only, not all release
+behavior; the private commit remains the provenance of the recorded fixtures.
+If no `v3.4.1-oracle` directory is found, a public 3.4.0 checkout at
+`rippled-worktrees/v3.4.0-oracle/` (commit
+`4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17`) is also accepted.
+
+CI's `libs` job additionally checks out rippled 3.2.0 and 3.3.0. No Go test
+reads those checkouts; you do not need them locally.
 
 Use the local checkout for source inspection:
 
@@ -92,8 +113,12 @@ just lint-advisory    # broader advisory checks used in release evidence
 just api-diff         # exported-API changes in the public packages vs origin/main
 just fmt              # gofmt -w the module
 
-just conformance              # rippled-parity summary (see docs/conformance.md)
-just conformance --failing    # only suites with failures
+# Recorded-corpus conformance summary (see docs/conformance.md). The corpus
+# path is required.
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
+just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4 --failing
+
+just docs-check       # regenerate the generated docs and fail on drift
 ```
 
 A change should build, pass the relevant tests, and pass `just lint` (which now

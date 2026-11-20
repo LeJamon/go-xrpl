@@ -231,6 +231,28 @@ valid) so the node does not dial out. Validator operation additionally requires
 Fields are grouped as they appear in `goxrpl.toml`. TOML requires all top-level
 keys to precede any `[section]` header.
 
+### Unknown keys
+
+A misspelled key stops startup. The loader reports the file and the unknown
+keys in sorted order. For example, two typos in the main configuration produce
+this error.
+
+```text
+unknown configuration keys in /etc/goxrpl/goxrpl.toml: node_db.online_delette, peers_maxx
+```
+
+Key names are case-insensitive. The check covers the main file, including
+nested tables and active port sections, and a TOML `validators_file`.
+
+- `[logging.partitions]` accepts arbitrary partition names.
+- `[server].ports` must list at least one port. Each name identifies a table
+  whose settings follow the port schema.
+- An unlisted `[port_*]` table can stay in the file while its port is disabled.
+  The loader ignores the contents of that table.
+
+Environment variables do not override TOML keys. The server separately reads
+`GOXRPL_PPROF` and `GOXRPL_METRICS` to configure diagnostic listeners.
+
 ### Top-level — peer protocol
 
 | Key | Example | Meaning |
