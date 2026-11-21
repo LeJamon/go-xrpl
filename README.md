@@ -163,6 +163,8 @@ before interpreting a pass as a release claim.
 | [Architecture](docs/architecture.md) | Client design, transaction flow, ledger lifecycle, consensus, and storage |
 | [Operating a node](docs/operating.md) | Build, configuration, startup, networking, validation, and security |
 | [Conformance](docs/conformance.md) | Protocol compatibility methodology and test suite |
+| [Upgrading rippled](docs/upgrading-rippled.md) | Runbook for moving to the next rippled release |
+| [API stability](docs/api-stability.md) | Public Go packages, versioning, and what may change |
 | [RPC methods](docs/rpc-methods.md) | Implemented RPC API catalog |
 | [Transactions](docs/supported-transactions.md) | Supported transaction types |
 | [Amendments](docs/amendments.md) | Amendment support and voting defaults |
