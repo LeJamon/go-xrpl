@@ -160,6 +160,10 @@ func escrowCreatePreclaimMPT(view tx.ReadOnlyLedgerView, rules *amendment.Rules,
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	mptID, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	if err != nil {
+		return ter.TefINTERNAL
+	}
 
 	// Must have lsfMPTCanEscrow flag
 	if issuance.Flags&entry.LsfMPTCanEscrow == 0 {
@@ -191,20 +195,17 @@ func escrowCreatePreclaimMPT(view tx.ReadOnlyLedgerView, rules *amendment.Rules,
 		return tr
 	}
 
-	// Frozen checks (global lock on issuance or individual lock on token)
-	if frozen, result := isMPTFrozen(view, issuance.Flags, issuanceKey, accountID, issuerID); result != ter.TesSUCCESS {
+	// Frozen checks include the backing asset of a vault share.
+	if result := mptutil.CheckMPTFrozen(view, mptID, issuance, accountID); result != ter.TesSUCCESS {
 		return result
-	} else if frozen {
-		return ter.TecLOCKED
 	}
-	if frozen, result := isMPTFrozen(view, issuance.Flags, issuanceKey, destID, issuerID); result != ter.TesSUCCESS {
+	if result := mptutil.CheckMPTFrozen(view, mptID, issuance, destID); result != ter.TesSUCCESS {
 		return result
-	} else if frozen {
-		return ter.TecLOCKED
 	}
 
-	// canTransfer check (holder-to-holder needs LsfMPTCanTransfer)
-	if tr := canTransferMPT(issuance, accountID, destID); tr != ter.TesSUCCESS {
+	// canTransfer check (holder-to-holder needs LsfMPTCanTransfer), including
+	// the transferability inherited from a vault share's backing asset.
+	if tr := mptutil.CanTransfer(view, mptID, accountID, destID); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -293,17 +294,19 @@ func escrowFinishPreclaimMPT(view tx.ReadOnlyLedgerView, destID [20]byte, amount
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	mptID, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	if err != nil {
+		return ter.TefINTERNAL
+	}
 
 	// requireAuth on destination (WeakAuth)
 	if tr := requireMPTAuthForEscrow(view, amount.MPTIssuanceID(), destID, parentCloseTime); tr != ter.TesSUCCESS {
 		return tr
 	}
 
-	// Frozen check on destination
-	if frozen, result := isMPTFrozen(view, issuance.Flags, issuanceKey, destID, issuerID); result != ter.TesSUCCESS {
+	// Frozen check on destination, including the backing asset of a vault share.
+	if result := mptutil.CheckMPTFrozen(view, mptID, issuance, destID); result != ter.TesSUCCESS {
 		return result
-	} else if frozen {
-		return ter.TecLOCKED
 	}
 
 	return ter.TesSUCCESS
@@ -804,54 +807,6 @@ func requireMPTAuthForEscrow(view tx.ReadOnlyLedgerView, issuanceID string, acco
 		return ter.TefINTERNAL
 	}
 	return mptutil.RequireAuthWithTypeAt(view, id, accountID, mptutil.WeakAuth, parentCloseTime)
-}
-
-// isMPTFrozen checks if an MPT is frozen for a given account.
-// Checks global lock on issuance + individual lock on MPToken.
-// Reference: rippled View.cpp isFrozen(view, account, MPTIssue)
-func isMPTFrozen(view tx.ReadOnlyLedgerView, issuanceFlags uint32, issuanceKey keylet.Keylet, accountID, issuerID [20]byte) (bool, ter.Result) {
-	// Issuer is never frozen
-	if issuerID == accountID {
-		return false, ter.TesSUCCESS
-	}
-
-	// Global lock: issuance has lsfMPTLocked
-	if issuanceFlags&entry.LsfMPTLocked != 0 {
-		return true, ter.TesSUCCESS
-	}
-
-	// Individual lock: MPToken has lsfMPTLocked
-	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
-	tokenData, err := view.Read(tokenKey)
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-	if tokenData == nil {
-		return false, ter.TesSUCCESS
-	}
-
-	token, err := state.ParseMPToken(tokenData)
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-
-	return token.Flags&entry.LsfMPTLocked != 0, ter.TesSUCCESS
-}
-
-// canTransferMPT checks if MPT can be transferred between two accounts.
-// If LsfMPTCanTransfer is not set, at least one party must be the issuer.
-// Reference: rippled View.cpp canTransfer(view, MPTIssue, from, to)
-func canTransferMPT(issuance *state.MPTokenIssuanceData, fromID, toID [20]byte) ter.Result {
-	if issuance.Flags&entry.LsfMPTCanTransfer != 0 {
-		return ter.TesSUCCESS
-	}
-
-	// If neither party is the issuer, cannot transfer
-	if fromID != issuance.Issuer && toID != issuance.Issuer {
-		return ter.TecNO_AUTH
-	}
-
-	return ter.TesSUCCESS
 }
 
 // mptIssuanceKeyFromHex decodes a hex MPT issuance ID and returns the keylet.
