@@ -59,7 +59,7 @@ func (h *chargeLogHandler) snapshot() []chargeLog {
 	return append([]chargeLog(nil), h.charges...)
 }
 
-func TestRouter_LedgerRepliesSelectOnePeerFee(t *testing.T) {
+func TestRouter_InboundFramesSelectOnePeerFee(t *testing.T) {
 	journal := &chargeLogHandler{}
 	previous := slog.Default()
 	slog.SetDefault(slog.New(journal))
@@ -84,17 +84,26 @@ func TestRouter_LedgerRepliesSelectOnePeerFee(t *testing.T) {
 	}
 
 	r, _ := makeRouterWithRelayRecorder(t)
+	manifestRouter, _, _ := routerWithCache(t, nil, 0, 0)
 	send := func(data message.Message) {
 		t.Helper()
 		frame, err := message.EncodeFrame(data)
 		require.NoError(t, err)
 		require.NoError(t, connection.overlay.overlay.Send(connection.peerID, frame))
 
+		lane := client.overlay.LedgerDataMessages()
+		if data.Type() == message.TypeManifests {
+			lane = client.overlay.ManifestMessages()
+		}
 		select {
-		case inbound := <-client.overlay.LedgerDataMessages():
-			r.handleInboundMessage(inbound)
+		case inbound := <-lane:
+			if data.Type() == message.TypeManifests {
+				manifestRouter.processManifestJob(inbound)
+			} else {
+				r.handleInboundMessage(inbound)
+			}
 		case <-time.After(5 * time.Second):
-			t.Fatal("ledger-data frame did not reach the processing lane")
+			t.Fatalf("%s did not reach the processing lane", data.Type())
 		}
 	}
 
@@ -155,4 +164,13 @@ func TestRouter_LedgerRepliesSelectOnePeerFee(t *testing.T) {
 		LedgerHeader: wireHeader, Path: path,
 	})
 	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeTrivialPeer(), "")
+
+	before = len(journal.snapshot())
+	send(&message.Manifests{})
+	assertOneCharge(before, message.TypeManifests, resource.FeeUselessData(), "empty")
+
+	entry := message.Manifest{STObject: buildWireManifest(t, 1, 0x26, 0x27)}
+	before = len(journal.snapshot())
+	send(&message.Manifests{List: []message.Manifest{entry}})
+	assertOneCharge(before, message.TypeManifests, resource.FeeTrivialPeer(), "")
 }

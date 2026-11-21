@@ -346,13 +346,8 @@ func (m *InboundMessage) MaterializeManifest(ctx context.Context) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	m.ManifestFrame.mu.Lock()
-	peer := m.ManifestFrame.peer
-	m.ManifestFrame.mu.Unlock()
-	if peer != nil {
-		if m.charge == nil {
-			m.charge = newMessageCharge(peer, m.Type.String())
-		}
+	if peer := m.ManifestFrame.peer; peer != nil && m.charge == nil {
+		m.charge = newMessageCharge(peer, m.Type.String())
 	}
 	return payload, nil
 }

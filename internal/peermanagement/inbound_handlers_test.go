@@ -978,7 +978,7 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }
 
-func recordEndpointCharges(peer *Peer) *chargeRecorder {
+func recordPeerCharges(peer *Peer) *chargeRecorder {
 	recorder := &chargeRecorder{}
 	manager := resource.NewManager(nil, slog.New(recorder))
 	peer.attachUsage(manager.NewInboundEndpoint(peer.Endpoint().String()), nil)
@@ -987,7 +987,7 @@ func recordEndpointCharges(peer *Peer) *chargeRecorder {
 
 func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(115))
-	charges := recordEndpointCharges(peer)
+	charges := recordPeerCharges(peer)
 	payload := encodeEndpoints(t, 2, []message.Endpointv2{
 		{Endpoint: "not-an-endpoint", Hops: 1},
 		{Endpoint: "10.0.0.9 51235", Hops: 1},
@@ -1017,7 +1017,7 @@ func TestHandleEndpoints_OversizedFrameFee(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o, peer := newEndpointsTestOverlay(t, PeerID(16))
 			peer.setTracking(tc.tracking)
-			charges := recordEndpointCharges(peer)
+			charges := recordPeerCharges(peer)
 			payload := append([]byte{0x08, tc.version}, peerEndpointEntries(endpointsIngestMaxEntries)...)
 			o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload})
 			require.Equal(t, tc.want, charges.String())

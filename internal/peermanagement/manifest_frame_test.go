@@ -164,16 +164,18 @@ func TestSpooledManifestTrafficCountsInitializedFrames(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEmpty(t, wire)
 			peer, manifests, _ := newManifestLimitTestPeer(t, true)
+			charges := recordPeerCharges(peer)
 			peer.SetManifestPayloadLimit(uint32(len(payload)))
 			peer.SetManifestSpoolDir(t.TempDir())
 			peer.bufReader = bufio.NewReader(bytes.NewReader(compressedManifestFrame(t, wire, uint32(len(payload)))))
 			require.ErrorIs(t, peer.readLoop(t.Context()), io.EOF)
 			require.Len(t, manifests, 1)
-			frame := (<-manifests).ManifestFrame
-			require.NotNil(t, frame)
+			msg := <-manifests
+			require.NotNil(t, msg.ManifestFrame)
 			require.Zero(t, peer.traffic.TotalStats().MessagesIn)
 
-			_, err = frame.Materialize(t.Context())
+			_, err = msg.MaterializeManifest(t.Context())
+			require.Equal(t, "[]", charges.String())
 			if tc.missingField {
 				require.Error(t, err)
 				require.Zero(t, peer.traffic.TotalStats().MessagesIn)
@@ -186,7 +188,12 @@ func TestSpooledManifestTrafficCountsInitializedFrames(t *testing.T) {
 				require.Equal(t, stats.BytesIn, total.BytesIn)
 				require.Equal(t, stats.MessagesIn, total.MessagesIn)
 			}
-			require.NoError(t, frame.Close())
+			require.NoError(t, msg.Close())
+			if tc.missingField {
+				require.Equal(t, "[]", charges.String())
+			} else {
+				require.Equal(t, "[trivial peer request ($1)(mtMANIFESTS)]", charges.String())
+			}
 		})
 	}
 }
