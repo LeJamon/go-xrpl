@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 	"time"
 
@@ -61,42 +62,13 @@ func peerValidatorListCollectionPayload(count int) []byte {
 	return wire
 }
 
-func peerEndpointEntryWire() []byte {
+func peerEndpointEntries(count int) []byte {
 	entry := protowire.AppendTag(nil, 1, protowire.BytesType)
-	entry = protowire.AppendBytes(entry, []byte("10.0.0.1:51235"))
+	entry = protowire.AppendString(entry, "10.0.0.1:51235")
 	entry = protowire.AppendTag(entry, 2, protowire.VarintType)
-	return protowire.AppendVarint(entry, 1)
-}
-
-func peerEndpointsWire(versions []uint32, count int) []byte {
-	payload := make([]byte, 0, count*22+len(versions)*2)
-	appendVersion := func(version uint32) {
-		payload = protowire.AppendTag(payload, 1, protowire.VarintType)
-		payload = protowire.AppendVarint(payload, uint64(version))
-	}
-	for _, version := range versions {
-		appendVersion(version)
-	}
-	entry := peerEndpointEntryWire()
-	for range count {
-		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
-		payload = protowire.AppendBytes(payload, entry)
-	}
-	return payload
-}
-
-func peerEndpointsVersionLastWire(versions []uint32, count int) []byte {
-	payload := make([]byte, 0, count*22+len(versions)*2)
-	entry := peerEndpointEntryWire()
-	for range count {
-		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
-		payload = protowire.AppendBytes(payload, entry)
-	}
-	for _, version := range versions {
-		payload = protowire.AppendTag(payload, 1, protowire.VarintType)
-		payload = protowire.AppendVarint(payload, uint64(version))
-	}
-	return payload
+	entry = protowire.AppendVarint(entry, 1)
+	field := protowire.AppendTag(nil, 3, protowire.BytesType)
+	return bytes.Repeat(protowire.AppendBytes(field, entry), count)
 }
 
 func peerLedgerDataPayload(t *testing.T) []byte {
@@ -123,11 +95,12 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 		compress bool
 	}{
 		{
-			name:    "transactions",
-			msgType: message.TypeTransactions,
-			payload: peerRepeatedTransactionField(10_001),
-			reason:  "transactions-batch-too-large",
-			charge:  resource.FeeMalformedRequest(),
+			name:     "transactions",
+			msgType:  message.TypeTransactions,
+			payload:  peerRepeatedTransactionField(10_001),
+			reason:   "transactions-batch-too-large",
+			charge:   resource.FeeMalformedRequest(),
+			compress: true,
 		},
 		{
 			name:    "get object transactions",
@@ -183,6 +156,8 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 }
 
 func TestPeerEndpointsOversizeAdmissionCarriesVersionAndLimit(t *testing.T) {
+	entries := peerEndpointEntries(1_024)
+	versionTwo := []byte{0x08, 2}
 	tests := []struct {
 		name           string
 		payload        []byte
@@ -192,24 +167,29 @@ func TestPeerEndpointsOversizeAdmissionCarriesVersionAndLimit(t *testing.T) {
 	}{
 		{
 			name:          "initialized oversized",
-			payload:       peerEndpointsWire([]uint32{2}, 1_024),
+			payload:       slices.Concat(versionTwo, entries),
 			wantVersion:   2,
 			wantOversized: true,
 		},
 		{
+			name:           "incomplete entry after size limit",
+			payload:        slices.Concat(versionTwo, entries, peerRepeatedMessageField(3, 1)),
+			wantFrameError: true,
+		},
+		{
 			name:           "missing version after oversized list",
-			payload:        peerEndpointsVersionLastWire(nil, 1_024),
+			payload:        entries,
 			wantFrameError: true,
 		},
 		{
 			name:          "version last",
-			payload:       peerEndpointsVersionLastWire([]uint32{2}, 1_024),
+			payload:       slices.Concat(entries, versionTwo),
 			wantVersion:   2,
 			wantOversized: true,
 		},
 		{
 			name:          "duplicate version uses last value",
-			payload:       peerEndpointsVersionLastWire([]uint32{1, 2}, 1_024),
+			payload:       slices.Concat([]byte{0x08, 1}, entries, versionTwo),
 			wantVersion:   2,
 			wantOversized: true,
 		},
@@ -243,6 +223,7 @@ func TestPeerEndpointsOversizeAdmissionCarriesVersionAndLimit(t *testing.T) {
 			}
 
 			require.ErrorIs(t, err, io.EOF)
+			require.Len(t, events, 1)
 			event := <-events
 			require.NotNil(t, event.decodedEndpoints)
 			require.Equal(t, test.wantVersion, event.decodedEndpoints.Version)
@@ -285,6 +266,7 @@ func TestPeerInboundLedgerDataTrafficUsesWirePayloadSize(t *testing.T) {
 			peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
 
 			require.ErrorIs(t, peer.readLoop(context.Background()), io.EOF)
+			require.Len(t, events, 1)
 			event := <-events
 			require.Equal(t, uint64(wirePayloadSize), event.WireSize)
 			total := peer.traffic.TotalStats()
