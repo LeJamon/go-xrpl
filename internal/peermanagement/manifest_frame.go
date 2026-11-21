@@ -56,11 +56,11 @@ func (w *manifestSpoolWriter) Write(p []byte) (int, error) {
 type ManifestFrame struct {
 	mu sync.Mutex
 
-	path    string
-	header  message.Header
-	budget  *readBudget
-	traffic *TrafficCounter
-	done    chan struct{}
+	path   string
+	header message.Header
+	budget *readBudget
+	peer   *Peer
+	done   chan struct{}
 
 	materializing bool
 	materialized  bool
@@ -136,8 +136,8 @@ func (f *ManifestFrame) Materialize(ctx context.Context) ([]byte, error) {
 	var releaseBytes int64
 	if err == nil {
 		f.materialized = true
-		if f.traffic != nil {
-			f.traffic.AddCount(CategoryManifests, true, int(f.header.PayloadSize))
+		if f.peer != nil {
+			f.peer.traffic.AddCount(CategoryManifests, true, int(f.header.PayloadSize))
 		}
 		if f.header.Compressed {
 			releaseBytes = int64(f.header.PayloadSize)

@@ -20,6 +20,7 @@
 package peermanagement
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -329,6 +330,31 @@ func (m *InboundMessage) Close() error {
 		m.completePeerCharge()
 	})
 	return m.closeErr
+}
+
+// MaterializeManifest admits a spooled manifest payload before exposing it to
+// the worker. Its source peer receives the normal per-message charge only
+// after that admission succeeds; invalid or unreadable spool frames remain
+// uncharged.
+func (m *InboundMessage) MaterializeManifest(ctx context.Context) ([]byte, error) {
+	if m == nil || m.ManifestFrame == nil {
+		return nil, ErrManifestFrameClosed
+	}
+	m.chargeMu.Lock()
+	defer m.chargeMu.Unlock()
+	payload, err := m.ManifestFrame.Materialize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m.ManifestFrame.mu.Lock()
+	peer := m.ManifestFrame.peer
+	m.ManifestFrame.mu.Unlock()
+	if peer != nil {
+		if m.charge == nil {
+			m.charge = newMessageCharge(peer, m.Type.String())
+		}
+	}
+	return payload, nil
 }
 
 func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext string) bool {

@@ -376,6 +376,9 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		switch describeMessage(evt.MessageType).lane {
 		case laneManifests:
 			if p.manifestMessages != nil {
+				if evt.ManifestFrame == nil && evt.charge == nil {
+					evt.charge = newMessageCharge(p, evt.MessageType.String())
+				}
 				msg := evt.inboundMessage()
 				select {
 				case p.manifestMessages <- msg:
@@ -1235,7 +1238,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			manifestFrame.traffic = p.traffic
+			manifestFrame.peer = p
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,

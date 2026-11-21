@@ -115,7 +115,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		msg.SelectPeerCharge(resource.FeeUselessData(), "empty")
 		return true
 	}
-	if count > manifestFrameMaxEntries && !msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "manifests-oversize") {
+	if count > manifestFrameMaxEntries && !msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "oversize") {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
 	}
 
@@ -164,7 +164,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			valid = true
 		}
 	})
-	if skippedUntrusted && !msg.SelectPeerCharge(resource.FeeMalformedRequest(), "manifests-untrusted-limit") {
+	if skippedUntrusted && !msg.ChargePeer(resource.FeeMalformedRequest(), "too many untrusted manifests") {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-untrusted-limit")
 	}
 	if badManifest {
