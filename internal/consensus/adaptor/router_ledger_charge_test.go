@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,7 +108,7 @@ func TestRouter_LedgerRepliesSelectOnePeerFee(t *testing.T) {
 		}
 		require.Len(t, charges, 1)
 		require.Equal(t, expected.String(), charges[0].fee)
-		require.Contains(t, charges[0].context, reason)
+		require.Equal(t, strings.TrimSpace(msgType.String()+" "+reason), charges[0].context)
 	}
 
 	before := len(journal.snapshot())
@@ -134,4 +135,24 @@ func TestRouter_LedgerRepliesSelectOnePeerFee(t *testing.T) {
 		MapType: message.LedgerMapAccountState, Error: message.ReplyErrorNoNode,
 	})
 	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeInvalidData(), "proof_path_response")
+
+	before = len(journal.snapshot())
+	send(&message.ProofPathResponse{
+		Key: make([]byte, 32), LedgerHash: make([]byte, 32), MapType: message.LedgerMapAccountState,
+	})
+	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeMalformedData(), "proof_path_response malformed")
+
+	closed := makeClosedLedgerWithTxs(t, nil)
+	lookup := newFakeLookup()
+	lookup.add(closed)
+	hash := closed.Hash()
+	key := keylet.LedgerHashes().Key
+	wireHeader, path, err := newLedgerProviderForTest(lookup).GetProofPath(hash[:], key[:], message.LedgerMapAccountState)
+	require.NoError(t, err)
+	before = len(journal.snapshot())
+	send(&message.ProofPathResponse{
+		Key: key[:], LedgerHash: hash[:], MapType: message.LedgerMapAccountState,
+		LedgerHeader: wireHeader, Path: path,
+	})
+	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeTrivialPeer(), "")
 }

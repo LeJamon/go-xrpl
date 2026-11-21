@@ -49,10 +49,7 @@ var inboundHandlers = [...]inboundHandler{
 	message.TypeReplayDeltaResponse:     inlineHandler((*Router).handleReplayDeltaResponse),
 	message.TypeManifests:               inlineHandler((*Router).submitManifestJob),
 	message.TypeValidatorListCollection: inlineHandler((*Router).handleValidatorListCollection),
-	message.TypeProofPathResponse: func(_ *Router, msg *peermanagement.InboundMessage) bool {
-		msg.SelectPeerCharge(proofPathResponseFee(msg.Payload), "proof_path_response")
-		return false
-	},
+	message.TypeProofPathResponse:       inlineHandler((*Router).handleProofPathResponse),
 	message.TypeTransaction: func(r *Router, msg *peermanagement.InboundMessage) bool {
 		r.submitTxJob(msg)
 		return true
