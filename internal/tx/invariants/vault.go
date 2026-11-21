@@ -230,7 +230,7 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 		sign := 0
 
 		if e.Before != nil {
-			if bf, err := decodeEntry(e.Before); err == nil {
+			if bf, err := e.model(e.Before); err == nil {
 				switch e.EntryType {
 				case entry.TypeVault:
 					if v, ok := vvMakeVault(bf, e.Key, c.numberScale); ok {
@@ -255,7 +255,7 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 		}
 
 		if !e.IsDelete && e.After != nil {
-			if af, err := decodeEntry(e.After); err == nil {
+			if af, err := e.model(e.After); err == nil {
 				switch e.EntryType {
 				case entry.TypeVault:
 					if v, ok := vvMakeVault(af, e.Key, c.numberScale); ok {

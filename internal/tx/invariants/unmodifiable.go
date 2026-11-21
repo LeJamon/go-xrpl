@@ -44,8 +44,8 @@ func checkNoModifiedUnmodifiableFields(entries []InvariantEntry, rules *amendmen
 			return unmodifiableViolation()
 		}
 
-		before, beforeErr := decodeEntry(e.Before)
-		after, afterErr := decodeEntry(e.After)
+		before, beforeErr := e.model(e.Before)
+		after, afterErr := e.model(e.After)
 		if beforeErr != nil || afterErr != nil {
 			return unmodifiableViolation()
 		}

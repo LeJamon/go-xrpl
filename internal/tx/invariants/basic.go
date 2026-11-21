@@ -28,7 +28,7 @@ func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 			if data == nil {
 				continue
 			}
-			if v := checkXRPBalanceImage(data); v != nil {
+			if v := checkXRPBalanceImage(e, data); v != nil {
 				return v
 			}
 		}
@@ -42,8 +42,8 @@ func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 // field access in visitEntry throws and ApplyContext's catch-all converts it to
 // tecINVARIANT_FAILED. Balance is uint64 so the negative-balance branch of
 // rippled's isBad cannot trigger here.
-func checkXRPBalanceImage(data []byte) *InvariantViolation {
-	acct, err := state.ParseAccountRoot(data)
+func checkXRPBalanceImage(e InvariantEntry, data []byte) *InvariantViolation {
+	acct, err := e.accountRoot(data)
 	if err != nil {
 		return &InvariantViolation{
 			Name:    "XRPBalanceChecks",
@@ -69,7 +69,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 		case entry.TypeAccountRoot:
 			var before, after uint64
 			if e.Before != nil {
-				acct, err := state.ParseAccountRoot(e.Before)
+				acct, err := e.accountRoot(e.Before)
 				if err != nil {
 					return xrpNotCreatedParseViolation("AccountRoot", err)
 				}
@@ -80,7 +80,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 				afterImage = e.DeleteFinal
 			}
 			if afterImage != nil {
-				acct, err := state.ParseAccountRoot(afterImage)
+				acct, err := e.accountRoot(afterImage)
 				if err != nil {
 					return xrpNotCreatedParseViolation("AccountRoot", err)
 				}

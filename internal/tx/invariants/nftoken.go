@@ -95,7 +95,7 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 
 		// Sum minted/burned from before state
 		if e.Before != nil {
-			acct, err := state.ParseAccountRoot(e.Before)
+			acct, err := e.accountRoot(e.Before)
 			if err != nil {
 				return nftCountParseViolation(err)
 			}
@@ -111,14 +111,14 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 		if e.IsDelete && e.Before != nil {
 			// Erased entry: rippled passes the SLE data as "after",
 			// so the before values appear in both before and after totals.
-			acct, err := state.ParseAccountRoot(e.Before)
+			acct, err := e.accountRoot(e.Before)
 			if err != nil {
 				return nftCountParseViolation(err)
 			}
 			afterMintedTotal += acct.MintedNFTokens
 			afterBurnedTotal += acct.BurnedNFTokens
 		} else if e.After != nil {
-			acct, err := state.ParseAccountRoot(e.After)
+			acct, err := e.accountRoot(e.After)
 			if err != nil {
 				return nftCountParseViolation(err)
 			}
