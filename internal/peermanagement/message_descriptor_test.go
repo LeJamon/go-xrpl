@@ -188,7 +188,7 @@ var wantOverlayRouting = map[message.MessageType]overlayRouting{
 	message.TypeManifests:               {def: "general [" + trivial + "(mtMANIFESTS)]"},
 	message.TypePing:                    {def: "- [" + trivial + "(mtPING)]"},
 	message.TypeCluster:                 {def: "- [useless data ($150)(cluster-no-pubkey); " + trivial + "(mtCLUSTER)]"},
-	message.TypeEndpoints:               {def: "- [" + trivial + "(mtENDPOINTS)]"},
+	message.TypeEndpoints:               {def: "- [invalid data ($400)(mtENDPOINTS endpoints-decode)]"},
 	message.TypeTransaction:             {def: "transaction [" + trivial + "(mtTRANSACTION)]"},
 	message.TypeGetLedger:               {def: "general [" + trivial + "(mtGET_LEDGER)]"},
 	message.TypeLedgerData:              {def: "ledger-data [" + trivial + "(mtLEDGER_DATA)]"},

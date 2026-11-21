@@ -576,14 +576,17 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // discovery. Mirrors rippled PeerImp::onMessage(TMEndpoints) at
 // PeerImp.cpp:1197-1251.
 //
-// Gating mirrors rippled exactly: ignore endpoints from a peer that is
-// not tracking-converged or that speaks a version other than 2, and
-// reject (with a charge) any frame advertising 1024+ entries.
+// A frame that does not decode is charged whatever the peer's state:
+// rippled rejects an unparseable message before its handler runs. Gating
+// then mirrors rippled exactly: ignore endpoints from a peer that is not
+// tracking-converged or that speaks a version other than 2, and reject
+// (with a charge) any frame advertising 1024+ entries. Every charge
+// raises the single per-message fee.
 //
-// Per-entry, an unparseable address is skipped and charged as bad data
-// — rippled accumulates a feeInvalidData charge per malformed endpoint
-// rather than dropping the whole frame, since the remaining entries may
-// still be valid. A hops==0 entry describes the sending peer itself; its
+// Per-entry, an unparseable address is skipped rather than dropping the
+// whole frame, since the remaining entries may still be valid; the frame
+// is charged feeInvalidData per malformed endpoint, summed into one
+// charge. A hops==0 entry describes the sending peer itself; its
 // self-reported host is untrustworthy, so we overwrite it with the
 // socket's observed remote IP (keeping the advertised port), matching
 // rippled's remote_address_.at_port(result->port()).
@@ -595,37 +598,30 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // these an announced address stream would grow d.peers without bound
 // (issue #1170).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
-	peer, exists := o.getPeer(evt.PeerID)
-	if !exists {
-		return
-	}
-
-	// Drop endpoints from peers we don't yet trust or that speak an
-	// unsupported version (PeerImp.cpp:1201). No charge — a peer that
-	// hasn't converged or predates v2 isn't misbehaving.
-	if peer.Tracking() != PeerTrackingConverged {
-		return
-	}
-
 	decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
 	if err != nil {
 		reason := "endpoints-decode"
 		if errors.Is(err, message.ErrWireLimit) {
 			reason = wirePreflightChargeReason(err)
 		}
-		o.IncPeerBadData(evt.PeerID, reason)
+		o.selectMessageChargeReason(&evt, reason)
 		return
 	}
 	eps, ok := decoded.(*message.Endpoints)
-	if !ok {
+	peer, exists := o.getPeer(evt.PeerID)
+	if !ok || !exists {
 		return
 	}
-	if eps.Version != 2 {
+
+	// Drop endpoints from peers we don't yet trust or that speak an
+	// unsupported version (PeerImp.cpp:1201). No charge — a peer that
+	// hasn't converged or predates v2 isn't misbehaving.
+	if peer.Tracking() != PeerTrackingConverged || eps.Version != 2 {
 		return
 	}
 
 	if len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
-		o.IncPeerBadData(evt.PeerID, "endpoints-too-large")
+		o.selectMessageChargeReason(&evt, "endpoints-too-large")
 		return
 	}
 
@@ -635,6 +631,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		hops     uint32
 	}
 	accepted := make([]ingestEndpoint, 0, len(eps.EndpointsV2))
+	malformed := 0
 	for _, tm := range eps.EndpointsV2 {
 		parsed, parseErr := ParseEndpoint(tm.Endpoint)
 		if parseErr != nil || net.ParseIP(parsed.Host) == nil {
@@ -642,7 +639,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			// a literal IP:port, charging the peer (PeerImp.cpp:1218-1226).
 			// ParseEndpoint is laxer — it accepts hostnames for the
 			// outbound Connect path — so the IP check is applied here.
-			o.IncPeerBadData(evt.PeerID, "endpoints-malformed")
+			malformed++
 			continue
 		}
 
@@ -655,6 +652,9 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			parsed.Host = remoteIP
 		}
 		accepted = append(accepted, ingestEndpoint{endpoint: parsed, hops: tm.Hops})
+	}
+	if malformed > 0 {
+		o.selectMessageCharge(&evt, resource.FeeInvalidData().Times(malformed), "endpoints-malformed")
 	}
 
 	// rippled hands the parsed set to PeerFinder only when at least one
