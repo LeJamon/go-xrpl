@@ -359,6 +359,11 @@ jobs:
         run: |
           packages=$(scripts/test-shard.sh "${{ matrix.group }}")
           go test -count=1 -timeout 15m $packages
+      - name: Exercise ledger history and persistence benchmarks
+        if: matrix.group == 'core'
+        run: >-
+          go test -run='^$' -bench='^(BenchmarkCommitAndEvictHistory|BenchmarkPersistLedgerPhases)$'
+          -benchtime=2x ./internal/ledger/service
       - name: Record producer evidence
         if: always()
         env:

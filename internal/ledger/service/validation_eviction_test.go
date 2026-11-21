@@ -54,9 +54,9 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	svc.historyComponent.mu.Lock()
 	svc.putHistoryLocked(coldOld)
 	svc.putHistoryLocked(latest)
-	svc.txIndex[txHash] = coldOld.Sequence()
+	svc.indexTxLocked(txHash, coldOld.Sequence())
 	svc.txPositionIndex[txHash] = 0
-	svc.txIndex[movedTxHash] = latest.Sequence()
+	svc.indexTxLocked(movedTxHash, latest.Sequence())
 	svc.txPositionIndex[movedTxHash] = 1
 	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
