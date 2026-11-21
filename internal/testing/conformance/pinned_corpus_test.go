@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func copyPinnedCorpus(t *testing.T) (string, pinnedManifest) {
 	t.Helper()
 	root := t.TempDir()
-	source := filepath.Join(conformanceRepositoryRoot(), "internal/testing/conformance/testdata/rippled-3.4.1-v4")
+	source := filepath.Join(conformanceRepositoryRoot(), rippled.Pin.Corpus)
 	if err := os.CopyFS(root, os.DirFS(source)); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestPinnedCorpusAcceptsRecordedCorpus(t *testing.T) {
 }
 
 func TestPinnedCorpusResolvesRelativeSelectionFromRepository(t *testing.T) {
-	t.Setenv("GOXRPL_FIXTURES_DIR", "internal/testing/conformance/testdata/rippled-3.4.1-v4")
+	t.Setenv("GOXRPL_FIXTURES_DIR", rippled.Pin.Corpus)
 	t.Chdir(t.TempDir())
 	corpus, err := resolvePinnedCorpus(true)
 	if err != nil {
@@ -84,6 +85,38 @@ func TestPinnedCorpusResolvesRelativeSelectionFromRepository(t *testing.T) {
 	}
 	if len(corpus.Cases) == 0 {
 		t.Fatal("selected corpus has no cases")
+	}
+}
+
+func TestPinnedManifestVerifiesArchivedPin(t *testing.T) {
+	_, manifest := copyPinnedCorpus(t)
+	repo := copyPinnedRecorderArchive(t, manifest)
+	manifest.Schema = pinnedManifestSchema
+	delete(manifest.RecorderSources, rippled.PinPath)
+	if _, err := validatePinnedManifestAt(manifest, repo); err == nil {
+		t.Fatal("accepted a manifest missing the recorder pin")
+	}
+
+	pin, err := os.ReadFile(filepath.Join(conformanceRepositoryRoot(), rippled.PinPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repo, manifest.RecorderArchive, rippled.PinPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, pin, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest.RecorderSources[rippled.PinPath] = sha256Hex(pin)
+	if _, err := validatePinnedManifestAt(manifest, repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(pin, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatePinnedManifestAt(manifest, repo); err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("tampered recorder pin: %v", err)
 	}
 }
 
@@ -449,7 +482,7 @@ func TestPinnedRequiredEntrypointRejectsFilteredExecution(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.json")
 	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestConformance$/^does-not-exist$")
 	cmd.Env = append(os.Environ(),
-		"GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4",
+		"GOXRPL_FIXTURES_DIR="+rippled.Pin.Corpus,
 		"GOXRPL_CONFORMANCE_REQUIRED=1", "GOXRPL_CONFORMANCE_REPORT="+path)
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "incomplete conformance execution") {

@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
@@ -26,8 +27,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
-
-const batchOracleCommit = "d147fccf54a500fce586522f28d6044c37fd8d29"
 
 var batchOracleWrappers = []string{
 	"RawTransaction", "CreatedNode", "ModifiedNode", "DeletedNode", "TemplateEntry",
@@ -98,7 +97,7 @@ func TestBatchWrapperOracleFixtures(t *testing.T) {
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			fixture := loadBatchOracleFixture(t, path)
-			require.Equal(t, batchOracleCommit, strings.ToLower(fixture.OracleCommit))
+			require.Equal(t, rippled.Pin.Commit, strings.ToLower(fixture.OracleCommit))
 			require.Contains(t, batchOracleWrappers, fixture.Wrapper)
 			key := fmt.Sprintf("%s/%t", fixture.Wrapper, fixture.Enabled)
 			require.NotContains(t, seen, key)

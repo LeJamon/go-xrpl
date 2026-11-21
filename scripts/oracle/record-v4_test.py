@@ -2,6 +2,9 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +22,20 @@ manifest_spec.loader.exec_module(manifest)
 
 
 class RecorderProvenanceTest(unittest.TestCase):
+    def test_archived_recorder_loads_its_pin(self):
+        repo = Path(__file__).resolve().parents[2]
+        self.assertEqual(set(recorder.RECORDER_SOURCE_PATHS), manifest.RECORDER_SOURCES)
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory)
+            for name in manifest.RECORDER_SOURCES:
+                target = archive / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(repo / name, target)
+            subprocess.run(
+                [sys.executable, "scripts/oracle/record-v4.py", "--help"],
+                cwd=archive, check=True, stdout=subprocess.DEVNULL,
+            )
+
     def test_manifest_inputs_reject_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
