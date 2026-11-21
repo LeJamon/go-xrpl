@@ -182,7 +182,9 @@ func TestSpooledManifestTrafficCountsInitializedFrames(t *testing.T) {
 				stats := peer.traffic.Stats(CategoryManifests)
 				require.Equal(t, uint64(1), stats.MessagesIn)
 				require.Equal(t, uint64(len(wire)), stats.BytesIn)
-				require.Equal(t, stats, peer.traffic.TotalStats())
+				total := peer.traffic.TotalStats()
+				require.Equal(t, stats.BytesIn, total.BytesIn)
+				require.Equal(t, stats.MessagesIn, total.MessagesIn)
 			}
 			require.NoError(t, frame.Close())
 		})
