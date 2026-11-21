@@ -1,36 +1,8 @@
 package peermanagement
 
 import (
-	"time"
-
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
-
-func (o *Overlay) SetLedgerHintProvider(fn func() (LedgerHints, bool)) {
-	o.providersMu.Lock()
-	o.ledgerHintProvider = fn
-	o.providersMu.Unlock()
-}
-
-func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
-	o.providersMu.RLock()
-	defer o.providersMu.RUnlock()
-	return o.ledgerHintProvider
-}
-
-// SetValidLedgerProvider wires the validated-ledger source used by
-// handleStatusChange. ok=false suppresses tracking updates.
-func (o *Overlay) SetValidLedgerProvider(fn func() (seq uint32, age time.Duration, ok bool)) {
-	o.providersMu.Lock()
-	o.validLedgerProvider = fn
-	o.providersMu.Unlock()
-}
-
-func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Duration, ok bool) {
-	o.providersMu.RLock()
-	defer o.providersMu.RUnlock()
-	return o.validLedgerProvider
-}
 
 // PeerStatusUpdate captures the post-decode TMStatusChange fields the RPC
 // layer needs to materialize a peer_status WebSocket event.
@@ -45,7 +17,8 @@ type PeerStatusUpdate struct {
 }
 
 // SetPeerStatusPublisher wires a sink for peer_status events. Passing nil
-// disconnects the sink.
+// disconnects the sink. A setter because the sink is the RPC publisher, which
+// is built from the overlay (as its PeerSource).
 func (o *Overlay) SetPeerStatusPublisher(fn func(PeerStatusUpdate)) {
 	o.providersMu.Lock()
 	o.peerStatusPublisher = fn

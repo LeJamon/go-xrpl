@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
@@ -45,6 +46,17 @@ type peerStatusCandidate struct {
 type peerSessionView interface {
 	IsPeerConnected(peermanagement.PeerID) bool
 }
+
+// routerOverlay is the overlay surface the router calls directly, outside
+// the network roles routed through the adaptor's sender.
+type routerOverlay interface {
+	manifestSender
+	RelayTransactionSkipping(toSkip map[peermanagement.PeerID]struct{}, frame []byte)
+	Cluster() *cluster.Registry
+	PeerRemoteAddr(peermanagement.PeerID) string
+}
+
+var _ routerOverlay = (*peermanagement.Overlay)(nil)
 
 type peerCountView interface {
 	PeerCount() int
@@ -124,7 +136,7 @@ type Router struct {
 	// flood on this lane can't starve consensus/acquisition frames
 	// arriving on inbox (issue #1103). nil when unset — tests that drive
 	// handleMessage directly leave it nil, and a nil channel is simply
-	// never selected. Wired via SetTxInbox before Run.
+	// never selected.
 	txInbox <-chan *peermanagement.InboundMessage
 	// acqInbox is the overlay's dedicated acquisition-reply lane
 	// (mtLEDGER_DATA and the replay-delta / proof-path responses). Its own
@@ -132,7 +144,6 @@ type Router struct {
 	// explicitly requested; Run drains it as a co-equal select case — not
 	// absolute priority, which would let a mtLEDGER_DATA flood starve
 	// proposal/validation. nil when unset — a nil channel is never selected.
-	// Wired via SetAcqInbox before Run.
 	acqInbox <-chan *peermanagement.InboundMessage
 	// manifestInbox is a dedicated, backpressured overlay lane drained by the
 	// manifest worker without passing through the consensus router loop.
@@ -181,7 +192,7 @@ type Router struct {
 
 	// overlay is held so the router can relay accepted manifests and emit
 	// the local cache to peers. Nil in tests without manifest support.
-	overlay *peermanagement.Overlay
+	overlay routerOverlay
 
 	// validatorList is the publisher-trust subsystem. Wired by the
 	// Components bootstrap when validator_list_keys is configured. Nil
@@ -265,6 +276,28 @@ type routerNetworkConfig struct {
 	serve                ledgerServeNetwork
 	inboundClock         inbound.Clock
 	inboundSweepInterval time.Duration
+}
+
+// routerDeps are the router's optional collaborators, fixed at construction.
+// A nil inbox is never selected; any other nil field disables its path.
+type routerDeps struct {
+	consensusControlInbox <-chan *peermanagement.InboundMessage
+	serviceInbox          <-chan *peermanagement.InboundMessage
+	txInbox               <-chan *peermanagement.InboundMessage
+	acqInbox              <-chan *peermanagement.InboundMessage
+	manifestInbox         <-chan *peermanagement.InboundMessage
+
+	// manifests enables TMManifests handling; overlay relays and emits them.
+	manifests *manifest.Cache
+	overlay   routerOverlay
+	// manifestClassify nil treats every manifest as uncapped.
+	manifestClassify func([33]byte) manifest.ManifestRateLimitCapPolicy
+	// manifestUntrustedLimit nil keeps the manifest cache's own limit.
+	manifestUntrustedLimit *int
+
+	peerSessions  peerSessionView
+	floor         MinimumOnlineFloor
+	validatorList *validatorlist.Aggregator
 }
 
 // catchupTarget is the highest (seq,hash) the router is driving a bounded
@@ -361,10 +394,10 @@ func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		network.acquisition, _ = adaptor.sender.(ledgerAcquisitionNetwork)
 		network.serve, _ = adaptor.sender.(ledgerServeNetwork)
 	}
-	return newRouter(engine, adaptor, inbox, network)
+	return newRouter(engine, adaptor, inbox, network, routerDeps{})
 }
 
-func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage, network routerNetworkConfig) *Router {
+func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage, network routerNetworkConfig, deps routerDeps) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	noop := &noopSender{}
 	if network.gossip == nil {
@@ -390,6 +423,16 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		serveMemory:            newLedgerServeMemory(),
 		serveReplyBytes:        ledgerServeReplyBytes,
 		inbox:                  inbox,
+		consensusControlInbox:  deps.consensusControlInbox,
+		serviceInbox:           deps.serviceInbox,
+		txInbox:                deps.txInbox,
+		acqInbox:               deps.acqInbox,
+		manifestInbox:          deps.manifestInbox,
+		manifests:              deps.manifests,
+		overlay:                deps.overlay,
+		manifestClassify:       deps.manifestClassify,
+		peerSessions:           deps.peerSessions,
+		validatorList:          deps.validatorList,
 		logger:                 logger,
 		peerDisconnectWake:     make(chan struct{}, 1),
 		peerConnectWake:        make(chan struct{}, 1),
@@ -401,6 +444,18 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
 		lifecycleCtx:           context.Background(),
+	}
+	if deps.manifests != nil {
+		r.manifestUntrustedLimit = deps.manifests.MaxUntrustedCount()
+	}
+	if deps.manifestUntrustedLimit != nil {
+		r.manifestUntrustedLimit = max(*deps.manifestUntrustedLimit, 0)
+		r.manifestLimitSet = true
+	}
+	coord.setPeerSessionView(deps.peerSessions)
+	coord.setFloor(deps.floor)
+	if deps.validatorList != nil {
+		coord.setValidatorPeerForget(deps.validatorList.ForgetPeer)
 	}
 	coord.onPeerDisconnect = r.HandlePeerDisconnect
 	if adaptor != nil {
@@ -432,36 +487,10 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 	return r
 }
 
-// SetTxInbox installs the overlay's dedicated transaction lane. Run selects
-// it alongside the consensus inbox, so transactions and consensus/acquisition
-// traffic no longer share a single bounded buffer that a tx flood could
-// saturate (issue #1103). Safe to call before Run; leaving it unset keeps the
-// inbox-only behaviour tests rely on.
-func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
-	r.txInbox = txInbox
-}
-
-func (r *Router) SetServiceInbox(serviceInbox <-chan *peermanagement.InboundMessage) {
-	r.serviceInbox = serviceInbox
-}
-
-func (r *Router) SetConsensusControlInbox(inbox <-chan *peermanagement.InboundMessage) {
-	r.consensusControlInbox = inbox
-}
-
-// SetAcqInbox installs the overlay's dedicated acquisition-reply lane (see the
-// acqInbox field). Safe to call before Run; leaving it unset keeps acquisition
-// replies flowing through the shared inbox as before.
-func (r *Router) SetAcqInbox(acqInbox <-chan *peermanagement.InboundMessage) {
-	r.acqInbox = acqInbox
-}
-
-// SetManifestInbox installs the overlay's dedicated manifest lane. The peer
-// read path applies bounded backpressure, while a separate worker keeps
-// signature verification off the consensus router.
-func (r *Router) SetManifestInbox(manifestInbox <-chan *peermanagement.InboundMessage) {
-	r.manifestInbox = manifestInbox
-}
+// SetAcquisitionFamily, SetAcquisitionMemory* and SetLedgerServeMemoryBudget
+// are startup-only: the node runtime applies its node-store family and
+// memory budgets after NewFromConfig and before Start, since the budgets
+// commit parent reservations that the runtime owns.
 
 // SetAcquisitionFamily installs the node-store family that backs new inbound
 // ledger acquisitions, so a forked or catching-up node satisfies the shared
@@ -504,15 +533,6 @@ func (r *Router) CloseAcquisitionMemoryBudget() bool {
 	return r.catchupReplay.closeAcquisitionMemoryBudget()
 }
 
-// SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
-// the router refuses to acquire or serve ledgers below it. A nil floor leaves
-// both paths unrestricted, so the disabled / standalone case is unchanged.
-func (r *Router) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
-	if r.catchupReplay != nil {
-		r.catchupReplay.setFloor(floor)
-	}
-}
-
 // belowFloor reports whether seq sits below the online-delete retention floor.
 // A nil floor or a zero floor (no rotation yet) never withholds anything,
 // mirroring rippled where shouldAcquire treats an unset minimumOnline as no
@@ -522,58 +542,6 @@ func (r *Router) belowFloor(seq uint32) bool {
 		return r.catchupReplay.belowFloor(seq)
 	}
 	return false
-}
-
-// SetManifestCache installs the validator-manifest cache and the
-// overlay handle used to relay accepted manifests. Calling with a nil
-// cache disables the TMManifests path (the dispatch switch silently
-// drops inbound manifest frames). Safe to call before Run.
-func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement.Overlay) {
-	r.manifests = cache
-	r.overlay = overlay
-	if cache != nil && !r.manifestLimitSet {
-		r.manifestUntrustedLimit = cache.MaxUntrustedCount()
-	}
-}
-
-// SetManifestClassifier installs the listed/trusted resolver used for
-// inbound admission and outbound snapshot selection. A nil classifier keeps
-// the standalone/test default of treating every manifest as uncapped.
-func (r *Router) SetManifestClassifier(classify func([33]byte) manifest.ManifestRateLimitCapPolicy) {
-	r.manifestClassify = classify
-}
-
-// SetManifestUntrustedLimit sets the per-message unlisted-manifest budget and
-// the outbound snapshot's unlisted selection limit. It is independent of the
-// wire frame's entry-count/byte batching limits.
-func (r *Router) SetManifestUntrustedLimit(limit int) {
-	if limit < 0 {
-		limit = 0
-	}
-	r.manifestUntrustedLimit = limit
-	r.manifestLimitSet = true
-}
-
-func (r *Router) setPeerSessionView(view peerSessionView) {
-	r.peerSessions = view
-	if r.catchupReplay != nil {
-		r.catchupReplay.setPeerSessionView(view)
-	}
-}
-
-// SetValidatorListAggregator installs the publisher-trust subsystem.
-// Calling with a nil aggregator disables the validator-list collection path —
-// the dispatch switch silently
-// drops inbound frames in that case. Safe to call before Run.
-func (r *Router) SetValidatorListAggregator(agg *validatorlist.Aggregator) {
-	r.validatorList = agg
-	if r.catchupReplay != nil {
-		if agg == nil {
-			r.catchupReplay.setValidatorPeerForget(nil)
-		} else {
-			r.catchupReplay.setValidatorPeerForget(agg.ForgetPeer)
-		}
-	}
 }
 
 // StopAcquisitions terminally drains both inbound-ledger acquisition paths.

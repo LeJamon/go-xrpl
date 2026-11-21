@@ -80,9 +80,9 @@ func TestOverlay_handleStatusChange_UpdatesTracking(t *testing.T) {
 
 	peer := NewPeer(PeerID(7), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
-	o.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
+	o.validLedgerProvider = func() (uint32, time.Duration, bool) {
 		return 5000, 30 * time.Second, true
-	})
+	}
 
 	sc := &message.StatusChange{
 		LedgerSeq:  4995,
@@ -112,9 +112,9 @@ func TestOverlay_handleStatusChange_StaleValidLedgerSkipsTracking(t *testing.T) 
 	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{1: peer})
 	// Validated ledger is older than rippled's 2-min freshness gate.
-	o.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
+	o.validLedgerProvider = func() (uint32, time.Duration, bool) {
 		return 5000, 5 * time.Minute, true
-	})
+	}
 
 	sc := &message.StatusChange{
 		LedgerSeq:  5000,
@@ -151,9 +151,9 @@ func TestOverlay_handleStatusChange_ZeroLedgerSeqSkipsTracking(t *testing.T) {
 
 	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{1: peer})
-	o.SetValidLedgerProvider(func() (uint32, time.Duration, bool) {
+	o.validLedgerProvider = func() (uint32, time.Duration, bool) {
 		return 5000, 30 * time.Second, true
-	})
+	}
 
 	// LedgerSeq=0 — peer reported no ledger info; tracking must not flip.
 	sc := &message.StatusChange{
