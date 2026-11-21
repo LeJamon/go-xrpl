@@ -1,10 +1,8 @@
 package adaptor
 
-// standardReplayPhase is the lifecycle phase of standardReplayPipeline.
 type standardReplayPhase uint8
 
 const (
-	// standardReplayIdle: no pipeline is armed.
 	standardReplayIdle standardReplayPhase = iota
 	// standardReplayAcquiringPivot: a frozen full-state pivot is being
 	// acquired; collected successors cannot drain yet.
@@ -56,7 +54,6 @@ func (p standardReplayPhase) deactivated() standardReplayPhase {
 	}
 }
 
-// withoutDrain is the phase after a drain reservation is released.
 func (p standardReplayPhase) withoutDrain() standardReplayPhase {
 	switch p {
 	case standardReplayDraining:
@@ -68,7 +65,6 @@ func (p standardReplayPhase) withoutDrain() standardReplayPhase {
 	}
 }
 
-// standardReplayTransitions lists the legal successors of each phase.
 // Self-transitions are always legal.
 var standardReplayTransitions = [standardReplayPhaseCount][]standardReplayPhase{
 	standardReplayIdle:           {standardReplayAcquiringPivot, standardReplayPivotReady},
