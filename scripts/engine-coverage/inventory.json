@@ -5059,9 +5059,7 @@
         "internal/tx/paychan/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendment_references": [
-        "PayChan"
-      ],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Destination",
@@ -5117,7 +5115,6 @@
       "methods": [
         "Apply",
         "GetFlagsMask",
-        "RequiredAmendments",
         "Validate"
       ],
       "method_locations": {
@@ -5128,24 +5125,17 @@
             "symbol": "PaymentChannelCreate.Validate"
           }
         ],
-        "RequiredAmendments": [
-          {
-            "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 117,
-            "symbol": "PaymentChannelCreate.RequiredAmendments"
-          }
-        ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 124,
+            "line": 120,
             "symbol": "PaymentChannelCreate.GetFlagsMask"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/paychan/payment_channel_create.go",
-            "line": 129,
+            "line": 125,
             "symbol": "PaymentChannelCreate.Apply"
           }
         ]
@@ -5239,9 +5229,7 @@
         "internal/tx/paychan/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendment_references": [
-        "PayChan"
-      ],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Channel",
@@ -5274,7 +5262,6 @@
         "Apply",
         "GetFlagsMask",
         "PreflightRules",
-        "RequiredAmendments",
         "Validate"
       ],
       "method_locations": {
@@ -5285,31 +5272,24 @@
             "symbol": "PaymentChannelFund.Validate"
           }
         ],
-        "RequiredAmendments": [
-          {
-            "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 90,
-            "symbol": "PaymentChannelFund.RequiredAmendments"
-          }
-        ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 97,
+            "line": 93,
             "symbol": "PaymentChannelFund.GetFlagsMask"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 103,
+            "line": 99,
             "symbol": "PaymentChannelFund.PreflightRules"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/paychan/payment_channel_fund.go",
-            "line": 111,
+            "line": 107,
             "symbol": "PaymentChannelFund.Apply"
           }
         ]
@@ -5395,9 +5375,7 @@
         "internal/tx/paychan/register.go"
       ],
       "oracle_amendments": [],
-      "go_required_amendment_references": [
-        "PayChan"
-      ],
+      "go_required_amendment_references": [],
       "oracle_fields": [
         {
           "name": "Channel",
@@ -5455,7 +5433,6 @@
         "CheckExtraFeatures",
         "GetFlagsMask",
         "PreflightWithRules",
-        "RequiredAmendments",
         "Validate"
       ],
       "method_locations": {
@@ -5473,31 +5450,24 @@
             "symbol": "PaymentChannelClaim.PreflightWithRules"
           }
         ],
-        "RequiredAmendments": [
-          {
-            "path": "internal/tx/paychan/payment_channel_claim.go",
-            "line": 160,
-            "symbol": "PaymentChannelClaim.RequiredAmendments"
-          }
-        ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/paychan/payment_channel_claim.go",
-            "line": 171,
+            "line": 167,
             "symbol": "PaymentChannelClaim.GetFlagsMask"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/paychan/payment_channel_claim.go",
-            "line": 180,
+            "line": 176,
             "symbol": "PaymentChannelClaim.CheckExtraFeatures"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/paychan/payment_channel_claim.go",
-            "line": 211,
+            "line": 207,
             "symbol": "PaymentChannelClaim.Apply"
           }
         ]
@@ -13700,14 +13670,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 349,
+            "line": 351,
             "symbol": "LoanBrokerCoverDeposit.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 409,
+            "line": 411,
             "symbol": "LoanBrokerCoverDeposit.Apply"
           }
         ]
@@ -13879,14 +13849,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 442,
+            "line": 444,
             "symbol": "LoanBrokerCoverWithdraw.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 575,
+            "line": 577,
             "symbol": "LoanBrokerCoverWithdraw.Apply"
           }
         ]
@@ -14021,14 +13991,14 @@
         "Preclaim": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 685,
+            "line": 687,
             "symbol": "LoanBrokerCoverClawback.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/lending/loan_broker_apply.go",
-            "line": 775,
+            "line": 777,
             "symbol": "LoanBrokerCoverClawback.Apply"
           }
         ]

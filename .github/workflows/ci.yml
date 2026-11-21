@@ -339,8 +339,9 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
+      # The tx shard's descriptor and template tests read transactions.macro.
       - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        if: matrix.group == 'libs'
+        if: matrix.group == 'libs' || matrix.group == 'tx'
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
