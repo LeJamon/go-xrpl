@@ -16,214 +16,7 @@ import (
 // regression in any of the typed encoder's per-type paths trips at least
 // one case.
 func TestRoundTrip_TypedSLE(t *testing.T) {
-	cases := []struct {
-		name string
-		json map[string]any
-	}{
-		{
-			name: "AccountRoot_XRP_Amount",
-			json: map[string]any{
-				"LedgerEntryType":   "AccountRoot",
-				"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Balance":           "1000000",
-				"Sequence":          uint32(1),
-				"OwnerCount":        uint32(0),
-				"Flags":             uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-		{
-			name: "Offer_IOU_Amounts",
-			json: map[string]any{
-				"LedgerEntryType":   "Offer",
-				"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Sequence":          uint32(7),
-				"TakerPays":         map[string]any{"value": "100", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
-				"TakerGets":         "1000000",
-				"BookDirectory":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"BookNode":          "0",
-				"OwnerNode":         "0",
-				"Flags":             uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(0),
-			},
-		},
-		{
-			name: "DirectoryNode_Vector256_Indexes",
-			json: map[string]any{
-				"LedgerEntryType": "DirectoryNode",
-				"Flags":           uint32(0),
-				"RootIndex":       "1111111111111111111111111111111111111111111111111111111111111111",
-				"Indexes": []any{
-					"2222222222222222222222222222222222222222222222222222222222222222",
-					"3333333333333333333333333333333333333333333333333333333333333333",
-				},
-				"Owner": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			},
-		},
-		{
-			name: "SignerList_STArray_SignerEntries",
-			json: map[string]any{
-				"LedgerEntryType": "SignerList",
-				"Flags":           uint32(0),
-				"OwnerNode":       "0",
-				"SignerQuorum":    uint32(3),
-				"SignerEntries": []any{
-					map[string]any{
-						"SignerEntry": map[string]any{
-							"Account":      "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-							"SignerWeight": uint32(1),
-						},
-					},
-				},
-				"SignerListID":      uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-		{
-			name: "AMM_Issue_XRP_and_IOU",
-			json: map[string]any{
-				"LedgerEntryType": "AMM",
-				"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"TradingFee":      uint32(500),
-				"Asset":           map[string]any{"currency": "XRP"},
-				"Asset2": map[string]any{
-					"currency": "USD",
-					"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-				},
-				"LPTokenBalance": map[string]any{
-					"value":    "1000",
-					"currency": "039C99CD9AB0B70B32ECDA51EAAE471625608EA2",
-					"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				},
-				"OwnerNode":         "0",
-				"Flags":             uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-		{
-			name: "Bridge_XChainBridge",
-			json: map[string]any{
-				"LedgerEntryType": "Bridge",
-				"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"SignatureReward": "1000",
-				"XChainBridge": map[string]any{
-					"LockingChainDoor":  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-					"LockingChainIssue": map[string]any{"currency": "XRP"},
-					"IssuingChainDoor":  "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-					"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
-				},
-				"XChainClaimID":            "0",
-				"XChainAccountCreateCount": "0",
-				"XChainAccountClaimCount":  "0",
-				"OwnerNode":                "0",
-				"Flags":                    uint32(0),
-				"PreviousTxnID":            "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq":        uint32(1),
-			},
-		},
-		{
-			name: "XChainOwnedClaimID_Flags",
-			json: map[string]any{
-				"LedgerEntryType": "XChainOwnedClaimID",
-				"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"XChainBridge": map[string]any{
-					"LockingChainDoor":  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-					"LockingChainIssue": map[string]any{"currency": "XRP"},
-					"IssuingChainDoor":  "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-					"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
-				},
-				"XChainClaimID":    "1",
-				"OtherChainSource": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-				"XChainClaimAttestations": []any{
-					map[string]any{"XChainClaimProofSig": map[string]any{
-						"AttestationSignerAccount": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-						"PublicKey":                "ED5F1EEA3CC1A5F9A77E122416C5A8541D42BF1B976FD727BB0168B6F42D9D1A90",
-						"Amount":                   "1000000",
-						"AttestationRewardAccount": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-						"WasLockingChainSend":      uint32(1),
-						"Destination":              "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-					}},
-				},
-				"SignatureReward":   "1000",
-				"OwnerNode":         "0",
-				"Flags":             uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-		{
-			name: "XChainOwnedCreateAccountClaimID_Flags",
-			json: map[string]any{
-				"LedgerEntryType": "XChainOwnedCreateAccountClaimID",
-				"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"XChainBridge": map[string]any{
-					"LockingChainDoor":  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-					"LockingChainIssue": map[string]any{"currency": "XRP"},
-					"IssuingChainDoor":  "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-					"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
-				},
-				"XChainAccountCreateCount": "1",
-				"XChainCreateAccountAttestations": []any{
-					map[string]any{"XChainCreateAccountProofSig": map[string]any{
-						"AttestationSignerAccount": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-						"PublicKey":                "ED5F1EEA3CC1A5F9A77E122416C5A8541D42BF1B976FD727BB0168B6F42D9D1A90",
-						"Amount":                   "1000000",
-						"SignatureReward":          "1000",
-						"AttestationRewardAccount": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-						"WasLockingChainSend":      uint32(1),
-						"Destination":              "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-					}},
-				},
-				"OwnerNode":         "0",
-				"Flags":             uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-		{
-			name: "MPTokenIssuance_UInt8_UInt16_BaseTenUInt64",
-			json: map[string]any{
-				"LedgerEntryType":   "MPTokenIssuance",
-				"Issuer":            "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Sequence":          uint32(1),
-				"TransferFee":       uint32(500),
-				"AssetScale":        uint32(2),
-				"MaximumAmount":     "1000000000",
-				"OutstandingAmount": "500000000",
-				"LockedAmount":      "0",
-				"Flags":             uint32(0),
-				"OwnerNode":         "0",
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-		{
-			name: "Vault_Number_Hash192",
-			json: map[string]any{
-				"LedgerEntryType":   "Vault",
-				"Sequence":          uint32(1),
-				"OwnerNode":         "0",
-				"Owner":             "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Account":           "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
-				"Asset":             map[string]any{"currency": "XRP"},
-				"AssetsTotal":       "1000",
-				"AssetsAvailable":   "500",
-				"AssetsMaximum":     "10000",
-				"LossUnrealized":    "1",
-				"ShareMPTID":        "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
-				"WithdrawalPolicy":  uint32(1),
-				"Flags":             uint32(0),
-				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
-				"PreviousTxnLgrSeq": uint32(1),
-			},
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range roundTripCases {
 		t.Run(tc.name, func(t *testing.T) {
 			canonical, err := binarycodec.EncodeBytes(tc.json)
 			if err != nil {
@@ -253,6 +46,213 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 			}
 		})
 	}
+}
+
+var roundTripCases = []struct {
+	name string
+	json map[string]any
+}{
+	{
+		name: "AccountRoot_XRP_Amount",
+		json: map[string]any{
+			"LedgerEntryType":   "AccountRoot",
+			"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Balance":           "1000000",
+			"Sequence":          uint32(1),
+			"OwnerCount":        uint32(0),
+			"Flags":             uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
+	{
+		name: "Offer_IOU_Amounts",
+		json: map[string]any{
+			"LedgerEntryType":   "Offer",
+			"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Sequence":          uint32(7),
+			"TakerPays":         map[string]any{"value": "100", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+			"TakerGets":         "1000000",
+			"BookDirectory":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"BookNode":          "0",
+			"OwnerNode":         "0",
+			"Flags":             uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(0),
+		},
+	},
+	{
+		name: "DirectoryNode_Vector256_Indexes",
+		json: map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"Flags":           uint32(0),
+			"RootIndex":       "1111111111111111111111111111111111111111111111111111111111111111",
+			"Indexes": []any{
+				"2222222222222222222222222222222222222222222222222222222222222222",
+				"3333333333333333333333333333333333333333333333333333333333333333",
+			},
+			"Owner": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		},
+	},
+	{
+		name: "SignerList_STArray_SignerEntries",
+		json: map[string]any{
+			"LedgerEntryType": "SignerList",
+			"Flags":           uint32(0),
+			"OwnerNode":       "0",
+			"SignerQuorum":    uint32(3),
+			"SignerEntries": []any{
+				map[string]any{
+					"SignerEntry": map[string]any{
+						"Account":      "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+						"SignerWeight": uint32(1),
+					},
+				},
+			},
+			"SignerListID":      uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
+	{
+		name: "AMM_Issue_XRP_and_IOU",
+		json: map[string]any{
+			"LedgerEntryType": "AMM",
+			"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"TradingFee":      uint32(500),
+			"Asset":           map[string]any{"currency": "XRP"},
+			"Asset2": map[string]any{
+				"currency": "USD",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			"LPTokenBalance": map[string]any{
+				"value":    "1000",
+				"currency": "039C99CD9AB0B70B32ECDA51EAAE471625608EA2",
+				"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			},
+			"OwnerNode":         "0",
+			"Flags":             uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
+	{
+		name: "Bridge_XChainBridge",
+		json: map[string]any{
+			"LedgerEntryType": "Bridge",
+			"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"SignatureReward": "1000",
+			"XChainBridge": map[string]any{
+				"LockingChainDoor":  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"LockingChainIssue": map[string]any{"currency": "XRP"},
+				"IssuingChainDoor":  "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
+			},
+			"XChainClaimID":            "0",
+			"XChainAccountCreateCount": "0",
+			"XChainAccountClaimCount":  "0",
+			"OwnerNode":                "0",
+			"Flags":                    uint32(0),
+			"PreviousTxnID":            "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq":        uint32(1),
+		},
+	},
+	{
+		name: "XChainOwnedClaimID_Flags",
+		json: map[string]any{
+			"LedgerEntryType": "XChainOwnedClaimID",
+			"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"XChainBridge": map[string]any{
+				"LockingChainDoor":  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"LockingChainIssue": map[string]any{"currency": "XRP"},
+				"IssuingChainDoor":  "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
+			},
+			"XChainClaimID":    "1",
+			"OtherChainSource": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			"XChainClaimAttestations": []any{
+				map[string]any{"XChainClaimProofSig": map[string]any{
+					"AttestationSignerAccount": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+					"PublicKey":                "ED5F1EEA3CC1A5F9A77E122416C5A8541D42BF1B976FD727BB0168B6F42D9D1A90",
+					"Amount":                   "1000000",
+					"AttestationRewardAccount": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+					"WasLockingChainSend":      uint32(1),
+					"Destination":              "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				}},
+			},
+			"SignatureReward":   "1000",
+			"OwnerNode":         "0",
+			"Flags":             uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
+	{
+		name: "XChainOwnedCreateAccountClaimID_Flags",
+		json: map[string]any{
+			"LedgerEntryType": "XChainOwnedCreateAccountClaimID",
+			"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"XChainBridge": map[string]any{
+				"LockingChainDoor":  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"LockingChainIssue": map[string]any{"currency": "XRP"},
+				"IssuingChainDoor":  "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
+			},
+			"XChainAccountCreateCount": "1",
+			"XChainCreateAccountAttestations": []any{
+				map[string]any{"XChainCreateAccountProofSig": map[string]any{
+					"AttestationSignerAccount": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+					"PublicKey":                "ED5F1EEA3CC1A5F9A77E122416C5A8541D42BF1B976FD727BB0168B6F42D9D1A90",
+					"Amount":                   "1000000",
+					"SignatureReward":          "1000",
+					"AttestationRewardAccount": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+					"WasLockingChainSend":      uint32(1),
+					"Destination":              "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				}},
+			},
+			"OwnerNode":         "0",
+			"Flags":             uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
+	{
+		name: "MPTokenIssuance_UInt8_UInt16_BaseTenUInt64",
+		json: map[string]any{
+			"LedgerEntryType":   "MPTokenIssuance",
+			"Issuer":            "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Sequence":          uint32(1),
+			"TransferFee":       uint32(500),
+			"AssetScale":        uint32(2),
+			"MaximumAmount":     "1000000000",
+			"OutstandingAmount": "500000000",
+			"LockedAmount":      "0",
+			"Flags":             uint32(0),
+			"OwnerNode":         "0",
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
+	{
+		name: "Vault_Number_Hash192",
+		json: map[string]any{
+			"LedgerEntryType":   "Vault",
+			"Sequence":          uint32(1),
+			"OwnerNode":         "0",
+			"Owner":             "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Account":           "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			"Asset":             map[string]any{"currency": "XRP"},
+			"AssetsTotal":       "1000",
+			"AssetsAvailable":   "500",
+			"AssetsMaximum":     "10000",
+			"LossUnrealized":    "1",
+			"ShareMPTID":        "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
+			"WithdrawalPolicy":  uint32(1),
+			"Flags":             uint32(0),
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(1),
+		},
+	},
 }
 
 // TestSignerList_LegacyAccountDecodeTolerance verifies the typed SignerList

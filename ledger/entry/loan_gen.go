@@ -1802,7 +1802,14 @@ func (l *Loan) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *Loan) Encode() ([]byte, error) {
-	if err := l.validateRequired(); err != nil {
+	return l.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (l *Loan) encodeViaMap() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := l.ToMap()
@@ -1813,6 +1820,15 @@ func (l *Loan) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (l *Loan) validateEncode() error {
+	if err := l.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

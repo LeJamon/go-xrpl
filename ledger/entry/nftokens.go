@@ -87,6 +87,16 @@ func validateNFTokens(tokens []NFTokenValue) error {
 	return nil
 }
 
+func validateNFTokensForEncode(tokens []NFTokenValue) error {
+	if err := validateNFTokens(tokens); err != nil {
+		return err
+	}
+	if len(tokens) > types.MaxJSONArrayElements {
+		return &types.JSONArrayTooLargeError{Field: "NFTokens"}
+	}
+	return nil
+}
+
 func nftokensToAny(tokens []NFTokenValue) []any {
 	result := make([]any, len(tokens))
 	for i, token := range tokens {
@@ -117,11 +127,8 @@ func emitIfChangedNFTokens(out map[string]any, name string, prev, curr []NFToken
 
 func (n *NFTokenPage) encodeNFTokens() ([]byte, error) {
 	if n.HasNFTokens() {
-		if err := validateNFTokens(n.NFTokens); err != nil {
+		if err := validateNFTokensForEncode(n.NFTokens); err != nil {
 			return nil, err
-		}
-		if len(n.NFTokens) > types.MaxJSONArrayElements {
-			return nil, &types.JSONArrayTooLargeError{Field: "NFTokens"}
 		}
 	}
 

@@ -911,13 +911,15 @@ func (o *Offer) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (o *Offer) Encode() ([]byte, error) {
-	if err := o.validateRequired(); err != nil {
+	return o.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (o *Offer) encodeViaMap() ([]byte, error) {
+	if err := o.validateEncode(); err != nil {
 		return nil, err
-	}
-	if o.present&offerBitAdditionalBooks != 0 {
-		if err := validateSTArrayForEncode("AdditionalBooks", o.AdditionalBooks); err != nil {
-			return nil, err
-		}
 	}
 	out := o.ToMap()
 	if o.present&offerBitPreviousTxnID == 0 {
@@ -927,6 +929,20 @@ func (o *Offer) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (o *Offer) validateEncode() error {
+	if err := o.validateRequired(); err != nil {
+		return err
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		if err := validateSTArrayForEncode("AdditionalBooks", o.AdditionalBooks); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

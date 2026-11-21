@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -553,6 +554,37 @@ func (n *NFTokenPage) Encode() ([]byte, error) {
 		return nil, err
 	}
 	return n.encodeNFTokens()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (n *NFTokenPage) encodeViaMap() ([]byte, error) {
+	if err := n.validateEncode(); err != nil {
+		return nil, err
+	}
+	out := n.ToMap()
+	if n.present&nftokenpageBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if n.present&nftokenpageBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (n *NFTokenPage) validateEncode() error {
+	if err := n.validateRequired(); err != nil {
+		return err
+	}
+	if n.present&nftokenpageBitNFTokens != 0 {
+		if err := validateNFTokensForEncode(n.NFTokens); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

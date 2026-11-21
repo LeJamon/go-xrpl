@@ -748,7 +748,14 @@ func (c *Credential) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (c *Credential) Encode() ([]byte, error) {
-	if err := c.validateRequired(); err != nil {
+	return c.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (c *Credential) encodeViaMap() ([]byte, error) {
+	if err := c.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := c.ToMap()
@@ -759,6 +766,15 @@ func (c *Credential) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (c *Credential) validateEncode() error {
+	if err := c.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

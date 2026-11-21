@@ -1066,7 +1066,14 @@ func (e *Escrow) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (e *Escrow) Encode() ([]byte, error) {
-	if err := e.validateRequired(); err != nil {
+	return e.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (e *Escrow) encodeViaMap() ([]byte, error) {
+	if err := e.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := e.ToMap()
@@ -1077,6 +1084,15 @@ func (e *Escrow) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (e *Escrow) validateEncode() error {
+	if err := e.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -534,7 +534,14 @@ func (t *Ticket) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (t *Ticket) Encode() ([]byte, error) {
-	if err := t.validateRequired(); err != nil {
+	return t.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (t *Ticket) encodeViaMap() ([]byte, error) {
+	if err := t.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := t.ToMap()
@@ -545,6 +552,15 @@ func (t *Ticket) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (t *Ticket) validateEncode() error {
+	if err := t.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -813,7 +813,14 @@ func (b *Bridge) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (b *Bridge) Encode() ([]byte, error) {
-	if err := b.validateRequired(); err != nil {
+	return b.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (b *Bridge) encodeViaMap() ([]byte, error) {
+	if err := b.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := b.ToMap()
@@ -824,6 +831,15 @@ func (b *Bridge) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (b *Bridge) validateEncode() error {
+	if err := b.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

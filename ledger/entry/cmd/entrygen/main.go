@@ -749,7 +749,7 @@ import (
 	"errors"
 	"fmt"
 
-{{ if ne .Name "NFTokenPage" }}	"github.com/LeJamon/go-xrpl/codec/binarycodec"{{ end }}
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1468,25 +1468,23 @@ func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
+{{- if eq .Name "NFTokenPage" }}
 	if err := {{ .Receiver }}.validateRequired(); err != nil {
 		return nil, err
 	}
-{{- if eq .Name "NFTokenPage" }}
 	return {{ .Receiver }}.encodeNFTokens()
 {{- else }}
-{{- range .Fields }}{{ if eq .XRPLType "STArray" }}
-	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		if err := validateSTArrayForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
-			return nil, err
-		}
+	return {{ .Receiver }}.encodeViaMap()
+{{- end }}
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func ({{ .Receiver }} *{{ .StructName }}) encodeViaMap() ([]byte, error) {
+	if err := {{ .Receiver }}.validateEncode(); err != nil {
+		return nil, err
 	}
-{{- else if eq .XRPLType "STObject" }}
-	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		if err := validateInnerObjectForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
-			return nil, err
-		}
-	}
-{{- end }}{{ end }}
 {{- if .AllowBadCurrencyDecode }}
 	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
 		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
@@ -1503,7 +1501,34 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 	}
 {{- end }}{{ end }}
 	return binarycodec.EncodeBytes(out)
-{{- end }}
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func ({{ .Receiver }} *{{ .StructName }}) validateEncode() error {
+	if err := {{ .Receiver }}.validateRequired(); err != nil {
+		return err
+	}
+{{- range .Fields }}{{ if and (eq $.Name "NFTokenPage") (eq .Name "NFTokens") }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateNFTokensForEncode({{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return err
+		}
+	}
+{{- else if eq .XRPLType "STArray" }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateSTArrayForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return err
+		}
+	}
+{{- else if eq .XRPLType "STObject" }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateInnerObjectForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return err
+		}
+	}
+{{- end }}{{ end }}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
