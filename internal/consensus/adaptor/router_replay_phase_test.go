@@ -58,21 +58,23 @@ func (r *standardReplayPhaseRecorder) expectIllegal(t *testing.T, c *catchupRepl
 	}
 }
 
-// report writes the observed transitions to STANDARD_REPLAY_PHASE_TRANSITIONS
-// when set and returns a non-zero exit code if any transition was illegal.
-func (r *standardReplayPhaseRecorder) report() int {
+// An empty path skips the count file. Violations always go to stderr.
+func (r *standardReplayPhaseRecorder) report(path string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if path := os.Getenv("STANDARD_REPLAY_PHASE_TRANSITIONS"); path != "" {
+	for _, violation := range r.violations {
+		fmt.Fprintln(os.Stderr, "standard replay phase violation:", violation)
+	}
+	if path != "" {
 		lines := make([]string, 0, len(r.transitions))
 		for edge, count := range r.transitions {
 			lines = append(lines, fmt.Sprintf("%s -> %s %d\n", edge[0], edge[1], count))
 		}
 		slices.Sort(lines)
-		_ = os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600)
-	}
-	for _, violation := range r.violations {
-		fmt.Fprintln(os.Stderr, "standard replay phase violation:", violation)
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, "writing standard replay phase transitions:", err)
+			return 1
+		}
 	}
 	if len(r.violations) != 0 {
 		return 1
@@ -83,10 +85,13 @@ func (r *standardReplayPhaseRecorder) report() int {
 func TestMain(m *testing.M) {
 	standardReplayPhaseHook = standardReplayPhases.observe
 	code := m.Run()
-	if code == 0 {
-		code = standardReplayPhases.report()
-	}
-	os.Exit(code)
+	reportCode := standardReplayPhases.report(os.Getenv("STANDARD_REPLAY_PHASE_TRANSITIONS"))
+	os.Exit(max(code, reportCode))
+}
+
+func TestStandardReplayPhaseReportWriteFailure(t *testing.T) {
+	var recorder standardReplayPhaseRecorder
+	assert.Equal(t, 1, recorder.report(t.TempDir()))
 }
 
 // Each phase corresponds to exactly one combination of the former
