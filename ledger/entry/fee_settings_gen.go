@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -779,6 +780,10 @@ func (f *FeeSettings) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (f *FeeSettings) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := f.encodeDirect()
+		verifyEncodeParity(f, data, err)
+	}
 	return f.encodeViaMap()
 }
 
@@ -791,6 +796,136 @@ func (f *FeeSettings) encodeViaMap() ([]byte, error) {
 	}
 	out := f.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (f *FeeSettings) encodeDirect() ([]byte, error) {
+	if err := f.validateEncode(); err != nil {
+		return nil, err
+	}
+	if f.hasXAddress() {
+		return f.encodeViaMap()
+	}
+	return f.appendBinary(make([]byte, 0, f.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (f *FeeSettings) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x73)
+	if f.present&feesettingsBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), f.Flags)
+	}
+	if f.present&feesettingsBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), f.PreviousTxnLgrSeq)
+	}
+	if f.present&feesettingsBitReferenceFeeUnits != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x1E), f.ReferenceFeeUnits)
+	}
+	if f.present&feesettingsBitReserveBase != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x1F), f.ReserveBase)
+	}
+	if f.present&feesettingsBitReserveIncrement != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x20), f.ReserveIncrement)
+	}
+	if f.present&feesettingsBitBaseFee != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x35), f.BaseFee); err != nil {
+			return nil, err
+		}
+	}
+	if f.present&feesettingsBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), f.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if f.present&feesettingsBitBaseFeeDrops != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x16), f.BaseFeeDrops); err != nil {
+			return nil, err
+		}
+	}
+	if f.present&feesettingsBitReserveBaseDrops != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x17), f.ReserveBaseDrops); err != nil {
+			return nil, err
+		}
+	}
+	if f.present&feesettingsBitReserveIncrementDrops != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x18), f.ReserveIncrementDrops); err != nil {
+			return nil, err
+		}
+	}
+	if f.present&feesettingsBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), f.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (f *FeeSettings) encodedSizeHint() int {
+	size := 3
+	if f.present&feesettingsBitFlags != 0 {
+		size += 5
+	}
+	if f.present&feesettingsBitPreviousTxnLgrSeq != 0 {
+		size += 5
+	}
+	if f.present&feesettingsBitReferenceFeeUnits != 0 {
+		size += 6
+	}
+	if f.present&feesettingsBitReserveBase != 0 {
+		size += 6
+	}
+	if f.present&feesettingsBitReserveIncrement != 0 {
+		size += 6
+	}
+	if f.present&feesettingsBitBaseFee != 0 {
+		size += 9
+	}
+	if f.present&feesettingsBitPreviousTxnID != 0 {
+		size += 33
+	}
+	if f.present&feesettingsBitBaseFeeDrops != 0 {
+		size += 2 + amountEncodedLen(f.BaseFeeDrops)
+	}
+	if f.present&feesettingsBitReserveBaseDrops != 0 {
+		size += 2 + amountEncodedLen(f.ReserveBaseDrops)
+	}
+	if f.present&feesettingsBitReserveIncrementDrops != 0 {
+		size += 2 + amountEncodedLen(f.ReserveIncrementDrops)
+	}
+	if f.present&feesettingsBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(f.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (f *FeeSettings) hasXAddress() bool {
+	if f.present&feesettingsBitBaseFee != 0 && isXAddress(f.BaseFee) {
+		return true
+	}
+	if f.present&feesettingsBitPreviousTxnID != 0 && isXAddress(f.PreviousTxnID) {
+		return true
+	}
+	if f.present&feesettingsBitBaseFeeDrops != 0 && isXAddressValue(f.BaseFeeDrops) {
+		return true
+	}
+	if f.present&feesettingsBitReserveBaseDrops != 0 && isXAddressValue(f.ReserveBaseDrops) {
+		return true
+	}
+	if f.present&feesettingsBitReserveIncrementDrops != 0 && isXAddressValue(f.ReserveIncrementDrops) {
+		return true
+	}
+	if f.present&feesettingsBitSponsor != 0 && isXAddress(f.Sponsor) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is

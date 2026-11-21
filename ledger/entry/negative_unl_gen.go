@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -569,6 +570,10 @@ func (n *NegativeUNL) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (n *NegativeUNL) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := n.encodeDirect()
+		verifyEncodeParity(n, data, err)
+	}
 	return n.encodeViaMap()
 }
 
@@ -581,6 +586,101 @@ func (n *NegativeUNL) encodeViaMap() ([]byte, error) {
 	}
 	out := n.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (n *NegativeUNL) encodeDirect() ([]byte, error) {
+	if err := n.validateEncode(); err != nil {
+		return nil, err
+	}
+	if n.hasXAddress() {
+		return n.encodeViaMap()
+	}
+	return n.appendBinary(make([]byte, 0, n.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (n *NegativeUNL) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x4E)
+	if n.present&negativeunlBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), n.Flags)
+	}
+	if n.present&negativeunlBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), n.PreviousTxnLgrSeq)
+	}
+	if n.present&negativeunlBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), n.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&negativeunlBitValidatorToDisable != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x14), n.ValidatorToDisable); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&negativeunlBitValidatorToReEnable != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x15), n.ValidatorToReEnable); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&negativeunlBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), n.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&negativeunlBitDisabledValidators != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x11), "DisabledValidators", n.DisabledValidators); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (n *NegativeUNL) encodedSizeHint() int {
+	size := 3
+	if n.present&negativeunlBitFlags != 0 {
+		size += 5
+	}
+	if n.present&negativeunlBitPreviousTxnLgrSeq != 0 {
+		size += 5
+	}
+	if n.present&negativeunlBitPreviousTxnID != 0 {
+		size += 33
+	}
+	if n.present&negativeunlBitValidatorToDisable != 0 {
+		size += 2 + blobEncodedLen(n.ValidatorToDisable)
+	}
+	if n.present&negativeunlBitValidatorToReEnable != 0 {
+		size += 2 + blobEncodedLen(n.ValidatorToReEnable)
+	}
+	if n.present&negativeunlBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(n.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (n *NegativeUNL) hasXAddress() bool {
+	if n.present&negativeunlBitPreviousTxnID != 0 && isXAddress(n.PreviousTxnID) {
+		return true
+	}
+	if n.present&negativeunlBitValidatorToDisable != 0 && isXAddress(n.ValidatorToDisable) {
+		return true
+	}
+	if n.present&negativeunlBitValidatorToReEnable != 0 && isXAddress(n.ValidatorToReEnable) {
+		return true
+	}
+	if n.present&negativeunlBitSponsor != 0 && isXAddress(n.Sponsor) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is
