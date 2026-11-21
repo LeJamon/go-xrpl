@@ -85,14 +85,15 @@ func TestCurrencyCodeMatchesReference(t *testing.T) {
 		}
 		return string(b)
 	}
-	codes := []string{
+	codes := make([]string, 0, 8032)
+	codes = append(codes,
 		"", "1", "XRP", "xrp", "Xrp", "xRP", "0xXRP", "0x", "0x1", "0x0x", "0xUSD", "USD", "usd",
 		"US", "USDT", "U", "é", "éU", "Ué", "€", "\u0000\u0000\u0000",
-		strings.Repeat("0", 40), "0x" + strings.Repeat("0", 40), strings.Repeat("0", 39) + "1",
-		strings.Repeat("g", 40), strings.Repeat("0", 38) + "zz", strings.Repeat("0", 39), strings.Repeat("0", 41),
+		strings.Repeat("0", 40), "0x"+strings.Repeat("0", 40), strings.Repeat("0", 39)+"1",
+		strings.Repeat("g", 40), strings.Repeat("0", 38)+"zz", strings.Repeat("0", 39), strings.Repeat("0", 41),
 		"0158415500000000C1F76FF6ECB0BAC600000000", "0000000000000000000000005553440000000000",
 		"0000000000000000000000005852500000000000", "0000000000000000000000000000000000000001",
-	}
+	)
 	for range 2000 {
 		codes = append(codes, randomHex(40), "0x"+randomHex(40), randomHex(rng.IntN(45)))
 		corrupt := []byte(randomHex(40))
@@ -104,7 +105,8 @@ func TestCurrencyCodeMatchesReference(t *testing.T) {
 		compared++
 	}
 
-	datas := [][]byte{nil, {}, make([]byte, 19), make([]byte, 21), make([]byte, 20), noCurrencyBytes, standardCurrency("XRP")}
+	datas := make([][]byte, 0, 4007)
+	datas = append(datas, nil, []byte{}, make([]byte, 19), make([]byte, 21), make([]byte, 20), noCurrencyBytes, standardCurrency("XRP"))
 	for range 2000 {
 		d := make([]byte, 20)
 		for i := range d {

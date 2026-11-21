@@ -84,7 +84,7 @@ func base58DiffInputs(t testing.TB) []string {
 		ids = append(ids, randomBytes(rng, 20))
 	}
 
-	var addresses []string
+	addresses := make([]string, 0, len(ids))
 	for _, id := range ids {
 		addr, err := EncodeAccountIDToClassicAddress(id)
 		if err != nil {
