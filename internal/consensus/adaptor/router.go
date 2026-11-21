@@ -963,7 +963,7 @@ func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagem
 				r.logger.Warn("failed to close manifest spool", "error", err, "peer", msg.PeerID)
 			}
 		}()
-		payload, err := msg.ManifestFrame.Materialize(ctx)
+		payload, err := msg.MaterializeManifest(ctx)
 		if err != nil {
 			if errors.Is(err, message.ErrDecompressFailed) && r.gossip != nil &&
 				!msg.SelectPeerCharge(resource.FeeInvalidData(), "decompress-lz4-failed") {

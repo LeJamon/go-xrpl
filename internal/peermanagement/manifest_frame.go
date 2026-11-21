@@ -59,6 +59,7 @@ type ManifestFrame struct {
 	path   string
 	header message.Header
 	budget *readBudget
+	peer   *Peer
 	done   chan struct{}
 
 	materializing bool
@@ -129,9 +130,15 @@ func (f *ManifestFrame) Materialize(ctx context.Context) ([]byte, error) {
 	if err == nil {
 		err = ctx.Err()
 	}
+	if err == nil {
+		err = message.ValidatePayload(message.TypeManifests, payload)
+	}
 	var releaseBytes int64
 	if err == nil {
 		f.materialized = true
+		if f.peer != nil {
+			f.peer.traffic.AddCount(CategoryManifests, true, int(f.header.PayloadSize))
+		}
 		if f.header.Compressed {
 			releaseBytes = int64(f.header.PayloadSize)
 			f.reservation -= releaseBytes

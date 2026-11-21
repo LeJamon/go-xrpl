@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -113,6 +114,105 @@ func TestBroadcastSelectsOutboundCompressionPerPeer(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	assert.Equal(t, uint64(len(compressedWire)), compressedPeer.traffic.Stats(CategoryManifests).BytesOut)
 	assert.Equal(t, uint64(len(plainWire)), plainPeer.traffic.Stats(CategoryManifests).BytesOut)
+}
+
+func TestOutboundTrafficCountedWhenSendIsAccepted(t *testing.T) {
+	peer := NewPeer(PeerID(3), Endpoint{Host: "127.0.0.1", Port: 51235}, false, nil, nil)
+	frame, err := message.EncodeFrame(&message.Manifests{
+		List: []message.Manifest{{STObject: bytes.Repeat([]byte("manifest"), 32)}},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, peer.Send(frame))
+	stats := peer.traffic.Stats(CategoryManifests)
+	require.NotNil(t, stats)
+	assert.Equal(t, uint64(1), stats.MessagesOut)
+	assert.Equal(t, uint64(len(frame)), stats.BytesOut)
+}
+
+func TestSendPriorityAccountsAcceptedWireBytes(t *testing.T) {
+	peer := newOutboundCompressionPeer(4, true)
+	frame, err := message.EncodeFrame(&message.Manifests{
+		List: []message.Manifest{{STObject: bytes.Repeat([]byte("manifest"), 512)}},
+	})
+	require.NoError(t, err)
+	wire, compressed := message.CompressFrameIfWorthwhile(frame)
+	require.True(t, compressed)
+
+	require.NoError(t, peer.SendPriority(frame))
+	stats := peer.traffic.Stats(CategoryManifests)
+	require.NotNil(t, stats)
+	assert.Equal(t, uint64(1), stats.MessagesOut)
+	assert.Equal(t, uint64(len(wire)), stats.BytesOut)
+
+	snapshot := peer.outbound.snapshot()
+	assert.Equal(t, int64(len(wire)), snapshot.TotalBytes)
+}
+
+func TestSendManifestFramesAccountsAcceptedWireBytes(t *testing.T) {
+	peer := newOutboundCompressionPeer(5, true)
+	frames := make([][]byte, 2)
+	for i, size := range []int{128, 256} {
+		frame, err := message.EncodeFrame(&message.Manifests{
+			List: []message.Manifest{{STObject: bytes.Repeat([]byte("manifest"), size)}},
+		})
+		require.NoError(t, err)
+		frames[i] = frame
+	}
+
+	var wantBytes uint64
+	for _, frame := range frames {
+		wire, _ := message.CompressFrameIfWorthwhile(frame)
+		wantBytes += uint64(len(wire))
+	}
+	require.NoError(t, peer.SendManifestFrames(frames))
+
+	stats := peer.traffic.Stats(CategoryManifests)
+	require.NotNil(t, stats)
+	assert.Equal(t, uint64(len(frames)), stats.MessagesOut)
+	assert.Equal(t, wantBytes, stats.BytesOut)
+}
+
+func TestOutboundTrafficExcludesRefusedFrame(t *testing.T) {
+	peer := NewPeer(PeerID(6), Endpoint{Host: "127.0.0.1", Port: 51235}, false, nil, nil)
+	frame, err := message.EncodeFrame(&message.Manifests{
+		List: []message.Manifest{{STObject: []byte("manifest")}},
+	})
+	require.NoError(t, err)
+
+	for range ordinarySendMaximum {
+		require.NoError(t, peer.Send(frame))
+	}
+	before := peer.traffic.Stats(CategoryManifests)
+	require.NotNil(t, before)
+	require.Error(t, peer.Send(frame))
+	after := peer.traffic.Stats(CategoryManifests)
+	require.NotNil(t, after)
+	assert.Equal(t, before.MessagesOut, after.MessagesOut)
+	assert.Equal(t, before.BytesOut, after.BytesOut)
+	assert.Equal(t, uint64(1), peer.SendDrops())
+}
+
+func TestOutboundTrafficRetainedWhenWriteFails(t *testing.T) {
+	writeErr := errors.New("peer write failed")
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	conn.writeErr = writeErr
+	close(conn.releaseWrites)
+	peer.conn = conn
+	peer.setState(PeerStateConnected)
+	frame, err := message.EncodeFrame(&message.Manifests{
+		List: []message.Manifest{{STObject: []byte("manifest")}},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, peer.Send(frame))
+	stats := peer.traffic.Stats(CategoryManifests)
+	require.NotNil(t, stats)
+	assert.Equal(t, uint64(1), stats.MessagesOut)
+	assert.Equal(t, uint64(len(frame)), stats.BytesOut)
+	require.ErrorIs(t, peer.writeLoop(context.Background()), writeErr)
+	assert.Zero(t, peer.metrics.sent.totalBytesSnapshot())
 }
 
 func TestWriteLoopRejectsUnnegotiatedCompressedFrame(t *testing.T) {

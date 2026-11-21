@@ -911,6 +911,10 @@ func Decode(msgType MessageType, data []byte) (Message, error) {
 	if err := Preflight(msgType, data); err != nil {
 		return nil, fmt.Errorf("failed to preflight: %w", err)
 	}
+	return c.decodePayload(data)
+}
+
+func (c *msgCodec) decodePayload(data []byte) (Message, error) {
 	pmsg := c.newProto()
 	normalized, err := normalizeEnumWire(data, pmsg.ProtoReflect().Descriptor())
 	if err != nil {

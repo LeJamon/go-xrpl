@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -415,8 +416,9 @@ func TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation(t *testing.T) {
 		Payload:     payload,
 	})
 
-	assert.NotZero(t, peer.BadDataCount(),
-		"TMHaveTransactions without tx-reduce-relay must charge bad-data")
+	want := uint32(resource.FeeMalformedRequest().Cost() / resource.DecayWindowSeconds)
+	assert.Equal(t, want, peer.BadDataCount(),
+		"TMHaveTransactions without tx-reduce-relay must incur one malformed-request charge")
 }
 
 // TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation mirrors
@@ -702,6 +704,49 @@ func encodeEndpoints(t *testing.T, version uint32, eps []message.Endpointv2) []b
 	return payload
 }
 
+func TestParseGossipEndpoint(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  Endpoint
+	}{
+		{name: "bare IPv4", input: "1.2.3.4", want: Endpoint{Host: "1.2.3.4"}},
+		{name: "IPv4 port", input: "1.2.3.4:5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "IPv4 whitespace port", input: "1.2.3.4: 5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "IPv4 trailing colon", input: "1.2.3.4:", want: Endpoint{Host: "1.2.3.4"}},
+		{name: "legacy IPv4 port", input: "1.2.3.4 5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "trimmed", input: "  1.2.3.4:5  ", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "bare IPv6", input: "2001:db8::1", want: Endpoint{Host: "2001:db8::1"}},
+		{name: "bracketed address at EOF", input: "[2001:db8::1", want: Endpoint{Host: "2001:db8::1"}},
+		{name: "legacy IPv6 port", input: "2001:db8::1 5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "bracketed IPv6 port", input: "[2001:db8::1]:5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "bracketed legacy port", input: "[2001:db8::1] 5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "whitespace after colon", input: "[2001:db8::1]: +5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "mapped IPv6 identity", input: "[::ffff:192.0.2.1]:5", want: Endpoint{Host: "::ffff:192.0.2.1", Port: 5}},
+		{name: "negative wraps", input: "1.2.3.4:-1", want: Endpoint{Host: "1.2.3.4", Port: 65535}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseGossipEndpoint(test.input)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+
+	for _, input := range []string{
+		"example.com:5",
+		"1.2.3.4:65536",
+		"[2001:db8::1]junk",
+		"[2001:db8::1]:-",
+		"[fe80::1%eth0]:51235",
+		"1.2.3.4\u00a05",
+		"",
+	} {
+		_, err := parseGossipEndpoint(input)
+		assert.Error(t, err, input)
+	}
+}
+
 // fakeAddrConn is a net.Conn that only reports a meaningful RemoteAddr,
 // used to exercise the hops==0 socket-IP rewrite path.
 type fakeAddrConn struct {
@@ -933,55 +978,89 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }
 
+func recordPeerCharges(peer *Peer) *chargeRecorder {
+	recorder := &chargeRecorder{}
+	manager := resource.NewManager(nil, slog.New(recorder))
+	peer.attachUsage(manager.NewInboundEndpoint(peer.Endpoint().String()), nil)
+	return recorder
+}
+
 func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(115))
+	charges := recordPeerCharges(peer)
 	payload := encodeEndpoints(t, 2, []message.Endpointv2{
 		{Endpoint: "not-an-endpoint", Hops: 1},
+		{Endpoint: "10.0.0.9 51235", Hops: 1},
+		{Endpoint: "10.0.0.10", Hops: 1},
 		{Endpoint: "also-invalid", Hops: 1},
 	})
 	o.onMessageReceived(Event{
 		PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload,
 	})
 
-	want := uint32((2 * resource.FeeInvalidData().Cost()) / resource.DecayWindowSeconds)
-	assert.Equal(t, want, peer.BadDataCount())
+	require.Equal(t, "[invalid data ($800)(mtENDPOINTS 2 malformed endpoints)]", charges.String())
+	require.Len(t, o.discovery.peers, 1)
+	require.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }
 
-// TestHandleEndpoints_RejectsOversizedFrame pins PeerImp.cpp:1206-1210: a
-// frame at or above 1024 entries is rejected wholesale and charged.
-func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
-	o, peer := newEndpointsTestOverlay(t, PeerID(16))
-
-	payload := make([]byte, 0, 2*endpointsIngestMaxEntries)
-	for range endpointsIngestMaxEntries {
-		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
-		payload = protowire.AppendVarint(payload, 0)
+func TestHandleEndpoints_OversizedFrameFee(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tracking PeerTracking
+		version  byte
+		want     string
+	}{
+		{"converged", PeerTrackingConverged, 2, "[useless data ($150)(mtENDPOINTS endpoints too large)]"},
+		{"unknown tracking", PeerTrackingUnknown, 2, "[trivial peer request ($1)(mtENDPOINTS)]"},
+		{"unsupported version", PeerTrackingConverged, 1, "[trivial peer request ($1)(mtENDPOINTS)]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, peer := newEndpointsTestOverlay(t, PeerID(16))
+			peer.setTracking(tc.tracking)
+			charges := recordPeerCharges(peer)
+			payload := append([]byte{0x08, tc.version}, peerEndpointEntries(endpointsIngestMaxEntries)...)
+			o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload})
+			require.Equal(t, tc.want, charges.String())
+			require.Empty(t, o.discovery.peers)
+		})
 	}
+}
+
+func TestHandleEndpoints_RejectsMissingRequiredNestedFields(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(116))
+	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 2)
+	payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+	payload = protowire.AppendBytes(payload, nil)
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
 		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
-	assert.NotZero(t, peer.BadDataCount())
-
-	// PeerImp.cpp:1208 charges feeUselessData (150) for an oversized
-	// frame, strictly lighter than the feeInvalidData (400) levied per
-	// malformed entry. A reference peer charged the malformed reason
-	// must end up with a heavier balance, pinning the chargeForReason
-	// routing for "endpoints-too-large".
-	id, err := NewIdentity()
-	require.NoError(t, err)
-	ref := NewPeer(PeerID(116), Endpoint{Host: "127.0.0.1", Port: 51236}, false, id, make(chan Event, 1))
-	ref.setTracking(PeerTrackingConverged)
-	o.peers[ref.ID()] = ref
-	o.IncPeerBadData(ref.ID(), "endpoints-malformed")
-	assert.Less(t, peer.BadDataCount(), ref.BadDataCount(),
-		"oversized frame must cost feeUselessData (150), lighter than feeInvalidData (400)")
-
+	want := uint32(resource.FeeInvalidData().Cost() / resource.DecayWindowSeconds)
+	assert.Equal(t, want, peer.BadDataCount())
 	o.discovery.mu.RLock()
 	defer o.discovery.mu.RUnlock()
 	assert.Empty(t, o.discovery.peers)
+}
+
+func TestHandleEndpoints_UsesLastRepeatedVersion(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(117))
+	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 1)
+	payload = append(payload, encodeEndpoints(t, 2, []message.Endpointv2{{
+		Endpoint: "10.0.0.1:51235", Hops: 1,
+	}})...)
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: message.TypeEndpoints,
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235")
 }
 
 // TestHandleEndpoints_RejectsNonIPHost pins PeerImp.cpp:1218-1226:

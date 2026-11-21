@@ -20,8 +20,10 @@
 package peermanagement
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +60,61 @@ func ParseEndpoint(s string) (Endpoint, error) {
 		return Endpoint{}, err
 	}
 	return Endpoint{Host: host, Port: port}, nil
+}
+
+const gossipWhitespace = " \t\r\n\v\f"
+
+func parseGossipEndpoint(s string) (Endpoint, error) {
+	if len(s) > 64 {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	s = strings.Trim(s, gossipWhitespace)
+	if s == "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+
+	// Whitespace is the legacy port separator. A colon separates an IPv4
+	// port but remains part of an unbracketed IPv6 address.
+	separators := gossipWhitespace
+	bracketed := s[0] == '['
+	if bracketed {
+		s = s[1:]
+		separators += "]"
+	} else if first := strings.IndexAny(s, ".:"); first >= 0 && s[first] == '.' {
+		separators += ":"
+	}
+
+	host, portText := s, ""
+	if i := strings.IndexAny(s, separators); i >= 0 {
+		host, portText = s[:i], s[i+1:]
+		if bracketed && portText != "" {
+			if !strings.ContainsRune(gossipWhitespace+":", rune(portText[0])) {
+				return Endpoint{}, ErrInvalidEndpoint
+			}
+			portText = portText[1:]
+		}
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil || addr.Zone() != "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	endpoint := Endpoint{Host: addr.String()}
+	portText = strings.TrimLeft(portText, gossipWhitespace)
+	if portText != "" {
+		negative := portText[0] == '-'
+		if negative || portText[0] == '+' {
+			portText = portText[1:]
+		}
+		port, err := parsePort(portText)
+		if err != nil {
+			return Endpoint{}, err
+		}
+		if negative {
+			port = -port
+		}
+		endpoint.Port = port
+	}
+	return endpoint, nil
 }
 
 func parsePort(s string) (uint16, error) {
@@ -135,6 +192,9 @@ type Event struct {
 
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
+
+	decodedEndpoints   *message.Endpoints
+	endpointsOversized bool
 
 	// ManifestFrame carries an oversized manifest payload spooled to disk.
 	ManifestFrame *ManifestFrame
@@ -270,6 +330,26 @@ func (m *InboundMessage) Close() error {
 		m.completePeerCharge()
 	})
 	return m.closeErr
+}
+
+// MaterializeManifest admits a spooled manifest payload before exposing it to
+// the worker. Its source peer receives the normal per-message charge only
+// after that admission succeeds; invalid or unreadable spool frames remain
+// uncharged.
+func (m *InboundMessage) MaterializeManifest(ctx context.Context) ([]byte, error) {
+	if m == nil || m.ManifestFrame == nil {
+		return nil, ErrManifestFrameClosed
+	}
+	m.chargeMu.Lock()
+	defer m.chargeMu.Unlock()
+	payload, err := m.ManifestFrame.Materialize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if peer := m.ManifestFrame.peer; peer != nil && m.charge == nil {
+		m.charge = newMessageCharge(peer, m.Type.String())
+	}
+	return payload, nil
 }
 
 func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext string) bool {

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +59,7 @@ func (h *chargeLogHandler) snapshot() []chargeLog {
 	return append([]chargeLog(nil), h.charges...)
 }
 
-func TestRouter_LedgerDataSynchronousInvaliditySelectsOnePeerFee(t *testing.T) {
+func TestRouter_InboundFramesSelectOnePeerFee(t *testing.T) {
 	journal := &chargeLogHandler{}
 	previous := slog.Default()
 	slog.SetDefault(slog.New(journal))
@@ -83,39 +84,40 @@ func TestRouter_LedgerDataSynchronousInvaliditySelectsOnePeerFee(t *testing.T) {
 	}
 
 	r, _ := makeRouterWithRelayRecorder(t)
-	send := func(data *message.LedgerData) {
+	manifestRouter, _, _ := routerWithCache(t, nil, 0, 0)
+	send := func(data message.Message) {
 		t.Helper()
 		frame, err := message.EncodeFrame(data)
 		require.NoError(t, err)
 		require.NoError(t, connection.overlay.overlay.Send(connection.peerID, frame))
 
+		lane := client.overlay.LedgerDataMessages()
+		if data.Type() == message.TypeManifests {
+			lane = client.overlay.ManifestMessages()
+		}
 		select {
-		case inbound := <-client.overlay.LedgerDataMessages():
-			r.handleInboundMessage(inbound)
+		case inbound := <-lane:
+			if data.Type() == message.TypeManifests {
+				manifestRouter.processManifestJob(inbound)
+			} else {
+				r.handleInboundMessage(inbound)
+			}
 		case <-time.After(5 * time.Second):
-			t.Fatal("ledger-data frame did not reach the processing lane")
+			t.Fatalf("%s did not reach the processing lane", data.Type())
 		}
 	}
 
-	assertOneInvalidDataCharge := func(before int, reason string) {
+	assertOneCharge := func(before int, msgType message.MessageType, expected resource.Charge, reason string) {
 		t.Helper()
-		charges := journal.snapshot()[before:]
-		var invalid, trivial []chargeLog
-		ledgerDataContext := message.TypeLedgerData.String()
-		for _, charge := range charges {
-			if charge.context != ledgerDataContext && !strings.HasPrefix(charge.context, ledgerDataContext+" ") {
-				continue
-			}
-			switch charge.fee {
-			case resource.FeeInvalidData().String():
-				invalid = append(invalid, charge)
-			case resource.FeeTrivialPeer().String():
-				trivial = append(trivial, charge)
+		var charges []chargeLog
+		for _, charge := range journal.snapshot()[before:] {
+			if charge.context == msgType.String() || strings.HasPrefix(charge.context, msgType.String()+" ") {
+				charges = append(charges, charge)
 			}
 		}
-		require.Len(t, invalid, 1, "synchronous ledger-data rejection must select one invalid-data fee")
-		require.Contains(t, invalid[0].context, reason)
-		require.Empty(t, trivial, "selected invalid-data fee must replace the ledger-data message's trivial close fee")
+		require.Len(t, charges, 1)
+		require.Equal(t, expected.String(), charges[0].fee)
+		require.Equal(t, strings.TrimSpace(msgType.String()+" "+reason), charges[0].context)
 	}
 
 	before := len(journal.snapshot())
@@ -123,7 +125,7 @@ func TestRouter_LedgerDataSynchronousInvaliditySelectsOnePeerFee(t *testing.T) {
 		LedgerHash: []byte{1},
 		InfoType:   message.LedgerInfoBase,
 	})
-	assertOneInvalidDataCharge(before, "ledger-data-hash")
+	assertOneCharge(before, message.TypeLedgerData, resource.FeeInvalidData(), "ledger-data-hash")
 
 	depth := uint32(0)
 	before = len(journal.snapshot())
@@ -134,5 +136,41 @@ func TestRouter_LedgerDataSynchronousInvaliditySelectsOnePeerFee(t *testing.T) {
 		RequestCookie:    99,
 		RequestCookieSet: true,
 	})
-	assertOneInvalidDataCharge(before, "ledger-data-node")
+	assertOneCharge(before, message.TypeLedgerData, resource.FeeInvalidData(), "ledger-data-node")
+
+	before = len(journal.snapshot())
+	send(&message.ProofPathResponse{
+		Key: make([]byte, 32), LedgerHash: make([]byte, 32),
+		MapType: message.LedgerMapAccountState, Error: message.ReplyErrorNoNode,
+	})
+	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeInvalidData(), "proof_path_response")
+
+	before = len(journal.snapshot())
+	send(&message.ProofPathResponse{
+		Key: make([]byte, 32), LedgerHash: make([]byte, 32), MapType: message.LedgerMapAccountState,
+	})
+	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeMalformedData(), "proof_path_response malformed")
+
+	closed := makeClosedLedgerWithTxs(t, nil)
+	lookup := newFakeLookup()
+	lookup.add(closed)
+	hash := closed.Hash()
+	key := keylet.LedgerHashes().Key
+	wireHeader, path, err := newLedgerProviderForTest(lookup).GetProofPath(hash[:], key[:], message.LedgerMapAccountState)
+	require.NoError(t, err)
+	before = len(journal.snapshot())
+	send(&message.ProofPathResponse{
+		Key: key[:], LedgerHash: hash[:], MapType: message.LedgerMapAccountState,
+		LedgerHeader: wireHeader, Path: path,
+	})
+	assertOneCharge(before, message.TypeProofPathResponse, resource.FeeTrivialPeer(), "")
+
+	before = len(journal.snapshot())
+	send(&message.Manifests{})
+	assertOneCharge(before, message.TypeManifests, resource.FeeUselessData(), "empty")
+
+	entry := message.Manifest{STObject: buildWireManifest(t, 1, 0x26, 0x27)}
+	before = len(journal.snapshot())
+	send(&message.Manifests{List: []message.Manifest{entry}})
+	assertOneCharge(before, message.TypeManifests, resource.FeeTrivialPeer(), "")
 }
