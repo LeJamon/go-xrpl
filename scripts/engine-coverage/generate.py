@@ -550,7 +550,7 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         manifest = json.loads(read(manifest_path))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid v4 conformance manifest: {exc}") from exc
-    if manifest.get("schema") != 4 or manifest.get("fixture_version") != "v4":
+    if manifest.get("schema") not in (4, 5) or manifest.get("fixture_version") != "v4":
         raise ValueError("unexpected v4 conformance manifest schema or fixture version")
     if manifest.get("oracle_repository") != ORACLE_REPOSITORY:
         raise ValueError("v4 conformance manifest repository differs from pinned oracle")
@@ -567,6 +567,8 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         "scripts/oracle/record-v4.py", "scripts/oracle/record-v4.sh",
         "scripts/oracle/strict-corpus-config.json", "scripts/oracle/strict_recorder.cpp",
     }
+    if manifest["schema"] == 5:
+        expected_sources.add("internal/testutil/rippled/pin.env")
     if set(sources) != expected_sources:
         raise ValueError("v4 conformance manifest recorder source inventory is incomplete")
     for name, checksum in sources.items():

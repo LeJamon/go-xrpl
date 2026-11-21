@@ -88,6 +88,38 @@ func TestPinnedCorpusResolvesRelativeSelectionFromRepository(t *testing.T) {
 	}
 }
 
+func TestPinnedManifestVerifiesArchivedPin(t *testing.T) {
+	_, manifest := copyPinnedCorpus(t)
+	repo := copyPinnedRecorderArchive(t, manifest)
+	manifest.Schema = pinnedManifestSchema
+	delete(manifest.RecorderSources, rippled.PinPath)
+	if _, err := validatePinnedManifestAt(manifest, repo); err == nil {
+		t.Fatal("accepted a manifest missing the recorder pin")
+	}
+
+	pin, err := os.ReadFile(filepath.Join(conformanceRepositoryRoot(), rippled.PinPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repo, manifest.RecorderArchive, rippled.PinPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, pin, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest.RecorderSources[rippled.PinPath] = sha256Hex(pin)
+	if _, err := validatePinnedManifestAt(manifest, repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(pin, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatePinnedManifestAt(manifest, repo); err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("tampered recorder pin: %v", err)
+	}
+}
+
 func TestPinnedCorpusAcceptsExplicitUnsupportedProfile(t *testing.T) {
 	root, manifest := copyPinnedCorpus(t)
 	const id = "c0-l0-b0-f1"

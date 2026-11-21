@@ -8,15 +8,17 @@ import json
 import subprocess
 from pathlib import Path
 
+PIN_PATH = "internal/testutil/rippled/pin.env"
 PIN = dict(
     line.split("=", 1)
-    for line in (Path(__file__).resolve().parents[1] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    for line in (Path(__file__).resolve().parents[1] / PIN_PATH).read_text().splitlines()
     if line and not line.startswith("#")
 )
 ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
 ORACLE_TAG = PIN["ORACLE_TAG"]
 ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
 RECORDER_SOURCES = {
+    PIN_PATH,
     "scripts/oracle/record-v4.py",
     "scripts/oracle/record-v4.sh",
     "scripts/oracle/strict-corpus-config.json",
@@ -101,7 +103,7 @@ def main():
         parser.error("oracle checkout must be clean")
     recorder_commit = git(repo, "rev-parse", f"{args.recorder_commit}^{{commit}}").decode()
     sources = {}
-    for name in args.recorder_source:
+    for name in dict.fromkeys([*args.recorder_source, PIN_PATH]):
         input_path = repo / name
         try:
             path = regular_file(input_path, f"recorder source {name}")
@@ -205,7 +207,7 @@ def main():
     if unknown:
         parser.error(f"unknown profile IDs: {unknown}")
     manifest = {
-        "schema": 4,
+        "schema": 5,
         "fixture_version": "v4",
         "oracle_repository": ORACLE_REPOSITORY,
         "rippled_tag": ORACLE_TAG,

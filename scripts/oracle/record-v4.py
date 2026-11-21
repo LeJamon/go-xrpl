@@ -15,9 +15,10 @@ import tarfile
 from pathlib import Path
 
 
+PIN_PATH = "internal/testutil/rippled/pin.env"
 PIN = dict(
     line.split("=", 1)
-    for line in (Path(__file__).resolve().parents[2] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    for line in (Path(__file__).resolve().parents[2] / PIN_PATH).read_text().splitlines()
     if line and not line.startswith("#")
 )
 ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
@@ -28,6 +29,7 @@ OLD_BINARY_SHA256 = "f05b910157c5e3a416ee723332ce2fbd83cf7e3c02d4a61af09060871e3
 CONAN_REMOTE_NAME = "xrplf"
 CONAN_REMOTE_URL = "https://conan.xrplf.org/repository/conan/"
 RECORDER_SOURCE_PATHS = (
+    PIN_PATH,
     "scripts/oracle/record-v4.py",
     "scripts/oracle/record-v4.sh",
     "scripts/oracle/strict-corpus-config.json",

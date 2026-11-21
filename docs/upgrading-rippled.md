@@ -184,7 +184,9 @@ python3 scripts/oracle/record-v4.py --clean-build --record \
 
 Write `manifest.json` with `python3 scripts/recorded-corpus-manifest.py`
 (`--help` lists the required recorder commit, binary, build identity, config,
-recorder sources and coverage limits), add a README modelled on the current
+recorder sources and coverage limits). The manifest writer automatically
+archives `internal/testutil/rippled/pin.env` from the recorder commit and
+records its SHA-256. Add a README modelled on the current
 corpus's, and set `ORACLE_CORPUS`. The amendment profile matrix
 (`pinnedProfile` in `internal/testing/conformance/pinned_corpus.go`) is
 release-specific: revise it if the release's gating amendments differ.

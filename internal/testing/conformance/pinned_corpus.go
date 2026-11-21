@@ -20,7 +20,7 @@ import (
 
 const (
 	pinnedFixtureVersion = "v4"
-	pinnedManifestSchema = 4
+	pinnedManifestSchema = 5
 )
 
 var (
@@ -28,13 +28,6 @@ var (
 	pinnedOracleTag        = rippled.Pin.Tag
 	pinnedOracleCommit     = rippled.Pin.Commit
 )
-
-var pinnedRecorderSources = []string{
-	"scripts/oracle/record-v4.py",
-	"scripts/oracle/record-v4.sh",
-	"scripts/oracle/strict-corpus-config.json",
-	"scripts/oracle/strict_recorder.cpp",
-}
 
 type pinnedManifest struct {
 	Schema              int                         `json:"schema"`
@@ -258,8 +251,8 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 }
 
 func validatePinnedManifestAt(manifest pinnedManifest, repository string) (map[string]pinnedProfile, error) {
-	if manifest.Schema != pinnedManifestSchema || manifest.FixtureVersion != pinnedFixtureVersion {
-		return nil, fmt.Errorf("required corpus format is schema %d/%s", pinnedManifestSchema, pinnedFixtureVersion)
+	if (manifest.Schema != 4 && manifest.Schema != pinnedManifestSchema) || manifest.FixtureVersion != pinnedFixtureVersion {
+		return nil, fmt.Errorf("required corpus format is schema 4 or %d with %s fixtures", pinnedManifestSchema, pinnedFixtureVersion)
 	}
 	if manifest.OracleRepository != pinnedOracleRepository || manifest.RippledTag != pinnedOracleTag || manifest.RippledCommit != pinnedOracleCommit {
 		return nil, fmt.Errorf("required oracle is %s tag %s commit %s", pinnedOracleRepository, pinnedOracleTag, pinnedOracleCommit)
@@ -277,10 +270,19 @@ func validatePinnedManifestAt(manifest pinnedManifest, repository string) (map[s
 	if manifest.BuildIdentity != expectedBuildIdentity || !fs.ValidPath(manifest.BuildIdentity) || strings.Contains(manifest.BuildIdentity, "\\") {
 		return nil, errors.New("build_identity must identify the archived recorder build identity")
 	}
-	if len(manifest.RecorderSources) != len(pinnedRecorderSources) {
+	expectedSources := []string{
+		"scripts/oracle/record-v4.py",
+		"scripts/oracle/record-v4.sh",
+		"scripts/oracle/strict-corpus-config.json",
+		"scripts/oracle/strict_recorder.cpp",
+	}
+	if manifest.Schema == pinnedManifestSchema {
+		expectedSources = append(expectedSources, rippled.PinPath)
+	}
+	if len(manifest.RecorderSources) != len(expectedSources) {
 		return nil, errors.New("recorder_sources must contain the complete recorder source inventory")
 	}
-	for _, name := range pinnedRecorderSources {
+	for _, name := range expectedSources {
 		if _, ok := manifest.RecorderSources[name]; !ok {
 			return nil, fmt.Errorf("recorder_sources is missing %s", name)
 		}
