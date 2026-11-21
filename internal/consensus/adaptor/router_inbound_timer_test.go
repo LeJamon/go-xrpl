@@ -39,7 +39,7 @@ func TestRetryInboundLedgerAcquisitionsDoesNotDeferForUnrelatedQueuedReply(t *te
 func TestMaintenanceRetriesOnConfiguredAcquisitionClock(t *testing.T) {
 	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
 	sender := &recordingSender{acquisitionPeers: []uint64{7}}
-	router := newRouter(nil, New(Config{}), nil, routerNetworkConfig{acquisition: sender, inboundClock: clock})
+	router := newRouter(nil, New(Config{}), nil, routerNetworkConfig{acquisition: sender, inboundClock: clock}, routerDeps{})
 	hash := [32]byte{0x92}
 	trackCatchupPeer(router, 7, 42, hash)
 	_, started, _ := router.RequestLedger(hash, 42)
