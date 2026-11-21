@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
@@ -31,10 +32,13 @@ import (
 
 const (
 	snapshotFixtureVersion = "v4"
-	snapshotOracleRepo     = "XRPLF/xrpld-private"
-	snapshotOracleTag      = "3.4.1"
-	snapshotOracleCommit   = "d147fccf54a500fce586522f28d6044c37fd8d29"
 	snapshotSubmitBoundary = "open_ledger"
+)
+
+var (
+	snapshotOracleRepo   = rippled.Pin.Repository
+	snapshotOracleTag    = rippled.Pin.Tag
+	snapshotOracleCommit = rippled.Pin.Commit
 )
 
 // snapshotFixture is the self-contained v4 differential fixture. The input

@@ -2,9 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-CORPUS="internal/testing/conformance/testdata/rippled-3.4.1-v4"
+. ./internal/testutil/rippled/pin.env
 OUT="docs/conformance-status.md"
-if ! SUMMARY=$(GOXRPL_CONFORMANCE_REPORT= ./scripts/conformance-summary.sh --corpus "$CORPUS"); then
+if ! SUMMARY=$(GOXRPL_CONFORMANCE_REPORT= ./scripts/conformance-summary.sh --corpus "$ORACLE_CORPUS"); then
     printf '%s\n' "$SUMMARY" >&2
     exit 1
 fi
@@ -15,7 +15,7 @@ fi
     echo "# Conformance status"
     echo ""
     echo "The result of executing the committed conformance corpus"
-    echo "\`$CORPUS\`,"
+    echo "\`$ORACLE_CORPUS\`,"
     echo "produced by [\`scripts/conformance-summary.sh\`](https://github.com/LeJamon/go-xrpl/blob/main/scripts/conformance-summary.sh)."
     echo "The required CI conformance job executes the same corpus."
     echo ""

@@ -542,15 +542,6 @@ func (o *Overlay) selectMessageChargeReason(evt *Event, reason string) {
 	o.selectMessageCharge(evt, chargeForReason(reason), reason)
 }
 
-// peerNegotiatedLedgerReplay reports whether the peer identified by
-// peerID advertised the ledger-replay feature during handshake. Used
-// to gate serving mtREPLAY_DELTA_REQ and mtPROOF_PATH_REQ: these
-// frames from a peer that didn't negotiate the feature indicate a
-// protocol violation.
-func (o *Overlay) peerNegotiatedLedgerReplay(peerID PeerID) bool {
-	return o.PeerSupports(peerID, FeatureLedgerReplay)
-}
-
 // PeerSupports reports whether the peer identified by peerID has
 // advertised support for the given protocol feature via its handshake
 // headers. Returns false when the peer is unknown, the handshake has

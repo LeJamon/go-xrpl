@@ -58,7 +58,7 @@ func TestAcquisitionCompletionMemorySurvivesPreparedReplayPlateau(t *testing.T) 
 	target := links[len(links)-1]
 	trackCatchupPeer(r, 7, target.seq, target.hash)
 	require.True(t, r.catchupReplay.tryArmStandardReplayPipeline(svc, svc.GetClosedLedger(), target.seq, target.hash, 7))
-	r.catchupReplay.standardReplay.pivotReady = false
+	r.catchupReplay.standardReplay.phase = standardReplayAcquiringPivot
 	budget := r.catchupReplay.acquisitionMemory
 	for i, link := range links {
 		il := r.catchupReplay.fetchTracker.Find(link.hash)

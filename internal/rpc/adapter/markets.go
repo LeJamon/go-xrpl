@@ -21,7 +21,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		return nil, err
 	}
 
-	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit, marker, withProofs)
+	result, err := a.backend().GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit, marker, withProofs)
 	if err != nil {
 		return nil, err
 	}
@@ -78,12 +78,12 @@ func rpcBookAmount(amount types.Amount) (tx.Amount, error) {
 
 // UseTxTables implements types.TxTablesProvider.
 func (a *LedgerServiceAdapter) UseTxTables() bool {
-	return a.svc.UseTxTables()
+	return a.backend().UseTxTables()
 }
 
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
 func (a *LedgerServiceAdapter) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
-	result, err := a.svc.GetNoRippleCheck(ctx, account, role, ledgerIndex, limit, transactions)
+	result, err := a.backend().GetNoRippleCheck(ctx, account, role, ledgerIndex, limit, transactions)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (a *LedgerServiceAdapter) GetNoRippleCheck(ctx context.Context, account str
 }
 
 func (a *LedgerServiceAdapter) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
-	result, err := a.svc.GetGatewayBalances(ctx, account, hotWallets, ledgerIndex)
+	result, err := a.backend().GetGatewayBalances(ctx, account, hotWallets, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (a *LedgerServiceAdapter) GetGatewayBalances(ctx context.Context, account s
 
 // GetDepositAuthorized checks if a source account is authorized to deposit to a destination account
 func (a *LedgerServiceAdapter) GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
-	result, err := a.svc.GetDepositAuthorized(ctx, sourceAccount, destinationAccount, ledgerIndex, credentials)
+	result, err := a.backend().GetDepositAuthorized(ctx, sourceAccount, destinationAccount, ledgerIndex, credentials)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +198,7 @@ func (a *LedgerServiceAdapter) GetDepositAuthorized(ctx context.Context, sourceA
 
 // GetNFTBuyOffers retrieves buy offers for an NFToken
 func (a *LedgerServiceAdapter) GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	result, err := a.svc.GetNFTBuyOffers(ctx, nftID, ledgerIndex, limit, marker)
+	result, err := a.backend().GetNFTBuyOffers(ctx, nftID, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func (a *LedgerServiceAdapter) GetNFTBuyOffers(ctx context.Context, nftID [32]by
 
 // GetNFTSellOffers retrieves sell offers for an NFToken
 func (a *LedgerServiceAdapter) GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	result, err := a.svc.GetNFTSellOffers(ctx, nftID, ledgerIndex, limit, marker)
+	result, err := a.backend().GetNFTSellOffers(ctx, nftID, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}

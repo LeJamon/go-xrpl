@@ -44,8 +44,8 @@ func TestVerifiedSourceRejectsWrongIdentityAndContent(t *testing.T) {
 		commits []string
 	}{
 		{"single_commit", []string{sha}},
-		{"first_commit", []string{sha, commit}},
-		{"alternate_commit", []string{commit, sha}},
+		{"first_commit", []string{sha, Pin.Commit}},
+		{"alternate_commit", []string{Pin.Commit, sha}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got, err := verifiedFile(t.Context(), root, relative, test.commits...); err != nil || got != path {
@@ -57,7 +57,7 @@ func TestVerifiedSourceRejectsWrongIdentityAndContent(t *testing.T) {
 		name, relative, diagnostic string
 		commits                    []string
 	}{
-		{"wrong_commit", relative, "rev-parse", []string{commit, publicCommit}},
+		{"wrong_commit", relative, "rev-parse", []string{Pin.Commit, Pin.PublicCommit}},
 		{"no_commits", relative, "rev-parse", nil},
 		{"unrecorded_file", "include/xrpl/protocol/detail/features.macro", "unrecorded", []string{sha}},
 		{"path_traversal", "../LedgerFormats.h", "unrecorded", []string{sha}},
@@ -71,11 +71,11 @@ func TestVerifiedSourceRejectsWrongIdentityAndContent(t *testing.T) {
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifiedFile(t.Context(), root, relative, commit, sha); err == nil || !strings.Contains(err.Error(), "status") {
+	if _, err := verifiedFile(t.Context(), root, relative, Pin.Commit, sha); err == nil || !strings.Contains(err.Error(), "status") {
 		t.Fatalf("want dirty source rejection, got %v", err)
 	}
 	sha = commitFixture()
-	if _, err := verifiedFile(t.Context(), root, relative, commit, sha); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+	if _, err := verifiedFile(t.Context(), root, relative, Pin.Commit, sha); err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("want changed content rejection, got %v", err)
 	}
 }

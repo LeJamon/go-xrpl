@@ -288,6 +288,8 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
 	require.Equal(t, canonical.Hash(), base.ledgerService.GetValidatedLedger().Hash())
 
+	// A recovery request made while the production build is still running must
+	// remain busy until the acceptance job has reconciled its result.
 	result, err := engine.TrySwitchToLedger(consensus.LedgerID(canonical.Hash()))
 	require.NoError(t, err)
 	require.Equal(t, consensus.LedgerSwitchBusy, result)
