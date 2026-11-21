@@ -94,8 +94,38 @@ func BenchmarkDecodeClassicAddressToAccountID(b *testing.B) {
 
 	for _, tc := range tt {
 		b.Run(tc.description, func(b *testing.B) {
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				DecodeClassicAddressToAccountID(tc.input)
+			}
+		})
+	}
+}
+
+func BenchmarkEncodeAccountIDToClassicAddress(b *testing.B) {
+	_, accountID, err := DecodeClassicAddressToAccountID("rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := EncodeAccountIDToClassicAddress(accountID); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBase58CheckDecode(b *testing.B) {
+	for _, in := range []string{
+		"rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN",
+		"n9MDGCfimuyCmKXUAMcR12rv39PE6PY5YfFpNs75ZjtY3UWt31td",
+	} {
+		b.Run(in[:1], func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := Base58CheckDecode(in); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}
