@@ -38,7 +38,7 @@ func decodeCurrencyCode(data []byte) (string, error) {
 	// rippled forbids the ISO-style representation of the system code, so a
 	// standard-form "XRP" falls through to hex (UintTypes.cpp:73).
 	if isAllZero(data[0:12]) && isAllZero(data[15:20]) &&
-		iouCodeRegex.Match(data[12:15]) &&
+		isISOCode(data[12:15]) &&
 		!bytes.Equal(data[12:15], []byte("XRP")) {
 		return string(data[12:15]), nil
 	}
@@ -63,7 +63,7 @@ func encodeCurrencyCode(currency string) ([]byte, error) {
 		return append([]byte(nil), noCurrencyBytes...), nil
 
 	case len(currency) == 3:
-		if len(iouCodeRegex.FindAllString(currency, -1)) != 1 {
+		if !isISOCode(currency) {
 			return nil, errInvalidCurrencyCode
 		}
 		currencyBytes := make([]byte, 20)
@@ -86,4 +86,27 @@ func encodeCurrencyCode(currency string) ([]byte, error) {
 	default:
 		return nil, &InvalidCodeError{Disallowed: currency}
 	}
+}
+
+// isISOCode reports whether code is exactly three bytes from rippled's
+// isoCharSet, the set IOUCodeRegex describes: ASCII letters and digits plus
+// <>(){}[]|?!@#$%^&*.
+func isISOCode[T string | []byte](code T) bool {
+	if len(code) != 3 {
+		return false
+	}
+	for i := range len(code) {
+		if !isISOChar(code[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isISOChar(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	}
+	return strings.IndexByte("<>(){}[]|?!@#$%^&*", c) >= 0
 }
