@@ -46,7 +46,7 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 // applies any delta to ctx.Account.OwnerCount. This is needed because the
 // engine writes ctx.Account back to the view after Apply(), overwriting
 // view-based changes. When IOU payments auto-create trust lines for the
-// submitter via adjustOwnerCountViaView, those changes are lost unless
+// submitter via tx.AdjustOwnerCount, those changes are lost unless
 // synced back to ctx.Account.
 // Reference: rippled stores the account SLE in the view, so changes are
 // automatic. go-xrpl uses a separate ctx.Account copy.
@@ -149,8 +149,8 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
 		return ter.TecINTERNAL
 	}
-	adjustOwnerCountViaView(ctx.View, buyerID, -1)
-	adjustOwnerCountViaView(ctx.View, sellerID, -1)
+	_ = tx.AdjustOwnerCount(ctx.View, buyerID, -1)
+	_ = tx.AdjustOwnerCount(ctx.View, sellerID, -1)
 
 	buyIsXRP := buyOffer.AmountIOU == nil
 
@@ -286,8 +286,8 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	}
 
 	// Adjust OwnerCount for page changes from the transfer.
-	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
-	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
+	_ = tx.AdjustOwnerCount(ctx.View, sellerID, -xferResult.FromPagesRemoved)
+	_ = tx.AdjustOwnerCount(ctx.View, buyerID, xferResult.ToPagesCreated)
 
 	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
@@ -319,7 +319,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
 		return ter.TecINTERNAL
 	}
-	adjustOwnerCountViaView(ctx.View, sellerID, -1)
+	_ = tx.AdjustOwnerCount(ctx.View, sellerID, -1)
 
 	if sellOffer.AmountIOU != nil {
 		// IOU payment path
@@ -395,7 +395,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	}
 
 	// Adjust OwnerCount for page changes from the transfer.
-	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
+	_ = tx.AdjustOwnerCount(ctx.View, sellerID, -xferResult.FromPagesRemoved)
 	ctx.Account.OwnerCount += uint32(xferResult.ToPagesCreated)
 
 	if r := checkBuyerReserve(ctx, accountID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
@@ -428,7 +428,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
 		return ter.TecINTERNAL
 	}
-	adjustOwnerCountViaView(ctx.View, buyerID, -1)
+	_ = tx.AdjustOwnerCount(ctx.View, buyerID, -1)
 
 	if buyOffer.AmountIOU != nil {
 		// IOU payment path: buyer pays seller via trust lines
@@ -504,7 +504,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 
 	// Adjust OwnerCount for page changes from the transfer.
 	ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, xferResult.FromPagesRemoved)
-	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
+	_ = tx.AdjustOwnerCount(ctx.View, buyerID, xferResult.ToPagesCreated)
 
 	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r

@@ -7,7 +7,6 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // FlowCrossParams groups the offer-crossing options and amendment flags passed
@@ -158,7 +157,7 @@ func FlowCross(
 	} else if !takerGets.IsNative() {
 		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
-			transferRate := GetTransferRate(view, issuerID)
+			transferRate := tx.GetTransferRateByID(view, issuerID)
 			if transferRate != QualityOne {
 				// Reference: rippled CreateOffer.cpp line 348-352:
 				//   sendMax = multiplyRound(takerAmount.in, gatewayXferRate, takerAmount.in.issue(), true)
@@ -353,7 +352,7 @@ func FlowCross(
 	} else if !takerGets.IsNative() {
 		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
-			transferRate := GetTransferRate(view, issuerID)
+			transferRate := tx.GetTransferRateByID(view, issuerID)
 			if transferRate != QualityOne && transferRate > 0 {
 				rateAmt := rateAsAmount(transferRate)
 				netResult := state.DivRoundWithNumberContext(
@@ -455,29 +454,6 @@ func zeroCrossAmount(amt tx.Amount) EitherAmount {
 	return ZeroIOUEitherAmount(amt.Currency, amt.Issuer)
 }
 
-// GetTransferRate returns the transfer rate for an issuer account.
-// Transfer rate is stored as a uint32 where QualityOne (1,000,000,000) means no fee.
-// A value of 1,020,000,000 means a 2% transfer fee.
-//
-// Returns QualityOne if the issuer doesn't exist or has no transfer rate set.
-func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
-	accountKey := keylet.Account(issuer)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return QualityOne
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return QualityOne
-	}
-
-	if account.TransferRate == 0 {
-		return QualityOne
-	}
-	return account.TransferRate
-}
-
 // AccountFundsInSandbox returns account funds with BalanceHook applied.
 // Matches rippled's accountFunds(psb, ...) in CreateOffer.cpp line 432.
 // BalanceHook subtracts DeferredCredits so self-crossing round-trips report zero.
@@ -485,7 +461,7 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 	if amount.IsMPT() {
 		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 	}
-	rawBalance := tx.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
+	rawBalance := mptutil.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 
 	if amount.IsNative() {
 		return sb.BalanceHook(accountID, [20]byte{}, rawBalance), ter.TesSUCCESS
@@ -500,7 +476,7 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 
 func accountFundsForCross(view tx.LedgerView, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, reserveBase, reserveIncrement uint64) (tx.Amount, ter.Result) {
 	if !amount.IsMPT() {
-		return tx.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement), ter.TesSUCCESS
+		return mptutil.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement), ter.TesSUCCESS
 	}
 	id, ok := decodeMPTID(amount.MPTIssuanceID())
 	if !ok {
