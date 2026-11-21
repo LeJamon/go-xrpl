@@ -7,10 +7,6 @@ import "fmt"
 // frames are represented by a version-only Endpoints value so they never make
 // the protobuf runtime allocate a repeated list that will be discarded.
 func DecodeEndpointsForPeer(data []byte) (*Endpoints, bool, error) {
-	// The peer frame reader enforces this cap before handing payloads to the
-	// message package. Keep the same bound for direct callers so a valid small
-	// entry count cannot make Decode materialize an arbitrarily large unknown
-	// field payload.
 	if len(data) > smallMsgMax {
 		return nil, false, fmt.Errorf("endpoints payload exceeds %d bytes", smallMsgMax)
 	}
