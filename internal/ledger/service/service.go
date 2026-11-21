@@ -123,7 +123,8 @@ type Config struct {
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
 	NodeStore nodestore.Database
 
-	// SHAMapFamily loads and stores state and transaction tree nodes.
+	// SHAMapFamily loads and stores state and transaction tree nodes. When NodeStore is set,
+	// its Sync must cover writes made by the family, including snapshot flushes.
 	SHAMapFamily shamap.Family
 	// FastLoad restores the newest complete persisted ledger at startup.
 	FastLoad bool
@@ -257,7 +258,7 @@ type Service struct {
 	configuredFees drops.Fees
 
 	// NodeStore for persistent storage (nil if in-memory only)
-	nodeStore    nodestore.Database
+	nodeStore    *boundNodeStore
 	shamapFamily shamap.Family
 
 	// replayProofMu protects the bounded in-memory certificates used by
@@ -572,6 +573,10 @@ func New(cfg Config) (*Service, error) {
 			appconfig.MinLedgerCacheSize, appconfig.MaxLedgerCacheSize, cfg.LedgerCacheSize)
 	}
 
+	if family, ok := cfg.SHAMapFamily.(nodeStoreFamily); ok && cfg.NodeStore != nil && !family.UsesDatabase(cfg.NodeStore) {
+		return nil, errors.New("invalid ledger service configuration: SHAMap family is not backed by the configured node store")
+	}
+
 	logger := cfg.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()
@@ -608,7 +613,7 @@ func New(cfg Config) (*Service, error) {
 		config:         cfg,
 		logger:         logger.Named(xrpllog.PartitionLedger),
 		configuredFees: configuredFees,
-		nodeStore:      cfg.NodeStore,
+		nodeStore:      bindNodeStore(cfg.NodeStore),
 		shamapFamily:   cfg.SHAMapFamily,
 		relationalDB:   cfg.RelationalDB,
 		amendmentTable: cfg.Table,

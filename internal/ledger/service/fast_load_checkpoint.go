@@ -206,7 +206,7 @@ func (s *Service) consumeFastLoadCheckpoint(ctx context.Context) (*fastLoadCheck
 	if s.nodeStore == nil {
 		return nil, nil
 	}
-	node, fetchErr := s.nodeStore.Fetch(ctx, fastLoadCheckpointKey)
+	node, fetchErr := s.nodeStore.database().Fetch(ctx, fastLoadCheckpointKey)
 	if node == nil && fetchErr == nil {
 		s.logger.Info("Fast-load checkpoint unavailable", "reason", "missing")
 		return nil, nil
@@ -228,8 +228,8 @@ func (s *Service) consumeFastLoadCheckpoint(ctx context.Context) (*fastLoadCheck
 		s.logger.Info("Fast-load checkpoint unavailable", "reason", "tombstone")
 		return nil, nil
 	}
-	durable, ok := s.nodeStore.(nodestore.DurableDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durable
+	if durable == nil {
 		return nil, errors.New("consume fast-load checkpoint: NodeStore has no durable checkpoint capability")
 	}
 	tombstoneData := encodeFastLoadCheckpoint(nil)
@@ -438,8 +438,8 @@ func (s *Service) AcquireFastLoadStateBase(ctx context.Context) ([32]byte, func(
 	if !eligible {
 		return [32]byte{}, nil, false, nil
 	}
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return [32]byte{}, nil, false, errors.New("NodeStore cannot retain a durable snapshot")
 	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
@@ -491,8 +491,8 @@ func (s *Service) AcquireValidatedStateBase(ctx context.Context) ([32]byte, func
 		return [32]byte{}, nil, false, nil
 	}
 
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return [32]byte{}, nil, false, errors.New("NodeStore cannot retain a durable validated state base")
 	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
@@ -621,7 +621,7 @@ func (s *Service) PrepareFastLoadCheckpoint(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("re-certify checkpoint state base: %w", err)
 		}
 	}
-	if err := s.nodeStore.Sync(ctx); err != nil {
+	if err := s.nodeStore.database().Sync(ctx); err != nil {
 		return false, fmt.Errorf("sync NodeStore before fast-load checkpoint: %w", err)
 	}
 	s.mu.RLock()
@@ -635,7 +635,7 @@ func (s *Service) PrepareFastLoadCheckpoint(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("load newest relational ledger for checkpoint: %w", err)
 	}
-	tip, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	tip, err := s.nodeStore.database().Fetch(ctx, validatedTipKey)
 	if err != nil {
 		return false, fmt.Errorf("fetch durable validated tip for checkpoint: %w", err)
 	}
@@ -643,7 +643,7 @@ func (s *Service) PrepareFastLoadCheckpoint(ctx context.Context) (bool, error) {
 		len(tip.Data) != 32 || !bytes.Equal(tip.Data, h.Hash[:]) {
 		return false, errors.New("durable validated tip does not match latest validated ledger")
 	}
-	storedHeader, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(h.Hash))
+	storedHeader, err := s.nodeStore.database().Fetch(ctx, nodestore.Hash256(h.Hash))
 	if err != nil {
 		return false, fmt.Errorf("fetch durable ledger header for checkpoint: %w", err)
 	}
@@ -742,8 +742,8 @@ func (s *Service) PrepareFastLoadCheckpoint(ctx context.Context) (bool, error) {
 }
 
 func (s *Service) fastLoadDurability() (nodestore.DurableDatabase, relationaldb.SchemaFingerprinter, error) {
-	durable, ok := s.nodeStore.(nodestore.DurableDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durable
+	if durable == nil {
 		return nil, nil, errors.New("NodeStore has no durable checkpoint capability")
 	}
 	schema, ok := s.relationalDB.(relationaldb.SchemaFingerprinter)

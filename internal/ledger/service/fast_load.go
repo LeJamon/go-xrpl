@@ -49,7 +49,7 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if err != nil || info == nil {
 		return nil, err
 	}
-	tip, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	tip, err := s.nodeStore.database().Fetch(ctx, validatedTipKey)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +145,8 @@ func (s *Service) verifyFastLoadStrictState(
 		return nil
 	}
 
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return metrics, [32]byte{}, false, verify()
 	}
 	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
@@ -181,7 +181,7 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	if s.nodeStore == nil || s.shamapFamily == nil {
 		return nil, nil
 	}
-	stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
+	stored, err := s.nodeStore.database().Fetch(ctx, nodestore.Hash256(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +392,7 @@ func (s *Service) verifyStoredSHAMapWithTicksReportPolicy(
 	report func(storedSHAMapVerificationMetrics),
 	policy storedSHAMapVerificationPolicy,
 ) (err error) {
-	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore, root, mapType, startedAt)
+	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore.database(), root, mapType, startedAt)
 	defer func() {
 		finishedAt := now()
 		progress.finish(finishedAt, err)
@@ -882,11 +882,9 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 }
 
 func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {
-	uncached, ok := s.nodeStore.(interface {
-		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
-	})
-	if !ok {
-		return s.nodeStore.Fetch
+	uncached := s.nodeStore.capabilities().uncached
+	if uncached == nil {
+		return s.nodeStore.database().Fetch
 	}
 	return func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
 		data, err := uncached.FetchDataUncached(ctx, hash)
@@ -898,10 +896,8 @@ func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {
 }
 
 func (s *Service) storedSHAMapVerificationBatchFetch() storedSHAMapBatchFetch {
-	uncached, ok := s.nodeStore.(interface {
-		FetchBatchUncached(context.Context, []nodestore.Hash256, int, int) ([]*nodestore.Node, error)
-	})
-	if !ok {
+	uncached := s.nodeStore.capabilities().uncachedBatch
+	if uncached == nil {
 		return nil
 	}
 	return func(
@@ -976,7 +972,7 @@ func (s *Service) walkStoredSHAMap(
 	mapType shamap.Type,
 	visit func([32]byte, *nodestore.Node) error,
 ) error {
-	return s.walkStoredSHAMapWithFetch(ctx, root, mapType, s.nodeStore.Fetch, visit)
+	return s.walkStoredSHAMapWithFetch(ctx, root, mapType, s.nodeStore.database().Fetch, visit)
 }
 
 func (s *Service) walkStoredSHAMapWithFetch(
@@ -1129,7 +1125,7 @@ func (s *Service) loadStoredSHAMapNode(
 	pending storedSHAMapNode,
 	mapType shamap.Type,
 ) (shamap.NodeReader, *nodestore.Node, error) {
-	return s.loadStoredSHAMapNodeWithFetch(ctx, pending, mapType, s.nodeStore.Fetch)
+	return s.loadStoredSHAMapNodeWithFetch(ctx, pending, mapType, s.nodeStore.database().Fetch)
 }
 
 func (s *Service) loadStoredSHAMapNodeWithFetch(

@@ -869,7 +869,7 @@ func TestService_FastLoadCheckpointDeadlinePreservesTombstone(t *testing.T) {
 		checkpointTrackingDatabase: tracked,
 		started:                    make(chan struct{}, 1),
 	}
-	svc.nodeStore = blocked
+	svc.nodeStore = bindNodeStore(blocked)
 	prepareCtx, cancelPrepare := context.WithTimeout(ctx, 25*time.Millisecond)
 	defer cancelPrepare()
 	prepared, err := svc.PrepareFastLoadCheckpoint(prepareCtx)
@@ -942,10 +942,6 @@ func newFastLoadCheckpointService(
 	})
 	require.NoError(t, err)
 	return svc
-}
-
-type uncachedNodeReader interface {
-	FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
 }
 
 type checkpointTrackingDatabase struct {
