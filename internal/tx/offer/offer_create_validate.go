@@ -242,7 +242,7 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 				return ter.TecUNFUNDED_OFFER
 			}
 		}
-		funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
+		funds := mptutil.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER
 		}

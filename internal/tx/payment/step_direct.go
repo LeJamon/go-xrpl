@@ -506,7 +506,7 @@ func (s *DirectStepI) qualitiesSrcIssuesDir(sb *PaymentSandbox, prevStepDir Debt
 	// Charge transfer rate when issuing and previous step redeems
 	var srcQOut uint32 = QualityOne
 	if Redeems(prevStepDir) {
-		srcQOut = s.transferRate(sb)
+		srcQOut = tx.GetTransferRateByID(sb, s.src)
 	}
 
 	dstQIn := s.quality(sb, true) // QualityDirection::in
@@ -629,11 +629,6 @@ func (s *DirectStepI) creditLimit(sb *PaymentSandbox) tx.Amount {
 	}
 	// dst is high account
 	return rs.HighLimit
-}
-
-// transferRate returns the transfer rate for src account
-func (s *DirectStepI) transferRate(sb *PaymentSandbox) uint32 {
-	return GetTransferRate(sb, s.src)
 }
 
 // DirectStepSrcAcct returns the source account for NoRipple checking
@@ -845,10 +840,10 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) ter.R
 	// tecINTERNAL, before the frozen test.
 	// Reference: rippled StepChecks.h:65-83.
 	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		switch tx.LPTokenFrozenForIssuer(view, src, dst) {
-		case tx.LPTokenAMMUnresolvable:
+		switch mptutil.LPTokenFrozenForIssuer(view, src, dst) {
+		case mptutil.LPTokenAMMUnresolvable:
 			return ter.TecINTERNAL
-		case tx.LPTokenFrozen:
+		case mptutil.LPTokenFrozen:
 			return ter.TerNO_LINE
 		}
 	}

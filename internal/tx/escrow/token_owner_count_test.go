@@ -40,17 +40,17 @@ func (m *mapView) TxExists([32]byte) (bool, error)               { return false,
 func (m *mapView) Rules() *amendment.Rules                       { return nil }
 func (m *mapView) LedgerSeq() uint32                             { return 0 }
 
-// TestAdjustOwnerCountViaView_PreservesPresentZeroAccountTxnID is a regression
+// TestEscrowOwnerCountBump_PreservesPresentZeroAccountTxnID is a regression
 // for the #741 account_hash fork. A token-escrow finish that creates the
-// destination's trust line / MPToken bumps the destination's OwnerCount via
-// adjustOwnerCountViaView, which re-serializes its AccountRoot. The previous
+// destination's trust line / MPToken bumps the destination's OwnerCount, which
+// re-serializes its AccountRoot. The previous
 // hand-rolled serializer emitted sfAccountTxnID only when non-zero, so a
 // present-but-zero AccountTxnID (asfAccountTxnID enabled, account not used
 // since — rippled makeFieldPresent semantics) was silently dropped, forking
 // account_hash from rippled, which keeps every present field. The fix delegates
 // to the canonical tx.AdjustOwnerCount / state.SerializeAccountRoot, which key
 // on presence.
-func TestAdjustOwnerCountViaView_PreservesPresentZeroAccountTxnID(t *testing.T) {
+func TestEscrowOwnerCountBump_PreservesPresentZeroAccountTxnID(t *testing.T) {
 	view := newMapView()
 	var dest [20]byte
 	dest[0], dest[19] = 0xab, 0xcd
@@ -70,8 +70,11 @@ func TestAdjustOwnerCountViaView_PreservesPresentZeroAccountTxnID(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(key, blob))
 
-	// The token-escrow finish trust-line / MPToken create path.
-	require.Equal(t, ter.TesSUCCESS, adjustOwnerCountViaView(view, dest, 1))
+	const mptHexID = "0000000100000000000000000000000000000000000000AB"
+	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
+	require.NoError(t, err)
+	require.Equal(t, ter.TesSUCCESS,
+		createMPTokenForEscrow(view, nil, issuanceKey, mptHexID, dest, dest, true))
 
 	out, err := view.Read(key)
 	require.NoError(t, err)

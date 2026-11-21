@@ -9,6 +9,7 @@ import (
 	codecTypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -255,7 +256,7 @@ func (v *VaultCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 		}
 	}
 
-	if res := checkFrozen(view, asset, accountID); res != ter.TesSUCCESS {
+	if res := mptutil.CheckFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 		return res
 	}
 
