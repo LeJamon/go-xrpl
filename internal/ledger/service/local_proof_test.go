@@ -117,7 +117,7 @@ func TestAcceptConsensusResultRetainsLocalChildReplayProofAcrossRollback(t *test
 		syncStarted:     make(chan struct{}, 1),
 		syncRelease:     make(chan struct{}),
 	}
-	svc.nodeStore = dbGate
+	svc.nodeStore = bindNodeStore(dbGate)
 	blob, _ := startupPaymentBlob(t, "local-child-provenance", 1)
 	outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
 	require.NoError(t, err)

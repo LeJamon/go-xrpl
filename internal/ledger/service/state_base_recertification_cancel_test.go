@@ -39,7 +39,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 					target:                     nodestore.Hash256(f.childHash), started: make(chan struct{}), release: make(chan struct{}),
 				},
 			}
-			f.svc.nodeStore = db
+			f.svc.nodeStore = bindNodeStore(db)
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			t.Cleanup(func() {

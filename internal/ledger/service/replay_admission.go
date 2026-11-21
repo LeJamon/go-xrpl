@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 const (
@@ -379,7 +378,7 @@ func (s *Service) replaySnapshotProvider() replaySnapshotProvider {
 	if provider, ok := s.shamapFamily.(replaySnapshotProvider); ok {
 		return provider
 	}
-	if durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase); ok {
+	if durable := s.nodeStore.capabilities().durableSnapshot; durable != nil {
 		return durable
 	}
 	return nil
