@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -945,6 +946,54 @@ func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
 
 	want := uint32((2 * resource.FeeInvalidData().Cost()) / resource.DecayWindowSeconds)
 	assert.Equal(t, want, peer.BadDataCount())
+}
+
+// TestHandleEndpoints_ChargesOncePerMessage pins rippled's single
+// per-message charge for TMEndpoints. A frame that does not parse is charged
+// whatever the peer's tracking state, since rippled rejects it before the
+// handler's tracking gate; malformed entries add up to one charge.
+func TestHandleEndpoints_ChargesOncePerMessage(t *testing.T) {
+	oversized := make([]byte, 0, 2*endpointsIngestMaxEntries)
+	for range endpointsIngestMaxEntries {
+		oversized = protowire.AppendTag(oversized, 3, protowire.BytesType)
+		oversized = protowire.AppendVarint(oversized, 0)
+	}
+	valid := encodeEndpoints(t, 2, []message.Endpointv2{{Endpoint: "10.0.0.9:51235", Hops: 1}})
+
+	tests := []struct {
+		name     string
+		tracking PeerTracking
+		payload  []byte
+		want     string
+	}{
+		{"missing version from diverged peer", PeerTrackingDiverged, nil,
+			"[invalid data ($400)(mtENDPOINTS endpoints-decode)]"},
+		{"missing version from converged peer", PeerTrackingConverged, nil,
+			"[invalid data ($400)(mtENDPOINTS endpoints-decode)]"},
+		{"too many entries", PeerTrackingConverged, oversized,
+			"[useless data ($150)(mtENDPOINTS endpoints-too-large)]"},
+		{"malformed entries", PeerTrackingConverged, encodeEndpoints(t, 2, []message.Endpointv2{
+			{Endpoint: "not-an-endpoint", Hops: 1},
+			{Endpoint: "10.0.0.9:51235", Hops: 1},
+			{Endpoint: "evil-host:51235", Hops: 1},
+		}), "[invalid data ($800)(mtENDPOINTS endpoints-malformed)]"},
+		{"valid from diverged peer", PeerTrackingDiverged, valid, "[" + trivial + "(mtENDPOINTS)]"},
+		{"valid from converged peer", PeerTrackingConverged, valid, "[" + trivial + "(mtENDPOINTS)]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o, peer := newEndpointsTestOverlay(t, PeerID(18))
+			peer.setTracking(tc.tracking)
+			charges := &chargeRecorder{}
+			clock := time.Unix(1_700_000_000, 0)
+			peer.usage = resource.NewManager(func() time.Time { return clock }, slog.New(charges)).
+				NewInboundEndpoint(peer.endpoint.String())
+			peer.onDropDisconnect = func() {}
+
+			o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: tc.payload})
+			assert.Equal(t, tc.want, charges.String())
+		})
+	}
 }
 
 // TestHandleEndpoints_RejectsOversizedFrame pins PeerImp.cpp:1206-1210: a

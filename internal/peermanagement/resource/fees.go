@@ -5,6 +5,7 @@ func FeeRequestNoReply() Charge     { return NewCharge(10, "unsatisfiable reques
 func FeeInvalidSignature() Charge   { return NewCharge(2000, "invalid signature") }
 func FeeUselessData() Charge        { return NewCharge(150, "useless data") }
 func FeeInvalidData() Charge        { return NewCharge(400, "invalid data") }
+func FeeMalformedData() Charge      { return NewCharge(2000, "malformed data") }
 func FeeMalformedRPC() Charge       { return NewCharge(100, "malformed RPC") }
 func FeeReferenceRPC() Charge       { return NewCharge(20, "reference RPC") }
 func FeeExceptionRPC() Charge       { return NewCharge(100, "exceptioned RPC") }

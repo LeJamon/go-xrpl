@@ -54,7 +54,7 @@ func TestTrafficCounterCategorize(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		result := CategorizeMessage(tc.msgType)
+		result := CategorizeMessage(tc.msgType, true)
 		if result != tc.expected {
 			t.Errorf("CategorizeMessage(%d) = %v, expected %v", tc.msgType, result, tc.expected)
 		}
@@ -81,6 +81,14 @@ func TestTrafficCategoryString(t *testing.T) {
 		{CategoryBase, "overhead"},
 		{CategoryTransaction, "transactions"},
 		{CategoryValidation, "validations"},
+		{CategoryGetSet, "set_get"},
+		{CategoryShareSet, "set_share"},
+		{CategoryProofPathRequest, "proof_path_request"},
+		{CategoryProofPathResponse, "proof_path_response"},
+		{CategoryReplayDeltaRequest, "replay_delta_request"},
+		{CategoryReplayDeltaResponse, "replay_delta_response"},
+		{CategoryHaveTransactions, "have_transactions"},
+		{CategoryRequestedTransactions, "requested_transactions"},
 		{CategoryTotal, "total"},
 		{CategoryUnknown, "unknown"},
 	}

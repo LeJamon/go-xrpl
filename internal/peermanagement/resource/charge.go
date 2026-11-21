@@ -28,6 +28,9 @@ func NewCharge(cost int, label string) Charge {
 
 func (c Charge) Cost() int { return c.cost }
 
+// Times returns c with its cost multiplied by n, keeping its label.
+func (c Charge) Times(n int) Charge { return NewCharge(c.cost*n, c.label) }
+
 func (c Charge) String() string {
 	return fmt.Sprintf("%s ($%d)", c.label, c.cost)
 }
