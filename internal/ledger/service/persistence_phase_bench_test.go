@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/membudget"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -95,6 +97,9 @@ func (c *persistPhaseChain) next(b *testing.B) *ledger.Ledger {
 	require.NoError(b, err)
 	closed := c.svc.GetClosedLedger()
 	require.Equal(b, uint32(len(blobs)), closed.TxCount())
+	c.svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
+	c.svc.FlushPersists()
+	require.True(b, closed.IsValidated())
 	return closed
 }
 
@@ -122,7 +127,15 @@ func benchmarkPersistLedgerPhases(b *testing.B, txPerLedger int) {
 
 	nodes := &phaseTimedNodeStore{Database: base}
 	relational := &phaseTimedRepositories{RepositoryManager: repositories}
-	writer := &Service{nodeStore: nodes, shamapFamily: backend.New(nodes), relationalDB: relational}
+	budget := membudget.New(shamap.DirtyWorkspaceBytes)
+	persistence, err := budget.NewAccount("persistence", shamap.DirtyWorkspaceBytes, shamap.DirtyWorkspaceBytes)
+	require.NoError(b, err)
+	writer := &Service{
+		config:       Config{PersistenceMemory: persistence},
+		nodeStore:    nodes,
+		shamapFamily: backend.New(nodes),
+		relationalDB: relational,
+	}
 	chain := newPersistPhaseChain(b, txPerLedger)
 	genesisLedger := chain.svc.GetClosedLedger()
 	require.NoError(b, writer.persistToNodeStore(b.Context(), genesisLedger, genesisLedger.Sequence()))
