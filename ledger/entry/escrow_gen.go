@@ -1067,11 +1067,17 @@ func (e *Escrow) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (e *Escrow) Encode() ([]byte, error) {
+	if err := e.validateEncode(); err != nil {
+		return nil, err
+	}
+	if e.hasXAddress() {
+		return e.encodeViaMap()
+	}
+	data, err := e.appendBinary(make([]byte, 0, e.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := e.encodeDirect()
 		verifyEncodeParity(e, data, err)
 	}
-	return e.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -1089,17 +1095,6 @@ func (e *Escrow) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (e *Escrow) encodeDirect() ([]byte, error) {
-	if err := e.validateEncode(); err != nil {
-		return nil, err
-	}
-	if e.hasXAddress() {
-		return e.encodeViaMap()
-	}
-	return e.appendBinary(make([]byte, 0, e.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

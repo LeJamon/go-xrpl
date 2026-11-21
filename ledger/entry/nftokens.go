@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 )
 
@@ -123,76 +121,4 @@ func emitIfChangedNFTokens(out map[string]any, name string, prev, curr []NFToken
 		return
 	}
 	out[name] = nftokensToAny(prev)
-}
-
-func (n *NFTokenPage) encodeNFTokens() ([]byte, error) {
-	if n.HasNFTokens() {
-		if err := validateNFTokensForEncode(n.NFTokens); err != nil {
-			return nil, err
-		}
-	}
-
-	// NFTokens sorts after every other page field. Encode the outer fields
-	// normally, then append the typed array without materializing JSON objects.
-	outer := *n
-	outer.present &^= nftokenpageBitNFTokens
-	fields := outer.ToMap()
-	if !n.HasPreviousTxnID() {
-		fields["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
-	}
-	if !n.HasPreviousTxnLgrSeq() {
-		fields["PreviousTxnLgrSeq"] = uint32(0)
-	}
-	data, err := binarycodec.EncodeBytes(fields)
-	if err != nil || !n.HasNFTokens() {
-		return data, err
-	}
-
-	size := 2
-	for _, token := range n.NFTokens {
-		size += 35 // wrapper, ID field and payload, object end marker
-		if token.HasURI() {
-			if len(token.URI) > 918744 {
-				return nil, serdes.ErrLengthPrefixTooLong
-			}
-			size += 1 + len(token.URI) + variableLengthSize(len(token.URI))
-		}
-	}
-	data = slices.Grow(data, size)
-	data = append(data, 0xFA)
-	for _, token := range n.NFTokens {
-		data = append(data, 0xEC, 0x5A)
-		data = append(data, token.NFTokenID[:]...)
-		if token.HasURI() {
-			data = append(data, 0x75)
-			data = appendVariableLength(data, len(token.URI))
-			data = append(data, token.URI...)
-		}
-		data = append(data, types.ObjectEndMarker)
-	}
-	return append(data, types.ArrayEndMarker), nil
-}
-
-func variableLengthSize(length int) int {
-	switch {
-	case length <= 192:
-		return 1
-	case length <= 12480:
-		return 2
-	default:
-		return 3
-	}
-}
-
-func appendVariableLength(data []byte, length int) []byte {
-	switch {
-	case length <= 192:
-		return append(data, byte(length))
-	case length <= 12480:
-		length -= 193
-		return append(data, byte((length>>8)+193), byte(length))
-	default:
-		length -= 12481
-		return append(data, byte((length>>16)+241), byte(length>>8), byte(length))
-	}
 }

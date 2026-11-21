@@ -1224,11 +1224,17 @@ func (l *LoanBroker) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LoanBroker) Encode() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
+		return nil, err
+	}
+	if l.hasXAddress() {
+		return l.encodeViaMap()
+	}
+	data, err := l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := l.encodeDirect()
 		verifyEncodeParity(l, data, err)
 	}
-	return l.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -1246,17 +1252,6 @@ func (l *LoanBroker) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (l *LoanBroker) encodeDirect() ([]byte, error) {
-	if err := l.validateEncode(); err != nil {
-		return nil, err
-	}
-	if l.hasXAddress() {
-		return l.encodeViaMap()
-	}
-	return l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

@@ -796,11 +796,17 @@ func (o *Oracle) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (o *Oracle) Encode() ([]byte, error) {
+	if err := o.validateEncode(); err != nil {
+		return nil, err
+	}
+	if o.hasXAddress() {
+		return o.encodeViaMap()
+	}
+	data, err := o.appendBinary(make([]byte, 0, o.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := o.encodeDirect()
 		verifyEncodeParity(o, data, err)
 	}
-	return o.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -818,17 +824,6 @@ func (o *Oracle) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (o *Oracle) encodeDirect() ([]byte, error) {
-	if err := o.validateEncode(); err != nil {
-		return nil, err
-	}
-	if o.hasXAddress() {
-		return o.encodeViaMap()
-	}
-	return o.appendBinary(make([]byte, 0, o.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

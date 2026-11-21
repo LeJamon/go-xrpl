@@ -1201,11 +1201,17 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (m *MPTokenIssuance) Encode() ([]byte, error) {
+	if err := m.validateEncode(); err != nil {
+		return nil, err
+	}
+	if m.hasXAddress() {
+		return m.encodeViaMap()
+	}
+	data, err := m.appendBinary(make([]byte, 0, m.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := m.encodeDirect()
 		verifyEncodeParity(m, data, err)
 	}
-	return m.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -1223,17 +1229,6 @@ func (m *MPTokenIssuance) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (m *MPTokenIssuance) encodeDirect() ([]byte, error) {
-	if err := m.validateEncode(); err != nil {
-		return nil, err
-	}
-	if m.hasXAddress() {
-		return m.encodeViaMap()
-	}
-	return m.appendBinary(make([]byte, 0, m.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

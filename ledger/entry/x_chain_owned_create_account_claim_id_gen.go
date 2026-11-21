@@ -660,11 +660,17 @@ func (x *XChainOwnedCreateAccountClaimID) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
+	if err := x.validateEncode(); err != nil {
+		return nil, err
+	}
+	if x.hasXAddress() {
+		return x.encodeViaMap()
+	}
+	data, err := x.appendBinary(make([]byte, 0, x.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := x.encodeDirect()
 		verifyEncodeParity(x, data, err)
 	}
-	return x.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -682,17 +688,6 @@ func (x *XChainOwnedCreateAccountClaimID) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (x *XChainOwnedCreateAccountClaimID) encodeDirect() ([]byte, error) {
-	if err := x.validateEncode(); err != nil {
-		return nil, err
-	}
-	if x.hasXAddress() {
-		return x.encodeViaMap()
-	}
-	return x.appendBinary(make([]byte, 0, x.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

@@ -1677,11 +1677,17 @@ func (a *AccountRoot) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (a *AccountRoot) Encode() ([]byte, error) {
+	if err := a.validateEncode(); err != nil {
+		return nil, err
+	}
+	if a.hasXAddress() {
+		return a.encodeViaMap()
+	}
+	data, err := a.appendBinary(make([]byte, 0, a.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := a.encodeDirect()
 		verifyEncodeParity(a, data, err)
 	}
-	return a.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -1699,17 +1705,6 @@ func (a *AccountRoot) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (a *AccountRoot) encodeDirect() ([]byte, error) {
-	if err := a.validateEncode(); err != nil {
-		return nil, err
-	}
-	if a.hasXAddress() {
-		return a.encodeViaMap()
-	}
-	return a.appendBinary(make([]byte, 0, a.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:
