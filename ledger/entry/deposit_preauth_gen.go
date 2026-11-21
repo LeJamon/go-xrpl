@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -607,13 +608,25 @@ func (d *DepositPreauth) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DepositPreauth) Encode() ([]byte, error) {
-	if err := d.validateRequired(); err != nil {
+	if err := d.validateEncode(); err != nil {
 		return nil, err
 	}
-	if d.present&depositpreauthBitAuthorizeCredentials != 0 {
-		if err := validateSTArrayForEncode("AuthorizeCredentials", d.AuthorizeCredentials); err != nil {
-			return nil, err
-		}
+	if d.hasXAddress() {
+		return d.encodeViaMap()
+	}
+	data, err := d.appendBinary(make([]byte, 0, d.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(d, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (d *DepositPreauth) encodeViaMap() ([]byte, error) {
+	if err := d.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := d.ToMap()
 	if d.present&depositpreauthBitPreviousTxnID == 0 {
@@ -623,6 +636,113 @@ func (d *DepositPreauth) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (d *DepositPreauth) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x70)
+	if d.present&depositpreauthBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), d.Flags)
+	}
+	if d.present&depositpreauthBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), d.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if d.present&depositpreauthBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), d.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&depositpreauthBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), d.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if d.present&depositpreauthBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), d.Account); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&depositpreauthBitAuthorize != 0 {
+		if dst, err = appendAccountID(append(dst, 0x85), d.Authorize); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&depositpreauthBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), d.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&depositpreauthBitAuthorizeCredentials != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x1A), "AuthorizeCredentials", d.AuthorizeCredentials); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (d *DepositPreauth) encodedSizeHint() int {
+	size := 41
+	if d.present&depositpreauthBitFlags != 0 {
+		size += 5
+	}
+	if d.present&depositpreauthBitOwnerNode != 0 {
+		size += 9
+	}
+	if d.present&depositpreauthBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(d.Account)
+	}
+	if d.present&depositpreauthBitAuthorize != 0 {
+		size += 1 + accountIDEncodedLen(d.Authorize)
+	}
+	if d.present&depositpreauthBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(d.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (d *DepositPreauth) hasXAddress() bool {
+	if d.present&depositpreauthBitOwnerNode != 0 && isXAddress(d.OwnerNode) {
+		return true
+	}
+	if d.present&depositpreauthBitPreviousTxnID != 0 && isXAddress(d.PreviousTxnID) {
+		return true
+	}
+	if d.present&depositpreauthBitAccount != 0 && isXAddress(d.Account) {
+		return true
+	}
+	if d.present&depositpreauthBitAuthorize != 0 && isXAddress(d.Authorize) {
+		return true
+	}
+	if d.present&depositpreauthBitSponsor != 0 && isXAddress(d.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (d *DepositPreauth) validateEncode() error {
+	if err := d.validateRequired(); err != nil {
+		return err
+	}
+	if d.present&depositpreauthBitAuthorizeCredentials != 0 {
+		if err := validateSTArrayForEncode("AuthorizeCredentials", d.AuthorizeCredentials); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

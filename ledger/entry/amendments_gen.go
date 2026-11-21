@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -519,16 +520,112 @@ func (a *Amendments) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (a *Amendments) Encode() ([]byte, error) {
-	if err := a.validateRequired(); err != nil {
+	if err := a.validateEncode(); err != nil {
 		return nil, err
 	}
-	if a.present&amendmentsBitMajorities != 0 {
-		if err := validateSTArrayForEncode("Majorities", a.Majorities); err != nil {
-			return nil, err
-		}
+	if a.hasXAddress() {
+		return a.encodeViaMap()
+	}
+	data, err := a.appendBinary(make([]byte, 0, a.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(a, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (a *Amendments) encodeViaMap() ([]byte, error) {
+	if err := a.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := a.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (a *Amendments) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x66)
+	if a.present&amendmentsBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), a.Flags)
+	}
+	if a.present&amendmentsBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), a.PreviousTxnLgrSeq)
+	}
+	if a.present&amendmentsBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), a.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&amendmentsBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), a.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&amendmentsBitMajorities != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x10), "Majorities", a.Majorities); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&amendmentsBitAmendments != 0 {
+		if dst, err = appendVector256(append(dst, 0x03, 0x13), "Amendments", a.Amendments); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (a *Amendments) encodedSizeHint() int {
+	size := 3
+	if a.present&amendmentsBitFlags != 0 {
+		size += 5
+	}
+	if a.present&amendmentsBitPreviousTxnLgrSeq != 0 {
+		size += 5
+	}
+	if a.present&amendmentsBitPreviousTxnID != 0 {
+		size += 33
+	}
+	if a.present&amendmentsBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(a.Sponsor)
+	}
+	if a.present&amendmentsBitAmendments != 0 {
+		size += 2 + vector256EncodedLen(a.Amendments)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (a *Amendments) hasXAddress() bool {
+	if a.present&amendmentsBitPreviousTxnID != 0 && isXAddress(a.PreviousTxnID) {
+		return true
+	}
+	if a.present&amendmentsBitSponsor != 0 && isXAddress(a.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (a *Amendments) validateEncode() error {
+	if err := a.validateRequired(); err != nil {
+		return err
+	}
+	if a.present&amendmentsBitMajorities != 0 {
+		if err := validateSTArrayForEncode("Majorities", a.Majorities); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

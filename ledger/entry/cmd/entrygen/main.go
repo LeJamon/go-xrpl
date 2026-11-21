@@ -19,10 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -167,6 +169,37 @@ type entryRender struct {
 	HasUnsupported         bool // any Amount field that may be IOU
 	AllowBadCurrencyDecode bool
 	EntryTypeCode          int
+	Writer                 writerRender
+}
+
+// writerRender is the direct binary writer of one entry type. Writes are in
+// canonical wire order, resolved here so the generated code never sorts.
+type writerRender struct {
+	EntryTypeBytes string // LedgerEntryType header and value
+	FixedSize      int    // bytes written whatever the presence bits
+	Writes         []writeRender
+	Decimals       []decimalRender // base-ten UInt64 fields, parsed before any write
+	NeedsErr       bool
+	UsesBinary     bool
+	UsesTypes      bool
+}
+
+type writeRender struct {
+	BitConst   string
+	ordinal    int32
+	decimal    *decimalRender
+	Infallible string // append expression for a value that cannot fail
+	Call       string // append expression returning ([]byte, error)
+	Deferred   string // append expression for the default of an absent field
+	SizeExpr   string // encoded size when present; empty when not estimated
+	XAddress   string // X-address predicate; empty when the value is never a string
+}
+
+type decimalRender struct {
+	BitConst string
+	Name     string
+	Value    string
+	Index    int
 }
 
 type decodeArm struct {
@@ -352,6 +385,12 @@ func generate(defs *definitions.Definitions, entry schema.Entry, outDir string) 
 		er.DecodeArms[tc] = arms
 	}
 
+	writer, err := buildWriter(defs, er, fieldInstances)
+	if err != nil {
+		return "", nil, err
+	}
+	er.Writer = writer
+
 	var buf strings.Builder
 	if err := tmpl.Execute(&buf, er); err != nil {
 		return "", nil, err
@@ -521,6 +560,150 @@ func attachCompound(fr *fieldRender) error {
 		return nil
 	}
 	return nil
+}
+
+// buildWriter plans the direct writer of one entry. It mirrors what
+// binarycodec.EncodeBytes does with the ToMap output: serialized fields only,
+// ordered by definitions ordinal (type code, then field code), each preceded
+// by the header the field ID codec emits and, for VL-encoded types, a length
+// prefix. Any field type the writer cannot reproduce exactly fails generation.
+func buildWriter(defs *definitions.Definitions, er entryRender, fieldInstances map[string]*definitions.FieldInstance) (writerRender, error) {
+	var w writerRender
+	fieldIDs := serdes.DefaultFieldIDCodec()
+
+	code, err := defs.LedgerEntryTypeCode(er.Name)
+	if err != nil {
+		return w, fmt.Errorf("LedgerEntryType %s: %w", er.Name, err)
+	}
+	if int(code) != er.EntryTypeCode {
+		return w, fmt.Errorf("LedgerEntryType %s: definitions code %d, registry code %d", er.Name, code, er.EntryTypeCode)
+	}
+	header, err := fieldIDs.Encode("LedgerEntryType")
+	if err != nil {
+		return w, err
+	}
+	w.EntryTypeBytes = byteList(append(header, byte(code>>8), byte(code)))
+	w.FixedSize = len(header) + 2
+
+	for _, fr := range er.Fields {
+		fi := fieldInstances[fr.Name]
+		if !fi.IsSerialized {
+			continue
+		}
+		switch fr.Name {
+		case "LedgerEntryType", "TransactionType", "TransactionResult", "PermissionValue":
+			return w, fmt.Errorf("field %s: codec special-cases its JSON value", fr.Name)
+		}
+		baseTen := definitions.IsBaseTenUInt64FieldName(fr.Name)
+		if baseTen && fi.Type != "UInt64" {
+			return w, fmt.Errorf("field %s: base-ten field has XRPL type %s", fr.Name, fi.Type)
+		}
+		header, err := fieldIDs.Encode(fr.Name)
+		if err != nil {
+			return w, fmt.Errorf("field %s: %w", fr.Name, err)
+		}
+		h := byteList(header)
+		withHeader := "append(dst, " + h + ")"
+		value := er.Receiver + "." + fr.GoField
+		wr := writeRender{BitConst: fr.BitConst, ordinal: fi.Ordinal}
+		payload := 0
+		vl := false
+		switch fi.Type {
+		case "UInt8":
+			wr.Call, payload = fmt.Sprintf("appendUInt8(%s, %s)", withHeader, value), 1
+		case "UInt16":
+			wr.Call, payload = fmt.Sprintf("appendUInt16(%s, %s)", withHeader, value), 2
+		case "UInt32":
+			wr.Infallible, payload = fmt.Sprintf("binary.BigEndian.AppendUint32(%s, %s)", withHeader, value), 4
+			w.UsesBinary = true
+		case "Int32":
+			wr.Call, payload = fmt.Sprintf("appendInt32(%s, %s)", withHeader, value), 4
+		case "UInt64":
+			payload = 8
+			if baseTen {
+				wr.decimal = &decimalRender{BitConst: fr.BitConst, Name: fr.Name, Value: value}
+				wr.Infallible = "binary.BigEndian.AppendUint64(" + withHeader + ", decimalValues[%d])"
+				w.UsesBinary = true
+			} else {
+				wr.Call = fmt.Sprintf("appendUInt64Hex(%s, %s)", withHeader, value)
+			}
+		case "Hash128", "Hash160", "Hash192", "Hash256":
+			payload = map[string]int{"Hash128": 16, "Hash160": 20, "Hash192": 24, "Hash256": 32}[fi.Type]
+			wr.Call = fmt.Sprintf("appendHash(%s, %s, %d)", withHeader, value, payload)
+		case "AccountID":
+			vl = true
+			wr.Call = fmt.Sprintf("appendAccountID(%s, %s)", withHeader, value)
+			wr.SizeExpr = fmt.Sprintf("%d + accountIDEncodedLen(%s)", len(header), value)
+		case "Blob":
+			vl = true
+			wr.Call = fmt.Sprintf("appendBlob(%s, %s)", withHeader, value)
+			wr.SizeExpr = fmt.Sprintf("%d + blobEncodedLen(%s)", len(header), value)
+		case "Amount":
+			wr.Call = fmt.Sprintf("appendAmount(%s, %s)", withHeader, value)
+			wr.SizeExpr = fmt.Sprintf("%d + amountEncodedLen(%s)", len(header), value)
+		case "Vector256":
+			vl = true
+			wr.Call = fmt.Sprintf("appendVector256(%s, %q, %s)", withHeader, fr.Name, value)
+			wr.SizeExpr = fmt.Sprintf("%d + vector256EncodedLen(%s)", len(header), value)
+		case "STArray":
+			if fr.Comparer == "NFTokens" {
+				wr.Call = fmt.Sprintf("appendNFTokens(%s, %s)", withHeader, value)
+				wr.SizeExpr = fmt.Sprintf("%d + nftokensEncodedLen(%s)", len(header), value)
+			} else {
+				wr.Call = fmt.Sprintf("appendSTArray(%s, %q, %s)", withHeader, fr.Name, value)
+			}
+		case "STObject":
+			wr.Call = fmt.Sprintf("appendInnerObjectField(dst, %q, %s)", fr.Name, value)
+		case "Issue", "Number", "XChainBridge", "Currency":
+			payload = map[string]int{"Issue": 44, "Number": 12, "XChainBridge": 122, "Currency": 20}[fi.Type]
+			wr.Call = fmt.Sprintf("appendCodecValue(%s, &types.%s{}, %s)", withHeader, fi.Type, value)
+			w.UsesTypes = true
+		default:
+			return w, fmt.Errorf("field %s: direct writer does not support XRPL type %s", fr.Name, fi.Type)
+		}
+		if vl != fi.IsVLEncoded {
+			return w, fmt.Errorf("field %s: XRPL type %s with isVLEncoded=%t", fr.Name, fi.Type, fi.IsVLEncoded)
+		}
+		if payload > 0 {
+			wr.SizeExpr = strconv.Itoa(len(header) + payload)
+		}
+		if fr.DeferredRequired {
+			switch {
+			case fr.Name == "PreviousTxnID" && fi.Type == "Hash256":
+				wr.Deferred = fmt.Sprintf("append(append(dst, %s), zeroHash[:]...)", h)
+			case fr.Name != "PreviousTxnID" && fi.Type == "UInt32":
+				wr.Deferred = fmt.Sprintf("append(dst, %s, 0, 0, 0, 0)", h)
+			default:
+				return w, fmt.Errorf("field %s: no encoded default for deferred %s", fr.Name, fi.Type)
+			}
+			w.FixedSize += len(header) + payload
+		}
+		switch fr.GoType {
+		case "string":
+			wr.XAddress = "isXAddress(" + value + ")"
+		case "any":
+			wr.XAddress = "isXAddressValue(" + value + ")"
+		}
+		w.NeedsErr = w.NeedsErr || wr.Call != "" || wr.decimal != nil
+		w.Writes = append(w.Writes, wr)
+	}
+	sort.SliceStable(w.Writes, func(i, j int) bool { return w.Writes[i].ordinal < w.Writes[j].ordinal })
+	for i := range w.Writes {
+		if d := w.Writes[i].decimal; d != nil {
+			d.Index = len(w.Decimals)
+			w.Writes[i].Infallible = fmt.Sprintf(w.Writes[i].Infallible, d.Index)
+			w.Decimals = append(w.Decimals, *d)
+		}
+	}
+	return w, nil
+}
+
+func byteList(b []byte) string {
+	parts := make([]string, len(b))
+	for i, c := range b {
+		parts[i] = fmt.Sprintf("0x%02X", c)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func innerTypeName(template string) string { return template + "Value" }
@@ -746,10 +929,16 @@ var tmpl = template.Must(template.New("entry").Funcs(template.FuncMap{
 package entry
 
 import (
+{{- if .Writer.UsesBinary }}
+	"encoding/binary"
+{{- end }}
 	"errors"
 	"fmt"
 
-{{ if ne .Name "NFTokenPage" }}	"github.com/LeJamon/go-xrpl/codec/binarycodec"{{ end }}
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+{{- if .Writer.UsesTypes }}
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+{{- end }}
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1468,25 +1657,31 @@ func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
-	if err := {{ .Receiver }}.validateRequired(); err != nil {
+	if err := {{ .Receiver }}.validateEncode(); err != nil {
 		return nil, err
 	}
-{{- if eq .Name "NFTokenPage" }}
-	return {{ .Receiver }}.encodeNFTokens()
-{{- else }}
-{{- range .Fields }}{{ if eq .XRPLType "STArray" }}
-	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		if err := validateSTArrayForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
-			return nil, err
-		}
+{{- if .AllowBadCurrencyDecode }}
+	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
+		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
 	}
-{{- else if eq .XRPLType "STObject" }}
-	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
-		if err := validateInnerObjectForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
-			return nil, err
-		}
+{{- end }}
+	if {{ .Receiver }}.hasXAddress() {
+		return {{ .Receiver }}.encodeViaMap()
 	}
-{{- end }}{{ end }}
+	data, err := {{ .Receiver }}.appendBinary(make([]byte, 0, {{ .Receiver }}.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity({{ .Receiver }}, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func ({{ .Receiver }} *{{ .StructName }}) encodeViaMap() ([]byte, error) {
+	if err := {{ .Receiver }}.validateEncode(); err != nil {
+		return nil, err
+	}
 {{- if .AllowBadCurrencyDecode }}
 	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
 		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
@@ -1503,7 +1698,92 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 	}
 {{- end }}{{ end }}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func ({{ .Receiver }} *{{ .StructName }}) appendBinary(dst []byte) ([]byte, error) {
+{{- if .Writer.NeedsErr }}
+	var err error
 {{- end }}
+{{- if .Writer.Decimals }}
+	var decimalValues [{{ len .Writer.Decimals }}]uint64
+{{- range .Writer.Decimals }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if decimalValues[{{ .Index }}], err = parseUInt64Decimal({{ printf "%q" .Name }}, {{ .Value }}); err != nil {
+			return nil, err
+		}
+	}
+{{- end }}
+{{- end }}
+	dst = append(dst, {{ .Writer.EntryTypeBytes }})
+{{- range .Writer.Writes }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+{{- if .Infallible }}
+		dst = {{ .Infallible }}
+{{- else }}
+		if dst, err = {{ .Call }}; err != nil {
+			return nil, err
+		}
+{{- end }}
+	}{{ if .Deferred }} else {
+		dst = {{ .Deferred }}
+	}{{ end }}
+{{- end }}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func ({{ .Receiver }} *{{ .StructName }}) encodedSizeHint() int {
+	size := {{ .Writer.FixedSize }}
+{{- range .Writer.Writes }}{{ if and .SizeExpr (not .Deferred) }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		size += {{ .SizeExpr }}
+	}
+{{- end }}{{ end }}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func ({{ .Receiver }} *{{ .StructName }}) hasXAddress() bool {
+{{- range .Writer.Writes }}{{ if .XAddress }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 && {{ .XAddress }} {
+		return true
+	}
+{{- end }}{{ end }}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func ({{ .Receiver }} *{{ .StructName }}) validateEncode() error {
+	if err := {{ .Receiver }}.validateRequired(); err != nil {
+		return err
+	}
+{{- range .Fields }}{{ if and (eq $.Name "NFTokenPage") (eq .Name "NFTokens") }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateNFTokensForEncode({{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return err
+		}
+	}
+{{- else if eq .XRPLType "STArray" }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateSTArrayForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return err
+		}
+	}
+{{- else if eq .XRPLType "STObject" }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		if err := validateInnerObjectForEncode({{ printf "%q" .Name }}, {{ $.Receiver }}.{{ .GoField }}); err != nil {
+			return err
+		}
+	}
+{{- end }}{{ end }}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

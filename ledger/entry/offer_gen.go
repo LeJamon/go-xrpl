@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -911,13 +912,25 @@ func (o *Offer) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (o *Offer) Encode() ([]byte, error) {
-	if err := o.validateRequired(); err != nil {
+	if err := o.validateEncode(); err != nil {
 		return nil, err
 	}
-	if o.present&offerBitAdditionalBooks != 0 {
-		if err := validateSTArrayForEncode("AdditionalBooks", o.AdditionalBooks); err != nil {
-			return nil, err
-		}
+	if o.hasXAddress() {
+		return o.encodeViaMap()
+	}
+	data, err := o.appendBinary(make([]byte, 0, o.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(o, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (o *Offer) encodeViaMap() ([]byte, error) {
+	if err := o.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := o.ToMap()
 	if o.present&offerBitPreviousTxnID == 0 {
@@ -927,6 +940,169 @@ func (o *Offer) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (o *Offer) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x6F)
+	if o.present&offerBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), o.Flags)
+	}
+	if o.present&offerBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), o.Sequence)
+	}
+	if o.present&offerBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), o.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if o.present&offerBitExpiration != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2A), o.Expiration)
+	}
+	if o.present&offerBitBookNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x33), o.BookNode); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), o.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), o.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if o.present&offerBitBookDirectory != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x10), o.BookDirectory, 32); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitDomainID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x22), o.DomainID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitTakerPays != 0 {
+		if dst, err = appendAmount(append(dst, 0x64), o.TakerPays); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitTakerGets != 0 {
+		if dst, err = appendAmount(append(dst, 0x65), o.TakerGets); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), o.Account); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), o.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		if dst, err = appendSTArray(append(dst, 0xFD), "AdditionalBooks", o.AdditionalBooks); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (o *Offer) encodedSizeHint() int {
+	size := 41
+	if o.present&offerBitFlags != 0 {
+		size += 5
+	}
+	if o.present&offerBitSequence != 0 {
+		size += 5
+	}
+	if o.present&offerBitExpiration != 0 {
+		size += 5
+	}
+	if o.present&offerBitBookNode != 0 {
+		size += 9
+	}
+	if o.present&offerBitOwnerNode != 0 {
+		size += 9
+	}
+	if o.present&offerBitBookDirectory != 0 {
+		size += 34
+	}
+	if o.present&offerBitDomainID != 0 {
+		size += 34
+	}
+	if o.present&offerBitTakerPays != 0 {
+		size += 1 + amountEncodedLen(o.TakerPays)
+	}
+	if o.present&offerBitTakerGets != 0 {
+		size += 1 + amountEncodedLen(o.TakerGets)
+	}
+	if o.present&offerBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(o.Account)
+	}
+	if o.present&offerBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(o.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (o *Offer) hasXAddress() bool {
+	if o.present&offerBitBookNode != 0 && isXAddress(o.BookNode) {
+		return true
+	}
+	if o.present&offerBitOwnerNode != 0 && isXAddress(o.OwnerNode) {
+		return true
+	}
+	if o.present&offerBitPreviousTxnID != 0 && isXAddress(o.PreviousTxnID) {
+		return true
+	}
+	if o.present&offerBitBookDirectory != 0 && isXAddress(o.BookDirectory) {
+		return true
+	}
+	if o.present&offerBitDomainID != 0 && isXAddress(o.DomainID) {
+		return true
+	}
+	if o.present&offerBitTakerPays != 0 && isXAddressValue(o.TakerPays) {
+		return true
+	}
+	if o.present&offerBitTakerGets != 0 && isXAddressValue(o.TakerGets) {
+		return true
+	}
+	if o.present&offerBitAccount != 0 && isXAddress(o.Account) {
+		return true
+	}
+	if o.present&offerBitSponsor != 0 && isXAddress(o.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (o *Offer) validateEncode() error {
+	if err := o.validateRequired(); err != nil {
+		return err
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		if err := validateSTArrayForEncode("AdditionalBooks", o.AdditionalBooks); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

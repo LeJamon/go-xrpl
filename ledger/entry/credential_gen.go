@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -748,7 +749,24 @@ func (c *Credential) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (c *Credential) Encode() ([]byte, error) {
-	if err := c.validateRequired(); err != nil {
+	if err := c.validateEncode(); err != nil {
+		return nil, err
+	}
+	if c.hasXAddress() {
+		return c.encodeViaMap()
+	}
+	data, err := c.appendBinary(make([]byte, 0, c.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(c, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (c *Credential) encodeViaMap() ([]byte, error) {
+	if err := c.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := c.ToMap()
@@ -759,6 +777,142 @@ func (c *Credential) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (c *Credential) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x81)
+	if c.present&credentialBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), c.Flags)
+	}
+	if c.present&credentialBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), c.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if c.present&credentialBitExpiration != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2A), c.Expiration)
+	}
+	if c.present&credentialBitIssuerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x1B), c.IssuerNode); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&credentialBitSubjectNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x1C), c.SubjectNode); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&credentialBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), c.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if c.present&credentialBitURI != 0 {
+		if dst, err = appendBlob(append(dst, 0x75), c.URI); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&credentialBitCredentialType != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x1F), c.CredentialType); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&credentialBitIssuer != 0 {
+		if dst, err = appendAccountID(append(dst, 0x84), c.Issuer); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&credentialBitSubject != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x18), c.Subject); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&credentialBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), c.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (c *Credential) encodedSizeHint() int {
+	size := 41
+	if c.present&credentialBitFlags != 0 {
+		size += 5
+	}
+	if c.present&credentialBitExpiration != 0 {
+		size += 5
+	}
+	if c.present&credentialBitIssuerNode != 0 {
+		size += 10
+	}
+	if c.present&credentialBitSubjectNode != 0 {
+		size += 10
+	}
+	if c.present&credentialBitURI != 0 {
+		size += 1 + blobEncodedLen(c.URI)
+	}
+	if c.present&credentialBitCredentialType != 0 {
+		size += 2 + blobEncodedLen(c.CredentialType)
+	}
+	if c.present&credentialBitIssuer != 0 {
+		size += 1 + accountIDEncodedLen(c.Issuer)
+	}
+	if c.present&credentialBitSubject != 0 {
+		size += 2 + accountIDEncodedLen(c.Subject)
+	}
+	if c.present&credentialBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(c.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (c *Credential) hasXAddress() bool {
+	if c.present&credentialBitIssuerNode != 0 && isXAddress(c.IssuerNode) {
+		return true
+	}
+	if c.present&credentialBitSubjectNode != 0 && isXAddress(c.SubjectNode) {
+		return true
+	}
+	if c.present&credentialBitPreviousTxnID != 0 && isXAddress(c.PreviousTxnID) {
+		return true
+	}
+	if c.present&credentialBitURI != 0 && isXAddress(c.URI) {
+		return true
+	}
+	if c.present&credentialBitCredentialType != 0 && isXAddress(c.CredentialType) {
+		return true
+	}
+	if c.present&credentialBitIssuer != 0 && isXAddress(c.Issuer) {
+		return true
+	}
+	if c.present&credentialBitSubject != 0 && isXAddress(c.Subject) {
+		return true
+	}
+	if c.present&credentialBitSponsor != 0 && isXAddress(c.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (c *Credential) validateEncode() error {
+	if err := c.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

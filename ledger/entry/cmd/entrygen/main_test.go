@@ -131,6 +131,36 @@ func TestGenerateRejectsInvalidStyles(t *testing.T) {
 	}
 }
 
+func TestBuildWriterRejectsFieldsItCannotReproduce(t *testing.T) {
+	defs := definitions.Get()
+	tests := []struct {
+		field string
+		want  string
+	}{
+		{field: "Paths", want: "does not support XRPL type PathSet"},
+		{field: "PermissionValue", want: "special-cases its JSON value"},
+		{field: "TransactionType", want: "special-cases its JSON value"},
+	}
+	for _, test := range tests {
+		t.Run(test.field, func(t *testing.T) {
+			fi, err := defs.FieldInstanceByName(test.field)
+			if err != nil {
+				t.Fatal(err)
+			}
+			er := entryRender{
+				Name:          "Check",
+				Receiver:      "c",
+				EntryTypeCode: 67,
+				Fields:        []fieldRender{{Name: test.field, GoField: test.field, BitConst: "bit"}},
+			}
+			_, err = buildWriter(defs, er, map[string]*definitions.FieldInstance{test.field: fi})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("buildWriter error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestGenerateRejectsInvalidDecodeAliases(t *testing.T) {
 	defs := definitions.Get()
 	tests := []struct {
