@@ -629,9 +629,17 @@ func (s *Service) commitTransactionResultsLocked(staged *stagedTransactionResult
 	if staged == nil {
 		return
 	}
-	s.txHashesBySeq[staged.ledgerSeq] = slices.Grow(s.txHashesBySeq[staged.ledgerSeq], len(staged.results))
+	seq := staged.ledgerSeq
+	if hashes := s.txHashesBySeq[seq]; hashes != nil {
+		s.txHashesBySeq[seq] = slices.DeleteFunc(hashes, func(hash [32]byte) bool {
+			owner, ok := s.txIndex[hash]
+			return !ok || owner != seq
+		})
+	} else if len(staged.results) > 0 {
+		s.txHashesBySeq[seq] = make([][32]byte, 0, len(staged.results))
+	}
 	for _, result := range staged.results {
-		s.indexTxLocked(result.TxHash, staged.ledgerSeq)
+		s.indexTxLocked(result.TxHash, seq)
 	}
 	for txHash, txIndex := range staged.positions {
 		s.txPositionIndex[txHash] = txIndex

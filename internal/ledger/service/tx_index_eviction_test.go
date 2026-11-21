@@ -105,6 +105,27 @@ func TestTxIndexEvictionMatchesFullScan(t *testing.T) {
 	}
 }
 
+func TestReindexLedgerReusesSequenceList(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	hash := [32]byte{1}
+	staged := &stagedTransactionResults{ledgerSeq: 10}
+	svc.commitTransactionResultsLocked(staged)
+	require.Empty(t, svc.txHashesBySeq)
+
+	staged.results = []TransactionResultEvent{{TxHash: hash}}
+	other := &stagedTransactionResults{ledgerSeq: 11, results: staged.results}
+	svc.commitTransactionResultsLocked(staged)
+	original := svc.txHashesBySeq[10]
+	for range 4 {
+		svc.commitTransactionResultsLocked(staged)
+		require.Same(t, &original[0], &svc.txHashesBySeq[10][0])
+		svc.commitTransactionResultsLocked(other)
+		svc.commitTransactionResultsLocked(staged)
+		require.Equal(t, original, svc.txHashesBySeq[10])
+	}
+}
+
 func TestEvictOldHistoryLockedFreesSequenceLists(t *testing.T) {
 	const window = 4
 	cfg := DefaultConfig()
