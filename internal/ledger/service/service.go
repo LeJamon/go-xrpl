@@ -123,7 +123,8 @@ type Config struct {
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
 	NodeStore nodestore.Database
 
-	// SHAMapFamily loads and stores state and transaction tree nodes.
+	// SHAMapFamily loads and stores state and transaction tree nodes. When NodeStore is set,
+	// its Sync must cover writes made by the family, including snapshot flushes.
 	SHAMapFamily shamap.Family
 	// FastLoad restores the newest complete persisted ledger at startup.
 	FastLoad bool

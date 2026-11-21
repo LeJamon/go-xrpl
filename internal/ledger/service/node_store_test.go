@@ -145,20 +145,21 @@ func TestPersistWithoutNodeStoreFamilyWritesNodeStore(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	family := &plainPersistFamily{Family: shamapbackend.New(db)}
 
-	state, err := shamap.NewBacked(shamap.TypeState, family)
-	require.NoError(t, err)
+	state := shamap.New(shamap.TypeState)
 	for _, entry := range residencyEntries(9, 0, 16) {
 		require.NoError(t, state.Put(entry.key, entry.value))
 	}
 	l := retentionTestLedger(t, state, 9)
-	svc := &Service{nodeStore: bindNodeStore(db), shamapFamily: family}
-	before := family.storeBatches
-	require.NoError(t, svc.persistToNodeStore(ctx, l, l.Sequence()))
-	require.Equal(t, before, family.storeBatches)
-
-	root, err := state.Hash()
+	l.SetSHAMapFamily(family)
+	root := nodestore.Hash256(l.Header().AccountHash)
+	node, err := db.Fetch(ctx, root)
 	require.NoError(t, err)
-	node, err := db.Fetch(ctx, nodestore.Hash256(root))
+	require.Nil(t, node)
+
+	svc := &Service{nodeStore: bindNodeStore(db), shamapFamily: family}
+	require.NoError(t, svc.persistToNodeStore(ctx, l, l.Sequence()))
+	require.Zero(t, family.storeBatches)
+	node, err = db.Fetch(ctx, root)
 	require.NoError(t, err)
 	require.NotNil(t, node)
 	require.Equal(t, nodestore.NodeAccount, node.Type)
