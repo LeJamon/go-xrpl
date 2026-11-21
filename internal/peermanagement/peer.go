@@ -1366,9 +1366,13 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			decodedEndpoints, _ = decoded.(*message.Endpoints)
 		} else {
-			err = message.Preflight(header.MessageType, payload)
+			err = message.ValidatePayload(header.MessageType, payload)
 		}
 		if err != nil {
+			if !errors.Is(err, message.ErrWireLimit) {
+				releaseRetainedReservation()
+				return frameReader.failure(err, now)
+			}
 			reason := wirePreflightChargeReason(err)
 			p.IncBadData(reason)
 			releaseRetainedReservation()
@@ -1377,7 +1381,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			continue
 		}
-		p.traffic.AddCount(categorizeMessagePayload(header.MessageType, payload, true), true, len(payload))
+		p.traffic.AddCount(categorizeMessagePayload(header.MessageType, payload, true), true, int(payloadWireSize))
 
 		delivered := p.dispatchEvent(Event{
 			Type:             EventMessageReceived,

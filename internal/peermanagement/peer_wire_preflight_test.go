@@ -24,10 +24,41 @@ func peerRepeatedMessageField(field protowire.Number, count int) []byte {
 	return wire
 }
 
+func peerRepeatedTransactionField(count int) []byte {
+	tx := protowire.AppendTag(nil, 1, protowire.BytesType)
+	tx = protowire.AppendBytes(tx, []byte{0})
+	tx = protowire.AppendTag(tx, 2, protowire.VarintType)
+	tx = protowire.AppendVarint(tx, 1)
+	wire := make([]byte, 0, count*len(tx)+count*2)
+	for range count {
+		wire = protowire.AppendTag(wire, 1, protowire.BytesType)
+		wire = protowire.AppendBytes(wire, tx)
+	}
+	return wire
+}
+
 func peerGetObjectTransactionsPayload(count int) []byte {
 	wire := protowire.AppendTag(nil, 1, protowire.VarintType)
 	wire = protowire.AppendVarint(wire, uint64(message.ObjectTypeTransactions))
+	wire = protowire.AppendTag(wire, 2, protowire.VarintType)
+	wire = protowire.AppendVarint(wire, 1)
 	return append(wire, peerRepeatedMessageField(6, count)...)
+}
+
+func peerValidatorListCollectionPayload(count int) []byte {
+	wire := protowire.AppendTag(nil, 1, protowire.VarintType)
+	wire = protowire.AppendVarint(wire, 1)
+	wire = protowire.AppendTag(wire, 2, protowire.BytesType)
+	wire = protowire.AppendBytes(wire, []byte{0})
+	blob := protowire.AppendTag(nil, 2, protowire.BytesType)
+	blob = protowire.AppendBytes(blob, []byte{0})
+	blob = protowire.AppendTag(blob, 3, protowire.BytesType)
+	blob = protowire.AppendBytes(blob, []byte{0})
+	for range count {
+		wire = protowire.AppendTag(wire, 3, protowire.BytesType)
+		wire = protowire.AppendBytes(wire, blob)
+	}
+	return wire
 }
 
 func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
@@ -50,7 +81,7 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 		{
 			name:    "transactions",
 			msgType: message.TypeTransactions,
-			payload: peerRepeatedMessageField(1, 10_001),
+			payload: peerRepeatedTransactionField(10_001),
 			reason:  "transactions-batch-too-large",
 			charge:  resource.FeeMalformedRequest(),
 		},
@@ -64,7 +95,7 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 		{
 			name:    "validator list collection",
 			msgType: message.TypeValidatorListCollection,
-			payload: peerRepeatedMessageField(3, 6),
+			payload: peerValidatorListCollectionPayload(6),
 			reason:  "vl-coll-heavy-too-many-blobs",
 			charge:  resource.FeeHeavyBurdenPeer(),
 		},
@@ -141,6 +172,36 @@ func TestPeerEndpointsDecodeFailureTerminatesBeforeCharge(t *testing.T) {
 				require.ErrorIs(t, err, message.ErrMalformedWire)
 			}
 			require.Equal(t, message.TypeEndpoints, frameErr.MessageType)
+			require.Empty(t, events)
+			require.Zero(t, peer.BadDataCount())
+			require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+		})
+	}
+}
+
+func TestPeerRequiredProofFieldsTerminateBeforeCharge(t *testing.T) {
+	for _, negotiated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "feature-disabled", true: "feature-negotiated"}[negotiated], func(t *testing.T) {
+			frame, err := message.BuildWireMessage(message.TypeProofPathResponse, nil)
+			require.NoError(t, err)
+
+			identity, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			peer := NewPeer(PeerID(118), Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+			manager := resource.NewManager(nil, nil)
+			consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+			peer.attachUsage(consumer, func() {})
+			if negotiated {
+				peer.capabilities = NewPeerCapabilities()
+				peer.capabilities.Features.Enable(FeatureLedgerReplay)
+			}
+			peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+			err = peer.readLoop(context.Background())
+			var frameErr *FrameReadError
+			require.ErrorAs(t, err, &frameErr)
+			require.Equal(t, message.TypeProofPathResponse, frameErr.MessageType)
 			require.Empty(t, events)
 			require.Zero(t, peer.BadDataCount())
 			require.Zero(t, peer.traffic.TotalStats().MessagesIn)

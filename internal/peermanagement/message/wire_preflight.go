@@ -23,8 +23,9 @@ const (
 )
 
 var (
-	ErrWireLimit     = errors.New("protobuf wire resource limit")
-	ErrMalformedWire = errors.New("malformed protobuf wire")
+	ErrWireLimit            = errors.New("protobuf wire resource limit")
+	ErrMalformedWire        = errors.New("malformed protobuf wire")
+	ErrMissingRequiredField = errors.New("protobuf required field missing")
 )
 
 type WireLimitReason string
@@ -81,6 +82,9 @@ type wireScanState struct {
 	msgType               MessageType
 	collections           []collectionLimit
 	collectionCounts      [maxCollectionLimits]int
+	deferEndpointLimit    bool
+	endpointCount         int
+	validateRequired      bool
 	fields                int
 	getObjects            int
 	getObjectTransactions bool
@@ -89,18 +93,42 @@ type wireScanState struct {
 }
 
 func Preflight(msgType MessageType, data []byte) error {
+	_, err := scanWirePayload(msgType, data, false, false)
+	return err
+}
+
+func validateWirePayload(msgType MessageType, data []byte) error {
+	_, err := scanWirePayload(msgType, data, true, false)
+	return err
+}
+
+type wirePayloadInfo struct {
+	endpointCount int
+}
+
+func scanWirePayload(
+	msgType MessageType,
+	data []byte,
+	validateRequired bool,
+	deferEndpointLimit bool,
+) (wirePayloadInfo, error) {
 	codec, ok := codecFor(msgType)
 	if !ok {
-		return fmt.Errorf("unknown message type: %d", msgType)
+		return wirePayloadInfo{}, fmt.Errorf("unknown message type: %d", msgType)
 	}
 	descriptor := wireDescriptors[msgType]
-	state := wireScanState{msgType: msgType, collections: codec.collections}
+	state := wireScanState{
+		msgType:            msgType,
+		collections:        codec.collections,
+		deferEndpointLimit: deferEndpointLimit,
+		validateRequired:   validateRequired,
+	}
 	consumed, err := state.scanMessage(data, descriptor, 1, 0)
 	if err != nil {
-		return err
+		return wirePayloadInfo{}, err
 	}
 	if consumed != len(data) {
-		return malformedWire(consumed, "unexpected end group")
+		return wirePayloadInfo{}, malformedWire(consumed, "unexpected end group")
 	}
 	if msgType == TypeGetObjects {
 		limit := maxGetObjects
@@ -110,14 +138,14 @@ func Preflight(msgType MessageType, data []byte) error {
 			reason = WireLimitGetObjectTransactions
 		}
 		if state.getObjects > limit {
-			return wireLimit(reason, limit, state.getObjects)
+			return wirePayloadInfo{}, wireLimit(reason, limit, state.getObjects)
 		}
 	}
 	if msgType == TypeGetLedger && state.getLedgerInfoType != protoreflect.EnumNumber(proto.TMLedgerInfoType_liBASE) &&
 		state.getLedgerNodes > maxGetLedgerNodes {
-		return wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
+		return wirePayloadInfo{}, wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
 	}
-	return nil
+	return wirePayloadInfo{endpointCount: state.endpointCount}, nil
 }
 
 func (s *wireScanState) scanMessage(
@@ -126,6 +154,10 @@ func (s *wireScanState) scanMessage(
 	depth int,
 	endGroup protowire.Number,
 ) (int, error) {
+	required, err := newRequiredFieldSet(descriptor, s.validateRequired)
+	if err != nil {
+		return 0, err
+	}
 	for offset := 0; offset < len(data); {
 		fieldOffset := offset
 		number, wireType, tagLen := protowire.ConsumeTag(data[offset:])
@@ -137,6 +169,9 @@ func (s *wireScanState) scanMessage(
 		if wireType == protowire.EndGroupType {
 			if endGroup == 0 || number != endGroup {
 				return 0, malformedWire(fieldOffset, "unexpected end group")
+			}
+			if err := required.check(); err != nil {
+				return 0, err
 			}
 			return offset, nil
 		}
@@ -160,10 +195,14 @@ func (s *wireScanState) scanMessage(
 				return 0, malformedWireAt(err, fieldOffset)
 			}
 		}
+		required.observe(field, wireType, value)
 		offset += valueLen
 	}
 	if endGroup != 0 {
 		return 0, malformedWire(len(data), "unterminated group")
+	}
+	if err := required.check(); err != nil {
+		return 0, err
 	}
 	return len(data), nil
 }
@@ -263,11 +302,102 @@ func (s *wireScanState) observeRootField(
 		}
 		s.collectionCounts[i]++
 		if count := s.collectionCounts[i]; count > limit.max {
+			if limit.reason == WireLimitEndpoints && s.deferEndpointLimit {
+				s.endpointCount = count
+				return nil
+			}
 			return wireLimit(limit.reason, limit.max, count)
+		}
+		if limit.reason == WireLimitEndpoints {
+			s.endpointCount = s.collectionCounts[i]
 		}
 		return nil
 	}
 	return nil
+}
+
+type requiredFieldSet struct {
+	descriptor protoreflect.MessageDescriptor
+	numbers    protoreflect.FieldNumbers
+	seen       uint64
+}
+
+func newRequiredFieldSet(descriptor protoreflect.MessageDescriptor, enabled bool) (requiredFieldSet, error) {
+	if !enabled || descriptor == nil {
+		return requiredFieldSet{}, nil
+	}
+	numbers := descriptor.RequiredNumbers()
+	if numbers.Len() > 64 {
+		return requiredFieldSet{}, fmt.Errorf("message %s declares %d required fields; wire admission supports at most 64", descriptor.FullName(), numbers.Len())
+	}
+	return requiredFieldSet{descriptor: descriptor, numbers: numbers}, nil
+}
+
+func (r *requiredFieldSet) observe(
+	field protoreflect.FieldDescriptor,
+	wireType protowire.Type,
+	data []byte,
+) {
+	if field == nil || r.numbers == nil || field.Cardinality() != protoreflect.Required {
+		return
+	}
+	for i := 0; i < r.numbers.Len(); i++ {
+		required := r.descriptor.Fields().ByNumber(r.numbers.Get(i))
+		if required.Number() != field.Number() || fieldWireType(required) != wireType {
+			continue
+		}
+		if required.Kind() == protoreflect.EnumKind {
+			value, n := protowire.ConsumeVarint(data)
+			if n < 0 || required.Enum().Values().ByNumber(protoreflect.EnumNumber(value)) == nil {
+				return
+			}
+		}
+		r.seen |= uint64(1) << uint(i)
+		return
+	}
+}
+
+func (r *requiredFieldSet) check() error {
+	if r.numbers == nil {
+		return nil
+	}
+	for i := 0; i < r.numbers.Len(); i++ {
+		if r.seen&(uint64(1)<<uint(i)) == 0 {
+			field := r.descriptor.Fields().ByNumber(r.numbers.Get(i))
+			return fmt.Errorf("%w: %s", ErrMissingRequiredField, field.FullName())
+		}
+	}
+	return nil
+}
+
+func fieldWireType(field protoreflect.FieldDescriptor) protowire.Type {
+	switch field.Kind() {
+	case protoreflect.BoolKind,
+		protoreflect.EnumKind,
+		protoreflect.Int32Kind,
+		protoreflect.Int64Kind,
+		protoreflect.Sint32Kind,
+		protoreflect.Sint64Kind,
+		protoreflect.Uint32Kind,
+		protoreflect.Uint64Kind:
+		return protowire.VarintType
+	case protoreflect.Fixed32Kind,
+		protoreflect.FloatKind,
+		protoreflect.Sfixed32Kind:
+		return protowire.Fixed32Type
+	case protoreflect.Fixed64Kind,
+		protoreflect.DoubleKind,
+		protoreflect.Sfixed64Kind:
+		return protowire.Fixed64Type
+	case protoreflect.StringKind,
+		protoreflect.BytesKind,
+		protoreflect.MessageKind:
+		return protowire.BytesType
+	case protoreflect.GroupKind:
+		return protowire.StartGroupType
+	default:
+		return protowire.Type(-1)
+	}
 }
 
 func wireLimit(reason WireLimitReason, limit, observed int) error {

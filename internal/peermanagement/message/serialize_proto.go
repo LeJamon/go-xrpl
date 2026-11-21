@@ -902,25 +902,44 @@ func encode(msg Message, msgType MessageType) ([]byte, error) {
 	return encoded, nil
 }
 
-// Decode decodes a message from bytes using protobuf.
-func Decode(msgType MessageType, data []byte) (Message, error) {
+func decodeProtoMessage(msgType MessageType, data []byte) (*msgCodec, pb.Message, error) {
 	c, ok := codecFor(msgType)
 	if !ok {
-		return nil, fmt.Errorf("unknown message type: %d", msgType)
+		return nil, nil, fmt.Errorf("unknown message type: %d", msgType)
 	}
 	if err := Preflight(msgType, data); err != nil {
-		return nil, fmt.Errorf("failed to preflight: %w", err)
+		return nil, nil, fmt.Errorf("failed to preflight: %w", err)
 	}
 	pmsg := c.newProto()
 	normalized, err := normalizeEnumWire(data, pmsg.ProtoReflect().Descriptor())
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 	if err := (pb.UnmarshalOptions{RecursionLimit: maxWireDepth, DiscardUnknown: true}).Unmarshal(normalized, pmsg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal: %w", err)
 	}
 	if err := validateEnums(pmsg.ProtoReflect(), true); err != nil {
-		return nil, fmt.Errorf("failed to validate: %w", err)
+		return nil, nil, fmt.Errorf("failed to validate: %w", err)
+	}
+	return c, pmsg, nil
+}
+
+// ValidatePayload validates a complete protobuf payload without converting it
+// into the higher-level message representation. Callers use this at the wire
+// boundary when they need required-field and enum validation before charging
+// or dispatching a frame.
+func ValidatePayload(msgType MessageType, data []byte) error {
+	if err := validateWirePayload(msgType, data); err != nil {
+		return fmt.Errorf("failed to preflight: %w", err)
+	}
+	return nil
+}
+
+// Decode decodes a message from bytes using protobuf.
+func Decode(msgType MessageType, data []byte) (Message, error) {
+	c, pmsg, err := decodeProtoMessage(msgType, data)
+	if err != nil {
+		return nil, err
 	}
 	return c.decode(pmsg)
 }
