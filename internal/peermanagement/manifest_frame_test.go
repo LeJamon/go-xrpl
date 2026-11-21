@@ -146,6 +146,49 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 	}
 }
 
+func TestSpooledManifestTrafficCountsInitializedFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		missingField bool
+	}{
+		{name: "initialized"},
+		{name: "missing manifest bytes", missingField: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := opaqueTestPayload(bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1))
+			if tc.missingField {
+				payload = protowire.AppendTag(payload, 1, protowire.BytesType)
+				payload = protowire.AppendBytes(payload, nil)
+			}
+			wire, err := message.CompressLZ4(payload)
+			require.NoError(t, err)
+			require.NotEmpty(t, wire)
+			peer, manifests, _ := newManifestLimitTestPeer(t, true)
+			peer.SetManifestPayloadLimit(uint32(len(payload)))
+			peer.SetManifestSpoolDir(t.TempDir())
+			peer.bufReader = bufio.NewReader(bytes.NewReader(compressedManifestFrame(t, wire, uint32(len(payload)))))
+			require.ErrorIs(t, peer.readLoop(t.Context()), io.EOF)
+			require.Len(t, manifests, 1)
+			frame := (<-manifests).ManifestFrame
+			require.NotNil(t, frame)
+			require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+
+			_, err = frame.Materialize(t.Context())
+			if tc.missingField {
+				require.Error(t, err)
+				require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+			} else {
+				require.NoError(t, err)
+				stats := peer.traffic.Stats(CategoryManifests)
+				require.Equal(t, uint64(1), stats.MessagesIn)
+				require.Equal(t, uint64(len(wire)), stats.BytesIn)
+				require.Equal(t, stats, peer.traffic.TotalStats())
+			}
+			require.NoError(t, frame.Close())
+		})
+	}
+}
+
 func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	spoolDir, err := prepareManifestSpoolDir(t.TempDir())
 	require.NoError(t, err)

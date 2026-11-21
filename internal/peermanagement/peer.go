@@ -1235,7 +1235,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(CategorizeMessage(header.MessageType), true, int(header.PayloadSize))
+			manifestFrame.traffic = p.traffic
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
