@@ -92,10 +92,7 @@ var (
 )
 
 // Compiled once at package init: avoiding MustCompile on hot paths.
-var (
-	integralAmountRegex = regexp.MustCompile(`^[+-]?(?:0|[1-9]\d*)$`)
-	iouCodeRegex        = regexp.MustCompile(IOUCodeRegex)
-)
+var integralAmountRegex = regexp.MustCompile(`^[+-]?(?:0|[1-9]\d*)$`)
 
 // IsScientificOffset reports whether an IOU mantissa/exponent combination
 // renders in scientific notation, per rippled STAmount::getText
