@@ -122,13 +122,13 @@ var messageDescriptors = [...]*messageDescriptor{
 		lane:     laneConsensusControl,
 		route:    routeConsensusControl,
 		outbound: OutboundClassControl,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryBase,
 	},
 	message.TypeHaveSet: {
 		lane:     laneConsensusControl,
 		route:    routeConsensusControl,
 		outbound: OutboundClassControl,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryGetSet,
 	},
 	message.TypeValidation: {
 		lane:     laneConsensus,
@@ -162,28 +162,28 @@ var messageDescriptors = [...]*messageDescriptor{
 		route:    routeNone,
 		gate:     ledgerReplayGate("proof path request disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryProofPathRequest,
 	},
 	message.TypeProofPathResponse: {
 		lane:     laneAcquisition,
 		route:    routeLedgerData,
 		gate:     ledgerReplayGate("proof path response disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryProofPathResponse,
 	},
 	message.TypeReplayDeltaReq: {
 		lane:     laneGeneral,
 		route:    routeNone,
 		gate:     ledgerReplayGate("replay delta request disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryReplayDeltaRequest,
 	},
 	message.TypeReplayDeltaResponse: {
 		lane:     laneAcquisition,
 		route:    routeLedgerData,
 		gate:     ledgerReplayGate("replay delta response disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryReplayDeltaResponse,
 	},
 	message.TypeHaveTransactions: {
 		lane:  laneGeneral,
@@ -194,7 +194,7 @@ var messageDescriptors = [...]*messageDescriptor{
 			reason:             "have-transactions-unnegotiated",
 		},
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryHaveTransactions,
 	},
 	message.TypeTransactions: {
 		lane:  laneGeneral,
@@ -205,7 +205,7 @@ var messageDescriptors = [...]*messageDescriptor{
 			reason:             "transactions-batch-unnegotiated",
 		},
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryTransaction,
+		traffic:  CategoryRequestedTransactions,
 	},
 }
 

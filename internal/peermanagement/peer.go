@@ -1214,7 +1214,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(CategorizeMessage(header.MessageType), true, int(header.PayloadSize))
+			p.traffic.AddCount(CategorizeMessage(header.MessageType, true), true, int(header.PayloadSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
@@ -1344,7 +1344,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			continue
 		}
-		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
+		p.traffic.AddCount(CategorizeMessage(header.MessageType, true), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
 			Type:        EventMessageReceived,
@@ -1412,7 +1412,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 		p.metrics.sent.addMessage(uint64(n))
 		if hdr, derr := message.DecodeHeader(wire); derr == nil {
-			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
+			p.traffic.AddCount(CategorizeMessage(hdr.MessageType, false), false, n)
 		}
 	}
 }

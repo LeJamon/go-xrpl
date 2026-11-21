@@ -66,18 +66,23 @@ var wantMessageClassification = map[message.MessageType]messageClassification{
 	message.TypeGetLedger:               {"general", OutboundClassOrdinary, CategoryLedgerData},
 	message.TypeLedgerData:              {"acquisition", OutboundClassOrdinary, CategoryLedgerData},
 	message.TypeProposeLedger:           {"consensus", OutboundClassConsensus, CategoryProposal},
-	message.TypeStatusChange:            {"consensus-control", OutboundClassControl, CategoryUnknown},
-	message.TypeHaveSet:                 {"consensus-control", OutboundClassControl, CategoryUnknown},
+	message.TypeStatusChange:            {"consensus-control", OutboundClassControl, CategoryBase},
+	message.TypeHaveSet:                 {"consensus-control", OutboundClassControl, CategoryGetSet},
 	message.TypeValidation:              {"consensus", OutboundClassConsensus, CategoryValidation},
 	message.TypeGetObjects:              {"acquisition", OutboundClassOrdinary, CategoryUnknown},
 	message.TypeSquelch:                 {"general", OutboundClassControl, CategorySquelch},
 	message.TypeValidatorListCollection: {"consensus", OutboundClassConsensus, CategoryValidatorList},
-	message.TypeProofPathReq:            {"general", OutboundClassOrdinary, CategoryUnknown},
-	message.TypeProofPathResponse:       {"acquisition", OutboundClassOrdinary, CategoryUnknown},
-	message.TypeReplayDeltaReq:          {"general", OutboundClassOrdinary, CategoryUnknown},
-	message.TypeReplayDeltaResponse:     {"acquisition", OutboundClassOrdinary, CategoryUnknown},
-	message.TypeHaveTransactions:        {"general", OutboundClassOrdinary, CategoryUnknown},
-	message.TypeTransactions:            {"general", OutboundClassOrdinary, CategoryTransaction},
+	message.TypeProofPathReq:            {"general", OutboundClassOrdinary, CategoryProofPathRequest},
+	message.TypeProofPathResponse:       {"acquisition", OutboundClassOrdinary, CategoryProofPathResponse},
+	message.TypeReplayDeltaReq:          {"general", OutboundClassOrdinary, CategoryReplayDeltaRequest},
+	message.TypeReplayDeltaResponse:     {"acquisition", OutboundClassOrdinary, CategoryReplayDeltaResponse},
+	message.TypeHaveTransactions:        {"general", OutboundClassOrdinary, CategoryHaveTransactions},
+	message.TypeTransactions:            {"general", OutboundClassOrdinary, CategoryRequestedTransactions},
+}
+
+// wantOutboundTraffic overrides the traffic category of a message we send.
+var wantOutboundTraffic = map[message.MessageType]TrafficCategory{
+	message.TypeHaveSet: CategoryShareSet,
 }
 
 var unlistedMessageClassification = messageClassification{"general", OutboundClassOrdinary, CategoryUnknown}
@@ -101,7 +106,12 @@ func TestMessageClassificationPinned(t *testing.T) {
 			frame, err := message.BuildWireMessage(msgType, nil)
 			require.NoError(t, err)
 			assert.Equal(t, want.outbound, outboundClassForFrame(frame), "outbound class")
-			assert.Equal(t, want.traffic, CategorizeMessage(msgType), "traffic category")
+			assert.Equal(t, want.traffic, CategorizeMessage(msgType, true), "inbound traffic category")
+			wantOut, ok := wantOutboundTraffic[msgType]
+			if !ok {
+				wantOut = want.traffic
+			}
+			assert.Equal(t, wantOut, CategorizeMessage(msgType, false), "outbound traffic category")
 		})
 	}
 	assert.Equal(t, OutboundClassOrdinary, outboundClassForFrame([]byte{0xff}), "undecodable frame")

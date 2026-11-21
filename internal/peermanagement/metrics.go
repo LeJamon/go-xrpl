@@ -19,7 +19,15 @@ const (
 	CategoryValidation
 	CategoryValidatorList
 	CategorySquelch
+	CategoryGetSet
+	CategoryShareSet
 	CategoryLedgerData
+	CategoryProofPathRequest
+	CategoryProofPathResponse
+	CategoryReplayDeltaRequest
+	CategoryReplayDeltaResponse
+	CategoryHaveTransactions
+	CategoryRequestedTransactions
 	CategoryTotal
 	CategoryUnknown
 )
@@ -27,18 +35,26 @@ const (
 // String returns the string representation of a category.
 func (c TrafficCategory) String() string {
 	names := map[TrafficCategory]string{
-		CategoryBase:          "overhead",
-		CategoryCluster:       "overhead_cluster",
-		CategoryOverlay:       "overhead_overlay",
-		CategoryManifests:     "overhead_manifest",
-		CategoryTransaction:   "transactions",
-		CategoryProposal:      "proposals",
-		CategoryValidation:    "validations",
-		CategoryValidatorList: "validator_lists",
-		CategorySquelch:       "squelch",
-		CategoryLedgerData:    "ledger_data",
-		CategoryTotal:         "total",
-		CategoryUnknown:       "unknown",
+		CategoryBase:                  "overhead",
+		CategoryCluster:               "overhead_cluster",
+		CategoryOverlay:               "overhead_overlay",
+		CategoryManifests:             "overhead_manifest",
+		CategoryTransaction:           "transactions",
+		CategoryProposal:              "proposals",
+		CategoryValidation:            "validations",
+		CategoryValidatorList:         "validator_lists",
+		CategorySquelch:               "squelch",
+		CategoryGetSet:                "set_get",
+		CategoryShareSet:              "set_share",
+		CategoryLedgerData:            "ledger_data",
+		CategoryProofPathRequest:      "proof_path_request",
+		CategoryProofPathResponse:     "proof_path_response",
+		CategoryReplayDeltaRequest:    "replay_delta_request",
+		CategoryReplayDeltaResponse:   "replay_delta_response",
+		CategoryHaveTransactions:      "have_transactions",
+		CategoryRequestedTransactions: "requested_transactions",
+		CategoryTotal:                 "total",
+		CategoryUnknown:               "unknown",
 	}
 	if name, ok := names[c]; ok {
 		return name
@@ -100,8 +116,13 @@ func (tc *TrafficCounter) AddCount(cat TrafficCategory, inbound bool, bytes int)
 	}
 }
 
-// CategorizeMessage determines the traffic category for a message type.
-func CategorizeMessage(msgType message.MessageType) TrafficCategory {
+// CategorizeMessage determines the traffic category for a message type
+// travelling in the given direction. A TMHaveSet we receive announces a set
+// we may get; one we send shares ours.
+func CategorizeMessage(msgType message.MessageType, inbound bool) TrafficCategory {
+	if msgType == message.TypeHaveSet && !inbound {
+		return CategoryShareSet
+	}
 	return describeMessage(msgType).traffic
 }
 
