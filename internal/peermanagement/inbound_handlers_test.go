@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -977,60 +978,52 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }
 
+func recordEndpointCharges(peer *Peer) *chargeRecorder {
+	recorder := &chargeRecorder{}
+	manager := resource.NewManager(nil, slog.New(recorder))
+	peer.attachUsage(manager.NewInboundEndpoint(peer.Endpoint().String()), nil)
+	return recorder
+}
+
 func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(115))
+	charges := recordEndpointCharges(peer)
 	payload := encodeEndpoints(t, 2, []message.Endpointv2{
 		{Endpoint: "not-an-endpoint", Hops: 1},
+		{Endpoint: "10.0.0.9 51235", Hops: 1},
+		{Endpoint: "10.0.0.10", Hops: 1},
 		{Endpoint: "also-invalid", Hops: 1},
 	})
 	o.onMessageReceived(Event{
 		PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload,
 	})
 
-	want := uint32((2 * resource.FeeInvalidData().Cost()) / resource.DecayWindowSeconds)
-	assert.Equal(t, want, peer.BadDataCount())
+	require.Equal(t, "[invalid data ($800)(mtENDPOINTS 2 malformed endpoints)]", charges.String())
+	require.Len(t, o.discovery.peers, 1)
+	require.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }
 
-// TestHandleEndpoints_RejectsOversizedFrame pins PeerImp.cpp:1206-1210: a
-// frame at or above 1024 entries is rejected wholesale and charged.
-func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
-	o, peer := newEndpointsTestOverlay(t, PeerID(16))
-
-	entry := protowire.AppendTag(nil, 1, protowire.BytesType)
-	entry = protowire.AppendString(entry, "10.0.0.1:51235")
-	entry = protowire.AppendTag(entry, 2, protowire.VarintType)
-	entry = protowire.AppendVarint(entry, 1)
-	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
-	payload = protowire.AppendVarint(payload, 2)
-	for range endpointsIngestMaxEntries {
-		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
-		payload = protowire.AppendBytes(payload, entry)
+func TestHandleEndpoints_OversizedFrameFee(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tracking PeerTracking
+		version  byte
+		want     string
+	}{
+		{"converged", PeerTrackingConverged, 2, "[useless data ($150)(mtENDPOINTS endpoints too large)]"},
+		{"unknown tracking", PeerTrackingUnknown, 2, "[trivial peer request ($1)(mtENDPOINTS)]"},
+		{"unsupported version", PeerTrackingConverged, 1, "[trivial peer request ($1)(mtENDPOINTS)]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, peer := newEndpointsTestOverlay(t, PeerID(16))
+			peer.setTracking(tc.tracking)
+			charges := recordEndpointCharges(peer)
+			payload := append([]byte{0x08, tc.version}, peerEndpointEntries(endpointsIngestMaxEntries)...)
+			o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload})
+			require.Equal(t, tc.want, charges.String())
+			require.Empty(t, o.discovery.peers)
+		})
 	}
-	o.onMessageReceived(Event{
-		PeerID:      peer.ID(),
-		MessageType: message.TypeEndpoints,
-		Payload:     payload,
-	})
-
-	assert.NotZero(t, peer.BadDataCount())
-
-	// PeerImp.cpp:1208 charges feeUselessData (150) for an oversized
-	// frame, strictly lighter than the feeInvalidData (400) levied per
-	// malformed entry. A reference peer charged the malformed reason
-	// must end up with a heavier balance, pinning the chargeForReason
-	// routing for "endpoints-too-large".
-	id, err := NewIdentity()
-	require.NoError(t, err)
-	ref := NewPeer(PeerID(116), Endpoint{Host: "127.0.0.1", Port: 51236}, false, id, make(chan Event, 1))
-	ref.setTracking(PeerTrackingConverged)
-	o.peers[ref.ID()] = ref
-	o.IncPeerBadData(ref.ID(), "endpoints-malformed")
-	assert.Less(t, peer.BadDataCount(), ref.BadDataCount(),
-		"oversized frame must cost feeUselessData (150), lighter than feeInvalidData (400)")
-
-	o.discovery.mu.RLock()
-	defer o.discovery.mu.RUnlock()
-	assert.Empty(t, o.discovery.peers)
 }
 
 func TestHandleEndpoints_RejectsMissingRequiredNestedFields(t *testing.T) {
