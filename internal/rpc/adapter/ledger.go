@@ -12,7 +12,7 @@ import (
 
 // GetLedgerBySequence returns a ledger by its sequence number
 func (a *LedgerServiceAdapter) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	l, err := a.svc.GetLedgerBySequence(seq)
+	l, err := a.backend().GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func (a *LedgerServiceAdapter) GetLedgerBySequence(seq uint32) (types.LedgerRead
 
 // GetLedgerByHash returns a ledger by its hash
 func (a *LedgerServiceAdapter) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	l, err := a.svc.GetLedgerByHash(hash)
+	l, err := a.backend().GetLedgerByHash(hash)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func (a *LedgerServiceAdapter) GetLedgerByHash(hash [32]byte) (types.LedgerReade
 }
 
 func (a *LedgerServiceAdapter) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (types.LedgerReader, error) {
-	l, err := a.svc.GetLedgerByHashContext(ctx, hash)
+	l, err := a.backend().GetLedgerByHashContext(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (a *LedgerServiceAdapter) GetLedgerByHashContext(ctx context.Context, hash 
 
 // GetGenesisAccount returns the genesis account address
 func (a *LedgerServiceAdapter) GetGenesisAccount() (string, error) {
-	return a.svc.GetGenesisAccount()
+	return a.backend().GetGenesisAccount()
 }
 
 // ledgerReaderAdapter adapts ledger.Ledger to types.LedgerReader interface
@@ -135,7 +135,7 @@ func (a *ledgerReaderAdapter) LedgerAmendmentRulesWithError() (*amendment.Rules,
 // GetClosedLedgerView returns a read-only view of the last closed ledger
 // for use by pathfinding and other operations that need direct state access.
 func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
-	l := a.svc.GetClosedLedger()
+	l := a.backend().GetClosedLedger()
 	if l == nil {
 		return nil, fmt.Errorf("no closed ledger available")
 	}
@@ -144,7 +144,7 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 
 // GetOpenLedgerView returns an immutable snapshot of the current open ledger.
 func (a *LedgerServiceAdapter) GetOpenLedgerView() (types.LedgerStateView, error) {
-	l := a.svc.GetOpenLedger()
+	l := a.backend().GetOpenLedger()
 	if l == nil {
 		return nil, fmt.Errorf("no open ledger available")
 	}
@@ -158,7 +158,7 @@ func (a *LedgerServiceAdapter) GetOpenLedgerView() (types.LedgerStateView, error
 // GetLedgerViewBySeq returns a state view of the ledger with the given
 // sequence, plus its metadata reader.
 func (a *LedgerServiceAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {
-	l, err := a.svc.GetLedgerBySequence(seq)
+	l, err := a.backend().GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,7 +168,7 @@ func (a *LedgerServiceAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerState
 // GetLedgerViewByHash returns a state view of the ledger with the given
 // hash, plus its metadata reader.
 func (a *LedgerServiceAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateView, types.LedgerReader, error) {
-	l, err := a.svc.GetLedgerByHash(hash)
+	l, err := a.backend().GetLedgerByHash(hash)
 	if err != nil {
 		return nil, nil, err
 	}
