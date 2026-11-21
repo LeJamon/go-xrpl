@@ -1657,18 +1657,22 @@ func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
-	if encodeParityCheck {
-		data, err := {{ .Receiver }}.encodeDirect()
-		verifyEncodeParity({{ .Receiver }}, data, err)
-	}
-{{- if eq .Name "NFTokenPage" }}
-	if err := {{ .Receiver }}.validateRequired(); err != nil {
+	if err := {{ .Receiver }}.validateEncode(); err != nil {
 		return nil, err
 	}
-	return {{ .Receiver }}.encodeNFTokens()
-{{- else }}
-	return {{ .Receiver }}.encodeViaMap()
+{{- if .AllowBadCurrencyDecode }}
+	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
+		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
+	}
 {{- end }}
+	if {{ .Receiver }}.hasXAddress() {
+		return {{ .Receiver }}.encodeViaMap()
+	}
+	data, err := {{ .Receiver }}.appendBinary(make([]byte, 0, {{ .Receiver }}.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity({{ .Receiver }}, data, err)
+	}
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -1694,22 +1698,6 @@ func ({{ .Receiver }} *{{ .StructName }}) encodeViaMap() ([]byte, error) {
 	}
 {{- end }}{{ end }}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func ({{ .Receiver }} *{{ .StructName }}) encodeDirect() ([]byte, error) {
-	if err := {{ .Receiver }}.validateEncode(); err != nil {
-		return nil, err
-	}
-{{- if .AllowBadCurrencyDecode }}
-	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
-		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
-	}
-{{- end }}
-	if {{ .Receiver }}.hasXAddress() {
-		return {{ .Receiver }}.encodeViaMap()
-	}
-	return {{ .Receiver }}.appendBinary(make([]byte, 0, {{ .Receiver }}.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

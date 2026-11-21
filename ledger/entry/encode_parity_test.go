@@ -31,15 +31,8 @@ type namedEncoder struct {
 	encode func() ([]byte, error)
 }
 
-type directEncoder interface {
-	encodeDirect() ([]byte, error)
-}
-
 func parityCandidates(e Entry) []namedEncoder {
-	return []namedEncoder{
-		{name: "Encode", encode: e.(encodeIface).Encode},
-		{name: "encodeDirect", encode: e.(directEncoder).encodeDirect},
-	}
+	return []namedEncoder{{name: "Encode", encode: e.(encodeIface).Encode}}
 }
 
 type parityResult struct {

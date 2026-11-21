@@ -285,6 +285,30 @@ var reverseHex = func() (table [256]byte) {
 	return table
 }()
 
+func variableLengthSize(length int) int {
+	switch {
+	case length <= 192:
+		return 1
+	case length <= 12480:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func appendVariableLength(data []byte, length int) []byte {
+	switch {
+	case length <= 192:
+		return append(data, byte(length))
+	case length <= 12480:
+		length -= 193
+		return append(data, byte((length>>8)+193), byte(length))
+	default:
+		length -= 12481
+		return append(data, byte((length>>16)+241), byte(length>>8), byte(length))
+	}
+}
+
 func accountIDEncodedLen(s string) int {
 	if s == "" {
 		return 1

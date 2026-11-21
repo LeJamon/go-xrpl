@@ -535,11 +535,17 @@ func (t *Ticket) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (t *Ticket) Encode() ([]byte, error) {
+	if err := t.validateEncode(); err != nil {
+		return nil, err
+	}
+	if t.hasXAddress() {
+		return t.encodeViaMap()
+	}
+	data, err := t.appendBinary(make([]byte, 0, t.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := t.encodeDirect()
 		verifyEncodeParity(t, data, err)
 	}
-	return t.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -557,17 +563,6 @@ func (t *Ticket) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (t *Ticket) encodeDirect() ([]byte, error) {
-	if err := t.validateEncode(); err != nil {
-		return nil, err
-	}
-	if t.hasXAddress() {
-		return t.encodeViaMap()
-	}
-	return t.appendBinary(make([]byte, 0, t.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

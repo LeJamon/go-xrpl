@@ -815,11 +815,17 @@ func (b *Bridge) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (b *Bridge) Encode() ([]byte, error) {
+	if err := b.validateEncode(); err != nil {
+		return nil, err
+	}
+	if b.hasXAddress() {
+		return b.encodeViaMap()
+	}
+	data, err := b.appendBinary(make([]byte, 0, b.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := b.encodeDirect()
 		verifyEncodeParity(b, data, err)
 	}
-	return b.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -837,17 +843,6 @@ func (b *Bridge) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (b *Bridge) encodeDirect() ([]byte, error) {
-	if err := b.validateEncode(); err != nil {
-		return nil, err
-	}
-	if b.hasXAddress() {
-		return b.encodeViaMap()
-	}
-	return b.appendBinary(make([]byte, 0, b.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

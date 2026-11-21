@@ -442,11 +442,17 @@ func (l *LedgerHashes) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LedgerHashes) Encode() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
+		return nil, err
+	}
+	if l.hasXAddress() {
+		return l.encodeViaMap()
+	}
+	data, err := l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
 	if encodeParityCheck {
-		data, err := l.encodeDirect()
 		verifyEncodeParity(l, data, err)
 	}
-	return l.encodeViaMap()
+	return data, err
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
@@ -458,17 +464,6 @@ func (l *LedgerHashes) encodeViaMap() ([]byte, error) {
 	}
 	out := l.ToMap()
 	return binarycodec.EncodeBytes(out)
-}
-
-// encodeDirect serializes the receiver with the direct binary writer.
-func (l *LedgerHashes) encodeDirect() ([]byte, error) {
-	if err := l.validateEncode(); err != nil {
-		return nil, err
-	}
-	if l.hasXAddress() {
-		return l.encodeViaMap()
-	}
-	return l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:
