@@ -101,174 +101,10 @@ const (
 
 // String returns the canonical name of the transaction type.
 func (t TxType) String() string {
-	switch t {
-	case TxTypePayment:
-		return "Payment"
-	case TxTypeEscrowCreate:
-		return "EscrowCreate"
-	case TxTypeEscrowFinish:
-		return "EscrowFinish"
-	case TxTypeAccountSet:
-		return "AccountSet"
-	case TxTypeEscrowCancel:
-		return "EscrowCancel"
-	case TxTypeRegularKeySet:
-		return "SetRegularKey"
-	case TxTypeOfferCreate:
-		return "OfferCreate"
-	case TxTypeOfferCancel:
-		return "OfferCancel"
-	case TxTypeTicketCreate:
-		return "TicketCreate"
-	case TxTypeSignerListSet:
-		return "SignerListSet"
-	case TxTypePaymentChannelCreate:
-		return "PaymentChannelCreate"
-	case TxTypePaymentChannelFund:
-		return "PaymentChannelFund"
-	case TxTypePaymentChannelClaim:
-		return "PaymentChannelClaim"
-	case TxTypeCheckCreate:
-		return "CheckCreate"
-	case TxTypeCheckCash:
-		return "CheckCash"
-	case TxTypeCheckCancel:
-		return "CheckCancel"
-	case TxTypeDepositPreauth:
-		return "DepositPreauth"
-	case TxTypeTrustSet:
-		return "TrustSet"
-	case TxTypeAccountDelete:
-		return "AccountDelete"
-	case TxTypeNFTokenMint:
-		return "NFTokenMint"
-	case TxTypeNFTokenBurn:
-		return "NFTokenBurn"
-	case TxTypeNFTokenCreateOffer:
-		return "NFTokenCreateOffer"
-	case TxTypeNFTokenCancelOffer:
-		return "NFTokenCancelOffer"
-	case TxTypeNFTokenAcceptOffer:
-		return "NFTokenAcceptOffer"
-	case TxTypeClawback:
-		return "Clawback"
-	case TxTypeAMMClawback:
-		return "AMMClawback"
-	case TxTypeAMMCreate:
-		return "AMMCreate"
-	case TxTypeAMMDeposit:
-		return "AMMDeposit"
-	case TxTypeAMMWithdraw:
-		return "AMMWithdraw"
-	case TxTypeAMMVote:
-		return "AMMVote"
-	case TxTypeAMMBid:
-		return "AMMBid"
-	case TxTypeAMMDelete:
-		return "AMMDelete"
-	case TxTypeXChainCreateClaimID:
-		return "XChainCreateClaimID"
-	case TxTypeXChainCommit:
-		return "XChainCommit"
-	case TxTypeXChainClaim:
-		return "XChainClaim"
-	case TxTypeXChainAccountCreateCommit:
-		return "XChainAccountCreateCommit"
-	case TxTypeXChainAddClaimAttestation:
-		return "XChainAddClaimAttestation"
-	case TxTypeXChainAddAccountCreateAttest:
-		return "XChainAddAccountCreateAttestation"
-	case TxTypeXChainModifyBridge:
-		return "XChainModifyBridge"
-	case TxTypeXChainCreateBridge:
-		return "XChainCreateBridge"
-	case TxTypeDIDSet:
-		return "DIDSet"
-	case TxTypeDIDDelete:
-		return "DIDDelete"
-	case TxTypeOracleSet:
-		return "OracleSet"
-	case TxTypeOracleDelete:
-		return "OracleDelete"
-	case TxTypeLedgerStateFix:
-		return "LedgerStateFix"
-	case TxTypeMPTokenIssuanceCreate:
-		return "MPTokenIssuanceCreate"
-	case TxTypeMPTokenIssuanceDestroy:
-		return "MPTokenIssuanceDestroy"
-	case TxTypeMPTokenIssuanceSet:
-		return "MPTokenIssuanceSet"
-	case TxTypeMPTokenAuthorize:
-		return "MPTokenAuthorize"
-	case TxTypeCredentialCreate:
-		return "CredentialCreate"
-	case TxTypeCredentialAccept:
-		return "CredentialAccept"
-	case TxTypeCredentialDelete:
-		return "CredentialDelete"
-	case TxTypeNFTokenModify:
-		return "NFTokenModify"
-	case TxTypePermissionedDomainSet:
-		return "PermissionedDomainSet"
-	case TxTypePermissionedDomainDelete:
-		return "PermissionedDomainDelete"
-	case TxTypeDelegateSet:
-		return "DelegateSet"
-	case TxTypeVaultCreate:
-		return "VaultCreate"
-	case TxTypeVaultSet:
-		return "VaultSet"
-	case TxTypeVaultDelete:
-		return "VaultDelete"
-	case TxTypeVaultDeposit:
-		return "VaultDeposit"
-	case TxTypeVaultWithdraw:
-		return "VaultWithdraw"
-	case TxTypeVaultClawback:
-		return "VaultClawback"
-	case TxTypeBatch:
-		return "Batch"
-	case TxTypeLoanBrokerSet:
-		return "LoanBrokerSet"
-	case TxTypeLoanBrokerDelete:
-		return "LoanBrokerDelete"
-	case TxTypeLoanBrokerCoverDeposit:
-		return "LoanBrokerCoverDeposit"
-	case TxTypeLoanBrokerCoverWithdraw:
-		return "LoanBrokerCoverWithdraw"
-	case TxTypeLoanBrokerCoverClawback:
-		return "LoanBrokerCoverClawback"
-	case TxTypeLoanSet:
-		return "LoanSet"
-	case TxTypeLoanDelete:
-		return "LoanDelete"
-	case TxTypeLoanManage:
-		return "LoanManage"
-	case TxTypeLoanPay:
-		return "LoanPay"
-	case TxTypeConfidentialMPTConvert:
-		return "ConfidentialMPTConvert"
-	case TxTypeConfidentialMPTMergeInbox:
-		return "ConfidentialMPTMergeInbox"
-	case TxTypeConfidentialMPTConvertBack:
-		return "ConfidentialMPTConvertBack"
-	case TxTypeConfidentialMPTSend:
-		return "ConfidentialMPTSend"
-	case TxTypeConfidentialMPTClawback:
-		return "ConfidentialMPTClawback"
-	case TxTypeSponsorshipTransfer:
-		return "SponsorshipTransfer"
-	case TxTypeSponsorshipSet:
-		return "SponsorshipSet"
-	case TxTypeAmendment:
-		return "EnableAmendment"
-	case TxTypeFee:
-		return "SetFee"
-	case TxTypeUNLModify:
-		return "UNLModify"
-	default:
-		return fmt.Sprintf("Unknown(%d)", t)
+	if name, ok := txTypeNames[t]; ok {
+		return name
 	}
+	return fmt.Sprintf("Unknown(%d)", t)
 }
 
 // txTypeNameMap maps transaction type names to their codes.
@@ -356,6 +192,15 @@ var txTypeNameMap = map[string]TxType{
 	"SetFee":                            TxTypeFee,
 	"UNLModify":                         TxTypeUNLModify,
 }
+
+// txTypeNames is the inverse of txTypeNameMap.
+var txTypeNames = func() map[TxType]string {
+	names := make(map[TxType]string, len(txTypeNameMap))
+	for name, t := range txTypeNameMap {
+		names[t] = name
+	}
+	return names
+}()
 
 // TxTypeFromName returns the transaction type for a given name.
 func TxTypeFromName(name string) (TxType, bool) {

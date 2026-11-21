@@ -325,10 +325,11 @@ jobs:
             race: "-race"
     steps:
       - uses: actions/checkout@v5
+      # The tx shard's descriptor and template tests read transactions.macro.
       - uses: ./.github/actions/oracle-pin
-        if: matrix.group == 'libs'
+        if: matrix.group == 'libs' || matrix.group == 'tx'
       - name: Check out equivalent inventory sources (public rippled)
-        if: matrix.group == 'libs'
+        if: matrix.group == 'libs' || matrix.group == 'tx'
         uses: actions/checkout@v5
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}

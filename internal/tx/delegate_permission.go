@@ -92,35 +92,6 @@ var granularPermissions = map[uint32]granularPermission{
 	},
 }
 
-var nonDelegatableTxTypes = map[Type]bool{
-	TypeAccountSet:              true,
-	TypeRegularKeySet:           true,
-	TypeSignerListSet:           true,
-	TypeAccountDelete:           true,
-	TypeDelegateSet:             true,
-	TypeVaultCreate:             true,
-	TypeVaultSet:                true,
-	TypeVaultDelete:             true,
-	TypeVaultDeposit:            true,
-	TypeVaultWithdraw:           true,
-	TypeVaultClawback:           true,
-	TypeBatch:                   true,
-	TypeLoanBrokerSet:           true,
-	TypeLoanBrokerDelete:        true,
-	TypeLoanBrokerCoverDeposit:  true,
-	TypeLoanBrokerCoverWithdraw: true,
-	TypeLoanBrokerCoverClawback: true,
-	TypeLoanSet:                 true,
-	TypeLoanDelete:              true,
-	TypeLoanManage:              true,
-	TypeLoanPay:                 true,
-	TypeConfidentialMPTConvert:  true,
-	TypeSponsorshipTransfer:     true,
-	TypeAmendment:               true,
-	TypeFee:                     true,
-	TypeUNLModify:               true,
-}
-
 func HasGranularPermissions(txType Type) bool {
 	for _, permission := range granularPermissions {
 		if permission.txType == txType {
@@ -130,8 +101,11 @@ func HasGranularPermissions(txType Type) bool {
 	return false
 }
 
+// IsTransactionDelegable reports whether txType is a registered transaction
+// type declared Delegable.
 func IsTransactionDelegable(txType Type) bool {
-	return !nonDelegatableTxTypes[txType]
+	d, ok := Lookup(txType)
+	return ok && d.Delegation == Delegable
 }
 
 // GranularPermissionsFor returns the held granular permissions that apply to
