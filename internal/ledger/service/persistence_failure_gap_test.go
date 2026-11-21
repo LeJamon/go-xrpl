@@ -28,7 +28,7 @@ func (r *failOnceRepositories) PersistValidatedLedger(ctx context.Context, valid
 // durable validated tip without its index: restart resumes from the tip and
 // nothing re-indexes the skipped ledger.
 func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
-	t.Skip("known gap (#2192): a failed persist is logged, never retried, and the next ledger advances the durable tip past it")
+	t.Skip("known gap (#2204): a failed persist is logged, never retried, and the next ledger advances the durable tip past it")
 
 	ctx := context.Background()
 	db := newTestNodeStore(t, 10_000)
@@ -55,7 +55,9 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tip)
 	info, err := repositories.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(failed))
-	indexed := err == nil && info != nil
-	require.Truef(t, indexed || tip.LedgerSeq < failed,
+	if !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+		require.NoError(t, err)
+	}
+	require.Truef(t, info != nil || tip.LedgerSeq < failed,
 		"durable tip %d is above ledger %d, which has no relational index", tip.LedgerSeq, failed)
 }
