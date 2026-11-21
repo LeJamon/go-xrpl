@@ -38,11 +38,11 @@ func newBlockedReplayWorker(t *testing.T) (*Router, *service.Service, standardRe
 	c := router.catchupReplay
 	links := buildStandardReplayTestChain(t, router, svc.GetClosedLedger(), 2)
 	armStandardReplayTestPipeline(t, router, adaptor, sender, links)
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, router, links[0])
 	family.root = links[0].ledger.Header().AccountHash
 	family.blocked.Store(true)
-	c.standardReplay.pivotReady = true
+	c.standardReplay.phase = standardReplayPivotReady
 	c.startTasks(t.Context())
 	t.Cleanup(func() {
 		resume()
@@ -254,8 +254,7 @@ func TestReplayWorkerFailureDiagnosticsDoNotHoldPublicationLock(t *testing.T) {
 	h.TxHash = root
 	h.Hash = header.CalculateHash(h)
 	entry := &standardReplayEntry{seq: h.LedgerIndex, hash: h.Hash, parentHash: h.ParentHash, header: h, readyAt: time.Now()}
-	c.standardReplay.active = true
-	c.standardReplay.pivotReady = true
+	c.standardReplay.phase = standardReplayPivotReady
 	c.standardReplay.anchorSeq = parent.Sequence()
 	c.standardReplay.entries = map[uint32]*standardReplayEntry{entry.seq: entry}
 	owner := c.beginStandardReplayDrain()

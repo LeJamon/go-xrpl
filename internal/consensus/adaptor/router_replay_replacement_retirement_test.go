@@ -83,8 +83,7 @@ func TestStandardReplayBaseRetiresObsoleteReplacementAfterStoredAdvance(t *testi
 			}
 			c.standardReplay = standardReplayPipeline{
 				generation:  generation,
-				active:      true,
-				pivotReady:  true,
+				phase:       standardReplayPivotReady,
 				pivotSeq:    base.Sequence(),
 				pivotHash:   base.Hash(),
 				anchorSeq:   base.Sequence(),
@@ -165,7 +164,7 @@ func TestRetryStandardReplayReplacementRetiresObsoleteBeforeRetryGates(t *testin
 			}
 			c.standardReplay = standardReplayPipeline{
 				generation:  7,
-				active:      true,
+				phase:       standardReplayAcquiringPivot,
 				anchorSeq:   seq,
 				anchorHash:  hash,
 				targetSeq:   seq,
@@ -205,7 +204,7 @@ func TestRetryStandardReplayReplacementWaitsForReplayCommitBeforeRetirement(t *t
 	}
 	c.standardReplay = standardReplayPipeline{
 		generation:  9,
-		active:      true,
+		phase:       standardReplayAcquiringPivot,
 		anchorSeq:   seq,
 		anchorHash:  hash,
 		replacement: replacement,
@@ -256,8 +255,7 @@ func TestReplayReplacementLateCallbacksCannotRetireFreshSameHashAcquisition(t *t
 	}
 	c.standardReplay = standardReplayPipeline{
 		generation:  1,
-		active:      true,
-		pivotReady:  true,
+		phase:       standardReplayPivotReady,
 		anchorSeq:   seq,
 		anchorHash:  hash,
 		targetSeq:   seq,

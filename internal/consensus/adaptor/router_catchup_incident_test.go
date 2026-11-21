@@ -271,7 +271,7 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 	pivotHeader := pivot.Header()
 	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, true))
 	require.True(t, r.catchupReplay.standardReplay.initialCandidate)
-	require.True(t, r.catchupReplay.standardReplay.applying)
+	require.True(t, r.catchupReplay.standardReplay.isApplying())
 	// A busy runner may exhaust the time budget before the full window is stored.
 	drainStandardReplayTestPipeline(t, r)
 	for i := range standardReplayPipelineWindow {
@@ -344,8 +344,7 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 		r.catchupReplay.catchupMu.Unlock()
 		r.catchupReplay.acquisitionMu.Lock()
 		r.catchupReplay.standardReplay = standardReplayPipeline{
-			active:     true,
-			pivotReady: true,
+			phase:      standardReplayPivotReady,
 			pivotSeq:   seq,
 			pivotHash:  hash,
 			anchorSeq:  seq,
@@ -410,7 +409,7 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 	require.Equal(t, consensus.ModeProposing, engine.Mode())
 	r.catchupReplay.acquisitionMu.Lock()
 	retryTarget := r.catchupReplay.consensusRecovery.targetHash
-	replayActive := r.catchupReplay.standardReplay.active
+	replayActive := r.catchupReplay.standardReplay.isActive()
 	r.catchupReplay.acquisitionMu.Unlock()
 	assert.Equal(t, target.hash, retryTarget)
 	assert.False(t, replayActive)
