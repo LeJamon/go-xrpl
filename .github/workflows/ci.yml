@@ -856,13 +856,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Collect producer evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: issue-1908-producer-${{ github.sha }}-*
           path: ${{ runner.temp }}/release-evidence/producers
           merge-multiple: true
       - name: Collect executed corpus evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: issue-2015-conformance-final-${{ github.sha }}
           path: ${{ runner.temp }}/release-evidence/producers
