@@ -170,8 +170,6 @@ func gitGrep(t *testing.T, patterns []string, pathspecs ...string) []string {
 	return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 }
 
-// TestPinnedIdentityIsNotDuplicated keeps the pin the only place a release
-// bump has to edit: see docs/upgrading-rippled.md.
 func TestPinnedIdentityIsNotDuplicated(t *testing.T) {
 	identity := []string{
 		Pin.Commit, Pin.PublicCommit,
@@ -207,8 +205,6 @@ func TestPinnedIdentityIsNotDuplicated(t *testing.T) {
 	}
 }
 
-// stringLiteralLines reports the lines of a Go file on which a string literal
-// contains the substring.
 func stringLiteralLines(t *testing.T, path, substring string) map[string]bool {
 	t.Helper()
 	source, err := os.ReadFile(filepath.Join(repositoryRoot, filepath.FromSlash(path)))

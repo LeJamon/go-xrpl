@@ -467,7 +467,6 @@ jobs:
       EVIDENCE_DIR: /tmp/issue-2015-conformance-final
     steps:
       - uses: actions/checkout@v5
-      # Supplies ORACLE_REPOSITORY / ORACLE_TAG / ORACLE_COMMIT / ORACLE_CORPUS.
       - uses: ./.github/actions/oracle-pin
       - name: Select pinned corpus
         run: printf 'GOXRPL_FIXTURES_DIR=%s\n' "$ORACLE_CORPUS" >> "$GITHUB_ENV"
@@ -591,7 +590,6 @@ jobs:
       EVIDENCE_DIR: /tmp/issue-2017-peer-interop
     steps:
       - uses: actions/checkout@v5
-      # Supplies ORACLE_REPOSITORY / ORACLE_TAG / ORACLE_COMMIT / ORACLE_IMAGE.
       - uses: ./.github/actions/oracle-pin
       - name: Select pinned oracle release
         run: printf 'PEERTLS_RIPPLED_VERSION=%s\nPEERTLS_RIPPLED_IMAGE=%s\n' "$ORACLE_TAG" "$ORACLE_IMAGE" >> "$GITHUB_ENV"
@@ -687,8 +685,6 @@ jobs:
         shell: bash
         run: mkdir -p "$EVIDENCE_DIR"
       - uses: actions/checkout@v5
-      # Supplies ORACLE_TAG / ORACLE_REPOSITORY / ORACLE_COMMIT / ORACLE_IMAGE /
-      # ORACLE_CHECKOUT.
       - uses: ./.github/actions/oracle-pin
 
       - name: Record Go checkout provenance

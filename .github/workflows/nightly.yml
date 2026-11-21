@@ -97,7 +97,6 @@ jobs:
       EVIDENCE_DIR: /tmp/issue-2017-nightly-oracle
     steps:
       - uses: actions/checkout@v5
-      # Supplies ORACLE_IMAGE.
       - uses: ./.github/actions/oracle-pin
 
       - name: Build goxrpl docker image
