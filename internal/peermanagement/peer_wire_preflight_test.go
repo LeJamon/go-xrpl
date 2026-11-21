@@ -61,6 +61,58 @@ func peerValidatorListCollectionPayload(count int) []byte {
 	return wire
 }
 
+func peerEndpointEntryWire() []byte {
+	entry := protowire.AppendTag(nil, 1, protowire.BytesType)
+	entry = protowire.AppendBytes(entry, []byte("10.0.0.1:51235"))
+	entry = protowire.AppendTag(entry, 2, protowire.VarintType)
+	return protowire.AppendVarint(entry, 1)
+}
+
+func peerEndpointsWire(versions []uint32, count int) []byte {
+	payload := make([]byte, 0, count*22+len(versions)*2)
+	appendVersion := func(version uint32) {
+		payload = protowire.AppendTag(payload, 1, protowire.VarintType)
+		payload = protowire.AppendVarint(payload, uint64(version))
+	}
+	for _, version := range versions {
+		appendVersion(version)
+	}
+	entry := peerEndpointEntryWire()
+	for range count {
+		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+		payload = protowire.AppendBytes(payload, entry)
+	}
+	return payload
+}
+
+func peerEndpointsVersionLastWire(versions []uint32, count int) []byte {
+	payload := make([]byte, 0, count*22+len(versions)*2)
+	entry := peerEndpointEntryWire()
+	for range count {
+		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+		payload = protowire.AppendBytes(payload, entry)
+	}
+	for _, version := range versions {
+		payload = protowire.AppendTag(payload, 1, protowire.VarintType)
+		payload = protowire.AppendVarint(payload, uint64(version))
+	}
+	return payload
+}
+
+func peerLedgerDataPayload(t *testing.T) []byte {
+	t.Helper()
+	payload, err := message.Encode(&message.LedgerData{
+		LedgerHash: make([]byte, 32),
+		LedgerSeq:  1,
+		InfoType:   message.LedgerInfoAsNode,
+		Nodes: []message.LedgerNode{{
+			NodeData: bytes.Repeat([]byte{0x4c}, 4*1024),
+		}},
+	})
+	require.NoError(t, err)
+	return payload
+}
+
 func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -70,14 +122,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 		charge   resource.Charge
 		compress bool
 	}{
-		{
-			name:     "endpoints",
-			msgType:  message.TypeEndpoints,
-			payload:  peerRepeatedMessageField(3, 1_024),
-			reason:   "endpoints-too-large",
-			charge:   resource.FeeUselessData(),
-			compress: true,
-		},
 		{
 			name:    "transactions",
 			msgType: message.TypeTransactions,
@@ -136,6 +180,154 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			require.Zero(t, peer.traffic.TotalStats().MessagesIn)
 		})
 	}
+}
+
+func TestPeerEndpointsOversizeAdmissionCarriesVersionAndLimit(t *testing.T) {
+	tests := []struct {
+		name           string
+		payload        []byte
+		wantVersion    uint32
+		wantOversized  bool
+		wantFrameError bool
+	}{
+		{
+			name:          "initialized oversized",
+			payload:       peerEndpointsWire([]uint32{2}, 1_024),
+			wantVersion:   2,
+			wantOversized: true,
+		},
+		{
+			name:           "missing version after oversized list",
+			payload:        peerEndpointsVersionLastWire(nil, 1_024),
+			wantFrameError: true,
+		},
+		{
+			name:          "version last",
+			payload:       peerEndpointsVersionLastWire([]uint32{2}, 1_024),
+			wantVersion:   2,
+			wantOversized: true,
+		},
+		{
+			name:          "duplicate version uses last value",
+			payload:       peerEndpointsVersionLastWire([]uint32{1, 2}, 1_024),
+			wantVersion:   2,
+			wantOversized: true,
+		},
+	}
+
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			frame, err := message.BuildWireMessage(message.TypeEndpoints, test.payload)
+			require.NoError(t, err)
+
+			identity, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			peer := NewPeer(PeerID(200+i), Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			manager := resource.NewManager(nil, nil)
+			consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+			peer.attachUsage(consumer, func() {})
+			peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+			err = peer.readLoop(context.Background())
+			if test.wantFrameError {
+				var frameErr *FrameReadError
+				require.ErrorAs(t, err, &frameErr)
+				require.Equal(t, message.TypeEndpoints, frameErr.MessageType)
+				require.Empty(t, events)
+				require.Zero(t, peer.BadDataCount())
+				require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+				require.Zero(t, consumer.Balance())
+				return
+			}
+
+			require.ErrorIs(t, err, io.EOF)
+			event := <-events
+			require.NotNil(t, event.decodedEndpoints)
+			require.Equal(t, test.wantVersion, event.decodedEndpoints.Version)
+			require.Equal(t, test.wantOversized, event.endpointsOversized)
+			require.Empty(t, event.decodedEndpoints.EndpointsV2)
+			event.release()
+		})
+	}
+}
+
+func TestPeerInboundLedgerDataTrafficUsesWirePayloadSize(t *testing.T) {
+	payload := peerLedgerDataPayload(t)
+	for _, compressed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "compressed"}[compressed], func(t *testing.T) {
+			frame, err := message.BuildWireMessage(message.TypeLedgerData, payload)
+			require.NoError(t, err)
+			if compressed {
+				var compressedFrame bool
+				frame, compressedFrame = message.CompressFrameIfWorthwhile(frame)
+				require.True(t, compressedFrame)
+			}
+			wirePayloadSize := len(frame) - message.HeaderSizeUncompressed
+			if compressed {
+				wirePayloadSize = len(frame) - message.HeaderSizeCompressed
+			}
+
+			identity, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			peer := NewPeer(PeerID(210), Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			manager := resource.NewManager(nil, nil)
+			consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+			peer.attachUsage(consumer, func() {})
+			peer.handshakeCfg.EnableCompression = compressed
+			if compressed {
+				peer.capabilities = NewPeerCapabilities()
+				peer.capabilities.Features.Enable(FeatureCompression)
+			}
+			peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+			require.ErrorIs(t, peer.readLoop(context.Background()), io.EOF)
+			event := <-events
+			require.Equal(t, uint64(wirePayloadSize), event.WireSize)
+			total := peer.traffic.TotalStats()
+			require.Equal(t, uint64(wirePayloadSize), total.BytesIn)
+			require.Equal(t, uint64(1), total.MessagesIn)
+			category := peer.traffic.Stats(CategoryLedgerDataStateNodeGet)
+			require.Equal(t, uint64(wirePayloadSize), category.BytesIn)
+			require.Equal(t, uint64(1), category.MessagesIn)
+			event.release()
+		})
+	}
+}
+
+func TestPeerMissingRequiredLedgerFieldTerminatesBeforeAccounting(t *testing.T) {
+	payload := protowire.AppendTag(nil, 2, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 1)
+	payload = protowire.AppendTag(payload, 3, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, uint64(message.LedgerInfoAsNode))
+	frame, err := message.BuildWireMessage(message.TypeLedgerData, payload)
+	require.NoError(t, err)
+
+	identity, err := NewIdentity()
+	require.NoError(t, err)
+	events := make(chan Event, 1)
+	peer := NewPeer(PeerID(220), Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	manager := resource.NewManager(nil, nil)
+	consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+	peer.attachUsage(consumer, func() {})
+	budget := newReadBudget(int64(len(frame) + len(payload)))
+	peer.SetInboundReadBudget(budget)
+	peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+	err = peer.readLoop(context.Background())
+	var frameErr *FrameReadError
+	require.ErrorAs(t, err, &frameErr)
+	require.Equal(t, message.TypeLedgerData, frameErr.MessageType)
+	require.Empty(t, events)
+	require.Zero(t, peer.BadDataCount())
+	require.Zero(t, consumer.Balance())
+	require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+	require.Zero(t, peer.traffic.TotalStats().BytesIn)
+	require.Zero(t, readBudgetUsed(budget))
 }
 
 func TestPeerEndpointsDecodeFailureTerminatesBeforeCharge(t *testing.T) {
