@@ -164,7 +164,7 @@ func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) 
 	historyLedger := relationalTestLedger(t, hash, combined)
 	svc.historyComponent.mu.Lock()
 	svc.putHistoryLocked(historyLedger)
-	svc.txIndex[hash] = historyLedger.Sequence()
+	svc.indexTxLocked(hash, historyLedger.Sequence())
 	svc.historyComponent.mu.Unlock()
 
 	ranged, searched, err := svc.GetTransactionWithRange(ctx, hash, 999, 1000)

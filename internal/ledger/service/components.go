@@ -64,6 +64,7 @@ type historyComponent struct {
 	persistedLedgerFIFO  [][32]byte
 	txIndex              map[[32]byte]uint32
 	txPositionIndex      map[[32]byte]uint32
+	txHashesBySeq        map[uint32][][32]byte
 	completeMu           sync.RWMutex
 	completedLedgers     *completeLedgerSet
 	completeLedgerHashes map[uint32][32]byte

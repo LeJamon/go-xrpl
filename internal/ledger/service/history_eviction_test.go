@@ -67,7 +67,7 @@ func testEvictOldHistoryLocked(t *testing.T, window uint32) {
 		if err := l.AddTransaction(txHash, txData); err != nil {
 			t.Fatalf("AddTransaction(seq=%d): %v", seq, err)
 		}
-		svc.txIndex[txHash] = seq
+		svc.indexTxLocked(txHash, seq)
 		svc.txPositionIndex[txHash] = 0
 		return l
 	}
@@ -187,7 +187,7 @@ func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
 	svc.historyComponent.mu.Lock()
 	svc.putHistoryLocked(coldOld)
 	svc.putHistoryLocked(latest)
-	svc.txIndex[txHash] = coldOld.Sequence()
+	svc.indexTxLocked(txHash, coldOld.Sequence())
 	svc.txPositionIndex[txHash] = 0
 	svc.evictOldHistoryLocked(latest.Sequence())
 	svc.historyComponent.mu.Unlock()

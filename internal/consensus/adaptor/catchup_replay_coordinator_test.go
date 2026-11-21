@@ -99,7 +99,7 @@ func TestCatchupCoordinatorYieldRearmsSameGenerationOnce(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	c := r.catchupReplay
 	c.standardReplay = standardReplayPipeline{
-		active: true, pivotReady: true, generation: 7, anchorSeq: 10,
+		phase: standardReplayPivotReady, generation: 7, anchorSeq: 10,
 		entries: map[uint32]*standardReplayEntry{11: {readyAt: time.Now()}},
 	}
 	owner := c.beginStandardReplayDrain()
@@ -161,8 +161,8 @@ func TestCatchupCoordinatorShutdownDuringReplayHandoff(t *testing.T) {
 		t.Fatal("retired replay drain did not finish")
 	}
 	require.Nil(t, c.standardReplayDrainOwner)
-	require.False(t, c.standardReplay.active)
-	require.False(t, c.standardReplay.applying)
+	require.False(t, c.standardReplay.isActive())
+	require.False(t, c.standardReplay.isApplying())
 	require.Empty(t, c.standardReplayDrainWake)
 	require.Empty(t, c.fetchTracker.Active())
 	require.False(t, c.startLedgerAcquisition(links[1].seq+1, [32]byte{9}, 7))
@@ -186,7 +186,7 @@ func TestCatchupCoordinatorShutdownRejectsReplayAndAncestryRearm(t *testing.T) {
 	require.False(t, c.tryArmStandardReplayPipeline(svc, base, target.seq, target.hash, 7))
 	require.False(t, c.beginFrozenPivotRecovery(target.seq, target.hash, 7))
 	require.False(t, c.startHeaderParentDiscovery(base, target.seq, target.hash, 7, catchupSourceQuorum))
-	require.False(t, c.standardReplay.active)
+	require.False(t, c.standardReplay.isActive())
 	require.Nil(t, c.headerDiscovery)
 	require.Empty(t, c.fetchTracker.Active())
 	require.Empty(t, c.standardReplayDrainWake)

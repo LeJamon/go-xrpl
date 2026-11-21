@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the pinned v3.4.1 amendment registry fixture.
+"""Generate the pinned amendment registry fixture.
 
 The generated data contains feature names, SHA-512-half IDs, and the
 Supported/VoteBehavior values from rippled's features.macro. It deliberately
@@ -16,9 +16,14 @@ import subprocess
 from pathlib import Path
 
 
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
-ORACLE_TAG = "3.4.1"
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[2] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
 SOURCE_RELATIVE = Path("include/xrpl/protocol/detail/features.macro")
 
 ACTIVE = re.compile(

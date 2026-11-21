@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ func TestCheckedAmountAdditionOracle(t *testing.T) {
 		}
 	}
 	require.NoError(t, json.Unmarshal(raw, &fixture))
-	require.Equal(t, "d147fccf54a500fce586522f28d6044c37fd8d29", fixture.Commit)
+	require.Equal(t, rippled.Pin.Commit, fixture.Commit)
 	id := [24]byte{1}
 	for _, asset := range []struct {
 		name string

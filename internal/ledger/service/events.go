@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -628,8 +629,17 @@ func (s *Service) commitTransactionResultsLocked(staged *stagedTransactionResult
 	if staged == nil {
 		return
 	}
+	seq := staged.ledgerSeq
+	if hashes := s.txHashesBySeq[seq]; hashes != nil {
+		s.txHashesBySeq[seq] = slices.DeleteFunc(hashes, func(hash [32]byte) bool {
+			owner, ok := s.txIndex[hash]
+			return !ok || owner != seq
+		})
+	} else if len(staged.results) > 0 {
+		s.txHashesBySeq[seq] = make([][32]byte, 0, len(staged.results))
+	}
 	for _, result := range staged.results {
-		s.txIndex[result.TxHash] = staged.ledgerSeq
+		s.indexTxLocked(result.TxHash, seq)
 	}
 	for txHash, txIndex := range staged.positions {
 		s.txPositionIndex[txHash] = txIndex

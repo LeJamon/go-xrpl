@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -307,9 +308,9 @@ func TestServerDefinitionsHash(t *testing.T) {
 	hash, ok := resp["hash"].(string)
 	require.True(t, ok, "response should contain a string hash")
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
-	// Pinned to the v3.4.1 ServerDefinitions document and its compact
-	// Json::FastWriter serialization from the private release oracle.
-	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", hash)
+	// The pinned release's ServerDefinitions document in its compact
+	// Json::FastWriter serialization.
+	assert.Equal(t, rippled.Pin.DefinitionsHash, hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
 		params, err := json.Marshal(map[string]any{"hash": hash})
@@ -375,13 +376,10 @@ func TestServerDefinitionsHash(t *testing.T) {
 // even when the complete-document hash is accidentally updated.
 func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
 	fixture := loadServerDefinitionsFinalHashFixture(t)
-	assert.Equal(t, "XRPLF/xrpld-private", fixture.Oracle.Repository)
-	assert.Equal(t, "3.4.1", fixture.Oracle.Tag)
-	assert.Equal(t, "d147fccf54a500fce586522f28d6044c37fd8d29", fixture.Oracle.Commit)
-	assert.Equal(t,
-		"1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
-		fixture.FullDocumentSHA512Half,
-	)
+	assert.Equal(t, rippled.Pin.Repository, fixture.Oracle.Repository)
+	assert.Equal(t, rippled.Pin.Tag, fixture.Oracle.Tag)
+	assert.Equal(t, rippled.Pin.Commit, fixture.Oracle.Commit)
+	assert.Equal(t, rippled.Pin.DefinitionsHash, fixture.FullDocumentSHA512Half)
 
 	result, rpcErr := (&handlers.ServerDefinitionsMethod{}).Handle(&types.RpcContext{
 		Context: context.Background(), Role: types.RoleGuest, ApiVersion: types.ApiVersion1,

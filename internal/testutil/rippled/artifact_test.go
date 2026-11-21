@@ -33,11 +33,11 @@ esac
 		name, key, value string
 	}{
 		{"pinned", "", ""},
-		{"mutable_image_id", "MOCK_IMAGE_ID", "oracle:3.4.1"},
+		{"mutable_image_id", "MOCK_IMAGE_ID", Pin.Image},
 		{"wrong_architecture", "MOCK_PLATFORM", "linux/arm64"},
 		{"changed_binary", "MOCK_BINARY_HASH", strings.Repeat("0", 64)},
-		{"wrong_version", "MOCK_VERSION", "3.4.0"},
-		{"wrong_commit", "MOCK_COMMIT", priorCommit},
+		{"wrong_version", "MOCK_VERSION", Pin.Prior.Tag},
+		{"wrong_commit", "MOCK_COMMIT", Pin.Prior.Commit},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			bin := t.TempDir()
@@ -56,9 +56,9 @@ esac
 				"EVIDENCE_DIR":     evidence,
 				"MOCK_IMAGE_ID":    imageID,
 				"MOCK_PLATFORM":    "linux/amd64",
-				"MOCK_BINARY_HASH": "fb8430dfdbee9d8016818dab22881e48a125598beebf9b5b8c90ca7fdba1faaa",
-				"MOCK_VERSION":     "3.4.1",
-				"MOCK_COMMIT":      commit,
+				"MOCK_BINARY_HASH": Pin.BinarySHA256,
+				"MOCK_VERSION":     Pin.Tag,
+				"MOCK_COMMIT":      Pin.Commit,
 			}
 			if test.key != "" {
 				env[test.key] = test.value
