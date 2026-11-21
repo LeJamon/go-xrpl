@@ -57,6 +57,7 @@ func TestHeaderDiscoveryRepairsEmptyReplayPipelineWithoutAdvancingBase(t *testin
 	require.EqualValues(t, 9, r.catchupReplay.standardReplay.generation)
 	completeStandardReplayTestLink(t, r, first)
 	completeStandardReplayTestLink(t, r, second)
+	drainStandardReplayTestPipeline(t, r)
 	stored, err := svc.GetLedgerByHash(second.hash)
 	require.NoError(t, err)
 	require.NotNil(t, stored, "recovery must actually apply the repaired successors")

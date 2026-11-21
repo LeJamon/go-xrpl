@@ -139,7 +139,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	}
 
 	// Submit to the service with the raw blob for canonical ordering
-	result, err := a.svc.SubmitTransaction(transaction, rawBlob, failHard)
+	result, err := a.backend().SubmitTransaction(transaction, rawBlob, failHard)
 	if err != nil {
 		return internalSubmitResult(), nil
 	}
