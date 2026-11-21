@@ -98,7 +98,6 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 		return tx.XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
 	}
 
-	// IOU balance
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)

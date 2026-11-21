@@ -177,7 +177,6 @@ func escrowCreatePreclaimMPT(view tx.ReadOnlyLedgerView, rules *amendment.Rules,
 		return tr
 	}
 
-	// Frozen checks include the backing asset of a vault share.
 	if result := mptutil.CheckMPTFrozen(view, mptID, issuance, accountID); result != ter.TesSUCCESS {
 		return result
 	}
@@ -185,8 +184,6 @@ func escrowCreatePreclaimMPT(view tx.ReadOnlyLedgerView, rules *amendment.Rules,
 		return result
 	}
 
-	// canTransfer check (holder-to-holder needs LsfMPTCanTransfer), including
-	// the transferability inherited from a vault share's backing asset.
 	if tr := mptutil.CanTransfer(view, mptID, accountID, destID); tr != ter.TesSUCCESS {
 		return tr
 	}
@@ -268,7 +265,6 @@ func escrowFinishPreclaimMPT(view tx.ReadOnlyLedgerView, destID [20]byte, amount
 		return tr
 	}
 
-	// Frozen check on destination, including the backing asset of a vault share.
 	if result := mptutil.CheckMPTFrozen(view, mptID, issuance, destID); result != ter.TesSUCCESS {
 		return result
 	}

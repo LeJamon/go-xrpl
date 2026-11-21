@@ -31,8 +31,6 @@ func TestLPTokenFrozenForIssuer_AMMUnresolvable(t *testing.T) {
 	}
 }
 
-// TestLPTokenFrozenForIssuer_NotAMM confirms a plain (non-AMM) issuer reports
-// LPTokenIssuerNotAMM, leaving the freeze fast-path untouched.
 func TestLPTokenFrozenForIssuer_NotAMM(t *testing.T) {
 	var issuer [20]byte
 	issuer[0] = 0x11
@@ -47,8 +45,6 @@ func TestLPTokenFrozenForIssuer_NotAMM(t *testing.T) {
 	}
 }
 
-// TestLPTokenFrozenForIssuer_MissingIssuer confirms a missing issuer AccountRoot
-// reports LPTokenIssuerNotAMM (the no-issuer path).
 func TestLPTokenFrozenForIssuer_MissingIssuer(t *testing.T) {
 	var issuer [20]byte
 	issuer[0] = 0x33

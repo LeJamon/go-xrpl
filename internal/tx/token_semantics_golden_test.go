@@ -22,8 +22,6 @@ type iouScenario struct {
 	currency string
 }
 
-// iouScenarios enumerates issuer state x holder ordering x every trust-line
-// flag combination x currency.
 func iouScenarios(t *testing.T) []iouScenario {
 	t.Helper()
 	var issuer, low, high [20]byte
