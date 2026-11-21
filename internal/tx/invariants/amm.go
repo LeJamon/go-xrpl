@@ -280,7 +280,7 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 				lptAfter = &bal
 			} else if e.EntryType == entry.TypeRippleState {
 				// Check for lsfAMMNode flag
-				rs, err := state.ParseRippleState(e.After)
+				rs, err := e.rippleState(e.After)
 				if err == nil && (rs.Flags&state.LsfAMMNode) != 0 {
 					ammPoolChanged = true
 				}
@@ -291,7 +291,7 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 				}
 			} else if e.EntryType == entry.TypeAccountRoot {
 				// Check for non-zero AMMID (AMM pseudo-account)
-				acct, err := state.ParseAccountRoot(e.After)
+				acct, err := e.accountRoot(e.After)
 				if err == nil {
 					var zeroHash [32]byte
 					if acct.AMMID != zeroHash {
