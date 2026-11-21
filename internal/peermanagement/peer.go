@@ -1913,6 +1913,9 @@ func chargeForReason(reason string) resource.Charge {
 		"message-too-large",
 		"wire-invalid":
 		return resource.FeeInvalidData()
+	case "proof-path-resp-decode",
+		"proof-path-resp-malformed":
+		return resource.FeeMalformedData()
 	case "endpoints-too-large",
 		"cluster-no-pubkey",
 		"cluster-not-member",

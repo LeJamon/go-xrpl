@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
@@ -18,7 +19,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 type gossipNetwork interface {
@@ -81,6 +84,8 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 		r.handleFetchPackReply(msg)
 	case message.TypeReplayDeltaResponse:
 		r.handleReplayDeltaResponse(msg)
+	case message.TypeProofPathResponse:
+		r.handleProofPathResponse(msg)
 	case message.TypeManifests:
 		r.submitManifestJob(msg)
 	case message.TypeValidatorListCollection:
@@ -88,6 +93,49 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 	default:
 	}
 	return transferred
+}
+
+// handleProofPathResponse charges an mtPROOF_PATH_RESPONSE as invalid data
+// when the peer reports an error and as malformed data when it does not prove
+// the skip list of the ledger it names. This node never requests proof paths,
+// so a valid response has no consumer and is dropped.
+func (r *Router) handleProofPathResponse(msg *peermanagement.InboundMessage) {
+	charge := func(fee resource.Charge, reason string) {
+		if !msg.SelectPeerCharge(fee, reason) {
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
+		}
+	}
+	decoded, err := message.Decode(message.TypeProofPathResponse, msg.Payload)
+	if err != nil {
+		charge(resource.FeeMalformedData(), "proof-path-resp-decode")
+		return
+	}
+	resp, ok := decoded.(*message.ProofPathResponse)
+	if !ok {
+		return
+	}
+	switch {
+	case resp.HasError():
+		charge(resource.FeeInvalidData(), "proof-path-resp-error")
+	case !provesSkipList(resp):
+		charge(resource.FeeMalformedData(), "proof-path-resp-malformed")
+	}
+}
+
+// provesSkipList reports whether resp carries a ledger header hashing to its
+// ledger hash and a state-map proof of that ledger's skip list. Bytes past the
+// header are ignored.
+func provesSkipList(resp *message.ProofPathResponse) bool {
+	if len(resp.Key) != 32 || len(resp.LedgerHash) != 32 || len(resp.Path) == 0 ||
+		len(resp.LedgerHeader) < header.SizeBase || resp.MapType != message.LedgerMapAccountState {
+		return false
+	}
+	ledger, err := header.DeserializeHeader(resp.LedgerHeader[:header.SizeBase], false)
+	if err != nil || header.CalculateHash(*ledger) != [32]byte(resp.LedgerHash) {
+		return false
+	}
+	key := [32]byte(resp.Key)
+	return key == keylet.LedgerHashes().Key && shamap.VerifyProofPath(ledger.AccountHash, key, resp.Path)
 }
 
 func (r *Router) handleInboundMessage(msg *peermanagement.InboundMessage) {
