@@ -16,7 +16,6 @@ var txKinds = []applyKind{
 	{"offer-create", buildOfferCreateCross},
 }
 
-// BenchmarkFlatten measures one reflective Flatten of a parsed transaction.
 func BenchmarkFlatten(b *testing.B) {
 	for _, kind := range txKinds {
 		transaction := parseFixture(b, kind.build(b).blob)
@@ -31,7 +30,6 @@ func BenchmarkFlatten(b *testing.B) {
 	}
 }
 
-// BenchmarkParseFromBinary measures the full binary transaction parse.
 func BenchmarkParseFromBinary(b *testing.B) {
 	for _, kind := range txKinds {
 		blob := kind.build(b).blob
@@ -77,8 +75,6 @@ type encoder interface {
 	Encode() ([]byte, error)
 }
 
-// BenchmarkEntryEncode and BenchmarkEntryDecode measure one typed ledger-entry
-// round trip for entries taken from the offer-crossing parent ledger.
 func BenchmarkEntryEncode(b *testing.B) {
 	entries := fixtureEntries(b)
 	for _, name := range entryNames {

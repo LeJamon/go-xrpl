@@ -40,8 +40,7 @@ var applyKinds = []applyKind{
 
 // BenchmarkApplyTransaction applies one signed transaction blob to a fresh
 // open view of a prepared parent ledger. Each iteration parses the blob anew
-// and starts from a cold signature cache, so every per-transaction cost of
-// first-seen ingress is measured. The view-new sub-benchmark is the fixed
+// and starts from a cold signature cache. The view-new sub-benchmark is the fixed
 // per-iteration overhead (fresh view, cache reset) to subtract; the timer is
 // not toggled per iteration because doing so stops the world and dominates
 // the measurement.
@@ -70,7 +69,6 @@ func BenchmarkApplyTransaction(b *testing.B) {
 	}
 }
 
-// TestApplyFixtures keeps the benchmark fixtures honest under plain go test.
 func TestApplyFixtures(t *testing.T) {
 	for _, kind := range applyKinds {
 		t.Run(kind.name, func(t *testing.T) {
@@ -126,7 +124,6 @@ func appliedResult(tb testing.TB, view *ledger.Ledger, hash [32]byte) string {
 	return result
 }
 
-// finish closes the env and signs transaction for the resulting parent ledger.
 func finish(tb testing.TB, env *jtx.TestEnv, signer *jtx.Account, transaction tx.Transaction) applyFixture {
 	tb.Helper()
 	env.Close()
