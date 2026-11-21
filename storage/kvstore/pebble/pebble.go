@@ -86,6 +86,11 @@ func openWithCache(path string, pebbleCache *pebble.Cache, options Options, read
 	return &Store{db: db, readOnly: readOnly}, nil
 }
 
+// ReadOnly reports whether the store was opened with NewReadOnly.
+func (s *Store) ReadOnly() bool {
+	return s.readOnly
+}
+
 // Get retrieves the value for the given key.
 // Returns kvstore.ErrNotFound if the key does not exist.
 func (s *Store) Get(key []byte) ([]byte, error) {
@@ -437,3 +442,4 @@ func (i *iterator) Close() error {
 // Ensure Store implements kvstore.KeyValueStore at compile time.
 var _ kvstore.KeyValueStore = (*Store)(nil)
 var _ kvstore.BatchReadingStore = (*Store)(nil)
+var _ kvstore.ReadOnlyStore = (*Store)(nil)

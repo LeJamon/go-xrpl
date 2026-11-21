@@ -77,6 +77,28 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-lint-advisory
           if-no-files-found: error
 
+  # Report-only: makes changes to the public packages' exported API visible on
+  # the PR. See docs/api-stability.md.
+  api-diff:
+    name: Public API diff
+    continue-on-error: true
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - name: Diff exported API against the base branch
+        shell: bash
+        env:
+          API_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! scripts/apidiff.sh "$API_BASE" | tee -a "$GITHUB_STEP_SUMMARY"; then
+            echo "Public API comparison failed. See the step log." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
   generate:
     name: Generate (drift check)
     runs-on: ubuntu-latest
@@ -288,20 +310,18 @@ jobs:
           # that the detector slowed ~9x (900s -> ~96s) while the engine's
           # concurrency is already exercised under -race by the other shards.
           # (The nightly workflow runs this suite *with* -race, off the hot path.)
+          #
+          # scripts/test-shard.sh partitions `go list ./...` across these
+          # groups, so every package in the module runs in exactly one shard.
           - group: integration-offer
-            packages: ./internal/testing/offer/...
             race: ""
           - group: integration
-            packages: "$(go list ./internal/testing/... | grep -v '/internal/testing/offer$')"
             race: "-race"
           - group: tx
-            packages: ./internal/tx/...
             race: "-race"
           - group: core
-            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/... ./internal/validator/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/... ./internal/statecompare/...
             race: "-race"
           - group: libs
-            packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./internal/testutil/...
             race: "-race"
     steps:
       - uses: actions/checkout@v5
@@ -343,7 +363,12 @@ jobs:
             .full_document_bytes == 79944
           ' internal/rpc/testdata/server_definitions_final_hashes.json >/dev/null
       - uses: ./.github/actions/setup
-      - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
+      - name: Run package tests
+        env:
+          GOFLAGS: ${{ matrix.race }}
+        run: |
+          packages=$(scripts/test-shard.sh "${{ matrix.group }}")
+          go test -count=1 -timeout 15m $packages
       - name: Record producer evidence
         if: always()
         env:
@@ -351,7 +376,9 @@ jobs:
           EVIDENCE_LABEL: test-${{ matrix.group }}
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
-            go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
+            export GOFLAGS="${{ matrix.race }}";
+            packages=$(scripts/test-shard.sh "${{ matrix.group }}") &&
+            go test -count=1 -timeout 15m $packages
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()

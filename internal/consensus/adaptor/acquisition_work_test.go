@@ -1020,12 +1020,11 @@ func TestProcessAcquisitionWork_UsesNewestTimerCheck(t *testing.T) {
 
 	result := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{
 		{kind: acquisitionWorkTimerCheck, at: newest},
-		{kind: acquisitionWorkTimerCheck, at: newest.Add(-time.Second)},
+		{kind: acquisitionWorkTimerCheck, at: clock},
 	})
 
 	require.NoError(t, result.err)
 	require.True(t, result.timerEscalate)
-	assert.Equal(t, newest, result.timerAt)
 }
 
 func TestProcessAcquisitionWork_UsefulDataPreventsTimerFailure(t *testing.T) {

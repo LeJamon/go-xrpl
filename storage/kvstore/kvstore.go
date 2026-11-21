@@ -45,6 +45,12 @@ type KeyValueStore interface {
 	Close() error
 }
 
+// ReadOnlyStore is implemented by stores that can be opened without write
+// access. Callers must not write to a store reporting ReadOnly.
+type ReadOnlyStore interface {
+	ReadOnly() bool
+}
+
 // BoundedReadingStore checks the stored value size before allocating its
 // caller-owned copy. Oversized values return ErrValueTooLarge, including the
 // first read; there is no progress exception. Backend block-cache memory is

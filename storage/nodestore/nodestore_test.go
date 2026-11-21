@@ -114,12 +114,18 @@ type databaseErrorStore struct {
 	newBatchErr error
 }
 
-func (s *databaseErrorStore) Get([]byte) ([]byte, error) {
-	return nil, s.getErr
+func (s *databaseErrorStore) Get(key []byte) ([]byte, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.KeyValueStore.Get(key)
 }
 
-func (s *databaseErrorStore) Put([]byte, []byte) error {
-	return s.putErr
+func (s *databaseErrorStore) Put(key, value []byte) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	return s.KeyValueStore.Put(key, value)
 }
 
 func (s *databaseErrorStore) NewBatch() (kvstore.Batch, error) {

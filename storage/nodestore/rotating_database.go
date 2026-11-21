@@ -194,6 +194,11 @@ func (d *RotatingKVDatabase) CanRotateWithoutRefresh(ctx context.Context) (bool,
 		return false, err
 	}
 	defer d.lifecycleMu.RUnlock()
+	if store, ok := d.rotating.(interface {
+		CanRotateWithoutRefreshExcept(key []byte) (bool, error)
+	}); ok {
+		return store.CanRotateWithoutRefreshExcept(formatMarkerKey)
+	}
 	return d.rotating.CanRotateWithoutRefresh()
 }
 
@@ -268,6 +273,17 @@ func (d *RotatingKVDatabase) RotateGenerationWithRetention(
 		}
 		d.pruneMu.Lock()
 		defer d.pruneMu.Unlock()
+		// The fresh writable generation starts empty, so the marker must be in
+		// the generation that becomes the archive to stay readable until the
+		// next rotation rewrites it.
+		completed, floor := d.rotating.RotationState()
+		advances := lastRotated > completed && minimumOnline > 0 &&
+			minimumOnline >= floor && minimumOnline <= lastRotated
+		if advances {
+			if err := writeFormatMarker(d.store); err != nil {
+				return false, err
+			}
+		}
 		var committed bool
 		var err error
 		if backend, ok := d.rotating.(kvstore.RetiringRotatingStore); ok {

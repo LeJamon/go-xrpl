@@ -94,6 +94,9 @@ func configDecodeHook() mapstructure.DecodeHookFunc {
 	networkIDType := reflect.TypeFor[NetworkID]()
 
 	return func(from, to reflect.Type, data any) (any, error) {
+		if from.Kind() == reflect.Map && to.Kind() == reflect.Slice {
+			return nil, fmt.Errorf("expected a list, got a table")
+		}
 		switch to {
 		case ledgerHistoryType:
 			set, full, count, err := decodeKeywordOrUint32("ledger_history", data, 0)

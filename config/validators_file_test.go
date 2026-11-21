@@ -50,7 +50,7 @@ func TestLoadConfigRejectsInvalidValidatorFiles(t *testing.T) {
 		{"sites only", "validators.txt", "[validator_list_sites]\n", "validators file must contain"},
 		{"empty TOML", "validators.toml", "", "validators file must contain"},
 		{"TOML sites only", "validators.toml", "validator_list_sites = []\n", "validators file must contain"},
-		{"TOML table instead of array", "validators.toml", "[validators]\n", "validators file must contain"},
+		{"TOML table instead of array", "validators.toml", "[validators]\n", "expected a list, got a table"},
 		{"sites without keys", "validators.txt", "[validator_list_keys]\n[validator_list_sites]\nhttps://vl.example.com\n", "validator_list_sites requires"},
 		{"TOML sites without keys", "validators.toml", "validator_list_keys = []\nvalidator_list_sites = [\"https://vl.example.com\"]\n", "validator_list_sites requires"},
 		{"threshold without keys", "validators.txt", "[validators]\n[validator_list_threshold]\n1\n", "requires at least one validator_list_keys"},

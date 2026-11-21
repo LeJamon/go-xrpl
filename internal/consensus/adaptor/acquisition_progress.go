@@ -2,13 +2,12 @@ package adaptor
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 )
 
 func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Ledger, yielded bool) {
-	snapshot, due := ledger.ProgressSnapshot(time.Now())
+	snapshot, due := ledger.ProgressSnapshot(ledger.Now())
 	if !due {
 		return
 	}

@@ -6,18 +6,19 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound/inboundtest"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAcquisitionWorkYieldWithoutProgressExhaustsTimeout(t *testing.T) {
-	ledger := inbound.New([32]byte{0xe7}, 1876, 7, serveTestLogger())
-	clock := time.Now().Add(-time.Minute)
-	ledger.RearmTimer(clock)
+	clock := inboundtest.NewFakeClock(time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC))
+	ledger := inbound.New([32]byte{0xe7}, 1876, 7, serveTestLogger(), inbound.WithClock(clock))
 	for range 6 {
-		clock = clock.Add(4 * time.Second)
-		require.Equal(t, inbound.TimerEscalate, ledger.OnTimer(clock))
+		clock.Advance(4 * time.Second)
+		require.Equal(t, inbound.TimerEscalate, ledger.OnTimer(clock.Now()))
 	}
+	clock.Advance(4 * time.Second)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(context.Context, *inbound.Ledger, []acquisitionWorkEvent) acquisitionWorkResult {
 		return acquisitionWorkResult{ledger: ledger, err: shamap.ErrTraversalBudget}

@@ -123,7 +123,6 @@ type acquisitionWorkResult struct {
 	memoryWait       bool
 	requestWait      inbound.MissingRequestOutcome
 	timerEscalate    bool
-	timerAt          time.Time
 	rearmTimer       bool
 	localFetch       func([32]byte) ([]byte, bool)
 	retryBase        bool
@@ -405,7 +404,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		result.yielded = true
 		result.rearmTimer = batch.ledger.RecordTraversalProgress(previous) || len(result.requests) > 0
 		if !result.rearmTimer {
-			switch batch.ledger.OnTimer(time.Now()) {
+			switch batch.ledger.OnTimer(batch.ledger.Now()) {
 			case inbound.TimerFailed:
 				result.snapshot = batch.ledger.Snapshot()
 				result.haveSnapshot = true
@@ -414,7 +413,6 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 				result.failureClass = standardReplayFailureAvailability
 			case inbound.TimerEscalate:
 				result.timerEscalate = true
-				result.timerAt = time.Now()
 			}
 		}
 	}
@@ -778,7 +776,6 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 			return result
 		case inbound.TimerEscalate:
 			result.timerEscalate = true
-			result.timerAt = timerAt
 			return result
 		case inbound.TimerRefresh:
 			addedPeers = append(addedPeers, acquisitionRequestCandidates(nil, ledger.Peers())...)
@@ -1031,7 +1028,7 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 		return
 	}
 	if result.rearmTimer && !result.complete && !result.remove {
-		defer ledger.RearmTimer(time.Now())
+		defer func() { ledger.RearmTimer(ledger.Now()) }()
 	}
 	c.recordReplayHeadWork(result)
 	c.reportAcquisitionProgress(ledger, result.yielded)
@@ -1081,8 +1078,8 @@ func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitio
 		return
 	}
 	if result.timerEscalate {
-		if !c.escalateAcquisition(ledger, result.timerAt) {
-			ledger.RearmTimer(time.Now())
+		if !c.escalateAcquisition(ledger) {
+			ledger.RearmTimer(ledger.Now())
 		}
 		return
 	}

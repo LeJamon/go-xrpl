@@ -39,3 +39,9 @@ func isPaymentFlowArithmeticPanic(value any) bool {
 		return false
 	}
 }
+
+// IsFlowArithmeticPanic reports whether a recovered panic is one of the protocol
+// arithmetic exceptions that a payment or offer crossing turns into tecINTERNAL.
+func IsFlowArithmeticPanic(value any) bool {
+	return isPaymentFlowArithmeticPanic(value)
+}
