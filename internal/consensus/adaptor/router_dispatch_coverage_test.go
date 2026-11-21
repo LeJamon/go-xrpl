@@ -111,11 +111,12 @@ func wireMessageType(t *testing.T, constant string) message.MessageType {
 // on every inbound peer lane proves all earlier frames were dispatched.
 func overlayDeliveredTypes(t *testing.T) map[string]map[message.MessageType]bool {
 	t.Helper()
-	opts := []peermanagement.Option{
+	opts := make([]peermanagement.Option, 0, 5)
+	opts = append(opts,
 		peermanagement.WithCompression(false),
 		peermanagement.WithLedgerReplay(true),
 		peermanagement.WithReduceRelay(true),
-	}
+	)
 	connected := make(chan peermanagement.PeerID, 1)
 	source := startRunningManifestOverlay(t, opts...)
 	source.overlay.SetPeerConnectCallback(func(peerID peermanagement.PeerID) {
