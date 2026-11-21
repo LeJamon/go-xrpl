@@ -437,7 +437,8 @@ func parityValues(xrplType, field string, current any, slotKind reflect.Kind) []
 }
 
 func parityAmountValues() []any {
-	values := []any{
+	values := make([]any, 0, 100)
+	values = append(values,
 		"0", "1", "-1", "100000000000000000", "-100000000000000000", "100000000000000001", "99999999999999999",
 		"+5", "-0", "+0", "00", "01", "-01", "1.5", "", "-", "abc", "99999999999999999999", "123456789012345678",
 		"1e6", " 5", "5 ", "18446744073709551616", "١",
@@ -454,7 +455,7 @@ func parityAmountValues() []any {
 		map[string]any{"value": "1", "currency": "USD", "issuer": 5},
 		map[string]any{"value": "1", "mpt_issuance_id": 5},
 		map[string]any(nil),
-	}
+	)
 	for _, v := range []string{
 		"0", "1", "-1", "100", "1.5", "-1.5", "0.000001", "1e-81", "1e-96", "1e-97", "1e-100", "9999999999999999e80",
 		"1e96", "1e97", "12345678901234567", "1.2345678901234565", "1.2345678901234575", "-0", "", "abc", "1e",
@@ -479,7 +480,8 @@ func parityAmountValues() []any {
 }
 
 func parityBridgeValues(current any) []any {
-	values := []any{nil, "bridge", map[string]any(nil), map[string]any{}}
+	values := make([]any, 0, 10)
+	values = append(values, nil, "bridge", map[string]any(nil), map[string]any{})
 	bridge, ok := current.(map[string]any)
 	if !ok {
 		return values
