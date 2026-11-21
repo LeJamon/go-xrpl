@@ -146,26 +146,24 @@ func IsFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte) bool
 
 func isFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8) bool {
 	return IsGlobalFrozen(view, id) || IsIndividualFrozen(view, id, account) ||
-		isVaultPseudoAccountFrozen(view, id, account, depth)
+		isVaultPseudoAccountFrozen(view, id, account, depth, nil)
 }
 
-func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8) bool {
-	if frozen, done := vaultFreezePreconditions(view, depth); done {
-		return frozen
-	}
-	issuance, _, result := ReadIssuance(view, id)
-	if result != ter.TesSUCCESS {
+func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8, issuance *state.MPTokenIssuanceData) bool {
+	rules := view.Rules()
+	if rules == nil || !rules.Enabled(amendment.FeatureSingleAssetVault) {
 		return false
 	}
-	return isVaultPseudoAccountFrozenForIssuance(view, account, issuance, depth)
-}
-
-func isVaultPseudoAccountFrozenForIssuance(
-	view state.ReadOnlyLedgerView,
-	account [20]byte,
-	issuance *state.MPTokenIssuanceData,
-	depth uint8,
-) bool {
+	if depth >= maxAssetCheckDepth {
+		return true
+	}
+	if issuance == nil {
+		var result ter.Result
+		issuance, _, result = ReadIssuance(view, id)
+		if result != ter.TesSUCCESS {
+			return false
+		}
+	}
 	if issuance.ReferenceHolding != nil {
 		asset, result := referencedAsset(view, issuance)
 		if result != ter.TesSUCCESS {
@@ -189,17 +187,6 @@ func isVaultPseudoAccountFrozenForIssuance(
 	return isAnyAssetFrozen(view, asset, [][20]byte{issuance.Issuer, account}, depth+1)
 }
 
-func vaultFreezePreconditions(view state.ReadOnlyLedgerView, depth uint8) (bool, bool) {
-	rules := view.Rules()
-	if rules == nil || !rules.Enabled(amendment.FeatureSingleAssetVault) {
-		return false, true
-	}
-	if depth >= maxAssetCheckDepth {
-		return true, true
-	}
-	return false, false
-}
-
 // CheckMPTFrozen checks an already parsed issuance for escrow freeze rules.
 // The direct holding read preserves the transaction's fail-closed storage
 // result; vault-share traversal reuses the shared boolean predicate.
@@ -217,23 +204,14 @@ func CheckMPTFrozen(
 	}
 	if account != issuance.Issuer {
 		token, _, result := ReadHolding(view, id, account)
-		switch result {
-		case ter.TesSUCCESS:
-			if token.Flags&entry.LsfMPTLocked != 0 {
-				return ter.TecLOCKED
-			}
-		case ter.TecNO_AUTH:
-		default:
+		if result != ter.TesSUCCESS && result != ter.TecNO_AUTH {
 			return result
 		}
-	}
-	if frozen, done := vaultFreezePreconditions(view, 0); done {
-		if frozen {
+		if token != nil && token.Flags&entry.LsfMPTLocked != 0 {
 			return ter.TecLOCKED
 		}
-		return ter.TesSUCCESS
 	}
-	if isVaultPseudoAccountFrozenForIssuance(view, account, issuance, 0) {
+	if isVaultPseudoAccountFrozen(view, id, account, 0, issuance) {
 		return ter.TecLOCKED
 	}
 	return ter.TesSUCCESS
@@ -330,7 +308,7 @@ func checkPseudoAccountBackingFreeze(view state.ReadOnlyLedgerView, pseudoAcct [
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if isVaultPseudoAccountFrozen(view, id, pseudoAcct, 0) {
+	if isVaultPseudoAccountFrozen(view, id, pseudoAcct, 0, nil) {
 		return ter.TecINTERNAL
 	}
 	return ter.TesSUCCESS

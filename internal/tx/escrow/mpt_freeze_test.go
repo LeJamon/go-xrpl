@@ -1,6 +1,7 @@
 package escrow
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -27,8 +28,8 @@ func TestMPTVaultShareBackingFreezeBlocksEscrowCreateAndFinish(t *testing.T) {
 	var sender, destination, owner, pseudo, underlyingIssuer [20]byte
 	sender[0], destination[0], owner[0], pseudo[0], underlyingIssuer[0] = 0x10, 0x20, 0x30, 0x70, 0x50
 	vaultID := [32]byte{9}
-	shareID := testEscrowMPTID(1, pseudo)
-	underlyingID := testEscrowMPTID(2, underlyingIssuer)
+	shareID := keylet.MakeMPTID(1, pseudo)
+	underlyingID := keylet.MakeMPTID(2, underlyingIssuer)
 	shareHex := mptutil.EncodeID(shareID)
 
 	putFreezeAccount(t, view, pseudo, vaultID)
@@ -50,13 +51,6 @@ func TestMPTVaultShareBackingFreezeBlocksEscrowCreateAndFinish(t *testing.T) {
 	require.Equal(t, ter.TecNO_AUTH, escrowCreatePreclaimMPT(view, view.rules, sender, destination, amount, 0))
 }
 
-func testEscrowMPTID(sequence byte, issuer [20]byte) [24]byte {
-	var id [24]byte
-	id[3] = sequence
-	copy(id[4:], issuer[:])
-	return id
-}
-
 func putFreezeAccount(t *testing.T, view *rulesMapView, account [20]byte, vaultID [32]byte) {
 	t.Helper()
 	raw, err := state.SerializeAccountRoot(&state.AccountRoot{
@@ -73,7 +67,7 @@ func putFreezeIssuance(t *testing.T, view *rulesMapView, id [24]byte, flags uint
 	t.Helper()
 	raw, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
 		Issuer:           mptutil.Issuer(id),
-		Sequence:         1,
+		Sequence:         binary.BigEndian.Uint32(id[:4]),
 		Flags:            flags,
 		ReferenceHolding: reference,
 	})
