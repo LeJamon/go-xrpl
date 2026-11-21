@@ -165,6 +165,75 @@ func TestDecodeBase58MatchesReference(t *testing.T) {
 	t.Logf("compared %d inputs", len(inputs))
 }
 
+func checkEncodeMatchesReference(t testing.TB, b []byte) {
+	t.Helper()
+
+	if got, want := EncodeBase58(b), refEncodeBase58(b); got != want {
+		t.Fatalf("EncodeBase58(%x) = %q, want %q", b, got, want)
+	}
+	for _, prefix := range [][]byte{nil, {AccountAddressPrefix}, {0x01, 0xE1, 0x4B}} {
+		if got, want := Base58CheckEncode(b, prefix...), refBase58CheckEncode(b, prefix...); got != want {
+			t.Fatalf("Base58CheckEncode(%x, %x) = %q, want %q", b, prefix, got, want)
+		}
+	}
+}
+
+func TestEncodeBase58MatchesReference(t *testing.T) {
+	rng := rand.New(rand.NewPCG(2192, 85))
+	var inputs [][]byte
+
+	inputs = append(inputs, nil, []byte{})
+	for v := range 1 << 16 {
+		inputs = append(inputs, []byte{byte(v)}, []byte{byte(v >> 8), byte(v)})
+	}
+	for n := range 65 {
+		inputs = append(inputs, make([]byte, n), bytes.Repeat([]byte{0xFF}, n))
+		for k := 0; k <= n; k++ {
+			b := randomBytes(rng, n)
+			clear(b[:k])
+			inputs = append(inputs, b)
+		}
+		for range 50 {
+			inputs = append(inputs, randomBytes(rng, n))
+		}
+	}
+	for _, n := range []int{20, 21, 25, 33, 35, 38} {
+		for range 2000 {
+			inputs = append(inputs, randomBytes(rng, n))
+		}
+	}
+	for _, n := range []int{100, 255, 1000, 4096} {
+		b := randomBytes(rng, n)
+		inputs = append(inputs, b, append(make([]byte, 17), b...))
+	}
+
+	for _, b := range inputs {
+		checkEncodeMatchesReference(t, b)
+	}
+	t.Logf("compared %d inputs", len(inputs))
+}
+
+func FuzzEncodeBase58Differential(f *testing.F) {
+	for _, b := range [][]byte{
+		{},
+		{0},
+		{0, 0, 0},
+		{0, 0, 1},
+		{0xFF, 0xFF, 0xFF},
+		bytes.Repeat([]byte{0xFF}, 25),
+		{0x88, 0xa5, 0xa5, 0x7c, 0x82, 0x9f, 0x40, 0xf2, 0x5e, 0xa8,
+			0x33, 0x85, 0xbb, 0xde, 0x6c, 0x3d, 0x8b, 0x4c, 0xa0, 0x82},
+	} {
+		f.Add(b)
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		if len(b) > 256 {
+			t.Skip()
+		}
+		checkEncodeMatchesReference(t, b)
+	})
+}
+
 func FuzzDecodeBase58Differential(f *testing.F) {
 	for _, s := range []string{
 		"",
