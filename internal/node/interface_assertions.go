@@ -17,8 +17,6 @@ var (
 	_ types.PeerSource = (*peermanagement.Overlay)(nil)
 )
 
-// The ledger service is consumed through role interfaces declared by each
-// consumer; a signature change breaks the build here.
 var (
 	_ xrplgrpc.LedgerLookup = (*service.Service)(nil)
 	_ rpcadapter.Backend    = (*service.Service)(nil)
