@@ -195,3 +195,32 @@ func TestPersistRejectsDifferentFamilyDatabase(t *testing.T) {
 		require.Nil(t, node)
 	}
 }
+
+func TestPersistWithNonComparableFamily(t *testing.T) {
+	db := newTestNodeStore(t, 0)
+	family := struct {
+		*shamapbackend.NodeStore
+		tag any
+	}{shamapbackend.New(db), []byte{1}}
+	t.Cleanup(func() { require.NoError(t, family.Close()) })
+
+	state, err := shamap.NewBacked(shamap.TypeState, family)
+	require.NoError(t, err)
+	for _, entry := range residencyEntries(9, 0, 16) {
+		require.NoError(t, state.Put(entry.key, entry.value))
+	}
+	l := retentionTestLedger(t, state, 9)
+	before, err := state.RetainedMemoryBytes()
+	require.NoError(t, err)
+	require.NotZero(t, before)
+
+	svc := &Service{nodeStore: bindNodeStore(db), shamapFamily: family}
+	require.NoError(t, svc.persistToNodeStore(t.Context(), l, l.Sequence()))
+	after, err := state.RetainedMemoryBytes()
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	header, err := db.Fetch(t.Context(), nodestore.Hash256(l.Hash()))
+	require.NoError(t, err)
+	require.NotNil(t, header)
+	require.Equal(t, l.SerializeHeader(), header.Data)
+}

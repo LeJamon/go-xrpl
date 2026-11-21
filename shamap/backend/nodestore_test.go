@@ -14,6 +14,17 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
+func TestUsesDatabaseWithNonComparableValue(t *testing.T) {
+	db := struct {
+		nodestore.Database
+		tag any
+	}{tag: []byte{1}}
+	family := &NodeStore{db: db}
+	if family.UsesDatabase(db) {
+		t.Fatal("database identity cannot be established for a non-comparable value")
+	}
+}
+
 func TestOpenPebbleRejectsOverflowingBlockCache(t *testing.T) {
 	if strconv.IntSize < 64 {
 		t.Skip("overflowing MiB value does not fit in int")
