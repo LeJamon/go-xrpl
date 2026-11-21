@@ -170,7 +170,7 @@ func TestPersistWithoutNodeStoreFamilyWritesNodeStore(t *testing.T) {
 	require.Equal(t, nodestore.NodeLedger, header.Type)
 }
 
-func TestPersistRejectsDifferentFamilyDatabase(t *testing.T) {
+func TestNewRejectsDifferentFamilyDatabase(t *testing.T) {
 	ctx := t.Context()
 	db := newTestNodeStore(t, 0)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -180,7 +180,7 @@ func TestPersistRejectsDifferentFamilyDatabase(t *testing.T) {
 
 	state, err := shamap.NewBacked(shamap.TypeState, family)
 	require.NoError(t, err)
-	require.NoError(t, state.Put([32]byte{1}, []byte("state")))
+	require.NoError(t, state.Put([32]byte{1}, []byte("preflushed state")))
 	l := retentionTestLedger(t, state, 9)
 	root := nodestore.Hash256(l.Header().AccountHash)
 	stored, err := other.Fetch(ctx, root)
@@ -188,8 +188,8 @@ func TestPersistRejectsDifferentFamilyDatabase(t *testing.T) {
 	require.NotNil(t, stored)
 
 	svc, err := New(Config{NodeStore: db, SHAMapFamily: family})
-	require.NoError(t, err)
-	require.ErrorContains(t, svc.persistLedger(ctx, l), "SHAMap family is not backed by the configured node store")
+	require.ErrorContains(t, err, "SHAMap family is not backed by the configured node store")
+	require.Nil(t, svc)
 	for _, key := range []nodestore.Hash256{root, nodestore.Hash256(l.Hash()), validatedTipKey} {
 		node, err := db.Fetch(ctx, key)
 		require.NoError(t, err)

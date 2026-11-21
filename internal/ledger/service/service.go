@@ -573,6 +573,10 @@ func New(cfg Config) (*Service, error) {
 			appconfig.MinLedgerCacheSize, appconfig.MaxLedgerCacheSize, cfg.LedgerCacheSize)
 	}
 
+	if family, ok := cfg.SHAMapFamily.(nodeStoreFamily); ok && cfg.NodeStore != nil && !family.UsesDatabase(cfg.NodeStore) {
+		return nil, errors.New("invalid ledger service configuration: SHAMap family is not backed by the configured node store")
+	}
+
 	logger := cfg.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()

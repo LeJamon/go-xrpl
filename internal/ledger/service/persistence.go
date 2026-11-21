@@ -504,17 +504,15 @@ func (p *persistenceWorker) waitForNodePersists(ctx context.Context) error {
 func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
 	s.beginNodePersist()
 	defer s.endNodePersist()
-	family, familyStores := s.shamapFamily.(nodeStoreFamily)
+	family, ok := s.shamapFamily.(nodeStoreFamily)
+	useFamily := ok && family.UsesDatabase(s.nodeStore.database())
 	var releaseClean func()
-	if familyStores {
-		if !family.UsesDatabase(s.nodeStore.database()) {
-			return fmt.Errorf("persist ledger %d: SHAMap family is not backed by the configured node store", seq)
-		}
+	if useFamily {
 		releaseClean = l.PrepareCleanResidencyRelease(family)
 	}
 	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
 		return func(entries []shamap.FlushEntry) error {
-			if familyStores {
+			if useFamily {
 				return family.StoreBatch(ctx, entries)
 			}
 			const batchSize = 4096
