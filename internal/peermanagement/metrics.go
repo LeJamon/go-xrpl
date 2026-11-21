@@ -102,30 +102,7 @@ func (tc *TrafficCounter) AddCount(cat TrafficCategory, inbound bool, bytes int)
 
 // CategorizeMessage determines the traffic category for a message type.
 func CategorizeMessage(msgType message.MessageType) TrafficCategory {
-	switch msgType {
-	case message.TypePing:
-		return CategoryBase
-	case message.TypeCluster:
-		return CategoryCluster
-	case message.TypeEndpoints:
-		return CategoryOverlay
-	case message.TypeManifests:
-		return CategoryManifests
-	case message.TypeTransaction, message.TypeTransactions:
-		return CategoryTransaction
-	case message.TypeProposeLedger:
-		return CategoryProposal
-	case message.TypeValidation:
-		return CategoryValidation
-	case message.TypeValidatorListCollection:
-		return CategoryValidatorList
-	case message.TypeSquelch:
-		return CategorySquelch
-	case message.TypeGetLedger, message.TypeLedgerData:
-		return CategoryLedgerData
-	default:
-		return CategoryUnknown
-	}
+	return describeMessage(msgType).traffic
 }
 
 // Stats returns statistics for a category.
