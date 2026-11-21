@@ -703,6 +703,46 @@ func encodeEndpoints(t *testing.T, version uint32, eps []message.Endpointv2) []b
 	return payload
 }
 
+func TestParseGossipEndpoint(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  Endpoint
+	}{
+		{name: "bare IPv4", input: "1.2.3.4", want: Endpoint{Host: "1.2.3.4"}},
+		{name: "IPv4 port", input: "1.2.3.4:5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "IPv4 whitespace port", input: "1.2.3.4: 5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "IPv4 trailing colon", input: "1.2.3.4:", want: Endpoint{Host: "1.2.3.4"}},
+		{name: "legacy IPv4 port", input: "1.2.3.4 5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "trimmed", input: "  1.2.3.4:5  ", want: Endpoint{Host: "1.2.3.4", Port: 5}},
+		{name: "bare IPv6", input: "2001:db8::1", want: Endpoint{Host: "2001:db8::1"}},
+		{name: "legacy IPv6 port", input: "2001:db8::1 5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "bracketed IPv6 port", input: "[2001:db8::1]:5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "bracketed legacy port", input: "[2001:db8::1] 5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "whitespace after colon", input: "[2001:db8::1]: +5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
+		{name: "mapped IPv6 identity", input: "[::ffff:192.0.2.1]:5", want: Endpoint{Host: "::ffff:192.0.2.1", Port: 5}},
+		{name: "negative wraps", input: "1.2.3.4:-1", want: Endpoint{Host: "1.2.3.4", Port: 65535}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseGossipEndpoint(test.input)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+
+	for _, input := range []string{
+		"example.com:5",
+		"1.2.3.4:65536",
+		"[2001:db8::1]junk",
+		"[2001:db8::1]:-",
+		"",
+	} {
+		_, err := parseGossipEndpoint(input)
+		assert.Error(t, err, input)
+	}
+}
+
 // fakeAddrConn is a net.Conn that only reports a meaningful RemoteAddr,
 // used to exercise the hops==0 socket-IP rewrite path.
 type fakeAddrConn struct {
@@ -953,10 +993,15 @@ func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
 func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(16))
 
-	payload := make([]byte, 0, 2*endpointsIngestMaxEntries)
+	entry := protowire.AppendTag(nil, 1, protowire.BytesType)
+	entry = protowire.AppendString(entry, "10.0.0.1:51235")
+	entry = protowire.AppendTag(entry, 2, protowire.VarintType)
+	entry = protowire.AppendVarint(entry, 1)
+	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 2)
 	for range endpointsIngestMaxEntries {
 		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
-		payload = protowire.AppendVarint(payload, 0)
+		payload = protowire.AppendBytes(payload, entry)
 	}
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
@@ -983,6 +1028,43 @@ func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 	o.discovery.mu.RLock()
 	defer o.discovery.mu.RUnlock()
 	assert.Empty(t, o.discovery.peers)
+}
+
+func TestHandleEndpoints_RejectsMissingRequiredNestedFields(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(116))
+	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 2)
+	payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+	payload = protowire.AppendBytes(payload, nil)
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: message.TypeEndpoints,
+		Payload:     payload,
+	})
+
+	want := uint32(resource.FeeInvalidData().Cost() / resource.DecayWindowSeconds)
+	assert.Equal(t, want, peer.BadDataCount())
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Empty(t, o.discovery.peers)
+}
+
+func TestHandleEndpoints_UsesLastRepeatedVersion(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(117))
+	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 1)
+	payload = append(payload, encodeEndpoints(t, 2, []message.Endpointv2{{
+		Endpoint: "10.0.0.1:51235", Hops: 1,
+	}})...)
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: message.TypeEndpoints,
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235")
 }
 
 // TestHandleEndpoints_RejectsNonIPHost pins PeerImp.cpp:1218-1226:

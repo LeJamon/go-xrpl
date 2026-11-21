@@ -7,6 +7,7 @@ package peermanagement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -581,7 +582,7 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // reject (with a charge) any frame advertising 1024+ entries.
 //
 // Per-entry, an unparseable address is skipped and charged as bad data
-// — rippled accumulates a feeInvalidData charge per malformed endpoint
+// — rippled aggregates a feeInvalidData charge for malformed endpoints
 // rather than dropping the whole frame, since the remaining entries may
 // still be valid. A hops==0 entry describes the sending peer itself; its
 // self-reported host is untrustworthy, so we overwrite it with the
@@ -608,24 +609,22 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	}
 
 	eps := evt.decodedEndpoints
+	oversized := evt.endpointsOversized
 	if eps == nil {
-		decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
+		decoded, decodedOversized, err := message.DecodeEndpointsForPeer(evt.Payload)
 		if err != nil {
-			reason := "endpoints-decode"
-			if errors.Is(err, message.ErrWireLimit) {
-				reason = wirePreflightChargeReason(err)
-			}
-			o.IncPeerBadData(evt.PeerID, reason)
+			o.selectMessageCharge(&evt, resource.FeeInvalidData(), "endpoints-decode")
 			return
 		}
-		eps = decoded.(*message.Endpoints)
+		eps = decoded
+		oversized = decodedOversized
 	}
 	if eps.Version != 2 {
 		return
 	}
 
-	if len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
-		o.IncPeerBadData(evt.PeerID, "endpoints-too-large")
+	if oversized || len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
+		o.selectMessageCharge(&evt, resource.FeeUselessData(), "endpoints too large")
 		return
 	}
 
@@ -635,14 +634,15 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		hops     uint32
 	}
 	accepted := make([]ingestEndpoint, 0, len(eps.EndpointsV2))
+	malformed := 0
 	for _, tm := range eps.EndpointsV2 {
-		parsed, parseErr := ParseEndpoint(tm.Endpoint)
-		if parseErr != nil || net.ParseIP(parsed.Host) == nil {
+		parsed, parseErr := parseGossipEndpoint(tm.Endpoint)
+		if parseErr != nil {
 			// rippled's from_string_checked rejects anything that is not
-			// a literal IP:port, charging the peer (PeerImp.cpp:1218-1226).
-			// ParseEndpoint is laxer — it accepts hostnames for the
-			// outbound Connect path — so the IP check is applied here.
-			o.IncPeerBadData(evt.PeerID, "endpoints-malformed")
+			// a literal IP endpoint, charging the peer
+			// (PeerImp.cpp:1218-1226). ParseEndpoint remains laxer for
+			// the outbound Connect path.
+			malformed++
 			continue
 		}
 
@@ -655,6 +655,13 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			parsed.Host = remoteIP
 		}
 		accepted = append(accepted, ingestEndpoint{endpoint: parsed, hops: tm.Hops})
+	}
+	if malformed > 0 {
+		fee := resource.NewCharge(
+			resource.FeeInvalidData().Cost()*malformed,
+			"invalid data",
+		)
+		o.selectMessageCharge(&evt, fee, fmt.Sprintf("%d malformed endpoints", malformed))
 	}
 
 	// rippled hands the parsed set to PeerFinder only when at least one
@@ -694,6 +701,9 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 				continue
 			}
 			neighborSeen = true
+		}
+		if e.endpoint.Port == 0 {
+			continue
 		}
 		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(e.endpoint.Host), e.endpoint.Port) {
 			continue

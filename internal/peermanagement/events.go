@@ -22,6 +22,7 @@ package peermanagement
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,107 @@ func ParseEndpoint(s string) (Endpoint, error) {
 		return Endpoint{}, err
 	}
 	return Endpoint{Host: host, Port: port}, nil
+}
+
+const gossipWhitespace = " \t\r\n\v\f"
+
+// parseGossipEndpoint accepts the address forms used by rippled's inbound
+// endpoint parser without changing the stricter outbound dial parser.
+func parseGossipEndpoint(s string) (Endpoint, error) {
+	// Rippled bounds the original string before trimming it.
+	if len(s) > 64 {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	s = strings.Trim(s, gossipWhitespace)
+	if s == "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+
+	var host, portText string
+	if strings.HasPrefix(s, "[") {
+		close := strings.IndexByte(s, ']')
+		if close < 0 {
+			return Endpoint{}, ErrInvalidEndpoint
+		}
+		host = s[1:close]
+		suffix := s[close+1:]
+		if suffix == "" {
+			portText = ""
+		} else {
+			if suffix[0] != ':' && !isGossipSpace(suffix[0]) {
+				return Endpoint{}, ErrInvalidEndpoint
+			}
+			// The stream parser consumes one delimiter. The numeric extractor
+			// then skips any remaining ASCII whitespace.
+			portText = suffix[1:]
+		}
+	} else {
+		// A dot before the first colon identifies the IPv4 grammar. For
+		// IPv6, a colon belongs to the address and only whitespace can
+		// separate a legacy port.
+		firstDot := strings.IndexByte(s, '.')
+		firstColon := strings.IndexByte(s, ':')
+		ipv4 := firstDot >= 0 && (firstColon < 0 || firstDot < firstColon)
+		delimiter := -1
+		if ipv4 {
+			if firstColon >= 0 {
+				delimiter = firstColon
+			}
+			if whitespace := strings.IndexFunc(s, func(r rune) bool {
+				return r < 256 && isGossipSpace(byte(r))
+			}); whitespace >= 0 && (delimiter < 0 || whitespace < delimiter) {
+				delimiter = whitespace
+			}
+		} else {
+			delimiter = strings.IndexFunc(s, func(r rune) bool {
+				return r < 256 && isGossipSpace(byte(r))
+			})
+		}
+		if delimiter < 0 {
+			host = s
+		} else {
+			host = s[:delimiter]
+			portText = s[delimiter+1:]
+		}
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	if strings.Trim(portText, gossipWhitespace) == "" {
+		return Endpoint{Host: addr.String()}, nil
+	}
+	port, err := parseGossipPort(portText)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	return Endpoint{Host: addr.String(), Port: port}, nil
+}
+
+func isGossipSpace(c byte) bool {
+	return strings.ContainsRune(gossipWhitespace, rune(c))
+}
+
+func parseGossipPort(s string) (uint16, error) {
+	s = strings.Trim(s, gossipWhitespace)
+	if s == "" {
+		return 0, ErrInvalidEndpoint
+	}
+	negative := s[0] == '-'
+	if s[0] == '+' || negative {
+		s = s[1:]
+	}
+	if s == "" {
+		return 0, ErrInvalidEndpoint
+	}
+	value, err := parsePort(s)
+	if err != nil {
+		return 0, err
+	}
+	if negative {
+		return uint16(-int32(value)), nil
+	}
+	return value, nil
 }
 
 func parsePort(s string) (uint16, error) {
@@ -136,7 +238,8 @@ type Event struct {
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
 
-	decodedEndpoints *message.Endpoints
+	decodedEndpoints   *message.Endpoints
+	endpointsOversized bool
 
 	// ManifestFrame carries an oversized manifest payload spooled to disk.
 	ManifestFrame *ManifestFrame
