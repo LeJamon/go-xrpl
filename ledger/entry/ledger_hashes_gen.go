@@ -441,11 +441,27 @@ func (l *LedgerHashes) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LedgerHashes) Encode() ([]byte, error) {
-	if err := l.validateRequired(); err != nil {
+	return l.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (l *LedgerHashes) encodeViaMap() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := l.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (l *LedgerHashes) validateEncode() error {
+	if err := l.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

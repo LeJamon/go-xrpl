@@ -765,7 +765,14 @@ func (s *Sponsorship) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (s *Sponsorship) Encode() ([]byte, error) {
-	if err := s.validateRequired(); err != nil {
+	return s.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (s *Sponsorship) encodeViaMap() ([]byte, error) {
+	if err := s.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := s.ToMap()
@@ -776,6 +783,15 @@ func (s *Sponsorship) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (s *Sponsorship) validateEncode() error {
+	if err := s.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

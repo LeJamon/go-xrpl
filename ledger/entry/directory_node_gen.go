@@ -1153,11 +1153,27 @@ func (d *DirectoryNode) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DirectoryNode) Encode() ([]byte, error) {
-	if err := d.validateRequired(); err != nil {
+	return d.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (d *DirectoryNode) encodeViaMap() ([]byte, error) {
+	if err := d.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := d.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (d *DirectoryNode) validateEncode() error {
+	if err := d.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

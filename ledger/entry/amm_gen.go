@@ -861,21 +861,37 @@ func (a *AMM) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (a *AMM) Encode() ([]byte, error) {
-	if err := a.validateRequired(); err != nil {
+	return a.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (a *AMM) encodeViaMap() ([]byte, error) {
+	if err := a.validateEncode(); err != nil {
 		return nil, err
+	}
+	out := a.ToMap()
+	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (a *AMM) validateEncode() error {
+	if err := a.validateRequired(); err != nil {
+		return err
 	}
 	if a.present&ammBitVoteSlots != 0 {
 		if err := validateSTArrayForEncode("VoteSlots", a.VoteSlots); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if a.present&ammBitAuctionSlot != 0 {
 		if err := validateInnerObjectForEncode("AuctionSlot", a.AuctionSlot); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	out := a.ToMap()
-	return binarycodec.EncodeBytes(out)
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

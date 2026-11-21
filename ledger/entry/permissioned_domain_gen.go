@@ -594,13 +594,15 @@ func (p *PermissionedDomain) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (p *PermissionedDomain) Encode() ([]byte, error) {
-	if err := p.validateRequired(); err != nil {
+	return p.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (p *PermissionedDomain) encodeViaMap() ([]byte, error) {
+	if err := p.validateEncode(); err != nil {
 		return nil, err
-	}
-	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
-		if err := validateSTArrayForEncode("AcceptedCredentials", p.AcceptedCredentials); err != nil {
-			return nil, err
-		}
 	}
 	out := p.ToMap()
 	if p.present&permissioneddomainBitPreviousTxnID == 0 {
@@ -610,6 +612,20 @@ func (p *PermissionedDomain) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (p *PermissionedDomain) validateEncode() error {
+	if err := p.validateRequired(); err != nil {
+		return err
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+		if err := validateSTArrayForEncode("AcceptedCredentials", p.AcceptedCredentials); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

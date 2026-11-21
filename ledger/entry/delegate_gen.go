@@ -653,13 +653,15 @@ func (d *Delegate) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (d *Delegate) Encode() ([]byte, error) {
-	if err := d.validateRequired(); err != nil {
+	return d.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (d *Delegate) encodeViaMap() ([]byte, error) {
+	if err := d.validateEncode(); err != nil {
 		return nil, err
-	}
-	if d.present&delegateBitPermissions != 0 {
-		if err := validateSTArrayForEncode("Permissions", d.Permissions); err != nil {
-			return nil, err
-		}
 	}
 	out := d.ToMap()
 	if d.present&delegateBitPreviousTxnID == 0 {
@@ -669,6 +671,20 @@ func (d *Delegate) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (d *Delegate) validateEncode() error {
+	if err := d.validateRequired(); err != nil {
+		return err
+	}
+	if d.present&delegateBitPermissions != 0 {
+		if err := validateSTArrayForEncode("Permissions", d.Permissions); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

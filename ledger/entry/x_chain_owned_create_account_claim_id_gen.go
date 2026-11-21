@@ -658,13 +658,15 @@ func (x *XChainOwnedCreateAccountClaimID) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
-	if err := x.validateRequired(); err != nil {
+	return x.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (x *XChainOwnedCreateAccountClaimID) encodeViaMap() ([]byte, error) {
+	if err := x.validateEncode(); err != nil {
 		return nil, err
-	}
-	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
-		if err := validateSTArrayForEncode("XChainCreateAccountAttestations", x.XChainCreateAccountAttestations); err != nil {
-			return nil, err
-		}
 	}
 	out := x.ToMap()
 	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID == 0 {
@@ -674,6 +676,20 @@ func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (x *XChainOwnedCreateAccountClaimID) validateEncode() error {
+	if err := x.validateRequired(); err != nil {
+		return err
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
+		if err := validateSTArrayForEncode("XChainCreateAccountAttestations", x.XChainCreateAccountAttestations); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

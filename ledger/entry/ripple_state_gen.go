@@ -973,7 +973,14 @@ func (r *RippleState) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (r *RippleState) Encode() ([]byte, error) {
-	if err := r.validateRequired(); err != nil {
+	return r.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (r *RippleState) encodeViaMap() ([]byte, error) {
+	if err := r.validateEncode(); err != nil {
 		return nil, err
 	}
 	if r.decoded && !r.dirty && len(r.decodedBinary) != 0 {
@@ -987,6 +994,15 @@ func (r *RippleState) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (r *RippleState) validateEncode() error {
+	if err := r.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

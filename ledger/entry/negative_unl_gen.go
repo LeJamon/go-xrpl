@@ -569,16 +569,32 @@ func (n *NegativeUNL) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (n *NegativeUNL) Encode() ([]byte, error) {
-	if err := n.validateRequired(); err != nil {
+	return n.encodeViaMap()
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (n *NegativeUNL) encodeViaMap() ([]byte, error) {
+	if err := n.validateEncode(); err != nil {
 		return nil, err
-	}
-	if n.present&negativeunlBitDisabledValidators != 0 {
-		if err := validateSTArrayForEncode("DisabledValidators", n.DisabledValidators); err != nil {
-			return nil, err
-		}
 	}
 	out := n.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (n *NegativeUNL) validateEncode() error {
+	if err := n.validateRequired(); err != nil {
+		return err
+	}
+	if n.present&negativeunlBitDisabledValidators != 0 {
+		if err := validateSTArrayForEncode("DisabledValidators", n.DisabledValidators); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
