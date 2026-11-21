@@ -2155,19 +2155,16 @@ func (p *Peer) SendManifestFrames(frames [][]byte) error {
 	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
-	prepared := make([][]byte, 0, len(frames))
-	for _, frame := range frames {
-		wire, _ := p.prepareOutboundFrame(frame)
-		prepared = append(prepared, wire)
+	prepared := make([][]byte, len(frames))
+	for i, frame := range frames {
+		prepared[i], _ = p.prepareOutboundFrame(frame)
 	}
 	if err := p.outbound.enqueueBulk(prepared); err != nil {
 		p.recordSendDrop(OutboundClassBulk, err)
 		return err
 	}
-	for i, wire := range prepared {
-		if len(wire) > 0 {
-			p.recordOutboundAccepted(frames[i], wire)
-		}
+	for i, frame := range frames {
+		p.recordOutboundAccepted(frame, prepared[i])
 	}
 	return nil
 }
