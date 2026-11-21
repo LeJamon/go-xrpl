@@ -716,6 +716,7 @@ func TestParseGossipEndpoint(t *testing.T) {
 		{name: "legacy IPv4 port", input: "1.2.3.4 5", want: Endpoint{Host: "1.2.3.4", Port: 5}},
 		{name: "trimmed", input: "  1.2.3.4:5  ", want: Endpoint{Host: "1.2.3.4", Port: 5}},
 		{name: "bare IPv6", input: "2001:db8::1", want: Endpoint{Host: "2001:db8::1"}},
+		{name: "bracketed address at EOF", input: "[2001:db8::1", want: Endpoint{Host: "2001:db8::1"}},
 		{name: "legacy IPv6 port", input: "2001:db8::1 5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
 		{name: "bracketed IPv6 port", input: "[2001:db8::1]:5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
 		{name: "bracketed legacy port", input: "[2001:db8::1] 5", want: Endpoint{Host: "2001:db8::1", Port: 5}},
@@ -736,6 +737,8 @@ func TestParseGossipEndpoint(t *testing.T) {
 		"1.2.3.4:65536",
 		"[2001:db8::1]junk",
 		"[2001:db8::1]:-",
+		"[fe80::1%eth0]:51235",
+		"1.2.3.4\u00a05",
 		"",
 	} {
 		_, err := parseGossipEndpoint(input)
