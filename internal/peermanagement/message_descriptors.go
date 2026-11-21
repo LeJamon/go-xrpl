@@ -33,15 +33,12 @@ const (
 
 // featureGate refuses a message from a peer that did not negotiate feature
 // (and, when localTxReduceRelay is set, also when tx reduce-relay is off
-// locally). A refused message is dropped and charged FeeMalformedRequest
-// under reason before any handler runs.
+// locally). A refused message is dropped before any handler runs and its
+// per-message fee is raised to FeeMalformedRequest under reason.
 type featureGate struct {
 	feature            Feature
 	localTxReduceRelay bool
 	reason             string
-	// immediate charges the peer directly instead of raising the
-	// per-message fee.
-	immediate bool
 }
 
 // messageDescriptor declares the per-type dispatch policy of one wire
@@ -195,7 +192,6 @@ var messageDescriptors = [...]*messageDescriptor{
 			feature:            FeatureTxReduceRelay,
 			localTxReduceRelay: true,
 			reason:             "have-transactions-unnegotiated",
-			immediate:          true,
 		},
 		outbound: OutboundClassOrdinary,
 		traffic:  CategoryUnknown,

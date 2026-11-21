@@ -213,7 +213,7 @@ var wantOverlayRouting = map[message.MessageType]overlayRouting{
 		"- [malformed request ($200)(mtREPLAY_DELTA_RESPONSE replay delta response disabled)]"),
 	message.TypeHaveTransactions: gatedRouting(txReduceScenarios,
 		"- [invalid data ($400)(have-transactions-decode); "+trivial+"(mtHAVE_TRANSACTIONS)]",
-		"- [malformed request ($200)(have-transactions-unnegotiated); "+trivial+"(mtHAVE_TRANSACTIONS)]"),
+		"- [malformed request ($200)(mtHAVE_TRANSACTIONS have-transactions-unnegotiated)]"),
 	message.TypeTransactions: gatedRouting(txReduceScenarios,
 		"- [invalid data ($400)(mtTRANSACTIONS transactions-batch-decode)]",
 		"- [malformed request ($200)(mtTRANSACTIONS transactions-batch-unnegotiated)]"),
