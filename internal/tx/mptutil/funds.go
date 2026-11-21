@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -129,6 +130,9 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 			case LPTokenFrozen, LPTokenAMMUnresolvable:
 				return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 			}
+		}
+		if CanTransferLPToken(view, accountID, accountID, issuerID) != ter.TesSUCCESS {
+			return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
 	}
 
