@@ -607,18 +607,18 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		return
 	}
 
-	decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
-	if err != nil {
-		reason := "endpoints-decode"
-		if errors.Is(err, message.ErrWireLimit) {
-			reason = wirePreflightChargeReason(err)
+	eps := evt.decodedEndpoints
+	if eps == nil {
+		decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
+		if err != nil {
+			reason := "endpoints-decode"
+			if errors.Is(err, message.ErrWireLimit) {
+				reason = wirePreflightChargeReason(err)
+			}
+			o.IncPeerBadData(evt.PeerID, reason)
+			return
 		}
-		o.IncPeerBadData(evt.PeerID, reason)
-		return
-	}
-	eps, ok := decoded.(*message.Endpoints)
-	if !ok {
-		return
+		eps = decoded.(*message.Endpoints)
 	}
 	if eps.Version != 2 {
 		return

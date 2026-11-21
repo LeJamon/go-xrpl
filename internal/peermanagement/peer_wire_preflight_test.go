@@ -107,6 +107,47 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestPeerEndpointsDecodeFailureTerminatesBeforeCharge(t *testing.T) {
+	tests := []struct {
+		name      string
+		payload   []byte
+		malformed bool
+	}{
+		{name: "malformed wire", payload: []byte{0xff}, malformed: true},
+		{name: "missing version"},
+		{name: "missing nested required fields", payload: append([]byte{0x08, 2}, peerRepeatedMessageField(3, 1)...)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !test.malformed {
+				require.NoError(t, message.Preflight(message.TypeEndpoints, test.payload))
+			}
+			frame, err := message.BuildWireMessage(message.TypeEndpoints, test.payload)
+			require.NoError(t, err)
+
+			identity, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			peer := NewPeer(PeerID(117), Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+			manager := resource.NewManager(nil, nil)
+			consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+			peer.attachUsage(consumer, func() {})
+			peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+			err = peer.readLoop(context.Background())
+			var frameErr *FrameReadError
+			require.ErrorAs(t, err, &frameErr)
+			if test.malformed {
+				require.ErrorIs(t, err, message.ErrMalformedWire)
+			}
+			require.Equal(t, message.TypeEndpoints, frameErr.MessageType)
+			require.Empty(t, events)
+			require.Zero(t, peer.BadDataCount())
+			require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+		})
+	}
+}
+
 func TestPeerWirePreflightMalformedUsesInvalidDataClass(t *testing.T) {
 	reason := wirePreflightChargeReason(errors.Join(message.ErrMalformedWire, errors.New("bad tag")))
 	require.Equal(t, "wire-invalid", reason)

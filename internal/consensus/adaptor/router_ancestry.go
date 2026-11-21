@@ -631,7 +631,10 @@ func decodeHeaderDiscoveryHeader(ld *message.LedgerData) (*header.LedgerHeader, 
 	if len(ld.Nodes) == 0 || len(ld.Nodes[0].NodeData) == 0 {
 		return nil, errors.New("header reply has no header node")
 	}
-	data := ld.Nodes[0].NodeData
+	return decodePeerLedgerHeader(ld.Nodes[0].NodeData)
+}
+
+func decodePeerLedgerHeader(data []byte) (*header.LedgerHeader, error) {
 	if len(data) < header.SizeBase {
 		return nil, fmt.Errorf("invalid header node size: %d", len(data))
 	}

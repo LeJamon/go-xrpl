@@ -415,8 +415,9 @@ func TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation(t *testing.T) {
 		Payload:     payload,
 	})
 
-	assert.NotZero(t, peer.BadDataCount(),
-		"TMHaveTransactions without tx-reduce-relay must charge bad-data")
+	want := uint32(resource.FeeMalformedRequest().Cost() / resource.DecayWindowSeconds)
+	assert.Equal(t, want, peer.BadDataCount(),
+		"TMHaveTransactions without tx-reduce-relay must incur one malformed-request charge")
 }
 
 // TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation mirrors

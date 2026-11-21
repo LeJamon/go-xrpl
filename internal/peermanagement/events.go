@@ -136,6 +136,8 @@ type Event struct {
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
 
+	decodedEndpoints *message.Endpoints
+
 	// ManifestFrame carries an oversized manifest payload spooled to disk.
 	ManifestFrame *ManifestFrame
 

@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // TrafficCategory represents a traffic category for counting.
@@ -20,30 +21,109 @@ const (
 	CategoryValidatorList
 	CategorySquelch
 	CategoryLedgerData
+	CategoryProofPathRequest
+	CategoryProofPathResponse
+	CategoryReplayDeltaRequest
+	CategoryReplayDeltaResponse
+	CategoryHaveTransactions
+	CategoryRequestedTransactions
+	CategoryGetSet
+	CategoryShareSet
+	CategoryLedgerDataTxSetGet
+	CategoryLedgerDataTxSetShare
+	CategoryLedgerDataTxNodeGet
+	CategoryLedgerDataTxNodeShare
+	CategoryLedgerDataStateNodeGet
+	CategoryLedgerDataStateNodeShare
+	CategoryLedgerDataGet
+	CategoryLedgerDataShare
+	CategoryGetLedgerTxSetShare
+	CategoryGetLedgerTxSetGet
+	CategoryGetLedgerTxNodeShare
+	CategoryGetLedgerTxNodeGet
+	CategoryGetLedgerStateNodeShare
+	CategoryGetLedgerStateNodeGet
+	CategoryGetLedgerShare
+	CategoryGetLedgerGet
+	CategoryShareHashLedger
+	CategoryGetHashLedger
+	CategoryShareHashTx
+	CategoryGetHashTx
+	CategoryShareHashTxNode
+	CategoryGetHashTxNode
+	CategoryShareHashStateNode
+	CategoryGetHashStateNode
+	CategoryShareCasObject
+	CategoryGetCasObject
+	CategoryShareFetchPack
+	CategoryGetFetchPack
+	CategoryGetTransactions
+	CategoryShareHash
+	CategoryGetHash
 	CategoryTotal
 	CategoryUnknown
 )
 
 // String returns the string representation of a category.
 func (c TrafficCategory) String() string {
-	names := map[TrafficCategory]string{
-		CategoryBase:          "overhead",
-		CategoryCluster:       "overhead_cluster",
-		CategoryOverlay:       "overhead_overlay",
-		CategoryManifests:     "overhead_manifest",
-		CategoryTransaction:   "transactions",
-		CategoryProposal:      "proposals",
-		CategoryValidation:    "validations",
-		CategoryValidatorList: "validator_lists",
-		CategorySquelch:       "squelch",
-		CategoryLedgerData:    "ledger_data",
-		CategoryTotal:         "total",
-		CategoryUnknown:       "unknown",
-	}
-	if name, ok := names[c]; ok {
-		return name
+	if c >= 0 && int(c) < len(trafficCategoryNames) {
+		return trafficCategoryNames[c]
 	}
 	return "unknown"
+}
+
+var trafficCategoryNames = [...]string{
+	CategoryBase:                     "overhead",
+	CategoryCluster:                  "overhead_cluster",
+	CategoryOverlay:                  "overhead_overlay",
+	CategoryManifests:                "overhead_manifest",
+	CategoryTransaction:              "transactions",
+	CategoryProposal:                 "proposals",
+	CategoryValidation:               "validations",
+	CategoryValidatorList:            "validator_lists",
+	CategorySquelch:                  "squelch",
+	CategoryLedgerData:               "ledger_data",
+	CategoryProofPathRequest:         "proof_path_request",
+	CategoryProofPathResponse:        "proof_path_response",
+	CategoryReplayDeltaRequest:       "replay_delta_request",
+	CategoryReplayDeltaResponse:      "replay_delta_response",
+	CategoryHaveTransactions:         "have_transactions",
+	CategoryRequestedTransactions:    "requested_transactions",
+	CategoryGetSet:                   "set_get",
+	CategoryShareSet:                 "set_share",
+	CategoryLedgerDataTxSetGet:       "ledger_data_Transaction_Set_candidate_get",
+	CategoryLedgerDataTxSetShare:     "ledger_data_Transaction_Set_candidate_share",
+	CategoryLedgerDataTxNodeGet:      "ledger_data_Transaction_Node_get",
+	CategoryLedgerDataTxNodeShare:    "ledger_data_Transaction_Node_share",
+	CategoryLedgerDataStateNodeGet:   "ledger_data_Account_State_Node_get",
+	CategoryLedgerDataStateNodeShare: "ledger_data_Account_State_Node_share",
+	CategoryLedgerDataGet:            "ledger_data_get",
+	CategoryLedgerDataShare:          "ledger_data_share",
+	CategoryGetLedgerTxSetShare:      "ledger_Transaction_Set_candidate_share",
+	CategoryGetLedgerTxSetGet:        "ledger_Transaction_Set_candidate_get",
+	CategoryGetLedgerTxNodeShare:     "ledger_Transaction_Node_share",
+	CategoryGetLedgerTxNodeGet:       "ledger_Transaction_Node_get",
+	CategoryGetLedgerStateNodeShare:  "ledger_Account_State_Node_share",
+	CategoryGetLedgerStateNodeGet:    "ledger_Account_State_Node_get",
+	CategoryGetLedgerShare:           "ledger_share",
+	CategoryGetLedgerGet:             "ledger_get",
+	CategoryShareHashLedger:          "getobject_Ledger_share",
+	CategoryGetHashLedger:            "getobject_Ledger_get",
+	CategoryShareHashTx:              "getobject_Transaction_share",
+	CategoryGetHashTx:                "getobject_Transaction_get",
+	CategoryShareHashTxNode:          "getobject_Transaction_node_share",
+	CategoryGetHashTxNode:            "getobject_Transaction_node_get",
+	CategoryShareHashStateNode:       "getobject_Account_State_node_share",
+	CategoryGetHashStateNode:         "getobject_Account_State_node_get",
+	CategoryShareCasObject:           "getobject_CAS_share",
+	CategoryGetCasObject:             "getobject_CAS_get",
+	CategoryShareFetchPack:           "getobject_Fetch_Pack_share",
+	CategoryGetFetchPack:             "getobject_Fetch Pack_get",
+	CategoryGetTransactions:          "getobject_Transactions_get",
+	CategoryShareHash:                "getobject_share",
+	CategoryGetHash:                  "getobject_get",
+	CategoryTotal:                    "total",
+	CategoryUnknown:                  "unknown",
 }
 
 // TrafficStats holds traffic statistics.
@@ -103,6 +183,126 @@ func (tc *TrafficCounter) AddCount(cat TrafficCategory, inbound bool, bytes int)
 // CategorizeMessage determines the traffic category for a message type.
 func CategorizeMessage(msgType message.MessageType) TrafficCategory {
 	return describeMessage(msgType).traffic
+}
+
+type trafficPair struct {
+	get, share TrafficCategory
+}
+
+func (p trafficPair) category(sharing bool) TrafficCategory {
+	if sharing {
+		return p.share
+	}
+	return p.get
+}
+
+var getObjectTraffic = [...]trafficPair{
+	message.ObjectTypeUnknown:         {CategoryGetHash, CategoryShareHash},
+	message.ObjectTypeLedger:          {CategoryGetHashLedger, CategoryShareHashLedger},
+	message.ObjectTypeTransaction:     {CategoryGetHashTx, CategoryShareHashTx},
+	message.ObjectTypeTransactionNode: {CategoryGetHashTxNode, CategoryShareHashTxNode},
+	message.ObjectTypeStateNode:       {CategoryGetHashStateNode, CategoryShareHashStateNode},
+	message.ObjectTypeCasObject:       {CategoryGetCasObject, CategoryShareCasObject},
+	message.ObjectTypeFetchPack:       {CategoryGetFetchPack, CategoryShareFetchPack},
+	message.ObjectTypeTransactions:    {CategoryGetTransactions, CategoryGetTransactions},
+}
+
+var getLedgerTraffic = [...]trafficPair{
+	message.LedgerInfoBase:        {CategoryGetLedgerGet, CategoryGetLedgerShare},
+	message.LedgerInfoTxNode:      {CategoryGetLedgerTxNodeGet, CategoryGetLedgerTxNodeShare},
+	message.LedgerInfoAsNode:      {CategoryGetLedgerStateNodeGet, CategoryGetLedgerStateNodeShare},
+	message.LedgerInfoTsCandidate: {CategoryGetLedgerTxSetGet, CategoryGetLedgerTxSetShare},
+}
+
+var ledgerDataTraffic = [...]trafficPair{
+	message.LedgerInfoBase:        {CategoryLedgerDataGet, CategoryLedgerDataShare},
+	message.LedgerInfoTxNode:      {CategoryLedgerDataTxNodeGet, CategoryLedgerDataTxNodeShare},
+	message.LedgerInfoAsNode:      {CategoryLedgerDataStateNodeGet, CategoryLedgerDataStateNodeShare},
+	message.LedgerInfoTsCandidate: {CategoryLedgerDataTxSetGet, CategoryLedgerDataTxSetShare},
+}
+
+func categorizeMessagePayload(msgType message.MessageType, payload []byte, inbound bool) TrafficCategory {
+	switch msgType {
+	case message.TypeHaveSet:
+		return trafficPair{CategoryGetSet, CategoryShareSet}.category(!inbound)
+	case message.TypeGetObjects:
+		fields, ok := readTrafficFields(payload, 1, 2, getObjectTraffic[:])
+		if ok && fields.hasFlag {
+			return fields.pair.category(fields.flag == inbound)
+		}
+	case message.TypeGetLedger:
+		fields, ok := readTrafficFields(payload, 1, 6, getLedgerTraffic[:])
+		if ok {
+			return fields.pair.category(inbound || fields.hasFlag)
+		}
+	case message.TypeLedgerData:
+		fields, ok := readTrafficFields(payload, 3, 5, ledgerDataTraffic[:])
+		if ok {
+			return fields.pair.category(!inbound || fields.hasFlag)
+		}
+	default:
+		return CategorizeMessage(msgType)
+	}
+	return CategoryUnknown
+}
+
+func outboundTrafficCategory(header *message.Header, frame []byte) TrafficCategory {
+	payload := frame[header.HeaderSize():]
+	if header.Compressed {
+		switch header.MessageType {
+		case message.TypeGetObjects, message.TypeGetLedger, message.TypeLedgerData:
+			var err error
+			payload, err = message.DecompressLZ4(payload, int(header.UncompressedSize))
+			if err != nil {
+				return CategoryUnknown
+			}
+		}
+	}
+	return categorizeMessagePayload(header.MessageType, payload, false)
+}
+
+type trafficFields struct {
+	pair    trafficPair
+	hasFlag bool
+	flag    bool
+}
+
+// Read only the root scalars used by TrafficCount. A ledger-data frame may
+// contain thousands of nodes whose contents do not affect its category.
+func readTrafficFields(payload []byte, subtype, flag protowire.Number, categories []trafficPair) (fields trafficFields, found bool) {
+	for len(payload) > 0 {
+		number, wireType, n := protowire.ConsumeTag(payload)
+		if n < 0 {
+			return trafficFields{}, false
+		}
+		payload = payload[n:]
+		if wireType != protowire.VarintType {
+			n = protowire.ConsumeFieldValue(number, wireType, payload)
+			if n < 0 {
+				return trafficFields{}, false
+			}
+			payload = payload[n:]
+			continue
+		}
+		value, n := protowire.ConsumeVarint(payload)
+		if n < 0 {
+			return trafficFields{}, false
+		}
+		switch number {
+		case subtype:
+			// Proto2 keeps the last recognized enum value.
+			enum := int32(value)
+			if enum >= 0 && int(enum) < len(categories) {
+				fields.pair = categories[enum]
+				found = true
+			}
+		case flag:
+			fields.hasFlag = true
+			fields.flag = value != 0
+		}
+		payload = payload[n:]
+	}
+	return fields, found
 }
 
 // Stats returns statistics for a category.

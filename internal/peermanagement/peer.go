@@ -1335,7 +1335,19 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				retainedReservation -= int64(header.PayloadSize)
 			}
 		}
-		if err := message.Preflight(header.MessageType, payload); err != nil {
+		var decodedEndpoints *message.Endpoints
+		if header.MessageType == message.TypeEndpoints {
+			var decoded message.Message
+			decoded, err = message.Decode(header.MessageType, payload)
+			if err != nil && !errors.Is(err, message.ErrWireLimit) {
+				releaseRetainedReservation()
+				return frameReader.failure(err, now)
+			}
+			decodedEndpoints, _ = decoded.(*message.Endpoints)
+		} else {
+			err = message.Preflight(header.MessageType, payload)
+		}
+		if err != nil {
 			reason := wirePreflightChargeReason(err)
 			p.IncBadData(reason)
 			releaseRetainedReservation()
@@ -1344,15 +1356,16 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			continue
 		}
-		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
+		p.traffic.AddCount(categorizeMessagePayload(header.MessageType, payload, true), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
-			Type:        EventMessageReceived,
-			PeerID:      p.id,
-			MessageType: header.MessageType,
-			Payload:     payload,
-			WireSize:    payloadWireSize,
-			reservation: newInboundReservation(p.inboundReadBudget, retainedReservation),
+			Type:             EventMessageReceived,
+			PeerID:           p.id,
+			MessageType:      header.MessageType,
+			Payload:          payload,
+			WireSize:         payloadWireSize,
+			decodedEndpoints: decodedEndpoints,
+			reservation:      newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
 		retainedReservation = 0
 		if !delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
@@ -1389,7 +1402,8 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 
 		wire := data
 		compressionEnabled := p.compressionNegotiated()
-		if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
+		header, headerErr := message.DecodeHeader(data)
+		if headerErr == nil && header.Compressed {
 			if !compressionEnabled {
 				p.completeOutbound(token, errCompressionUnnegotiated)
 				return errCompressionUnnegotiated
@@ -1406,13 +1420,15 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			err = ErrWriteIdle
 		}
+		if err == nil {
+			p.metrics.sent.addMessage(uint64(n))
+			if headerErr == nil {
+				p.traffic.AddCount(outboundTrafficCategory(header, data), false, n)
+			}
+		}
 		p.completeOutbound(token, err)
 		if err != nil {
 			return err
-		}
-		p.metrics.sent.addMessage(uint64(n))
-		if hdr, derr := message.DecodeHeader(wire); derr == nil {
-			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
 		}
 	}
 }
