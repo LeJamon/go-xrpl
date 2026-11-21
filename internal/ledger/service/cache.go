@@ -315,9 +315,7 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 	}
 }
 
-// indexTxLocked maps txHash to the ledger that contains it and records the
-// hash under that sequence so unindexing a ledger costs only its own
-// transactions. txHashesBySeq may hold stale hashes; txIndex is authoritative.
+// txHashesBySeq may hold stale hashes. txIndex is authoritative.
 // Caller holds historyComponent.mu.
 func (s *historyComponent) indexTxLocked(txHash [32]byte, seq uint32) {
 	if indexed, ok := s.txIndex[txHash]; ok && indexed == seq {
@@ -327,8 +325,7 @@ func (s *historyComponent) indexTxLocked(txHash [32]byte, seq uint32) {
 	s.txHashesBySeq[seq] = append(s.txHashesBySeq[seq], txHash)
 }
 
-// unindexLedgerTxsLocked drops the transaction-index entries that resolve to
-// seq. Caller holds historyComponent.mu.
+// Caller holds historyComponent.mu.
 func (s *historyComponent) unindexLedgerTxsLocked(seq uint32) {
 	for _, txHash := range s.txHashesBySeq[seq] {
 		if indexed, ok := s.txIndex[txHash]; ok && indexed == seq {

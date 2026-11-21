@@ -24,9 +24,7 @@ func (r *failOnceRepositories) PersistValidatedLedger(ctx context.Context, valid
 	return r.RepositoryManager.PersistValidatedLedger(ctx, validated)
 }
 
-// A ledger whose relational index failed to persist must not end up below the
-// durable validated tip without its index: restart resumes from the tip and
-// nothing re-indexes the skipped ledger.
+// Restart resumes from the durable tip and skips any earlier unindexed ledger.
 func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	t.Skip("known gap (#2204): a failed persist is logged, never retried, and the next ledger advances the durable tip past it")
 

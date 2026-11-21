@@ -8,8 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// txIndexReference is the full-scan transaction-index maintenance that the
-// per-sequence index replaces.
 type txIndexReference struct {
 	txIndex         map[[32]byte]uint32
 	txPositionIndex map[[32]byte]uint32
