@@ -15,15 +15,11 @@ type uncachedBatchNodeReader interface {
 	FetchBatchUncached(context.Context, []nodestore.Hash256, int, int) ([]*nodestore.Node, error)
 }
 
-// nodeStoreFamily is a SHAMap family that persists flushed nodes into a node
-// store and can report whether that store is a given database.
 type nodeStoreFamily interface {
 	shamap.Family
 	UsesDatabase(nodestore.Database) bool
 }
 
-// nodeStoreCapabilities holds the optional node-store capabilities; an absent
-// capability is nil.
 type nodeStoreCapabilities struct {
 	durable         nodestore.DurableDatabase
 	durableSnapshot nodestore.DurableSnapshotDatabase
@@ -54,7 +50,6 @@ func bindNodeStore(db nodestore.Database) *boundNodeStore {
 	return bound
 }
 
-// database returns the store, nil when there is none.
 func (b *boundNodeStore) database() nodestore.Database {
 	if b == nil {
 		return nil
