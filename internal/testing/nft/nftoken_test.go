@@ -2377,13 +2377,13 @@ func TestIOUWithTransferFee(t *testing.T) {
 
 		t.Run("IssuerBuysWithLargeIOU", func(t *testing.T) {
 			reinit()
-			const price = 1e16
+			price := jtx.IssuedCurrencyFromMantissa(gw, "XAU", 1, 16)
 			nftID := mintNFT(minter)
-			offerID := createSellOffer(minter, nftID, XAU(price))
+			offerID := createSellOffer(minter, nftID, price)
 			result := env.Submit(nft.NFTokenAcceptSellOffer(gw, offerID).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
-			checkBalance(minter, "XAU", price)
+			checkBalance(minter, "XAU", 1e16)
 		})
 	})
 }
