@@ -83,7 +83,7 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	router.catchupReplay.fetchTracker.Track(candidate)
 	baseReleased := make(chan struct{})
 	router.catchupReplay.standardReplay = standardReplayPipeline{
-		active:      true,
+		phase:       standardReplayAcquiringPivot,
 		pivotSeq:    seq,
 		pivotHash:   candidateHash,
 		anchorSeq:   seq,

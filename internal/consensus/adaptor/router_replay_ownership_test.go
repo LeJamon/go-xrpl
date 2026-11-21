@@ -26,7 +26,7 @@ func TestReplayOwnershipSurvivesTransactionHandoff(t *testing.T) {
 	parent := svc.GetClosedLedger()
 	links := buildStandardReplayTestChain(t, r, parent, 2)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, r, links[0])
 	link := links[0]
 	require.Nil(t, c.fetchTracker.Find(link.hash))
@@ -120,7 +120,7 @@ func TestReplayOwnershipDiscardsDuplicateCompletion(t *testing.T) {
 	c := r.catchupReplay
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 2)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, r, links[0])
 	link := links[0]
 	entry := c.standardReplay.entries[link.seq]

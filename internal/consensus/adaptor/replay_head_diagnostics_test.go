@@ -25,7 +25,7 @@ func TestReplayHeadDiagnosticsBoundedAcrossHeadChanges(t *testing.T) {
 			7: 20 * time.Millisecond,
 		}},
 		standardReplay: standardReplayPipeline{
-			active: true, pivotReady: true, anchorSeq: 9,
+			phase: standardReplayPivotReady, anchorSeq: 9,
 			entries: map[uint32]*standardReplayEntry{
 				10: {seq: 10, acquisition: first, requestedAt: now.Add(-time.Second)},
 				11: {seq: 11, acquisition: second, requestedAt: now, readyAt: now.Add(-time.Second)},
@@ -48,6 +48,7 @@ func TestReplayHeadDiagnosticsBoundedAcrossHeadChanges(t *testing.T) {
 	require.Equal(t, float64(100), record["reply_payload_bytes"])
 	require.Equal(t, float64(20*time.Millisecond), record["worker_queue_max"])
 	require.Equal(t, "reply", record["planner_wait"])
+	require.Equal(t, "pivot_ready", record["replay_phase"])
 	require.Equal(t, float64(1), record["ready_blocked"])
 	require.Equal(t, float64(time.Second), record["ready_wait_max"])
 	output.Reset()
@@ -63,7 +64,7 @@ func TestReplayHeadDiagnosticsBoundedAcrossHeadChanges(t *testing.T) {
 	require.Equal(t, float64(0), record["reply_payload_bytes"])
 	require.Equal(t, float64(0), record["hedge_requests"])
 	output.Reset()
-	c.standardReplay.active = false
+	c.standardReplay.phase = standardReplayComplete
 	c.reportReplayHead(now.Add(2 * replayHeadDiagnosticInterval))
 	require.Empty(t, output.String())
 	require.Nil(t, c.replayHeadDiagnostics.ledger)

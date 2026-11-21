@@ -31,7 +31,7 @@ type replayHeadDiagnostics struct {
 func (c *catchupReplayCoordinator) replayHeadDiagnosticsLocked(ledger *inbound.Ledger) *replayHeadDiagnostics {
 	pipeline := &c.standardReplay
 	entry := pipeline.entries[pipeline.anchorSeq+1]
-	if ledger == nil || !pipeline.active || !pipeline.pivotReady || entry == nil || entry.acquisition != ledger {
+	if ledger == nil || !pipeline.isActive() || !pipeline.isPivotReady() || entry == nil || entry.acquisition != ledger {
 		return nil
 	}
 	if c.replayHeadDiagnostics.ledger != ledger {
@@ -97,7 +97,7 @@ func (c *catchupReplayCoordinator) reportReplayHead(now time.Time) {
 	c.acquisitionMu.Lock()
 	pipeline := &c.standardReplay
 	entry := pipeline.entries[pipeline.anchorSeq+1]
-	if !pipeline.active || !pipeline.pivotReady || entry == nil || entry.acquisition == nil {
+	if !pipeline.isActive() || !pipeline.isPivotReady() || entry == nil || entry.acquisition == nil {
 		c.replayHeadDiagnostics = replayHeadDiagnostics{}
 		c.acquisitionMu.Unlock()
 		return
@@ -107,6 +107,7 @@ func (c *catchupReplayCoordinator) reportReplayHead(now time.Time) {
 		return
 	}
 	d := *c.replayHeadDiagnosticsLocked(entry.acquisition)
+	replayPhase := pipeline.phase
 	c.replayHeadLogAt = now
 	age := max(0, now.Sub(entry.requestedAt))
 	var readyBlocked int
@@ -137,6 +138,6 @@ func (c *catchupReplayCoordinator) reportReplayHead(now time.Time) {
 		"worker_batch_max", d.workMax, "result_queue_max", d.resultMax,
 		"tx_received", snapshot.TxReceived, "tx_useful", snapshot.TxUseful,
 		"tx_nonuseful", snapshot.TxReceived-min(snapshot.TxReceived, snapshot.TxUseful),
-		"ready_blocked", readyBlocked, "ready_wait_max", readyWait,
+		"ready_blocked", readyBlocked, "ready_wait_max", readyWait, "replay_phase", replayPhase.String(),
 	)
 }

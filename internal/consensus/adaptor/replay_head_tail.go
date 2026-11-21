@@ -13,7 +13,7 @@ func (c *catchupReplayCoordinator) retryReplayHeadTail(now time.Time) {
 	pipeline := &c.standardReplay
 	entry := pipeline.entries[pipeline.anchorSeq+1]
 	var ledger *inbound.Ledger
-	if pipeline.active && pipeline.pivotReady && entry != nil && !entry.failed && !entry.durable {
+	if pipeline.isActive() && pipeline.isPivotReady() && entry != nil && !entry.failed && !entry.durable {
 		ledger = entry.acquisition
 	}
 	c.acquisitionMu.Unlock()
