@@ -24,6 +24,56 @@ var refBigRadix = [...]*big.Int{
 	big.NewInt(58 * 58 * 58 * 58 * 58 * 58 * 58 * 58 * 58 * 58),
 }
 
+func refEncodeBase58(b []byte) string {
+	x := new(big.Int)
+	x.SetBytes(b)
+
+	maxlen := int(float64(len(b))*1.365658237309761) + 1
+	answer := make([]byte, 0, maxlen)
+	mod := new(big.Int)
+
+	for x.Sign() > 0 {
+		x.DivMod(x, refBigRadix[10], mod)
+
+		if x.Sign() == 0 {
+			m := mod.Int64()
+			for m > 0 {
+				answer = append(answer, xrpAlphabet[m%58])
+				m /= 58
+			}
+		} else {
+			m := mod.Int64()
+			for range 10 {
+				answer = append(answer, xrpAlphabet[m%58])
+				m /= 58
+			}
+		}
+	}
+	for _, i := range b {
+		if i != 0 {
+			break
+		}
+		answer = append(answer, alphabetIdx0)
+	}
+
+	alen := len(answer)
+	for i := 0; i < alen/2; i++ {
+		answer[i], answer[alen-1-i] = answer[alen-1-i], answer[i]
+	}
+
+	return string(answer)
+}
+
+func refBase58CheckEncode(input []byte, prefix ...byte) string {
+	b := make([]byte, 0, 1+len(input)+4)
+	b = append(b, prefix...)
+	b = append(b, input...)
+
+	cksum := checksum(b)
+	b = append(b, cksum[:]...)
+	return refEncodeBase58(b)
+}
+
 func refDecodeBase58(b string) []byte {
 	answer := big.NewInt(0)
 	scratch := new(big.Int)

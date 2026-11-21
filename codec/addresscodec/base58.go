@@ -1,11 +1,6 @@
 package addresscodec
 
-import (
-	"math/big"
-	"math/bits"
-)
-
-var bigRadix10 = big.NewInt(58 * 58 * 58 * 58 * 58 * 58 * 58 * 58 * 58 * 58)
+import "math/bits"
 
 // pow58[n] is 58^n; 58^10 is the largest power of 58 that fits in a uint64,
 // so decoding folds ten digits at a time into little-endian uint64 limbs.
@@ -17,58 +12,69 @@ var pow58 = func() (p [11]uint64) {
 	return p
 }()
 
+// radix58Pow5 is the largest power of 58 below 2^32, so dividing a uint32 limb
+// and the carried remainder by it is a 64-bit division by a constant.
+const radix58Pow5 = 58 * 58 * 58 * 58 * 58
+
 // EncodeBase58 encodes a byte slice to a base58 string using the XRP alphabet.
 func EncodeBase58(b []byte) string {
-	x := new(big.Int)
-	x.SetBytes(b)
+	zeros := 0
+	for zeros < len(b) && b[zeros] == 0 {
+		zeros++
+	}
 
-	// Maximum length of output is log58(2^(8*len(b))) == len(b) * 8 / log(58)
-	maxlen := int(float64(len(b))*1.365658237309761) + 1
-	answer := make([]byte, 0, maxlen)
-	mod := new(big.Int)
+	var limbStack [16]uint32
+	limbs := limbStack[:0]
+	for i := len(b); i > zeros; i -= 4 {
+		var limb uint32
+		for _, c := range b[max(i-4, zeros):i] {
+			limb = limb<<8 | uint32(c)
+		}
+		limbs = append(limbs, limb)
+	}
 
-	for x.Sign() > 0 {
-		// Calculating with big.Int is slow for each iteration.
-		//    x, mod = x / 58, x % 58
-		//
-		// Instead we can try to do as much calculations on int64.
-		//    x, mod = x / 58^10, x % 58^10
-		//
-		// Which will give us mod, which is 10 digit base58 number.
-		// We'll loop that 10 times to convert to the answer.
+	// Each leading zero byte encodes as one 'r'; the remaining value needs at
+	// most ceil(n*log(256)/log(58)) digits, and log(256)/log(58) < 1.366.
+	var outStack [96]byte
+	out := outStack[:]
+	if size := zeros + (len(b)-zeros)*1366/1000 + 1; size > len(out) {
+		out = make([]byte, size)
+	}
+	pos := len(out)
 
-		x.DivMod(x, bigRadix10, mod)
-
-		if x.Sign() == 0 {
-			// When x = 0, we need to ensure we don't add any extra zeros.
-			m := mod.Int64()
-			for m > 0 {
-				answer = append(answer, xrpAlphabet[m%58])
-				m /= 58
+	for len(limbs) > 0 {
+		// Each pass divides by 58^10 as two chained divisions by 58^5 whose
+		// dependency chains overlap: lo is the first remainder, hi the second.
+		var lo, hi uint64
+		for i := len(limbs) - 1; i >= 0; i-- {
+			cur := lo<<32 | uint64(limbs[i])
+			q := cur / radix58Pow5
+			lo = cur % radix58Pow5
+			cur = hi<<32 | q
+			limbs[i] = uint32(cur / radix58Pow5)
+			hi = cur % radix58Pow5
+		}
+		for len(limbs) > 0 && limbs[len(limbs)-1] == 0 {
+			limbs = limbs[:len(limbs)-1]
+		}
+		// Emit all ten digits of a low-order group, but no leading zeros for
+		// the most significant one.
+		rem := hi*radix58Pow5 + lo
+		for range 10 {
+			if rem == 0 && len(limbs) == 0 {
+				break
 			}
-		} else {
-			m := mod.Int64()
-			for range 10 {
-				answer = append(answer, xrpAlphabet[m%58])
-				m /= 58
-			}
+			pos--
+			out[pos] = xrpAlphabet[rem%58]
+			rem /= 58
 		}
 	}
-	// leading zero bytes
-	for _, i := range b {
-		if i != 0 {
-			break
-		}
-		answer = append(answer, alphabetIdx0)
+	for range zeros {
+		pos--
+		out[pos] = alphabetIdx0
 	}
 
-	// reverse
-	alen := len(answer)
-	for i := 0; i < alen/2; i++ {
-		answer[i], answer[alen-1-i] = answer[alen-1-i], answer[i]
-	}
-
-	return string(answer)
+	return string(out[pos:])
 }
 
 // DecodeBase58 decodes a modified base58 string to a byte slice. A string
