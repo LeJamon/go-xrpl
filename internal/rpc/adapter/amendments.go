@@ -16,7 +16,7 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		return malformedSubmitResult(), nil
 	}
 
-	result, err := a.svc.SimulateTransaction(transaction)
+	result, err := a.backend().SimulateTransaction(transaction)
 	if err != nil {
 		return internalSubmitResult(), nil
 	}
@@ -47,32 +47,32 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 // TransactionRules returns the rules used by the ledger service for the
 // current open ledger.
 func (a *LedgerServiceAdapter) TransactionRules() *amendment.Rules {
-	return a.svc.TransactionRules()
+	return a.backend().TransactionRules()
 }
 
 func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	// Fee autofill falls back to the reference fee when parsing fails; the
 	// service still performs the later structural checks.
 	parsedTx, _ := tx.ParseJSON(txJSON)
-	return a.svc.GetAutofillFee(parsedTx, unlimited, mult, div)
+	return a.backend().GetAutofillFee(parsedTx, unlimited, mult, div)
 }
 
 func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return a.svc.GetAutofillSequence(account, hasTicketSequence)
+	return a.backend().GetAutofillSequence(account, hasTicketSequence)
 }
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
 func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
-	return a.svc.IsAmendmentBlocked()
+	return a.backend().IsAmendmentBlocked()
 }
 
 // Table exposes the live amendment table for RPC introspection
 // (feature command, server_info warnings). May be nil.
 func (a *LedgerServiceAdapter) Table() *amendment.Table {
-	return a.svc.Table()
+	return a.backend().Table()
 }
 
 // SetAmendmentVote records an operator veto/upvote and persists it.
 func (a *LedgerServiceAdapter) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
-	return a.svc.SetAmendmentVote(ctx, id, vetoed)
+	return a.backend().SetAmendmentVote(ctx, id, vetoed)
 }

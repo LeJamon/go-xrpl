@@ -9,7 +9,7 @@ import (
 
 // GetTransaction retrieves a transaction by its hash
 func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
-	result, err := a.svc.GetTransaction(txHash)
+	result, err := a.backend().GetTransaction(txHash)
 	if err != nil {
 		return nil, err
 	}
@@ -19,7 +19,7 @@ func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.Transacti
 // GetTransactionWithRange performs the optional transaction-table lookup used
 // by the tx RPC without adding that method to the broad ledger service contract.
 func (a *LedgerServiceAdapter) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*types.TransactionInfo, types.TxSearchResult, error) {
-	result, searched, err := a.svc.GetTransactionWithRange(ctx, txHash, minLedger, maxLedger)
+	result, searched, err := a.backend().GetTransactionWithRange(ctx, txHash, minLedger, maxLedger)
 	if result == nil {
 		return nil, rpcTxSearchResult(searched), err
 	}
@@ -43,7 +43,7 @@ func rpcTransactionInfo(result *service.TransactionResult) *types.TransactionInf
 
 // GetTransactionHistory retrieves recent transactions
 func (a *LedgerServiceAdapter) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
-	result, err := a.svc.GetTransactionHistory(ctx, startIndex)
+	result, err := a.backend().GetTransactionHistory(ctx, startIndex)
 	if err != nil {
 		return nil, err
 	}

@@ -96,6 +96,14 @@ type replayFaultControl interface {
 	RevalidateReplayFault(ctx context.Context, id string) error
 }
 
+func (a *LedgerServiceAdapter) backend() Backend {
+	if a.svc == nil {
+		// Service methods can return static data or a context error before accessing ledger state.
+		return (*service.Service)(nil)
+	}
+	return a.svc
+}
+
 // isNilBackend also reports an interface holding a typed nil pointer, so the
 // adapter's nil guards keep working when a nil service pointer is injected.
 func isNilBackend(b Backend) bool {

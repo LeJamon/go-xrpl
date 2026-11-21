@@ -1,10 +1,12 @@
 package adapter
 
 import (
+	"context"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/stretchr/testify/require"
 )
 
 type fakeBackend struct {
@@ -18,28 +20,40 @@ func (f *fakeBackend) ReplayFaultStatus() replayfault.Status { return f.status }
 func (f *fakeBackend) ReplayBlocked() bool                   { return f.status.Blocked }
 
 func TestLedgerServiceAdapterDelegatesToBackend(t *testing.T) {
-	a := NewLedgerServiceAdapter(&fakeBackend{validated: 42, status: replayfault.Status{Blocked: true}})
-	if got := a.GetValidatedLedgerIndex(); got != 42 {
-		t.Fatalf("GetValidatedLedgerIndex = %d, want 42", got)
-	}
-	if !a.ReplayBlocked() || !a.ReplayFaultStatus().Blocked {
-		t.Fatal("replay fault state not delegated to backend")
-	}
+	status := replayfault.Status{FollowerMode: true}
+	a := NewLedgerServiceAdapter(&fakeBackend{validated: 42, status: status})
+	require.Equal(t, uint32(42), a.GetValidatedLedgerIndex())
+	require.False(t, a.ReplayBlocked())
+	require.Equal(t, status, a.ReplayFaultStatus())
 }
 
-func TestLedgerServiceAdapterTypedNilServiceIsUnavailable(t *testing.T) {
+func TestLedgerServiceAdapterWithoutService(t *testing.T) {
 	var svc *service.Service
-	a := NewLedgerServiceAdapter(svc)
-	if a.svc != nil {
-		t.Fatal("typed-nil service stored as non-nil backend")
-	}
-	if !a.ReplayBlocked() {
-		t.Fatal("ReplayBlocked = false for unavailable service")
-	}
-	if status := a.ReplayFaultStatus(); !status.Blocked || status.PersistenceError == nil {
-		t.Fatalf("ReplayFaultStatus = %+v, want blocked with persistence error", status)
-	}
-	if err := a.StartReplayFaultRecovery("id"); err == nil {
-		t.Fatal("StartReplayFaultRecovery succeeded without a service")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for name, a := range map[string]*LedgerServiceAdapter{
+		"nil":        NewLedgerServiceAdapter(nil),
+		"typed nil":  NewLedgerServiceAdapter(svc),
+		"zero value": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			address, err := a.GetGenesisAccount()
+			require.NoError(t, err)
+			require.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", address)
+
+			_, err = a.GetAccountInfo(ctx, "", "current")
+			require.ErrorIs(t, err, context.Canceled)
+			_, err = a.GetLedgerByHashContext(ctx, [32]byte{})
+			require.ErrorIs(t, err, context.Canceled)
+			_, err = a.GetAutofillFee(nil, false, 1, 0)
+			require.ErrorContains(t, err, "invalid fee limit factors")
+
+			require.True(t, a.ReplayBlocked())
+			status := a.ReplayFaultStatus()
+			require.True(t, status.Blocked)
+			require.Error(t, status.PersistenceError)
+			require.Error(t, a.StartReplayFaultRecovery("id"))
+			require.Error(t, a.RevalidateReplayFault(t.Context(), "id"))
+		})
 	}
 }

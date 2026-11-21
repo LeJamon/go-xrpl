@@ -43,32 +43,32 @@ func (a *LedgerServiceAdapter) SetTxBroadcaster(fn func(txBlob []byte)) {
 
 // GetCurrentLedgerIndex returns the current open ledger index
 func (a *LedgerServiceAdapter) GetCurrentLedgerIndex() uint32 {
-	return a.svc.GetCurrentLedgerIndex()
+	return a.backend().GetCurrentLedgerIndex()
 }
 
 // GetClosedLedgerIndex returns the last closed ledger index
 func (a *LedgerServiceAdapter) GetClosedLedgerIndex() uint32 {
-	return a.svc.GetClosedLedgerIndex()
+	return a.backend().GetClosedLedgerIndex()
 }
 
 // GetValidatedLedgerIndex returns the highest validated ledger index
 func (a *LedgerServiceAdapter) GetValidatedLedgerIndex() uint32 {
-	return a.svc.GetValidatedLedgerIndex()
+	return a.backend().GetValidatedLedgerIndex()
 }
 
 // AcceptLedger closes the current open ledger (standalone mode only)
 func (a *LedgerServiceAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
-	return a.svc.AcceptLedger(ctx)
+	return a.backend().AcceptLedger(ctx)
 }
 
 // IsStandalone returns true if running in standalone mode
 func (a *LedgerServiceAdapter) IsStandalone() bool {
-	return a.svc.IsStandalone()
+	return a.backend().IsStandalone()
 }
 
 // GetServerInfo returns server status information
 func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
-	info := a.svc.GetServerInfo()
+	info := a.backend().GetServerInfo()
 	return types.LedgerServerInfo{
 		Standalone:               info.Standalone,
 		ServerState:              info.ServerState,
@@ -93,5 +93,5 @@ func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 
 // GetCurrentFees returns the current fee settings.
 func (a *LedgerServiceAdapter) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
-	return a.svc.GetCurrentFees()
+	return a.backend().GetCurrentFees()
 }
