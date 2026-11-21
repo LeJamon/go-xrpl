@@ -93,8 +93,8 @@ func TestTrafficCategories(t *testing.T) {
 		request, data string
 	}{
 		{message.LedgerInfoBase, "ledger", "ledger_data"},
-		{message.LedgerInfoTxNode, "ledger_Transaction_Node", "ledger_data_Transaction_Node"},
-		{message.LedgerInfoAsNode, "ledger_Account_State_Node", "ledger_data_Account_State_Node"},
+		{message.LedgerInfoTxNode, "ledger_Transaction_node", "ledger_data_Transaction_Node"},
+		{message.LedgerInfoAsNode, "ledger_Account_State_node", "ledger_data_Account_State_Node"},
 		{message.LedgerInfoTsCandidate, "ledger_Transaction_Set_candidate", "ledger_data_Transaction_Set_candidate"},
 	} {
 		req := &message.GetLedger{InfoType: tc.subtype}

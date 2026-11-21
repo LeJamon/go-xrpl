@@ -528,6 +528,27 @@ func (p *Peer) compressionNegotiated() bool {
 		p.capabilities.SupportsCompression()
 }
 
+func (p *Peer) prepareOutboundFrame(data []byte) ([]byte, bool) {
+	header, err := message.DecodeHeader(data)
+	if err != nil {
+		return data, false
+	}
+
+	wire := data
+	if !header.Compressed && p.compressionNegotiated() {
+		wire, _ = message.CompressFrameIfWorthwhile(data)
+	}
+	return wire, true
+}
+
+func (p *Peer) recordOutboundAccepted(data, wire []byte) {
+	header, err := message.DecodeHeader(data)
+	if err != nil {
+		return
+	}
+	p.traffic.AddCount(outboundTrafficCategory(header, data), false, len(wire))
+}
+
 func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1408,8 +1429,6 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 				p.completeOutbound(token, errCompressionUnnegotiated)
 				return errCompressionUnnegotiated
 			}
-		} else if compressionEnabled {
-			wire, _ = message.CompressFrameIfWorthwhile(data)
 		}
 
 		if err := conn.SetWriteDeadline(time.Now().Add(p.frameReadBudget(uint32(len(wire))))); err != nil {
@@ -1422,9 +1441,6 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 		if err == nil {
 			p.metrics.sent.addMessage(uint64(n))
-			if headerErr == nil {
-				p.traffic.AddCount(outboundTrafficCategory(header, data), false, n)
-			}
 		}
 		p.completeOutbound(token, err)
 		if err != nil {
@@ -2090,9 +2106,13 @@ func (p *Peer) Send(data []byte) error {
 		p.largeSendQ.Store(0)
 	}
 	class := outboundClassForFrame(data)
-	if err := p.outbound.enqueueReliable(class, data); err != nil {
+	wire, count := p.prepareOutboundFrame(data)
+	if err := p.outbound.enqueueReliable(class, wire); err != nil {
 		p.recordSendDrop(class, err)
 		return err
+	}
+	if count {
+		p.recordOutboundAccepted(data, wire)
 	}
 	return nil
 }
@@ -2116,9 +2136,13 @@ func (p *Peer) SendPriority(data []byte) error {
 	if p.SendQueueLen() < targetSendQueue {
 		p.largeSendQ.Store(0)
 	}
-	if err := p.outbound.enqueueReliable(OutboundClassAcquisition, data); err != nil {
+	wire, count := p.prepareOutboundFrame(data)
+	if err := p.outbound.enqueueReliable(OutboundClassAcquisition, wire); err != nil {
 		p.recordSendDrop(OutboundClassAcquisition, err)
 		return err
+	}
+	if count {
+		p.recordOutboundAccepted(data, wire)
 	}
 	return nil
 }
@@ -2131,9 +2155,19 @@ func (p *Peer) SendManifestFrames(frames [][]byte) error {
 	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
-	if err := p.outbound.enqueueBulk(frames); err != nil {
+	prepared := make([][]byte, 0, len(frames))
+	for _, frame := range frames {
+		wire, _ := p.prepareOutboundFrame(frame)
+		prepared = append(prepared, wire)
+	}
+	if err := p.outbound.enqueueBulk(prepared); err != nil {
 		p.recordSendDrop(OutboundClassBulk, err)
 		return err
+	}
+	for i, wire := range prepared {
+		if len(wire) > 0 {
+			p.recordOutboundAccepted(frames[i], wire)
+		}
 	}
 	return nil
 }
