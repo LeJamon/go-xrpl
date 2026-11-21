@@ -63,10 +63,7 @@ func ParseEndpoint(s string) (Endpoint, error) {
 
 const gossipWhitespace = " \t\r\n\v\f"
 
-// parseGossipEndpoint accepts the address forms used by rippled's inbound
-// endpoint parser without changing the stricter outbound dial parser.
 func parseGossipEndpoint(s string) (Endpoint, error) {
-	// Rippled bounds the original string before trimming it.
 	if len(s) > 64 {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
@@ -75,91 +72,48 @@ func parseGossipEndpoint(s string) (Endpoint, error) {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
 
-	var host, portText string
-	if strings.HasPrefix(s, "[") {
-		close := strings.IndexByte(s, ']')
-		if close < 0 {
-			return Endpoint{}, ErrInvalidEndpoint
-		}
-		host = s[1:close]
-		suffix := s[close+1:]
-		if suffix == "" {
-			portText = ""
-		} else {
-			if suffix[0] != ':' && !isGossipSpace(suffix[0]) {
+	// Whitespace is the legacy port separator. A colon separates an IPv4
+	// port but remains part of an unbracketed IPv6 address.
+	separators := gossipWhitespace
+	bracketed := s[0] == '['
+	if bracketed {
+		s = s[1:]
+		separators += "]"
+	} else if first := strings.IndexAny(s, ".:"); first >= 0 && s[first] == '.' {
+		separators += ":"
+	}
+
+	host, portText := s, ""
+	if i := strings.IndexAny(s, separators); i >= 0 {
+		host, portText = s[:i], s[i+1:]
+		if bracketed && portText != "" {
+			if !strings.ContainsRune(gossipWhitespace+":", rune(portText[0])) {
 				return Endpoint{}, ErrInvalidEndpoint
 			}
-			// The stream parser consumes one delimiter. The numeric extractor
-			// then skips any remaining ASCII whitespace.
-			portText = suffix[1:]
-		}
-	} else {
-		// A dot before the first colon identifies the IPv4 grammar. For
-		// IPv6, a colon belongs to the address and only whitespace can
-		// separate a legacy port.
-		firstDot := strings.IndexByte(s, '.')
-		firstColon := strings.IndexByte(s, ':')
-		ipv4 := firstDot >= 0 && (firstColon < 0 || firstDot < firstColon)
-		delimiter := -1
-		if ipv4 {
-			if firstColon >= 0 {
-				delimiter = firstColon
-			}
-			if whitespace := strings.IndexFunc(s, func(r rune) bool {
-				return r < 256 && isGossipSpace(byte(r))
-			}); whitespace >= 0 && (delimiter < 0 || whitespace < delimiter) {
-				delimiter = whitespace
-			}
-		} else {
-			delimiter = strings.IndexFunc(s, func(r rune) bool {
-				return r < 256 && isGossipSpace(byte(r))
-			})
-		}
-		if delimiter < 0 {
-			host = s
-		} else {
-			host = s[:delimiter]
-			portText = s[delimiter+1:]
+			portText = portText[1:]
 		}
 	}
 	addr, err := netip.ParseAddr(host)
-	if err != nil {
+	if err != nil || addr.Zone() != "" {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
-	if strings.Trim(portText, gossipWhitespace) == "" {
-		return Endpoint{Host: addr.String()}, nil
+	endpoint := Endpoint{Host: addr.String()}
+	portText = strings.TrimLeft(portText, gossipWhitespace)
+	if portText != "" {
+		negative := portText[0] == '-'
+		if negative || portText[0] == '+' {
+			portText = portText[1:]
+		}
+		port, err := parsePort(portText)
+		if err != nil {
+			return Endpoint{}, err
+		}
+		if negative {
+			port = -port
+		}
+		endpoint.Port = port
 	}
-	port, err := parseGossipPort(portText)
-	if err != nil {
-		return Endpoint{}, err
-	}
-	return Endpoint{Host: addr.String(), Port: port}, nil
-}
-
-func isGossipSpace(c byte) bool {
-	return strings.ContainsRune(gossipWhitespace, rune(c))
-}
-
-func parseGossipPort(s string) (uint16, error) {
-	s = strings.Trim(s, gossipWhitespace)
-	if s == "" {
-		return 0, ErrInvalidEndpoint
-	}
-	negative := s[0] == '-'
-	if s[0] == '+' || negative {
-		s = s[1:]
-	}
-	if s == "" {
-		return 0, ErrInvalidEndpoint
-	}
-	value, err := parsePort(s)
-	if err != nil {
-		return 0, err
-	}
-	if negative {
-		return uint16(-int32(value)), nil
-	}
-	return value, nil
+	return endpoint, nil
 }
 
 func parsePort(s string) (uint16, error) {

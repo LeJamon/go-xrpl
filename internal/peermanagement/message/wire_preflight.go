@@ -23,9 +23,8 @@ const (
 )
 
 var (
-	ErrWireLimit            = errors.New("protobuf wire resource limit")
-	ErrMalformedWire        = errors.New("malformed protobuf wire")
-	ErrMissingRequiredField = errors.New("protobuf required field missing")
+	ErrWireLimit     = errors.New("protobuf wire resource limit")
+	ErrMalformedWire = errors.New("malformed protobuf wire")
 )
 
 type WireLimitReason string
@@ -79,11 +78,11 @@ var wireDescriptors = func() (descriptors [len(codecs)]protoreflect.MessageDescr
 }()
 
 type wireScanState struct {
-	msgType               MessageType
-	collections           []collectionLimit
-	collectionCounts      [maxCollectionLimits]int
-	deferEndpointLimit    bool
-	endpointCount         int
+	msgType            MessageType
+	collections        []collectionLimit
+	collectionCounts   [maxCollectionLimits]int
+	deferEndpointLimit bool
+	wirePayloadInfo
 	validateRequired      bool
 	fields                int
 	getObjects            int
@@ -97,13 +96,15 @@ func Preflight(msgType MessageType, data []byte) error {
 	return err
 }
 
-func validateWirePayload(msgType MessageType, data []byte) error {
+// ValidatePayload checks framing and proto2 initialization without decoding the message into memory.
+func ValidatePayload(msgType MessageType, data []byte) error {
 	_, err := scanWirePayload(msgType, data, true, false)
 	return err
 }
 
 type wirePayloadInfo struct {
-	endpointCount int
+	endpointVersion uint32
+	endpointCount   int
 }
 
 func scanWirePayload(
@@ -145,7 +146,7 @@ func scanWirePayload(
 		state.getLedgerNodes > maxGetLedgerNodes {
 		return wirePayloadInfo{}, wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
 	}
-	return wirePayloadInfo{endpointCount: state.endpointCount}, nil
+	return state.wirePayloadInfo, nil
 }
 
 func (s *wireScanState) scanMessage(
@@ -267,6 +268,10 @@ func (s *wireScanState) observeRootField(
 	if field == nil {
 		return nil
 	}
+	if s.deferEndpointLimit && field.Number() == 1 && wireType == protowire.VarintType {
+		value, _ := protowire.ConsumeVarint(data)
+		s.endpointVersion = uint32(value)
+	}
 	if (s.msgType == TypeGetObjects || s.msgType == TypeGetLedger) && field.Number() == 1 &&
 		field.Kind() == protoreflect.EnumKind && wireType == protowire.VarintType {
 		value, n := protowire.ConsumeVarint(data)
@@ -301,15 +306,11 @@ func (s *wireScanState) observeRootField(
 			continue
 		}
 		s.collectionCounts[i]++
-		if count := s.collectionCounts[i]; count > limit.max {
-			if limit.reason == WireLimitEndpoints && s.deferEndpointLimit {
-				s.endpointCount = count
-				return nil
-			}
+		count := s.collectionCounts[i]
+		if s.deferEndpointLimit && limit.reason == WireLimitEndpoints {
+			s.endpointCount = count
+		} else if count > limit.max {
 			return wireLimit(limit.reason, limit.max, count)
-		}
-		if limit.reason == WireLimitEndpoints {
-			s.endpointCount = s.collectionCounts[i]
 		}
 		return nil
 	}
@@ -341,19 +342,20 @@ func (r *requiredFieldSet) observe(
 	if field == nil || r.numbers == nil || field.Cardinality() != protoreflect.Required {
 		return
 	}
-	for i := 0; i < r.numbers.Len(); i++ {
-		required := r.descriptor.Fields().ByNumber(r.numbers.Get(i))
-		if required.Number() != field.Number() || fieldWireType(required) != wireType {
-			continue
-		}
-		if required.Kind() == protoreflect.EnumKind {
-			value, n := protowire.ConsumeVarint(data)
-			if n < 0 || required.Enum().Values().ByNumber(protoreflect.EnumNumber(value)) == nil {
-				return
-			}
-		}
-		r.seen |= uint64(1) << uint(i)
+	if fieldWireType(field) != wireType {
 		return
+	}
+	if field.Kind() == protoreflect.EnumKind {
+		value, _ := protowire.ConsumeVarint(data)
+		if field.Enum().Values().ByNumber(protoreflect.EnumNumber(value)) == nil {
+			return
+		}
+	}
+	for i := 0; i < r.numbers.Len(); i++ {
+		if r.numbers.Get(i) == field.Number() {
+			r.seen |= uint64(1) << uint(i)
+			return
+		}
 	}
 }
 
@@ -364,7 +366,7 @@ func (r *requiredFieldSet) check() error {
 	for i := 0; i < r.numbers.Len(); i++ {
 		if r.seen&(uint64(1)<<uint(i)) == 0 {
 			field := r.descriptor.Fields().ByNumber(r.numbers.Get(i))
-			return fmt.Errorf("%w: %s", ErrMissingRequiredField, field.FullName())
+			return fmt.Errorf("%w: missing required field %s", ErrMalformedWire, field.FullName())
 		}
 	}
 	return nil

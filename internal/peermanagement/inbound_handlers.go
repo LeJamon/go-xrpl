@@ -657,10 +657,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		accepted = append(accepted, ingestEndpoint{endpoint: parsed, hops: tm.Hops})
 	}
 	if malformed > 0 {
-		fee := resource.NewCharge(
-			resource.FeeInvalidData().Cost()*malformed,
-			"invalid data",
-		)
+		fee := resource.FeeInvalidData().Times(malformed)
 		o.selectMessageCharge(&evt, fee, fmt.Sprintf("%d malformed endpoints", malformed))
 	}
 

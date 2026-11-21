@@ -1357,14 +1357,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 		}
 		var decodedEndpoints *message.Endpoints
+		var endpointsOversized bool
 		if header.MessageType == message.TypeEndpoints {
-			var decoded message.Message
-			decoded, err = message.Decode(header.MessageType, payload)
-			if err != nil && !errors.Is(err, message.ErrWireLimit) {
-				releaseRetainedReservation()
-				return frameReader.failure(err, now)
-			}
-			decodedEndpoints, _ = decoded.(*message.Endpoints)
+			decodedEndpoints, endpointsOversized, err = message.DecodeEndpointsForPeer(payload)
 		} else {
 			err = message.ValidatePayload(header.MessageType, payload)
 		}
@@ -1384,13 +1379,14 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		p.traffic.AddCount(categorizeMessagePayload(header.MessageType, payload, true), true, int(payloadWireSize))
 
 		delivered := p.dispatchEvent(Event{
-			Type:             EventMessageReceived,
-			PeerID:           p.id,
-			MessageType:      header.MessageType,
-			Payload:          payload,
-			WireSize:         payloadWireSize,
-			decodedEndpoints: decodedEndpoints,
-			reservation:      newInboundReservation(p.inboundReadBudget, retainedReservation),
+			Type:               EventMessageReceived,
+			PeerID:             p.id,
+			MessageType:        header.MessageType,
+			Payload:            payload,
+			WireSize:           payloadWireSize,
+			decodedEndpoints:   decodedEndpoints,
+			endpointsOversized: endpointsOversized,
+			reservation:        newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
 		retainedReservation = 0
 		if !delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
