@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -795,6 +796,10 @@ func (o *Oracle) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (o *Oracle) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := o.encodeDirect()
+		verifyEncodeParity(o, data, err)
+	}
 	return o.encodeViaMap()
 }
 
@@ -813,6 +818,144 @@ func (o *Oracle) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (o *Oracle) encodeDirect() ([]byte, error) {
+	if err := o.validateEncode(); err != nil {
+		return nil, err
+	}
+	if o.hasXAddress() {
+		return o.encodeViaMap()
+	}
+	return o.appendBinary(make([]byte, 0, o.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (o *Oracle) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x80)
+	if o.present&oracleBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), o.Flags)
+	}
+	if o.present&oracleBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), o.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if o.present&oracleBitLastUpdateTime != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2F), o.LastUpdateTime)
+	}
+	if o.present&oracleBitOracleDocumentID != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x33), o.OracleDocumentID)
+	}
+	if o.present&oracleBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), o.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&oracleBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), o.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if o.present&oracleBitURI != 0 {
+		if dst, err = appendBlob(append(dst, 0x75), o.URI); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&oracleBitAssetClass != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x1C), o.AssetClass); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&oracleBitProvider != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x1D), o.Provider); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&oracleBitOwner != 0 {
+		if dst, err = appendAccountID(append(dst, 0x82), o.Owner); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&oracleBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), o.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if o.present&oracleBitPriceDataSeries != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x18), "PriceDataSeries", o.PriceDataSeries); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (o *Oracle) encodedSizeHint() int {
+	size := 41
+	if o.present&oracleBitFlags != 0 {
+		size += 5
+	}
+	if o.present&oracleBitLastUpdateTime != 0 {
+		size += 5
+	}
+	if o.present&oracleBitOracleDocumentID != 0 {
+		size += 6
+	}
+	if o.present&oracleBitOwnerNode != 0 {
+		size += 9
+	}
+	if o.present&oracleBitURI != 0 {
+		size += 1 + blobEncodedLen(o.URI)
+	}
+	if o.present&oracleBitAssetClass != 0 {
+		size += 2 + blobEncodedLen(o.AssetClass)
+	}
+	if o.present&oracleBitProvider != 0 {
+		size += 2 + blobEncodedLen(o.Provider)
+	}
+	if o.present&oracleBitOwner != 0 {
+		size += 1 + accountIDEncodedLen(o.Owner)
+	}
+	if o.present&oracleBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(o.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (o *Oracle) hasXAddress() bool {
+	if o.present&oracleBitOwnerNode != 0 && isXAddress(o.OwnerNode) {
+		return true
+	}
+	if o.present&oracleBitPreviousTxnID != 0 && isXAddress(o.PreviousTxnID) {
+		return true
+	}
+	if o.present&oracleBitURI != 0 && isXAddress(o.URI) {
+		return true
+	}
+	if o.present&oracleBitAssetClass != 0 && isXAddress(o.AssetClass) {
+		return true
+	}
+	if o.present&oracleBitProvider != 0 && isXAddress(o.Provider) {
+		return true
+	}
+	if o.present&oracleBitOwner != 0 && isXAddress(o.Owner) {
+		return true
+	}
+	if o.present&oracleBitSponsor != 0 && isXAddress(o.Sponsor) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is

@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -594,6 +595,10 @@ func (p *PermissionedDomain) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (p *PermissionedDomain) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := p.encodeDirect()
+		verifyEncodeParity(p, data, err)
+	}
 	return p.encodeViaMap()
 }
 
@@ -612,6 +617,105 @@ func (p *PermissionedDomain) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (p *PermissionedDomain) encodeDirect() ([]byte, error) {
+	if err := p.validateEncode(); err != nil {
+		return nil, err
+	}
+	if p.hasXAddress() {
+		return p.encodeViaMap()
+	}
+	return p.appendBinary(make([]byte, 0, p.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (p *PermissionedDomain) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x82)
+	if p.present&permissioneddomainBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), p.Flags)
+	}
+	if p.present&permissioneddomainBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), p.Sequence)
+	}
+	if p.present&permissioneddomainBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), p.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if p.present&permissioneddomainBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), p.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&permissioneddomainBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), p.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if p.present&permissioneddomainBitOwner != 0 {
+		if dst, err = appendAccountID(append(dst, 0x82), p.Owner); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&permissioneddomainBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), p.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x1C), "AcceptedCredentials", p.AcceptedCredentials); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (p *PermissionedDomain) encodedSizeHint() int {
+	size := 41
+	if p.present&permissioneddomainBitFlags != 0 {
+		size += 5
+	}
+	if p.present&permissioneddomainBitSequence != 0 {
+		size += 5
+	}
+	if p.present&permissioneddomainBitOwnerNode != 0 {
+		size += 9
+	}
+	if p.present&permissioneddomainBitOwner != 0 {
+		size += 1 + accountIDEncodedLen(p.Owner)
+	}
+	if p.present&permissioneddomainBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(p.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (p *PermissionedDomain) hasXAddress() bool {
+	if p.present&permissioneddomainBitOwnerNode != 0 && isXAddress(p.OwnerNode) {
+		return true
+	}
+	if p.present&permissioneddomainBitPreviousTxnID != 0 && isXAddress(p.PreviousTxnID) {
+		return true
+	}
+	if p.present&permissioneddomainBitOwner != 0 && isXAddress(p.Owner) {
+		return true
+	}
+	if p.present&permissioneddomainBitSponsor != 0 && isXAddress(p.Sponsor) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is

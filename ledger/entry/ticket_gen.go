@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -534,6 +535,10 @@ func (t *Ticket) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (t *Ticket) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := t.encodeDirect()
+		verifyEncodeParity(t, data, err)
+	}
 	return t.encodeViaMap()
 }
 
@@ -552,6 +557,100 @@ func (t *Ticket) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (t *Ticket) encodeDirect() ([]byte, error) {
+	if err := t.validateEncode(); err != nil {
+		return nil, err
+	}
+	if t.hasXAddress() {
+		return t.encodeViaMap()
+	}
+	return t.appendBinary(make([]byte, 0, t.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (t *Ticket) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x54)
+	if t.present&ticketBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), t.Flags)
+	}
+	if t.present&ticketBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), t.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if t.present&ticketBitTicketSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x29), t.TicketSequence)
+	}
+	if t.present&ticketBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), t.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if t.present&ticketBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), t.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if t.present&ticketBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), t.Account); err != nil {
+			return nil, err
+		}
+	}
+	if t.present&ticketBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), t.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (t *Ticket) encodedSizeHint() int {
+	size := 41
+	if t.present&ticketBitFlags != 0 {
+		size += 5
+	}
+	if t.present&ticketBitTicketSequence != 0 {
+		size += 6
+	}
+	if t.present&ticketBitOwnerNode != 0 {
+		size += 9
+	}
+	if t.present&ticketBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(t.Account)
+	}
+	if t.present&ticketBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(t.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (t *Ticket) hasXAddress() bool {
+	if t.present&ticketBitOwnerNode != 0 && isXAddress(t.OwnerNode) {
+		return true
+	}
+	if t.present&ticketBitPreviousTxnID != 0 && isXAddress(t.PreviousTxnID) {
+		return true
+	}
+	if t.present&ticketBitAccount != 0 && isXAddress(t.Account) {
+		return true
+	}
+	if t.present&ticketBitSponsor != 0 && isXAddress(t.Sponsor) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is

@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -550,6 +551,10 @@ func (n *NFTokenPage) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (n *NFTokenPage) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := n.encodeDirect()
+		verifyEncodeParity(n, data, err)
+	}
 	if err := n.validateRequired(); err != nil {
 		return nil, err
 	}
@@ -571,6 +576,102 @@ func (n *NFTokenPage) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (n *NFTokenPage) encodeDirect() ([]byte, error) {
+	if err := n.validateEncode(); err != nil {
+		return nil, err
+	}
+	if n.hasXAddress() {
+		return n.encodeViaMap()
+	}
+	return n.appendBinary(make([]byte, 0, n.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (n *NFTokenPage) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x50)
+	if n.present&nftokenpageBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), n.Flags)
+	}
+	if n.present&nftokenpageBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), n.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if n.present&nftokenpageBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), n.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if n.present&nftokenpageBitPreviousPageMin != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x1A), n.PreviousPageMin, 32); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&nftokenpageBitNextPageMin != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x1B), n.NextPageMin, 32); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&nftokenpageBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), n.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if n.present&nftokenpageBitNFTokens != 0 {
+		if dst, err = appendNFTokens(append(dst, 0xFA), n.NFTokens); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (n *NFTokenPage) encodedSizeHint() int {
+	size := 41
+	if n.present&nftokenpageBitFlags != 0 {
+		size += 5
+	}
+	if n.present&nftokenpageBitPreviousPageMin != 0 {
+		size += 34
+	}
+	if n.present&nftokenpageBitNextPageMin != 0 {
+		size += 34
+	}
+	if n.present&nftokenpageBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(n.Sponsor)
+	}
+	if n.present&nftokenpageBitNFTokens != 0 {
+		size += 1 + nftokensEncodedLen(n.NFTokens)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (n *NFTokenPage) hasXAddress() bool {
+	if n.present&nftokenpageBitPreviousTxnID != 0 && isXAddress(n.PreviousTxnID) {
+		return true
+	}
+	if n.present&nftokenpageBitPreviousPageMin != 0 && isXAddress(n.PreviousPageMin) {
+		return true
+	}
+	if n.present&nftokenpageBitNextPageMin != 0 && isXAddress(n.NextPageMin) {
+		return true
+	}
+	if n.present&nftokenpageBitSponsor != 0 && isXAddress(n.Sponsor) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is

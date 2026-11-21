@@ -26,17 +26,20 @@ import (
 // produces exactly the bytes, and accepts exactly the inputs, of encodeViaMap:
 // the original ToMap-through-binarycodec path, kept as the oracle.
 
-type viaMapEncoder interface {
-	encodeViaMap() ([]byte, error)
-}
-
 type namedEncoder struct {
 	name   string
 	encode func() ([]byte, error)
 }
 
+type directEncoder interface {
+	encodeDirect() ([]byte, error)
+}
+
 func parityCandidates(e Entry) []namedEncoder {
-	return []namedEncoder{{name: "Encode", encode: e.(encodeIface).Encode}}
+	return []namedEncoder{
+		{name: "Encode", encode: e.(encodeIface).Encode},
+		{name: "encodeDirect", encode: e.(directEncoder).encodeDirect},
+	}
 }
 
 type parityResult struct {
@@ -45,11 +48,13 @@ type parityResult struct {
 }
 
 // compareEncoders reports the first candidate whose acceptance or output
-// differs from encodeViaMap. Error messages are compared separately because
-// two encoders may legitimately name different faults of a multiply-invalid
-// entry; the result records the first such difference.
+// differs from encodeViaMap. Error messages are compared separately: when an
+// entry has several faults the oracle names one in map-iteration order, so a
+// message difference is recorded only against an oracle message that is
+// stable across runs.
 func compareEncoders(e Entry) (parityResult, error) {
-	want, wantErr := e.(viaMapEncoder).encodeViaMap()
+	oracle := e.(viaMapEncoder).encodeViaMap
+	want, wantErr := oracle()
 	result := parityResult{encoded: wantErr == nil}
 	for _, candidate := range parityCandidates(e) {
 		got, gotErr := candidate.encode()
@@ -57,7 +62,7 @@ func compareEncoders(e Entry) (parityResult, error) {
 		case (gotErr == nil) != (wantErr == nil):
 			return result, fmt.Errorf("%s %s: acceptance differs: candidate=%v map=%v", e.Type(), candidate.name, gotErr, wantErr)
 		case gotErr != nil:
-			if gotErr.Error() != wantErr.Error() && result.textDiff == "" {
+			if gotErr.Error() != wantErr.Error() && result.textDiff == "" && stableError(oracle, wantErr) {
 				result.textDiff = fmt.Sprintf("%s %s: %q, map %q", e.Type(), candidate.name, gotErr, wantErr)
 			}
 		case !bytes.Equal(got, want):
@@ -65,6 +70,15 @@ func compareEncoders(e Entry) (parityResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func stableError(encode func() ([]byte, error), first error) bool {
+	for range 8 {
+		if _, err := encode(); err == nil || err.Error() != first.Error() {
+			return false
+		}
+	}
+	return true
 }
 
 func requireEncodeParity(t testing.TB, e Entry) parityResult {

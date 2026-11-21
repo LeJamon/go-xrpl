@@ -6,10 +6,12 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1338,6 +1340,10 @@ func (v *Vault) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (v *Vault) Encode() ([]byte, error) {
+	if encodeParityCheck {
+		data, err := v.encodeDirect()
+		verifyEncodeParity(v, data, err)
+	}
 	return v.encodeViaMap()
 }
 
@@ -1356,6 +1362,232 @@ func (v *Vault) encodeViaMap() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// encodeDirect serializes the receiver with the direct binary writer.
+func (v *Vault) encodeDirect() ([]byte, error) {
+	if err := v.validateEncode(); err != nil {
+		return nil, err
+	}
+	if v.hasXAddress() {
+		return v.encodeViaMap()
+	}
+	return v.appendBinary(make([]byte, 0, v.encodedSizeHint()))
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (v *Vault) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x84)
+	if v.present&vaultBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), v.Flags)
+	}
+	if v.present&vaultBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), v.Sequence)
+	}
+	if v.present&vaultBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), v.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if v.present&vaultBitSubscriptionDate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x4B), v.SubscriptionDate)
+	}
+	if v.present&vaultBitRedemptionDate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x4C), v.RedemptionDate)
+	}
+	if v.present&vaultBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), v.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), v.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if v.present&vaultBitData != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x1B), v.Data); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), v.Account); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitOwner != 0 {
+		if dst, err = appendAccountID(append(dst, 0x82), v.Owner); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), v.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitAssetsAvailable != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x92), &types.Number{}, v.AssetsAvailable); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitAssetsMaximum != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x93), &types.Number{}, v.AssetsMaximum); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitAssetsTotal != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x94), &types.Number{}, v.AssetsTotal); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitLossUnrealized != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x95), &types.Number{}, v.LossUnrealized); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitScale != 0 {
+		if dst, err = appendUInt8(append(dst, 0x04, 0x10), v.Scale); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitLEVersion != 0 {
+		if dst, err = appendUInt8(append(dst, 0x06, 0x10), v.LEVersion); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitWithdrawalPolicy != 0 {
+		if dst, err = appendUInt8(append(dst, 0x00, 0x10, 0x14), v.WithdrawalPolicy); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitVaultKind != 0 {
+		if dst, err = appendUInt8(append(dst, 0x00, 0x10, 0x16), v.VaultKind); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitShareMPTID != 0 {
+		if dst, err = appendHash(append(dst, 0x02, 0x15), v.ShareMPTID, 24); err != nil {
+			return nil, err
+		}
+	}
+	if v.present&vaultBitAsset != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x03, 0x18), &types.Issue{}, v.Asset); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (v *Vault) encodedSizeHint() int {
+	size := 41
+	if v.present&vaultBitFlags != 0 {
+		size += 5
+	}
+	if v.present&vaultBitSequence != 0 {
+		size += 5
+	}
+	if v.present&vaultBitSubscriptionDate != 0 {
+		size += 6
+	}
+	if v.present&vaultBitRedemptionDate != 0 {
+		size += 6
+	}
+	if v.present&vaultBitOwnerNode != 0 {
+		size += 9
+	}
+	if v.present&vaultBitData != 0 {
+		size += 2 + blobEncodedLen(v.Data)
+	}
+	if v.present&vaultBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(v.Account)
+	}
+	if v.present&vaultBitOwner != 0 {
+		size += 1 + accountIDEncodedLen(v.Owner)
+	}
+	if v.present&vaultBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(v.Sponsor)
+	}
+	if v.present&vaultBitAssetsAvailable != 0 {
+		size += 13
+	}
+	if v.present&vaultBitAssetsMaximum != 0 {
+		size += 13
+	}
+	if v.present&vaultBitAssetsTotal != 0 {
+		size += 13
+	}
+	if v.present&vaultBitLossUnrealized != 0 {
+		size += 13
+	}
+	if v.present&vaultBitScale != 0 {
+		size += 3
+	}
+	if v.present&vaultBitLEVersion != 0 {
+		size += 3
+	}
+	if v.present&vaultBitWithdrawalPolicy != 0 {
+		size += 4
+	}
+	if v.present&vaultBitVaultKind != 0 {
+		size += 4
+	}
+	if v.present&vaultBitShareMPTID != 0 {
+		size += 26
+	}
+	if v.present&vaultBitAsset != 0 {
+		size += 46
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (v *Vault) hasXAddress() bool {
+	if v.present&vaultBitOwnerNode != 0 && isXAddress(v.OwnerNode) {
+		return true
+	}
+	if v.present&vaultBitPreviousTxnID != 0 && isXAddress(v.PreviousTxnID) {
+		return true
+	}
+	if v.present&vaultBitData != 0 && isXAddress(v.Data) {
+		return true
+	}
+	if v.present&vaultBitAccount != 0 && isXAddress(v.Account) {
+		return true
+	}
+	if v.present&vaultBitOwner != 0 && isXAddress(v.Owner) {
+		return true
+	}
+	if v.present&vaultBitSponsor != 0 && isXAddress(v.Sponsor) {
+		return true
+	}
+	if v.present&vaultBitAssetsAvailable != 0 && isXAddressValue(v.AssetsAvailable) {
+		return true
+	}
+	if v.present&vaultBitAssetsMaximum != 0 && isXAddressValue(v.AssetsMaximum) {
+		return true
+	}
+	if v.present&vaultBitAssetsTotal != 0 && isXAddressValue(v.AssetsTotal) {
+		return true
+	}
+	if v.present&vaultBitLossUnrealized != 0 && isXAddressValue(v.LossUnrealized) {
+		return true
+	}
+	if v.present&vaultBitShareMPTID != 0 && isXAddress(v.ShareMPTID) {
+		return true
+	}
+	if v.present&vaultBitAsset != 0 && isXAddressValue(v.Asset) {
+		return true
+	}
+	return false
 }
 
 // validateEncode runs the checks shared by every encoder before any field is
