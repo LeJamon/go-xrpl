@@ -168,3 +168,30 @@ func TestPersistWithoutNodeStoreFamilyWritesNodeStore(t *testing.T) {
 	require.NotNil(t, header)
 	require.Equal(t, nodestore.NodeLedger, header.Type)
 }
+
+func TestPersistRejectsDifferentFamilyDatabase(t *testing.T) {
+	ctx := t.Context()
+	db := newTestNodeStore(t, 0)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	other := newTestNodeStore(t, 0)
+	family := struct{ *shamapbackend.NodeStore }{shamapbackend.New(other)}
+	t.Cleanup(func() { require.NoError(t, family.Close()) })
+
+	state, err := shamap.NewBacked(shamap.TypeState, family)
+	require.NoError(t, err)
+	require.NoError(t, state.Put([32]byte{1}, []byte("state")))
+	l := retentionTestLedger(t, state, 9)
+	root := nodestore.Hash256(l.Header().AccountHash)
+	stored, err := other.Fetch(ctx, root)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	svc, err := New(Config{NodeStore: db, SHAMapFamily: family})
+	require.NoError(t, err)
+	require.ErrorContains(t, svc.persistLedger(ctx, l), "SHAMap family is not backed by the configured node store")
+	for _, key := range []nodestore.Hash256{root, nodestore.Hash256(l.Hash()), validatedTipKey} {
+		node, err := db.Fetch(ctx, key)
+		require.NoError(t, err)
+		require.Nil(t, node)
+	}
+}

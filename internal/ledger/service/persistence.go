@@ -506,7 +506,10 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 	defer s.endNodePersist()
 	family, familyStores := s.shamapFamily.(nodeStoreFamily)
 	var releaseClean func()
-	if familyStores && family.UsesDatabase(s.nodeStore.database()) {
+	if familyStores {
+		if !family.UsesDatabase(s.nodeStore.database()) {
+			return fmt.Errorf("persist ledger %d: SHAMap family is not backed by the configured node store", seq)
+		}
 		releaseClean = l.PrepareCleanResidencyRelease(family)
 	}
 	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
