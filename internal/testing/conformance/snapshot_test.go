@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -385,11 +385,7 @@ func TestSnapshotOpenLedgerMutationAuthenticatesAndStaysOpen(t *testing.T) {
 
 func loadSnapshotV4Fixture(t *testing.T, name string) snapshotFixture {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	path := filepath.Join(filepath.Dir(source), "testdata", "rippled-3.4.1-v4", name)
+	path := filepath.Join(conformanceRepositoryRoot(), rippled.Pin.Corpus, name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read v4 fixture %s: %v", path, err)
