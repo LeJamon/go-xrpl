@@ -165,7 +165,7 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Resul
 }
 
 // accountIOUBalanceSignum returns the signum of an account's IOU balance.
-// Unlike tx.AccountFunds, this returns -1 if the balance is negative (doesn't clamp to 0).
+// Unlike mptutil.AccountFunds, this returns -1 if the balance is negative (doesn't clamp to 0).
 // Used for post-hoc checks after IOU transfers.
 // Returns: -1 (negative/owes), 0 (zero), 1 (positive/has funds)
 // For the IOU issuer, always returns 1 (issuer has unlimited).

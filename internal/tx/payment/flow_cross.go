@@ -461,7 +461,7 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 	if amount.IsMPT() {
 		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 	}
-	rawBalance := tx.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
+	rawBalance := mptutil.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 
 	if amount.IsNative() {
 		return sb.BalanceHook(accountID, [20]byte{}, rawBalance), ter.TesSUCCESS
@@ -476,7 +476,7 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 
 func accountFundsForCross(view tx.LedgerView, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, reserveBase, reserveIncrement uint64) (tx.Amount, ter.Result) {
 	if !amount.IsMPT() {
-		return tx.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement), ter.TesSUCCESS
+		return mptutil.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement), ter.TesSUCCESS
 	}
 	id, ok := decodeMPTID(amount.MPTIssuanceID())
 	if !ok {

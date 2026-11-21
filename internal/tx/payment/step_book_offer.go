@@ -707,8 +707,8 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 		}
 	}
 	if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		switch tx.LPTokenFrozenForIssuer(sb, offerOwner, issuer) {
-		case tx.LPTokenFrozen, tx.LPTokenAMMUnresolvable:
+		switch mptutil.LPTokenFrozenForIssuer(sb, offerOwner, issuer) {
+		case mptutil.LPTokenFrozen, mptutil.LPTokenAMMUnresolvable:
 			// accountHolds() treats frozen or unresolvable LP backing as zero;
 			// OfferStream then grooms the unfunded offer.
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil

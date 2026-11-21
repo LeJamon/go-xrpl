@@ -5,10 +5,8 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -233,109 +231,6 @@ func IsIOUDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte
 	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, nil
 }
 
-// IsLPTokenFrozen implements rippled's isLPTokenFrozen: either AMM pool asset
-// is frozen for the holder under isFrozen, so a pool-asset issuer that globally
-// froze its currency is frozen too. MPT pool assets are not consulted; they need
-// MPTokensV2, which rippled 3.4.1 does not support.
-func IsLPTokenFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset, asset2 Asset) bool {
-	return IsFrozen(view, accountID, asset) || IsFrozen(view, accountID, asset2)
-}
-
-// decodeAMMPoolAssets extracts the sfAsset and sfAsset2 issues from a serialized
-// AMM ledger entry without depending on the amm package (which would form an
-// import cycle).
-func decodeAMMPoolAssets(data []byte) (Asset, Asset, bool) {
-	typ, err := state.DecodeType(data)
-	if err != nil || typ != entry.TypeAMM {
-		return Asset{}, Asset{}, false
-	}
-	decoded := entry.New(typ)
-	if decoded == nil {
-		return Asset{}, Asset{}, false
-	}
-	if err := decoded.Decode(data); err != nil {
-		return Asset{}, Asset{}, false
-	}
-	amm, ok := decoded.(*entry.AMM)
-	if !ok {
-		return Asset{}, Asset{}, false
-	}
-	assetValue, err := amm.GetAsset()
-	if err != nil {
-		return Asset{}, Asset{}, false
-	}
-	asset2Value, err := amm.GetAsset2()
-	if err != nil {
-		return Asset{}, Asset{}, false
-	}
-	asset, ok1 := issueFromField(assetValue)
-	asset2, ok2 := issueFromField(asset2Value)
-	if !ok1 || !ok2 {
-		return Asset{}, Asset{}, false
-	}
-	return asset, asset2, true
-}
-
-func issueFromField(field entry.IssueValue) (Asset, bool) {
-	if field.MPTIssuanceID != "" {
-		return Asset{MPTIssuanceID: field.MPTIssuanceID}, true
-	}
-	if field.Currency == "" {
-		return Asset{}, false
-	}
-	return Asset{Currency: field.Currency, Issuer: field.Issuer}, true
-}
-
-// LPTokenFreezeStatus reports the outcome of probing whether a token's issuer is
-// an AMM pseudo-account and, if so, whether its underlying pool assets are frozen
-// for the holder.
-type LPTokenFreezeStatus int
-
-const (
-	// LPTokenIssuerNotAMM means the issuer is not an AMM pseudo-account, so the
-	// LP-token freeze rules do not apply.
-	LPTokenIssuerNotAMM LPTokenFreezeStatus = iota
-	// LPTokenNotFrozen means the issuer is an AMM whose underlying assets are not
-	// frozen for the holder.
-	LPTokenNotFrozen
-	// LPTokenFrozen means the issuer is an AMM whose underlying assets are frozen
-	// for the holder.
-	LPTokenFrozen
-	// LPTokenAMMUnresolvable means the issuer carries sfAMMID but its AMM SLE
-	// cannot be read or decoded — a corrupt-ledger invariant violation. rippled's
-	// accountHolds zeroes funds here (`!sleAmm` → false); checkFreeze returns
-	// tecINTERNAL.
-	LPTokenAMMUnresolvable
-)
-
-// LPTokenFrozenForIssuer determines, for a token whose issuer is issuerID,
-// whether that issuer is an AMM pseudo-account and, if so, whether the AMM's
-// underlying assets are frozen for accountID. The missing/undecodable AMM SLE
-// case is reported distinctly (LPTokenAMMUnresolvable) so the accountHolds path
-// can treat it as zero funds while the checkFreeze path returns tecINTERNAL,
-// matching rippled exactly.
-// Callers must gate this on the fixFrozenLPTokenTransfer amendment.
-// Reference: rippled ledger/View.cpp accountHolds() / paths StepChecks.h
-// checkFreeze() LP-token arm.
-func LPTokenFrozenForIssuer(view ReadOnlyLedgerView, accountID, issuerID [20]byte) LPTokenFreezeStatus {
-	account, err := ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil || !account.HasAMMID() {
-		return LPTokenIssuerNotAMM
-	}
-	ammData, err := view.Read(keylet.AMMByID(account.AMMID))
-	if err != nil || ammData == nil {
-		return LPTokenAMMUnresolvable
-	}
-	asset, asset2, ok := decodeAMMPoolAssets(ammData)
-	if !ok {
-		return LPTokenAMMUnresolvable
-	}
-	if IsLPTokenFrozen(view, accountID, asset, asset2) {
-		return LPTokenFrozen
-	}
-	return LPTokenNotFrozen
-}
-
 // ownerCountReadHookView is the optional read-side owner-count hook a view may
 // implement. It mirrors rippled's virtual ReadView::ownerCountHook, which is a
 // no-op on the base view (returns the count unchanged) and is overridden by the
@@ -391,81 +286,6 @@ func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64,
 		return NewXRPAmount(int64(account.Balance - reserve))
 	}
 	return NewXRPAmount(0)
-}
-
-// AccountFunds returns the amount of funds an account has available.
-// If fhZeroIfFrozen is true, returns zero if the asset is frozen.
-// For XRP, returns balance minus reserve (xrpLiquid). reserveBase and reserveIncrement
-// are required for XRP reserve calculation.
-// Reference: rippled ledger/View.h accountFunds()
-func AccountFunds(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) Amount {
-	if amount.IsNative() {
-		return XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
-	}
-
-	// IOU balance
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	// If account is issuer, they have unlimited funds
-	if accountID == issuerID {
-		// Return a very large amount (10^15 with exponent 0)
-		return NewIssuedAmount(state.MaxMantissa, 0, amount.Currency, amount.Issuer)
-	}
-
-	// Check for frozen if requested
-	// Reference: rippled View.cpp accountHolds() — checks isFrozen || isDeepFrozen
-	if fhZeroIfFrozen {
-		if IsGlobalFrozen(view, amount.Issuer) {
-			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-		}
-		// Check individual trustline freeze
-		if IsTrustlineFrozen(view, accountID, issuerID, amount.Currency) {
-			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-		}
-		// Check deep freeze — either side of the trust line can deep-freeze it
-		if IsDeepFrozen(view, accountID, issuerID, amount.Currency) {
-			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-		}
-		// LP tokens count as zero funds when the underlying AMM assets are frozen.
-		// An unresolvable AMM SLE also zeroes funds here, mirroring rippled's
-		// `!sleAmm || isLPTokenFrozen(...)` → return false.
-		// Reference: rippled View.cpp accountHolds() lines 415-439.
-		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-			switch LPTokenFrozenForIssuer(view, accountID, issuerID) {
-			case LPTokenFrozen, LPTokenAMMUnresolvable:
-				return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-			}
-		}
-	}
-
-	// Read trustline balance
-	trustLineKey := keylet.Line(accountID, issuerID, amount.Currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	// Determine balance based on canonical ordering
-	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
-	balance := rs.Balance
-	if !accountIsLow {
-		balance = balance.Negate()
-	}
-
-	// Only return positive balance as available funds
-	if balance.Signum() <= 0 {
-		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
 }
 
 // AccountFundsNoFreezeStrict returns owner funds without applying freeze

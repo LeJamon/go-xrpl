@@ -333,7 +333,7 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			} else {
 				issuerID, _ := state.DecodeAccountID(amtAsset.Issuer)
 				if accountID != issuerID {
-					depositorFunds := tx.AccountFunds(view, accountID, *amt, false, config.ReserveBase, config.ReserveIncrement)
+					depositorFunds := mptutil.AccountFunds(view, accountID, *amt, false, config.ReserveBase, config.ReserveIncrement)
 					if depositorFunds.Compare(*amt) < 0 {
 						return TecUNFUNDED_AMM
 					}
@@ -962,7 +962,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			// Skip the check if the depositor is the issuer (unlimited supply).
 			issuerID1, _ := state.DecodeAccountID(a.Asset.Issuer)
 			if accountID != issuerID1 {
-				depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				depositorFunds := mptutil.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if depositorFunds.Compare(depositAmount1) < 0 {
 					return TecUNFUNDED_AMM
 				}
@@ -985,7 +985,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		} else {
 			issuerID2, _ := state.DecodeAccountID(a.Asset2.Issuer)
 			if accountID != issuerID2 {
-				depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				depositorFunds := mptutil.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if depositorFunds.Compare(depositAmount2) < 0 {
 					return TecUNFUNDED_AMM
 				}
