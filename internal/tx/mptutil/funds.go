@@ -102,9 +102,8 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 	if err != nil {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
-	// If account is issuer, they have unlimited funds.
 	if accountID == issuerID {
-		return tx.NewIssuedAmount(state.MaxMantissa, 0, amount.Currency, amount.Issuer)
+		return amount
 	}
 
 	if fhZeroIfFrozen {

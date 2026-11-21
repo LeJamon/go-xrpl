@@ -2374,6 +2374,17 @@ func TestIOUWithTransferFee(t *testing.T) {
 			checkBalance(secondarySeller, "XAU", 388)
 			checkBalance(broker, "XAU", 5100)
 		})
+
+		t.Run("IssuerBuysWithLargeIOU", func(t *testing.T) {
+			reinit()
+			const price = 1e16
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(price))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(gw, offerID).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			checkBalance(minter, "XAU", price)
+		})
 	})
 }
 
