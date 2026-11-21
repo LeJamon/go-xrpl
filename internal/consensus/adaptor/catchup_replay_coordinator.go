@@ -65,6 +65,7 @@ type catchupReplayCoordinator struct {
 	replayer     *inbound.Replayer
 	fetchTracker *inbound.Tracker
 	fetchPacks   *fetchPackCache
+	inboundClock inbound.Clock
 
 	acquisitionWorkMu        sync.RWMutex
 	acquisitionFamily        shamap.Family
@@ -507,7 +508,7 @@ func (c *catchupReplayCoordinator) admitInboundHeader(seq uint32) error {
 }
 
 func (c *catchupReplayCoordinator) acquisitionOpts() []inbound.Option {
-	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader)}
+	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader), inbound.WithClock(c.inboundClock)}
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
 	memory := c.acquisitionMemory
@@ -593,6 +594,9 @@ func (c *catchupReplayCoordinator) stoppedForShutdown() bool {
 }
 
 func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor, network routerNetworkConfig, logger *slog.Logger) *catchupReplayCoordinator {
+	if network.inboundClock == nil {
+		network.inboundClock = inbound.SystemClock
+	}
 	return &catchupReplayCoordinator{
 		engine:                    engine,
 		adaptor:                   adaptor,
@@ -602,9 +606,10 @@ func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor
 		historyDepth:              256,
 		peerStates:                make(map[peermanagement.PeerID]*peerLedgerState),
 		peerStatusCandidates:      make(map[peermanagement.PeerID]peerStatusCandidate),
-		replayer:                  inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		replayer:                  inbound.NewReplayer(logger, network.inboundClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:              inbound.NewTrackerWithClockAndSweepInterval(network.inboundClock, network.inboundSweepInterval),
 		fetchPacks:                newFetchPackCache(),
+		inboundClock:              network.inboundClock,
 		catchupFailures:           make(map[[32]byte]time.Time),
 		replayAvailabilityRetries: make(map[[32]byte]replayAvailabilityRetryState),
 		replayFallbackRequired:    make(map[[32]byte]uint32),
@@ -730,7 +735,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	if generation, seq, hash, peerID, ok := c.standardReplayAvailabilityExhaustedState(); ok {
 		c.reserveStandardReplayReplacement(generation, seq, hash, peerID, now)
 	}
-	c.retryInboundLedgerAcquisitions(now)
+	c.retryInboundLedgerAcquisitions(c.inboundClock.Now())
 	c.retryReplayHeadTail(now)
 	c.reportReplayHead(now)
 	c.tickHeaderDiscovery(now)

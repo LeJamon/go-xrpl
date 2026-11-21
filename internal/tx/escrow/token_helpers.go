@@ -594,20 +594,7 @@ func escrowUnlockIOU(
 		}
 	}
 
-	// Credit the receiver via rippleCredit (issuer -> receiver)
-	if !receiverIsIssuer {
-		if tr := rippleCreditForEscrow(
-			view,
-			issuerID,
-			receiverID,
-			finalAmt,
-			numberContext,
-		); tr != ter.TesSUCCESS {
-			return tr
-		}
-	}
-
-	return ter.TesSUCCESS
+	return rippleCreditEscrow(ctx, issuerID, receiverID, finalAmt)
 }
 
 // escrowUnlockMPT unlocks MPT tokens during EscrowFinish or EscrowCancel. The
@@ -1134,90 +1121,44 @@ func createTrustLineForEscrow(
 	return ter.TesSUCCESS
 }
 
-// rippleCreditForEscrow credits IOU from issuer to receiver by modifying the
-// trust line balance. This is the unlock-side direction of rippleCreditEscrow.
-// Reference: rippled View.cpp rippleCredit(issuer, receiver, amount)
-func rippleCreditForEscrow(
-	view tx.LedgerView,
-	issuerID, receiverID [20]byte,
-	amount tx.Amount,
-	numberContext state.NumberContext,
-) ter.Result {
-	return rippleCreditEscrow(
-		view,
-		issuerID,
-		receiverID,
-		amount,
-		ter.TecNO_LINE,
-		numberContext,
-	)
-}
-
 // rippleCreditEscrow moves an IOU amount from payerID to payeeID along their
-// existing trust line, with no auto-creation: the escrow lock/unlock callers
-// guarantee the line exists. Balance convention: a positive balance means the
-// low account owes the high account, so the payer subtracts when it is the low
-// account and adds when it is the high account.
+// existing trust line via the shared credit primitive, so a payer whose holding
+// is exhausted releases its line reserve and an emptied default line is
+// deleted. Escrow never auto-creates the line: an absent line is tecNO_LINE.
 //
-// A genuine view read error is internal; missingResult is returned when the
-// line is absent.
-// Reference: rippled View.cpp rippleCredit(sender, receiver, amount).
-func rippleCreditEscrow(
-	view tx.LedgerView,
-	payerID, payeeID [20]byte,
-	amount tx.Amount,
-	missingResult ter.Result,
-	numberContext state.NumberContext,
-) ter.Result {
+// Reserve changes land on the view. ctx.Account is refreshed when the source is
+// the payer or the reserve sponsor of the payer's side, so callers must not hold
+// unwritten owner-count changes on ctx.Account across this call.
+func rippleCreditEscrow(ctx *tx.ApplyContext, payerID, payeeID [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
 
-	trustLineKey := keylet.Line(payerID, payeeID, amount.Currency)
-	trustLineData, err := view.Read(trustLineKey)
+	data, err := ctx.View.Read(keylet.Line(payerID, payeeID, amount.Currency))
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("read escrow trust line", err)
 	}
-	if trustLineData == nil {
-		return missingResult
+	if data == nil {
+		return ter.TecNO_LINE
+	}
+	line, err := state.ParseRippleState(data)
+	if err != nil {
+		return ctx.Internal("parse escrow trust line", err)
+	}
+	payerSponsor := line.HighSponsor
+	if state.CompareAccountIDs(payerID, payeeID) < 0 {
+		payerSponsor = line.LowSponsor
 	}
 
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return ter.TefINTERNAL
+	if r := tx.RippleCreditWithNumberContext(ctx.View, payerID, payeeID, amount, ctx.NumberContext()); r != ter.TesSUCCESS {
+		return r
 	}
 
-	payerIsLow := state.CompareAccountIDs(payerID, payeeID) < 0
-	if payerIsLow {
-		newBalance, err := rs.Balance.SubWithNumberContext(
-			amount,
-			numberContext,
-			state.RoundToNearest,
-		)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		rs.Balance = newBalance
+	if payerID == ctx.AccountID {
+		ctx.SyncSenderOwnerCount()
 	} else {
-		newBalance, err := rs.Balance.AddWithNumberContext(
-			amount,
-			numberContext,
-			state.RoundToNearest,
-		)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		rs.Balance = newBalance
+		ctx.SyncSenderSponsorCounts(payerSponsor)
 	}
-
-	updated, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := view.Update(trustLineKey, updated); err != nil {
-		return ter.TefINTERNAL
-	}
-
 	return ter.TesSUCCESS
 }
 

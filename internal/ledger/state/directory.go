@@ -314,7 +314,7 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 			}
 			exchangeRateUnchanged = original == dir.ExchangeRate
 		}
-		if dir.ExchangeRate != 0 || exchangeRateUnchanged {
+		if isBookDir || dir.ExchangeRate != 0 || exchangeRateUnchanged {
 			entry.SetExchangeRateValue(dir.ExchangeRate)
 		} else {
 			entry.ClearExchangeRate()

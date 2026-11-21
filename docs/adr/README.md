@@ -14,3 +14,5 @@ record rather than editing history.
 | [0005](0005-cgo-for-crypto-and-tls.md) | CGO for peer TLS and secp256k1, with a pure-Go fallback | Superseded by ADRs 0006 and 0007 |
 | [0006](0006-cgo-required-for-daemon.md) | CGO required for the goxrpl daemon | Accepted |
 | [0007](0007-native-secp256k1.md) | Native libsecp256k1 for all secp256k1 operations | Accepted |
+| [0008](0008-sync-and-ledger-acquisition.md) | Sync, catch-up and ledger acquisition | Accepted |
+| [0009](0009-concurrency-model.md) | Concurrency model | Accepted |

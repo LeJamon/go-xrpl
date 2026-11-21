@@ -24,6 +24,7 @@ var (
 	minMantissa, _    = new(big.Int).SetString("1000000000000000000", 10) // 10^18
 	maxMantissa, _    = new(big.Int).SetString("9999999999999999999", 10) // 10^19 - 1
 	maxWireMantissa   = big.NewInt(math.MaxInt64)
+	maxWireMantissaUp = new(big.Int).SetUint64((uint64(math.MaxInt64)/10 + 1) * 10)
 	minExponent       = int32(-32768)
 	maxExponent       = int32(32768)
 	defaultZeroExp    = int32(-2147483648) // 0x80000000
@@ -242,7 +243,7 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 
 	// Large normalized values may exceed int64 internally, but the serialized
 	// mantissa may not. Drop once more so rounding occurs in the wire range.
-	if m.Cmp(maxWireMantissa) > 0 {
+	if m.Cmp(maxWireMantissaUp) > 0 {
 		if exponent >= maxExponent {
 			return nil, 0, ErrNumberOverflow
 		}
@@ -257,20 +258,19 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 		cmp := dropped.Cmp(half)
 		return cmp > 0 || (cmp == 0 && m.Bit(0) == 1)
 	}
-	if shouldRoundUp() {
-		if m.Cmp(maxMantissa) < 0 && m.Cmp(maxWireMantissa) < 0 {
-			m.Add(m, big.NewInt(1))
+	if m.Cmp(maxWireMantissa) >= 0 {
+		// MaxInt64 ends in 7. The next representable mantissa ends in 10
+		// and is written one decimal place shorter. At the midpoint the
+		// larger endpoint wins under fixCleanup3_3_0.
+		midpointFloor := uint64(math.MaxInt64) + 1
+		whole := m.Uint64()
+		if whole > midpointFloor || (whole == midpointFloor && new(big.Int).Lsh(dropped, 1).Cmp(scale) >= 0) {
+			m.Set(maxWireMantissaUp)
 		} else {
-			// fixCleanup3_2_0 cusp behavior: dividing first preserves the digit
-			// that made an increment unsafe, then rounds the shorter mantissa.
-			if exponent >= maxExponent {
-				return nil, 0, ErrNumberOverflow
-			}
-			dropDigit()
-			if shouldRoundUp() {
-				m.Add(m, big.NewInt(1))
-			}
+			m.Set(maxWireMantissa)
 		}
+	} else if shouldRoundUp() {
+		m.Add(m, big.NewInt(1))
 	}
 
 	if m.Cmp(minMantissa) < 0 {
@@ -304,7 +304,7 @@ func numberExternal(mantissa *big.Int, exponent int32) (int64, int32, error) {
 	if m.Cmp(maxWireMantissa) > 0 {
 		q, r := new(big.Int), new(big.Int)
 		q.QuoRem(m, big.NewInt(10), r)
-		if r.Sign() != 0 || q.Cmp(maxWireMantissa) > 0 || exponent >= maxExponent {
+		if r.Sign() != 0 || q.Cmp(maxWireMantissa) > 0 {
 			return 0, 0, ErrNumberOverflow
 		}
 		m = q

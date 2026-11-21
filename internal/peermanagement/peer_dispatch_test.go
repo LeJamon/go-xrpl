@@ -269,23 +269,23 @@ func TestConsensusMessageClassification(t *testing.T) {
 		message.TypeValidation,
 		message.TypeValidatorListCollection,
 	} {
-		assert.True(t, isConsensusPriorityMessageType(msgType), msgType.String())
-		assert.False(t, isConsensusControlMessageType(msgType), msgType.String())
+		assert.Equal(t, laneConsensus, describeMessage(msgType).lane, msgType.String())
+		assert.Equal(t, routeConsensus, describeMessage(msgType).route, msgType.String())
 	}
 	for _, msgType := range []message.MessageType{
 		message.TypeStatusChange,
 		message.TypeHaveSet,
 	} {
-		assert.False(t, isConsensusPriorityMessageType(msgType), msgType.String())
-		assert.True(t, isConsensusControlMessageType(msgType), msgType.String())
+		assert.Equal(t, laneConsensusControl, describeMessage(msgType).lane, msgType.String())
+		assert.Equal(t, routeConsensusControl, describeMessage(msgType).route, msgType.String())
 	}
 	for _, msgType := range []message.MessageType{
 		message.TypeGetLedger,
 		message.TypeTransaction,
 		message.TypeLedgerData,
 	} {
-		assert.False(t, isConsensusPriorityMessageType(msgType), msgType.String())
-		assert.False(t, isConsensusControlMessageType(msgType), msgType.String())
+		assert.NotContains(t, []inboundLane{laneConsensus, laneConsensusControl}, describeMessage(msgType).lane, msgType.String())
+		assert.NotContains(t, []overlayRoute{routeConsensus, routeConsensusControl}, describeMessage(msgType).route, msgType.String())
 	}
 }
 

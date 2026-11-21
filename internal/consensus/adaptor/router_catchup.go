@@ -3925,17 +3925,17 @@ func (c *catchupReplayCoordinator) retryMissingAcquisitionNodes(
 // set, re-request the missing nodes (timer-driven, so a silent peer cannot
 // stall it), arm a one-shot fetch-pack, and once aggressive ask the peer set
 // for the missing nodes by content hash.
-func (c *catchupReplayCoordinator) escalateAcquisition(il *inbound.Ledger, now time.Time) bool {
+func (c *catchupReplayCoordinator) escalateAcquisition(il *inbound.Ledger) bool {
 	if il.State() == inbound.StateWantBase {
 		c.broadenAcquisitionPeers(il)
 		c.requestAcquisitionBase(il)
 		return false
 	}
+	fetch := func(h [32]byte) ([]byte, bool) { return c.fetchPacks.get(h, time.Now()) }
 	if c.currentAcquisitionWork() != nil {
 		existingPeers := il.Peers()
 		addedPeers := c.broadenAcquisitionPeers(il)
 		c.tryFetchPackEscalation(il)
-		fetch := func(h [32]byte) ([]byte, bool) { return c.fetchPacks.get(h, time.Now()) }
 		queued := c.submitAcquisitionWork(il, acquisitionWorkEvent{
 			kind: acquisitionWorkTimer, fetch: fetch, peers: existingPeers, added: addedPeers,
 		})
@@ -3944,7 +3944,7 @@ func (c *catchupReplayCoordinator) escalateAcquisition(il *inbound.Ledger, now t
 		}
 		return queued
 	}
-	if il.CheckLocal(func(h [32]byte) ([]byte, bool) { return c.fetchPacks.get(h, now) }) && il.IsComplete() {
+	if il.CheckLocal(fetch) && il.IsComplete() {
 		c.completeInboundLedger(il)
 		return false
 	}

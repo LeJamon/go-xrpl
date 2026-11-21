@@ -96,8 +96,20 @@ func (o *OfferCreate) takerCross(
 	saTakerPays, saTakerGets tx.Amount,
 	uRate uint64,
 	bPassive, bSell, bFillOrKill bool,
-) crossOutcome {
+) (outcome crossOutcome) {
 	rules := ctx.Rules()
+
+	// An arithmetic exception while crossing fails the offer with tecINTERNAL,
+	// claiming the fee, instead of discarding the transaction.
+	crossing := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if !crossing || !payment.IsFlowArithmeticPanic(recovered) {
+				panic(recovered)
+			}
+			outcome = crossOutcome{terminated: true, result: ter.TecINTERNAL, applyMain: false}
+		}
+	}()
 
 	// Apply tick size rounding if applicable. An unrepresentable MPT quality is
 	// zero; rounding it can attempt to divide by zero and turn a cross into a
@@ -105,7 +117,11 @@ func (o *OfferCreate) takerCross(
 	unrepresentableRate := rules.MPTokensV2Enabled() && uRate == 0
 	if !unrepresentableRate {
 		// Reference: lines 643-685
-		saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
+		var tickResult ter.Result
+		saTakerPays, saTakerGets, tickResult = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
+		if tickResult != ter.TesSUCCESS {
+			return crossOutcome{terminated: true, result: tickResult, applyMain: false}
+		}
 		if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
 			// Offer rounded to zero
 			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
@@ -114,6 +130,10 @@ func (o *OfferCreate) takerCross(
 		// Recalculate rate after tick size
 		uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
 	}
+
+	// Crossing starts here: FlowCross runs the funds check first, as rippled's
+	// flowCross does inside its try block.
+	crossing = true
 
 	// Perform offer crossing using the main sandbox (sb)
 	// Reference: lines 687-768
@@ -292,6 +312,9 @@ func (o *OfferCreate) takerCross(
 		disallowUnfunded,
 		ctx.NumberContext(),
 	)
+	// rippled's flowCross try block ends once the remaining amounts are
+	// computed; the FillOrKill checks below run in applyGuts, outside it.
+	crossing = false
 
 	if outcome, done := evaluatePostCrossTermination(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
 		return outcome

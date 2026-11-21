@@ -121,7 +121,7 @@ func (c *catchupReplayCoordinator) reportReplayHead(now time.Time) {
 	snapshot := d.ledger.Snapshot()
 	var requestAge time.Duration
 	if !snapshot.OldestRequest.IsZero() {
-		requestAge = max(0, now.Sub(snapshot.OldestRequest))
+		requestAge = max(0, d.ledger.Now().Sub(snapshot.OldestRequest))
 	}
 	c.logger.Info("replay head acquisition",
 		"seq", snapshot.Seq, "hash", fmt.Sprintf("%x", snapshot.Hash[:8]),

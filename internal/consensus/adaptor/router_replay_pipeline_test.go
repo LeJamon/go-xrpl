@@ -495,7 +495,7 @@ func TestStandardReplayPipelineParksUnavailableHeadForBoundedRetries(t *testing.
 	for range 6 {
 		now = now.Add(4 * time.Second)
 		require.Equal(t, inbound.TimerEscalate, head.OnTimer(now))
-		r.catchupReplay.escalateAcquisition(head, now)
+		r.catchupReplay.escalateAcquisition(head)
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, head.OnTimer(now))
