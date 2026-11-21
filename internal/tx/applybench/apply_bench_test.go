@@ -23,6 +23,7 @@ type applyFixture struct {
 	parent *ledger.Ledger
 	config openledger.ApplyConfig
 	blob   []byte
+	check  func(*testing.T, *ledger.Ledger)
 }
 
 type applyKind struct {
@@ -81,6 +82,9 @@ func TestApplyFixtures(t *testing.T) {
 			}
 			if got := appliedResult(t, view.Current(), hash); got != "tesSUCCESS" {
 				t.Fatalf("result %s, want tesSUCCESS", got)
+			}
+			if fixture.check != nil {
+				fixture.check(t, view.Current())
 			}
 		})
 	}
@@ -190,7 +194,19 @@ func buildOfferCreateCross(tb testing.TB) applyFixture {
 	env.PayIOU(gw, maker, gw, "USD", 500)
 	env.Close()
 	jtx.RequireTxSuccess(tb, env.Submit(offerbuild.OfferCreate(maker, jtx.XRPTxAmountFromXRP(100), jtx.USD(gw, 100)).Build()))
-	return finish(tb, env, taker, offerbuild.OfferCreate(taker, jtx.USD(gw, 100), jtx.XRPTxAmountFromXRP(100)).Build())
+	want := jtx.USD(gw, 100)
+	fixture := finish(tb, env, taker, offerbuild.OfferCreate(taker, want, jtx.XRPTxAmountFromXRP(100)).Build())
+	fixture.check = func(t *testing.T, view *ledger.Ledger) {
+		t.Helper()
+		got, err := tx.AccountFundsNoFreezeStrict(view, taker.ID, want, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Compare(want) != 0 {
+			t.Fatalf("taker received %s USD, want %s", got.Value(), want.Value())
+		}
+	}
+	return fixture
 }
 
 func buildNFTokenMint(tb testing.TB) applyFixture {
