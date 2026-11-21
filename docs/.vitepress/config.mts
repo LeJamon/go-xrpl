@@ -94,6 +94,7 @@ export default defineConfig({
         items: [
           { text: 'Conformance', link: '/conformance' },
           { text: 'Conformance status', link: '/conformance-status' },
+          { text: 'Upgrading rippled', link: '/upgrading-rippled' },
         ],
       },
       {

@@ -140,8 +140,10 @@ Transactions flow through `Validate()` → `Preflight()` → `Preclaim()` → `A
 4. **Apply** — execute against ledger state
 
 The engine in `internal/tx/engine/` orchestrates validation and applies
-transactions to ledger state. Transaction types self-register via `init()` +
-`tx.Register()` in their subpackages.
+transactions to ledger state. Each transaction subpackage registers its types
+with `tx.Register()` from its own `Register()` function, and
+`internal/tx/all.RegisterAll()` calls every one explicitly at startup; nothing
+registers from `init()`.
 
 ## Rippled reference locations
 
