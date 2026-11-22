@@ -32,7 +32,6 @@ func Register(d Descriptor) {
 	registry[d.Type] = d
 }
 
-// Lookup returns the descriptor registered for t.
 func Lookup(t Type) (Descriptor, bool) {
 	registryMu.RLock()
 	d, ok := registry[t]
@@ -47,7 +46,6 @@ func PrivilegesOf(txType Type) Privilege {
 	return d.Privileges
 }
 
-// NewFromType creates a new transaction of the given type using the registered factory.
 func NewFromType(txType Type) (Transaction, error) {
 	d, ok := Lookup(txType)
 	if !ok {

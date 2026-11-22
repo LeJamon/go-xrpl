@@ -870,8 +870,6 @@ func (q *TxQ) getNextQueuableSeq(aq *accountQueue, acctSeq uint32) uint32 {
 func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) txConsequences {
 	fee, _ := strconv.ParseUint(txn.GetCommon().Fee, 10, 64)
 
-	// A type's consequences come from its descriptor: Normal and Blocker are
-	// declared there, Custom types compute their own.
 	var c tx.Consequences
 	if calc, ok := txn.(tx.ConsequencesCalculator); ok {
 		c = calc.Consequences()

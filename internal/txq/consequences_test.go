@@ -16,8 +16,6 @@ import (
 
 const consequencesAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
-// TestConsequencesEveryRegisteredType pins the queue consequences of a bare
-// instance of every registered transaction type.
 func TestConsequencesEveryRegisteredType(t *testing.T) {
 	blockers := map[tx.Type]bool{
 		tx.TypeRegularKeySet:                true,

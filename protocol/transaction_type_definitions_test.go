@@ -7,8 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// TestTxTypeNamesMatchDefinitions keeps the transaction type name table in
-// lockstep with the codec's TRANSACTION_TYPES.
 func TestTxTypeNamesMatchDefinitions(t *testing.T) {
 	want := 0
 	for name, code := range definitions.Get().TransactionTypes() {
