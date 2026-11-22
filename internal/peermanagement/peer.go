@@ -185,10 +185,6 @@ type Peer struct {
 	sendDrops        atomic.Uint64
 	sendDropsByClass [outboundClassCount]atomic.Uint64
 
-	// consecutiveDecompressFailures: back-to-back LZ4 errors; closed
-	// at maxConsecutiveDecompressFailures.
-	consecutiveDecompressFailures atomic.Uint32
-
 	serverDomain      string
 	networkID         string
 	userAgent         string
@@ -375,10 +371,10 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 		evt.ReceivedAt = time.Now()
 		switch describeMessage(evt.MessageType).lane {
 		case laneManifests:
+			if evt.charge == nil {
+				evt.charge = newMessageCharge(p, evt.MessageType.String())
+			}
 			if p.manifestMessages != nil {
-				if evt.ManifestFrame == nil && evt.charge == nil {
-					evt.charge = newMessageCharge(p, evt.MessageType.String())
-				}
 				msg := evt.inboundMessage()
 				select {
 				case p.manifestMessages <- msg:
@@ -1238,7 +1234,29 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			manifestFrame.peer = p
+			admissionErr := manifestFrame.admit(ctx)
+			if admissionErr != nil {
+				_ = manifestFrame.Close()
+				if p.closed.Load() {
+					return nil
+				}
+				now = p.readPolicy.now()
+				if errors.Is(admissionErr, context.Canceled) || errors.Is(admissionErr, context.DeadlineExceeded) {
+					return admissionErr
+				}
+				var localSpoolErr *manifestSpoolLocalError
+				if errors.As(admissionErr, &localSpoolErr) {
+					if p.onBootstrapReady != nil {
+						return frameReader.failure(admissionErr, now)
+					}
+					continue
+				}
+				return frameReader.failure(
+					fmt.Errorf("manifest spool admission failed: %w", admissionErr),
+					now,
+				)
+			}
+			p.traffic.AddCount(CategoryManifests, true, int(payloadWireSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
@@ -1340,20 +1358,9 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		if header.Compressed {
 			payload, err = message.DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
-				p.IncBadData("decompress-lz4-failed")
-				if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
-					releaseRetainedReservation()
-					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
-				}
-				if p.consecutiveDecompressFailures.Add(1) >= maxConsecutiveDecompressFailures {
-					releaseRetainedReservation()
-					return fmt.Errorf("decompress-lz4 failed %d times in a row: %w",
-						maxConsecutiveDecompressFailures, err)
-				}
 				releaseRetainedReservation()
-				continue
+				return frameReader.failure(fmt.Errorf("decompress-lz4 failed: %w", err), now)
 			}
-			p.consecutiveDecompressFailures.Store(0)
 			if retainedReservation > 0 {
 				p.inboundReadBudget.release(int64(header.PayloadSize))
 				retainedReservation -= int64(header.PayloadSize)
@@ -1640,10 +1647,6 @@ const (
 	sendqIntervals = 4
 	// targetSendQueue is rippled's retained-frame pressure threshold.
 	targetSendQueue = 128
-	// maxConsecutiveDecompressFailures: close after this many
-	// back-to-back LZ4 errors. A single bad frame still charges
-	// bad-data but resets on the next successful decompress.
-	maxConsecutiveDecompressFailures = 4
 	// readIdleDeadline: belt-and-braces backstop to ErrPingTimeout for
 	// a peer that completes the handshake then goes silent. Set above
 	// pingTimeout so the existing disconnect path stays primary.
@@ -1944,7 +1947,6 @@ func chargeForReason(reason string) resource.Charge {
 		"squelch-duration",
 		"squelch-map-full",
 		"squelch-malformed-pubkey",
-		"decompress-lz4-failed",
 		"message-too-large",
 		"wire-invalid":
 		return resource.FeeInvalidData()

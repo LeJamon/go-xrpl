@@ -166,36 +166,61 @@ func TestSpooledManifestTrafficCountsInitializedFrames(t *testing.T) {
 			peer, manifests, _ := newManifestLimitTestPeer(t, true)
 			charges := recordPeerCharges(peer)
 			peer.SetManifestPayloadLimit(uint32(len(payload)))
-			peer.SetManifestSpoolDir(t.TempDir())
+			spoolDir := t.TempDir()
+			peer.SetManifestSpoolDir(spoolDir)
 			peer.bufReader = bufio.NewReader(bytes.NewReader(compressedManifestFrame(t, wire, uint32(len(payload)))))
-			require.ErrorIs(t, peer.readLoop(t.Context()), io.EOF)
-			require.Len(t, manifests, 1)
-			msg := <-manifests
-			require.NotNil(t, msg.ManifestFrame)
-			require.Zero(t, peer.traffic.TotalStats().MessagesIn)
-
-			_, err = msg.MaterializeManifest(t.Context())
-			require.Equal(t, "[]", charges.String())
 			if tc.missingField {
-				require.Error(t, err)
+				require.ErrorIs(t, peer.readLoop(t.Context()), message.ErrMalformedWire)
+				require.Empty(t, manifests)
 				require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+				require.Equal(t, "[]", charges.String())
+				entries, readErr := os.ReadDir(spoolDir)
+				require.NoError(t, readErr)
+				require.Empty(t, entries)
 			} else {
-				require.NoError(t, err)
+				require.ErrorIs(t, peer.readLoop(t.Context()), io.EOF)
+				require.Len(t, manifests, 1)
+				msg := <-manifests
+				require.NotNil(t, msg.ManifestFrame)
 				stats := peer.traffic.Stats(CategoryManifests)
 				require.Equal(t, uint64(1), stats.MessagesIn)
 				require.Equal(t, uint64(len(wire)), stats.BytesIn)
 				total := peer.traffic.TotalStats()
 				require.Equal(t, stats.BytesIn, total.BytesIn)
 				require.Equal(t, stats.MessagesIn, total.MessagesIn)
-			}
-			require.NoError(t, msg.Close())
-			if tc.missingField {
+				_, err = msg.ManifestFrame.Materialize(t.Context())
+				require.NoError(t, err)
 				require.Equal(t, "[]", charges.String())
-			} else {
+				require.NoError(t, msg.Close())
 				require.Equal(t, "[trivial peer request ($1)(mtMANIFESTS)]", charges.String())
 			}
 		})
 	}
+}
+
+func TestSpooledManifestDecodeFailureStopsReadLoopBeforeFollowingFrame(t *testing.T) {
+	spoolDir := t.TempDir()
+	peer, manifests, events := newManifestLimitTestPeer(t, true)
+	peer.SetManifestPayloadLimit(manifestSpoolThreshold + 1)
+	peer.SetManifestSpoolDir(spoolDir)
+	peer.SetInboundReadBudget(newReadBudget(int64(2*manifestSpoolThreshold + 2)))
+
+	malformed := compressedManifestFrame(t, []byte{0xff}, uint32(manifestSpoolThreshold+1))
+	following, err := message.BuildWireMessage(message.TypePing, []byte{0x08, 0x00})
+	require.NoError(t, err)
+	peer.bufReader = bufio.NewReader(bytes.NewReader(append(malformed, following...)))
+
+	err = peer.readLoop(t.Context())
+	require.ErrorIs(t, err, message.ErrDecompressFailed)
+	require.Empty(t, manifests, "a failed spooled frame must not reach the manifest worker")
+	require.Empty(t, events, "a following frame must not reach a handler")
+	require.Zero(t, peer.BadDataCount(), "failed decompression must not add a resource fee")
+	require.Zero(t, readBudgetUsed(peer.inboundReadBudget))
+	require.Zero(t, peer.traffic.TotalStats().MessagesIn)
+	require.Equal(t, uint64(len(malformed)), peer.metrics.recv.totalBytesSnapshot())
+	entries, err := os.ReadDir(spoolDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {

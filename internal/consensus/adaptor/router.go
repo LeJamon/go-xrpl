@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"runtime"
 	"sync"
@@ -15,7 +14,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/membudget"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -963,12 +961,8 @@ func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagem
 				r.logger.Warn("failed to close manifest spool", "error", err, "peer", msg.PeerID)
 			}
 		}()
-		payload, err := msg.MaterializeManifest(ctx)
+		payload, err := msg.ManifestFrame.Materialize(ctx)
 		if err != nil {
-			if errors.Is(err, message.ErrDecompressFailed) && r.gossip != nil &&
-				!msg.SelectPeerCharge(resource.FeeInvalidData(), "decompress-lz4-failed") {
-				r.gossip.IncPeerBadData(uint64(msg.PeerID), "decompress-lz4-failed")
-			}
 			r.logger.Warn("failed to materialize manifest spool", "error", err, "peer", msg.PeerID)
 			return
 		}

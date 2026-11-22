@@ -59,13 +59,15 @@ type ManifestFrame struct {
 	path   string
 	header message.Header
 	budget *readBudget
-	peer   *Peer
 	done   chan struct{}
 
 	materializing bool
 	materialized  bool
-	closed        bool
-	reservation   int64
+	// admitted is set only by the read loop before publication; the spool path
+	// is private and immutable after that point.
+	admitted    bool
+	closed      bool
+	reservation int64
 }
 
 func newManifestFrame(path string, header message.Header, budget *readBudget, reservation int64) *ManifestFrame {
@@ -86,6 +88,47 @@ func (f *ManifestFrame) Header() message.Header {
 // WireSize returns the on-wire payload size, excluding the message header.
 func (f *ManifestFrame) WireSize() uint64 {
 	return uint64(f.header.PayloadSize)
+}
+
+func (f *ManifestFrame) readPayload(ctx context.Context, validate bool) ([]byte, error) {
+	err := ctx.Err()
+	var payload []byte
+	if err == nil {
+		payload, err = os.ReadFile(f.path)
+		if err != nil {
+			err = &manifestSpoolLocalError{operation: "read manifest spool", err: err}
+		}
+	}
+	if err == nil && uint32(len(payload)) != f.header.PayloadSize {
+		err = &manifestSpoolLocalError{
+			operation: "validate manifest spool",
+			err:       fmt.Errorf("payload size: got %d, want %d", len(payload), f.header.PayloadSize),
+		}
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && f.header.Compressed {
+		payload, err = message.DecompressLZ4(payload, int(f.header.UncompressedSize))
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && validate {
+		err = message.ValidatePayload(message.TypeManifests, payload)
+	}
+	return payload, err
+}
+
+// admit verifies a disk-backed manifest payload before the peer read loop
+// dispatches it. The payload is deliberately discarded after validation; the
+// worker materializes it again so the spool remains the bounded handoff.
+func (f *ManifestFrame) admit(ctx context.Context) error {
+	_, err := f.readPayload(ctx, true)
+	if err == nil {
+		f.admitted = true
+	}
+	return err
 }
 
 // Materialize reads the exact wire payload into memory while holding its share
@@ -110,35 +153,14 @@ func (f *ManifestFrame) Materialize(ctx context.Context) ([]byte, error) {
 
 	f.mu.Lock()
 	if f.closed {
+		f.materializing = false
 		f.mu.Unlock()
 		return nil, ErrManifestFrameClosed
 	}
-	err := ctx.Err()
-	var payload []byte
-	if err == nil {
-		payload, err = os.ReadFile(f.path)
-	}
-	if err == nil && uint32(len(payload)) != f.header.PayloadSize {
-		err = fmt.Errorf("manifest payload size: got %d, want %d", len(payload), f.header.PayloadSize)
-	}
-	if err == nil {
-		err = ctx.Err()
-	}
-	if err == nil && f.header.Compressed {
-		payload, err = message.DecompressLZ4(payload, int(f.header.UncompressedSize))
-	}
-	if err == nil {
-		err = ctx.Err()
-	}
-	if err == nil {
-		err = message.ValidatePayload(message.TypeManifests, payload)
-	}
+	payload, err := f.readPayload(ctx, !f.admitted)
 	var releaseBytes int64
 	if err == nil {
 		f.materialized = true
-		if f.peer != nil {
-			f.peer.traffic.AddCount(CategoryManifests, true, int(f.header.PayloadSize))
-		}
 		if f.header.Compressed {
 			releaseBytes = int64(f.header.PayloadSize)
 			f.reservation -= releaseBytes
