@@ -82,6 +82,7 @@ type wireScanState struct {
 	collections        []collectionLimit
 	collectionCounts   [maxCollectionLimits]int
 	deferEndpointLimit bool
+	deferredLimit      *WireLimitError
 	wirePayloadInfo
 	validateRequired      bool
 	fields                int
@@ -145,6 +146,9 @@ func scanWirePayload(
 	if msgType == TypeGetLedger && state.getLedgerInfoType != protoreflect.EnumNumber(proto.TMLedgerInfoType_liBASE) &&
 		state.getLedgerNodes > maxGetLedgerNodes {
 		return wirePayloadInfo{}, wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
+	}
+	if state.deferredLimit != nil {
+		return wirePayloadInfo{}, state.deferredLimit
 	}
 	return state.wirePayloadInfo, nil
 }
@@ -310,7 +314,13 @@ func (s *wireScanState) observeRootField(
 		if s.deferEndpointLimit && limit.reason == WireLimitEndpoints {
 			s.endpointCount = count
 		} else if count > limit.max {
-			return wireLimit(limit.reason, limit.max, count)
+			if s.deferredLimit == nil {
+				s.deferredLimit = &WireLimitError{
+					Reason:   limit.reason,
+					Limit:    limit.max,
+					Observed: count,
+				}
+			}
 		}
 		return nil
 	}

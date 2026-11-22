@@ -77,6 +77,43 @@ func enumField(field protowire.Number, value uint64) []byte {
 	return protowire.AppendVarint(wire, value)
 }
 
+func TestPreflightCollectionLimitDefersUntilWireComplete(t *testing.T) {
+	wire := repeatedMessageField(1, maxTransactions+1, nil)
+	wire = append(wire, protowire.AppendTag(nil, 100, protowire.Fixed32Type)...)
+	wire = append(wire, 1, 2, 3)
+
+	err := Preflight(TypeTransactions, wire)
+	require.ErrorIs(t, err, ErrMalformedWire)
+	require.NotErrorIs(t, err, ErrWireLimit)
+}
+
+func TestValidatePayloadRequiredFieldsPrecedeCollectionLimits(t *testing.T) {
+	ledgerNode := protowire.AppendTag(nil, 1, protowire.BytesType)
+	ledgerNode = protowire.AppendBytes(ledgerNode, nil)
+	ledger := enumField(3, uint64(LedgerInfoAsNode))
+	ledger = append(ledger, enumField(2, 1)...)
+	ledger = append(ledger, repeatedMessageField(4, maxLedgerDataNodes+1, ledgerNode)...)
+
+	err := ValidatePayload(TypeLedgerData, ledger)
+	require.ErrorIs(t, err, ErrMalformedWire)
+	require.NotErrorIs(t, err, ErrWireLimit)
+
+	validatorBlob := protowire.AppendTag(nil, 2, protowire.BytesType)
+	validatorBlob = protowire.AppendBytes(validatorBlob, nil)
+	validatorBlob = protowire.AppendTag(validatorBlob, 3, protowire.BytesType)
+	validatorBlob = protowire.AppendBytes(validatorBlob, nil)
+	validator := protowire.AppendTag(nil, 2, protowire.BytesType)
+	validator = protowire.AppendBytes(validator, nil)
+	validator = append(validator, repeatedMessageField(3, maxValidatorBlobs+1, validatorBlob)...)
+
+	err = ValidatePayload(TypeValidatorListCollection, validator)
+	require.ErrorIs(t, err, ErrMalformedWire)
+	require.NotErrorIs(t, err, ErrWireLimit)
+
+	validator = append(validator, enumField(1, 1)...)
+	requireWireLimit(t, ValidatePayload(TypeValidatorListCollection, validator), WireLimitValidatorBlobs, maxValidatorBlobs, maxValidatorBlobs+1)
+}
+
 func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 	objects10001 := repeatedMessageField(6, maxTransactions+1, nil)
 	objects12288 := repeatedMessageField(6, maxGetObjects, nil)
