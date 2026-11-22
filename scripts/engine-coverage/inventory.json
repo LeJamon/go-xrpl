@@ -3392,42 +3392,42 @@
         "Validate": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 58,
+            "line": 59,
             "symbol": "EscrowCreate.Validate"
           }
         ],
         "GetFlagsMask": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 79,
+            "line": 80,
             "symbol": "EscrowCreate.GetFlagsMask"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 88,
+            "line": 89,
             "symbol": "EscrowCreate.CheckExtraFeatures"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 101,
+            "line": 102,
             "symbol": "EscrowCreate.PreflightRules"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 161,
+            "line": 162,
             "symbol": "EscrowCreate.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/escrow/escrow_create.go",
-            "line": 270,
+            "line": 271,
             "symbol": "EscrowCreate.Apply"
           }
         ]
@@ -6881,42 +6881,42 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
-            "line": 70,
+            "line": 71,
             "symbol": "NFTokenCreateOffer.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
-            "line": 79,
+            "line": 80,
             "symbol": "NFTokenCreateOffer.Validate"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
-            "line": 96,
+            "line": 97,
             "symbol": "NFTokenCreateOffer.PreflightRules"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
-            "line": 112,
+            "line": 113,
             "symbol": "NFTokenCreateOffer.RequiredAmendments"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
-            "line": 117,
+            "line": 118,
             "symbol": "NFTokenCreateOffer.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/nftoken/nftoken_create_offer.go",
-            "line": 242,
+            "line": 243,
             "symbol": "NFTokenCreateOffer.Apply"
           }
         ]
@@ -7116,35 +7116,35 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/nftoken/nftoken_accept_offer.go",
-            "line": 42,
+            "line": 43,
             "symbol": "NFTokenAcceptOffer.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/nftoken/nftoken_accept_offer.go",
-            "line": 47,
+            "line": 48,
             "symbol": "NFTokenAcceptOffer.Validate"
           }
         ],
         "PreflightRules": [
           {
             "path": "internal/tx/nftoken/nftoken_accept_offer.go",
-            "line": 84,
+            "line": 85,
             "symbol": "NFTokenAcceptOffer.PreflightRules"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/nftoken/nftoken_accept_offer.go",
-            "line": 105,
+            "line": 106,
             "symbol": "NFTokenAcceptOffer.RequiredAmendments"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/nftoken/nftoken_accept_offer.go",
-            "line": 116,
+            "line": 117,
             "symbol": "NFTokenAcceptOffer.Apply"
           }
         ]
@@ -7569,42 +7569,42 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/amm/amm_create.go",
-            "line": 56,
+            "line": 57,
             "symbol": "AMMCreate.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/amm/amm_create.go",
-            "line": 60,
+            "line": 61,
             "symbol": "AMMCreate.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/amm/amm_create.go",
-            "line": 99,
+            "line": 100,
             "symbol": "AMMCreate.RequiredAmendments"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/amm/amm_create.go",
-            "line": 104,
+            "line": 105,
             "symbol": "AMMCreate.CheckExtraFeatures"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/amm/amm_create.go",
-            "line": 113,
+            "line": 114,
             "symbol": "AMMCreate.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/amm/amm_create.go",
-            "line": 227,
+            "line": 228,
             "symbol": "AMMCreate.Apply"
           }
         ]
@@ -12124,42 +12124,42 @@
         "GetFlagsMask": [
           {
             "path": "internal/tx/vault/vault_create.go",
-            "line": 84,
+            "line": 85,
             "symbol": "VaultCreate.GetFlagsMask"
           }
         ],
         "Validate": [
           {
             "path": "internal/tx/vault/vault_create.go",
-            "line": 88,
+            "line": 89,
             "symbol": "VaultCreate.Validate"
           }
         ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/vault/vault_create.go",
-            "line": 175,
+            "line": 176,
             "symbol": "VaultCreate.RequiredAmendments"
           }
         ],
         "CheckExtraFeatures": [
           {
             "path": "internal/tx/vault/vault_create.go",
-            "line": 222,
+            "line": 223,
             "symbol": "VaultCreate.CheckExtraFeatures"
           }
         ],
         "Preclaim": [
           {
             "path": "internal/tx/vault/vault_create.go",
-            "line": 233,
+            "line": 234,
             "symbol": "VaultCreate.Preclaim"
           }
         ],
         "Apply": [
           {
             "path": "internal/tx/vault/vault_create.go",
-            "line": 292,
+            "line": 293,
             "symbol": "VaultCreate.Apply"
           }
         ]
