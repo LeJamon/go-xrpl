@@ -58,16 +58,25 @@ func peerRepeatedTransactionField(count int) []byte {
 	return wire
 }
 
-func peerGetObjectTransactionsPayload(query bool, count int) []byte {
+func peerGetObjectsPayload(objectType message.ObjectType, query bool, count int, ledgerHash []byte) []byte {
 	wire := protowire.AppendTag(nil, 1, protowire.VarintType)
-	wire = protowire.AppendVarint(wire, uint64(message.ObjectTypeTransactions))
+	wire = protowire.AppendVarint(wire, uint64(objectType))
 	wire = protowire.AppendTag(wire, 2, protowire.VarintType)
 	if query {
 		wire = protowire.AppendVarint(wire, 1)
 	} else {
 		wire = protowire.AppendVarint(wire, 0)
 	}
-	return append(wire, peerRepeatedMessageField(6, count)...)
+	wire = append(wire, peerRepeatedMessageField(6, count)...)
+	if ledgerHash != nil {
+		wire = protowire.AppendTag(wire, 4, protowire.BytesType)
+		wire = protowire.AppendBytes(wire, ledgerHash)
+	}
+	return wire
+}
+
+func peerGetObjectTransactionsPayload(query bool, count int) []byte {
+	return peerGetObjectsPayload(message.ObjectTypeTransactions, query, count, nil)
 }
 
 func peerValidatorListCollectionPayload(version uint32, count int) []byte {
@@ -115,8 +124,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 		msgType         message.MessageType
 		payload         []byte
 		preflightReason string
-		reason          string
-		charge          resource.Charge
 		category        TrafficCategory
 		compress        bool
 		txrr            bool
@@ -126,8 +133,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType:         message.TypeTransactions,
 			payload:         peerRepeatedTransactionField(10_001),
 			preflightReason: "transactions-batch-too-large",
-			reason:          "transactions-batch-unnegotiated",
-			charge:          resource.FeeMalformedRequest(),
 			category:        CategoryRequestedTransactions,
 			compress:        true,
 		},
@@ -136,8 +141,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType:         message.TypeTransactions,
 			payload:         peerRepeatedTransactionField(10_001),
 			preflightReason: "transactions-batch-too-large",
-			reason:          "transactions-batch-too-large",
-			charge:          resource.FeeMalformedRequest(),
 			category:        CategoryRequestedTransactions,
 			txrr:            true,
 		},
@@ -146,8 +149,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType:         message.TypeGetObjects,
 			payload:         peerGetObjectTransactionsPayload(true, 10_001),
 			preflightReason: "get-objects-transactions-oversize",
-			reason:          "get-objects-txn-unnegotiated",
-			charge:          resource.FeeMalformedRequest(),
 			category:        CategoryGetTransactions,
 		},
 		{
@@ -155,27 +156,14 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType:         message.TypeGetObjects,
 			payload:         peerGetObjectTransactionsPayload(true, 10_001),
 			preflightReason: "get-objects-transactions-oversize",
-			reason:          "get-objects-transactions-oversize",
-			charge:          resource.FeeMalformedRequest(),
 			category:        CategoryGetTransactions,
 			txrr:            true,
-		},
-		{
-			name:            "get object transactions reply",
-			msgType:         message.TypeGetObjects,
-			payload:         peerGetObjectTransactionsPayload(false, 10_001),
-			preflightReason: "get-objects-transactions-oversize",
-			reason:          "get-objects-transactions-oversize",
-			charge:          resource.FeeMalformedRequest(),
-			category:        CategoryGetTransactions,
 		},
 		{
 			name:            "validator list collection supported version",
 			msgType:         message.TypeValidatorListCollection,
 			payload:         peerValidatorListCollectionPayload(2, 6),
 			preflightReason: "vl-coll-heavy-too-many-blobs",
-			reason:          "vl-coll-heavy-too-many-blobs",
-			charge:          resource.FeeHeavyBurdenPeer(),
 			category:        CategoryValidatorList,
 		},
 		{
@@ -183,8 +171,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			msgType:         message.TypeValidatorListCollection,
 			payload:         peerValidatorListCollectionPayload(1, 6),
 			preflightReason: "vl-coll-wrong-version",
-			reason:          "vl-coll-wrong-version",
-			charge:          resource.FeeInvalidData(),
 			category:        CategoryValidatorList,
 		},
 	}
@@ -226,11 +212,87 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			require.ErrorIs(t, err, io.EOF)
 			require.Empty(t, events)
 			require.Positive(t, peer.BadDataCount())
-			require.Equal(t, test.charge, chargeForReason(test.reason))
 			require.Equal(t, uint64(1), peer.traffic.TotalStats().MessagesIn)
 			require.Equal(t, uint64(1), peer.traffic.Stats(test.category).MessagesIn)
 		})
 	}
+}
+
+func TestPeerGetObjectsTransactionReplyAboveQueryCapDispatches(t *testing.T) {
+	payload := peerGetObjectTransactionsPayload(false, 10_001)
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, payload)
+	require.NoError(t, err)
+
+	identity, err := NewIdentity()
+	require.NoError(t, err)
+	events := make(chan Event, 1)
+	peer := NewPeer(20, Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	manager := resource.NewManager(nil, nil)
+	consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+	peer.attachUsage(consumer, func() {})
+	peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+	require.ErrorIs(t, peer.readLoop(context.Background()), io.EOF)
+	require.Len(t, events, 1)
+	event := <-events
+	require.Equal(t, message.TypeGetObjects, event.MessageType)
+	require.Equal(t, payload, event.Payload)
+	require.Zero(t, peer.BadDataCount())
+	require.Equal(t, uint64(1), peer.traffic.TotalStats().MessagesIn)
+	require.Equal(t, uint64(1), peer.traffic.Stats(CategoryGetTransactions).MessagesIn)
+	require.Zero(t, consumer.Balance())
+	event.release()
+}
+
+func TestPeerGetObjectsSaturatedQueryChargesOnlyTrivialFee(t *testing.T) {
+	payload := peerGetObjectTransactionsPayload(true, 10_001)
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, payload)
+	require.NoError(t, err)
+
+	identity, err := NewIdentity()
+	require.NoError(t, err)
+	events := make(chan Event, 1)
+	peer := NewPeer(21, Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	charges := recordPeerCharges(peer)
+	for range peerSendQueueDropThreshold {
+		require.NoError(t, peer.Send([]byte{0}))
+	}
+	peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+	require.ErrorIs(t, peer.readLoop(context.Background()), io.EOF)
+	require.Empty(t, events)
+	require.Zero(t, peer.BadDataCount())
+	require.Equal(t, uint64(1), peer.traffic.TotalStats().MessagesIn)
+	require.Equal(t, uint64(1), peer.traffic.Stats(CategoryGetTransactions).MessagesIn)
+	require.Equal(t, "[trivial peer request ($1)(mtGET_OBJECTS)]", charges.String())
+}
+
+func TestPeerGetObjectsInvalidLedgerHashPrecedesObjectLimit(t *testing.T) {
+	payload := peerGetObjectsPayload(message.ObjectTypeStateNode, true, 12_289, []byte{1})
+	preflightErr := message.Preflight(message.TypeGetObjects, payload)
+	var limitErr *message.WireLimitError
+	require.ErrorAs(t, preflightErr, &limitErr)
+	require.Equal(t, message.WireLimitGetObjects, limitErr.Reason)
+	require.True(t, limitErr.GetObjectLedgerHashInvalid)
+
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, payload)
+	require.NoError(t, err)
+	identity, err := NewIdentity()
+	require.NoError(t, err)
+	events := make(chan Event, 1)
+	peer := NewPeer(22, Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	charges := recordPeerCharges(peer)
+	peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+	require.ErrorIs(t, peer.readLoop(context.Background()), io.EOF)
+	require.Empty(t, events)
+	require.Positive(t, peer.BadDataCount())
+	require.Equal(t, uint64(1), peer.traffic.TotalStats().MessagesIn)
+	require.Equal(t, uint64(1), peer.traffic.Stats(CategoryShareHashStateNode).MessagesIn)
+	require.Equal(t, "[malformed request ($200)(get-objects-ledgerhash)]", charges.String())
 }
 
 func TestPeerEndpointsOversizeAdmissionCarriesVersionAndLimit(t *testing.T) {

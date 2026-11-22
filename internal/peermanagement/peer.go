@@ -1390,6 +1390,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			p.traffic.AddCount(categorizeMessagePayload(header.MessageType, payload, true), true, int(payloadWireSize))
 			if header.MessageType == message.TypeGetObjects && limitErr.GetObjectQuery &&
 				p.SendQueueLen() >= peerSendQueueDropThreshold {
+				p.Charge(resource.FeeTrivialPeer(), header.MessageType.String())
 				releaseRetainedReservation()
 				continue
 			}
@@ -2039,6 +2040,9 @@ func chargeForReason(reason string) resource.Charge {
 func wirePreflightChargeReason(err error) string {
 	var limitErr *message.WireLimitError
 	if errors.As(err, &limitErr) {
+		if limitErr.GetObjectLedgerHashInvalid {
+			return "get-objects-ledgerhash"
+		}
 		switch limitErr.Reason {
 		case message.WireLimitEndpoints:
 			return "endpoints-too-large"

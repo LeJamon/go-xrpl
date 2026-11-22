@@ -45,10 +45,11 @@ const (
 )
 
 type WireLimitError struct {
-	Reason         WireLimitReason
-	Limit          int
-	Observed       int
-	GetObjectQuery bool
+	Reason                     WireLimitReason
+	Limit                      int
+	Observed                   int
+	GetObjectQuery             bool
+	GetObjectLedgerHashInvalid bool
 }
 
 func (e *WireLimitError) Error() string {
@@ -90,15 +91,17 @@ type wireScanState struct {
 	deferEndpointLimit bool
 	deferredLimit      *WireLimitError
 	wirePayloadInfo
-	validateRequired      bool
-	fields                int
-	validatorVersion      uint32
-	validatorVersionSet   bool
-	getObjects            int
-	getObjectTransactions bool
-	getObjectQuery        bool
-	getLedgerNodes        int
-	getLedgerInfoType     protoreflect.EnumNumber
+	validateRequired           bool
+	fields                     int
+	validatorVersion           uint32
+	validatorVersionSet        bool
+	getObjects                 int
+	getObjectTransactions      bool
+	getObjectFetchPack         bool
+	getObjectQuery             bool
+	getObjectLedgerHashInvalid bool
+	getLedgerNodes             int
+	getLedgerInfoType          protoreflect.EnumNumber
 }
 
 func Preflight(msgType MessageType, data []byte) error {
@@ -144,13 +147,18 @@ func scanWirePayload(
 	if msgType == TypeGetObjects {
 		limit := maxGetObjects
 		reason := WireLimitGetObjects
-		if state.getObjectTransactions {
+		if state.getObjectTransactions && state.getObjectQuery {
 			limit = maxTransactions
 			reason = WireLimitGetObjectTransactions
 		}
 		if state.getObjects > limit {
-			limitErr := &WireLimitError{Reason: reason, Limit: limit, Observed: state.getObjects}
-			limitErr.GetObjectQuery = state.getObjectQuery
+			limitErr := &WireLimitError{
+				Reason:                     reason,
+				Limit:                      limit,
+				Observed:                   state.getObjects,
+				GetObjectQuery:             state.getObjectQuery,
+				GetObjectLedgerHashInvalid: state.getObjectQuery && !state.getObjectTransactions && !state.getObjectFetchPack && state.getObjectLedgerHashInvalid,
+			}
 			return wirePayloadInfo{}, limitErr
 		}
 	}
@@ -311,6 +319,7 @@ func (s *wireScanState) observeRootField(
 			switch s.msgType {
 			case TypeGetObjects:
 				s.getObjectTransactions = number == protoreflect.EnumNumber(proto.TMGetObjectByHash_otTRANSACTIONS)
+				s.getObjectFetchPack = number == protoreflect.EnumNumber(proto.TMGetObjectByHash_otFETCH_PACK)
 			case TypeGetLedger:
 				s.getLedgerInfoType = number
 			}
@@ -322,6 +331,13 @@ func (s *wireScanState) observeRootField(
 			return protowire.ParseError(n)
 		}
 		s.getObjectQuery = value != 0
+	}
+	if s.msgType == TypeGetObjects && field.Number() == 4 && field.Kind() == protoreflect.BytesKind && wireType == protowire.BytesType {
+		value, n := protowire.ConsumeBytes(data)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		s.getObjectLedgerHashInvalid = len(value) != 32
 	}
 	if s.msgType == TypeGetLedger && field.Number() == 5 && wireType == protowire.BytesType {
 		s.getLedgerNodes++
