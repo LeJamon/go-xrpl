@@ -36,7 +36,7 @@ func (r *Router) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
 func (r *Router) SetManifestCache(cache *manifest.Cache, overlay routerOverlay) {
 	r.manifests = cache
 	r.overlay = overlay
-	if cache != nil && !r.manifestLimitSet {
+	if cache != nil {
 		r.manifestUntrustedLimit = cache.MaxUntrustedCount()
 	}
 }
@@ -47,7 +47,6 @@ func (r *Router) SetManifestClassifier(classify func([33]byte) manifest.Manifest
 
 func (r *Router) SetManifestUntrustedLimit(limit int) {
 	r.manifestUntrustedLimit = max(limit, 0)
-	r.manifestLimitSet = true
 }
 
 func (r *Router) setPeerSessionView(view peerSessionView) {
@@ -111,7 +110,6 @@ func TestNewRouterAppliesDeps(t *testing.T) {
 	require.Equal(t, routerOverlay(overlay), r.overlay)
 	require.Equal(t, manifest.Capped, r.manifestClassify([33]byte{}))
 	require.Zero(t, r.manifestUntrustedLimit)
-	require.True(t, r.manifestLimitSet)
 	require.Equal(t, peerSessionView(overlay), r.peerSessions)
 	require.Equal(t, peerSessionView(overlay), r.catchupReplay.peerSessions)
 	require.EqualValues(t, 42, r.catchupReplay.minimumOnline())
@@ -124,7 +122,6 @@ func TestNewRouterManifestLimitDefaultsToCache(t *testing.T) {
 		manifests: manifest.NewCache(7),
 	})
 	require.Equal(t, 7, r.manifestUntrustedLimit)
-	require.False(t, r.manifestLimitSet)
 }
 
 type minimumOnlineFloorStub uint32

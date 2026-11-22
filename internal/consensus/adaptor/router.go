@@ -185,7 +185,6 @@ type Router struct {
 	// others as Capped before applying a manifest.
 	manifestClassify       func([33]byte) manifest.ManifestRateLimitCapPolicy
 	manifestUntrustedLimit int
-	manifestLimitSet       bool
 	manifestShuffle        func([][]byte)
 	manifestWorkerCancel   context.CancelFunc
 	manifestWorkerDone     chan struct{}
@@ -450,7 +449,6 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 	}
 	if deps.manifestUntrustedLimit != nil {
 		r.manifestUntrustedLimit = max(*deps.manifestUntrustedLimit, 0)
-		r.manifestLimitSet = true
 	}
 	coord.setPeerSessionView(deps.peerSessions)
 	coord.setFloor(deps.floor)
