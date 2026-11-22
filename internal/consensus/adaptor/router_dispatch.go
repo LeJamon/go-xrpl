@@ -121,7 +121,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 
 	accepted := make([][]byte, 0, min(count, manifestFrameMaxEntries))
 	valid := false
-	badManifest := false
 	untrusted := 0
 	skippedUntrusted := false
 	_, _ = message.WalkManifests(msg.Payload, func(wire []byte) {
@@ -129,7 +128,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		if err != nil {
 			r.logger.Debug("manifest parse failed",
 				"error", err, "peer", msg.PeerID)
-			badManifest = true
 			return
 		}
 		hash := parsed.Hash()
@@ -153,8 +151,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			if r.messageSeen != nil {
 				r.messageSeen.observe(hash)
 			}
-		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
-			badManifest = true
 		case manifest.Stale:
 			valid = true
 			if r.messageSeen != nil {
@@ -166,9 +162,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	})
 	if skippedUntrusted && !msg.ChargePeer(resource.FeeMalformedRequest(), "too many untrusted manifests") {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-untrusted-limit")
-	}
-	if badManifest {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
 	r.relayManifests(accepted)
 	return valid
