@@ -527,6 +527,14 @@ func (p *Peer) compressionNegotiated() bool {
 		p.capabilities.SupportsCompression()
 }
 
+func (p *Peer) txReduceRelayNegotiated() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.handshakeCfg.EnableTxReduceRelay &&
+		p.capabilities != nil &&
+		p.capabilities.HasFeature(FeatureTxReduceRelay)
+}
+
 func (p *Peer) prepareOutboundFrame(data []byte) ([]byte, bool) {
 	header, err := message.DecodeHeader(data)
 	if err != nil {
@@ -1374,11 +1382,29 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			err = message.ValidatePayload(header.MessageType, payload)
 		}
 		if err != nil {
-			if !errors.Is(err, message.ErrWireLimit) {
+			var limitErr *message.WireLimitError
+			if !errors.As(err, &limitErr) || limitErr.Unverified() {
 				releaseRetainedReservation()
 				return frameReader.failure(err, now)
 			}
+			p.traffic.AddCount(categorizeMessagePayload(header.MessageType, payload, true), true, int(payloadWireSize))
+			if header.MessageType == message.TypeGetObjects && limitErr.GetObjectQuery &&
+				p.SendQueueLen() >= peerSendQueueDropThreshold {
+				releaseRetainedReservation()
+				continue
+			}
 			reason := wirePreflightChargeReason(err)
+			if !p.txReduceRelayNegotiated() {
+				switch {
+				case header.MessageType == message.TypeTransactions &&
+					limitErr.Reason == message.WireLimitTransactions:
+					reason = "transactions-batch-unnegotiated"
+				case header.MessageType == message.TypeGetObjects &&
+					limitErr.Reason == message.WireLimitGetObjectTransactions &&
+					limitErr.GetObjectQuery:
+					reason = "get-objects-txn-unnegotiated"
+				}
+			}
 			p.IncBadData(reason)
 			releaseRetainedReservation()
 			if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
@@ -2022,6 +2048,8 @@ func wirePreflightChargeReason(err error) string {
 			return "transactions-batch-too-large"
 		case message.WireLimitValidatorBlobs:
 			return "vl-coll-heavy-too-many-blobs"
+		case message.WireLimitValidatorVersion:
+			return "vl-coll-wrong-version"
 		}
 	}
 	return "wire-invalid"

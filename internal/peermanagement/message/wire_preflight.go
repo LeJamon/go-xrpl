@@ -39,14 +39,16 @@ const (
 	WireLimitLedgerData            WireLimitReason = "ledger-data-nodes"
 	WireLimitEndpoints             WireLimitReason = "endpoints"
 	WireLimitValidatorBlobs        WireLimitReason = "validator-blobs"
+	WireLimitValidatorVersion      WireLimitReason = "validator-version"
 	WireLimitClusterNodes          WireLimitReason = "cluster-nodes"
 	WireLimitLoadSources           WireLimitReason = "load-sources"
 )
 
 type WireLimitError struct {
-	Reason   WireLimitReason
-	Limit    int
-	Observed int
+	Reason         WireLimitReason
+	Limit          int
+	Observed       int
+	GetObjectQuery bool
 }
 
 func (e *WireLimitError) Error() string {
@@ -55,6 +57,10 @@ func (e *WireLimitError) Error() string {
 
 func (e *WireLimitError) Unwrap() error {
 	return ErrWireLimit
+}
+
+func (e *WireLimitError) Unverified() bool {
+	return e.Reason == WireLimitDepth || e.Reason == WireLimitFieldCount
 }
 
 // collectionLimit bounds the element count of one repeated root message
@@ -86,8 +92,11 @@ type wireScanState struct {
 	wirePayloadInfo
 	validateRequired      bool
 	fields                int
+	validatorVersion      uint32
+	validatorVersionSet   bool
 	getObjects            int
 	getObjectTransactions bool
+	getObjectQuery        bool
 	getLedgerNodes        int
 	getLedgerInfoType     protoreflect.EnumNumber
 }
@@ -140,7 +149,9 @@ func scanWirePayload(
 			reason = WireLimitGetObjectTransactions
 		}
 		if state.getObjects > limit {
-			return wirePayloadInfo{}, wireLimit(reason, limit, state.getObjects)
+			limitErr := &WireLimitError{Reason: reason, Limit: limit, Observed: state.getObjects}
+			limitErr.GetObjectQuery = state.getObjectQuery
+			return wirePayloadInfo{}, limitErr
 		}
 	}
 	if msgType == TypeGetLedger && state.getLedgerInfoType != protoreflect.EnumNumber(proto.TMLedgerInfoType_liBASE) &&
@@ -148,6 +159,11 @@ func scanWirePayload(
 		return wirePayloadInfo{}, wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
 	}
 	if state.deferredLimit != nil {
+		if msgType == TypeValidatorListCollection &&
+			state.deferredLimit.Reason == WireLimitValidatorBlobs &&
+			state.validatorVersionSet && state.validatorVersion < 2 {
+			return wirePayloadInfo{}, wireLimit(WireLimitValidatorVersion, 2, int(state.validatorVersion))
+		}
 		return wirePayloadInfo{}, state.deferredLimit
 	}
 	return state.wirePayloadInfo, nil
@@ -276,6 +292,14 @@ func (s *wireScanState) observeRootField(
 		value, _ := protowire.ConsumeVarint(data)
 		s.endpointVersion = uint32(value)
 	}
+	if s.msgType == TypeValidatorListCollection && field.Number() == 1 && wireType == protowire.VarintType {
+		value, n := protowire.ConsumeVarint(data)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		s.validatorVersion = uint32(value)
+		s.validatorVersionSet = true
+	}
 	if (s.msgType == TypeGetObjects || s.msgType == TypeGetLedger) && field.Number() == 1 &&
 		field.Kind() == protoreflect.EnumKind && wireType == protowire.VarintType {
 		value, n := protowire.ConsumeVarint(data)
@@ -291,6 +315,13 @@ func (s *wireScanState) observeRootField(
 				s.getLedgerInfoType = number
 			}
 		}
+	}
+	if s.msgType == TypeGetObjects && field.Number() == 2 && field.Kind() == protoreflect.BoolKind && wireType == protowire.VarintType {
+		value, n := protowire.ConsumeVarint(data)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		s.getObjectQuery = value != 0
 	}
 	if s.msgType == TypeGetLedger && field.Number() == 5 && wireType == protowire.BytesType {
 		s.getLedgerNodes++

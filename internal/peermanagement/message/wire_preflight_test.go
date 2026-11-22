@@ -110,8 +110,10 @@ func TestValidatePayloadRequiredFieldsPrecedeCollectionLimits(t *testing.T) {
 	require.ErrorIs(t, err, ErrMalformedWire)
 	require.NotErrorIs(t, err, ErrWireLimit)
 
-	validator = append(validator, enumField(1, 1)...)
-	requireWireLimit(t, ValidatePayload(TypeValidatorListCollection, validator), WireLimitValidatorBlobs, maxValidatorBlobs, maxValidatorBlobs+1)
+	validatorV1 := append(append([]byte(nil), validator...), enumField(1, 1)...)
+	requireWireLimit(t, ValidatePayload(TypeValidatorListCollection, validatorV1), WireLimitValidatorVersion, 2, 1)
+	validatorV2 := append(append([]byte(nil), validator...), enumField(1, 2)...)
+	requireWireLimit(t, ValidatePayload(TypeValidatorListCollection, validatorV2), WireLimitValidatorBlobs, maxValidatorBlobs, maxValidatorBlobs+1)
 }
 
 func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
@@ -278,7 +280,11 @@ func nestedGroups(depth int) []byte {
 
 func TestPreflightDepthLimitInclusive(t *testing.T) {
 	require.NoError(t, Preflight(TypePing, nestedGroups(maxWireDepth-1)))
-	requireWireLimit(t, Preflight(TypePing, nestedGroups(maxWireDepth)), WireLimitDepth, maxWireDepth, maxWireDepth+1)
+	err := Preflight(TypePing, nestedGroups(maxWireDepth))
+	requireWireLimit(t, err, WireLimitDepth, maxWireDepth, maxWireDepth+1)
+	var limitErr *WireLimitError
+	require.ErrorAs(t, err, &limitErr)
+	require.True(t, limitErr.Unverified())
 }
 
 func repeatedVarintFields(count int) []byte {
@@ -292,7 +298,11 @@ func repeatedVarintFields(count int) []byte {
 
 func TestPreflightFieldCountLimitInclusive(t *testing.T) {
 	require.NoError(t, Preflight(TypePing, repeatedVarintFields(maxWireFieldCount)))
-	requireWireLimit(t, Preflight(TypePing, repeatedVarintFields(maxWireFieldCount+1)), WireLimitFieldCount, maxWireFieldCount, maxWireFieldCount+1)
+	err := Preflight(TypePing, repeatedVarintFields(maxWireFieldCount+1))
+	requireWireLimit(t, err, WireLimitFieldCount, maxWireFieldCount, maxWireFieldCount+1)
+	var limitErr *WireLimitError
+	require.ErrorAs(t, err, &limitErr)
+	require.True(t, limitErr.Unverified())
 }
 
 func TestPreflightUnknownBytesAreOpaque(t *testing.T) {
