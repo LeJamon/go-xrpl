@@ -778,9 +778,53 @@ func TestHandleEndpoints_IngestsHopsGreaterEntries(t *testing.T) {
 	require.Len(t, o.discovery.peers, 2)
 	require.Contains(t, o.discovery.peers, "10.0.0.1:51235")
 	require.Contains(t, o.discovery.peers, "10.0.0.2:51235")
-	assert.Equal(t, uint32(1), o.discovery.peers["10.0.0.1:51235"].Hops)
-	assert.Equal(t, uint32(2), o.discovery.peers["10.0.0.2:51235"].Hops)
+	assert.Equal(t, uint32(2), o.discovery.peers["10.0.0.1:51235"].Hops)
+	assert.Equal(t, uint32(3), o.discovery.peers["10.0.0.2:51235"].Hops)
 	assert.Zero(t, peer.BadDataCount())
+}
+
+// TestHandleEndpoints_DeduplicatesFirstAcceptedEntry pins Logic.h:730-739:
+// duplicate addresses are removed after validation, so the first occurrence
+// retains its advertised distance even when a later duplicate claims fewer
+// hops. The stored distance is then incremented for onward gossip.
+func TestHandleEndpoints_DeduplicatesFirstAcceptedEntry(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(24))
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: 2},
+		{Endpoint: "10.0.0.1:51235", Hops: 1},
+		{Endpoint: "10.0.0.2:51235", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: message.TypeEndpoints,
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	repeated := o.discovery.peers["10.0.0.1:51235"]
+	other := o.discovery.peers["10.0.0.2:51235"]
+	require.NotNil(t, repeated)
+	require.NotNil(t, other)
+	assert.Equal(t, uint32(3), repeated.Hops,
+		"the first duplicate must determine the stored distance")
+	assert.Equal(t, uint32(2), other.Hops)
+	assert.Equal(t, peer.ID(), repeated.Source)
+	assert.Equal(t, peer.ID(), other.Source)
+	assert.Len(t, o.discovery.peers, 2)
+	o.discovery.mu.RUnlock()
+
+	// The same stored distance is what the outbound handout encodes.
+	outbound := o.collectDiscoveredEndpoints()
+	var repeatedOutbound *message.Endpointv2
+	for i := range outbound {
+		if outbound[i].Endpoint == "10.0.0.1:51235" {
+			repeatedOutbound = &outbound[i]
+			break
+		}
+	}
+	require.NotNil(t, repeatedOutbound)
+	assert.Equal(t, uint32(3), repeatedOutbound.Hops)
 }
 
 // TestHandleEndpoints_Hops0RewrittenToSocketIP pins PeerImp.cpp:1234-1235:
@@ -805,7 +849,7 @@ func TestHandleEndpoints_Hops0RewrittenToSocketIP(t *testing.T) {
 	require.Len(t, o.discovery.peers, 1)
 	require.Contains(t, o.discovery.peers, "203.0.113.7:51235",
 		"hops==0 host must be rewritten to the socket remote IP")
-	assert.Equal(t, uint32(0), o.discovery.peers["203.0.113.7:51235"].Hops)
+	assert.Equal(t, uint32(1), o.discovery.peers["203.0.113.7:51235"].Hops)
 }
 
 // TestHandleEndpoints_VerifyOn_DropsNonPublic pins the rippled PeerFinder
@@ -1176,5 +1220,12 @@ func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
 	require.Len(t, o.discovery.peers, 1)
 	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235", "hops within horizon must ingest")
 	assert.NotContains(t, o.discovery.peers, "10.0.0.2:51235", "hops beyond horizon must be dropped")
+	assert.Equal(t, uint32(MaxHops+1), o.discovery.peers["10.0.0.1:51235"].Hops,
+		"stored hop count includes this node")
 	assert.Zero(t, peer.BadDataCount(), "over-horizon hop count is dropped, not charged")
+
+	for _, endpoint := range o.collectDiscoveredEndpoints() {
+		assert.NotEqual(t, "10.0.0.1:51235", endpoint.Endpoint,
+			"the max-hop sentinel must not be advertised onward")
+	}
 }

@@ -592,9 +592,11 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // The surviving set is then bounded like rippled's PeerFinder before it
 // reaches Discovery: sampled down to numberOfEndpointsMax (64), gated by
 // the per-peer secondsPerMessage rate-limit (one accepted frame per
-// window), and clipped to our discovery horizon (hops<=MaxHops). Without
-// these an announced address stream would grow d.peers without bound
-// (issue #1170).
+// window), and clipped to our discovery horizon (incoming hops<=MaxHops).
+// Before insertion, each surviving endpoint's hop count is incremented so
+// the stored value is the distance at which it can be advertised onward.
+// Without these an announced address stream would grow d.peers without
+// bound (issue #1170).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
 	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
@@ -686,6 +688,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	}
 
 	neighborSeen := false
+	seen := make(map[string]struct{}, len(accepted))
 	for _, e := range accepted {
 		// Drop endpoints beyond our discovery horizon rather than storing
 		// addresses SelectPeersToConnect would never dial; mirrors
@@ -706,10 +709,21 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			continue
 		}
 		address := e.endpoint.String()
+		// Filter duplicates after normalization and validation, preserving
+		// the first accepted entry in the announcement. This is the same
+		// order as rippled's preprocess, so a later lower-hop duplicate
+		// cannot rewrite the distance selected by the sender.
+		if _, duplicate := seen[address]; duplicate {
+			continue
+		}
+		seen[address] = struct{}{}
 		if e.hops == 0 && peer.Inbound() && !o.checkPeerListeningPort(peer, address) {
 			continue
 		}
-		o.discovery.AddPeer(address, e.hops, evt.PeerID)
+		// Rippled increments before inserting into the live cache. The
+		// resulting value is the distance to use when this endpoint is
+		// advertised to the next peer.
+		o.discovery.AddPeer(address, e.hops+1, evt.PeerID)
 	}
 }
 

@@ -119,6 +119,12 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 		if !gossipableEndpoint(address) {
 			return
 		}
+		// An inbound endpoint at MaxHops is stored at MaxHops+1 after the
+		// local hop is added. Rippled retains that sentinel for cache
+		// bookkeeping but Handouts::tryInsert excludes it from gossip.
+		if hops > MaxHops {
+			return
+		}
 		if hops == 0 {
 			// Our discovered entry has no explicit hop count — assume
 			// a single hop. The wire format treats hops==0 as a
