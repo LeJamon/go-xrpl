@@ -150,7 +150,7 @@ func (f *NodeStore) SHAMapCleanResidency() *shamap.CleanResidency {
 
 // UsesDatabase checks whether a caller's durability barrier covers this Family.
 func (f *NodeStore) UsesDatabase(db nodestore.Database) bool {
-	return db != nil && reflect.TypeOf(db).Comparable() && f.db == db
+	return reflect.ValueOf(db).Comparable() && f.db == db
 }
 
 // Fetch retrieves serialized node data by its SHAMap hash.

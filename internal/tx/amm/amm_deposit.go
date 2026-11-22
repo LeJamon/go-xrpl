@@ -253,7 +253,7 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		checkAsset := func(asset tx.Asset) ter.Result {
-			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+			if result := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 				return result
 			}
 			return mptutil.CheckDepositFreeze(view, accountID, ammAccountID, asset)
@@ -266,11 +266,11 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 		}
 	} else if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		checkAsset := func(asset tx.Asset) ter.Result {
-			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+			if result := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 				return result
 			}
-			if assetFrozen(view, accountID, asset) {
-				return frozenAssetResult(asset)
+			if result := mptutil.CheckFrozen(view, accountID, asset); result != ter.TesSUCCESS {
+				return result
 			}
 			return ter.TesSUCCESS
 		}
@@ -287,15 +287,15 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			return ter.TesSUCCESS
 		}
 		amtAsset := amountAsset(*amt)
-		if result := requireAssetAuth(view, amtAsset, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(view, amtAsset, accountID, mptutil.LegacyAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
-			if assetFrozen(view, ammAccountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckFrozen(view, ammAccountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
-			if assetIndividuallyFrozen(view, accountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckIndividualFrozen(view, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 		if checkBalance {
@@ -333,7 +333,7 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 			} else {
 				issuerID, _ := state.DecodeAccountID(amtAsset.Issuer)
 				if accountID != issuerID {
-					depositorFunds := tx.AccountFunds(view, accountID, *amt, false, config.ReserveBase, config.ReserveIncrement)
+					depositorFunds := mptutil.AccountFunds(view, accountID, *amt, false, config.ReserveBase, config.ReserveIncrement)
 					if depositorFunds.Compare(*amt) < 0 {
 						return TecUNFUNDED_AMM
 					}
@@ -962,7 +962,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			// Skip the check if the depositor is the issuer (unlimited supply).
 			issuerID1, _ := state.DecodeAccountID(a.Asset.Issuer)
 			if accountID != issuerID1 {
-				depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				depositorFunds := mptutil.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if depositorFunds.Compare(depositAmount1) < 0 {
 					return TecUNFUNDED_AMM
 				}
@@ -985,7 +985,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		} else {
 			issuerID2, _ := state.DecodeAccountID(a.Asset2.Issuer)
 			if accountID != issuerID2 {
-				depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				depositorFunds := mptutil.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if depositorFunds.Compare(depositAmount2) < 0 {
 					return TecUNFUNDED_AMM
 				}

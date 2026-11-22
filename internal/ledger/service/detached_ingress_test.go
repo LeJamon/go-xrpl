@@ -132,7 +132,7 @@ func runOwnedIngress(t testing.TB, cfg Config, blob []byte, hash [32]byte, mutat
 	parent := env.LastClosedLedger()
 	db := newTestNodeStore(t, 1_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	writer := &Service{nodeStore: db}
+	writer := &Service{nodeStore: bindNodeStore(db)}
 	require.NoError(t, writer.persistToNodeStore(t.Context(), parent, parent.Sequence()))
 	cfg.NodeStore = db
 	cfg.SHAMapFamily = backend.New(db)

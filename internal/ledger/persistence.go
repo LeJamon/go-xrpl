@@ -2,15 +2,19 @@ package ledger
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 // PrepareCleanResidencyRelease captures the maps before persistence. Invoke the
 // returned function only after both node and header writes have been synced.
-func (l *Ledger) PrepareCleanResidencyRelease(family *backend.NodeStore) func() {
+// A nil function means the family cannot be compared with the map binding.
+func (l *Ledger) PrepareCleanResidencyRelease(family shamap.Family) func() {
+	if !reflect.ValueOf(family).Comparable() {
+		return nil
+	}
 	l.mu.RLock()
 	stateMap, txMap := l.stateMap, l.txMap
 	stateToken := stateMap.PrepareCleanResidencyRelease()

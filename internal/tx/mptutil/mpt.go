@@ -146,10 +146,10 @@ func IsFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte) bool
 
 func isFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8) bool {
 	return IsGlobalFrozen(view, id) || IsIndividualFrozen(view, id, account) ||
-		isVaultPseudoAccountFrozen(view, id, account, depth)
+		isVaultPseudoAccountFrozen(view, id, account, depth, nil)
 }
 
-func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8) bool {
+func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, depth uint8, issuance *state.MPTokenIssuanceData) bool {
 	rules := view.Rules()
 	if rules == nil || !rules.Enabled(amendment.FeatureSingleAssetVault) {
 		return false
@@ -157,10 +157,12 @@ func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, acco
 	if depth >= maxAssetCheckDepth {
 		return true
 	}
-
-	issuance, _, result := ReadIssuance(view, id)
-	if result != ter.TesSUCCESS {
-		return false
+	if issuance == nil {
+		var result ter.Result
+		issuance, _, result = ReadIssuance(view, id)
+		if result != ter.TesSUCCESS {
+			return false
+		}
 	}
 	if issuance.ReferenceHolding != nil {
 		asset, result := referencedAsset(view, issuance)
@@ -185,6 +187,36 @@ func isVaultPseudoAccountFrozen(view state.ReadOnlyLedgerView, id [24]byte, acco
 	return isAnyAssetFrozen(view, asset, [][20]byte{issuance.Issuer, account}, depth+1)
 }
 
+// CheckMPTFrozen checks an already parsed issuance for escrow freeze rules.
+// The direct holding read preserves the transaction's fail-closed storage
+// result; vault-share traversal reuses the shared boolean predicate.
+func CheckMPTFrozen(
+	view state.ReadOnlyLedgerView,
+	id [24]byte,
+	issuance *state.MPTokenIssuanceData,
+	account [20]byte,
+) ter.Result {
+	if issuance == nil {
+		return ter.TefINTERNAL
+	}
+	if issuance.Flags&entry.LsfMPTLocked != 0 {
+		return ter.TecLOCKED
+	}
+	if account != issuance.Issuer {
+		token, _, result := ReadHolding(view, id, account)
+		if result != ter.TesSUCCESS && result != ter.TecNO_AUTH {
+			return result
+		}
+		if token != nil && token.Flags&entry.LsfMPTLocked != 0 {
+			return ter.TecLOCKED
+		}
+	}
+	if isVaultPseudoAccountFrozen(view, id, account, 0, issuance) {
+		return ter.TecLOCKED
+	}
+	return ter.TesSUCCESS
+}
+
 func IsAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte) bool {
 	if asset.IsNative() {
 		return false
@@ -194,6 +226,18 @@ func IsAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]by
 		return err == nil && IsFrozen(view, id, account)
 	}
 	return tx.IsFrozen(view, account, asset)
+}
+
+// CheckFrozen implements rippled's checkFrozen(view, account, Asset): tecLOCKED
+// for a frozen MPT, tecFROZEN for a frozen IOU.
+func CheckFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if !IsAssetFrozen(view, asset, account) {
+		return ter.TesSUCCESS
+	}
+	if asset.IsMPT() {
+		return ter.TecLOCKED
+	}
+	return ter.TecFROZEN
 }
 
 // CheckDepositFreeze applies the freeze rules for sending an asset from a
@@ -213,11 +257,11 @@ func CheckDepositFreeze(view state.ReadOnlyLedgerView, srcAcct, pseudoAcct [20]b
 		return result
 	}
 	if srcAcct != issuer {
-		if result := checkIndividualFrozen(view, srcAcct, asset); result != ter.TesSUCCESS {
+		if result := CheckIndividualFrozen(view, srcAcct, asset); result != ter.TesSUCCESS {
 			return result
 		}
 	}
-	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+	if result := CheckIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
 		return result
 	}
 	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
@@ -242,11 +286,11 @@ func CheckWithdrawFreeze(view state.ReadOnlyLedgerView, pseudoAcct, submitterAcc
 	if result := checkGlobalFrozen(view, asset); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+	if result := CheckIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
 		return result
 	}
 	if submitterAcct != dstAcct {
-		if result := checkIndividualFrozen(view, submitterAcct, asset); result != ter.TesSUCCESS {
+		if result := CheckIndividualFrozen(view, submitterAcct, asset); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -264,7 +308,7 @@ func checkPseudoAccountBackingFreeze(view state.ReadOnlyLedgerView, pseudoAcct [
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if isVaultPseudoAccountFrozen(view, id, pseudoAcct, 0) {
+	if isVaultPseudoAccountFrozen(view, id, pseudoAcct, 0, nil) {
 		return ter.TecINTERNAL
 	}
 	return ter.TesSUCCESS
@@ -302,7 +346,9 @@ func checkGlobalFrozen(view state.ReadOnlyLedgerView, asset tx.Asset) ter.Result
 	return ter.TesSUCCESS
 }
 
-func checkIndividualFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
+// CheckIndividualFrozen implements rippled's checkIndividualFrozen(view,
+// account, Asset).
+func CheckIndividualFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
@@ -338,22 +384,10 @@ func CheckDeepFrozen(view state.ReadOnlyLedgerView, account [20]byte, asset tx.A
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if isIOUDeepFrozen(view, account, issuer, asset.Currency) {
+	if tx.IsDeepFrozen(view, account, issuer, asset.Currency) {
 		return ter.TecFROZEN
 	}
 	return ter.TesSUCCESS
-}
-
-func isIOUDeepFrozen(view state.ReadOnlyLedgerView, account, issuer [20]byte, currency string) bool {
-	if currency == "" || currency == "XRP" || account == issuer {
-		return false
-	}
-	raw, err := view.Read(keylet.Line(account, issuer, currency))
-	if err != nil || raw == nil {
-		return false
-	}
-	line, err := state.ParseRippleState(raw)
-	return err == nil && line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0
 }
 
 func isAnyAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, accounts [][20]byte, depth uint8) bool {
@@ -377,12 +411,19 @@ func isAnyAssetFrozen(view state.ReadOnlyLedgerView, asset tx.Asset, accounts []
 	return false
 }
 
+// TransferRate implements rippled's transferRate(view, MPTID); a missing or
+// unreadable issuance is parity.
 func TransferRate(view state.ReadOnlyLedgerView, id [24]byte) uint32 {
 	issuance, _, result := ReadIssuance(view, id)
-	if result != ter.TesSUCCESS || issuance.TransferFee == 0 {
+	if result != ter.TesSUCCESS {
 		return RateOne
 	}
-	return RateOne + 10_000*uint32(issuance.TransferFee)
+	return TransferRateFromFee(issuance.TransferFee)
+}
+
+// TransferRateFromFee converts an issuance's sfTransferFee to a rate.
+func TransferRateFromFee(fee uint16) uint32 {
+	return RateOne + 10_000*uint32(fee)
 }
 
 func RequireAuth(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, strong bool) ter.Result {
@@ -515,14 +556,6 @@ func RequireAssetAuthAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [
 	return requireAssetAuthWithTypeAt(view, asset, account, authType, parentCloseTime, 0)
 }
 
-func requireAssetAuthAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, strong bool, parentCloseTime uint32, depth uint8) ter.Result {
-	authType := WeakAuth
-	if strong {
-		authType = StrongAuth
-	}
-	return requireAssetAuthWithTypeAt(view, asset, account, authType, parentCloseTime, depth)
-}
-
 func requireAssetAuthWithTypeAt(view state.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32, depth uint8) ter.Result {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
@@ -538,10 +571,16 @@ func requireAssetAuthWithTypeAt(view state.ReadOnlyLedgerView, asset tx.Asset, a
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	return RequireIOUAuth(view, issuer, asset.Currency, account, authType)
+}
+
+// RequireIOUAuth implements rippled's requireAuth(view, Issue, account,
+// authType); read and parse failures return tefINTERNAL.
+func RequireIOUAuth(view state.ReadOnlyLedgerView, issuer [20]byte, currency string, account [20]byte, authType AuthType) ter.Result {
 	if account == issuer {
 		return ter.TesSUCCESS
 	}
-	lineRaw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
+	lineRaw, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil {
 		return ter.TefINTERNAL
 	}

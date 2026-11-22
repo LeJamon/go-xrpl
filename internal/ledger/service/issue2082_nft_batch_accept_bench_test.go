@@ -321,7 +321,7 @@ func newIssue2082NFTBatchFixture(b *testing.B) (*benchmarkRefreshFixture, issue2
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	parent := env.LastClosedLedger()
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	fixture.root, err = parent.StateMapHash()
 	require.NoError(b, err)

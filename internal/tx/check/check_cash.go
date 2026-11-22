@@ -303,8 +303,8 @@ func checkCashSourceFunds(view tx.ReadOnlyLedgerView, config tx.EngineConfig, so
 		return ter.TecPATH_PARTIAL
 	}
 	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		switch tx.LPTokenFrozenForIssuer(view, sourceID, issuerID) {
-		case tx.LPTokenFrozen, tx.LPTokenAMMUnresolvable:
+		switch mptutil.LPTokenFrozenForIssuer(view, sourceID, issuerID) {
+		case mptutil.LPTokenFrozen, mptutil.LPTokenAMMUnresolvable:
 			return ter.TecPATH_PARTIAL
 		}
 	}

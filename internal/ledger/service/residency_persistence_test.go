@@ -77,7 +77,7 @@ func TestService_PersistenceFailureRetainsResidencyUntilSync(t *testing.T) {
 			}
 			ledger := retentionTestLedger(t, state, 7)
 			svc := &Service{
-				nodeStore:    db,
+				nodeStore:    bindNodeStore(db),
 				shamapFamily: family,
 				config: Config{
 					PersistenceMemory: &relayTestMemory{limit: shamap.DirtyWorkspaceBytes},
@@ -172,7 +172,7 @@ func TestService_PersistenceReleaseRejectsReplacedFamily(t *testing.T) {
 	}
 	ledger := retentionTestLedger(t, state, 8)
 	svc := &Service{
-		nodeStore:    db,
+		nodeStore:    bindNodeStore(db),
 		shamapFamily: replaced,
 		config:       Config{PersistenceMemory: &relayTestMemory{limit: shamap.DirtyWorkspaceBytes}},
 	}
