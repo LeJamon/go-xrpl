@@ -691,8 +691,6 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	neighborSeen := false
 	seen := make(map[string]struct{}, len(accepted))
 	for _, e := range accepted {
-		// Drop endpoints beyond the wire horizon; the local dial policy is
-		// narrower and is applied later by Discovery.
 		if e.hops > maxGossipHops {
 			continue
 		}
@@ -709,10 +707,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			continue
 		}
 		address := e.endpoint.String()
-		// Filter duplicates after normalization and validation, preserving
-		// the first accepted entry in the announcement. This is the same
-		// order as rippled's preprocess, so a later lower-hop duplicate
-		// cannot rewrite the distance selected by the sender.
+		// The first valid advertisement sets the distance, even if a later one claims fewer hops.
 		if _, duplicate := seen[address]; duplicate {
 			continue
 		}
@@ -720,9 +715,6 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		if e.hops == 0 && peer.Inbound() && !o.checkPeerListeningPort(peer, address) {
 			continue
 		}
-		// Rippled increments before inserting into the live cache. The
-		// resulting value is the distance to use when this endpoint is
-		// advertised to the next peer.
 		o.discovery.AddPeer(address, e.hops+1, evt.PeerID)
 	}
 }

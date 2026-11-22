@@ -105,11 +105,7 @@ func (o *Overlay) sendEndpoints() {
 	}
 }
 
-// collectDiscoveredEndpoints walks Discovery.peers and returns a list of
-// gossip-eligible endpoints, each tagged with the hop count we last
-// observed from. Endpoints we believe ourselves to be currently
-// connected to are still eligible — the recipient peer will dedup
-// against its own slot.
+// Connected endpoints remain eligible because the recipient filters its own connections.
 func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 	var out []message.Endpointv2
 	o.discovery.ForEachDiscovered(func(address string, hops uint32) {
@@ -119,9 +115,6 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 		if !gossipableEndpoint(address) {
 			return
 		}
-		// An inbound endpoint at maxGossipHops is stored one hop higher.
-		// Rippled retains that sentinel for cache bookkeeping but excludes it
-		// from gossip.
 		if hops > maxGossipHops {
 			return
 		}

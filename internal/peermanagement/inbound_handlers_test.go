@@ -786,10 +786,7 @@ func TestHandleEndpoints_IngestsHopsGreaterEntries(t *testing.T) {
 	assert.Zero(t, peer.BadDataCount())
 }
 
-// TestHandleEndpoints_DeduplicatesFirstAcceptedEntry pins Logic.h:730-739:
-// duplicate addresses are removed after validation, so the first occurrence
-// retains its advertised distance even when a later duplicate claims fewer
-// hops. The stored distance is then incremented for onward gossip.
+// Logic.h:730-739 keeps the first valid advertisement for each address.
 func TestHandleEndpoints_DeduplicatesFirstAcceptedEntry(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(24))
 
@@ -818,7 +815,6 @@ func TestHandleEndpoints_DeduplicatesFirstAcceptedEntry(t *testing.T) {
 	assert.Equal(t, peer.ID(), other.Source)
 	assert.Equal(t, 2, peerCount)
 
-	// The same stored distance is what the outbound handout encodes.
 	outbound := o.collectDiscoveredEndpoints()
 	var repeatedOutbound *message.Endpointv2
 	for i := range outbound {
@@ -1203,9 +1199,6 @@ func TestHandleEndpoints_SamplesOversizedFrame(t *testing.T) {
 	assert.Zero(t, peer.BadDataCount(), "well-formed oversized-but-sub-1024 frame is not charged")
 }
 
-// TestHandleEndpoints_DropsBeyondHorizon checks the wire horizon and its
-// non-gossipable sentinel.
-// Mirrors rippled's endpoint preprocess.
 func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(20))
 
