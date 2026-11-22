@@ -132,7 +132,7 @@ func benchmarkPersistLedgerPhases(b *testing.B, txPerLedger int) {
 	require.NoError(b, err)
 	writer := &Service{
 		config:       Config{PersistenceMemory: persistence},
-		nodeStore:    nodes,
+		nodeStore:    bindNodeStore(nodes),
 		shamapFamily: backend.New(nodes),
 		relationalDB: relational,
 	}
