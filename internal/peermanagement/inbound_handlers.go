@@ -592,7 +592,8 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // The surviving set is then bounded like rippled's PeerFinder before it
 // reaches Discovery: sampled down to numberOfEndpointsMax (64), gated by
 // the per-peer secondsPerMessage rate-limit (one accepted frame per
-// window), and clipped to our discovery horizon (incoming hops<=MaxHops).
+// window), and clipped to the wire endpoint horizon (incoming
+// hops<=maxGossipHops).
 // Before insertion, each surviving endpoint's hop count is incremented so
 // the stored value is the distance at which it can be advertised onward.
 // Without these an announced address stream would grow d.peers without
@@ -690,10 +691,9 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	neighborSeen := false
 	seen := make(map[string]struct{}, len(accepted))
 	for _, e := range accepted {
-		// Drop endpoints beyond our discovery horizon rather than storing
-		// addresses SelectPeersToConnect would never dial; mirrors
-		// rippled's hops>maxHops preprocess drop.
-		if e.hops > MaxHops {
+		// Drop endpoints beyond the wire horizon; the local dial policy is
+		// narrower and is applied later by Discovery.
+		if e.hops > maxGossipHops {
 			continue
 		}
 		if e.hops == 0 {

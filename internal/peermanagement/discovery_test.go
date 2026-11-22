@@ -213,6 +213,21 @@ func TestDiscoverySelectPeersToConnect(t *testing.T) {
 	}
 }
 
+func TestDiscoveryKeepsIncrementedDistanceWithinDialHorizon(t *testing.T) {
+	d := NewDiscovery(&Config{MaxOutbound: 25}, make(chan Event, 1))
+	selectable := "192.0.2.10:51235"
+	tooFar := "192.0.2.11:51235"
+	d.AddPeer(selectable, MaxHops+1, PeerID(1))
+	d.AddPeer(tooFar, MaxHops+2, PeerID(1))
+
+	candidates := d.SelectPeersToConnect(10)
+	assert.Contains(t, candidates, selectable)
+	assert.NotContains(t, candidates, tooFar)
+
+	summary := d.bootstrapSourceSummary()
+	assert.Equal(t, 1, summary.known)
+}
+
 func TestDiscoveryBootstrapPeers(t *testing.T) {
 	cfg := &Config{
 		MaxPeers:       50,

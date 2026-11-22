@@ -774,12 +774,15 @@ func TestHandleEndpoints_IngestsHopsGreaterEntries(t *testing.T) {
 	})
 
 	o.discovery.mu.RLock()
-	defer o.discovery.mu.RUnlock()
-	require.Len(t, o.discovery.peers, 2)
-	require.Contains(t, o.discovery.peers, "10.0.0.1:51235")
-	require.Contains(t, o.discovery.peers, "10.0.0.2:51235")
-	assert.Equal(t, uint32(2), o.discovery.peers["10.0.0.1:51235"].Hops)
-	assert.Equal(t, uint32(3), o.discovery.peers["10.0.0.2:51235"].Hops)
+	peerCount := len(o.discovery.peers)
+	first := o.discovery.peers["10.0.0.1:51235"]
+	second := o.discovery.peers["10.0.0.2:51235"]
+	o.discovery.mu.RUnlock()
+	require.Equal(t, 2, peerCount)
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	assert.Equal(t, uint32(2), first.Hops)
+	assert.Equal(t, uint32(3), second.Hops)
 	assert.Zero(t, peer.BadDataCount())
 }
 
@@ -804,6 +807,8 @@ func TestHandleEndpoints_DeduplicatesFirstAcceptedEntry(t *testing.T) {
 	o.discovery.mu.RLock()
 	repeated := o.discovery.peers["10.0.0.1:51235"]
 	other := o.discovery.peers["10.0.0.2:51235"]
+	peerCount := len(o.discovery.peers)
+	o.discovery.mu.RUnlock()
 	require.NotNil(t, repeated)
 	require.NotNil(t, other)
 	assert.Equal(t, uint32(3), repeated.Hops,
@@ -811,8 +816,7 @@ func TestHandleEndpoints_DeduplicatesFirstAcceptedEntry(t *testing.T) {
 	assert.Equal(t, uint32(2), other.Hops)
 	assert.Equal(t, peer.ID(), repeated.Source)
 	assert.Equal(t, peer.ID(), other.Source)
-	assert.Len(t, o.discovery.peers, 2)
-	o.discovery.mu.RUnlock()
+	assert.Equal(t, 2, peerCount)
 
 	// The same stored distance is what the outbound handout encodes.
 	outbound := o.collectDiscoveredEndpoints()
@@ -845,11 +849,12 @@ func TestHandleEndpoints_Hops0RewrittenToSocketIP(t *testing.T) {
 	})
 
 	o.discovery.mu.RLock()
-	defer o.discovery.mu.RUnlock()
-	require.Len(t, o.discovery.peers, 1)
-	require.Contains(t, o.discovery.peers, "203.0.113.7:51235",
-		"hops==0 host must be rewritten to the socket remote IP")
-	assert.Equal(t, uint32(1), o.discovery.peers["203.0.113.7:51235"].Hops)
+	peerCount := len(o.discovery.peers)
+	rewritten := o.discovery.peers["203.0.113.7:51235"]
+	o.discovery.mu.RUnlock()
+	require.Equal(t, 1, peerCount)
+	require.NotNil(t, rewritten)
+	assert.Equal(t, uint32(1), rewritten.Hops)
 }
 
 // TestHandleEndpoints_VerifyOn_DropsNonPublic pins the rippled PeerFinder
@@ -1198,16 +1203,16 @@ func TestHandleEndpoints_SamplesOversizedFrame(t *testing.T) {
 	assert.Zero(t, peer.BadDataCount(), "well-formed oversized-but-sub-1024 frame is not charged")
 }
 
-// TestHandleEndpoints_DropsBeyondHorizon pins issue #1170: an entry whose
-// hop count exceeds our discovery horizon (MaxHops) is dropped at ingest
-// without a charge, while a sibling within the horizon is still ingested.
-// Mirrors rippled's hops>maxHops preprocess drop.
+// TestHandleEndpoints_DropsBeyondHorizon checks the wire horizon and its
+// non-gossipable sentinel.
+// Mirrors rippled's endpoint preprocess.
 func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(20))
 
 	payload := encodeEndpoints(t, 2, []message.Endpointv2{
 		{Endpoint: "10.0.0.1:51235", Hops: MaxHops},
-		{Endpoint: "10.0.0.2:51235", Hops: MaxHops + 1},
+		{Endpoint: "10.0.0.2:51235", Hops: maxGossipHops},
+		{Endpoint: "10.0.0.3:51235", Hops: maxGossipHops + 1},
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
@@ -1216,16 +1221,26 @@ func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
 	})
 
 	o.discovery.mu.RLock()
-	defer o.discovery.mu.RUnlock()
-	require.Len(t, o.discovery.peers, 1)
-	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235", "hops within horizon must ingest")
-	assert.NotContains(t, o.discovery.peers, "10.0.0.2:51235", "hops beyond horizon must be dropped")
-	assert.Equal(t, uint32(MaxHops+1), o.discovery.peers["10.0.0.1:51235"].Hops,
-		"stored hop count includes this node")
+	peerCount := len(o.discovery.peers)
+	localBoundary := o.discovery.peers["10.0.0.1:51235"]
+	wireBoundary := o.discovery.peers["10.0.0.2:51235"]
+	beyondWire := o.discovery.peers["10.0.0.3:51235"]
+	o.discovery.mu.RUnlock()
+	require.Equal(t, 2, peerCount)
+	require.NotNil(t, localBoundary)
+	require.NotNil(t, wireBoundary)
+	assert.Nil(t, beyondWire)
+	assert.Equal(t, uint32(MaxHops+1), localBoundary.Hops,
+		"stored distance preserves the old local dial boundary")
+	assert.Equal(t, uint32(maxGossipHops+1), wireBoundary.Hops,
+		"wire-boundary endpoint becomes the sentinel")
 	assert.Zero(t, peer.BadDataCount(), "over-horizon hop count is dropped, not charged")
 
-	for _, endpoint := range o.collectDiscoveredEndpoints() {
-		assert.NotEqual(t, "10.0.0.1:51235", endpoint.Endpoint,
-			"the max-hop sentinel must not be advertised onward")
+	forwarded := o.collectDiscoveredEndpoints()
+	forwardedByAddress := make(map[string]uint32, len(forwarded))
+	for _, endpoint := range forwarded {
+		forwardedByAddress[endpoint.Endpoint] = endpoint.Hops
 	}
+	assert.Equal(t, uint32(MaxHops+1), forwardedByAddress["10.0.0.1:51235"])
+	assert.NotContains(t, forwardedByAddress, "10.0.0.2:51235")
 }

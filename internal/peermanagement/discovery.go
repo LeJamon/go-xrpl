@@ -16,10 +16,17 @@ import (
 
 // Discovery constants.
 const (
-	DefaultBootCacheFile   = "peerfinder.cache"
-	MaxCachedEndpoints     = 1000
-	CacheEntryTTL          = 7 * 24 * time.Hour
-	MaxHops                = 3
+	DefaultBootCacheFile = "peerfinder.cache"
+	MaxCachedEndpoints   = 1000
+	CacheEntryTTL        = 7 * 24 * time.Hour
+	// MaxHops is the existing local discovery horizon. Stored gossip
+	// distances include this node, so the corresponding selectable bound is
+	// one greater.
+	MaxHops = 3
+	// maxGossipHops is the wire endpoint horizon from rippled. A stored
+	// maxGossipHops+1 value is retained as a non-gossipable sentinel.
+	maxGossipHops          = 6
+	maxSelectableHops      = MaxHops + 1
 	DefaultReservationFile = "peer_reservations.json"
 
 	// MaxDiscoveredPeers caps the peer-discovery set. AddPeer evicts the
@@ -649,7 +656,7 @@ func (d *Discovery) selectPeersToConnect(count int, bootstrap bool) []string {
 			if d.fixedPeers[peer.Address] {
 				continue
 			}
-			if !peer.Connected && peer.Hops <= MaxHops && eligible(peer.Address) {
+			if !peer.Connected && peer.Hops <= maxSelectableHops && eligible(peer.Address) {
 				candidates = append(candidates, peer.Address)
 			}
 		}
@@ -790,7 +797,7 @@ func (d *Discovery) bootstrapSourceSummary() bootstrapSourceStatus {
 		seen := make(map[string]struct{})
 		for _, peer := range d.peers {
 			seen[peer.Address] = struct{}{}
-			if !d.fixedPeers[peer.Address] && peer.Hops <= MaxHops {
+			if !d.fixedPeers[peer.Address] && peer.Hops <= maxSelectableHops {
 				hosts[connectAttemptHost(peer.Address)] = struct{}{}
 			}
 		}
