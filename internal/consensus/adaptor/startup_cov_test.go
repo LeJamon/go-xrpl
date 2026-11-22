@@ -451,6 +451,24 @@ type stup_errStartEngine struct {
 
 func (e *stup_errStartEngine) Start(context.Context) error { return e.err }
 
+func TestNewFromConfigWiresOverlayLanes(t *testing.T) {
+	svc := newTestLedgerService(t)
+	t.Cleanup(svc.Stop)
+	cfg := &config.Config{DatabasePath: t.TempDir()}
+	const bufferSize = 17
+	c, err := NewFromConfig(t.Context(), cfg, svc, nil, nil, peermanagement.WithMessageBufferSize(bufferSize))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, c.Stop()) })
+
+	require.Equal(t, bufferSize, cap(c.Overlay.Messages()))
+	require.Equal(t, c.Overlay.ConsensusMessages(), c.Router.inbox)
+	require.Equal(t, c.Overlay.ConsensusControlMessages(), c.Router.consensusControlInbox)
+	require.Equal(t, c.Overlay.Messages(), c.Router.serviceInbox)
+	require.Equal(t, c.Overlay.TxMessages(), c.Router.txInbox)
+	require.Equal(t, c.Overlay.LedgerDataMessages(), c.Router.acqInbox)
+	require.Equal(t, c.Overlay.ManifestMessages(), c.Router.manifestInbox)
+}
+
 func TestStup_OverlayOptionsFromConfig_NetworkID(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NetworkID.Set = true
