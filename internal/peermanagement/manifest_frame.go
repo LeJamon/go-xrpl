@@ -91,33 +91,37 @@ func (f *ManifestFrame) WireSize() uint64 {
 }
 
 func (f *ManifestFrame) readPayload(ctx context.Context, validate bool) ([]byte, error) {
-	err := ctx.Err()
-	var payload []byte
-	if err == nil {
-		payload, err = os.ReadFile(f.path)
-		if err != nil {
-			err = &manifestSpoolLocalError{operation: "read manifest spool", err: err}
-		}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if err == nil && uint32(len(payload)) != f.header.PayloadSize {
-		err = &manifestSpoolLocalError{
+	payload, err := os.ReadFile(f.path)
+	if err != nil {
+		return nil, &manifestSpoolLocalError{operation: "read manifest spool", err: err}
+	}
+	if len(payload) != int(f.header.PayloadSize) {
+		return nil, &manifestSpoolLocalError{
 			operation: "validate manifest spool",
 			err:       fmt.Errorf("payload size: got %d, want %d", len(payload), f.header.PayloadSize),
 		}
 	}
-	if err == nil {
-		err = ctx.Err()
-	}
-	if err == nil && f.header.Compressed {
+	if f.header.Compressed {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		payload, err = message.DecompressLZ4(payload, int(f.header.UncompressedSize))
+		if err != nil {
+			return nil, err
+		}
 	}
-	if err == nil {
-		err = ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if err == nil && validate {
-		err = message.ValidatePayload(message.TypeManifests, payload)
+	if validate {
+		if err := message.ValidatePayload(message.TypeManifests, payload); err != nil {
+			return nil, err
+		}
 	}
-	return payload, err
+	return payload, nil
 }
 
 // admit verifies a disk-backed manifest payload before the peer read loop
