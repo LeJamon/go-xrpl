@@ -51,8 +51,6 @@ func TestAdaptor_RelayValidationsPolicyAccessors(t *testing.T) {
 	}
 }
 
-// TestAdaptor_IsListed: nothing is listed without a lookup; with one the
-// adaptor defers to it (Aggregator.IsListed in production).
 func TestAdaptor_IsListed(t *testing.T) {
 	listed := consensus.NodeID{0x11}
 

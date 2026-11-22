@@ -10,9 +10,6 @@ import (
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 )
 
-// Test-only post-construction wiring for routers built with NewRouter.
-// Production supplies these through routerDeps.
-
 func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
 	r.txInbox = txInbox
 }

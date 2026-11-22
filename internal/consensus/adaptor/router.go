@@ -277,8 +277,6 @@ type routerNetworkConfig struct {
 	inboundSweepInterval time.Duration
 }
 
-// routerDeps are the router's optional collaborators, fixed at construction.
-// A nil inbox is never selected; any other nil field disables its path.
 type routerDeps struct {
 	consensusControlInbox <-chan *peermanagement.InboundMessage
 	serviceInbox          <-chan *peermanagement.InboundMessage
@@ -286,7 +284,6 @@ type routerDeps struct {
 	acqInbox              <-chan *peermanagement.InboundMessage
 	manifestInbox         <-chan *peermanagement.InboundMessage
 
-	// manifests enables TMManifests handling; overlay relays and emits them.
 	manifests *manifest.Cache
 	overlay   routerOverlay
 	// manifestClassify nil treats every manifest as uncapped.
