@@ -248,7 +248,8 @@ type Amount struct {
 	// mptRaw stores the raw int64 value for MPT amounts, bypassing IOU normalization
 	// which loses precision for large values. The iou field is still set (normalized)
 	// for binary codec compatibility. Engine code should use MPTRaw() when available.
-	mptRaw *int64
+	mptRaw          *int64
+	mptNegativeZero bool
 
 	// mptIssuanceID stores the 24-byte MPT issuance ID as an uppercase hex string.
 	// When set, this Amount represents an MPT amount rather than an IOU.
@@ -315,6 +316,14 @@ func NewMPTAmountWithIssuanceID(value int64, issuer, mptIssuanceID string) Amoun
 		mptRaw:        &raw,
 		mptIssuanceID: strings.ToUpper(mptIssuanceID),
 	}
+}
+
+// WithNegativeZeroSign preserves the binary MPT sign until an amount is serialized again.
+func (a Amount) WithNegativeZeroSign() Amount {
+	if a.IsMPT() && a.IsZero() {
+		a.mptNegativeZero = true
+	}
+	return a
 }
 
 // MPTRaw returns the raw int64 value for MPT amounts, if available.
@@ -440,6 +449,9 @@ func (a Amount) IsZero() bool {
 
 // IsNegative returns true if the amount is negative
 func (a Amount) IsNegative() bool {
+	if a.mptNegativeZero {
+		return true
+	}
 	if a.IsNative() {
 		return a.xrp < 0
 	}

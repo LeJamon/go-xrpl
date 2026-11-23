@@ -186,8 +186,7 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 	}
-	restoreBinaryNoCurrency(parsed, fields)
-	restoreRawXRPAmounts(parsed, fields)
+	restoreBinaryAmounts(parsed, fields)
 	presentFields := make(map[string]bool, len(fields))
 	for name := range fields {
 		presentFields[name] = true
@@ -196,10 +195,7 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 	return parsed, nil
 }
 
-// sanitizeRawXRPAmounts keeps binary-only over-cap values out of the ordinary
-// JSON unmarshaling path. The typed Amount is restored from the raw field map
-// immediately after unmarshaling, so the transaction retains its canonical wire
-// identity while JSON input remains subject to the normal supply cap.
+// The typed transaction restores over-cap XRP amounts after JSON unmarshaling.
 func sanitizeRawXRPAmounts(value any) any {
 	switch v := value.(type) {
 	case binarytypes.RawXRPAmount:
@@ -218,42 +214,6 @@ func sanitizeRawXRPAmounts(value any) any {
 		return out
 	default:
 		return value
-	}
-}
-
-func restoreRawXRPAmounts(transaction Transaction, fields map[string]any) {
-	if transaction == nil {
-		return
-	}
-	if raw, ok := fields["Fee"].(binarytypes.RawXRPAmount); ok {
-		common := transaction.GetCommon()
-		common.Fee = rawXRPAmountDecimal(raw)
-		common.rawFee = &raw
-	}
-	value := reflect.ValueOf(transaction)
-	if value.Kind() == reflect.Pointer {
-		value = value.Elem()
-	}
-	for _, field := range getFlattenInfo(value.Type()).fields {
-		if !field.isAmount {
-			continue
-		}
-		raw, ok := fields[field.name].(binarytypes.RawXRPAmount)
-		if !ok {
-			continue
-		}
-		drops := int64(raw.Drops)
-		if raw.Negative {
-			drops = -drops
-		}
-		amount := NewXRPAmount(drops)
-		amountField := value.Field(field.index)
-		if amountField.Kind() == reflect.Pointer {
-			amountField.Set(reflect.New(amountField.Type().Elem()))
-			amountField.Elem().Set(reflect.ValueOf(amount))
-			continue
-		}
-		amountField.Set(reflect.ValueOf(amount))
 	}
 }
 
@@ -327,26 +287,48 @@ func batchInnerObject(wrapper map[string]any) (string, map[string]any) {
 	return "", nil
 }
 
-func restoreBinaryNoCurrency(transaction Transaction, fields map[string]any) {
-	value := reflect.ValueOf(transaction)
-	if value.Kind() == reflect.Pointer {
-		value = value.Elem()
+func restoreBinaryAmounts(transaction Transaction, fields map[string]any) {
+	if raw, ok := fields["Fee"].(binarytypes.RawXRPAmount); ok {
+		common := transaction.GetCommon()
+		common.Fee = rawXRPAmountDecimal(raw)
+		common.rawFee = &raw
 	}
+	if base, ok := transaction.(*BaseTx); ok {
+		for name, original := range fields {
+			m, ok := original.(map[string]any)
+			if !ok {
+				continue
+			}
+			if raw, ok := m["value"].(binarytypes.RawMPTValue); ok && raw.Negative && raw.Magnitude == 0 {
+				base.fallbackFields[name] = cloneTransactionFieldValue(m)
+			}
+		}
+		return
+	}
+	value := reflect.Indirect(reflect.ValueOf(transaction))
 	for _, field := range getFlattenInfo(value.Type()).fields {
 		if !field.isAmount {
 			continue
 		}
-		encoded, ok := fields[field.name].(map[string]any)
-		if !ok || encoded["currency"] != "1" {
+		v := reflect.Indirect(value.Field(field.index))
+		if !v.IsValid() {
 			continue
 		}
-		amountField := value.Field(field.index)
-		if amountField.Kind() == reflect.Pointer {
-			if !amountField.IsNil() {
-				amountField.Interface().(*Amount).Currency = "1"
+		amount := v.Addr().Interface().(*Amount)
+		switch wire := fields[field.name].(type) {
+		case binarytypes.RawXRPAmount:
+			drops := int64(wire.Drops)
+			if wire.Negative {
+				drops = -drops
 			}
-			continue
+			*amount = NewXRPAmount(drops)
+		case map[string]any:
+			if wire["currency"] == "1" {
+				amount.Currency = "1"
+			}
+			if raw, ok := wire["value"].(binarytypes.RawMPTValue); ok && raw.Negative && raw.Magnitude == 0 {
+				*amount = amount.WithNegativeZeroSign()
+			}
 		}
-		amountField.Addr().Interface().(*Amount).Currency = "1"
 	}
 }
