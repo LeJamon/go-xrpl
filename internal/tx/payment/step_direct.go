@@ -655,7 +655,7 @@ func (s *DirectStepI) DirectStepSrcAcct() *[20]byte {
 	return &s.src
 }
 
-// Check validates the DirectStepI before use
+// Check validates the DirectStepI before use.
 func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	// Check freeze status — applies to BOTH payments and offer crossing.
 	// Skip for pure issue/redeem (single-step strand).
@@ -669,8 +669,15 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 		}
 	}
 
-	// Offer crossing: skip trust line existence and authorization checks.
-	// Trust lines are created on demand during crossing via rippleCredit.
+	if prev, ok := s.prevStep.(*DirectStepI); ok {
+		if result := checkNoRipple(sb, prev.src, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
+	// Offer crossing skips trust line existence and authorization checks after
+	// the common base checks above. Trust lines are created on demand during
+	// crossing via rippleCredit.
 	// Reference: rippled DirectIOfferCrossingStep::check() lines 462-470
 	if s.offerCrossing {
 		return ter.TesSUCCESS
@@ -864,29 +871,6 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string, dstAc
 			return ter.TecINTERNAL
 		case mptutil.LPTokenFrozen:
 			return ter.TerNO_LINE
-		}
-	}
-
-	return ter.TesSUCCESS
-}
-
-// CheckWithPrevStep validates the DirectStepI with NoRipple checking against previous step.
-// Reference: rippled DirectStep.cpp make_DirectStepI() lines 918-923
-func (s *DirectStepI) CheckWithPrevStep(sb *PaymentSandbox, prevStep Step) ter.Result {
-	// First do basic check
-	if result := s.Check(sb); result != ter.TesSUCCESS {
-		return result
-	}
-
-	// If there's a previous DirectStep, check NoRipple constraint
-	// Reference: rippled DirectStep.cpp:918-923
-	if prevStep != nil {
-		if prevDirectStep, ok := prevStep.(*DirectStepI); ok {
-			prevSrc := prevDirectStep.src
-			result := checkNoRipple(sb, prevSrc, s.src, s.dst, s.currency)
-			if result != ter.TesSUCCESS {
-				return result
-			}
 		}
 	}
 

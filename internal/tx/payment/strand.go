@@ -668,7 +668,7 @@ func (ctx *StrandContext) buildStrandSteps(
 				}
 				directStep := ctx.newDirectStepI(cur.account, curIssue.Issuer, curIssue.Currency, prevStep, len(strand) == 0, false)
 				// Check NoRipple constraint
-				if result := ctx.checkDirectStep(directStep, view, prevStep); result != ter.TesSUCCESS {
+				if result := directStep.Check(view); result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -681,7 +681,7 @@ func (ctx *StrandContext) buildStrandSteps(
 				// Now create step from curIssue.Issuer to next
 				directStep = ctx.newDirectStepI(curIssue.Issuer, next.account, curIssue.Currency, prevStep, false, isLast)
 				// Check NoRipple constraint
-				if result := ctx.checkDirectStep(directStep, view, prevStep); result != ter.TesSUCCESS {
+				if result := directStep.Check(view); result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -712,7 +712,7 @@ func (ctx *StrandContext) buildStrandSteps(
 					}
 					directStep := ctx.newDirectStepI(cur.account, next.account, curIssue.Currency, prevStep, len(strand) == 0, isLast)
 					// Check NoRipple constraint
-					if result := ctx.checkDirectStep(directStep, view, prevStep); result != ter.TesSUCCESS {
+					if result := directStep.Check(view); result != ter.TesSUCCESS {
 						return nil, result
 					}
 					strand = append(strand, directStep)
@@ -766,7 +766,7 @@ func (ctx *StrandContext) buildStrandSteps(
 				}
 				directStep := ctx.newDirectStepI(cur.account, curIssue.Issuer, curIssue.Currency, prevStep, len(strand) == 0, false)
 				// Check NoRipple constraint
-				if result := ctx.checkDirectStep(directStep, view, prevStep); result != ter.TesSUCCESS {
+				if result := directStep.Check(view); result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -822,7 +822,7 @@ func (ctx *StrandContext) buildStrandSteps(
 				}
 				directStep := ctx.newDirectStepI(curIssue.Issuer, next.account, curIssue.Currency, prevStep, len(strand) == 0, isLast)
 				// Check NoRipple constraint
-				if result := ctx.checkDirectStep(directStep, view, prevStep); result != ter.TesSUCCESS {
+				if result := directStep.Check(view); result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -979,23 +979,4 @@ func (ctx *StrandContext) newDirectStepI(src, dst [20]byte, currency string, pre
 	step := NewDirectStepI(src, dst, currency, prevStep, isFirst, isLast)
 	step.offerCrossing = ctx.OfferCrossing
 	return step
-}
-
-// checkDirectStep validates a DirectStepI during strand building.
-// For offer crossing, skips trust line existence and authorization checks
-// but STILL runs the freeze check (common base class checks).
-// Reference: rippled DirectStepI<TDerived>::check() runs checkFreeze before
-// delegating to DirectIOfferCrossingStep::check() which returns tesSUCCESS.
-func (ctx *StrandContext) checkDirectStep(step *DirectStepI, view *PaymentSandbox, prevStep Step) ter.Result {
-	if ctx.OfferCrossing {
-		// Run common checks that apply to both payments and offer crossing.
-		// Reference: rippled DirectStepI<TDerived>::check() lines 906-912
-		if !(step.isFirst && step.isLast) {
-			if result := checkFreezeAndLPToken(view, step.src, step.dst, step.currency); result != ter.TesSUCCESS {
-				return result
-			}
-		}
-		return ter.TesSUCCESS
-	}
-	return step.CheckWithPrevStep(view, prevStep)
 }
