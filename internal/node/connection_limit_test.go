@@ -129,7 +129,7 @@ func TestLimitedListenerRejectsAtCapacityAndAdmitsAfterClose(t *testing.T) {
 
 	secondServer, secondClient := net.Pipe()
 	t.Cleanup(func() { _ = secondClient.Close() })
-	require.NoError(t, secondClient.SetReadDeadline(time.Now().Add(time.Second)))
+	require.NoError(t, secondClient.SetReadDeadline(time.Now().Add(progressTimeout)))
 	listener.enqueue(secondServer)
 
 	accepted := make(chan net.Conn, 1)
@@ -145,7 +145,7 @@ func TestLimitedListenerRejectsAtCapacityAndAdmitsAfterClose(t *testing.T) {
 
 	buffer := make([]byte, 1)
 	_, err = secondClient.Read(buffer)
-	require.Error(t, err)
+	require.ErrorIs(t, err, io.EOF)
 
 	require.NoError(t, first.Close())
 	thirdServer, thirdClient := net.Pipe()

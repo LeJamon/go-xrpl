@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -43,6 +44,8 @@ func newConnectionLimitTestTransports(t *testing.T, protocol string, limit int) 
 		systemListen,
 	)
 	require.NoError(t, err)
+	// Keep the idle connection in its slot until the test closes it.
+	bound.http[0].server.ReadHeaderTimeout = -1
 	require.NoError(t, bound.serve(xrpllog.Discard()))
 	t.Cleanup(func() {
 		for _, server := range append(append([]*boundHTTPServer(nil), bound.ws...), bound.http...) {
@@ -69,11 +72,12 @@ func TestRPCConnectionLimitCountsIdleTCPConnections(t *testing.T) {
 
 	second, err := net.Dial("tcp", address)
 	require.NoError(t, err)
-	require.NoError(t, second.SetDeadline(time.Now().Add(time.Second)))
+	t.Cleanup(func() { _ = second.Close() })
+	require.NoError(t, second.SetDeadline(time.Now().Add(progressTimeout)))
 	_, _ = io.WriteString(second, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
-	_, err = bufio.NewReader(second).ReadString('\n')
-	require.Error(t, err)
-	_ = second.Close()
+	line, err := bufio.NewReader(second).ReadString('\n')
+	require.Empty(t, line)
+	require.True(t, errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET), "expected the listener to close the connection, got %v", err)
 
 	require.NoError(t, first.Close())
 	require.Eventually(t, func() bool {
