@@ -141,7 +141,6 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.validatedSignTime = closed.CloseTime()
 	s.putHistoryLocked(closed)
 	s.evictOldHistoryLocked(closedSeq)
-	s.requeueResidentHolesLocked(closedSeq)
 	s.openLedger = newOpen
 	s.tickLoadFeeLocked()
 
@@ -796,7 +795,6 @@ func (s *Service) setValidatedLedgerAt(ctx context.Context, seq uint32, expected
 		}
 	}
 	s.enqueuePersist(l)
-	s.requeueResidentHolesLocked(seq)
 	notification := s.validatedLedgerNotificationLocked(previousValidated)
 	s.dispatchLedgerEvent(event)
 	s.historyComponent.mu.Unlock()

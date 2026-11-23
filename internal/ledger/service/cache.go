@@ -61,6 +61,37 @@ func (s *Service) ensureCompleteLedgerStateLocked() {
 	}
 }
 
+func (s *Service) pruneFailedValidatedLedgersLocked(latestValidatedSeq uint32) {
+	if len(s.failedValidatedLedgers) == 0 {
+		return
+	}
+	window := s.ledgerCacheSize()
+	cutoff := uint32(0)
+	if latestValidatedSeq > window {
+		cutoff = latestValidatedSeq - window
+	}
+	for seq := range s.failedValidatedLedgers {
+		if seq < cutoff || (s.completeLedgerFloor != 0 && seq < s.completeLedgerFloor) {
+			delete(s.failedValidatedLedgers, seq)
+		}
+	}
+	limit := int(window)
+	if limit < 1 {
+		limit = 1
+	}
+	for len(s.failedValidatedLedgers) > limit {
+		var oldest uint32
+		first := true
+		for seq := range s.failedValidatedLedgers {
+			if first || seq < oldest {
+				oldest = seq
+				first = false
+			}
+		}
+		delete(s.failedValidatedLedgers, oldest)
+	}
+}
+
 func (s *Service) beginValidatedPersistence(seq uint32, hash [32]byte) uint64 {
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
@@ -87,17 +118,34 @@ func (s *Service) recordPersistOutcome(seq uint32, success bool) {
 }
 
 func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success bool) {
+	s.recordValidatedPersistenceForLedger(seq, token, success, nil)
+}
+
+func (s *Service) recordValidatedPersistenceForLedger(seq uint32, token uint64, success bool, l *ledger.Ledger) {
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
 	s.ensureCompleteLedgerStateLocked()
 	if s.completeLedgerTokens[seq] != token {
 		return
 	}
+	trackedHash := s.completeLedgerHashes[seq]
 	delete(s.completeLedgerTokens, seq)
 	if !success || seq < s.completeLedgerFloor {
 		delete(s.completeLedgerHashes, seq)
 		s.completedLedgers.remove(seq)
+		if seq < s.completeLedgerFloor {
+			delete(s.failedValidatedLedgers, seq)
+		} else if l != nil {
+			if s.failedValidatedLedgers == nil {
+				s.failedValidatedLedgers = make(map[uint32]*ledger.Ledger)
+			}
+			s.failedValidatedLedgers[seq] = l
+			s.pruneFailedValidatedLedgersLocked(seq)
+		}
 		return
+	}
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() == trackedHash {
+		delete(s.failedValidatedLedgers, seq)
 	}
 	s.completedLedgers.add(seq)
 }
@@ -115,6 +163,7 @@ func (s *Service) invalidateCompleteLedger(seq uint32) {
 	delete(s.completeLedgerTokens, seq)
 	delete(s.completeLedgerHashes, seq)
 	s.completedLedgers.remove(seq)
+	delete(s.failedValidatedLedgers, seq)
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
 	s.invalidatePersistedValidatedTip(seq, seq)
@@ -135,6 +184,7 @@ func (s *Service) invalidateEvictedLedger(seq uint32, hash [32]byte) {
 		delete(s.completeLedgerHashes, seq)
 		s.completedLedgers.remove(seq)
 	}
+	delete(s.failedValidatedLedgers, seq)
 	s.completeMu.Unlock()
 	if s.nodeStore != nil {
 		s.persistQueue = append(s.persistQueue, &persistJob{
@@ -155,6 +205,9 @@ func (s *Service) invalidateCompleteLedgerHash(seq uint32, hash [32]byte) {
 	}
 	s.completeMu.Lock()
 	s.ensureCompleteLedgerStateLocked()
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() == hash {
+		delete(s.failedValidatedLedgers, seq)
+	}
 	if s.completeLedgerHashes[seq] == hash {
 		delete(s.completeLedgerTokens, seq)
 		delete(s.completeLedgerHashes, seq)
@@ -186,6 +239,11 @@ func (s *Service) invalidateCompleteLedgerRange(start, end uint32) {
 	for seq := range s.completeLedgerHashes {
 		if seq >= start && seq <= end {
 			delete(s.completeLedgerHashes, seq)
+		}
+	}
+	for seq := range s.failedValidatedLedgers {
+		if seq >= start && seq <= end {
+			delete(s.failedValidatedLedgers, seq)
 		}
 	}
 	s.completedLedgers.removeRange(start, end)
@@ -221,6 +279,11 @@ func (s *Service) clampCompleteLedgers(floor uint32) {
 	for seq := range s.completeLedgerHashes {
 		if seq < floor {
 			delete(s.completeLedgerHashes, seq)
+		}
+	}
+	for seq := range s.failedValidatedLedgers {
+		if seq < floor {
+			delete(s.failedValidatedLedgers, seq)
 		}
 	}
 	s.completedLedgers.removeRange(0, floor-1)
@@ -334,12 +397,23 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 		return
 	}
 	cutoff := latestValidatedSeq - window
+	s.completeMu.Lock()
+	s.pruneFailedValidatedLedgersLocked(latestValidatedSeq)
+	s.completeMu.Unlock()
 	for seq := range s.ledgerHistory {
 		if seq > cutoff {
 			continue
 		}
-		if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable {
-			if l := s.ledgerHistory[seq]; l != nil {
+		l := s.ledgerHistory[seq]
+		failed := false
+		if l != nil {
+			s.completeMu.RLock()
+			retained := s.failedValidatedLedgers[seq]
+			failed = retained != nil && retained.Hash() == l.Hash()
+			s.completeMu.RUnlock()
+		}
+		if !failed {
+			if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable && l != nil {
 				s.invalidateEvictedLedger(seq, l.Hash())
 			}
 		}

@@ -626,16 +626,17 @@ func New(cfg Config) (*Service, error) {
 			publicationErrors:     make(chan error, 1),
 		},
 		historyComponent: historyComponent{
-			ledgerHistory:        make(map[uint32]*ledger.Ledger),
-			ledgerByHash:         make(map[[32]byte]uint32),
-			persistedLedgers:     make(map[[32]byte]*ledger.Ledger),
-			txIndex:              make(map[[32]byte]uint32),
-			txPositionIndex:      make(map[[32]byte]uint32),
-			txHashesBySeq:        make(map[uint32][][32]byte),
-			completedLedgers:     newCompleteLedgerSet(),
-			completeLedgerHashes: make(map[uint32][32]byte),
-			completeLedgerTokens: make(map[uint32]uint64),
-			sweepInterval:        sweepInterval,
+			ledgerHistory:          make(map[uint32]*ledger.Ledger),
+			ledgerByHash:           make(map[[32]byte]uint32),
+			persistedLedgers:       make(map[[32]byte]*ledger.Ledger),
+			txIndex:                make(map[[32]byte]uint32),
+			txPositionIndex:        make(map[[32]byte]uint32),
+			txHashesBySeq:          make(map[uint32][][32]byte),
+			completedLedgers:       newCompleteLedgerSet(),
+			completeLedgerHashes:   make(map[uint32][32]byte),
+			completeLedgerTokens:   make(map[uint32]uint64),
+			failedValidatedLedgers: make(map[uint32]*ledger.Ledger),
+			sweepInterval:          sweepInterval,
 		},
 		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
 		validationCandidates: make(map[uint32]*ledger.Ledger),
@@ -2311,6 +2312,13 @@ func (s *Service) SetMinimumOnlineFunc(fn func() uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.minimumOnlineFunc = fn
+}
+
+// AdvanceMinimumOnlineFloor publishes a retention transition to persistence
+// before online deletion starts. Older queued saves and failed local-repair
+// owners are canceled or discarded while their node-store trees still exist.
+func (s *Service) AdvanceMinimumOnlineFloor(floor uint32) {
+	s.clampCompleteLedgers(floor)
 }
 
 // IsStandalone returns true if running in standalone mode

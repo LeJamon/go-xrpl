@@ -406,7 +406,10 @@ func (r *nodeRuntime) configureMaintenance() error {
 				}
 				r.rotator.SetStateRefresh(
 					r.ledger.RefreshValidatedState,
-					r.nodeFamily.SetMinimumLedgerSeq,
+					func(minimumOnline uint32) {
+						r.ledger.AdvanceMinimumOnlineFloor(minimumOnline)
+						r.nodeFamily.SetMinimumLedgerSeq(minimumOnline)
+					},
 					func() func() {
 						r.ledger.InvalidateFastLoadCheckpointEligibility()
 						finish := r.nodeFamily.BeginPrune()
@@ -443,6 +446,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 	}
 	if r.appConfig.NodeDB.EarliestSeq > 0 || r.rotator != nil {
 		r.ledger.SetMinimumOnlineFunc(r.retentionFloor)
+		r.ledger.AdvanceMinimumOnlineFloor(r.retentionFloor())
 		if r.nodeFamily != nil {
 			r.nodeFamily.SetMinimumLedgerSeq(r.retentionFloor())
 		}
