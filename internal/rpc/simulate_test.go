@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -746,6 +747,114 @@ func TestSimulateMethodBinarySentinelRoundTripAndJSONBoundary(t *testing.T) {
 	_, rpcErr = (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+}
+
+const simulateMPTIssuanceID = "000000010000000000000000000000000000000000000001"
+
+func simulateMPTPaymentFields(value any, txnSignature string) map[string]any {
+	return map[string]any{
+		"TransactionType": "Payment",
+		"Account":         validAccountAddress,
+		"Destination":     validAccountAddress,
+		"Amount": map[string]any{
+			"value":           value,
+			"mpt_issuance_id": simulateMPTIssuanceID,
+		},
+		"Fee":           "10",
+		"Sequence":      uint32(1),
+		"SigningPubKey": "",
+		"TxnSignature":  txnSignature,
+	}
+}
+
+func encodeSimulateMPTBlob(t *testing.T, value any, txnSignature string) string {
+	t.Helper()
+	blob, err := binarycodec.EncodeDecodedFields(simulateMPTPaymentFields(value, txnSignature))
+	require.NoError(t, err)
+	return strings.ToUpper(hex.EncodeToString(blob))
+}
+
+func TestSimulateMethod_MPTNegativeZeroCanonicalizesPublicProjection(t *testing.T) {
+	negativeZeroBlob := encodeSimulateMPTBlob(t, binarycodectypes.RawMPTValue{Negative: true}, "")
+	positiveZeroBlob := encodeSimulateMPTBlob(t, "0", "")
+
+	decodedBlob, err := hex.DecodeString(negativeZeroBlob)
+	require.NoError(t, err)
+	decoded, err := binarycodec.DecodeBytesAllowOverCap(decodedBlob)
+	require.NoError(t, err)
+	amount, ok := decoded["Amount"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, binarycodectypes.RawMPTValue{Negative: true}, amount["value"])
+
+	for _, binaryOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("binary=%t", binaryOutput), func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleUser,
+				ApiVersion: types.ApiVersion2,
+				Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+			}
+			paramsJSON, err := json.Marshal(map[string]any{
+				"tx_blob": strings.ToLower(negativeZeroBlob),
+				"binary":  binaryOutput,
+			})
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+
+			if binaryOutput {
+				assert.Equal(t, positiveZeroBlob, response["tx_blob"])
+				return
+			}
+
+			txJSON, ok := response["tx_json"].(map[string]any)
+			require.True(t, ok)
+			amount, ok := txJSON["Amount"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "0", amount["value"])
+			assert.Equal(t, strings.ToUpper(simulateMPTIssuanceID), amount["mpt_issuance_id"])
+		})
+	}
+}
+
+func TestSimulateMethod_MPTOverCapAmountBlobReturnsInvalidParams(t *testing.T) {
+	paramsJSON, err := json.Marshal(map[string]any{
+		"tx_blob": encodeSimulateMPTBlob(t, binarycodectypes.RawMPTValue{Magnitude: 1 << 63}, ""),
+	})
+	require.NoError(t, err)
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+	}
+	_, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "Field 'tx_json.Amount' has invalid data.", rpcErr.Message)
+}
+
+func TestSimulateMethod_SignedMPTOverCapBlobWinsAutofill(t *testing.T) {
+	paramsJSON, err := json.Marshal(map[string]any{
+		"tx_blob": encodeSimulateMPTBlob(t, binarycodectypes.RawMPTValue{Magnitude: 1 << 63}, "ABCD"),
+	})
+	require.NoError(t, err)
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+	}
+	_, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcTX_SIGNED, rpcErr.Code)
+	assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
+	assert.Equal(t, "Transaction should not be signed.", rpcErr.Message)
 }
 
 func TestSimulateMethod_MPTokensV2UsesCurrentRules(t *testing.T) {
