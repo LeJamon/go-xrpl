@@ -87,7 +87,7 @@ func TestCurrencyCodeMatchesReference(t *testing.T) {
 	}
 	codes := make([]string, 0, 8032)
 	codes = append(codes,
-		"", "1", "XRP", "xrp", "Xrp", "xRP", "0xXRP", "0x", "0x1", "0x0x", "0xUSD", "USD", "usd",
+		"", "0", "1", "XRP", "xrp", "Xrp", "xRP", "0xXRP", "0x", "0x1", "0x0x", "0xUSD", "USD", "usd",
 		"US", "USDT", "U", "é", "éU", "Ué", "€", "\u0000\u0000\u0000",
 		strings.Repeat("0", 40), "0x"+strings.Repeat("0", 40), strings.Repeat("0", 39)+"1",
 		strings.Repeat("g", 40), strings.Repeat("0", 38)+"zz", strings.Repeat("0", 39), strings.Repeat("0", 41),
@@ -125,7 +125,7 @@ func TestCurrencyCodeMatchesReference(t *testing.T) {
 }
 
 func FuzzEncodeCurrencyCodeDifferential(f *testing.F) {
-	for _, s := range []string{"", "1", "XRP", "USD", "usd", "0xUSD", "U$D", "U D", "é", "US\xff",
+	for _, s := range []string{"", "0", "1", "XRP", "USD", "usd", "0xA", "0x1", "0xUSD", "U$D", "U D", "é", "US\xff",
 		"0158415500000000C1F76FF6ECB0BAC600000000", "0x0000000000000000000000005553440000000000",
 		strings.Repeat("g", 40)} {
 		f.Add(s)

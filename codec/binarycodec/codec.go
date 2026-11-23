@@ -99,17 +99,23 @@ func hexUpper(src []byte) string {
 // EncodeBytes does not mutate the caller-supplied map. An unknown field name
 // is treated as an error rather than silently dropped — see [ErrUnknownField].
 func EncodeBytes(json map[string]any) ([]byte, error) {
-	return encodeBytes(json, false)
+	return encodeBytes(json, types.NewSTObject)
+}
+
+// EncodeDecodedFields re-encodes a field map produced by the binary decoder.
+// It preserves reserved currency values that external JSON cannot specify.
+func EncodeDecodedFields(fields map[string]any) ([]byte, error) {
+	return encodeBytes(fields, types.NewDecodedSTObject)
 }
 
 // EncodeBytesTrusted encodes a protocol object constructed by trusted internal
 // code. Unlike EncodeBytes, it does not apply the JSON-input-only 512-element
 // array limit. Unknown fields and all binary-format validation remain enforced.
 func EncodeBytesTrusted(json map[string]any) ([]byte, error) {
-	return encodeBytes(json, true)
+	return encodeBytes(json, types.NewTrustedSTObject)
 }
 
-func encodeBytes(json map[string]any, trusted bool) ([]byte, error) {
+func encodeBytes(json map[string]any, newObject func(*serdes.BinarySerializer) *types.STObject) ([]byte, error) {
 	defs := definitions.Get()
 	for k := range json {
 		if !defs.HasField(k) {
@@ -118,11 +124,7 @@ func encodeBytes(json map[string]any, trusted bool) ([]byte, error) {
 	}
 
 	serializer := serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec())
-	st := types.NewSTObject(serializer)
-	if trusted {
-		st = types.NewTrustedSTObject(serializer)
-	}
-	return st.FromJSON(json)
+	return newObject(serializer).FromJSON(json)
 }
 
 // Encode converts a JSON transaction object to a hex string in the canonical
@@ -146,17 +148,7 @@ func EncodeForMultisigning(json map[string]any, xrpAccountID string) (string, er
 // Counterparty and sponsor prefixes are enabled by cleanupEnabled; ordinary
 // transaction signatures always use the legacy transaction prefix.
 func EncodeForSigningRole(json map[string]any, role SigningRole, cleanupEnabled bool) (string, error) {
-	prefix, err := signingPrefix(role, false, cleanupEnabled)
-	if err != nil {
-		return "", err
-	}
-
-	encoded, err := Encode(removeNonSigningFields(json))
-	if err != nil {
-		return "", err
-	}
-
-	return prefix + encoded, nil
+	return encodeSigningFields(json, nil, role, cleanupEnabled, EncodeBytes)
 }
 
 // EncodeForMultisigningRole encodes a transaction for a role-specific
@@ -168,16 +160,7 @@ func EncodeForMultisigningRole(
 	role SigningRole,
 	cleanupEnabled bool,
 ) (string, error) {
-	prefix, err := signingPrefix(role, true, cleanupEnabled)
-	if err != nil {
-		return "", err
-	}
-
-	signing := removeNonSigningFields(json)
-	if role == TransactionRole {
-		signing["SigningPubKey"] = ""
-	}
-	return encodeForMultisigningWithPrefix(signing, xrpAccountID, prefix)
+	return encodeSigningFields(json, &xrpAccountID, role, cleanupEnabled, EncodeBytes)
 }
 
 // EncodeForMultisigningTarget encodes a transaction for a multi-signature held
@@ -187,23 +170,33 @@ func EncodeForMultisigningTarget(json map[string]any, xrpAccountID string) (stri
 	return EncodeForMultisigningRole(json, xrpAccountID, CounterpartyRole, false)
 }
 
-func encodeForMultisigningWithPrefix(
-	signing map[string]any,
-	xrpAccountID string,
-	prefix string,
-) (string, error) {
-	st := &types.AccountID{}
-	suffix, err := st.FromJSON(xrpAccountID)
+// EncodeDecodedSigningFields builds the signing preimage of a transaction decoded
+// from binary. A non-nil signer selects the multisigning preimage for that account.
+func EncodeDecodedSigningFields(fields map[string]any, signer *string, role SigningRole, cleanupEnabled bool) (string, error) {
+	return encodeSigningFields(fields, signer, role, cleanupEnabled, EncodeDecodedFields)
+}
+
+func encodeSigningFields(fields map[string]any, signer *string, role SigningRole, cleanupEnabled bool, encode func(map[string]any) ([]byte, error)) (string, error) {
+	prefix, err := signingPrefix(role, signer != nil, cleanupEnabled)
 	if err != nil {
 		return "", err
 	}
-
-	encoded, err := Encode(signing)
+	signing := removeNonSigningFields(fields)
+	var suffix []byte
+	if signer != nil {
+		if role == TransactionRole {
+			signing["SigningPubKey"] = ""
+		}
+		suffix, err = (&types.AccountID{}).FromJSON(*signer)
+		if err != nil {
+			return "", err
+		}
+	}
+	encoded, err := encode(signing)
 	if err != nil {
 		return "", err
 	}
-
-	return prefix + encoded + hexUpper(suffix), nil
+	return prefix + hexUpper(encoded) + hexUpper(suffix), nil
 }
 
 func signingPrefix(role SigningRole, multiSigning, cleanupEnabled bool) (string, error) {
@@ -380,7 +373,7 @@ func removeNonSigningFields(json map[string]any) map[string]any {
 }
 
 // DecodeBytes decodes canonical binary bytes into a JSON transaction object.
-// Prefer this over Decode on hot paths that already hold the raw bytes.
+// Use [EncodeDecodedFields] to round-trip reserved currency values.
 func DecodeBytes(b []byte) (map[string]any, error) {
 	p := serdes.NewBinaryParser(b, definitions.Get())
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
@@ -409,7 +402,7 @@ func DecodeBytesWithTemplate(b []byte, templateName string) (map[string]any, err
 }
 
 // Decode decodes a hex string in the canonical binary format into a JSON
-// transaction object.
+// transaction object. Use [EncodeDecodedFields] to round-trip reserved currencies.
 func Decode(hexEncoded string) (map[string]any, error) {
 	b, err := hex.DecodeString(hexEncoded)
 	if err != nil {

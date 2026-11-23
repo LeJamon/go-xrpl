@@ -135,7 +135,7 @@ func appendAmount(dst []byte, v any) ([]byte, error) {
 			return binary.BigEndian.AppendUint64(dst, wire), nil
 		}
 	}
-	return appendCodecValue(dst, &types.Amount{}, v)
+	return appendCodecValue(dst, "Amount", v)
 }
 
 func (a *AccountRoot) balanceForEncode() any {
@@ -199,22 +199,22 @@ func appendSTArray(dst []byte, field string, elements []any) ([]byte, error) {
 	if len(elements) > types.MaxJSONArrayElements {
 		return nil, &types.JSONArrayTooLargeError{Field: field}
 	}
-	return appendCodecValue(dst, &types.STArray{}, elements)
+	return appendCodecValue(dst, "STArray", elements)
 }
 
 // appendInnerObjectField writes a whole nested-object field: header, body and
 // end marker. The codec applies an inner object's template only to a field of
 // an enclosing object, so the field is encoded as the sole member of one.
 func appendInnerObjectField(dst []byte, field string, object map[string]any) ([]byte, error) {
-	encoded, err := binarycodec.EncodeBytes(map[string]any{field: object})
+	encoded, err := binarycodec.EncodeDecodedFields(map[string]any{field: object})
 	if err != nil {
 		return nil, err
 	}
 	return append(dst, encoded...), nil
 }
 
-func appendCodecValue(dst []byte, st types.SerializedType, v any) ([]byte, error) {
-	encoded, err := st.FromJSON(v)
+func appendCodecValue(dst []byte, typeName string, v any) ([]byte, error) {
+	encoded, err := types.EncodeDecodedValue(typeName, v)
 	if err != nil {
 		return nil, err
 	}

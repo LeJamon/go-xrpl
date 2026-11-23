@@ -75,7 +75,7 @@ func serializedObjectBytes(fields map[string]any) ([]byte, error) {
 	if err := validateSerializedJSONNumbers(fields); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(fields)
+	return binarycodec.EncodeDecodedFields(fields)
 }
 
 func validateSerializedJSONNumbers(value any) error {

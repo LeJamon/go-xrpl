@@ -379,7 +379,7 @@ func parseSourceCurrencies(
 
 		if sendMax != nil {
 			// If the currencies don't match, ignore the source currency.
-			if sendMaxIssue.IsMPT || currency != canonCurrency(sendMaxIssue.Currency) {
+			if sendMaxIssue.IsMPT || keylet.CurrencyBytes(currencyValue) != keylet.CurrencyBytes(sendMaxIssue.Currency) {
 				continue
 			}
 			// If neither issuer is the source and they are not equal, the

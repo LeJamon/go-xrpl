@@ -330,7 +330,7 @@ func BindRawBytes(tx Transaction, raw []byte) error {
 	if err != nil {
 		return err
 	}
-	canonical, err := binarycodec.EncodeBytes(rawFields)
+	canonical, err := binarycodec.EncodeDecodedFields(rawFields)
 	if err != nil {
 		return err
 	}
@@ -348,7 +348,7 @@ func bindCanonicalRawBytes(tx Transaction, canonical []byte) error {
 	if err != nil {
 		return err
 	}
-	currentBytes, err := binarycodec.EncodeBytes(currentFields)
+	currentBytes, err := binarycodec.EncodeDecodedFields(currentFields)
 	if err != nil {
 		return err
 	}
@@ -377,7 +377,14 @@ func serializeCurrentTransaction(tx Transaction) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return binarycodec.EncodeBytes(txMap)
+	return encodeCurrentTransactionFields(tx, txMap)
+}
+
+func encodeCurrentTransactionFields(tx Transaction, fields map[string]any) ([]byte, error) {
+	if _, bound := tx.GetCommon().RawFieldsIdentity(); bound {
+		return binarycodec.EncodeDecodedFields(fields)
+	}
+	return binarycodec.EncodeBytes(fields)
 }
 
 func currentTransactionFields(tx Transaction) (map[string]any, error) {

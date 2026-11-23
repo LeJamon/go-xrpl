@@ -215,7 +215,7 @@ func (m *TxMethod) buildResponseV1(
 	response := map[string]any{}
 
 	if binary {
-		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
+		txBlob, err := encodeCanonicalTransaction(storedTx.TxJSON)
 		if err == nil {
 			response["tx"] = txBlob
 		}
@@ -269,7 +269,7 @@ func (m *TxMethod) buildResponseV2(
 	var txJSON map[string]any
 
 	if binary {
-		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
+		txBlob, err := encodeCanonicalTransaction(storedTx.TxJSON)
 		if err == nil {
 			response["tx_blob"] = txBlob
 		}

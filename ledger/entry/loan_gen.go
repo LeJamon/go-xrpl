@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1704,7 +1703,7 @@ func (l *Loan) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (l *Loan) ToMap() map[string]any {
@@ -1818,7 +1817,7 @@ func (l *Loan) Encode() ([]byte, error) {
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
-// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
 // direct binary writer.
 func (l *Loan) encodeViaMap() ([]byte, error) {
 	if err := l.validateEncode(); err != nil {
@@ -1831,7 +1830,7 @@ func (l *Loan) encodeViaMap() ([]byte, error) {
 	if l.present&loanBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:
@@ -1917,42 +1916,42 @@ func (l *Loan) appendBinary(dst []byte) ([]byte, error) {
 		}
 	}
 	if l.present&loanBitLoanOriginationFee != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x99), &types.Number{}, l.LoanOriginationFee); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x99), "Number", l.LoanOriginationFee); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitLoanServiceFee != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x9A), &types.Number{}, l.LoanServiceFee); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x9A), "Number", l.LoanServiceFee); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitLatePaymentFee != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x9B), &types.Number{}, l.LatePaymentFee); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x9B), "Number", l.LatePaymentFee); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitClosePaymentFee != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x9C), &types.Number{}, l.ClosePaymentFee); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x9C), "Number", l.ClosePaymentFee); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitPrincipalOutstanding != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x9D), &types.Number{}, l.PrincipalOutstanding); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x9D), "Number", l.PrincipalOutstanding); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitTotalValueOutstanding != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x9F), &types.Number{}, l.TotalValueOutstanding); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x9F), "Number", l.TotalValueOutstanding); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitPeriodicPayment != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x90, 0x10), &types.Number{}, l.PeriodicPayment); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x90, 0x10), "Number", l.PeriodicPayment); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanBitManagementFeeOutstanding != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x90, 0x11), &types.Number{}, l.ManagementFeeOutstanding); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x90, 0x11), "Number", l.ManagementFeeOutstanding); err != nil {
 			return nil, err
 		}
 	}

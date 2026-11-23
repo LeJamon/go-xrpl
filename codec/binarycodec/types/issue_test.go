@@ -28,6 +28,22 @@ func TestIssue_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name: "pass - zero currency alias is native XRP",
+			input: map[string]any{
+				"currency": "0",
+			},
+			expected:    make([]byte, 20),
+			expectedErr: nil,
+		},
+		{
+			name: "pass - empty currency alias is native XRP",
+			input: map[string]any{
+				"currency": "",
+			},
+			expected:    make([]byte, 20),
+			expectedErr: nil,
+		},
+		{
 			name: "pass - valid xrp issue object with null issuer",
 			input: map[string]any{
 				"currency": "XRP",
@@ -48,6 +64,22 @@ func TestIssue_FromJson(t *testing.T) {
 				174, 18, 58, 133, 86, 243, 207, 145, 21, 71,
 				17, 55, 106, 251, 15, 137, 79, 131, 43, 61,
 			},
+		},
+		{
+			name: "pass - 0xA is a three-character issue currency",
+			input: map[string]any{
+				"currency": "0xA",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expected: mustDecodeHex("0000000000000000000000003078410000000000AE123A8556F3CF91154711376AFB0F894F832B3D"),
+		},
+		{
+			name: "pass - 0x1 is a three-character issue currency",
+			input: map[string]any{
+				"currency": "0x1",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expected: mustDecodeHex("0000000000000000000000003078310000000000AE123A8556F3CF91154711376AFB0F894F832B3D"),
 		},
 		{
 			name: "pass - valid xrp issue object",
@@ -145,6 +177,22 @@ func TestIssue_FromJson(t *testing.T) {
 			expectedErr: ErrInvalidCurrency,
 		},
 		{
+			name: "fail - 0x-prefixed ISO-looking currency",
+			input: map[string]any{
+				"currency": "0xUSD",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: &InvalidCodeError{"0xUSD"},
+		},
+		{
+			name: "fail - 0x-prefixed hex currency",
+			input: map[string]any{
+				"currency": "0x0000000000000000000000005553440000000000",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: &InvalidCodeError{"0x0000000000000000000000005553440000000000"},
+		},
+		{
 			name: "fail - bad currency sentinel",
 			input: map[string]any{
 				"currency": "0000000000000000000000005852500000000000",
@@ -208,6 +256,11 @@ func TestIssue_ToJson(t *testing.T) {
 				"mpt_issuance_id": "BAADF00DBAADF00DBAADF00DBAADF00DBAADF00DBAADF00D",
 			},
 			err: nil,
+		},
+		{
+			name:  "non-native wire currency with native issuer",
+			input: append(append([]byte{}, noCurrencyBytes...), make([]byte, 20)...),
+			err:   ErrInvalidIssuer,
 		},
 		{
 			name:     "fail - truncated data",

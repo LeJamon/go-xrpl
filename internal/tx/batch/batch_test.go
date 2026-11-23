@@ -142,9 +142,7 @@ func TestBatchNoCurrencyJSONBoundary(t *testing.T) {
 			require.Error(t, err)
 			require.ErrorContains(t, err, "currency")
 
-			encoded, err := binarycodec.Encode(fields)
-			require.NoError(t, err)
-			blob, err := hex.DecodeString(encoded)
+			blob, err := binarycodec.EncodeDecodedFields(fields)
 			require.NoError(t, err)
 			parsed, err := tx.ParseFromBinary(blob)
 			require.NoError(t, err)

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
 	"sort"
 	"strings"
 
@@ -254,7 +253,7 @@ func checkSTTxMultiSign(transaction txcore.Transaction) string {
 		}
 		previous = signerID
 
-		payload, err := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		payload, err := encodeSigningFields(transaction, txMap, &signer.Account, binarycodec.TransactionRole, false)
 		if err != nil || !verifySignatureForKey(payload, signer.SigningPubKey, signer.TxnSignature, true) {
 			return "Invalid signature on account " + signer.Account + "."
 		}
@@ -462,7 +461,7 @@ func VerifyMultiSignature(tx txcore.Transaction, lookup SignerListLookup, mustBe
 		}
 
 		// Get the multi-signing payload for this specific signer
-		signingPayload, err := binarycodec.EncodeForMultisigning(copyMap(txMap), txSignerAccount)
+		signingPayload, err := encodeSigningFields(tx, txMap, &txSignerAccount, binarycodec.TransactionRole, false)
 		if err != nil {
 			return fmt.Errorf("failed to encode for multi-signing: %w", err)
 		}
@@ -520,7 +519,7 @@ func VerifyMultiSignatureCrypto(tx txcore.Transaction, mustBeFullyCanonical bool
 		if decErr != nil || len(pubKeyBytes) == 0 {
 			return ErrBadSignature
 		}
-		signingPayload, encErr := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		signingPayload, encErr := encodeSigningFields(tx, txMap, &signer.Account, binarycodec.TransactionRole, false)
 		if encErr != nil {
 			return fmt.Errorf("failed to encode for multi-signing: %w", encErr)
 		}
@@ -655,8 +654,7 @@ func verifyNestedMultiSign(
 		}
 		lastAccountID = accountID
 
-		payload, encErr := binarycodec.EncodeForMultisigningRole(
-			txMap, signer.Account, role, cleanupSigningEnabled(rules))
+		payload, encErr := encodeSigningFields(tx, txMap, &signer.Account, role, cleanupSigningEnabled(rules))
 		if encErr != nil {
 			return fmt.Errorf("%sInvalid signature on account %s.", prefix, signer.Account)
 		}
@@ -693,11 +691,14 @@ func SignSponsorWithRules(tx txcore.Transaction, pubKeyHex, privateKeyHex string
 	return &txcore.SponsorSignature{SigningPubKey: pubKeyHex, TxnSignature: sig}, nil
 }
 
-// copyMap creates a shallow copy of a map to avoid modifying the original
-func copyMap(m map[string]any) map[string]any {
-	result := make(map[string]any, len(m))
-	maps.Copy(result, m)
-	return result
+func encodeSigningFields(tx txcore.Transaction, fields map[string]any, signer *string, role binarycodec.SigningRole, cleanupEnabled bool) (string, error) {
+	if _, bound := tx.GetCommon().RawFieldsIdentity(); bound {
+		return binarycodec.EncodeDecodedSigningFields(fields, signer, role, cleanupEnabled)
+	}
+	if signer != nil {
+		return binarycodec.EncodeForMultisigningRole(fields, *signer, role, cleanupEnabled)
+	}
+	return binarycodec.EncodeForSigningRole(fields, role, cleanupEnabled)
 }
 
 func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
@@ -740,7 +741,7 @@ func getSigningPayloadForRole(tx txcore.Transaction, role binarycodec.SigningRol
 	if err != nil {
 		return "", err
 	}
-	return binarycodec.EncodeForSigningRole(txMap, role, cleanupSigningEnabled(rules))
+	return encodeSigningFields(tx, txMap, nil, role, cleanupSigningEnabled(rules))
 }
 
 func cleanupSigningEnabled(rules *amendment.Rules) bool {
@@ -946,7 +947,7 @@ func SignTransactionForMultiSignRole(tx txcore.Transaction, signerAccount, priva
 	if err != nil {
 		return "", fmt.Errorf("failed to flatten transaction: %w", err)
 	}
-	payload, err := binarycodec.EncodeForMultisigningRole(txMap, signerAccount, role, cleanupSigningEnabled(rules))
+	payload, err := encodeSigningFields(tx, txMap, &signerAccount, role, cleanupSigningEnabled(rules))
 	if err != nil {
 		return "", fmt.Errorf("failed to encode for multi-signing: %w", err)
 	}

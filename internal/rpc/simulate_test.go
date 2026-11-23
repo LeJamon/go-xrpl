@@ -692,6 +692,62 @@ func TestSimulateMethodCanonicalBlobAndHashProjection(t *testing.T) {
 	}
 }
 
+func TestSimulateMethodBinarySentinelRoundTripAndJSONBoundary(t *testing.T) {
+	const noCurrency = "0000000000000000000000000000000000000001"
+
+	baseTx := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         validAccountAddress,
+		"Destination":     validAccountAddress,
+		"Amount": map[string]any{
+			"currency": noCurrency,
+			"issuer":   validAccountAddress,
+			"value":    "1",
+		},
+		"Paths": []any{
+			[]any{
+				map[string]any{
+					"currency": noCurrency,
+					"issuer":   validAccountAddress,
+				},
+			},
+		},
+		"Fee":           "10",
+		"Sequence":      uint32(1),
+		"SigningPubKey": "",
+		"TxnSignature":  "",
+	}
+	blob, err := binarycodec.Encode(baseTx)
+	require.NoError(t, err)
+
+	mock := newMockLedgerServiceSimulate()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	paramsJSON, err := json.Marshal(map[string]any{
+		"tx_blob": strings.ToLower(blob),
+		"binary":  true,
+	})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	response, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, blob, response["tx_blob"])
+
+	textualCurrency, err := binarycodec.Decode(blob)
+	require.NoError(t, err)
+	paramsJSON, err = json.Marshal(map[string]any{"tx_json": textualCurrency})
+	require.NoError(t, err)
+	_, rpcErr = (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+}
+
 func TestSimulateMethod_MPTokensV2UsesCurrentRules(t *testing.T) {
 	const (
 		amountID  = "000000010000000000000000000000000000000000000001"

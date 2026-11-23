@@ -9,7 +9,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
@@ -155,7 +154,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, rpcInternalError("submit_multisigned: transaction flattening failed", encErr)
 	}
 	// Encode the transaction to binary
-	txBlob, encErr := binarycodec.Encode(canonicalMap)
+	txBlob, encErr := encodeCanonicalTransaction(canonicalMap)
 	if encErr != nil {
 		return nil, rpcInternalError("submit_multisigned: transaction encoding failed", encErr)
 	}

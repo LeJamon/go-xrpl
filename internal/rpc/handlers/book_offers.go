@@ -254,7 +254,7 @@ func sameBookAsset(a types.Amount, aIssuer [20]byte, b types.Amount, bIssuer [20
 	if a.IsMPT() || b.IsMPT() {
 		return a.IsMPT() && b.IsMPT() && strings.EqualFold(a.MPTIssuanceID, b.MPTIssuanceID)
 	}
-	return canonCurrency(a.Currency) == canonCurrency(b.Currency) && aIssuer == bIssuer
+	return keylet.CurrencyBytes(a.Currency) == keylet.CurrencyBytes(b.Currency) && aIssuer == bIssuer
 }
 
 // readAndValidateIssuer decodes the issuer field for one side of the book and
@@ -290,7 +290,7 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 		hasIssuer = true
 	}
 
-	isXRPCurrency := currency == "" || currency == "XRP"
+	isXRPCurrency := isNativeCurrency(currency)
 	isXRPIssuer := !hasIssuer || issuerID == xrpAccountID
 
 	if isXRPCurrency && !isXRPIssuer {
@@ -304,10 +304,14 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 	return issuerStr, issuerID, nil
 }
 
-// canonCurrency folds the two valid XRP spellings ("" and "XRP") to a single
-// form for equality checks.
+func isNativeCurrency(currency string) bool {
+	return keylet.CurrencyBytes(currency) == [20]byte{}
+}
+
+// canonCurrency folds every valid native-currency spelling to XRP for callers
+// that need a textual issue representation.
 func canonCurrency(c string) string {
-	if c == "" {
+	if isNativeCurrency(c) {
 		return "XRP"
 	}
 	return c
@@ -319,7 +323,7 @@ func canonCurrency(c string) string {
 // the user sent verbatim — by the time we get here it's been decoded
 // successfully, so re-encoding round-trip is unnecessary.
 func canonIssuerString(issuer, currency string) string {
-	if currency == "" || currency == "XRP" {
+	if isNativeCurrency(currency) {
 		return ""
 	}
 	return issuer
