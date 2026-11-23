@@ -637,10 +637,15 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 		after  []byte
 		key    [32]byte
 	}
+	type lineImage struct {
+		entry InvariantEntry
+		data  []byte
+	}
 	brokers := make(map[[32]byte]brokerState)
 	var unkeyedBrokers []brokerState
 	var deletedBrokers []brokerState
-	var lines, mpts [][]byte
+	var lines []lineImage
+	var mpts [][]byte
 	addBroker := func(id [32]byte) {
 		if _, ok := brokers[id]; !ok {
 			brokers[id] = brokerState{key: id}
@@ -698,7 +703,7 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 				return violation
 			}
 		case entry.TypeRippleState:
-			lines = append(lines, data)
+			lines = append(lines, lineImage{entry: e, data: data})
 		case entry.TypeMPToken:
 			mpts = append(mpts, data)
 		}
@@ -781,8 +786,8 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 		}
 		return nil
 	}
-	for _, data := range lines {
-		line, err := state.ParseRippleState(data)
+	for _, image := range lines {
+		line, err := image.entry.rippleState(image.data)
 		if err != nil {
 			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode RippleState: %v", err))
 		}

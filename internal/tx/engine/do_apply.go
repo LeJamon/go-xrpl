@@ -989,11 +989,7 @@ func (e *Engine) applyTable(table *applystate.ApplyStateTable, fee uint64) (*txc
 	}
 	if e.config.IsViewOpen() {
 		// Keep diagnostic metadata without committing its threading to the open view.
-		metadata, err := table.Preview()
-		if err != nil {
-			return nil, err
-		}
-		return metadata, table.ApplyUnthreaded()
+		return table.PreviewAndApplyUnthreaded()
 	}
 	return table.Apply()
 }
