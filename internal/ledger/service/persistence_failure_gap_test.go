@@ -251,7 +251,7 @@ func TestIngestHistoricalLedgerProvenBySkipList(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, fork.Close(forkTime, 0))
 			require.NotEqual(t, historical.Hash(), fork.Hash())
-			require.ErrorContains(t, ingestHistoricalLedgerCopy(ctx, svc, fork, test.prepared), "no canonical child")
+			require.ErrorContains(t, ingestHistoricalLedgerCopy(ctx, svc, fork, test.prepared), "current validated chain")
 
 			require.NoError(t, ingestHistoricalLedgerCopy(ctx, svc, historical, test.prepared))
 			held, err := svc.AdoptedLedgerBySequence(target)
@@ -352,7 +352,8 @@ func TestHistoricalProofRejectsInterveningValidatedTipChange(t *testing.T) {
 	txMap, err := target.TxMapSnapshot()
 	require.NoError(t, err)
 	proof := svc.skipListProvesHistory(ctx, &h)
-	require.True(t, proof.proven)
+	require.True(t, proof.found)
+	require.Equal(t, target.Hash(), proof.hash)
 	require.Same(t, tip, proof.tip)
 
 	replacement := makeStubLedger(t, tip.Sequence(), [32]byte{0xE2}, tip.ParentHash())

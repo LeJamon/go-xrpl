@@ -899,21 +899,9 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 }
 
 type historicalLedgerProof struct {
-	tip        *ledger.Ledger
-	targetSeq  uint32
-	targetHash [32]byte
-	checked    bool
-	proven     bool
-}
-
-// validFor requires the skip-list proof to have been computed from the same
-// validated frontier that is being published against. The caller holds
-// Service.mu while checking this field, so a provisional tip replacement
-// cannot slip between the check and the history commit.
-func (p historicalLedgerProof) validFor(s *Service, h *header.LedgerHeader) bool {
-	return p.checked && p.proven && h != nil && p.tip != nil &&
-		p.targetSeq == h.LedgerIndex && p.targetHash == h.Hash &&
-		s.validatedLedger == p.tip
+	tip   *ledger.Ledger
+	hash  [32]byte
+	found bool
 }
 
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated
@@ -949,13 +937,7 @@ func (s *Service) skipListProvesHistory(ctx context.Context, h *header.LedgerHea
 		return historicalLedgerProof{}
 	}
 	hash, ok, err := s.canonicalLedgerHashFromTip(ctx, tip, h.LedgerIndex)
-	return historicalLedgerProof{
-		tip:        tip,
-		targetSeq:  h.LedgerIndex,
-		targetHash: h.Hash,
-		checked:    err == nil && ok,
-		proven:     err == nil && ok && hash == h.Hash,
-	}
+	return historicalLedgerProof{tip: tip, hash: hash, found: err == nil && ok}
 }
 
 // ingestHistoricalLedgerWithStateLocked requires h to be the parent of its
@@ -985,16 +967,14 @@ func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *
 	// sync, so its parent link remains authoritative while the captured
 	// frontier is unchanged. Once that frontier moves, however, neither a
 	// cached child nor a same-sequence resident ledger may authorize history.
-	if s.validatedLedger != proof.tip {
+	if s.validatedLedger != proof.tip || (proof.found && proof.hash != hash) {
 		return fmt.Errorf("historical ledger %d is not on the current validated chain", seq)
 	}
-	if proof.checked && !proof.proven && (childExists || sameHistoricalLedger) {
-		return fmt.Errorf("historical ledger %d is not on the current validated chain", seq)
+	if !childExists && !proof.found && !(sameHistoricalLedger && existing.IsValidated()) {
+		return fmt.Errorf("historical ledger %d has no canonical child", seq)
 	}
 	if sameHistoricalLedger {
 		historical = existing
-	} else if !childExists && !proof.validFor(s, h) {
-		return fmt.Errorf("historical ledger %d has no canonical child", seq)
 	}
 	if !historical.IsValidated() {
 		if err := historical.SetValidated(); err != nil {
