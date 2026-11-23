@@ -17,6 +17,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 var amountErrSentinels = []error{
@@ -181,7 +182,7 @@ func integralAmountInputs(t testing.TB) []string {
 	return inputs
 }
 
-const conformanceCorpusDir = "../../../internal/testing/conformance/testdata/rippled-3.4.1-v4"
+var conformanceCorpusDir = filepath.Join("..", "..", "..", filepath.FromSlash(rippled.Pin.Corpus))
 
 // conformanceAmountValues returns the distinct value strings of every Amount
 // field decoded from the transactions, metadata and ledger entries of the
