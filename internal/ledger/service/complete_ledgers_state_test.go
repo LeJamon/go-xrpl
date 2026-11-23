@@ -438,7 +438,7 @@ func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {
 	}()
 	select {
 	case <-db.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("abandoned persistence did not reach the validated-tip store")
 	}
 
@@ -447,16 +447,16 @@ func TestCompleteLedgers_InvalidationRepairsInFlightValidatedTip(t *testing.T) {
 		svc.invalidateCompleteLedger(seq)
 		close(invalidationDone)
 	}()
-	require.Eventually(t, abandonedJob.canceled.Load, time.Second, time.Millisecond)
+	require.Eventually(t, abandonedJob.canceled.Load, progressTimeout, time.Millisecond)
 	close(db.release)
 	select {
 	case <-jobDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("abandoned persistence did not finish")
 	}
 	select {
 	case <-invalidationDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("invalidation did not repair the persisted tip")
 	}
 

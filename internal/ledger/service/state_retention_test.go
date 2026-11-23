@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -90,7 +89,7 @@ func TestStateRetentionRejectsStalePlan(t *testing.T) {
 			require.Equal(t, before, after)
 			require.True(t, svc.openLedgerMu.TryLock(), "failed admission must release the service guard")
 			svc.openLedgerMu.Unlock()
-			mutationCtx, mutationCancel := context.WithTimeout(t.Context(), time.Second)
+			mutationCtx, mutationCancel := context.WithTimeout(t.Context(), progressTimeout)
 			defer mutationCancel()
 			committed, err = db.RotateGeneration(mutationCtx, 40, 21)
 			require.NoError(t, err)
@@ -206,7 +205,7 @@ func TestStateRetentionDoesNotPublishPlanAfterSyncFailure(t *testing.T) {
 	_, guard, err := svc.PrepareStateRetention(t.Context(), 20, nil)
 	require.ErrorContains(t, err, "injected sync failure")
 	require.Nil(t, guard)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	committed, err := db.RotateGeneration(ctx, 20, 1)
 	require.NoError(t, err)

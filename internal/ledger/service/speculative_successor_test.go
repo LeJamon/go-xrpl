@@ -42,7 +42,7 @@ func TestFinishedSpeculationReusesMemoryForReplacement(t *testing.T) {
 			svc.mu.Unlock()
 			select {
 			case <-job.done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("canceled successor did not drain")
 			}
 			require.Equal(t, budget.limit, budget.Used())
@@ -128,7 +128,7 @@ func TestSpeculativeSuccessorStopDrainsRetiredAndPendingOwners(t *testing.T) {
 		svc.lifecycleMu.Lock()
 		defer svc.lifecycleMu.Unlock()
 		return svc.lifecycleState == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-done:
 		t.Fatal("shutdown returned with a retired worker still reading storage")
@@ -137,7 +137,7 @@ func TestSpeculativeSuccessorStopDrainsRetiredAndPendingOwners(t *testing.T) {
 	family.unblock()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not drain speculative ownership")
 	}
 	require.Zero(t, budget.Used())

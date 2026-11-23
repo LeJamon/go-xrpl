@@ -96,7 +96,7 @@ func TestDetachedIngressRelayCachePrecedesSuccessorPromotion(t *testing.T) {
 			require.Eventually(t, func() bool {
 				_, _, deferred, ok := svc.relayCacheGet(hash)
 				return ok && !deferred
-			}, 5*time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 
 			parent = svc.GetClosedLedger()
 			_, err = svc.AcceptConsensusResult(t.Context(), parent, [][]byte{blob}, nil, parent.CloseTime().Add(time.Second), true)
@@ -345,7 +345,7 @@ func TestDetachedIngressOwnedBatchStaleRetryReparsesAttemptAnnotations(t *testin
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		family.unblock()
 		t.Fatal("owned Batch ingress did not reach a blocked state read")
 	}
@@ -358,7 +358,7 @@ func TestDetachedIngressOwnedBatchStaleRetryReparsesAttemptAnnotations(t *testin
 	select {
 	case acceptErr := <-accepted:
 		require.NoError(t, acceptErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus acceptance blocked behind owned Batch ingress")
 	}
 	family.unblock()
@@ -436,7 +436,7 @@ func TestDetachedIngressDoesNotBlockConsensusAndPublishesRetry(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach a blocked state read")
 	}
 
@@ -448,7 +448,7 @@ func TestDetachedIngressDoesNotBlockConsensusAndPublishesRetry(t *testing.T) {
 	select {
 	case err := <-accepted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus acceptance blocked behind detached ingress")
 	}
 
@@ -482,7 +482,7 @@ func TestDetachedIngressStopDrainsBlockedApply(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach a blocked state read")
 	}
 
@@ -495,7 +495,7 @@ func TestDetachedIngressStopDrainsBlockedApply(t *testing.T) {
 		svc.lifecycleMu.Lock()
 		defer svc.lifecycleMu.Unlock()
 		return svc.lifecycleState == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-stopped:
 		t.Fatal("Stop returned while detached ingress was reading storage")
@@ -506,7 +506,7 @@ func TestDetachedIngressStopDrainsBlockedApply(t *testing.T) {
 	require.ErrorIs(t, <-submitted, errServiceNotRunning)
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain detached ingress")
 	}
 }
@@ -528,7 +528,7 @@ func TestDetachedIngressRejectsReplayFaultAtFence(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach a blocked state read")
 	}
 	require.NoError(t, recordTestReplayFault(svc.replayFaults, replayfault.Fault{Class: replayfault.ExecutionDisagreement}))
@@ -619,7 +619,7 @@ func TestDetachedIngressRejectsExhaustedMemory(t *testing.T) {
 	select {
 	case err := <-submitted:
 		require.ErrorIs(t, err, ErrPreferredTransitionMemory)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress waited for credits retained by unfinished work")
 	}
 	svc.Stop()
@@ -647,7 +647,7 @@ func TestDetachedIngressAdmissionBoundsWaitersAndStops(t *testing.T) {
 		admission.mu.Lock()
 		defer admission.mu.Unlock()
 		return len(admission.waiters) == detachedIngressWaitLimit
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	_, err = admission.acquire()
 	require.ErrorIs(t, err, errDetachedIngressBusy)
@@ -665,7 +665,7 @@ func TestDetachedIngressAdmissionBoundsWaitersAndStops(t *testing.T) {
 	releaseActive()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached ingress admission did not drain")
 	}
 
@@ -691,7 +691,7 @@ func TestDetachedIngressAdmissionStopDrainsHandedOffOwner(t *testing.T) {
 		admission.mu.Lock()
 		defer admission.mu.Unlock()
 		return len(admission.waiters) == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	releaseActive()
 	releaseOwner := <-ready
@@ -705,7 +705,7 @@ func TestDetachedIngressAdmissionStopDrainsHandedOffOwner(t *testing.T) {
 	releaseOwner()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stop did not wait for the handed-off owner")
 	}
 }

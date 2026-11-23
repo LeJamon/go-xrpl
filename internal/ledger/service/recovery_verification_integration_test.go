@@ -126,18 +126,18 @@ func testSharedRecoveryVerification(t *testing.T, preferredFirst bool) {
 			}
 		}
 		return false
-	}, 5*time.Second, time.Millisecond, "preferred recovery did not join the stored promotion verification")
+	}, progressTimeout, time.Millisecond, "preferred recovery did not join the stored promotion verification")
 	require.False(t, svc.preferredTransitionIsActive(), "cold verification must not own the preferred transition")
 	family.unblock()
 	select {
 	case err := <-preferred:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred recovery did not consume the completed verification")
 	}
 	select {
 	case <-promoted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stored promotion remained blocked after verification and publication")
 	}
 	require.Equal(t, int32(1), family.rootReads.Load(), "recovery repeated the full-state walk")

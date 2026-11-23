@@ -154,7 +154,7 @@ func TestPersistenceWaitDoesNotHoldStateTreeForPreferredPreparation(t *testing.T
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), headerValue, stateMap, txMap))
 	select {
 	case <-budget.attempted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("persistence did not reach its first bounded reservation")
 	}
 
@@ -179,12 +179,12 @@ func TestPersistenceWaitDoesNotHoldStateTreeForPreferredPreparation(t *testing.T
 	preparationStalled := false
 	select {
 	case result = <-preparedDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		preparationStalled = true
 		budget.allowSmallReservations(true)
 		select {
 		case result = <-preparedDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("preferred preparation did not unwind after releasing persistence")
 		}
 	}
@@ -196,13 +196,13 @@ func TestPersistenceWaitDoesNotHoldStateTreeForPreferredPreparation(t *testing.T
 		preparedOwner.Release()
 	})
 
-	waitCtx, cancelWait := context.WithTimeout(t.Context(), 5*time.Second)
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), progressTimeout)
 	waitErr := result.prepared.Wait(waitCtx)
 	cancelWait()
 	if waitErr != nil && !preparationStalled {
 		preparationStalled = true
 		budget.allowSmallReservations(true)
-		recoveryCtx, cancelRecovery := context.WithTimeout(t.Context(), 5*time.Second)
+		recoveryCtx, cancelRecovery := context.WithTimeout(t.Context(), progressTimeout)
 		recoveryErr := result.prepared.Wait(recoveryCtx)
 		cancelRecovery()
 		require.NoError(t, recoveryErr)
@@ -217,13 +217,13 @@ func TestPersistenceWaitDoesNotHoldStateTreeForPreferredPreparation(t *testing.T
 	budget.allowSmallReservations(false)
 	select {
 	case <-budget.sharedDenied:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		budget.allowSmallReservations(true)
 		result.prepared.Release()
 		t.Fatal("persistence did not observe shared-capacity denial before preferred release")
 	}
 	result.prepared.Release()
-	flushCtx, cancelFlush := context.WithTimeout(t.Context(), 5*time.Second)
+	flushCtx, cancelFlush := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancelFlush()
 	require.NoError(t, svc.flushPersists(flushCtx))
 
@@ -240,7 +240,7 @@ func TestPersistenceWaitDoesNotHoldStateTreeForPreferredPreparation(t *testing.T
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		budget.allowSmallReservations(true)
 		t.Fatal("service shutdown did not complete after preferred preparation")
 	}

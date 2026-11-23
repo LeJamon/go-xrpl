@@ -85,7 +85,7 @@ func TestServiceRelayCacheSkipsUnavailableSharedCapacity(t *testing.T) {
 func TestPersistenceAdmissionResumesAfterWorkReturns(t *testing.T) {
 	s := &Service{config: Config{PersistenceMemory: &relayTestMemory{limit: 1 << 20}}}
 	s.persistStarted = true
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	releases := make([]func(), 0, persistenceAdmissionLimit)
 	for range persistenceAdmissionLimit {
@@ -111,7 +111,7 @@ func TestPersistenceAdmissionResumesAfterWorkReturns(t *testing.T) {
 		s.persistMu.Lock()
 		defer s.persistMu.Unlock()
 		return s.persistCapacityWake != nil
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	releases[0]()
 	got := <-ready
 	require.NoError(t, got.err)
@@ -123,7 +123,7 @@ func TestPersistenceAdmissionShutdownUnblocksProducer(t *testing.T) {
 	s := &Service{config: Config{PersistenceMemory: &relayTestMemory{limit: 1 << 20}}}
 	s.persistStarted = true
 	s.persistQueue = make([]*persistJob, persistenceAdmissionLimit)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
@@ -134,7 +134,7 @@ func TestPersistenceAdmissionShutdownUnblocksProducer(t *testing.T) {
 		s.persistMu.Lock()
 		defer s.persistMu.Unlock()
 		return s.persistCapacityWake != nil
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	s.persistenceWorker.stopAdmissions()
 	require.ErrorIs(t, <-result, errServiceNotRunning)
 	require.Zero(t, s.persistAdmissions)
@@ -160,7 +160,7 @@ func TestLedgerWorkDrainsBeforeServiceStop(t *testing.T) {
 				svc.lifecycleMu.Lock()
 				defer svc.lifecycleMu.Unlock()
 				return svc.lifecycleState == serviceStopping
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 			select {
 			case <-stopped:
 				t.Fatal("Stop returned while ledger work still owned memory")
@@ -169,7 +169,7 @@ func TestLedgerWorkDrainsBeforeServiceStop(t *testing.T) {
 			release()
 			select {
 			case <-stopped:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("Stop did not drain released ledger work")
 			}
 			require.ErrorIs(t, svc.StoreLedgerWithState(t.Context(), nil, nil, nil), errServiceNotRunning)

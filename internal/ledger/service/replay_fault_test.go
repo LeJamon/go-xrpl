@@ -75,7 +75,7 @@ func TestReplayFaultPreservesFrontierAndRestartGate(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f := svc.replayFaults.Snapshot()
 		return f != nil && f.Class == replayfault.ExecutionDisagreement
-	}, 5*time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	f := svc.replayFaults.Snapshot()
 	require.Error(t, svc.RevalidateReplayFault(context.Background(), f.ID))
 	svc.Stop()
@@ -580,13 +580,13 @@ func TestReplayPreparationCancellationDuringInputWalkClearsIntent(t *testing.T) 
 	}()
 	select {
 	case <-family.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transaction walk did not reach the blocking family")
 	}
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled transaction walk did not return")
 	}
 	require.Nil(t, svc.replayFaults.Snapshot())
@@ -644,7 +644,7 @@ func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {
 	require.Eventually(t, func() bool {
 		f := svc.replayFaults.Snapshot()
 		return f != nil && f.Class == replayfault.ExecutionDisagreement
-	}, 5*time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	fault := svc.replayFaults.Snapshot()
 	var evidence replayEvidence
 	require.NoError(t, json.Unmarshal(fault.Evidence, &evidence))

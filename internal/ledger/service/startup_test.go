@@ -495,7 +495,7 @@ func TestService_StartupReplayStagesParentAndRebuildsTarget(t *testing.T) {
 }
 
 func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	db, rm := newStartupTestStorage(t, ctx)
 	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)

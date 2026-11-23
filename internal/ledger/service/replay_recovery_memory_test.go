@@ -44,7 +44,7 @@ func TestReplayDiagnosticRetainsMemoryUntilShutdown(t *testing.T) {
 	svc.recordReplayFailure(t.Context(), id, replay, cfg, evidence, errors.New("diagnostic test failure"), false)
 	select {
 	case <-blocked.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("diagnostic worker did not start")
 	}
 	replay.ReleaseMemory()

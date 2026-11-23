@@ -83,7 +83,7 @@ func issue2071ClosedChild(t testing.TB, parent *ledger.Ledger) *ledger.Ledger {
 
 func issue2071WaitForDenied(t testing.TB, account *membudget.Account) {
 	t.Helper()
-	deadline := time.NewTimer(5 * time.Second)
+	deadline := time.NewTimer(progressTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
@@ -110,7 +110,7 @@ func issue2071RequireGateFree(t testing.TB, svc *Service) {
 		}
 		svc.openLedgerMu.Unlock()
 		return true
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func issue2071OpenHashes(t testing.TB, svc *Service) ([32]byte, [32]byte) {
@@ -195,7 +195,7 @@ func TestIssue2071IngressMemoryReleaseWakesExactlyOneRetry(t *testing.T) {
 	case got := <-done:
 		require.NoError(t, got.err)
 		require.True(t, got.outcome.Applied)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not resume after speculative memory was released")
 	}
 
@@ -275,7 +275,7 @@ func TestIssue2071SuccessorReleasesOwnershipBeforeWaiting(t *testing.T) {
 	case got := <-ingressDone:
 		require.NoError(t, got.err)
 		require.True(t, got.outcome.Applied, "older ingress was not applied")
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("older ingress did not publish while successor admission was waiting")
 	}
 	afterState, afterTx = issue2071OpenHashes(t, svc)
@@ -288,7 +288,7 @@ func TestIssue2071SuccessorReleasesOwnershipBeforeWaiting(t *testing.T) {
 	case got := <-done:
 		require.Nil(t, got.prepared)
 		require.ErrorIs(t, got.err, context.Canceled)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled successor admission did not stop")
 	}
 	budgetTemplate.speculative.Release(hold)
@@ -320,7 +320,7 @@ func TestIssue2071SuccessorAdmissionCancellationReleasesOwnership(t *testing.T) 
 	case got := <-done:
 		require.Nil(t, got.prepared)
 		require.ErrorIs(t, got.err, context.Canceled)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("successor cancellation did not return")
 	}
 	require.False(t, svc.preferredTransitionIsActive())
@@ -357,7 +357,7 @@ func TestIssue2071SuccessorMemoryReleaseWakesAndPublishes(t *testing.T) {
 	case got := <-done:
 		require.NoError(t, got.err)
 		prepared = got.prepared
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("successor did not resume after speculative memory was released")
 	}
 	require.NotNil(t, prepared)
@@ -395,12 +395,12 @@ func TestIssue2071ShutdownAbortsWaitingIngress(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, errServiceNotRunning)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not abort waiting ingress")
 	}
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not complete after aborting ingress")
 	}
 	budget.speculative.Release(8 << 20)
@@ -435,12 +435,12 @@ func TestIssue2071ShutdownAbortsWaitingSuccessor(t *testing.T) {
 	case got := <-done:
 		require.Nil(t, got.prepared)
 		require.ErrorIs(t, got.err, errServiceNotRunning)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not abort waiting successor")
 	}
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not complete after aborting successor")
 	}
 	require.False(t, svc.preferredTransitionIsActive())
@@ -455,7 +455,7 @@ func TestIssue2071OversizedSuccessorAdmissionDoesNotWait(t *testing.T) {
 	budget := newIssue2071Budget(t, 8<<20, 8<<20, 8<<20, 0)
 	svc := newIssue2071Service(t, budget)
 	parent := issue2071ClosedChild(t, svc.GetClosedLedger())
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	baseline := budget.speculative.Snapshot()
 	_, err := svc.prepareSuccessor(ctx, parent, successorOptions{

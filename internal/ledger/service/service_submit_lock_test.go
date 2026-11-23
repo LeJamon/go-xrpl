@@ -82,13 +82,13 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 	case <-family.entered:
 	case result := <-submitDone:
 		t.Fatalf("ingress returned before the cold open-ledger read: %+v", result)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
 
 	require.Eventually(t, func() bool {
 		return !svc.openLedgerMu.Snapshot().Held
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	assertClosedRead := func() {
 		readDone := make(chan *ledger.Ledger, 1)
@@ -96,7 +96,7 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 		select {
 		case got := <-readDone:
 			require.NotNil(t, got)
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(progressTimeout):
 			t.Fatal("GetClosedLedger blocked behind open-ledger transaction application")
 		}
 	}
@@ -109,7 +109,7 @@ func testSubmitDoesNotBlockClosedLedgerReadsOrReplacement(t *testing.T, rpc bool
 	select {
 	case err := <-switchDone:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred-ledger replacement blocked behind detached submission")
 	}
 
@@ -158,12 +158,12 @@ func TestValidatedLedgerDoesNotWaitForOpenLedgerSubmission(t *testing.T) {
 	case <-family.entered:
 	case err := <-submitDone:
 		t.Fatalf("ingress returned before the cold open-ledger read: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
 	require.Eventually(t, func() bool {
 		return !svc.openLedgerMu.Snapshot().Held
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	validationDone := make(chan struct{})
 	go func() {
@@ -172,7 +172,7 @@ func TestValidatedLedgerDoesNotWaitForOpenLedgerSubmission(t *testing.T) {
 	}()
 	select {
 	case <-validationDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation admission blocked behind detached ledger submission")
 	}
 	require.True(t, candidate.IsValidated(), "validation did not advance while ingress was blocked")
@@ -182,7 +182,7 @@ func TestValidatedLedgerDoesNotWaitForOpenLedgerSubmission(t *testing.T) {
 	select {
 	case got := <-readDone:
 		require.NotNil(t, got)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("GetClosedLedger blocked behind queued ledger validation")
 	}
 
@@ -194,7 +194,7 @@ func TestValidatedLedgerDoesNotWaitForOpenLedgerSubmission(t *testing.T) {
 		select {
 		case publication := <-publications:
 			seen[publication] = true
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("timed out waiting for submit and validation publications")
 		}
 	}
@@ -225,7 +225,7 @@ func TestOpenLedgerWaitDoesNotBlockValidationAdmission(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return svc.openLedgerMu.Snapshot().QueuedPriority != 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	admitted := make(chan bool, 1)
 	go func() {
@@ -238,7 +238,7 @@ func TestOpenLedgerWaitDoesNotBlockValidationAdmission(t *testing.T) {
 	select {
 	case ok := <-admitted:
 		require.True(t, ok)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation admission blocked behind an open-ledger waiter")
 	}
 	select {
@@ -272,7 +272,7 @@ func TestStopRejectsQueuedConsensusAcceptance(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return svc.openLedgerMu.Snapshot().QueuedPriority != 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	stopDone := make(chan struct{})
 	go func() {
 		svc.Stop()
@@ -284,7 +284,7 @@ func TestStopRejectsQueuedConsensusAcceptance(t *testing.T) {
 		}
 		defer svc.lifecycleMu.Unlock()
 		return svc.lifecycleState == serviceStopping
-	}, time.Second, time.Millisecond, "queued consensus blocked Stop from closing admission")
+	}, progressTimeout, time.Millisecond, "queued consensus blocked Stop from closing admission")
 	select {
 	case <-stopDone:
 		t.Fatal("Stop did not drain the active open-ledger operation")
@@ -298,12 +298,12 @@ func TestStopRejectsQueuedConsensusAcceptance(t *testing.T) {
 	select {
 	case err := <-acceptDone:
 		require.ErrorIs(t, err, errServiceNotRunning)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("queued consensus acceptance did not return after shutdown")
 	}
 	select {
 	case <-stopDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not complete")
 	}
 	require.Same(t, closed, svc.GetClosedLedger(), "queued acceptance mutated the checkpoint frontier")
@@ -334,12 +334,12 @@ func TestStopWaitsForOpenLedgerSubmission(t *testing.T) {
 	case <-family.entered:
 	case err := <-submitDone:
 		t.Fatalf("ingress returned before the cold open-ledger read: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
 	require.Eventually(t, func() bool {
 		return !svc.openLedgerMu.Snapshot().Held
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	stopDone := make(chan struct{})
 	go func() {
@@ -351,7 +351,7 @@ func TestStopWaitsForOpenLedgerSubmission(t *testing.T) {
 		state := svc.lifecycleState
 		svc.lifecycleMu.Unlock()
 		return state == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-stopDone:
 		t.Fatal("Stop returned while an open-ledger submission was still running")
@@ -391,7 +391,7 @@ func TestQueuedIngressDoesNotHoldLifecycleLock(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return svc.openLedgerMu.Snapshot().QueuedIngress == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	require.True(t, svc.lifecycleMu.TryLock(), "queued ingress must not hold lifecycleMu")
 	svc.lifecycleMu.Unlock()
@@ -421,7 +421,7 @@ func TestQueuedIngressRejectedWhenStopWinsOpenLedgerGate(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return svc.openLedgerMu.Snapshot().QueuedIngress == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	stopDone := make(chan struct{})
 	go func() {
@@ -433,7 +433,7 @@ func TestQueuedIngressRejectedWhenStopWinsOpenLedgerGate(t *testing.T) {
 		state := svc.lifecycleState
 		svc.lifecycleMu.Unlock()
 		return state == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	svc.openLedgerMu.Unlock()
 	released = true
@@ -463,7 +463,7 @@ func TestStopWaitsForValidatedLedgerWork(t *testing.T) {
 		state := svc.lifecycleState
 		svc.lifecycleMu.Unlock()
 		return state == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-stopDone:
 		t.Fatal("Stop returned while validated-ledger work was still running")
@@ -493,7 +493,7 @@ func TestValidatedLedgerCallbackCanStopService(t *testing.T) {
 	}()
 	select {
 	case <-callbackDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validated-ledger callback deadlocked while stopping the service")
 	}
 	<-validationDone

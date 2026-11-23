@@ -46,7 +46,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 				cancel()
 				select {
 				case <-done:
-				case <-time.After(2 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Error("verification did not join after cancellation")
 				}
 			})
@@ -56,7 +56,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 			}()
 			select {
 			case <-db.started:
-			case <-time.After(2 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("verification did not reach blocked durable read")
 			}
 			require.EqualValues(t, 1, db.pins.Load())
@@ -83,7 +83,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 			select {
 			case err := <-done:
 				require.ErrorIs(t, err, errStateBaseRecertificationSuperseded)
-			case <-time.After(2 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("obsolete walk kept reading instead of canceling")
 			}
 			require.Zero(t, db.pins.Load())
