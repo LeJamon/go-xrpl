@@ -2955,16 +2955,23 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 
 	engine := NewEngine(adaptor, config)
 
-	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
-	engine.Subscribe(subscriber)
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	var results []consensus.Result
+	engine.Subscribe(testEventSubscriberFunc(func(event consensus.Event) {
+		if reached, ok := event.(*consensus.ConsensusReachedEvent); ok && reached.Round == round {
+			results = append(results, reached.Result)
+		}
+	}))
 
 	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer engine.Stop()
+	t.Cleanup(func() {
+		require.NoError(t, engine.Stop())
+		require.Equal(t, []consensus.Result{consensus.ResultAbandoned}, results)
+	})
 
-	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
 	engine.StartRound(round, true)
 
 	// Confirm the engine entered ModeProposing — the abandon branch
@@ -3033,33 +3040,6 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	adaptor.mu.RUnlock()
 	if !sawObserving {
 		t.Errorf("hard abandon: expected bow-out to ModeObserving (rippled leaveConsensus), modeChanges=%v, final mode=%v", adaptor.modeChanges, modeAfter)
-	}
-
-	// Drain events and assert ResultAbandoned was emitted.
-	sawAbandoned := false
-	sawTimeout := false
-	deadline := time.After(progressTimeout)
-drain:
-	for !sawAbandoned {
-		select {
-		case ev := <-subscriber.events:
-			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
-				switch cre.Result {
-				case consensus.ResultAbandoned:
-					sawAbandoned = true
-				case consensus.ResultTimeout:
-					sawTimeout = true
-				}
-			}
-		case <-deadline:
-			break drain
-		}
-	}
-	if !sawAbandoned {
-		t.Errorf("expected ConsensusReachedEvent with ResultAbandoned from hard abandon")
-	}
-	if sawTimeout {
-		t.Errorf("hard abandon must not emit ResultTimeout (that is the soft branch)")
 	}
 }
 
