@@ -3,8 +3,8 @@ name: Nightly
 # Heavy, slow, or possibly-flaky checks that are too expensive for the per-PR
 # gate but catch the bugs that gate can't afford to look for: data races in the
 # heaviest suite, native macOS/arm64 + 32-bit *runtime* behaviour, a longer
-# multi-node consensus soak, coverage trend, and benchmark rot. None of these
-# block a PR; failures are triaged the next morning.
+# multi-node consensus soak, coverage trend, ledger-entry encoder parity, and
+# benchmark rot. None of these block a PR; failures are triaged the next morning.
 
 on:
   schedule:
@@ -176,4 +176,29 @@ jobs:
       # (e.g. benchmark-action/github-action-benchmark) layered on later.
       - run: >
           go test -run='^$' -bench=. -benchtime=1x -timeout 30m
-          ./codec/... ./crypto/... ./shamap/... ./internal/tx/... ./internal/consensus/adaptor/...
+          ./codec/... ./crypto/... ./shamap/... ./ledger/... ./internal/tx/... ./internal/consensus/adaptor/...
+
+  # The ledger-entry encoder writes binary directly; the map-based encoder it
+  # replaced stays as an oracle. Built with entryencodeparity, every Encode()
+  # also runs the old encoder and panics on any byte difference, so the pinned
+  # corpus and the engine suites check the new writer on real traffic.
+  entry-encode-parity:
+    name: Entry encoder parity (pinned corpus)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/oracle-pin
+      # The tx shard's descriptor and template tests read transactions.macro.
+      - name: Check out equivalent inventory sources (public rippled)
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
+      - uses: ./.github/actions/setup
+      - name: Pinned conformance corpus
+        run: >
+          GOXRPL_FIXTURES_DIR="$ORACLE_CORPUS" GOXRPL_CONFORMANCE_REQUIRED=1
+          go test -tags entryencodeparity -count=1 -timeout 30m ./internal/testing/conformance
+      - name: Transaction engine and ledger packages
+        run: go test -tags entryencodeparity -count=1 -timeout 45m ./internal/tx/... ./internal/ledger/...

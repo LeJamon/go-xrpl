@@ -127,6 +127,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				require.Equal(b, uint32(len(tc.agreed)+len(tc.innerHashes)), closed.TxCount())
 				assertBatchAcceptanceEffects(b, closed, tc)
 				if tc.withRetry {
+					require.NoError(b, svc.waitSpeculativeSuccessor(b.Context()))
 					exists, err := svc.openLedgerView.Current().TxExists(tc.localHash)
 					require.NoError(b, err)
 					require.True(b, exists, "successor transaction was not prepared in next open ledger")
