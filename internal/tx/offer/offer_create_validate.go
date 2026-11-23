@@ -359,33 +359,30 @@ func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, 
 		return ter.TesSUCCESS
 	}
 
-	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
-		line, err := view.Read(keylet.Line(accountID, issuerID, currency))
-		if err != nil || line == nil {
+	fixCleanup340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	disallowIncoming := fixCleanup340 && issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0
+	requireAuth := issuerAccount.Flags&state.LsfRequireAuth != 0
+
+	trustLineData, readErr := view.Read(keylet.Line(accountID, issuerID, currency))
+	if readErr != nil || trustLineData == nil {
+		if disallowIncoming || requireAuth {
 			if config.ApplyFlags&tx.TapRETRY != 0 {
 				return ter.TerNO_LINE
 			}
 			return ter.TecNO_LINE
 		}
+		return ter.TesSUCCESS
 	}
 
 	// Reference: lines 258-282
-	var rs *state.RippleState
-	if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
-		trustLineKey := keylet.Line(accountID, issuerID, currency)
-		trustLineData, err := view.Read(trustLineKey)
-		if err != nil || trustLineData == nil {
-			if config.ApplyFlags&tx.TapRETRY != 0 {
-				return ter.TerNO_LINE
-			}
+	rs, parseErr := state.ParseRippleState(trustLineData)
+	if parseErr != nil {
+		if requireAuth {
 			return ter.TecNO_LINE
 		}
-
-		rs, err = state.ParseRippleState(trustLineData)
-		if err != nil {
-			return ter.TecNO_LINE
-		}
-
+		return ter.TesSUCCESS
+	}
+	if requireAuth {
 		// Check authorization based on canonical ordering
 		canonicalGT := state.CompareAccountIDs(accountID, issuerID) > 0
 		var isAuthorized bool
@@ -400,20 +397,6 @@ func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, 
 				return ter.TerNO_AUTH
 			}
 			return ter.TecNO_AUTH
-		}
-	}
-
-	// Reference: lines 293-309. The RequireAuth branch above already parsed
-	// the line from this read-only view.
-	if rs == nil {
-		trustLineData, err := view.Read(keylet.Line(accountID, issuerID, currency))
-		if err != nil || trustLineData == nil {
-			// No trustline = OK (will be created if needed)
-			return ter.TesSUCCESS
-		}
-		rs, err = state.ParseRippleState(trustLineData)
-		if err != nil {
-			return ter.TesSUCCESS
 		}
 	}
 
