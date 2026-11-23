@@ -167,14 +167,16 @@ func startRunningRouterServeIngressOverlay(
 	opts ...peermanagement.Option,
 ) *runningManifestOverlay {
 	t.Helper()
-	allOpts := append([]peermanagement.Option{peermanagement.WithListenAddr("127.0.0.1:0")}, opts...)
+	allOpts := append([]peermanagement.Option{
+		peermanagement.WithListenAddr("127.0.0.1:0"),
+		peermanagement.WithMemoryBudgets(
+			inbound,
+			routerServeUnlimitedMemoryBudget{},
+			routerServeUnlimitedMemoryBudget{},
+		),
+	}, opts...)
 	overlay, err := peermanagement.New(allOpts...)
 	require.NoError(t, err)
-	require.NoError(t, overlay.SetMemoryBudgets(
-		inbound,
-		routerServeUnlimitedMemoryBudget{},
-		routerServeUnlimitedMemoryBudget{},
-	))
 	running := &runningManifestOverlay{overlay: overlay, done: make(chan error, 1)}
 	go func() { running.done <- overlay.Run(context.Background()) }()
 	t.Cleanup(func() { running.stop(t) })

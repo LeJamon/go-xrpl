@@ -263,17 +263,6 @@ func defaultTxSetRetryKnobs() txSetRetryKnobs {
 	}
 }
 
-// setTxSetRetryKnobsForTest overrides the tx-set retry knobs on this
-// Router. Tests use it to dial timings down so they don't sleep for the
-// production throttle window. The lock matches the read in handleTxSetData
-// so racing this against an active inbox goroutine is safe under -race;
-// production is not expected to call this.
-func (r *Router) setTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
-	r.txSetAcquireMu.Lock()
-	defer r.txSetAcquireMu.Unlock()
-	r.txSetRetryKnobs = knobs
-}
-
 // learnTxFromLeaf queues the transaction carried by an acquired tx-set
 // leaf for open-ledger admission and, on acceptance, active relay.
 // A tx-set leaf is a tnTRANSACTION_NM node whose wire form is

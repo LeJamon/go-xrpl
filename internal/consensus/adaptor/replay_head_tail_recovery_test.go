@@ -123,7 +123,7 @@ func TestReplayHeadTailRecoversCanonicalPaymentSuccessor(t *testing.T) {
 		clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
 		router := newRouter(nil, adaptor, nil, routerNetworkConfig{
 			acquisition: sender, gossip: sender, txSet: sender, serve: sender, inboundClock: clock,
-		})
+		}, routerDeps{})
 		parent := svc.GetClosedLedger()
 		require.NotNil(t, parent)
 		_, first, second := buildCanonicalReplayPaymentSuccessors(t, parent)
