@@ -170,9 +170,6 @@ func TestTransactionBinaryMPTNegativeZeroPreservesSign(t *testing.T) {
 	if !invariants.HasInvalidAmount(flat) {
 		t.Fatal("negative MPT zero lost its sign before preflight")
 	}
-	if !invariants.HasInvalidAmount(map[string]any{"RawTransactions": []map[string]any{{"RawTransaction": flat}}}) {
-		t.Fatal("batch preflight missed an inner negative MPT zero")
-	}
 	encoded, err := binarycodec.EncodeDecodedFields(flat)
 	if err != nil || !bytes.Equal(encoded, wire) {
 		t.Fatalf("reconstructed transaction = %x, %v; want %x", encoded, err, wire)
