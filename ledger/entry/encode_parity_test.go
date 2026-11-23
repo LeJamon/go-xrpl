@@ -370,7 +370,11 @@ func parityValues(xrplType, field string, current any, slotKind reflect.Kind) []
 	case "UInt32":
 		values = append(values, uint32(0), uint32(1), uint32(math.MaxUint32))
 	case "Int32":
-		values = append(values, 0, -1, math.MinInt32, math.MaxInt32, math.MaxInt32+1, math.MinInt32-1)
+		lo, hi := int(math.MinInt32), int(math.MaxInt32)
+		values = append(values, 0, -1, lo, hi)
+		if math.MaxInt > math.MaxInt32 {
+			values = append(values, lo-1, hi+1)
+		}
 	case "UInt64":
 		if definitions.IsBaseTenUInt64FieldName(field) {
 			values = append(values, "0", "1", "18446744073709551615", "18446744073709551616", "", "abc", "-1", "+1", "1e3", "ff", "0001", " 1")
