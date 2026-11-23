@@ -133,6 +133,7 @@ const (
 	persistNodeData ledgerPersistKind = iota
 	persistValidatedTip
 	persistValidatedHistory
+	persistAcquiredHistory
 	retryValidatedHistory
 )
 
@@ -219,7 +220,7 @@ func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, kind ledgerPe
 			existing.canceled.Store(true)
 			delete(p.validatedPersistJobs, seq)
 		}
-		if s.hasCompleteLedger(l) && !updatesTip {
+		if kind != persistAcquiredHistory && s.hasCompleteLedger(l) && !updatesTip {
 			p.persistMu.Unlock()
 			return
 		}
@@ -231,7 +232,7 @@ func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, kind ledgerPe
 	}
 	job.updatesTip.Store(updatesTip)
 	if validated {
-		if s.hasCompleteLedger(l) {
+		if kind != persistAcquiredHistory && s.hasCompleteLedger(l) {
 			job.tipOnly = true
 		} else if l.IsValidated() {
 			job.completionToken = s.beginValidatedPersistence(seq, l.Hash())

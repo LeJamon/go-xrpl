@@ -1008,7 +1008,8 @@ func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *
 	s.putHistoryLocked(historical)
 	s.cachePersistedLedgerLocked(historical)
 	s.commitTransactionResultsLocked(stagedResults)
-	s.enqueueValidatedHistoryPersist(historical)
+	// Reacquisition can replace a missing header for a sequence still recorded as complete.
+	s.enqueueLedgerPersist(historical, persistAcquiredHistory)
 
 	s.logger.Info("Ingested historical ledger",
 		"seq", seq,

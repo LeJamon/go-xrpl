@@ -211,14 +211,13 @@ func TestHistoryBackfillRefreshesSameSequenceHash(t *testing.T) {
 	const hole = 7
 	relational := &failingLedgerIndex{RepositoryManager: rm}
 	relational.fail(hole, -1)
-	writer := writeLedgerHistory(t, db, relational, 10)
-	acquired, err := writer.GetLedgerBySequence(hole)
+	svc := writeLedgerHistory(t, db, relational, 10)
+	t.Cleanup(svc.Stop)
+	acquired, err := svc.GetLedgerBySequence(hole)
 	require.NoError(t, err)
-	writer.Stop()
 	_, err = rm.Ledger().GetLedgerInfoBySeq(context.Background(), relationaldb.LedgerIndex(hole))
 	require.ErrorIs(t, err, relationaldb.ErrLedgerNotFound)
 	relational.fail(hole, 0)
-	svc := restartFastLoad(t, db, relational)
 	tip := svc.GetValidatedLedgerIndex()
 	r, _ := newHistoryRepairRouter(t, svc, tip-2)
 	r.catchupReplay.historyMu.Lock()
@@ -250,9 +249,8 @@ func TestHistoryBackfillRefreshesSameSequenceHash(t *testing.T) {
 }
 
 func TestHistoryBackfillRequestsAndRepairsMissingDeepAnchor(t *testing.T) {
-	base, err := nodestore.NewKVDatabase(memorydb.New(), nodestore.DatabaseConfig{
-		PositiveCache: nodestore.CacheConfig{Enabled: true, MaxEntries: 100_000, TTL: time.Hour},
-	})
+	kv := memorydb.New()
+	base, err := nodestore.NewKVDatabase(kv, nodestore.DatabaseConfig{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	store := &failingHeaderStore{Database: base}
@@ -283,10 +281,9 @@ func TestHistoryBackfillRequestsAndRepairsMissingDeepAnchor(t *testing.T) {
 	acceptUntil(t, svc, 600)
 	require.False(t, svc.HasCompleteLedger(100))
 	require.True(t, svc.HasCompleteLedger(256))
-	deleted, err := base.DeleteBefore(context.Background(), 257, 0)
-	require.NoError(t, err)
-	require.Positive(t, deleted)
-	storedAnchor, err := base.Fetch(context.Background(), nodestore.Hash256(anchor.Hash()))
+	anchorHash := anchor.Hash()
+	require.NoError(t, kv.Delete(anchorHash[:]))
+	storedAnchor, err := base.Fetch(t.Context(), nodestore.Hash256(anchorHash))
 	require.NoError(t, err)
 	require.Nil(t, storedAnchor)
 
@@ -299,6 +296,9 @@ func TestHistoryBackfillRequestsAndRepairsMissingDeepAnchor(t *testing.T) {
 	store.failAlways.Store(0)
 	require.NoError(t, svc.IngestHistoricalLedgerWithState(context.Background(), &anchorHeader, anchorState, anchorTx))
 	svc.FlushPersists()
+	storedAnchor, err = base.Fetch(t.Context(), nodestore.Hash256(anchorHash))
+	require.NoError(t, err)
+	require.NotNil(t, storedAnchor)
 	r.catchupReplay.completeHistoryBackfill(256, anchor.Hash(), anchor.ParentHash(), calls[0].peerID)
 	r.catchupReplay.armHistoryBackfill()
 	calls = sender.legacyCalls()
