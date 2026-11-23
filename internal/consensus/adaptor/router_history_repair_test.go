@@ -61,15 +61,20 @@ func (r *failingLedgerIndex) PersistValidatedLedger(ctx context.Context, validat
 	return r.RepositoryManager.PersistValidatedLedger(ctx, validated)
 }
 
-// failingHeaderStore fails one write of the selected ledger's header.
+// failingHeaderStore can fail selected ledger-header writes.
 type failingHeaderStore struct {
 	nodestore.Database
-	failSeq atomic.Uint32
+	failSeq    atomic.Uint32
+	failAlways atomic.Uint32
 }
 
 func (d *failingHeaderStore) Store(ctx context.Context, node *nodestore.Node) error {
-	if node.Type == nodestore.NodeLedger && node.LedgerSeq != 0 && d.failSeq.CompareAndSwap(node.LedgerSeq, 0) {
-		return errors.New("injected node-store failure")
+	if node.Type == nodestore.NodeLedger && node.LedgerSeq != 0 {
+		always := d.failAlways.Load() == node.LedgerSeq
+		once := d.failSeq.CompareAndSwap(node.LedgerSeq, 0)
+		if always || once {
+			return errors.New("injected node-store failure")
+		}
 	}
 	return d.Database.Store(ctx, node)
 }
@@ -205,10 +210,14 @@ func TestHistoryBackfillRefreshesSameSequenceHash(t *testing.T) {
 	db, rm := newHistoryRepairStores(t)
 	const hole = 7
 	relational := &failingLedgerIndex{RepositoryManager: rm}
+	relational.fail(hole, -1)
 	writer := writeLedgerHistory(t, db, relational, 10)
+	acquired, err := writer.GetLedgerBySequence(hole)
+	require.NoError(t, err)
 	writer.Stop()
-
-	relational.fail(hole, 1)
+	_, err = rm.Ledger().GetLedgerInfoBySeq(context.Background(), relationaldb.LedgerIndex(hole))
+	require.ErrorIs(t, err, relationaldb.ErrLedgerNotFound)
+	relational.fail(hole, 0)
 	svc := restartFastLoad(t, db, relational)
 	tip := svc.GetValidatedLedgerIndex()
 	r, _ := newHistoryRepairRouter(t, svc, tip-2)
@@ -223,9 +232,10 @@ func TestHistoryBackfillRefreshesSameSequenceHash(t *testing.T) {
 	canonical, ok, err := svc.CanonicalLedgerHash(context.Background(), hole)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, hole, target.seq)
+	require.Equal(t, uint32(hole), target.seq)
 	require.Equal(t, canonical, target.hash)
 	require.Equal(t, uint64(42), target.peerID)
+	require.Equal(t, acquired.Hash(), canonical)
 
 	r.catchupReplay.historyMu.Lock()
 	r.catchupReplay.history = catchupTarget{seq: hole + 1, hash: [32]byte{0xFB}, peerID: 43}
@@ -234,42 +244,69 @@ func TestHistoryBackfillRefreshesSameSequenceHash(t *testing.T) {
 	r.catchupReplay.historyMu.Lock()
 	target = r.catchupReplay.history
 	r.catchupReplay.historyMu.Unlock()
-	require.Equal(t, hole+1, target.seq)
+	require.Equal(t, uint32(hole+1), target.seq)
 	require.Equal(t, [32]byte{0xFB}, target.hash)
 	require.Equal(t, uint64(43), target.peerID)
 }
 
 func TestHistoryBackfillRequestsAndRepairsMissingDeepAnchor(t *testing.T) {
-	base := newTestNodeStore(t, 100_000)
+	base, err := nodestore.NewKVDatabase(memorydb.New(), nodestore.DatabaseConfig{
+		PositiveCache: nodestore.CacheConfig{Enabled: true, MaxEntries: 100_000, TTL: time.Hour},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
 	store := &failingHeaderStore{Database: base}
-	store.failSeq.Store(300)
+	store.failAlways.Store(100)
 	svc := startHistoryRepairService(t, service.Config{
 		Standalone:      true,
-		LedgerCacheSize: 256,
+		LedgerCacheSize: 2,
 		NodeStore:       store,
 	})
-	acceptUntil(t, svc, 900)
-	require.True(t, svc.HasCompleteLedger(512))
-	r, sender := newHistoryRepairRouter(t, svc, 700)
+	acceptUntil(t, svc, 100)
+	hole := svc.GetValidatedLedger()
+	require.NotNil(t, hole)
+	holeHeader := hole.Header()
+	holeState, err := hole.StateMapSnapshotContext(context.Background())
+	require.NoError(t, err)
+	holeTx, err := hole.TxMapSnapshotContext(context.Background())
+	require.NoError(t, err)
+
+	acceptUntil(t, svc, 256)
+	anchor := svc.GetValidatedLedger()
+	require.NotNil(t, anchor)
+	anchorHeader := anchor.Header()
+	anchorState, err := anchor.StateMapSnapshotContext(context.Background())
+	require.NoError(t, err)
+	anchorTx, err := anchor.TxMapSnapshotContext(context.Background())
+	require.NoError(t, err)
+
+	acceptUntil(t, svc, 600)
+	require.False(t, svc.HasCompleteLedger(100))
+	require.True(t, svc.HasCompleteLedger(256))
+	deleted, err := base.DeleteBefore(context.Background(), 257, 0)
+	require.NoError(t, err)
+	require.Positive(t, deleted)
+	storedAnchor, err := base.Fetch(context.Background(), nodestore.Hash256(anchor.Hash()))
+	require.NoError(t, err)
+	require.Nil(t, storedAnchor)
+
+	r, sender := newHistoryRepairRouter(t, svc, 600)
 	r.catchupReplay.armHistoryBackfill()
 	calls := sender.legacyCalls()
 	require.Len(t, calls, 1)
-	require.Equal(t, uint32(512), calls[0].seq)
+	require.Equal(t, uint32(256), calls[0].seq)
 
-	anchor, err := svc.GetLedgerBySequenceContext(context.Background(), 512)
-	require.NoError(t, err)
-	stateMap, err := anchor.StateMapSnapshotContext(context.Background())
-	require.NoError(t, err)
-	txMap, err := anchor.TxMapSnapshotContext(context.Background())
-	require.NoError(t, err)
-	header := anchor.Header()
-	require.NoError(t, svc.StoreLedgerWithState(context.Background(), &header, stateMap, txMap))
+	store.failAlways.Store(0)
+	require.NoError(t, svc.IngestHistoricalLedgerWithState(context.Background(), &anchorHeader, anchorState, anchorTx))
 	svc.FlushPersists()
-	r.catchupReplay.completeHistoryBackfill(512, anchor.Hash(), anchor.ParentHash(), calls[0].peerID)
+	r.catchupReplay.completeHistoryBackfill(256, anchor.Hash(), anchor.ParentHash(), calls[0].peerID)
 	r.catchupReplay.armHistoryBackfill()
 	calls = sender.legacyCalls()
 	require.Len(t, calls, 2)
-	require.Equal(t, uint32(300), calls[1].seq)
+	require.Equal(t, uint32(100), calls[1].seq)
+	require.NoError(t, svc.IngestHistoricalLedgerWithState(context.Background(), &holeHeader, holeState, holeTx))
+	svc.FlushPersists()
+	require.True(t, svc.HasCompleteLedger(100))
 }
 
 // A hole that leaves memory after the initial walk is acquired from the

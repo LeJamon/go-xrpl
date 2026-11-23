@@ -2212,6 +2212,7 @@ func (c *catchupReplayCoordinator) startHistoryBackfill(seq uint32, hash [32]byt
 	c.historyMu.Lock()
 	c.history = catchupTarget{seq: seq, hash: hash, peerID: peerID}
 	c.historyFloor = floor
+	c.historyResumeSeq = 0
 	c.historyMu.Unlock()
 }
 
@@ -2329,50 +2330,10 @@ func (c *catchupReplayCoordinator) completeHistoryBackfill(seq uint32, hash, par
 		return
 	}
 	c.historyMu.Lock()
-	if c.history.seq != seq || c.history.hash != hash {
-		c.historyMu.Unlock()
-		return
+	defer c.historyMu.Unlock()
+	if c.history.seq == seq && c.history.hash == hash {
+		c.history = catchupTarget{seq: seq - 1, hash: parentHash, peerID: peerID}
 	}
-	next := catchupTarget{seq: seq - 1, hash: parentHash, peerID: peerID}
-	c.history = next
-	c.historyMu.Unlock()
-
-	// A non-aligned gap may have required this aligned anchor as a proof
-	// bridge. Once the anchor is ingested, resolve the original gap from its
-	// rolling hashes before the next tick starts walking its parents.
-	if c.adaptor == nil {
-		return
-	}
-	svc := c.adaptor.LedgerService()
-	if svc == nil {
-		return
-	}
-	tip := svc.GetValidatedLedgerIndex()
-	missing, ok := svc.NewestMissingLedger(tip)
-	if !ok || missing >= seq || !c.historySequenceAllowed(missing) {
-		return
-	}
-	lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
-	defer cancelLookup()
-	var target catchupTarget
-	if anchor, cached := svc.GetCachedLedgerByHash(hash); cached {
-		gapHash, hashOK, hashErr := anchor.HashOfSeqContext(lookupCtx, missing)
-		if hashErr == nil && hashOK {
-			target = catchupTarget{seq: missing, hash: gapHash, peerID: peerID}
-		}
-	}
-	if target.hash == ([32]byte{}) {
-		gapHash, targetSeq, targetOK, targetErr := svc.CleanerReacquireTarget(lookupCtx, missing)
-		if targetErr != nil || !targetOK || targetSeq < missing || targetSeq >= tip {
-			return
-		}
-		target = catchupTarget{seq: targetSeq, hash: gapHash, peerID: peerID}
-	}
-	c.historyMu.Lock()
-	if c.history == next {
-		c.history = target
-	}
-	c.historyMu.Unlock()
 }
 
 // armHistoryBackfill drives one backward history-backfill acquisition from the
@@ -2420,6 +2381,7 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 			if c.history == target && c.historyFloor == floor {
 				c.history = catchupTarget{}
 				c.historyFloor = 0
+				c.historyResumeSeq = 0
 			}
 			c.historyMu.Unlock()
 			return
@@ -2493,25 +2455,20 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 			return
 		}
 		next := catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
-		// When the current target was a skip-list anchor acquired to resolve a
-		// deeper gap, use that anchor's rolling hashes to jump directly to the
-		// missing sequence. Acquiring every intervening ledger would preserve
-		// correctness but can turn a single repair into hundreds of requests.
-		if missing, ok := svc.NewestMissingLedger(tip.Sequence()); ok && missing < target.seq {
-			lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
-			missingHash, hashOK, hashErr := held.HashOfSeqContext(lookupCtx, missing)
-			cancelLookup()
-			if hashErr == nil && hashOK {
-				next = catchupTarget{seq: missing, hash: missingHash, peerID: target.peerID}
-			}
-		}
 		c.historyMu.Lock()
+		resumeSeq := c.historyResumeSeq
 		if c.history != target || c.historyFloor != floor {
 			c.historyMu.Unlock()
 			return
 		}
 		c.history = next
 		c.historyMu.Unlock()
+		if resumeSeq != 0 && resumeSeq < target.seq {
+			// The aligned anchor has been held locally. Leave the parent cursor
+			// in place so the next maintenance tick can resolve the original gap
+			// through the canonical lookup path without walking every parent.
+			return
+		}
 		target = next
 	}
 	c.historyMu.Lock()
@@ -2560,8 +2517,9 @@ func (c *catchupReplayCoordinator) retargetHistoryGap(svc *service.Service, tip 
 	gapSeq := missing
 	c.historyMu.Lock()
 	current := c.history
+	resumeSeq := c.historyResumeSeq
 	c.historyMu.Unlock()
-	if missing < current.seq {
+	if missing < current.seq && (resumeSeq == 0 || resumeSeq != missing) {
 		return
 	}
 	lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
@@ -2575,6 +2533,11 @@ func (c *catchupReplayCoordinator) retargetHistoryGap(svc *service.Service, tip 
 	if c.history == current {
 		c.history = catchupTarget{seq: targetSeq, hash: hash, peerID: current.peerID}
 		c.historyFloor = floor
+		if targetSeq == gapSeq {
+			c.historyResumeSeq = 0
+		} else {
+			c.historyResumeSeq = gapSeq
+		}
 	}
 	c.historyMu.Unlock()
 }

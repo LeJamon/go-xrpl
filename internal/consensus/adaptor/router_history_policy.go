@@ -62,6 +62,7 @@ func (c *catchupReplayCoordinator) pruneHistoryBackfill(tip uint32) {
 	if c.history.seq != 0 && !c.historyRetained(tip, c.history.seq) {
 		c.history = catchupTarget{}
 		c.historyFloor = 0
+		c.historyResumeSeq = 0
 	}
 	c.historyMu.Unlock()
 	var retired []*inbound.Ledger

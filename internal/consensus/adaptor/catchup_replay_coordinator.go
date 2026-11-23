@@ -137,6 +137,10 @@ type catchupReplayCoordinator struct {
 	historyMu    sync.Mutex
 	history      catchupTarget
 	historyFloor uint32
+	// historyResumeSeq is the original gap hidden behind an aligned anchor
+	// currently being acquired. It lets the next maintenance tick re-resolve
+	// that gap after the anchor is ingested without walking every parent.
+	historyResumeSeq uint32
 
 	seqHashMu     sync.Mutex
 	seqHash       map[uint32]ledgerHashEntry

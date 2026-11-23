@@ -198,8 +198,8 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	if h.Hash != hash || header.CalculateHash(*h) != hash {
 		return nil, fmt.Errorf("%w: stored ledger header does not match requested hash", errStoredLedgerUnavailable)
 	}
-	if stored.LedgerSeq != 0 && stored.LedgerSeq != h.LedgerIndex {
-		return nil, fmt.Errorf("%w: stored ledger sequence %d does not match header %d", errStoredLedgerUnavailable, stored.LedgerSeq, h.LedgerIndex)
+	if stored.LedgerSeq != 0 && stored.LedgerSeq < h.LedgerIndex {
+		return nil, fmt.Errorf("%w: stored ledger sequence %d precedes header %d", errStoredLedgerUnavailable, stored.LedgerSeq, h.LedgerIndex)
 	}
 
 	stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, h.AccountHash, s.shamapFamily)

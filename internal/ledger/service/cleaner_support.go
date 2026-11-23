@@ -137,6 +137,19 @@ func (s *Service) cleanerLedgerByHash(ctx context.Context, hash [32]byte) (*ledg
 			return candidate, nil
 		}
 	}
+
+	if s.nodeStore != nil && s.shamapFamily != nil {
+		loaded, err := s.loadStoredLedgerByHash(ctx, hash)
+		if err == nil && loaded != nil {
+			s.historyComponent.mu.Lock()
+			s.cachePersistedLedgerLocked(loaded)
+			s.historyComponent.mu.Unlock()
+			return loaded, nil
+		}
+		if err != nil && !errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, err
+		}
+	}
 	if s.nodeStore == nil || s.shamapFamily == nil || s.relationalDB == nil || s.relationalDB.Ledger() == nil {
 		return nil, svcerr.ErrLedgerNotFound
 	}
