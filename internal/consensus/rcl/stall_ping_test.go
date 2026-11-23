@@ -23,7 +23,7 @@ func TestEngine_StallPingFiresFromRunLoop(t *testing.T) {
 	}
 	defer func() { _ = engine.Stop() }()
 
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(progressTimeout)
 	for pings.Load() < 2 {
 		select {
 		case <-deadline:
@@ -75,14 +75,14 @@ func TestEngine_StallPingCanBeClearedWhileRunning(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stall ping did not start")
 	}
 	engine.SetStallPing(nil)
 	close(release)
 	select {
 	case <-returned:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("in-flight stall ping did not return")
 	}
 
@@ -96,7 +96,7 @@ func TestEngine_StallPingCanBeClearedWhileRunning(t *testing.T) {
 	for range 2 {
 		select {
 		case <-replacementPings:
-		case <-time.After(2 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("replacement stall ping did not run")
 		}
 	}

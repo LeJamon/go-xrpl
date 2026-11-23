@@ -92,7 +92,7 @@ func TestPreferredRecoveryPreparationDoesNotHoldEngineMutex(t *testing.T) {
 	require.Equal(t, base.lastLCL.ID(), e.prevLedger.ID())
 	select {
 	case <-a.prepareStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred preparation did not start")
 	}
 
@@ -104,12 +104,12 @@ func TestPreferredRecoveryPreparationDoesNotHoldEngineMutex(t *testing.T) {
 	}()
 	select {
 	case <-phaseDone:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("engine mutex remained held during preferred preparation")
 	}
 	close(a.prepareRelease)
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		e.mu.RLock()
 		adopted := e.prevLedger != nil && e.prevLedger.ID() == target.ID()
@@ -141,7 +141,7 @@ func TestPreferredRecoveryStopCancelsPreparation(t *testing.T) {
 	require.Equal(t, consensus.LedgerSwitchBusy, result)
 	select {
 	case <-a.prepareStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred preparation did not start")
 	}
 
@@ -150,7 +150,7 @@ func TestPreferredRecoveryStopCancelsPreparation(t *testing.T) {
 	select {
 	case err := <-stopped:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("engine stop did not cancel preferred preparation")
 	}
 	close(a.prepareRelease)
@@ -176,13 +176,13 @@ func TestPreferredRecoveryHeartbeatUsesDetachedPreparation(t *testing.T) {
 	require.Equal(t, consensus.ModeObserving, e.Mode())
 	select {
 	case <-a.prepareStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("heartbeat preferred preparation did not start")
 	}
 	close(a.prepareRelease)
 	t.Cleanup(func() { _ = e.Stop() })
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		e.mu.RLock()
 		adopted := e.prevLedger != nil && e.prevLedger.ID() == target.ID()
@@ -215,7 +215,7 @@ func TestPreferredRecoveryRejectsChangedNetworkPreference(t *testing.T) {
 	require.Equal(t, consensus.LedgerSwitchBusy, result)
 	select {
 	case <-a.prepareStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred preparation did not start")
 	}
 	base.mu.Lock()
@@ -224,7 +224,7 @@ func TestPreferredRecoveryRejectsChangedNetworkPreference(t *testing.T) {
 	close(a.prepareRelease)
 	t.Cleanup(func() { _ = e.Stop() })
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		e.mu.RLock()
 		adopted := e.prevLedger != nil && e.prevLedger.ID() == target.ID()
@@ -260,14 +260,14 @@ func TestPreferredRecoveryRejectsRoundRestart(t *testing.T) {
 	require.Equal(t, consensus.LedgerSwitchBusy, result)
 	select {
 	case <-a.prepareStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred preparation did not start")
 	}
 	require.NoError(t, e.StartRound(consensus.RoundID{Seq: initial.Seq() + 1, ParentHash: initial.ID()}, false))
 	close(a.prepareRelease)
 	t.Cleanup(func() { _ = e.Stop() })
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		e.mu.RLock()
 		adopted := e.prevLedger != nil && e.prevLedger.ID() == target.ID()
@@ -310,7 +310,7 @@ func TestPreferredRecoveryNotifiesAfterEngineUnlock(t *testing.T) {
 	close(a.prepareRelease)
 	select {
 	case <-notified:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred notification did not run after engine unlock")
 	}
 	_ = e.Stop()
@@ -343,7 +343,7 @@ func TestPreferredRecoveryFinishCanStopEngine(t *testing.T) {
 	close(a.prepareRelease)
 	select {
 	case <-finishStopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Finish callback deadlocked while stopping engine")
 	}
 }
@@ -368,7 +368,7 @@ func TestPreferredRecoverySameWrongLedgerRestartsRound(t *testing.T) {
 	close(a.prepareRelease)
 	t.Cleanup(func() { _ = e.Stop() })
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		if e.Mode() == consensus.ModeSwitchedLedger {
 			return

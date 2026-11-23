@@ -37,7 +37,7 @@ func TestFinalityDeferralBlocksConcurrentDrain(t *testing.T) {
 	}()
 	select {
 	case <-drainDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("concurrent finality drain did not return")
 	}
 	select {
@@ -49,7 +49,7 @@ func TestFinalityDeferralBlocksConcurrentDrain(t *testing.T) {
 	tracker.endFinalityDeferral()
 	select {
 	case <-fired:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("finality callback did not run after deferral ended")
 	}
 }

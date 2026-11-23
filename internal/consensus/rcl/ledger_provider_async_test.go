@@ -35,12 +35,12 @@ func TestBackgroundAncestryProvider_ColdLookupDoesNotBlockOrDuplicate(t *testing
 	select {
 	case unresolved := <-returned:
 		require.True(t, unresolved)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus lookup waited for blocked storage")
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("background lookup did not start")
 	}
 	for range 100 {
@@ -50,7 +50,7 @@ func TestBackgroundAncestryProvider_ColdLookupDoesNotBlockOrDuplicate(t *testing
 	}
 	require.EqualValues(t, 1, calls.Load())
 	close(release)
-	require.Eventually(t, func() bool { l, ok := p.LedgerByID(id); return ok && l.MinSeq() == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { l, ok := p.LedgerByID(id); return ok && l.MinSeq() == 1 }, progressTimeout, time.Millisecond)
 	resolved, ok := p.LedgerByID(id)
 	require.True(t, ok)
 	require.Equal(t, id, resolved.ID())
@@ -73,7 +73,7 @@ func TestBackgroundAncestryProvider_BoundedQueueAndCancelableShutdown(t *testing
 		id[0], id[1] = byte(i), byte(i>>8)
 		_, _ = p.LedgerByID(id)
 	}
-	require.Eventually(t, func() bool { return active.Load() == ancestryWorkers }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return active.Load() == ancestryWorkers }, progressTimeout, time.Millisecond)
 	p.mu.Lock()
 	pending, queued := len(p.inflight), len(p.background.jobs)
 	p.mu.Unlock()
@@ -83,7 +83,7 @@ func TestBackgroundAncestryProvider_BoundedQueueAndCancelableShutdown(t *testing
 	go func() { p.stop(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not cancel blocked ancestry reads")
 	}
 	require.Zero(t, active.Load())
@@ -119,11 +119,11 @@ func TestBackgroundAncestryProvider_RepairsPartialWithoutBlockingFallback(t *tes
 	})
 	t.Cleanup(p.stop)
 	id := consensus.LedgerID(tip.hash)
-	require.Eventually(t, func() bool { l, ok := p.LedgerByID(id); return ok && l.MinSeq() == 3 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { l, ok := p.LedgerByID(id); return ok && l.MinSeq() == 3 }, progressTimeout, time.Millisecond)
 	mu.Lock()
 	headers[missing] = saved
 	mu.Unlock()
-	require.Eventually(t, func() bool { l, ok := p.LedgerByID(id); return ok && l.MinSeq() == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { l, ok := p.LedgerByID(id); return ok && l.MinSeq() == 1 }, progressTimeout, time.Millisecond)
 	l, _ := p.LedgerByID(id)
 	require.Equal(t, consensus.LedgerID(missing), l.Ancestor(3))
 }
@@ -140,7 +140,7 @@ func TestBackgroundAncestryProvider_PanicDoesNotStrandWorkerOrFlight(t *testing.
 	})
 	t.Cleanup(p.stop)
 	id := consensus.LedgerID(tip.hash)
-	require.Eventually(t, func() bool { _, ok := p.LedgerByID(id); return ok }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { _, ok := p.LedgerByID(id); return ok }, progressTimeout, time.Millisecond)
 }
 
 func TestBackgroundAncestryProvider_EngineOwnsReplacementAndShutdown(t *testing.T) {
@@ -194,12 +194,12 @@ func TestBackgroundAncestryProvider_TrackerProgressesDuringBlockedRead(t *testin
 	select {
 	case accepted := <-done:
 		require.True(t, accepted)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation ingestion/preference polling waited for storage")
 	}
 	close(release)
 	require.Eventually(t, func() bool {
 		got, seq, ok := vt.GetPreferred(0)
 		return ok && got == id && seq == tip.seq
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }

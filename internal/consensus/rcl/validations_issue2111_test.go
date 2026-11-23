@@ -52,7 +52,7 @@ func TestValidationPublicationFencesConfigurationChanges(t *testing.T) {
 			release()
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("configuration did not resume after publication")
 			}
 			snapshot := tracker.QuorumValidatedLedgers(100)

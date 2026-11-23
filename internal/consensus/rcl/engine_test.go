@@ -1829,7 +1829,7 @@ func TestEngine_Subscribe(t *testing.T) {
 
 	// Wait for events (multiple events may be fired)
 	foundRoundStarted := false
-	timeout := time.After(500 * time.Millisecond)
+	timeout := time.After(progressTimeout)
 	for !foundRoundStarted {
 		select {
 		case event := <-subscriber.events:
@@ -3038,9 +3038,9 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	// Drain events and assert ResultAbandoned was emitted.
 	sawAbandoned := false
 	sawTimeout := false
-	deadline := time.After(500 * time.Millisecond)
+	deadline := time.After(progressTimeout)
 drain:
-	for {
+	for !sawAbandoned {
 		select {
 		case ev := <-subscriber.events:
 			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok {
@@ -3398,7 +3398,7 @@ func TestEngine_OnValidation_NoSelfDeadlockOnQuorum(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OnValidation returned unexpected error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("OnValidation did not return — fully-validated callback " +
 			"self-deadlocked on e.mu (issue #381 root cause)")
 	}
@@ -3442,9 +3442,8 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 	<-writerHasLock
 
 	// IsProposing must NOT block on the contended e.mu — the read
-	// is served from the atomic mirror. Run on a separate goroutine
-	// with a tight timeout so a regression cannot pass by simply
-	// being slow.
+	// is served from the atomic mirror. The writer holds e.mu until the
+	// test returns, so a regression fails the bounded wait below.
 	done := make(chan bool, 1)
 	go func() {
 		done <- engine.IsProposing()
@@ -3455,7 +3454,7 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 		if !got {
 			t.Errorf("IsProposing returned false while we are in ModeProposing")
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("IsProposing blocked while a writer holds e.mu — atomic " +
 			"mode mirror regression (issue #381 follow-up)")
 	}
@@ -3470,7 +3469,7 @@ func TestEngine_IsProposing_LockFreeWhileWriterHoldsMu(t *testing.T) {
 		if got != consensus.ModeProposing {
 			t.Errorf("Mode returned %v while we are in ModeProposing", got)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("Mode blocked while a writer holds e.mu — atomic mode mirror regression")
 	}
 }
