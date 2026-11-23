@@ -263,9 +263,9 @@ func (o *OfferCreate) takerCross(
 	var takerInBalance tx.Amount
 	var fundsResult ter.Result
 	if crossResult.Sandbox != nil {
-		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement, ctx.Config.ParentCloseTime)
 	} else {
-		takerInBalance, fundsResult = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement, ctx.Config.ParentCloseTime)
 	}
 	if fundsResult != ter.TesSUCCESS {
 		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}

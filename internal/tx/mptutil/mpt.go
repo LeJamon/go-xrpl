@@ -921,6 +921,17 @@ func vaultAsset(view state.ReadOnlyLedgerView, vaultID [32]byte) (tx.Asset, ter.
 }
 
 func Funds(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, zeroIfFrozen bool) (int64, ter.Result) {
+	return funds(view, id, account, zeroIfFrozen, false, 0)
+}
+
+// FundsWithAuth returns the holder's spendable amount while treating an
+// unauthorized MPT as unfunded. Offer admission uses this form to match
+// rippled's accountFunds(..., ZeroIfUnauthorized) behavior.
+func FundsWithAuth(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, zeroIfFrozen bool, parentCloseTime uint32) (int64, ter.Result) {
+	return funds(view, id, account, zeroIfFrozen, true, parentCloseTime)
+}
+
+func funds(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, zeroIfFrozen bool, zeroIfUnauthorized bool, parentCloseTime uint32) (int64, ter.Result) {
 	issuance, _, result := ReadIssuance(view, id)
 	if result != ter.TesSUCCESS {
 		return 0, result
@@ -945,6 +956,20 @@ func Funds(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, zeroIfF
 		return 0, ter.TefINTERNAL
 	}
 	amount := int64(token.MPTAmount)
+	if zeroIfUnauthorized {
+		rules := view.Rules()
+		if rules != nil && (rules.Enabled(amendment.FeatureSingleAssetVault) || rules.Enabled(amendment.FeatureConfidentialTransfer)) {
+			authResult := RequireAuthWithTypeAt(view, id, account, StrongAuth, parentCloseTime)
+			if authResult == ter.TefINTERNAL {
+				return 0, authResult
+			}
+			if authResult != ter.TesSUCCESS {
+				amount = 0
+			}
+		} else if issuance.Flags&entry.LsfMPTRequireAuth != 0 && token.Flags&entry.LsfMPTAuthorized == 0 {
+			amount = 0
+		}
+	}
 	if mptokensV2Enabled(view) {
 		if hook, ok := view.(balanceHookMPT); ok {
 			amount = hook.BalanceHookMPT(account, id, amount)

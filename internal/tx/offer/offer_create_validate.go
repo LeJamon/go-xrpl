@@ -230,7 +230,7 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 			return ter.TefINTERNAL
 		}
 		if accountID != mptutil.Issuer(id) {
-			funds, result := mptutil.Funds(view, id, accountID, true)
+			funds, result := mptutil.FundsWithAuth(view, id, accountID, true, config.ParentCloseTime)
 			if result == ter.TefINTERNAL {
 				return result
 			}
