@@ -109,7 +109,7 @@ func TestParseIOUValue(t *testing.T) {
 	}
 }
 
-func TestVerifyMPTValue(t *testing.T) {
+func TestParseMPTValue(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
@@ -154,7 +154,7 @@ func TestVerifyMPTValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := verifyMPTValue(tt.input)
+			_, _, err := parseMPTValue(tt.input)
 			if tt.expErr != nil {
 				require.EqualError(t, tt.expErr, err.Error())
 			} else {
@@ -672,7 +672,7 @@ func TestSerializeIssuedCurrencyAmount(t *testing.T) {
 	}
 }
 
-func TestSerializeMPTCurrencyValue(t *testing.T) {
+func TestParseMPTValueMagnitude(t *testing.T) {
 	tests := []struct {
 		name           string
 		value          string
@@ -707,14 +707,14 @@ func TestSerializeMPTCurrencyValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := serializeMPTCurrencyValue(tt.value)
+			magnitude, _, err := parseMPTValue(tt.value)
 
 			if tt.expErr != nil {
 				require.Error(t, err)
 				require.Equal(t, tt.expErr.Error(), err.Error())
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, tt.expectedOutput, got)
+				require.Equal(t, tt.expectedOutput, binary.BigEndian.AppendUint64(nil, magnitude))
 			}
 		})
 	}

@@ -2,9 +2,11 @@ package types
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"math/rand/v2"
 	"os"
@@ -287,6 +289,157 @@ func TestXrpAmountMatchesReference(t *testing.T) {
 		checkXrpMatchesReference(t, value)
 	}
 	t.Logf("compared %d inputs", len(inputs))
+}
+
+const diffIssuanceID = "00000002430427B80BD2D09D36B70B969E12801065F22308"
+
+var invalidIssuanceIDs = []string{
+	"", "0", "00", diffIssuanceID[:46], diffIssuanceID[:47], diffIssuanceID + "0", diffIssuanceID + "00",
+	diffIssuanceID[:47] + "G", "G" + diffIssuanceID[1:], strings.Repeat("Z", 49),
+}
+
+func checkMPTAmountMatchesReference(t testing.TB, value, issuanceID string) {
+	t.Helper()
+
+	want, wantErr := refSerializeMPTCurrencyAmount(value, issuanceID)
+	got, gotErr := serializeMPTCurrencyAmount(value, issuanceID)
+	if !sameAmountErr(gotErr, wantErr) || !sameAmountBytes(got, want) {
+		t.Fatalf("serializeMPTCurrencyAmount(%q, %q) = %x, %v; want %x, %v",
+			value, issuanceID, got, gotErr, want, wantErr)
+	}
+	got, gotErr = (&Amount{}).FromJSON(map[string]any{"value": value, "mpt_issuance_id": issuanceID})
+	if !sameAmountErr(gotErr, wantErr) || !sameAmountBytes(got, want) {
+		t.Fatalf("Amount.FromJSON(MPT %q, %q) = %x, %v; want %x, %v",
+			value, issuanceID, got, gotErr, want, wantErr)
+	}
+	if wantErr == nil {
+		checkMPTDecodeMatchesReference(t, want)
+	}
+}
+
+func checkMPTValueMatchesReference(t testing.TB, value string) {
+	t.Helper()
+
+	wantErr := refVerifyMPTValue(value)
+	magnitude, negative, gotErr := parseMPTValue(value)
+	if !sameAmountErr(gotErr, wantErr) {
+		t.Fatalf("parseMPTValue(%q) error = %v; want %v", value, gotErr, wantErr)
+	}
+	if gotErr != nil {
+		if magnitude != 0 || negative {
+			t.Fatalf("parseMPTValue(%q) = %d, %t on error", value, magnitude, negative)
+		}
+	} else {
+		want, err := refSerializeMPTCurrencyValue(value)
+		if err != nil {
+			t.Fatalf("refSerializeMPTCurrencyValue(%q) = %v after a passing verify", value, err)
+		}
+		if magnitude != binary.BigEndian.Uint64(want) || negative != strings.HasPrefix(value, "-") {
+			t.Fatalf("parseMPTValue(%q) = %d, %t; want %x", value, magnitude, negative, want)
+		}
+	}
+	checkMPTAmountMatchesReference(t, value, diffIssuanceID)
+}
+
+// checkMPTDecodeMatchesReference decodes data as the leading value bytes of an
+// MPT amount, directly and through Amount.ToJSON.
+func checkMPTDecodeMatchesReference(t testing.TB, data []byte) {
+	t.Helper()
+
+	want, wantErr := refDeserializeMPTValue(data)
+	got, gotErr := deserializeMPTValue(data)
+	if !sameAmountErr(gotErr, wantErr) || got != want {
+		t.Fatalf("deserializeMPTValue(%x) = %q, %v; want %q, %v", data, got, gotErr, want, wantErr)
+	}
+	if len(data) < MPTValueWithHeaderLength {
+		return
+	}
+
+	wire := make([]byte, 0, MPTAmountByteLength)
+	wire = append(wire, data[0]&^NotXRPBitMask|MPTAmountFlag)
+	wire = append(wire, data[1:MPTValueWithHeaderLength]...)
+	wire = append(wire, mustDecodeHex(diffIssuanceID)...)
+	want, wantErr = refDeserializeMPTValue(wire)
+	decoded, gotErr := (&Amount{}).ToJSON(serdes.NewBinaryParser(wire, nil))
+	if !sameAmountErr(gotErr, wantErr) {
+		t.Fatalf("Amount.ToJSON(%x) error = %v; want %v", wire, gotErr, wantErr)
+	}
+	if wantErr == nil {
+		m, ok := decoded.(map[string]any)
+		if !ok || m["value"] != want || m["mpt_issuance_id"] != diffIssuanceID {
+			t.Fatalf("Amount.ToJSON(%x) = %v; want value %q", wire, decoded, want)
+		}
+	}
+}
+
+func TestMPTAmountMatchesReference(t *testing.T) {
+	inputs := integralAmountInputs(t)
+	for i, value := range inputs {
+		checkMPTValueMatchesReference(t, value)
+		checkMPTAmountMatchesReference(t, value, invalidIssuanceIDs[i%len(invalidIssuanceIDs)])
+	}
+	t.Logf("compared %d inputs", len(inputs))
+}
+
+func TestMPTAmountDecodeMatchesReference(t *testing.T) {
+	rng := rand.New(rand.NewPCG(2192, 33))
+	magnitudes := make([]uint64, 0, 3016)
+	magnitudes = append(magnitudes,
+		0, 1, 2, 9, 10, 99, 100, 1<<32-1, 1<<32, MaxDrops, math.MaxInt64-1, math.MaxInt64,
+		1<<63, 1<<63+1, math.MaxUint64-1, math.MaxUint64,
+	)
+	for range 1000 {
+		magnitudes = append(magnitudes, rng.Uint64(), rng.Uint64()>>1, rng.Uint64()>>rng.IntN(64))
+	}
+
+	var compared int
+	data := make([]byte, MPTValueWithHeaderLength)
+	for header := range 256 {
+		for _, m := range magnitudes {
+			data[0] = byte(header)
+			binary.BigEndian.PutUint64(data[1:], m)
+			checkMPTDecodeMatchesReference(t, data)
+			compared++
+		}
+	}
+	for n := range MPTAmountByteLength + 2 {
+		for range 200 {
+			b := make([]byte, n)
+			for i := range b {
+				b[i] = byte(rng.Uint32())
+			}
+			checkMPTDecodeMatchesReference(t, b)
+			compared++
+		}
+	}
+	checkMPTDecodeMatchesReference(t, nil)
+	t.Logf("compared %d inputs", compared+1)
+}
+
+func FuzzMPTAmountDifferential(f *testing.F) {
+	for _, s := range []string{
+		"", "0", "-0", "+0", "100", "-1", "00", "01", "1.0", "1e3", " 1", "٣",
+		"9223372036854775807", "-9223372036854775807", "9223372036854775808", "18446744073709551616",
+	} {
+		f.Add(s, diffIssuanceID)
+		f.Add(s, diffIssuanceID[:47]+"G")
+	}
+	f.Fuzz(func(t *testing.T, value, issuanceID string) {
+		checkMPTValueMatchesReference(t, value)
+		checkMPTAmountMatchesReference(t, value, issuanceID)
+	})
+}
+
+func FuzzMPTAmountDecodeDifferential(f *testing.F) {
+	for _, b := range [][]byte{
+		{}, {0x60}, mustDecodeHex("600000000000000064"), mustDecodeHex("207FFFFFFFFFFFFFFF"),
+		mustDecodeHex("608000000000000000"), mustDecodeHex("20FFFFFFFFFFFFFFFF"), mustDecodeHex("200000000000000000"),
+	} {
+		f.Add(b)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		checkMPTDecodeMatchesReference(t, data)
+	})
 }
 
 func FuzzXrpAmountDifferential(f *testing.F) {
