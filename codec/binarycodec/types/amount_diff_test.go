@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"math/rand/v2"
@@ -193,9 +194,9 @@ func conformanceAmountValues(t testing.TB) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	paths = filterCorpusFixtures(paths)
 	if len(paths) == 0 {
-		t.Logf("no conformance corpus at %s", conformanceCorpusDir)
-		return nil
+		t.Fatalf("no conformance fixtures at %s", conformanceCorpusDir)
 	}
 
 	seen := make(map[string]struct{})
@@ -209,18 +210,27 @@ func conformanceAmountValues(t testing.TB) []string {
 		if err := json.Unmarshal(raw, &fixture); err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
-		forEachCorpusBlob(fixture, func(blob string) {
+		fixtureBlobs := 0
+		err = forEachCorpusBlob(fixture, path, func(blobPath, blob string) error {
 			data, err := hex.DecodeString(blob)
 			if err != nil {
-				return
+				return fmt.Errorf("%s: invalid hex: %w", blobPath, err)
 			}
 			decoded, err := (&STObject{}).ToJSON(serdes.NewBinaryParser(data, definitions.Get()))
 			if err != nil {
-				return
+				return fmt.Errorf("%s: STObject decode: %w", blobPath, err)
 			}
 			blobs++
+			fixtureBlobs++
 			collectAmountValues(decoded, "", seen)
+			return nil
 		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fixtureBlobs == 0 {
+			t.Fatalf("%s: fixture has no serialized transaction, metadata or ledger blobs", path)
+		}
 	}
 
 	values := make([]string, 0, len(seen))
@@ -228,36 +238,65 @@ func conformanceAmountValues(t testing.TB) []string {
 		values = append(values, v)
 	}
 	t.Logf("conformance corpus: %d blobs, %d distinct amount values", blobs, len(values))
+	if len(values) == 0 {
+		t.Fatalf("conformance corpus at %s contains no decoded Amount values", conformanceCorpusDir)
+	}
 	return values
 }
 
-func forEachCorpusBlob(v any, fn func(string)) {
+func filterCorpusFixtures(paths []string) []string {
+	fixtures := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if filepath.Base(path) != "manifest.json" {
+			fixtures = append(fixtures, path)
+		}
+	}
+	return fixtures
+}
+
+func forEachCorpusBlob(v any, path string, fn func(path, blob string) error) error {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, child := range v {
+			childPath := path + "." + k
 			switch k {
 			case "tx_blob", "meta_blob", "data":
-				if s, ok := child.(string); ok {
-					fn(s)
-					continue
+				s, ok := child.(string)
+				if !ok {
+					return fmt.Errorf("%s: want string, got %T", childPath, child)
 				}
+				if err := fn(childPath, s); err != nil {
+					return err
+				}
+				continue
 			case "tx_blobs":
-				if list, ok := child.([]any); ok {
-					for _, item := range list {
-						if s, ok := item.(string); ok {
-							fn(s)
-						}
-					}
-					continue
+				list, ok := child.([]any)
+				if !ok {
+					return fmt.Errorf("%s: want array, got %T", childPath, child)
 				}
+				for i, item := range list {
+					s, ok := item.(string)
+					if !ok {
+						return fmt.Errorf("%s[%d]: want string, got %T", childPath, i, item)
+					}
+					if err := fn(fmt.Sprintf("%s[%d]", childPath, i), s); err != nil {
+						return err
+					}
+				}
+				continue
 			}
-			forEachCorpusBlob(child, fn)
+			if err := forEachCorpusBlob(child, childPath, fn); err != nil {
+				return err
+			}
 		}
 	case []any:
-		for _, child := range v {
-			forEachCorpusBlob(child, fn)
+		for i, child := range v {
+			if err := forEachCorpusBlob(child, fmt.Sprintf("%s[%d]", path, i), fn); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func collectAmountValues(v any, field string, seen map[string]struct{}) {
