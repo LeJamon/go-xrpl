@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -226,7 +227,7 @@ func conformanceAmountValues(t testing.TB) []string {
 			if err != nil {
 				return fmt.Errorf("%s: invalid hex: %w", blobPath, err)
 			}
-			decoded, err := (&STObject{}).ToJSON(serdes.NewBinaryParser(data, definitions.Get()))
+			decoded, err := (&STObject{}).ToJSONStrict(serdes.NewBinaryParserAllowOverCap(data, definitions.Get()))
 			if err != nil {
 				return fmt.Errorf("%s: STObject decode: %w", blobPath, err)
 			}
@@ -306,9 +307,22 @@ func collectAmountValues(v any, field string, seen map[string]struct{}) {
 		if isAmount {
 			seen[v] = struct{}{}
 		}
-	case map[string]any:
-		if s, ok := v["value"].(string); ok && isAmount {
+	case RawXRPAmount:
+		if isAmount {
+			s := strconv.FormatUint(v.Drops, 10)
+			if v.Negative && v.Drops != 0 {
+				s = "-" + s
+			}
 			seen[s] = struct{}{}
+		}
+	case map[string]any:
+		if isAmount {
+			switch n := v["value"].(type) {
+			case string:
+				seen[n] = struct{}{}
+			case RawMPTValue:
+				seen[n.String()] = struct{}{}
+			}
 		}
 		for k, child := range v {
 			collectAmountValues(child, k, seen)
