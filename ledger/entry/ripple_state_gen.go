@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -973,7 +974,27 @@ func (r *RippleState) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (r *RippleState) Encode() ([]byte, error) {
-	if err := r.validateRequired(); err != nil {
+	if err := r.validateEncode(); err != nil {
+		return nil, err
+	}
+	if r.decoded && !r.dirty && len(r.decodedBinary) != 0 {
+		return append([]byte(nil), r.decodedBinary...), nil
+	}
+	if r.hasXAddress() {
+		return r.encodeViaMap()
+	}
+	data, err := r.appendBinary(make([]byte, 0, r.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(r, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (r *RippleState) encodeViaMap() ([]byte, error) {
+	if err := r.validateEncode(); err != nil {
 		return nil, err
 	}
 	if r.decoded && !r.dirty && len(r.decodedBinary) != 0 {
@@ -987,6 +1008,171 @@ func (r *RippleState) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (r *RippleState) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x72)
+	if r.present&ripplestateBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), r.Flags)
+	}
+	if r.present&ripplestateBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), r.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if r.present&ripplestateBitHighQualityIn != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x10), r.HighQualityIn)
+	}
+	if r.present&ripplestateBitHighQualityOut != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x11), r.HighQualityOut)
+	}
+	if r.present&ripplestateBitLowQualityIn != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x12), r.LowQualityIn)
+	}
+	if r.present&ripplestateBitLowQualityOut != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x13), r.LowQualityOut)
+	}
+	if r.present&ripplestateBitLowNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x37), r.LowNode); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitHighNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x38), r.HighNode); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), r.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if r.present&ripplestateBitBalance != 0 {
+		if dst, err = appendAmount(append(dst, 0x62), r.Balance); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitLowLimit != 0 {
+		if dst, err = appendAmount(append(dst, 0x66), r.LowLimit); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitHighLimit != 0 {
+		if dst, err = appendAmount(append(dst, 0x67), r.HighLimit); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), r.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitHighSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1C), r.HighSponsor); err != nil {
+			return nil, err
+		}
+	}
+	if r.present&ripplestateBitLowSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1D), r.LowSponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (r *RippleState) encodedSizeHint() int {
+	size := 41
+	if r.present&ripplestateBitFlags != 0 {
+		size += 5
+	}
+	if r.present&ripplestateBitHighQualityIn != 0 {
+		size += 6
+	}
+	if r.present&ripplestateBitHighQualityOut != 0 {
+		size += 6
+	}
+	if r.present&ripplestateBitLowQualityIn != 0 {
+		size += 6
+	}
+	if r.present&ripplestateBitLowQualityOut != 0 {
+		size += 6
+	}
+	if r.present&ripplestateBitLowNode != 0 {
+		size += 9
+	}
+	if r.present&ripplestateBitHighNode != 0 {
+		size += 9
+	}
+	if r.present&ripplestateBitBalance != 0 {
+		size += 1 + amountEncodedLen(r.Balance)
+	}
+	if r.present&ripplestateBitLowLimit != 0 {
+		size += 1 + amountEncodedLen(r.LowLimit)
+	}
+	if r.present&ripplestateBitHighLimit != 0 {
+		size += 1 + amountEncodedLen(r.HighLimit)
+	}
+	if r.present&ripplestateBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(r.Sponsor)
+	}
+	if r.present&ripplestateBitHighSponsor != 0 {
+		size += 2 + accountIDEncodedLen(r.HighSponsor)
+	}
+	if r.present&ripplestateBitLowSponsor != 0 {
+		size += 2 + accountIDEncodedLen(r.LowSponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (r *RippleState) hasXAddress() bool {
+	if r.present&ripplestateBitLowNode != 0 && isXAddress(r.LowNode) {
+		return true
+	}
+	if r.present&ripplestateBitHighNode != 0 && isXAddress(r.HighNode) {
+		return true
+	}
+	if r.present&ripplestateBitPreviousTxnID != 0 && isXAddress(r.PreviousTxnID) {
+		return true
+	}
+	if r.present&ripplestateBitBalance != 0 && isXAddressValue(r.Balance) {
+		return true
+	}
+	if r.present&ripplestateBitLowLimit != 0 && isXAddressValue(r.LowLimit) {
+		return true
+	}
+	if r.present&ripplestateBitHighLimit != 0 && isXAddressValue(r.HighLimit) {
+		return true
+	}
+	if r.present&ripplestateBitSponsor != 0 && isXAddress(r.Sponsor) {
+		return true
+	}
+	if r.present&ripplestateBitHighSponsor != 0 && isXAddress(r.HighSponsor) {
+		return true
+	}
+	if r.present&ripplestateBitLowSponsor != 0 && isXAddress(r.LowSponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (r *RippleState) validateEncode() error {
+	if err := r.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

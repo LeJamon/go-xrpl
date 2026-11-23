@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -441,11 +442,97 @@ func (l *LedgerHashes) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LedgerHashes) Encode() ([]byte, error) {
-	if err := l.validateRequired(); err != nil {
+	if err := l.validateEncode(); err != nil {
+		return nil, err
+	}
+	if l.hasXAddress() {
+		return l.encodeViaMap()
+	}
+	data, err := l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(l, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (l *LedgerHashes) encodeViaMap() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := l.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (l *LedgerHashes) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x68)
+	if l.present&ledgerhashesBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), l.Flags)
+	}
+	if l.present&ledgerhashesBitFirstLedgerSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x1A), l.FirstLedgerSequence)
+	}
+	if l.present&ledgerhashesBitLastLedgerSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x1B), l.LastLedgerSequence)
+	}
+	if l.present&ledgerhashesBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), l.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&ledgerhashesBitHashes != 0 {
+		if dst, err = appendVector256(append(dst, 0x02, 0x13), "Hashes", l.Hashes); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (l *LedgerHashes) encodedSizeHint() int {
+	size := 3
+	if l.present&ledgerhashesBitFlags != 0 {
+		size += 5
+	}
+	if l.present&ledgerhashesBitFirstLedgerSequence != 0 {
+		size += 6
+	}
+	if l.present&ledgerhashesBitLastLedgerSequence != 0 {
+		size += 6
+	}
+	if l.present&ledgerhashesBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(l.Sponsor)
+	}
+	if l.present&ledgerhashesBitHashes != 0 {
+		size += 2 + vector256EncodedLen(l.Hashes)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (l *LedgerHashes) hasXAddress() bool {
+	if l.present&ledgerhashesBitSponsor != 0 && isXAddress(l.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (l *LedgerHashes) validateEncode() error {
+	if err := l.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

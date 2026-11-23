@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -1055,7 +1056,24 @@ func (p *PayChannel) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (p *PayChannel) Encode() ([]byte, error) {
-	if err := p.validateRequired(); err != nil {
+	if err := p.validateEncode(); err != nil {
+		return nil, err
+	}
+	if p.hasXAddress() {
+		return p.encodeViaMap()
+	}
+	data, err := p.appendBinary(make([]byte, 0, p.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(p, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (p *PayChannel) encodeViaMap() ([]byte, error) {
+	if err := p.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := p.ToMap()
@@ -1066,6 +1084,183 @@ func (p *PayChannel) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (p *PayChannel) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x78)
+	if p.present&paychannelBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), p.Flags)
+	}
+	if p.present&paychannelBitSourceTag != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x23), p.SourceTag)
+	}
+	if p.present&paychannelBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), p.Sequence)
+	}
+	if p.present&paychannelBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), p.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if p.present&paychannelBitExpiration != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2A), p.Expiration)
+	}
+	if p.present&paychannelBitDestinationTag != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2E), p.DestinationTag)
+	}
+	if p.present&paychannelBitCancelAfter != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x24), p.CancelAfter)
+	}
+	if p.present&paychannelBitSettleDelay != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x27), p.SettleDelay)
+	}
+	if p.present&paychannelBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), p.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitDestinationNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x39), p.DestinationNode); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), p.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if p.present&paychannelBitAmount != 0 {
+		if dst, err = appendAmount(append(dst, 0x61), p.Amount); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitBalance != 0 {
+		if dst, err = appendAmount(append(dst, 0x62), p.Balance); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitPublicKey != 0 {
+		if dst, err = appendBlob(append(dst, 0x71), p.PublicKey); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), p.Account); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitDestination != 0 {
+		if dst, err = appendAccountID(append(dst, 0x83), p.Destination); err != nil {
+			return nil, err
+		}
+	}
+	if p.present&paychannelBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), p.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (p *PayChannel) encodedSizeHint() int {
+	size := 41
+	if p.present&paychannelBitFlags != 0 {
+		size += 5
+	}
+	if p.present&paychannelBitSourceTag != 0 {
+		size += 5
+	}
+	if p.present&paychannelBitSequence != 0 {
+		size += 5
+	}
+	if p.present&paychannelBitExpiration != 0 {
+		size += 5
+	}
+	if p.present&paychannelBitDestinationTag != 0 {
+		size += 5
+	}
+	if p.present&paychannelBitCancelAfter != 0 {
+		size += 6
+	}
+	if p.present&paychannelBitSettleDelay != 0 {
+		size += 6
+	}
+	if p.present&paychannelBitOwnerNode != 0 {
+		size += 9
+	}
+	if p.present&paychannelBitDestinationNode != 0 {
+		size += 9
+	}
+	if p.present&paychannelBitAmount != 0 {
+		size += 1 + amountEncodedLen(p.Amount)
+	}
+	if p.present&paychannelBitBalance != 0 {
+		size += 1 + amountEncodedLen(p.Balance)
+	}
+	if p.present&paychannelBitPublicKey != 0 {
+		size += 1 + blobEncodedLen(p.PublicKey)
+	}
+	if p.present&paychannelBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(p.Account)
+	}
+	if p.present&paychannelBitDestination != 0 {
+		size += 1 + accountIDEncodedLen(p.Destination)
+	}
+	if p.present&paychannelBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(p.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (p *PayChannel) hasXAddress() bool {
+	if p.present&paychannelBitOwnerNode != 0 && isXAddress(p.OwnerNode) {
+		return true
+	}
+	if p.present&paychannelBitDestinationNode != 0 && isXAddress(p.DestinationNode) {
+		return true
+	}
+	if p.present&paychannelBitPreviousTxnID != 0 && isXAddress(p.PreviousTxnID) {
+		return true
+	}
+	if p.present&paychannelBitAmount != 0 && isXAddressValue(p.Amount) {
+		return true
+	}
+	if p.present&paychannelBitBalance != 0 && isXAddressValue(p.Balance) {
+		return true
+	}
+	if p.present&paychannelBitPublicKey != 0 && isXAddress(p.PublicKey) {
+		return true
+	}
+	if p.present&paychannelBitAccount != 0 && isXAddress(p.Account) {
+		return true
+	}
+	if p.present&paychannelBitDestination != 0 && isXAddress(p.Destination) {
+		return true
+	}
+	if p.present&paychannelBitSponsor != 0 && isXAddress(p.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (p *PayChannel) validateEncode() error {
+	if err := p.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

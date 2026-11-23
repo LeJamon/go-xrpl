@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -23,6 +24,7 @@ type AccountRoot struct {
 	present                uint64
 	decoded                bool
 	dirty                  bool
+	decodedOverCap         *overCapBalance
 	Account                string // AccountID (base58)
 	Balance                any    // Amount (XRP string | IOU map)
 	Sequence               uint32
@@ -98,6 +100,7 @@ func (a *AccountRoot) SetAccount(value string) {
 
 // SetBalance assigns Balance and updates its serialized presence.
 func (a *AccountRoot) SetBalance(value any) {
+	a.decodedOverCap = nil
 	a.Balance = value
 	a.dirty = true
 	a.present |= accountrootBitBalance
@@ -1254,16 +1257,15 @@ func (a *AccountRoot) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 6: // Amount
-			val, err := sr.readAmount()
+			val, overCap, err := sr.readAccountBalance()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				if s, ok := val.(string); ok {
-					a.Balance = s
-					a.present |= accountrootBitBalance
-				}
+				a.Balance = val
+				a.decodedOverCap = overCap
+				a.present |= accountrootBitBalance
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -1676,10 +1678,30 @@ func (a *AccountRoot) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (a *AccountRoot) Encode() ([]byte, error) {
-	if err := a.validateRequired(); err != nil {
+	if err := a.validateEncode(); err != nil {
+		return nil, err
+	}
+	if a.hasXAddress() {
+		return a.encodeViaMap()
+	}
+	data, err := a.appendBinary(make([]byte, 0, a.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(a, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (a *AccountRoot) encodeViaMap() ([]byte, error) {
+	if err := a.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := a.ToMap()
+	if a.decodedOverCap != nil {
+		out["Balance"] = a.balanceForEncode()
+	}
 	if a.present&accountrootBitPreviousTxnID == 0 {
 		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
 	}
@@ -1687,6 +1709,276 @@ func (a *AccountRoot) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (a *AccountRoot) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x61)
+	if a.present&accountrootBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), a.Flags)
+	}
+	if a.present&accountrootBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), a.Sequence)
+	}
+	if a.present&accountrootBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), a.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if a.present&accountrootBitTransferRate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2B), a.TransferRate)
+	}
+	if a.present&accountrootBitWalletSize != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2C), a.WalletSize)
+	}
+	if a.present&accountrootBitOwnerCount != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2D), a.OwnerCount)
+	}
+	if a.present&accountrootBitTicketCount != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x28), a.TicketCount)
+	}
+	if a.present&accountrootBitMintedNFTokens != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x2B), a.MintedNFTokens)
+	}
+	if a.present&accountrootBitBurnedNFTokens != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x2C), a.BurnedNFTokens)
+	}
+	if a.present&accountrootBitFirstNFTokenSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x32), a.FirstNFTokenSequence)
+	}
+	if a.present&accountrootBitSponsoredOwnerCount != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x46), a.SponsoredOwnerCount)
+	}
+	if a.present&accountrootBitSponsoringOwnerCount != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x47), a.SponsoringOwnerCount)
+	}
+	if a.present&accountrootBitSponsoringAccountCount != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x48), a.SponsoringAccountCount)
+	}
+	if a.present&accountrootBitEmailHash != 0 {
+		if dst, err = appendHash(append(dst, 0x41), a.EmailHash, 16); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), a.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if a.present&accountrootBitWalletLocator != 0 {
+		if dst, err = appendHash(append(dst, 0x57), a.WalletLocator, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitAccountTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x59), a.AccountTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitAMMID != 0 {
+		if dst, err = appendHash(append(dst, 0x5E), a.AMMID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitVaultID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x23), a.VaultID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitLoanBrokerID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x25), a.LoanBrokerID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitBalance != 0 {
+		if dst, err = appendAmount(append(dst, 0x62), a.balanceForEncode()); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitMessageKey != 0 {
+		if dst, err = appendBlob(append(dst, 0x72), a.MessageKey); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitDomain != 0 {
+		if dst, err = appendBlob(append(dst, 0x77), a.Domain); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), a.Account); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitRegularKey != 0 {
+		if dst, err = appendAccountID(append(dst, 0x88), a.RegularKey); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitNFTokenMinter != 0 {
+		if dst, err = appendAccountID(append(dst, 0x89), a.NFTokenMinter); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), a.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&accountrootBitTickSize != 0 {
+		if dst, err = appendUInt8(append(dst, 0x00, 0x10, 0x10), a.TickSize); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (a *AccountRoot) encodedSizeHint() int {
+	size := 41
+	if a.present&accountrootBitFlags != 0 {
+		size += 5
+	}
+	if a.present&accountrootBitSequence != 0 {
+		size += 5
+	}
+	if a.present&accountrootBitTransferRate != 0 {
+		size += 5
+	}
+	if a.present&accountrootBitWalletSize != 0 {
+		size += 5
+	}
+	if a.present&accountrootBitOwnerCount != 0 {
+		size += 5
+	}
+	if a.present&accountrootBitTicketCount != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitMintedNFTokens != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitBurnedNFTokens != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitFirstNFTokenSequence != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitSponsoredOwnerCount != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitSponsoringOwnerCount != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitSponsoringAccountCount != 0 {
+		size += 6
+	}
+	if a.present&accountrootBitEmailHash != 0 {
+		size += 17
+	}
+	if a.present&accountrootBitWalletLocator != 0 {
+		size += 33
+	}
+	if a.present&accountrootBitAccountTxnID != 0 {
+		size += 33
+	}
+	if a.present&accountrootBitAMMID != 0 {
+		size += 33
+	}
+	if a.present&accountrootBitVaultID != 0 {
+		size += 34
+	}
+	if a.present&accountrootBitLoanBrokerID != 0 {
+		size += 34
+	}
+	if a.present&accountrootBitBalance != 0 {
+		size += 1 + amountEncodedLen(a.Balance)
+	}
+	if a.present&accountrootBitMessageKey != 0 {
+		size += 1 + blobEncodedLen(a.MessageKey)
+	}
+	if a.present&accountrootBitDomain != 0 {
+		size += 1 + blobEncodedLen(a.Domain)
+	}
+	if a.present&accountrootBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(a.Account)
+	}
+	if a.present&accountrootBitRegularKey != 0 {
+		size += 1 + accountIDEncodedLen(a.RegularKey)
+	}
+	if a.present&accountrootBitNFTokenMinter != 0 {
+		size += 1 + accountIDEncodedLen(a.NFTokenMinter)
+	}
+	if a.present&accountrootBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(a.Sponsor)
+	}
+	if a.present&accountrootBitTickSize != 0 {
+		size += 4
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (a *AccountRoot) hasXAddress() bool {
+	if a.present&accountrootBitEmailHash != 0 && isXAddress(a.EmailHash) {
+		return true
+	}
+	if a.present&accountrootBitPreviousTxnID != 0 && isXAddress(a.PreviousTxnID) {
+		return true
+	}
+	if a.present&accountrootBitWalletLocator != 0 && isXAddress(a.WalletLocator) {
+		return true
+	}
+	if a.present&accountrootBitAccountTxnID != 0 && isXAddress(a.AccountTxnID) {
+		return true
+	}
+	if a.present&accountrootBitAMMID != 0 && isXAddress(a.AMMID) {
+		return true
+	}
+	if a.present&accountrootBitVaultID != 0 && isXAddress(a.VaultID) {
+		return true
+	}
+	if a.present&accountrootBitLoanBrokerID != 0 && isXAddress(a.LoanBrokerID) {
+		return true
+	}
+	if a.present&accountrootBitBalance != 0 && isXAddressValue(a.Balance) {
+		return true
+	}
+	if a.present&accountrootBitMessageKey != 0 && isXAddress(a.MessageKey) {
+		return true
+	}
+	if a.present&accountrootBitDomain != 0 && isXAddress(a.Domain) {
+		return true
+	}
+	if a.present&accountrootBitAccount != 0 && isXAddress(a.Account) {
+		return true
+	}
+	if a.present&accountrootBitRegularKey != 0 && isXAddress(a.RegularKey) {
+		return true
+	}
+	if a.present&accountrootBitNFTokenMinter != 0 && isXAddress(a.NFTokenMinter) {
+		return true
+	}
+	if a.present&accountrootBitSponsor != 0 && isXAddress(a.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (a *AccountRoot) validateEncode() error {
+	if err := a.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

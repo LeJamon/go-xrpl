@@ -6,10 +6,12 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -658,13 +660,25 @@ func (x *XChainOwnedCreateAccountClaimID) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
-	if err := x.validateRequired(); err != nil {
+	if err := x.validateEncode(); err != nil {
 		return nil, err
 	}
-	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
-		if err := validateSTArrayForEncode("XChainCreateAccountAttestations", x.XChainCreateAccountAttestations); err != nil {
-			return nil, err
-		}
+	if x.hasXAddress() {
+		return x.encodeViaMap()
+	}
+	data, err := x.appendBinary(make([]byte, 0, x.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(x, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (x *XChainOwnedCreateAccountClaimID) encodeViaMap() ([]byte, error) {
+	if err := x.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := x.ToMap()
 	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID == 0 {
@@ -674,6 +688,124 @@ func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (x *XChainOwnedCreateAccountClaimID) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x74)
+	if x.present&xchainownedcreateaccountclaimidBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), x.Flags)
+	}
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), x.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), x.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x15), x.XChainAccountCreateCount); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), x.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), x.Account); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), x.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x16), "XChainCreateAccountAttestations", x.XChainCreateAccountAttestations); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x01, 0x19), &types.XChainBridge{}, x.XChainBridge); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (x *XChainOwnedCreateAccountClaimID) encodedSizeHint() int {
+	size := 41
+	if x.present&xchainownedcreateaccountclaimidBitFlags != 0 {
+		size += 5
+	}
+	if x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0 {
+		size += 9
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0 {
+		size += 10
+	}
+	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(x.Account)
+	}
+	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(x.Sponsor)
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0 {
+		size += 124
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (x *XChainOwnedCreateAccountClaimID) hasXAddress() bool {
+	if x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0 && isXAddress(x.OwnerNode) {
+		return true
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0 && isXAddress(x.XChainAccountCreateCount) {
+		return true
+	}
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID != 0 && isXAddress(x.PreviousTxnID) {
+		return true
+	}
+	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 && isXAddress(x.Account) {
+		return true
+	}
+	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 && isXAddress(x.Sponsor) {
+		return true
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0 && isXAddressValue(x.XChainBridge) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (x *XChainOwnedCreateAccountClaimID) validateEncode() error {
+	if err := x.validateRequired(); err != nil {
+		return err
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
+		if err := validateSTArrayForEncode("XChainCreateAccountAttestations", x.XChainCreateAccountAttestations); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

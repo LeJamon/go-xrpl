@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -898,7 +899,24 @@ func (c *Check) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (c *Check) Encode() ([]byte, error) {
-	if err := c.validateRequired(); err != nil {
+	if err := c.validateEncode(); err != nil {
+		return nil, err
+	}
+	if c.hasXAddress() {
+		return c.encodeViaMap()
+	}
+	data, err := c.appendBinary(make([]byte, 0, c.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(c, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (c *Check) encodeViaMap() ([]byte, error) {
+	if err := c.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := c.ToMap()
@@ -909,6 +927,160 @@ func (c *Check) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (c *Check) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x43)
+	if c.present&checkBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), c.Flags)
+	}
+	if c.present&checkBitSourceTag != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x23), c.SourceTag)
+	}
+	if c.present&checkBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), c.Sequence)
+	}
+	if c.present&checkBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), c.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if c.present&checkBitExpiration != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2A), c.Expiration)
+	}
+	if c.present&checkBitDestinationTag != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2E), c.DestinationTag)
+	}
+	if c.present&checkBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), c.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&checkBitDestinationNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x39), c.DestinationNode); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&checkBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), c.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if c.present&checkBitInvoiceID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x11), c.InvoiceID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&checkBitSendMax != 0 {
+		if dst, err = appendAmount(append(dst, 0x69), c.SendMax); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&checkBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), c.Account); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&checkBitDestination != 0 {
+		if dst, err = appendAccountID(append(dst, 0x83), c.Destination); err != nil {
+			return nil, err
+		}
+	}
+	if c.present&checkBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), c.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (c *Check) encodedSizeHint() int {
+	size := 41
+	if c.present&checkBitFlags != 0 {
+		size += 5
+	}
+	if c.present&checkBitSourceTag != 0 {
+		size += 5
+	}
+	if c.present&checkBitSequence != 0 {
+		size += 5
+	}
+	if c.present&checkBitExpiration != 0 {
+		size += 5
+	}
+	if c.present&checkBitDestinationTag != 0 {
+		size += 5
+	}
+	if c.present&checkBitOwnerNode != 0 {
+		size += 9
+	}
+	if c.present&checkBitDestinationNode != 0 {
+		size += 9
+	}
+	if c.present&checkBitInvoiceID != 0 {
+		size += 34
+	}
+	if c.present&checkBitSendMax != 0 {
+		size += 1 + amountEncodedLen(c.SendMax)
+	}
+	if c.present&checkBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(c.Account)
+	}
+	if c.present&checkBitDestination != 0 {
+		size += 1 + accountIDEncodedLen(c.Destination)
+	}
+	if c.present&checkBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(c.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (c *Check) hasXAddress() bool {
+	if c.present&checkBitOwnerNode != 0 && isXAddress(c.OwnerNode) {
+		return true
+	}
+	if c.present&checkBitDestinationNode != 0 && isXAddress(c.DestinationNode) {
+		return true
+	}
+	if c.present&checkBitPreviousTxnID != 0 && isXAddress(c.PreviousTxnID) {
+		return true
+	}
+	if c.present&checkBitInvoiceID != 0 && isXAddress(c.InvoiceID) {
+		return true
+	}
+	if c.present&checkBitSendMax != 0 && isXAddressValue(c.SendMax) {
+		return true
+	}
+	if c.present&checkBitAccount != 0 && isXAddress(c.Account) {
+		return true
+	}
+	if c.present&checkBitDestination != 0 && isXAddress(c.Destination) {
+		return true
+	}
+	if c.present&checkBitSponsor != 0 && isXAddress(c.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (c *Check) validateEncode() error {
+	if err := c.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

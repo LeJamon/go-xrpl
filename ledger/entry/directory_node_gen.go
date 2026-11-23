@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -1153,11 +1154,245 @@ func (d *DirectoryNode) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DirectoryNode) Encode() ([]byte, error) {
-	if err := d.validateRequired(); err != nil {
+	if err := d.validateEncode(); err != nil {
+		return nil, err
+	}
+	if d.hasXAddress() {
+		return d.encodeViaMap()
+	}
+	data, err := d.appendBinary(make([]byte, 0, d.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(d, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (d *DirectoryNode) encodeViaMap() ([]byte, error) {
+	if err := d.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := d.ToMap()
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (d *DirectoryNode) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x64)
+	if d.present&directorynodeBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), d.Flags)
+	}
+	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), d.PreviousTxnLgrSeq)
+	}
+	if d.present&directorynodeBitIndexNext != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x31), d.IndexNext); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitIndexPrevious != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x32), d.IndexPrevious); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitExchangeRate != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x36), d.ExchangeRate); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), d.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitRootIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x58), d.RootIndex, 32); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitNFTokenID != 0 {
+		if dst, err = appendHash(append(dst, 0x5A), d.NFTokenID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitDomainID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x22), d.DomainID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitOwner != 0 {
+		if dst, err = appendAccountID(append(dst, 0x82), d.Owner); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), d.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitTakerPaysCurrency != 0 {
+		if dst, err = appendHash(append(dst, 0x01, 0x11), d.TakerPaysCurrency, 20); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitTakerPaysIssuer != 0 {
+		if dst, err = appendHash(append(dst, 0x02, 0x11), d.TakerPaysIssuer, 20); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitTakerGetsCurrency != 0 {
+		if dst, err = appendHash(append(dst, 0x03, 0x11), d.TakerGetsCurrency, 20); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitTakerGetsIssuer != 0 {
+		if dst, err = appendHash(append(dst, 0x04, 0x11), d.TakerGetsIssuer, 20); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitIndexes != 0 {
+		if dst, err = appendVector256(append(dst, 0x01, 0x13), "Indexes", d.Indexes); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 {
+		if dst, err = appendHash(append(dst, 0x03, 0x15), d.TakerPaysMPT, 24); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 {
+		if dst, err = appendHash(append(dst, 0x04, 0x15), d.TakerGetsMPT, 24); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (d *DirectoryNode) encodedSizeHint() int {
+	size := 3
+	if d.present&directorynodeBitFlags != 0 {
+		size += 5
+	}
+	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
+		size += 5
+	}
+	if d.present&directorynodeBitIndexNext != 0 {
+		size += 9
+	}
+	if d.present&directorynodeBitIndexPrevious != 0 {
+		size += 9
+	}
+	if d.present&directorynodeBitExchangeRate != 0 {
+		size += 9
+	}
+	if d.present&directorynodeBitPreviousTxnID != 0 {
+		size += 33
+	}
+	if d.present&directorynodeBitRootIndex != 0 {
+		size += 33
+	}
+	if d.present&directorynodeBitNFTokenID != 0 {
+		size += 33
+	}
+	if d.present&directorynodeBitDomainID != 0 {
+		size += 34
+	}
+	if d.present&directorynodeBitOwner != 0 {
+		size += 1 + accountIDEncodedLen(d.Owner)
+	}
+	if d.present&directorynodeBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(d.Sponsor)
+	}
+	if d.present&directorynodeBitTakerPaysCurrency != 0 {
+		size += 22
+	}
+	if d.present&directorynodeBitTakerPaysIssuer != 0 {
+		size += 22
+	}
+	if d.present&directorynodeBitTakerGetsCurrency != 0 {
+		size += 22
+	}
+	if d.present&directorynodeBitTakerGetsIssuer != 0 {
+		size += 22
+	}
+	if d.present&directorynodeBitIndexes != 0 {
+		size += 2 + vector256EncodedLen(d.Indexes)
+	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 {
+		size += 26
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 {
+		size += 26
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (d *DirectoryNode) hasXAddress() bool {
+	if d.present&directorynodeBitIndexNext != 0 && isXAddress(d.IndexNext) {
+		return true
+	}
+	if d.present&directorynodeBitIndexPrevious != 0 && isXAddress(d.IndexPrevious) {
+		return true
+	}
+	if d.present&directorynodeBitExchangeRate != 0 && isXAddress(d.ExchangeRate) {
+		return true
+	}
+	if d.present&directorynodeBitPreviousTxnID != 0 && isXAddress(d.PreviousTxnID) {
+		return true
+	}
+	if d.present&directorynodeBitRootIndex != 0 && isXAddress(d.RootIndex) {
+		return true
+	}
+	if d.present&directorynodeBitNFTokenID != 0 && isXAddress(d.NFTokenID) {
+		return true
+	}
+	if d.present&directorynodeBitDomainID != 0 && isXAddress(d.DomainID) {
+		return true
+	}
+	if d.present&directorynodeBitOwner != 0 && isXAddress(d.Owner) {
+		return true
+	}
+	if d.present&directorynodeBitSponsor != 0 && isXAddress(d.Sponsor) {
+		return true
+	}
+	if d.present&directorynodeBitTakerPaysCurrency != 0 && isXAddress(d.TakerPaysCurrency) {
+		return true
+	}
+	if d.present&directorynodeBitTakerPaysIssuer != 0 && isXAddress(d.TakerPaysIssuer) {
+		return true
+	}
+	if d.present&directorynodeBitTakerGetsCurrency != 0 && isXAddress(d.TakerGetsCurrency) {
+		return true
+	}
+	if d.present&directorynodeBitTakerGetsIssuer != 0 && isXAddress(d.TakerGetsIssuer) {
+		return true
+	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 && isXAddress(d.TakerPaysMPT) {
+		return true
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 && isXAddress(d.TakerGetsMPT) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (d *DirectoryNode) validateEncode() error {
+	if err := d.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

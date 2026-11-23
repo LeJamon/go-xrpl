@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -977,7 +978,24 @@ func (m *MPToken) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (m *MPToken) Encode() ([]byte, error) {
-	if err := m.validateRequired(); err != nil {
+	if err := m.validateEncode(); err != nil {
+		return nil, err
+	}
+	if m.hasXAddress() {
+		return m.encodeViaMap()
+	}
+	data, err := m.appendBinary(make([]byte, 0, m.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(m, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (m *MPToken) encodeViaMap() ([]byte, error) {
+	if err := m.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := m.ToMap()
@@ -988,6 +1006,193 @@ func (m *MPToken) Encode() ([]byte, error) {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
 	return binarycodec.EncodeBytes(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (m *MPToken) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	var decimalValues [2]uint64
+	if m.present&mptokenBitMPTAmount != 0 {
+		if decimalValues[0], err = parseUInt64Decimal("MPTAmount", m.MPTAmount); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitLockedAmount != 0 {
+		if decimalValues[1], err = parseUInt64Decimal("LockedAmount", m.LockedAmount); err != nil {
+			return nil, err
+		}
+	}
+	dst = append(dst, 0x11, 0x00, 0x7F)
+	if m.present&mptokenBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), m.Flags)
+	}
+	if m.present&mptokenBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), m.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if m.present&mptokenBitConfidentialBalanceVersion != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x45), m.ConfidentialBalanceVersion)
+	}
+	if m.present&mptokenBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), m.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitMPTAmount != 0 {
+		dst = binary.BigEndian.AppendUint64(append(dst, 0x30, 0x1A), decimalValues[0])
+	}
+	if m.present&mptokenBitLockedAmount != 0 {
+		dst = binary.BigEndian.AppendUint64(append(dst, 0x30, 0x1D), decimalValues[1])
+	}
+	if m.present&mptokenBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), m.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if m.present&mptokenBitConfidentialBalanceInbox != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x20), m.ConfidentialBalanceInbox); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitConfidentialBalanceSpending != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x21), m.ConfidentialBalanceSpending); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitIssuerEncryptedBalance != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x22), m.IssuerEncryptedBalance); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitHolderEncryptionKey != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x24), m.HolderEncryptionKey); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitAuditorEncryptedBalance != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x2A), m.AuditorEncryptedBalance); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), m.Account); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), m.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if m.present&mptokenBitMPTokenIssuanceID != 0 {
+		if dst, err = appendHash(append(dst, 0x01, 0x15), m.MPTokenIssuanceID, 24); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (m *MPToken) encodedSizeHint() int {
+	size := 41
+	if m.present&mptokenBitFlags != 0 {
+		size += 5
+	}
+	if m.present&mptokenBitConfidentialBalanceVersion != 0 {
+		size += 6
+	}
+	if m.present&mptokenBitOwnerNode != 0 {
+		size += 9
+	}
+	if m.present&mptokenBitMPTAmount != 0 {
+		size += 10
+	}
+	if m.present&mptokenBitLockedAmount != 0 {
+		size += 10
+	}
+	if m.present&mptokenBitConfidentialBalanceInbox != 0 {
+		size += 2 + blobEncodedLen(m.ConfidentialBalanceInbox)
+	}
+	if m.present&mptokenBitConfidentialBalanceSpending != 0 {
+		size += 2 + blobEncodedLen(m.ConfidentialBalanceSpending)
+	}
+	if m.present&mptokenBitIssuerEncryptedBalance != 0 {
+		size += 2 + blobEncodedLen(m.IssuerEncryptedBalance)
+	}
+	if m.present&mptokenBitHolderEncryptionKey != 0 {
+		size += 2 + blobEncodedLen(m.HolderEncryptionKey)
+	}
+	if m.present&mptokenBitAuditorEncryptedBalance != 0 {
+		size += 2 + blobEncodedLen(m.AuditorEncryptedBalance)
+	}
+	if m.present&mptokenBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(m.Account)
+	}
+	if m.present&mptokenBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(m.Sponsor)
+	}
+	if m.present&mptokenBitMPTokenIssuanceID != 0 {
+		size += 26
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (m *MPToken) hasXAddress() bool {
+	if m.present&mptokenBitOwnerNode != 0 && isXAddress(m.OwnerNode) {
+		return true
+	}
+	if m.present&mptokenBitMPTAmount != 0 && isXAddress(m.MPTAmount) {
+		return true
+	}
+	if m.present&mptokenBitLockedAmount != 0 && isXAddress(m.LockedAmount) {
+		return true
+	}
+	if m.present&mptokenBitPreviousTxnID != 0 && isXAddress(m.PreviousTxnID) {
+		return true
+	}
+	if m.present&mptokenBitConfidentialBalanceInbox != 0 && isXAddress(m.ConfidentialBalanceInbox) {
+		return true
+	}
+	if m.present&mptokenBitConfidentialBalanceSpending != 0 && isXAddress(m.ConfidentialBalanceSpending) {
+		return true
+	}
+	if m.present&mptokenBitIssuerEncryptedBalance != 0 && isXAddress(m.IssuerEncryptedBalance) {
+		return true
+	}
+	if m.present&mptokenBitHolderEncryptionKey != 0 && isXAddress(m.HolderEncryptionKey) {
+		return true
+	}
+	if m.present&mptokenBitAuditorEncryptedBalance != 0 && isXAddress(m.AuditorEncryptedBalance) {
+		return true
+	}
+	if m.present&mptokenBitAccount != 0 && isXAddress(m.Account) {
+		return true
+	}
+	if m.present&mptokenBitSponsor != 0 && isXAddress(m.Sponsor) {
+		return true
+	}
+	if m.present&mptokenBitMPTokenIssuanceID != 0 && isXAddress(m.MPTokenIssuanceID) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (m *MPToken) validateEncode() error {
+	if err := m.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
