@@ -15,7 +15,8 @@ import (
 )
 
 // CanonicalizeSerializedTransaction validates and returns the codec-decoded
-// representation of a serialized transaction.
+// representation of a stored transaction. Legacy JSON rows can contain
+// currency strings rendered by the binary decoder.
 func CanonicalizeSerializedTransaction(fields map[string]any) (map[string]any, error) {
 	encoded, err := serializedObjectBytes(fields)
 	if err != nil {
