@@ -106,7 +106,7 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("inbound completeness walk did not reach the blocking store")
 	}
 
@@ -129,7 +129,7 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	select {
 	case processErr := <-validationDone:
 		require.NoError(t, processErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("trusted validation waited for the inbound completeness walk")
 	}
 	require.Nil(t, router.catchupReplay.fetchTracker.Find(candidateHash))
@@ -146,7 +146,7 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	}()
 	select {
 	case <-tickDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus tick waited for the inbound completeness walk")
 	}
 
@@ -154,7 +154,7 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	require.NoError(t, <-baseDone)
 	select {
 	case <-baseReleased:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("checkpoint base was not released after discovery stopped")
 	}
 }

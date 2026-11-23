@@ -181,7 +181,7 @@ func runAcquisitionThroughput(t *testing.T, visitSlice int64, budget *shamap.Acq
 		var result acquisitionWorkResult
 		select {
 		case result = <-lane.results():
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("acquisition stopped responding at step %d: %+v", step, ledger.Snapshot())
 		}
 		require.NoError(t, result.err)

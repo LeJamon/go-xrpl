@@ -85,7 +85,7 @@ func TestComponentsReportsPostReadyOverlayExit(t *testing.T) {
 	case err := <-components.Errors():
 		require.Error(t, err)
 		require.True(t, strings.Contains(err.Error(), "overlay stopped"), err.Error())
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("unexpected overlay exit was not reported")
 	}
 
@@ -108,7 +108,7 @@ func TestComponentsReportsRouterExit(t *testing.T) {
 	case err := <-components.Errors():
 		require.Error(t, err)
 		require.True(t, strings.Contains(err.Error(), "router stopped"), err.Error())
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("unexpected router exit was not reported")
 	}
 
@@ -132,7 +132,7 @@ func TestComponentsReportsEngineExit(t *testing.T) {
 	case err := <-components.Errors():
 		require.ErrorIs(t, err, terminalErr)
 		require.Contains(t, err.Error(), "consensus engine stopped")
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("unexpected engine exit was not reported")
 	}
 	require.NoError(t, components.Stop())
@@ -193,7 +193,7 @@ func TestComponentsStopJoinsRouterWorkBeforeEngine(t *testing.T) {
 	close(release)
 	select {
 	case <-stopped:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Components.Stop did not finish after Router work exited")
 	}
 	require.Equal(t, int32(1), engine.stopCount.Load())

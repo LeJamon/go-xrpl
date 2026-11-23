@@ -56,7 +56,7 @@ func TestFreshNodeSwitchesToNetworkLedgerTwoBeforeFirstValidation(t *testing.T) 
 			engine.Mode() == consensus.ModeSwitchedLedger &&
 			closed != nil && closed.Hash() == networkHeader.Hash &&
 			svc.GetCurrentLedgerIndex() == networkHeader.LedgerIndex+1
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }
 
 func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
@@ -128,7 +128,7 @@ func TestSlowInitialAcquisitionWaitsForCurrentConsensusSwitch(t *testing.T) {
 			engine.Mode() == consensus.ModeSwitchedLedger &&
 			!engine.IsProposing() &&
 			svc.GetCurrentLedgerIndex() == fresh.Seq()+1
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 
 	svc.SetValidatedLedger(fresh.Seq(), fresh.Hash())
 	router.maintenanceTick()
@@ -206,7 +206,7 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 			validated != nil && validated.Hash() == targetHeader.Hash &&
 			svc.GetCurrentLedgerIndex() == targetHeader.LedgerIndex+1 &&
 			engine.Mode() == consensus.ModeSwitchedLedger
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 	require.Equal(t, uint64(1), router.FastSyncMetrics().CompletionRecheckAccepted)
 
 	engine.TimerEntry()

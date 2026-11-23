@@ -164,9 +164,10 @@ func TestStandardReplayReplacesFullStateSuccessor(t *testing.T) {
 	for _, link := range links {
 		completeStandardReplayTestLink(t, r, link)
 	}
-	require.Eventually(t, func() bool {
-		return r.catchupReplay.replayPipelineApplied.Load() == 3
-	}, 5*time.Second, 10*time.Millisecond)
+	// A slow apply exhausts the batch budget and yields the remaining
+	// successors to the router loop, which this test drives by hand.
+	drainStandardReplayTestPipeline(t, r)
+	require.Equal(t, uint64(3), r.catchupReplay.replayPipelineApplied.Load())
 }
 
 func TestStandardReplayPipelineYieldsAfterBoundedApplyBatch(t *testing.T) {
@@ -1090,7 +1091,7 @@ func TestStandardReplayCancellationWaitsBeforeInvalidatingGeneration(t *testing.
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.False(t, r.catchupReplay.standardReplay.isActive())
 	require.Equal(t, uint64(8), r.catchupReplay.standardReplay.generation)
 }
@@ -1135,7 +1136,7 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("final replay did not reach the handoff barrier")
 	}
 	trackCatchupPeer(r, 7, links[2].seq, links[2].hash)
@@ -1154,7 +1155,7 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("final replay did not leave the handoff barrier")
 	}
 }

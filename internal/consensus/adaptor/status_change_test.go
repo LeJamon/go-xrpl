@@ -140,7 +140,7 @@ func TestStatusChange_WrongLedgerDoesNotOverwriteConcurrentDisconnect(t *testing
 	}()
 	require.Eventually(t, func() bool {
 		return consensus.Mode(a.consensusMode.Load()) == consensus.ModeWrongLedger
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	a.setOperatingModeLocked(consensus.OpModeDisconnected)
 	a.mu.Unlock()
@@ -148,7 +148,7 @@ func TestStatusChange_WrongLedgerDoesNotOverwriteConcurrentDisconnect(t *testing
 
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("OnModeChange did not complete")
 	}
 	require.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode())

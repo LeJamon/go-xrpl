@@ -81,7 +81,7 @@ func testProductionAdaptorRetainsQuorumConflict(t *testing.T, depth int) {
 		blocked.releaseBuild()
 		select {
 		case <-blocked.completed:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("ledger build did not finish during cleanup")
 		}
 	})
@@ -92,7 +92,7 @@ func testProductionAdaptorRetainsQuorumConflict(t *testing.T, depth int) {
 	}()
 	select {
 	case <-blocked.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ledger build did not start")
 	}
 
@@ -126,7 +126,7 @@ func testProductionAdaptorRetainsQuorumConflict(t *testing.T, depth int) {
 		releaseOnce.Do(func() { close(releaseTransition) })
 		select {
 		case <-transitionDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("trust transition did not finish during cleanup")
 		}
 	})
@@ -136,7 +136,7 @@ func testProductionAdaptorRetainsQuorumConflict(t *testing.T, depth int) {
 	}()
 	select {
 	case <-transitionEntered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("trust transition did not reach the refreshed tracker")
 	}
 	require.True(t, a.IsQuorumUnavailable())
@@ -145,7 +145,7 @@ func testProductionAdaptorRetainsQuorumConflict(t *testing.T, depth int) {
 	select {
 	case err := <-buildResult:
 		require.ErrorIs(t, err, service.ErrConsensusPublicationStale)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ledger publication waited for the trust transition")
 	}
 	require.Equal(t, [32]byte(parent.ID()), a.ledgerService.GetClosedLedger().Hash())

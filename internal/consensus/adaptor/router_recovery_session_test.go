@@ -754,7 +754,7 @@ func TestFrozenPivotHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("pivot did not reach the handoff barrier")
 	}
 	trackCatchupPeer(r, 7, links[0].seq, links[0].hash)
@@ -770,7 +770,7 @@ func TestFrozenPivotHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	select {
 	case handled := <-done:
 		assert.True(t, handled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("pivot did not leave the handoff barrier")
 	}
 }

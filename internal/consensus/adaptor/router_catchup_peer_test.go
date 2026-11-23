@@ -116,7 +116,7 @@ func TestRouter_QueuesDisconnectCleanupOffOverlayLoop(t *testing.T) {
 	}()
 	select {
 	case <-queued:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		r.catchupReplay.peersMu.Unlock()
 		t.Fatal("queuePeerDisconnect blocked on peer cleanup")
 	}
@@ -133,11 +133,11 @@ func TestRouter_QueuesDisconnectCleanupOffOverlayLoop(t *testing.T) {
 		remaining := len(r.catchupReplay.peerStates)
 		r.catchupReplay.peersMu.RUnlock()
 		return remaining == 0 && !containsPeer(il.Peers(), 1)
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	select {
 	case <-runDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not join peer disconnect cleanup")
 	}
 }

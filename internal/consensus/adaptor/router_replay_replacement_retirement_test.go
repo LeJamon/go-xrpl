@@ -232,7 +232,7 @@ func TestRetryStandardReplayReplacementWaitsForReplayCommitBeforeRetirement(t *t
 
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replacement retry did not finish after replay commit release")
 	}
 	assert.Nil(t, c.standardReplay.replacement)

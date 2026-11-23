@@ -93,14 +93,14 @@ func TestRouterReplayPublicationKeepsMessageLanesResponsive(t *testing.T) {
 				resume()
 				select {
 				case <-done:
-				case <-time.After(3 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Error("router did not stop after replay cancellation")
 				}
 				router.StopAcquisitions()
 			})
 			select {
 			case <-family.entered:
-			case <-time.After(3 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("replay did not reach post-apply durable state verification")
 			}
 			require.True(t, c.replayCommitMu.TryLock(), "cold verification held the replay publication mutex")
@@ -116,13 +116,13 @@ func TestRouterReplayPublicationKeepsMessageLanesResponsive(t *testing.T) {
 			}
 			require.Eventually(t, func() bool {
 				return router.FastSyncMetrics().ReplayPipelineReady == 2
-			}, 3*time.Second, time.Millisecond, "acquisition completion stalled behind replay verification")
+			}, progressTimeout, time.Millisecond, "acquisition completion stalled behind replay verification")
 
 			parent := svc.GetClosedLedger()
 			for id := peermanagement.PeerID(10); id < 18; id++ {
 				select {
 				case control <- statusChangeMessage(t, id, parent.Sequence(), parent.Hash()):
-				case <-time.After(time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("control lane stopped draining behind replay verification")
 				}
 			}
@@ -135,19 +135,19 @@ func TestRouterReplayPublicationKeepsMessageLanesResponsive(t *testing.T) {
 					}
 				}
 				return true
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 			router.queuePeerDisconnect(17)
 			require.Eventually(t, func() bool {
 				c.peersMu.RLock()
 				defer c.peersMu.RUnlock()
 				return c.peerStates[17] == nil
-			}, time.Second, time.Millisecond, "peer lifecycle cleanup stalled")
+			}, progressTimeout, time.Millisecond, "peer lifecycle cleanup stalled")
 
 			if !shutdown {
 				resume()
 				require.Eventually(t, func() bool {
 					return router.FastSyncMetrics().ReplayPipelineApplied == 2
-				}, 3*time.Second, time.Millisecond)
+				}, progressTimeout, time.Millisecond)
 				stored, err := svc.GetLedgerByHash(tail.hash)
 				require.NoError(t, err)
 				require.NotNil(t, stored)
@@ -155,7 +155,7 @@ func TestRouterReplayPublicationKeepsMessageLanesResponsive(t *testing.T) {
 			cancel()
 			select {
 			case <-done:
-			case <-time.After(3 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("shutdown waited for the blocked durable reader instead of canceling it")
 			}
 			require.False(t, svc.ReplayBlocked())

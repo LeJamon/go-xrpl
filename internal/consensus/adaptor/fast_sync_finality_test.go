@@ -63,7 +63,7 @@ func TestFullyValidatedHeldLedgerDoesNotReenterEngineLock(t *testing.T) {
 	}()
 	select {
 	case <-returned:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		engine.mu.Unlock()
 		<-returned
 		t.Fatal("fully validated callback re-entered the engine lock")
@@ -75,7 +75,7 @@ func TestFullyValidatedHeldLedgerDoesNotReenterEngineLock(t *testing.T) {
 		validated := a.ledgerService.GetValidatedLedger()
 		return len(ledgers) == 1 && ledgers[0] == consensus.LedgerID(h.Hash) &&
 			validated != nil && validated.Hash() == h.Hash
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func TestFastSyncFinalityMoreThan256TargetsUseLiveEvidence(t *testing.T) {

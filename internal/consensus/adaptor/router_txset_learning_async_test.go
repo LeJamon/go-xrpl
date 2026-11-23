@@ -76,7 +76,7 @@ func TestTxSetLearningDoesNotBlockConsensusDelivery(t *testing.T) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("router did not join its transaction workers")
 		}
 	})
@@ -84,14 +84,14 @@ func TestTxSetLearningDoesNotBlockConsensusDelivery(t *testing.T) {
 	inbox <- &peermanagement.InboundMessage{PeerID: 5, Type: message.TypeLedgerData, Payload: encodePayload(t, data)}
 	select {
 	case <-lookup.entered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transaction learning did not start")
 	}
 	require.Eventually(t, func() bool {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()
 		return len(engine.txSets) == 1 && engine.txSets[0] == setID
-	}, time.Second, time.Millisecond, "consensus must receive the complete set while open-ledger access is blocked")
+	}, progressTimeout, time.Millisecond, "consensus must receive the complete set while open-ledger access is blocked")
 	exists, err := a.ledgerService.OpenLedgerHasTx([32]byte(id))
 	require.NoError(t, err)
 	require.False(t, exists, "delivery must not wait for open-ledger admission")

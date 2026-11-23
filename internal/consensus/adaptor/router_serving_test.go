@@ -148,7 +148,7 @@ func newServingTestRouter(
 		for range pools {
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Errorf("serve scheduler did not stop")
 			}
 		}
@@ -263,14 +263,14 @@ func awaitServing(t *testing.T, ready <-chan struct{}, description string) {
 	t.Helper()
 	select {
 	case <-ready:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatalf("timed out waiting for %s", description)
 	}
 }
 
 func awaitServingStats(t *testing.T, pool *peermanagement.ServeScheduler, predicate func(peermanagement.ServeSchedulerStats) bool, description string) peermanagement.ServeSchedulerStats {
 	t.Helper()
-	deadline := time.NewTimer(time.Second)
+	deadline := time.NewTimer(progressTimeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
@@ -397,7 +397,7 @@ func TestRouterServingRealLedgerWorkRemainsClassIndependent(t *testing.T) {
 		select {
 		case frame := <-sender.sent:
 			require.Equal(t, uint64(txPeer), frame.peerID, "tx-set class should run while state class is blocked")
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("timed out waiting for cached tx-set response")
 		}
 		require.Equal(t, 1, sender.frameCount(), "ordinary response sent before its provider was released")
@@ -406,7 +406,7 @@ func TestRouterServingRealLedgerWorkRemainsClassIndependent(t *testing.T) {
 		select {
 		case frame := <-sender.sent:
 			require.NotEqual(t, uint64(txPeer), frame.peerID, "ordinary class should send after provider release")
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("timed out waiting for ordinary ledger response")
 		}
 		awaitServing(t, family.exited, "state provider completion")
@@ -447,7 +447,7 @@ func TestRouterServingRealLedgerWorkRemainsClassIndependent(t *testing.T) {
 		select {
 		case frame := <-sender.sent:
 			require.Equal(t, uint64(1), frame.peerID, "ordinary class should run while tx-set class is blocked")
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("timed out waiting for ordinary ledger response")
 		}
 

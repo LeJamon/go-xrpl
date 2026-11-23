@@ -151,7 +151,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return len(rs.sentTo(7)) > 0
-	}, time.Second, 10*time.Millisecond, "router did not respond to liTS_CANDIDATE request")
+	}, progressTimeout, 10*time.Millisecond, "router did not respond to liTS_CANDIDATE request")
 
 	frames := rs.sentTo(7)
 	require.Len(t, frames, 1, "expected exactly one response frame")
@@ -220,7 +220,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 		}
 		require.Eventually(t, func() bool {
 			return len(rs.sentTo(7)) > frameCount
-		}, time.Second, 10*time.Millisecond, "router did not answer missing-node follow-up")
+		}, progressTimeout, 10*time.Millisecond, "router did not answer missing-node follow-up")
 		followupFrames := rs.sentTo(7)
 		_, decoded = decodeFrame(t, followupFrames[frameCount].frame)
 		followup, ok := decoded.(*message.LedgerData)
@@ -320,7 +320,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()
 		return len(engine.txSets) > 0
-	}, time.Second, 10*time.Millisecond, "engine did not see acquired tx-set")
+	}, progressTimeout, 10*time.Millisecond, "engine did not see acquired tx-set")
 
 	engine.mu.Lock()
 	defer engine.mu.Unlock()

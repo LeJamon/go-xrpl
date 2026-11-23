@@ -184,7 +184,7 @@ func startRunningRouterServeIngressOverlay(
 	case <-overlay.ListenerReady():
 	case err := <-running.done:
 		t.Fatalf("overlay stopped before listener became ready: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		stack := make([]byte, 1<<20)
 		n := runtime.Stack(stack, true)
 		t.Fatalf("overlay listener did not become ready\n%s", stack[:n])
@@ -246,7 +246,7 @@ func startRouterServeFixture(t *testing.T, fixture routerServeFixture) (context.
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Errorf("router did not join during cleanup")
 		}
 	})
@@ -254,7 +254,7 @@ func startRouterServeFixture(t *testing.T, fixture routerServeFixture) (context.
 		fixture.router.lifecycleMu.RLock()
 		defer fixture.router.lifecycleMu.RUnlock()
 		return fixture.router.lifecycleState == routerLifecycleRunning
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	return cancel, done
 }
 
@@ -280,7 +280,7 @@ func waitRouterServeFetch(t *testing.T, family *routerServeFetchGate) {
 	t.Helper()
 	select {
 	case <-family.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("serve request did not reach the backing Family")
 	}
 }
@@ -299,12 +299,12 @@ func TestRouterIssue2080_ShutdownCancelsServeFetchAndJoins(t *testing.T) {
 	cancel()
 	select {
 	case <-fixture.family.canceled:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router cancellation did not reach the in-flight Family fetch")
 	}
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not join after the cancellable serve fetch returned")
 	}
 
@@ -336,7 +336,7 @@ func TestRouterIssue2080_NoncancellableServeKeepsJoinUntilReadReturns(t *testing
 	cancel()
 	select {
 	case <-fixture.family.canceled:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router cancellation did not reach the noncancellable fetch")
 	}
 	select {
@@ -349,7 +349,7 @@ func TestRouterIssue2080_NoncancellableServeKeepsJoinUntilReadReturns(t *testing
 	fixture.family.releaseFetch()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not join after the noncancellable read returned")
 	}
 
@@ -379,7 +379,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	var connection manifestOverlayConnection
 	select {
 	case connection = <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("serve source did not connect")
 	}
 
@@ -403,7 +403,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 					continue
 				}
 				return inbound
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("serve request did not reach the production ingress lane")
 				return nil
 			}
@@ -420,7 +420,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	require.Positive(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Eventually(t, func() bool {
 		return budget.Used() > baseline
-	}, time.Second, time.Millisecond, "running inbound message did not retain its ingress reservation")
+	}, progressTimeout, time.Millisecond, "running inbound message did not retain its ingress reservation")
 	runningHeld := budget.Used()
 	require.Greater(t, runningHeld, baseline)
 
@@ -429,7 +429,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	require.True(t, fixture.router.handleMessage(queued))
 	require.Eventually(t, func() bool {
 		return fixture.router.LedgerServeMetrics().Ledger.Queued == 1
-	}, time.Second, time.Millisecond, "second production-ingress request did not remain queued")
+	}, progressTimeout, time.Millisecond, "second production-ingress request did not remain queued")
 	queuedHeld := budget.Used()
 	require.Greater(t, queuedHeld, runningHeld)
 
@@ -437,12 +437,12 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	fixture.router.queuePeerDisconnect(running.PeerID)
 	select {
 	case <-fixture.family.canceled:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer disconnect did not cancel the active read")
 	}
 	require.Eventually(t, func() bool {
 		return budget.Used() == runningHeld
-	}, time.Second, time.Millisecond,
+	}, progressTimeout, time.Millisecond,
 		"peer disconnect did not release the queued ingress reservation")
 	select {
 	case <-done:
@@ -456,7 +456,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	fixture.family.releaseFetch()
 	require.Eventually(t, func() bool {
 		return budget.Used() == baseline
-	}, 2*time.Second, time.Millisecond,
+	}, progressTimeout, time.Millisecond,
 		"running ingress reservation was not released after the serve returned")
 	require.Zero(t, fixture.router.serveMemory.Snapshot().Used)
 	require.Empty(t, fixture.sender.sentFrames(), "disconnected peer must receive no serve reply")
@@ -464,7 +464,7 @@ func TestRouterIssue2080_PeerDisconnectReleasesInboundReservationsAtOwnershipBou
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		stack := make([]byte, 1<<20)
 		n := runtime.Stack(stack, true)
 		t.Fatalf("router did not stop after peer serve cancellation\n%s", stack[:n])
@@ -513,18 +513,18 @@ func TestRouterIssue2080_ServeAdmissionRaceWithPeerDisconnect(t *testing.T) {
 
 	select {
 	case <-fixture.family.canceled:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("admission race did not cancel the running serve")
 	}
 	require.Eventually(t, func() bool {
 		stats := fixture.router.LedgerServeMetrics().Ledger
 		return stats.Queued == 0 && stats.Active == 0 && stats.RetainedBytes == 0
-	}, time.Second, time.Millisecond, "admission race left serve jobs queued after disconnect")
+	}, progressTimeout, time.Millisecond, "admission race left serve jobs queued after disconnect")
 	require.Empty(t, fixture.sender.sentFrames(), "admission race must not produce a late peer reply")
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not stop after admission-race cancellation")
 	}
 }
