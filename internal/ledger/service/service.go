@@ -2413,6 +2413,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 		s.clampCompleteLedgers(minimumOnlineFunc())
 	}
 	info.CompleteLedgers = s.completeLedgersString()
+	info.PersistFailures, info.LastFailedPersist = s.ValidatedPersistFailures()
 	if min, max, ok := s.validatedLedgerRange(); ok {
 		info.HaveValidatedRange = true
 		info.ValidatedRangeMin = min
@@ -2442,6 +2443,10 @@ type ServerInfo struct {
 	ValidatedRangeMin        uint32
 	ValidatedRangeMax        uint32
 	NetworkID                uint32
+	// PersistFailures counts validated-ledger persists failed since the last
+	// success; LastFailedPersist is the most recent failed sequence.
+	PersistFailures   uint32
+	LastFailedPersist uint32
 }
 
 // LedgerInfo contains information about a ledger

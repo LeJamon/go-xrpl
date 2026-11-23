@@ -88,6 +88,8 @@ func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 		ValidatedRangeMin:        info.ValidatedRangeMin,
 		ValidatedRangeMax:        info.ValidatedRangeMax,
 		NetworkID:                info.NetworkID,
+		PersistFailures:          info.PersistFailures,
+		LastFailedPersist:        info.LastFailedPersist,
 	}
 }
 

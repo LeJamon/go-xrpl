@@ -610,6 +610,17 @@ go-xrpl keeps content-addressed state separate from queryable indexes (see
   ([`storage/relationaldb/postgres`](../storage/relationaldb/postgres)) is
   available for shared deployments.
 
+A validated ledger that fails to persist is left out of `complete_ledgers` while
+the node keeps following the chain; its relational rows are written only after
+its node-store write succeeds. Once a later validated ledger persists, the node
+rewrites the ledger from memory, or history backfill acquires it from peers if it
+is no longer held. Backfill repairs ledgers within `ledger_history` of the
+validated ledger and, with `online_delete`, gaps above `minimumOnline` that lie
+above a completed ledger. While persists keep failing, `server_info` and
+`server_state` include a go-xrpl-specific `ledger_persistence` object
+(`consecutive_failures`, `last_failed_seq`), and the peer-port `/health` endpoint
+reports `ledger_persistence` as a warning.
+
 ## See also
 
 - [architecture.md](architecture.md) — how the node is structured.

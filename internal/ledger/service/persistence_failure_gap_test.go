@@ -21,6 +21,7 @@ var errInjectedPersist = errors.New("injected persistence failure")
 type injectedFailures struct {
 	mu        sync.Mutex
 	remaining map[uint32]int
+	attempted map[uint32]int
 }
 
 func (f *injectedFailures) fail(seq uint32, times int) {
@@ -32,9 +33,19 @@ func (f *injectedFailures) fail(seq uint32, times int) {
 	f.remaining[seq] = times
 }
 
+func (f *injectedFailures) attempts(seq uint32) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempted[seq]
+}
+
 func (f *injectedFailures) take(seq uint32) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.attempted == nil {
+		f.attempted = make(map[uint32]int)
+	}
+	f.attempted[seq]++
 	if f.remaining[seq] == 0 {
 		return false
 	}
@@ -138,6 +149,36 @@ func TestNodeStorePersistFailureSkipsRelationalIndex(t *testing.T) {
 	svc.FlushPersists()
 	require.True(t, svc.HasCompleteLedger(failed))
 	requireLedgerIndexed(t, repositories, failed, true)
+}
+
+// Consecutive failures are counted until a validated persist succeeds, and
+// holes wait for that success before they are written again.
+func TestValidatedPersistFailuresCountUntilSuccess(t *testing.T) {
+	ctx := context.Background()
+	relational := &failingRepositories{RepositoryManager: newTestRepositories(t, ctx)}
+	svc := startPersistedTestService(t, newTestNodeStore(t, 10_000), relational)
+
+	first := svc.GetClosedLedgerIndex() + 1
+	relational.fail(first, 1)
+	relational.fail(first+1, 1)
+	for range 2 {
+		_, err := svc.AcceptLedger(ctx)
+		require.NoError(t, err)
+	}
+	svc.FlushPersists()
+	info := svc.GetServerInfo()
+	require.EqualValues(t, 2, info.PersistFailures)
+	require.Equal(t, first+1, info.LastFailedPersist)
+	require.Equal(t, 1, relational.attempts(first), "holes wait for a healthy persist")
+
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	info = svc.GetServerInfo()
+	require.Zero(t, info.PersistFailures)
+	require.Equal(t, first+1, info.LastFailedPersist)
+	require.True(t, svc.HasCompleteLedger(first))
+	require.True(t, svc.HasCompleteLedger(first+1))
 }
 
 // Once a ledger's child has left memory, the validated skip list is the

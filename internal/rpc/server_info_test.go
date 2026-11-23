@@ -84,6 +84,8 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 		CompleteLedgers:          m.serverInfo.CompleteLedgers,
 		HavePublished:            m.serverInfo.HavePublished,
 		PublishedLedgerSeq:       m.serverInfo.PublishedLedgerSeq,
+		PersistFailures:          m.serverInfo.PersistFailures,
+		LastFailedPersist:        m.serverInfo.LastFailedPersist,
 	}
 }
 
@@ -174,6 +176,22 @@ func TestServerInfoNetworkLedgerWaiting(t *testing.T) {
 	infoResult, rpcErr = (&handlers.ServerInfoMethod{}).Handle(ctx, nil)
 	require.Nil(t, rpcErr)
 	assert.NotContains(t, infoResult.(map[string]any)["info"].(map[string]any), "network_ledger")
+}
+
+func TestServerInfoLedgerPersistenceFailures(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	ctx := &types.RpcContext{Context: t.Context(), Services: servicesForServerInfo(mock)}
+	for _, human := range []bool{true, false} {
+		assert.NotContains(t, callServerStatus(t, ctx, human), "ledger_persistence")
+	}
+	mock.serverInfo.PersistFailures = 3
+	mock.serverInfo.LastFailedPersist = 41
+	for _, human := range []bool{true, false} {
+		assert.Equal(t, map[string]any{
+			"consecutive_failures": uint32(3),
+			"last_failed_seq":      uint32(41),
+		}, callServerStatus(t, ctx, human)["ledger_persistence"])
+	}
 }
 
 // servicesForServerInfo builds a per-test ServiceContainer with a server_info mock.
