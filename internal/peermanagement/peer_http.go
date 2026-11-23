@@ -34,6 +34,8 @@ func WithHTTPConfig(cfg HTTPConfig) Option {
 	return func(c *Config) { c.HTTP = cfg }
 }
 
+// SetHTTPProviders wires the /crawl and /vl sources. A setter because they
+// come from the RPC service graph, which is built from the overlay.
 func (o *Overlay) SetHTTPProviders(providers HTTPProviders) {
 	o.providersMu.Lock()
 	o.httpProviders = providers

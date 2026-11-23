@@ -336,9 +336,8 @@ func TestStup_ReloadStaticValidators_WithNonNilValidatorList(t *testing.T) {
 func TestStup_WireValidatorListTrustInitializesUnavailableQuorum(t *testing.T) {
 	static := consensus.NodeID{0xBB}
 	master := [33]byte{0x02, 0xBB}
-	a := New(Config{Validators: []consensus.NodeID{static}})
 	agg := stup_newAggregator(t)
-	a.SetQuorumUnavailableFunc(agg.IsQuorumUnavailable)
+	a := New(Config{Validators: []consensus.NodeID{static}, QuorumUnavailable: agg.IsQuorumUnavailable})
 	c := &Components{
 		Adaptor:          a,
 		ValidatorList:    agg,
@@ -451,6 +450,24 @@ type stup_errStartEngine struct {
 }
 
 func (e *stup_errStartEngine) Start(context.Context) error { return e.err }
+
+func TestNewFromConfigWiresOverlayLanes(t *testing.T) {
+	svc := newTestLedgerService(t)
+	t.Cleanup(svc.Stop)
+	cfg := &config.Config{DatabasePath: t.TempDir()}
+	const bufferSize = 17
+	c, err := NewFromConfig(t.Context(), cfg, svc, nil, nil, peermanagement.WithMessageBufferSize(bufferSize))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, c.Stop()) })
+
+	require.Equal(t, bufferSize, cap(c.Overlay.Messages()))
+	require.Equal(t, c.Overlay.ConsensusMessages(), c.Router.inbox)
+	require.Equal(t, c.Overlay.ConsensusControlMessages(), c.Router.consensusControlInbox)
+	require.Equal(t, c.Overlay.Messages(), c.Router.serviceInbox)
+	require.Equal(t, c.Overlay.TxMessages(), c.Router.txInbox)
+	require.Equal(t, c.Overlay.LedgerDataMessages(), c.Router.acqInbox)
+	require.Equal(t, c.Overlay.ManifestMessages(), c.Router.manifestInbox)
+}
 
 func TestStup_OverlayOptionsFromConfig_NetworkID(t *testing.T) {
 	cfg := &config.Config{}

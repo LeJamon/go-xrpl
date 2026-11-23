@@ -634,9 +634,7 @@ func (r *Router) isLoadedLocal() bool {
 // preserved untouched, so non-rotated validators still round-trip
 // through the engine on the signing-derived NodeID.
 //
-// The manifest cache is installed on the router via SetManifestCache
-// before Run(). When the cache is nil (tests constructing a bare
-// router), this is a no-op and the parser default stands.
+// Without a manifest cache, the signing-derived NodeID is retained.
 func (r *Router) resolveMasterNodeID(nid *consensus.NodeID, signing consensus.SigningPubKey) {
 	if r.manifests == nil {
 		return

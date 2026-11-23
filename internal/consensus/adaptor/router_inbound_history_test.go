@@ -34,7 +34,7 @@ func TestRouterMaintenanceUsesConfiguredInboundSweepInterval(t *testing.T) {
 	router := newRouter(nil, New(Config{}), nil, routerNetworkConfig{
 		inboundClock:         clock,
 		inboundSweepInterval: 90 * time.Second,
-	})
+	}, routerDeps{})
 	hash := [32]byte{0xA4}
 	ledger := inbound.New(hash, 1829, 1, slog.Default())
 	router.catchupReplay.fetchTracker.Track(ledger)
