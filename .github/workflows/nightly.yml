@@ -26,7 +26,7 @@ jobs:
     name: Offer suite (-race)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: go test -race -count=1 -timeout 45m ./internal/testing/offer/...
 
@@ -37,10 +37,10 @@ jobs:
     name: Test (macOS / arm64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       - name: Check out equivalent inventory sources (public rippled)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
           ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
@@ -60,10 +60,10 @@ jobs:
       GOARCH: "386"
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       - name: Check out equivalent inventory sources (public rippled)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
           ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
@@ -96,7 +96,7 @@ jobs:
     env:
       EVIDENCE_DIR: /tmp/issue-2017-nightly-oracle
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
 
       - name: Build goxrpl docker image
@@ -141,10 +141,10 @@ jobs:
     name: Coverage (informational)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       - name: Check out equivalent inventory sources (public rippled)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
           ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
@@ -168,7 +168,7 @@ jobs:
     name: Benchmark smoke (must still run)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       # Compile and run every benchmark once (-benchtime=1x, -run='^$' skips
       # tests). Guards against benchmarks silently rotting into non-compiling or
@@ -186,11 +186,11 @@ jobs:
     name: Entry encoder parity (pinned corpus)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       # The tx shard's descriptor and template tests read transactions.macro.
       - name: Check out equivalent inventory sources (public rippled)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
           ref: ${{ env.ORACLE_PUBLIC_COMMIT }}

@@ -42,7 +42,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: ./scripts/fuzz.sh --corpus
 
@@ -66,7 +66,7 @@ jobs:
           - name: shamap
             packages: ./shamap
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Select fuzztime
         id: cfg
