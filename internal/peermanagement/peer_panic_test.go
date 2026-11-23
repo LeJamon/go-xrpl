@@ -51,7 +51,7 @@ func TestPeerRunRecoversWorkerPanics(t *testing.T) {
 			case err := <-done:
 				require.ErrorContains(t, err, fmt.Sprintf("peer 7 %s worker panic", tt.name))
 				require.ErrorContains(t, err, "injected worker panic")
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("Peer.Run did not recover the worker panic")
 			}
 			assert.True(t, peer.closed.Load())

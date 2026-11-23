@@ -36,7 +36,7 @@ func TestCrawlInboundListeningPort(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			o.ctx = ctx
-			o.cfg.ConnectTimeout = time.Second
+			o.cfg.ConnectTimeout = progressTimeout
 			peer.inbound = tc.inbound
 			peer.crawlPublic = true
 			peer.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}}

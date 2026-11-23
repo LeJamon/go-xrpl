@@ -517,7 +517,7 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 			require.NotNil(t, got.Tx,
 				"fanned-out frame must carry the decoded transaction")
 			assert.Equal(t, inners[i].RawTransaction, got.Tx.RawTransaction)
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("expected fanout for inner %d", i)
 		}
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +58,7 @@ func TestReadBudgetWakesOnParentRelease(t *testing.T) {
 	require.True(t, parent.TryReserve(8))
 	budget := newReadBudget(8)
 	budget.parent = parent
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- budget.acquire(ctx, nil, 4) }()

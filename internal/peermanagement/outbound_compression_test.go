@@ -41,7 +41,7 @@ func startPeerWriter(t *testing.T, peer *Peer) peerWriter {
 
 func readWireFrame(t *testing.T, conn net.Conn) []byte {
 	t.Helper()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(progressTimeout)))
 	prefix := make([]byte, message.HeaderSizeUncompressed)
 	_, err := io.ReadFull(conn, prefix)
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestBroadcastSelectsOutboundCompressionPerPeer(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return compressedPeer.metrics.sent.totalBytesSnapshot() == uint64(len(compressedWire)) &&
 			plainPeer.metrics.sent.totalBytesSnapshot() == uint64(len(plainWire))
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	assert.Equal(t, uint64(len(compressedWire)), compressedPeer.traffic.Stats(CategoryManifests).BytesOut)
 	assert.Equal(t, uint64(len(plainWire)), plainPeer.traffic.Stats(CategoryManifests).BytesOut)
 }
@@ -230,7 +230,7 @@ func TestWriteLoopRejectsUnnegotiatedCompressedFrame(t *testing.T) {
 	select {
 	case err := <-writer.errs:
 		assert.ErrorIs(t, err, errCompressionUnnegotiated)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("write loop did not reject unnegotiated compressed frame")
 	}
 

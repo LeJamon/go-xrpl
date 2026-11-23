@@ -291,13 +291,13 @@ func TestSendTxQueueAnnounce_ReleasesPeersLockBeforeEnqueue(t *testing.T) {
 	}()
 	select {
 	case <-writerAcquired:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peersMu writer blocked while relay enqueue was in progress")
 	}
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("relay announce did not finish")
 	}
 }
