@@ -150,6 +150,13 @@ func appendAmount(dst []byte, v any) ([]byte, error) {
 	return appendCodecValue(dst, &types.Amount{}, v)
 }
 
+func (a *AccountRoot) balanceForEncode() any {
+	if a.decodedOverCap != nil && a.Balance == a.decodedOverCap.decimal {
+		return a.decodedOverCap.raw
+	}
+	return a.Balance
+}
+
 // canonicalNativeAmount returns the wire form of a drop count written as "0"
 // or as an optionally negative decimal without leading zeros, within the
 // supply cap. It reports false for anything else, including values the codec

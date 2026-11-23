@@ -24,6 +24,7 @@ type AccountRoot struct {
 	present                uint64
 	decoded                bool
 	dirty                  bool
+	decodedOverCap         *overCapBalance
 	Account                string // AccountID (base58)
 	Balance                any    // Amount (XRP string | IOU map)
 	Sequence               uint32
@@ -99,6 +100,7 @@ func (a *AccountRoot) SetAccount(value string) {
 
 // SetBalance assigns Balance and updates its serialized presence.
 func (a *AccountRoot) SetBalance(value any) {
+	a.decodedOverCap = nil
 	a.Balance = value
 	a.dirty = true
 	a.present |= accountrootBitBalance
@@ -1255,16 +1257,15 @@ func (a *AccountRoot) decode(data []byte, legacy bool) error {
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
 		case 6: // Amount
-			val, err := sr.readAmount()
+			val, overCap, err := sr.readAccountBalance()
 			if err != nil {
 				return err
 			}
 			switch fieldCode {
 			case 2:
-				if s, ok := val.(string); ok {
-					a.Balance = s
-					a.present |= accountrootBitBalance
-				}
+				a.Balance = val
+				a.decodedOverCap = overCap
+				a.present |= accountrootBitBalance
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -1698,6 +1699,9 @@ func (a *AccountRoot) encodeViaMap() ([]byte, error) {
 		return nil, err
 	}
 	out := a.ToMap()
+	if a.decodedOverCap != nil {
+		out["Balance"] = a.balanceForEncode()
+	}
 	if a.present&accountrootBitPreviousTxnID == 0 {
 		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
 	}
@@ -1792,7 +1796,7 @@ func (a *AccountRoot) appendBinary(dst []byte) ([]byte, error) {
 		}
 	}
 	if a.present&accountrootBitBalance != 0 {
-		if dst, err = appendAmount(append(dst, 0x62), a.Balance); err != nil {
+		if dst, err = appendAmount(append(dst, 0x62), a.balanceForEncode()); err != nil {
 			return nil, err
 		}
 	}

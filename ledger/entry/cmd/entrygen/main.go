@@ -140,7 +140,7 @@ type fieldRender struct {
 	Comparer         string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
 	IsAmount         bool
 	IsHash           bool // hex-string default-value check
-	XRPOnly          bool // Balance on AccountRoot uses readAmount (XRP-only)
+	XRPOnly          bool
 	IsBaseTenUInt64  bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
 	ReadCall         string
 	DecodeKind       string
@@ -639,7 +639,11 @@ func buildWriter(defs *definitions.Definitions, er entryRender, fieldInstances m
 			wr.Call = fmt.Sprintf("appendBlob(%s, %s)", withHeader, value)
 			wr.SizeExpr = fmt.Sprintf("%d + blobEncodedLen(%s)", len(header), value)
 		case "Amount":
-			wr.Call = fmt.Sprintf("appendAmount(%s, %s)", withHeader, value)
+			amount := value
+			if fr.XRPOnly {
+				amount = er.Receiver + ".balanceForEncode()"
+			}
+			wr.Call = fmt.Sprintf("appendAmount(%s, %s)", withHeader, amount)
 			wr.SizeExpr = fmt.Sprintf("%d + amountEncodedLen(%s)", len(header), value)
 		case "Vector256":
 			vl = true
@@ -952,6 +956,9 @@ type {{ .StructName }} struct {
 	present uint64
 	decoded bool
 	dirty   bool
+{{- if eq .Name "AccountRoot" }}
+	decodedOverCap *overCapBalance
+{{- end }}
 {{- if .AllowBadCurrencyDecode }}
 	decodedBinary []byte
 {{- end }}
@@ -970,6 +977,9 @@ const (
 
 {{ range .Fields }}// Set{{ .GoField }} assigns {{ .Name }} and updates its serialized presence.
 func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .SetterGoType }}) {
+{{- if .XRPOnly }}
+	{{ $.Receiver }}.decodedOverCap = nil
+{{- end }}
 	{{ $.Receiver }}.{{ .GoField }} = {{ .SetterAssignment }}
 	{{ $.Receiver }}.dirty = true
 {{- if eq .Style 3 }}
@@ -1403,7 +1413,7 @@ func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error
 {{- else }}
 {{- if eq $first.XRPLType "Amount" }}
 {{- if $first.XRPOnly }}
-			val, err := sr.readAmount()
+			val, overCap, err := sr.readAccountBalance()
 {{- else if $.AllowBadCurrencyDecode }}
 			val, badCurrency, err := sr.readAmountAnyAllowBadCurrency()
 			preserveDecodedBinary = preserveDecodedBinary || badCurrency
@@ -1519,10 +1529,9 @@ func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error
 				_ = val // {{ $arm.GoField }} decoded for tolerance only; discard
 {{- end }}
 {{- else if and (eq $arm.XRPLType "Amount") $arm.XRPOnly }}
-				if s, ok := val.(string); ok {
-					{{ $.Receiver }}.{{ $arm.GoField }} = s
-					{{ $.Receiver }}.present |= {{ $arm.BitConst }}
-				}
+				{{ $.Receiver }}.{{ $arm.GoField }} = val
+				{{ $.Receiver }}.decodedOverCap = overCap
+				{{ $.Receiver }}.present |= {{ $arm.BitConst }}
 {{- else }}
 				{{ $.Receiver }}.{{ $arm.GoField }} = val
 				{{ $.Receiver }}.present |= {{ $arm.BitConst }}
@@ -1688,6 +1697,11 @@ func ({{ .Receiver }} *{{ .StructName }}) encodeViaMap() ([]byte, error) {
 	}
 {{- end }}
 	out := {{ .Receiver }}.ToMap()
+{{- if eq .Name "AccountRoot" }}
+	if {{ .Receiver }}.decodedOverCap != nil {
+		out["Balance"] = {{ .Receiver }}.balanceForEncode()
+	}
+{{- end }}
 {{- range .Fields }}{{ if .DeferredRequired }}
 	if {{ $.Receiver }}.present&{{ .BitConst }} == 0 {
 {{- if eq .Name "PreviousTxnID" }}

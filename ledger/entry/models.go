@@ -14,9 +14,9 @@
 //     transaction metadata construction depends on this typed path.
 //
 //   - Typed serialization: every struct also exposes ToMap, Encode, and Hash.
-//     Encode writes the canonical binary form directly, byte-identical to
-//     serializing ToMap through binarycodec, and round-trips Decode
-//     byte-for-byte; Hash returns the canonical SHAMap account-state leaf
+//     Encode writes canonical ledger bytes and preserves a decoded
+//     AccountRoot balance above the XRP supply cap. ToMap exposes that
+//     balance as a decimal string. Hash returns the SHAMap account-state leaf
 //     hash (sha512Half(HashPrefixLeafNode || data || index)). These methods
 //     are a typed alternative to hand-built map[string]any serializers.
 package entry
