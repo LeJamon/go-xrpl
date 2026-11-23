@@ -66,7 +66,7 @@ func waitForServerStatus(t *testing.T, recorder *serverStatusRecorder) *rpc.Serv
 	select {
 	case event := <-recorder.ready:
 		return event
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for server status")
 		return nil
 	}
@@ -168,7 +168,7 @@ func TestServerStatusPublisherDoesNotCacheWithoutSubscribers(t *testing.T) {
 	status.publish(nil)
 	select {
 	case <-conn.Outbound():
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first status after subscribing was suppressed")
 	}
 }

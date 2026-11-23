@@ -182,11 +182,11 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 	select {
 	case seq := <-reacquired:
 		require.Equal(t, hdr.LedgerIndex, seq)
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("cleaner did not request transaction-tree reacquisition")
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		status := cleaner.Status()
 		if status.State == "idle" && status.LedgersChecked == 1 {

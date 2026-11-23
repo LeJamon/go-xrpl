@@ -157,7 +157,7 @@ func TestLimitedListenerRejectsAtCapacityAndAdmitsAfterClose(t *testing.T) {
 		require.NoError(t, conn.Close())
 	case err := <-acceptErr:
 		t.Fatalf("Accept returned error: %v", err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("listener did not admit a connection after the slot was released")
 	}
 }

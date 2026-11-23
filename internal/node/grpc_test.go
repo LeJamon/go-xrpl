@@ -95,7 +95,7 @@ func TestGRPCServer_RoundTrip(t *testing.T) {
 	defer conn.Close()
 
 	client := rpcv1.NewXRPLedgerAPIServiceClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 
 	ledgerResp, err := client.GetLedger(ctx, &rpcv1.GetLedgerRequest{
@@ -208,7 +208,7 @@ func TestGRPCServer_RequestLimit(t *testing.T) {
 	for range 2 {
 		select {
 		case <-entered:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("request did not enter the handler")
 		}
 	}
@@ -249,7 +249,7 @@ func TestGRPCServer_CancellationReleasesAdmission(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("request did not enter the handler")
 	}
 	cancel()
@@ -258,7 +258,7 @@ func TestGRPCServer_CancellationReleasesAdmission(t *testing.T) {
 		if err != context.Canceled {
 			t.Fatalf("canceled request error = %v, want %v", err, context.Canceled)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled request did not exit")
 	}
 

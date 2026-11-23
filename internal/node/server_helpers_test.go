@@ -297,7 +297,7 @@ func TestAffectedOfferMatchesTakerPerspectiveSubscription(t *testing.T) {
 	select {
 	case message := <-matching.Outbound():
 		require.Equal(t, []byte("accepted"), message)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("taker-perspective book did not receive accepted offer")
 	}
 	select {

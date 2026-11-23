@@ -65,7 +65,7 @@ func TestRPCConnectionLimitCountsIdleTCPConnections(t *testing.T) {
 		bound.limiter.mu.Lock()
 		defer bound.limiter.mu.Unlock()
 		return bound.limiter.counts["http"] == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	second, err := net.Dial("tcp", address)
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestRPCConnectionLimitCountsIdleTCPConnections(t *testing.T) {
 		bound.limiter.mu.Lock()
 		defer bound.limiter.mu.Unlock()
 		return bound.limiter.counts["http"] == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	response, err := client.Get("http://" + address + "/health")
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestRPCConnectionLimitOwnsWebSocketLifetime(t *testing.T) {
 		}
 		_ = third.Close()
 		return true
-	}, time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 }
 
 func TestRPCConnectionLimitIgnoresUpgradeShapedHTTPHeaders(t *testing.T) {
@@ -154,7 +154,7 @@ func TestRPCConnectionLimitIgnoresUpgradeShapedHTTPHeaders(t *testing.T) {
 		}
 		_ = response.Body.Close()
 		return response.StatusCode == http.StatusOK
-	}, time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 }
 
 func TestRPCConnectionLimitReleasesAllSlotsOnShutdown(t *testing.T) {
@@ -170,13 +170,13 @@ func TestRPCConnectionLimitReleasesAllSlotsOnShutdown(t *testing.T) {
 		bound.limiter.mu.Lock()
 		defer bound.limiter.mu.Unlock()
 		return bound.limiter.total == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.NoError(t, bound.http[0].server.Close())
 	require.Eventually(t, func() bool {
 		bound.limiter.mu.Lock()
 		defer bound.limiter.mu.Unlock()
 		return bound.limiter.total == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func TestRPCConnectionLimitReleasesRejectedHTTPTransportConnections(t *testing.T) {
@@ -239,7 +239,7 @@ func TestRPCConnectionLimitReleasesRejectedHTTPTransportConnections(t *testing.T
 				bound.limiter.mu.Lock()
 				defer bound.limiter.mu.Unlock()
 				return bound.limiter.counts["http"] == 0
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 		})
 	}
 
@@ -309,7 +309,7 @@ func TestRPCConnectionLimitReleasesRejectedWebSocketConnections(t *testing.T) {
 				bound.limiter.mu.Lock()
 				defer bound.limiter.mu.Unlock()
 				return bound.limiter.counts["ws"] == 0
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 		})
 	}
 
@@ -329,7 +329,7 @@ func TestRPCConnectionLimitReleasesRejectedWebSocketConnections(t *testing.T) {
 		bound.limiter.mu.Lock()
 		defer bound.limiter.mu.Unlock()
 		return bound.limiter.counts["ws"] == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	conn, response, err := websocket.DefaultDialer.Dial(url, authorized)
 	require.NoError(t, err)
@@ -372,7 +372,7 @@ func TestRPCConnectionLimitIsGlobalAcrossHTTPAndWebSocketPorts(t *testing.T) {
 		bound.limiter.mu.Lock()
 		defer bound.limiter.mu.Unlock()
 		return bound.limiter.total == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	url := "ws://" + bound.ws[0].address + "/"
 	_, response, err := websocket.DefaultDialer.Dial(url, nil)
@@ -389,7 +389,7 @@ func TestRPCConnectionLimitIsGlobalAcrossHTTPAndWebSocketPorts(t *testing.T) {
 		}
 		_ = conn.Close()
 		return true
-	}, time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 }
 
 func TestBindRPCTransportsValidatesAllPortsBeforeBinding(t *testing.T) {
@@ -519,7 +519,7 @@ func TestBoundRPCTransportsDoNotServeBeforeCommit(t *testing.T) {
 	require.Zero(t, tracked.accepts.Load())
 
 	require.NoError(t, bound.serve(xrpllog.Discard()))
-	require.Eventually(t, func() bool { return tracked.accepts.Load() > 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return tracked.accepts.Load() > 0 }, progressTimeout, time.Millisecond)
 	require.NoError(t, bound.http[0].server.Close())
 	require.NoError(t, bound.closeListeners())
 	bound.wait()
@@ -596,7 +596,7 @@ func TestBoundRPCTransportsServeAndJoinAllProtocols(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, bound.serve(xrpllog.Discard()))
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	for _, server := range append(append([]*boundHTTPServer(nil), bound.ws...), bound.http...) {
 		require.NoError(t, server.server.Shutdown(ctx))
@@ -610,7 +610,7 @@ func TestBoundRPCTransportsServeAndJoinAllProtocols(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transport Serve goroutines did not stop")
 	}
 	select {
@@ -644,7 +644,7 @@ func TestBoundRPCTransportsPreStoppedServersDoNotBlockServe(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("serve blocked after transports were stopped before serving")
 	}
 	require.NoError(t, bound.closeListeners())
@@ -683,7 +683,7 @@ func TestShutdownTransportsForceClosesStuckHTTPHandler(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("HTTP handler did not start")
 	}
 
@@ -697,7 +697,7 @@ func TestShutdownTransportsForceClosesStuckHTTPHandler(t *testing.T) {
 	close(release)
 	select {
 	case <-requestDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("forced transport close did not release the client")
 	}
 }
@@ -728,7 +728,7 @@ func TestShutdownTransportsDoesNotCompleteWithStuckGRPCHandler(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("gRPC handler did not start")
 	}
 
@@ -749,7 +749,7 @@ func TestShutdownTransportsDoesNotCompleteWithStuckGRPCHandler(t *testing.T) {
 	close(release)
 	select {
 	case <-handlerDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("gRPC handler did not exit after release")
 	}
 }

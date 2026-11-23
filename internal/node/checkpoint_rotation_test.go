@@ -37,7 +37,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 					r.stopSampler()
 				}
 				cancel(nil)
-				require.NoError(t, r.shutdownWithin(10*time.Second))
+				require.NoError(t, r.shutdownWithin(progressTimeout))
 			})
 		}
 		t.Cleanup(stop)
@@ -65,7 +65,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 	runtime.rotator.Notify(initialSeq)
 	require.Eventually(t, func() bool {
 		return runtime.services.AdvisoryDeleteState.GetLastRotated() == initialSeq
-	}, 10*time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 	for range 8 {
 		seq, err := runtime.ledger.AcceptLedger(t.Context())
 		require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 		if (seq-initialSeq)%4 == 0 {
 			require.Eventually(t, func() bool {
 				return runtime.services.AdvisoryDeleteState.GetLastRotated() == seq
-			}, 10*time.Second, 10*time.Millisecond)
+			}, progressTimeout, 10*time.Millisecond)
 		}
 	}
 	after, err := durable.DurableFingerprint(t.Context())
@@ -89,7 +89,7 @@ func TestCheckpointRecertificationAcrossOnlineDeleteAndRestart(t *testing.T) {
 			release()
 		}
 		return err == nil && available && root == runtime.ledger.GetValidatedLedger().Header().AccountHash
-	}, 10*time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 	want := runtime.ledger.GetValidatedLedger().Hash()
 	stopRuntime()
 
