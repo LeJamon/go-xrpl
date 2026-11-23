@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,18 +192,26 @@ var conformanceCorpusDir = filepath.Join("..", "..", "..", filepath.FromSlash(ri
 // pinned conformance corpus.
 func conformanceAmountValues(t testing.TB) []string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(conformanceCorpusDir, "*.json"))
+	manifestPath := filepath.Join(conformanceCorpusDir, "manifest.json")
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths = filterCorpusFixtures(paths)
-	if len(paths) == 0 {
-		t.Fatalf("no conformance fixtures at %s", conformanceCorpusDir)
+	var manifest struct {
+		Count    int                 `json:"fixture_count"`
+		Fixtures map[string]struct{} `json:"fixtures"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("%s: %v", manifestPath, err)
+	}
+	if manifest.Count == 0 || len(manifest.Fixtures) != manifest.Count {
+		t.Fatalf("%s: fixture_count = %d, listed fixtures = %d", manifestPath, manifest.Count, len(manifest.Fixtures))
 	}
 
 	seen := make(map[string]struct{})
 	var blobs int
-	for _, path := range paths {
+	for _, name := range slices.Sorted(maps.Keys(manifest.Fixtures)) {
+		path := filepath.Join(conformanceCorpusDir, name)
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -233,25 +243,12 @@ func conformanceAmountValues(t testing.TB) []string {
 		}
 	}
 
-	values := make([]string, 0, len(seen))
-	for v := range seen {
-		values = append(values, v)
-	}
+	values := slices.Sorted(maps.Keys(seen))
 	t.Logf("conformance corpus: %d blobs, %d distinct amount values", blobs, len(values))
 	if len(values) == 0 {
 		t.Fatalf("conformance corpus at %s contains no decoded Amount values", conformanceCorpusDir)
 	}
 	return values
-}
-
-func filterCorpusFixtures(paths []string) []string {
-	fixtures := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if filepath.Base(path) != "manifest.json" {
-			fixtures = append(fixtures, path)
-		}
-	}
-	return fixtures
 }
 
 func forEachCorpusBlob(v any, path string, fn func(path, blob string) error) error {
