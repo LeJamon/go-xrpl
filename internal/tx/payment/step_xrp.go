@@ -307,10 +307,10 @@ func (s *XRPEndpointStep) liquidOf(sb *PaymentSandbox, accountRoot *state.Accoun
 	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
 	adjustedOwnerCount := tx.ConfineOwnerCount(ownerCount, int(s.reserveReduction))
 
-	// AMM pseudo-accounts (sfAMMID present) have no reserve requirement.
+	// Pseudo-accounts have no reserve requirement.
 	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
 	var reserve uint64
-	if !accountRoot.HasAMMID() {
+	if !accountRoot.IsPseudoAccount() {
 		baseReserve, ownerReserve := GetLedgerReserves(sb)
 		accountWithHook := *accountRoot
 		accountWithHook.OwnerCount = counts.Owner

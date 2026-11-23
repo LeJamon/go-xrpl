@@ -118,40 +118,42 @@ func TestXRPEndpointStep_xrpLiquid_DeferredCredit(t *testing.T) {
 		"deferred-credit hook must subtract the 40 XRP received earlier in the payment")
 }
 
-// TestXRPEndpointStep_xrpLiquid_AMMReserveExemption proves that an AMM
-// pseudo-account (sfAMMID present) has no reserve requirement, so its entire
-// balance is liquid. Reference: rippled View.cpp xrpLiquid() lines 631-633.
-func TestXRPEndpointStep_xrpLiquid_AMMReserveExemption(t *testing.T) {
+func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 	view := newPaymentMockLedgerView()
-	var amm [20]byte
-	copy(amm[:], []byte("ammacct123456789012"))
-
-	// Build an AMM pseudo-account: non-zero AMMID, a non-trivial owner count to
-	// prove the reserve is waived regardless of owners.
-	acct := &state.AccountRoot{
-		Account:    state.EncodeAccountIDSafe(amm),
-		Balance:    100_000_000, // 100 XRP
-		OwnerCount: 5,
-		Sequence:   1,
+	pseudoAccounts := []struct {
+		name string
+		set  func(*state.AccountRoot)
+	}{
+		{name: "AMM", set: func(account *state.AccountRoot) { account.AMMID[0] = 1 }},
+		{name: "vault", set: func(account *state.AccountRoot) { account.VaultID[0] = 1 }},
+		{name: "loan broker", set: func(account *state.AccountRoot) { account.LoanBrokerID[0] = 1 }},
 	}
-	acct.AMMID[0] = 0x01 // mark sfAMMID present
-	data, err := state.SerializeAccountRoot(acct)
-	require.NoError(t, err)
-	view.data[keylet.Account(amm).Key] = data
 
-	step := NewXRPEndpointStep(amm, false)
-	sb := NewPaymentSandbox(view)
+	for index, pseudo := range pseudoAccounts {
+		t.Run(pseudo.name, func(t *testing.T) {
+			var accountID [20]byte
+			accountID[0] = byte(index + 1)
+			account := &state.AccountRoot{
+				Account:    state.EncodeAccountIDSafe(accountID),
+				Balance:    100_000_000,
+				OwnerCount: 5,
+				Sequence:   1,
+			}
+			pseudo.set(account)
+			data, err := state.SerializeAccountRoot(account)
+			require.NoError(t, err)
+			view.data[keylet.Account(accountID).Key] = data
 
-	// No reserve: full 100 XRP is liquid (base 10 + 5*owner reserve would be
-	// withheld for a normal account, but an AMM has zero reserve).
-	require.Equal(t, int64(100_000_000), step.xrpLiquid(sb),
-		"AMM pseudo-account must have zero reserve -> full balance liquid")
+			step := NewXRPEndpointStep(accountID, false)
+			sb := NewPaymentSandbox(view)
+			require.Equal(t, int64(100_000_000), step.xrpLiquid(sb),
+				"pseudo-account must have zero reserve -> full balance liquid")
+		})
+	}
 
-	// Sanity: a non-AMM account with the same owner count withholds reserve.
 	var normal [20]byte
 	copy(normal[:], []byte("normalacct123456789"))
 	view.createAccount(normal, 100_000_000, 5) // base 10 + 5*2 = 20 XRP reserve
 	normalStep := NewXRPEndpointStep(normal, false)
-	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(sb),
-		"non-AMM account withholds base + owner*inc reserve")
+	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(NewPaymentSandbox(view)))
 }
