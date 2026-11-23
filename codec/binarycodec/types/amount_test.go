@@ -885,7 +885,7 @@ func TestDeserializeMPTValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := deserializeMPTValue(tt.input)
+			got, err := deserializeMPTValue(tt.input, false)
 
 			if tt.expErr != nil {
 				require.Error(t, err)

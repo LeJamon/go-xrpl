@@ -23,25 +23,14 @@ func rawMPTTestFields(value binarytypes.RawMPTValue) map[string]any {
 
 func TestDecodeBytesAllowOverCapPreservesRawMPTWireValues(t *testing.T) {
 	tests := []struct {
-		name      string
-		value     binarytypes.RawMPTValue
-		wantValue binarytypes.RawMPTValue
+		name       string
+		value      binarytypes.RawMPTValue
+		wirePrefix string
+		display    string
 	}{
-		{
-			name:      "negative zero",
-			value:     binarytypes.RawMPTValue{Negative: true},
-			wantValue: binarytypes.RawMPTValue{Negative: true},
-		},
-		{
-			name:      "unsigned maximum",
-			value:     binarytypes.RawMPTValue{Magnitude: math.MaxUint64},
-			wantValue: binarytypes.RawMPTValue{Magnitude: math.MaxUint64},
-		},
-		{
-			name:      "negative unsigned maximum",
-			value:     binarytypes.RawMPTValue{Magnitude: math.MaxUint64, Negative: true},
-			wantValue: binarytypes.RawMPTValue{Magnitude: math.MaxUint64, Negative: true},
-		},
+		{"negative zero", binarytypes.RawMPTValue{Negative: true}, "61200000000000000000", "0"},
+		{"first over cap", binarytypes.RawMPTValue{Magnitude: 1 << 63}, "61608000000000000000", "9223372036854775808"},
+		{"negative unsigned maximum", binarytypes.RawMPTValue{Magnitude: math.MaxUint64, Negative: true}, "6120ffffffffffffffff", "-18446744073709551615"},
 	}
 
 	for _, tc := range tests {
@@ -51,6 +40,9 @@ func TestDecodeBytesAllowOverCapPreservesRawMPTWireValues(t *testing.T) {
 				t.Fatalf("EncodeDecodedFields: %v", err)
 			}
 
+			if got, want := hex.EncodeToString(wire), tc.wirePrefix+rawMPTTestIssuanceID; got != want {
+				t.Fatalf("serialized Amount = %s, want %s", got, want)
+			}
 			decoded, err := DecodeBytesAllowOverCap(wire)
 			if err != nil {
 				t.Fatalf("DecodeBytesAllowOverCap: %v", err)
@@ -60,8 +52,8 @@ func TestDecodeBytesAllowOverCapPreservesRawMPTWireValues(t *testing.T) {
 				t.Fatalf("decoded Amount = %#v, want MPT amount map", decoded["Amount"])
 			}
 			got, ok := amount["value"].(binarytypes.RawMPTValue)
-			if !ok || got != tc.wantValue {
-				t.Fatalf("decoded raw MPT value = %#v, want %#v", amount["value"], tc.wantValue)
+			if !ok || got != tc.value {
+				t.Fatalf("decoded raw MPT value = %#v, want %#v", amount["value"], tc.value)
 			}
 			if amount["mpt_issuance_id"] != strings.ToUpper(rawMPTTestIssuanceID) {
 				t.Fatalf("decoded issuance ID = %#v, want uppercase ID", amount["mpt_issuance_id"])
@@ -79,7 +71,7 @@ func TestDecodeBytesAllowOverCapPreservesRawMPTWireValues(t *testing.T) {
 			if err != nil {
 				t.Fatalf("json.Marshal(decoded Amount): %v", err)
 			}
-			wantJSON := `{"mpt_issuance_id":"` + strings.ToUpper(rawMPTTestIssuanceID) + `","value":"` + tc.wantValue.String() + `"}`
+			wantJSON := `{"mpt_issuance_id":"` + strings.ToUpper(rawMPTTestIssuanceID) + `","value":"` + tc.display + `"}`
 			if got := string(jsonBytes); got != wantJSON {
 				t.Fatalf("decoded MPT JSON = %s, want %s", got, wantJSON)
 			}

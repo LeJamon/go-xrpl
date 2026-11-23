@@ -387,7 +387,7 @@ func checkMPTDecodeMatchesReference(t testing.TB, data []byte) {
 	t.Helper()
 
 	want, wantErr := refDeserializeMPTValue(data)
-	got, gotErr := deserializeMPTValue(data)
+	got, gotErr := deserializeMPTValue(data, false)
 	if !sameAmountErr(gotErr, wantErr) || got != want {
 		t.Fatalf("deserializeMPTValue(%x) = %q, %v; want %q, %v", data, got, gotErr, want, wantErr)
 	}

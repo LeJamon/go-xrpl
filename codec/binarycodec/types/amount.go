@@ -184,26 +184,22 @@ func (a *Amount) fromFields(value any, source fieldSource) ([]byte, error) {
 		if !ok {
 			return nil, errAmountMissingValue
 		}
-		rawMPT, isRawMPT := rawVal.(RawMPTValue)
-		if isRawMPT && source != decodedFields {
-			return nil, errInvalidAmountType
-		}
-		var val string
-		if !isRawMPT {
-			var err error
-			val, err = valueToString(rawVal)
-			if err != nil {
-				return nil, fmt.Errorf("%w: %w", errInvalidAmountValue, err)
+		if raw, ok := rawVal.(RawMPTValue); ok {
+			id, ok := v["mpt_issuance_id"].(string)
+			if source != decodedFields || !ok {
+				return nil, errInvalidAmountType
 			}
+			return serializeMPTCurrencyAmountParts(raw.Magnitude, !raw.Negative, id)
+		}
+		val, err := valueToString(rawVal)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", errInvalidAmountValue, err)
 		}
 		// If there's an mpt_issuance_id key → MPT currency
 		if rawID, ok := v["mpt_issuance_id"]; ok {
 			id, err := valueToString(rawID)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", errInvalidMPTIssuanceID, err)
-			}
-			if isRawMPT {
-				return serializeRawMPTCurrencyAmount(rawMPT, id)
 			}
 			return serializeMPTCurrencyAmount(val, id)
 		}
@@ -387,39 +383,22 @@ func deserializeIssuer(data []byte) (string, error) {
 	return addresscodec.Encode(data, []byte{addresscodec.AccountAddressPrefix}, addresscodec.AccountAddressLength)
 }
 
-// deserializeMPTValue extracts and formats the value component from an MPT amount binary representation.
-// It handles sign bit and converts the 64-bit mantissa (split into MSB and LSB) to a string representation.
-func deserializeMPTValue(data []byte) (string, error) {
-	num, negative, err := mptValueParts(data)
-	if err != nil {
-		return "", err
-	}
-	return formatMPTValue(num, negative)
-}
-
-func mptValueParts(data []byte) (magnitude uint64, negative bool, err error) {
+func deserializeMPTValue(data []byte, preserveRaw bool) (any, error) {
 	if len(data) < MPTValueWithHeaderLength {
-		return 0, false, errInvalidMPTLength
+		return "", errInvalidMPTLength
 	}
-	return binary.BigEndian.Uint64(data[1:MPTValueWithHeaderLength]), !isPositive(data[0]), nil
-}
-
-func formatMPTValue(magnitude uint64, negative bool) (string, error) {
-	if magnitude == 0 {
-		return "0", nil
+	value := RawMPTValue{
+		Magnitude: binary.BigEndian.Uint64(data[1:MPTValueWithHeaderLength]),
+		Negative:  !isPositive(data[0]),
 	}
-	sign := ""
-	if negative {
-		sign = "-"
+	if preserveRaw && (value.Magnitude > math.MaxInt64 || value.Magnitude == 0 && value.Negative) {
+		return value, nil
 	}
-	// rippled's MPT deserialize skips canonicalize and so skips the max-value
-	// cap, but its JSON re-entry path applies it (STAmount.cpp:939-940,
-	// maxMPTokenAmount = 2^63-1). Enforce it on decode so the value re-encodes;
-	// mirrors parseMPTValue's range check on the encode side.
-	if magnitude > math.MaxInt64 {
-		return "", &InvalidAmountError{Amount: sign + strconv.FormatUint(magnitude, 10)}
+	text := value.String()
+	if value.Magnitude > math.MaxInt64 {
+		return "", &InvalidAmountError{Amount: text}
 	}
-	return sign + strconv.FormatUint(magnitude, 10), nil
+	return text, nil
 }
 
 // deserializeMPTIssuanceID extracts the issuance ID from an MPT amount binary representation
@@ -439,7 +418,7 @@ func deserializeMPTAmount(data []byte, preserveRaw bool) (map[string]any, error)
 	if len(data) != MPTAmountByteLength {
 		return nil, errInvalidMPTLength
 	}
-	val, err := deserializeMPTValueForDecode(data[:MPTValueWithHeaderLength], preserveRaw)
+	val, err := deserializeMPTValue(data[:MPTValueWithHeaderLength], preserveRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -451,17 +430,6 @@ func deserializeMPTAmount(data []byte, preserveRaw bool) (map[string]any, error)
 		"value":           val,
 		"mpt_issuance_id": id,
 	}, nil
-}
-
-func deserializeMPTValueForDecode(data []byte, preserveRaw bool) (any, error) {
-	magnitude, negative, err := mptValueParts(data)
-	if err != nil {
-		return nil, err
-	}
-	if preserveRaw && (magnitude > math.MaxInt64 || (magnitude == 0 && negative)) {
-		return RawMPTValue{Magnitude: magnitude, Negative: negative}, nil
-	}
-	return formatMPTValue(magnitude, negative)
 }
 
 // splitIntegralAmount accepts an optional '+' or '-' followed by "0" or ASCII
@@ -734,10 +702,6 @@ func serializeMPTCurrencyAmountParts(magnitude uint64, positive bool, issuanceHe
 	binary.BigEndian.PutUint64(buf[1:MPTValueWithHeaderLength], magnitude)
 	copy(buf[MPTValueWithHeaderLength:], idBytes)
 	return buf, nil
-}
-
-func serializeRawMPTCurrencyAmount(value RawMPTValue, issuanceHex string) ([]byte, error) {
-	return serializeMPTCurrencyAmountParts(value.Magnitude, !value.Negative, issuanceHex)
 }
 
 // Returns true if this amount is a "native" XRP amount - first bit in first byte set to 0 for native XRP
