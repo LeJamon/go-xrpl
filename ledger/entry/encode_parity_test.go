@@ -2,7 +2,6 @@ package entry
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -199,26 +198,105 @@ func TestEncodeParityConformanceCorpus(t *testing.T) {
 		perType[typ]++
 		encoded, err := e.(encodeIface).Encode()
 		if err != nil {
-			// The fee-invariant fixture records a wire balance above the JSON supply cap.
-			const overCapAccount = "99f79b34db1b0811e24de8c0814c5a3f5ba1800a8148a837ce4396f08c9a9670"
-			root, ok := e.(*AccountRoot)
-			var amountErr *types.InvalidAmountError
-			if !ok || fmt.Sprintf("%x", sha256.Sum256(data)) != overCapAccount ||
-				!errors.As(err, &amountErr) || amountErr.Amount != "100000000000000001" {
-				t.Fatalf("%s: Encode: %v", typ, err)
-			}
-			root.SetBalance(types.RawXRPAmount{Drops: types.MaxDrops + 1})
-			requireEncodeParity(t, root)
-			encoded, err = root.Encode()
-			if err != nil {
-				t.Fatalf("%s: Encode with wire balance: %v", typ, err)
-			}
+			t.Fatalf("%s: Encode: %v", typ, err)
 		}
 		if !bytes.Equal(encoded, data) {
 			t.Fatalf("%s: Encode does not reproduce rippled's blob:\n got  %X\n want %X", typ, encoded, data)
 		}
 	}
 	t.Logf("compared %d distinct ledger entries from %d fixtures: %v", len(blobs), len(files), perType)
+}
+
+func TestOverCapXRPAmountRoundTripAndInputValidation(t *testing.T) {
+	base := fixtureEntry(t, "AccountRoot").(*AccountRoot)
+	for _, tc := range []struct {
+		name, want, replacement string
+		negative                bool
+	}{
+		{name: "positive", want: "100000000000000001", replacement: "100000000000000002"},
+		{name: "negative", want: "-100000000000000001", replacement: "-100000000000000002", negative: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wireMap := base.ToMap()
+			wireMap["Balance"] = types.RawXRPAmount{Drops: types.MaxDrops + 1, Negative: tc.negative}
+			data, err := binarycodec.EncodeBytes(wireMap)
+			if err != nil {
+				t.Fatalf("EncodeBytes: %v", err)
+			}
+
+			var account AccountRoot
+			if err := account.Decode(data); err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+
+			balance, err := account.GetBalance()
+			if err != nil {
+				t.Fatalf("GetBalance: %v", err)
+			}
+			if balance != (AmountValue{Value: tc.want}) {
+				t.Fatalf("GetBalance = %#v, want %#v", balance, AmountValue{Value: tc.want})
+			}
+
+			mapped := account.ToMap()["Balance"]
+			if mapped != tc.want {
+				t.Fatalf("ToMap Balance = %#v, want %q", mapped, tc.want)
+			}
+
+			got, err := account.Encode()
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			if !bytes.Equal(got, data) {
+				t.Fatalf("round-trip mismatch:\n got  %X\n want %X", got, data)
+			}
+
+			account.SetSequence(account.Sequence + 1)
+			wireMap["Sequence"] = account.Sequence
+			want, err := binarycodec.EncodeBytes(wireMap)
+			if err != nil {
+				t.Fatalf("EncodeBytes after unrelated mutation: %v", err)
+			}
+			mutated, err := account.Encode()
+			if err != nil {
+				t.Fatalf("Encode after unrelated mutation: %v", err)
+			}
+			if !bytes.Equal(mutated, want) {
+				t.Fatalf("mutation mismatch:\n got  %X\n want %X", mutated, want)
+			}
+
+			reject := func(label, want string, entry *AccountRoot) {
+				t.Helper()
+				encoders := []struct {
+					name   string
+					encode func() ([]byte, error)
+				}{
+					{name: "direct", encode: entry.Encode},
+					{name: "map", encode: entry.encodeViaMap},
+				}
+				for _, encoder := range encoders {
+					_, err := encoder.encode()
+					var amountErr *types.InvalidAmountError
+					if !errors.As(err, &amountErr) {
+						t.Errorf("%s %s error = %v, want InvalidAmountError", label, encoder.name, err)
+						continue
+					}
+					if amountErr.Amount != want {
+						t.Errorf("%s %s error amount = %q, want %q", label, encoder.name, amountErr.Amount, want)
+					}
+				}
+			}
+
+			account.SetBalance(tc.want)
+			reject("same supplied value", tc.want, &account)
+
+			var assigned AccountRoot
+			if err := assigned.Decode(data); err != nil {
+				t.Fatalf("Decode for direct assignment: %v", err)
+			}
+			assigned.Balance = tc.replacement
+			reject("different direct assignment", tc.replacement, &assigned)
+		})
+	}
 }
 
 func collectLedgerEntryBlobs(node any, out map[string]struct{}) {
