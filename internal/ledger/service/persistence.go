@@ -25,7 +25,9 @@ import (
 var validatedTipKey = nodestore.Hash256(sha512half.Sum([]byte("go-xrpl validated ledger tip")))
 
 // persistLedger stores SHAMap deltas and the ledger header before updating the
-// relational index. Callers log failures without stopping chain advancement.
+// relational index, which is skipped when the node-store write fails so that a
+// relational row always names a loadable ledger. Callers log failures without
+// stopping chain advancement.
 func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	return s.persistValidatedLedger(ctx, l, true)
 }
@@ -66,8 +68,8 @@ func (s *Service) persistValidatedLedgerAtToken(
 		defer s.canonicalPersistMu.Unlock()
 	}
 	if s.relationalDB != nil {
-		if err := s.persistToRelationalDB(ctx, l); err != nil {
-			persistErr = errors.Join(persistErr, err)
+		if persistErr == nil {
+			persistErr = s.persistToRelationalDB(ctx, l)
 		}
 		if canceled != nil && canceled() {
 			return nil
