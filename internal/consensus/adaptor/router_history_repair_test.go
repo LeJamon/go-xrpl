@@ -201,6 +201,77 @@ func TestHistoryBackfillRetargetsResidentHoleLocally(t *testing.T) {
 	}
 }
 
+func TestHistoryBackfillRefreshesSameSequenceHash(t *testing.T) {
+	db, rm := newHistoryRepairStores(t)
+	const hole = 7
+	relational := &failingLedgerIndex{RepositoryManager: rm}
+	writer := writeLedgerHistory(t, db, relational, 10)
+	writer.Stop()
+
+	relational.fail(hole, 1)
+	svc := restartFastLoad(t, db, relational)
+	tip := svc.GetValidatedLedgerIndex()
+	r, _ := newHistoryRepairRouter(t, svc, tip-2)
+	r.catchupReplay.historyMu.Lock()
+	r.catchupReplay.history = catchupTarget{seq: hole, hash: [32]byte{0xFA}, peerID: 42}
+	r.catchupReplay.historyMu.Unlock()
+
+	r.catchupReplay.retargetHistoryGap(svc, tip)
+	r.catchupReplay.historyMu.Lock()
+	target := r.catchupReplay.history
+	r.catchupReplay.historyMu.Unlock()
+	canonical, ok, err := svc.CanonicalLedgerHash(context.Background(), hole)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, hole, target.seq)
+	require.Equal(t, canonical, target.hash)
+	require.Equal(t, uint64(42), target.peerID)
+
+	r.catchupReplay.historyMu.Lock()
+	r.catchupReplay.history = catchupTarget{seq: hole + 1, hash: [32]byte{0xFB}, peerID: 43}
+	r.catchupReplay.historyMu.Unlock()
+	r.catchupReplay.retargetHistoryGap(svc, tip)
+	r.catchupReplay.historyMu.Lock()
+	target = r.catchupReplay.history
+	r.catchupReplay.historyMu.Unlock()
+	require.Equal(t, hole+1, target.seq)
+	require.Equal(t, [32]byte{0xFB}, target.hash)
+	require.Equal(t, uint64(43), target.peerID)
+}
+
+func TestHistoryBackfillRequestsAndRepairsMissingDeepAnchor(t *testing.T) {
+	base := newTestNodeStore(t, 100_000)
+	store := &failingHeaderStore{Database: base}
+	store.failSeq.Store(300)
+	svc := startHistoryRepairService(t, service.Config{
+		Standalone:      true,
+		LedgerCacheSize: 256,
+		NodeStore:       store,
+	})
+	acceptUntil(t, svc, 900)
+	require.True(t, svc.HasCompleteLedger(512))
+	r, sender := newHistoryRepairRouter(t, svc, 700)
+	r.catchupReplay.armHistoryBackfill()
+	calls := sender.legacyCalls()
+	require.Len(t, calls, 1)
+	require.Equal(t, uint32(512), calls[0].seq)
+
+	anchor, err := svc.GetLedgerBySequenceContext(context.Background(), 512)
+	require.NoError(t, err)
+	stateMap, err := anchor.StateMapSnapshotContext(context.Background())
+	require.NoError(t, err)
+	txMap, err := anchor.TxMapSnapshotContext(context.Background())
+	require.NoError(t, err)
+	header := anchor.Header()
+	require.NoError(t, svc.StoreLedgerWithState(context.Background(), &header, stateMap, txMap))
+	svc.FlushPersists()
+	r.catchupReplay.completeHistoryBackfill(512, anchor.Hash(), anchor.ParentHash(), calls[0].peerID)
+	r.catchupReplay.armHistoryBackfill()
+	calls = sender.legacyCalls()
+	require.Len(t, calls, 2)
+	require.Equal(t, uint32(300), calls[1].seq)
+}
+
 // A hole that leaves memory after the initial walk is acquired from the
 // network once validated persists succeed again.
 func TestHistoryBackfillAcquiresEvictedHole(t *testing.T) {
