@@ -125,6 +125,26 @@ func newHistoryRepairRouter(t *testing.T, svc *service.Service, depth uint32) (*
 	return r, sender
 }
 
+func newRouterWithHistoryGap(t *testing.T) (*Router, *recordingSender, *service.Service, uint32, [32]byte) {
+	t.Helper()
+	const gap uint32 = 4
+	db, rm := newHistoryRepairStores(t)
+	repos := &failingLedgerIndex{RepositoryManager: rm}
+	repos.fail(gap, -1)
+	svc := startHistoryRepairService(t, service.Config{
+		Standalone: true, LedgerCacheSize: 1, NodeStore: db, RelationalDB: repos,
+	})
+	acceptUntil(t, svc, gap+3)
+	require.False(t, svc.HasCompleteLedger(gap))
+	hash, ok, err := svc.CanonicalLedgerHash(t.Context(), gap)
+	require.NoError(t, err)
+	require.True(t, ok)
+	a, sender := newRecordingAdaptor(t, svc)
+	r := newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 1))
+	r.catchupReplay.configureHistoryBackfill(true, 6, false)
+	return r, sender, svc, gap, hash
+}
+
 func runHistoryBackfill(svc *service.Service, r *Router, done func() bool) {
 	for range 32 {
 		if done() {
