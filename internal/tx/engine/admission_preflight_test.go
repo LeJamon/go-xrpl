@@ -128,6 +128,33 @@ func TestPreflightAdmissionOverCapTypeAmountsReturnTERBeforeAndAfterCleanup320(t
 	}
 }
 
+func TestPreflightAdmissionMPTNegativeZero(t *testing.T) {
+	fields := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         admissionPreflightAccount,
+		"Destination":     admissionPreflightDestination,
+		"Amount": map[string]any{
+			"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+			"value":           binarytypes.RawMPTValue{Negative: true},
+		},
+		"Sequence":      uint32(1),
+		"Fee":           "10",
+		"SigningPubKey": admissionPreflightPublicKey,
+	}
+	transaction, err := txcore.ParseFromDecodedFields(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := preflightEngine(allRules())
+	if got := engine.preflightStructure(transaction, transaction.GetCommon()); got != ter.TemBAD_AMOUNT {
+		t.Fatalf("preflight MPT negative zero = %v, want temBAD_AMOUNT", got)
+	}
+	transaction.GetCommon().Account = protocol.ZeroAccount
+	if got := engine.preflightStructure(transaction, transaction.GetCommon()); got != ter.TemBAD_SRC_ACCOUNT {
+		t.Fatalf("preflight zero source account and MPT negative zero = %v, want temBAD_SRC_ACCOUNT", got)
+	}
+}
+
 func TestPreflightAdmissionZeroSourceAccountReturnsTER(t *testing.T) {
 	transaction := signedAdmissionTransaction(t, "AccountSet", protocol.ZeroAccount, nil)
 
