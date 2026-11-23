@@ -88,7 +88,7 @@ jobs:
         run: FUZZTIME=${{ steps.cfg.outputs.fuzztime }} ./scripts/fuzz.sh ${{ matrix.packages }}
       - name: Upload new crashers
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashers-${{ matrix.name }}
           path: "**/testdata/fuzz/**"
