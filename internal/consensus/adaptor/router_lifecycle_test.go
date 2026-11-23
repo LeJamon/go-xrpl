@@ -45,7 +45,7 @@ func TestRouterRunJoinsOwnedTasksOnInboxClose(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not return after router-owned work exited")
 	}
 
@@ -121,7 +121,7 @@ func TestRouterRunJoinsOwnedTasksOnCancellation(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not return after router-owned work exited")
 	}
 }
@@ -161,7 +161,7 @@ func TestRouterRunJoinsSignaturePrewarm(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not return after signature prewarm exited")
 	}
 }

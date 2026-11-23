@@ -137,7 +137,7 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 	store.open()
 	select {
 	case <-stopDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain the persistence queue")
 	}
 
@@ -200,14 +200,14 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 	}()
 	select {
 	case <-store.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("accepted ledger was not handed to async persistence")
 	}
 	cancel()
 	select {
 	case err := <-accepted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("committed acceptance waited for asynchronous persistence")
 	}
 
@@ -222,7 +222,7 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 		svc.lifecycleMu.Lock()
 		defer svc.lifecycleMu.Unlock()
 		return svc.lifecycleState == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-stopDone:
 		t.Fatal("Stop returned while async persistence was blocked")
@@ -232,7 +232,7 @@ func TestService_CanceledAcceptanceDrainsAsyncPersistence(t *testing.T) {
 	store.open()
 	select {
 	case <-stopDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain async persistence")
 	}
 	persisted, err := store.Fetch(t.Context(), nodestore.Hash256(closed.Hash()))
@@ -270,7 +270,7 @@ func TestService_StandaloneCommitPersistsAfterCancellation(t *testing.T) {
 	}()
 	select {
 	case <-store.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("standalone acceptance did not reach persistence")
 	}
 	cancel()
@@ -280,7 +280,7 @@ func TestService_StandaloneCommitPersistsAfterCancellation(t *testing.T) {
 	select {
 	case result = <-accepted:
 		require.NoError(t, result.err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("committed standalone acceptance did not finish after cancellation")
 	}
 	closed := svc.GetClosedLedger()

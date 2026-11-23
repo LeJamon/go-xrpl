@@ -811,7 +811,7 @@ func TestAcquisitionStoreScopePromoteWaitsForAdmittedWrite(t *testing.T) {
 		defer lane.pendingMu.RUnlock()
 		_, ok := lane.pending[pendingAcquisitionKey{scope: scope.id, hash: second.Hash}]
 		return ok
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	promoteDone := make(chan error, 1)
 	go func() {
 		_, err := scope.Promote(t.Context())
@@ -855,7 +855,7 @@ func TestAcquisitionStoreScopeCheckpointWaitsForAdmittedWrite(t *testing.T) {
 		defer lane.pendingMu.RUnlock()
 		_, ok := lane.pending[pendingAcquisitionKey{scope: scope.id, hash: second.Hash}]
 		return ok
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	checkpointDone := make(chan error, 1)
 	go func() {
@@ -896,7 +896,7 @@ func TestAcquisitionStoreLaneStopCancelsBlockedWrites(t *testing.T) {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stop did not cancel the blocked write")
 	}
 }
@@ -925,7 +925,7 @@ func TestAcquisitionStoreLaneStopDrainsQueuedWrites(t *testing.T) {
 	close(base.blockFirst)
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stop did not finish after draining queued persistence")
 	}
 
@@ -954,11 +954,11 @@ func TestRouterAcquisitionStoreLifecycle(t *testing.T) {
 		router.catchupReplay.acquisitionStore.lifecycleMu.RLock()
 		defer router.catchupReplay.acquisitionStore.lifecycleMu.RUnlock()
 		return router.catchupReplay.acquisitionStore.done != nil
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not drain acquisition persistence on shutdown")
 	}
 	router.catchupReplay.acquisitionStore.lifecycleMu.RLock()
@@ -1234,7 +1234,7 @@ func TestClearThenStaleResultRetiresLaterPersistenceFailure(t *testing.T) {
 	}()
 	select {
 	case <-cleared:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scope retirement blocked behind persistence")
 	}
 

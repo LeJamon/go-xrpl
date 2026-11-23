@@ -51,7 +51,7 @@ func TestBackgroundVerificationYieldResumesAndCancels(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("background verifier did not resume")
 	}
 	ctx, cancel := context.WithCancel(t.Context())

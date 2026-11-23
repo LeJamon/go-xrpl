@@ -693,7 +693,7 @@ func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("onStale callback deadlocked or never fired")
 	}
 }

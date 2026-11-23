@@ -107,7 +107,7 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
 	select {
 	case <-db.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validated persistence did not reach the tip store")
 	}
 
@@ -122,7 +122,7 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	require.Eventually(t, func() bool {
 		info := svc.GetServerInfo()
 		return info.HavePublished && info.PublishedLedgerSeq == closed.Sequence()
-	}, 5*time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	info := svc.GetServerInfo()
 	require.True(t, info.HaveValidatedRange)
 	availableMin, availableMax, ok := svc.AvailableLedgerRange()
@@ -135,5 +135,5 @@ func TestValidatedLedgerRangeTracksSetValidatedLedgerPersistence(t *testing.T) {
 	unblock()
 	require.Eventually(t, func() bool {
 		return svc.GetServerInfo().ValidatedRangeMax == closed.Sequence()
-	}, 5*time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }

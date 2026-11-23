@@ -136,7 +136,7 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 		blocked.releaseBuild()
 		select {
 		case <-blocked.completed:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("production ledger acceptance did not complete during cleanup")
 		}
 		require.NoError(t, engine.Stop())
@@ -157,7 +157,7 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 		}()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("consensus timer blocked before the deferred acceptance started")
 		}
 	}
@@ -168,7 +168,7 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 
 	select {
 	case <-blocked.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("production acceptance did not enter the blocked build")
 	}
 
@@ -181,19 +181,19 @@ func TestProductionAdaptorAcceptanceKeepsTimerResponsiveDuringBlockedBuild(t *te
 	}()
 	select {
 	case <-tickDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus timer waited for the blocked production ledger build")
 	}
 
 	blocked.releaseBuild()
 	select {
 	case <-blocked.completed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("production ledger acceptance did not complete")
 	}
 	select {
 	case <-sender.emitted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("production ledger acceptance did not emit a validation")
 	}
 
@@ -262,7 +262,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 		blocked.releaseBuild()
 		select {
 		case <-blocked.completed:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("production stale-build acceptance did not complete during cleanup")
 		}
 		require.NoError(t, engine.Stop())
@@ -282,7 +282,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	driveToAcceptance()
 	select {
 	case <-blocked.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("production acceptance did not enter the blocked build")
 	}
 	base.ledgerService.PromoteStoredValidatedLedgerAt(canonical.Sequence(), canonical.Hash(), canonical.CloseTime())
@@ -310,12 +310,12 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	blocked.releaseBuild()
 	select {
 	case <-blocked.completed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stale production acceptance did not complete")
 	}
 	require.Eventually(t, func() bool {
 		return engine.BuildingLedgerSeq() == 0
-	}, time.Second, time.Millisecond, "engine acceptance did not reconcile the completed build")
+	}, progressTimeout, time.Millisecond, "engine acceptance did not reconcile the completed build")
 	require.Empty(t, sender.snapshot(), "stale build must not emit a validation")
 
 	// The canonical candidate is already held locally. The normal recovery path
@@ -323,7 +323,7 @@ func TestProductionAdaptorRejectsStaleBuildAndRecoversHeldCanonicalLedger(t *tes
 	require.Eventually(t, func() bool {
 		closed := base.ledgerService.GetClosedLedger()
 		return closed != nil && closed.Hash() == canonical.Hash()
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.Equal(t, canonical.Hash(), base.ledgerService.GetClosedLedger().Hash())
 	require.Zero(t, requests.Load(), "held canonical ledger must not trigger acquisition")
 	require.False(t, base.ledgerService.ReplayBlocked())

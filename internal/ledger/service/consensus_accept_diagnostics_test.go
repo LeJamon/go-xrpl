@@ -51,7 +51,7 @@ func TestConsensusAcceptanceProfileBoundsReporting(t *testing.T) {
 		require.Contains(t, record["goroutine_profile"], "goroutine profile: total")
 		require.LessOrEqual(t, len(record["goroutine_profile"].(string)), maxAcceptanceProfileBytes)
 		require.Nil(t, record["profile_error"])
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("slow acceptance did not capture a grouped profile")
 	}
 	// Reporting must remain nonblocking even if the previous log sink is stuck.
@@ -80,7 +80,7 @@ func TestConsensusAcceptanceProfileTimer(t *testing.T) {
 	select {
 	case record := <-logger.record:
 		require.Equal(t, uint32(42), record["seq"])
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("slow acceptance timer did not trigger a profile")
 	}
 }

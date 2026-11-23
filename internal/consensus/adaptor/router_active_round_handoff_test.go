@@ -66,5 +66,5 @@ func TestRouter_ActiveRoundRecoveryDefersPromotionAndHandoff(t *testing.T) {
 		return closed != nil && closed.Hash() == child.Hash() &&
 			validated != nil && validated.Hash() == child.Hash() &&
 			e.Mode() == consensus.ModeSwitchedLedger
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }

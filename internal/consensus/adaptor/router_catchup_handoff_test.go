@@ -238,7 +238,7 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 				r.catchupReplay.acquisitionMu.Lock()
 				defer r.catchupReplay.acquisitionMu.Unlock()
 				return r.catchupReplay.consensusRecovery.targetHash == hdr.Hash
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 
 			assert.Equal(t, local.Hash(), svc.GetClosedLedger().Hash())
 			assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())

@@ -168,7 +168,7 @@ func TestGotBase_BlockedCompletenessWalkDoesNotHoldLedgerLock(t *testing.T) {
 
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("completeness walk did not reach the blocking store")
 	}
 
@@ -177,7 +177,7 @@ func TestGotBase_BlockedCompletenessWalkDoesNotHoldLedgerLock(t *testing.T) {
 	select {
 	case seq := <-seqDone:
 		require.Equal(t, uint32(100), seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ledger sequence waited for the completeness walk")
 	}
 
@@ -186,7 +186,7 @@ func TestGotBase_BlockedCompletenessWalkDoesNotHoldLedgerLock(t *testing.T) {
 	select {
 	case removed := <-peerDone:
 		require.True(t, removed)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer removal waited for the completeness walk")
 	}
 
@@ -606,7 +606,7 @@ func TestGotBase_PersistenceDoesNotHoldAcquisitionLock(t *testing.T) {
 	select {
 	case state := <-stateDone:
 		require.Equal(t, StateWantState, state)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acquisition state waited for persistence admission")
 	}
 	close(release)

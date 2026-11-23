@@ -320,7 +320,7 @@ func waitForVerificationSignal(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-signal:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for stored SHAMap verification")
 	}
 }
@@ -662,7 +662,7 @@ func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *tes
 	select {
 	case hash := <-validated:
 		require.Equal(t, replacementHash, hash)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("same-height validated-ledger replacement was not notified")
 	}
 	require.True(t, svc.GetValidatedLedger().IsValidated())
@@ -682,7 +682,7 @@ func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *tes
 	case event := <-events:
 		require.NotNil(t, event.Ledger)
 		require.Equal(t, replacementHash, event.Ledger.Hash())
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("same-height replacement was not published")
 	}
 
@@ -710,7 +710,7 @@ func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *tes
 		require.NotNil(t, event.Ledger)
 		require.Equal(t, childHash, event.Ledger.Hash())
 		require.Equal(t, replacementHash, event.Ledger.ParentHash())
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replacement child was not published")
 	}
 }
@@ -766,7 +766,7 @@ func TestService_VerifyStoredSHAMapRebalancesBelowRoot(t *testing.T) {
 		started: make(chan struct{}),
 	}
 	svc.nodeStore = bindNodeStore(tracked)
-	walkCtx, cancel := context.WithTimeout(ctx, time.Second)
+	walkCtx, cancel := context.WithTimeout(ctx, progressTimeout)
 	defer cancel()
 	err = svc.verifyStoredSHAMap(walkCtx, root, shamap.TypeState)
 	require.NoError(t, err, "peak concurrent fetches: %d", tracked.peakFetches())
@@ -1013,7 +1013,7 @@ func TestService_VerifyStoredSHAMapCancelsSaturatedWorkers(t *testing.T) {
 	svc.nodeStore = bindNodeStore(tracked)
 	svc.config.FastLoadWorkers = 4
 
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	err = svc.verifyStoredSHAMap(ctx, root, shamap.TypeState)
 	require.ErrorIs(t, err, fetchErr)
@@ -1359,7 +1359,7 @@ func TestService_VerifyStoredSHAMapRateLimitsProgressAndReportsCancellation(t *t
 	select {
 	case err := <-errs:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for canceled stored SHAMap verification")
 	}
 

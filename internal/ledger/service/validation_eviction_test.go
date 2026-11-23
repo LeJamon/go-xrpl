@@ -71,7 +71,7 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	case <-family.entered:
 		t.Fatal("validation eviction read a cold transaction tree")
 	case <-validated:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation did not finish with cold history")
 	}
 	require.Equal(t, latest.Hash(), svc.GetValidatedLedger().Hash())

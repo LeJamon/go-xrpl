@@ -62,7 +62,7 @@ func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- second.readLoop(context.Background()) }()
 
-	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, progressTimeout, time.Millisecond)
 	time.Sleep(25 * time.Millisecond)
 	require.Less(t, secondReader.read.Load(), int64(len(frame)))
 
@@ -76,7 +76,7 @@ func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 	firstMessage := <-overlay.ledgerData
 	require.NoError(t, firstMessage.Close())
 
-	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, progressTimeout, time.Millisecond)
 	secondEvent := <-events
 	secondEvent.release()
 	require.ErrorIs(t, <-firstDone, io.EOF)

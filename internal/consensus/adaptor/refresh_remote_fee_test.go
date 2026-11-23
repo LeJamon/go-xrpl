@@ -222,7 +222,7 @@ func TestRefreshRemoteFee_ValidationBeforePreferredLedgerSwitch(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("preferred-ledger switch blocked while notifying the validated-ledger callback")
 	}
 	signTime, result := a.recheckFullyValidated(header.LedgerIndex, header.Hash)
@@ -280,7 +280,7 @@ func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus close blocked while notifying the validated-ledger callback")
 	}
 	signTime, result := a.recheckFullyValidated(expected.Sequence(), expected.Hash())

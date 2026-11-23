@@ -292,7 +292,7 @@ func TestAncestryProvider_EvictedPartialJoinsInflightFallback(t *testing.T) {
 	<-buildTip
 	close(releaseRetryProbe)
 
-	deadline := time.NewTimer(time.Second)
+	deadline := time.NewTimer(progressTimeout)
 	defer deadline.Stop()
 	for {
 		p.mu.Lock()

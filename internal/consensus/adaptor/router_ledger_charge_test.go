@@ -79,7 +79,7 @@ func TestRouter_InboundFramesSelectOnePeerFee(t *testing.T) {
 	var connection manifestOverlayConnection
 	select {
 	case connection = <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ledger-data source did not connect")
 	}
 
@@ -102,7 +102,7 @@ func TestRouter_InboundFramesSelectOnePeerFee(t *testing.T) {
 			} else {
 				r.handleInboundMessage(inbound)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("%s did not reach the processing lane", data.Type())
 		}
 	}

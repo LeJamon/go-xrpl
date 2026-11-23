@@ -205,7 +205,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return len(rs.sentTo(7)) > 0
-	}, time.Second, 10*time.Millisecond,
+	}, progressTimeout, 10*time.Millisecond,
 		"router must serve a ledger at or above the floor")
 }
 

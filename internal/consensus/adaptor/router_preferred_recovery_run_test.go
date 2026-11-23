@@ -135,7 +135,7 @@ func TestRouterRun_PreferredRecoveryKeepsIngressResponsive(t *testing.T) {
 		cancelRouter()
 		select {
 		case <-routerDone:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Errorf("Router.Run did not stop")
 		}
 		require.NoError(t, e.Stop())
@@ -149,7 +149,7 @@ func TestRouterRun_PreferredRecoveryKeepsIngressResponsive(t *testing.T) {
 	e.TimerEntry()
 	require.Eventually(t, func() bool {
 		return budget.attempts.Load() > 0
-	}, time.Second, time.Millisecond,
+	}, progressTimeout, time.Millisecond,
 		"preferred recovery must wait on the detached preparation budget")
 
 	heartbeatDone := make(chan struct{})
@@ -159,7 +159,7 @@ func TestRouterRun_PreferredRecoveryKeepsIngressResponsive(t *testing.T) {
 	}()
 	select {
 	case <-heartbeatDone:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("heartbeat blocked behind preferred preparation")
 	}
 
@@ -173,7 +173,7 @@ func TestRouterRun_PreferredRecoveryKeepsIngressResponsive(t *testing.T) {
 			}
 		}
 		return false
-	}, time.Second, time.Millisecond, "Router.Run must process peer control while recovery waits")
+	}, progressTimeout, time.Millisecond, "Router.Run must process peer control while recovery waits")
 
 	validation := &consensus.Validation{
 		Full:      true,
@@ -198,11 +198,11 @@ func TestRouterRun_PreferredRecoveryKeepsIngressResponsive(t *testing.T) {
 		return len(historian.GetTrustedFullValidations(
 			consensus.LedgerID(target.Hash()), target.Sequence(),
 		)) > 0
-	}, time.Second, time.Millisecond, "trusted validation must be ingested while recovery waits")
+	}, progressTimeout, time.Millisecond, "trusted validation must be ingested while recovery waits")
 
 	budget.Unblock()
 	require.Eventually(t, func() bool {
 		current := svc.GetClosedLedger()
 		return current != nil && current.Hash() == target.Hash() && e.Mode() == consensus.ModeSwitchedLedger
-	}, time.Second, 5*time.Millisecond, "preferred recovery must complete after the budget is released")
+	}, progressTimeout, 5*time.Millisecond, "preferred recovery must complete after the budget is released")
 }

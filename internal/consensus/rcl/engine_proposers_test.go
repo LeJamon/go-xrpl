@@ -57,7 +57,7 @@ func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 
 	// Wait long enough for the heartbeat to drive phaseOpen ->
 	// phaseEstablish -> acceptLedger.
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	var proposers int
 	var convergeTime time.Duration
 	for time.Now().Before(deadline) {
@@ -129,7 +129,7 @@ func TestEngine_TrackerReportsProposers_TimerDriven(t *testing.T) {
 	// No explicit StartRound — the engine's heartbeat
 	// (checkAndStartRoundInner) must start the round and consume
 	// the buffered proposals.
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	var proposers int
 	for time.Now().Before(deadline) {
 		proposers, _ = engine.GetLastCloseInfo()
@@ -225,7 +225,7 @@ func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 		t.Fatalf("TrySwitchToLedger: got %v", result)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	var proposers int
 	for time.Now().Before(deadline) {
 		proposers, _ = engine.GetLastCloseInfo()

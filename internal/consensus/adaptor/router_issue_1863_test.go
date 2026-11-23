@@ -212,7 +212,7 @@ func TestIssue1863MaintenancePreservesCompletionHandoff(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("completion did not reach the handoff")
 	}
 	require.Nil(t, r.catchupReplay.fetchTracker.Find(pivot.Hash()))
@@ -230,7 +230,7 @@ func TestIssue1863MaintenancePreservesCompletionHandoff(t *testing.T) {
 	unblock()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("completion did not finish")
 	}
 	assert.False(t, r.catchupReplay.standardReplay.isActive())

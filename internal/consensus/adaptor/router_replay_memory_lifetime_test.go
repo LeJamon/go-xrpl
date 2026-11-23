@@ -68,7 +68,7 @@ func TestReplayCancellationKeepsActiveDrainMemoryUntilItReturns(t *testing.T) {
 	go func() { c.drainStandardReplayPipeline(); close(done) }()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replay drain did not reach the cold transaction root")
 	}
 	c.acquisitionMu.Lock()
@@ -82,7 +82,7 @@ func TestReplayCancellationKeepsActiveDrainMemoryUntilItReturns(t *testing.T) {
 	release()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled drain did not finish after its read returned")
 	}
 	require.False(t, svc.ReplayBlocked())

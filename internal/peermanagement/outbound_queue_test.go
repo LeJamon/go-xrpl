@@ -456,7 +456,7 @@ func TestPeerRunTerminatesOnCriticalQueueExhaustion(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, ErrCriticalSendQueueFull)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Peer.Run did not terminate on critical queue exhaustion")
 	}
 	assert.True(t, peer.closed.Load())
@@ -478,14 +478,14 @@ func TestPeerRunDrainsAcceptedFramesBeforeGracefulEOFShutdown(t *testing.T) {
 
 	select {
 	case <-conn.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("writer did not start")
 	}
 	require.Eventually(t, func() bool {
 		peer.sendMu.RLock()
 		defer peer.sendMu.RUnlock()
 		return peer.gracefulClosing
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	assert.Equal(t, PeerStateClosing, peer.State())
 	require.ErrorIs(t, peer.Send([]byte("late")), ErrConnectionClosed)
 	close(conn.releaseWrites)
@@ -493,7 +493,7 @@ func TestPeerRunDrainsAcceptedFramesBeforeGracefulEOFShutdown(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, io.EOF)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Peer.Run did not finish graceful EOF shutdown")
 	}
 	select {
@@ -523,7 +523,7 @@ func TestGracefulDrainIgnoresExpectedPingLoopClosure(t *testing.T) {
 	go func() { writerDone <- peer.writeLoop(writerCtx) }()
 	select {
 	case <-conn.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("writer did not start")
 	}
 	require.True(t, peer.beginGracefulClose())
@@ -532,7 +532,7 @@ func TestGracefulDrainIgnoresExpectedPingLoopClosure(t *testing.T) {
 	require.ErrorIs(t, pingErr, ErrConnectionClosed)
 	runResults := make(chan peerRunResult, 1)
 	runResults <- peerRunResult{loop: peerPingLoop, err: pingErr}
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancelShutdown()
 	gracefulDone := make(chan error, 1)
 	go func() {
@@ -617,20 +617,20 @@ func TestPeerRunReturnsGracefulDrainTimeout(t *testing.T) {
 
 	select {
 	case <-conn.writeStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("writer did not start")
 	}
 	require.Eventually(t, func() bool {
 		peer.sendMu.RLock()
 		defer peer.sendMu.RUnlock()
 		return peer.gracefulClosing
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	close(conn.releaseWrites)
 
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, ErrWriteIdle)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Peer.Run did not return graceful drain timeout")
 	}
 	select {

@@ -320,7 +320,7 @@ func TestService_VerifyStoredSHAMapBatchCancellationDoesNotPublishProofs(t *test
 	go func() { done <- svc.verifyStoredSHAMap(ctx, root, shamap.TypeState) }()
 	select {
 	case <-tracked.batchStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for batch fetch")
 	}
 	cancel()

@@ -53,7 +53,7 @@ func TestProcessVerifiedValidationDrainsFinalityOutsideEngineLock(t *testing.T) 
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("fully validated callback did not start")
 	}
 
@@ -64,7 +64,7 @@ func TestProcessVerifiedValidationDrainsFinalityOutsideEngineLock(t *testing.T) 
 	}()
 	select {
 	case <-tickDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus tick waited for the fully validated callback")
 	}
 
@@ -82,7 +82,7 @@ func TestProcessVerifiedValidationDrainsFinalityOutsideEngineLock(t *testing.T) 
 	}()
 	select {
 	case <-processingDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation processing waited for the fully validated callback")
 	}
 
@@ -118,7 +118,7 @@ func TestProcessVerifiedValidationPublishesAfterFinality(t *testing.T) {
 	require.True(t, engine.eventBus.Publish(&consensus.PhaseChangedEvent{}))
 	select {
 	case <-subscriber.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("event subscriber did not start")
 	}
 	require.True(t, engine.eventBus.Publish(&consensus.PhaseChangedEvent{}))
@@ -140,7 +140,7 @@ func TestProcessVerifiedValidationPublishesAfterFinality(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("fully validated callback did not start")
 	}
 	require.Zero(t, engine.eventBus.DroppedEvents(),
@@ -193,7 +193,7 @@ func TestStartRoundTrustRefreshDrainsFinalityOutsideEngineLock(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("trust refresh did not promote stored validation")
 	}
 
@@ -204,7 +204,7 @@ func TestStartRoundTrustRefreshDrainsFinalityOutsideEngineLock(t *testing.T) {
 	}()
 	select {
 	case <-tickDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus tick waited for trust-refresh finality callback")
 	}
 
@@ -245,7 +245,7 @@ func TestSendValidationDrainsFinalityOutsideEngineLock(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("self-validation finality callback did not start")
 	}
 
@@ -256,14 +256,14 @@ func TestSendValidationDrainsFinalityOutsideEngineLock(t *testing.T) {
 	}()
 	select {
 	case <-tickDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus tick waited for the self-validation finality callback")
 	}
 
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-flushDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("deferred finality work did not finish")
 	}
 }
@@ -337,7 +337,7 @@ func TestProcessVerifiedValidationDisposition(t *testing.T) {
 	require.False(t, disposition.AcquireEligible())
 
 	var validationEvents int
-	timeout := time.After(time.Second)
+	timeout := time.After(progressTimeout)
 	for validationEvents < 3 {
 		select {
 		case event := <-subscriber.events:

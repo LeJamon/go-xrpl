@@ -40,7 +40,7 @@ func TestPublicationDispatcherOrdersProposedBeforeValidated(t *testing.T) {
 	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{})
 	select {
 	case <-proposedStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("proposed publication did not start")
 	}
 	publisher.dispatchLedgerEvent(&LedgerAcceptedEvent{})
@@ -52,7 +52,7 @@ func TestPublicationDispatcherOrdersProposedBeforeValidated(t *testing.T) {
 	close(releaseProposed)
 	select {
 	case <-validated:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validated publication did not follow proposed publication")
 	}
 	publisher.stop()
@@ -88,7 +88,7 @@ func TestPublicationDispatcherPreservesProposalBurstOrder(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("proposal burst was not delivered")
 	}
 	publisher.stop()
@@ -123,7 +123,7 @@ func TestPublicationDispatcherFailsClosedAtCapacity(t *testing.T) {
 	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{CurrentLedger: 1})
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first publication did not start")
 	}
 	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{CurrentLedger: 2})
@@ -135,7 +135,7 @@ func TestPublicationDispatcherFailsClosedAtCapacity(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "capacity 1") {
 			t.Fatalf("publication failure = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("queue capacity failure was not reported")
 	}
 	publisher.ledgerEventMu.Lock()
@@ -171,7 +171,7 @@ func TestPublicationDispatcherFailsClosedOnSinkError(t *testing.T) {
 		if !errors.Is(err, sinkErr) {
 			t.Fatalf("publication failure = %v, want %v", err, sinkErr)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("sink failure was not reported")
 	}
 
@@ -237,7 +237,7 @@ func TestServerStatusSignalPreservesPublicationOrder(t *testing.T) {
 	publisher.dispatchSubmittedTxEvent(SubmittedTxEvent{CurrentLedger: 1})
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first publication did not start")
 	}
 	if !publisher.dispatchServerStatusEvent() {
@@ -247,7 +247,7 @@ func TestServerStatusSignalPreservesPublicationOrder(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("publication queue did not drain")
 	}
 	publisher.stop()
@@ -294,7 +294,7 @@ func TestServerStatusSignalCoalescesAndAllowsCallbackReentry(t *testing.T) {
 	}
 	select {
 	case <-firstStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first status callback did not start")
 	}
 	for range 10 {
@@ -305,7 +305,7 @@ func TestServerStatusSignalCoalescesAndAllowsCallbackReentry(t *testing.T) {
 	close(releaseFirst)
 	select {
 	case <-thirdDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("reentrant status callback did not run")
 	}
 	publisher.stop()
@@ -343,7 +343,7 @@ func TestServerStatusSignalDrainsOnStopAndRejectsAfter(t *testing.T) {
 	publisher.dispatchServerStatusEvent()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("status callback did not start")
 	}
 	publisher.dispatchServerStatusEvent()
@@ -359,7 +359,7 @@ func TestServerStatusSignalDrainsOnStopAndRejectsAfter(t *testing.T) {
 	close(release)
 	select {
 	case <-drained:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stop did not return after status drain")
 	}
 	if publisher.dispatchServerStatusEvent() {

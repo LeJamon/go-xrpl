@@ -209,7 +209,7 @@ func TestService_OpenLedgerPeerSubmitPublishesProposal(t *testing.T) {
 		if event.TxHash != hash || !bytes.Equal(event.RawBlob, blob) || !event.Result.Applied {
 			t.Fatalf("published proposal = %+v", event)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer-applied transaction was not published")
 	}
 }

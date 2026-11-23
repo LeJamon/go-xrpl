@@ -37,7 +37,7 @@ func startRunningManifestOverlay(t *testing.T, opts ...peermanagement.Option) *r
 	case <-overlay.ListenerReady():
 	case err := <-running.done:
 		t.Fatalf("overlay stopped before listener became ready: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay listener did not become ready")
 	}
 	t.Cleanup(func() { running.stop(t) })
@@ -50,7 +50,7 @@ func (r *runningManifestOverlay) stop(t *testing.T) {
 		require.NoError(t, r.overlay.Stop())
 		select {
 		case <-r.done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("overlay did not stop")
 		}
 	})
@@ -140,7 +140,7 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 
 	// Poll until applied or timeout — the router runs async so we
 	// can't assume immediate visibility.
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		if _, ok := cache.GetSigningKey(parsed.MasterKey()); ok {
 			break
@@ -176,7 +176,7 @@ func TestRouter_OversizedManifestDropsBeforeSpoolAndKeepsPeerLive(t *testing.T) 
 	var connection manifestOverlayConnection
 	select {
 	case connection = <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("manifest source did not connect")
 	}
 
@@ -200,7 +200,7 @@ func TestRouter_OversizedManifestDropsBeforeSpoolAndKeepsPeerLive(t *testing.T) 
 	var inbound *peermanagement.InboundMessage
 	select {
 	case inbound = <-client.overlay.ManifestMessages():
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("valid manifest did not reach the processing lane")
 	}
 	require.Nil(t, inbound.ManifestFrame)
@@ -338,7 +338,7 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 	var source manifestOverlayConnection
 	select {
 	case source = <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("bootstrap source did not connect")
 	}
 
@@ -352,7 +352,7 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 	var inbound *peermanagement.InboundMessage
 	select {
 	case inbound = <-client.overlay.ManifestMessages():
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("manifest frame did not reach client overlay")
 	}
 	require.Equal(t, message.TypeManifests, inbound.Type)
@@ -360,7 +360,7 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 	source.overlay.stop(t)
 	require.Eventually(t, func() bool {
 		return !client.overlay.IsPeerConnected(inbound.PeerID)
-	}, 5*time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 	select {
 	case <-connections:
 		t.Fatal("replacement connected before manifest handler decision")
@@ -378,7 +378,7 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 	require.Equal(t, wire, stored)
 	select {
 	case <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("bootstrap did not continue after disconnected manifest was accepted")
 	}
 }
@@ -459,7 +459,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("manifest worker did not begin processing")
 	}
 
@@ -483,7 +483,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 		state := router.catchupReplay.peerStates[9]
 		router.catchupReplay.peersMu.RUnlock()
 		return state != nil && state.LedgerSeq == 1 && state.LedgerHash == ledgerHash
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 
 	releaseWorker()
 	require.Eventually(t, func() bool {
@@ -493,7 +493,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 			}
 		}
 		return true
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }
 
 func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
@@ -536,7 +536,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("manifest worker did not begin processing")
 	}
 
@@ -558,7 +558,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 		state := router.catchupReplay.peerStates[3]
 		router.catchupReplay.peersMu.RUnlock()
 		return state != nil && state.LedgerHash == ledgerHash
-	}, time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 
 	cancel()
 	select {
@@ -569,7 +569,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	releaseWorker()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not join its manifest worker")
 	}
 	_, ok := cache.GetSigningKey(queuedManifest.MasterKey())

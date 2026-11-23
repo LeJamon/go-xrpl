@@ -119,7 +119,7 @@ func TestGetServerInfo_CallbacksRunUnlocked(t *testing.T) {
 		}()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("server-info callback ran while Service.mu was held")
 		}
 	}

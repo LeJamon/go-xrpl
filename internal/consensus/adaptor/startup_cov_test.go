@@ -420,7 +420,7 @@ func TestStup_ComponentsStart_ListenerBindFailure(t *testing.T) {
 	select {
 	case startErr := <-done:
 		require.Error(t, startErr, "a listener bind failure must fail boot")
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Start hung on a listener bind failure instead of returning an error")
 	}
 }

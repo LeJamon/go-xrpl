@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
+
+type uninterruptibleFamily struct{ shamap.Family }
+
+func (f uninterruptibleFamily) Fetch(_ context.Context, hash [32]byte) ([]byte, error) {
+	return f.Family.Fetch(context.Background(), hash)
+}
 
 func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 	for _, rpc := range []bool{false, true} {
@@ -42,7 +49,7 @@ func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 			// NodeStore instead of copying only dirty nodes into another DB.
 			family := &acceptanceBlockingFamily{Family: cfg.SHAMapFamily, entered: make(chan struct{}), release: make(chan struct{})}
 			t.Cleanup(family.unblock)
-			coldState, err := shamap.NewFromRootHash(shamap.TypeState, root, family)
+			coldState, err := shamap.NewFromRootHash(shamap.TypeState, root, uninterruptibleFamily{family})
 			require.NoError(t, err)
 			cold, err = ledger.NewFromHeader(cold.Header(), coldState, shamap.New(shamap.TypeTransaction), cold.Fees())
 			require.NoError(t, err)
@@ -82,7 +89,7 @@ func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 			}()
 			select {
 			case <-family.entered:
-			case <-time.After(3 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("prefetch did not reach cold state")
 			}
 			require.False(t, svc.openLedgerMu.Snapshot().Held, "cold prefetch must not own the ingress gate")
@@ -91,7 +98,7 @@ func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 			select {
 			case err := <-switched:
 				require.NoError(t, err)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("prefetch retained a live-view lock needed by ledger replacement")
 			}
 			family.unblock()
@@ -99,7 +106,7 @@ func TestIngressPrefetchDoesNotHoldGateAndRechecksCurrentLedger(t *testing.T) {
 			case out := <-done:
 				require.NoError(t, out.err)
 				require.True(t, out.applied, "submit result %s", out.code)
-			case <-time.After(3 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("submission did not resume after prefetch")
 			}
 			require.Equal(t, preferred.Hash(), svc.GetClosedLedger().Hash())

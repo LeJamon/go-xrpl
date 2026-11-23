@@ -503,7 +503,7 @@ func TestReplayCloseTimesTrustCallbackLinearized(t *testing.T) {
 	}()
 	select {
 	case <-a.finalCheck:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Replay did not reach its final trust check")
 	}
 	base.setTrusted(nil)
@@ -554,7 +554,7 @@ func TestTrustedPredicateSnapshotSurvivesReplacement(t *testing.T) {
 	}()
 	select {
 	case <-changed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("trust replacement callback did not complete")
 	}
 	if !before(first) || !before(second) || before(replacement) {

@@ -141,7 +141,7 @@ func issue2072AwaitWorkResult(t *testing.T, work *acquisitionWorkLane) acquisiti
 	select {
 	case result := <-work.results():
 		return result
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acquisition work did not return a result")
 		return acquisitionWorkResult{}
 	}
@@ -188,7 +188,7 @@ func TestRouterIssue2072LedgerBuiltRetiresPausedTransactionOnlyAcquisition(t *te
 	require.True(t, r.handleInboundLedgerData(acquisition, issue2072LedgerData(fixture), 7))
 	select {
 	case <-paused.entered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("verified-node persistence did not reach the paused family")
 	}
 	snapshot := acquisition.Snapshot()
@@ -207,7 +207,7 @@ func TestRouterIssue2072LedgerBuiltRetiresPausedTransactionOnlyAcquisition(t *te
 	select {
 	case err := <-paused.returned:
 		require.Error(t, err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("late StoreBatch did not return after scope retirement")
 	}
 	stored := paused.storedEntries()

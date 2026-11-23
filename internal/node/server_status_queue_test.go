@@ -28,7 +28,7 @@ func blockStatusPublication(t *testing.T, svc *service.Service) func() {
 	}))
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("publication worker did not reach barrier")
 	}
 	return unblock
@@ -68,7 +68,7 @@ func TestRuntimeFeeChangeDefersLedgerReads(t *testing.T) {
 	unblock()
 	select {
 	case <-completed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("fee publication did not drain")
 	}
 	require.Positive(t, probe.reads.Load(), "the worker must sample ledger fees")

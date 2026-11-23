@@ -35,14 +35,14 @@ func TestIssue2065AcceptancePublishesSkeletonBeforeSpeculation(t *testing.T) {
 
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance did not enter speculative successor work")
 	}
 
 	select {
 	case err := <-accepted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus acceptance waited for speculative successor work")
 	}
 
@@ -59,7 +59,7 @@ func TestIssue2065AcceptancePublishesSkeletonBeforeSpeculation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		exists, err := svc.OpenLedgerHasTx(localHash)
 		return err == nil && exists
-	}, 5*time.Second, time.Millisecond, "successor worker did not promote local input")
+	}, progressTimeout, time.Millisecond, "successor worker did not promote local input")
 	require.Same(t, closed, svc.GetClosedLedger())
 }
 
@@ -93,13 +93,13 @@ func TestIssue2065SupersededSpeculationRetainsInputsWithoutStalePublication(t *t
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first acceptance did not enter speculative successor work")
 	}
 	select {
 	case err := <-firstAccepted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first acceptance did not publish before speculation")
 	}
 
@@ -115,7 +115,7 @@ func TestIssue2065SupersededSpeculationRetainsInputsWithoutStalePublication(t *t
 	select {
 	case err := <-secondAccepted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("a later acceptance waited for the superseded speculative worker")
 	}
 
@@ -129,7 +129,7 @@ func TestIssue2065SupersededSpeculationRetainsInputsWithoutStalePublication(t *t
 		require.Eventually(t, func() bool {
 			exists, err := svc.OpenLedgerHasTx(hash)
 			return err == nil && exists
-		}, 5*time.Second, time.Millisecond, "successor promotion dropped local input %x", hash)
+		}, progressTimeout, time.Millisecond, "successor promotion dropped local input %x", hash)
 	}
 	require.Same(t, secondClosed, svc.GetClosedLedger())
 	require.Equal(t, secondClosed.Hash(), svc.GetOpenLedger().ParentHash(),

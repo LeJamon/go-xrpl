@@ -45,7 +45,7 @@ func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	for i := range startedPeers {
 		select {
 		case startedPeers[i] = <-started:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("scheduler did not start one job from each peer")
 		}
 	}
@@ -53,7 +53,7 @@ func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	cancel()
 	select {
 	case <-runDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not shut down")
 	}
 	if !((startedPeers[0] == 1 && startedPeers[1] == 2) ||
@@ -86,7 +86,7 @@ func TestServeSchedulerBoundsAndCancellation(t *testing.T) {
 	cancel()
 	select {
 	case <-s.done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not shut down after cancellation")
 	}
 }
@@ -116,17 +116,17 @@ func TestServeSchedulerCancelPeerTracksCompletedTasks(t *testing.T) {
 	}
 	select {
 	case <-startedFirst:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first task did not start")
 	}
 	select {
 	case <-startedSecond:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("second task did not start")
 	}
 	close(releaseSecond)
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for {
 		s.mu.Lock()
 		running := len(s.running[1])
@@ -142,7 +142,7 @@ func TestServeSchedulerCancelPeerTracksCompletedTasks(t *testing.T) {
 	s.CancelPeer(1)
 	select {
 	case <-firstCanceled:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceling peer did not cancel the remaining task")
 	}
 	cancel()
@@ -178,7 +178,7 @@ func TestServeSchedulerWakesEveryIdleWorkerForBurst(t *testing.T) {
 		close(done)
 	}()
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for s.idle.Load() != workers {
 		if time.Now().After(deadline) {
 			t.Fatalf("idle workers = %d, want %d before burst", s.idle.Load(), workers)
@@ -197,7 +197,7 @@ func TestServeSchedulerWakesEveryIdleWorkerForBurst(t *testing.T) {
 		}
 	}
 
-	deadline = time.Now().Add(time.Second)
+	deadline = time.Now().Add(progressTimeout)
 	for len(started) != workers {
 		if time.Now().After(deadline) {
 			t.Fatalf("started workers = %d, want %d after burst", len(started), workers)
@@ -208,7 +208,7 @@ func TestServeSchedulerWakesEveryIdleWorkerForBurst(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not stop after burst")
 	}
 }
@@ -289,14 +289,14 @@ func TestServeSchedulerActiveCancellationUsesRunCleanup(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("owned task did not start")
 	}
 
 	s.CancelPeer(1)
 	select {
 	case <-cleaned:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("active task did not observe peer cancellation")
 	}
 	if got := discarded.Load(); got != 0 {
@@ -352,22 +352,22 @@ func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
 		if peerID != peer.ID() {
 			t.Fatalf("panic attributed to peer %d, want %d", peerID, peer.ID())
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("serve task panic was not recovered")
 	}
 	select {
 	case <-discarded:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("panicking peer's queued task was not discarded")
 	}
 	select {
 	case <-released:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("panicking task did not release owned resources")
 	}
 	select {
 	case <-progressed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler worker did not make progress after panic")
 	}
 	select {
@@ -376,7 +376,7 @@ func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
 	default:
 	}
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for {
 		s.mu.Lock()
 		active := len(s.active)
@@ -405,7 +405,7 @@ func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
 		if err != context.Canceled {
 			t.Fatalf("scheduler run error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not stop after cancellation")
 	}
 }
@@ -431,7 +431,7 @@ func TestOverlayServeAdmissionSerializesWithPeerClose(t *testing.T) {
 		)
 	}()
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for peer.sendMu.TryLock() {
 		peer.sendMu.Unlock()
 		if time.Now().After(deadline) {
@@ -491,7 +491,7 @@ func TestServeSchedulerRetainedBytesIncludeActiveTasks(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("byte-charged task did not start")
 	}
 	stats := s.Snapshot()
@@ -512,7 +512,7 @@ func TestServeSchedulerRetainedBytesIncludeActiveTasks(t *testing.T) {
 	}
 
 	close(release)
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for {
 		stats = s.Snapshot()
 		if stats.Active == 0 && stats.RetainedBytes == 0 && stats.Completed == 1 {
@@ -531,7 +531,7 @@ func TestServeSchedulerRetainedBytesIncludeActiveTasks(t *testing.T) {
 	}
 	select {
 	case <-secondDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("second byte-charged task did not run")
 	}
 	cancel()
@@ -540,7 +540,7 @@ func TestServeSchedulerRetainedBytesIncludeActiveTasks(t *testing.T) {
 		if err != context.Canceled {
 			t.Fatalf("scheduler run error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not stop")
 	}
 }
@@ -618,13 +618,13 @@ func TestServeSchedulerCancelPeerKeepsActiveRetentionUntilExit(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("active task did not start")
 	}
 	s.CancelPeer(1)
 	select {
 	case <-canceled:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("active task did not observe cancellation")
 	}
 	if got := s.Snapshot(); got.Active != 1 || got.Queued != 0 || got.RetainedBytes != 6 {
@@ -633,10 +633,10 @@ func TestServeSchedulerCancelPeerKeepsActiveRetentionUntilExit(t *testing.T) {
 	close(release)
 	select {
 	case <-cleaned:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("active task did not observe cancellation")
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for {
 		stats := s.Snapshot()
 		if stats.Active == 0 && stats.RetainedBytes == 0 && stats.Canceled == 2 {
@@ -674,13 +674,13 @@ func TestServeSchedulerCloseJoinsWorkers(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("active task did not start")
 	}
 	s.Close()
 	select {
 	case <-cleaned:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("active task did not observe close")
 	}
 	select {
@@ -688,7 +688,7 @@ func TestServeSchedulerCloseJoinsWorkers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("scheduler run error = %v, want nil after direct close", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not join workers after direct close")
 	}
 	if got := s.Snapshot(); got.Active != 0 || got.RetainedBytes != 0 || got.Canceled != 1 {
@@ -715,10 +715,10 @@ func TestServeSchedulerSnapshotTimingIsBounded(t *testing.T) {
 	}
 	select {
 	case <-finished:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed task did not finish")
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	var stats ServeSchedulerStats
 	for {
 		stats = s.Snapshot()
@@ -752,7 +752,7 @@ func TestServeSchedulerSnapshotTimingIsBounded(t *testing.T) {
 		if err != context.Canceled {
 			t.Fatalf("scheduler run error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not stop")
 	}
 }
@@ -769,7 +769,7 @@ func TestServeSchedulerCanceledParentConstruction(t *testing.T) {
 		})
 		select {
 		case <-s.done:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("scheduler did not close for an already-canceled parent")
 		}
 		s.Close()
@@ -800,7 +800,7 @@ func TestServeSchedulerConcurrentCloseJoinsDiscard(t *testing.T) {
 	}()
 	select {
 	case <-discardStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("close did not enter discard")
 	}
 	select {
@@ -819,7 +819,7 @@ func TestServeSchedulerConcurrentCloseJoinsDiscard(t *testing.T) {
 	close(releaseDiscard)
 	select {
 	case <-closeDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Close did not return after discard completed")
 	}
 	select {
@@ -827,7 +827,7 @@ func TestServeSchedulerConcurrentCloseJoinsDiscard(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run error = %v, want nil after direct close", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not join close disposal")
 	}
 }
@@ -859,7 +859,7 @@ func TestServeSchedulerRetainedBytesStayChargedDuringDiscard(t *testing.T) {
 	}()
 	select {
 	case <-discardStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer cancellation did not enter discard")
 	}
 	stats := s.Snapshot()
@@ -878,7 +878,7 @@ func TestServeSchedulerRetainedBytesStayChargedDuringDiscard(t *testing.T) {
 	close(releaseDiscard)
 	select {
 	case <-cancelDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer cancellation did not finish")
 	}
 	if got := s.Snapshot(); got.RetainedBytes != 0 {
@@ -949,13 +949,13 @@ func TestServeSchedulerDiscardReleasesCompletedRequests(t *testing.T) {
 				t.Cleanup(func() {
 					select {
 					case <-discardDone:
-					case <-time.After(time.Second):
+					case <-time.After(progressTimeout):
 						t.Error("discard did not finish")
 					}
 				})
 				select {
 				case <-discardStarted:
-				case <-time.After(time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("second discard did not start")
 				}
 				if got := s.Snapshot(); got.RetainedBytes != 1 || got.Queued != 0 || got.Active != 0 {
@@ -995,7 +995,7 @@ func TestServeSchedulerCloseJoinsCancelPeerDiscard(t *testing.T) {
 	}()
 	select {
 	case <-discardStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer cancellation did not enter discard")
 	}
 
@@ -1020,12 +1020,12 @@ func TestServeSchedulerCloseJoinsCancelPeerDiscard(t *testing.T) {
 	close(releaseDiscard)
 	select {
 	case <-cancelDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("CancelPeer did not finish after discard completed")
 	}
 	select {
 	case <-closeDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Close did not join CancelPeer discard")
 	}
 	select {
@@ -1033,7 +1033,7 @@ func TestServeSchedulerCloseJoinsCancelPeerDiscard(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run error = %v, want nil after direct close", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not join CancelPeer discard")
 	}
 	if got := s.Snapshot(); got.RetainedBytes != 0 || got.Queued != 0 || got.Canceled != 1 {
@@ -1071,7 +1071,7 @@ func TestServeSchedulerPerPeerByteBudget(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer A task did not start")
 	}
 
@@ -1097,7 +1097,7 @@ func TestServeSchedulerPerPeerByteBudget(t *testing.T) {
 	s.CancelPeer(1)
 	select {
 	case <-canceled:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer A task did not observe cancellation")
 	}
 	if s.SubmitOwnedBytes(ctx, 1, 1, func(context.Context) {}, nil) {
@@ -1110,10 +1110,10 @@ func TestServeSchedulerPerPeerByteBudget(t *testing.T) {
 	releaseTask()
 	select {
 	case <-bDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer B task did not run after peer A exited")
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for {
 		stats := s.Snapshot()
 		if stats.Active == 0 && stats.Queued == 0 && stats.RetainedBytes == 0 {
@@ -1133,7 +1133,7 @@ func TestServeSchedulerPerPeerByteBudget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("scheduler run error = %v, want nil after direct close", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("scheduler did not stop")
 	}
 }

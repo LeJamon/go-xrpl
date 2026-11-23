@@ -32,7 +32,7 @@ func TestPeer_DispatchEvent_NonBlocking(t *testing.T) {
 		}()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("dispatchEvent blocked on full channel (iter %d)", i)
 		}
 	}
@@ -55,7 +55,7 @@ func TestPeer_DispatchEvent_NilCounter(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("dispatchEvent blocked with nil counter on full channel")
 	}
 }
@@ -149,7 +149,7 @@ func TestPeer_DispatchEvent_BackpressuresAcquisitionSeparately(t *testing.T) {
 	select {
 	case delivered := <-done:
 		require.True(t, delivered)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acquisition dispatch did not resume")
 	}
 }
@@ -182,7 +182,7 @@ func TestPeer_DispatchEvent_BackpressuresConsensusSeparately(t *testing.T) {
 			select {
 			case delivered := <-done:
 				require.True(t, delivered)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("consensus dispatch did not resume")
 			}
 			assert.Empty(t, events)
@@ -217,7 +217,7 @@ func TestPeer_DispatchEvent_BackpressuresConsensusControlSeparately(t *testing.T
 			select {
 			case delivered := <-done:
 				require.True(t, delivered)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("consensus control dispatch did not resume")
 			}
 			assert.Empty(t, events)
@@ -255,7 +255,7 @@ func TestPeer_DispatchEvent_ConsensusBackpressureReleasesOnClose(t *testing.T) {
 			select {
 			case delivered := <-done:
 				assert.False(t, delivered)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("consensus dispatch did not release when the peer closed")
 			}
 			assert.Len(t, lane, 1)
@@ -327,7 +327,7 @@ func TestConsensusPriorityLanePreservesValidatorListValidationOrder(t *testing.T
 	cancel()
 	select {
 	case <-loopDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus event loop did not stop")
 	}
 }
@@ -358,7 +358,7 @@ func TestOverlay_DispatchLifecycle(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("dispatchLifecycle did not release on stopCh close during shutdown")
 	}
 }

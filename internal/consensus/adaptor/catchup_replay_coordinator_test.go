@@ -144,20 +144,20 @@ func TestCatchupCoordinatorShutdownDuringReplayHandoff(t *testing.T) {
 	go func() { defer close(done); c.completeInboundLedger(first) }()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replay did not reach handoff")
 	}
 	stopped := make(chan struct{})
 	go func() { r.StopAcquisitions(); close(stopped) }()
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown waited on the handoff while holding transition locks")
 	}
 	unblock()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("retired replay drain did not finish")
 	}
 	require.Nil(t, c.standardReplayDrainOwner)

@@ -199,7 +199,7 @@ func TestValidatedStateBaseMissingProofRequestsRecertification(t *testing.T) {
 		proof, found := f.svc.currentValidatedStateBaseProof()
 		return found && proof.ledgerHash == f.validated.Hash() &&
 			f.svc.fastLoadCheckpointState.Load() == fastLoadCheckpointEligible
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }
 
 func TestValidatedStateBaseMismatchingProofRequestsRecertification(t *testing.T) {
@@ -222,7 +222,7 @@ func TestValidatedStateBaseMismatchingProofRequestsRecertification(t *testing.T)
 	require.Eventually(t, func() bool {
 		proof, found := f.svc.currentValidatedStateBaseProof()
 		return found && proof.ledgerHash == f.validated.Hash()
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }
 
 func TestValidatedStateBaseNonConsecutivePromotionRequestsRecertification(t *testing.T) {
@@ -251,7 +251,7 @@ func TestValidatedStateBaseNonConsecutivePromotionRequestsRecertification(t *tes
 	require.Eventually(t, func() bool {
 		proof, found := svc.currentValidatedStateBaseProof()
 		return found && proof.sequence == target.Sequence() && proof.ledgerHash == target.Hash()
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }
 
 func TestValidatedStateBaseConsecutivePromotionPreservesProof(t *testing.T) {

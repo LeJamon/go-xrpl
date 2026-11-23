@@ -363,7 +363,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 			}
 		}
 		return false
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	svc.mu.Lock()
 	svc.validatedLedger = newer
@@ -382,7 +382,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	case result := <-done:
 		require.NoError(t, result.err)
 		require.Equal(t, selectedSeq, result.seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not resume after selected-ledger persistence")
 	}
 	require.Equal(t, int64(1), db.refreshChecks.Load())
@@ -456,7 +456,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	case result := <-done:
 		require.NoError(t, result.err)
 		require.Equal(t, seq, result.seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not resume after health recovery")
 	}
 
@@ -477,7 +477,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	case result := <-done:
 		require.ErrorIs(t, result.err, context.Canceled)
 		require.Zero(t, result.seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not stop promptly after cancellation")
 	}
 }
@@ -589,7 +589,7 @@ func TestService_ConcurrentRefreshChecksHealthDuringFrontierBuild(t *testing.T) 
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, wantErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("frontier health checkpoint did not stop the refresh")
 	}
 	require.Equal(t, int64(1), fetches.Load())
@@ -653,7 +653,7 @@ func TestService_ConcurrentRefreshDoesNotBlockAfterFetchError(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, wantErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not return after the fetch failed with a checkpoint pending")
 	}
 }
@@ -737,7 +737,7 @@ func TestService_RefreshValidatedStateUsesBoundedConcurrencyAndReportsProgress(t
 
 func TestService_RefreshValidatedStateReportsCancellation(t *testing.T) {
 	svc, db, seq := newRotatingRefreshFixture(t, 16)
-	db.promotionDelay = time.Second
+	db.promotionDelay = time.Hour
 	db.promotionStart = make(chan struct{})
 	capture, logger := newVerificationLogCapture()
 	svc.logger = logger
@@ -754,7 +754,7 @@ func TestService_RefreshValidatedStateReportsCancellation(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not stop promptly after cancellation")
 	}
 	records := decodeVerificationLogs(t, capture)

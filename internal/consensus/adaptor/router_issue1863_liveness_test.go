@@ -169,7 +169,7 @@ func testIssue1863MixedRecovery(t *testing.T, orphan bool) {
 		closed := svc.GetClosedLedger()
 		return closed != nil && closed.Hash() == child.hash &&
 			r.catchupReplay.standardReplay.anchorSeq == child.seq
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.Equal(t, child.hash, svc.GetClosedLedger().Hash())
 	require.Contains(t, engine.getLedgers(), consensus.LedgerID(child.hash))
 }

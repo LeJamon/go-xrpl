@@ -57,7 +57,7 @@ func TestOverlayRunCancellationClosesListener(t *testing.T) {
 	case <-o.ListenerReady():
 	case err := <-runDone:
 		t.Fatalf("overlay stopped before startup: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not become ready")
 	}
 	addr := o.ListenAddr()
@@ -66,7 +66,7 @@ func TestOverlayRunCancellationClosesListener(t *testing.T) {
 	select {
 	case err := <-runDone:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not stop after cancellation")
 	}
 	require.NoError(t, o.Stop())
@@ -96,7 +96,7 @@ func TestOverlayStopPersistsLatePeerMutation(t *testing.T) {
 	case <-o.ListenerReady():
 	case err := <-runDone:
 		t.Fatalf("overlay stopped before startup: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not become ready")
 	}
 
@@ -122,7 +122,7 @@ func TestOverlayStopPersistsLatePeerMutation(t *testing.T) {
 	close(release)
 	select {
 	case <-stopDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not complete after the peer producer joined")
 	}
 	<-runDone
@@ -145,7 +145,7 @@ func TestOverlayContextCancellationPersistsLatePeerMutation(t *testing.T) {
 	case <-o.ListenerReady():
 	case err := <-runDone:
 		t.Fatalf("overlay stopped before startup: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not become ready")
 	}
 
@@ -166,7 +166,7 @@ func TestOverlayContextCancellationPersistsLatePeerMutation(t *testing.T) {
 	close(release)
 	select {
 	case <-runDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not complete after the peer producer joined")
 	}
 
@@ -199,7 +199,7 @@ func TestOverlayConcurrentStopRejectsStartupBeforeReadiness(t *testing.T) {
 	go func() { runDone <- o.Run(context.Background()) }()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("discovery startup did not enter the blocking resolver")
 	}
 	require.NoError(t, o.Stop())
@@ -223,7 +223,7 @@ func TestOverlayRejectsDoubleRun(t *testing.T) {
 	case <-o.ListenerReady():
 	case err := <-runDone:
 		t.Fatalf("overlay stopped before startup: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not become ready")
 	}
 

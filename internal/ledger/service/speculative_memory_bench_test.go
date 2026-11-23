@@ -182,7 +182,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 		b.StopTimer()
 		fixture := newIssue2071BenchmarkFixture(b, isolated)
 		targetBytes = fixture.workloadBytes
-		ctx, cancel := context.WithTimeout(b.Context(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(b.Context(), progressTimeout)
 		storage := &issue2071BenchmarkStore{
 			started: make(chan struct{}),
 			release: make(chan struct{}),
@@ -200,7 +200,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 			cancel()
 			fixture.service.Stop()
 			b.Fatalf("persistence ended before storage callback: %v", err)
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			cancel()
 			fixture.service.Stop()
 			b.Fatal("persistence did not reach the slow storage callback")
@@ -242,7 +242,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 		}()
 		close(start)
 
-		startupDeadline := time.NewTimer(time.Second)
+		startupDeadline := time.NewTimer(progressTimeout)
 		select {
 		case <-ingressStarted:
 		case <-startupDeadline.C:
@@ -270,7 +270,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 			select {
 			case result := <-ingressDone:
 				return result
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				cancel()
 				fixture.service.Stop()
 				b.Fatal("ingress did not complete after storage release")
@@ -286,7 +286,7 @@ func benchmarkIssue2071PersistenceIngressContention(b *testing.B, isolated, dela
 			select {
 			case result := <-validationDone:
 				return result
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				cancel()
 				fixture.service.Stop()
 				b.Fatal("successor replay did not complete after storage release")

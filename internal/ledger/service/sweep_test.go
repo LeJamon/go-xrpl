@@ -44,7 +44,7 @@ func TestServiceNodeStoreSweeperRunsWhileIdleAndStops(t *testing.T) {
 	initial := cache.Stats().Sweeps
 	require.Eventually(t, func() bool {
 		return cache.Stats().Sweeps >= initial+2
-	}, time.Second, time.Millisecond, "periodic sweeps stopped when insertions stopped")
+	}, progressTimeout, time.Millisecond, "periodic sweeps stopped when insertions stopped")
 
 	service.Stop()
 	stopped := cache.Stats().Sweeps

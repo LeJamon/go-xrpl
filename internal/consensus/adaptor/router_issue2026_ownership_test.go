@@ -40,7 +40,7 @@ func TestFrozenPivotRecoveryDefersAtCapacityAndRetriesOnePendingIntent(t *testin
 		defer r.catchupReplay.acquisitionMu.Unlock()
 		return r.catchupReplay.standardReplay.isActive() &&
 			r.catchupReplay.standardReplay.pivotHash == targetHash
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	assert.Equal(t, generation+1, r.catchupReplay.standardReplay.generation)
 	assert.NotNil(t, r.catchupReplay.fetchTracker.Find(targetHash))
 	assert.Len(t, sender.legacyCalls(), 2)

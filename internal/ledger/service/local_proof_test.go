@@ -150,12 +150,12 @@ func TestAcceptConsensusResultRetainsLocalChildReplayProofAcrossRollback(t *test
 	}()
 	select {
 	case <-dbGate.syncStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("local child persistence did not reach the delayed sync")
 	}
 	select {
 	case <-relayStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("local child publication did not reach the delayed relay")
 	}
 

@@ -289,7 +289,7 @@ func TestOnlineDeleteRefreshPromotionMetricsReportCancellationDuringPersistence(
 	select {
 	case err := <-refreshDone:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh cancellation waited for ledger persistence")
 	}
 	release()

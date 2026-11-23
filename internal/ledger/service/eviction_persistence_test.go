@@ -36,7 +36,7 @@ func TestHistoryEvictionDrainsInFlightTipInvalidation(t *testing.T) {
 			svc.enqueuePersist(l)
 			select {
 			case <-db.entered:
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("persistence did not reach validated-tip storage")
 			}
 			svc.persistMu.Lock()
@@ -62,7 +62,7 @@ func TestHistoryEvictionDrainsInFlightTipInvalidation(t *testing.T) {
 			}()
 			select {
 			case <-evicted:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("history eviction waited for an in-flight tip write")
 			}
 			require.True(t, job.canceled.Load())
@@ -86,7 +86,7 @@ func TestHistoryEvictionDrainsInFlightTipInvalidation(t *testing.T) {
 			unblock()
 			select {
 			case <-drained:
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("persistence drain did not finish")
 			}
 			tip, err := db.Fetch(t.Context(), validatedTipKey)

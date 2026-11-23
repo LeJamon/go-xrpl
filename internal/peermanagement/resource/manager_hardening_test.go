@@ -524,7 +524,7 @@ func TestLoggingOccursOutsideManagerLock(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("reentrant logger deadlocked resource manager")
 	}
 	c.Release()

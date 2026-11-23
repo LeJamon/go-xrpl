@@ -37,13 +37,13 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
 	require.Eventually(t, func() bool {
 		snapshot := svc.openLedgerMu.Snapshot()
 		return !snapshot.Held
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	queuedIngressDone := make(chan error, 1)
 	go func() {
@@ -54,7 +54,7 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 		svc.detachedIngress.mu.Lock()
 		defer svc.detachedIngress.mu.Unlock()
 		return len(svc.detachedIngress.waiters) == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	consensusDone := make(chan error, 1)
 	go func() {
@@ -78,7 +78,7 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	}()
 	select {
 	case <-readDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("closed-ledger reads blocked behind cold ingress apply")
 	}
 
@@ -89,7 +89,7 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	select {
 	case consensusErr := <-consensusDone:
 		require.NoError(t, consensusErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus did not complete after ingress released")
 	}
 
@@ -102,14 +102,14 @@ func TestConsensusAdmissionPrecedesQueuedIngressDuringColdApply(t *testing.T) {
 	}()
 	select {
 	case <-readDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("closed-ledger reads blocked behind post-publication relay")
 	}
 
 	select {
 	case err := <-queuedIngressDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("queued ingress remained parked after consensus publication")
 	}
 }
@@ -143,13 +143,13 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ingress did not reach the cold open-ledger read")
 	}
 	require.Eventually(t, func() bool {
 		snapshot := svc.openLedgerMu.Snapshot()
 		return !snapshot.Held
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	consensusDone := make(chan error, 1)
 	go func() {
@@ -162,7 +162,7 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 		svc.detachedIngress.mu.Lock()
 		defer svc.detachedIngress.mu.Unlock()
 		return len(svc.detachedIngress.waiters) == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	queuedIngressDone := make(chan error, 1)
 	go func() {
@@ -173,7 +173,7 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 		svc.detachedIngress.mu.Lock()
 		defer svc.detachedIngress.mu.Unlock()
 		return len(svc.detachedIngress.waiters) == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	stopDone := make(chan struct{})
 	go func() {
@@ -185,7 +185,7 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 		state := svc.lifecycleState
 		svc.lifecycleMu.Unlock()
 		return state == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-stopDone:
 		t.Fatal("Stop returned while cold ingress and queued lifecycle work were active")
@@ -201,7 +201,7 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 	}()
 	select {
 	case <-readDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("closed-ledger reads blocked behind cold ingress apply during Stop")
 	}
 
@@ -214,13 +214,13 @@ func TestStopRejectsQueuedConsensusAndIngressDuringColdApply(t *testing.T) {
 		if consensusErr != nil {
 			require.ErrorIs(t, consensusErr, errServiceNotRunning)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus acceptance did not drain during Stop")
 	}
 	require.ErrorIs(t, <-queuedIngressDone, errServiceNotRunning)
 	select {
 	case <-stopDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain queued lifecycle work")
 	}
 }

@@ -118,7 +118,7 @@ func TestEngine_AcceptLedger_DiscardsBuildAfterAuthenticatedConflict(t *testing.
 	}()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("BuildLedger did not enter blocked phase")
 	}
 
@@ -140,7 +140,7 @@ func TestEngine_AcceptLedger_DiscardsBuildAfterAuthenticatedConflict(t *testing.
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-acceptDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptLedger did not finish after releasing the build")
 	}
 

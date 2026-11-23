@@ -61,14 +61,14 @@ func TestStartReplayFaultRecoveryAdmitsExactIDAndPublishesFailure(t *testing.T) 
 	require.NoError(t, svc.StartReplayFaultRecovery(fault.ID))
 	require.Eventually(t, func() bool {
 		return svc.ReplayFaultStatus().Recovery.InFlight
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.Error(t, svc.StartReplayFaultRecovery(fault.ID))
 
 	close(release)
 	require.Eventually(t, func() bool {
 		status := svc.ReplayFaultStatus()
 		return !status.Recovery.InFlight && status.Recovery.LastError != ""
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.True(t, svc.ReplayBlocked())
 	require.Contains(t, svc.ReplayFaultStatus().Recovery.LastError, "acquisition failed")
 	svc.Stop()
@@ -98,12 +98,12 @@ func TestReplayRecoveryWorkerCancellationIsDrainedByStop(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replay recovery worker was not canceled")
 	}
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("service stop did not drain replay recovery worker")
 	}
 }
@@ -125,7 +125,7 @@ func TestStartReplayFaultRecoveryClearsVerifiedTransition(t *testing.T) {
 	_, err = svc.captureReplayParent(context.Background(), fault.ID, parent)
 	require.NoError(t, err)
 	require.NoError(t, svc.StartReplayFaultRecovery(fault.ID))
-	require.Eventually(t, func() bool { return !svc.ReplayBlocked() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !svc.ReplayBlocked() }, progressTimeout, time.Millisecond)
 	require.NoError(t, svc.WithValidatorDuty(func() error { return nil }))
 	reopened, err := replayfault.Open(path)
 	require.NoError(t, err)

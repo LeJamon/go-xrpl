@@ -164,7 +164,7 @@ func TestOverlay_ConsensusTrafficBackpressures(t *testing.T) {
 			assert.Equal(t, msgType, first.Type)
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("consensus message did not resume after capacity became available")
 			}
 			second := <-o.consensusMessages
@@ -205,7 +205,7 @@ func TestOverlay_ConsensusControlTrafficBackpressures(t *testing.T) {
 			assert.Equal(t, msgType, first.Type)
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("consensus control message did not resume after capacity became available")
 			}
 			second := <-o.consensusControlMessages
@@ -250,7 +250,7 @@ func TestOverlay_ConsensusBackpressureReleasesOnShutdown(t *testing.T) {
 			close(o.stopCh)
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("consensus backpressure did not release during shutdown")
 			}
 			assert.Len(t, tc.lane(o), 1)
@@ -340,7 +340,7 @@ func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
 	<-o.ledgerData
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acquisition reply did not resume after capacity became available")
 	}
 
@@ -385,7 +385,7 @@ func TestOverlay_AcquisitionBackpressureReleasesOnRunShutdown(t *testing.T) {
 	close(runDone)
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acquisition backpressure did not release when the run stopped")
 	}
 	assert.Equal(t, 1, len(o.ledgerData),

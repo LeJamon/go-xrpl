@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -15,7 +14,7 @@ import (
 )
 
 func TestRunWithOptionsStandaloneReadyThenStopping(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	var events []string
 
@@ -67,7 +66,7 @@ func TestRunWithOptionsBindFailureSuppressesReadyAndClosesStorage(t *testing.T) 
 		},
 	}
 	var ready, stopping bool
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	err = RunWithOptions(
 		ctx,
@@ -107,7 +106,7 @@ func TestRuntimeNetworkRetentionFloor(t *testing.T) {
 	}, "", false, service.StartupConfig{}, xrpllog.Discard(), xrpllog.Discard(), RunOptions{})
 	t.Cleanup(func() {
 		r.stopRuntime()
-		require.NoError(t, r.shutdownWithin(10*time.Second))
+		require.NoError(t, r.shutdownWithin(progressTimeout))
 		if r.stopSHAMapMetrics != nil {
 			r.stopSHAMapMetrics()
 		}

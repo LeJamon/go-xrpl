@@ -423,7 +423,7 @@ func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testin
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("re-certification did not start the durable walk")
 	}
 
@@ -434,7 +434,7 @@ func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testin
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stopping re-certification did not join the canceled walk")
 	}
 	requireStateBaseRecertificationUnavailable(t, f)
@@ -454,7 +454,7 @@ func TestStateBaseRecertificationMutationDuringWalkPreventsPublication(t *testin
 			go func() { done <- f.svc.recertifyValidatedStateBase(t.Context()) }()
 			select {
 			case <-blocked.started:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("re-certification did not start the durable walk")
 			}
 			family := f.svc.shamapFamily.(*backend.NodeStore)
@@ -566,7 +566,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 		go func() { done <- f.svc.recertifyValidatedStateBase(context.Background()) }()
 		select {
 		case <-blocked.started:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("re-certification did not start the durable walk")
 		}
 		f.svc.mu.Lock()
@@ -593,7 +593,7 @@ func TestStateBaseRecertificationCarriesProofAcrossValidationDuringWalk(t *testi
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("re-certification did not start the durable walk")
 	}
 	_, release, available, err := f.svc.AcquireValidatedStateBase(context.Background())
@@ -629,7 +629,7 @@ func TestStateBaseRecertificationCarriesProofAcrossValidationDuringWalk(t *testi
 		proof, found := f.svc.currentValidatedStateBaseProof()
 		return found && proof.sequence == latest.Sequence() &&
 			f.svc.fastLoadCheckpointState.Load() == fastLoadCheckpointEligible
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 	root, release, available, err := f.svc.AcquireValidatedStateBase(context.Background())
 	require.NoError(t, err)
 	require.True(t, available)
@@ -672,7 +672,7 @@ func TestStateBaseRecertificationRejectsMutationAtPublication(t *testing.T) {
 			go func() { done <- f.svc.recertifyValidatedStateBase(t.Context()) }()
 			select {
 			case <-db.checked:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("verification did not reach the final generation check")
 			}
 			switch mutation {
@@ -732,7 +732,7 @@ func TestStateBasePublicationWaitingForServiceDoesNotBlockRetention(t *testing.T
 		}
 		f.svc.stateBaseRetentionMu.Unlock()
 		return false
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-family.acquired:
 	case <-time.After(20 * time.Millisecond):
@@ -747,7 +747,7 @@ func TestStateBasePublicationWaitingForServiceDoesNotBlockRetention(t *testing.T
 	select {
 	case <-advanced:
 		progressed = true
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 	}
 	unlock()
 	publicationErr := <-done
