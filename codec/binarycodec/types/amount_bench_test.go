@@ -13,6 +13,10 @@ var amountBenchCases = []struct {
 	value any
 }{
 	{"XRP", "123456789"},
+	{"XRPFee", "10"},
+	{"XRPBalance", "1000000000"},
+	{"XRPMax", "100000000000000000"},
+	{"XRPNegative", "-125000708"},
 	{"IOU3", map[string]any{"value": "1234.5678", "currency": "USD", "issuer": benchIssuer}},
 	{"IOUHex", map[string]any{
 		"value":    "-0.0000000123",
@@ -21,6 +25,14 @@ var amountBenchCases = []struct {
 	}},
 	{"MPT", map[string]any{
 		"value":           "9223372036854775807",
+		"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+	}},
+	{"MPTSmall", map[string]any{
+		"value":           "100",
+		"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+	}},
+	{"MPTNegative", map[string]any{
+		"value":           "-1000000",
 		"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
 	}},
 }
