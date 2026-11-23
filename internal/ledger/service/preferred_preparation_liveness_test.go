@@ -122,6 +122,55 @@ func TestPreferredAdmissionRejectsConcurrentConsensusAcceptance(t *testing.T) {
 	require.False(t, svc.preferredTransitionIsActive())
 }
 
+func TestPreferredAdmissionIngressDuringVerification(t *testing.T) {
+	for _, mode := range []string{"switch", "prepare"} {
+		t.Run(mode, func(t *testing.T) {
+			svc, err := New(DefaultConfig())
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+			preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
+			env := jtx.NewTestEnv(t)
+			destination := jtx.NewAccount("preferred-admission-ingress")
+			blob, _ := preferredSwitchPaymentBlob(t, env, jtx.MasterAccount(), destination, 20_000_000, 100, 1)
+			family.armed.Store(true)
+			switched := make(chan error, 1)
+			go func() {
+				if mode == "switch" {
+					switched <- svc.SwitchToPreferredLedger(preferred)
+					return
+				}
+				prepared, err := svc.PreparePreferredLedger(t.Context(), preferred)
+				if err == nil {
+					defer prepared.Release()
+					if err = prepared.Wait(t.Context()); err == nil {
+						if _, err = prepared.TryPublish(); err == nil {
+							prepared.Finish()
+						}
+					}
+				}
+				switched <- err
+			}()
+			awaitPreferredPreparation(t, family.entered)
+
+			svc.mu.RLock()
+			queue := svc.txQueue
+			svc.mu.RUnlock()
+			result, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
+			require.NoError(t, err)
+			require.Equal(t, ter.TesSUCCESS, result.Result)
+			svc.mu.RLock()
+			require.NotSame(t, queue, svc.txQueue, "ingress must publish a new queue while admission verifies")
+			svc.mu.RUnlock()
+
+			family.unblock()
+			err = <-switched
+			require.ErrorIs(t, err, ErrPreferredTransitionStale)
+			require.ErrorContains(t, err, "ledger ownership changed during admission")
+		})
+	}
+}
+
 func TestPreferredAdmissionRejectsConcurrentTransitionOwnership(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
