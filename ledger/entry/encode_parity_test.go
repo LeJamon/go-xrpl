@@ -2,8 +2,10 @@ package entry
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -173,8 +175,10 @@ func TestEncodeParityConformanceCorpus(t *testing.T) {
 		}
 		collectLedgerEntryBlobs(fixture, blobs)
 	}
+	if len(blobs) == 0 {
+		t.Fatal("conformance fixtures contain no ledger entries")
+	}
 	perType := make(map[Type]int)
-	var unencodable []string
 	for blob := range blobs {
 		data, err := hex.DecodeString(blob)
 		if err != nil {
@@ -195,17 +199,26 @@ func TestEncodeParityConformanceCorpus(t *testing.T) {
 		perType[typ]++
 		encoded, err := e.(encodeIface).Encode()
 		if err != nil {
-			// The JSON amount path caps native amounts at 10^17 drops; a
-			// recorded over-cap balance decodes but is rejected by every encoder.
-			unencodable = append(unencodable, fmt.Sprintf("%s: %v", typ, err))
-			continue
+			// The fee-invariant fixture records a wire balance above the JSON supply cap.
+			const overCapAccount = "99f79b34db1b0811e24de8c0814c5a3f5ba1800a8148a837ce4396f08c9a9670"
+			root, ok := e.(*AccountRoot)
+			var amountErr *types.InvalidAmountError
+			if !ok || fmt.Sprintf("%x", sha256.Sum256(data)) != overCapAccount ||
+				!errors.As(err, &amountErr) || amountErr.Amount != "100000000000000001" {
+				t.Fatalf("%s: Encode: %v", typ, err)
+			}
+			root.SetBalance(types.RawXRPAmount{Drops: types.MaxDrops + 1})
+			requireEncodeParity(t, root)
+			encoded, err = root.Encode()
+			if err != nil {
+				t.Fatalf("%s: Encode with wire balance: %v", typ, err)
+			}
 		}
 		if !bytes.Equal(encoded, data) {
 			t.Fatalf("%s: Encode does not reproduce rippled's blob:\n got  %X\n want %X", typ, encoded, data)
 		}
 	}
 	t.Logf("compared %d distinct ledger entries from %d fixtures: %v", len(blobs), len(files), perType)
-	t.Logf("%d entries rejected by every encoder: %v", len(unencodable), unencodable)
 }
 
 func collectLedgerEntryBlobs(node any, out map[string]struct{}) {
