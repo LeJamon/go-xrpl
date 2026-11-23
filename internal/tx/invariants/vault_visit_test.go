@@ -66,12 +66,16 @@ func TestValidVaultSkipsVisitWithoutVault(t *testing.T) {
 		s := current
 		s.checked++
 		entries := table.CollectEntries()
-		require.Equal(t, s.touchesVault, invariants.TouchesVault(entries), s.name)
 
 		fee, err := strconv.ParseUint(s.transaction.GetCommon().Fee, 10, 64)
 		require.NoError(t, err, s.name)
 		compare := func(name string, wrapped invariants.Transaction) *invariants.InvariantViolation {
-			got := invariants.CheckValidVault(wrapped, invariants.Result(result), fee, entries, table, rules)
+			got, decoded := invariants.CheckValidVault(wrapped, invariants.Result(result), fee, entries, table, rules)
+			if s.touchesVault {
+				require.Positive(t, decoded, name)
+			} else {
+				require.Zero(t, decoded, name)
+			}
 			want := invariants.ValidVaultVisitingAll(wrapped, invariants.Result(result), fee, entries, table, rules)
 			require.Equal(t, want, got, name)
 			return got
