@@ -119,8 +119,11 @@ func (s *XRPEndpointStep) Rev(
 	// and cache the result as rippled would, while any other (genuine) credit
 	// failure still dries the strand.
 	err := s.accountSend(sb, result, account, readErr)
-	if err != nil && !(s.isLast && errors.Is(err, errXRPBalanceOutOfRange)) {
-		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
+	if err != nil {
+		if !s.isLast || !errors.Is(err, errXRPBalanceOutOfRange) {
+			return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
+		}
+		sb.CreditHook([20]byte{}, s.account, tx.NewXRPAmount(result), tx.NewXRPAmount(-int64(account.Balance)))
 	}
 
 	s.cache = &result
@@ -342,81 +345,39 @@ func (s *XRPEndpointStep) liquidOf(sb *PaymentSandbox, accountRoot *state.Accoun
 // step account's AccountRoot as read from sb, nil when absent or when the read
 // failed with readErr; accountSend takes ownership of it.
 func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, amount int64, account *state.AccountRoot, readErr error) error {
-	if amount <= 0 {
-		return nil // Nothing to send
+	if amount <= 0 || s.account == ([20]byte{}) {
+		return nil
+	}
+	if account == nil {
+		return readErr
 	}
 
 	var sender, receiver [20]byte
-	var xrpAccount [20]byte // Zero = XRP pseudo-account
-
+	preCreditBalance := int64(account.Balance)
 	if s.isLast {
-		sender = xrpAccount
 		receiver = s.account
+		preCreditBalance = -preCreditBalance
+		if account.Balance+uint64(amount) > uint64(drops.MaxDrops) {
+			return errXRPBalanceOutOfRange
+		}
+		account.Balance += uint64(amount)
 	} else {
 		sender = s.account
-		receiver = xrpAccount
-	}
-
-	// If sender is not XRP pseudo-account, deduct from sender
-	if sender != xrpAccount {
-		senderKey := keylet.Account(sender)
-		senderRoot := account
-		if senderRoot == nil {
-			return readErr
-		}
-
-		// Insufficient-balance guard, mirroring rippled accountSendIOU's native
-		// path (View.cpp: sender balance < amount). Defensive: the flow caps the
-		// requested amount at the sender's funds, so this should never trip.
-		if senderRoot.Balance < uint64(amount) {
+		if account.Balance < uint64(amount) {
 			sb.markFundsFailure()
 			return errInsufficientFunds
 		}
-
-		// Record the deferred credit on the sender side BEFORE the debit, so the
-		// same drops are not counted as spendable liquidity elsewhere in the same
-		// payment. Mirrors rippled accountSendIOU native path:
-		//   view.creditHook(uSenderID, xrpAccount(), saAmount, sndBal)
-		sb.CreditHook(sender, xrpAccount, tx.NewXRPAmount(amount), tx.NewXRPAmount(int64(senderRoot.Balance)))
-
-		senderRoot.Balance -= uint64(amount)
-
-		// Serialize and update
-		newData, err := state.SerializeAccountRoot(senderRoot)
-		if err != nil {
-			return err
-		}
-		sb.Update(senderKey, newData)
+		account.Balance -= uint64(amount)
 	}
 
-	// If receiver is not XRP pseudo-account, credit to receiver
-	if receiver != xrpAccount {
-		receiverKey := keylet.Account(receiver)
-		receiverRoot := account
-		if receiverRoot == nil {
-			return readErr
-		}
-
-		// Record the deferred credit on the receiver side. XRP credited here must
-		// not be counted as spendable liquidity by a later step in the same
-		// payment (e.g. the taker's own offers on the opposite book). Mirrors
-		// rippled accountSendIOU native path:
-		//   view.creditHook(xrpAccount(), uReceiverID, saAmount, -rcvBal)
-		sb.CreditHook(xrpAccount, receiver, tx.NewXRPAmount(amount), tx.NewXRPAmount(-int64(receiverRoot.Balance)))
-
-		receiverRoot.Balance += uint64(amount)
-		if receiverRoot.Balance > uint64(drops.MaxDrops) {
-			return errXRPBalanceOutOfRange
-		}
-
-		// Serialize and update
-		newData, err := state.SerializeAccountRoot(receiverRoot)
-		if err != nil {
-			return err
-		}
-		sb.Update(receiverKey, newData)
+	data, err := state.SerializeAccountRoot(account)
+	if err != nil {
+		return err
 	}
-
+	if err := sb.Update(keylet.Account(s.account), data); err != nil {
+		return err
+	}
+	sb.CreditHook(sender, receiver, tx.NewXRPAmount(amount), tx.NewXRPAmount(preCreditBalance))
 	return nil
 }
 

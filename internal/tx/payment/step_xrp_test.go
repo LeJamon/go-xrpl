@@ -1,15 +1,34 @@
 package payment
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+type xrpPreimageReadErrorView struct {
+	*paymentMockLedgerView
+	key   [32]byte
+	reads int
+	err   error
+}
+
+func (v *xrpPreimageReadErrorView) Read(key keylet.Keylet) ([]byte, error) {
+	if key.Key == v.key {
+		v.reads++
+		if v.reads == 2 {
+			return nil, v.err
+		}
+	}
+	return v.paymentMockLedgerView.Read(key)
+}
 
 func TestXRPEndpointStep_CheckGlobalFreeze(t *testing.T) {
 	view := newPaymentMockLedgerView()
@@ -156,4 +175,92 @@ func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 	view.createAccount(normal, 100_000_000, 5) // base 10 + 5*2 = 20 XRP reserve
 	normalStep := NewXRPEndpointStep(normal, false)
 	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(NewPaymentSandbox(view)))
+}
+
+func TestXRPEndpointStep_UpdateFailureDoesNotCacheOrRecordCredit(t *testing.T) {
+	tests := []struct {
+		name    string
+		isLast  bool
+		forward bool
+	}{
+		{name: "reverse source", isLast: false},
+		{name: "reverse destination", isLast: true},
+		{name: "forward source", isLast: false, forward: true},
+		{name: "forward destination", isLast: true, forward: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var accountID [20]byte
+			accountID[0] = 1
+			base := newPaymentMockLedgerView()
+			base.createAccount(accountID, 100_000_000, 0)
+			accountKey := keylet.Account(accountID)
+			before := append([]byte(nil), base.data[accountKey.Key]...)
+			view := &xrpPreimageReadErrorView{
+				paymentMockLedgerView: base,
+				key:                   accountKey.Key,
+				err:                   errors.New("pre-image read failed"),
+			}
+			sb := NewPaymentSandbox(view)
+			step := NewXRPEndpointStep(accountID, test.isLast)
+			amount := NewXRPEitherAmount(1_000_000)
+			if test.forward {
+				cached := int64(123)
+				step.cache = &cached
+			}
+
+			var in, out EitherAmount
+			if test.forward {
+				in, out = step.Fwd(sb, NewChildSandbox(sb), nil, amount)
+			} else {
+				in, out = step.Rev(sb, NewChildSandbox(sb), nil, amount)
+			}
+
+			require.True(t, in.IsZero())
+			require.True(t, out.IsZero())
+			if test.forward {
+				require.NotNil(t, step.cache)
+				require.Equal(t, int64(123), *step.cache)
+			} else {
+				require.Nil(t, step.cache)
+			}
+			require.Equal(t, 2, view.reads)
+			require.Equal(t, before, base.data[accountKey.Key])
+			require.Empty(t, sb.Modifications())
+			require.Empty(t, sb.Insertions())
+			require.Empty(t, sb.tab.credits)
+		})
+	}
+}
+
+func TestXRPEndpointStep_OverrangeCredit(t *testing.T) {
+	var accountID [20]byte
+	accountID[0] = 1
+	view := newPaymentMockLedgerView()
+	account := &state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(accountID),
+		Balance:  uint64(drops.MaxDrops),
+		Sequence: 1,
+	}
+	data, err := state.SerializeAccountRoot(account)
+	require.NoError(t, err)
+	view.data[keylet.Account(accountID).Key] = data
+
+	sb := NewPaymentSandbox(view)
+	step := NewXRPEndpointStep(accountID, true)
+	in, out := step.Rev(sb, NewChildSandbox(sb), nil, NewXRPEitherAmount(1))
+
+	require.Equal(t, NewXRPEitherAmount(1), in)
+	require.Equal(t, NewXRPEitherAmount(1), out)
+	require.NotNil(t, step.cache)
+	require.NotEmpty(t, sb.tab.credits)
+	require.Empty(t, sb.Modifications())
+
+	forward := NewPaymentSandbox(view)
+	in, out = step.Fwd(forward, NewChildSandbox(forward), nil, NewXRPEitherAmount(1))
+	require.True(t, in.IsZero())
+	require.True(t, out.IsZero())
+	require.Empty(t, forward.tab.credits)
+	require.Empty(t, forward.Modifications())
 }
