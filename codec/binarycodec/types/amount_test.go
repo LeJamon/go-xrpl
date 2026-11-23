@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVerifyXrpValue(t *testing.T) {
+func TestParseXrpValue(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
@@ -48,10 +48,11 @@ func TestVerifyXrpValue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := parseXrpValue(tt.input)
 			if tt.expErr != nil {
-				require.Equal(t, tt.expErr, verifyXrpValue(tt.input))
+				require.Equal(t, tt.expErr, err)
 			} else {
-				require.NoError(t, verifyXrpValue(tt.input))
+				require.NoError(t, err)
 			}
 		})
 	}

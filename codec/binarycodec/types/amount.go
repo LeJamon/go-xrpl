@@ -88,7 +88,6 @@ var (
 	errInvalidCurrencyFormat         = errors.New("invalid currency")
 	errInvalidIssuerFormat           = errors.New("invalid issuer")
 	errInvalidAmountType             = errors.New("invalid amount type")
-	errFailedConvertStringToBigFloat = errors.New("failed to convert string to big.Float")
 )
 
 // Compiled once at package init: avoiding MustCompile on hot paths.
@@ -427,36 +426,51 @@ func deserializeMPTAmount(data []byte) (map[string]any, error) {
 	}, nil
 }
 
-// verifyXrpValue validates the format of an XRP amount value.
-// XRP values should not contain a decimal point because they are represented as integers as drops.
-// Negative XRP values are valid in ledger objects (e.g., NFToken sell offers with negative prices).
-func verifyXrpValue(value string) error {
-	if !integralAmountRegex.MatchString(value) {
-		return errInvalidXRPValue
+// splitIntegralAmount accepts an optional '+' or '-' followed by "0" or ASCII
+// decimal digits without a leading zero, and returns the digits and sign.
+func splitIntegralAmount(value string) (digits string, negative, ok bool) {
+	digits = value
+	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
+		negative = digits[0] == '-'
+		digits = digits[1:]
 	}
-
-	// Strip the optional leading sign for validation.
-	checkValue := value
-	if strings.HasPrefix(checkValue, "-") || strings.HasPrefix(checkValue, "+") {
-		checkValue = checkValue[1:]
+	if digits == "" || (digits[0] == '0' && len(digits) > 1) {
+		return "", false, false
 	}
+	for i := range len(digits) {
+		if digits[i] < '0' || digits[i] > '9' {
+			return "", false, false
+		}
+	}
+	return digits, negative, true
+}
 
-	decimal := new(big.Float)
-	decimal, ok := decimal.SetString(checkValue) // bigFloat for precision (use absolute value)
+// parseMagnitude returns the value of digits from splitIntegralAmount, or false
+// when it exceeds limit. Without leading zeros, more than 19 digits is at least
+// 10^19, above every limit used here; 19 digits always fit in a uint64.
+func parseMagnitude(digits string, limit uint64) (uint64, bool) {
+	if len(digits) > 19 {
+		return 0, false
+	}
+	var n uint64
+	for i := range len(digits) {
+		n = n*10 + uint64(digits[i]-'0')
+	}
+	return n, n <= limit
+}
 
+// parseXrpValue parses a signed integer number of drops of magnitude at most
+// MaxDrops. Negative values are valid in ledger objects (e.g., NFToken sell
+// offers with negative prices).
+func parseXrpValue(value string) (drops uint64, negative bool, err error) {
+	digits, negative, ok := splitIntegralAmount(value)
 	if !ok {
-		return errFailedConvertStringToBigFloat
+		return 0, false, errInvalidXRPValue
 	}
-
-	if decimal.Sign() == 0 {
-		return nil
+	if drops, ok = parseMagnitude(digits, MaxDrops); !ok {
+		return 0, false, &InvalidAmountError{Amount: value}
 	}
-
-	if decimal.Cmp(big.NewFloat(MinXRP)) == -1 || decimal.Cmp(big.NewFloat(MaxDrops)) == 1 {
-		return &InvalidAmountError{value}
-	}
-
-	return nil
+	return drops, negative, nil
 }
 
 type iouValue struct {
@@ -553,28 +567,14 @@ func verifyMPTValue(value string) error {
 // Negative values are supported: the absolute value is stored without the positive sign bit.
 // Reference: rippled STAmount::add — positive sets cPositive bit, negative does not.
 func serializeXrpAmount(value string) ([]byte, error) {
-	if err := verifyXrpValue(value); err != nil {
-		return nil, err
-	}
-
-	isNegative := strings.HasPrefix(value, "-")
-	absValue := value
-	if isNegative || strings.HasPrefix(value, "+") {
-		absValue = value[1:]
-	}
-
-	val, err := strconv.ParseUint(absValue, 10, 64)
+	drops, negative, err := parseXrpValue(value)
 	if err != nil {
 		return nil, err
 	}
 
-	var serialized uint64
-	if isNegative && val != 0 {
-		// Negative: store absolute value without positive sign bit
-		serialized = val
-	} else {
-		// Positive: set the positive sign bit
-		serialized = val | PosSignBitMask
+	serialized := drops
+	if !negative || drops == 0 {
+		serialized |= PosSignBitMask
 	}
 
 	valBytes := make([]byte, NativeAmountByteLength)
