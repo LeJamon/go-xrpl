@@ -3,35 +3,72 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	"github.com/stretchr/testify/require"
 )
 
-type failOnceRepositories struct {
-	relationaldb.RepositoryManager
-	failSeq relationaldb.LedgerIndex
-	failed  bool
+var errInjectedPersist = errors.New("injected persistence failure")
+
+// injectedFailures counts the remaining injected failures per ledger sequence.
+type injectedFailures struct {
+	mu        sync.Mutex
+	remaining map[uint32]int
 }
 
-func (r *failOnceRepositories) PersistValidatedLedger(ctx context.Context, validated relationaldb.ValidatedLedger) error {
-	if !r.failed && validated.Ledger.Sequence == r.failSeq {
-		r.failed = true
-		return errors.New("injected relational failure")
+func (f *injectedFailures) fail(seq uint32, times int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.remaining == nil {
+		f.remaining = make(map[uint32]int)
+	}
+	f.remaining[seq] = times
+}
+
+func (f *injectedFailures) take(seq uint32) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.remaining[seq] == 0 {
+		return false
+	}
+	f.remaining[seq]--
+	return true
+}
+
+type failingRepositories struct {
+	relationaldb.RepositoryManager
+	injectedFailures
+}
+
+func (r *failingRepositories) PersistValidatedLedger(ctx context.Context, validated relationaldb.ValidatedLedger) error {
+	if r.take(uint32(validated.Ledger.Sequence)) {
+		return errInjectedPersist
 	}
 	return r.RepositoryManager.PersistValidatedLedger(ctx, validated)
 }
 
-// Restart resumes from the durable tip and skips any earlier unindexed ledger.
-func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
-	t.Skip("known gap (#2204): a failed persist is logged, never retried, and the next ledger advances the durable tip past it")
+// failingHeaderStore fails the node-store write of selected ledger headers.
+type failingHeaderStore struct {
+	nodestore.Database
+	injectedFailures
+}
 
-	ctx := context.Background()
-	db := newTestNodeStore(t, 10_000)
-	repositories := newTestRepositories(t, ctx)
-	relational := &failOnceRepositories{RepositoryManager: repositories}
+func (d *failingHeaderStore) Store(ctx context.Context, node *nodestore.Node) error {
+	if node.Type == nodestore.NodeLedger && node.Hash != validatedTipKey && d.take(node.LedgerSeq) {
+		return errInjectedPersist
+	}
+	return d.Database.Store(ctx, node)
+}
+
+func startPersistedTestService(t *testing.T, db nodestore.Database, relational relationaldb.RepositoryManager) *Service {
+	t.Helper()
 	cfg := DefaultConfig()
 	cfg.NodeStore = db
 	cfg.SHAMapFamily = backend.New(db)
@@ -40,11 +77,35 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	return svc
+}
 
-	relational.failSeq = relationaldb.LedgerIndex(svc.GetClosedLedgerIndex() + 1)
-	failed, err := svc.AcceptLedger(ctx)
+func requireLedgerIndexed(t *testing.T, repositories relationaldb.RepositoryManager, seq uint32, indexed bool) {
+	t.Helper()
+	info, err := repositories.Ledger().GetLedgerInfoBySeq(context.Background(), relationaldb.LedgerIndex(seq))
+	if !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+		require.NoError(t, err)
+	}
+	require.Equalf(t, indexed, info != nil, "relational index for ledger %d", seq)
+}
+
+// A failed relational write leaves a hole that the next healthy validated
+// persist repairs, so no ledger below the durable tip stays unindexed.
+func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
+	ctx := context.Background()
+	db := newTestNodeStore(t, 10_000)
+	repositories := newTestRepositories(t, ctx)
+	relational := &failingRepositories{RepositoryManager: repositories}
+	svc := startPersistedTestService(t, db, relational)
+
+	failed := svc.GetClosedLedgerIndex() + 1
+	relational.fail(failed, 1)
+	seq, err := svc.AcceptLedger(ctx)
 	require.NoError(t, err)
-	require.True(t, relational.failed)
+	require.Equal(t, failed, seq)
+	require.False(t, svc.HasCompleteLedger(failed))
+	requireLedgerIndexed(t, repositories, failed, false)
+
 	_, err = svc.AcceptLedger(ctx)
 	require.NoError(t, err)
 	svc.FlushPersists()
@@ -52,10 +113,78 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	tip, err := db.Fetch(ctx, validatedTipKey)
 	require.NoError(t, err)
 	require.NotNil(t, tip)
-	info, err := repositories.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(failed))
-	if !errors.Is(err, relationaldb.ErrLedgerNotFound) {
+	require.Greater(t, tip.LedgerSeq, failed)
+	require.True(t, svc.HasCompleteLedger(failed))
+	requireLedgerIndexed(t, repositories, failed, true)
+}
+
+// A node-store failure must not leave a relational row for a ledger whose
+// header is not stored; the ledger is repaired like any other hole.
+func TestNodeStorePersistFailureSkipsRelationalIndex(t *testing.T) {
+	ctx := context.Background()
+	db := &failingHeaderStore{Database: newTestNodeStore(t, 10_000)}
+	repositories := newTestRepositories(t, ctx)
+	svc := startPersistedTestService(t, db, repositories)
+
+	failed := svc.GetClosedLedgerIndex() + 1
+	db.fail(failed, 1)
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	require.False(t, svc.HasCompleteLedger(failed))
+	requireLedgerIndexed(t, repositories, failed, false)
+
+	_, err = svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	require.True(t, svc.HasCompleteLedger(failed))
+	requireLedgerIndexed(t, repositories, failed, true)
+}
+
+// Once a ledger's child has left memory, the validated skip list is the
+// canonical proof for re-installing it as history.
+func TestIngestHistoricalLedgerProvenBySkipList(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 2
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	parent := svc.GetClosedLedger()
+	target, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	historical, err := svc.GetLedgerBySequence(target)
+	require.NoError(t, err)
+	for svc.GetValidatedLedgerIndex() < target+4 {
+		_, err := svc.AcceptLedger(ctx)
 		require.NoError(t, err)
 	}
-	require.Truef(t, info != nil || tip.LedgerSeq < failed,
-		"durable tip %d is above ledger %d, which has no relational index", tip.LedgerSeq, failed)
+	_, err = svc.AdoptedLedgerBySequence(target + 1)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
+
+	forkTime := historical.CloseTime().Add(time.Hour)
+	fork, err := ledger.NewOpen(parent, forkTime)
+	require.NoError(t, err)
+	require.NoError(t, fork.Close(forkTime, 0))
+	require.NotEqual(t, historical.Hash(), fork.Hash())
+	require.ErrorContains(t, ingestLedgerCopy(ctx, svc, fork), "no canonical child")
+
+	require.NoError(t, ingestLedgerCopy(ctx, svc, historical))
+	held, err := svc.AdoptedLedgerBySequence(target)
+	require.NoError(t, err)
+	require.Equal(t, historical.Hash(), held.Hash())
+}
+
+func ingestLedgerCopy(ctx context.Context, svc *Service, l *ledger.Ledger) error {
+	h := l.Header()
+	stateMap, err := l.StateMapSnapshot()
+	if err != nil {
+		return err
+	}
+	txMap, err := l.TxMapSnapshot()
+	if err != nil {
+		return err
+	}
+	return svc.IngestHistoricalLedgerWithState(ctx, &h, stateMap, txMap)
 }
