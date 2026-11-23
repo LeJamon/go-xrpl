@@ -79,6 +79,12 @@ func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success b
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
 	s.ensureCompleteLedgerStateLocked()
+	if success {
+		s.persistFailures = 0
+	} else {
+		s.persistFailures++
+		s.lastFailedPersist = seq
+	}
 	if s.completeLedgerTokens[seq] != token {
 		return
 	}
@@ -260,6 +266,35 @@ func (s *Service) HasCompleteLedgerHash(seq uint32, hash [32]byte) bool {
 	defer s.completeMu.RUnlock()
 	completeHash, ok := s.completeLedgerHashes[seq]
 	return ok && completeHash == hash && s.completedLedgers != nil && s.completedLedgers.contains(seq)
+}
+
+// NewestMissingLedger returns the newest ledger below `below` that is absent
+// from the completed-ledger set, mirroring rippled's prevMissing.
+func (s *Service) NewestMissingLedger(below uint32) (uint32, bool) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	if s.completedLedgers == nil {
+		return 0, false
+	}
+	return s.completedLedgers.prevMissing(below, 1)
+}
+
+// CompleteLedgerBelow returns the newest completed ledger below seq.
+func (s *Service) CompleteLedgerBelow(seq uint32) (uint32, bool) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	if s.completedLedgers == nil {
+		return 0, false
+	}
+	return s.completedLedgers.prevPresent(seq)
+}
+
+// ValidatedPersistFailures reports how many validated-ledger persists have
+// failed since the last success, and the most recent failed sequence.
+func (s *Service) ValidatedPersistFailures() (consecutive, lastFailed uint32) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	return s.persistFailures, s.lastFailedPersist
 }
 
 func (s *Service) completeLedgersString() string {

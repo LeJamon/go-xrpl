@@ -141,6 +141,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.validatedSignTime = closed.CloseTime()
 	s.putHistoryLocked(closed)
 	s.evictOldHistoryLocked(closedSeq)
+	s.requeueResidentHolesLocked(closedSeq)
 	s.openLedger = newOpen
 	s.tickLoadFeeLocked()
 
@@ -795,6 +796,7 @@ func (s *Service) setValidatedLedgerAt(ctx context.Context, seq uint32, expected
 		}
 	}
 	s.enqueuePersist(l)
+	s.requeueResidentHolesLocked(seq)
 	notification := s.validatedLedgerNotificationLocked(previousValidated)
 	s.dispatchLedgerEvent(event)
 	s.historyComponent.mu.Unlock()
@@ -907,14 +909,27 @@ func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header
 	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
 		return err
 	}
+	proven := s.skipListProvesHistory(ctx, h)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
-	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap, proven)
 }
 
-func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+// skipListProvesHistory reports whether the validated ledger's skip list names
+// h. It is only consulted when h's child is not resident to prove the link.
+func (s *Service) skipListProvesHistory(ctx context.Context, h *header.LedgerHeader) bool {
+	if h == nil || s.historyComponent.ledgerBySequence(h.LedgerIndex+1) != nil {
+		return false
+	}
+	hash, ok, err := s.CanonicalLedgerHash(ctx, h.LedgerIndex)
+	return err == nil && ok && hash == h.Hash
+}
+
+// ingestHistoricalLedgerWithStateLocked requires h to be the parent of its
+// resident child or, when proven, named by the validated skip list.
+func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap, proven bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -936,7 +951,7 @@ func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *
 	}
 	if sameHistoricalLedger {
 		historical = existing
-	} else if !childExists {
+	} else if !childExists && !proven {
 		return fmt.Errorf("historical ledger %d has no canonical child", seq)
 	}
 	if !historical.IsValidated() {

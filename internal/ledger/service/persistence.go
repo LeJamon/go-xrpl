@@ -129,6 +129,53 @@ func (p *persistenceWorker) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
 	p.enqueueLedgerPersist(l, true, false)
 }
 
+// residentRepairLimit bounds the holes one validated ledger re-queues, so
+// recovery cannot crowd consensus out of the persistence FIFO.
+const residentRepairLimit = 4
+
+// requeueResidentHolesLocked re-persists the newest resident validated ledgers
+// missing between completed ledgers once the latest validated persist has
+// succeeded. It needs no network, so standalone and backfill-disabled nodes
+// also repair their own write failures. Caller holds s.mu and
+// historyComponent.mu.
+func (s *Service) requeueResidentHolesLocked(below uint32) {
+	var holes []*ledger.Ledger
+	s.completeMu.RLock()
+	if s.persistFailures == 0 && s.completedLedgers != nil {
+		if lowest, ok := s.completedLedgers.lowest(); ok {
+			minimum := max(lowest+1, s.completeLedgerFloor)
+			window := s.ledgerCacheSize()
+			for next := below; len(holes) < residentRepairLimit; {
+				seq, ok := s.completedLedgers.prevMissing(next, minimum)
+				if !ok || below-seq > window {
+					break
+				}
+				if l := s.ledgerHistory[seq]; l != nil && l.IsValidated() {
+					holes = append(holes, l)
+				}
+				next = seq
+			}
+		}
+	}
+	s.completeMu.RUnlock()
+	for _, l := range holes {
+		s.enqueueValidatedHistoryPersist(l)
+	}
+}
+
+// RequeueResidentLedger queues persistence of the resident validated ledger
+// with the given hash. It reports false when that ledger is not held.
+func (s *Service) RequeueResidentLedger(seq uint32, hash [32]byte) bool {
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
+	l := s.ledgerHistory[seq]
+	if l == nil || l.Hash() != hash || !l.IsValidated() {
+		return false
+	}
+	s.enqueueValidatedHistoryPersist(l)
+	return true
+}
+
 func (p *persistenceWorker) enqueueNodePersist(l *ledger.Ledger) {
 	p.enqueueLedgerPersist(l, false, false)
 }

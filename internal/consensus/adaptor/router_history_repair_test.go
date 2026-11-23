@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ type failingLedgerIndex struct {
 	relationaldb.RepositoryManager
 	mu        sync.Mutex
 	remaining map[uint32]int
+	writes    map[uint32]int
 }
 
 func (r *failingLedgerIndex) fail(seq uint32, times int) {
@@ -35,9 +37,19 @@ func (r *failingLedgerIndex) fail(seq uint32, times int) {
 	r.remaining[seq] = times
 }
 
+func (r *failingLedgerIndex) attempts(seq uint32) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.writes[seq]
+}
+
 func (r *failingLedgerIndex) PersistValidatedLedger(ctx context.Context, validated relationaldb.ValidatedLedger) error {
 	seq := uint32(validated.Ledger.Sequence)
 	r.mu.Lock()
+	if r.writes == nil {
+		r.writes = make(map[uint32]int)
+	}
+	r.writes[seq]++
 	remaining := r.remaining[seq]
 	if remaining > 0 {
 		r.remaining[seq]--
@@ -47,6 +59,19 @@ func (r *failingLedgerIndex) PersistValidatedLedger(ctx context.Context, validat
 		return errors.New("injected relational failure")
 	}
 	return r.RepositoryManager.PersistValidatedLedger(ctx, validated)
+}
+
+// failingHeaderStore fails one write of the selected ledger's header.
+type failingHeaderStore struct {
+	nodestore.Database
+	failSeq atomic.Uint32
+}
+
+func (d *failingHeaderStore) Store(ctx context.Context, node *nodestore.Node) error {
+	if node.Type == nodestore.NodeLedger && node.LedgerSeq != 0 && d.failSeq.CompareAndSwap(node.LedgerSeq, 0) {
+		return errors.New("injected node-store failure")
+	}
+	return d.Database.Store(ctx, node)
 }
 
 func newHistoryRepairStores(t *testing.T) (nodestore.Database, *sqlitedb.RepositoryManager) {
@@ -90,7 +115,7 @@ func newHistoryRepairRouter(t *testing.T, svc *service.Service, depth uint32) (*
 	t.Helper()
 	a, sender := newRecordingAdaptor(t, svc)
 	r := newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 1))
-	r.catchupReplay.configureHistoryBackfill(true, depth)
+	r.catchupReplay.configureHistoryBackfill(true, depth, false)
 	trackCatchupPeer(r, 7, svc.GetValidatedLedgerIndex())
 	return r, sender
 }
@@ -136,34 +161,48 @@ func restartFastLoad(t *testing.T, db nodestore.Database, relational relationald
 // A resident ledger whose history persist failed during the restart walk is
 // retargeted on a later tick and repaired without a network request.
 func TestHistoryBackfillRetargetsResidentHoleLocally(t *testing.T) {
-	db, rm := newHistoryRepairStores(t)
-	writeLedgerHistory(t, db, rm, 10).Stop()
-
-	relational := &failingLedgerIndex{RepositoryManager: rm}
-	const hole = 7
-	relational.fail(hole, 1)
-	svc := restartFastLoad(t, db, relational)
-	tip := svc.GetValidatedLedgerIndex()
-	r, sender := newHistoryRepairRouter(t, svc, tip-2)
-
-	runHistoryBackfill(svc, r, func() bool {
-		for seq := uint32(2); seq < tip; seq++ {
-			if seq != hole && !svc.HasCompleteLedger(seq) {
-				return false
-			}
+	for _, nodeStoreFailure := range []bool{false, true} {
+		name := "relational"
+		if nodeStoreFailure {
+			name = "node store"
 		}
-		return true
-	})
-	for seq := uint32(2); seq < tip; seq++ {
-		require.Equalf(t, seq != hole, svc.HasCompleteLedger(seq), "ledger %d", seq)
-	}
+		t.Run(name, func(t *testing.T) {
+			db, rm := newHistoryRepairStores(t)
+			writeLedgerHistory(t, db, rm, 10).Stop()
 
-	runHistoryBackfill(svc, r, func() bool { return svc.HasCompleteLedger(hole) })
-	require.True(t, svc.HasCompleteLedger(hole))
-	require.Empty(t, sender.legacyCalls())
+			const hole = 7
+			relational := &failingLedgerIndex{RepositoryManager: rm}
+			store := &failingHeaderStore{Database: db}
+			if nodeStoreFailure {
+				store.failSeq.Store(hole)
+			} else {
+				relational.fail(hole, 1)
+			}
+			svc := restartFastLoad(t, store, relational)
+			tip := svc.GetValidatedLedgerIndex()
+			r, sender := newHistoryRepairRouter(t, svc, tip-2)
+
+			runHistoryBackfill(svc, r, func() bool {
+				for seq := uint32(2); seq < tip; seq++ {
+					if seq != hole && !svc.HasCompleteLedger(seq) {
+						return false
+					}
+				}
+				return true
+			})
+			for seq := uint32(2); seq < tip; seq++ {
+				require.Equalf(t, seq != hole, svc.HasCompleteLedger(seq), "ledger %d", seq)
+			}
+
+			runHistoryBackfill(svc, r, func() bool { return svc.HasCompleteLedger(hole) })
+			require.True(t, svc.HasCompleteLedger(hole))
+			require.Empty(t, sender.legacyCalls())
+		})
+	}
 }
 
-// A hole that leaves memory after the initial walk is acquired from the network.
+// A hole that leaves memory after the initial walk is acquired from the
+// network once validated persists succeed again.
 func TestHistoryBackfillAcquiresEvictedHole(t *testing.T) {
 	db, rm := newHistoryRepairStores(t)
 	relational := &failingLedgerIndex{RepositoryManager: rm}
@@ -180,6 +219,12 @@ func TestHistoryBackfillAcquiresEvictedHole(t *testing.T) {
 
 	hole := svc.GetValidatedLedgerIndex() + 1
 	relational.fail(hole, -1)
+	relational.fail(hole+1, 1)
+	acceptUntil(t, svc, hole+1)
+	r.catchupReplay.armHistoryBackfill()
+	svc.FlushPersists()
+	require.Equal(t, 1, relational.attempts(hole), "no history work while validated persists fail")
+
 	acceptUntil(t, svc, hole+3)
 	relational.fail(hole, 0)
 	acceptUntil(t, svc, hole+5)

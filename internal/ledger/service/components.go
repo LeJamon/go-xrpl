@@ -70,6 +70,10 @@ type historyComponent struct {
 	completeLedgerHashes map[uint32][32]byte
 	completeLedgerFloor  uint32
 	completeLedgerTokens map[uint32]uint64
+	// persistFailures counts consecutive failed validated-ledger persists;
+	// completeMu guards it and lastFailedPersist.
+	persistFailures   uint32
+	lastFailedPersist uint32
 
 	validatedStateBaseMu        sync.RWMutex
 	validatedStateBaseProof     *validatedStateBaseProof
