@@ -3,6 +3,7 @@ package addresscodec
 import (
 	"bytes"
 	"errors"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -211,6 +212,21 @@ func TestEncodeBase58MatchesReference(t *testing.T) {
 		checkEncodeMatchesReference(t, b)
 	}
 	t.Logf("compared %d inputs", len(inputs))
+}
+
+func TestBase58BufferSize(t *testing.T) {
+	for _, tc := range []struct{ length, zeros, want int }{
+		{0, 0, 0},
+		{1001, 0, 1368},
+		{2_000_000, 0, 2_732_000},
+		{2_000_000, 500_000, 2_549_000},
+		{math.MaxInt, math.MaxInt, math.MaxInt},
+		{math.MaxInt, 0, math.MaxInt},
+	} {
+		if got := base58BufferSize(tc.length, tc.zeros); got != tc.want {
+			t.Errorf("base58BufferSize(%d, %d) = %d, want %d", tc.length, tc.zeros, got, tc.want)
+		}
+	}
 }
 
 func FuzzEncodeBase58Differential(f *testing.F) {

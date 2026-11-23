@@ -1,6 +1,9 @@
 package addresscodec
 
-import "math/bits"
+import (
+	"math"
+	"math/bits"
+)
 
 // pow58[n] is 58^n; 58^10 is the largest power of 58 that fits in a uint64,
 // so decoding folds ten digits at a time into little-endian uint64 limbs.
@@ -15,6 +18,14 @@ var pow58 = func() (p [11]uint64) {
 // radix58Pow5 is the largest power of 58 below 2^32, so dividing a uint32 limb
 // and the carried remainder by it is a 64-bit division by a constant.
 const radix58Pow5 = 58 * 58 * 58 * 58 * 58
+
+func base58BufferSize(length, leadingZeros int) int {
+	// Each significant byte needs at most 1.366 digits. Split the product
+	// before multiplying so the bound also fits on 32-bit platforms.
+	n := length - leadingZeros
+	extra := n/1000*366 + (n%1000*366+999)/1000
+	return length + min(extra, math.MaxInt-length)
+}
 
 // EncodeBase58 encodes a byte slice to a base58 string using the XRP alphabet.
 func EncodeBase58(b []byte) string {
@@ -33,11 +44,9 @@ func EncodeBase58(b []byte) string {
 		limbs = append(limbs, limb)
 	}
 
-	// Each leading zero byte encodes as one 'r'; the remaining value needs at
-	// most ceil(n*log(256)/log(58)) digits, and log(256)/log(58) < 1.366.
 	var outStack [96]byte
 	out := outStack[:]
-	if size := zeros + (len(b)-zeros)*1366/1000 + 1; size > len(out) {
+	if size := base58BufferSize(len(b), zeros); size > len(out) {
 		out = make([]byte, size)
 	}
 	pos := len(out)
