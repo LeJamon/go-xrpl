@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -56,6 +58,11 @@ func (s *Service) persistValidatedLedgerAtToken(
 	seq := l.Sequence()
 	var persistErr error
 	var recertificationNeeded bool
+	s.retentionWriteMu.RLock()
+	defer s.retentionWriteMu.RUnlock()
+	if !updateTip && s.belowRetentionFloor(seq) {
+		return nil
+	}
 
 	if s.nodeStore != nil {
 		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
@@ -115,7 +122,6 @@ type persistJob struct {
 	evictedTip      *evictedLedgerTip
 	done            chan struct{}
 	validated       bool
-	registered      bool
 	tipOnly         bool
 	canceled        atomic.Bool
 	updatesTip      atomic.Bool
@@ -128,44 +134,40 @@ type evictedLedgerTip struct {
 	hash     [32]byte
 }
 
+type ledgerPersistKind uint8
+
+const (
+	persistNodeData ledgerPersistKind = iota
+	persistValidatedTip
+	persistValidatedHistory
+	retryValidatedHistory
+)
+
 func (p *persistenceWorker) enqueuePersist(l *ledger.Ledger) {
-	p.enqueueLedgerPersist(l, true, true)
+	p.enqueueLedgerPersist(l, persistValidatedTip)
 }
 
 func (p *persistenceWorker) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
-	p.enqueueLedgerPersist(l, true, false)
+	p.enqueueLedgerPersist(l, persistValidatedHistory)
 }
 
 // residentRepairLimit bounds the holes one validated ledger re-queues, so
 // recovery cannot crowd consensus out of the persistence FIFO.
 const residentRepairLimit = 4
 
-// retryFailedValidatedLedgersAfterPersist runs after a validated save has
-// released storage locks. It only publishes bounded failed-owner identities;
-// no service or history lock is needed, and enqueueFailedValidatedRetry
-// rechecks each hash before publication.
 func (s *Service) retryFailedValidatedLedgersAfterPersist(seq uint32) {
 	window := s.ledgerCacheSize()
-	type failedLedger struct {
-		seq  uint32
-		hash [32]byte
-	}
-	failed := make([]failedLedger, 0, residentRepairLimit)
+	var failed []*ledger.Ledger
 	s.completeMu.RLock()
 	for candidate, l := range s.failedValidatedLedgers {
-		if l == nil || candidate >= seq || seq-candidate > window ||
-			(s.completeLedgerFloor != 0 && candidate < s.completeLedgerFloor) {
-			continue
+		if candidate < seq && seq-candidate <= window && candidate >= s.completeLedgerFloor {
+			failed = append(failed, l)
 		}
-		failed = append(failed, failedLedger{seq: candidate, hash: l.Hash()})
 	}
 	s.completeMu.RUnlock()
-	sort.Slice(failed, func(i, j int) bool { return failed[i].seq > failed[j].seq })
-	if len(failed) > residentRepairLimit {
-		failed = failed[:residentRepairLimit]
-	}
-	for _, candidate := range failed {
-		s.enqueueFailedValidatedRetry(candidate.seq, candidate.hash)
+	sort.Slice(failed, func(i, j int) bool { return failed[i].Sequence() > failed[j].Sequence() })
+	for _, l := range failed[:min(len(failed), residentRepairLimit)] {
+		s.enqueueLedgerPersist(l, retryValidatedHistory)
 	}
 }
 
@@ -183,53 +185,53 @@ func (s *Service) RequeueResidentLedger(seq uint32, hash [32]byte) bool {
 }
 
 func (p *persistenceWorker) enqueueNodePersist(l *ledger.Ledger) {
-	p.enqueueLedgerPersist(l, false, false)
+	p.enqueueLedgerPersist(l, persistNodeData)
 }
 
-func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip bool) {
+func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, kind ledgerPersistKind) {
 	if l == nil {
 		return
 	}
-	p.persistMu.Lock()
-	job, runInline, stopping := p.enqueueLedgerPersistLocked(l, validated, updatesTip)
-	p.persistMu.Unlock()
-	if stopping {
-		if validated && !job.tipOnly {
-			p.service.invalidateCompleteLedger(l.Sequence())
-		}
-		p.service.logger.Warn("persist skipped: service stopping", "seq", l.Sequence())
-		return
-	}
-	if runInline {
-		p.service.runPersistJob(job)
-	}
-}
-
-// enqueueLedgerPersistLocked coalesces and queues a persistence job. Caller
-// holds persistMu; it returns runInline when the caller must execute the job
-// after releasing that lock.
-func (p *persistenceWorker) enqueueLedgerPersistLocked(l *ledger.Ledger, validated, updatesTip bool) (job *persistJob, runInline, stopping bool) {
 	s := p.service
 	seq := l.Sequence()
+	validated := kind != persistNodeData
+	updatesTip := kind == persistValidatedTip
+	p.persistMu.Lock()
+	if kind == retryValidatedHistory {
+		s.completeMu.RLock()
+		stillFailed := s.failedValidatedLedgers[seq] == l
+		s.completeMu.RUnlock()
+		if !stillFailed {
+			p.persistMu.Unlock()
+			return
+		}
+	}
 	if validated {
+		if !updatesTip && s.belowRetentionFloor(seq) {
+			p.persistMu.Unlock()
+			return
+		}
 		if existing := p.validatedPersistJobs[seq]; existing != nil {
 			if existing.l != nil && existing.l.Hash() == l.Hash() {
 				if updatesTip {
 					existing.updatesTip.Store(true)
 				}
-				return nil, false, false
+				p.persistMu.Unlock()
+				return
 			}
 			if !updatesTip && existing.updatesTip.Load() {
-				return nil, false, false
+				p.persistMu.Unlock()
+				return
 			}
 			existing.canceled.Store(true)
 			delete(p.validatedPersistJobs, seq)
 		}
 		if s.hasCompleteLedger(l) && !updatesTip {
-			return nil, false, false
+			p.persistMu.Unlock()
+			return
 		}
 	}
-	job = &persistJob{
+	job := &persistJob{
 		l:         l,
 		validated: validated,
 		proof:     s.replayPersistenceProof(l.Header()),
@@ -242,50 +244,37 @@ func (p *persistenceWorker) enqueueLedgerPersistLocked(l *ledger.Ledger, validat
 			job.completionToken = s.beginValidatedPersistence(seq, l.Hash())
 		}
 		p.validatedPersistJobs[seq] = job
-		job.registered = true
 	}
 	if !p.persistStarted {
-		return job, true, false
+		p.persistMu.Unlock()
+		s.runPersistJob(job)
+		return
 	}
-	if p.persistStopping {
+	if p.persistStopping && kind != retryValidatedHistory {
 		if validated {
 			job.canceled.Store(true)
 			delete(p.validatedPersistJobs, seq)
 		}
-		return job, false, true
-	}
-	p.persistQueue = append(p.persistQueue, job)
-	p.signalPersistLocked()
-	return nil, false, false
-}
-
-// enqueueFailedValidatedRetry queues a failed-ledger owner only while the
-// persistence mutex is held. Fork invalidation takes the same mutex before it
-// clears the failed owner, so the hash check and job publication are atomic
-// with respect to stale retry admission.
-func (p *persistenceWorker) enqueueFailedValidatedRetry(seq uint32, hash [32]byte) {
-	p.persistMu.Lock()
-	s := p.service
-	s.completeMu.RLock()
-	failed := s.failedValidatedLedgers[seq]
-	valid := failed != nil && failed.Hash() == hash &&
-		(seq >= s.completeLedgerFloor)
-	s.completeMu.RUnlock()
-	if !valid {
 		p.persistMu.Unlock()
-		return
-	}
-	job, runInline, stopping := p.enqueueLedgerPersistLocked(failed, true, false)
-	p.persistMu.Unlock()
-	if stopping {
-		if job != nil && !job.tipOnly {
+		if validated && !job.tipOnly {
 			s.invalidateCompleteLedger(seq)
 		}
+		s.logger.Warn("persist skipped: service stopping", "seq", seq)
 		return
 	}
-	if runInline {
-		s.runPersistJob(job)
+	// A retry caused by a job ahead of a flush barrier belongs to that flush.
+	index := len(p.persistQueue)
+	if kind == retryValidatedHistory {
+		for i, queued := range p.persistQueue {
+			if queued.done != nil {
+				index = i
+				break
+			}
+		}
 	}
+	p.persistQueue = slices.Insert(p.persistQueue, index, job)
+	p.signalPersistLocked()
+	p.persistMu.Unlock()
 }
 
 func (p *persistenceWorker) signalPersistLocked() {
@@ -498,8 +487,8 @@ func (s *Service) runPersistJob(job *persistJob) {
 		s.persistMu.Lock()
 		lateTip := job.validated && !job.tipOnly && !job.canceled.Load() &&
 			!updateTip && job.updatesTip.Load()
-		s.persistMu.Unlock()
 		if err == nil && lateTip && s.nodeStore != nil {
+			s.persistMu.Unlock()
 			err = s.persistValidatedTipJob(
 				context.Background(),
 				job.l,
@@ -507,24 +496,21 @@ func (s *Service) runPersistJob(job *persistJob) {
 				job.canceled.Load,
 				job.proof,
 			)
+			s.persistMu.Lock()
 		}
 		shouldRetry := false
-		started := false
-		s.persistMu.Lock()
-		current := !job.registered || s.validatedPersistJobs[job.l.Sequence()] == job
-		if job.registered && current {
+		if s.validatedPersistJobs[job.l.Sequence()] == job {
 			delete(s.validatedPersistJobs, job.l.Sequence())
 		}
-		if job.validated && !job.canceled.Load() && current {
+		if job.validated && !job.canceled.Load() {
 			// Keep invalidation's persistMu → completeMu order while recording
 			// the final outcome, so a stale job cannot update repair state after
 			// its registration has been removed.
 			s.recordPersistOutcome(job.l.Sequence(), err == nil)
-			shouldRetry = err == nil
+			shouldRetry = err == nil && s.persistStarted
 		}
-		started = s.persistStarted
 		s.persistMu.Unlock()
-		if shouldRetry && started {
+		if shouldRetry {
 			s.retryFailedValidatedLedgersAfterPersist(job.l.Sequence())
 		}
 		if err != nil {
@@ -1004,6 +990,11 @@ func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32) erro
 	l, err := s.getLedgerBySequence(ctx, seq)
 	if err != nil {
 		return err
+	}
+	s.retentionWriteMu.RLock()
+	defer s.retentionWriteMu.RUnlock()
+	if s.belowRetentionFloor(seq) {
+		return svcerr.ErrLedgerNotFound
 	}
 	if s.nodeStore != nil {
 		if err := s.persistToNodeStore(ctx, l, seq); err != nil {

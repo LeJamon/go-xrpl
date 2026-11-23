@@ -75,18 +75,10 @@ func (s *Service) pruneFailedValidatedLedgersLocked(latestValidatedSeq uint32) {
 			delete(s.failedValidatedLedgers, seq)
 		}
 	}
-	limit := int(window)
-	if limit < 1 {
-		limit = 1
-	}
-	for len(s.failedValidatedLedgers) > limit {
-		var oldest uint32
-		first := true
+	if len(s.failedValidatedLedgers) > int(window) {
+		oldest := ^uint32(0)
 		for seq := range s.failedValidatedLedgers {
-			if first || seq < oldest {
-				oldest = seq
-				first = false
-			}
+			oldest = min(seq, oldest)
 		}
 		delete(s.failedValidatedLedgers, oldest)
 	}
@@ -96,6 +88,9 @@ func (s *Service) beginValidatedPersistence(seq uint32, hash [32]byte) uint64 {
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
 	s.ensureCompleteLedgerStateLocked()
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() != hash {
+		delete(s.failedValidatedLedgers, seq)
+	}
 	s.nextCompleteLedgerToken++
 	token := s.nextCompleteLedgerToken
 	s.completeLedgerTokens[seq] = token
@@ -128,7 +123,6 @@ func (s *Service) recordValidatedPersistenceForLedger(seq uint32, token uint64, 
 	if s.completeLedgerTokens[seq] != token {
 		return
 	}
-	trackedHash := s.completeLedgerHashes[seq]
 	delete(s.completeLedgerTokens, seq)
 	if !success || seq < s.completeLedgerFloor {
 		delete(s.completeLedgerHashes, seq)
@@ -144,9 +138,7 @@ func (s *Service) recordValidatedPersistenceForLedger(seq uint32, token uint64, 
 		}
 		return
 	}
-	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() == trackedHash {
-		delete(s.failedValidatedLedgers, seq)
-	}
+	delete(s.failedValidatedLedgers, seq)
 	s.completedLedgers.add(seq)
 }
 
@@ -184,7 +176,9 @@ func (s *Service) invalidateEvictedLedger(seq uint32, hash [32]byte) {
 		delete(s.completeLedgerHashes, seq)
 		s.completedLedgers.remove(seq)
 	}
-	delete(s.failedValidatedLedgers, seq)
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() == hash {
+		delete(s.failedValidatedLedgers, seq)
+	}
 	s.completeMu.Unlock()
 	if s.nodeStore != nil {
 		s.persistQueue = append(s.persistQueue, &persistJob{
@@ -250,6 +244,12 @@ func (s *Service) invalidateCompleteLedgerRange(start, end uint32) {
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
 	s.invalidatePersistedValidatedTip(start, end)
+}
+
+func (s *Service) belowRetentionFloor(seq uint32) bool {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	return seq < s.completeLedgerFloor
 }
 
 func (s *Service) clampCompleteLedgers(floor uint32) {

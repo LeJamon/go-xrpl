@@ -24,6 +24,7 @@ type persistenceWorker struct {
 	persistAdmissionStop bool
 	persistWG            sync.WaitGroup
 	canonicalPersistMu   sync.Mutex
+	retentionWriteMu     sync.RWMutex
 	promotionMu          sync.Mutex
 	nodePersists         int
 	nodePersistIdle      chan struct{}

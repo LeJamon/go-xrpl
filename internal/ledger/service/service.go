@@ -2318,6 +2318,8 @@ func (s *Service) SetMinimumOnlineFunc(fn func() uint32) {
 // before online deletion starts. Older queued saves and failed local-repair
 // owners are canceled or discarded while their node-store trees still exist.
 func (s *Service) AdvanceMinimumOnlineFloor(floor uint32) {
+	s.retentionWriteMu.Lock()
+	defer s.retentionWriteMu.Unlock()
 	s.clampCompleteLedgers(floor)
 }
 
