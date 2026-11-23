@@ -131,7 +131,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// Persist best-effort: a persistence failure must not be fatal — treating it
 	// so would diverge from rippled and risk forks on transient DB issues.
 	// The open-view commit has begun; retain ownership through durability.
-	if err := s.persistLedger(context.WithoutCancel(ctx), closed); err != nil {
+	if err := s.persistValidatedLedger(context.WithoutCancel(ctx), closed, true); err != nil {
 		s.logger.Error("failed to persist closed ledger; chain advance continues",
 			"seq", closed.Sequence(), "err", err)
 	}

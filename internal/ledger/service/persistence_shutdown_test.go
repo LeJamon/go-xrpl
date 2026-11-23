@@ -161,7 +161,7 @@ func TestService_PersistLedgerWritesHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := buildLedgerWithState(t, 99)
-	if err := svc.persistLedger(context.Background(), l); err != nil {
+	if err := svc.persistValidatedLedger(context.Background(), l, true); err != nil {
 		t.Fatal(err)
 	}
 	node, err := store.Fetch(context.Background(), nodestore.Hash256(l.Hash()))

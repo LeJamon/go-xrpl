@@ -866,9 +866,7 @@ func (s *Service) Start() (err error) {
 	}
 	if selection.validate && !selection.loaded {
 		// Starting a new chain can replace a previous initial ledger at the same sequence.
-		token := s.beginValidatedPersistence(selection.ledger.Sequence(), selection.ledger.Hash())
-		if err := s.persistValidatedLedgerAtToken(context.Background(), selection.ledger, true, token,
-			true, nil, s.replayPersistenceProof(selection.ledger.Header())); err != nil {
+		if err := s.persistLedger(context.Background(), selection.ledger, true, true); err != nil {
 			return fmt.Errorf("persist initial ledger: %w", err)
 		}
 	}

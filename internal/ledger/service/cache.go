@@ -75,16 +75,21 @@ func (s *Service) beginValidatedPersistence(seq uint32, hash [32]byte) uint64 {
 	return token
 }
 
-func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success bool) {
+func (s *Service) recordPersistOutcome(seq uint32, success bool) {
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
-	s.ensureCompleteLedgerStateLocked()
 	if success {
 		s.persistFailures = 0
 	} else {
 		s.persistFailures++
 		s.lastFailedPersist = seq
 	}
+}
+
+func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success bool) {
+	s.completeMu.Lock()
+	defer s.completeMu.Unlock()
+	s.ensureCompleteLedgerStateLocked()
 	if s.completeLedgerTokens[seq] != token {
 		return
 	}

@@ -24,21 +24,21 @@ import (
 
 var validatedTipKey = nodestore.Hash256(sha512half.Sum([]byte("go-xrpl validated ledger tip")))
 
-// persistLedger stores SHAMap deltas and the ledger header before updating the
-// relational index, which is skipped when the node-store write fails so that a
-// relational row always names a loadable ledger. Callers log failures without
-// stopping chain advancement.
-func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
-	return s.persistValidatedLedger(ctx, l, true)
+func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, updateTip bool) error {
+	return s.persistLedger(ctx, l, updateTip, false)
 }
 
-func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, updateTip bool) error {
+func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger, updateTip, allowTipReplacement bool) error {
 	seq := l.Sequence()
 	var token uint64
 	if l.IsValidated() {
 		token = s.beginValidatedPersistence(seq, l.Hash())
 	}
-	return s.persistValidatedLedgerAtToken(ctx, l, updateTip, token, false, nil, s.replayPersistenceProof(l.Header()))
+	err := s.persistValidatedLedgerAtToken(ctx, l, updateTip, token, allowTipReplacement, nil, s.replayPersistenceProof(l.Header()))
+	if token != 0 {
+		s.recordPersistOutcome(seq, err == nil)
+	}
+	return err
 }
 
 func (s *Service) persistValidatedLedgerAtToken(
@@ -66,6 +66,9 @@ func (s *Service) persistValidatedLedgerAtToken(
 	if s.relationalDB != nil || (updateTip && s.nodeStore != nil) {
 		s.canonicalPersistMu.Lock()
 		defer s.canonicalPersistMu.Unlock()
+		if canceled != nil && canceled() {
+			return nil
+		}
 	}
 	if s.relationalDB != nil {
 		if persistErr == nil {
@@ -473,6 +476,9 @@ func (s *Service) runPersistJob(job *persistJob) {
 				delete(s.validatedPersistJobs, job.l.Sequence())
 			}
 			s.persistMu.Unlock()
+		}
+		if job.validated && !job.canceled.Load() {
+			s.recordPersistOutcome(job.l.Sequence(), err == nil)
 		}
 		if err != nil {
 			s.logger.Error("failed to persist ledger; chain advance continues",
