@@ -219,6 +219,29 @@ func TestValidatedPersistCountsTipPublicationOutcomes(t *testing.T) {
 	require.Zero(t, failures)
 }
 
+func TestShutdownRetriesFailedTipForAlreadyIndexedLedger(t *testing.T) {
+	db := &stateBaseLateTipDatabase{KVDatabase: newTestNodeStore(t, 10_000)}
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repositories := newTestRepositories(t, t.Context())
+	svc := startPersistedTestService(t, db, repositories)
+	db.failTip.Store(true)
+	seq, err := svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	require.True(t, svc.hasDurableCompleteLedger(svc.GetValidatedLedger()))
+	requireLedgerIndexed(t, repositories, seq, true)
+	before, err := db.Fetch(t.Context(), validatedTipKey)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Less(t, before.LedgerSeq, seq)
+
+	db.failTip.Store(false)
+	svc.Stop()
+	after, err := db.Fetch(t.Context(), validatedTipKey)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.Equal(t, seq, after.LedgerSeq)
+}
+
 func TestValidatedStateBaseLateTipPublicationPromotesCandidate(t *testing.T) {
 	svc, candidate, _ := newPendingStateBaseCandidate(t)
 	require.NoError(t, candidate.SetValidated())

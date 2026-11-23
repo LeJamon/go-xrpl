@@ -25,6 +25,7 @@ type persistenceWorker struct {
 	persistWG            sync.WaitGroup
 	canonicalPersistMu   sync.Mutex
 	retentionWriteMu     sync.RWMutex
+	failedTipHash        [32]byte // guarded by canonicalPersistMu
 	promotionMu          sync.Mutex
 	nodePersists         int
 	nodePersistIdle      chan struct{}

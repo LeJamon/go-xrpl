@@ -83,32 +83,22 @@ func (s *Service) persistValidatedLedgerAtToken(
 			return nil
 		}
 	}
-	if s.relationalDB != nil {
+	if persistErr == nil && s.relationalDB != nil {
+		persistErr = s.persistToRelationalDB(ctx, l)
+	}
+	if canceled != nil && canceled() {
+		return nil
+	}
+	dataSaved := persistErr == nil
+	if dataSaved && updateTip && s.nodeStore != nil {
+		persistErr = s.persistValidatedTipLocked(ctx, l, allowTipReplacement)
 		if persistErr == nil {
-			persistErr = s.persistToRelationalDB(ctx, l)
-		}
-		if canceled != nil && canceled() {
-			return nil
-		}
-		if persistErr == nil && updateTip && s.nodeStore != nil {
-			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
-				persistErr = err
-			} else {
-				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
-			}
-		}
-	} else if persistErr == nil && updateTip && s.nodeStore != nil {
-		if canceled == nil || !canceled() {
-			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
-				persistErr = err
-			} else {
-				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
-			}
+			recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l, proof)
 		}
 	}
 
 	if l.IsValidated() {
-		s.recordValidatedPersistenceForLedger(seq, token, persistErr == nil, l)
+		s.recordValidatedPersistenceForLedger(seq, token, dataSaved, l)
 		if persistErr == nil && s.nodeStore != nil && s.shamapFamily != nil {
 			s.markFastLoadCheckpointEligible()
 			if recertificationNeeded {
@@ -413,6 +403,7 @@ func (s *Service) Stop() {
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
+	s.retryTipOnShutdown()
 	s.eventPublisher.stop()
 	s.clearRelayCache()
 	s.mu.Lock()
@@ -685,12 +676,39 @@ func (s *Service) persistValidatedTipJob(
 	return nil
 }
 
+// A failed tip publication can be the last write before shutdown.
+func (s *Service) retryTipOnShutdown() {
+	tip := s.GetValidatedLedger()
+	if tip == nil || s.nodeStore == nil {
+		return
+	}
+	s.retentionWriteMu.RLock()
+	defer s.retentionWriteMu.RUnlock()
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	if s.failedTipHash != tip.Hash() || !s.hasDurableCompleteLedger(tip) {
+		return
+	}
+	err := s.persistValidatedTipLocked(context.Background(), tip, true)
+	s.recordPersistOutcome(tip.Sequence(), err == nil)
+	if err != nil {
+		s.logger.Error("failed to persist validated tip before shutdown", "seq", tip.Sequence(), "err", err)
+	}
+}
+
 func (s *Service) persistValidatedTipLocked(
 	ctx context.Context,
 	l *ledger.Ledger,
 	allowSameSequenceReplacement bool,
-) error {
+) (err error) {
 	hash := l.Hash()
+	defer func() {
+		if err != nil {
+			s.failedTipHash = hash
+		} else if s.failedTipHash == hash {
+			s.failedTipHash = [32]byte{}
+		}
+	}()
 	current, err := s.nodeStore.database().Fetch(ctx, validatedTipKey)
 	if err != nil {
 		return fmt.Errorf("fetch validated ledger tip: %w", err)
