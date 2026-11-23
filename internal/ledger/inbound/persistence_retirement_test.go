@@ -59,7 +59,7 @@ func TestInboundPersistenceRetirementClassification(t *testing.T) {
 			}()
 			select {
 			case <-entered:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("callback did not reach persistence")
 			}
 			if tc.retire {
@@ -72,7 +72,7 @@ func TestInboundPersistenceRetirementClassification(t *testing.T) {
 			var err error
 			select {
 			case err = <-done:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("callback did not finish")
 			}
 			if tc.persistence {
@@ -136,7 +136,7 @@ func TestInboundRetirementDuringDurabilityBarrier(t *testing.T) {
 			}()
 			select {
 			case <-family.entered:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("durability barrier did not start")
 			}
 			require.NoError(t, acquired.RetirePersistence(t.Context()))
@@ -145,7 +145,7 @@ func TestInboundRetirementDuringDurabilityBarrier(t *testing.T) {
 			case err := <-done:
 				require.ErrorIs(t, err, context.Canceled)
 				require.NotErrorIs(t, err, ErrPersistence)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("durability barrier did not finish")
 			}
 			require.Zero(t, acquired.Snapshot().MemoryCheckpoints)

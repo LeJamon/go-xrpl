@@ -78,7 +78,7 @@ func TestRetirementDefersMemoryReleaseWithoutWaitingForTraversal(t *testing.T) {
 	select {
 	case err := <-retired:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		ledger.finishWork()
 		t.Fatal("retirement waited for traversal")
 	}
