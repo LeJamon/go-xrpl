@@ -674,7 +674,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		return nil, rpcInternalError("sign: transaction flattening failed", err)
 	}
 	normalizeSignerResponseContainers(canonicalMap)
-	txBlob, err := binarycodec.Encode(canonicalMap)
+	txBlob, err := encodeCanonicalTransaction(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("sign: transaction encoding failed", err)
 	}
@@ -761,8 +761,16 @@ func signatureTargetObject(txMap map[string]any, target string) (map[string]any,
 	return object, nil
 }
 
-func parseTransactionForSigning(txMap map[string]any) (tx.Transaction, *rpcerrors.RpcError) {
-	blob, err := binarycodec.EncodeBytes(txMap)
+func parseTransactionForSigning(txMap map[string]any, decodedFields bool) (tx.Transaction, *rpcerrors.RpcError) {
+	var (
+		blob []byte
+		err  error
+	)
+	if decodedFields {
+		blob, err = binarycodec.EncodeDecodedFields(txMap)
+	} else {
+		blob, err = binarycodec.EncodeBytes(txMap)
+	}
 	if err != nil {
 		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}

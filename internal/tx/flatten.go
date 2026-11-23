@@ -274,7 +274,7 @@ func flattenAsset(a Asset) map[string]any {
 		}
 	}
 	// XRP is represented by currency "XRP" with no issuer
-	if a.Currency == "" || a.Currency == "XRP" {
+	if a.IsNative() {
 		return map[string]any{
 			"currency": "XRP",
 		}

@@ -716,7 +716,7 @@ func (n *NFTokenOffer) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (n *NFTokenOffer) ToMap() map[string]any {
@@ -776,7 +776,7 @@ func (n *NFTokenOffer) Encode() ([]byte, error) {
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
-// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
 // direct binary writer.
 func (n *NFTokenOffer) encodeViaMap() ([]byte, error) {
 	if err := n.validateEncode(); err != nil {
@@ -789,7 +789,7 @@ func (n *NFTokenOffer) encodeViaMap() ([]byte, error) {
 	if n.present&nftokenofferBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

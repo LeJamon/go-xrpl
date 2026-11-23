@@ -100,6 +100,30 @@ func TestXChainBridge_FromJson(t *testing.T) {
 			want: iouBridgeBytes(),
 		},
 		{
+			name: "valid bridge with 0xA three-character currency",
+			json: func() map[string]any {
+				bridge := xrpXrpBridgeJSON()
+				bridge["IssuingChainIssue"] = map[string]any{
+					"currency": "0xA",
+					"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				}
+				return bridge
+			}(),
+			want: mustDecodeHex("1453DF81C37F46159242F7CA9163E09F044029CC1200000000000000000000000000000000000000001453DF81C37F46159242F7CA9163E09F044029CC120000000000000000000000003078410000000000AE123A8556F3CF91154711376AFB0F894F832B3D"),
+		},
+		{
+			name: "valid bridge with 0x1 three-character currency",
+			json: func() map[string]any {
+				bridge := xrpXrpBridgeJSON()
+				bridge["IssuingChainIssue"] = map[string]any{
+					"currency": "0x1",
+					"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+				}
+				return bridge
+			}(),
+			want: mustDecodeHex("1453DF81C37F46159242F7CA9163E09F044029CC1200000000000000000000000000000000000000001453DF81C37F46159242F7CA9163E09F044029CC120000000000000000000000003078310000000000AE123A8556F3CF91154711376AFB0F894F832B3D"),
+		},
+		{
 			name: "unknown XRP issue fields are ignored",
 			json: func() map[string]any {
 				bridge := xrpXrpBridgeJSON()
@@ -181,6 +205,26 @@ func TestXChainBridge_FromJson(t *testing.T) {
 			json: map[string]any{
 				"LockingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
 				"LockingChainIssue": map[string]any{"currency": "0000000000000000000000000000000000000001", "issuer": "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p"},
+				"IssuingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
+				"IssuingChainIssue": map[string]any{"currency": "XRP"},
+			},
+			err: true,
+		},
+		{
+			name: "0x-prefixed ISO-looking currency is rejected",
+			json: map[string]any{
+				"LockingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
+				"LockingChainIssue": map[string]any{"currency": "0xUSD", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
+				"IssuingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
+				"IssuingChainIssue": map[string]any{"currency": "XRP"},
+			},
+			err: true,
+		},
+		{
+			name: "0x-prefixed hex currency is rejected",
+			json: map[string]any{
+				"LockingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
+				"LockingChainIssue": map[string]any{"currency": "0x0000000000000000000000005553440000000000", "issuer": "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"},
 				"IssuingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
 				"IssuingChainIssue": map[string]any{"currency": "XRP"},
 			},
@@ -365,7 +409,7 @@ func TestXChainBridge_RoundTrip(t *testing.T) {
 }
 
 func TestXChainBridge_NativeCurrencyAliasesRoundTrip(t *testing.T) {
-	for _, currency := range []string{"", "XRP", "0000000000000000000000000000000000000000"} {
+	for _, currency := range []string{"", "0", "XRP", "0000000000000000000000000000000000000000"} {
 		bridge := xrpXrpBridgeJSON()
 		bridge["LockingChainIssue"] = map[string]any{"currency": currency}
 		encoded, err := (&XChainBridge{}).FromJSON(bridge)

@@ -57,6 +57,25 @@ func TestDecodeTxBlobCanonicalizesJSONStoredObjects(t *testing.T) {
 	}
 }
 
+func TestStoredJSONPreservesDecodedCurrency(t *testing.T) {
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	wire, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "TrustSet", "Account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Fee": "10", "Sequence": 1, "SigningPubKey": "",
+		"LimitAmount": map[string]any{"value": "1", "issuer": issuer, "currency": "0000000000000000000000000000000000000001"},
+	})
+	require.NoError(t, err)
+	fields, err := binarycodec.Decode(wire)
+	require.NoError(t, err)
+	row, err := json.Marshal(StoredTransaction{TxJSON: fields})
+	require.NoError(t, err)
+	stored, err := decodeTxBlob(row)
+	require.NoError(t, err)
+	rebuilt, err := encodeCanonicalTransaction(stored.TxJSON)
+	require.NoError(t, err)
+	require.Equal(t, wire, rebuilt)
+}
+
 func TestDecodeLedgerTransactionRawCanonicalOpen(t *testing.T) {
 	raw, hash := testRawPayment(t)
 	hashString := strings.ToUpper(hex.EncodeToString(hash[:]))

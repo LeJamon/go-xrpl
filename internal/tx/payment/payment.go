@@ -1,6 +1,8 @@
 package payment
 
 import (
+	"encoding/json"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
@@ -57,6 +59,24 @@ type PathStep struct {
 	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
 	Type          int    `json:"type,omitempty"`
 	TypeHex       string `json:"type_hex,omitempty"`
+}
+
+func (p *PathStep) UnmarshalJSON(data []byte) error {
+	type plain PathStep
+	value := plain(*p)
+	fields := struct {
+		*plain
+		Currency *string `json:"currency"`
+	}{plain: &value}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	// Only an explicit currency identifies an asset on this step.
+	if fields.Currency != nil {
+		value.Currency = tx.NormalizeNativeCurrency(*fields.Currency)
+	}
+	*p = PathStep(value)
+	return nil
 }
 
 // Payment flags

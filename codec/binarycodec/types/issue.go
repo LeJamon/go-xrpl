@@ -39,6 +39,10 @@ type Issue struct{}
 // FromJSON converts an Issue JSON object ({"currency": ...}, {"currency": ...,
 // "issuer": ...} or {"mpt_issuance_id": ...}) to its wire representation.
 func (i *Issue) FromJSON(json any) ([]byte, error) {
+	return i.fromFields(json, jsonFields)
+}
+
+func (i *Issue) fromFields(json any, source fieldSource) ([]byte, error) {
 	mapObj, ok := json.(map[string]any)
 	if !ok || !i.isIssueObject(json) {
 		return nil, ErrInvalidIssueObject
@@ -77,14 +81,9 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 		return wire, nil
 	}
 
-	currencyCodec := &Currency{}
-
-	currencyBytes, err := currencyCodec.FromJSON(currency)
+	currencyBytes, err := (&Currency{}).fromFields(currency, source)
 	if err != nil {
 		return nil, err
-	}
-	if bytes.Equal(currencyBytes, noCurrencyBytes) || bytes.Equal(currencyBytes, badCurrencyBytes) {
-		return nil, ErrInvalidCurrency
 	}
 
 	issuer, hasIssuer := mapObj["issuer"]
@@ -117,6 +116,10 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 // - MPT: 44 bytes (issuer account + NO_ACCOUNT marker + sequence)
 // The opts parameter is ignored as length is determined automatically.
 func (i *Issue) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
+	return readIssue(p)
+}
+
+func readIssue(p *serdes.BinaryParser) (map[string]any, error) {
 	// Step 1: Read first 20 bytes (currency for XRP/IOU, or issuer account for MPT)
 	currencyOrAccount, err := p.ReadBytes(20)
 	if err != nil {
@@ -134,6 +137,9 @@ func (i *Issue) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	issuerOrNoAccount, err := p.ReadBytes(20)
 	if err != nil {
 		return nil, err
+	}
+	if isAllZero(issuerOrNoAccount) {
+		return nil, ErrInvalidIssuer
 	}
 
 	// Step 4: Check if it's MPT (NO_ACCOUNT marker)

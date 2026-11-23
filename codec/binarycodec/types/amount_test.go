@@ -397,6 +397,20 @@ func TestSerializeIssuedCurrencyValueNormalizesLikeRippled(t *testing.T) {
 	require.Equal(t, "Exponent", outOfRange.Type)
 }
 
+func mustDecodeHex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+const (
+	issuedAmountNoCurrencyHex  = "0000000000000000000000000000000000000001"
+	issuedAmountBadCurrencyHex = "0000000000000000000000005852500000000000"
+	issuedAmountIssuerHex      = "0A20B3C85F482532A9578DBB3950B85CA06594D1"
+)
+
 func TestSerializeIssuedCurrencyCode(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -411,10 +425,26 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			name:        "pass - valid standard currency - ISO4217 - USD - hex",
-			input:       "0x0000000000000000000000005553440000000000",
-			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x55, 0x53, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00},
+			name:        "pass - 0xA is a three-character currency code",
+			input:       "0xA",
+			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x78, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00},
 			expectedErr: nil,
+		},
+		{
+			name:        "pass - 0x1 is a three-character currency code",
+			input:       "0x1",
+			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x78, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00},
+			expectedErr: nil,
+		},
+		{
+			name:        "fail - 0xUSD is not a three-character code",
+			input:       "0xUSD",
+			expectedErr: &InvalidCodeError{"0xUSD"},
+		},
+		{
+			name:        "fail - 0x-prefixed 40-character hex is not accepted",
+			input:       "0x0000000000000000000000005553440000000000",
+			expectedErr: &InvalidCodeError{"0x0000000000000000000000005553440000000000"},
 		},
 		{
 			name:        "pass - valid standard currency - non ISO4217 - BTC",
@@ -423,10 +453,9 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			name:        "pass - valid standard currency - non ISO4217 - BTC - hex",
+			name:        "fail - 0x-prefixed non-ISO hex is not accepted",
 			input:       "0x0000000000000000000000004254430000000000",
-			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x42, 0x54, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expectedErr: nil,
+			expectedErr: &InvalidCodeError{"0x0000000000000000000000004254430000000000"},
 		},
 		{
 			name:        "fail - disallowed standard currency - XRP",
@@ -435,7 +464,7 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: &InvalidCodeError{"XRP uppercase"},
 		},
 		{
-			name:     "pass - badCurrency sentinel - hex",
+			name:     "pass - badCurrency sentinel - bare hex",
 			input:    "0000000000000000000000005852500000000000",
 			expected: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x58, 0x52, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00},
 		},
@@ -446,14 +475,13 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: &InvalidCodeError{"ABCD"},
 		},
 		{
-			name:        "pass - valid non-standard currency - 4 characters - hex",
+			name:        "fail - 0x-prefixed non-standard hex is not accepted",
 			input:       "0x4142434400000000000000000000000000000000",
-			expected:    []byte{0x41, 0x42, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expectedErr: nil,
+			expectedErr: &InvalidCodeError{"0x4142434400000000000000000000000000000000"},
 		},
 		{
-			name:        "pass - special case - XRP - hex",
-			input:       "0x0000000000000000000000000000000000000000",
+			name:        "pass - special case - XRP - bare hex",
+			input:       "0000000000000000000000000000000000000000",
 			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 			expectedErr: nil,
 		},
@@ -464,10 +492,9 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			name:        "pass - standard currency - valid symbols in currency code - 3 characters - hex",
+			name:        "fail - 0x-prefixed standard-form hex is not accepted",
 			input:       "0x000000000000000000000000412a420000000000",
-			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x2a, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expectedErr: nil,
+			expectedErr: &InvalidCodeError{"0x000000000000000000000000412a420000000000"},
 		},
 		{
 			name:        "fail - standard currency - invalid characters in currency code",
@@ -481,8 +508,8 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			// path. The bytes are stored verbatim even when the ISO region is not
 			// a printable code; the decoder renders such a currency back as hex,
 			// so this must round-trip rather than reject.
-			name:        "pass - non-standard currency in standard position - hex stored verbatim",
-			input:       "0x00000000000000000000000041442f0000000000",
+			name:        "pass - non-standard currency in standard position - bare hex stored verbatim",
+			input:       "00000000000000000000000041442f0000000000",
 			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x44, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x00},
 			expectedErr: nil,
 		},
@@ -540,6 +567,69 @@ func TestSerializeIssuedCurrencyAmount(t *testing.T) {
 			inputCurrency: "0000000000000000000000000000000000000000",
 			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
 			expectedErr:   errInvalidCurrencyCode,
+		},
+		{
+			name:          "fail - zero currency spelling in issued amount",
+			inputValue:    "0",
+			inputCurrency: "0",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expectedErr:   errInvalidCurrencyCode,
+		},
+		{
+			name:          "fail - empty currency spelling in issued amount",
+			inputValue:    "0",
+			inputCurrency: "",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expectedErr:   errInvalidCurrencyCode,
+		},
+		{
+			name:          "fail - noCurrency spelling in issued amount",
+			inputValue:    "0",
+			inputCurrency: "1",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expectedErr:   &InvalidCodeError{"1"},
+		},
+		{
+			name:          "fail - 0x-prefixed ISO-looking currency in issued amount",
+			inputValue:    "0",
+			inputCurrency: "0xUSD",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expectedErr:   &InvalidCodeError{"0xUSD"},
+		},
+		{
+			name:          "fail - 0x-prefixed hex in issued amount",
+			inputValue:    "0",
+			inputCurrency: "0x0000000000000000000000005553440000000000",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expectedErr:   &InvalidCodeError{"0x0000000000000000000000005553440000000000"},
+		},
+		{
+			name:          "pass - zero amount preserves raw noCurrency bytes",
+			inputValue:    "0",
+			inputCurrency: "0000000000000000000000000000000000000001",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expected:      mustDecodeHex("8000000000000000" + issuedAmountNoCurrencyHex + issuedAmountIssuerHex),
+		},
+		{
+			name:          "pass - zero amount preserves raw badCurrency bytes",
+			inputValue:    "0",
+			inputCurrency: "0000000000000000000000005852500000000000",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expected:      mustDecodeHex("8000000000000000" + issuedAmountBadCurrencyHex + issuedAmountIssuerHex),
+		},
+		{
+			name:          "pass - 0xA is a three-character currency in an issued amount",
+			inputValue:    "0",
+			inputCurrency: "0xA",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expected:      mustDecodeHex("8000000000000000" + "0000000000000000000000003078410000000000" + issuedAmountIssuerHex),
+		},
+		{
+			name:          "pass - 0x1 is a three-character currency in an issued amount",
+			inputValue:    "0",
+			inputCurrency: "0x1",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expected:      mustDecodeHex("8000000000000000" + "0000000000000000000000003078310000000000" + issuedAmountIssuerHex),
 		},
 		{
 			name:          "pass - valid serialized issued currency amount",

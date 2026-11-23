@@ -95,7 +95,7 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to decode binary transaction: %w", err)
 	}
-	canonical, err := binarycodec.EncodeBytes(jsonMap)
+	canonical, err := binarycodec.EncodeDecodedFields(jsonMap)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
 	}
@@ -107,7 +107,7 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, []byte, error) {
 // ParseFromDecodedFields constructs an owned transaction from fields returned by
 // the binary decoder, retaining their canonical encoding and field identity.
 func ParseFromDecodedFields(fields map[string]any) (Transaction, error) {
-	canonical, err := binarycodec.EncodeBytes(fields)
+	canonical, err := binarycodec.EncodeDecodedFields(fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
 	}

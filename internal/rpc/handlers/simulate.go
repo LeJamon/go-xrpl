@@ -207,7 +207,8 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// preserves STTx's invalidTransaction error envelope while the shared
 	// preprocessor handles serialized-field normalization and array limits.
 	parsedTx, rpcErr := preprocessTransaction(txJsonMap, transactionPreprocessOptions{
-		mode: transactionPreprocessSimulate,
+		mode:          transactionPreprocessSimulate,
+		decodedFields: hasTxBlobRaw,
 	})
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -226,7 +227,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction flattening failed", err)
 	}
-	canonicalBlob, err := binarycodec.Encode(canonicalMap)
+	canonicalBlob, err := encodeCanonicalTransaction(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction encoding failed", err)
 	}

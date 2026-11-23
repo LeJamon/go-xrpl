@@ -179,7 +179,6 @@ type writerRender struct {
 	Decimals       []decimalRender // base-ten UInt64 fields, parsed before any write
 	NeedsErr       bool
 	UsesBinary     bool
-	UsesTypes      bool
 }
 
 type writeRender struct {
@@ -561,7 +560,7 @@ func attachCompound(fr *fieldRender) error {
 }
 
 // buildWriter plans the direct writer of one entry. It mirrors what
-// binarycodec.EncodeBytes does with the ToMap output: serialized fields only,
+// binarycodec.EncodeDecodedFields does with the ToMap output: serialized fields only,
 // ordered by definitions ordinal (type code, then field code), each preceded
 // by the header the field ID codec emits and, for VL-encoded types, a length
 // prefix. Any field type the writer cannot reproduce exactly fails generation.
@@ -658,8 +657,7 @@ func buildWriter(defs *definitions.Definitions, er entryRender, fieldInstances m
 			wr.Call = fmt.Sprintf("appendInnerObjectField(dst, %q, %s)", fr.Name, value)
 		case "Issue", "Number", "XChainBridge", "Currency":
 			payload = map[string]int{"Issue": 44, "Number": 12, "XChainBridge": 122, "Currency": 20}[fi.Type]
-			wr.Call = fmt.Sprintf("appendCodecValue(%s, &types.%s{}, %s)", withHeader, fi.Type, value)
-			w.UsesTypes = true
+			wr.Call = fmt.Sprintf("appendCodecValue(%s, %q, %s)", withHeader, fi.Type, value)
 		default:
 			return w, fmt.Errorf("field %s: direct writer does not support XRPL type %s", fr.Name, fi.Type)
 		}
@@ -938,9 +936,6 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-{{- if .Writer.UsesTypes }}
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
-{{- end }}
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1646,7 +1641,7 @@ func ({{ .Receiver }} *{{ .StructName }}) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
@@ -1683,7 +1678,7 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
-// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
 // direct binary writer.
 func ({{ .Receiver }} *{{ .StructName }}) encodeViaMap() ([]byte, error) {
 	if err := {{ .Receiver }}.validateEncode(); err != nil {
@@ -1709,7 +1704,7 @@ func ({{ .Receiver }} *{{ .StructName }}) encodeViaMap() ([]byte, error) {
 {{- end }}
 	}
 {{- end }}{{ end }}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:

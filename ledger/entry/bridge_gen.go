@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -766,7 +765,7 @@ func (b *Bridge) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (b *Bridge) ToMap() map[string]any {
@@ -829,7 +828,7 @@ func (b *Bridge) Encode() ([]byte, error) {
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
-// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
 // direct binary writer.
 func (b *Bridge) encodeViaMap() ([]byte, error) {
 	if err := b.validateEncode(); err != nil {
@@ -842,7 +841,7 @@ func (b *Bridge) encodeViaMap() ([]byte, error) {
 	if b.present&bridgeBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:
@@ -907,7 +906,7 @@ func (b *Bridge) appendBinary(dst []byte) ([]byte, error) {
 		}
 	}
 	if b.present&bridgeBitXChainBridge != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x01, 0x19), &types.XChainBridge{}, b.XChainBridge); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x01, 0x19), "XChainBridge", b.XChainBridge); err != nil {
 			return nil, err
 		}
 	}

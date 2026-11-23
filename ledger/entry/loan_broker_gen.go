@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1154,7 +1153,7 @@ func (l *LoanBroker) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (l *LoanBroker) ToMap() map[string]any {
@@ -1238,7 +1237,7 @@ func (l *LoanBroker) Encode() ([]byte, error) {
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
-// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
 // direct binary writer.
 func (l *LoanBroker) encodeViaMap() ([]byte, error) {
 	if err := l.validateEncode(); err != nil {
@@ -1251,7 +1250,7 @@ func (l *LoanBroker) encodeViaMap() ([]byte, error) {
 	if l.present&loanbrokerBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:
@@ -1331,17 +1330,17 @@ func (l *LoanBroker) appendBinary(dst []byte) ([]byte, error) {
 		}
 	}
 	if l.present&loanbrokerBitDebtTotal != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x96), &types.Number{}, l.DebtTotal); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x96), "Number", l.DebtTotal); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanbrokerBitDebtMaximum != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x97), &types.Number{}, l.DebtMaximum); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x97), "Number", l.DebtMaximum); err != nil {
 			return nil, err
 		}
 	}
 	if l.present&loanbrokerBitCoverAvailable != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x98), &types.Number{}, l.CoverAvailable); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x98), "Number", l.CoverAvailable); err != nil {
 			return nil, err
 		}
 	}

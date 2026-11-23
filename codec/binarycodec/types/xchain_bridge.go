@@ -34,6 +34,10 @@ var xchainBridgeFields = [2]struct {
 // Doors are classic address strings; issues are Issue-shaped objects
 // ({"currency": ...} or {"currency": ..., "issuer": ...}).
 func (x *XChainBridge) FromJSON(json any) ([]byte, error) {
+	return x.fromFields(json, jsonFields)
+}
+
+func (x *XChainBridge) fromFields(json any, source fieldSource) ([]byte, error) {
 	v, ok := json.(map[string]any)
 	if !ok {
 		return nil, errNotValidJSON
@@ -67,7 +71,7 @@ func (x *XChainBridge) FromJSON(json any) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: %s must be an issue object", errNotValidXChainBridge, f.issue)
 		}
-		issueBytes, err := xchainIssueFromJSON(issueMap)
+		issueBytes, err := xchainIssueFromJSON(issueMap, source)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s: %w", errNotValidXChainBridge, f.issue, err)
 		}
@@ -100,16 +104,12 @@ func (x *XChainBridge) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 		}
 		json[f.door] = door
 
-		issue, err := (&Issue{}).ToJSON(p)
+		issue, err := readIssue(p)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", f.issue, err)
+			return nil, fmt.Errorf("%w: %s: %w", errNotValidXChainBridge, f.issue, err)
 		}
-		if issueMap, ok := issue.(map[string]any); ok {
-			if _, err := xchainIssueFromJSON(issueMap); err != nil {
-				return nil, fmt.Errorf("%w: %s: %w", errNotValidXChainBridge, f.issue, err)
-			}
-		} else {
-			return nil, fmt.Errorf("%w: %s is not an issue object", errNotValidXChainBridge, f.issue)
+		if _, isMPT := issue["mpt_issuance_id"]; isMPT {
+			return nil, fmt.Errorf("%w: %s: MPT issues are not supported", errNotValidXChainBridge, f.issue)
 		}
 		json[f.issue] = issue
 	}
@@ -117,7 +117,7 @@ func (x *XChainBridge) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	return json, nil
 }
 
-func xchainIssueFromJSON(issue map[string]any) ([]byte, error) {
+func xchainIssueFromJSON(issue map[string]any, source fieldSource) ([]byte, error) {
 	if _, isMPT := issue["mpt_issuance_id"]; isMPT {
 		return nil, errors.New("MPT issues are not supported")
 	}
@@ -125,8 +125,8 @@ func xchainIssueFromJSON(issue map[string]any) ([]byte, error) {
 	if !ok {
 		return nil, ErrInvalidCurrency
 	}
-	currencyBytes, err := (&Currency{}).FromJSON(currency)
-	if err != nil || bytes.Equal(currencyBytes, noCurrencyBytes) || bytes.Equal(currencyBytes, badCurrencyBytes) {
+	currencyBytes, err := (&Currency{}).fromFields(currency, source)
+	if err != nil {
 		return nil, ErrInvalidCurrency
 	}
 

@@ -92,10 +92,7 @@ var (
 )
 
 // Compiled once at package init: avoiding MustCompile on hot paths.
-var (
-	integralAmountRegex = regexp.MustCompile(`^[+-]?(?:0|[1-9]\d*)$`)
-	iouCodeRegex        = regexp.MustCompile(IOUCodeRegex)
-)
+var integralAmountRegex = regexp.MustCompile(`^[+-]?(?:0|[1-9]\d*)$`)
 
 // IsScientificOffset reports whether an IOU mantissa/exponent combination
 // renders in scientific notation, per rippled STAmount::getText
@@ -154,6 +151,10 @@ func (a RawXRPAmount) MarshalJSON() ([]byte, error) {
 
 // FromJSON serializes an issued currency amount to its bytes representation from JSON.
 func (a *Amount) FromJSON(value any) ([]byte, error) {
+	return a.fromFields(value, jsonFields)
+}
+
+func (a *Amount) fromFields(value any, source fieldSource) ([]byte, error) {
 	switch v := value.(type) {
 	case RawXRPAmount:
 		return serializeRawXrpAmount(v)
@@ -188,15 +189,15 @@ func (a *Amount) FromJSON(value any) ([]byte, error) {
 		if !ok {
 			return nil, errIssuedCurrencyMissingIssuer
 		}
-		curr, err := valueToString(rawCurr)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", errInvalidCurrencyFormat, err)
+		curr, ok := rawCurr.(string)
+		if !ok {
+			return nil, errInvalidCurrencyFormat
 		}
 		iss, err := valueToString(rawIss)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errInvalidIssuerFormat, err)
 		}
-		return serializeIssuedCurrencyAmount(val, curr, iss)
+		return serializeIssuedCurrencyAmount(val, source.currencyText(curr), iss)
 
 	default:
 		return nil, errInvalidAmountType
@@ -634,7 +635,6 @@ func SerializeIssuedCurrencyValue(value string) ([]byte, error) {
 // The currency code can be 3 allowed string characters, or 20 bytes of hex.
 // The native code is disallowed in its ISO spelling.
 func serializeIssuedCurrencyCode(currency string) ([]byte, error) {
-	currency = strings.TrimPrefix(currency, "0x")
 	if currency == "XRP" {
 		return nil, &InvalidCodeError{Disallowed: "XRP uppercase"}
 	}

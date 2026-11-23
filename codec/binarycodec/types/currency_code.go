@@ -38,7 +38,7 @@ func decodeCurrencyCode(data []byte) (string, error) {
 	// rippled forbids the ISO-style representation of the system code, so a
 	// standard-form "XRP" falls through to hex (UintTypes.cpp:73).
 	if isAllZero(data[0:12]) && isAllZero(data[15:20]) &&
-		iouCodeRegex.Match(data[12:15]) &&
+		isISOCode(data[12:15]) &&
 		!bytes.Equal(data[12:15], []byte("XRP")) {
 		return string(data[12:15]), nil
 	}
@@ -46,24 +46,21 @@ func decodeCurrencyCode(data []byte) (string, error) {
 	return strings.ToUpper(hex.EncodeToString(data)), nil
 }
 
-// encodeCurrencyCode encodes a currency string into its 20-byte representation:
-// "XRP" is the all-zero code, "1" is rippled's noCurrency() sentinel as rendered
-// by to_string (UintTypes.cpp:59-60; rippled reaches noCurrency via to_currency's
-// parse-failure fallback — the codec special-cases "1" only, keeping other
-// unparseable codes an error), a 3-char code in the legal ISO alphabet fills
-// bytes 12-14, and a 40-char hex string is stored verbatim.
-func encodeCurrencyCode(currency string) ([]byte, error) {
-	currency = strings.TrimPrefix(currency, "0x")
+// A decoded noCurrency value renders as "1", which is not valid user input.
+func (source fieldSource) currencyText(code string) string {
+	if source != jsonFields && code == "1" {
+		return "0000000000000000000000000000000000000001"
+	}
+	return code
+}
 
+func encodeCurrencyCode(currency string) ([]byte, error) {
 	switch {
-	case currency == "XRP":
+	case currency == "" || currency == "XRP" || currency == "0":
 		return make([]byte, 20), nil
 
-	case currency == "1":
-		return append([]byte(nil), noCurrencyBytes...), nil
-
 	case len(currency) == 3:
-		if len(iouCodeRegex.FindAllString(currency, -1)) != 1 {
+		if !isISOCode(currency) {
 			return nil, errInvalidCurrencyCode
 		}
 		currencyBytes := make([]byte, 20)
@@ -86,4 +83,27 @@ func encodeCurrencyCode(currency string) ([]byte, error) {
 	default:
 		return nil, &InvalidCodeError{Disallowed: currency}
 	}
+}
+
+// isISOCode reports whether code is exactly three bytes from rippled's
+// isoCharSet, the set IOUCodeRegex describes: ASCII letters and digits plus
+// <>(){}[]|?!@#$%^&*.
+func isISOCode[T string | []byte](code T) bool {
+	if len(code) != 3 {
+		return false
+	}
+	for i := range len(code) {
+		if !isISOChar(code[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isISOChar(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	}
+	return strings.IndexByte("<>(){}[]|?!@#$%^&*", c) >= 0
 }

@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -23,6 +25,7 @@ const (
 type transactionPreprocessOptions struct {
 	mode               transactionPreprocessMode
 	rejectTxnSignature bool
+	decodedFields      bool // The map came from binary decoding and may contain reserved wire values.
 }
 
 // preprocessTransaction performs the serialized-field validation and returns
@@ -33,8 +36,10 @@ func preprocessTransaction(
 	txMap map[string]any,
 	options transactionPreprocessOptions,
 ) (tx.Transaction, *rpcerrors.RpcError) {
-	if message := serializedFieldParseMessage(txMap, "tx_json", binarycodecdefs.Get()); message != "" {
-		return nil, rpcerrors.RpcErrorInvalidParams(message)
+	if !options.decodedFields {
+		if message := serializedFieldParseMessage(txMap, "tx_json", binarycodecdefs.Get()); message != "" {
+			return nil, rpcerrors.RpcErrorInvalidParams(message)
+		}
 	}
 	delete(txMap, "hash")
 	delete(txMap, "index")
@@ -65,7 +70,7 @@ func preprocessTransaction(
 		}
 	}
 
-	transaction, rpcErr := parseTransactionForSigning(txMap)
+	transaction, rpcErr := parseTransactionForSigning(txMap, options.decodedFields)
 	if rpcErr != nil {
 		if options.mode == transactionPreprocessSimulate {
 			return nil, rpcerrors.RpcErrorInvalidTransaction(rpcErr.Message)
@@ -177,6 +182,14 @@ func flattenCanonicalTransaction(transaction tx.Transaction, source map[string]a
 	mergeExplicitEmptyFields(flat, source)
 	flat = normalizeJSONContainers(flat).(map[string]any)
 	return flat, nil
+}
+
+func encodeCanonicalTransaction(fields map[string]any) (string, error) {
+	encoded, err := binarycodec.EncodeDecodedFields(fields)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToUpper(hex.EncodeToString(encoded)), nil
 }
 
 func normalizeJSONContainers(value any) any {

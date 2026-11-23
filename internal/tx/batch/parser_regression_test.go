@@ -160,7 +160,7 @@ func TestBatchBinaryParserBindsInnerNoCurrencyIdentity(t *testing.T) {
 			map[string]any{"RawTransaction": second},
 		},
 	}
-	blob, err := binarycodec.EncodeBytes(fields)
+	blob, err := binarycodec.EncodeDecodedFields(fields)
 	require.NoError(t, err)
 
 	parsed, err := tx.ParseFromBinary(blob)
@@ -168,7 +168,7 @@ func TestBatchBinaryParserBindsInnerNoCurrencyIdentity(t *testing.T) {
 	parsedBatch := parsed.(*Batch)
 	inner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx.(*trustsettx.TrustSet)
 	require.Equal(t, "1", inner.LimitAmount.Currency)
-	wantRaw, err := binarycodec.EncodeBytes(first)
+	wantRaw, err := binarycodec.EncodeDecodedFields(first)
 	require.NoError(t, err)
 	require.Equal(t, wantRaw, inner.GetRawBytes())
 	matches, err := tx.CurrentFieldsMatchRaw(inner)

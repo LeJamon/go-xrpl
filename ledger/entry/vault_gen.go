@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -1264,7 +1263,7 @@ func (v *Vault) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (v *Vault) ToMap() map[string]any {
@@ -1354,7 +1353,7 @@ func (v *Vault) Encode() ([]byte, error) {
 }
 
 // encodeViaMap is the reference encoder: it serializes ToMap through
-// binarycodec.EncodeBytes. It is kept as the differential-test oracle for the
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
 // direct binary writer.
 func (v *Vault) encodeViaMap() ([]byte, error) {
 	if err := v.validateEncode(); err != nil {
@@ -1367,7 +1366,7 @@ func (v *Vault) encodeViaMap() ([]byte, error) {
 	if v.present&vaultBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
 }
 
 // appendBinary appends the canonical binary form of the receiver to dst:
@@ -1426,22 +1425,22 @@ func (v *Vault) appendBinary(dst []byte) ([]byte, error) {
 		}
 	}
 	if v.present&vaultBitAssetsAvailable != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x92), &types.Number{}, v.AssetsAvailable); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x92), "Number", v.AssetsAvailable); err != nil {
 			return nil, err
 		}
 	}
 	if v.present&vaultBitAssetsMaximum != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x93), &types.Number{}, v.AssetsMaximum); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x93), "Number", v.AssetsMaximum); err != nil {
 			return nil, err
 		}
 	}
 	if v.present&vaultBitAssetsTotal != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x94), &types.Number{}, v.AssetsTotal); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x94), "Number", v.AssetsTotal); err != nil {
 			return nil, err
 		}
 	}
 	if v.present&vaultBitLossUnrealized != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x95), &types.Number{}, v.LossUnrealized); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x95), "Number", v.LossUnrealized); err != nil {
 			return nil, err
 		}
 	}
@@ -1471,7 +1470,7 @@ func (v *Vault) appendBinary(dst []byte) ([]byte, error) {
 		}
 	}
 	if v.present&vaultBitAsset != 0 {
-		if dst, err = appendCodecValue(append(dst, 0x03, 0x18), &types.Issue{}, v.Asset); err != nil {
+		if dst, err = appendCodecValue(append(dst, 0x03, 0x18), "Issue", v.Asset); err != nil {
 			return nil, err
 		}
 	}
