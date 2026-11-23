@@ -136,11 +136,7 @@ func (o *Overlay) admitGated(evt *Event, gate *featureGate) bool {
 	}
 	slog.Debug("Message from peer without negotiated feature; dropping", "t", "Overlay",
 		"type", evt.MessageType.String(), "feature", gate.feature.String(), "peer", evt.PeerID)
-	if gate.immediate {
-		o.IncPeerBadData(evt.PeerID, gate.reason)
-	} else {
-		o.selectMessageCharge(evt, resource.FeeMalformedRequest(), gate.reason)
-	}
+	o.selectMessageCharge(evt, resource.FeeMalformedRequest(), gate.reason)
 	return false
 }
 

@@ -7,6 +7,7 @@ package peermanagement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -581,7 +582,7 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // reject (with a charge) any frame advertising 1024+ entries.
 //
 // Per-entry, an unparseable address is skipped and charged as bad data
-// — rippled accumulates a feeInvalidData charge per malformed endpoint
+// — rippled aggregates a feeInvalidData charge for malformed endpoints
 // rather than dropping the whole frame, since the remaining entries may
 // still be valid. A hops==0 entry describes the sending peer itself; its
 // self-reported host is untrustworthy, so we overwrite it with the
@@ -591,9 +592,12 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // The surviving set is then bounded like rippled's PeerFinder before it
 // reaches Discovery: sampled down to numberOfEndpointsMax (64), gated by
 // the per-peer secondsPerMessage rate-limit (one accepted frame per
-// window), and clipped to our discovery horizon (hops<=MaxHops). Without
-// these an announced address stream would grow d.peers without bound
-// (issue #1170).
+// window), and clipped to the wire endpoint horizon (incoming
+// hops<=maxGossipHops).
+// Before insertion, each surviving endpoint's hop count is incremented so
+// the stored value is the distance at which it can be advertised onward.
+// Without these an announced address stream would grow d.peers without
+// bound (issue #1170).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
 	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
@@ -607,25 +611,23 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		return
 	}
 
-	decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
-	if err != nil {
-		reason := "endpoints-decode"
-		if errors.Is(err, message.ErrWireLimit) {
-			reason = wirePreflightChargeReason(err)
+	eps := evt.decodedEndpoints
+	oversized := evt.endpointsOversized
+	if eps == nil {
+		decoded, decodedOversized, err := message.DecodeEndpointsForPeer(evt.Payload)
+		if err != nil {
+			o.selectMessageCharge(&evt, resource.FeeInvalidData(), "endpoints-decode")
+			return
 		}
-		o.IncPeerBadData(evt.PeerID, reason)
-		return
-	}
-	eps, ok := decoded.(*message.Endpoints)
-	if !ok {
-		return
+		eps = decoded
+		oversized = decodedOversized
 	}
 	if eps.Version != 2 {
 		return
 	}
 
-	if len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
-		o.IncPeerBadData(evt.PeerID, "endpoints-too-large")
+	if oversized || len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
+		o.selectMessageCharge(&evt, resource.FeeUselessData(), "endpoints too large")
 		return
 	}
 
@@ -635,14 +637,15 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		hops     uint32
 	}
 	accepted := make([]ingestEndpoint, 0, len(eps.EndpointsV2))
+	malformed := 0
 	for _, tm := range eps.EndpointsV2 {
-		parsed, parseErr := ParseEndpoint(tm.Endpoint)
-		if parseErr != nil || net.ParseIP(parsed.Host) == nil {
+		parsed, parseErr := parseGossipEndpoint(tm.Endpoint)
+		if parseErr != nil {
 			// rippled's from_string_checked rejects anything that is not
-			// a literal IP:port, charging the peer (PeerImp.cpp:1218-1226).
-			// ParseEndpoint is laxer — it accepts hostnames for the
-			// outbound Connect path — so the IP check is applied here.
-			o.IncPeerBadData(evt.PeerID, "endpoints-malformed")
+			// a literal IP endpoint, charging the peer
+			// (PeerImp.cpp:1218-1226). ParseEndpoint remains laxer for
+			// the outbound Connect path.
+			malformed++
 			continue
 		}
 
@@ -655,6 +658,10 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			parsed.Host = remoteIP
 		}
 		accepted = append(accepted, ingestEndpoint{endpoint: parsed, hops: tm.Hops})
+	}
+	if malformed > 0 {
+		fee := resource.FeeInvalidData().Times(malformed)
+		o.selectMessageCharge(&evt, fee, fmt.Sprintf("%d malformed endpoints", malformed))
 	}
 
 	// rippled hands the parsed set to PeerFinder only when at least one
@@ -682,11 +689,9 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	}
 
 	neighborSeen := false
+	seen := make(map[string]struct{}, len(accepted))
 	for _, e := range accepted {
-		// Drop endpoints beyond our discovery horizon rather than storing
-		// addresses SelectPeersToConnect would never dial; mirrors
-		// rippled's hops>maxHops preprocess drop.
-		if e.hops > MaxHops {
+		if e.hops > maxGossipHops {
 			continue
 		}
 		if e.hops == 0 {
@@ -695,14 +700,22 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			}
 			neighborSeen = true
 		}
+		if e.endpoint.Port == 0 {
+			continue
+		}
 		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(e.endpoint.Host), e.endpoint.Port) {
 			continue
 		}
 		address := e.endpoint.String()
+		// The first valid advertisement sets the distance, even if a later one claims fewer hops.
+		if _, duplicate := seen[address]; duplicate {
+			continue
+		}
+		seen[address] = struct{}{}
 		if e.hops == 0 && peer.Inbound() && !o.checkPeerListeningPort(peer, address) {
 			continue
 		}
-		o.discovery.AddPeer(address, e.hops, evt.PeerID)
+		o.discovery.AddPeer(address, e.hops+1, evt.PeerID)
 	}
 }
 

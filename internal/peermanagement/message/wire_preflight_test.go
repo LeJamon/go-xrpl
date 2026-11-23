@@ -41,7 +41,7 @@ func TestPreflightCollectionLimitsInclusive(t *testing.T) {
 		prefix  []byte
 	}{
 		{name: "transactions", msgType: TypeTransactions, field: 1, limit: maxTransactions, reason: WireLimitTransactions},
-		{name: "get objects transactions", msgType: TypeGetObjects, field: 6, limit: maxTransactions, reason: WireLimitGetObjectTransactions, prefix: enumField(1, uint64(ObjectTypeTransactions))},
+		{name: "get objects transactions", msgType: TypeGetObjects, field: 6, limit: maxTransactions, reason: WireLimitGetObjectTransactions, prefix: append(enumField(1, uint64(ObjectTypeTransactions)), enumField(2, 1)...)},
 		{name: "ledger data", msgType: TypeLedgerData, field: 4, limit: maxLedgerDataNodes, reason: WireLimitLedgerData},
 		{name: "endpoints", msgType: TypeEndpoints, field: 3, limit: maxEndpoints, reason: WireLimitEndpoints},
 		{name: "validator blobs", msgType: TypeValidatorListCollection, field: 3, limit: maxValidatorBlobs, reason: WireLimitValidatorBlobs},
@@ -77,6 +77,45 @@ func enumField(field protowire.Number, value uint64) []byte {
 	return protowire.AppendVarint(wire, value)
 }
 
+func TestPreflightCollectionLimitDefersUntilWireComplete(t *testing.T) {
+	wire := repeatedMessageField(1, maxTransactions+1, nil)
+	wire = append(wire, protowire.AppendTag(nil, 100, protowire.Fixed32Type)...)
+	wire = append(wire, 1, 2, 3)
+
+	err := Preflight(TypeTransactions, wire)
+	require.ErrorIs(t, err, ErrMalformedWire)
+	require.NotErrorIs(t, err, ErrWireLimit)
+}
+
+func TestValidatePayloadRequiredFieldsPrecedeCollectionLimits(t *testing.T) {
+	ledgerNode := protowire.AppendTag(nil, 1, protowire.BytesType)
+	ledgerNode = protowire.AppendBytes(ledgerNode, nil)
+	ledger := enumField(3, uint64(LedgerInfoAsNode))
+	ledger = append(ledger, enumField(2, 1)...)
+	ledger = append(ledger, repeatedMessageField(4, maxLedgerDataNodes+1, ledgerNode)...)
+
+	err := ValidatePayload(TypeLedgerData, ledger)
+	require.ErrorIs(t, err, ErrMalformedWire)
+	require.NotErrorIs(t, err, ErrWireLimit)
+
+	validatorBlob := protowire.AppendTag(nil, 2, protowire.BytesType)
+	validatorBlob = protowire.AppendBytes(validatorBlob, nil)
+	validatorBlob = protowire.AppendTag(validatorBlob, 3, protowire.BytesType)
+	validatorBlob = protowire.AppendBytes(validatorBlob, nil)
+	validator := protowire.AppendTag(nil, 2, protowire.BytesType)
+	validator = protowire.AppendBytes(validator, nil)
+	validator = append(validator, repeatedMessageField(3, maxValidatorBlobs+1, validatorBlob)...)
+
+	err = ValidatePayload(TypeValidatorListCollection, validator)
+	require.ErrorIs(t, err, ErrMalformedWire)
+	require.NotErrorIs(t, err, ErrWireLimit)
+
+	validatorV1 := append(append([]byte(nil), validator...), enumField(1, 1)...)
+	requireWireLimit(t, ValidatePayload(TypeValidatorListCollection, validatorV1), WireLimitValidatorVersion, 2, 1)
+	validatorV2 := append(append([]byte(nil), validator...), enumField(1, 2)...)
+	requireWireLimit(t, ValidatePayload(TypeValidatorListCollection, validatorV2), WireLimitValidatorBlobs, maxValidatorBlobs, maxValidatorBlobs+1)
+}
+
 func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 	objects10001 := repeatedMessageField(6, maxTransactions+1, nil)
 	objects12288 := repeatedMessageField(6, maxGetObjects, nil)
@@ -85,16 +124,18 @@ func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 	tests := []struct {
 		name   string
 		types  []uint64
+		query  bool
 		wire   []byte
 		limit  int
 		reject bool
 	}{
 		{name: "absent type uses general cap", wire: objects12288},
 		{name: "unknown type uses general cap", types: []uint64{unknown}, wire: objects12288},
-		{name: "transactions then unknown stays transactions", types: []uint64{uint64(ObjectTypeTransactions), unknown}, wire: objects10001, limit: maxTransactions, reject: true},
-		{name: "transactions then ledger uses general cap", types: []uint64{uint64(ObjectTypeTransactions), uint64(ObjectTypeLedger)}, wire: objects12288},
-		{name: "ledger unknown transactions uses transactions cap", types: []uint64{uint64(ObjectTypeLedger), unknown, uint64(ObjectTypeTransactions)}, wire: objects10001, limit: maxTransactions, reject: true},
-		{name: "unknown transactions unknown stays transactions", types: []uint64{unknown, uint64(ObjectTypeTransactions), unknown}, wire: objects10001, limit: maxTransactions, reject: true},
+		{name: "transactions reply uses general cap", types: []uint64{uint64(ObjectTypeTransactions)}, wire: objects10001},
+		{name: "transactions then unknown stays transactions", types: []uint64{uint64(ObjectTypeTransactions), unknown}, query: true, wire: objects10001, limit: maxTransactions, reject: true},
+		{name: "transactions then ledger uses general cap", types: []uint64{uint64(ObjectTypeTransactions), uint64(ObjectTypeLedger)}, query: true, wire: objects12288},
+		{name: "ledger unknown transactions uses transactions cap", types: []uint64{uint64(ObjectTypeLedger), unknown, uint64(ObjectTypeTransactions)}, query: true, wire: objects10001, limit: maxTransactions, reject: true},
+		{name: "unknown transactions unknown stays transactions", types: []uint64{unknown, uint64(ObjectTypeTransactions), unknown}, query: true, wire: objects10001, limit: maxTransactions, reject: true},
 	}
 
 	for _, test := range tests {
@@ -102,6 +143,9 @@ func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 			var wire []byte
 			for _, value := range test.types {
 				wire = append(wire, enumField(1, value)...)
+			}
+			if test.query {
+				wire = append(wire, enumField(2, 1)...)
 			}
 			wire = append(wire, test.wire...)
 			err := Preflight(TypeGetObjects, wire)
@@ -115,6 +159,26 @@ func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 
 	overGeneral := repeatedMessageField(6, maxGetObjects+1, nil)
 	requireWireLimit(t, Preflight(TypeGetObjects, overGeneral), WireLimitGetObjects, maxGetObjects, maxGetObjects+1)
+
+	queryWithInvalidLedgerHash := enumField(1, uint64(ObjectTypeStateNode))
+	queryWithInvalidLedgerHash = append(queryWithInvalidLedgerHash, enumField(2, 1)...)
+	queryWithInvalidLedgerHash = append(queryWithInvalidLedgerHash, overGeneral...)
+	queryWithInvalidLedgerHash = append(queryWithInvalidLedgerHash, protowire.AppendTag(nil, 4, protowire.BytesType)...)
+	queryWithInvalidLedgerHash = protowire.AppendBytes(queryWithInvalidLedgerHash, []byte{1})
+	var limitErr *WireLimitError
+	require.ErrorAs(t, Preflight(TypeGetObjects, queryWithInvalidLedgerHash), &limitErr)
+	require.Equal(t, WireLimitGetObjects, limitErr.Reason)
+	require.True(t, limitErr.GetObjectQuery)
+	require.True(t, limitErr.GetObjectLedgerHashInvalid)
+
+	fetchPackWithInvalidLedgerHash := enumField(1, uint64(ObjectTypeFetchPack))
+	fetchPackWithInvalidLedgerHash = append(fetchPackWithInvalidLedgerHash, enumField(2, 1)...)
+	fetchPackWithInvalidLedgerHash = append(fetchPackWithInvalidLedgerHash, overGeneral...)
+	fetchPackWithInvalidLedgerHash = append(fetchPackWithInvalidLedgerHash, protowire.AppendTag(nil, 4, protowire.BytesType)...)
+	fetchPackWithInvalidLedgerHash = protowire.AppendBytes(fetchPackWithInvalidLedgerHash, []byte{1})
+	var fetchPackLimitErr *WireLimitError
+	require.ErrorAs(t, Preflight(TypeGetObjects, fetchPackWithInvalidLedgerHash), &fetchPackLimitErr)
+	require.False(t, fetchPackLimitErr.GetObjectLedgerHashInvalid)
 }
 
 func TestPreflightGetLedgerNodeLimit(t *testing.T) {
@@ -241,7 +305,11 @@ func nestedGroups(depth int) []byte {
 
 func TestPreflightDepthLimitInclusive(t *testing.T) {
 	require.NoError(t, Preflight(TypePing, nestedGroups(maxWireDepth-1)))
-	requireWireLimit(t, Preflight(TypePing, nestedGroups(maxWireDepth)), WireLimitDepth, maxWireDepth, maxWireDepth+1)
+	err := Preflight(TypePing, nestedGroups(maxWireDepth))
+	requireWireLimit(t, err, WireLimitDepth, maxWireDepth, maxWireDepth+1)
+	var limitErr *WireLimitError
+	require.ErrorAs(t, err, &limitErr)
+	require.True(t, limitErr.Unverified())
 }
 
 func repeatedVarintFields(count int) []byte {
@@ -255,7 +323,11 @@ func repeatedVarintFields(count int) []byte {
 
 func TestPreflightFieldCountLimitInclusive(t *testing.T) {
 	require.NoError(t, Preflight(TypePing, repeatedVarintFields(maxWireFieldCount)))
-	requireWireLimit(t, Preflight(TypePing, repeatedVarintFields(maxWireFieldCount+1)), WireLimitFieldCount, maxWireFieldCount, maxWireFieldCount+1)
+	err := Preflight(TypePing, repeatedVarintFields(maxWireFieldCount+1))
+	requireWireLimit(t, err, WireLimitFieldCount, maxWireFieldCount, maxWireFieldCount+1)
+	var limitErr *WireLimitError
+	require.ErrorAs(t, err, &limitErr)
+	require.True(t, limitErr.Unverified())
 }
 
 func TestPreflightUnknownBytesAreOpaque(t *testing.T) {

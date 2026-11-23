@@ -284,7 +284,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	}
 }
 
-func TestRouter_HandleManifests_ChargesInvalidEntriesOncePerFrame(t *testing.T) {
+func TestRouter_HandleManifests_SkipsInvalidEntriesWithoutExtraCharge(t *testing.T) {
 	router, sender := makeRouterWithBadDataRecorder(t)
 	router.SetManifestCache(manifest.NewCache(), nil)
 	list := []message.Manifest{
@@ -299,9 +299,7 @@ func TestRouter_HandleManifests_ChargesInvalidEntriesOncePerFrame(t *testing.T) 
 		Payload: encodePayload(t, &message.Manifests{List: list}),
 	})
 
-	calls := sender.getBadDataCalls()
-	require.Len(t, calls, 1)
-	require.Equal(t, badDataCall{peerID: 9, reason: "manifest-invalid"}, calls[0])
+	require.Empty(t, sender.getBadDataCalls())
 }
 
 func TestRouter_HandleManifests_ChargesLargeFrame(t *testing.T) {
@@ -318,7 +316,7 @@ func TestRouter_HandleManifests_ChargesLargeFrame(t *testing.T) {
 		Payload: encodePayload(t, &message.Manifests{List: list}),
 	})
 
-	require.Contains(t, sender.getBadDataCalls(), badDataCall{peerID: 9, reason: "manifests-oversize"})
+	require.Equal(t, []badDataCall{{peerID: 9, reason: "manifests-oversize"}}, sender.getBadDataCalls())
 }
 
 func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T) {
@@ -425,10 +423,7 @@ func TestRouter_HandleManifests_RelaysAcceptedEntriesToAllPeers(t *testing.T) {
 	for i := range wires {
 		require.Equal(t, wires[i], got[i], "accepted manifests must retain input order and bytes")
 	}
-	require.Equal(t, []badDataCall{
-		{peerID: 7, reason: "manifests-oversize"},
-		{peerID: 7, reason: "manifest-invalid"},
-	}, badData.getBadDataCalls())
+	require.Equal(t, []badDataCall{{peerID: 7, reason: "manifests-oversize"}}, badData.getBadDataCalls())
 }
 
 func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {

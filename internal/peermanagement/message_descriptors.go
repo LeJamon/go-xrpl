@@ -39,9 +39,6 @@ type featureGate struct {
 	feature            Feature
 	localTxReduceRelay bool
 	reason             string
-	// immediate charges the peer directly instead of raising the
-	// per-message fee.
-	immediate bool
 }
 
 // messageDescriptor declares the per-type dispatch policy of one wire
@@ -87,7 +84,7 @@ var messageDescriptors = [...]*messageDescriptor{
 		lane:     laneGeneral,
 		route:    routeNone,
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryCluster,
+		traffic:  CategoryUnknown,
 	},
 	message.TypeEndpoints: {
 		lane:     laneGeneral,
@@ -105,13 +102,13 @@ var messageDescriptors = [...]*messageDescriptor{
 		lane:     laneGeneral,
 		route:    routeGeneral,
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryLedgerData,
+		traffic:  CategoryUnknown,
 	},
 	message.TypeLedgerData: {
 		lane:     laneAcquisition,
 		route:    routeLedgerData,
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryLedgerData,
+		traffic:  CategoryUnknown,
 	},
 	message.TypeProposeLedger: {
 		lane:     laneConsensus,
@@ -125,7 +122,7 @@ var messageDescriptors = [...]*messageDescriptor{
 		lane:     laneConsensusControl,
 		route:    routeConsensusControl,
 		outbound: OutboundClassControl,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryBase,
 	},
 	message.TypeHaveSet: {
 		lane:     laneConsensusControl,
@@ -165,28 +162,28 @@ var messageDescriptors = [...]*messageDescriptor{
 		route:    routeNone,
 		gate:     ledgerReplayGate("proof path request disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryProofPathRequest,
 	},
 	message.TypeProofPathResponse: {
 		lane:     laneAcquisition,
 		route:    routeLedgerData,
 		gate:     ledgerReplayGate("proof path response disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryProofPathResponse,
 	},
 	message.TypeReplayDeltaReq: {
 		lane:     laneGeneral,
 		route:    routeNone,
 		gate:     ledgerReplayGate("replay delta request disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryReplayDeltaRequest,
 	},
 	message.TypeReplayDeltaResponse: {
 		lane:     laneAcquisition,
 		route:    routeLedgerData,
 		gate:     ledgerReplayGate("replay delta response disabled"),
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryReplayDeltaResponse,
 	},
 	message.TypeHaveTransactions: {
 		lane:  laneGeneral,
@@ -195,10 +192,9 @@ var messageDescriptors = [...]*messageDescriptor{
 			feature:            FeatureTxReduceRelay,
 			localTxReduceRelay: true,
 			reason:             "have-transactions-unnegotiated",
-			immediate:          true,
 		},
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryUnknown,
+		traffic:  CategoryHaveTransactions,
 	},
 	message.TypeTransactions: {
 		lane:  laneGeneral,
@@ -209,7 +205,7 @@ var messageDescriptors = [...]*messageDescriptor{
 			reason:             "transactions-batch-unnegotiated",
 		},
 		outbound: OutboundClassOrdinary,
-		traffic:  CategoryTransaction,
+		traffic:  CategoryRequestedTransactions,
 	},
 }
 
