@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
@@ -384,4 +386,29 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	if [32]byte(info.Hash) != hash || [32]byte(info.ParentHash) != parent {
 		t.Fatalf("repaired ledger info = hash %x parent %x", info.Hash[:4], info.ParentHash[:4])
 	}
+}
+
+func TestCleanerRepairsHeaderBeforeTransactionIndex(t *testing.T) {
+	ctx := t.Context()
+	db := &failingHeaderStore{Database: newTestNodeStore(t, 10_000)}
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repositories := newTestRepositories(t, ctx)
+	svc := startPersistedTestService(t, db, repositories)
+	seq := svc.GetClosedLedgerIndex() + 1
+	db.fail(seq, 2)
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	hash := nodestore.Hash256(svc.GetValidatedLedger().Hash())
+	header, err := db.Fetch(ctx, hash)
+	require.NoError(t, err)
+	require.Nil(t, header)
+
+	require.ErrorIs(t, svc.RepairLedgerTransactions(ctx, seq), errInjectedPersist)
+	requireLedgerIndexed(t, repositories, seq, false)
+	require.NoError(t, svc.RepairLedgerTransactions(ctx, seq))
+	header, err = db.Fetch(ctx, hash)
+	require.NoError(t, err)
+	require.NotNil(t, header)
+	require.Equal(t, nodestore.NodeLedger, header.Type)
+	requireLedgerIndexed(t, repositories, seq, true)
 }

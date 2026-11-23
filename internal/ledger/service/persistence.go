@@ -957,6 +957,11 @@ func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32) erro
 	if err != nil {
 		return err
 	}
+	if s.nodeStore != nil {
+		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
+			return err
+		}
+	}
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
 	return s.persistToRelationalDB(ctx, l)
