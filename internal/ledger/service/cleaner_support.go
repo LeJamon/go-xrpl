@@ -70,6 +70,15 @@ func (s *Service) CanonicalLedgerHash(ctx context.Context, seq uint32) ([32]byte
 	s.mu.RLock()
 	tip := s.validatedLedger
 	s.mu.RUnlock()
+	return s.canonicalLedgerHashFromTip(ctx, tip, seq)
+}
+
+// canonicalLedgerHashFromTip resolves seq against the supplied validated
+// frontier. Callers that publish a result can retain the frontier pointer and
+// compare it again under Service.mu before committing the result. This keeps
+// the proof tied to the exact tip used for the skip-list walk without holding
+// Service.mu across storage I/O.
+func (s *Service) canonicalLedgerHashFromTip(ctx context.Context, tip *ledger.Ledger, seq uint32) ([32]byte, bool, error) {
 	if tip == nil || seq > tip.Sequence() {
 		return [32]byte{}, false, nil
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -217,40 +218,50 @@ func TestValidatedPersistFailuresCountUntilSuccess(t *testing.T) {
 // Once a ledger's child has left memory, the validated skip list is the
 // canonical proof for re-installing it as history.
 func TestIngestHistoricalLedgerProvenBySkipList(t *testing.T) {
-	ctx := context.Background()
-	cfg := DefaultConfig()
-	cfg.LedgerCacheSize = 2
-	svc, err := New(cfg)
-	require.NoError(t, err)
-	require.NoError(t, svc.Start())
-	t.Cleanup(svc.Stop)
+	for _, test := range []struct {
+		name     string
+		prepared bool
+	}{
+		{name: "direct"},
+		{name: "prepared", prepared: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg := DefaultConfig()
+			cfg.LedgerCacheSize = 2
+			svc, err := New(cfg)
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
 
-	parent := svc.GetClosedLedger()
-	target, err := svc.AcceptLedger(ctx)
-	require.NoError(t, err)
-	historical, err := svc.GetLedgerBySequence(target)
-	require.NoError(t, err)
-	for svc.GetValidatedLedgerIndex() < target+4 {
-		_, err := svc.AcceptLedger(ctx)
-		require.NoError(t, err)
+			parent := svc.GetClosedLedger()
+			target, err := svc.AcceptLedger(ctx)
+			require.NoError(t, err)
+			historical, err := svc.GetLedgerBySequence(target)
+			require.NoError(t, err)
+			for svc.GetValidatedLedgerIndex() < target+4 {
+				_, err := svc.AcceptLedger(ctx)
+				require.NoError(t, err)
+			}
+			_, err = svc.AdoptedLedgerBySequence(target + 1)
+			require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
+
+			forkTime := historical.CloseTime().Add(time.Hour)
+			fork, err := ledger.NewOpen(parent, forkTime)
+			require.NoError(t, err)
+			require.NoError(t, fork.Close(forkTime, 0))
+			require.NotEqual(t, historical.Hash(), fork.Hash())
+			require.ErrorContains(t, ingestHistoricalLedgerCopy(ctx, svc, fork, test.prepared), "no canonical child")
+
+			require.NoError(t, ingestHistoricalLedgerCopy(ctx, svc, historical, test.prepared))
+			held, err := svc.AdoptedLedgerBySequence(target)
+			require.NoError(t, err)
+			require.Equal(t, historical.Hash(), held.Hash())
+		})
 	}
-	_, err = svc.AdoptedLedgerBySequence(target + 1)
-	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
-
-	forkTime := historical.CloseTime().Add(time.Hour)
-	fork, err := ledger.NewOpen(parent, forkTime)
-	require.NoError(t, err)
-	require.NoError(t, fork.Close(forkTime, 0))
-	require.NotEqual(t, historical.Hash(), fork.Hash())
-	require.ErrorContains(t, ingestLedgerCopy(ctx, svc, fork), "no canonical child")
-
-	require.NoError(t, ingestLedgerCopy(ctx, svc, historical))
-	held, err := svc.AdoptedLedgerBySequence(target)
-	require.NoError(t, err)
-	require.Equal(t, historical.Hash(), held.Hash())
 }
 
-func ingestLedgerCopy(ctx context.Context, svc *Service, l *ledger.Ledger) error {
+func ingestHistoricalLedgerCopy(ctx context.Context, svc *Service, l *ledger.Ledger, prepared bool) error {
 	h := l.Header()
 	stateMap, err := l.StateMapSnapshot()
 	if err != nil {
@@ -260,5 +271,101 @@ func ingestLedgerCopy(ctx context.Context, svc *Service, l *ledger.Ledger) error
 	if err != nil {
 		return err
 	}
-	return svc.IngestHistoricalLedgerWithState(ctx, &h, stateMap, txMap)
+	if !prepared {
+		return svc.IngestHistoricalLedgerWithState(ctx, &h, stateMap, txMap)
+	}
+	acquired, err := svc.PrepareAcquiredLedger(ctx, &h, stateMap, txMap)
+	if err != nil {
+		return err
+	}
+	defer acquired.Release()
+	return svc.IngestHistoricalPreparedLedger(ctx, acquired)
+}
+
+func TestIngestHistoricalRejectsResidentCandidateOutsideValidatedTip(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		prepared bool
+	}{
+		{name: "direct"},
+		{name: "prepared", prepared: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, err := New(DefaultConfig())
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+			for range 3 {
+				_, err := svc.AcceptLedger(ctx)
+				require.NoError(t, err)
+			}
+
+			tip := svc.GetValidatedLedger()
+			require.NotNil(t, tip)
+			targetSeq := tip.Sequence() - 2
+			h, stateMap, txMap := acquiredLedgerFixture(t, targetSeq, 0xE1)
+			canonical, err := svc.GetLedgerBySequence(targetSeq)
+			require.NoError(t, err)
+			require.NotEqual(t, canonical.Hash(), h.Hash)
+			resident, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+			require.NoError(t, err)
+			require.False(t, resident.IsValidated(), "a preferred resident may be unvalidated")
+
+			svc.mu.Lock()
+			svc.historyComponent.mu.Lock()
+			svc.historyComponent.deleteHistoryLocked(targetSeq + 1)
+			svc.historyComponent.putHistoryLocked(resident)
+			svc.historyComponent.mu.Unlock()
+			svc.mu.Unlock()
+
+			require.ErrorContains(
+				ingestHistoricalLedgerCopy(ctx, svc, resident, test.prepared),
+				"current validated chain",
+			)
+			held, err := svc.AdoptedLedgerBySequence(targetSeq)
+			require.NoError(t, err)
+			require.Equal(t, resident.Hash(), held.Hash())
+			require.False(t, held.IsValidated(), "contradictory resident must not be promoted")
+		})
+	}
+}
+
+func TestHistoricalProofRejectsInterveningValidatedTipChange(t *testing.T) {
+	ctx := context.Background()
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	for range 3 {
+		_, err := svc.AcceptLedger(ctx)
+		require.NoError(t, err)
+	}
+
+	tip := svc.GetValidatedLedger()
+	require.NotNil(t, tip)
+	target, err := svc.GetLedgerBySequence(tip.Sequence() - 2)
+	require.NoError(t, err)
+	h := target.Header()
+	stateMap, err := target.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := target.TxMapSnapshot()
+	require.NoError(t, err)
+	proof := svc.skipListProvesHistory(ctx, &h)
+	require.True(t, proof.proven)
+	require.Same(t, tip, proof.tip)
+
+	replacement := makeStubLedger(t, tip.Sequence(), [32]byte{0xE2}, tip.ParentHash())
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.historyComponent.deleteHistoryLocked(target.Sequence())
+	svc.historyComponent.deleteHistoryLocked(target.Sequence() + 1)
+	svc.validatedLedger = replacement
+	err = svc.ingestHistoricalLedgerWithStateLocked(ctx, &h, stateMap, txMap, proof)
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
+
+	require.ErrorContains(t, err, "current validated chain")
+	_, err = svc.AdoptedLedgerBySequence(target.Sequence())
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 }
