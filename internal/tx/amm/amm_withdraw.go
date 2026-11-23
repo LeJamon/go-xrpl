@@ -1005,11 +1005,13 @@ func withdrawIOUToAccount(
 	amount tx.Amount,
 	options withdrawalOptions,
 ) ter.Result {
-	// When the withdrawer IS the issuer, no trust line is needed between them.
-	// Just debit the AMM's trust line (which is between AMM and issuer).
-	// Reference: rippled accountSend → rippleCredit handles issuer case by only
-	// adjusting the single AMM-issuer trust line.
+	// The issuer never holds a trust line to itself, so the reserve check for a
+	// missing line still applies to it, even though no line is created and only
+	// the AMM's trust line is debited.
 	if accountID == issuerID {
+		if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
+			return result
+		}
 		if err := debitAMMTrustline(ammAccountID, asset, amount, ctx.View, ctx.NumberContext()); err != nil {
 			return ammResultFromError(err, ter.TefINTERNAL)
 		}

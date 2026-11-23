@@ -767,6 +767,25 @@ func TestFixReserveCheckOnWithdrawal(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
+	// The issuer of both pool assets never holds a trust line to itself, so its
+	// withdrawal is reserve-checked as if a line had to be created.
+	issuerWithdrawAll := func(t *testing.T, enableFixAMMv1_2 bool) jtx.TxResult {
+		env := setupMinimalAMM(t, enableFixAMMv1_2)
+		env.Trust(env.GW, env.Alice, "BTC", 1)
+		env.Close()
+		require.Equal(t, uint32(2), env.TestEnv.OwnerCount(env.GW))
+
+		return env.Submit(amm.AMMWithdraw(env.GW, env.EUR, env.USD).WithdrawAll().Build())
+	}
+
+	t.Run("WithFix_IssuerWithdrawAll", func(t *testing.T) {
+		amm.ExpectTER(t, issuerWithdrawAll(t, true), "tecINSUFFICIENT_RESERVE")
+	})
+
+	t.Run("WithoutFix_IssuerWithdrawAll", func(t *testing.T) {
+		jtx.RequireTxSuccess(t, issuerWithdrawAll(t, false))
+	})
+
 	// Test without fixAMMv1_2: same withdrawals succeed.
 	t.Run("WithoutFix_EqualWithdraw", func(t *testing.T) {
 		env := setupMinimalAMM(t, false)
