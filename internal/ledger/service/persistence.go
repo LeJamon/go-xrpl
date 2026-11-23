@@ -60,7 +60,10 @@ func (s *Service) persistValidatedLedgerAtToken(
 	var recertificationNeeded bool
 	s.retentionWriteMu.RLock()
 	defer s.retentionWriteMu.RUnlock()
-	if !updateTip && s.belowRetentionFloor(seq) {
+	if (!updateTip || canceled != nil) && s.belowRetentionFloor(seq) {
+		if token != 0 {
+			s.recordValidatedPersistence(seq, token, false)
+		}
 		return nil
 	}
 
@@ -207,7 +210,7 @@ func (p *persistenceWorker) enqueueLedgerPersist(l *ledger.Ledger, kind ledgerPe
 		}
 	}
 	if validated {
-		if !updatesTip && s.belowRetentionFloor(seq) {
+		if s.belowRetentionFloor(seq) {
 			p.persistMu.Unlock()
 			return
 		}
@@ -666,6 +669,8 @@ func (s *Service) persistValidatedTipJob(
 	canceled func() bool,
 	proof *replayCompletenessRecord,
 ) error {
+	s.retentionWriteMu.RLock()
+	defer s.retentionWriteMu.RUnlock()
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
 	if canceled != nil && canceled() {
