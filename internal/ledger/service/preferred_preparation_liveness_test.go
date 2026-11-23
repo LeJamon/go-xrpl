@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
@@ -128,14 +128,25 @@ func TestPreferredAdmissionRejectsConcurrentConsensusAcceptance(t *testing.T) {
 func TestPreferredAdmissionRetainsIngressDuringVerification(t *testing.T) {
 	for _, mode := range []string{"switch", "prepare"} {
 		t.Run(mode, func(t *testing.T) {
-			svc, err := New(DefaultConfig())
+			cfg := DefaultConfig()
+			queueCfg := txq.StandaloneConfig()
+			queueCfg.MinimumTxnInLedgerStandalone = 1
+			queueCfg.TargetTxnInLedger = 1
+			cfg.TxQ = &queueCfg
+			svc, err := New(cfg)
 			require.NoError(t, err)
 			require.NoError(t, svc.Start())
 			t.Cleanup(svc.Stop)
 			preferred, family := coldAcceptanceParent(t, svc.GetClosedLedger())
 			env := jtx.NewTestEnv(t)
 			destination := jtx.NewAccount("preferred-admission-ingress")
-			blob, hash := preferredSwitchPaymentBlob(t, env, jtx.MasterAccount(), destination, 20_000_000, 100, 1)
+			master := jtx.MasterAccount()
+			first, _ := preferredSwitchPaymentBlob(t, env, master, destination, 20_000_000, 10, 1)
+			applied, appliedHash := preferredSwitchPaymentBlob(t, env, master, destination, 1_000_000, 10, 2)
+			queued, queuedHash := preferredSwitchPaymentBlob(t, env, master, destination, 1_000_000, 10, 3)
+			outcome, err := svc.SubmitOpenLedgerTxDetailed(first, false)
+			require.NoError(t, err)
+			require.Equal(t, ter.TesSUCCESS, outcome.Result)
 			family.armed.Store(true)
 			switched := make(chan error, 1)
 			go func() {
@@ -156,23 +167,24 @@ func TestPreferredAdmissionRetainsIngressDuringVerification(t *testing.T) {
 			}()
 			awaitPreferredPreparation(t, family.entered)
 
-			svc.mu.RLock()
-			queue := svc.txQueue
-			svc.mu.RUnlock()
-			result, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
+			require.False(t, svc.preferredTransitionIsActive())
+			require.False(t, svc.openLedgerMu.Snapshot().Held)
+			outcome, err = svc.SubmitOpenLedgerTxDetailed(applied, true)
 			require.NoError(t, err)
-			require.Equal(t, ter.TesSUCCESS, result.Result)
-			svc.mu.RLock()
-			published := svc.txQueue
-			svc.mu.RUnlock()
-			require.NotSame(t, queue, published, "ingress must publish a new queue while admission verifies")
+			require.Equal(t, ter.TesSUCCESS, outcome.Result)
+			outcome, err = svc.SubmitOpenLedgerTxDetailed(queued, false)
+			require.NoError(t, err)
+			require.Equal(t, ter.TerQUEUED, outcome.Result)
 
 			family.unblock()
 			require.NoError(t, <-switched)
 			require.Same(t, preferred, svc.GetClosedLedger())
-			present, err := svc.openLedgerView.Current().TxExists(hash)
+			present, err := svc.openLedgerView.Current().TxExists(appliedHash)
 			require.NoError(t, err)
 			require.True(t, present, "preferred switch dropped the transaction committed during admission")
+			retained, ok := svc.txQueue.GetTxBlob(queuedHash)
+			require.True(t, ok, "preferred switch dropped the transaction queued during admission")
+			require.Equal(t, queued, retained)
 			require.False(t, svc.preferredTransitionIsActive())
 		})
 	}
@@ -206,11 +218,8 @@ func TestPreferredAdmissionRetainsSpeculativeReplayDuringVerification(t *testing
 
 	env := jtx.NewTestEnv(t)
 	blob, hash := preferredSwitchPaymentBlob(t, env, master, jtx.NewAccount("preferred-admission-replay"), 20_000_000, 100, 1)
-	local, err := openledger.ParsePendingTx(blob)
-	require.NoError(t, err)
-	svc.localTxs.PushBack(svc.openLedgerView.Current().Sequence(), local)
 	replayFamily.armed.Store(true)
-	_, err = svc.AcceptConsensusResult(t.Context(), parent, nil, nil, parent.CloseTime().Add(time.Second), true)
+	_, err = svc.AcceptConsensusResult(t.Context(), parent, nil, [][]byte{blob}, parent.CloseTime().Add(time.Second), true)
 	require.NoError(t, err)
 	awaitSuccessorPreparation(t, replayFamily.entered, replayFamily.unblock, &replayFamily.fetches)
 
@@ -222,19 +231,24 @@ func TestPreferredAdmissionRetainsSpeculativeReplayDuringVerification(t *testing
 	closed, view := svc.closedLedger, svc.openLedgerView
 	svc.mu.RUnlock()
 	replayFamily.unblock()
-	require.NoError(t, svc.waitSpeculativeSuccessor(t.Context()))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, svc.waitSpeculativeSuccessor(ctx))
 	svc.mu.RLock()
 	closedAfter, viewAfter := svc.closedLedger, svc.openLedgerView
 	svc.mu.RUnlock()
 	require.Same(t, closed, closedAfter)
 	require.NotSame(t, view, viewAfter, "speculative replay must publish while admission verifies")
+	present, err := viewAfter.Current().TxExists(hash)
+	require.NoError(t, err)
+	require.True(t, present, "speculative replay must apply the disputed transaction")
 
 	admissionFamily.unblock()
 	require.NoError(t, <-switched)
 	require.Same(t, preferred, svc.GetClosedLedger())
-	present, err := svc.openLedgerView.Current().TxExists(hash)
+	present, err = svc.openLedgerView.Current().TxExists(hash)
 	require.NoError(t, err)
-	require.True(t, present, "preferred switch dropped the replayed local transaction")
+	require.True(t, present, "preferred switch dropped the replayed transaction")
 }
 
 func TestPreferredAdmissionRejectsConcurrentTransitionOwnership(t *testing.T) {
