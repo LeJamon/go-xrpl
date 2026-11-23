@@ -610,16 +610,20 @@ go-xrpl keeps content-addressed state separate from queryable indexes (see
   ([`storage/relationaldb/postgres`](../storage/relationaldb/postgres)) is
   available for shared deployments.
 
-A validated ledger that fails to persist is left out of `complete_ledgers` while
-the node keeps following the chain; its relational rows are written only after
-its node-store write succeeds. Once a later validated ledger persists, the node
-rewrites the ledger from memory, or history backfill acquires it from peers if it
-is no longer held. Backfill repairs ledgers within `ledger_history` of the
-validated ledger and, with `online_delete`, gaps above `minimumOnline` that lie
-above a completed ledger. While persists keep failing, `server_info` and
-`server_state` include a go-xrpl-specific `ledger_persistence` object
-(`consecutive_failures`, `last_failed_seq`), and the peer-port `/health` endpoint
-reports `ledger_persistence` as a warning.
+The node keeps following the chain when a validated ledger fails to persist.
+It writes the relational indexes after the node store saves the ledger. A
+failed data write leaves a gap in `complete_ledgers`. A failure publishing
+the tip for an already durable ledger leaves that ledger in the range.
+
+After a successful validated save, the node retries recent failed writes from
+memory, including when peer backfill is disabled. With backfill enabled, it
+can acquire older gaps within `ledger_history` from peers. Online deletion
+limits local retries to ledgers at or above the retention floor.
+
+While validated saves keep failing, `server_info` and `server_state` include
+a go-xrpl-specific `ledger_persistence` object with `consecutive_failures` and
+`last_failed_seq`. The peer-port `/health` endpoint also reports a persistence
+warning. A successful validated save clears the warning.
 
 ## See also
 
