@@ -20,7 +20,6 @@ import (
 
 var errInjectedPersist = errors.New("injected persistence failure")
 
-// injectedFailures counts the remaining injected failures per ledger sequence.
 type injectedFailures struct {
 	mu        sync.Mutex
 	remaining map[uint32]int
@@ -68,7 +67,6 @@ func (r *failingRepositories) PersistValidatedLedger(ctx context.Context, valida
 	return r.RepositoryManager.PersistValidatedLedger(ctx, validated)
 }
 
-// failingHeaderStore fails the node-store write of selected ledger headers.
 type failingHeaderStore struct {
 	nodestore.Database
 	injectedFailures
@@ -103,8 +101,6 @@ func requireLedgerIndexed(t *testing.T, repositories relationaldb.RepositoryMana
 	require.Equalf(t, indexed, info != nil, "relational index for ledger %d", seq)
 }
 
-// A failed relational write leaves a hole that the next healthy validated
-// persist repairs, so no ledger below the durable tip stays unindexed.
 func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 10_000)
@@ -163,8 +159,6 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	require.Equal(t, failed, history.Transactions[0].LedgerIndex)
 }
 
-// A node-store failure must not leave a relational row for a ledger whose
-// header is not stored; the ledger is repaired like any other hole.
 func TestNodeStorePersistFailureSkipsRelationalIndex(t *testing.T) {
 	ctx := context.Background()
 	db := &failingHeaderStore{Database: newTestNodeStore(t, 10_000)}
@@ -185,8 +179,6 @@ func TestNodeStorePersistFailureSkipsRelationalIndex(t *testing.T) {
 	requireLedgerIndexed(t, repositories, failed, true)
 }
 
-// Consecutive failures are counted until a validated persist succeeds, and
-// holes wait for that success before they are written again.
 func TestValidatedPersistFailuresCountUntilSuccess(t *testing.T) {
 	ctx := context.Background()
 	relational := &failingRepositories{RepositoryManager: newTestRepositories(t, ctx)}
@@ -215,8 +207,6 @@ func TestValidatedPersistFailuresCountUntilSuccess(t *testing.T) {
 	require.True(t, svc.HasCompleteLedger(first+1))
 }
 
-// Once a ledger's child has left memory, the validated skip list is the
-// canonical proof for re-installing it as history.
 func TestIngestHistoricalLedgerProvenBySkipList(t *testing.T) {
 	for _, test := range []struct {
 		name     string

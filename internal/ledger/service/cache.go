@@ -347,7 +347,6 @@ func (s *Service) NewestMissingLedger(below uint32) (uint32, bool) {
 	return s.completedLedgers.prevMissing(below, 1)
 }
 
-// CompleteLedgerBelow returns the newest completed ledger below seq.
 func (s *Service) CompleteLedgerBelow(seq uint32) (uint32, bool) {
 	s.completeMu.RLock()
 	defer s.completeMu.RUnlock()

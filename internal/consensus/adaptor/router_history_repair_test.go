@@ -61,7 +61,6 @@ func (r *failingLedgerIndex) PersistValidatedLedger(ctx context.Context, validat
 	return r.RepositoryManager.PersistValidatedLedger(ctx, validated)
 }
 
-// failingHeaderStore can fail selected ledger-header writes.
 type failingHeaderStore struct {
 	nodestore.Database
 	failSeq    atomic.Uint32
@@ -155,8 +154,6 @@ func runHistoryBackfill(svc *service.Service, r *Router, done func() bool) {
 	}
 }
 
-// writeLedgerHistory persists ledgers up to tip with a standalone writer that
-// the caller stops before restarting on the same stores.
 func writeLedgerHistory(t *testing.T, db nodestore.Database, relational relationaldb.RepositoryManager, tip uint32) *service.Service {
 	t.Helper()
 	writer, err := service.New(service.Config{
@@ -183,8 +180,6 @@ func restartFastLoad(t *testing.T, db nodestore.Database, relational relationald
 	return svc
 }
 
-// A resident ledger whose history persist failed during the restart walk is
-// retargeted on a later tick and repaired without a network request.
 func TestHistoryBackfillRetargetsResidentHoleLocally(t *testing.T) {
 	for _, nodeStoreFailure := range []bool{false, true} {
 		name := "relational"
@@ -332,8 +327,6 @@ func TestHistoryBackfillRequestsAndRepairsMissingDeepAnchor(t *testing.T) {
 	require.True(t, svc.HasCompleteLedger(100))
 }
 
-// A hole that leaves memory after the initial walk is acquired from the
-// network once validated persists succeed again.
 func TestHistoryBackfillAcquiresEvictedHole(t *testing.T) {
 	db, rm := newHistoryRepairStores(t)
 	relational := &failingLedgerIndex{RepositoryManager: rm}
@@ -370,8 +363,6 @@ func TestHistoryBackfillAcquiresEvictedHole(t *testing.T) {
 	require.Equal(t, hole, calls[0].seq)
 }
 
-// After a restart the walk requests the unindexed ledger, and installing the
-// acquired copy re-indexes it.
 func TestHistoryBackfillReindexesHoleAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	db, rm := newHistoryRepairStores(t)

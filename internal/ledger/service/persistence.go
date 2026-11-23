@@ -677,7 +677,6 @@ func (s *Service) persistValidatedTipJob(
 	return nil
 }
 
-// A failed tip publication can be the last write before shutdown.
 func (s *Service) retryTipOnShutdown() {
 	tip := s.GetValidatedLedger()
 	if tip == nil || s.nodeStore == nil {

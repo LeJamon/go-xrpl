@@ -938,9 +938,6 @@ func (s *Service) skipListProvesHistory(ctx context.Context, h *header.LedgerHea
 	return historicalLedgerProof{tip: tip, hash: hash, found: err == nil && ok}
 }
 
-// ingestHistoricalLedgerWithStateLocked requires h to be the parent of its
-// resident child, an unchanged resident candidate, or named by the validated
-// skip list.
 func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap, proof historicalLedgerProof) error {
 	if err := ctx.Err(); err != nil {
 		return err

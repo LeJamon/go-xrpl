@@ -120,7 +120,6 @@ func (c *completeLedgerSet) prevMissing(below, minimum uint32) (uint32, bool) {
 	return seq, true
 }
 
-// prevPresent returns the largest sequence below `below` held in the set.
 func (c *completeLedgerSet) prevPresent(below uint32) (uint32, bool) {
 	index := sort.Search(len(c.ranges), func(i int) bool {
 		return c.ranges[i].end >= below
