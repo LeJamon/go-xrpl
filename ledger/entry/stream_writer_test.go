@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
@@ -67,5 +68,21 @@ func TestAppendBlobMatchesCodec(t *testing.T) {
 	long[len(long)-1] = 'G'
 	if _, err := appendBlob(nil, string(long)); !errors.As(err, new(hex.InvalidByteError)) {
 		t.Fatalf("oversized invalid blob error = %v, want the hex error first", err)
+	}
+}
+
+func TestSizeHintsSkipOversizedFields(t *testing.T) {
+	if n := blobEncodedLen(strings.Repeat("0", 2*maxVLLength+1)); n != 0 {
+		t.Fatalf("oversized blob size hint = %d", n)
+	}
+	if n := vector256EncodedLen(make([]string, types.MaxJSONArrayElements+1)); n != 0 {
+		t.Fatalf("oversized vector size hint = %d", n)
+	}
+	page := nftCodecPage(t, 1, maxVLLength+1)
+	if n := nftokensEncodedLen(page.NFTokens); n != 0 {
+		t.Fatalf("oversized URI size hint = %d", n)
+	}
+	if _, err := page.Encode(); !errors.Is(err, serdes.ErrLengthPrefixTooLong) {
+		t.Fatalf("oversized URI error = %v", err)
 	}
 }

@@ -96,13 +96,12 @@ func appendHash(dst []byte, s string, size int) ([]byte, error) {
 // appendBlob writes a length-prefixed blob given as hex. An odd-length string
 // is read with an implied leading zero nibble.
 func appendBlob(dst []byte, s string) ([]byte, error) {
-	n := (len(s) + 1) / 2
+	n := len(s)/2 + len(s)%2
 	if n > maxVLLength {
-		if len(s)%2 != 0 {
-			s = "0" + s
-		}
-		if _, err := hex.DecodeString(s); err != nil {
-			return nil, err
+		for i := range len(s) {
+			if reverseHex[s[i]] > 0x0f {
+				return nil, hex.InvalidByteError(s[i])
+			}
 		}
 		return nil, serdes.ErrLengthPrefixTooLong
 	}
@@ -317,6 +316,9 @@ func accountIDEncodedLen(s string) int {
 }
 
 func blobEncodedLen(s string) int {
+	if len(s) > 2*maxVLLength {
+		return 0
+	}
 	n := (len(s) + 1) / 2
 	return variableLengthSize(n) + n
 }
@@ -334,6 +336,9 @@ func amountEncodedLen(v any) int {
 }
 
 func vector256EncodedLen(hashes []string) int {
+	if len(hashes) > types.MaxJSONArrayElements {
+		return 0
+	}
 	n := len(hashes) * len(zeroHash)
 	return variableLengthSize(n) + n
 }
@@ -343,6 +348,9 @@ func nftokensEncodedLen(tokens []NFTokenValue) int {
 	for i := range tokens {
 		n += 35
 		if tokens[i].HasURI() {
+			if len(tokens[i].URI) > maxVLLength {
+				return 0
+			}
 			n += 1 + variableLengthSize(len(tokens[i].URI)) + len(tokens[i].URI)
 		}
 	}
