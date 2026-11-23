@@ -4,22 +4,54 @@ import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Register registers all NFToken-related transaction types with the tx registry.
 func Register() {
-	tx.Register(tx.TypeNFTokenMint, func() tx.Transaction {
-		return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeNFTokenMint,
+		New: func() tx.Transaction {
+			return &NFTokenMint{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenMint, "")}
+		},
+		Delegation:   tx.Delegable,
+		Privileges:   tx.PrivChangeNFTCounts,
+		Consequences: tx.NormalConsequences,
 	})
-	tx.Register(tx.TypeNFTokenBurn, func() tx.Transaction {
-		return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeNFTokenBurn,
+		New: func() tx.Transaction {
+			return &NFTokenBurn{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenBurn, "")}
+		},
+		Delegation:   tx.Delegable,
+		Privileges:   tx.PrivChangeNFTCounts,
+		Consequences: tx.NormalConsequences,
 	})
-	tx.Register(tx.TypeNFTokenCreateOffer, func() tx.Transaction {
-		return &NFTokenCreateOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCreateOffer, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeNFTokenCreateOffer,
+		New: func() tx.Transaction {
+			return &NFTokenCreateOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCreateOffer, "")}
+		},
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
-	tx.Register(tx.TypeNFTokenCancelOffer, func() tx.Transaction {
-		return &NFTokenCancelOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCancelOffer, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeNFTokenCancelOffer,
+		New: func() tx.Transaction {
+			return &NFTokenCancelOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenCancelOffer, "")}
+		},
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
-	tx.Register(tx.TypeNFTokenAcceptOffer, func() tx.Transaction {
-		return &NFTokenAcceptOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenAcceptOffer, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeNFTokenAcceptOffer,
+		New: func() tx.Transaction {
+			return &NFTokenAcceptOffer{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenAcceptOffer, "")}
+		},
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
-	tx.Register(tx.TypeNFTokenModify, func() tx.Transaction {
-		return &NFTokenModify{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenModify, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeNFTokenModify,
+		New: func() tx.Transaction {
+			return &NFTokenModify{BaseTx: *tx.NewBaseTx(tx.TypeNFTokenModify, "")}
+		},
+		Delegation:   tx.Delegable,
+		Consequences: tx.NormalConsequences,
 	})
 }

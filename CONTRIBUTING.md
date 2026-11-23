@@ -39,9 +39,11 @@ What depends on the checkout:
 | Task | Needs a rippled checkout? |
 |------|---------------------------|
 | `just build`, `just lint`, `just docs-check` | No |
-| `just test-tx`, `just test-integration`, `just test-core` | No |
+| `just test-integration`, `just test-core` | No |
+| `just test-tx` | Yes. The transaction descriptor and MPT field tests read the pinned `transactions.macro`. |
 | `just conformance --corpus …` and `go test ./internal/testing/conformance` | No. The recorded corpus is committed under `internal/testing/conformance/testdata/rippled-3.4.1-v4`. |
-| `just test-libs`, `just test` | Yes. Four source-inventory tests in `codec/binarycodec/definitions`, `ledger/entry` and `ledger/entry/schema` read pinned rippled source files. Without a checkout they **fail** (they are not skipped) with `rippled 3.4.1 oracle not found`. Every other test in those packages still runs. |
+| `just test-libs` | Yes. Source-inventory tests in `codec/binarycodec/definitions`, `ledger/entry` and `ledger/entry/schema` read pinned rippled source files. |
+| `just test` | Yes. The full suite includes the transaction and library tests above. |
 | `just test-docker` (peer interop) | No checkout. Needs Docker; `scripts/peer-interop/Dockerfile` downloads the checksum-pinned `xrpld` 3.4.1 package from `packages.xrplf.org`. |
 | Re-recording the conformance corpus (`scripts/oracle/`) | Requires the pinned private oracle checkout. |
 
@@ -81,8 +83,13 @@ When implementing or fixing a feature:
    codes (e.g. `temBAD_OFFER: ...`).
 3. **Mirror the tests** in Go under `internal/testing/<feature>/` — one directory
    per feature (e.g. `internal/testing/offer/`, `internal/testing/amm/`).
-   Transaction types live under `internal/tx/<type>/` and self-register via
-   `init()` + `tx.Register()`.
+   Transaction types live under `internal/tx/<type>/`. Each declares one
+   `tx.Descriptor` (constructor, delegation, privileges, queue consequences,
+   Batch and reserve-sponsor eligibility) in its package's `Register()` via
+   `tx.Register()`; `internal/tx/all.RegisterAll()` calls every package's
+   `Register()` explicitly at startup. A new type also needs its code and name
+   in `protocol/transaction_type.go`, its field template in
+   `internal/tx/template.go`, and its wire definition in `definitions.json`.
 4. **Run the build, tests, and lint** (below) until green, plus the conformance
    summary for the area you touched.
 

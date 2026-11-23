@@ -107,6 +107,19 @@ func (p *Payment) TxType() tx.Type {
 	return tx.TypePayment
 }
 
+// Consequences reports the XRP the payment may spend: SendMax when present,
+// otherwise Amount, and nothing when that amount is not XRP.
+func (p *Payment) Consequences() tx.Consequences {
+	maxAmount := p.Amount
+	if p.SendMax != nil {
+		maxAmount = *p.SendMax
+	}
+	if !maxAmount.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(maxAmount.Drops())}
+}
+
 // GetDomainID exposes the payment's DomainID to the ValidPermissionedDEX invariant.
 func (p *Payment) GetDomainID() (*[32]byte, bool) {
 	if p.DomainID == nil {
