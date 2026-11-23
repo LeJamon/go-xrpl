@@ -655,7 +655,6 @@ func (s *DirectStepI) DirectStepSrcAcct() *[20]byte {
 	return &s.src
 }
 
-// Check validates the DirectStepI before use.
 func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	// Check freeze status — applies to BOTH payments and offer crossing.
 	// Skip for pure issue/redeem (single-step strand).
@@ -692,8 +691,6 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	if data == nil {
 		return ter.TerNO_LINE
 	}
-	// Decoded once for the auth, NoRipple and credit-limit checks; rs is nil
-	// when the line does not parse.
 	rs, parseErr := state.ParseRippleState(data)
 
 	// Check authorization

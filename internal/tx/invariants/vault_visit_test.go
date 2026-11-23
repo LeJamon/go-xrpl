@@ -36,10 +36,6 @@ type retypedTx struct {
 
 func (t retypedTx) TxType() invariants.TxType { return t.txType }
 
-// TestValidVaultSkipsVisitWithoutVault checks, on the entries real
-// transactions produce, that the ValidVault result with the no-vault shortcut
-// equals the result of a full per-entry visit, and that the shortcut is taken
-// exactly when no Vault entry is touched.
 func TestValidVaultSkipsVisitWithoutVault(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("SingleAssetVault")

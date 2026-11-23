@@ -205,8 +205,6 @@ func TestDirectStepCheckNoRipplePrecedesCreditLimit(t *testing.T) {
 	second.offerCrossing = true
 	require.Equal(t, ter.TerNO_RIPPLE, second.Check(sb))
 
-	// With one flag cleared, the payment falls through to the exhausted credit
-	// limit while offer crossing still skips that payment-specific check.
 	setFlags(keylet.Line(prev, cur, "USD").Key, 0)
 	second.offerCrossing = false
 	require.Equal(t, ter.TecPATH_DRY, second.Check(sb))

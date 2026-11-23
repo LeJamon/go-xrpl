@@ -187,8 +187,6 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 	uGetsIssuerID := saTakerGets.Issuer
 
 	// Reference: lines 165-170
-	// The TakerPays issuer's AccountRoot is read once, here and for
-	// checkAcceptAsset below.
 	var paysIssuer *state.AccountRoot
 	if saTakerPays.IsMPT() {
 		id, decodeErr := mptutil.DecodeID(saTakerPays.MPTIssuanceID())

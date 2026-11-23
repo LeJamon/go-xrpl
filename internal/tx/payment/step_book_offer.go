@@ -688,8 +688,6 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	}
 	currency := offerTakerGets.IOU.Currency
 
-	// The issuer's AccountRoot and the owner's trust line are each read once,
-	// for the freeze and LP-token checks as well as the balance.
 	issuerAccount, issuerErr := tx.ReadAccountRoot(sb, issuer)
 	var line *state.RippleState
 	lineRead := false

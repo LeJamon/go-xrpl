@@ -115,8 +115,6 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 		return amount
 	}
 
-	// The issuer AccountRoot and the trust line are each read once, for the
-	// freeze and LP-token checks as well as the balance.
 	var (
 		line     *state.RippleState
 		lineErr  error
@@ -128,7 +126,6 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 		if tx.IsAccountGlobalFrozen(issuer) {
 			return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
-		// Individual freeze by the issuer, or deep freeze by either side.
 		if amount.Currency != "" && amount.Currency != "XRP" {
 			line, lineErr = tx.ReadRippleState(view, accountID, issuerID, amount.Currency)
 			lineRead = true
