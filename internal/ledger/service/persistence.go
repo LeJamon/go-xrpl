@@ -663,7 +663,8 @@ func (s *Service) persistValidatedTipLocked(
 			return nil
 		case current.LedgerSeq == l.Sequence():
 			if bytes.Equal(current.Data, hash[:]) {
-				return nil
+				// A failed sync leaves the previous tip write readable.
+				return s.nodeStore.database().Sync(ctx)
 			}
 			if !allowSameSequenceReplacement {
 				return fmt.Errorf("validated ledger tip %d conflicts with persisted hash", l.Sequence())

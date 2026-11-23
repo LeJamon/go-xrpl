@@ -156,6 +156,7 @@ type stateBaseLateTipDatabase struct {
 	*nodestore.KVDatabase
 	beforeSync func()
 	failTip    atomic.Bool
+	failSync   atomic.Bool
 }
 
 func (d *stateBaseLateTipDatabase) Store(ctx context.Context, node *nodestore.Node) error {
@@ -170,6 +171,9 @@ func (d *stateBaseLateTipDatabase) Sync(ctx context.Context) error {
 		callback := d.beforeSync
 		d.beforeSync = nil
 		callback()
+	}
+	if d.failSync.Load() {
+		return errInjectedPersist
 	}
 	return d.KVDatabase.Sync(ctx)
 }
@@ -201,6 +205,14 @@ func TestValidatedPersistCountsTipPublicationOutcomes(t *testing.T) {
 	require.True(t, svc.hasDurableCompleteLedger(candidate))
 
 	db.failTip.Store(false)
+	db.failSync.Store(true)
+	for _, wantFailures := range []uint64{3, 4} {
+		svc.enqueuePersist(candidate)
+		svc.FlushPersists()
+		failures, _ = svc.ValidatedPersistFailures()
+		require.EqualValues(t, wantFailures, failures)
+	}
+	db.failSync.Store(false)
 	svc.enqueuePersist(candidate)
 	svc.FlushPersists()
 	failures, _ = svc.ValidatedPersistFailures()
