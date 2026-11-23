@@ -36,7 +36,10 @@ func TestNormalizeDecodedMPTValuesForSimulation(t *testing.T) {
 		"Reserved": reserved,
 	}
 
-	normalizeDecodedMPTValuesForSimulation(fields)
+	wantMessage := "Error at 'tx_json.RawTransactions.[0].RawTransaction'. Field 'tx_json.RawTransactions.[0].RawTransaction.Amount' has invalid data."
+	if message := normalizeDecodedMPTValuesForSimulation(fields, "tx_json"); message != wantMessage {
+		t.Fatalf("nested amount parse error = %q, want %q", message, wantMessage)
+	}
 
 	if got := fields["Amount"].(map[string]any)["value"]; got != "0" {
 		t.Fatalf("negative zero = %#v, want %q", got, "0")
@@ -44,10 +47,6 @@ func TestNormalizeDecodedMPTValuesForSimulation(t *testing.T) {
 	path := fields["Paths"].([]any)[0].([]any)[0].(map[string]any)
 	if got := path["currency"]; got != "1" {
 		t.Fatalf("reserved path currency = %#v, want unchanged sentinel", got)
-	}
-	inner := fields["RawTransactions"].([]any)[0].(map[string]any)["RawTransaction"].(map[string]any)
-	if got := inner["Amount"].(map[string]any)["value"]; got != "18446744073709551615" {
-		t.Fatalf("batch MPT value = %#v, want unsigned decimal", got)
 	}
 	if got := fields["Reserved"]; !reflect.DeepEqual(got, reserved) {
 		t.Fatalf("reserved decoded field = %#v, want unchanged %#v", got, reserved)

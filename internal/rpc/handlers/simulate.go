@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SimulateMethod handles the simulate RPC method.
@@ -84,7 +87,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if err != nil {
 			return nil, rpcerrors.RpcErrorInvalidField("tx_blob")
 		}
-		normalizeDecodedMPTValuesForSimulation(txJsonMap)
 	} else {
 		var txObj map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(rawParams["tx_json"]))
@@ -205,6 +207,12 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, rpcerrors.RpcErrorInvalidField("tx.Account")
 	}
 
+	if hasTxBlobRaw {
+		if message := normalizeDecodedMPTValuesForSimulation(txJsonMap, "tx_json"); message != "" {
+			return nil, rpcerrors.RpcErrorInvalidParams(message)
+		}
+	}
+
 	// Parse and validate the canonical transaction once. The simulation mode
 	// preserves STTx's invalidTransaction error envelope while the shared
 	// preprocessor handles serialized-field normalization and array limits.
@@ -292,30 +300,38 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	return response, nil
 }
 
-// normalizeDecodedMPTValuesForSimulation applies the public JSON projection
-// that rippled performs after decoding tx_blob and before STParsedJSONObject.
-// RawMPTValue is a wire-only representation, so only MPT amount values are
-// converted; all other decoded fields retain their original types and values.
-func normalizeDecodedMPTValuesForSimulation(value any) {
-	switch value := value.(type) {
-	case map[string]any:
-		if _, isMPT := value["mpt_issuance_id"]; isMPT {
-			if raw, ok := value["value"].(binarycodectypes.RawMPTValue); ok {
-				value["value"] = raw.String()
+// Simulation parses the decoded MPT's display value after autofill. This erases
+// the wire sign of zero and applies the JSON magnitude limit.
+func normalizeDecodedMPTValuesForSimulation(fields map[string]any, path string) string {
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		switch child := fields[name].(type) {
+		case map[string]any:
+			fieldPath := path + "." + name
+			if raw, ok := child["value"].(binarycodectypes.RawMPTValue); ok {
+				if raw.Magnitude > protocol.MaxMPTokenAmount {
+					return fmt.Sprintf("Field '%s' has invalid data.", fieldPath)
+				}
+				child["value"] = raw.String()
+			} else if message := normalizeDecodedMPTValuesForSimulation(child, fieldPath); message != "" {
+				return message
+			}
+		case []any:
+			for i, item := range child {
+				wrapper, _ := item.(map[string]any)
+				for wrapperName, value := range wrapper {
+					object, ok := value.(map[string]any)
+					if !ok {
+						continue
+					}
+					itemPath := fmt.Sprintf("%s.%s.[%d].%s", path, name, i, wrapperName)
+					if message := normalizeDecodedMPTValuesForSimulation(object, itemPath); message != "" {
+						return fmt.Sprintf("Error at '%s'. %s", itemPath, message)
+					}
+				}
 			}
 		}
-		for _, child := range value {
-			normalizeDecodedMPTValuesForSimulation(child)
-		}
-	case []any:
-		for _, child := range value {
-			normalizeDecodedMPTValuesForSimulation(child)
-		}
-	case []map[string]any:
-		for _, child := range value {
-			normalizeDecodedMPTValuesForSimulation(child)
-		}
 	}
+	return ""
 }
 
 func (m *SimulateMethod) RequiredCondition() types.Condition {
