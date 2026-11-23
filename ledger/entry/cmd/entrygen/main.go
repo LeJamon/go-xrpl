@@ -172,8 +172,6 @@ type entryRender struct {
 	Writer                 writerRender
 }
 
-// writerRender is the direct binary writer of one entry type. Writes are in
-// canonical wire order, resolved here so the generated code never sorts.
 type writerRender struct {
 	EntryTypeBytes string // LedgerEntryType header and value
 	FixedSize      int    // bytes written whatever the presence bits

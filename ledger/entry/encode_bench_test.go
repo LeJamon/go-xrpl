@@ -7,8 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
-// benchmarkEntries are typical shapes of the entries transactions rewrite
-// most often.
 var benchmarkEntries = []struct {
 	name   string
 	fields map[string]any
@@ -61,8 +59,6 @@ var benchmarkEntries = []struct {
 	}},
 }
 
-// BenchmarkEncode measures Encode (the direct writer) against encodeViaMap,
-// the map-based encoder it replaced, on decoded entries.
 func BenchmarkEncode(b *testing.B) {
 	for _, bench := range benchmarkEntries {
 		data, err := binarycodec.EncodeBytes(bench.fields)

@@ -23,10 +23,6 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
 
-// The differential harness below proves that every encoder an entry exposes
-// produces exactly the bytes, and accepts exactly the inputs, of encodeViaMap:
-// the original ToMap-through-binarycodec path, kept as the oracle.
-
 type namedEncoder struct {
 	name   string
 	encode func() ([]byte, error)
@@ -84,8 +80,6 @@ func requireEncodeParity(t testing.TB, e Entry) parityResult {
 	return result
 }
 
-// requireDecodedParity re-decodes an oracle encoding and compares the encoders
-// again on the decoded value. It reports whether the bytes decoded.
 func requireDecodedParity(t testing.TB, typ Type, data []byte) bool {
 	t.Helper()
 	decoded := New(typ)
@@ -147,7 +141,6 @@ func TestEncodeParityFixtures(t *testing.T) {
 	})
 }
 
-// conformanceCorpusDir is the pinned rippled corpus, relative to this package.
 var conformanceCorpusDir = filepath.Join("..", "..", filepath.FromSlash(rippled.Pin.Corpus))
 
 // TestEncodeParityConformanceCorpus decodes every ledger-entry blob recorded
@@ -345,8 +338,6 @@ func fixtureEntry(t testing.TB, name string) Entry {
 	return e
 }
 
-// parityField is one serialized field of an entry, with the candidate values
-// the property test assigns to it.
 type parityField struct {
 	name      string
 	xrplType  string
@@ -448,9 +439,6 @@ var parityAddressStrings = []any{
 
 func hexOfLen(n int, digit string) string { return strings.Repeat(digit, n) }
 
-// parityValues returns valid, boundary, non-canonical and invalid values for
-// one XRPL field type; current is the decoded fixture value and slotKind the
-// kind of the struct field holding it.
 func parityValues(xrplType, field string, current any, slotKind reflect.Kind) []any {
 	values := []any{current}
 	switch xrplType {
@@ -799,9 +787,6 @@ func FuzzEncodeParity(f *testing.F) {
 	})
 }
 
-// FuzzEncodeParityStringField assigns an arbitrary string to one string- or
-// Amount-valued field of a fully populated entry, either directly or as one
-// component of an issued or MPT amount, and compares the encoders.
 func FuzzEncodeParityStringField(f *testing.F) {
 	for i := range schema.Specs {
 		f.Add(uint8(i), uint8(0), uint8(0), "0")

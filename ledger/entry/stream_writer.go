@@ -13,19 +13,10 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 )
 
-// The append helpers below are the writing counterpart of streamReader. Each
-// appends one field value, after its header, in exactly the form
-// binarycodec.EncodeBytes produces for the same Go value, and fails on exactly
-// the inputs it rejects. Values with intricate canonicalisation are handed to
-// the codec's own serializers.
-
-// maxVLLength is the largest payload a variable-length prefix can describe.
 const maxVLLength = 918744
 
 var zeroHash [32]byte
 
-// isXAddress mirrors the codec's X-address detection, whose length gate makes
-// it free for every other string.
 func isXAddress(s string) bool {
 	return len(s) == 47 && addresscodec.IsValidXAddress(s)
 }
@@ -138,9 +129,6 @@ func appendAccountID(dst []byte, s string) ([]byte, error) {
 	return append(appendVariableLength(dst, len(id)), id...), nil
 }
 
-// appendAmount writes an Amount. Native amounts in the canonical form the
-// decoder produces are written inline; every other value goes through the
-// codec's Amount serializer.
 func appendAmount(dst []byte, v any) ([]byte, error) {
 	if s, ok := v.(string); ok {
 		if wire, ok := canonicalNativeAmount(s); ok {
@@ -233,8 +221,6 @@ func appendCodecValue(dst []byte, st types.SerializedType, v any) ([]byte, error
 	return append(dst, encoded...), nil
 }
 
-// appendNFTokens writes the body of an NFTokens array: one NFToken object per
-// token followed by the array end marker.
 func appendNFTokens(dst []byte, tokens []NFTokenValue) ([]byte, error) {
 	for i := range tokens {
 		if tokens[i].HasURI() && len(tokens[i].URI) > maxVLLength {

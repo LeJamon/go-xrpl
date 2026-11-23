@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-// viaMapEncoder is implemented by every generated entry: encodeViaMap is the
-// reference ToMap-through-binarycodec encoder the direct writer must match.
 type viaMapEncoder interface {
 	encodeViaMap() ([]byte, error)
 }
