@@ -319,7 +319,7 @@ func TestIngestHistoricalRejectsResidentCandidateOutsideValidatedTip(t *testing.
 			svc.historyComponent.mu.Unlock()
 			svc.mu.Unlock()
 
-			require.ErrorContains(
+			require.ErrorContains(t,
 				ingestHistoricalLedgerCopy(ctx, svc, resident, test.prepared),
 				"current validated chain",
 			)
