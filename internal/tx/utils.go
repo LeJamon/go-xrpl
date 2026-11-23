@@ -113,10 +113,22 @@ func IsIOUFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte, cu
 	if err != nil {
 		return false, err
 	}
-	if issuer != nil && issuer.Flags&state.LsfGlobalFreeze != 0 {
+	if IsAccountGlobalFrozen(issuer) {
 		return true, nil
 	}
 	return IsTrustlineFrozenBy(view, issuerID, accountID, currency)
+}
+
+// IsAccountGlobalFrozen reports whether an already-read issuer AccountRoot set
+// lsfGlobalFreeze. A missing account is not frozen.
+func IsAccountGlobalFrozen(issuer *state.AccountRoot) bool {
+	return issuer != nil && issuer.Flags&state.LsfGlobalFreeze != 0
+}
+
+// IsRippleStateDeepFrozen reports whether either side deep-froze an
+// already-parsed trust line. A missing line is not deep-frozen.
+func IsRippleStateDeepFrozen(line *state.RippleState) bool {
+	return line != nil && line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0
 }
 
 // HasExpired reports whether an optional expiration has passed relative to the
@@ -203,11 +215,10 @@ func IsGlobalFrozen(view state.ReadOnlyLedgerView, issuerAddress string) bool {
 	}
 
 	account, err := ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil {
+	if err != nil {
 		return false
 	}
-
-	return (account.Flags & state.LsfGlobalFreeze) != 0
+	return IsAccountGlobalFrozen(account)
 }
 
 // IsDeepFrozen implements rippled's isDeepFrozen for an IOU: either side of the
@@ -225,10 +236,10 @@ func IsIOUDeepFrozen(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte
 		return false, nil
 	}
 	line, err := ReadRippleState(view, accountID, issuerID, currency)
-	if err != nil || line == nil {
+	if err != nil {
 		return false, err
 	}
-	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, nil
+	return IsRippleStateDeepFrozen(line), nil
 }
 
 // ownerCountReadHookView is the optional read-side owner-count hook a view may
@@ -266,7 +277,12 @@ func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64,
 	if err != nil || account == nil {
 		return NewXRPAmount(0)
 	}
+	return XRPLiquidOf(view, accountID, account, ownerCountAdj, reserveBase, reserveIncrement)
+}
 
+// XRPLiquidOf is XRPLiquid for an AccountRoot the caller already read from
+// view; account is not modified.
+func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.AccountRoot, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
 	accountWithHook := accountWithOwnerCountHook(view, accountID, account)
 	ownerCount := accountWithHook.OwnerCount
 	if account.IsPseudoAccount() {

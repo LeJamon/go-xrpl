@@ -134,9 +134,9 @@ func TestDirectStepICreditFailuresAbortEveryBranch(t *testing.T) {
 		fault   directCreditFault
 		faultAt int
 	}{
-		{name: "read", fault: directCreditReadFault, faultAt: 4},
-		{name: "parse", fault: directCreditParseFault, faultAt: 4},
-		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 5},
+		{name: "read", fault: directCreditReadFault, faultAt: 2},
+		{name: "parse", fault: directCreditParseFault, faultAt: 2},
+		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 3},
 	}
 
 	for _, branch := range branches {
@@ -180,9 +180,9 @@ func TestDirectStepICreditFailureDiscardsStrandSandbox(t *testing.T) {
 		fault   directCreditFault
 		faultAt int
 	}{
-		{name: "read", fault: directCreditReadFault, faultAt: 4},
-		{name: "parse", fault: directCreditParseFault, faultAt: 4},
-		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 5},
+		{name: "read", fault: directCreditReadFault, faultAt: 2},
+		{name: "parse", fault: directCreditParseFault, faultAt: 2},
+		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 3},
 	}
 
 	for _, fault := range faults {

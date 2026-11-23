@@ -688,37 +688,49 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	}
 	currency := offerTakerGets.IOU.Currency
 
+	// The issuer's AccountRoot and the owner's trust line are each read once,
+	// for the freeze and LP-token checks as well as the balance.
+	issuerAccount, issuerErr := tx.ReadAccountRoot(sb, issuer)
+	var line *state.RippleState
+	lineRead := false
+
 	// Check freeze before returning balance (fhZERO_IF_FROZEN).
 	// If the trust line is frozen or deep frozen, the offer is treated as unfunded.
 	// Reference: rippled accountHolds() lines 407-413:
 	//   if (zeroIfFrozen == fhZERO_IF_FROZEN) {
 	//     if (isFrozen(...) || isDeepFrozen(...)) return false;
 	//   }
-	if offerOwner != issuer {
-		frozen := tx.IsFrozen(sb, offerOwner, tx.Asset{Currency: currency, Issuer: state.EncodeAccountIDSafe(issuer)})
+	if offerOwner != issuer && currency != "" && currency != "XRP" {
+		frozen := tx.IsAccountGlobalFrozen(issuerAccount)
 		if !frozen {
-			frozen, err = s.isDeepFrozenIssue(sb, offerOwner, Issue{Currency: currency, Issuer: issuer})
-			if err != nil {
-				return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), err
+			var lineErr error
+			line, lineErr = tx.ReadRippleState(sb, offerOwner, issuer, currency)
+			lineRead = true
+			if lineErr != nil {
+				return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), fmt.Errorf("deep-freeze trust line: %w", lineErr)
 			}
+			frozen = tx.IsRippleStateFrozenBy(line, issuer, offerOwner) || tx.IsRippleStateDeepFrozen(line)
 		}
 		if frozen {
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 		}
 	}
 	if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		switch mptutil.LPTokenFrozenForIssuer(sb, offerOwner, issuer) {
+		switch mptutil.LPTokenFrozenOf(sb, offerOwner, issuerAccount) {
 		case mptutil.LPTokenFrozen, mptutil.LPTokenAMMUnresolvable:
 			// accountHolds() treats frozen or unresolvable LP backing as zero;
 			// OfferStream then grooms the unfunded offer.
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 		}
 	}
-	if result := mptutil.CanTransferLPToken(sb, offerOwner, offerOwner, issuer); result != ter.TesSUCCESS {
+	if issuerErr != nil || mptutil.CanTransferLPTokenOf(sb, offerOwner, offerOwner, issuerAccount) != ter.TesSUCCESS {
 		return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 	}
 
-	ownerBalance := s.getIOUBalance(sb, offerOwner, issuer, currency)
+	if offerOwner != issuer && !lineRead {
+		line, _ = tx.ReadRippleState(sb, offerOwner, issuer, currency)
+	}
+	ownerBalance := s.getIOUBalance(offerOwner, issuer, currency, line)
 
 	// Subtract deferred credits so self-cross round-trips net to zero, matching
 	// rippled accountHolds() which returns view.balanceHook(account, issuer, amount)
@@ -744,8 +756,9 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	return ownerBalance, nil
 }
 
-// getIOUBalance returns an account's IOU balance with an issuer
-func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, currency string) EitherAmount {
+// getIOUBalance returns an account's IOU balance with an issuer, given their
+// trust line as already read (nil when absent or unreadable).
+func (s *BookStep) getIOUBalance(account, issuer [20]byte, currency string, rs *state.RippleState) EitherAmount {
 	issuerStr := state.EncodeAccountIDSafe(issuer)
 
 	if account == issuer {
@@ -753,14 +766,7 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 		return NewIOUEitherAmount(tx.NewIssuedAmount(1000000000000000, 15, currency, issuerStr))
 	}
 
-	lineKey := keylet.Line(account, issuer, currency)
-	lineData, err := sb.Read(lineKey)
-	if err != nil || lineData == nil {
-		return ZeroIOUEitherAmount(currency, issuerStr)
-	}
-
-	rs, err := state.ParseRippleState(lineData)
-	if err != nil {
+	if rs == nil {
 		return ZeroIOUEitherAmount(currency, issuerStr)
 	}
 

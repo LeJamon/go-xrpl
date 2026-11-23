@@ -3,7 +3,6 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -992,10 +991,7 @@ func (ctx *StrandContext) checkDirectStep(step *DirectStepI, view *PaymentSandbo
 		// Run common checks that apply to both payments and offer crossing.
 		// Reference: rippled DirectStepI<TDerived>::check() lines 906-912
 		if !(step.isFirst && step.isLast) {
-			if result := checkFreeze(view, step.src, step.dst, step.currency); result != ter.TesSUCCESS {
-				return result
-			}
-			if result := mptutil.CanTransferLPToken(view, step.src, step.dst, step.dst); result != ter.TesSUCCESS {
+			if result := checkFreezeAndLPToken(view, step.src, step.dst, step.currency); result != ter.TesSUCCESS {
 				return result
 			}
 		}

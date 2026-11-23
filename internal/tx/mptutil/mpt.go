@@ -743,18 +743,17 @@ func CanTransferAsset(view state.ReadOnlyLedgerView, asset tx.Asset, from, to [2
 // must permit the same holder-to-holder transfer, including any reference
 // holding's recursive transfer capability.
 func CanTransferLPToken(view state.ReadOnlyLedgerView, from, to, lpTokenIssuer [20]byte) ter.Result {
-	issuerRaw, err := view.Read(keylet.Account(lpTokenIssuer))
+	issuer, err := tx.ReadAccountRoot(view, lpTokenIssuer)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
-	if issuerRaw == nil {
-		return ter.TesSUCCESS
-	}
-	issuer, err := state.ParseAccountRoot(issuerRaw)
-	if err != nil {
-		return ter.TecINTERNAL
-	}
-	if !issuer.HasAMMID() {
+	return CanTransferLPTokenOf(view, from, to, issuer)
+}
+
+// CanTransferLPTokenOf is CanTransferLPToken for a caller that already read the
+// LP token issuer's AccountRoot from view (nil when it does not exist).
+func CanTransferLPTokenOf(view state.ReadOnlyLedgerView, from, to [20]byte, issuer *state.AccountRoot) ter.Result {
+	if issuer == nil || !issuer.HasAMMID() {
 		return ter.TesSUCCESS
 	}
 

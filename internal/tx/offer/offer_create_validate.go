@@ -187,6 +187,9 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 	uGetsIssuerID := saTakerGets.Issuer
 
 	// Reference: lines 165-170
+	// The TakerPays issuer's AccountRoot is read once, here and for
+	// checkAcceptAsset below.
+	var paysIssuer *state.AccountRoot
 	if saTakerPays.IsMPT() {
 		id, decodeErr := mptutil.DecodeID(saTakerPays.MPTIssuanceID())
 		if decodeErr != nil {
@@ -196,7 +199,10 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 			return ter.TecLOCKED
 		}
 	} else if uPaysIssuerID != "" {
-		if tx.IsGlobalFrozen(view, uPaysIssuerID) {
+		if paysIssuerID, decodeErr := state.DecodeAccountID(uPaysIssuerID); decodeErr == nil {
+			paysIssuer, _ = tx.ReadAccountRoot(view, paysIssuerID)
+		}
+		if tx.IsAccountGlobalFrozen(paysIssuer) {
 			return ter.TecFROZEN
 		}
 	}
@@ -242,7 +248,12 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 				return ter.TecUNFUNDED_OFFER
 			}
 		}
-		funds := mptutil.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
+		var funds tx.Amount
+		if saTakerGets.IsNative() {
+			funds = tx.XRPLiquidOf(view, accountID, account, 0, config.ReserveBase, config.ReserveIncrement)
+		} else {
+			funds = mptutil.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
+		}
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER
 		}
@@ -274,7 +285,7 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 			if err != nil {
 				return ter.TecNO_ISSUER
 			}
-			result = checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency, config)
+			result = checkAcceptAsset(view, accountID, paysIssuerID, paysIssuer, saTakerPays.Currency, config)
 		}
 		if result != ter.TesSUCCESS {
 			return result
@@ -330,11 +341,11 @@ func checkAcceptMPT(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Am
 }
 
 // checkAcceptAsset validates that an account can receive an asset.
+// issuerAccount is issuerID's AccountRoot as read from view, nil when absent
+// or unreadable.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, currency string, config tx.EngineConfig) ter.Result {
-	// Read issuer account
-	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil || issuerAccount == nil {
+func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, issuerAccount *state.AccountRoot, currency string, config tx.EngineConfig) ter.Result {
+	if issuerAccount == nil {
 		if config.ApplyFlags&tx.TapRETRY != 0 {
 			return ter.TerNO_ACCOUNT
 		}
@@ -359,6 +370,7 @@ func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, 
 	}
 
 	// Reference: lines 258-282
+	var rs *state.RippleState
 	if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
 		trustLineKey := keylet.Line(accountID, issuerID, currency)
 		trustLineData, err := view.Read(trustLineKey)
@@ -369,7 +381,7 @@ func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, 
 			return ter.TecNO_LINE
 		}
 
-		rs, err := state.ParseRippleState(trustLineData)
+		rs, err = state.ParseRippleState(trustLineData)
 		if err != nil {
 			return ter.TecNO_LINE
 		}
@@ -391,21 +403,21 @@ func checkAcceptAsset(view tx.ReadOnlyLedgerView, accountID, issuerID [20]byte, 
 		}
 	}
 
-	// Reference: lines 293-309
-	trustLineKey := keylet.Line(accountID, issuerID, currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		// No trustline = OK (will be created if needed)
-		return ter.TesSUCCESS
+	// Reference: lines 293-309. The RequireAuth branch above already parsed
+	// the line from this read-only view.
+	if rs == nil {
+		trustLineData, err := view.Read(keylet.Line(accountID, issuerID, currency))
+		if err != nil || trustLineData == nil {
+			// No trustline = OK (will be created if needed)
+			return ter.TesSUCCESS
+		}
+		rs, err = state.ParseRippleState(trustLineData)
+		if err != nil {
+			return ter.TesSUCCESS
+		}
 	}
 
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return ter.TesSUCCESS
-	}
-
-	deepFrozen := (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
-	if deepFrozen {
+	if tx.IsRippleStateDeepFrozen(rs) {
 		return ter.TecFROZEN
 	}
 
