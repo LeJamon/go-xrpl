@@ -186,8 +186,18 @@ func (s *Service) RepairCleanerLedgerIndex(
 		}
 	}
 
+	tip := s.GetValidatedLedger()
+	expected, known, err := s.canonicalLedgerHashFromTip(ctx, tip, seq)
+	if err != nil {
+		return false, err
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tip != s.validatedLedger || (known && expected != hash) {
+		return false, fmt.Errorf("ledger_cleaner: ledger %d is no longer canonical", seq)
+	}
 	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 	indexed := s.ledgerHistory[seq]
 	if indexed == nil || indexed.Hash() != hash || indexed.ParentHash() != parentHash {
 		repairTransactions = true
@@ -201,14 +211,22 @@ func (s *Service) RepairCleanerLedgerIndex(
 			}
 		}
 		if canonical != nil && canonical.Sequence() == seq && canonical.ParentHash() == parentHash {
-			s.putHistoryLocked(canonical)
 			indexed = canonical
 		}
 	}
 	if indexed == nil || indexed.Hash() != hash || indexed.ParentHash() != parentHash {
-		s.historyComponent.mu.Unlock()
-		s.mu.Unlock()
 		return false, fmt.Errorf("ledger_cleaner: canonical ledger %d unavailable for index repair", seq)
+	}
+	if !indexed.IsValidated() {
+		if !known {
+			return false, fmt.Errorf("ledger_cleaner: missing validation proof for ledger %d", seq)
+		}
+		if err := indexed.SetValidated(); err != nil {
+			return false, err
+		}
+	}
+	if s.ledgerHistory[seq] != indexed {
+		s.putHistoryLocked(indexed)
 	}
 	if indexedSeq, ok := s.ledgerByHash[hash]; !ok || indexedSeq != seq {
 		s.ledgerByHash[hash] = seq
@@ -220,8 +238,5 @@ func (s *Service) RepairCleanerLedgerIndex(
 			repairTransactions = true
 		}
 	}
-	s.historyComponent.mu.Unlock()
-	s.mu.Unlock()
-
 	return repairTransactions, nil
 }

@@ -412,3 +412,28 @@ func TestCleanerRepairsHeaderBeforeTransactionIndex(t *testing.T) {
 	require.Equal(t, nodestore.NodeLedger, header.Type)
 	requireLedgerIndexed(t, repositories, seq, true)
 }
+
+func TestCleanerInstallsColdCanonicalLedgerAsValidated(t *testing.T) {
+	db := newTestNodeStore(t, 100)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	cfg := DefaultConfig()
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = shamapbackend.New(db)
+	cfg.LedgerCacheSize = 1
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	seq, err := svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	_, err = svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	cold, err := svc.CleanerLedger(t.Context(), seq)
+	require.NoError(t, err)
+	require.NotNil(t, cold)
+	_, err = svc.RepairCleanerLedgerIndex(t.Context(), seq, cold.Hash(), cold.ParentHash())
+	require.NoError(t, err)
+	adopted, err := svc.AdoptedLedgerBySequence(seq)
+	require.NoError(t, err)
+	require.True(t, adopted.IsValidated())
+}
