@@ -308,8 +308,6 @@ func isNativeCurrency(currency string) bool {
 	return keylet.CurrencyBytes(currency) == [20]byte{}
 }
 
-// canonCurrency folds every valid native-currency spelling to XRP for callers
-// that need a textual issue representation.
 func canonCurrency(c string) string {
 	if isNativeCurrency(c) {
 		return "XRP"

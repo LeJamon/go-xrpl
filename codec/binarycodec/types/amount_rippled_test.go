@@ -629,8 +629,6 @@ func TestCurrencyCodeValidation(t *testing.T) {
 		{"JPY", "JPY", false},
 		// Valid custom characters
 		{"special chars A*B", "A*B", false},
-		// The grammar is exact: 0xA and 0x1 are three-character codes, not
-		// prefixes. A longer 0x-prefixed value is invalid input.
 		{"three-character 0xA", "0xA", false},
 		{"three-character 0x1", "0x1", false},
 		{"0x-prefixed ISO text", "0xUSD", true},

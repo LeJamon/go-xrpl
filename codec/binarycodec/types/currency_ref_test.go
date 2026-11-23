@@ -8,8 +8,6 @@ import (
 )
 
 // This is a small, independent model of rippled's pinned currency grammar.
-// Keep it separate from the implementation so the exhaustive differential
-// tests still detect changes in the production codec.
 
 var refIOUCodeRegex = regexp.MustCompile(IOUCodeRegex)
 

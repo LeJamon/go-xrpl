@@ -192,8 +192,6 @@ func encodeCanonicalTransaction(fields map[string]any) (string, error) {
 	return strings.ToUpper(hex.EncodeToString(encoded)), nil
 }
 
-// normalizeDecodedFieldTypes reverses the JSON rendering used for decoded
-// scalar fields whose wire encoder expects a numeric value.
 func normalizeJSONContainers(value any) any {
 	switch value := value.(type) {
 	case map[string]any:

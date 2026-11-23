@@ -68,8 +68,6 @@ func randomBytes(rng *rand.Rand, n int) []byte {
 	return b
 }
 
-// base58DiffInputs generates valid encodings of every XRPL key class together
-// with the malformed inputs derived from them.
 func base58DiffInputs(t testing.TB) []string {
 	rng := rand.New(rand.NewPCG(2192, 58))
 	var inputs []string

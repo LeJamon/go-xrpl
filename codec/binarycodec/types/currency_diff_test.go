@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// sameCodecErr treats errors as equal when they have the same dynamic type,
-// the same message and the same sentinel identity.
 func sameCodecErr(got, want error) bool {
 	if got == nil || want == nil {
 		return got == want
@@ -45,7 +43,6 @@ func standardCurrency(code string) []byte {
 }
 
 func TestCurrencyCodeMatchesReference(t *testing.T) {
-	// Every 3-character code over printable ASCII, exhaustively.
 	var compared int
 	code := make([]byte, 3)
 	for a := byte(0x20); a < 0x7f; a++ {
@@ -59,7 +56,6 @@ func TestCurrencyCodeMatchesReference(t *testing.T) {
 		}
 	}
 
-	// Every byte value in every position, next to valid and invalid neighbours.
 	neighbours := []byte("aZ0*| \x00\x7f\x80\xff")
 	for pos := range 3 {
 		for v := range 256 {
