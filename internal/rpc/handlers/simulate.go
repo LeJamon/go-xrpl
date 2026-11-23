@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -83,6 +84,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if err != nil {
 			return nil, rpcerrors.RpcErrorInvalidField("tx_blob")
 		}
+		normalizeDecodedMPTValuesForSimulation(txJsonMap)
 	} else {
 		var txObj map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(rawParams["tx_json"]))
@@ -288,6 +290,32 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	return response, nil
+}
+
+// normalizeDecodedMPTValuesForSimulation applies the public JSON projection
+// that rippled performs after decoding tx_blob and before STParsedJSONObject.
+// RawMPTValue is a wire-only representation, so only MPT amount values are
+// converted; all other decoded fields retain their original types and values.
+func normalizeDecodedMPTValuesForSimulation(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		if _, isMPT := value["mpt_issuance_id"]; isMPT {
+			if raw, ok := value["value"].(binarycodectypes.RawMPTValue); ok {
+				value["value"] = raw.String()
+			}
+		}
+		for _, child := range value {
+			normalizeDecodedMPTValuesForSimulation(child)
+		}
+	case []any:
+		for _, child := range value {
+			normalizeDecodedMPTValuesForSimulation(child)
+		}
+	case []map[string]any:
+		for _, child := range value {
+			normalizeDecodedMPTValuesForSimulation(child)
+		}
+	}
 }
 
 func (m *SimulateMethod) RequiredCondition() types.Condition {
