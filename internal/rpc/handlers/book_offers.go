@@ -217,7 +217,7 @@ func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Am
 			return types.Amount{}, [20]byte{}, rpcerrors.RpcErrorDstAmtMalformed(
 				"Invalid field 'taker_gets.currency', bad currency.")
 		}
-		return types.Amount{Currency: currency}, [20]byte{}, nil
+		return types.Amount{Currency: canonCurrency(currency)}, [20]byte{}, nil
 	}
 
 	var value string
