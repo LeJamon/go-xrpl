@@ -159,6 +159,100 @@ func TestSerializedFieldParseMessageCanonicalizesIssuedAmountString(t *testing.T
 	}
 }
 
+func TestSerializedFieldParseMessagePreservesIssuedAmountObject(t *testing.T) {
+	object := map[string]any{
+		"Amount": map[string]any{
+			"value":    "1e2",
+			"currency": "USD",
+			"issuer":   "rMRxj8jED6ZCjtjgFxB4cz1MGVNtYqCEyS",
+		},
+	}
+	if message := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("message = %q, want success", message)
+	}
+	want := map[string]any{
+		"value":    "1e2",
+		"currency": "USD",
+		"issuer":   "rMRxj8jED6ZCjtjgFxB4cz1MGVNtYqCEyS",
+	}
+	if got := object["Amount"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Amount = %#v, want %#v", got, want)
+	}
+}
+
+func TestSerializedFieldParseMessageCanonicalizesMPTObject(t *testing.T) {
+	object := map[string]any{
+		"Amount": map[string]any{
+			"mpt_issuance_id": "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+			"value":           "1e2",
+		},
+	}
+	if message := serializedFieldParseMessage(object, "tx_json", binarycodecdefs.Get()); message != "" {
+		t.Fatalf("message = %q, want success", message)
+	}
+	want := map[string]any{
+		"value":           "100",
+		"mpt_issuance_id": "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+	}
+	if got := object["Amount"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Amount = %#v, want %#v", got, want)
+	}
+}
+
+func TestSerializedFieldParseMessageMPTObjectValidation(t *testing.T) {
+	const issuanceID = "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8"
+	valid := func(value any) map[string]any {
+		return map[string]any{
+			"mpt_issuance_id": issuanceID,
+			"value":           value,
+		}
+	}
+
+	tests := []struct {
+		name   string
+		value  any
+		mutate func(map[string]any)
+		valid  bool
+	}{
+		{name: "numeric value", value: json.Number("100"), valid: true},
+		{name: "maximum value", value: "9223372036854775807", valid: true},
+		{name: "numeric exponent", value: json.Number("1e2")},
+		{name: "fractional value", value: "1.5"},
+		{name: "out of range", value: "9223372036854775808"},
+		{name: "missing value", mutate: func(object map[string]any) { delete(object, "value") }},
+		{name: "mixed currency", value: "1e2", mutate: func(object map[string]any) { object["currency"] = "USD" }},
+		{name: "invalid identifier", value: "1e2", mutate: func(object map[string]any) {
+			object["mpt_issuance_id"] = "not-an-issuance-id"
+		}},
+		{name: "non-string identifier", value: "1e2", mutate: func(object map[string]any) {
+			object["mpt_issuance_id"] = json.Number("1")
+		}},
+		{name: "reserved currency", value: "1e2", mutate: func(object map[string]any) {
+			delete(object, "mpt_issuance_id")
+			object["currency"] = "XRP"
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			object := valid(test.value)
+			if test.mutate != nil {
+				test.mutate(object)
+			}
+			message := serializedFieldParseMessage(map[string]any{"Amount": object}, "tx_json", binarycodecdefs.Get())
+			if test.valid {
+				if message != "" {
+					t.Fatalf("message = %q, want success", message)
+				}
+				return
+			}
+			if message != "Field 'tx_json.Amount' has invalid data." {
+				t.Fatalf("message = %q, want invalid amount data", message)
+			}
+		})
+	}
+}
+
 func TestSerializedFieldParseMessageInnerTemplate(t *testing.T) {
 	object := map[string]any{
 		"Signers": []any{
