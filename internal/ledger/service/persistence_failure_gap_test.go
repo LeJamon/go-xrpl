@@ -9,6 +9,8 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -109,6 +111,13 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	relational := &failingRepositories{RepositoryManager: repositories}
 	svc := startPersistedTestService(t, db, relational)
 
+	blob, hash := startupPaymentBlob(t, "persist-gap", 1)
+	payment, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	submitted, err := svc.SubmitTransaction(payment, blob, false)
+	require.NoError(t, err)
+	require.True(t, submitted.Applied)
+
 	failed := svc.GetClosedLedgerIndex() + 1
 	relational.fail(failed, 1)
 	seq, err := svc.AcceptLedger(ctx)
@@ -127,6 +136,30 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	require.Greater(t, tip.LedgerSeq, failed)
 	require.True(t, svc.HasCompleteLedger(failed))
 	requireLedgerIndexed(t, repositories, failed, true)
+	svc.Stop()
+
+	cfg := DefaultConfig()
+	cfg.FastLoad = true
+	cfg.Standalone = false
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = backend.New(db)
+	cfg.RelationalDB = repositories
+	restarted, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, restarted.Start())
+	t.Cleanup(restarted.Stop)
+	require.Equal(t, failed+1, restarted.GetValidatedLedgerIndex())
+
+	transaction, err := restarted.GetTransaction(hash)
+	require.NoError(t, err)
+	require.Equal(t, failed, transaction.LedgerIndex)
+	history, err := restarted.GetAccountTransactionsWithDelegate(ctx, jtx.MasterAccount().Address,
+		int64(failed), int64(failed), 10, nil, false, nil)
+	require.NoError(t, err)
+	require.Len(t, history.Transactions, 1)
+	require.Equal(t, hash, history.Transactions[0].Hash)
+	require.Equal(t, blob, history.Transactions[0].TxBlob)
+	require.Equal(t, failed, history.Transactions[0].LedgerIndex)
 }
 
 // A node-store failure must not leave a relational row for a ledger whose

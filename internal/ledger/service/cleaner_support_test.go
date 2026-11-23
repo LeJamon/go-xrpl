@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
-	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
@@ -13,8 +11,10 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
+	"github.com/stretchr/testify/require"
 )
 
 type cleanerMissingFamily struct {
