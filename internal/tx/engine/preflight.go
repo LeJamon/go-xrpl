@@ -109,7 +109,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	}
 
 	// preflight1 (which itself runs preflight0).
-	if result := e.preflight1(tx, common, rules); result != ter.TesSUCCESS {
+	if result := e.preflight1(tx, common, rules, false); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -138,7 +138,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 // fee → signing-key shape → ticket+AccountTxnID → inner-batch flag validation
 // → Sponsor field validation.
 // Reference: rippled Transactor.cpp preflight1/preflight0.
-func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
+func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules, hasParentBatch bool) ter.Result {
 	// The delegate check precedes preflight0 (and thus the NetworkID checks).
 	if result := checkDelegate(tx, common, rules); result != ter.TesSUCCESS {
 		return result
@@ -160,11 +160,10 @@ func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules 
 		return parseValidationError(err)
 	}
 	// Sequence presence (go-xrpl defensive) and the ticket+AccountTxnID rule.
-	if result := e.preflightSequence(common); result != ter.TesSUCCESS {
+	if result := e.preflightSequence(common, hasParentBatch); result != ter.TesSUCCESS {
 		return result
 	}
-	// The outer tfInnerBatchTxn rejection precedes the common Sponsor checks.
-	if result := preflightInnerBatchFlag(common, rules, false); result != ter.TesSUCCESS {
+	if result := preflightInnerBatchFlag(common, rules, hasParentBatch); result != ter.TesSUCCESS {
 		return result
 	}
 	if result := checkSponsorFields(tx, common, rules); result != ter.TesSUCCESS {
@@ -251,27 +250,11 @@ func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules, flags txcor
 	return checkPreflightRules(tx, rules)
 }
 
-// preflightInner runs the structural checks for an inner batch tx. rippled routes
-// inner txs through the SAME invokePreflight as standalone txs (Batch.cpp:338 →
-// preflight(stx, tapBATCH)): the amendment gate, checkExtraFeatures, preflight0's
-// flags mask, and the full T::preflight body all run — tapBATCH only makes
-// preflight1/preflight2 skip the fee and signature checks. So this must run every
-// per-type preflight seam (FlagsMasker, CheckExtraFeatures, RulesPreflighter,
-// RulesAwarePreflighter), not just Validate(): a type that carries part of its
-// preflight body in another seam would otherwise have that validation silently
-// skipped for an inner tx. Any failure collapses to temINVALID_INNER_BATCH at the
-// call site, so the intra-order here is immaterial.
-// Fee/signature/multi-sign rejections stay skipped (inner txs carry Fee=0, no
-// signature, and no multi-signers — all validated by Batch.Validate()). The
-// inner flag/parent consistency check still runs here because it is part of
-// common preflight1 and must also protect callers that supply a parent context
-// without going through Batch's structural checks.
+// Batch checks that each inner fee is zero and verifies the outer signatures.
+// Each inner transaction still goes through common and per-type preflight.
 func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	common := innerTx.GetCommon()
 	rules := e.rules()
-	if result := checkAccountPresent(common); result != ter.TesSUCCESS {
-		return result
-	}
 	for _, featureID := range innerTx.RequiredAmendments() {
 		if !rules.Enabled(featureID) {
 			return ter.TemDISABLED
@@ -280,29 +263,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkExtraFeatures(innerTx, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := checkFlagsMask(innerTx, common, rules); result != ter.TesSUCCESS {
-		return result
-	}
-	if common.HasRawNonnativeFee() {
-		return ter.TemBAD_FEE
-	}
-	if err := txcore.CheckSigningPubKey(common.SigningPubKey); err != nil {
-		return parseValidationError(err)
-	}
-	usesTicket := (common.Sequence == nil || *common.Sequence == 0) && common.TicketSequence != nil
-	if usesTicket && common.AccountTxnID != "" {
-		return ter.TemINVALID
-	}
-	if result := checkDelegate(innerTx, common, rules); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := preflightInnerBatchFlag(common, rules, true); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
+	if result := e.preflight1(innerTx, common, rules, true); result != ter.TesSUCCESS {
 		return result
 	}
 	if hasInvalidAmount(innerTx, rules) {
@@ -413,8 +374,9 @@ func checkAccountPresent(common *txcore.Common) ter.Result {
 // Transactor::preflight1, plus a go-xrpl-only defensive check that Sequence or
 // TicketSequence is present (rippled relies on the soeREQUIRED sfSequence
 // template field, which cannot be absent from a canonically-serialized tx).
-func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
-	if common.Sequence == nil && common.TicketSequence == nil {
+func (e *Engine) preflightSequence(common *txcore.Common, hasParentBatch bool) ter.Result {
+	// Batch checks for a missing inner sequence after the per-type preflight.
+	if !hasParentBatch && common.Sequence == nil && common.TicketSequence == nil {
 		return ter.TemBAD_SEQUENCE
 	}
 

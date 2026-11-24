@@ -190,11 +190,17 @@ func TestPreflightInnerBatchFlag_AbsentFlag(t *testing.T) {
 	}
 }
 
-func TestPreflightInnerDelegatePrecedesFlagContext(t *testing.T) {
+func TestPreflightInnerFlagPrecedence(t *testing.T) {
 	tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
 	tx.Delegate = tx.Account
-	if got := preflightEngine(allRules()).preflightInner(tx); got != ter.TemBAD_SIGNER {
+	tx.Fee = "-1"
+	e := preflightEngine(allRules())
+	if got := e.preflightInner(tx); got != ter.TemBAD_SIGNER {
 		t.Fatalf("preflightInner = %v, want %v", got, ter.TemBAD_SIGNER)
+	}
+	tx.Delegate = ""
+	if got := e.preflightInner(tx); got != ter.TemBAD_FEE {
+		t.Fatalf("preflightInner = %v, want %v", got, ter.TemBAD_FEE)
 	}
 }
 
@@ -214,10 +220,16 @@ func (t *rulesPreflightTx) PreflightRules(*amendment.Rules) error { return t.err
 // would let a malformed inner slip through to apply.
 func TestPreflightInner_RunsPerTypeSeams(t *testing.T) {
 	e := preflightEngine(allRules())
-
-	t.Run("PreflightRules runs for inner tx", func(t *testing.T) {
+	newInner := func() *txcore.BaseTx {
 		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
 		base.SetFlags(txcore.TfInnerBatchTxn)
+		base.SetSequence(1)
+		base.Fee = "0"
+		return base
+	}
+
+	t.Run("PreflightRules runs for inner tx", func(t *testing.T) {
+		base := newInner()
 		tx := &rulesPreflightTx{BaseTx: base, err: ter.Errorf(ter.TemMALFORMED, "bad")}
 		if got := e.preflightInner(tx); got != ter.TemMALFORMED {
 			t.Fatalf("preflightInner = %v, want TemMALFORMED", got)
@@ -226,9 +238,8 @@ func TestPreflightInner_RunsPerTypeSeams(t *testing.T) {
 
 	t.Run("FlagsMasker runs for inner tx", func(t *testing.T) {
 		bit := uint32(0x00010000)
-		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		flags := bit | txcore.TfInnerBatchTxn
-		base.Flags = &flags
+		base := newInner()
+		base.SetFlags(bit | txcore.TfInnerBatchTxn)
 		tx := &flagMaskTx{BaseTx: base, mask: bit}
 		if got := e.preflightInner(tx); got != ter.TemINVALID_FLAG {
 			t.Fatalf("preflightInner = %v, want TemINVALID_FLAG", got)
@@ -236,8 +247,7 @@ func TestPreflightInner_RunsPerTypeSeams(t *testing.T) {
 	})
 
 	t.Run("CheckExtraFeatures runs for inner tx", func(t *testing.T) {
-		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		base.SetFlags(txcore.TfInnerBatchTxn)
+		base := newInner()
 		tx := &extraFeaturesTx{BaseTx: base, err: ter.Errorf(ter.TemDISABLED, "disabled")}
 		if got := e.preflightInner(tx); got != ter.TemDISABLED {
 			t.Fatalf("preflightInner = %v, want TemDISABLED", got)
@@ -245,9 +255,7 @@ func TestPreflightInner_RunsPerTypeSeams(t *testing.T) {
 	})
 
 	t.Run("clean inner tx passes", func(t *testing.T) {
-		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		base.SetFlags(txcore.TfInnerBatchTxn)
-		if got := e.preflightInner(base); got != ter.TesSUCCESS {
+		if got := e.preflightInner(newInner()); got != ter.TesSUCCESS {
 			t.Fatalf("preflightInner = %v, want TesSUCCESS", got)
 		}
 	})
