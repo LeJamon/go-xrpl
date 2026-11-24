@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -290,8 +291,6 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 	if account == nil {
 		return NewXRPAmount(0)
 	}
-	accountWithHook := accountWithOwnerCountHook(view, accountID, account)
-	ownerCount := accountWithHook.OwnerCount
 	balance := NewXRPAmount(int64(account.Balance))
 	if hook, ok := view.(balanceReadHookView); ok {
 		balance = hook.BalanceHook(accountID, [20]byte{}, balance)
@@ -302,10 +301,17 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 	if ownerCountAdj > math.MaxInt || ownerCountAdj < math.MinInt {
 		return NewXRPAmount(0)
 	}
+	hooked := accountWithOwnerCountHook(view, accountID, account)
+	ownerCount, accountCount := hooked.OwnerCount, uint32(1)
+	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureSponsor) {
+		if hooked.SponsoredOwnerCount > hooked.OwnerCount {
+			return NewXRPAmount(0)
+		}
+		ownerCount = ownerCounts(&hooked).effective()
+		accountCount = reserveAccountCount(&hooked, 0)
+	}
 	ownerCount = ConfineOwnerCount(ownerCount, int(ownerCountAdj))
-	reserve, ok := AccountReserveForView(view, EngineConfig{
-		ReserveBase: reserveBase, ReserveIncrement: reserveIncrement,
-	}, &accountWithHook, ownerCount)
+	reserve, ok := checkedAccountReserve(EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}, ownerCount, accountCount)
 	if !ok {
 		return NewXRPAmount(0)
 	}

@@ -204,6 +204,10 @@ func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 			sb := NewPaymentSandbox(view)
 			require.Equal(t, int64(100_000_000), step.xrpLiquid(sb),
 				"pseudo-account must have zero reserve -> full balance liquid")
+			offer := &state.LedgerOffer{Account: account.Account, TakerGets: tx.NewXRPAmount(1)}
+			funds, err := (&BookStep{}).getOfferFundedAmount(sb, offer)
+			require.NoError(t, err)
+			require.Equal(t, NewXRPEitherAmount(int64(account.Balance)), funds)
 		})
 	}
 
@@ -212,6 +216,15 @@ func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 	view.createAccount(normal, 100_000_000, 5) // base 10 + 5*2 = 20 XRP reserve
 	normalStep := NewXRPEndpointStep(normal, false)
 	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(NewPaymentSandbox(view)))
+}
+
+func TestXRPEndpointReducesSponsoredReserve(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureSponsor})
+	sb := NewPaymentSandbox(view)
+	root := &state.AccountRoot{Balance: 100_000_000, SponsoringOwnerCount: 1}
+	step := XRPEndpointStep{account: [20]byte{1}, reserveReduction: -1}
+	require.EqualValues(t, 90_000_000, step.liquidOf(sb, root))
 }
 
 func TestXRPEndpointStep_UpdateFailureDoesNotCacheOrRecordCredit(t *testing.T) {
