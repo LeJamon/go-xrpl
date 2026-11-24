@@ -362,6 +362,7 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	canonical := makeStubLedger(t, seq, hash, parent)
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()
+	svc.validatedLedger = canonical
 	svc.putHistoryLocked(canonical)
 	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
@@ -373,7 +374,7 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	if !repairTxns {
 		t.Fatal("missing relational ledger did not force transaction repair")
 	}
-	if err := svc.RepairLedgerTransactions(ctx, seq); err != nil {
+	if err := svc.RepairLedgerTransactions(ctx, seq, hash, parent); err != nil {
 		t.Fatal(err)
 	}
 
@@ -398,14 +399,15 @@ func TestCleanerRepairsHeaderBeforeTransactionIndex(t *testing.T) {
 	db.fail(seq, 2)
 	_, err := svc.AcceptLedger(ctx)
 	require.NoError(t, err)
-	hash := nodestore.Hash256(svc.GetValidatedLedger().Hash())
+	tip := svc.GetValidatedLedger()
+	hash := nodestore.Hash256(tip.Hash())
 	header, err := db.Fetch(ctx, hash)
 	require.NoError(t, err)
 	require.Nil(t, header)
 
-	require.ErrorIs(t, svc.RepairLedgerTransactions(ctx, seq), errInjectedPersist)
+	require.ErrorIs(t, svc.RepairLedgerTransactions(ctx, seq, tip.Hash(), tip.ParentHash()), errInjectedPersist)
 	requireLedgerIndexed(t, repositories, seq, false)
-	require.NoError(t, svc.RepairLedgerTransactions(ctx, seq))
+	require.NoError(t, svc.RepairLedgerTransactions(ctx, seq, tip.Hash(), tip.ParentHash()))
 	header, err = db.Fetch(ctx, hash)
 	require.NoError(t, err)
 	require.NotNil(t, header)

@@ -1026,27 +1026,63 @@ func (s *Service) RefreshValidatedState(
 // RepairLedgerTransactions rebuilds the relational ledger and transaction
 // indexes from the canonical ledger. Nodes without relational persistence have
 // nothing to repair.
-func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32) error {
+func (s *Service) RepairLedgerTransactions(ctx context.Context, seq uint32, hash, parent [32]byte) error {
 	if s == nil || s.relationalDB == nil {
 		return nil
 	}
-	l, err := s.getLedgerBySequence(ctx, seq)
+	l := s.historyComponent.ledgerBySequence(seq)
+	if l == nil || l.Hash() != hash {
+		var err error
+		l, err = s.cleanerLedgerByHash(ctx, hash)
+		if err != nil {
+			return err
+		}
+	}
+	if l.Sequence() != seq || l.ParentHash() != parent {
+		return fmt.Errorf("ledger_cleaner: ledger %d identity mismatch", seq)
+	}
+	if s.nodeStore != nil {
+		if err := s.persistCleanerLedgerData(ctx, l); err != nil {
+			return err
+		}
+	}
+
+	tip := s.GetValidatedLedger()
+	canonical, known, err := s.canonicalLedgerHashFromTip(ctx, tip, seq)
 	if err != nil {
 		return err
 	}
+	if !known || canonical != hash {
+		return fmt.Errorf("ledger_cleaner: ledger %d is no longer canonical", seq)
+	}
+
 	s.retentionWriteMu.RLock()
 	defer s.retentionWriteMu.RUnlock()
 	if s.belowRetentionFloor(seq) {
 		return svcerr.ErrLedgerNotFound
 	}
-	if s.nodeStore != nil {
-		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
-			return err
-		}
-	}
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
+	// Frontier replacement can hold mu while waiting for canonicalPersistMu.
+	// Let the cleaner retry if replacement is in progress.
+	if !s.mu.TryRLock() {
+		return errors.New("ledger_cleaner: validated frontier busy")
+	}
+	current := s.validatedLedger
+	s.mu.RUnlock()
+	if current != tip {
+		return errors.New("ledger_cleaner: validated frontier changed during repair")
+	}
 	return s.persistToRelationalDB(ctx, l)
+}
+
+func (s *Service) persistCleanerLedgerData(ctx context.Context, l *ledger.Ledger) error {
+	s.retentionWriteMu.RLock()
+	defer s.retentionWriteMu.RUnlock()
+	if s.belowRetentionFloor(l.Sequence()) {
+		return svcerr.ErrLedgerNotFound
+	}
+	return s.persistToNodeStore(ctx, l, l.Sequence())
 }
 
 // persistToRelationalDB materializes a validated ledger and all of its

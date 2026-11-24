@@ -105,7 +105,7 @@ func TestAdvanceMinimumOnlineFloorWaitsForInFlightValidatedRetry(t *testing.T) {
 	svc.enqueueValidatedHistoryPersist(historical)
 	svc.FlushPersists()
 	require.Equal(t, 2, repos.attempts(failed))
-	require.ErrorIs(t, svc.RepairLedgerTransactions(t.Context(), failed), svcerr.ErrLedgerNotFound)
+	require.ErrorIs(t, svc.RepairLedgerTransactions(t.Context(), failed, historical.Hash(), historical.ParentHash()), svcerr.ErrLedgerNotFound)
 	requireLedgerIndexed(t, repos, failed, false)
 }
 
