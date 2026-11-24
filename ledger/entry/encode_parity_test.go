@@ -310,7 +310,6 @@ func collectLedgerEntryBlobs(node any, out map[string]struct{}) {
 	}
 }
 
-// fixtureBlob includes the optional common fields as well as the entry-specific fixture.
 func fixtureBlob(t testing.TB, name string) []byte {
 	t.Helper()
 	input := make(map[string]any, len(coverageFixtures[name])+3)

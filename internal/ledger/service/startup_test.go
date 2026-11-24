@@ -672,8 +672,7 @@ func TestService_StartupReplaySettingsReadFaultRetriesWithoutBlocking(t *testing
 
 			// Startup loading reads the fee leaf while constructing the closed
 			// ledger, so bind an equivalent cold parent before exercising the
-			// production close entry point. The replay target and hash remain the
-			// exact ones selected by StartupReplay.
+			// production close entry point.
 			stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, parent.Header().AccountHash, family)
 			require.NoError(t, err)
 			require.Zero(t, parent.Header().TxHash)
