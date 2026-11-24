@@ -159,7 +159,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 		if !remaining.IsZero() && !remaining.IsNegative() {
 			remainingAmt := payment.FromEitherAmount(remaining)
 			extraRC := payment.RippleCalculate(
-				payment.NewPaymentSandbox(rc.Sandbox),
+				rc.Sandbox,
 				pf.srcAccount, pf.dstAccount,
 				remainingAmt,
 				&pf.srcAmount,

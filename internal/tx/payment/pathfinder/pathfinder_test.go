@@ -1529,6 +1529,30 @@ func TestGetPathLiquidityDoesNotReuseConsumedOffer(t *testing.T) {
 	require.Zero(t, liquidity.Compare(payment.ToEitherAmount(takerGets)))
 }
 
+func TestGetPathLiquidityKeepsOfferReserveAcrossProbes(t *testing.T) {
+	ledger := newMockLedger()
+	issuer, maker, dst := testAccountID(1), testAccountID(2), testAccountID(3)
+	addAccount(t, ledger, issuer, 100_000_000, 0)
+	addAccount(t, ledger, dst, 100_000_000, 0)
+	addAccountWithOwnerCount(t, ledger, maker, 20_000_000, 0, 3)
+	addRippleState(t, ledger, issuer, maker, "USD", 0, 0, 100, 0)
+	usd := func(value float64) state.Amount {
+		return state.NewIssuedAmountFromFloat64(value, "USD", testAccountAddress(issuer))
+	}
+	for i, price := range []float64{4, 8} {
+		sequence := uint32(i + 1)
+		addOfferToBook(t, ledger, maker, sequence, usd(price), state.NewXRPAmountFromInt(4_000_000), [32]byte{})
+		ensureOwnerDirContains(t, ledger, maker, keylet.Offer(maker, sequence).Key)
+	}
+
+	pf := NewPathfinder(ledger, NewRippleLineCache(ledger), issuer, dst,
+		state.NewXRPAmountFromInt(8_000_000), usd(12), "USD", issuer, false)
+	path := []payment.PathStep{{Currency: "XRP", Type: 0x10}}
+	liquidity, _, ok := pf.getPathLiquidity(path, state.NewXRPAmountFromInt(4_000_000))
+	require.True(t, ok)
+	require.Equal(t, payment.NewXRPEitherAmount(4_000_000), liquidity)
+}
+
 func TestShouldRetryWithFullLiquidityPath(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2456,29 +2480,18 @@ func TestPathRank_MixedCriteria(t *testing.T) {
 	require.Equal(t, 0, ranks[2].Index, "worst quality last despite high liquidity")
 }
 
-// Test 34: FindPaths — XRP destination when dest doesn't exist
-
-func TestFindPaths_DestNotExist_XRPAllowed(t *testing.T) {
-	// XRP payments to non-existent destination may still proceed
-	// (account can be created if amount >= reserve)
+func TestFindPathsNewAccountReserve(t *testing.T) {
 	ledger := newMockLedger()
-	src := testAccountID(1)
-	dst := testAccountID(2)
+	src, dst := testAccountID(1), testAccountID(2)
+	addAccount(t, ledger, src, 10_000_000_000, 0)
+	reserve := int64(drops.DefaultReserveBase)
 
-	addAccount(t, ledger, src, 10000000000, 0)
-	// dst NOT in ledger
-
-	cache := NewRippleLineCache(ledger)
-	dstAmt := state.NewXRPAmountFromInt(1000000)
-
-	pf := NewPathfinder(ledger, cache, src, dst,
-		dstAmt, state.NewXRPAmountFromInt(2000000),
-		"XRP", [20]byte{}, false,
-	)
-
-	result := pf.FindPaths(testSearchLevel)
-	// XRP-to-XRP pathfinding should succeed even when dest doesn't exist
-	require.True(t, result, "XRP payment to non-existent dest should not fail at pathfinding stage")
+	for _, amount := range []int64{reserve - 1, reserve, reserve + 1} {
+		dstAmount := state.NewXRPAmountFromInt(amount)
+		pf := NewPathfinder(ledger, NewRippleLineCache(ledger), src, dst,
+			dstAmount, dstAmount, "XRP", [20]byte{}, false)
+		require.Equal(t, amount >= reserve, pf.FindPaths(testSearchLevel), "destination amount %d", amount)
+	}
 }
 
 // Test 35: buildPathFindTrustLine balance negation

@@ -683,7 +683,7 @@ type RippleCalculateResult struct {
 // It converts paths to strands and executes the Flow algorithm.
 //
 // Parameters:
-//   - sandbox: fresh sandbox for this calculation
+//   - sandbox: accumulates successful flow changes across calculations
 //   - srcAccount: Source account sending the payment
 //   - dstAccount: Destination account receiving the payment
 //   - dstAmount: Amount to deliver to destination
