@@ -303,7 +303,11 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 	}
 	hooked := accountWithOwnerCountHook(view, accountID, account)
 	ownerCount, accountCount := hooked.OwnerCount, uint32(1)
-	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureSponsor) {
+	var rules *amendment.Rules
+	if view != nil {
+		rules = view.Rules()
+	}
+	if rules != nil && rules.Enabled(amendment.FeatureSponsor) {
 		if hooked.SponsoredOwnerCount > hooked.OwnerCount {
 			return NewXRPAmount(0)
 		}
