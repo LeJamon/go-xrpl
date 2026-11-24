@@ -17,13 +17,7 @@ type pathFindUpdateTarget struct {
 }
 
 func (s *PathFindSession) validate(view types.LedgerStateView) *rpcerrors.RpcError {
-	// Sessions built by ParseAndCreateSession always retain the request. A nil
-	// request is reserved for lightweight refresh fixtures that supply their
-	// own compute function.
-	if s.request == nil {
-		return nil
-	}
-	return handlers.ValidatePathFindAccounts(view, s.srcAccount, s.dstAccount, s.dstAmount, s.convertAll)
+	return handlers.ValidatePathFindAccounts(view, s.srcAccount, s.dstAccount, s.dstAmount, s.convertAll, "path_find")
 }
 
 func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *rpcerrors.RpcError) {

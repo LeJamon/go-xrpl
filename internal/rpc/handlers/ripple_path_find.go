@@ -56,17 +56,9 @@ type ripplePathFindMethod struct{ baseHandler }
 // path_find APIs. The request must have an existing source account. A missing
 // destination is only valid for native XRP payments that meet the effective
 // account reserve; convert-all requests intentionally bypass that reserve
-// check, matching rippled's PathRequest::isValid.
+// check, matching rippled's PathRequest::isValid. operation identifies the
+// caller in internal lookup diagnostics.
 func ValidatePathFindAccounts(
-	view types.LedgerStateView,
-	srcAccount, dstAccount [20]byte,
-	dstAmount state.Amount,
-	convertAll bool,
-) *rpcerrors.RpcError {
-	return validatePathFindAccounts(view, srcAccount, dstAccount, dstAmount, convertAll, "path_find")
-}
-
-func validatePathFindAccounts(
 	view types.LedgerStateView,
 	srcAccount, dstAccount [20]byte,
 	dstAmount state.Amount,
@@ -213,7 +205,7 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 
 	// Existence checks. Reference: rippled PathRequest::isValid.
-	if rpcErr := validatePathFindAccounts(view, srcAccount, dstAccount, dstAmount, convertAll, "ripple_path_find"); rpcErr != nil {
+	if rpcErr := ValidatePathFindAccounts(view, srcAccount, dstAccount, dstAmount, convertAll, "ripple_path_find"); rpcErr != nil {
 		return nil, rpcErr
 	}
 

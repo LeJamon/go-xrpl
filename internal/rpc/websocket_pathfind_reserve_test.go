@@ -116,7 +116,7 @@ func TestWebSocketPathFindReserveBoundaryAndConvertAllCreateSession(t *testing.T
 				ID:     "request-id",
 				Params: test.params(pathFindSessionAccountAddress(source), pathFindSessionAccountAddress(destination)),
 			})
-			require.NoError(t, rpcErr)
+			require.Nil(t, rpcErr)
 			require.NotNil(t, result)
 			_, active := conn.snapshotPathFindUpdate()
 			require.True(t, active)
@@ -136,7 +136,7 @@ func TestPathFindRefreshReserveErrorWireAndRecovery(t *testing.T) {
 		int64(drops.DefaultReserveBase),
 	)
 	session, rpcErr := ParseAndCreateSession(params, "request-id")
-	require.NoError(t, rpcErr)
+	require.Nil(t, rpcErr)
 	var computes int
 	computed := make(chan struct{}, 2)
 	session.computeFn = func(tx.LedgerView) *pathfinder.PathRequestResult {
