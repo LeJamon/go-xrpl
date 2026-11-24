@@ -331,24 +331,26 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 }
 
 func creditLoanPayment(v *vault.VaultLending, paid, totalDelta lmath.N, rules *amendment.Rules) ter.Result {
-	integral := assetIntegral(v.Asset)
 	availableBefore := lendNumForRules(v.AssetsAvailable, rules)
 	totalBefore := lendNumForRules(v.AssetsTotal, rules)
-	availableAfter := availableBefore.Add(paid).RoundToAsset(integral)
-	totalAfter := totalBefore.Add(totalDelta).RoundToAsset(integral)
+	credited := *v
+	credited.AssetsAvailable = numStr(availableBefore.Add(paid))
+	credited.AssetsTotal = numStr(totalBefore.Add(totalDelta))
+	if r := associateVaultAsset(&credited, rules); r != ter.TesSUCCESS {
+		return r
+	}
+	availableAfter := lendNumForRules(credited.AssetsAvailable, rules)
+	totalAfter := lendNumForRules(credited.AssetsTotal, rules)
 	totalUnchanged := totalAfter.Equal(totalBefore)
 
 	switch {
-	case v.Asset.IsNative() && (exceedsXRPRange(availableAfter) || exceedsXRPRange(totalAfter)):
-		return ter.TefEXCEPTION
 	case availableAfter.Equal(availableBefore), !totalDelta.IsZero() && totalUnchanged:
 		return ter.TecPRECISION_LOSS
 	case totalDelta.IsZero() && !totalUnchanged, availableAfter.Cmp(totalAfter) > 0:
 		return ter.TecINTERNAL
 	}
 
-	v.AssetsAvailable = numStr(availableAfter)
-	v.AssetsTotal = numStr(totalAfter)
+	*v = credited
 	return ter.TesSUCCESS
 }
 
