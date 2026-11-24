@@ -9,6 +9,7 @@ import (
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
@@ -834,4 +835,53 @@ func TestFixReserveCheckOnWithdrawal(t *testing.T) {
 		result = env.Submit(withdrawTx2)
 		jtx.RequireTxSuccess(t, result)
 	})
+}
+
+func TestAMMWithdrawTwoAssetReserveCheckPrecedesXRPCredit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		iouFirst bool
+		want     ter.Result
+	}{
+		{name: "xrp-first", iouFirst: false, want: ter.TesSUCCESS},
+		{name: "iou-first", iouFirst: true, want: ter.TecINSUFFICIENT_RESERVE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, ammAccount *jtx.Account) {
+				dan := jtx.NewAccount("dan")
+				env.FundAmount(dan, uint64(jtx.XRP(2_000)))
+				env.Close()
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(dan, amm.XRP(), env.USD).
+					Amount(amm.XRPAmount(1_000)).
+					SingleAsset().
+					Build()))
+				env.Trust(dan, env.GW, "EUR", 100)
+				env.Close()
+				require.Equal(t, uint32(2), env.OwnerCount(dan))
+
+				target := env.ReserveBase() + 2*env.ReserveIncrement() + 5*env.BaseFee()
+				jtx.RequireTxSuccess(t, env.Submit(payment.Pay(dan, env.Carol, env.Balance(dan)-target-env.BaseFee()).Build()))
+				env.Close()
+				require.Equal(t, target, env.Balance(dan))
+
+				usd, xrp := amm.IOUAmount(env.GW, "USD", 100), amm.XRPAmount(200)
+				withdraw := amm.AMMWithdraw(dan, amm.XRP(), env.USD).Amount(xrp).Amount2(usd)
+				if tc.iouFirst {
+					withdraw = amm.AMMWithdraw(dan, amm.XRP(), env.USD).Amount(usd).Amount2(xrp)
+				}
+				result := env.Submit(withdraw.TwoAsset().Build())
+				require.Equal(t, tc.want.String(), result.Code)
+				require.Equal(t, env.BaseFee(), result.Fee)
+				require.NotNil(t, result.Metadata)
+				require.Equal(t, tc.want, result.Metadata.TransactionResult)
+				if tc.want == ter.TesSUCCESS {
+					require.Equal(t, uint32(3), env.OwnerCount(dan))
+					require.Greater(t, env.Balance(dan), target)
+					return
+				}
+				require.Equal(t, uint32(2), env.OwnerCount(dan))
+				require.Equal(t, target-env.BaseFee(), env.Balance(dan))
+			})
+		})
+	}
 }

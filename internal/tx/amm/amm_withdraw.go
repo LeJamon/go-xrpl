@@ -797,36 +797,29 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
-	isXRP1 := isXRPAsset(applyAsset1)
-	isXRP2 := isXRPAsset(applyAsset2)
-
 	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if isXRP1 && !withdrawAmount1.IsZero() {
-		// Convert to drops, handling IOU representation from calculations
-		drops := uint64(withdrawAmount1.Drops())
-		ammAccount.Balance -= drops
-		ctx.Account.Balance += drops
-	}
-	if isXRP2 && !withdrawAmount2.IsZero() {
-		// Convert to drops, handling IOU representation from calculations
-		drops := uint64(withdrawAmount2.Drops())
-		ammAccount.Balance -= drops
-		ctx.Account.Balance += drops
-	}
 
-	// For IOU transfers: check reserve if trust line creation is needed,
-	// then transfer tokens.
-	// Reference: rippled AMMWithdraw.cpp lines 581-647
-	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset1, withdrawAmount1, withdrawalOptions{}); result != ter.TesSUCCESS {
-			return result
-		}
+	// Assets are sent in the order of the Amount field when present, so XRP
+	// sent second does not count toward the reserve check of the first asset.
+	sends := [2]struct {
+		asset  tx.Asset
+		amount tx.Amount
+	}{{applyAsset1, withdrawAmount1}, {applyAsset2, withdrawAmount2}}
+	if a.Amount != nil && !matchesAsset(a.Amount, applyAsset1) {
+		sends[0], sends[1] = sends[1], sends[0]
 	}
-	if !isXRP2 && !withdrawAmount2.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset2, withdrawAmount2, withdrawalOptions{}); result != ter.TesSUCCESS {
+	for _, send := range sends {
+		if send.amount.IsZero() {
+			continue
+		}
+		if isXRPAsset(send.asset) {
+			drops := uint64(send.amount.Drops())
+			ammAccount.Balance -= drops
+			ctx.Account.Balance += drops
+		} else if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, send.asset, send.amount, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}
