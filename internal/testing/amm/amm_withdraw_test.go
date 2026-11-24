@@ -9,6 +9,7 @@ import (
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
@@ -835,6 +836,45 @@ func TestFixReserveCheckOnWithdrawal(t *testing.T) {
 		result = env.Submit(withdrawTx2)
 		jtx.RequireTxSuccess(t, result)
 	})
+}
+
+func TestAMMWithdrawMPTIssuerReserveCheck(t *testing.T) {
+	env := amm.NewAMMTestEnv(t)
+	env.EnableFeature("MPTokensV2")
+
+	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol} {
+		env.FundAmount(account, uint64(jtx.XRP(100_000)))
+	}
+	env.Close()
+
+	token := mpttest.NewMPTTesterNoFund(t, env.TestEnv, env.GW)
+	token.Create(mpttest.CreateOpts{Flags: mpttest.TfMPTCanTrade | mpttest.TfMPTCanTransfer})
+	asset := tx.Asset{MPTIssuanceID: token.IssuanceID()}
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(
+		env.GW,
+		token.MPTAmount(1_000),
+		amm.XRPAmount(1_000),
+	).Build()))
+	env.Close()
+
+	env.Trust(env.GW, env.Alice, "BTC", 1)
+	env.Close()
+	required := env.ReserveBase() + uint64(env.OwnerCount(env.GW)+1)*env.ReserveIncrement()
+	target := required - 1
+	jtx.RequireTxSuccess(t, env.Submit(payment.Pay(
+		env.GW,
+		env.Carol,
+		env.Balance(env.GW)-target-env.BaseFee(),
+	).Build()))
+	env.Close()
+	require.Equal(t, target, env.Balance(env.GW))
+
+	result := env.Submit(amm.AMMWithdraw(env.GW, amm.XRP(), asset).
+		Amount(token.MPTAmount(1)).
+		Amount2(amm.XRPAmount(1)).
+		TwoAsset().
+		Build())
+	amm.ExpectTER(t, result, ter.TecINSUFFICIENT_RESERVE.String())
 }
 
 func TestAMMWithdrawTwoAssetReserveCheckPrecedesXRPCredit(t *testing.T) {

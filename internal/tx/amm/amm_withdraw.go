@@ -950,6 +950,11 @@ func withdrawAssetToAccount(
 		if result != ter.TesSUCCESS {
 			return result
 		}
+		if accountID == mptutil.Issuer(id) {
+			if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
+				return result
+			}
+		}
 		if accountID != mptutil.Issuer(id) {
 			tokenKey := keylet.MPTokenByID(id, accountID)
 			exists, err := ctx.View.Exists(tokenKey)
