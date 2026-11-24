@@ -28,7 +28,7 @@ func TestCustomBaseFeesUseParentSchedule(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.Fees(), data))
-	config := tx.EngineConfig{BaseFee: uint64(fees.Base), ReserveIncrement: uint64(fees.Increment)}
+	config := new(Service).EngineConfigForReplay(view)
 
 	for _, tc := range []struct {
 		txn  tx.Transaction

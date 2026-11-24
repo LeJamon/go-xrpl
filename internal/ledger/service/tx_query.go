@@ -363,16 +363,7 @@ func mayPublishProposedTransaction(flags uint32) bool {
 	return flags&tx.TfInnerBatchTxn == 0
 }
 
-// readFeesFromLedger reads fee settings from the FeeSettings SLE in the given
-// ledger. It supports both the modern XRPFees format (BaseFeeDrops /
-// ReserveBaseDrops / ReserveIncrementDrops) and the legacy format (BaseFee /
-// ReserveBase / ReserveIncrement). Falls back to network defaults if the SLE
-// cannot be found or parsed.
 func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
-	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), l)
-	if err == nil {
-		return baseFee, reserveBase, reserveIncrement
-	}
 	fees := drops.DefaultFees()
 	if l != nil {
 		fees = l.Fees()
@@ -381,30 +372,22 @@ func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncremen
 }
 
 func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
-	fees := drops.DefaultFees()
-	if l == nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+	if l != nil {
+		data, err := l.ReadContext(ctx, keylet.Fees())
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if data != nil {
+			if _, err := state.ParseFeeSettings(data); err != nil {
+				return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
+			}
+		}
 	}
-	fees = l.Fees()
-
-	data, err := l.ReadContext(ctx, keylet.Fees())
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	if data == nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
-	}
-
-	feeSettings, err := state.ParseFeeSettings(data)
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
-	}
-	fees = feeSettings.ApplyTo(fees)
-	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+	baseFee, reserveBase, reserveIncrement = readFeesFromLedger(l)
+	return baseFee, reserveBase, reserveIncrement, nil
 }
 
-// FeesFromLedger returns the fee and reserve settings carried by a specific
-// ledger, falling back to the protocol defaults when its FeeSettings entry is unavailable.
+// FeesFromLedger returns the effective fees and reserves for this ledger.
 func FeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
 	return readFeesFromLedger(l)
 }
