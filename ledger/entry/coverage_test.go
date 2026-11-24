@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -532,23 +531,9 @@ type hashIface interface {
 type toMapIface interface{ ToMap() map[string]any }
 
 func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
-	for name, fixture := range coverageFixtures {
+	for name := range coverageFixtures {
 		t.Run(name, func(t *testing.T) {
-			// Real SLE blobs carry LedgerEntryType, and ToMap re-emits it; add
-			// it here so the canonical bytes line up with the typed Encode.
-			input := make(map[string]any, len(fixture)+1)
-			for k, v := range fixture {
-				input[k] = v
-			}
-			if _, ok := input["Sponsor"]; !ok {
-				input["Sponsor"] = fxAccount
-			}
-			input["LedgerIndex"] = fxHash256
-			input["LedgerEntryType"] = name
-			canonical, err := binarycodec.EncodeBytes(input)
-			if err != nil {
-				t.Fatalf("EncodeBytes: %v", err)
-			}
+			canonical := fixtureBlob(t, name)
 
 			cur := NewByName(name)
 			if cur == nil {

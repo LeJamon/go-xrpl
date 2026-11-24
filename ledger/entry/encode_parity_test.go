@@ -310,17 +310,17 @@ func collectLedgerEntryBlobs(node any, out map[string]struct{}) {
 	}
 }
 
-// fixtureBlob is the canonical encoding of coverageFixtures[name] with the
-// common Sponsor field set, so every field of the entry is present.
+// fixtureBlob includes the optional common fields as well as the entry-specific fixture.
 func fixtureBlob(t testing.TB, name string) []byte {
 	t.Helper()
-	input := make(map[string]any, len(coverageFixtures[name])+2)
+	input := make(map[string]any, len(coverageFixtures[name])+3)
 	for k, v := range coverageFixtures[name] {
 		input[k] = v
 	}
 	if _, ok := input["Sponsor"]; !ok {
 		input["Sponsor"] = fxAccount
 	}
+	input["LedgerIndex"] = fxHash256
 	input["LedgerEntryType"] = name
 	data, err := binarycodec.EncodeBytes(input)
 	if err != nil {
