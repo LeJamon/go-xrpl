@@ -24,6 +24,8 @@ type persistenceWorker struct {
 	persistAdmissionStop bool
 	persistWG            sync.WaitGroup
 	canonicalPersistMu   sync.Mutex
+	retentionWriteMu     sync.RWMutex
+	failedTipHash        [32]byte // guarded by canonicalPersistMu
 	promotionMu          sync.Mutex
 	nodePersists         int
 	nodePersistIdle      chan struct{}
@@ -70,6 +72,15 @@ type historyComponent struct {
 	completeLedgerHashes map[uint32][32]byte
 	completeLedgerFloor  uint32
 	completeLedgerTokens map[uint32]uint64
+	// failedValidatedLedgers retains the bounded set of validated trees whose
+	// persistence failed after they left the completion set. History eviction
+	// may remove their normal lookup entry, but a local retry still owns these
+	// trees until they are repaired, invalidated, or cross the retention floor.
+	failedValidatedLedgers map[uint32]*ledger.Ledger
+	// persistFailures counts consecutive failed validated-ledger persists;
+	// completeMu guards it and lastFailedPersist.
+	persistFailures   uint32
+	lastFailedPersist uint32
 
 	validatedStateBaseMu        sync.RWMutex
 	validatedStateBaseProof     *validatedStateBaseProof

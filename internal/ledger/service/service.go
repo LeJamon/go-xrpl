@@ -626,16 +626,17 @@ func New(cfg Config) (*Service, error) {
 			publicationErrors:     make(chan error, 1),
 		},
 		historyComponent: historyComponent{
-			ledgerHistory:        make(map[uint32]*ledger.Ledger),
-			ledgerByHash:         make(map[[32]byte]uint32),
-			persistedLedgers:     make(map[[32]byte]*ledger.Ledger),
-			txIndex:              make(map[[32]byte]uint32),
-			txPositionIndex:      make(map[[32]byte]uint32),
-			txHashesBySeq:        make(map[uint32][][32]byte),
-			completedLedgers:     newCompleteLedgerSet(),
-			completeLedgerHashes: make(map[uint32][32]byte),
-			completeLedgerTokens: make(map[uint32]uint64),
-			sweepInterval:        sweepInterval,
+			ledgerHistory:          make(map[uint32]*ledger.Ledger),
+			ledgerByHash:           make(map[[32]byte]uint32),
+			persistedLedgers:       make(map[[32]byte]*ledger.Ledger),
+			txIndex:                make(map[[32]byte]uint32),
+			txPositionIndex:        make(map[[32]byte]uint32),
+			txHashesBySeq:          make(map[uint32][][32]byte),
+			completedLedgers:       newCompleteLedgerSet(),
+			completeLedgerHashes:   make(map[uint32][32]byte),
+			completeLedgerTokens:   make(map[uint32]uint64),
+			failedValidatedLedgers: make(map[uint32]*ledger.Ledger),
+			sweepInterval:          sweepInterval,
 		},
 		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
 		validationCandidates: make(map[uint32]*ledger.Ledger),
@@ -866,9 +867,7 @@ func (s *Service) Start() (err error) {
 	}
 	if selection.validate && !selection.loaded {
 		// Starting a new chain can replace a previous initial ledger at the same sequence.
-		token := s.beginValidatedPersistence(selection.ledger.Sequence(), selection.ledger.Hash())
-		if err := s.persistValidatedLedgerAtToken(context.Background(), selection.ledger, true, token,
-			true, nil, s.replayPersistenceProof(selection.ledger.Header())); err != nil {
+		if err := s.persistLedger(context.Background(), selection.ledger, true, true); err != nil {
 			return fmt.Errorf("persist initial ledger: %w", err)
 		}
 	}
@@ -2315,6 +2314,21 @@ func (s *Service) SetMinimumOnlineFunc(fn func() uint32) {
 	s.minimumOnlineFunc = fn
 }
 
+// AdvanceMinimumOnlineFloor publishes a retention transition to persistence
+// before online deletion starts. Older queued saves and failed local-repair
+// owners are canceled or discarded while their node-store trees still exist.
+func (s *Service) AdvanceMinimumOnlineFloor(floor uint32) {
+	s.completeMu.RLock()
+	alreadyApplied := floor <= s.completeLedgerFloor
+	s.completeMu.RUnlock()
+	if alreadyApplied {
+		return
+	}
+	s.retentionWriteMu.Lock()
+	defer s.retentionWriteMu.Unlock()
+	s.clampCompleteLedgers(floor)
+}
+
 // IsStandalone returns true if running in standalone mode
 func (s *Service) IsStandalone() bool {
 	return s.config.Standalone
@@ -2410,9 +2424,10 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ServerState = serverStateFunc()
 	}
 	if minimumOnlineFunc != nil {
-		s.clampCompleteLedgers(minimumOnlineFunc())
+		s.AdvanceMinimumOnlineFloor(minimumOnlineFunc())
 	}
 	info.CompleteLedgers = s.completeLedgersString()
+	info.PersistFailures, info.LastFailedPersist = s.ValidatedPersistFailures()
 	if min, max, ok := s.validatedLedgerRange(); ok {
 		info.HaveValidatedRange = true
 		info.ValidatedRangeMin = min
@@ -2442,6 +2457,10 @@ type ServerInfo struct {
 	ValidatedRangeMin        uint32
 	ValidatedRangeMax        uint32
 	NetworkID                uint32
+	// PersistFailures counts validated-ledger persists failed since the last
+	// success; LastFailedPersist is the most recent failed sequence.
+	PersistFailures   uint32
+	LastFailedPersist uint32
 }
 
 // LedgerInfo contains information about a ledger

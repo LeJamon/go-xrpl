@@ -1223,6 +1223,10 @@ type LedgerServerInfo struct {
 	ValidatedRangeMin  uint32
 	ValidatedRangeMax  uint32
 	NetworkID          uint32
+	// PersistFailures counts validated-ledger persists failed since the last
+	// success; LastFailedPersist is the most recent failed sequence.
+	PersistFailures   uint32
+	LastFailedPersist uint32
 }
 
 // LoadFactorFees carries rippled's per-source LoadFeeTrack fees used

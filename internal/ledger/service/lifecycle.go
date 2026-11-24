@@ -131,7 +131,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// Persist best-effort: a persistence failure must not be fatal — treating it
 	// so would diverge from rippled and risk forks on transient DB issues.
 	// The open-view commit has begun; retain ownership through durability.
-	if err := s.persistLedger(context.WithoutCancel(ctx), closed); err != nil {
+	if err := s.persistValidatedLedger(context.WithoutCancel(ctx), closed, true); err != nil {
 		s.logger.Error("failed to persist closed ledger; chain advance continues",
 			"seq", closed.Sequence(), "err", err)
 	}
@@ -896,6 +896,12 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 	return initialCandidate, err
 }
 
+type historicalLedgerProof struct {
+	tip   *ledger.Ledger
+	hash  [32]byte
+	found bool
+}
+
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated
 // history without changing the node's current ledger frontiers.
 func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
@@ -907,14 +913,32 @@ func (s *Service) IngestHistoricalLedgerWithState(ctx context.Context, h *header
 	if err := s.VerifyDetachedMaps(ctx, stateMap, txMap); err != nil {
 		return err
 	}
+	proof := s.skipListProvesHistory(ctx, h)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
-	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	return s.ingestHistoricalLedgerWithStateLocked(ctx, h, stateMap, txMap, proof)
 }
 
-func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+// skipListProvesHistory reports whether the validated ledger's skip list names
+// h. The proof is retained even when a child is resident so publication can
+// reject a cached child whose ancestry became stale during a frontier switch.
+func (s *Service) skipListProvesHistory(ctx context.Context, h *header.LedgerHeader) historicalLedgerProof {
+	if h == nil {
+		return historicalLedgerProof{}
+	}
+	s.mu.RLock()
+	tip := s.validatedLedger
+	s.mu.RUnlock()
+	if tip == nil {
+		return historicalLedgerProof{}
+	}
+	hash, ok, err := s.canonicalLedgerHashFromTip(ctx, tip, h.LedgerIndex)
+	return historicalLedgerProof{tip: tip, hash: hash, found: err == nil && ok}
+}
+
+func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap, proof historicalLedgerProof) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -934,10 +958,18 @@ func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *
 	if childExists && child.ParentHash() != hash {
 		return fmt.Errorf("historical ledger %d does not connect to canonical child", seq)
 	}
+	// A resident child can be an unvalidated preferred ledger during initial
+	// sync, so its parent link remains authoritative while the captured
+	// frontier is unchanged. Once that frontier moves, however, neither a
+	// cached child nor a same-sequence resident ledger may authorize history.
+	if s.validatedLedger != proof.tip || (proof.found && proof.hash != hash) {
+		return fmt.Errorf("historical ledger %d is not on the current validated chain", seq)
+	}
+	if !childExists && !proof.found && !(sameHistoricalLedger && existing.IsValidated()) {
+		return fmt.Errorf("historical ledger %d has no canonical child", seq)
+	}
 	if sameHistoricalLedger {
 		historical = existing
-	} else if !childExists {
-		return fmt.Errorf("historical ledger %d has no canonical child", seq)
 	}
 	if !historical.IsValidated() {
 		if err := historical.SetValidated(); err != nil {
@@ -973,7 +1005,8 @@ func (s *Service) ingestHistoricalLedgerWithStateLocked(ctx context.Context, h *
 	s.putHistoryLocked(historical)
 	s.cachePersistedLedgerLocked(historical)
 	s.commitTransactionResultsLocked(stagedResults)
-	s.enqueueValidatedHistoryPersist(historical)
+	// Reacquisition can replace a missing header for a sequence still recorded as complete.
+	s.enqueueLedgerPersist(historical, persistAcquiredHistory)
 
 	s.logger.Info("Ingested historical ledger",
 		"seq", seq,

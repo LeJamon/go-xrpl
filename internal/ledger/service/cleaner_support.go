@@ -70,6 +70,15 @@ func (s *Service) CanonicalLedgerHash(ctx context.Context, seq uint32) ([32]byte
 	s.mu.RLock()
 	tip := s.validatedLedger
 	s.mu.RUnlock()
+	return s.canonicalLedgerHashFromTip(ctx, tip, seq)
+}
+
+// canonicalLedgerHashFromTip resolves seq against the supplied validated
+// frontier. Callers that publish a result can retain the frontier pointer and
+// compare it again under Service.mu before committing the result. This keeps
+// the proof tied to the exact tip used for the skip-list walk without holding
+// Service.mu across storage I/O.
+func (s *Service) canonicalLedgerHashFromTip(ctx context.Context, tip *ledger.Ledger, seq uint32) ([32]byte, bool, error) {
 	if tip == nil || seq > tip.Sequence() {
 		return [32]byte{}, false, nil
 	}
@@ -128,6 +137,19 @@ func (s *Service) cleanerLedgerByHash(ctx context.Context, hash [32]byte) (*ledg
 			return candidate, nil
 		}
 	}
+
+	if s.nodeStore != nil && s.shamapFamily != nil {
+		loaded, err := s.loadStoredLedgerByHash(ctx, hash)
+		if err == nil && loaded != nil {
+			s.historyComponent.mu.Lock()
+			s.cachePersistedLedgerLocked(loaded)
+			s.historyComponent.mu.Unlock()
+			return loaded, nil
+		}
+		if err != nil && !errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, err
+		}
+	}
 	if s.nodeStore == nil || s.shamapFamily == nil || s.relationalDB == nil || s.relationalDB.Ledger() == nil {
 		return nil, svcerr.ErrLedgerNotFound
 	}
@@ -164,8 +186,18 @@ func (s *Service) RepairCleanerLedgerIndex(
 		}
 	}
 
+	tip := s.GetValidatedLedger()
+	expected, known, err := s.canonicalLedgerHashFromTip(ctx, tip, seq)
+	if err != nil {
+		return false, err
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tip != s.validatedLedger || (known && expected != hash) {
+		return false, fmt.Errorf("ledger_cleaner: ledger %d is no longer canonical", seq)
+	}
 	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 	indexed := s.ledgerHistory[seq]
 	if indexed == nil || indexed.Hash() != hash || indexed.ParentHash() != parentHash {
 		repairTransactions = true
@@ -179,14 +211,22 @@ func (s *Service) RepairCleanerLedgerIndex(
 			}
 		}
 		if canonical != nil && canonical.Sequence() == seq && canonical.ParentHash() == parentHash {
-			s.putHistoryLocked(canonical)
 			indexed = canonical
 		}
 	}
 	if indexed == nil || indexed.Hash() != hash || indexed.ParentHash() != parentHash {
-		s.historyComponent.mu.Unlock()
-		s.mu.Unlock()
 		return false, fmt.Errorf("ledger_cleaner: canonical ledger %d unavailable for index repair", seq)
+	}
+	if !indexed.IsValidated() {
+		if !known {
+			return false, fmt.Errorf("ledger_cleaner: missing validation proof for ledger %d", seq)
+		}
+		if err := indexed.SetValidated(); err != nil {
+			return false, err
+		}
+	}
+	if s.ledgerHistory[seq] != indexed {
+		s.putHistoryLocked(indexed)
 	}
 	if indexedSeq, ok := s.ledgerByHash[hash]; !ok || indexedSeq != seq {
 		s.ledgerByHash[hash] = seq
@@ -198,8 +238,5 @@ func (s *Service) RepairCleanerLedgerIndex(
 			repairTransactions = true
 		}
 	}
-	s.historyComponent.mu.Unlock()
-	s.mu.Unlock()
-
 	return repairTransactions, nil
 }

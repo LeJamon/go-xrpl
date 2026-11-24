@@ -16,6 +16,7 @@ type gatedValidatedRepository struct {
 	relationaldb.RepositoryManager
 
 	enabled     atomic.Bool
+	sequence    atomic.Uint32
 	enteredOnce sync.Once
 	releaseOnce sync.Once
 	entered     chan struct{}
@@ -31,7 +32,7 @@ func newGatedValidatedRepository(manager relationaldb.RepositoryManager) *gatedV
 }
 
 func (m *gatedValidatedRepository) PersistValidatedLedger(ctx context.Context, value relationaldb.ValidatedLedger) error {
-	if m.enabled.Load() {
+	if seq := m.sequence.Load(); m.enabled.Load() && (seq == 0 || seq == uint32(value.Ledger.Sequence)) {
 		m.enteredOnce.Do(func() { close(m.entered) })
 		select {
 		case <-m.release:

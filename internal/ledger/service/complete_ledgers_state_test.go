@@ -265,7 +265,8 @@ func TestCompleteLedgers_InvalidatedQueuedPersistenceSkipsAbandonedFork(t *testi
 
 func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.T) {
 	ctx := context.Background()
-	db := newTestNodeStore(t, 100)
+	db := newGatedStore(t)
+	db.bypass.Store(true)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	repositories := newTestRepositories(t, ctx)
 
@@ -276,11 +277,10 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 	cfg.RelationalDB = repositories
 	svc, err := New(cfg)
 	require.NoError(t, err)
-	svc.persistMu.Lock()
-	svc.persistStarted = true
-	svc.persistMu.Unlock()
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	t.Cleanup(db.open)
+	svc.FlushPersists()
 
 	seq := svc.GetClosedLedgerIndex()
 	parentHash := svc.GetClosedLedger().ParentHash()
@@ -293,12 +293,17 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 	svc.closedLedger = abandoned
 	svc.putHistoryLocked(abandoned)
 	svc.mu.Unlock()
+
+	db.bypass.Store(false)
+	svc.enqueueNodePersist(abandoned)
+	waitRetrySignal(t, db.entered)
+	db.bypass.Store(true)
 	svc.enqueueValidatedHistoryPersist(unrelated)
 
 	svc.persistMu.Lock()
-	require.Len(t, svc.persistQueue, 1)
-	unrelatedJob := svc.persistQueue[0]
+	unrelatedJob := svc.validatedPersistJobs[seq]
 	svc.persistMu.Unlock()
+	require.NotNil(t, unrelatedJob)
 
 	require.NoError(t, svc.SwitchToPreferredLedger(preferred))
 	assert.True(t, unrelatedJob.canceled.Load())
@@ -308,14 +313,8 @@ func TestCompleteLedgers_SameSequenceSwitchKeepsPreferredPersistence(t *testing.
 	require.NotNil(t, preferredJob)
 	assert.Same(t, preferred, preferredJob.l)
 
-	svc.persistMu.Lock()
-	jobs := append([]*persistJob(nil), svc.persistQueue...)
-	svc.persistQueue = nil
-	svc.persistMu.Unlock()
-	require.Len(t, jobs, 2)
-	for _, job := range jobs {
-		svc.runPersistJob(job)
-	}
+	db.open()
+	svc.FlushPersists()
 
 	tip, err := db.Fetch(ctx, validatedTipKey)
 	require.NoError(t, err)

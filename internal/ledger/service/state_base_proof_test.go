@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,6 +155,15 @@ func TestValidatedStateBaseTipOnlyPublicationPromotesCandidate(t *testing.T) {
 type stateBaseLateTipDatabase struct {
 	*nodestore.KVDatabase
 	beforeSync func()
+	failTip    atomic.Bool
+	failSync   atomic.Bool
+}
+
+func (d *stateBaseLateTipDatabase) Store(ctx context.Context, node *nodestore.Node) error {
+	if node.Hash == validatedTipKey && d.failTip.Load() {
+		return errInjectedPersist
+	}
+	return d.KVDatabase.Store(ctx, node)
 }
 
 func (d *stateBaseLateTipDatabase) Sync(ctx context.Context) error {
@@ -162,7 +172,74 @@ func (d *stateBaseLateTipDatabase) Sync(ctx context.Context) error {
 		d.beforeSync = nil
 		callback()
 	}
+	if d.failSync.Load() {
+		return errInjectedPersist
+	}
 	return d.KVDatabase.Sync(ctx)
+}
+
+func TestValidatedPersistCountsTipPublicationOutcomes(t *testing.T) {
+	svc, candidate, _ := newPendingStateBaseCandidate(t)
+	require.NoError(t, candidate.SetValidated())
+	require.NoError(t, svc.persistValidatedLedger(t.Context(), candidate, false))
+	db := svc.nodeStore.database().(*stateBaseLateTipDatabase)
+	db.failTip.Store(true)
+
+	svc.enqueuePersist(candidate)
+	svc.FlushPersists()
+	failures, last := svc.ValidatedPersistFailures()
+	require.EqualValues(t, 1, failures)
+	require.Equal(t, candidate.Sequence(), last)
+	require.True(t, svc.hasDurableCompleteLedger(candidate))
+
+	promoted := &persistJob{
+		l:               candidate,
+		validated:       true,
+		completionToken: svc.beginValidatedPersistence(candidate.Sequence(), candidate.Hash()),
+	}
+	db.beforeSync = func() { promoted.updatesTip.Store(true) }
+	svc.runPersistJob(promoted)
+	failures, last = svc.ValidatedPersistFailures()
+	require.EqualValues(t, 2, failures)
+	require.Equal(t, candidate.Sequence(), last)
+	require.True(t, svc.hasDurableCompleteLedger(candidate))
+
+	db.failTip.Store(false)
+	db.failSync.Store(true)
+	for _, wantFailures := range []uint64{3, 4} {
+		svc.enqueuePersist(candidate)
+		svc.FlushPersists()
+		failures, _ = svc.ValidatedPersistFailures()
+		require.EqualValues(t, wantFailures, failures)
+	}
+	db.failSync.Store(false)
+	svc.enqueuePersist(candidate)
+	svc.FlushPersists()
+	failures, _ = svc.ValidatedPersistFailures()
+	require.Zero(t, failures)
+}
+
+func TestShutdownRetriesFailedTipForAlreadyIndexedLedger(t *testing.T) {
+	db := &stateBaseLateTipDatabase{KVDatabase: newTestNodeStore(t, 10_000)}
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repositories := newTestRepositories(t, t.Context())
+	svc := startPersistedTestService(t, db, repositories)
+	db.failTip.Store(true)
+	seq, err := svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	require.True(t, svc.hasDurableCompleteLedger(svc.GetValidatedLedger()))
+	requireLedgerIndexed(t, repositories, seq, true)
+	before, err := db.Fetch(t.Context(), validatedTipKey)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Less(t, before.LedgerSeq, seq)
+
+	db.failTip.Store(false)
+	svc.Stop()
+	after, err := db.Fetch(t.Context(), validatedTipKey)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.Equal(t, seq, after.LedgerSeq)
 }
 
 func TestValidatedStateBaseLateTipPublicationPromotesCandidate(t *testing.T) {

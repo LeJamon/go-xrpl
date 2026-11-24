@@ -23,7 +23,7 @@ func TestHistoryWindowMinimum(t *testing.T) {
 func TestHistoryBackfillDisabledDoesNotDisableConsensusAcquisition(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	defer svc.Stop()
-	r.catchupReplay.configureHistoryBackfill(false, 256)
+	r.catchupReplay.configureHistoryBackfill(false, 256, false)
 	tip := svc.GetValidatedLedgerIndex()
 	historyHash := [32]byte{0xC1}
 	trackCatchupPeer(r, 7, tip+10)
@@ -40,7 +40,7 @@ func TestHistoryBackfillDisabledDoesNotDisableConsensusAcquisition(t *testing.T)
 func TestHistoryBackfillWindowCancelsOnlyExpiredHistory(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	defer svc.Stop()
-	r.catchupReplay.configureHistoryBackfill(true, 256)
+	r.catchupReplay.configureHistoryBackfill(true, 256, false)
 	old := inbound.NewHistory([32]byte{1}, 743, 7, r.logger)
 	keep := inbound.NewHistory([32]byte{2}, 744, 7, r.logger)
 	consensus := inbound.New([32]byte{3}, 700, 7, r.logger)
@@ -102,7 +102,7 @@ func TestHistoryBackfillRespectsWindowAndOnlineFloor(t *testing.T) {
 		_, err := svc.AcceptLedger(context.Background())
 		require.NoError(t, err)
 	}
-	r.catchupReplay.configureHistoryBackfill(true, 3) // [3,6], history [3,5]
+	r.catchupReplay.configureHistoryBackfill(true, 3, false) // [3,6], history [3,5]
 	require.False(t, r.catchupReplay.historySequenceAllowed(2))
 	require.True(t, r.catchupReplay.historySequenceAllowed(3))
 	require.True(t, r.catchupReplay.historySequenceAllowed(5))
@@ -110,9 +110,9 @@ func TestHistoryBackfillRespectsWindowAndOnlineFloor(t *testing.T) {
 	r.SetMinimumOnlineFloor(stubFloor(5))
 	require.False(t, r.catchupReplay.historySequenceAllowed(3))
 	require.True(t, r.catchupReplay.historySequenceAllowed(5))
-	r.catchupReplay.configureHistoryBackfill(true, 0)
+	r.catchupReplay.configureHistoryBackfill(true, 0, false)
 	require.False(t, r.catchupReplay.historySequenceAllowed(5))
-	r.catchupReplay.configureHistoryBackfill(true, 1)
+	r.catchupReplay.configureHistoryBackfill(true, 1, false)
 	require.True(t, r.catchupReplay.historySequenceAllowed(5))
 }
 
@@ -123,7 +123,7 @@ func TestHistoryBackfillLowTipAllowsEveryPriorLedger(t *testing.T) {
 		_, err := svc.AcceptLedger(context.Background())
 		require.NoError(t, err)
 	}
-	r.catchupReplay.configureHistoryBackfill(true, 256)
+	r.catchupReplay.configureHistoryBackfill(true, 256, false)
 	require.True(t, r.catchupReplay.historySequenceAllowed(1))
 	require.True(t, r.catchupReplay.historySequenceAllowed(2))
 	require.False(t, r.catchupReplay.historySequenceAllowed(3))
@@ -132,7 +132,7 @@ func TestHistoryBackfillLowTipAllowsEveryPriorLedger(t *testing.T) {
 func TestHistoryBackfillDepthOneKeepsParentAndCancelsOlder(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	defer svc.Stop()
-	r.catchupReplay.configureHistoryBackfill(true, 1)
+	r.catchupReplay.configureHistoryBackfill(true, 1, false)
 	parent := inbound.NewHistory([32]byte{0x11}, 999, 7, r.logger)
 	older := inbound.NewHistory([32]byte{0x12}, 998, 7, r.logger)
 	for _, il := range []*inbound.Ledger{parent, older} {
@@ -158,7 +158,7 @@ func TestHistoryBackfillMaxTipKeepsInclusiveBoundary(t *testing.T) {
 	for _, il := range []*inbound.Ledger{boundary, older} {
 		r.catchupReplay.fetchTracker.Track(il)
 	}
-	r.catchupReplay.configureHistoryBackfill(true, depth)
+	r.catchupReplay.configureHistoryBackfill(true, depth, false)
 	r.catchupReplay.startHistoryBackfill(boundary.Seq(), boundary.Hash(), 7, 0)
 	r.catchupReplay.pruneHistoryBackfill(tip)
 	require.Same(t, boundary, r.catchupReplay.fetchTracker.Find(boundary.Hash()))
@@ -172,10 +172,9 @@ func TestHistoryBackfillRestartSkipsCompleteLedgers(t *testing.T) {
 		_, err := svc.AcceptLedger(context.Background())
 		require.NoError(t, err)
 	}
-	r.catchupReplay.configureHistoryBackfill(true, 3)
+	r.catchupReplay.configureHistoryBackfill(true, 3, false)
 	trackCatchupPeer(r, 7, 8)
 	r.catchupReplay.armHistoryBackfill()
-	require.True(t, r.catchupReplay.historySeeded)
 	require.Zero(t, r.catchupReplay.history.seq, "all retained history is already complete")
 	require.Empty(t, sender.legacyCalls())
 }
@@ -183,7 +182,7 @@ func TestHistoryBackfillRestartSkipsCompleteLedgers(t *testing.T) {
 func TestHistoryBackfillLateResultCannotReviveDisabledWork(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	defer svc.Stop()
-	r.catchupReplay.configureHistoryBackfill(false, 256)
+	r.catchupReplay.configureHistoryBackfill(false, 256, false)
 	il := inbound.NewHistory([32]byte{9}, 1, 7, r.logger)
 	r.catchupReplay.fetchTracker.Track(il)
 	r.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: il, yielded: true})
@@ -199,7 +198,7 @@ func TestHistoryBackfillNewestMissingFirst(t *testing.T) {
 		_, err := svc.AcceptLedger(context.Background())
 		require.NoError(t, err)
 	}
-	r.catchupReplay.configureHistoryBackfill(true, 3)
+	r.catchupReplay.configureHistoryBackfill(true, 3, false)
 	trackCatchupPeer(r, 7, 6)
 	old := inbound.NewHistory([32]byte{0xA1}, 4, 7, r.logger)
 	r.catchupReplay.fetchTracker.Track(old)
@@ -227,8 +226,11 @@ func TestHistoryBackfillLocalSkipWorkIsBounded(t *testing.T) {
 		_, err := svc.AcceptLedger(context.Background())
 		require.NoError(t, err)
 	}
-	r.catchupReplay.configureHistoryBackfill(true, 256)
+	r.catchupReplay.configureHistoryBackfill(true, 256, false)
 	trackCatchupPeer(r, 7, 40)
+	held, err := svc.GetLedgerBySequence(39)
+	require.NoError(t, err)
+	r.catchupReplay.startHistoryBackfill(39, held.Hash(), 0, 0)
 	r.catchupReplay.armHistoryBackfill()
 	require.EqualValues(t, 39-historySkipBudget, r.catchupReplay.history.seq)
 	require.Empty(t, sender.legacyCalls())
@@ -236,4 +238,34 @@ func TestHistoryBackfillLocalSkipWorkIsBounded(t *testing.T) {
 	require.EqualValues(t, 39-2*historySkipBudget, r.catchupReplay.history.seq)
 	r.catchupReplay.armHistoryBackfill()
 	require.Zero(t, r.catchupReplay.history.seq)
+}
+
+func TestHistoryBackfillOnlineDeleteRetainsGapsAboveCompleteLedgers(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	defer svc.Stop()
+	for svc.GetValidatedLedgerIndex() < 10 {
+		_, err := svc.AcceptLedger(context.Background())
+		require.NoError(t, err)
+	}
+	tip := svc.GetValidatedLedgerIndex()
+	r.SetMinimumOnlineFloor(stubFloor(4))
+	r.catchupReplay.configureHistoryBackfill(true, 3, false) // window [7,10)
+	require.False(t, r.catchupReplay.historySequenceAllowed(5))
+	r.catchupReplay.configureHistoryBackfill(true, 3, true)
+	require.True(t, r.catchupReplay.historySequenceAllowed(5), "above minimumOnline and a completed ledger")
+	require.False(t, r.catchupReplay.historySequenceAllowed(3), "below minimumOnline")
+	r.SetMinimumOnlineFloor(stubFloor(1))
+	require.True(t, r.catchupReplay.historySequenceAllowed(3))
+	require.False(t, r.catchupReplay.historySequenceAllowed(1), "no completed ledger beneath")
+	r.SetMinimumOnlineFloor(nil)
+	require.False(t, r.catchupReplay.historySequenceAllowed(3), "unknown minimumOnline")
+
+	r.SetMinimumOnlineFloor(stubFloor(4))
+	il := inbound.NewHistory([32]byte{0x31}, 5, 7, r.logger)
+	r.catchupReplay.fetchTracker.Track(il)
+	r.catchupReplay.pruneHistoryBackfill(tip)
+	require.Same(t, il, r.catchupReplay.fetchTracker.Find(il.Hash()))
+	r.catchupReplay.configureHistoryBackfill(true, 3, false)
+	r.catchupReplay.pruneHistoryBackfill(tip)
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(il.Hash()))
 }

@@ -17,7 +17,7 @@ type ledgerCleanerService interface {
 	CleanerReacquireTarget(context.Context, uint32) ([32]byte, uint32, bool, error)
 	CanonicalLedgerHash(context.Context, uint32) ([32]byte, bool, error)
 	RepairCleanerLedgerIndex(context.Context, uint32, [32]byte, [32]byte) (bool, error)
-	RepairLedgerTransactions(context.Context, uint32) error
+	RepairLedgerTransactions(context.Context, uint32, [32]byte, [32]byte) error
 }
 
 type ledgerCleanerSource struct {
@@ -95,8 +95,8 @@ func (s *ledgerCleanerSource) Reacquire(ctx context.Context, seq uint32) error {
 	return fn(ctx, hash, targetSeq)
 }
 
-func (s *ledgerCleanerSource) RepairTransactions(ctx context.Context, seq uint32) error {
-	return s.svc.RepairLedgerTransactions(ctx, seq)
+func (s *ledgerCleanerSource) RepairTransactions(ctx context.Context, info cleaner.LedgerData) error {
+	return s.svc.RepairLedgerTransactions(ctx, info.Sequence, info.Hash, info.ParentHash)
 }
 
 // toCleanerStatus translates the cleaner package's status into the RPC-types

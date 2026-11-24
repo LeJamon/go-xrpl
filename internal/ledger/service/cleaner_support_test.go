@@ -11,8 +11,10 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
+	"github.com/stretchr/testify/require"
 )
 
 type cleanerMissingFamily struct {
@@ -360,6 +362,7 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	canonical := makeStubLedger(t, seq, hash, parent)
 	svc.mu.Lock()
 	svc.historyComponent.mu.Lock()
+	svc.validatedLedger = canonical
 	svc.putHistoryLocked(canonical)
 	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
@@ -371,7 +374,7 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	if !repairTxns {
 		t.Fatal("missing relational ledger did not force transaction repair")
 	}
-	if err := svc.RepairLedgerTransactions(ctx, seq); err != nil {
+	if err := svc.RepairLedgerTransactions(ctx, seq, hash, parent); err != nil {
 		t.Fatal(err)
 	}
 
@@ -384,4 +387,55 @@ func TestCleanerRepairRewritesMissingRelationalLedger(t *testing.T) {
 	if [32]byte(info.Hash) != hash || [32]byte(info.ParentHash) != parent {
 		t.Fatalf("repaired ledger info = hash %x parent %x", info.Hash[:4], info.ParentHash[:4])
 	}
+}
+
+func TestCleanerRepairsHeaderBeforeTransactionIndex(t *testing.T) {
+	ctx := t.Context()
+	db := &failingHeaderStore{Database: newTestNodeStore(t, 10_000)}
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repositories := newTestRepositories(t, ctx)
+	svc := startPersistedTestService(t, db, repositories)
+	seq := svc.GetClosedLedgerIndex() + 1
+	db.fail(seq, 2)
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	tip := svc.GetValidatedLedger()
+	hash := nodestore.Hash256(tip.Hash())
+	header, err := db.Fetch(ctx, hash)
+	require.NoError(t, err)
+	require.Nil(t, header)
+
+	require.ErrorIs(t, svc.RepairLedgerTransactions(ctx, seq, tip.Hash(), tip.ParentHash()), errInjectedPersist)
+	requireLedgerIndexed(t, repositories, seq, false)
+	require.NoError(t, svc.RepairLedgerTransactions(ctx, seq, tip.Hash(), tip.ParentHash()))
+	header, err = db.Fetch(ctx, hash)
+	require.NoError(t, err)
+	require.NotNil(t, header)
+	require.Equal(t, nodestore.NodeLedger, header.Type)
+	requireLedgerIndexed(t, repositories, seq, true)
+}
+
+func TestCleanerInstallsColdCanonicalLedgerAsValidated(t *testing.T) {
+	db := newTestNodeStore(t, 100)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	cfg := DefaultConfig()
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = shamapbackend.New(db)
+	cfg.LedgerCacheSize = 1
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	seq, err := svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	_, err = svc.AcceptLedger(t.Context())
+	require.NoError(t, err)
+	cold, err := svc.CleanerLedger(t.Context(), seq)
+	require.NoError(t, err)
+	require.NotNil(t, cold)
+	_, err = svc.RepairCleanerLedgerIndex(t.Context(), seq, cold.Hash(), cold.ParentHash())
+	require.NoError(t, err)
+	adopted, err := svc.AdoptedLedgerBySequence(seq)
+	require.NoError(t, err)
+	require.True(t, adopted.IsValidated())
 }

@@ -588,7 +588,8 @@ func NewFromConfig(
 		floor:                  floor,
 		validatorList:          vlAgg,
 	})
-	router.catchupReplay.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32())
+	router.catchupReplay.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32(),
+		appCfg.NodeDB.IsOnlineDeleteEnabled())
 
 	var vlPoller *validatorlist.SitePoller
 	if vlAgg != nil {

@@ -344,6 +344,11 @@ func (s *Service) stateRetentionLedgersLocked() []*ledger.Ledger {
 	for _, l := range s.validationCandidates {
 		add(l)
 	}
+	s.completeMu.RLock()
+	for _, l := range s.failedValidatedLedgers {
+		add(l)
+	}
+	s.completeMu.RUnlock()
 	for _, job := range s.persistQueue {
 		if job != nil {
 			add(job.l)

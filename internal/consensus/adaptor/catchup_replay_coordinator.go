@@ -43,8 +43,9 @@ type catchupReplayCoordinator struct {
 	forgetValidatorPeer func(uint64)
 	onPeerDisconnect    func(peermanagement.PeerID)
 
-	historyBackfill bool
-	historyDepth    uint32
+	historyBackfill     bool
+	historyDepth        uint32
+	historyOnlineDelete bool
 
 	peersMu                   sync.RWMutex
 	peerStates                map[peermanagement.PeerID]*peerLedgerState
@@ -133,10 +134,13 @@ type catchupReplayCoordinator struct {
 	standardReplayDrainOwner *standardReplayDrainOwner
 	stopped                  atomic.Bool
 
-	historyMu     sync.Mutex
-	history       catchupTarget
-	historyFloor  uint32
-	historySeeded bool
+	historyMu    sync.Mutex
+	history      catchupTarget
+	historyFloor uint32
+	// historyResumeSeq is the original gap hidden behind an aligned anchor
+	// currently being acquired. It lets the next maintenance tick re-resolve
+	// that gap after the anchor is ingested without walking every parent.
+	historyResumeSeq uint32
 
 	seqHashMu     sync.Mutex
 	seqHash       map[uint32]ledgerHashEntry
@@ -748,7 +752,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	// reached; startLedgerAcquisition dedups the in-flight hash.
 	c.armConsensusCatchup()
 
-	// Backward history backfill of jump-adopt gaps (rippled fetchForHistory
+	// History backfill of the newest missing ledger (rippled fetchForHistory
 	// from doAdvance), off the consensus catch-up slot.
 	c.armHistoryBackfill()
 

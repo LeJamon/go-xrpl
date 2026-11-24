@@ -1128,6 +1128,10 @@ func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedL
 
 	var initialCandidate bool
 	var err error
+	proof := historicalLedgerProof{}
+	if mode == preparedAcquisitionHistory {
+		proof = s.skipListProvesHistory(ctx, &prepared.header)
+	}
 	func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -1135,7 +1139,7 @@ func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedL
 		defer s.historyComponent.mu.Unlock()
 		initialCandidate = s.networkLedgerState != networkLedgerReady
 		if mode == preparedAcquisitionHistory {
-			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap, proof)
 			return
 		}
 		err = s.storeLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)

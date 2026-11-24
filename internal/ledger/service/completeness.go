@@ -104,6 +104,35 @@ func (c *completeLedgerSet) rangeContaining(seq uint32) (ledgerRange, bool) {
 	return c.ranges[index], true
 }
 
+// prevMissing returns the largest sequence in [minimum, below) absent from the
+// set, mirroring rippled's RangeSet prevMissing. An empty set has none.
+func (c *completeLedgerSet) prevMissing(below, minimum uint32) (uint32, bool) {
+	if len(c.ranges) == 0 || below <= minimum {
+		return 0, false
+	}
+	seq := below - 1
+	if r, ok := c.rangeContaining(seq); ok {
+		if r.start <= minimum {
+			return 0, false
+		}
+		seq = r.start - 1
+	}
+	return seq, true
+}
+
+func (c *completeLedgerSet) prevPresent(below uint32) (uint32, bool) {
+	index := sort.Search(len(c.ranges), func(i int) bool {
+		return c.ranges[i].end >= below
+	})
+	if index < len(c.ranges) && c.ranges[index].start < below {
+		return below - 1, true
+	}
+	if index == 0 {
+		return 0, false
+	}
+	return c.ranges[index-1].end, true
+}
+
 func (c *completeLedgerSet) String() string {
 	if len(c.ranges) == 0 {
 		return "empty"

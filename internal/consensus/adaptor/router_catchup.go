@@ -2212,7 +2212,7 @@ func (c *catchupReplayCoordinator) startHistoryBackfill(seq uint32, hash [32]byt
 	c.historyMu.Lock()
 	c.history = catchupTarget{seq: seq, hash: hash, peerID: peerID}
 	c.historyFloor = floor
-	c.historySeeded = true
+	c.historyResumeSeq = 0
 	c.historyMu.Unlock()
 }
 
@@ -2331,17 +2331,17 @@ func (c *catchupReplayCoordinator) completeHistoryBackfill(seq uint32, hash, par
 	}
 	c.historyMu.Lock()
 	defer c.historyMu.Unlock()
-	if c.history.seq != seq || c.history.hash != hash {
-		return
+	if c.history.seq == seq && c.history.hash == hash {
+		c.history = catchupTarget{seq: seq - 1, hash: parentHash, peerID: peerID}
 	}
-	c.history = catchupTarget{seq: seq - 1, hash: parentHash, peerID: peerID}
 }
 
 // armHistoryBackfill drives one backward history-backfill acquisition from the
 // maintenance tick (rippled fetchForHistory from doAdvance). Locally-held
 // ledgers advance the walk without a fetch; it ends at the gap floor, the
 // online-delete floor, or genesis. At most one ReasonHistory acquisition runs,
-// never in the consensus catch-up slot.
+// never in the consensus catch-up slot. Nothing runs while validated persists
+// are failing, since the history would fail to persist as well.
 func (c *catchupReplayCoordinator) armHistoryBackfill() {
 	if c.adaptor == nil {
 		return
@@ -2364,14 +2364,11 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 	if svc.GetValidatedLedgerIndex() != svc.GetClosedLedgerIndex() {
 		return
 	}
-	c.historyMu.Lock()
-	// A restart may have a valid tip but missing history without a new pivot
-	// switch. Seed once, then keep the backward cursor as live ledgers arrive.
-	if !c.historySeeded && tip.Sequence() > 1 {
-		c.history = catchupTarget{seq: tip.Sequence() - 1, hash: tip.ParentHash()}
-		c.historyFloor = 0
-		c.historySeeded = true
+	if failures, _ := svc.ValidatedPersistFailures(); failures != 0 {
+		return
 	}
+	c.retargetHistoryGap(svc, tip.Sequence())
+	c.historyMu.Lock()
 	target := c.history
 	floor := c.historyFloor
 	c.historyMu.Unlock()
@@ -2384,6 +2381,7 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 			if c.history == target && c.historyFloor == floor {
 				c.history = catchupTarget{}
 				c.historyFloor = 0
+				c.historyResumeSeq = 0
 			}
 			c.historyMu.Unlock()
 			return
@@ -2422,6 +2420,11 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 			if svc.HasCompleteLedgerHash(target.seq, target.hash) {
 				return
 			}
+			// A resident validated ledger whose persist failed only needs it
+			// queued again; its tree may not be durable yet.
+			if svc.RequeueResidentLedger(target.seq, target.hash) {
+				return
+			}
 			hdr := held.Header()
 			stateMap, snapshotErr := held.StateMapSnapshotContext(lookupCtx)
 			if snapshotErr != nil {
@@ -2453,12 +2456,19 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 		}
 		next := catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
 		c.historyMu.Lock()
+		resumeSeq := c.historyResumeSeq
 		if c.history != target || c.historyFloor != floor {
 			c.historyMu.Unlock()
 			return
 		}
 		c.history = next
 		c.historyMu.Unlock()
+		if resumeSeq != 0 && resumeSeq < target.seq {
+			// The aligned anchor has been held locally. Leave the parent cursor
+			// in place so the next maintenance tick can resolve the original gap
+			// through the canonical lookup path without walking every parent.
+			return
+		}
 		target = next
 	}
 	c.historyMu.Lock()
@@ -2492,6 +2502,44 @@ func (c *catchupReplayCoordinator) armHistoryBackfill() {
 		return
 	}
 	c.requestHistoryAcquisition(il, peer)
+}
+
+// retargetHistoryGap points the walk at the newest ledger missing from the
+// completed set when the walk is idle or below it (rippled doAdvance →
+// prevMissing). A failed persist opens a hole after the walk has passed, so a
+// cursor that only moves backward would never revisit it. The walk stops at
+// the newest completed ledger beneath the hole.
+func (c *catchupReplayCoordinator) retargetHistoryGap(svc *service.Service, tip uint32) {
+	missing, ok := svc.NewestMissingLedger(tip)
+	if !ok || !c.historySequenceAllowed(missing) {
+		return
+	}
+	gapSeq := missing
+	c.historyMu.Lock()
+	current := c.history
+	resumeSeq := c.historyResumeSeq
+	c.historyMu.Unlock()
+	if missing < current.seq && (resumeSeq == 0 || resumeSeq != missing) {
+		return
+	}
+	lookupCtx, cancelLookup := context.WithTimeout(c.lifecycleContext(), 100*time.Millisecond)
+	hash, targetSeq, ok, err := svc.CleanerReacquireTarget(lookupCtx, missing)
+	cancelLookup()
+	if err != nil || !ok || targetSeq < missing || targetSeq >= tip {
+		return
+	}
+	floor, _ := svc.CompleteLedgerBelow(gapSeq)
+	c.historyMu.Lock()
+	if c.history == current {
+		c.history = catchupTarget{seq: targetSeq, hash: hash, peerID: current.peerID}
+		c.historyFloor = floor
+		if targetSeq == gapSeq {
+			c.historyResumeSeq = 0
+		} else {
+			c.historyResumeSeq = gapSeq
+		}
+	}
+	c.historyMu.Unlock()
 }
 
 func (c *catchupReplayCoordinator) prepareHistoryAcquisition(seq uint32, hash [32]byte, peerID uint64) *inbound.Ledger {

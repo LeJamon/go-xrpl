@@ -8,10 +8,12 @@ const historySkipBudget = 16
 
 // configureHistoryBackfill must be called before Run. Disabling history never
 // disables consensus/replay acquisition, persistence, or serving retained data.
-func (c *catchupReplayCoordinator) configureHistoryBackfill(enabled bool, depth uint32) {
+func (c *catchupReplayCoordinator) configureHistoryBackfill(enabled bool, depth uint32, onlineDelete bool) {
 	c.historyBackfill = enabled
 	c.historyDepth = depth
-	c.logger.Info("Historical ledger backfill configured", "backfill", enabled, "ledger_history", depth)
+	c.historyOnlineDelete = onlineDelete
+	c.logger.Info("Historical ledger backfill configured", "backfill", enabled, "ledger_history", depth,
+		"online_delete", onlineDelete)
 }
 
 func historyWindowMinimum(tip, depth uint32) uint32 {
@@ -22,7 +24,7 @@ func historyWindowMinimum(tip, depth uint32) uint32 {
 }
 
 func (c *catchupReplayCoordinator) historySequenceAllowed(seq uint32) bool {
-	if !c.historyBackfill || c.historyDepth == 0 || seq == 0 || c.adaptor == nil {
+	if c.adaptor == nil {
 		return false
 	}
 	svc := c.adaptor.LedgerService()
@@ -30,19 +32,37 @@ func (c *catchupReplayCoordinator) historySequenceAllowed(seq uint32) bool {
 		return false
 	}
 	tip := svc.GetValidatedLedgerIndex()
-	return seq < tip && seq >= historyWindowMinimum(tip, c.historyDepth) && !c.belowFloor(seq)
+	return seq < tip && c.historyRetained(tip, seq)
+}
+
+// historyRetained mirrors rippled's shouldAcquire below the validated tip: the
+// ledger_history window, or, with online delete, anything from minimumOnline.
+// Completeness restarts from the loaded tip, so the online-delete range only
+// covers gaps above a completed ledger; otherwise every restart would
+// re-acquire the whole retained range.
+func (c *catchupReplayCoordinator) historyRetained(tip, seq uint32) bool {
+	if !c.historyBackfill || c.historyDepth == 0 || seq == 0 || c.belowFloor(seq) {
+		return false
+	}
+	if seq >= historyWindowMinimum(tip, c.historyDepth) {
+		return true
+	}
+	if !c.historyOnlineDelete || c.minimumOnline() == 0 || c.adaptor == nil || c.adaptor.LedgerService() == nil {
+		return false
+	}
+	_, retained := c.adaptor.LedgerService().CompleteLedgerBelow(seq)
+	return retained
 }
 
 // pruneHistoryBackfill is called as the validated tip advances and on maintenance
 // even when catch-up prevents new history work. Retirement cancels worker I/O;
 // dropping only the cursor would leave a yielding full-state walk running.
 func (c *catchupReplayCoordinator) pruneHistoryBackfill(tip uint32) {
-	minimum := historyWindowMinimum(tip, c.historyDepth)
-	disabled := !c.historyBackfill || c.historyDepth == 0
 	c.historyMu.Lock()
-	if disabled || (c.history.seq != 0 && (c.history.seq < minimum || c.belowFloor(c.history.seq))) {
+	if c.history.seq != 0 && !c.historyRetained(tip, c.history.seq) {
 		c.history = catchupTarget{}
 		c.historyFloor = 0
+		c.historyResumeSeq = 0
 	}
 	c.historyMu.Unlock()
 	var retired []*inbound.Ledger
@@ -51,7 +71,7 @@ func (c *catchupReplayCoordinator) pruneHistoryBackfill(tip uint32) {
 		if candidate.Reason() != inbound.ReasonHistory {
 			continue
 		}
-		if disabled || candidate.Seq() < minimum || c.belowFloor(candidate.Seq()) {
+		if !c.historyRetained(tip, candidate.Seq()) {
 			if c.discardInboundAcquisitionLocked(candidate) {
 				retired = append(retired, candidate)
 			}
@@ -61,7 +81,7 @@ func (c *catchupReplayCoordinator) pruneHistoryBackfill(tip uint32) {
 	c.retireLegacyAcquisitions(retired)
 	if len(retired) != 0 {
 		c.logger.Info("Canceled historical acquisitions outside retention window",
-			"validated_seq", tip, "minimum_seq", minimum, "canceled", len(retired))
+			"validated_seq", tip, "minimum_seq", historyWindowMinimum(tip, c.historyDepth), "canceled", len(retired))
 	}
 }
 
