@@ -511,7 +511,7 @@ func (amount aggregatePriceAmount) compare(other aggregatePriceAmount) int {
 }
 
 func (amount aggregatePriceAmount) text() string {
-	return amount.number.String()
+	return state.NewIOUAmountValue(amount.number.Mantissa(), amount.number.Exponent()).String()
 }
 
 func aggregatePriceStats(prices []aggregatePricePoint) (aggregatePriceAmount, state.XRPLNumber) {

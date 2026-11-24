@@ -2,9 +2,44 @@ package entry
 
 import (
 	"bytes"
+	"encoding/hex"
 	"strings"
 	"testing"
 )
+
+func TestReservedCurrencyLedgerEntryRoundTrip(t *testing.T) {
+	noCurrency := [20]byte{19: 1}
+	for _, tc := range []struct {
+		entry, currency string
+		count           int
+	}{
+		{"AMM", fxCurrUSD, 1}, // Asset2
+		{"AMM", "039C99CD9AB0B70B32ECDA51EAAE471625608EA2", 2}, // LPTokenBalance and AuctionSlot.Price
+		{"Bridge", fxCurrUSD, 1},                               // XChainBridge.IssuingChainIssue
+		{"Oracle", fxCurrUSD, 1},                               // PriceDataSeries[].PriceData.BaseAsset
+	} {
+		t.Run(tc.entry+"/"+tc.currency, func(t *testing.T) {
+			data := fixtureBlob(t, tc.entry)
+			currency, err := hex.DecodeString(tc.currency)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count := bytes.Count(data, currency); count != tc.count {
+				t.Fatalf("fixture contains %d currency fields, want %d", count, tc.count)
+			}
+			wire := bytes.ReplaceAll(data, currency, noCurrency[:])
+			e := NewByName(tc.entry)
+			if err := e.Decode(wire); err != nil {
+				t.Fatal(err)
+			}
+			requireEncodeParity(t, e)
+			got, err := e.(encodeIface).Encode()
+			if err != nil || !bytes.Equal(got, wire) {
+				t.Fatalf("Encode() = %X, %v; want %X", got, err, wire)
+			}
+		})
+	}
+}
 
 func rawBadCurrencyRippleState(t *testing.T) []byte {
 	t.Helper()

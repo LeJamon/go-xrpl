@@ -364,7 +364,7 @@ func encodeEntry(value interface{ Encode() ([]byte, error) }) ([]byte, ter.Resul
 }
 
 func attestationMessage(fields map[string]any) ([]byte, error) {
-	return binarycodec.EncodeBytes(fields)
+	return binarycodec.EncodeDecodedFields(fields)
 }
 
 func verifyAttestationSignature(publicKeyHex, signatureHex string, message []byte) bool {

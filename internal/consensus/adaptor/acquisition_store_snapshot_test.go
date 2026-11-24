@@ -44,7 +44,7 @@ func TestAcquisitionStoreScopeRetainsDurableGeneration(t *testing.T) {
 	select {
 	case deleteErr := <-deleted:
 		require.NoError(t, deleteErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("managed deletion remained blocked after releasing the durable pin")
 	}
 	after, err := db.DurableFingerprint(t.Context())

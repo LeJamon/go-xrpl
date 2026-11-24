@@ -2,12 +2,9 @@ package vault
 
 import (
 	"bytes"
-	"encoding/binary"
-	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -285,19 +282,6 @@ func TestVaultCreateSetsCashBasisVersionForLendingProtocolV11(t *testing.T) {
 	}
 	if created.LEVersion != VaultVersionCashBasis {
 		t.Fatalf("LEVersion = %d, want %d", created.LEVersion, VaultVersionCashBasis)
-	}
-}
-
-func TestVaultNumberSerializationPreservesLargeMantissa(t *testing.T) {
-	encoded, err := encodeVaultNumber("9223372036854775807e0", state.MantissaScaleLarge)
-	if err != nil {
-		t.Fatalf("encodeVaultNumber: %v", err)
-	}
-	if got := int64(binary.BigEndian.Uint64(encoded[:8])); got != math.MaxInt64 {
-		t.Fatalf("encoded mantissa = %d, want %d", got, int64(math.MaxInt64))
-	}
-	if got := int32(binary.BigEndian.Uint32(encoded[8:])); got != 0 {
-		t.Fatalf("encoded exponent = %d, want 0", got)
 	}
 }
 

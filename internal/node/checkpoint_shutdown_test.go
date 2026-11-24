@@ -87,7 +87,7 @@ func TestNodeRuntimeCheckpointShutdownGraceExpires(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	select {
 	case <-callbackDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("checkpoint callback did not stop after its configured deadline")
 	}
 	require.Contains(t, logs.String(), "Fast-load checkpoint preparation started")

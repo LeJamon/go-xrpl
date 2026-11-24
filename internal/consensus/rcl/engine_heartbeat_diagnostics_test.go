@@ -85,7 +85,7 @@ func TestEngineHeartbeatSlowStageDiagnostics(t *testing.T) {
 			case <-started:
 				clock.Advance(slowHeartbeatThreshold + time.Millisecond)
 				engine.mu.Unlock()
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				engine.mu.Unlock()
 				t.Fatal("heartbeat did not begin waiting for the engine mutex")
 			}
@@ -477,7 +477,7 @@ func waitForHeartbeatDiagnostic(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-signal:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for heartbeat diagnostic test hook")
 	}
 }
@@ -494,7 +494,7 @@ func advanceSlowHeartbeatStage(
 	case <-started:
 		clock.Advance(slowHeartbeatThreshold + time.Millisecond)
 		close(release)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		close(release)
 		waitForHeartbeatDiagnostic(t, done)
 		t.Fatal("heartbeat did not enter the expected stage")

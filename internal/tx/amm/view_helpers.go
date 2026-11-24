@@ -64,7 +64,7 @@ func insufficientBalance(view tx.ReadOnlyLedgerView, accountID [20]byte, amount 
 		return false, ter.TesSUCCESS
 	}
 
-	held := tx.AccountFunds(view, accountID, amount, true, 0, 0)
+	held := mptutil.AccountFunds(view, accountID, amount, true, 0, 0)
 	return held.Compare(amount) < 0, ter.TesSUCCESS
 }
 

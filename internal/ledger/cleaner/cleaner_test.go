@@ -138,11 +138,11 @@ func (s *fakeSource) Reacquire(ctx context.Context, seq uint32) error {
 	}
 	return s.reacquire(ctx, seq)
 }
-func (s *fakeSource) RepairTransactions(ctx context.Context, seq uint32) error {
+func (s *fakeSource) RepairTransactions(ctx context.Context, info LedgerData) error {
 	if s.repair == nil {
 		return nil
 	}
-	return s.repair(ctx, seq)
+	return s.repair(ctx, info.Sequence)
 }
 
 // putStateTree builds a state map from keys, flushes it into family, and

@@ -43,8 +43,9 @@ type catchupReplayCoordinator struct {
 	forgetValidatorPeer func(uint64)
 	onPeerDisconnect    func(peermanagement.PeerID)
 
-	historyBackfill bool
-	historyDepth    uint32
+	historyBackfill     bool
+	historyDepth        uint32
+	historyOnlineDelete bool
 
 	peersMu                   sync.RWMutex
 	peerStates                map[peermanagement.PeerID]*peerLedgerState
@@ -65,6 +66,7 @@ type catchupReplayCoordinator struct {
 	replayer     *inbound.Replayer
 	fetchTracker *inbound.Tracker
 	fetchPacks   *fetchPackCache
+	inboundClock inbound.Clock
 
 	acquisitionWorkMu        sync.RWMutex
 	acquisitionFamily        shamap.Family
@@ -132,10 +134,13 @@ type catchupReplayCoordinator struct {
 	standardReplayDrainOwner *standardReplayDrainOwner
 	stopped                  atomic.Bool
 
-	historyMu     sync.Mutex
-	history       catchupTarget
-	historyFloor  uint32
-	historySeeded bool
+	historyMu    sync.Mutex
+	history      catchupTarget
+	historyFloor uint32
+	// historyResumeSeq is the original gap hidden behind an aligned anchor
+	// currently being acquired. It lets the next maintenance tick re-resolve
+	// that gap after the anchor is ingested without walking every parent.
+	historyResumeSeq uint32
 
 	seqHashMu     sync.Mutex
 	seqHash       map[uint32]ledgerHashEntry
@@ -507,7 +512,7 @@ func (c *catchupReplayCoordinator) admitInboundHeader(seq uint32) error {
 }
 
 func (c *catchupReplayCoordinator) acquisitionOpts() []inbound.Option {
-	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader)}
+	opts := []inbound.Option{inbound.WithHeaderAdmission(c.admitInboundHeader), inbound.WithClock(c.inboundClock)}
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
 	memory := c.acquisitionMemory
@@ -593,6 +598,9 @@ func (c *catchupReplayCoordinator) stoppedForShutdown() bool {
 }
 
 func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor, network routerNetworkConfig, logger *slog.Logger) *catchupReplayCoordinator {
+	if network.inboundClock == nil {
+		network.inboundClock = inbound.SystemClock
+	}
 	return &catchupReplayCoordinator{
 		engine:                    engine,
 		adaptor:                   adaptor,
@@ -602,9 +610,10 @@ func newCatchupReplayCoordinator(engine consensus.RouterEngine, adaptor *Adaptor
 		historyDepth:              256,
 		peerStates:                make(map[peermanagement.PeerID]*peerLedgerState),
 		peerStatusCandidates:      make(map[peermanagement.PeerID]peerStatusCandidate),
-		replayer:                  inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		replayer:                  inbound.NewReplayer(logger, network.inboundClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:              inbound.NewTrackerWithClockAndSweepInterval(network.inboundClock, network.inboundSweepInterval),
 		fetchPacks:                newFetchPackCache(),
+		inboundClock:              network.inboundClock,
 		catchupFailures:           make(map[[32]byte]time.Time),
 		replayAvailabilityRetries: make(map[[32]byte]replayAvailabilityRetryState),
 		replayFallbackRequired:    make(map[[32]byte]uint32),
@@ -730,7 +739,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	if generation, seq, hash, peerID, ok := c.standardReplayAvailabilityExhaustedState(); ok {
 		c.reserveStandardReplayReplacement(generation, seq, hash, peerID, now)
 	}
-	c.retryInboundLedgerAcquisitions(now)
+	c.retryInboundLedgerAcquisitions(c.inboundClock.Now())
 	c.retryReplayHeadTail(now)
 	c.reportReplayHead(now)
 	c.tickHeaderDiscovery(now)
@@ -743,7 +752,7 @@ func (c *catchupReplayCoordinator) maintenanceTick() {
 	// reached; startLedgerAcquisition dedups the in-flight hash.
 	c.armConsensusCatchup()
 
-	// Backward history backfill of jump-adopt gaps (rippled fetchForHistory
+	// History backfill of the newest missing ledger (rippled fetchForHistory
 	// from doAdvance), off the consensus catch-up slot.
 	c.armHistoryBackfill()
 

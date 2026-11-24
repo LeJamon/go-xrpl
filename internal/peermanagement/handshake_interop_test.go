@@ -153,7 +153,7 @@ func TestHandshake_Interop_RippledDocker_RippledClient(t *testing.T) {
 		_ = overlay.Stop()
 		select {
 		case <-runDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("overlay did not stop")
 		}
 	})
@@ -162,7 +162,7 @@ func TestHandshake_Interop_RippledDocker_RippledClient(t *testing.T) {
 	case err := <-runDone:
 		runDone <- err
 		t.Fatalf("overlay stopped before listener became ready: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay listener did not become ready")
 	}
 

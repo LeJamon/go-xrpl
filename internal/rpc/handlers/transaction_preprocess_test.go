@@ -77,6 +77,44 @@ func TestPreprocessTransactionRequiredFieldOrder(t *testing.T) {
 	}
 }
 
+func TestPreprocessTransactionCanonicalizesMPTAmountForSigningAndSimulation(t *testing.T) {
+	const issuanceID = "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8"
+	for _, mode := range []transactionPreprocessMode{
+		transactionPreprocessSign,
+		transactionPreprocessSimulate,
+	} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			fields := map[string]any{
+				"TransactionType": "Payment",
+				"Destination":     loadAdmissionSigner,
+				"Amount": map[string]any{
+					"mpt_issuance_id": issuanceID,
+					"value":           "1e2",
+				},
+				"Account":       loadAdmissionAccount,
+				"Sequence":      1,
+				"Fee":           "10",
+				"SigningPubKey": "",
+			}
+			transaction, rpcErr := preprocessTransaction(fields, transactionPreprocessOptions{mode: mode})
+			if rpcErr != nil {
+				t.Fatalf("preprocess: %v", rpcErr)
+			}
+			canonical, err := flattenCanonicalTransaction(transaction, fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{
+				"mpt_issuance_id": issuanceID,
+				"value":           "100",
+			}
+			if got := canonical["Amount"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("canonical Amount = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestPreprocessTransactionDiscardableFields(t *testing.T) {
 	for _, mode := range []transactionPreprocessMode{
 		transactionPreprocessSign,

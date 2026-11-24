@@ -22,7 +22,7 @@ const maxNestingDepth = 10
 // and complex structures of the Ripple protocol.
 type STObject struct {
 	binarySerializer   *serdes.BinarySerializer
-	skipJSONArrayLimit bool
+	source             fieldSource
 	innerTemplateField string
 }
 
@@ -31,11 +31,16 @@ func NewSTObject(bs *serdes.BinarySerializer) *STObject {
 	return &STObject{binarySerializer: bs}
 }
 
+// NewDecodedSTObject encodes fields materialized from binary, including reserved currencies.
+func NewDecodedSTObject(bs *serdes.BinarySerializer) *STObject {
+	return &STObject{binarySerializer: bs, source: decodedFields}
+}
+
 // NewTrustedSTObject returns an STObject for protocol objects constructed by
 // trusted internal code. It preserves all structural validation while skipping
 // the JSON-input-only array element limit.
 func NewTrustedSTObject(bs *serdes.BinarySerializer) *STObject {
-	return &STObject{binarySerializer: bs, skipJSONArrayLimit: true}
+	return &STObject{binarySerializer: bs, source: trustedFields}
 }
 
 // FromJSON converts a JSON object into a serialized byte slice.
@@ -77,11 +82,10 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			continue
 		}
 
-		st := SerializedTypeFor(v.Type)
+		st := t.source.serializedType(v.Type)
 		if st == nil {
 			return nil, fmt.Errorf("unknown type %q for field %q", v.Type, v.FieldName)
 		}
-		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
 		fieldValue := fimap[v]
 		if v.Type == "STObject" {
 			object, ok := fieldValue.(map[string]any)
@@ -90,12 +94,12 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			}
 			st.(*STObject).innerTemplateField = v.FieldName
 		}
-		if !t.skipJSONArrayLimit {
+		if t.source != trustedFields {
 			if err := checkJSONArraySize(v.FieldName, v.Type, fieldValue); err != nil {
 				return nil, err
 			}
 		}
-		b, err := st.FromJSON(fieldValue)
+		b, err := t.source.encode(st, fieldValue)
 		if err != nil {
 			return nil, err
 		}

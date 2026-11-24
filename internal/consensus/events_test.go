@@ -130,7 +130,7 @@ func TestEventBus_StopWaitsForCallback(t *testing.T) {
 	close(release)
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not join the worker")
 	}
 	if eb.Publish(&TimerFiredEvent{}) {

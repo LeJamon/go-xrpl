@@ -173,12 +173,12 @@ func TestDetachedIngressWakeThenReplayBlockFinalizesAdmissionDiagnostic(t *testi
 	}()
 	select {
 	case <-budget.denied:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached ingress did not attempt a denied memory reservation")
 	}
 	select {
 	case <-budget.changedReady:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached ingress did not subscribe to memory wakeups")
 	}
 
@@ -191,7 +191,7 @@ func TestDetachedIngressWakeThenReplayBlockFinalizesAdmissionDiagnostic(t *testi
 	select {
 	case submitErr := <-done:
 		require.ErrorIs(t, submitErr, replayfault.ErrBlocked)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached ingress did not stop after replay fault wake")
 	}
 

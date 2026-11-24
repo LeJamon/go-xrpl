@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
 
 func TestLPTokenMPTTransferCapability(t *testing.T) {
@@ -59,6 +60,13 @@ func TestLPTokenMPTTransferCapability(t *testing.T) {
 					jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(env.GW, env.Alice, env.LPTokenAmountFromLedger(asset1, asset2, 1_000)).Build()))
 					env.Close()
 					requireAMMIOUBalance(t, env.TestEnv, env.Alice, pool, limit.Currency, 1_000)
+
+					spendable := mptutil.AccountFunds(env.Ledger(), env.Alice.ID, limit, true, 0, 0)
+					if transferable {
+						require.Equal(t, "1000", spendable.Value())
+					} else {
+						require.True(t, spendable.IsZero())
+					}
 
 					balance, sequence, owners := env.Balance(env.Alice), env.Seq(env.Alice), env.OwnerCount(env.Alice)
 					result := env.Submit(payment.PayIssued(env.Alice, env.Bob, env.LPTokenAmountFromLedger(asset1, asset2, 100)).Build())

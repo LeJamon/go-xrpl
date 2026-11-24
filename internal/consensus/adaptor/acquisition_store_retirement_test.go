@@ -56,7 +56,7 @@ func TestAcquisitionStoreRetirementDropsQueuedWrite(t *testing.T) {
 		defer lane.pendingMu.RUnlock()
 		_, ok := lane.pending[pendingAcquisitionKey{scope: scope.id, hash: second.Hash}]
 		return ok
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	require.NoError(t, scope.Retire(t.Context()))
 	require.ErrorIs(t, scope.Flush(t.Context()), inbound.ErrAcquisitionRetired)
@@ -71,7 +71,7 @@ func TestAcquisitionStoreRetirementDropsQueuedWrite(t *testing.T) {
 		pending := len(lane.pending)
 		lane.pendingMu.RUnlock()
 		return len(calls) == 2 && calls[0] == first.Hash && calls[1] == otherEntry.Hash && pending == 0 && lane.bytes.Load() == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func TestAcquisitionStoreRetirementUnblocksQueuedAdmission(t *testing.T) {
@@ -100,7 +100,7 @@ func TestAcquisitionStoreRetirementUnblocksQueuedAdmission(t *testing.T) {
 		defer lane.pendingMu.RUnlock()
 		_, ok := lane.pending[pendingAcquisitionKey{scope: scope.id, hash: third.Hash}]
 		return ok
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case err := <-thirdDone:
 		t.Fatalf("queued admission returned before retirement: %v", err)
@@ -112,7 +112,7 @@ func TestAcquisitionStoreRetirementUnblocksQueuedAdmission(t *testing.T) {
 	select {
 	case err := <-retireDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("retirement waited for a blocked admission")
 	}
 	require.ErrorIs(t, <-thirdDone, inbound.ErrAcquisitionRetired)
@@ -125,7 +125,7 @@ func TestAcquisitionStoreRetirementUnblocksQueuedAdmission(t *testing.T) {
 		pending := len(lane.pending)
 		lane.pendingMu.RUnlock()
 		return len(calls) == 1 && calls[0] == first.Hash && pending == 0 && lane.bytes.Load() == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func TestAcquisitionStoreRetirementPreservesBorrowedBufferLifetime(t *testing.T) {
@@ -165,7 +165,7 @@ func TestAcquisitionStoreRetirementPreservesBorrowedBufferLifetime(t *testing.T)
 		stored := bytes.Clone(base.data[entry.Hash])
 		base.mu.Unlock()
 		return len(calls) == 1 && calls[0] == entry.Hash && bytes.Equal(stored, original) && lane.bytes.Load() == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func TestAcquisitionStoreRetirementAbortsPromotionBarrier(t *testing.T) {
@@ -191,7 +191,7 @@ func TestAcquisitionStoreRetirementAbortsPromotionBarrier(t *testing.T) {
 		_, err := scope.Promote(t.Context())
 		promoteDone <- err
 	}()
-	require.Eventually(t, func() bool { return len(lane.jobs) == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return len(lane.jobs) == 1 }, progressTimeout, time.Millisecond)
 	require.NoError(t, scope.Retire(t.Context()))
 	require.ErrorIs(t, <-promoteDone, inbound.ErrAcquisitionRetired)
 
@@ -206,7 +206,7 @@ func TestAcquisitionStoreRetirementAbortsPromotionBarrier(t *testing.T) {
 		calls := append([][32]byte(nil), base.calls...)
 		base.mu.Unlock()
 		return len(calls) == 1 && calls[0] == entry.Hash && lane.bytes.Load() == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 }
 
 func TestAcquisitionStoreShutdownRecordsDiscardedOwnerFailure(t *testing.T) {

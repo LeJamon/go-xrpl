@@ -36,7 +36,7 @@ func TestValidationProgressesDuringTransactionPersistence(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transaction persistence did not reach storage")
 	}
 
@@ -47,7 +47,7 @@ func TestValidationProgressesDuringTransactionPersistence(t *testing.T) {
 	}()
 	select {
 	case <-validated:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation blocked behind transaction persistence")
 	}
 	require.Equal(t, hash, svc.GetValidatedLedger().Hash())
@@ -66,14 +66,14 @@ func TestValidationProgressesDuringTransactionPersistence(t *testing.T) {
 	select {
 	case err := <-admitted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("consensus admission blocked behind transaction persistence")
 	}
 	unblock()
 	select {
 	case err := <-persisted:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transaction persistence did not finish")
 	}
 }

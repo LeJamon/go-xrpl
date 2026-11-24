@@ -141,7 +141,7 @@ func TestVerifyDetachedLedgerCoalescesColdWalkAndPublishesStateProof(t *testing.
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first detached verification did not start")
 	}
 
@@ -153,7 +153,7 @@ func TestVerifyDetachedLedgerCoalescesColdWalkAndPublishesStateProof(t *testing.
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 1 && waiters == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	close(family.release)
 	first := <-firstDone
@@ -185,7 +185,7 @@ func TestVerifyDetachedLedgerCoalescesColdWalkAndPublishesStateProof(t *testing.
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 0 && waiters == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	root, err := state.Hash()
 	require.NoError(t, err)
 	family.hide(root)
@@ -211,7 +211,7 @@ func TestVerifyDetachedLedgerCoalescesStateProofTransactionUpgrade(t *testing.T)
 	go func() { firstDone <- svc.VerifyDetachedLedger(t.Context(), ledger) }()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transaction upgrade did not start")
 	}
 	secondDone := make(chan error, 1)
@@ -219,7 +219,7 @@ func TestVerifyDetachedLedgerCoalescesStateProofTransactionUpgrade(t *testing.T)
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 1 && waiters == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	close(family.release)
 	require.NoError(t, <-firstDone)
 	require.NoError(t, <-secondDone)
@@ -255,14 +255,14 @@ func TestVerifyDetachedLedgerRejectsGenerationChangeDuringSharedWalk(t *testing.
 			go func() { done <- svc.VerifyDetachedLedger(t.Context(), ledger) }()
 			select {
 			case <-family.entered:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("verification did not start")
 			}
 			go func() { done <- svc.VerifyDetachedLedger(t.Context(), ledger) }()
 			require.Eventually(t, func() bool {
 				flights, waiters := svc.replayVerificationFlightStats()
 				return flights == 1 && waiters == 2
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 			close(family.release)
 			for range 2 {
 				require.ErrorContains(t, <-done, "replay generation changed")
@@ -303,7 +303,7 @@ func TestVerifyDetachedLedgerCancellationKeepsOtherWaiter(t *testing.T) {
 			require.Eventually(t, func() bool {
 				flights, waiters := svc.replayVerificationFlightStats()
 				return flights == 1 && waiters == 2
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 			canceled, surviving := waiterDone, ownerDone
 			cancel := cancelWaiter
 			if cancelFirst {
@@ -314,7 +314,7 @@ func TestVerifyDetachedLedgerCancellationKeepsOtherWaiter(t *testing.T) {
 			flights, waiters := svc.replayVerificationFlightStats()
 			require.Equal(t, 1, flights)
 			require.Equal(t, 1, waiters)
-			require.Eventually(t, func() bool { return family.pins.Load() == 1 }, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return family.pins.Load() == 1 }, progressTimeout, time.Millisecond)
 			select {
 			case err := <-surviving:
 				t.Fatalf("shared verification stopped while another caller still needed it: %v", err)
@@ -339,7 +339,7 @@ func TestVerifyDetachedLedgerLastCanceledWaiterDoesNotPoisonNextFlight(t *testin
 	go func() { ownerDone <- svc.VerifyDetachedLedger(ownerCtx, ledger) }()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("owner verification did not start")
 	}
 	waiterCtx, cancelWaiter := context.WithCancel(t.Context())
@@ -348,7 +348,7 @@ func TestVerifyDetachedLedgerLastCanceledWaiterDoesNotPoisonNextFlight(t *testin
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 1 && waiters == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancelOwner()
 	cancelWaiter()
 	require.ErrorIs(t, <-ownerDone, context.Canceled)
@@ -356,7 +356,7 @@ func TestVerifyDetachedLedgerLastCanceledWaiterDoesNotPoisonNextFlight(t *testin
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 0 && waiters == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	close(family.release)
 	require.NoError(t, svc.VerifyDetachedLedger(t.Context(), ledger))
 }
@@ -385,21 +385,21 @@ func TestVerifyDetachedLedgerFreshCallerWaitsForCanceledFlightToDrain(t *testing
 	go func() { ownerDone <- svc.VerifyDetachedLedger(ownerCtx, ledger) }()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("owner verification did not start")
 	}
 	go func() { waiterDone <- svc.VerifyDetachedLedger(waiterCtx, ledger) }()
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 1 && waiters == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancelOwner()
 	cancelWaiter()
 	require.ErrorIs(t, <-ownerDone, context.Canceled)
 	require.ErrorIs(t, <-waiterDone, context.Canceled)
 	select {
 	case <-family.drainStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled owner did not enter its draining read")
 	}
 
@@ -432,7 +432,7 @@ func TestVerifyDetachedLedgerFailureRemovesFlight(t *testing.T) {
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 0 && waiters == 0
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	family.mu.Lock()
 	delete(family.hidden, root)
@@ -455,7 +455,7 @@ func TestVerifyDetachedLedgerStopDrainsSharedWalkAndPins(t *testing.T) {
 	require.Eventually(t, func() bool {
 		flights, waiters := svc.replayVerificationFlightStats()
 		return flights == 1 && waiters == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	stopped := make(chan struct{})
 	go func() {
 		svc.Stop()
@@ -463,7 +463,7 @@ func TestVerifyDetachedLedgerStopDrainsSharedWalkAndPins(t *testing.T) {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not drain shared verification")
 	}
 	for range 2 {
@@ -497,10 +497,10 @@ func TestReplayVerificationWaitsForBoundedFlightSlot(t *testing.T) {
 	require.Eventually(t, func() bool {
 		flights, _ := svc.replayVerificationFlightStats()
 		return flights == replayVerificationFlightLimit
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("bounded verification owners did not start")
 	}
 
@@ -611,14 +611,14 @@ func TestVerifyDetachedLedgerSeparatesInMemoryAndBackedTransactionCompleteness(t
 				require.Eventually(t, func() bool {
 					flights, _ := svc.replayVerificationFlightStats()
 					return flights == 2
-				}, 5*time.Second, time.Millisecond)
+				}, progressTimeout, time.Millisecond)
 				release()
 				await := func(done <-chan result) result {
 					t.Helper()
 					select {
 					case completed := <-done:
 						return completed
-					case <-time.After(5 * time.Second):
+					case <-time.After(progressTimeout):
 						t.Fatal("mixed-backing verification did not finish")
 						return result{}
 					}
@@ -694,13 +694,13 @@ func TestVerifyDetachedLedgerStateRechecksProofAfterAdmission(t *testing.T) {
 		require.NoError(t, completed.err)
 		require.True(t, completed.reused)
 		require.Zero(t, completed.stats.NodesLoaded)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("queued state verification did not finish")
 	}
 	select {
 	case err := <-ownerDone:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("state verification owner did not finish")
 	}
 }

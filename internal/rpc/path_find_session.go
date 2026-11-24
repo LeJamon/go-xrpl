@@ -169,7 +169,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			if err := json.Unmarshal(rawCurrency, &currency); err != nil || !keylet.IsValidCurrencyCode(currency) {
 				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
-			if currency == "" {
+			if keylet.CurrencyBytes(currency) == [20]byte{} {
 				currency = "XRP"
 			}
 			var issuer [20]byte

@@ -171,7 +171,7 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		svc.enqueueNodePersist(pending)
 		select {
 		case <-storeBatchStart:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("successor persistence did not reach the real node-store write")
 		}
 
@@ -194,7 +194,7 @@ func TestService_RotatingRetentionKeepsHistoricalStateReadable(t *testing.T) {
 		var prepared retentionPreparationResult
 		select {
 		case prepared = <-prepareDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("retention preparation did not complete after persistence resumed")
 		}
 		require.NoError(t, prepared.err)

@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 const (
@@ -379,7 +378,7 @@ func (s *Service) replaySnapshotProvider() replaySnapshotProvider {
 	if provider, ok := s.shamapFamily.(replaySnapshotProvider); ok {
 		return provider
 	}
-	if durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase); ok {
+	if durable := s.nodeStore.capabilities().durableSnapshot; durable != nil {
 		return durable
 	}
 	return nil
@@ -1129,6 +1128,10 @@ func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedL
 
 	var initialCandidate bool
 	var err error
+	proof := historicalLedgerProof{}
+	if mode == preparedAcquisitionHistory {
+		proof = s.skipListProvesHistory(ctx, &prepared.header)
+	}
 	func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -1136,7 +1139,7 @@ func (s *Service) publishPreparedLedger(ctx context.Context, prepared *PreparedL
 		defer s.historyComponent.mu.Unlock()
 		initialCandidate = s.networkLedgerState != networkLedgerReady
 		if mode == preparedAcquisitionHistory {
-			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)
+			err = s.ingestHistoricalLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap, proof)
 			return
 		}
 		err = s.storeLedgerWithStateLocked(ctx, &prepared.header, prepared.stateMap, prepared.txMap)

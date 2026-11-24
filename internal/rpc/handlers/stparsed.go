@@ -142,8 +142,14 @@ func validateSerializedLeaf(
 	case "Int32":
 		return validateInt32(value, path)
 	case "Amount":
-		switch value.(type) {
+		parseJSONAmount := false
+		switch typed := value.(type) {
 		case string, json.Number:
+			parseJSONAmount = true
+		case map[string]any:
+			_, parseJSONAmount = typed["mpt_issuance_id"]
+		}
+		if parseJSONAmount {
 			raw, err := json.Marshal(value)
 			if err != nil {
 				return value, fmt.Sprintf("Field '%s' has invalid data.", path)

@@ -139,11 +139,11 @@ func (v *VaultDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConf
 			return res
 		}
 	} else {
-		if res := checkFrozen(view, asset, accountID); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 			return res
 		}
 		shareAsset := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
-		if res := checkFrozen(view, shareAsset, accountID); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, accountID, shareAsset); res != ter.TesSUCCESS {
 			return res
 		}
 	}

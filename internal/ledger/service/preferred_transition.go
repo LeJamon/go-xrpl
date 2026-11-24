@@ -290,14 +290,16 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 		s.mu.RUnlock()
 		return failPrepared(svcerr.ErrNoOpenLedger)
 	}
+	openLedgerChanged := false
 	if verifyBeforeOwnership {
 		// Promotion of this same ledger may finish while verification is shared.
 		validatedChanged := s.validatedLedger != p.validatedAtPrepare &&
 			(s.validatedLedger == nil || s.validatedLedger.Hash() != parent.Hash())
-		if !p.frontierMatchesLocked() || validatedChanged {
+		if !p.ownershipMatchesLocked() || validatedChanged {
 			s.mu.RUnlock()
 			return failPrepared(fmt.Errorf("%w: ledger ownership changed during admission: %w", ErrPreferredChainSwitch, ErrPreferredTransitionStale))
 		}
+		openLedgerChanged = !p.frontierMatchesLocked()
 	}
 	if options.check != nil {
 		if err := options.check(s); err != nil {
@@ -335,6 +337,9 @@ func (s *Service) prepareSuccessorOnce(ctx context.Context, parent *ledger.Ledge
 	s.openLedgerMu.Unlock()
 	gateHeld = false
 	p.timings.openLedgerHold = time.Since(gateAcquired)
+	if openLedgerChanged {
+		s.logger.Debug("Preferred ledger admission overlapped open-ledger changes", "seq", parent.Sequence())
+	}
 
 	if p.keepOpen {
 		p.timings.openLedgerHold = time.Since(gateAcquired)
@@ -511,11 +516,18 @@ func (p *PreparedPreferredLedger) captureFrontierLocked() {
 	p.validatedAtPrepare = s.validatedLedger
 }
 
-func (p *PreparedPreferredLedger) frontierMatchesLocked() bool {
+// ownershipMatchesLocked ignores the open view and queue: ingress and
+// speculative replay replace them without changing the canonical chain, and
+// preparation captures both under the gate after admission.
+func (p *PreparedPreferredLedger) ownershipMatchesLocked() bool {
 	s := p.service
 	return s.closedLedger == p.expectedClosed && s.openLedger == p.expectedOpen &&
-		s.openLedgerView == p.expectedView && s.txQueue == p.expectedQueue &&
 		s.localTxs == p.expectedLocals && s.startupReplay == p.expectedReplay
+}
+
+func (p *PreparedPreferredLedger) frontierMatchesLocked() bool {
+	s := p.service
+	return p.ownershipMatchesLocked() && s.openLedgerView == p.expectedView && s.txQueue == p.expectedQueue
 }
 
 func (p *PreparedPreferredLedger) publish(publication func() error) (bool, error) {

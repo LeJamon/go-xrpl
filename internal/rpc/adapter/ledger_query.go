@@ -8,7 +8,7 @@ import (
 )
 
 func (a *LedgerServiceAdapter) GetLedgerContext(ctx context.Context, sequence uint32) (*types.LedgerContext, error) {
-	result, err := a.svc.GetLedgerContext(ctx, sequence)
+	result, err := a.backend().GetLedgerContext(ctx, sequence)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func rpcTxSearchResult(result relationaldb.TxSearchResult) types.TxSearchResult 
 
 // GetLedgerRange retrieves ledger hashes for a range of sequences
 func (a *LedgerServiceAdapter) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
-	result, err := a.svc.GetLedgerRange(ctx, minSeq, maxSeq)
+	result, err := a.backend().GetLedgerRange(ctx, minSeq, maxSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (a *LedgerServiceAdapter) GetLedgerRange(ctx context.Context, minSeq, maxSe
 
 // GetLedgerEntry retrieves a specific ledger entry by its index/key
 func (a *LedgerServiceAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
-	result, err := a.svc.GetLedgerEntry(ctx, entryKey, ledgerIndex)
+	result, err := a.backend().GetLedgerEntry(ctx, entryKey, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (a *LedgerServiceAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]
 
 // GetLedgerData retrieves all ledger state entries with pagination
 func (a *LedgerServiceAdapter) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-	result, err := a.svc.GetLedgerData(ctx, ledgerIndex, limit, marker)
+	result, err := a.backend().GetLedgerData(ctx, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}

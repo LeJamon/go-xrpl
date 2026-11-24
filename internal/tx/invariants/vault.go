@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/big"
+	"slices"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -146,8 +147,18 @@ type vvDelta struct {
 	scale int
 }
 
-// checkValidVault is the ValidVault entry point.
+// checkValidVault is the ValidVault entry point. finalize consults what visit
+// records only once a Vault entry is present, so a transaction touching none
+// skips decoding its entries.
 func checkValidVault(tx Transaction, result Result, fee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
+	return validVault(tx, result, fee, entries, view, rules, touchesVault(entries), numberContexts...)
+}
+
+func touchesVault(entries []InvariantEntry) bool {
+	return slices.ContainsFunc(entries, func(e InvariantEntry) bool { return e.EntryType == entry.TypeVault })
+}
+
+func validVault(tx Transaction, result Result, fee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules, visit bool, numberContexts ...state.NumberContext) *InvariantViolation {
 	if result != TesSUCCESS {
 		return nil
 	}
@@ -176,7 +187,9 @@ func checkValidVault(tx Transaction, result Result, fee uint64, entries []Invari
 	if provider, ok := tx.(CurrentCloseTimeProvider); ok {
 		c.currentCloseTime, c.currentCloseTimeKnown = provider.CurrentCloseTime()
 	}
-	c.visit(entries)
+	if visit {
+		c.visit(entries)
+	}
 
 	msg := c.finalize()
 	if msg == "" {
@@ -233,7 +246,7 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 		sign := 0
 
 		if e.Before != nil {
-			if bf, err := decodeEntry(e.Before); err == nil {
+			if bf, err := e.model(e.Before); err == nil {
 				switch e.EntryType {
 				case entry.TypeVault:
 					if v, ok := vvMakeVault(bf, e.Key, c.numberScale); ok {
@@ -258,7 +271,7 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 		}
 
 		if !e.IsDelete && e.After != nil {
-			if af, err := decodeEntry(e.After); err == nil {
+			if af, err := e.model(e.After); err == nil {
 				switch e.EntryType {
 				case entry.TypeVault:
 					if v, ok := vvMakeVault(af, e.Key, c.numberScale); ok {

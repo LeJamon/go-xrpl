@@ -34,7 +34,7 @@ func checkSponsorshipOwnerCounts(entries []InvariantEntry) *InvariantViolation {
 	)
 
 	for _, e := range entries {
-		before, err := decodeSponsorshipState(e.EntryType, e.Before)
+		before, err := decodeSponsorshipState(e, e.Before)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "SponsorshipOwnerCountsMatch",
@@ -49,7 +49,7 @@ func checkSponsorshipOwnerCounts(entries []InvariantEntry) *InvariantViolation {
 				afterData = e.Before
 			}
 		}
-		after, err := decodeSponsorshipState(e.EntryType, afterData)
+		after, err := decodeSponsorshipState(e, afterData)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "SponsorshipOwnerCountsMatch",
@@ -107,7 +107,7 @@ func checkSponsorshipAccountCount(entries []InvariantEntry) *InvariantViolation 
 			continue
 		}
 
-		before, err := decodeAccountRoot(e.Before)
+		before, err := decodeAccountRoot(e, e.Before)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "SponsorshipAccountCountMatchesField",
@@ -122,7 +122,7 @@ func checkSponsorshipAccountCount(entries []InvariantEntry) *InvariantViolation 
 				afterData = e.Before
 			}
 		}
-		after, err := decodeAccountRoot(afterData)
+		after, err := decodeAccountRoot(e, afterData)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "SponsorshipAccountCountMatchesField",
@@ -160,30 +160,31 @@ type decodedAccountRoot struct {
 	hasSponsor bool
 }
 
-func decodeAccountRoot(data []byte) (*decodedAccountRoot, error) {
+func decodeAccountRoot(e InvariantEntry, data []byte) (*decodedAccountRoot, error) {
 	if data == nil {
 		return nil, nil
 	}
-	account, err := state.ParseAccountRoot(data)
+	account, err := e.accountRoot(data)
 	if err != nil {
 		return nil, err
 	}
 	return &decodedAccountRoot{account: account, hasSponsor: account.HasSponsor}, nil
 }
 
-func decodeSponsorshipState(typ entry.Type, data []byte) (sponsorshipState, error) {
+func decodeSponsorshipState(e InvariantEntry, data []byte) (sponsorshipState, error) {
 	if data == nil {
 		return sponsorshipState{}, nil
 	}
+	typ := e.EntryType
 	if typ == entry.TypeAccountRoot {
-		account, err := state.ParseAccountRoot(data)
+		account, err := e.accountRoot(data)
 		if err != nil {
 			return sponsorshipState{}, err
 		}
 		return sponsorshipState{account: account}, nil
 	}
 	if typ == entry.TypeRippleState {
-		line, err := state.ParseRippleState(data)
+		line, err := e.rippleState(data)
 		if err != nil {
 			return sponsorshipState{}, err
 		}
@@ -197,13 +198,18 @@ func decodeSponsorshipState(typ entry.Type, data []byte) (sponsorshipState, erro
 		return sponsorshipState{objectOwnerCount: objectOwnerCount}, nil
 	}
 
-	decoded := entry.New(typ)
-	if decoded == nil {
-		return sponsorshipState{}, nil
-	}
-	if err := decoded.Decode(data); err != nil {
-		if typ != entry.TypeSignerList || entry.DecodeLegacy(decoded, data) != nil {
-			return sponsorshipState{}, err
+	var decoded entry.Entry
+	if m, err := e.model(data); err == nil && m.typ == typ {
+		decoded = m.model
+	} else {
+		decoded = entry.New(typ)
+		if decoded == nil {
+			return sponsorshipState{}, nil
+		}
+		if err := decoded.Decode(data); err != nil {
+			if typ != entry.TypeSignerList || entry.DecodeLegacy(decoded, data) != nil {
+				return sponsorshipState{}, err
+			}
 		}
 	}
 	sponsorField, ok := decoded.(interface{ HasSponsor() bool })

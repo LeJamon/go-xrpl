@@ -364,6 +364,12 @@ func MigrateLegacyRotationState(path string) error {
 // path becomes the initial writable generation, so enabling online deletion
 // does not copy or rename an operator's current database.
 func NewRotating(path string, options Options) (*RotatingStore, error) {
+	return NewRotatingWithCheck(path, options, nil)
+}
+
+// NewRotatingWithCheck validates each opened generation before publishing a
+// new manifest or retiring orphaned generations. The check must be read-only.
+func NewRotatingWithCheck(path string, options Options, check func(kvstore.KeyValueStore) error) (*RotatingStore, error) {
 	if path == "" {
 		return nil, errors.New("kvstore/pebble: rotating store path is empty")
 	}
@@ -375,7 +381,19 @@ func NewRotating(path string, options Options) (*RotatingStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := r.openGenerations(resolved.BlockCacheBytes, found, newWithCache); err != nil {
+	open := func(path string, cache *cockroachpebble.Cache, options Options) (*Store, error) {
+		store, err := newWithCache(path, cache, options)
+		if err != nil {
+			return nil, err
+		}
+		if check != nil {
+			if err := check(store); err != nil {
+				return nil, errors.Join(err, store.Close())
+			}
+		}
+		return store, nil
+	}
+	if err := r.openGenerations(resolved.BlockCacheBytes, found, open); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -516,6 +534,19 @@ func (r *RotatingStore) Get(key []byte) ([]byte, error) {
 	return r.getLocked(key, false)
 }
 
+// CheckArchive pins the archive while check inspects records that the
+// writable generation might shadow. The callback must only read the store.
+func (r *RotatingStore) CheckArchive(check func(kvstore.KeyValueStore) error) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed {
+		return kvstore.ErrClosed
+	}
+	r.archiveMu.RLock()
+	defer r.archiveMu.RUnlock()
+	return check(r.archive)
+}
+
 // GetBatch reads an explicit set of keys in sorted order, preferring the
 // writable generation for keys present in both generations. It never promotes
 // archive records.
@@ -569,7 +600,12 @@ func (r *RotatingStore) GetBatch(
 }
 
 // CanRotateWithoutRefresh reports whether the archive is empty.
-func (r *RotatingStore) CanRotateWithoutRefresh() (canRotate bool, resultErr error) {
+func (r *RotatingStore) CanRotateWithoutRefresh() (bool, error) {
+	return r.CanRotateWithoutRefreshExcept(nil)
+}
+
+// CanRotateWithoutRefreshExcept ignores a key the caller preserves at rotation.
+func (r *RotatingStore) CanRotateWithoutRefreshExcept(key []byte) (canRotate bool, resultErr error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.closed {
@@ -583,6 +619,9 @@ func (r *RotatingStore) CanRotateWithoutRefresh() (canRotate bool, resultErr err
 		resultErr = errors.Join(resultErr, iter.Close())
 	}()
 	hasRecords := iter.Next()
+	if hasRecords && key != nil && bytes.Equal(iter.Key(), key) {
+		hasRecords = iter.Next()
+	}
 	if err := iter.Error(); err != nil {
 		return false, err
 	}

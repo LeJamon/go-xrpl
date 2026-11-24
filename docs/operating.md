@@ -231,6 +231,28 @@ valid) so the node does not dial out. Validator operation additionally requires
 Fields are grouped as they appear in `goxrpl.toml`. TOML requires all top-level
 keys to precede any `[section]` header.
 
+### Unknown keys
+
+A misspelled key stops startup. The loader reports the file and the unknown
+keys in sorted order. For example, two typos in the main configuration produce
+this error.
+
+```text
+unknown configuration keys in /etc/goxrpl/goxrpl.toml: node_db.online_delette, peers_maxx
+```
+
+Key names are case-insensitive. The check covers the main file, including
+nested tables and active port sections, and a TOML `validators_file`.
+
+- `[logging.partitions]` accepts arbitrary partition names.
+- `[server].ports` must list at least one port. Each name identifies a table
+  whose settings follow the port schema.
+- An unlisted `[port_*]` table can stay in the file while its port is disabled.
+  The loader ignores the contents of that table.
+
+Environment variables do not override TOML keys. The server separately reads
+`GOXRPL_PPROF` and `GOXRPL_METRICS` to configure diagnostic listeners.
+
 ### Top-level — peer protocol
 
 | Key | Example | Meaning |
@@ -481,6 +503,20 @@ synced and the swap is durable. An interrupted refresh restarts its state-tree
 walk from the root; any records that remain in the writable generation are
 reused, but every live node is read again.
 
+The node store records its record-format version (currently `1`) in a reserved
+marker record. A database created before the marker existed is stamped on its
+first writable open, with no manual step. Startup fails with
+`unsupported nodestore format version` when the database was written by a build
+using a different format; run a build that supports that version. The marker is
+separate from the rotating store's `<path>.generations.json` manifest, which
+versions the generation directories rather than the records inside them.
+
+Before upgrading a plain Pebble store, take an offline backup if you may need
+to roll back. Builds that predate the marker can read version 1 nodes, but
+their `DeleteBefore` pruning scan stops at the marker with `data corrupt`.
+Restore the pre-upgrade backup before using that pruning path on an older
+build. Generation-based pruning uses a directory swap and is unaffected.
+
 ### `[sqlite]` — relational index databases
 
 Schema version 6 stores ledger headers alongside transaction and account indexes
@@ -573,6 +609,25 @@ go-xrpl keeps content-addressed state separate from queryable indexes (see
   is the default and needs no external service; a PostgreSQL backend
   ([`storage/relationaldb/postgres`](../storage/relationaldb/postgres)) is
   available for shared deployments.
+
+The node keeps following the chain when a validated ledger fails to persist.
+It writes the relational indexes after the node store saves the ledger. A
+failed data write leaves a gap in `complete_ledgers`. A failure publishing
+the tip for an already durable ledger leaves that ledger in the range.
+
+After a successful validated save, the node retries recent failed writes from
+memory, including when peer backfill is disabled. With backfill enabled, it
+can acquire older gaps within `ledger_history` from peers. Online deletion
+limits local retries to ledgers at or above the retention floor.
+
+During a clean shutdown, queued writes are settled first. If the current
+validated tip is the retained owner of a failed save, it receives one final
+queued attempt before the persistence worker drains and exits.
+
+While validated saves keep failing, `server_info` and `server_state` include
+a go-xrpl-specific `ledger_persistence` object with `consecutive_failures` and
+`last_failed_seq`. The peer-port `/health` endpoint also reports a persistence
+warning. A successful validated save clears the warning.
 
 ## See also
 

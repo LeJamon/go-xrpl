@@ -12,9 +12,19 @@ import (
 // type and force a 64MB allocation per claim — trivial OOM vector.
 // Values are ~10× typical observed traffic per known type.
 const (
-	smallMsgMax  = 64 * 1024       // 64 KiB
-	mediumMsgMax = 1 * 1024 * 1024 // 1 MiB
-	maxPingSize  = 1024
+	smallMsgMax    = 64 * 1024       // 64 KiB
+	mediumMsgMax   = 1 * 1024 * 1024 // 1 MiB
+	maxSquelchSize = 2048
+	maxPingSize    = 1024
+
+	// bulkMsgMax is the cap for bulk response/broadcast types, which can
+	// legitimately approach rippled's single 64 MB protocol ceiling: a
+	// TMLedgerData reply fills up to softMaxReplyNodes fat nodes,
+	// TMGetObjectByHash carries fetch-pack data on the same type as its
+	// queries, a full TMManifests batches every stored manifest unsplit, and
+	// TMValidatorListCollection blobs are bounded only by the ceiling. A
+	// tighter local cap would tear down a peer mid-sync.
+	bulkMsgMax = MaxMessageSize
 )
 
 // MaxPayloadSizeForType returns the largest payload a peer may claim
@@ -22,53 +32,15 @@ const (
 // Unknown types are bounded only by the universal protocol ceiling so a
 // newer peer can introduce message types without breaking older peers.
 func MaxPayloadSizeForType(t MessageType) uint32 {
-	return payloadSizeLimit(t)
+	if c, ok := codecFor(t); ok {
+		return c.maxPayload
+	}
+	return MaxMessageSize
 }
 
 func IsKnownMessageType(t MessageType) bool {
-	_, known := codecs[t]
+	_, known := codecFor(t)
 	return known
-}
-
-func payloadSizeLimit(t MessageType) uint32 {
-	switch t {
-	case TypeSquelch:
-		return 2048
-	case TypeEndpoints,
-		TypeStatusChange,
-		TypeProposeLedger,
-		TypeValidation,
-		TypeHaveSet,
-		TypeHaveTransactions,
-		TypeCluster:
-		return smallMsgMax
-	case TypeGetLedger,
-		TypeProofPathReq,
-		TypeReplayDeltaReq,
-		TypeTransaction:
-		return mediumMsgMax
-	case TypeProofPathResponse,
-		TypeReplayDeltaResponse:
-		return MaxMessageSize
-	case TypeManifests,
-		TypeValidatorListCollection,
-		TypeLedgerData,
-		TypeGetObjects,
-		TypeTransactions:
-		// Bulk response/broadcast types can legitimately approach
-		// rippled's single 64 MB protocol ceiling, which applies no
-		// per-type cap of its own: a TMLedgerData reply fills up to
-		// softMaxReplyNodes fat nodes, TMGetObjectByHash carries
-		// fetch-pack data on the same type as its queries, a full
-		// TMManifests batches every stored manifest unsplit, and a single
-		// TMValidatorListCollection blobs are bounded only
-		// by the ceiling. A tighter local cap would tear down a peer
-		// mid-sync, so these rely on the protocol ceiling (enforced in
-		// framing validation) rather than a stricter limit.
-		return MaxMessageSize
-	default:
-		return MaxMessageSize
-	}
 }
 
 const (

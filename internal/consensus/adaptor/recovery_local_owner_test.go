@@ -33,7 +33,7 @@ func TestRecoveryLocalPreparationPreventsGapEscalation(t *testing.T) {
 			}
 			require.True(t, c.localForwardReplayOwnsRecovery(target.seq, target.hash))
 			require.True(t, c.beginFrozenPivotRecovery(target.seq, target.hash, 7))
-			require.False(t, c.standardReplay.active, "local verification must not create a competing pivot")
+			require.False(t, c.standardReplay.isActive(), "local verification must not create a competing pivot")
 			require.Empty(t, sender.legacyCalls())
 			// A directly conflicting target must not be protected by old work.
 			require.False(t, c.localForwardReplayOwnsRecovery(next.seq, [32]byte{99}))
@@ -60,7 +60,7 @@ func TestRecoveryCommittedAnchorSurvivesMovingTargetPastInitialWindow(t *testing
 	trackCatchupPeer(r, 7, target.seq, target.hash)
 	c.recordCatchupTarget(target.seq, target.hash, 7)
 	c.armCatchupTowardTarget()
-	require.False(t, c.standardReplay.active, "moving head abandoned the committed replay anchor")
+	require.False(t, c.standardReplay.isActive(), "moving head abandoned the committed replay anchor")
 	require.NotEmpty(t, sender.replayCalls())
 	require.Equal(t, links[0].hash, sender.replayCalls()[0].hash)
 	require.Empty(t, sender.legacyCalls())

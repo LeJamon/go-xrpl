@@ -52,7 +52,7 @@ func newRouterRuleService(t *testing.T, cleanup bool) (*Adaptor, *ledgerservice.
 	require.Eventually(t, func() bool {
 		validated := svc.GetValidatedLedger()
 		return validated != nil && validated.Hash() == closed.Hash()
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	_, err = svc.AcceptConsensusResult(context.Background(), closed, nil, nil, time.Now(), true)
 	require.NoError(t, err)
 	require.Equal(t, cleanup, svc.TransactionRules().FixCleanup3_4_0Enabled())
@@ -83,7 +83,7 @@ func routerMixedRuleService(t *testing.T, validatedCleanup bool) (*Adaptor, *led
 		return validated != nil && validated.Hash() == candidate.Hash() &&
 			validated.Rules().FixCleanup3_4_0Enabled() == validatedCleanup &&
 			openRules.FixCleanup3_4_0Enabled() != validatedCleanup
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	return adaptor, svc
 }

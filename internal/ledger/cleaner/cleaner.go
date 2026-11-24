@@ -52,9 +52,9 @@ type LedgerSource interface {
 	// verification. The cleaner retries the same sequence after the request.
 	Reacquire(ctx context.Context, seq uint32) error
 
-	// RepairTransactions rewrites the relational transaction indexes for seq.
+	// RepairTransactions rewrites the relational indexes for the verified ledger.
 	// Implementations without relational persistence return nil.
-	RepairTransactions(ctx context.Context, seq uint32) error
+	RepairTransactions(ctx context.Context, ledger LedgerData) error
 }
 
 type LedgerData struct {
@@ -349,24 +349,16 @@ func (c *Cleaner) run() {
 		runCtx := c.runCtx
 		c.mu.Unlock()
 
-		nodes, missing, repairTxns, reacquire, err := c.cleanLedger(runCtx, seq, deep, func() {
+		retryTxns := pendingRepair.needed && pendingRepair.generation == generation && pendingRepair.seq == seq
+		nodes, missing, reacquire, err := c.cleanLedger(runCtx, seq, deep, fixTxns || retryTxns, func() {
 			pendingRepair.generation = generation
 			pendingRepair.seq = seq
 			pendingRepair.needed = true
 		})
-		repairTxns = repairTxns || (pendingRepair.needed &&
-			pendingRepair.generation == generation && pendingRepair.seq == seq)
-		if err == nil && missing == 0 && (fixTxns || repairTxns) {
-			err = c.src.RepairTransactions(runCtx, seq)
-			if err != nil && repairTxns {
-				pendingRepair.generation = generation
-				pendingRepair.seq = seq
-				pendingRepair.needed = true
-			} else if err == nil {
-				pendingRepair.needed = false
-			}
-		}
 		failed := err != nil || missing != 0
+		if !failed {
+			pendingRepair.needed = false
+		}
 		if failed && runCtx.Err() == nil && (reacquire || missing != 0) {
 			reacquireErr := c.src.Reacquire(runCtx, seq)
 			if err == nil {
@@ -458,18 +450,18 @@ func (c *Cleaner) sleepRun(ctx context.Context, d time.Duration) bool {
 func (c *Cleaner) cleanLedger(
 	ctx context.Context,
 	seq uint32,
-	deep bool,
+	deep, fixTxns bool,
 	rememberRepair func(),
-) (nodes, missing uint64, repairTxns, reacquire bool, err error) {
+) (nodes, missing uint64, reacquire bool, err error) {
 	info, ok, err := c.src.Ledger(ctx, seq)
 	if err != nil {
-		return 0, 0, false, true, err
+		return 0, 0, true, err
 	}
 	if !ok {
-		return 0, 1, false, true, nil
+		return 0, 1, true, nil
 	}
 	if info.Sequence != seq {
-		return 0, 0, false, true, fmt.Errorf(
+		return 0, 0, true, fmt.Errorf(
 			"ledger_cleaner: ledger sequence %d indexed at %d",
 			info.Sequence,
 			seq,
@@ -477,43 +469,43 @@ func (c *Cleaner) cleanLedger(
 	}
 	canonicalHash, ok, err := c.src.CanonicalHash(ctx, seq)
 	if err != nil {
-		return 0, 0, false, true, err
+		return 0, 0, true, err
 	}
 	if !ok {
-		return 0, 0, false, true, fmt.Errorf("ledger_cleaner: canonical hash unavailable for ledger %d", seq)
+		return 0, 0, true, fmt.Errorf("ledger_cleaner: canonical hash unavailable for ledger %d", seq)
 	}
 	if info.Hash != canonicalHash {
-		return 0, 0, false, true, fmt.Errorf("ledger_cleaner: ledger %d hash does not match validated chain", seq)
+		return 0, 0, true, fmt.Errorf("ledger_cleaner: ledger %d hash does not match validated chain", seq)
 	}
 	expectedParent := [32]byte{}
 	if seq > 1 {
 		expectedParent, ok, err = c.src.CanonicalHash(ctx, seq-1)
 		if err != nil {
-			return 0, 0, false, true, err
+			return 0, 0, true, err
 		}
 		if !ok {
-			return 0, 0, false, true, fmt.Errorf(
+			return 0, 0, true, fmt.Errorf(
 				"ledger_cleaner: canonical parent unavailable for ledger %d",
 				seq,
 			)
 		}
 	}
 	if info.ParentHash != expectedParent {
-		return 0, 0, false, true, fmt.Errorf(
+		return 0, 0, true, fmt.Errorf(
 			"ledger_cleaner: ledger %d parent does not match validated chain",
 			seq,
 		)
 	}
-	repairTxns, err = c.src.RepairLedgerIndex(ctx, info)
+	repairTxns, err := c.src.RepairLedgerIndex(ctx, info)
 	if err != nil {
-		return 0, 0, false, false, err
+		return 0, 0, false, err
 	}
 	if repairTxns {
 		rememberRepair()
 	}
 	family := c.src.Family()
 	if family == nil {
-		return 0, 0, repairTxns, false, errNoFamily
+		return 0, 0, false, errNoFamily
 	}
 	family = newDurableTraversalFamily(family)
 
@@ -534,7 +526,7 @@ func (c *Cleaner) cleanLedger(
 				missing++
 				continue
 			}
-			return nodes, missing, repairTxns, true, ferr
+			return nodes, missing, true, ferr
 		}
 
 		if !deep {
@@ -544,12 +536,15 @@ func (c *Cleaner) cleanLedger(
 
 		res, cerr := sm.CheckComplete(ctx)
 		if cerr != nil {
-			return nodes, missing, repairTxns, true, cerr
+			return nodes, missing, true, cerr
 		}
 		nodes += uint64(res.InnerNodes + res.LeafNodes)
 		missing += uint64(len(res.Missing) + len(res.Corrupt))
 	}
-	return nodes, missing, repairTxns, missing != 0, nil
+	if missing == 0 && (fixTxns || repairTxns) {
+		err = c.src.RepairTransactions(ctx, info)
+	}
+	return nodes, missing, missing != 0, err
 }
 
 func isZeroHash(h [32]byte) bool {

@@ -154,7 +154,7 @@ func checkTransfersNotFrozen(
 
 		if afterType == entry.TypeAccountRoot {
 			// Store as possible issuer for finalize phase.
-			acct, err := state.ParseAccountRoot(afterData)
+			acct, err := e.accountRoot(afterData)
 			if err != nil {
 				if enforce {
 					return &InvariantViolation{
@@ -186,7 +186,7 @@ func checkTransfersNotFrozen(
 		// --- calculateBalanceChange ---
 		// Parse the trust line from the "after" data (never nil in rippled;
 		// in Go, for deletions we use Before).
-		afterRS, err := state.ParseRippleState(afterData)
+		afterRS, err := e.rippleState(afterData)
 		if err != nil {
 			if enforce {
 				return &InvariantViolation{
@@ -208,7 +208,7 @@ func checkTransfersNotFrozen(
 		var balanceBefore, balanceAfter state.Amount
 
 		if e.Before != nil {
-			beforeRS, err := state.ParseRippleState(e.Before)
+			beforeRS, err := e.rippleState(e.Before)
 			if err != nil {
 				if enforce {
 					return &InvariantViolation{
@@ -232,7 +232,7 @@ func checkTransfersNotFrozen(
 		} else {
 			if e.After != nil {
 				// Use the actual after data (not the "before" fallback).
-				actualAfterRS, err := state.ParseRippleState(e.After)
+				actualAfterRS, err := e.rippleState(e.After)
 				if err != nil {
 					if enforce {
 						return &InvariantViolation{

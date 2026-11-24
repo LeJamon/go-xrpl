@@ -115,6 +115,7 @@ func TestRouter_ValidationSchedulingDoesNotWaitForSQLite(t *testing.T) {
 			}()
 			select {
 			case <-done:
+			// The bound is the property: it stays below the 1 s lookup deadlines that end a stalled read.
 			case <-time.After(500 * time.Millisecond):
 				unblock()
 				<-done

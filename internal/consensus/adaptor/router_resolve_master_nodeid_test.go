@@ -98,7 +98,7 @@ func TestRouter_ResolveMasterNodeID_Validation_RewritesToMaster(t *testing.T) {
 	}
 
 	wantNodeID := consensus.CalcNodeID(master)
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		if vs := engine.getValidations(); len(vs) == 1 {
 			if vs[0].NodeID != wantNodeID {
@@ -158,7 +158,7 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 	}
 
 	wantNodeID := consensus.CalcNodeID(signing)
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		if vs := engine.getValidations(); len(vs) == 1 {
 			if vs[0].NodeID != wantNodeID {

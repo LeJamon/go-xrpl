@@ -73,7 +73,7 @@ func TestFullAcquisitionCompletionReleasesRequestMemory(t *testing.T) {
 			if mode == "replacement" {
 				parent := svc.GetClosedLedger()
 				c.standardReplay = standardReplayPipeline{
-					generation: 1, active: true, pivotReady: true,
+					generation: 1, phase: standardReplayPivotReady,
 					anchorSeq: parent.Sequence(), anchorHash: parent.Hash(),
 					targetSeq: il.Seq(), targetHash: il.Hash(),
 					replacement: &standardReplayReplacement{generation: 1, seq: il.Seq(), hash: il.Hash(), acquisition: il},
@@ -111,7 +111,7 @@ func TestAcquisitionCompletionKeepsRouterAndSuccessorCollectionResponsive(t *tes
 			router.SetAcqInbox(acquisition)
 			links := buildStandardReplayTestChain(t, router, svc.GetClosedLedger(), 2)
 			armStandardReplayTestPipeline(t, router, router.adaptor, router.adaptor.sender.(*recordingSender), links)
-			c.standardReplay.pivotReady = false
+			c.standardReplay.phase = standardReplayAcquiringPivot
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan struct{})
 			go func() { router.Run(ctx); close(done) }()
@@ -120,13 +120,13 @@ func TestAcquisitionCompletionKeepsRouterAndSuccessorCollectionResponsive(t *tes
 				resume()
 				select {
 				case <-done:
-				case <-time.After(3 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Error("router did not join completion workers")
 				}
 			})
 			select {
 			case <-family.entered:
-			case <-time.After(3 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("completion did not reach durable verification")
 			}
 			require.Eventually(t, func() bool {
@@ -135,13 +135,13 @@ func TestAcquisitionCompletionKeepsRouterAndSuccessorCollectionResponsive(t *tes
 				}
 				c.replayCommitMu.Unlock()
 				return true
-			}, time.Second, time.Millisecond, "full-state walk held publication lock")
+			}, progressTimeout, time.Millisecond, "full-state walk held publication lock")
 			for _, link := range links {
 				acquisition <- &peermanagement.InboundMessage{PeerID: 7, Type: message.TypeLedgerData,
 					Payload: encodePayload(t, &message.LedgerData{LedgerHash: link.hash[:], LedgerSeq: link.seq,
 						InfoType: message.LedgerInfoBase, Nodes: []message.LedgerNode{{NodeData: link.response.LedgerHeader}, {NodeData: []byte{1}}}})}
 			}
-			require.Eventually(t, func() bool { return router.FastSyncMetrics().ReplayPipelineReady == 2 }, 3*time.Second, time.Millisecond,
+			require.Eventually(t, func() bool { return router.FastSyncMetrics().ReplayPipelineReady == 2 }, progressTimeout, time.Millisecond,
 				"transaction-only completions stalled behind full-state verification")
 			parent := svc.GetClosedLedger()
 			control <- statusChangeMessage(t, 17, parent.Sequence(), parent.Hash())
@@ -149,15 +149,15 @@ func TestAcquisitionCompletionKeepsRouterAndSuccessorCollectionResponsive(t *tes
 				c.peersMu.RLock()
 				defer c.peersMu.RUnlock()
 				return c.peerStates[17] != nil && c.peerStates[17].LedgerHash == parent.Hash()
-			}, time.Second, time.Millisecond, "router stopped processing control messages")
+			}, progressTimeout, time.Millisecond, "router stopped processing control messages")
 			if !shutdown {
 				resume()
-				require.Eventually(t, func() bool { return c.fetchTracker.Find(il.Hash()) == nil }, 3*time.Second, time.Millisecond)
+				require.Eventually(t, func() bool { return c.fetchTracker.Find(il.Hash()) == nil }, progressTimeout, time.Millisecond)
 			}
 			cancel()
 			select {
 			case <-done:
-			case <-time.After(3 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("shutdown waited for blocked verification instead of canceling it")
 			}
 			stored, err := svc.GetLedgerByHash(il.Hash())
@@ -179,7 +179,7 @@ func TestAcquisitionCompletionRejectsReplacedIdentityAndReleasesSlot(t *testing.
 	c.completeInboundLedgerReady(il)
 	select {
 	case <-family.entered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("verification did not start")
 	}
 	c.completionMu.Lock()
@@ -196,7 +196,7 @@ func TestAcquisitionCompletionRejectsReplacedIdentityAndReleasesSlot(t *testing.
 	var result *acquisitionCompletionResult
 	select {
 	case result = <-c.completionResults:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("verification did not finish")
 	}
 	require.NoError(t, result.err)
@@ -220,7 +220,7 @@ func TestAcquisitionCompletionRetirementCancelsDetachedVerification(t *testing.T
 	c.completeInboundLedgerReady(il)
 	select {
 	case <-family.entered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("verification did not start")
 	}
 
@@ -231,7 +231,7 @@ func TestAcquisitionCompletionRetirementCancelsDetachedVerification(t *testing.T
 	}()
 	select {
 	case <-retired:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("retirement waited for durable verification")
 	}
 	require.True(t, il.IsRetired())
@@ -242,7 +242,7 @@ func TestAcquisitionCompletionRetirementCancelsDetachedVerification(t *testing.T
 		c.completionMu.Lock()
 		defer c.completionMu.Unlock()
 		return c.completionTasks[0] == nil
-	}, time.Second, time.Millisecond, "retired verification retained its worker slot")
+	}, progressTimeout, time.Millisecond, "retired verification retained its worker slot")
 	c.stopTasks()
 	require.Same(t, replacement, c.fetchTracker.Find(il.Hash()))
 	_, err := svc.GetLedgerByHash(il.Hash())

@@ -13,7 +13,7 @@ import (
 
 // GetAccountInfo retrieves account information from the ledger
 func (a *LedgerServiceAdapter) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
-	result, err := a.svc.GetAccountInfo(ctx, account, ledgerIndex)
+	result, err := a.backend().GetAccountInfo(ctx, account, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (a *LedgerServiceAdapter) GetAccountInfo(ctx context.Context, account strin
 
 // GetAccountLines retrieves trust lines for an account
 func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*types.AccountLinesResult, error) {
-	result, err := a.svc.GetAccountLines(ctx, account, ledgerIndex, peer, limit, marker)
+	result, err := a.backend().GetAccountLines(ctx, account, ledgerIndex, peer, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account stri
 
 // GetAccountOffers retrieves offers for an account
 func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountOffersResult, error) {
-	result, err := a.svc.GetAccountOffers(ctx, account, ledgerIndex, limit, marker)
+	result, err := a.backend().GetAccountOffers(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (a *LedgerServiceAdapter) getAccountTransactions(ctx context.Context, accou
 		}
 	}
 
-	result, err := a.svc.GetAccountTransactionsWithDelegate(ctx, account, ledgerMin, ledgerMax, limit, svcMarker, forward, delegate)
+	result, err := a.backend().GetAccountTransactionsWithDelegate(ctx, account, ledgerMin, ledgerMax, limit, svcMarker, forward, delegate)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +198,7 @@ func (a *LedgerServiceAdapter) getAccountTransactions(ctx context.Context, accou
 
 // GetAccountObjects retrieves all objects owned by an account
 func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
-	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit, marker)
+	result, err := a.backend().GetAccountObjects(ctx, account, ledgerIndex, objType, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account st
 // GetOwnerInfo walks the account's owner directory for the owner_info RPC,
 // implementing types.OwnerDirectoryReader.
 func (a *LedgerServiceAdapter) GetOwnerInfo(ctx context.Context, account string, ledgerIndex string) (*types.OwnerInfoResult, error) {
-	result, err := a.svc.GetOwnerInfo(ctx, account, ledgerIndex)
+	result, err := a.backend().GetOwnerInfo(ctx, account, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +253,7 @@ func toRPCAccountObjectItems(items []service.AccountObjectItem) []types.AccountO
 }
 
 func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*types.AccountChannelsResult, error) {
-	result, err := a.svc.GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit, marker)
+	result, err := a.backend().GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +291,7 @@ func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account s
 
 // GetAccountCurrencies retrieves currencies an account can send and receive
 func (a *LedgerServiceAdapter) GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
-	result, err := a.svc.GetAccountCurrencies(ctx, account, ledgerIndex)
+	result, err := a.backend().GetAccountCurrencies(ctx, account, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (a *LedgerServiceAdapter) GetAccountCurrencies(ctx context.Context, account
 }
 
 func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
-	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit, marker)
+	result, err := a.backend().GetAccountNFTs(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}

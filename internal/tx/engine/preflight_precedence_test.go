@@ -61,6 +61,7 @@ func TestSponsorFieldsAmendmentGate(t *testing.T) {
 
 	inner := newAccountSet(precedenceSourceAddr)
 	inner.Sponsor = precedenceGenesisAddr
+	inner.SetFlags(txcore.TfInnerBatchTxn)
 	if got := preflightEngine(disabledRules).preflightInner(inner); got != ter.TemDISABLED {
 		t.Fatalf("inner preflight with Sponsor disabled = %v, want temDISABLED", got)
 	}

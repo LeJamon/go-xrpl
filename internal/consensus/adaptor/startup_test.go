@@ -212,8 +212,8 @@ func TestOverlayOptionsFromConfig_FixedFallbackConnectsThroughBootstrap(t *testi
 	case <-connected:
 		require.Eventually(t, func() bool {
 			return client.PeerCount() == 1
-		}, time.Second, 10*time.Millisecond)
-	case <-time.After(5 * time.Second):
+		}, progressTimeout, 10*time.Millisecond)
+	case <-time.After(progressTimeout):
 		t.Fatal("fixed-only fallback was not selected through the bootstrap lane")
 	}
 }
@@ -259,14 +259,14 @@ func startBootstrapFallbackOverlay(t *testing.T, opts ...peermanagement.Option) 
 	case <-overlay.ListenerReady():
 	case err := <-runDone:
 		t.Fatalf("overlay stopped before its listener became ready: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay listener did not become ready")
 	}
 	t.Cleanup(func() {
 		require.NoError(t, overlay.Stop())
 		select {
 		case <-runDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("overlay did not stop")
 		}
 	})

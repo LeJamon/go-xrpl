@@ -2,6 +2,8 @@
 package types
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
@@ -19,6 +21,27 @@ type SerializedType interface {
 // field type, so the appropriate methods of that type can be called. It returns
 // nil for an unknown type name; callers must nil-check the result.
 func SerializedTypeFor(t string) SerializedType {
+	return jsonFields.serializedType(t)
+}
+
+// EncodeDecodedValue re-encodes one decoded field value without its field header.
+func EncodeDecodedValue(typeName string, value any) ([]byte, error) {
+	st := decodedFields.serializedType(typeName)
+	if st == nil {
+		return nil, fmt.Errorf("unknown serialized type %q", typeName)
+	}
+	return decodedFields.encode(st, value)
+}
+
+type fieldSource uint8
+
+const (
+	jsonFields fieldSource = iota
+	decodedFields
+	trustedFields
+)
+
+func (source fieldSource) serializedType(t string) SerializedType {
 	switch t {
 	case "UInt8":
 		return &UInt8{}
@@ -45,11 +68,11 @@ func SerializedTypeFor(t string) SerializedType {
 	case "Blob":
 		return &Blob{}
 	case "STObject":
-		return NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
+		return &STObject{binarySerializer: serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()), source: source}
 	case "STArray":
-		return &STArray{}
+		return &STArray{source: source}
 	case "PathSet":
-		return &PathSet{}
+		return &PathSet{source: source}
 	case "XChainBridge":
 		return &XChainBridge{}
 	case "Issue":
@@ -66,13 +89,13 @@ func SerializedTypeFor(t string) SerializedType {
 	return nil
 }
 
-func setSkipJSONArrayLimit(st SerializedType, skip bool) {
-	switch v := st.(type) {
-	case *STObject:
-		v.skipJSONArrayLimit = skip
-	case *STArray:
-		v.skipJSONArrayLimit = skip
-	case *PathSet:
-		v.skipJSONArrayLimit = skip
+func (source fieldSource) encode(st SerializedType, value any) ([]byte, error) {
+	if source != jsonFields {
+		if codec, ok := st.(interface {
+			fromFields(any, fieldSource) ([]byte, error)
+		}); ok {
+			return codec.fromFields(value, source)
+		}
 	}
+	return st.FromJSON(value)
 }

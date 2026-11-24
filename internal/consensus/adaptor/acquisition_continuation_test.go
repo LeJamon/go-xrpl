@@ -61,7 +61,7 @@ func TestAcquisitionDiscoveryContinuesAfterPartialRequests(t *testing.T) {
 	require.Same(t, reply, events[0].data)
 	require.Equal(t, acquisitionWorkContinue, events[1].kind)
 	require.Nil(t, events[1].data)
-	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 }
 
 func TestAcquisitionDiscoveryYieldPreservesPeerControl(t *testing.T) {
@@ -142,7 +142,7 @@ func TestAcquisitionDiscoveryWaitResumesAfterCheckpoint(t *testing.T) {
 			events := <-resumed
 			require.Len(t, events, 1)
 			require.Equal(t, acquisitionWorkContinue, events[0].kind)
-			require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 		})
 	}
 }
@@ -178,7 +178,7 @@ func TestAcquisitionReplyResumesAfterAutomaticCheckpoint(t *testing.T) {
 	case next := <-lane.results():
 		require.NoError(t, next.err)
 		close(next.ack)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("remaining reply was parked despite reclaimed memory")
 	}
 }
@@ -268,7 +268,7 @@ func TestAcquisitionRetainsPressuredReplyUntilWake(t *testing.T) {
 				defer lane.mu.Unlock()
 				batch := lane.pending[ledger]
 				return batch != nil && batch.waiting
-			}, time.Second, time.Millisecond)
+			}, progressTimeout, time.Millisecond)
 			if cancel {
 				require.True(t, lane.cancelLedger(ledger))
 			} else {
@@ -285,7 +285,7 @@ func TestAcquisitionRetainsPressuredReplyUntilWake(t *testing.T) {
 			require.Equal(t, 7, events[0].consumed)
 			require.Same(t, data, events[0].data)
 			require.Same(t, owner, events[0].owner)
-			require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 		})
 	}
 }

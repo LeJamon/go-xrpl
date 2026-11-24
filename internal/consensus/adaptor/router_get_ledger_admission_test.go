@@ -137,7 +137,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	var connection manifestOverlayConnection
 	select {
 	case connection = <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ledger request source did not connect")
 	}
 
@@ -174,7 +174,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	}
 	receive := func(infoType message.LedgerInfoType, count int) *peermanagement.InboundMessage {
 		t.Helper()
-		timeout := time.NewTimer(5 * time.Second)
+		timeout := time.NewTimer(progressTimeout)
 		defer timeout.Stop()
 		for {
 			select {
@@ -200,7 +200,7 @@ func TestGetLedgerAdmissionProductionIngress(t *testing.T) {
 	}
 	receiveRejected := func() {
 		t.Helper()
-		timeout := time.NewTimer(5 * time.Second)
+		timeout := time.NewTimer(progressTimeout)
 		defer timeout.Stop()
 		for {
 			select {

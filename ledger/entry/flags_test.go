@@ -107,30 +107,28 @@ func TestLedgerSpecificFlags(t *testing.T) {
 		{"LsfLoanBrokerPrivate", LsfLoanBrokerPrivate, 0x00010000},
 	}
 
-	for _, tt := range tests {
-		if tt.got != tt.want {
-			t.Errorf("%s = 0x%08X, want 0x%08X", tt.name, tt.got, tt.want)
-		}
-	}
-
 	oracle := readOracleLedgerFlags(t)
 	if _, found := oracle["lsfLoanBrokerPrivate"]; found {
 		t.Fatal("staged rc1 lsfLoanBrokerPrivate already exists in the pinned oracle")
 	}
 	oracle["lsfLoanBrokerPrivate"] = 0x00010000
-	if len(oracle) != len(tests) {
-		t.Fatalf("rippled has %d ledger flags, Go has %d", len(oracle), len(tests))
-	}
 	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("%s = 0x%08X, want 0x%08X", tt.name, tt.got, tt.want)
+		}
 		oracleName := strings.ToLower(tt.name[:1]) + tt.name[1:]
 		want, ok := oracle[oracleName]
 		if !ok {
-			t.Errorf("%s is absent from rippled LedgerFormats.h", tt.name)
+			t.Errorf("%s is duplicated in the test table or absent from rippled LedgerFormats.h", tt.name)
 			continue
 		}
 		if tt.got != want {
 			t.Errorf("%s = 0x%08X, rippled = 0x%08X", tt.name, tt.got, want)
 		}
+		delete(oracle, oracleName)
+	}
+	for name := range oracle {
+		t.Errorf("rippled flag %s is missing from the Go flag table", name)
 	}
 }
 

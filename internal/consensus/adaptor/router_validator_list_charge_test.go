@@ -40,7 +40,7 @@ func TestRvl_CollectionChargeUsesInboundLifecycle(t *testing.T) {
 	var connection manifestOverlayConnection
 	select {
 	case connection = <-connections:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validator-list source did not connect")
 	}
 	slog.SetDefault(previousLogger)
@@ -64,7 +64,7 @@ func TestRvl_CollectionChargeUsesInboundLifecycle(t *testing.T) {
 		var inbound *peermanagement.InboundMessage
 		select {
 		case inbound = <-client.overlay.ConsensusMessages():
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("validator-list collection did not reach consensus lane")
 		}
 		require.Equal(t, message.TypeValidatorListCollection, inbound.Type)

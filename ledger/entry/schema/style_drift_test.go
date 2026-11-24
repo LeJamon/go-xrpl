@@ -36,7 +36,7 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	tagged := parseTaggedStyles(t, macro)
 	addRC1StagedStyles(t, tagged)
 	if len(tagged) != len(Specs) {
-		t.Fatalf("rippled v3.4.1 has %d ledger templates, schema has %d", len(tagged), len(Specs))
+		t.Fatalf("pinned rippled has %d ledger templates, schema has %d", len(tagged), len(Specs))
 	}
 
 	byEntry := make(map[string]Entry, len(Specs))
@@ -46,7 +46,7 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	for entryName, fields := range tagged {
 		entry, ok := byEntry[entryName]
 		if !ok {
-			t.Errorf("rippled v3.4.1 template %s is missing from schema", entryName)
+			t.Errorf("pinned rippled template %s is missing from schema", entryName)
 			continue
 		}
 		specFields := make(map[string]Field, len(entry.Fields))
@@ -72,7 +72,7 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 				continue
 			}
 			if _, ok := fields[field.Name]; !ok {
-				t.Errorf("schema field %s.%s is absent from rippled v3.4.1", entryName, field.Name)
+				t.Errorf("schema field %s.%s is absent from pinned rippled", entryName, field.Name)
 			}
 		}
 	}
@@ -104,7 +104,7 @@ func readRippledFile(t *testing.T, path string) []byte {
 	t.Helper()
 	out, err := os.ReadFile(rippled.File(t, path))
 	if err != nil {
-		t.Fatalf("read rippled v3.4.1 %s: %v", path, err)
+		t.Fatalf("read pinned rippled %s: %v", path, err)
 	}
 	return out
 }

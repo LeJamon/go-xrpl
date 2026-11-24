@@ -1,4 +1,4 @@
-package rcl
+package consensus
 
 import (
 	"testing"
@@ -86,9 +86,9 @@ func TestRoundCloseTime_RippledParity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := roundCloseTime(tc.input, tc.resolution)
+			got := RoundCloseTime(tc.input, tc.resolution)
 			assert.True(t, got.Equal(tc.want),
-				"roundCloseTime(%v, %v) = %v, want %v",
+				"RoundCloseTime(%v, %v) = %v, want %v",
 				tc.input, tc.resolution, got, tc.want)
 		})
 	}
@@ -107,9 +107,9 @@ func TestRoundCloseTime_StableAcrossSubSecondInputs(t *testing.T) {
 	b := xrplBase.Add(34*time.Second + 500*time.Millisecond)
 	c := xrplBase.Add(34*time.Second + 999_999_999*time.Nanosecond)
 
-	roundedA := roundCloseTime(a, resolution)
-	roundedB := roundCloseTime(b, resolution)
-	roundedC := roundCloseTime(c, resolution)
+	roundedA := RoundCloseTime(a, resolution)
+	roundedB := RoundCloseTime(b, resolution)
+	roundedC := RoundCloseTime(c, resolution)
 
 	assert.True(t, roundedA.Equal(roundedB),
 		"sub-second variance must not change rounded output: %v vs %v", roundedA, roundedB)

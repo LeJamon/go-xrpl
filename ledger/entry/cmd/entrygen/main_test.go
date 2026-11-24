@@ -82,6 +82,36 @@ func TestGenerateInnerValuesDeterministicAndCurrent(t *testing.T) {
 	}
 }
 
+func TestGenerateRegistryDeterministicAndCurrent(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	generatedDir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	path, first, err := generateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("first generate: %v", err)
+	}
+	_, second, err := generateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("second generate: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("successive registry generator runs produced different source")
+	}
+	formatted, err := format.Source(first)
+	if err != nil {
+		t.Fatalf("format generated registry: %v", err)
+	}
+	current, err := os.ReadFile(filepath.Join(generatedDir, filepath.Base(path)))
+	if err != nil {
+		t.Fatalf("read generated registry: %v", err)
+	}
+	if !bytes.Equal(formatted, current) {
+		t.Fatalf("%s is stale; run go generate ./ledger/entry/...", path)
+	}
+}
+
 func TestGenerateRejectsInvalidStyles(t *testing.T) {
 	defs := definitions.Get()
 	tests := []struct {
@@ -96,6 +126,36 @@ func TestGenerateRejectsInvalidStyles(t *testing.T) {
 			entry := schema.Entry{Name: "AccountRoot", Fields: []schema.Field{test.field}}
 			if _, _, err := generate(defs, entry, t.TempDir()); err == nil {
 				t.Fatal("generate accepted invalid serialization style")
+			}
+		})
+	}
+}
+
+func TestBuildWriterRejectsFieldsItCannotReproduce(t *testing.T) {
+	defs := definitions.Get()
+	tests := []struct {
+		field string
+		want  string
+	}{
+		{field: "Paths", want: "does not support XRPL type PathSet"},
+		{field: "PermissionValue", want: "special-cases its JSON value"},
+		{field: "TransactionType", want: "special-cases its JSON value"},
+	}
+	for _, test := range tests {
+		t.Run(test.field, func(t *testing.T) {
+			fi, err := defs.FieldInstanceByName(test.field)
+			if err != nil {
+				t.Fatal(err)
+			}
+			er := entryRender{
+				Name:          "Check",
+				Receiver:      "c",
+				EntryTypeCode: 67,
+				Fields:        []fieldRender{{Name: test.field, GoField: test.field, BitConst: "bit"}},
+			}
+			_, err = buildWriter(defs, er, map[string]*definitions.FieldInstance{test.field: fi})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("buildWriter error = %v, want %q", err, test.want)
 			}
 		})
 	}

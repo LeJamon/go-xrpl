@@ -74,6 +74,41 @@ func TestBookStepMPTFundingAndTransferFee(t *testing.T) {
 	require.Equal(t, []uint64{90, 100}, balances)
 }
 
+func TestBookStepMPTHolderFundingRequiresAuthorization(t *testing.T) {
+	issuer, holder := [20]byte{1}, [20]byte{2}
+	id := keylet.MakeMPTID(1, issuer)
+	view := newPaymentMockLedgerView()
+	view.rules = amendment.AllSupportedRules()
+	view.createAccount(issuer, 100_000_000, 1)
+	view.createAccount(holder, 100_000_000, 1)
+	putMPTIssuance(t, view, id, 200, 0)
+	issuance, key, result := mptutil.ReadIssuance(view, id)
+	require.Equal(t, ter.TesSUCCESS, result)
+	issuance.Flags |= entry.LsfMPTRequireAuth
+	data, err := state.SerializeMPTokenIssuance(issuance)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(key, data))
+
+	step := NewBookStep(Issue{Currency: "XRP"}, NewMPTIssue(id), issuer, holder, nil, true)
+	offer := &state.LedgerOffer{Account: state.EncodeAccountIDSafe(holder), TakerGets: newMPTAmount(100, id)}
+	for _, test := range []struct {
+		flags uint32
+		want  int64
+	}{
+		{entry.LsfMPTAuthorized, 200},
+		{0, 0},
+	} {
+		holding, err := state.SerializeMPToken(&state.MPTokenData{
+			Account: holder, MPTokenIssuanceID: id, MPTAmount: 200, Flags: test.flags,
+		})
+		require.NoError(t, err)
+		view.data[keylet.MPTokenByID(id, holder).Key] = holding
+		funds, err := step.getOfferFundedAmount(NewPaymentSandbox(view), offer)
+		require.NoError(t, err)
+		require.Equal(t, NewMPTEitherAmount(test.want, id), funds)
+	}
+}
+
 func TestBookStepMPTTransferRateFinalIssuerDelivery(t *testing.T) {
 	var issuer, owner, destination [20]byte
 	copy(issuer[:], []byte("issuer12345678901234"))

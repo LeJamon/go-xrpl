@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -34,7 +33,7 @@ func newRetentionTestService(t *testing.T) (*Service, *nodestore.RotatingKVDatab
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	family := shamapbackend.New(db)
-	return &Service{nodeStore: db, shamapFamily: family, logger: xrpllog.Discard()}, db, family
+	return &Service{nodeStore: bindNodeStore(db), shamapFamily: family, logger: xrpllog.Discard()}, db, family
 }
 
 func retentionTestLedger(t *testing.T, tree *shamap.SHAMap, seq uint32) *ledger.Ledger {
@@ -90,7 +89,7 @@ func TestStateRetentionRejectsStalePlan(t *testing.T) {
 			require.Equal(t, before, after)
 			require.True(t, svc.openLedgerMu.TryLock(), "failed admission must release the service guard")
 			svc.openLedgerMu.Unlock()
-			mutationCtx, mutationCancel := context.WithTimeout(t.Context(), time.Second)
+			mutationCtx, mutationCancel := context.WithTimeout(t.Context(), progressTimeout)
 			defer mutationCancel()
 			committed, err = db.RotateGeneration(mutationCtx, 40, 21)
 			require.NoError(t, err)
@@ -171,7 +170,7 @@ func (d *retentionCountingDatabase) Sync(ctx context.Context) error {
 func TestStateRetentionVisitsOnlyChangedSubtrees(t *testing.T) {
 	svc, db, family := newRetentionTestService(t)
 	counting := &retentionCountingDatabase{RotatingKVDatabase: db}
-	svc.nodeStore = counting
+	svc.nodeStore = bindNodeStore(counting)
 	tree, err := shamap.NewBacked(shamap.TypeState, family)
 	require.NoError(t, err)
 	for i := range 4096 {
@@ -202,11 +201,11 @@ func TestStateRetentionDoesNotPublishPlanAfterSyncFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tree.Put([32]byte{0x30}, []byte("example-state")))
 	svc.validatedLedger = retentionTestLedger(t, tree, 20)
-	svc.nodeStore = &retentionCountingDatabase{RotatingKVDatabase: db, failSync: true}
+	svc.nodeStore = bindNodeStore(&retentionCountingDatabase{RotatingKVDatabase: db, failSync: true})
 	_, guard, err := svc.PrepareStateRetention(t.Context(), 20, nil)
 	require.ErrorContains(t, err, "injected sync failure")
 	require.Nil(t, guard)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	committed, err := db.RotateGeneration(ctx, 20, 1)
 	require.NoError(t, err)
@@ -241,7 +240,7 @@ func TestStateRetentionRestampsLegacyStateAndTransactions(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	family := shamapbackend.New(db)
-	svc := &Service{nodeStore: db, shamapFamily: family, logger: xrpllog.Discard()}
+	svc := &Service{nodeStore: bindNodeStore(db), shamapFamily: family, logger: xrpllog.Discard()}
 	state, err := shamap.NewBacked(shamap.TypeState, family)
 	require.NoError(t, err)
 	require.NoError(t, state.Put([32]byte{0x30}, []byte("old-state-value")))
@@ -326,11 +325,11 @@ func TestStateRetentionPreservesRevivedArchiveSubtree(t *testing.T) {
 			live := retentionTestLedger(t, reused, 21)
 			switch name {
 			case "adopted_during_refresh":
-				svc.nodeStore = &retentionCountingDatabase{RotatingKVDatabase: db, onPromote: func() {
+				svc.nodeStore = bindNodeStore(&retentionCountingDatabase{RotatingKVDatabase: db, onPromote: func() {
 					svc.mu.Lock()
 					svc.closedLedger = live
 					svc.mu.Unlock()
-				}}
+				}})
 			case "validation_candidate":
 				svc.validationCandidates = map[uint32]*ledger.Ledger{21: live}
 			case "pending_persistence":

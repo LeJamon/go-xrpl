@@ -14,5 +14,10 @@ import (
 // then EncodePseudoTx fills the pseudo-tx defaults (zero fee/sequence,
 // empty signing key).
 func BuildPseudoTx(txType tx.Type, build func(base tx.BaseTx) tx.Transaction) ([]byte, error) {
-	return pseudo.EncodePseudoTx(build(*tx.NewBaseTx(txType, protocol.ZeroAccount)))
+	account := protocol.ZeroAccount
+	if txType == tx.TypeUNLModify {
+		// UNLModify leaves Account at its wire default (a zero-length AccountID).
+		account = ""
+	}
+	return pseudo.EncodePseudoTx(build(*tx.NewBaseTx(txType, account)))
 }

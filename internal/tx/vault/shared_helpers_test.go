@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -118,8 +119,8 @@ func TestWithdrawSelfMPTReserveAndOwnerCount(t *testing.T) {
 		require.Equal(t, uint32(2), ctx.Account.OwnerCount)
 	})
 
-	t.Run("second object requires full reserve and increments owner count", func(t *testing.T) {
-		ctx, view := build(t, 1, 40)
+	t.Run("second object waives reserve and increments owner count", func(t *testing.T) {
+		ctx, view := build(t, 1, 0)
 		require.Equal(t, ter.TesSUCCESS, addWithdrawDestinationHolding(ctx, asset))
 		exists, err := view.Exists(keylet.MPTokenByID(id, holder))
 		require.NoError(t, err)
@@ -307,6 +308,73 @@ func TestAddEmptyHoldingUsesNonSubmitterReserve(t *testing.T) {
 	})
 }
 
+func TestAddEmptyMPTHoldingEffectiveReserve(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		owners, sponsored, sponsoring uint32
+		balance                       uint64
+		want                          ter.Result
+	}{
+		{"first holding", 0, 0, 0, 0, ter.TesSUCCESS},
+		{"second holding", 1, 0, 0, 0, ter.TesSUCCESS},
+		{"third holding short", 2, 0, 0, 49, ter.TecINSUFFICIENT_RESERVE},
+		{"third holding funded", 2, 0, 0, 50, ter.TesSUCCESS},
+		{"sponsored objects preserve free tier", 3, 2, 0, 0, ter.TesSUCCESS},
+		{"sponsoring objects exhaust free tier", 1, 0, 1, 49, ter.TecINSUFFICIENT_RESERVE},
+		{"sponsoring objects funded", 1, 0, 1, 50, ter.TesSUCCESS},
+	} {
+		for _, submitter := range []bool{true, false} {
+			name := tc.name + "/counterparty"
+			if submitter {
+				name = tc.name + "/submitter"
+			}
+			t.Run(name, func(t *testing.T) {
+				var issuer, holder, sender [20]byte
+				issuer[19], holder[19], sender[19] = 1, 2, 3
+				if submitter {
+					sender = holder
+				}
+				rules := amendment.NewRulesBuilder().Enable(amendment.FeatureSponsor).Build()
+				view := newMPTArmsView()
+				ctx := buildArmsCtx(t, view, sender, rules)
+				ctx.Config.ReserveBase = 20
+				ctx.Config.ReserveIncrement = 10
+				account := &state.AccountRoot{
+					Account:              state.EncodeAccountIDSafe(holder),
+					Balance:              tc.balance,
+					OwnerCount:           tc.owners,
+					SponsoredOwnerCount:  tc.sponsored,
+					SponsoringOwnerCount: tc.sponsoring,
+				}
+				if submitter {
+					ctx.Account = account
+				}
+				raw, err := state.SerializeAccountRoot(account)
+				require.NoError(t, err)
+				require.NoError(t, view.Update(keylet.Account(holder), raw))
+				id := keylet.MakeMPTID(7, issuer)
+				raw, err = state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+					Issuer: issuer,
+					Flags:  entry.LsfMPTCanTransfer,
+				})
+				require.NoError(t, err)
+				require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
+				delta, result := addEmptyHolding(ctx, holder, tx.Asset{MPTIssuanceID: hex.EncodeToString(id[:])}, tc.balance)
+				require.Equal(t, tc.want, result)
+				exists, err := view.Exists(keylet.MPTokenByID(id, holder))
+				require.NoError(t, err)
+				if tc.want == ter.TesSUCCESS {
+					require.Equal(t, int32(1), delta)
+					require.True(t, exists)
+				} else {
+					require.Zero(t, delta)
+					require.False(t, exists)
+				}
+			})
+		}
+	}
+}
+
 func TestAssetDispatchPreservesMPTPrecedenceAndFreezeTER(t *testing.T) {
 	rules := amendment.NewRulesBuilder().
 		Enable(amendment.FeatureSingleAssetVault).
@@ -330,8 +398,8 @@ func TestAssetDispatchPreservesMPTPrecedenceAndFreezeTER(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.MPTIssuance(id), issuanceRaw))
 	require.Equal(t, ter.TesSUCCESS, canTransfer(view, asset, issuer, holder, false))
-	require.Equal(t, ter.TecLOCKED, checkFrozen(view, asset, holder))
-	require.Equal(t, ter.TesSUCCESS, checkFrozen(view, tx.Asset{Currency: "XRP"}, holder))
+	require.Equal(t, ter.TecLOCKED, mptutil.CheckFrozen(view, holder, asset))
+	require.Equal(t, ter.TesSUCCESS, mptutil.CheckFrozen(view, holder, tx.Asset{Currency: "XRP"}))
 }
 
 func TestRemoveVaultAssetMPTHoldingHonorsLockedAmountAmendment(t *testing.T) {

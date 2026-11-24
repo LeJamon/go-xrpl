@@ -1,5 +1,11 @@
 package consensus
 
+import (
+	"time"
+
+	"github.com/LeJamon/go-xrpl/protocol"
+)
+
 // ledgerPossibleTimeResolutions lists valid close-time-resolution bin widths,
 // in seconds, finest to coarsest.
 var ledgerPossibleTimeResolutions = []uint32{10, 20, 30, 60, 90, 120}
@@ -51,4 +57,35 @@ func GetNextLedgerTimeResolution(parentResolution uint32, previousAgree bool, ne
 	}
 
 	return parentResolution
+}
+
+// RoundCloseTime rounds to the nearest multiple of resolution (up at the
+// midpoint). Truncates sub-second precision first so nanosecond-skewed
+// validators round identically; does the modulo in XRPL-epoch space to
+// match rippled byte-for-byte.
+func RoundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
+	if closeTime.IsZero() {
+		return closeTime
+	}
+	resSec := int64(resolution.Seconds())
+	if resSec <= 0 {
+		return closeTime
+	}
+	xrplSec := closeTime.Unix() - protocol.RippleEpochUnix
+	xrplSec += resSec / 2
+	xrplSec -= xrplSec % resSec
+	return time.Unix(xrplSec+protocol.RippleEpochUnix, 0).UTC()
+}
+
+// EffCloseTime rounds to resolution, then floors at priorCloseTime + 1s.
+func EffCloseTime(closeTime time.Time, resolution time.Duration, priorCloseTime time.Time) time.Time {
+	if closeTime.IsZero() {
+		return closeTime
+	}
+	rounded := RoundCloseTime(closeTime, resolution)
+	minTime := priorCloseTime.Add(time.Second)
+	if rounded.Before(minTime) {
+		return minTime
+	}
+	return rounded
 }

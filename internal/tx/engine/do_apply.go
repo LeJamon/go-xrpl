@@ -324,7 +324,11 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 	sigWithMaster := txcore.SignedWithMasterKey(e.config.SkipSignatureVerification, st.common)
 
 	ctx := &txcore.ApplyContext{
-		View:             st.table,
+		View: st.table,
+		PreclaimView: rulesView{
+			ReadOnlyLedgerView: txcore.NewReadOnlyLedgerView(e.view),
+			rules:              e.rules(),
+		},
 		Account:          st.account,
 		AccountID:        st.accountID,
 		Common:           st.common,
@@ -985,11 +989,7 @@ func (e *Engine) applyTable(table *applystate.ApplyStateTable, fee uint64) (*txc
 	}
 	if e.config.IsViewOpen() {
 		// Keep diagnostic metadata without committing its threading to the open view.
-		metadata, err := table.Preview()
-		if err != nil {
-			return nil, err
-		}
-		return metadata, table.ApplyUnthreaded()
+		return table.PreviewAndApplyUnthreaded()
 	}
 	return table.Apply()
 }

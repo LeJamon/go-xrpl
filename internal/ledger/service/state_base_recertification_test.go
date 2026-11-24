@@ -323,7 +323,7 @@ func TestStateBaseRecertificationRepairSyncFailureRetainsExactTarget(t *testing.
 
 	syncFailure := errors.New("repaired state sync failed")
 	tracking := &checkpointTrackingDatabase{Database: f.db, uncached: f.db, syncErr: syncFailure}
-	f.svc.nodeStore = tracking
+	f.svc.nodeStore = bindNodeStore(tracking)
 	require.ErrorIs(t, f.svc.RevalidateReplayFault(t.Context(), fault.ID), syncFailure)
 	require.True(t, f.svc.ReplayBlocked())
 	require.Equal(t, 1, repairCalls)
@@ -381,10 +381,10 @@ func TestStateBaseRecertificationRejectsMissingTransactionDescendant(t *testing.
 	cached, err := f.db.Fetch(t.Context(), nodestore.Hash256(child))
 	require.NoError(t, err)
 	require.NotNil(t, cached)
-	f.svc.nodeStore = &missingRecertificationNodeDatabase{
+	f.svc.nodeStore = bindNodeStore(&missingRecertificationNodeDatabase{
 		checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 		missing:                    nodestore.Hash256(child),
-	}
+	})
 	f.invalidate(t)
 	err = f.svc.recertifyValidatedStateBase(t.Context())
 	require.ErrorContains(t, err, "transaction tree")
@@ -419,11 +419,11 @@ func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testin
 		started:                    make(chan struct{}),
 		release:                    make(chan struct{}),
 	}
-	f.svc.nodeStore = blocked
+	f.svc.nodeStore = bindNodeStore(blocked)
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("re-certification did not start the durable walk")
 	}
 
@@ -434,7 +434,7 @@ func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testin
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stopping re-certification did not join the canceled walk")
 	}
 	requireStateBaseRecertificationUnavailable(t, f)
@@ -449,12 +449,12 @@ func TestStateBaseRecertificationMutationDuringWalkPreventsPublication(t *testin
 				checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 				target:                     nodestore.Hash256(f.childHash), started: make(chan struct{}), release: make(chan struct{}),
 			}
-			f.svc.nodeStore = blocked
+			f.svc.nodeStore = bindNodeStore(blocked)
 			done := make(chan error, 1)
 			go func() { done <- f.svc.recertifyValidatedStateBase(t.Context()) }()
 			select {
 			case <-blocked.started:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("re-certification did not start the durable walk")
 			}
 			family := f.svc.shamapFamily.(*backend.NodeStore)
@@ -517,7 +517,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 				db := &staleFingerprintStateBaseRecertificationDatabase{
 					checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 				}
-				f.svc.nodeStore = db
+				f.svc.nodeStore = bindNodeStore(db)
 			},
 		},
 		{
@@ -549,7 +549,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 			started:                    make(chan struct{}),
 			release:                    make(chan struct{}),
 		}
-		f.svc.nodeStore = blocked
+		f.svc.nodeStore = bindNodeStore(blocked)
 		alternateHeader := f.validated.Header()
 		alternateHeader.CloseFlags ^= header.LCFNoConsensusTime
 		alternateHeader.Validated = false
@@ -566,7 +566,7 @@ func TestStateBaseRecertificationFailsClosedOnStaleFingerprintIdentityOrRetentio
 		go func() { done <- f.svc.recertifyValidatedStateBase(context.Background()) }()
 		select {
 		case <-blocked.started:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("re-certification did not start the durable walk")
 		}
 		f.svc.mu.Lock()
@@ -589,11 +589,11 @@ func TestStateBaseRecertificationCarriesProofAcrossValidationDuringWalk(t *testi
 		started:                    make(chan struct{}),
 		release:                    make(chan struct{}),
 	}
-	f.svc.nodeStore = blocked
+	f.svc.nodeStore = bindNodeStore(blocked)
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("re-certification did not start the durable walk")
 	}
 	_, release, available, err := f.svc.AcquireValidatedStateBase(context.Background())
@@ -629,7 +629,7 @@ func TestStateBaseRecertificationCarriesProofAcrossValidationDuringWalk(t *testi
 		proof, found := f.svc.currentValidatedStateBaseProof()
 		return found && proof.sequence == latest.Sequence() &&
 			f.svc.fastLoadCheckpointState.Load() == fastLoadCheckpointEligible
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 	root, release, available, err := f.svc.AcquireValidatedStateBase(context.Background())
 	require.NoError(t, err)
 	require.True(t, available)
@@ -661,7 +661,7 @@ func TestStateBaseRecertificationRejectsMutationAtPublication(t *testing.T) {
 				checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 				checked:                    make(chan struct{}),
 			}
-			f.svc.nodeStore = db
+			f.svc.nodeStore = bindNodeStore(db)
 			var floor atomic.Uint32
 			f.svc.SetMinimumOnlineFunc(floor.Load)
 			release := f.svc.BeginStateBaseRetentionChange()
@@ -672,7 +672,7 @@ func TestStateBaseRecertificationRejectsMutationAtPublication(t *testing.T) {
 			go func() { done <- f.svc.recertifyValidatedStateBase(t.Context()) }()
 			select {
 			case <-db.checked:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("verification did not reach the final generation check")
 			}
 			switch mutation {
@@ -732,7 +732,7 @@ func TestStateBasePublicationWaitingForServiceDoesNotBlockRetention(t *testing.T
 		}
 		f.svc.stateBaseRetentionMu.Unlock()
 		return false
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-family.acquired:
 	case <-time.After(20 * time.Millisecond):
@@ -747,7 +747,7 @@ func TestStateBasePublicationWaitingForServiceDoesNotBlockRetention(t *testing.T
 	select {
 	case <-advanced:
 		progressed = true
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 	}
 	unlock()
 	publicationErr := <-done

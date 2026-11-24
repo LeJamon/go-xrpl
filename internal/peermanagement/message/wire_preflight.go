@@ -39,14 +39,17 @@ const (
 	WireLimitLedgerData            WireLimitReason = "ledger-data-nodes"
 	WireLimitEndpoints             WireLimitReason = "endpoints"
 	WireLimitValidatorBlobs        WireLimitReason = "validator-blobs"
+	WireLimitValidatorVersion      WireLimitReason = "validator-version"
 	WireLimitClusterNodes          WireLimitReason = "cluster-nodes"
 	WireLimitLoadSources           WireLimitReason = "load-sources"
 )
 
 type WireLimitError struct {
-	Reason   WireLimitReason
-	Limit    int
-	Observed int
+	Reason                     WireLimitReason
+	Limit                      int
+	Observed                   int
+	GetObjectQuery             bool
+	GetObjectLedgerHashInvalid bool
 }
 
 func (e *WireLimitError) Error() string {
@@ -57,54 +60,121 @@ func (e *WireLimitError) Unwrap() error {
 	return ErrWireLimit
 }
 
-var wireDescriptors = func() map[MessageType]protoreflect.MessageDescriptor {
-	descriptors := make(map[MessageType]protoreflect.MessageDescriptor, len(codecs))
+func (e *WireLimitError) Unverified() bool {
+	return e.Reason == WireLimitDepth || e.Reason == WireLimitFieldCount
+}
+
+// collectionLimit bounds the element count of one repeated root message
+// field.
+type collectionLimit struct {
+	field  protowire.Number
+	reason WireLimitReason
+	max    int
+}
+
+// maxCollectionLimits is the most collection limits one type may declare.
+const maxCollectionLimits = 2
+
+var wireDescriptors = func() (descriptors [len(codecs)]protoreflect.MessageDescriptor) {
 	for msgType, codec := range codecs {
-		descriptors[msgType] = codec.newProto().ProtoReflect().Descriptor()
+		if codec != nil {
+			descriptors[msgType] = codec.newProto().ProtoReflect().Descriptor()
+		}
 	}
 	return descriptors
 }()
 
 type wireScanState struct {
-	msgType               MessageType
-	fields                int
-	collection            int
-	loadSources           int
-	getObjects            int
-	getObjectTransactions bool
-	getLedgerNodes        int
-	getLedgerInfoType     protoreflect.EnumNumber
+	msgType            MessageType
+	collections        []collectionLimit
+	collectionCounts   [maxCollectionLimits]int
+	deferEndpointLimit bool
+	deferredLimit      *WireLimitError
+	wirePayloadInfo
+	validateRequired           bool
+	fields                     int
+	validatorVersion           uint32
+	validatorVersionSet        bool
+	getObjects                 int
+	getObjectTransactions      bool
+	getObjectFetchPack         bool
+	getObjectQuery             bool
+	getObjectLedgerHashInvalid bool
+	getLedgerNodes             int
+	getLedgerInfoType          protoreflect.EnumNumber
 }
 
 func Preflight(msgType MessageType, data []byte) error {
-	descriptor, ok := wireDescriptors[msgType]
+	_, err := scanWirePayload(msgType, data, false, false)
+	return err
+}
+
+// ValidatePayload checks framing and proto2 initialization without decoding the message into memory.
+func ValidatePayload(msgType MessageType, data []byte) error {
+	_, err := scanWirePayload(msgType, data, true, false)
+	return err
+}
+
+type wirePayloadInfo struct {
+	endpointVersion uint32
+	endpointCount   int
+}
+
+func scanWirePayload(
+	msgType MessageType,
+	data []byte,
+	validateRequired bool,
+	deferEndpointLimit bool,
+) (wirePayloadInfo, error) {
+	codec, ok := codecFor(msgType)
 	if !ok {
-		return fmt.Errorf("unknown message type: %d", msgType)
+		return wirePayloadInfo{}, fmt.Errorf("unknown message type: %d", msgType)
 	}
-	state := wireScanState{msgType: msgType}
+	descriptor := wireDescriptors[msgType]
+	state := wireScanState{
+		msgType:            msgType,
+		collections:        codec.collections,
+		deferEndpointLimit: deferEndpointLimit,
+		validateRequired:   validateRequired,
+	}
 	consumed, err := state.scanMessage(data, descriptor, 1, 0)
 	if err != nil {
-		return err
+		return wirePayloadInfo{}, err
 	}
 	if consumed != len(data) {
-		return malformedWire(consumed, "unexpected end group")
+		return wirePayloadInfo{}, malformedWire(consumed, "unexpected end group")
 	}
 	if msgType == TypeGetObjects {
 		limit := maxGetObjects
 		reason := WireLimitGetObjects
-		if state.getObjectTransactions {
+		if state.getObjectTransactions && state.getObjectQuery {
 			limit = maxTransactions
 			reason = WireLimitGetObjectTransactions
 		}
 		if state.getObjects > limit {
-			return wireLimit(reason, limit, state.getObjects)
+			limitErr := &WireLimitError{
+				Reason:                     reason,
+				Limit:                      limit,
+				Observed:                   state.getObjects,
+				GetObjectQuery:             state.getObjectQuery,
+				GetObjectLedgerHashInvalid: state.getObjectQuery && !state.getObjectTransactions && !state.getObjectFetchPack && state.getObjectLedgerHashInvalid,
+			}
+			return wirePayloadInfo{}, limitErr
 		}
 	}
 	if msgType == TypeGetLedger && state.getLedgerInfoType != protoreflect.EnumNumber(proto.TMLedgerInfoType_liBASE) &&
 		state.getLedgerNodes > maxGetLedgerNodes {
-		return wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
+		return wirePayloadInfo{}, wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
 	}
-	return nil
+	if state.deferredLimit != nil {
+		if msgType == TypeValidatorListCollection &&
+			state.deferredLimit.Reason == WireLimitValidatorBlobs &&
+			state.validatorVersionSet && state.validatorVersion < 2 {
+			return wirePayloadInfo{}, wireLimit(WireLimitValidatorVersion, 2, int(state.validatorVersion))
+		}
+		return wirePayloadInfo{}, state.deferredLimit
+	}
+	return state.wirePayloadInfo, nil
 }
 
 func (s *wireScanState) scanMessage(
@@ -113,6 +183,10 @@ func (s *wireScanState) scanMessage(
 	depth int,
 	endGroup protowire.Number,
 ) (int, error) {
+	required, err := newRequiredFieldSet(descriptor, s.validateRequired)
+	if err != nil {
+		return 0, err
+	}
 	for offset := 0; offset < len(data); {
 		fieldOffset := offset
 		number, wireType, tagLen := protowire.ConsumeTag(data[offset:])
@@ -124,6 +198,9 @@ func (s *wireScanState) scanMessage(
 		if wireType == protowire.EndGroupType {
 			if endGroup == 0 || number != endGroup {
 				return 0, malformedWire(fieldOffset, "unexpected end group")
+			}
+			if err := required.check(); err != nil {
+				return 0, err
 			}
 			return offset, nil
 		}
@@ -147,10 +224,14 @@ func (s *wireScanState) scanMessage(
 				return 0, malformedWireAt(err, fieldOffset)
 			}
 		}
+		required.observe(field, wireType, value)
 		offset += valueLen
 	}
 	if endGroup != 0 {
 		return 0, malformedWire(len(data), "unterminated group")
+	}
+	if err := required.check(); err != nil {
+		return 0, err
 	}
 	return len(data), nil
 }
@@ -215,6 +296,18 @@ func (s *wireScanState) observeRootField(
 	if field == nil {
 		return nil
 	}
+	if s.deferEndpointLimit && field.Number() == 1 && wireType == protowire.VarintType {
+		value, _ := protowire.ConsumeVarint(data)
+		s.endpointVersion = uint32(value)
+	}
+	if s.msgType == TypeValidatorListCollection && field.Number() == 1 && wireType == protowire.VarintType {
+		value, n := protowire.ConsumeVarint(data)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		s.validatorVersion = uint32(value)
+		s.validatorVersionSet = true
+	}
 	if (s.msgType == TypeGetObjects || s.msgType == TypeGetLedger) && field.Number() == 1 &&
 		field.Kind() == protoreflect.EnumKind && wireType == protowire.VarintType {
 		value, n := protowire.ConsumeVarint(data)
@@ -226,10 +319,25 @@ func (s *wireScanState) observeRootField(
 			switch s.msgType {
 			case TypeGetObjects:
 				s.getObjectTransactions = number == protoreflect.EnumNumber(proto.TMGetObjectByHash_otTRANSACTIONS)
+				s.getObjectFetchPack = number == protoreflect.EnumNumber(proto.TMGetObjectByHash_otFETCH_PACK)
 			case TypeGetLedger:
 				s.getLedgerInfoType = number
 			}
 		}
+	}
+	if s.msgType == TypeGetObjects && field.Number() == 2 && field.Kind() == protoreflect.BoolKind && wireType == protowire.VarintType {
+		value, n := protowire.ConsumeVarint(data)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		s.getObjectQuery = value != 0
+	}
+	if s.msgType == TypeGetObjects && field.Number() == 4 && field.Kind() == protoreflect.BytesKind && wireType == protowire.BytesType {
+		value, n := protowire.ConsumeBytes(data)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		s.getObjectLedgerHashInvalid = len(value) != 32
 	}
 	if s.msgType == TypeGetLedger && field.Number() == 5 && wireType == protowire.BytesType {
 		s.getLedgerNodes++
@@ -238,62 +346,117 @@ func (s *wireScanState) observeRootField(
 		return nil
 	}
 
-	var reason WireLimitReason
-	limit := 0
-	switch s.msgType {
-	case TypeTransactions:
-		if field.Number() == 1 {
-			reason, limit = WireLimitTransactions, maxTransactions
-		}
-	case TypeGetObjects:
-		if field.Number() == 6 {
-			s.getObjects++
-			return nil
-		}
-	case TypeLedgerData:
-		if field.Number() == 4 {
-			reason, limit = WireLimitLedgerData, maxLedgerDataNodes
-		}
-	case TypeEndpoints:
-		if field.Number() == 3 {
-			reason, limit = WireLimitEndpoints, maxEndpoints
-		}
-	case TypeValidatorListCollection:
-		if field.Number() == 3 {
-			reason, limit = WireLimitValidatorBlobs, maxValidatorBlobs
-		}
-	case TypeCluster:
-		switch field.Number() {
-		case 1:
-			reason, limit = WireLimitClusterNodes, maxClusterNodes
-		case 2:
-			reason, limit = WireLimitLoadSources, maxLoadSources
-		}
-	}
-	if limit == 0 {
+	// The GetObjects object count is bounded after the scan because its
+	// limit depends on the object type, which may follow the objects.
+	if s.msgType == TypeGetObjects && field.Number() == 6 {
+		s.getObjects++
 		return nil
 	}
-	count := s.collectionCount(reason) + 1
-	s.setCollectionCount(reason, count)
-	if count > limit {
-		return wireLimit(reason, limit, count)
+	for i, limit := range s.collections {
+		if limit.field != field.Number() {
+			continue
+		}
+		s.collectionCounts[i]++
+		count := s.collectionCounts[i]
+		if s.deferEndpointLimit && limit.reason == WireLimitEndpoints {
+			s.endpointCount = count
+		} else if count > limit.max {
+			if s.deferredLimit == nil {
+				s.deferredLimit = &WireLimitError{
+					Reason:   limit.reason,
+					Limit:    limit.max,
+					Observed: count,
+				}
+			}
+		}
+		return nil
 	}
 	return nil
 }
 
-func (s *wireScanState) collectionCount(reason WireLimitReason) int {
-	if reason == WireLimitLoadSources {
-		return s.loadSources
-	}
-	return s.collection
+type requiredFieldSet struct {
+	descriptor protoreflect.MessageDescriptor
+	numbers    protoreflect.FieldNumbers
+	seen       uint64
 }
 
-func (s *wireScanState) setCollectionCount(reason WireLimitReason, count int) {
-	if reason == WireLimitLoadSources {
-		s.loadSources = count
+func newRequiredFieldSet(descriptor protoreflect.MessageDescriptor, enabled bool) (requiredFieldSet, error) {
+	if !enabled || descriptor == nil {
+		return requiredFieldSet{}, nil
+	}
+	numbers := descriptor.RequiredNumbers()
+	if numbers.Len() > 64 {
+		return requiredFieldSet{}, fmt.Errorf("message %s declares %d required fields; wire admission supports at most 64", descriptor.FullName(), numbers.Len())
+	}
+	return requiredFieldSet{descriptor: descriptor, numbers: numbers}, nil
+}
+
+func (r *requiredFieldSet) observe(
+	field protoreflect.FieldDescriptor,
+	wireType protowire.Type,
+	data []byte,
+) {
+	if field == nil || r.numbers == nil || field.Cardinality() != protoreflect.Required {
 		return
 	}
-	s.collection = count
+	if fieldWireType(field) != wireType {
+		return
+	}
+	if field.Kind() == protoreflect.EnumKind {
+		value, _ := protowire.ConsumeVarint(data)
+		if field.Enum().Values().ByNumber(protoreflect.EnumNumber(value)) == nil {
+			return
+		}
+	}
+	for i := 0; i < r.numbers.Len(); i++ {
+		if r.numbers.Get(i) == field.Number() {
+			r.seen |= uint64(1) << uint(i)
+			return
+		}
+	}
+}
+
+func (r *requiredFieldSet) check() error {
+	if r.numbers == nil {
+		return nil
+	}
+	for i := 0; i < r.numbers.Len(); i++ {
+		if r.seen&(uint64(1)<<uint(i)) == 0 {
+			field := r.descriptor.Fields().ByNumber(r.numbers.Get(i))
+			return fmt.Errorf("%w: missing required field %s", ErrMalformedWire, field.FullName())
+		}
+	}
+	return nil
+}
+
+func fieldWireType(field protoreflect.FieldDescriptor) protowire.Type {
+	switch field.Kind() {
+	case protoreflect.BoolKind,
+		protoreflect.EnumKind,
+		protoreflect.Int32Kind,
+		protoreflect.Int64Kind,
+		protoreflect.Sint32Kind,
+		protoreflect.Sint64Kind,
+		protoreflect.Uint32Kind,
+		protoreflect.Uint64Kind:
+		return protowire.VarintType
+	case protoreflect.Fixed32Kind,
+		protoreflect.FloatKind,
+		protoreflect.Sfixed32Kind:
+		return protowire.Fixed32Type
+	case protoreflect.Fixed64Kind,
+		protoreflect.DoubleKind,
+		protoreflect.Sfixed64Kind:
+		return protowire.Fixed64Type
+	case protoreflect.StringKind,
+		protoreflect.BytesKind,
+		protoreflect.MessageKind:
+		return protowire.BytesType
+	case protoreflect.GroupKind:
+		return protowire.StartGroupType
+	default:
+		return protowire.Type(-1)
+	}
 }
 
 func wireLimit(reason WireLimitReason, limit, observed int) error {

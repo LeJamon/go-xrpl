@@ -96,7 +96,7 @@ func (l *LoanBrokerSet) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 		if res := vault.CanAddHolding(view, asset); res != ter.TesSUCCESS {
 			return res
 		}
-		if res := tx.AssetFrozen(view, vinfo.Account, asset); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, vinfo.Account, asset); res != ter.TesSUCCESS {
 			return res
 		}
 	}
@@ -265,7 +265,7 @@ func (l *LoanBrokerDelete) Preclaim(view tx.ReadOnlyLedgerView, config tx.Engine
 			return res
 		}
 		if rules.FixCleanup3_2_0Enabled() {
-			if res := tx.AssetFrozen(view, b.Account, vinfo.Asset); res != ter.TesSUCCESS {
+			if res := mptutil.CheckFrozen(view, b.Account, vinfo.Asset); res != ter.TesSUCCESS {
 				return res
 			}
 		}
@@ -296,6 +296,8 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		if res := vault.SendAsset(ctx, b.Account, accountID, asset, cover); res != ter.TesSUCCESS {
 			return res
 		}
+		// The payout recreates a deleted owner trust line through the view.
+		ctx.SyncSenderOwnerCount()
 	}
 
 	// Remove the pseudo-account's asset holding and destroy the pseudo-account.
@@ -381,10 +383,10 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.
 			return res
 		}
 	} else {
-		if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 			return res
 		}
-		if res := tx.AssetFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
 			return res
 		}
 	}
@@ -606,9 +608,11 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Ensure the destination can hold the asset when it is the submitter.
 	if dstID == accountID && (amount.Signum() > 0 || !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)) {
-		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+		delta, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance())
+		if res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
 			return res
 		}
+		ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(delta))
 	} else {
 		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
 		if err != nil {

@@ -40,7 +40,7 @@ func TestOverlayStopDuringListenerBindClosesUnpublishedListener(t *testing.T) {
 	var bound net.Listener
 	select {
 	case bound = <-opened:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("listener bind hook did not run")
 	}
 	addr := bound.Addr().String()
@@ -49,7 +49,7 @@ func TestOverlayStopDuringListenerBindClosesUnpublishedListener(t *testing.T) {
 	go func() { stopDone <- o.Stop() }()
 	select {
 	case <-o.stopCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not request shutdown")
 	}
 	select {
@@ -62,13 +62,13 @@ func TestOverlayStopDuringListenerBindClosesUnpublishedListener(t *testing.T) {
 	select {
 	case err := <-runDone:
 		require.ErrorIs(t, err, ErrShutdown)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Run did not finish after Stop during listener preparation")
 	}
 	select {
 	case err := <-stopDone:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not finish after Run unwound")
 	}
 

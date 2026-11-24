@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -67,13 +67,8 @@ func (p PendingTx) ParsedMatchesCanonical() bool {
 	if common == nil {
 		return false
 	}
-	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
-	if err != nil || len(accountBytes) != len(p.Account) {
-		return false
-	}
-	var account [20]byte
-	copy(account[:], accountBytes)
-	if account != p.Account || common.SeqProxy() != p.Sequence {
+	account, err := orderingAccount(common.Account)
+	if err != nil || account != p.Account || common.SeqProxy() != p.Sequence {
 		return false
 	}
 	lastMatches := common.LastLedgerSequence == nil && !p.HasLastLedgerSequence
@@ -108,12 +103,10 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 
 	common := transaction.GetCommon()
 
-	_, accountBytes, decErr := addresscodec.DecodeClassicAddressToAccountID(common.Account)
-	if decErr != nil || len(accountBytes) != 20 {
+	accountID, err := orderingAccount(common.Account)
+	if err != nil {
 		return PendingTx{}, fmt.Errorf("invalid transaction account %q", common.Account)
 	}
-	var accountID [20]byte
-	copy(accountID[:], accountBytes)
 
 	txHash, hashErr := tx.ComputeTransactionHash(transaction)
 	if hashErr != nil {
@@ -137,6 +130,13 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		IsTicket:              common.TicketSequence != nil,
 		Parsed:                transaction,
 	}, nil
+}
+
+func orderingAccount(account string) ([20]byte, error) {
+	if account == "" {
+		return [20]byte{}, nil
+	}
+	return state.DecodeAccountID(account)
 }
 
 // CanonicalSort sorts pending transactions using the CanonicalTXSet

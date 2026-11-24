@@ -207,7 +207,7 @@ func waitInteropPeer(t *testing.T, done <-chan error) {
 	t.Helper()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Error("interop peer did not stop")
 	}
 }

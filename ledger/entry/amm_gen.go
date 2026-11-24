@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -812,7 +813,7 @@ func (a *AMM) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (a *AMM) ToMap() map[string]any {
@@ -861,21 +862,177 @@ func (a *AMM) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (a *AMM) Encode() ([]byte, error) {
-	if err := a.validateRequired(); err != nil {
+	if err := a.validateEncode(); err != nil {
 		return nil, err
 	}
-	if a.present&ammBitVoteSlots != 0 {
-		if err := validateSTArrayForEncode("VoteSlots", a.VoteSlots); err != nil {
+	if a.hasXAddress() {
+		return a.encodeViaMap()
+	}
+	data, err := a.appendBinary(make([]byte, 0, a.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(a, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (a *AMM) encodeViaMap() ([]byte, error) {
+	if err := a.validateEncode(); err != nil {
+		return nil, err
+	}
+	out := a.ToMap()
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (a *AMM) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x79)
+	if a.present&ammBitTradingFee != 0 {
+		if dst, err = appendUInt16(append(dst, 0x15), a.TradingFee); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), a.Flags)
+	}
+	if a.present&ammBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), a.PreviousTxnLgrSeq)
+	}
+	if a.present&ammBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), a.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), a.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitLPTokenBalance != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x1F), a.LPTokenBalance); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), a.Account); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), a.Sponsor); err != nil {
 			return nil, err
 		}
 	}
 	if a.present&ammBitAuctionSlot != 0 {
-		if err := validateInnerObjectForEncode("AuctionSlot", a.AuctionSlot); err != nil {
+		if dst, err = appendInnerObjectField(dst, "AuctionSlot", a.AuctionSlot); err != nil {
 			return nil, err
 		}
 	}
-	out := a.ToMap()
-	return binarycodec.EncodeBytes(out)
+	if a.present&ammBitVoteSlots != 0 {
+		if dst, err = appendSTArray(append(dst, 0xFC), "VoteSlots", a.VoteSlots); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitAsset != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x03, 0x18), "Issue", a.Asset); err != nil {
+			return nil, err
+		}
+	}
+	if a.present&ammBitAsset2 != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x04, 0x18), "Issue", a.Asset2); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (a *AMM) encodedSizeHint() int {
+	size := 3
+	if a.present&ammBitTradingFee != 0 {
+		size += 3
+	}
+	if a.present&ammBitFlags != 0 {
+		size += 5
+	}
+	if a.present&ammBitPreviousTxnLgrSeq != 0 {
+		size += 5
+	}
+	if a.present&ammBitOwnerNode != 0 {
+		size += 9
+	}
+	if a.present&ammBitPreviousTxnID != 0 {
+		size += 33
+	}
+	if a.present&ammBitLPTokenBalance != 0 {
+		size += 2 + amountEncodedLen(a.LPTokenBalance)
+	}
+	if a.present&ammBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(a.Account)
+	}
+	if a.present&ammBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(a.Sponsor)
+	}
+	if a.present&ammBitAsset != 0 {
+		size += 46
+	}
+	if a.present&ammBitAsset2 != 0 {
+		size += 46
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (a *AMM) hasXAddress() bool {
+	if a.present&ammBitOwnerNode != 0 && isXAddress(a.OwnerNode) {
+		return true
+	}
+	if a.present&ammBitPreviousTxnID != 0 && isXAddress(a.PreviousTxnID) {
+		return true
+	}
+	if a.present&ammBitLPTokenBalance != 0 && isXAddressValue(a.LPTokenBalance) {
+		return true
+	}
+	if a.present&ammBitAccount != 0 && isXAddress(a.Account) {
+		return true
+	}
+	if a.present&ammBitSponsor != 0 && isXAddress(a.Sponsor) {
+		return true
+	}
+	if a.present&ammBitAsset != 0 && isXAddressValue(a.Asset) {
+		return true
+	}
+	if a.present&ammBitAsset2 != 0 && isXAddressValue(a.Asset2) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (a *AMM) validateEncode() error {
+	if err := a.validateRequired(); err != nil {
+		return err
+	}
+	if a.present&ammBitVoteSlots != 0 {
+		if err := validateSTArrayForEncode("VoteSlots", a.VoteSlots); err != nil {
+			return err
+		}
+	}
+	if a.present&ammBitAuctionSlot != 0 {
+		if err := validateInnerObjectForEncode("AuctionSlot", a.AuctionSlot); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

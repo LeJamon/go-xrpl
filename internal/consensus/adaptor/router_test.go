@@ -262,7 +262,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	// through service.SubmitOpenLedgerTx into the persistent open view.
 	require.Eventually(t, func() bool {
 		return adaptorHasTx(t, a, consensus.TxID(txHash))
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }
 
 // TestRouterDispatchesPreDecodedTransaction covers the path taken by
@@ -307,7 +307,7 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return adaptorHasTx(t, a, consensus.TxID(txHash))
-	}, 2*time.Second, 5*time.Millisecond,
+	}, progressTimeout, 5*time.Millisecond,
 		"router must accept a pre-decoded (batch-fanned) transaction")
 }
 
@@ -635,7 +635,7 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	select {
 	case <-done:
 		// Good — router exited
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not stop after context cancel")
 	}
 }
@@ -962,7 +962,7 @@ func TestRouterStopsOnChannelClose(t *testing.T) {
 	select {
 	case <-done:
 		// Good — router exited
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not stop after channel close")
 	}
 }

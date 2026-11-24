@@ -59,7 +59,7 @@ func TestWebSocketInvalidSendQueueReleasesListenerSlot(t *testing.T) {
 					bound.limiter.mu.Lock()
 					defer bound.limiter.mu.Unlock()
 					return bound.limiter.total == 0 && bound.limiter.counts["ws"] == 0
-				}, time.Second, time.Millisecond)
+				}, progressTimeout, time.Millisecond)
 			}
 		})
 	}

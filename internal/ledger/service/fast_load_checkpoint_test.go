@@ -770,7 +770,7 @@ func TestService_ValidatedStateBaseCancellationAndShutdownRelease(t *testing.T) 
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("service shutdown did not complete while state base was pinned")
 	}
 	release()
@@ -869,7 +869,7 @@ func TestService_FastLoadCheckpointDeadlinePreservesTombstone(t *testing.T) {
 		checkpointTrackingDatabase: tracked,
 		started:                    make(chan struct{}, 1),
 	}
-	svc.nodeStore = blocked
+	svc.nodeStore = bindNodeStore(blocked)
 	prepareCtx, cancelPrepare := context.WithTimeout(ctx, 25*time.Millisecond)
 	defer cancelPrepare()
 	prepared, err := svc.PrepareFastLoadCheckpoint(prepareCtx)
@@ -942,10 +942,6 @@ func newFastLoadCheckpointService(
 	})
 	require.NoError(t, err)
 	return svc
-}
-
-type uncachedNodeReader interface {
-	FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
 }
 
 type checkpointTrackingDatabase struct {
@@ -1145,7 +1141,7 @@ func TestService_FastLoadCheckpointRequiresConsensusDrain(t *testing.T) {
 		svc.lifecycleMu.Lock()
 		defer svc.lifecycleMu.Unlock()
 		return svc.lifecycleState == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	prepared, err := svc.PrepareFastLoadCheckpoint(ctx)
 	require.False(t, prepared)
 	require.ErrorContains(t, err, "before ledger service stopped")
@@ -1157,7 +1153,7 @@ func TestService_FastLoadCheckpointRequiresConsensusDrain(t *testing.T) {
 	finish()
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not finish after consensus drain")
 	}
 	prepared, err = svc.PrepareFastLoadCheckpoint(ctx)

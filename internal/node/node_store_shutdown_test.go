@@ -72,7 +72,7 @@ func TestNodeRuntimeShutdownDrainsCanceledNodeStoreSync(t *testing.T) {
 
 	select {
 	case <-store.syncStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("backend Sync did not start")
 	}
 	cancel()
@@ -81,7 +81,7 @@ func TestNodeRuntimeShutdownDrainsCanceledNodeStoreSync(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("node-store Sync error = %v, want context.Canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled node-store Sync did not return promptly")
 	}
 
@@ -96,6 +96,7 @@ func TestNodeRuntimeShutdownDrainsCanceledNodeStoreSync(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("node shutdown error = %v, want context deadline exceeded", err)
 		}
+	// The bound is the property: staying below storeShutdownGrace proves the total budget ended shutdown.
 	case <-time.After(time.Second):
 		t.Fatal("node shutdown exceeded its bounded timeout")
 	}
@@ -109,7 +110,7 @@ func TestNodeRuntimeShutdownDrainsCanceledNodeStoreSync(t *testing.T) {
 	store.releaseSync()
 	select {
 	case <-store.closeFinished:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("node store Close did not drain after backend Sync finished")
 	}
 }

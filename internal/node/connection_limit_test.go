@@ -129,7 +129,7 @@ func TestLimitedListenerRejectsAtCapacityAndAdmitsAfterClose(t *testing.T) {
 
 	secondServer, secondClient := net.Pipe()
 	t.Cleanup(func() { _ = secondClient.Close() })
-	require.NoError(t, secondClient.SetReadDeadline(time.Now().Add(time.Second)))
+	require.NoError(t, secondClient.SetReadDeadline(time.Now().Add(progressTimeout)))
 	listener.enqueue(secondServer)
 
 	accepted := make(chan net.Conn, 1)
@@ -145,7 +145,7 @@ func TestLimitedListenerRejectsAtCapacityAndAdmitsAfterClose(t *testing.T) {
 
 	buffer := make([]byte, 1)
 	_, err = secondClient.Read(buffer)
-	require.Error(t, err)
+	require.ErrorIs(t, err, io.EOF)
 
 	require.NoError(t, first.Close())
 	thirdServer, thirdClient := net.Pipe()
@@ -157,7 +157,7 @@ func TestLimitedListenerRejectsAtCapacityAndAdmitsAfterClose(t *testing.T) {
 		require.NoError(t, conn.Close())
 	case err := <-acceptErr:
 		t.Fatalf("Accept returned error: %v", err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("listener did not admit a connection after the slot was released")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -367,7 +368,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			if err != nil {
 				return ter.TecINTERNAL
 			}
-			funds := tx.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if funds.Compare(buyAmount) < 0 {
 				return ter.TecINSUFFICIENT_FUNDS
 			}
@@ -375,7 +376,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			// XRP buy offer: the buyer needs enough liquid XRP. accountFunds for a
 			// native amount returns balance minus reserve in both amendment eras.
 			needed := tx.NewXRPAmount(int64(buyOffer.Amount))
-			funds := tx.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if funds.Compare(needed) < 0 {
 				return ter.TecINSUFFICIENT_FUNDS
 			}
@@ -439,7 +440,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				if err != nil {
 					return ter.TecINTERNAL
 				}
-				funds := tx.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				funds := mptutil.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Compare(sellAmount) < 0 {
 					return ter.TecINSUFFICIENT_FUNDS
 				}
@@ -449,13 +450,14 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			// enough liquid XRP (matching accountFunds with `!bo`).
 			if buyOffer == nil {
 				needed := tx.NewXRPAmount(int64(sellOffer.Amount))
-				// rippled checks the submitter's native funds in preclaim on the
-				// PRE-fee balance; goXRPL folds this into Apply (post-fee), so use
-				// PriorBalance, else a fee straddling reserve(OwnerCount) flips the TER.
-				reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
+				account, result := ctx.PreclaimAccount()
+				if result != ter.TesSUCCESS {
+					return result
+				}
+				reserve := ctx.AccountReserveFor(account, account.OwnerCount)
 				var liquid uint64
-				if pb := ctx.PriorBalance(); pb > reserve {
-					liquid = pb - reserve
+				if account.Balance > reserve {
+					liquid = account.Balance - reserve
 				}
 				if liquid < uint64(needed.Drops()) {
 					return ter.TecINSUFFICIENT_FUNDS

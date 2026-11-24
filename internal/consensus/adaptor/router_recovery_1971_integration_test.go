@@ -16,6 +16,7 @@ func TestRecoveryHeaderDiscoveryAndAvailabilityPreservePreparedSuccessors(t *tes
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 	completeStandardReplayTestLink(t, r, links[2])
 	completeStandardReplayTestLink(t, r, links[0])
+	drainStandardReplayTestPipeline(t, r)
 	svc.PromoteStoredValidatedLedgerAt(links[0].seq, links[0].hash, links[0].ledger.CloseTime())
 	require.Equal(t, links[0].hash, svc.GetValidatedLedger().Hash())
 
@@ -48,6 +49,7 @@ func TestRecoveryHeaderDiscoveryAndAvailabilityPreservePreparedSuccessors(t *tes
 	require.NotNil(t, acquisition)
 	require.True(t, acquisition.TransactionOnly())
 	completeStandardReplayTestLink(t, r, links[1])
+	drainStandardReplayTestPipeline(t, r)
 	for _, link := range links {
 		stored, err := svc.GetLedgerByHash(link.hash)
 		require.NoError(t, err)

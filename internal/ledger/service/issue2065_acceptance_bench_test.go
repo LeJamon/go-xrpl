@@ -73,7 +73,7 @@ func BenchmarkService_Issue2065OfferCreateSuccessor(b *testing.B) {
 					case err := <-done:
 						svc.Stop()
 						b.Fatalf("refresh ended before its first promotion: %v", err)
-					case <-time.After(5 * time.Second):
+					case <-time.After(progressTimeout):
 						svc.Stop()
 						b.Fatal("refresh did not reach its first promotion")
 					}
@@ -100,7 +100,7 @@ func BenchmarkService_Issue2065OfferCreateSuccessor(b *testing.B) {
 					if existsErr == nil && exists {
 						break
 					}
-					if time.Since(readyAt) > 5*time.Second {
+					if time.Since(readyAt) > progressTimeout {
 						svc.Stop()
 						b.Fatalf("successor OfferCreate was not observable: %v", existsErr)
 					}

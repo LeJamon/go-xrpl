@@ -54,9 +54,9 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	svc.historyComponent.mu.Lock()
 	svc.putHistoryLocked(coldOld)
 	svc.putHistoryLocked(latest)
-	svc.txIndex[txHash] = coldOld.Sequence()
+	svc.indexTxLocked(txHash, coldOld.Sequence())
 	svc.txPositionIndex[txHash] = 0
-	svc.txIndex[movedTxHash] = latest.Sequence()
+	svc.indexTxLocked(movedTxHash, latest.Sequence())
 	svc.txPositionIndex[movedTxHash] = 1
 	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
@@ -71,7 +71,7 @@ func TestValidationEvictsColdHistoryWithoutTransactionReads(t *testing.T) {
 	case <-family.entered:
 		t.Fatal("validation eviction read a cold transaction tree")
 	case <-validated:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validation did not finish with cold history")
 	}
 	require.Equal(t, latest.Hash(), svc.GetValidatedLedger().Hash())

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +58,7 @@ func TestReadBudgetWakesOnParentRelease(t *testing.T) {
 	require.True(t, parent.TryReserve(8))
 	budget := newReadBudget(8)
 	budget.parent = parent
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- budget.acquire(ctx, nil, 4) }()
@@ -125,18 +124,4 @@ func TestOutboundBudgetParentRollbackAndCriticalOverflow(t *testing.T) {
 	require.Equal(t, uint64(outboundCriticalByteReserve-8), critical.used)
 	account.close()
 	require.Zero(t, critical.used)
-}
-
-func TestOverlayMemoryBudgetsRequireUnusedLifecycle(t *testing.T) {
-	overlay := &Overlay{
-		inboundReadBudget: newReadBudget(8),
-		outboundBudget:    newOutboundBudget(2*outboundCriticalByteReserve, 1),
-	}
-	parent := &testMemoryAccount{limit: 8}
-	require.NoError(t, overlay.SetMemoryBudgets(parent, parent, parent))
-	account := overlay.outboundBudget.attach()
-	require.Error(t, overlay.SetMemoryBudgets(parent, parent, parent))
-	account.close()
-	overlay.lifecycleState = overlayLifecycleRunning
-	require.Error(t, overlay.SetMemoryBudgets(parent, parent, parent))
 }

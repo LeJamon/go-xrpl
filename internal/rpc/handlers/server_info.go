@@ -626,6 +626,13 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	if replayStatus, available := replayFaultStatus(services); available {
 		info["replay_fault"] = replayStatus
 	}
+	// go-xrpl extension, present only while validated ledgers fail to persist.
+	if serverInfo.PersistFailures > 0 {
+		info["ledger_persistence"] = map[string]any{
+			"consecutive_failures": serverInfo.PersistFailures,
+			"last_failed_seq":      serverInfo.LastFailedPersist,
+		}
+	}
 
 	return info
 }

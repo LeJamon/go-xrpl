@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	appconfig "github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -122,7 +123,8 @@ type Config struct {
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
 	NodeStore nodestore.Database
 
-	// SHAMapFamily loads and stores state and transaction tree nodes.
+	// SHAMapFamily loads and stores state and transaction tree nodes. When NodeStore is set,
+	// its Sync must cover writes made by the family, including snapshot flushes.
 	SHAMapFamily shamap.Family
 	// FastLoad restores the newest complete persisted ledger at startup.
 	FastLoad bool
@@ -256,7 +258,7 @@ type Service struct {
 	configuredFees drops.Fees
 
 	// NodeStore for persistent storage (nil if in-memory only)
-	nodeStore    nodestore.Database
+	nodeStore    *boundNodeStore
 	shamapFamily shamap.Family
 
 	// replayProofMu protects the bounded in-memory certificates used by
@@ -571,6 +573,10 @@ func New(cfg Config) (*Service, error) {
 			appconfig.MinLedgerCacheSize, appconfig.MaxLedgerCacheSize, cfg.LedgerCacheSize)
 	}
 
+	if family, ok := cfg.SHAMapFamily.(nodeStoreFamily); ok && cfg.NodeStore != nil && !family.UsesDatabase(cfg.NodeStore) {
+		return nil, errors.New("invalid ledger service configuration: SHAMap family is not backed by the configured node store")
+	}
+
 	logger := cfg.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()
@@ -607,7 +613,7 @@ func New(cfg Config) (*Service, error) {
 		config:         cfg,
 		logger:         logger.Named(xrpllog.PartitionLedger),
 		configuredFees: configuredFees,
-		nodeStore:      cfg.NodeStore,
+		nodeStore:      bindNodeStore(cfg.NodeStore),
 		shamapFamily:   cfg.SHAMapFamily,
 		relationalDB:   cfg.RelationalDB,
 		amendmentTable: cfg.Table,
@@ -620,15 +626,17 @@ func New(cfg Config) (*Service, error) {
 			publicationErrors:     make(chan error, 1),
 		},
 		historyComponent: historyComponent{
-			ledgerHistory:        make(map[uint32]*ledger.Ledger),
-			ledgerByHash:         make(map[[32]byte]uint32),
-			persistedLedgers:     make(map[[32]byte]*ledger.Ledger),
-			txIndex:              make(map[[32]byte]uint32),
-			txPositionIndex:      make(map[[32]byte]uint32),
-			completedLedgers:     newCompleteLedgerSet(),
-			completeLedgerHashes: make(map[uint32][32]byte),
-			completeLedgerTokens: make(map[uint32]uint64),
-			sweepInterval:        sweepInterval,
+			ledgerHistory:          make(map[uint32]*ledger.Ledger),
+			ledgerByHash:           make(map[[32]byte]uint32),
+			persistedLedgers:       make(map[[32]byte]*ledger.Ledger),
+			txIndex:                make(map[[32]byte]uint32),
+			txPositionIndex:        make(map[[32]byte]uint32),
+			txHashesBySeq:          make(map[uint32][][32]byte),
+			completedLedgers:       newCompleteLedgerSet(),
+			completeLedgerHashes:   make(map[uint32][32]byte),
+			completeLedgerTokens:   make(map[uint32]uint64),
+			failedValidatedLedgers: make(map[uint32]*ledger.Ledger),
+			sweepInterval:          sweepInterval,
 		},
 		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
 		validationCandidates: make(map[uint32]*ledger.Ledger),
@@ -833,7 +841,8 @@ func (s *Service) Start() (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create initial closed ledger: %w", err)
 	}
-	if err := initialClosed.Close(time.Now(), 0); err != nil {
+	resolution := time.Duration(initialClosed.CloseTimeResolution()) * time.Second
+	if err := initialClosed.Close(consensus.RoundCloseTime(time.Now(), resolution), 0); err != nil {
 		return fmt.Errorf("failed to close initial ledger: %w", err)
 	}
 
@@ -860,9 +869,7 @@ func (s *Service) Start() (err error) {
 	}
 	if selection.validate && !selection.loaded {
 		// Starting a new chain can replace a previous initial ledger at the same sequence.
-		token := s.beginValidatedPersistence(selection.ledger.Sequence(), selection.ledger.Hash())
-		if err := s.persistValidatedLedgerAtToken(context.Background(), selection.ledger, true, token,
-			true, nil, s.replayPersistenceProof(selection.ledger.Header())); err != nil {
+		if err := s.persistLedger(context.Background(), selection.ledger, true, true); err != nil {
 			return fmt.Errorf("persist initial ledger: %w", err)
 		}
 	}
@@ -1524,36 +1531,6 @@ func (s *Service) OpenLedgerTxs() [][]byte {
 		return nil
 	}
 	return ov.CurrentTxs()
-}
-
-// OpenLedgerTxHashes returns the tx hashes in the persistent open view, driving
-// the periodic TMHaveTransactions announce. Allocates fresh each call. Nil
-// pre-Start.
-func (s *Service) OpenLedgerTxHashes() [][32]byte {
-	s.mu.RLock()
-	ov := s.openLedgerView
-	s.mu.RUnlock()
-	if ov == nil {
-		return nil
-	}
-	view := ov.Current()
-	if view == nil {
-		return nil
-	}
-	var hashes [][32]byte
-	_ = view.ForEachTransaction(func(hash [32]byte, data []byte) bool {
-		raw, _, err := tx.SplitTxWithMetaBlob(data)
-		if err != nil {
-			return true
-		}
-		parsed, err := tx.ParseFromBinary(raw)
-		if err != nil || parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
-			return true
-		}
-		hashes = append(hashes, hash)
-		return true
-	})
-	return hashes
 }
 
 // OpenLedgerHasTx reports whether the persistent open view contains
@@ -2339,6 +2316,21 @@ func (s *Service) SetMinimumOnlineFunc(fn func() uint32) {
 	s.minimumOnlineFunc = fn
 }
 
+// AdvanceMinimumOnlineFloor publishes a retention transition to persistence
+// before online deletion starts. Older queued saves and failed local-repair
+// owners are canceled or discarded while their node-store trees still exist.
+func (s *Service) AdvanceMinimumOnlineFloor(floor uint32) {
+	s.completeMu.RLock()
+	alreadyApplied := floor <= s.completeLedgerFloor
+	s.completeMu.RUnlock()
+	if alreadyApplied {
+		return
+	}
+	s.retentionWriteMu.Lock()
+	defer s.retentionWriteMu.Unlock()
+	s.clampCompleteLedgers(floor)
+}
+
 // IsStandalone returns true if running in standalone mode
 func (s *Service) IsStandalone() bool {
 	return s.config.Standalone
@@ -2434,9 +2426,10 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ServerState = serverStateFunc()
 	}
 	if minimumOnlineFunc != nil {
-		s.clampCompleteLedgers(minimumOnlineFunc())
+		s.AdvanceMinimumOnlineFloor(minimumOnlineFunc())
 	}
 	info.CompleteLedgers = s.completeLedgersString()
+	info.PersistFailures, info.LastFailedPersist = s.ValidatedPersistFailures()
 	if min, max, ok := s.validatedLedgerRange(); ok {
 		info.HaveValidatedRange = true
 		info.ValidatedRangeMin = min
@@ -2466,6 +2459,10 @@ type ServerInfo struct {
 	ValidatedRangeMin        uint32
 	ValidatedRangeMax        uint32
 	NetworkID                uint32
+	// PersistFailures counts validated-ledger persists failed since the last
+	// success; LastFailedPersist is the most recent failed sequence.
+	PersistFailures   uint32
+	LastFailedPersist uint32
 }
 
 // LedgerInfo contains information about a ledger

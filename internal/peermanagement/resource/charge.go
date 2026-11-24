@@ -28,6 +28,10 @@ func NewCharge(cost int, label string) Charge {
 
 func (c Charge) Cost() int { return c.cost }
 
+func (c Charge) Times(count int) Charge {
+	return NewCharge(c.cost*count, c.label)
+}
+
 func (c Charge) String() string {
 	return fmt.Sprintf("%s ($%d)", c.label, c.cost)
 }

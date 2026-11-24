@@ -363,7 +363,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 			}
 		}
 		return false
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	svc.mu.Lock()
 	svc.validatedLedger = newer
@@ -382,7 +382,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 	case result := <-done:
 		require.NoError(t, result.err)
 		require.Equal(t, selectedSeq, result.seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not resume after selected-ledger persistence")
 	}
 	require.Equal(t, int64(1), db.refreshChecks.Load())
@@ -456,7 +456,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	case result := <-done:
 		require.NoError(t, result.err)
 		require.Equal(t, seq, result.seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not resume after health recovery")
 	}
 
@@ -477,7 +477,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	case result := <-done:
 		require.ErrorIs(t, result.err, context.Canceled)
 		require.Zero(t, result.seq)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not stop promptly after cancellation")
 	}
 }
@@ -567,7 +567,7 @@ func TestService_ConcurrentRefreshChecksHealthDuringFrontierBuild(t *testing.T) 
 			storedSHAMapWalkControl{
 				progress: newOnlineDeleteRefreshProgress(
 					svc.logger,
-					svc.nodeStore,
+					svc.nodeStore.database(),
 					root,
 					shamap.TypeState,
 					svc.GetValidatedLedger().Sequence(),
@@ -589,7 +589,7 @@ func TestService_ConcurrentRefreshChecksHealthDuringFrontierBuild(t *testing.T) 
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, wantErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("frontier health checkpoint did not stop the refresh")
 	}
 	require.Equal(t, int64(1), fetches.Load())
@@ -628,7 +628,7 @@ func TestService_ConcurrentRefreshDoesNotBlockAfterFetchError(t *testing.T) {
 			storedSHAMapWalkControl{
 				progress: newOnlineDeleteRefreshProgress(
 					svc.logger,
-					svc.nodeStore,
+					svc.nodeStore.database(),
 					root,
 					shamap.TypeState,
 					svc.GetValidatedLedger().Sequence(),
@@ -653,7 +653,7 @@ func TestService_ConcurrentRefreshDoesNotBlockAfterFetchError(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, wantErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not return after the fetch failed with a checkpoint pending")
 	}
 }
@@ -683,7 +683,7 @@ func TestService_ConcurrentRefreshChecksHealthBeforeCompletion(t *testing.T) {
 		storedSHAMapWalkControl{
 			progress: newOnlineDeleteRefreshProgress(
 				svc.logger,
-				svc.nodeStore,
+				svc.nodeStore.database(),
 				root,
 				shamap.TypeState,
 				validated.Sequence(),
@@ -737,7 +737,7 @@ func TestService_RefreshValidatedStateUsesBoundedConcurrencyAndReportsProgress(t
 
 func TestService_RefreshValidatedStateReportsCancellation(t *testing.T) {
 	svc, db, seq := newRotatingRefreshFixture(t, 16)
-	db.promotionDelay = time.Second
+	db.promotionDelay = time.Hour
 	db.promotionStart = make(chan struct{})
 	capture, logger := newVerificationLogCapture()
 	svc.logger = logger
@@ -754,7 +754,7 @@ func TestService_RefreshValidatedStateReportsCancellation(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("refresh did not stop promptly after cancellation")
 	}
 	records := decodeVerificationLogs(t, capture)
@@ -940,7 +940,7 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *be
 	require.NoError(b, err)
 	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)
@@ -998,7 +998,7 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	family := shamapbackend.New(db)
 	svc := &Service{
-		nodeStore:    db,
+		nodeStore:    bindNodeStore(db),
 		shamapFamily: family,
 		logger:       xrpllog.Discard(),
 	}

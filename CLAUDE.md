@@ -54,14 +54,15 @@ just build-all       # full module compile
 just test            # everything
 just test-integration   # ./internal/testing/...
 just test-tx            # ./internal/tx/...
-just test-core          # ledger / txq / rpc / consensus / peermanagement
-just test-libs          # codec / crypto / shamap / storage / ...
+just test-core          # remaining node packages and tools
+just test-libs          # libraries and oracle-backed test utilities
 just test-pkg ./internal/tx/offer/...                  # one package
 just test-pkg './internal/tx/payment/... -run TestX'   # one test (quote args)
 just test-docker        # checksum-pinned private rippled 3.4.1 peer/manifest interop
 
 just vet
-just lint            # auto-installs golangci-lint at the CI-pinned version
+just lint            # the strict config CI gates on (auto-installs the pinned version)
+just lint-advisory   # broader advisory checks used in release evidence
 just fmt
 just tidy
 
@@ -81,8 +82,10 @@ go test ./internal/tx/offer/...            # one package
 ./scripts/conformance-summary.sh --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4
 ```
 
-The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions at
-`ws://localhost:8080/ws`, and a health check at `http://localhost:8080/health`.
+The server listens on the ports named in the configuration's `[server].ports`.
+The configuration written by `goxrpl generate-config` serves admin JSON-RPC at
+`http://127.0.0.1:5005/` and WebSocket subscriptions at `ws://127.0.0.1:6006/`;
+every HTTP RPC port also answers a health check at `/health`.
 
 ## Architecture
 
@@ -112,12 +115,12 @@ The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions
 - `internal/tx/` — Transaction engine, types, and processing
   - One subpackage per tx type: `account/`, `amm/`, `batch/`, `check/`, `clawback/`,
     `credential/`, `delegate/`, `depositpreauth/`, `did/`, `escrow/`,
-    `ledgerstatefix/`, `mpt/`, `nftoken/`, `offer/`, `oracle/`, `paychan/`,
-    `payment/`, `permissioneddomain/`, `pseudo/`, `signerlist/`, `ticket/`,
-    `trustset/`, `vault/`, `xchain/`
+    `ledgerstatefix/`, `lending/`, `mpt/`, `nftoken/`, `offer/`, `oracle/`,
+    `paychan/`, `payment/`, `permissioneddomain/`, `pseudo/`, `signerlist/`,
+    `sponsor/`, `ticket/`, `trustset/`, `vault/`, `xchain/`
   - `all/` — registry that imports all tx subpackages
-- `internal/ledger/` — Ledger management (`genesis/`, `header/`, `manager/`,
-  `service/`, `state/`, `store/`)
+- `internal/ledger/` — Ledger management (`genesis/`, `header/`, `inbound/`,
+  `openledger/`, `service/`, `state/`)
 - `internal/consensus/` — Consensus protocol (`csf/` simulation framework, `rcl/`)
 - `internal/txq/` — Transaction queue
 - `internal/rpc/` — JSON-RPC server with 60+ methods (`handlers/`, `types/`) and
@@ -136,9 +139,11 @@ Transactions flow through `Validate()` → `Preflight()` → `Preclaim()` → `A
 3. **Preclaim** — ledger-aware checks (account exists, sufficient balance)
 4. **Apply** — execute against ledger state
 
-The engine in `internal/tx/engine.go` orchestrates validation and applies
-transactions to ledger state. Transaction types self-register via `init()` +
-`tx.Register()` in their subpackages.
+The engine in `internal/tx/engine/` orchestrates validation and applies
+transactions to ledger state. Each transaction subpackage registers its types
+with `tx.Register()` from its own `Register()` function, and
+`internal/tx/all.RegisterAll()` calls every one explicitly at startup; nothing
+registers from `init()`.
 
 ## Rippled reference locations
 

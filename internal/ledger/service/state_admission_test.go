@@ -79,7 +79,7 @@ func TestStateAdmissionDoesNotChangeCallerMapState(t *testing.T) {
 func TestStateAdmissionPinsDurableMutationUntilRelease(t *testing.T) {
 	db := newTestNodeStore(t, 0)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	svc := &Service{nodeStore: db}
+	svc := &Service{nodeStore: bindNodeStore(db)}
 	releaseAdmission, err := svc.AcquireStateAdmission(t.Context())
 	require.NoError(t, err)
 
@@ -106,7 +106,7 @@ func TestStateAdmissionPinsDurableMutationUntilRelease(t *testing.T) {
 	releaseAdmission()
 	select {
 	case <-finished:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("durable mutation did not proceed after admission release")
 	}
 }

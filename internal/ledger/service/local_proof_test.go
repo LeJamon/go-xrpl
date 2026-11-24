@@ -117,7 +117,7 @@ func TestAcceptConsensusResultRetainsLocalChildReplayProofAcrossRollback(t *test
 		syncStarted:     make(chan struct{}, 1),
 		syncRelease:     make(chan struct{}),
 	}
-	svc.nodeStore = dbGate
+	svc.nodeStore = bindNodeStore(dbGate)
 	blob, _ := startupPaymentBlob(t, "local-child-provenance", 1)
 	outcome, err := svc.SubmitOpenLedgerTxDetailed(blob, true)
 	require.NoError(t, err)
@@ -150,12 +150,12 @@ func TestAcceptConsensusResultRetainsLocalChildReplayProofAcrossRollback(t *test
 	}()
 	select {
 	case <-dbGate.syncStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("local child persistence did not reach the delayed sync")
 	}
 	select {
 	case <-relayStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("local child publication did not reach the delayed relay")
 	}
 

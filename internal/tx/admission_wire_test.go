@@ -10,6 +10,7 @@ import (
 	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -145,6 +146,41 @@ func TestTransactionBinaryDecodeAmountControls(t *testing.T) {
 	}
 	if _, present := withoutAmountDecoded["Amount"]; present {
 		t.Fatal("absent Amount was synthesized during binary decoding")
+	}
+}
+
+func TestTransactionBinaryMPTNegativeZeroPreservesSign(t *testing.T) {
+	all.RegisterAll()
+	const id = "00000002430427B80BD2D09D36B70B969E12801065F22308"
+	fields := admissionWireFields(map[string]any{
+		"value": binarytypes.RawMPTValue{Negative: true}, "mpt_issuance_id": id,
+	})
+	wire, err := binarycodec.EncodeDecodedFields(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := tx.ParseFromBinary(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flat, err := parsed.Flatten()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !invariants.HasInvalidAmount(flat) {
+		t.Fatal("negative MPT zero lost its sign before preflight")
+	}
+	encoded, err := binarycodec.EncodeDecodedFields(flat)
+	if err != nil || !bytes.Equal(encoded, wire) {
+		t.Fatalf("reconstructed transaction = %x, %v; want %x", encoded, err, wire)
+	}
+	display, err := json.Marshal(flat["Amount"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var amount map[string]string
+	if err := json.Unmarshal(display, &amount); err != nil || amount["value"] != "0" || amount["mpt_issuance_id"] != id {
+		t.Fatalf("JSON amount = %s (%v)", display, err)
 	}
 }
 

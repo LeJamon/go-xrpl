@@ -67,6 +67,38 @@ func IsValidPublicKey(key []byte) bool {
 	return key[0] == 0xED || key[0] == 0x02 || key[0] == 0x03
 }
 
+func CheckSigningPubKey(key string) error {
+	if key == "" {
+		return nil
+	}
+	decoded, err := hex.DecodeString(key)
+	if err != nil || !IsValidPublicKey(decoded) {
+		return ter.Errorf(ter.TemBAD_SIGNATURE, "invalid SigningPubKey")
+	}
+	return nil
+}
+
+func CheckSimulateKeys(key *string, signature string, signers []SignerWrapper, hasSigners bool) error {
+	if signature != "" {
+		return ter.Errorf(ter.TemINVALID, "simulation requires an empty TxnSignature")
+	}
+	if !hasSigners && len(signers) == 0 {
+		return nil
+	}
+	for _, signer := range signers {
+		if signer.Signer.TxnSignature != "" {
+			return ter.Errorf(ter.TemINVALID, "simulation requires an empty signer TxnSignature")
+		}
+	}
+	if key == nil {
+		return ter.Errorf(ter.TefEXCEPTION, "missing SigningPubKey on multisigned simulation")
+	}
+	if *key != "" {
+		return ter.Errorf(ter.TemINVALID, "cannot combine SigningPubKey and Signers")
+	}
+	return nil
+}
+
 // SignedWithMasterKey reports whether a transaction was signed with the sending
 // account's master key: SigningPubKey must hex-decode to a valid public key
 // whose derived account ID equals common.Account. A multi-signed transaction

@@ -42,37 +42,40 @@ test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./crypto/secp256
 test:
     go test ./...
 
-# CI group: integration tests.
+# The CI groups below come from scripts/test-shard.sh, which partitions every
+# package in the module across the shards CI runs.
+
+# CI groups: integration tests (both the offer shard and the rest).
 test-integration:
-    go test ./internal/testing/...
+    packages=$(./scripts/test-shard.sh integration-offer integration) && go test $packages
 
 # CI group: transaction-engine tests.
 test-tx:
-    go test ./internal/tx/...
+    packages=$(./scripts/test-shard.sh tx) && go test $packages
 
-# CI group: ledger / txq / rpc / grpc / consensus / peermanagement / manifest.
+# CI group: remaining node packages and tools.
 test-core:
-    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/grpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
+    packages=$(./scripts/test-shard.sh core) && go test $packages
 
-# CI group: codec / crypto / shamap / storage / etc.
+# CI group: libraries and oracle-backed test utilities.
 test-libs:
-    go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./internal/testutil/...
+    packages=$(./scripts/test-shard.sh libs) && go test $packages
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:
     go test -v {{pkg}}
 
-# Build and verify the private 3.4.1 oracle, then exercise the production peer path.
+# Build and verify the pinned private oracle, then exercise the production peer path.
 test-docker:
     #!/usr/bin/env bash
     set -euo pipefail
-    export ORACLE_IMAGE=goxrpl-oracle:3.4.1
+    set -a; . internal/testutil/rippled/pin.env; set +a
     export EVIDENCE_DIR="${EVIDENCE_DIR:-$(mktemp -d)}"
     docker build --platform linux/amd64 -t "$ORACLE_IMAGE" scripts/peer-interop
     scripts/acceptance/oracle-image.sh
     read -r image_id < "$EVIDENCE_DIR/oracle-image-id.txt"
     PEERTLS_DOCKER_INTEROP=1 PEERTLS_LEDGER_NODE_DEPTH_INTEROP=1 PEERTLS_VALIDATOR_LIST_INTEROP=1 \
-      PEERTLS_RIPPLED_VERSION=3.4.1 PEERTLS_RIPPLED_IMAGE="$image_id" \
+      PEERTLS_RIPPLED_VERSION="$ORACLE_TAG" PEERTLS_RIPPLED_IMAGE="$image_id" \
       go test -race -tags docker -count=1 -timeout 10m -v \
       -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
 
@@ -95,9 +98,9 @@ fuzz-determinism fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDeterminism$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
 
 # Differential-vs-rippled fuzzer (issue #682, scope 2): replays recorded rippled
-# fixtures and diffs goXRPL's TER + post-state. Needs the pinned private-3.4.1
-# conformance corpus; set GOXRPL_FIXTURES_DIR explicitly. e.g.
-# `GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 just fuzz-differential 5m`.
+# fixtures and diffs goXRPL's TER + post-state. Uses the pinned conformance
+# corpus (ORACLE_CORPUS in internal/testutil/rippled/pin.env) unless
+# GOXRPL_FIXTURES_DIR selects another. e.g. `just fuzz-differential 5m`.
 fuzz-differential fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDifferential$' -fuzztime {{fuzztime}} ./internal/testing/conformance/
 
@@ -135,10 +138,19 @@ fuzz-corpus *pkgs:
 vet:
     go vet -stdmethods=false ./...
 
-# Run golangci-lint pinned to the CI version (auto-installs if missing).
+# Run the lint configuration CI gates merges on (auto-installs the pinned version).
 lint:
-    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
+    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
+    golangci-lint run --config .golangci.yml
+
+# Run the broader advisory lint configuration used in release evidence.
+lint-advisory:
+    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
     golangci-lint run --config .golangci-warnings.yml
+
+# Report changes to the public packages' exported API since a base ref.
+api-diff base="origin/main":
+    ./scripts/apidiff.sh {{quote(base)}}
 
 lint-fix: 
     @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
@@ -152,9 +164,9 @@ fmt:
 tidy:
     go mod tidy
 
-# Required final-oracle conformance summary. Pass the corpus explicitly, e.g.
-# `just conformance --corpus internal/testing/conformance/testdata/rippled-3.4.1-v4` or use
-# `GOXRPL_FIXTURES_DIR=internal/testing/conformance/testdata/rippled-3.4.1-v4 just conformance`.
+# Required final-oracle conformance summary. Runs the pinned corpus
+# (ORACLE_CORPUS in internal/testutil/rippled/pin.env) unless `--corpus PATH` or
+# GOXRPL_FIXTURES_DIR selects another.
 conformance *args:
     ./scripts/conformance-summary.sh {{args}}
 
@@ -166,9 +178,7 @@ dev:
 run:
     go run ./cmd/goxrpl
 
-# Regenerate all generated docs (RPC catalog, tx/amendment catalogs, and the
-# conformance-status snapshot). The conformance step runs the full suite and is
-# slow (~300s); it is the only way docs/conformance-status.md is refreshed.
+# Regenerate the registry catalogs and the pinned corpus status page.
 docs-gen:
     go run ./scripts/docsgen/rpcmethods
     go run ./scripts/docsgen/registries
@@ -179,8 +189,6 @@ docs-gen-fast:
     go run ./scripts/docsgen/rpcmethods
     go run ./scripts/docsgen/registries
 
-# Fail if the registry-derived docs are stale (run in CI). Excludes
-# conformance-status.md, whose counts change with the full suite and which is
-# refreshed only via `just docs-gen`.
-docs-check: docs-gen-fast
-    git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md docs/ledger-entries.md
+# Check generated docs for drift.
+docs-check: docs-gen
+    git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md docs/ledger-entries.md docs/conformance-status.md

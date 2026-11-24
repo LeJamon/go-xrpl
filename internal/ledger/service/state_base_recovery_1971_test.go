@@ -20,5 +20,5 @@ func TestPersistedValidatedTipRecoversAlreadyMissingProofAtEpochZero(t *testing.
 	require.Eventually(t, func() bool {
 		proof, found := f.svc.currentValidatedStateBaseProof()
 		return found && proof.ledgerHash == f.validated.Hash()
-	}, 2*time.Second, 5*time.Millisecond)
+	}, progressTimeout, 5*time.Millisecond)
 }

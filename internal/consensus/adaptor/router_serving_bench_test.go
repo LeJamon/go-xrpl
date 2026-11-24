@@ -72,7 +72,7 @@ func waitSyntheticServingReady(ready <-chan struct{}, count int) {
 	for range count {
 		select {
 		case <-ready:
-		case <-time.After(2 * time.Second):
+		case <-time.After(progressTimeout):
 			panic("synthetic serving workers did not become ready")
 		}
 	}
@@ -162,7 +162,7 @@ func runSyntheticServingFair(offers []syntheticServingOffer, workers int) synthe
 	for range pools {
 		select {
 		case <-runDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(progressTimeout):
 			panic("fair serving scheduler did not stop")
 		}
 	}

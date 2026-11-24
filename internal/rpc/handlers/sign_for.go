@@ -107,7 +107,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		}
 	}
 
-	privateKey, publicKey, _, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
+	privateKey, publicKey, _, rpcErr := request.signCredentials.deriveKeypair(types.DefaultApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -228,7 +228,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		return nil, rpcInternalError("sign_for: transaction flattening failed", err)
 	}
 	normalizeSignerResponseContainers(canonicalMap)
-	txBlob, err := binarycodec.Encode(canonicalMap)
+	txBlob, err := encodeCanonicalTransaction(canonicalMap)
 	if err != nil {
 		return nil, rpcInternalError("sign_for: transaction encoding failed", err)
 	}

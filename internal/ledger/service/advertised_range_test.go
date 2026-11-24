@@ -118,7 +118,7 @@ func TestAdvertisableLedgerRange_MinimumOnlineCallbackRunsUnlocked(t *testing.T)
 		}()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("minimum-online callback ran while Service.mu was held")
 		}
 		return 0

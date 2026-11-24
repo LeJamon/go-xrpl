@@ -81,14 +81,14 @@ func TestConsensusAcceptanceDetachedBuildRejectsReplacedParent(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance did not reach a cold read")
 	}
 	reads := make(chan struct{})
 	go func() { svc.GetClosedLedger(); svc.GetValidatedLedger(); close(reads) }()
 	select {
 	case <-reads:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached build blocked closed-ledger readers")
 	}
 	switched := make(chan error, 1)
@@ -96,7 +96,7 @@ func TestConsensusAcceptanceDetachedBuildRejectsReplacedParent(t *testing.T) {
 	select {
 	case err := <-switched:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached build blocked preferred-ledger switch")
 	}
 	family.unblock()
@@ -123,7 +123,7 @@ func TestConsensusAcceptanceCancellationDuringDetachedBuildDoesNotPublish(t *tes
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance did not reach a cold read")
 	}
 	cancel()
@@ -152,12 +152,12 @@ func TestConsensusAcceptanceCancellationWhileWaitingForGate(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return svc.openLedgerMu.Snapshot().QueuedPriority == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance did not cancel while the gate remained held")
 	}
 	require.Zero(t, svc.openLedgerMu.Snapshot().QueuedPriority)
@@ -181,7 +181,7 @@ func TestConsensusAcceptanceStopDrainsDetachedBuild(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance did not reach a cold read")
 	}
 	stopped := make(chan struct{})
@@ -190,7 +190,7 @@ func TestConsensusAcceptanceStopDrainsDetachedBuild(t *testing.T) {
 		svc.lifecycleMu.Lock()
 		defer svc.lifecycleMu.Unlock()
 		return svc.lifecycleState == serviceStopping
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case <-stopped:
 		t.Fatal("Stop returned with a detached build reading storage")
@@ -200,7 +200,7 @@ func TestConsensusAcceptanceStopDrainsDetachedBuild(t *testing.T) {
 	require.ErrorIs(t, <-accepted, errServiceNotRunning)
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain detached build")
 	}
 	require.Same(t, cold, svc.GetClosedLedger())
@@ -233,7 +233,7 @@ func TestConsensusAcceptancePublishesOpenAndClosedTogether(t *testing.T) {
 	}()
 	select {
 	case <-replaying:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("next-open replay did not relay the local transaction")
 	}
 	type frontier struct {
@@ -252,7 +252,7 @@ func TestConsensusAcceptancePublishesOpenAndClosedTogether(t *testing.T) {
 		require.NotSame(t, parent, got.closed)
 		require.Equal(t, parent.Sequence()+1, got.closed.Sequence())
 		require.Equal(t, got.closed.Hash(), got.openParent)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("post-publication relay blocked closed-ledger reads")
 	}
 
@@ -260,7 +260,7 @@ func TestConsensusAcceptancePublishesOpenAndClosedTogether(t *testing.T) {
 	go func() { svc.historyComponent.mu.RLock(); svc.historyComponent.mu.RUnlock(); close(historyDone) }()
 	select {
 	case <-historyDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("next-open replay blocked history reads")
 	}
 	unblock()
@@ -293,7 +293,7 @@ func TestConsensusAcceptanceCarriesRPCIngressDuringDetachedBuild(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("build did not reach cold state read")
 	}
 	submitted := make(chan error, 1)
@@ -301,7 +301,7 @@ func TestConsensusAcceptanceCarriesRPCIngressDuringDetachedBuild(t *testing.T) {
 	select {
 	case err := <-submitted:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("detached build blocked RPC ingress")
 	}
 	family.unblock()

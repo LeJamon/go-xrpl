@@ -9,6 +9,8 @@ import (
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
@@ -767,6 +769,25 @@ func TestFixReserveCheckOnWithdrawal(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
+	// The issuer of both pool assets never holds a trust line to itself, so its
+	// withdrawal is reserve-checked as if a line had to be created.
+	issuerWithdrawAll := func(t *testing.T, enableFixAMMv1_2 bool) jtx.TxResult {
+		env := setupMinimalAMM(t, enableFixAMMv1_2)
+		env.Trust(env.GW, env.Alice, "BTC", 1)
+		env.Close()
+		require.Equal(t, uint32(2), env.TestEnv.OwnerCount(env.GW))
+
+		return env.Submit(amm.AMMWithdraw(env.GW, env.EUR, env.USD).WithdrawAll().Build())
+	}
+
+	t.Run("WithFix_IssuerWithdrawAll", func(t *testing.T) {
+		amm.ExpectTER(t, issuerWithdrawAll(t, true), "tecINSUFFICIENT_RESERVE")
+	})
+
+	t.Run("WithoutFix_IssuerWithdrawAll", func(t *testing.T) {
+		jtx.RequireTxSuccess(t, issuerWithdrawAll(t, false))
+	})
+
 	// Test without fixAMMv1_2: same withdrawals succeed.
 	t.Run("WithoutFix_EqualWithdraw", func(t *testing.T) {
 		env := setupMinimalAMM(t, false)
@@ -815,4 +836,93 @@ func TestFixReserveCheckOnWithdrawal(t *testing.T) {
 		result = env.Submit(withdrawTx2)
 		jtx.RequireTxSuccess(t, result)
 	})
+}
+
+func TestAMMWithdrawMPTIssuerReserveCheck(t *testing.T) {
+	env := amm.NewAMMTestEnv(t)
+	env.EnableFeature("MPTokensV2")
+	env.EnableFeature("fixAMMv1_2")
+
+	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol} {
+		env.FundAmount(account, uint64(jtx.XRP(100_000)))
+	}
+	env.Close()
+
+	token := mpttest.NewMPTTesterNoFund(t, env.TestEnv, env.GW)
+	token.Create(mpttest.CreateOpts{Flags: mpttest.TfMPTCanTrade | mpttest.TfMPTCanTransfer})
+	asset := tx.Asset{MPTIssuanceID: token.IssuanceID()}
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(
+		env.GW,
+		token.MPTAmount(1_000),
+		amm.XRPAmount(1_000),
+	).Build()))
+	env.Close()
+
+	env.Trust(env.GW, env.Alice, "BTC", 1)
+	env.Close()
+	required := env.ReserveBase() + uint64(env.OwnerCount(env.GW)+1)*env.ReserveIncrement()
+	target := required - 1
+	jtx.RequireTxSuccess(t, env.Submit(payment.Pay(
+		env.GW,
+		env.Carol,
+		env.Balance(env.GW)-target-env.BaseFee(),
+	).Build()))
+	env.Close()
+	require.Equal(t, target, env.Balance(env.GW))
+
+	result := env.Submit(amm.AMMWithdraw(env.GW, amm.XRP(), asset).
+		Amount(token.MPTAmount(1)).
+		Amount2(amm.XRPAmount(1)).
+		TwoAsset().
+		Build())
+	amm.ExpectTER(t, result, ter.TecINSUFFICIENT_RESERVE.String())
+}
+
+func TestAMMWithdrawTwoAssetReserveCheckPrecedesXRPCredit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		iouFirst bool
+		want     ter.Result
+	}{
+		{name: "xrp-first", iouFirst: false, want: ter.TesSUCCESS},
+		{name: "iou-first", iouFirst: true, want: ter.TecINSUFFICIENT_RESERVE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, ammAccount *jtx.Account) {
+				dan := jtx.NewAccount("dan")
+				env.FundAmount(dan, uint64(jtx.XRP(2_000)))
+				env.Close()
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(dan, amm.XRP(), env.USD).
+					Amount(amm.XRPAmount(1_000)).
+					SingleAsset().
+					Build()))
+				env.Trust(dan, env.GW, "EUR", 100)
+				env.Close()
+				require.Equal(t, uint32(2), env.OwnerCount(dan))
+
+				target := env.ReserveBase() + 2*env.ReserveIncrement() + 5*env.BaseFee()
+				jtx.RequireTxSuccess(t, env.Submit(payment.Pay(dan, env.Carol, env.Balance(dan)-target-env.BaseFee()).Build()))
+				env.Close()
+				require.Equal(t, target, env.Balance(dan))
+
+				usd, xrp := amm.IOUAmount(env.GW, "USD", 100), amm.XRPAmount(200)
+				withdraw := amm.AMMWithdraw(dan, amm.XRP(), env.USD).Amount(xrp).Amount2(usd)
+				if tc.iouFirst {
+					withdraw = amm.AMMWithdraw(dan, amm.XRP(), env.USD).Amount(usd).Amount2(xrp)
+				}
+				result := env.Submit(withdraw.TwoAsset().Build())
+				require.Equal(t, tc.want.String(), result.Code)
+				require.Equal(t, env.BaseFee(), result.Fee)
+				require.NotNil(t, result.Metadata)
+				require.Equal(t, tc.want, result.Metadata.TransactionResult)
+				if tc.want == ter.TesSUCCESS {
+					require.Equal(t, uint32(3), env.OwnerCount(dan))
+					require.Greater(t, env.Balance(dan), target)
+					return
+				}
+				require.Equal(t, uint32(2), env.OwnerCount(dan))
+				require.Equal(t, target-env.BaseFee(), env.Balance(dan))
+			})
+		})
+	}
 }

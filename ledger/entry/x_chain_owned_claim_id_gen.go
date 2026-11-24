@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -723,7 +724,7 @@ func (x *XChainOwnedClaimID) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (x *XChainOwnedClaimID) ToMap() map[string]any {
@@ -769,13 +770,25 @@ func (x *XChainOwnedClaimID) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (x *XChainOwnedClaimID) Encode() ([]byte, error) {
-	if err := x.validateRequired(); err != nil {
+	if err := x.validateEncode(); err != nil {
 		return nil, err
 	}
-	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
-		if err := validateSTArrayForEncode("XChainClaimAttestations", x.XChainClaimAttestations); err != nil {
-			return nil, err
-		}
+	if x.hasXAddress() {
+		return x.encodeViaMap()
+	}
+	data, err := x.appendBinary(make([]byte, 0, x.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(x, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (x *XChainOwnedClaimID) encodeViaMap() ([]byte, error) {
+	if err := x.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := x.ToMap()
 	if x.present&xchainownedclaimidBitPreviousTxnID == 0 {
@@ -784,7 +797,147 @@ func (x *XChainOwnedClaimID) Encode() ([]byte, error) {
 	if x.present&xchainownedclaimidBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (x *XChainOwnedClaimID) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x71)
+	if x.present&xchainownedclaimidBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), x.Flags)
+	}
+	if x.present&xchainownedclaimidBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), x.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if x.present&xchainownedclaimidBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), x.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitXChainClaimID != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x14), x.XChainClaimID); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), x.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if x.present&xchainownedclaimidBitSignatureReward != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x1D), x.SignatureReward); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), x.Account); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitOtherChainSource != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x12), x.OtherChainSource); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), x.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x15), "XChainClaimAttestations", x.XChainClaimAttestations); err != nil {
+			return nil, err
+		}
+	}
+	if x.present&xchainownedclaimidBitXChainBridge != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x01, 0x19), "XChainBridge", x.XChainBridge); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (x *XChainOwnedClaimID) encodedSizeHint() int {
+	size := 41
+	if x.present&xchainownedclaimidBitFlags != 0 {
+		size += 5
+	}
+	if x.present&xchainownedclaimidBitOwnerNode != 0 {
+		size += 9
+	}
+	if x.present&xchainownedclaimidBitXChainClaimID != 0 {
+		size += 10
+	}
+	if x.present&xchainownedclaimidBitSignatureReward != 0 {
+		size += 2 + amountEncodedLen(x.SignatureReward)
+	}
+	if x.present&xchainownedclaimidBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(x.Account)
+	}
+	if x.present&xchainownedclaimidBitOtherChainSource != 0 {
+		size += 2 + accountIDEncodedLen(x.OtherChainSource)
+	}
+	if x.present&xchainownedclaimidBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(x.Sponsor)
+	}
+	if x.present&xchainownedclaimidBitXChainBridge != 0 {
+		size += 124
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (x *XChainOwnedClaimID) hasXAddress() bool {
+	if x.present&xchainownedclaimidBitOwnerNode != 0 && isXAddress(x.OwnerNode) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitXChainClaimID != 0 && isXAddress(x.XChainClaimID) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitPreviousTxnID != 0 && isXAddress(x.PreviousTxnID) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitSignatureReward != 0 && isXAddressValue(x.SignatureReward) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitAccount != 0 && isXAddress(x.Account) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitOtherChainSource != 0 && isXAddress(x.OtherChainSource) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitSponsor != 0 && isXAddress(x.Sponsor) {
+		return true
+	}
+	if x.present&xchainownedclaimidBitXChainBridge != 0 && isXAddressValue(x.XChainBridge) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (x *XChainOwnedClaimID) validateEncode() error {
+	if err := x.validateRequired(); err != nil {
+		return err
+	}
+	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
+		if err := validateSTArrayForEncode("XChainClaimAttestations", x.XChainClaimAttestations); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

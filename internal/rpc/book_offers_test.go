@@ -547,6 +547,30 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 			expectedGets: types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		},
 		{
+			name: "literal zero taker_pays is canonical XRP",
+			takerPays: map[string]any{
+				"currency": "0",
+			},
+			takerGets: map[string]any{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+			expectedPays: types.Amount{Currency: "XRP"},
+			expectedGets: types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		},
+		{
+			name: "zero hex taker_gets is canonical XRP",
+			takerPays: map[string]any{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+			takerGets: map[string]any{
+				"currency": "0000000000000000000000000000000000000000",
+			},
+			expectedPays: types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			expectedGets: types.Amount{Currency: "XRP"},
+		},
+		{
 			name: "IOU taker_pays, XRP taker_gets",
 			takerPays: map[string]any{
 				"currency": "USD",

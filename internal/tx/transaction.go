@@ -84,6 +84,10 @@ type RulesAwarePreflighter interface {
 	PreflightWithRules(rules *amendment.Rules) error
 }
 
+type FlagsAwarePreflighter interface {
+	PreflightWithFlags(rules *amendment.Rules, flags ApplyFlags) error
+}
+
 // ExtraFeaturesChecker is implemented by transaction types with an amendment
 // gate that rippled evaluates in T::checkExtraFeatures — which runs in
 // invokePreflight BEFORE preflight1's common checks (flags mask, NetworkID,
@@ -425,8 +429,9 @@ type Common struct {
 	TransactionType string `json:"TransactionType"`
 
 	// Fee in drops (required for signing, optional for submission)
-	Fee    string `json:"Fee,omitempty"`
-	rawFee *binarytypes.RawXRPAmount
+	Fee             string `json:"Fee,omitempty"`
+	rawFee          *binarytypes.RawXRPAmount
+	rawNonnativeFee map[string]any
 
 	// Sequence number (required unless using TicketSequence)
 	Sequence *uint32 `json:"Sequence,omitempty"`
@@ -489,8 +494,7 @@ type Common struct {
 	txIDCached bool
 
 	// preflightedRules records the amendment rules under which this
-	// transaction's non-signature structural preflight last succeeded. This stage
-	// is a pure function of the transaction fields and the active rules, so when
+	// transaction's cacheable structural preflight last succeeded. When
 	// the engine re-preflights the same parsed transaction under identical rules —
 	// as the open-ledger apply strand does, preflighting once in TxQ.Apply and
 	// again in Engine.Apply under modifyMu — the second run skips the repeat.
@@ -548,6 +552,17 @@ func (c *Common) SignatureCacheLegacyRole(rules *amendment.Rules) bool {
 // SetPresentFields sets the map of fields that were present in the original parsed data.
 func (c *Common) SetPresentFields(fields map[string]bool) {
 	c.PresentFields = fields
+}
+
+func (c *Common) setRawNonnativeFee(value map[string]any) {
+	c.rawNonnativeFee = cloneTransactionFieldValue(value).(map[string]any)
+	c.Fee = ""
+}
+
+// HasRawNonnativeFee reports whether the decoded fee is still the preserved
+// non-native amount. Updating Fee to a native value disables the marker.
+func (c *Common) HasRawNonnativeFee() bool {
+	return c.rawNonnativeFee != nil && c.Fee == ""
 }
 
 // GetRawBytes returns the retained canonical serialized bytes.
@@ -685,7 +700,9 @@ func (c *Common) ToMap() map[string]any {
 		"TransactionType": c.TransactionType,
 	}
 
-	if c.Fee != "" {
+	if c.HasRawNonnativeFee() {
+		m["Fee"] = cloneTransactionFieldValue(c.rawNonnativeFee)
+	} else if c.Fee != "" {
 		if c.rawFee != nil && c.Fee == rawXRPAmountDecimal(*c.rawFee) {
 			m["Fee"] = *c.rawFee
 		} else {

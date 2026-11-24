@@ -228,7 +228,7 @@ func awaitSuccessorPreparation(t *testing.T, entered <-chan struct{}, unblock fu
 	t.Helper()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		unblock()
 		t.Fatalf("successor preparation did not reach the cold read (fetches=%d)", fetches.Load())
 	}
@@ -250,7 +250,7 @@ func assertSuccessorReadersAndGate(t *testing.T, svc *Service, oldClosed *ledger
 	select {
 	case err := <-reads:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		unblock()
 		t.Fatal("successor preparation blocked service/history readers")
 	}

@@ -127,6 +127,7 @@ func BenchmarkService_BatchConsensusAcceptance(b *testing.B) {
 				require.Equal(b, uint32(len(tc.agreed)+len(tc.innerHashes)), closed.TxCount())
 				assertBatchAcceptanceEffects(b, closed, tc)
 				if tc.withRetry {
+					require.NoError(b, svc.waitSpeculativeSuccessor(b.Context()))
 					exists, err := svc.openLedgerView.Current().TxExists(tc.localHash)
 					require.NoError(b, err)
 					require.True(b, exists, "successor transaction was not prepared in next open ledger")
@@ -405,7 +406,7 @@ func newBatchBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64
 	require.NoError(b, err)
 	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
 	require.NoError(b, err)
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	closeTime := parent.CloseTime().Add(10 * time.Second)
 	validated, err := ledgerpkg.NewOpen(parent, closeTime)

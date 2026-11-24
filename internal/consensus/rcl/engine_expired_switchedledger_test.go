@@ -149,9 +149,9 @@ func TestConsensus_Expired_WithCloseTimeConsensus_AcceptsAbandoned(t *testing.T)
 	}
 
 	sawAbandoned := false
-	deadline := time.After(500 * time.Millisecond)
+	deadline := time.After(progressTimeout)
 drain:
-	for {
+	for !sawAbandoned {
 		select {
 		case ev := <-subscriber.events:
 			if cre, ok := ev.(*consensus.ConsensusReachedEvent); ok && cre.Result == consensus.ResultAbandoned {

@@ -160,17 +160,13 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 	// elastic remainder. The first 4 MiB processing reservation then succeeds,
 	// while the stored replay constructor's larger admission is forced to wait.
 	r.catchupReplay.acquisitionMu.Lock()
-	r.catchupReplay.standardReplay.pivotReady = false
-	r.catchupReplay.standardReplay.applying = true
+	r.catchupReplay.standardReplay.phase = standardReplayAcquiringPivot
 	preparedHead := r.catchupReplay.standardReplay.entries[head.seq]
 	r.catchupReplay.acquisitionMu.Unlock()
 	require.NotNil(t, preparedHead)
 	require.Equal(t, head.hash, preparedHead.hash)
 	require.Same(t, r.catchupReplay.fetchTracker.Find(head.hash), preparedHead.acquisition)
 	completePaymentReplayTestLink(t, r, head, sourceTarget)
-	r.catchupReplay.acquisitionMu.Lock()
-	r.catchupReplay.standardReplay.applying = false
-	r.catchupReplay.acquisitionMu.Unlock()
 
 	available := pool.Snapshot().SharedAvailable
 	require.Greater(t, available, uint64(4<<20))
@@ -183,7 +179,7 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 
 	r.catchupReplay.acquisitionMu.Lock()
 	readyHead := r.catchupReplay.standardReplay.entries[head.seq]
-	r.catchupReplay.standardReplay.pivotReady = true
+	r.catchupReplay.standardReplay.phase = standardReplayPivotReady
 	r.catchupReplay.acquisitionMu.Unlock()
 	require.NotNil(t, readyHead)
 	require.False(t, readyHead.readyAt.IsZero())
@@ -197,7 +193,7 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 		"memory pressure must not enter the replay fault or peer fallback path")
 	require.False(t, svc.ReplayBlocked(), "a transient memory wait must keep validator duties healthy")
 	r.catchupReplay.acquisitionMu.Lock()
-	applying := r.catchupReplay.standardReplay.applying
+	applying := r.catchupReplay.standardReplay.isApplying()
 	memoryWait := r.catchupReplay.standardReplay.memoryWait
 	r.catchupReplay.acquisitionMu.Unlock()
 	require.False(t, applying)
@@ -222,6 +218,12 @@ func TestStandardReplaySharedMemoryWakeAppliesPaymentAfterParentCacheRelease(t *
 		t.Fatal("memory wake did not schedule the parked replay head")
 	}
 	r.catchupReplay.drainStandardReplayPipeline()
+	// Applying the payment can exhaust the drain's time budget and queue one continuation.
+	select {
+	case <-r.catchupReplay.standardReplayDrainWake:
+		r.catchupReplay.drainStandardReplayPipeline()
+	default:
+	}
 
 	require.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineApplied)
 	require.Zero(t, r.FastSyncMetrics().ReplayPipelineFallbacks)

@@ -367,12 +367,11 @@ func TestPendingConsensusTargetPrecedesRecordedCatchupTarget(t *testing.T) {
 }
 
 func TestHistoryBackfillWaitsForConsensusCatchup(t *testing.T) {
-	r, _, sender, svc := makeRouter(t)
+	r, sender, svc, historySeq, historyHash := newRouterWithHistoryGap(t)
 	closed := svc.GetClosedLedgerIndex()
-	historyHash := [32]byte{0xC1}
 	catchupHash := [32]byte{0xC2}
 	trackCatchupPeer(r, 7, closed+10)
-	r.catchupReplay.startHistoryBackfill(closed-1, historyHash, 7, 0)
+	r.catchupReplay.startHistoryBackfill(historySeq, historyHash, 7, 0)
 	r.catchupReplay.recordCatchupTarget(closed+10, catchupHash, 7)
 
 	r.catchupReplay.armHistoryBackfill()

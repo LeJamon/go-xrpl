@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/archive"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -399,12 +400,14 @@ func manifestCountSource(configured bool) string {
 // floor is the online-delete retention floor (a *shamapstore.Rotator in
 // production). Pass nil when online_delete is off: acquisition and serving are
 // then unrestricted, leaving the standalone / feature-disabled path unchanged.
+// overlayOpts are applied after the config-derived overlay options.
 func NewFromConfig(
 	ctx context.Context,
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
 	validationRepo relationaldb.ValidationRepository,
 	floor MinimumOnlineFloor,
+	overlayOpts ...peermanagement.Option,
 ) (_ *Components, err error) {
 	if err := appCfg.Overlay.Validate(); err != nil {
 		return nil, fmt.Errorf("validate overlay config: %w", err)
@@ -454,14 +457,14 @@ func NewFromConfig(
 	restoreManifests("validator", validatorManifests, stored.Validators)
 	restoreManifests("publisher", publisherManifests, stored.Publishers)
 
-	// Build overlay options from app config
-	overlayOpts := OverlayOptionsFromConfig(appCfg)
+	opts := OverlayOptionsFromConfig(appCfg)
 	if identity != nil {
-		overlayOpts = append(overlayOpts,
+		opts = append(opts,
 			peermanagement.WithLocalValidatorPubKey(identity.SigningPubKey()))
 	}
+	opts = append(opts, overlayOpts...)
 
-	overlay, err := peermanagement.New(overlayOpts...)
+	overlay, err := peermanagement.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create overlay: %w", err)
 	}
@@ -488,65 +491,6 @@ func NewFromConfig(
 	staticValidators, staticMasterKeys = excludeLocalValidator(staticValidators, staticMasterKeys, identity)
 	validators, masterKeys := includeLocalValidator(staticValidators, staticMasterKeys, identity)
 
-	sender := NewOverlaySender(overlay)
-
-	adaptor := New(Config{
-		LedgerService:       ledgerSvc,
-		Sender:              sender,
-		Identity:            identity,
-		Validators:          validators,
-		ValidatorMasterKeys: masterKeys,
-		OnTxSetBuilt: func(id consensus.TxSetID) {
-			overlay.BroadcastHaveTxSet([32]byte(id))
-		},
-		// Source vote stances from the same amendment table the ledger service
-		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
-		// config) drives consensus voting.
-		Table: ledgerSvc.Table(),
-		// The operator's [voting] stanza.
-		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
-		RelayValidations: parseRelayValidationsPolicy(appCfg.RelayValidations),
-	})
-
-	// Seed the local token manifest after durable validator state has loaded.
-	if identity != nil && identity.Manifest != nil {
-		if err := seedLocalManifest(validatorManifests, identity.Manifest); err != nil {
-			return nil, err
-		}
-	} else {
-		slog.Info("local validator manifest not configured",
-			"t", "adaptor.NewFromConfig")
-	}
-
-	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
-
-	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
-
-	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
-		gossip:               sender,
-		txSet:                sender,
-		acquisition:          sender,
-		serve:                sender,
-		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
-	})
-	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
-	router.catchupReplay.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32())
-	router.SetServiceInbox(overlay.Messages())
-	router.SetTxInbox(overlay.TxMessages())
-	router.SetAcqInbox(overlay.LedgerDataMessages())
-	router.SetManifestInbox(overlay.ManifestMessages())
-	router.SetManifestCache(validatorManifests, overlay)
-	router.SetManifestUntrustedLimit(appCfg.Overlay.EffectiveMaxUntrustedCount())
-	router.SetManifestClassifier(func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
-		nodeID := consensus.CalcNodeID(master)
-		if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
-			return manifest.Uncapped
-		}
-		return manifest.Capped
-	})
-	router.setPeerSessionView(overlay)
-	router.SetMinimumOnlineFloor(floor)
-
 	// Build the publisher-list aggregator when validator_list_keys are
 	// configured. Lists are then ingested both via peer gossip
 	// (ValidatorListCollection through the router) and via HTTP polling of
@@ -554,7 +498,6 @@ func NewFromConfig(
 	// trusted UNL into adaptor.SetTrustedValidators on every change —
 	// the same write path SIGHUP reload uses.
 	var vlAgg *validatorlist.Aggregator
-	var vlPoller *validatorlist.SitePoller
 	if len(publisherKeys) > 0 {
 		pkSlice := make([]validatorlist.PublisherKey, len(publisherKeys))
 		for i, k := range publisherKeys {
@@ -572,14 +515,84 @@ func NewFromConfig(
 		if err != nil {
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
-		router.SetValidatorListAggregator(vlAgg)
-		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
-		adaptor.SetQuorumUnavailableFunc(vlAgg.IsQuorumUnavailable)
-		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
+	}
+
+	sender := NewOverlaySender(overlay)
+
+	adaptorCfg := Config{
+		LedgerService:       ledgerSvc,
+		Sender:              sender,
+		Identity:            identity,
+		Validators:          validators,
+		ValidatorMasterKeys: masterKeys,
+		OnTxSetBuilt: func(id consensus.TxSetID) {
+			overlay.BroadcastHaveTxSet([32]byte(id))
+		},
+		// Source vote stances from the same amendment table the ledger service
+		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
+		// config) drives consensus voting.
+		Table: ledgerSvc.Table(),
+		// The operator's [voting] stanza.
+		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
+		RelayValidations: parseRelayValidationsPolicy(appCfg.RelayValidations),
+	}
+	if vlAgg != nil {
+		adaptorCfg.UNLBlocked = vlAgg.IsUNLBlocked
+		adaptorCfg.QuorumUnavailable = vlAgg.IsQuorumUnavailable
+		adaptorCfg.RefreshUNL = vlAgg.Tick
 		// Listed-but-untrusted signers (published below the trust
 		// threshold) get their validations stored by the engine so a later
 		// trust change promotes what was already seen.
-		adaptor.SetListedLookup(vlAgg.IsListed)
+		adaptorCfg.Listed = vlAgg.IsListed
+	}
+	adaptor := New(adaptorCfg)
+
+	// Seed the local token manifest after durable validator state has loaded.
+	if identity != nil && identity.Manifest != nil {
+		if err := seedLocalManifest(validatorManifests, identity.Manifest); err != nil {
+			return nil, err
+		}
+	} else {
+		slog.Info("local validator manifest not configured",
+			"t", "adaptor.NewFromConfig")
+	}
+
+	engine := rcl.NewEngine(adaptor, rcl.DefaultConfig())
+
+	engine.SetLedgerAncestryProvider(newAncestryProvider(ledgerSvc))
+
+	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
+		gossip:               sender,
+		txSet:                sender,
+		acquisition:          sender,
+		serve:                sender,
+		inboundClock:         inbound.SystemClock,
+		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
+	}, routerDeps{
+		consensusControlInbox: overlay.ConsensusControlMessages(),
+		serviceInbox:          overlay.Messages(),
+		txInbox:               overlay.TxMessages(),
+		acqInbox:              overlay.LedgerDataMessages(),
+		manifestInbox:         overlay.ManifestMessages(),
+		manifests:             validatorManifests,
+		overlay:               overlay,
+		manifestClassify: func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
+			nodeID := consensus.CalcNodeID(master)
+			if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
+				return manifest.Uncapped
+			}
+			return manifest.Capped
+		},
+		manifestUntrustedLimit: &maxUntrustedCount,
+		peerSessions:           overlay,
+		floor:                  floor,
+		validatorList:          vlAgg,
+	})
+	router.catchupReplay.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32(),
+		appCfg.NodeDB.IsOnlineDeleteEnabled())
+
+	var vlPoller *validatorlist.SitePoller
+	if vlAgg != nil {
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after
 		// every successful apply, and hydrated on cold start so the

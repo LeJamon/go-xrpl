@@ -15,22 +15,19 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 )
 
 const (
-	pinnedOracleRepository = "XRPLF/xrpld-private"
-	pinnedOracleTag        = "3.4.1"
-	pinnedOracleCommit     = "d147fccf54a500fce586522f28d6044c37fd8d29"
-	pinnedFixtureVersion   = "v4"
-	pinnedManifestSchema   = 4
+	pinnedFixtureVersion = "v4"
+	pinnedManifestSchema = 5
 )
 
-var pinnedRecorderSources = []string{
-	"scripts/oracle/record-v4.py",
-	"scripts/oracle/record-v4.sh",
-	"scripts/oracle/strict-corpus-config.json",
-	"scripts/oracle/strict_recorder.cpp",
-}
+var (
+	pinnedOracleRepository = rippled.Pin.Repository
+	pinnedOracleTag        = rippled.Pin.Tag
+	pinnedOracleCommit     = rippled.Pin.Commit
+)
 
 type pinnedManifest struct {
 	Schema              int                         `json:"schema"`
@@ -97,7 +94,7 @@ func resolvePinnedCorpus(required bool) (*pinnedCorpus, error) {
 		if required {
 			return nil, fmt.Errorf("%w: set GOXRPL_FIXTURES_DIR", errCorpusNotConfigured)
 		}
-		root = filepath.Join(conformanceRepositoryRoot(), "internal/testing/conformance/testdata/rippled-3.4.1-v4")
+		root = filepath.Join(conformanceRepositoryRoot(), rippled.Pin.Corpus)
 	} else if !filepath.IsAbs(root) {
 		root = filepath.Join(conformanceRepositoryRoot(), root)
 	}
@@ -254,8 +251,8 @@ func validatePinnedManifest(manifest pinnedManifest) (map[string]pinnedProfile, 
 }
 
 func validatePinnedManifestAt(manifest pinnedManifest, repository string) (map[string]pinnedProfile, error) {
-	if manifest.Schema != pinnedManifestSchema || manifest.FixtureVersion != pinnedFixtureVersion {
-		return nil, fmt.Errorf("required corpus format is schema %d/%s", pinnedManifestSchema, pinnedFixtureVersion)
+	if (manifest.Schema != 4 && manifest.Schema != pinnedManifestSchema) || manifest.FixtureVersion != pinnedFixtureVersion {
+		return nil, fmt.Errorf("required corpus format is schema 4 or %d with %s fixtures", pinnedManifestSchema, pinnedFixtureVersion)
 	}
 	if manifest.OracleRepository != pinnedOracleRepository || manifest.RippledTag != pinnedOracleTag || manifest.RippledCommit != pinnedOracleCommit {
 		return nil, fmt.Errorf("required oracle is %s tag %s commit %s", pinnedOracleRepository, pinnedOracleTag, pinnedOracleCommit)
@@ -273,10 +270,19 @@ func validatePinnedManifestAt(manifest pinnedManifest, repository string) (map[s
 	if manifest.BuildIdentity != expectedBuildIdentity || !fs.ValidPath(manifest.BuildIdentity) || strings.Contains(manifest.BuildIdentity, "\\") {
 		return nil, errors.New("build_identity must identify the archived recorder build identity")
 	}
-	if len(manifest.RecorderSources) != len(pinnedRecorderSources) {
+	expectedSources := []string{
+		"scripts/oracle/record-v4.py",
+		"scripts/oracle/record-v4.sh",
+		"scripts/oracle/strict-corpus-config.json",
+		"scripts/oracle/strict_recorder.cpp",
+	}
+	if manifest.Schema == pinnedManifestSchema {
+		expectedSources = append(expectedSources, rippled.PinPath)
+	}
+	if len(manifest.RecorderSources) != len(expectedSources) {
 		return nil, errors.New("recorder_sources must contain the complete recorder source inventory")
 	}
-	for _, name := range pinnedRecorderSources {
+	for _, name := range expectedSources {
 		if _, ok := manifest.RecorderSources[name]; !ok {
 			return nil, fmt.Errorf("recorder_sources is missing %s", name)
 		}
@@ -394,7 +400,7 @@ func validatePinnedBuildIdentity(data []byte, manifest pinnedManifest) error {
 	if err != nil {
 		return err
 	}
-	if version != "xrpld version 3.4.1" {
+	if version != rippled.Pin.VersionLine() {
 		return errors.New("build identity verified binary version does not match the pinned oracle")
 	}
 	return nil

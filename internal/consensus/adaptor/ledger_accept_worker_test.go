@@ -25,7 +25,7 @@ func TestAdaptorLedgerAcceptWorkerIsAsynchronousAndSingleFlight(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance worker did not start")
 	}
 	if !a.DeferLedgerAccept(func() {
@@ -49,12 +49,12 @@ func TestAdaptorLedgerAcceptWorkerIsAsynchronousAndSingleFlight(t *testing.T) {
 	close(release)
 	select {
 	case <-finished:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("deferred acceptance did not complete")
 	}
 	select {
 	case <-queued:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("queued acceptance was not drained")
 	}
 	select {
@@ -62,7 +62,7 @@ func TestAdaptorLedgerAcceptWorkerIsAsynchronousAndSingleFlight(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StopLedgerAccept: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("StopLedgerAccept did not join the worker")
 	}
 	if got := calls.Load(); got != 2 {
@@ -95,7 +95,7 @@ func TestAdaptorLedgerAcceptWorkerRunsAdmittedCallbackDuringShutdown(t *testing.
 	}
 	select {
 	case <-completed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("admitted completion was abandoned during shutdown")
 	}
 	if got := calls.Load(); got != 1 {

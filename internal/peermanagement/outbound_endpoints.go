@@ -105,11 +105,7 @@ func (o *Overlay) sendEndpoints() {
 	}
 }
 
-// collectDiscoveredEndpoints walks Discovery.peers and returns a list of
-// gossip-eligible endpoints, each tagged with the hop count we last
-// observed from. Endpoints we believe ourselves to be currently
-// connected to are still eligible — the recipient peer will dedup
-// against its own slot.
+// Connected endpoints remain eligible because the recipient filters its own connections.
 func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 	var out []message.Endpointv2
 	o.discovery.ForEachDiscovered(func(address string, hops uint32) {
@@ -117,6 +113,9 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 		// recipient's IP-endpoint parse (rippled PeerImp.cpp:1213) and gets
 		// the sender charged "malformed endpoints" every gossip round.
 		if !gossipableEndpoint(address) {
+			return
+		}
+		if hops > maxGossipHops {
 			return
 		}
 		if hops == 0 {

@@ -24,15 +24,15 @@ func TestPriorityGateRunsPriorityFIFOBeforeIngress(t *testing.T) {
 	lock(openLedgerIngress)
 	require.Eventually(t, func() bool {
 		return gate.Snapshot().QueuedIngress == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	lock(openLedgerConsensus)
 	require.Eventually(t, func() bool {
 		return gate.Snapshot().QueuedPriority == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	lock(openLedgerValidation)
 	require.Eventually(t, func() bool {
 		return gate.Snapshot().QueuedPriority == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.False(t, gate.TryLock(), "TryLock must not bypass queued work")
 
 	gate.Unlock()
@@ -44,7 +44,7 @@ func TestPriorityGateRunsPriorityFIFOBeforeIngress(t *testing.T) {
 		select {
 		case got := <-acquired:
 			require.Equal(t, want, got)
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("timed out waiting for %s admission", want)
 		}
 	}
@@ -58,7 +58,7 @@ func TestPriorityGateRecordsWaitAndHold(t *testing.T) {
 	go func() { acquired <- gate.LockRole(openLedgerConsensus) }()
 	require.Eventually(t, func() bool {
 		return gate.Snapshot().QueuedPriority == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	gate.Unlock()
 	wait := <-acquired
@@ -83,13 +83,13 @@ func TestPriorityGateCancellationRemovesQueuedWaiter(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool {
 		return gate.Snapshot().QueuedPriority == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	cancel()
 	select {
 	case err := <-result:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled gate waiter did not return")
 	}
 	snapshot := gate.Snapshot()

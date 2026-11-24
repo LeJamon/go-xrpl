@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	appconfig "github.com/LeJamon/go-xrpl/config"
@@ -16,6 +17,8 @@ import (
 )
 
 const historyWindow = uint32(appconfig.DefaultLedgerCacheSize)
+
+const progressTimeout = 15 * time.Second
 
 func formatRange(min, max uint32) string {
 	return strconv.FormatUint(uint64(min), 10) + "-" + strconv.FormatUint(uint64(max), 10)

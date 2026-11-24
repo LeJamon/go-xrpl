@@ -38,11 +38,11 @@ func newBlockedReplayWorker(t *testing.T) (*Router, *service.Service, standardRe
 	c := router.catchupReplay
 	links := buildStandardReplayTestChain(t, router, svc.GetClosedLedger(), 2)
 	armStandardReplayTestPipeline(t, router, adaptor, sender, links)
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, router, links[0])
 	family.root = links[0].ledger.Header().AccountHash
 	family.blocked.Store(true)
-	c.standardReplay.pivotReady = true
+	c.standardReplay.phase = standardReplayPivotReady
 	c.startTasks(t.Context())
 	t.Cleanup(func() {
 		resume()
@@ -53,7 +53,7 @@ func newBlockedReplayWorker(t *testing.T) (*Router, *service.Service, standardRe
 	c.startStandardReplayDrain()
 	select {
 	case <-family.entered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("worker did not reach durable verification")
 	}
 	return router, svc, links[0], resume
@@ -79,7 +79,7 @@ func TestReplayWorkerCancellationRetainsSingleOwner(t *testing.T) {
 		c.acquisitionMu.Lock()
 		defer c.acquisitionMu.Unlock()
 		return c.standardReplayDrainOwner == nil
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	_, err := svc.GetLedgerByHash(link.hash)
 	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 	require.Zero(t, c.replayPipelineApplied.Load())
@@ -93,7 +93,7 @@ func TestReplayWorkerQueuedResultCannotAdvanceRetiredGeneration(t *testing.T) {
 	var result *standardReplayDrainResult
 	select {
 	case result = <-c.standardReplayResults:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("worker did not queue its prepared result")
 	}
 	require.NoError(t, result.err)
@@ -129,7 +129,7 @@ func TestReplayWorkerShutdownCancelsCommitLockWait(t *testing.T) {
 	go func() { c.stopTasks(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("worker shutdown waited for the publication lock")
 	}
 	unlock()
@@ -149,7 +149,7 @@ func TestReplayWorkerRechecksFaultGateBeforePublication(t *testing.T) {
 	case result := <-c.standardReplayResults:
 		require.Error(t, result.err)
 		c.handleStandardReplayDrainResult(result)
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("fault-gated worker did not finish")
 	}
 	_, err := svc.GetLedgerByHash(link.hash)
@@ -178,7 +178,7 @@ func TestReplayWorkerClaimedResultRetainsResourcesDuringCancellation(t *testing.
 	var result *standardReplayDrainResult
 	select {
 	case result = <-c.standardReplayResults:
-	case <-time.After(3 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("worker did not finish preparation")
 	}
 	require.NoError(t, result.err)
@@ -193,7 +193,7 @@ func TestReplayWorkerClaimedResultRetainsResourcesDuringCancellation(t *testing.
 	go func() { c.handleStandardReplayDrainResult(result); close(done) }()
 	select {
 	case <-barrier.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("result handler did not reach activation")
 	}
 	c.acquisitionMu.Lock()
@@ -207,7 +207,7 @@ func TestReplayWorkerClaimedResultRetainsResourcesDuringCancellation(t *testing.
 	release()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("claimed result did not retire")
 	}
 	require.Nil(t, result.prepared)
@@ -254,8 +254,7 @@ func TestReplayWorkerFailureDiagnosticsDoNotHoldPublicationLock(t *testing.T) {
 	h.TxHash = root
 	h.Hash = header.CalculateHash(h)
 	entry := &standardReplayEntry{seq: h.LedgerIndex, hash: h.Hash, parentHash: h.ParentHash, header: h, readyAt: time.Now()}
-	c.standardReplay.active = true
-	c.standardReplay.pivotReady = true
+	c.standardReplay.phase = standardReplayPivotReady
 	c.standardReplay.anchorSeq = parent.Sequence()
 	c.standardReplay.entries = map[uint32]*standardReplayEntry{entry.seq: entry}
 	owner := c.beginStandardReplayDrain()
@@ -271,7 +270,7 @@ func TestReplayWorkerFailureDiagnosticsDoNotHoldPublicationLock(t *testing.T) {
 	}()
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("failure diagnostics did not walk the cold transaction tree")
 	}
 	require.True(t, c.replayCommitMu.TryLock(), "failure diagnostics held the publication lock")
@@ -279,7 +278,7 @@ func TestReplayWorkerFailureDiagnosticsDoNotHoldPublicationLock(t *testing.T) {
 	owner.cancelWork()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("canceled failure diagnostics did not return")
 	}
 	c.finishStandardReplayDrain(owner)

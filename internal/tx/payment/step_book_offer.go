@@ -69,6 +69,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				}
 			}
 			if !reYieldOwnOffer {
+				if err := DeleteOfferAtomically(sb, offerKey); err != nil {
+					return nil, [32]byte{}, &offerCleanupError{cause: err}
+				}
 				continue
 			}
 		}
@@ -124,6 +127,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 								}
 							}
 						}
+						if !groomable && s.offerDomainMismatch(sb, probeOffer) {
+							throwFlowError(ter.TecINTERNAL)
+						}
 						if !groomable {
 							groomable = s.offerOutOfDomain(sb, probeOffer)
 						}
@@ -177,10 +183,6 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			continue
 		}
 
-		if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && s.domainID != nil && offer.DomainID != *s.domainID {
-			throwFlowError(ter.TecINTERNAL)
-		}
-
 		// The single funded/groom rule, applied to every offer the walk
 		// steps onto and read from the live working sandbox — rippled's
 		// OfferStream::step. A deep-frozen or zero-amount offer is a
@@ -198,8 +200,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			continue
 		}
 		if offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
 		}
 		deepFrozen, err := s.isDeepFrozenIssue(sb, offerOwner, s.book.In)
@@ -207,9 +208,11 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			return nil, [32]byte{}, err
 		}
 		if deepFrozen {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
+		}
+		if s.offerDomainMismatch(sb, offer) {
+			throwFlowError(ter.TecINTERNAL)
 		}
 
 		// Domain membership check: if the offer has a DomainID (domain or
@@ -220,8 +223,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// expired hybrid offers remain usable in the open book.
 		// Reference: rippled OfferStream.cpp lines 294-303
 		if s.offerOutOfDomain(sb, offer) {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
 		}
 		groomed, err := s.groomUnfundedOffer(sb, afView, offer, offerKey, offerOwner, ofrsToRm)
@@ -363,6 +365,12 @@ func (s *BookStep) offerExpired(offer *state.LedgerOffer) bool {
 		offer.Expiration <= s.parentCloseTime
 }
 
+func (s *BookStep) offerDomainMismatch(sb *PaymentSandbox, offer *state.LedgerOffer) bool {
+	rules := sb.Rules()
+	return rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) &&
+		s.domainID != nil && (!offer.HasDomainID() || offer.DomainID != *s.domainID)
+}
+
 // offerOutOfDomain reports whether a domain/hybrid offer's owner has left the
 // offer's DomainID (or lost the gating credential), which rippled treats as
 // unfunded and grooms quality-blind, ahead of the crossing quality threshold.
@@ -375,8 +383,7 @@ func (s *BookStep) offerOutOfDomain(sb *PaymentSandbox, offer *state.LedgerOffer
 			return false
 		}
 	}
-	var zeroDomainID [32]byte
-	if offer.DomainID == zeroDomainID {
+	if !offer.HasDomainID() {
 		return false
 	}
 	return !permissioneddomain.OfferInDomain(sb, offer, offer.DomainID, s.parentCloseTime)
@@ -409,8 +416,7 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 			return false, err
 		}
 		if fundsAf.IsZero() {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, owner, ofrsToRm)
 		} else {
 			s.dropBecameOffer(sb, offer, owner)
 		}
@@ -418,8 +424,7 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 	}
 	shouldRemove, overflow := s.shouldRmSmallIncreasedQOfferSafe(sb, offer, funds)
 	if overflow {
-		ofrsToRm[offerKey] = true
-		s.recordPermRm(offerKey)
+		s.removeSteppedOffer(sb, offer, offerKey, owner, ofrsToRm)
 		return true, nil
 	}
 	if shouldRemove {
@@ -428,14 +433,25 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 			return false, err
 		}
 		if fundsAf.Compare(funds) == 0 {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, owner, ofrsToRm)
 		} else {
 			s.dropBecameOffer(sb, offer, owner)
 		}
 		return true, nil
 	}
 	return false, nil
+}
+
+// removeSteppedOffer permanently removes an offer the book walk stepped over.
+// Besides recording it for the flow's cleanup, the offer is erased from the
+// working sandbox right away: BookTip::step deletes each tip from the view as the
+// walk advances past it, so the removals land in book order. Left to the flow's
+// key-sorted cleanup alone, offers sharing owner-directory pages would empty and
+// unlink those pages in a different order (testnet ledger 22465396).
+func (s *BookStep) removeSteppedOffer(sb *PaymentSandbox, offer *state.LedgerOffer, offerKey [32]byte, owner [20]byte, ofrsToRm map[[32]byte]bool) {
+	ofrsToRm[offerKey] = true
+	s.recordPermRm(offerKey)
+	_ = s.deleteOffer(sb, offer, owner)
 }
 
 // dropBecameOffer deletes a BECAME-unfunded/tiny offer straight from the working
@@ -577,45 +593,15 @@ func (s *BookStep) isOfferOwnerAuthorized(
 	return false, nil
 }
 
-// isDeepFrozen checks if an account's trust line for the given currency/issuer
-// has either the high or low deep freeze flag set.
-// Deep freeze is more restrictive than regular freeze — it prevents both
-// sending AND receiving, and causes existing offers to be removed.
-// XRP cannot be frozen, so this always returns false for XRP.
-// If the account is the issuer, deep freeze does not apply.
-// Reference: rippled View.cpp isDeepFrozen(view, account, currency, issuer)
-func (s *BookStep) isDeepFrozen(sb *PaymentSandbox, account [20]byte, currency string, issuer [20]byte) (bool, error) {
-	// XRP cannot be frozen
-	if currency == "" || currency == "XRP" {
-		return false, nil
-	}
-
-	// Issuer is never deep frozen for their own currency
-	if issuer == account {
-		return false, nil
-	}
-
-	lineKey := keylet.Line(account, issuer, currency)
-	lineData, err := sb.Read(lineKey)
-	if err != nil {
-		return false, fmt.Errorf("read deep-freeze trust line: %w", err)
-	}
-	if lineData == nil {
-		return false, nil
-	}
-	rs, err := state.ParseRippleState(lineData)
-	if err != nil {
-		return false, fmt.Errorf("parse deep-freeze trust line: %w", err)
-	}
-
-	return (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0, nil
-}
-
 func (s *BookStep) isDeepFrozenIssue(sb *PaymentSandbox, account [20]byte, issue Issue) (bool, error) {
 	if issue.IsMPT {
 		return mptutil.IsFrozen(sb, issue.MPTID, account), nil
 	}
-	return s.isDeepFrozen(sb, account, issue.Currency, issue.Issuer)
+	frozen, err := tx.IsIOUDeepFrozen(sb, account, issue.Issuer, issue.Currency)
+	if err != nil {
+		return false, fmt.Errorf("deep-freeze trust line: %w", err)
+	}
+	return frozen, nil
 }
 
 // getOfferFundedAmount returns the actual amount an offer can deliver based on owner's balance.
@@ -693,7 +679,10 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 		if offerOwner == mptIssuer(offerTakerGets.MPTID) {
 			funds, result = mptutil.IssuerFundsToSelfIssue(sb, offerTakerGets.MPTID)
 		} else {
-			funds, result = mptutil.Funds(sb, offerTakerGets.MPTID, offerOwner, true)
+			funds, result = mptutil.FundsWithAuth(sb, offerTakerGets.MPTID, offerOwner, true, s.parentCloseTime)
+		}
+		if result == ter.TefINTERNAL {
+			return ZeroMPTEitherAmount(offerTakerGets.MPTID), ter.Errorf(result, "reading MPT offer funds")
 		}
 		if result != ter.TesSUCCESS || funds <= 0 {
 			return ZeroMPTEitherAmount(offerTakerGets.MPTID), nil
@@ -708,37 +697,47 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	}
 	currency := offerTakerGets.IOU.Currency
 
+	issuerAccount, issuerErr := tx.ReadAccountRoot(sb, issuer)
+	var line *state.RippleState
+	lineRead := false
+
 	// Check freeze before returning balance (fhZERO_IF_FROZEN).
 	// If the trust line is frozen or deep frozen, the offer is treated as unfunded.
 	// Reference: rippled accountHolds() lines 407-413:
 	//   if (zeroIfFrozen == fhZERO_IF_FROZEN) {
 	//     if (isFrozen(...) || isDeepFrozen(...)) return false;
 	//   }
-	if offerOwner != issuer {
-		frozen := tx.IsFrozen(sb, offerOwner, tx.Asset{Currency: currency, Issuer: state.EncodeAccountIDSafe(issuer)})
+	if offerOwner != issuer && currency != "" && currency != "XRP" {
+		frozen := tx.IsAccountGlobalFrozen(issuerAccount)
 		if !frozen {
-			frozen, err = s.isDeepFrozen(sb, offerOwner, currency, issuer)
-			if err != nil {
-				return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), err
+			var lineErr error
+			line, lineErr = tx.ReadRippleState(sb, offerOwner, issuer, currency)
+			lineRead = true
+			if lineErr != nil {
+				return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), fmt.Errorf("deep-freeze trust line: %w", lineErr)
 			}
+			frozen = tx.IsRippleStateFrozenBy(line, issuer, offerOwner) || tx.IsRippleStateDeepFrozen(line)
 		}
 		if frozen {
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 		}
 	}
 	if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		switch tx.LPTokenFrozenForIssuer(sb, offerOwner, issuer) {
-		case tx.LPTokenFrozen, tx.LPTokenAMMUnresolvable:
+		switch mptutil.LPTokenFrozenOf(sb, offerOwner, issuerAccount) {
+		case mptutil.LPTokenFrozen, mptutil.LPTokenAMMUnresolvable:
 			// accountHolds() treats frozen or unresolvable LP backing as zero;
 			// OfferStream then grooms the unfunded offer.
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 		}
 	}
-	if result := mptutil.CanTransferLPToken(sb, offerOwner, offerOwner, issuer); result != ter.TesSUCCESS {
+	if issuerErr != nil || mptutil.CanTransferLPTokenOf(sb, offerOwner, offerOwner, issuerAccount) != ter.TesSUCCESS {
 		return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 	}
 
-	ownerBalance := s.getIOUBalance(sb, offerOwner, issuer, currency)
+	if offerOwner != issuer && !lineRead {
+		line, _ = tx.ReadRippleState(sb, offerOwner, issuer, currency)
+	}
+	ownerBalance := s.getIOUBalance(offerOwner, issuer, currency, line)
 
 	// Subtract deferred credits so self-cross round-trips net to zero, matching
 	// rippled accountHolds() which returns view.balanceHook(account, issuer, amount)
@@ -764,8 +763,9 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	return ownerBalance, nil
 }
 
-// getIOUBalance returns an account's IOU balance with an issuer
-func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, currency string) EitherAmount {
+// getIOUBalance returns an account's IOU balance with an issuer, given their
+// trust line as already read (nil when absent or unreadable).
+func (s *BookStep) getIOUBalance(account, issuer [20]byte, currency string, rs *state.RippleState) EitherAmount {
 	issuerStr := state.EncodeAccountIDSafe(issuer)
 
 	if account == issuer {
@@ -773,14 +773,7 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 		return NewIOUEitherAmount(tx.NewIssuedAmount(1000000000000000, 15, currency, issuerStr))
 	}
 
-	lineKey := keylet.Line(account, issuer, currency)
-	lineData, err := sb.Read(lineKey)
-	if err != nil || lineData == nil {
-		return ZeroIOUEitherAmount(currency, issuerStr)
-	}
-
-	rs, err := state.ParseRippleState(lineData)
-	if err != nil {
+	if rs == nil {
 		return ZeroIOUEitherAmount(currency, issuerStr)
 	}
 

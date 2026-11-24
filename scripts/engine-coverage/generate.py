@@ -9,7 +9,7 @@ claims to an explicit evidence section.  Run from the go-xrpl repository root:
     python3 scripts/engine-coverage/generate.py
     python3 scripts/engine-coverage/generate.py --check
 
-The default oracle is the sibling read-only v3.4.1 checkout used by issue
+The default oracle is the sibling read-only pinned checkout used by issue
 #2016.  ``--oracle`` is useful for a different local checkout, but the pinned
 commit is still checked before an inventory is written.
 """
@@ -28,9 +28,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-ORACLE_REPOSITORY = "XRPLF/xrpld-private"
-ORACLE_TAG = "3.4.1"
-ORACLE_COMMIT = "d147fccf54a500fce586522f28d6044c37fd8d29"
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[2] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
 GO_BASE_COMMIT = "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f"
 GO_PREREQUISITE_BASELINE = "8093a8e6c9a55c17ef19cd8c677522c8c5f1c33f"
 SCHEMA = 1
@@ -38,7 +43,7 @@ SCHEMA = 1
 TRANSACTION_MACRO = "include/xrpl/protocol/detail/transactions.macro"
 TX_FORMATS = "src/libxrpl/protocol/TxFormats.cpp"
 FEATURE_MACRO = "include/xrpl/protocol/detail/features.macro"
-V4_MANIFEST = "internal/testing/conformance/testdata/rippled-3.4.1-v4/manifest.json"
+V4_MANIFEST = PIN["ORACLE_CORPUS"] + "/manifest.json"
 
 GO_TRANSACTION_TYPES = "protocol/transaction_type.go"
 GO_TEMPLATE = "internal/tx/template.go"
@@ -54,6 +59,7 @@ METHODS = (
     "Validate",
     "PreflightRules",
     "PreflightWithRules",
+    "PreflightWithFlags",
     "CheckExtraFeatures",
     "PreflightSigValidated",
     "Preclaim",
@@ -378,7 +384,7 @@ def common_field_stage_mapping() -> list[dict[str, Any]]:
             "oracle": [
                 {"path": TX_FORMATS, "symbols": ["TxFormats::getCommonFields"]},
             ],
-            "behavior": "The field is accepted as a common wire/template field; no v3.4.1 common engine check or mutation was found.",
+            "behavior": f"The field is accepted as a common wire/template field; no v{ORACLE_TAG} common engine check or mutation was found.",
             "unexecuted_edges": "Presence, value bounds, signing, and any type-specific interpretation remain unexecuted; do not call it behaviorally covered.",
         },
         {
@@ -400,7 +406,8 @@ def common_field_stage_mapping() -> list[dict[str, Any]]:
             "classification": "signature shape + verification",
             "stages": ["preflight1", "preflight2", "preclaim"],
             "go": [
-                {"path": "internal/tx/engine/preflight.go", "symbols": ["checkSigningKeyShape", "Engine.verifySignatures"]},
+                {"path": "internal/tx/validate.go", "symbols": ["CheckSigningPubKey"]},
+                {"path": "internal/tx/engine/preflight.go", "symbols": ["Engine.verifySignatures"]},
                 {"path": "internal/tx/sign/signature.go", "symbols": ["VerifySignature"]},
             ],
             "oracle": [
@@ -545,7 +552,7 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         manifest = json.loads(read(manifest_path))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid v4 conformance manifest: {exc}") from exc
-    if manifest.get("schema") != 4 or manifest.get("fixture_version") != "v4":
+    if manifest.get("schema") not in (4, 5) or manifest.get("fixture_version") != "v4":
         raise ValueError("unexpected v4 conformance manifest schema or fixture version")
     if manifest.get("oracle_repository") != ORACLE_REPOSITORY:
         raise ValueError("v4 conformance manifest repository differs from pinned oracle")
@@ -562,6 +569,8 @@ def parse_v4_corpus(repo: Path) -> dict[str, Any]:
         "scripts/oracle/record-v4.py", "scripts/oracle/record-v4.sh",
         "scripts/oracle/strict-corpus-config.json", "scripts/oracle/strict_recorder.cpp",
     }
+    if manifest["schema"] == 5:
+        expected_sources.add("internal/testutil/rippled/pin.env")
     if set(sources) != expected_sources:
         raise ValueError("v4 conformance manifest recorder source inventory is incomplete")
     for name, checksum in sources.items():
@@ -665,11 +674,9 @@ def parse_go_transaction_types(repo: Path) -> tuple[dict[int, dict[str, Any]], l
             "code": int(match.group(2), 0),
             "go_const": f"Type{match.group(1)}",
         }
-    for match in re.finditer(
-        r"(?m)^\s*case\s+TxType(\w+)\s*:\s*\n\s*return\s+\"([^\"]+)\"", text
-    ):
-        if match.group(1) in constants:
-            constants[match.group(1)]["name"] = match.group(2)
+    for match in re.finditer(r'(?m)^\s*"([^"]+)"\s*:\s*TxType(\w+),', text):
+        if match.group(2) in constants:
+            constants[match.group(2)]["name"] = match.group(1)
     by_code: dict[int, dict[str, Any]] = {}
     for suffix, value in constants.items():
         if "name" in value:
@@ -692,7 +699,7 @@ def parse_go_registrations(repo: Path) -> dict[int, dict[str, Any]]:
     for path in sorted((repo / "internal/tx").rglob("register.go")):
         text = read(path)
         for match in re.finditer(
-            r"tx\.Register\(tx\.(Type\w+),\s*func\(\) tx\.Transaction\s*\{\s*return &([A-Za-z_]\w*)\{",
+            r"tx\.Register\(tx\.Descriptor\{\s*Type:\s*tx\.(Type\w+),\s*New:\s*func\(\) tx\.Transaction\s*\{\s*return &([A-Za-z_]\w*)\{",
             text,
             re.S,
         ):
@@ -719,7 +726,7 @@ def parse_go_templates(repo: Path) -> dict[str, list[dict[str, str]]]:
         fields_body, _ = balanced(body, match.end() - 1, "{", "}")
         fields = []
         for field in re.finditer(
-            r'\{name:\s*"([^"]+)",\s*style:\s*soe(\w+)\}', fields_body
+            r'\{name:\s*"([^"]+)",\s*style:\s*soe(\w+)(?:,\s*mptSupported:\s*true)?\}', fields_body
         ):
             fields.append({"name": field.group(1), "style": STYLE_NAMES[field.group(2).title()]})
         templates[match.group(1)] = fields
@@ -1106,7 +1113,7 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
                     "validate": "typed Validate method" if "Validate" in row_methods else "embedded BaseTx.Validate",
                     "preflight": {
                         "common": True,
-                        "typed": [name for name in ["PreflightRules", "PreflightWithRules", "CheckExtraFeatures", "PreflightSigValidated"] if name in row_methods],
+                        "typed": [name for name in ["PreflightRules", "PreflightWithRules", "PreflightWithFlags", "CheckExtraFeatures", "PreflightSigValidated"] if name in row_methods],
                     },
                     "preclaim": "pseudo gate" if pseudo else ("typed Preclaim" if "Preclaim" in row_methods else "engine common checks only"),
                     "apply": "pseudo ApplyPseudo dispatch" if pseudo else "Appliable.Apply",
@@ -1215,7 +1222,7 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
             "go_only_contracts": [
                 {"path": "internal/tx/common_wire_coverage_test.go", "test": "TestCommonTemplateFieldsSurviveRegisteredTypedProjection", "scope": "all registered types × common fields; Go codec round-trip only"},
                 {"path": "internal/tx/template_registry_test.go", "test": "TestParseFromBinary_EveryRegisteredTypeAcceptsCommonFields", "scope": "registered type parsing; Go-only"},
-                {"path": "codec/binarycodec/definitions/final_inventory_test.go", "test": "TestFinalDefinitionsMatchRippled", "scope": "definitions registry against hash-pinned private v3.4.1 source; not engine execution"},
+                {"path": "codec/binarycodec/definitions/final_inventory_test.go", "test": "TestFinalDefinitionsMatchRippled", "scope": f"definitions registry against hash-pinned private v{ORACLE_TAG} source; not engine execution"},
             ],
             "oracle_source_contracts": [
                 {"path": TRANSACTION_MACRO, "scope": "transaction tags, codes, settings, unique fields"},
@@ -1228,14 +1235,14 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--oracle", type=Path, help="local rippled v3.4.1 oracle checkout")
+    parser.add_argument("--oracle", type=Path, help="local pinned rippled oracle checkout")
     parser.add_argument("--output", type=Path, help="inventory JSON output path")
     parser.add_argument("--check", action="store_true", help="fail if the checked-in snapshot is stale")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     oracle = args.oracle
     if oracle is None:
-        candidates = [parent / "rippled-worktrees/v3.4.1-oracle" for parent in (repo.parent, repo.parent.parent)]
+        candidates = [parent / PIN["ORACLE_CHECKOUT"] for parent in (repo.parent, repo.parent.parent)]
         oracle = next((path for path in candidates if path.is_dir()), candidates[0])
     output = args.output or repo / "scripts/engine-coverage/inventory.json"
     if not oracle.is_dir():

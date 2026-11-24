@@ -343,7 +343,7 @@ func setupStorage(
 			return nil, nil, fmt.Errorf("inspect rotating storage state: %w", err)
 		}
 		if cfg.NodeDB.IsOnlineDeleteEnabled() || hasRotationState {
-			store, err := kvpebble.NewRotating(nodestorePath, pebbleOptions)
+			store, err := kvpebble.NewRotatingWithCheck(nodestorePath, pebbleOptions, nodestore.VerifyFormat)
 			if err != nil {
 				return nil, nil, fmt.Errorf("rotating storage backend: %w", err)
 			}

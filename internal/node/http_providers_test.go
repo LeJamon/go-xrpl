@@ -186,20 +186,20 @@ func TestWirePeerHTTPProvidersBeforeOverlayListen(t *testing.T) {
 		cancel()
 		select {
 		case <-runDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("overlay did not stop")
 		}
 		require.NoError(t, o.Stop())
 	})
 	select {
 	case <-o.ListenerReady():
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay listener did not become ready")
 	}
 
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	t.Cleanup(transport.CloseIdleConnections)
-	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: progressTimeout}
 	getCrawl := func() map[string]any {
 		resp, err := client.Get("https://" + o.ListenAddr() + "/crawl")
 		require.NoError(t, err)

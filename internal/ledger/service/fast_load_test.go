@@ -320,7 +320,7 @@ func waitForVerificationSignal(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-signal:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for stored SHAMap verification")
 	}
 }
@@ -662,7 +662,7 @@ func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *tes
 	select {
 	case hash := <-validated:
 		require.Equal(t, replacementHash, hash)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("same-height validated-ledger replacement was not notified")
 	}
 	require.True(t, svc.GetValidatedLedger().IsValidated())
@@ -682,7 +682,7 @@ func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *tes
 	case event := <-events:
 		require.NotNil(t, event.Ledger)
 		require.Equal(t, replacementHash, event.Ledger.Hash())
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("same-height replacement was not published")
 	}
 
@@ -710,7 +710,7 @@ func TestService_FastLoadSameHeightSwitchRemainsProvisionalUntilValidated(t *tes
 		require.NotNil(t, event.Ledger)
 		require.Equal(t, childHash, event.Ledger.Hash())
 		require.Equal(t, replacementHash, event.Ledger.ParentHash())
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replacement child was not published")
 	}
 }
@@ -751,7 +751,7 @@ func TestService_VerifyStoredSHAMapRebalancesBelowRoot(t *testing.T) {
 		[][32]byte{rootChild},
 		4*storedSHAMapFrontierTasksPerWorker,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -765,8 +765,8 @@ func TestService_VerifyStoredSHAMapRebalancesBelowRoot(t *testing.T) {
 		},
 		started: make(chan struct{}),
 	}
-	svc.nodeStore = tracked
-	walkCtx, cancel := context.WithTimeout(ctx, time.Second)
+	svc.nodeStore = bindNodeStore(tracked)
+	walkCtx, cancel := context.WithTimeout(ctx, progressTimeout)
 	defer cancel()
 	err = svc.verifyStoredSHAMap(walkCtx, root, shamap.TypeState)
 	require.NoError(t, err, "peak concurrent fetches: %d", tracked.peakFetches())
@@ -777,7 +777,7 @@ func TestService_VerifyStoredSHAMapRebalancesBelowRoot(t *testing.T) {
 func TestService_VerifyStoredSHAMapUsesUncachedReads(t *testing.T) {
 	svc, db, root, expectedNodes, _ := newStoredVerificationFixture(t, shamap.BranchFactor)
 	tracked := &uncachedTrackingDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.config.FastLoadWorkers = 4
 	before := db.Stats()
 
@@ -842,7 +842,7 @@ func TestService_VerifyStoredSHAMapDoesNotSeedFailedProofs(t *testing.T) {
 		}
 		return raw.FetchDataUncached(t.Context(), nodestore.Hash256(root))
 	}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 
 	err := svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState)
 	require.ErrorContains(t, err, "invalid content hash")
@@ -853,7 +853,7 @@ func TestService_VerifyStoredSHAMapDoesNotSeedFailedProofs(t *testing.T) {
 func TestService_VerifyStoredSHAMapFallsBackToFetch(t *testing.T) {
 	svc, db, root, expectedNodes, _ := newStoredVerificationFixture(t, shamap.BranchFactor)
 	tracked := &fallbackTrackingDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.config.FastLoadWorkers = 4
 
 	require.NoError(t, svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState))
@@ -901,7 +901,7 @@ func TestService_VerifyStoredSHAMapUncachedReadsPreserveIntegrityChecks(t *testi
 				}
 				return test.rewrite(rootData)(hash, data)
 			}
-			svc.nodeStore = tracked
+			svc.nodeStore = bindNodeStore(tracked)
 			svc.config.FastLoadWorkers = 4
 
 			err = svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState)
@@ -1010,10 +1010,10 @@ func TestService_VerifyStoredSHAMapCancelsSaturatedWorkers(t *testing.T) {
 		expected:  4,
 		ready:     make(chan struct{}),
 	}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.config.FastLoadWorkers = 4
 
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	err = svc.verifyStoredSHAMap(ctx, root, shamap.TypeState)
 	require.ErrorIs(t, err, fetchErr)
@@ -1068,7 +1068,7 @@ func TestService_StoredSHAMapFrontierIsBounded(t *testing.T) {
 		[][32]byte{rootChild},
 		target,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1114,7 +1114,7 @@ func TestService_StoredSHAMapFrontierSplitsEveryRootBranch(t *testing.T) {
 		branches,
 		32,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1171,7 +1171,7 @@ func TestService_StoredSHAMapFrontierRedistributesUnusedCapacity(t *testing.T) {
 		branches,
 		target,
 		shamap.TypeState,
-		svc.nodeStore.Fetch,
+		svc.nodeStore.database().Fetch,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1334,7 +1334,7 @@ func TestService_VerifyStoredSHAMapRateLimitsProgressAndReportsCancellation(t *t
 		started:   make(chan struct{}),
 		release:   make(chan struct{}),
 	}
-	svc.nodeStore = blocked
+	svc.nodeStore = bindNodeStore(blocked)
 	capture, logger := newVerificationLogCapture()
 	svc.logger = logger.Named(xrpllog.PartitionLedger)
 	startedAt := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)
@@ -1359,7 +1359,7 @@ func TestService_VerifyStoredSHAMapRateLimitsProgressAndReportsCancellation(t *t
 	select {
 	case err := <-errs:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for canceled stored SHAMap verification")
 	}
 
@@ -1386,13 +1386,13 @@ func TestService_VerifyStoredSHAMapReportsTraversalFailure(t *testing.T) {
 	fetchErr := errors.New("read stored node")
 	release := make(chan struct{})
 	close(release)
-	svc.nodeStore = &blockingVerificationDatabase{
+	svc.nodeStore = bindNodeStore(&blockingVerificationDatabase{
 		Database: db,
 		root:     nodestore.Hash256(root),
 		started:  make(chan struct{}),
 		release:  release,
 		err:      fetchErr,
-	}
+	})
 	capture, logger := newVerificationLogCapture()
 	svc.logger = logger.Named(xrpllog.PartitionLedger)
 	startedAt := time.Date(2026, time.July, 27, 20, 0, 0, 0, time.UTC)

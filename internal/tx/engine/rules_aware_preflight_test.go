@@ -46,9 +46,12 @@ func (p *legacyDispatchProbe) PreflightRules(*amendment.Rules) error {
 
 func dispatchProbeBase(outer bool) *txcore.BaseTx {
 	base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+	base.SetSequence(5)
 	if outer {
 		base.Fee = "10"
-		base.Sequence = u32(5)
+	} else {
+		base.Fee = "0"
+		base.SetFlags(txcore.TfInnerBatchTxn)
 	}
 	return base
 }

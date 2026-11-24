@@ -222,13 +222,6 @@ func (e *Engine) SetBaseTxCount(count uint32) {
 	e.txCount.Store(count)
 }
 
-// adjustOwnerCountOnView modifies an account's OwnerCount on a LedgerView.
-// Used by the engine for tecOVERSIZE offer cleanup after the sandbox is discarded.
-// Reference: rippled removeUnfundedOffers() adjusts owner count on the base view.
-func adjustOwnerCountOnView(view txcore.LedgerView, account [20]byte, delta int) {
-	_ = txcore.AdjustOwnerCount(view, account, delta)
-}
-
 // deleteNFTokenOfferOnView deletes an NFTokenOffer from the ledger view,
 // removing it from owner directory, NFTBuys/NFTSells directory, and erasing the SLE.
 // Used for tecEXPIRED re-deletion of expired NFToken offers.
@@ -266,5 +259,5 @@ func deleteNFTokenOfferOnView(view txcore.LedgerView, offerKL keylet.Keylet) {
 	if err := view.Erase(offerKL); err != nil {
 		return
 	}
-	adjustOwnerCountOnView(view, offer.Owner, -1)
+	_ = txcore.AdjustOwnerCount(view, offer.Owner, -1)
 }

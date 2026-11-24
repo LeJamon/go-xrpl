@@ -6,7 +6,6 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
@@ -317,7 +316,7 @@ func TestNodeMemoryStorageFailureAndShutdownRelease(t *testing.T) {
 					require.Equal(t, stats.UsedBytes, account.Used)
 				}
 			}
-			require.NoError(t, runtime.shutdownWithin(5*time.Second))
+			require.NoError(t, runtime.shutdownWithin(progressTimeout))
 			require.Zero(t, runtime.memory.pool.Snapshot().Used)
 		})
 	}
@@ -340,8 +339,8 @@ func TestNodeMemoryStorageCloseErrorStillReturnsCommitment(t *testing.T) {
 	require.NoError(t, runtime.configureStorage())
 	closeErr := errors.New("close flush failed")
 	runtime.nodeStore = &memoryCloseErrorStore{Database: runtime.nodeStore, err: closeErr}
-	require.ErrorIs(t, runtime.shutdownWithin(5*time.Second), closeErr)
+	require.ErrorIs(t, runtime.shutdownWithin(progressTimeout), closeErr)
 	require.Zero(t, runtime.memory.pool.Snapshot().Used)
-	require.ErrorIs(t, runtime.shutdownWithin(5*time.Second), closeErr)
+	require.ErrorIs(t, runtime.shutdownWithin(progressTimeout), closeErr)
 	require.Zero(t, runtime.memory.pool.Snapshot().InvalidReleases)
 }

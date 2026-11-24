@@ -51,21 +51,15 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		if txParseErr != nil {
 			return nil, rpcerrors.RpcErrorInvalidTransaction(txParseErr.Error())
 		}
-		canonical, canonicalErr := binarycodec.DecodeBytesAllowOverCap(rawBlob)
+		canonicalBlobBytes := parsed.GetRawBytes()
+		if len(canonicalBlobBytes) == 0 {
+			return nil, rpcerrors.RpcErrorInvalidTransaction("parsed transaction has no canonical bytes")
+		}
+		canonical, canonicalErr := binarycodec.DecodeBytesAllowOverCap(canonicalBlobBytes)
 		if canonicalErr != nil {
 			return nil, rpcerrors.RpcErrorInvalidTransaction(canonicalErr.Error())
 		}
-		canonicalBlobHex, canonicalEncodeErr := binarycodec.Encode(canonical)
-		if canonicalEncodeErr != nil {
-			return nil, rpcerrors.RpcErrorInvalidTransaction(canonicalEncodeErr.Error())
-		}
-		canonicalBlob, canonicalDecodeErr := hex.DecodeString(canonicalBlobHex)
-		if canonicalDecodeErr != nil {
-			return nil, rpcInternalError("submit: canonical transaction decoding failed", canonicalDecodeErr)
-		}
-		if bindErr := tx.BindRawBytes(parsed, canonicalBlob); bindErr != nil {
-			return nil, rpcerrors.RpcErrorInvalidTransaction(bindErr.Error())
-		}
+		canonicalBlobHex := strings.ToUpper(hex.EncodeToString(canonicalBlobBytes))
 
 		signatureReason := sign.CheckSTTxSignature(parsed, transactionRulesForContext(ctx), true)
 		if signatureReason != "" {
@@ -80,7 +74,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			return nil, parseErr
 		}
 		txJsonMap = canonical
-		txBlobHex = strings.ToUpper(canonicalBlobHex)
+		txBlobHex = canonicalBlobHex
 		if marshaled, marshalErr := json.Marshal(txJsonMap); marshalErr != nil {
 			return nil, rpcInternalError("submit: decoded transaction marshaling failed", marshalErr)
 		} else {

@@ -233,7 +233,7 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 		if isGreater(*amt, balance) {
 			return ter.TecAMM_BALANCE
 		}
-		if result := requireAssetAuth(view, amtAsset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+		if result := mptutil.RequireAssetAuthAt(view, amtAsset, accountID, mptutil.WeakAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
 		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
@@ -241,11 +241,11 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 				return result
 			}
 		} else {
-			if assetFrozen(view, ammAccountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckFrozen(view, ammAccountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
-			if assetIndividuallyFrozen(view, accountID, amtAsset) {
-				return frozenAssetResult(amtAsset)
+			if result := mptutil.CheckIndividualFrozen(view, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 		return ter.TesSUCCESS
@@ -290,12 +290,18 @@ func (a *AMMWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 
 // Reference: rippled AMMWithdraw.cpp applyGuts
 func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	calculationComplete := false
+	withdrawalActive := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
-				result = ter.TecAMM_FAILED
-				return
+			if withdrawalActive && isAMMAmountOverflowPanic(recovered) {
+				if a.GetFlags()&(tfLPToken|tfWithdrawAll) != 0 {
+					result = ter.TecINTERNAL
+					return
+				}
+				if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+					result = ter.TecAMM_FAILED
+					return
+				}
 			}
 			panic(recovered)
 		}
@@ -387,6 +393,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 
 	// Handle different withdrawal modes
 	// Reference: rippled AMMWithdraw.cpp applyGuts()
+	withdrawalActive = true
 	switch {
 	case flags&tfLPToken != 0, flags&tfWithdrawAll != 0:
 		// Proportional withdrawal (equalWithdrawTokens)
@@ -720,10 +727,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				withdrawAmount1 = adjAmt
 			}
 		} else {
-			var amount2Ptr *tx.Amount
-			if !withdrawAmount2.IsZero() {
-				amount2Ptr = &withdrawAmount2
-			}
+			amount2Ptr := &withdrawAmount2
 			withdrawAmount1, amount2Ptr, lpTokensToRedeem = adjustAmountsByLPTokens(math,
 				assetBalance1, withdrawAmount1, amount2Ptr, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3)
 			if amount2Ptr != nil {
@@ -787,54 +791,30 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
-	isXRP1 := isXRPAsset(applyAsset1)
-	isXRP2 := isXRPAsset(applyAsset2)
-
 	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
-		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
-			return result
-		}
-	}
 
-	// All remaining operations mutate the transaction view. Keep overflow
-	// recovery limited to the calculation stage above so a post-transfer fault
-	// remains a normal apply exception and is rolled back by the engine.
-	calculationComplete = true
-	if isXRP1 && !withdrawAmount1.IsZero() {
-		// Convert to drops, handling IOU representation from calculations
-		drops := uint64(withdrawAmount1.Drops())
-		ammAccount.Balance -= drops
-		ctx.Account.Balance += drops
+	// Assets are sent in the order of the Amount field when present, so XRP
+	// sent second does not count toward the reserve check of the first asset.
+	sends := [2]struct {
+		asset  tx.Asset
+		amount tx.Amount
+	}{{applyAsset1, withdrawAmount1}, {applyAsset2, withdrawAmount2}}
+	if a.Amount != nil && !matchesAsset(a.Amount, applyAsset1) {
+		sends[0], sends[1] = sends[1], sends[0]
 	}
-	if isXRP2 && !withdrawAmount2.IsZero() {
-		// Convert to drops, handling IOU representation from calculations
-		drops := uint64(withdrawAmount2.Drops())
-		ammAccount.Balance -= drops
-		ctx.Account.Balance += drops
+	sendCount := len(sends)
+	if isSingleAssetWithdraw {
+		sendCount = 1
 	}
-
-	// For IOU transfers: check reserve if trust line creation is needed,
-	// then transfer tokens.
-	// Reference: rippled AMMWithdraw.cpp lines 581-647
-	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset1, withdrawAmount1, withdrawalOptions{}); result != ter.TesSUCCESS {
-			return result
-		}
-	}
-	if !isXRP2 && !withdrawAmount2.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset2, withdrawAmount2, withdrawalOptions{}); result != ter.TesSUCCESS {
+	for _, send := range sends[:sendCount] {
+		if isXRPAsset(send.asset) {
+			drops := uint64(send.amount.Drops())
+			ammAccount.Balance -= drops
+			ctx.Account.Balance += drops
+		} else if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, send.asset, send.amount, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -851,6 +831,22 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			return r
 		}
 	}
+	withdrawalActive = false
+
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	// NOTE: Asset balances are NOT stored in AMM entry
 	// They are updated by the balance transfers above:
 	// - XRP: via ammAccount.Balance -= drops
@@ -949,32 +945,37 @@ func withdrawAssetToAccount(
 		if result != ter.TesSUCCESS {
 			return result
 		}
-		if accountID != mptutil.Issuer(id) {
+		if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2) {
 			tokenKey := keylet.MPTokenByID(id, accountID)
 			exists, err := ctx.View.Exists(tokenKey)
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			if !exists && ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2) {
+			if !exists {
 				if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
 					return result
 				}
-				createFlags := uint32(0)
-				if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
-					if options.clawbackIssuer == nil || result != ter.TecNO_AUTH {
+				if accountID != mptutil.Issuer(id) {
+					createFlags := uint32(0)
+					if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+						if options.clawbackIssuer == nil || result != ter.TecNO_AUTH {
+							return result
+						}
+						if mptutil.Issuer(id) == *options.clawbackIssuer {
+							createFlags = entry.LsfMPTAuthorized
+						}
+					}
+					if result := mptutil.EnsureHolding(ctx.View, id, accountID, createFlags, true); result != ter.TesSUCCESS {
 						return result
 					}
-					if mptutil.Issuer(id) == *options.clawbackIssuer {
-						createFlags = entry.LsfMPTAuthorized
+					if accountID == ctx.AccountID {
+						ctx.SyncSenderOwnerCount()
 					}
 				}
-				if result := mptutil.EnsureHolding(ctx.View, id, accountID, createFlags, true); result != ter.TesSUCCESS {
-					return result
-				}
-				if accountID == ctx.AccountID {
-					ctx.SyncSenderOwnerCount()
-				}
 			}
+		}
+		if amount.IsZero() {
+			return ter.TesSUCCESS
 		}
 		return sendMPT(ctx.View, ammAccountID, accountID, amount, true)
 	}
@@ -997,17 +998,6 @@ func withdrawIOUToAccount(
 	amount tx.Amount,
 	options withdrawalOptions,
 ) ter.Result {
-	// When the withdrawer IS the issuer, no trust line is needed between them.
-	// Just debit the AMM's trust line (which is between AMM and issuer).
-	// Reference: rippled accountSend → rippleCredit handles issuer case by only
-	// adjusting the single AMM-issuer trust line.
-	if accountID == issuerID {
-		if err := debitAMMTrustline(ammAccountID, asset, amount, ctx.View, ctx.NumberContext()); err != nil {
-			return ammResultFromError(err, ter.TefINTERNAL)
-		}
-		return ter.TesSUCCESS
-	}
-
 	// Check if withdrawer already has a trust line for this IOU.
 	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
 	trustLineExists, err := ctx.View.Exists(trustLineKey)
@@ -1020,16 +1010,19 @@ func withdrawIOUToAccount(
 		if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
 			return result
 		}
-
-		// Create trust line for the withdrawer.
-		// Reference: rippled uses accountSend → rippleCredit → trustCreate
-		if result := createWithdrawTrustLine(ctx, accountID, issuerID, asset, amount); result != ter.TesSUCCESS {
+	}
+	if amount.IsZero() {
+		return ter.TesSUCCESS
+	}
+	if accountID != issuerID {
+		if !trustLineExists {
+			// Create trust line for the withdrawer.
+			// Reference: rippled uses accountSend → rippleCredit → trustCreate
+			if result := createWithdrawTrustLine(ctx, accountID, issuerID, asset, amount); result != ter.TesSUCCESS {
+				return result
+			}
+		} else if result := tx.RippleCreditWithNumberContext(ctx.View, issuerID, accountID, amount, ctx.NumberContext()); result != ter.TesSUCCESS {
 			return result
-		}
-	} else {
-		// Trust line exists — just credit the withdrawer's balance.
-		if err := updateTrustlineBalanceInView(accountID, issuerID, asset.Currency, amount, ctx.View, ctx.NumberContext()); err != nil {
-			return ammResultFromError(err, ter.TefINTERNAL)
 		}
 	}
 

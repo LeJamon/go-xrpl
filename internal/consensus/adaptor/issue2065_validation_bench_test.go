@@ -252,7 +252,7 @@ func BenchmarkIssue2065AdaptorValidationLatency(b *testing.B) {
 		var validation *consensus.Validation
 		select {
 		case validation = <-adaptor.signed:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			b.Fatal("real adaptor did not emit validation")
 		}
 		elapsed := time.Since(started)
@@ -264,17 +264,17 @@ func BenchmarkIssue2065AdaptorValidationLatency(b *testing.B) {
 		require.NotNil(b, closed)
 		require.Eventually(b, func() bool {
 			return delayed.selectedHits.Load() > beforeFetches
-		}, 5*time.Second, time.Millisecond,
+		}, progressTimeout, time.Millisecond,
 			"successor replay must traverse the delayed account path")
 		require.Eventually(b, func() bool {
 			exists, err := base.ledgerService.OpenLedgerHasTx(offerHashes[round])
 			return err == nil && exists
-		}, 5*time.Second, time.Millisecond,
+		}, progressTimeout, time.Millisecond,
 			"successor OfferCreate was not replayed")
 		require.Eventually(b, func() bool {
 			round, ok := engine.CurrentRound()
 			return ok && round.Seq == validation.LedgerSeq+1
-		}, 5*time.Second, time.Millisecond,
+		}, progressTimeout, time.Millisecond,
 			"engine did not advance to the next round")
 	}
 	issue2065ReportValidationQuantiles(b, samples)

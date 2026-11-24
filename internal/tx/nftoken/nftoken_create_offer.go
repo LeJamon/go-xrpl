@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -133,91 +134,115 @@ func (n *NFTokenCreateOffer) Preclaim(view tx.ReadOnlyLedgerView, config tx.Engi
 
 	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
 	ownerID := accountID
+	var buyOfferOwner *[20]byte
 	if !isSellOffer {
 		ownerID, err = state.DecodeAccountID(n.Owner)
 		if err != nil {
 			return ter.TemINVALID
 		}
+		buyOfferOwner = &ownerID
 	}
 	if _, _, _, found := findToken(view, ownerID, tokenID); !found {
 		return ter.TecNO_ENTRY
 	}
 
+	token := offerToken{
+		issuer:      getNFTIssuer(tokenID),
+		flags:       getNFTFlagsFromID(tokenID),
+		transferFee: getNFTTransferFee(tokenID),
+	}
+	return tokenOfferCreatePreclaim(view, config, accountID, token, n.Amount, n.Destination, buyOfferOwner)
+}
+
+type offerToken struct {
+	issuer      [20]byte
+	flags       uint16
+	transferFee uint16
+}
+
+func tokenOfferCreatePreclaim(
+	view tx.ReadOnlyLedgerView,
+	config tx.EngineConfig,
+	accountID [20]byte,
+	token offerToken,
+	amount tx.Amount,
+	destination string,
+	buyOfferOwner *[20]byte,
+) ter.Result {
 	rules := config.RequireRules()
-	nftFlags := getNFTFlagsFromID(tokenID)
-	nftIssuerID := getNFTIssuer(tokenID)
 	var iouIssuerID [20]byte
 
-	if !n.Amount.IsNative() {
-		iouIssuerID, err = state.DecodeAccountID(n.Amount.Issuer)
+	if !amount.IsNative() {
+		var err error
+		iouIssuerID, err = state.DecodeAccountID(amount.Issuer)
 		if err != nil {
 			return ter.TemINVALID
 		}
 
-		if nftFlags&NFTokenFlagTrustLine == 0 && getNFTTransferFee(tokenID) != 0 {
-			issuerExists, _ := view.Exists(keylet.Account(nftIssuerID))
+		if token.flags&NFTokenFlagTrustLine == 0 && token.transferFee != 0 {
+			issuerExists, _ := view.Exists(keylet.Account(token.issuer))
 			if !issuerExists {
 				return ter.TecNO_ISSUER
 			}
 
 			if rules.Enabled(amendment.FeatureNFTokenMintOffer) {
-				if nftIssuerID != iouIssuerID {
-					trustLineData, err := view.Read(keylet.Line(nftIssuerID, iouIssuerID, n.Amount.Currency))
+				if token.issuer != iouIssuerID {
+					trustLineData, err := view.Read(keylet.Line(token.issuer, iouIssuerID, amount.Currency))
 					if err != nil || trustLineData == nil {
 						return ter.TecNO_LINE
 					}
 				}
 			} else {
-				trustLineExists, _ := view.Exists(keylet.Line(nftIssuerID, iouIssuerID, n.Amount.Currency))
+				trustLineExists, _ := view.Exists(keylet.Line(token.issuer, iouIssuerID, amount.Currency))
 				if !trustLineExists {
 					return ter.TecNO_LINE
 				}
 			}
 
-			if tx.IsGlobalFrozen(view, n.Amount.Issuer) || tx.IsTrustlineFrozen(view, nftIssuerID, iouIssuerID, n.Amount.Currency) {
+			if tx.IsGlobalFrozen(view, amount.Issuer) || tx.IsTrustlineFrozen(view, token.issuer, iouIssuerID, amount.Currency) {
 				return ter.TecFROZEN
 			}
 		}
 	}
 
-	if nftIssuerID != accountID && nftFlags&NFTokenFlagTransferable == 0 {
-		issuerAccount, err := tx.ReadAccountRoot(view, nftIssuerID)
-		if err != nil || issuerAccount == nil || issuerAccount.NFTokenMinter != n.Account {
+	if token.issuer != accountID && token.flags&NFTokenFlagTransferable == 0 {
+		issuerAccount, err := tx.ReadAccountRoot(view, token.issuer)
+		if err != nil || issuerAccount == nil || issuerAccount.NFTokenMinter != state.EncodeAccountIDSafe(accountID) {
 			return ter.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
 	}
 
-	if !n.Amount.IsNative() && !(rules.Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == iouIssuerID) &&
-		(tx.IsGlobalFrozen(view, n.Amount.Issuer) || tx.IsTrustlineFrozen(view, accountID, iouIssuerID, n.Amount.Currency)) {
+	if !amount.IsNative() && !(rules.Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == iouIssuerID) &&
+		(tx.IsGlobalFrozen(view, amount.Issuer) || tx.IsTrustlineFrozen(view, accountID, iouIssuerID, amount.Currency)) {
 		return ter.TecFROZEN
 	}
 
-	if !isSellOffer {
-		funds := tx.AccountFunds(view, accountID, n.Amount, true, config.ReserveBase, config.ReserveIncrement)
+	if buyOfferOwner != nil {
+		funds := mptutil.AccountFunds(view, accountID, amount, true, config.ReserveBase, config.ReserveIncrement)
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER
 		}
 	}
 
-	if n.Destination != "" {
-		destinationID, err := state.DecodeAccountID(n.Destination)
+	if destination != "" {
+		destinationID, err := state.DecodeAccountID(destination)
 		if err != nil {
 			return ter.TemINVALID
 		}
-		destination, err := tx.ReadAccountRoot(view, destinationID)
+		destAccount, err := tx.ReadAccountRoot(view, destinationID)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		if destination == nil {
+		if destAccount == nil {
 			return ter.TecNO_DST
 		}
-		if destination.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+		if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
 			return ter.TecNO_PERMISSION
 		}
 	}
 
-	if n.Owner != "" {
-		ownerAccount, err := tx.ReadAccountRoot(view, ownerID)
+	if buyOfferOwner != nil {
+		ownerAccount, err := tx.ReadAccountRoot(view, *buyOfferOwner)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -229,10 +254,8 @@ func (n *NFTokenCreateOffer) Preclaim(view tx.ReadOnlyLedgerView, config tx.Engi
 		}
 	}
 
-	if !n.Amount.IsNative() && rules.Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
-		if result := checkNFTTrustlineAuthorized(view, accountID, n.Amount.Currency, iouIssuerID); result != ter.TesSUCCESS {
-			return result
-		}
+	if !amount.IsNative() && rules.Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
+		return checkNFTTrustlineAuthorized(view, accountID, amount.Currency, iouIssuerID)
 	}
 
 	return ter.TesSUCCESS

@@ -23,19 +23,10 @@ const (
 	pathSeparatorByte = 0xFF
 )
 
-// serializePathCurrency serializes a currency code for use in path steps.
-// Unlike serializeIssuedCurrencyCode, this allows "XRP" which serializes to 20 zero bytes.
-func serializePathCurrency(currency string) ([]byte, error) {
-	if currency == "XRP" {
-		return make([]byte, 20), nil
-	}
-	return serializeIssuedCurrencyCode(currency)
-}
-
 // PathSet is the binary codec for the PathSet field type — the set of payment
 // paths carried by a Payment transaction.
 type PathSet struct {
-	skipJSONArrayLimit bool
+	source fieldSource
 }
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.
@@ -67,7 +58,7 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 
 	// rippled caps each inner path (STI_PATHSET) at maxSTParsedJSONArraySize as
 	// well as the outer array; the outer array is capped by checkJSONArraySize.
-	if !p.skipJSONArrayLimit {
+	if p.source != trustedFields {
 		for i, path := range outer {
 			if inner, ok := path.([]any); ok && len(inner) > MaxJSONArrayElements {
 				return nil, &JSONArrayTooLargeError{Field: fmt.Sprintf("Paths[%d]", i)}
@@ -79,7 +70,7 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 		return nil, ErrInvalidPathSet
 	}
 
-	return newPathSet(outer)
+	return p.newPathSet(outer)
 }
 
 // ToJSON decodes a path set from a binary representation using a provided binary parser, then translates it to a JSON representation.
@@ -182,7 +173,7 @@ const pathStepMaxLen = 1 + 20 + 24 + 20
 
 // newPathStep creates a path step from a map representation.
 // It generates a byte array representation of the path step, encoding account, currency, and issuer information as appropriate.
-func newPathStep(v map[string]any) ([]byte, error) {
+func (p PathSet) newPathStep(v map[string]any) ([]byte, error) {
 	out := make([]byte, 1, pathStepMaxLen)
 	dataType := 0x00
 
@@ -222,7 +213,7 @@ func newPathStep(v map[string]any) ([]byte, error) {
 		if !ok {
 			return nil, errors.New("path step: currency is not a string")
 		}
-		currency, err := serializePathCurrency(curr)
+		currency, err := encodeCurrencyCode(p.source.currencyText(curr))
 		if err != nil {
 			return nil, fmt.Errorf("path step: currency %q: %w", curr, err)
 		}
@@ -248,7 +239,7 @@ func newPathStep(v map[string]any) ([]byte, error) {
 
 // newPath constructs a path from a slice of path steps.
 // It generates a byte array representation of the path, encoding each path step in turn.
-func newPath(v []any) ([]byte, error) {
+func (p PathSet) newPath(v []any) ([]byte, error) {
 	if len(v) == 0 {
 		return nil, ErrInvalidPathSet
 	}
@@ -258,7 +249,7 @@ func newPath(v []any) ([]byte, error) {
 		if !ok {
 			return nil, errors.New("path: step is not a map[string]any")
 		}
-		encoded, err := newPathStep(stepMap)
+		encoded, err := p.newPathStep(stepMap)
 		if err != nil {
 			return nil, err
 		}
@@ -269,7 +260,7 @@ func newPath(v []any) ([]byte, error) {
 
 // newPathSet constructs a path set from a slice of paths.
 // It generates a byte array representation of the path set, encoding each path and adding path separators as appropriate.
-func newPathSet(v []any) ([]byte, error) {
+func (p PathSet) newPathSet(v []any) ([]byte, error) {
 	if len(v) == 0 {
 		return []byte{pathsetEndByte}, nil
 	}
@@ -279,7 +270,7 @@ func newPathSet(v []any) ([]byte, error) {
 		if !ok {
 			return nil, errors.New("path set: path is not a []any")
 		}
-		encoded, err := newPath(inner)
+		encoded, err := p.newPath(inner)
 		if err != nil {
 			return nil, err
 		}

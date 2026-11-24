@@ -214,9 +214,14 @@ func amountPartsFromString(number string) (amountNumberParts, error) {
 	parts := amountNumberParts{negative: m[1] == "-"}
 
 	digits := m[2]
+	fractionExponent := int64(0)
 	if m[4] != "" {
 		digits += m[4]
-		parts.exponent = -len(m[4])
+		fractionLength := int64(len(m[4]))
+		if fractionLength > math.MaxInt32 {
+			return amountNumberParts{}, fmt.Errorf("'%s' is not a number", number)
+		}
+		fractionExponent = -fractionLength
 	}
 	mantissa, err := strconv.ParseUint(digits, 10, 64)
 	if err != nil {
@@ -225,16 +230,23 @@ func amountPartsFromString(number string) (amountNumberParts, error) {
 	parts.mantissa = mantissa
 
 	if m[7] != "" {
-		exp, err := strconv.Atoi(m[7])
+		// rippled parses the exponent with a signed 32-bit int. Keep that
+		// boundary independent of the host's int width, then combine it with
+		// a fractional exponent before narrowing to the local representation.
+		exp, err := strconv.ParseInt(m[7], 10, 32)
 		if err != nil {
 			return amountNumberParts{}, fmt.Errorf("'%s' is not a number", number)
 		}
 		if m[6] == "-" {
-			parts.exponent -= exp
-		} else {
-			parts.exponent += exp
+			exp = -exp
 		}
+		combined := fractionExponent + exp
+		if combined < math.MinInt32 || combined > math.MaxInt32 {
+			return amountNumberParts{}, fmt.Errorf("'%s' is not a number", number)
+		}
+		fractionExponent = combined
 	}
+	parts.exponent = int(fractionExponent)
 
 	return parts, nil
 }

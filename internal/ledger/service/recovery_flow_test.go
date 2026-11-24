@@ -212,7 +212,7 @@ func TestRecoveryStateWalkLeavesTransactionCapacityAndBackgroundYields(t *testin
 	require.NoError(t, err)
 	defer releaseState()
 	require.Equal(t, 1, workers)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	workers, _, releaseTx, err := svc.acquireReplayWorkspace(ctx, shamap.TypeTransaction)
 	require.NoError(t, err, "transaction verification starved behind state scan")

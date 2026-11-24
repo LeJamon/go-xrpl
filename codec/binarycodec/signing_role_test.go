@@ -49,6 +49,26 @@ func sha512HalfHex(payload string) string {
 	return strings.ToUpper(hex.EncodeToString(hash[:32]))
 }
 
+func TestDecodedSigningFieldsKeepReservedAmountCurrency(t *testing.T) {
+	const wire = "6180000000000000000000000000000000000000000000000000000001" + roleSuffix
+	fields, err := Decode(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EncodeForSigning(fields); err == nil {
+		t.Fatal("accepted rendered noCurrency as JSON input")
+	}
+	single, err := EncodeDecodedSigningFields(fields, nil, TransactionRole, false)
+	if err != nil || single != "53545800"+wire {
+		t.Fatalf("single signing preimage = %s, %v", single, err)
+	}
+	signer := roleAccount
+	multi, err := EncodeDecodedSigningFields(fields, &signer, TransactionRole, false)
+	if err != nil || multi != "534D5400"+wire+"7300"+roleSuffix {
+		t.Fatalf("multisigning preimage = %s, %v", multi, err)
+	}
+}
+
 func TestEncodeForSigningRolePrefixesAndPreimages(t *testing.T) {
 	t.Parallel()
 

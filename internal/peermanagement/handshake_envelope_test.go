@@ -491,7 +491,7 @@ func TestOutboundResourceAdmissionPrecedesDial(t *testing.T) {
 	go func() { done <- o.Run(ctx) }()
 	select {
 	case <-o.ListenerReady():
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not become ready")
 	}
 
@@ -514,7 +514,7 @@ func TestOutboundResourceAdmissionPrecedesDial(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay Run did not stop")
 	}
 }

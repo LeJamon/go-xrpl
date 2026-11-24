@@ -833,7 +833,7 @@ func TestPeerStopCancelsLifecycleBeforeJoiningEngineWork(t *testing.T) {
 	})
 	select {
 	case <-workStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("engine work did not start")
 	}
 
@@ -844,7 +844,7 @@ func TestPeerStopCancelsLifecycleBeforeJoiningEngineWork(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		releaseWork.Do(func() { close(workReleased) })
 		select {
 		case <-stopDone:
