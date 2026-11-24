@@ -4,6 +4,7 @@ package permissioneddex
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/stretchr/testify/require"
 )
 
 // usdPath returns a path through the USD order book (equivalent to rippled's path(~USD)).
@@ -2117,5 +2120,117 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 			requireDirectoryMembership(t, env, dir, offerKey, false)
 		}
 		jtx.RequireOwnerCount(t, env, dex.Bob, ownerCount-1)
+	}
+}
+
+func TestPermissionedDEX_HybridOfferWithEmptyAdditionalBooks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fixed bool
+	}{
+		{"before-fixCleanup3_1_3", false},
+		{"with-fixCleanup3_1_3", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if tc.fixed {
+				env.EnableFeature("fixCleanup3_1_3")
+			} else {
+				env.DisableFeature("fixCleanup3_1_3")
+			}
+			dex := SetupPermissionedDEX(t, env)
+			key := keylet.Offer(dex.Bob.ID, env.Seq(dex.Bob))
+			jtx.RequireTxSuccess(t, env.Submit(offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
+				DomainID(dex.DomainID).Hybrid().Build()))
+			env.Close()
+
+			raw, err := env.Ledger().Read(key)
+			require.NoError(t, err)
+			var offer entry.Offer
+			require.NoError(t, offer.Decode(raw))
+			offer.SetAdditionalBooks([]any{})
+			raw, err = offer.Encode()
+			require.NoError(t, err)
+			require.NoError(t, env.Ledger().Update(key, raw))
+
+			result := env.Submit(paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(10)).
+				Paths(usdPath(dex.GW)).SendMax(jtx.XRPTxAmount(10_000_000)).DomainID(dex.DomainIDHex).Build())
+			if tc.fixed {
+				jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
+			} else {
+				jtx.RequireTxSuccess(t, result)
+			}
+		})
+	}
+}
+
+func TestPermissionedDEX_OutOfDomainOffersRemovedInBookOrder(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func(dex *PermissionedDEXEnv) tx.Transaction
+	}{
+		{
+			name: "payment",
+			build: func(dex *PermissionedDEXEnv) tx.Transaction {
+				return paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(1)).
+					SendMax(jtx.XRPTxAmount(10_000_000)).
+					Paths(usdPath(dex.GW)).
+					DomainID(dex.DomainIDHex).Build()
+			},
+		},
+		{
+			name: "offer",
+			build: func(dex *PermissionedDEXEnv) tx.Transaction {
+				return offerBuilder.OfferCreate(dex.Alice, dex.USD(1), jtx.XRPTxAmount(3_000_000)).
+					DomainID(dex.DomainID).Build()
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			dex := SetupPermissionedDEX(t, env)
+
+			devin := jtx.NewAccount("devin")
+			env.FundAmount(devin, uint64(jtx.XRP(100000)))
+			env.Close()
+			env.Trust(devin, dex.USD(1000))
+			env.Close()
+			jtx.RequireTxSuccess(t, env.Submit(paymentBuilder.PayIssued(dex.GW, devin, dex.USD(100)).Build()))
+			jtx.RequireTxSuccess(t, env.Submit(cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).Build()))
+			env.Close()
+			jtx.RequireTxSuccess(t, env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build()))
+			env.Close()
+			env.CreateTickets(devin, 30)
+			env.Close()
+			for i := range 33 {
+				jtx.RequireTxSuccess(t, env.Submit(offerBuilder.OfferCreate(devin, jtx.XRPTxAmount(int64(1_000_000+i*1000)), dex.USD(1)).
+					DomainID(dex.DomainID).Build()))
+			}
+			jtx.RequireTxSuccess(t, env.Submit(offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(3_000_000), dex.USD(1)).
+				DomainID(dex.DomainID).Build()))
+			jtx.RequireTxSuccess(t, env.Submit(cred.CredentialDeleteHex(dex.DomainOwner, devin, dex.DomainOwner, dex.CredType).Build()))
+			env.Close()
+			jtx.RequireOwnerCount(t, env, devin, 64)
+
+			result := env.Submit(tc.build(dex))
+			jtx.RequireTxSuccess(t, result)
+			jtx.RequireOwnerCount(t, env, devin, 31)
+
+			nodes := make(map[uint64]tx.AffectedNode)
+			for page := uint64(1); page <= 2; page++ {
+				key := keylet.OwnerDirPage(devin.ID, page).Key
+				for _, n := range result.Metadata.AffectedNodes {
+					if n.LedgerIndex == strings.ToUpper(hex.EncodeToString(key[:])) {
+						nodes[page] = n
+					}
+				}
+			}
+			require.Equal(t, "DeletedNode", nodes[1].NodeType)
+			require.Equal(t, "2", nodes[1].FinalFields["IndexNext"])
+			require.Empty(t, nodes[1].PreviousFields)
+			require.Equal(t, "DeletedNode", nodes[2].NodeType)
+			require.Equal(t, map[string]any{"IndexPrevious": "1"}, nodes[2].PreviousFields)
+		})
 	}
 }
