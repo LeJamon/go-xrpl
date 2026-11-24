@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	rpcpathfind "github.com/LeJamon/go-xrpl/internal/rpc/pathfind"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -13,7 +14,6 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // PathFindSession holds the state for a persistent WebSocket path_find session.
@@ -106,96 +106,10 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	var srcCurrencies []payment.Issue
 	sourceCurrenciesRaw, hasSourceCurrencies := fields["source_currencies"]
 	if hasSourceCurrencies {
-		var entries []json.RawMessage
-		if err := json.Unmarshal(sourceCurrenciesRaw, &entries); err != nil || len(entries) == 0 || len(entries) > 18 {
-			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-		}
-		var sendMaxIssue payment.Issue
-		if sendMax != nil {
-			sendMaxIssue = payment.GetIssue(*sendMax)
-		}
-		seen := make(map[payment.Issue]bool)
-		add := func(issue payment.Issue) {
-			if !seen[issue] {
-				seen[issue] = true
-				srcCurrencies = append(srcCurrencies, issue)
-			}
-		}
-
-		for _, raw := range entries {
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &fields); err != nil {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-			rawCurrency, hasCurrency := fields["currency"]
-			rawMPT, hasMPT := fields["mpt_issuance_id"]
-			if hasCurrency == hasMPT {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-			if hasMPT {
-				var value string
-				if err := json.Unmarshal(rawMPT, &value); err != nil {
-					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-				}
-				mptID, ok := pathfinder.ParseSourceMPTID(value)
-				if !ok {
-					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-				}
-				if _, hasIssuer := fields["issuer"]; hasIssuer {
-					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-				}
-				issue := payment.NewMPTIssue(mptID)
-				if sendMax != nil {
-					if !issue.Equal(sendMaxIssue) {
-						continue
-					}
-					if sendMaxIssue.Issuer != srcAccount {
-						return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-					}
-				}
-				add(issue)
-				continue
-			}
-
-			var currency string
-			if err := json.Unmarshal(rawCurrency, &currency); err != nil || !keylet.IsValidCurrencyCode(currency) {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-			if keylet.CurrencyBytes(currency) == [20]byte{} {
-				currency = "XRP"
-			}
-			var issuer [20]byte
-			if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
-				var issuerString string
-				if err := json.Unmarshal(rawIssuer, &issuerString); err != nil {
-					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-				}
-				issuerID, decErr := state.DecodeAccountID(issuerString)
-				if decErr != nil {
-					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-				}
-				issuer = issuerID
-			}
-			if currency == "XRP" {
-				if issuer != [20]byte{} {
-					return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-				}
-			} else if issuer == [20]byte{} {
-				issuer = srcAccount
-			}
-
-			if sendMax != nil {
-				if sendMaxIssue.IsMPT || currency != sendMaxIssue.Currency {
-					continue
-				}
-				if issuer != srcAccount && sendMaxIssue.Issuer != srcAccount && issuer != sendMaxIssue.Issuer {
-					return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-				}
-				if issuer == srcAccount && sendMaxIssue.Issuer != srcAccount {
-					issuer = sendMaxIssue.Issuer
-				}
-			}
-			add(payment.Issue{Currency: currency, Issuer: issuer})
+		var rpcErr *rpcerrors.RpcError
+		srcCurrencies, rpcErr = rpcpathfind.ParseSourceCurrencies(sourceCurrenciesRaw, srcAccount, sendMax)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
 	}
 

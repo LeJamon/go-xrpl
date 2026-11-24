@@ -79,7 +79,7 @@ func TestPathFindMPTSourceRejectsConflictingMembers(t *testing.T) {
 		want             string
 	}{
 		{`[{"mpt_issuance_id":"` + rpcMPTID + `","currency":null}]`, "srcCurMalformed"},
-		{`[{"mpt_issuance_id":"` + rpcMPTID + `","issuer":null}]`, "srcIsrMalformed"},
+		{`[{"mpt_issuance_id":"` + rpcMPTID + `","issuer":null}]`, "srcCurMalformed"},
 	} {
 		_, rpcErr := parseSourceCurrencies(map[string]json.RawMessage{
 			"source_currencies": json.RawMessage(tc.sourceCurrencies),
