@@ -188,6 +188,7 @@ func TestAmountFromJSON_IOUErrors(t *testing.T) {
 		{"slash form without issuer", `"5/USD"`},
 		// Past the IOU range (max mantissa 9999999999999999 at exponent 80).
 		{"exponent overflow", iouJSON("1e97", "USD", testIssuer)},
+		{"combined exponent below int32", iouJSON("1.00e-2147483647", "USD", testIssuer)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -223,6 +224,7 @@ func TestAmountFromJSON_MPT(t *testing.T) {
 		{"bad issuance id", `{"mpt_issuance_id":"ABCD","value":"1"}`},
 		{"fractional mpt", `{"mpt_issuance_id":"` + testMPTID + `","value":"1.5"}`},
 		{"mpt out of range", `{"mpt_issuance_id":"` + testMPTID + `","value":"9223372036854775808"}`},
+		{"mpt zero exponent out of range", `{"mpt_issuance_id":"` + testMPTID + `","value":"0e2147483648"}`},
 	}
 	for _, tt := range errCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,6 +232,15 @@ func TestAmountFromJSON_MPT(t *testing.T) {
 				t.Fatalf("AmountFromJSON(%s): want error", tt.input)
 			}
 		})
+	}
+
+	zeroAtExponentLimit, err := AmountFromJSON(json.RawMessage(
+		`{"mpt_issuance_id":"` + testMPTID + `","value":"0e2147483647"}`))
+	if err != nil {
+		t.Fatalf("MPT zero at int32 exponent limit: %v", err)
+	}
+	if raw, ok := zeroAtExponentLimit.MPTRaw(); !ok || raw != 0 {
+		t.Fatalf("MPT zero at int32 exponent limit = %d/%v, want 0/true", raw, ok)
 	}
 }
 

@@ -216,9 +216,11 @@ func TestSerializedFieldParseMessageMPTObjectValidation(t *testing.T) {
 	}{
 		{name: "numeric value", value: json.Number("100"), valid: true},
 		{name: "maximum value", value: "9223372036854775807", valid: true},
+		{name: "zero at int32 exponent limit", value: "0e2147483647", valid: true},
 		{name: "numeric exponent", value: json.Number("1e2")},
 		{name: "fractional value", value: "1.5"},
 		{name: "out of range", value: "9223372036854775808"},
+		{name: "zero exponent outside int32", value: "0e2147483648"},
 		{name: "missing value", mutate: func(object map[string]any) { delete(object, "value") }},
 		{name: "mixed currency", value: "1e2", mutate: func(object map[string]any) { object["currency"] = "USD" }},
 		{name: "invalid identifier", value: "1e2", mutate: func(object map[string]any) {
