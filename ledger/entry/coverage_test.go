@@ -543,6 +543,7 @@ func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
 			if _, ok := input["Sponsor"]; !ok {
 				input["Sponsor"] = fxAccount
 			}
+			input["LedgerIndex"] = fxHash256
 			input["LedgerEntryType"] = name
 			canonical, err := binarycodec.EncodeBytes(input)
 			if err != nil {
