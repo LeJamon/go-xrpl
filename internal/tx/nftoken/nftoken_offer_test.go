@@ -2,6 +2,7 @@ package nftoken
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -9,6 +10,22 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+func TestOfferDirectoryResults(t *testing.T) {
+	ctx := &tx.ApplyContext{}
+	for _, tc := range []struct {
+		err  error
+		want ter.Result
+	}{
+		{state.ErrDirFull, ter.TecDIR_FULL},
+		{state.ErrMalformedDirectory, ter.TefEXCEPTION},
+		{errors.New("storage error"), ter.TefINTERNAL},
+	} {
+		if got := offerDirInsertError(ctx, "insert offer", tc.err); got != tc.want {
+			t.Errorf("%v: got %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}
 
 // insertSellOffer creates a sell-offer SLE for tokenID owned by owner and
 // links it into the owner directory and the NFTSells directory, mirroring the

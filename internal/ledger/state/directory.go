@@ -583,6 +583,9 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		if err != nil {
 			return nil, err
 		}
+		if pageData == nil {
+			return nil, fmt.Errorf("%w: root back-pointer broken", ErrMalformedDirectory)
+		}
 		node, err = ParseDirectoryNode(pageData)
 		if err != nil {
 			return nil, err
@@ -607,14 +610,14 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 			// (book) branch too, raising LogicError on a double insertion rather
 			// than silently corrupting the book. Reference: ApplyView.cpp:71-74.
 			if slices.Contains(node.Indexes, itemKey) {
-				return nil, fmt.Errorf("dirInsert: double insertion")
+				return nil, fmt.Errorf("%w: dirInsert: double insertion", ErrMalformedDirectory)
 			}
 			node.Indexes = append(node.Indexes, itemKey)
 		} else {
 			sortIndexes(node.Indexes)
 			pos := sortedSearch(node.Indexes, itemKey)
 			if pos < len(node.Indexes) && node.Indexes[pos] == itemKey {
-				return nil, fmt.Errorf("dirInsert: double insertion")
+				return nil, fmt.Errorf("%w: dirInsert: double insertion", ErrMalformedDirectory)
 			}
 			node.Indexes = append(node.Indexes, [32]byte{})
 			copy(node.Indexes[pos+1:], node.Indexes[pos:])

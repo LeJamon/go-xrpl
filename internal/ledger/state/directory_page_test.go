@@ -244,7 +244,7 @@ func TestDirInsert_SortsWithinPageAndRejectsDuplicate(t *testing.T) {
 	}
 
 	_, err := DirInsert(v, dir, itemKeyN(3), false, nil)
-	require.Error(t, err, "re-inserting an existing key must fail")
+	require.ErrorIs(t, err, ErrMalformedDirectory)
 	assert.Contains(t, err.Error(), "double insertion")
 }
 

@@ -245,5 +245,8 @@ func offerDirInsertError(ctx *tx.ApplyContext, op string, err error) ter.Result 
 	if errors.Is(err, state.ErrDirFull) {
 		return ter.TecDIR_FULL
 	}
+	if errors.Is(err, state.ErrMalformedDirectory) {
+		return ter.TefEXCEPTION
+	}
 	return ctx.Internal(op, err)
 }
