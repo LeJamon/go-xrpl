@@ -248,9 +248,6 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 		"destination", n.Destination,
 	)
 
-	accountID := ctx.AccountID
-
-	// Parse token ID
 	tokenIDBytes, err := hex.DecodeString(n.NFTokenID)
 	if err != nil || len(tokenIDBytes) != 32 {
 		return ter.TemINVALID
@@ -260,64 +257,5 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	copy(tokenID[:], tokenIDBytes)
 
 	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
-
-	// For buy offers, check the buyer has enough XRP for reserve but do NOT
-	// escrow/deduct the offer amount. NFToken buy offers are unfunded promises
-	// — the buyer's balance is only checked, not held.
-	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply — no balance deduction
-
-	sequence := n.GetCommon().SeqProxy()
-	offerKey := keylet.NFTokenOffer(accountID, sequence)
-
-	// Insert into owner's directory. The describe callback stamps sfOwner on
-	// a newly created owner-dir root/page (rippled describeOwnerDir, View.cpp:
-	// 1048); without it the SLE bytes (and CreatedNode NewFields) diverge.
-	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = accountID
-	})
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	ownerNode := dirResult.Page
-
-	// Insert into NFTSells or NFTBuys directory. rippled stamps the offer
-	// directory root with sfFlags (lsfNFTokenSellOffers/BuyOffers) and
-	// sfNFTokenID via the describe callback (NFTokenUtils.cpp:1059-1063).
-	var tokenDirKey keylet.Keylet
-	dirFlags := lsfNFTokenBuyOffers
-	if isSellOffer {
-		tokenDirKey = keylet.NFTSells(tokenID)
-		dirFlags = lsfNFTokenSellOffers
-	} else {
-		tokenDirKey = keylet.NFTBuys(tokenID)
-	}
-	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Flags = dirFlags
-		dir.NFTokenID = tokenID
-	})
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	offerNode := tokenDirResult.Page
-
-	// Serialize the offer with directory page numbers
-	offerData, err := serializeNFTokenOffer(n, accountID, tokenID, sequence, ownerNode, offerNode)
-	if err != nil {
-		return ctx.Internal("serializeNFTokenOffer", err)
-	}
-
-	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return ctx.Internal("insert NFTokenOffer", err)
-	}
-
-	ctx.Account.OwnerCount++
-
-	// The offer adds an owned object; charge its reserve against the pre-fee
-	// balance so the source can still dip into the reserve to pay the fee.
-	if r := ctx.CheckReserveWithFee(ctx.Account.OwnerCount); r != ter.TesSUCCESS {
-		return r
-	}
-
-	return ter.TesSUCCESS
+	return tokenOfferCreateApply(ctx, tokenID, n.GetCommon().SeqProxy(), n.Amount, n.Destination, n.Expiration, isSellOffer)
 }

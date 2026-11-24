@@ -180,67 +180,70 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 	return result, ter.TesSUCCESS
 }
 
-// tokenOfferCreateApply creates a sell offer for a newly minted NFToken.
-// This is the shared logic used by both NFTokenCreateOffer and NFTokenMint (with Amount).
-// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply
 func tokenOfferCreateApply(
 	ctx *tx.ApplyContext,
-	accountID [20]byte,
 	tokenID [32]byte,
-	amount *tx.Amount,
+	seqProxy uint32,
+	amount tx.Amount,
 	destination string,
 	expiration *uint32,
-	seqProxy uint32,
-	priorBalance uint64,
+	isSellOffer bool,
 ) ter.Result {
-	// Check reserve using priorBalance (balance before fee deduction)
-	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply line 1037
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
-		return ter.TecINSUFFICIENT_RESERVE
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+		return result
 	}
 
+	accountID := ctx.AccountID
 	offerKey := keylet.NFTokenOffer(accountID, seqProxy)
 
 	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
+	ownerDirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = accountID
 	})
 	if err != nil {
-		return ter.TefINTERNAL
+		return offerDirInsertError(ctx, "insert NFTokenOffer in owner directory", err)
 	}
-	ownerNode := dirResult.Page
 
-	// Insert into NFTSells directory (mint always creates sell offers). rippled
-	// stamps the offer directory root with sfFlags (lsfNFTokenSellOffers) and
-	// sfNFTokenID via the describe callback (NFTokenUtils.cpp:1059-1063).
-	tokenDirKey := keylet.NFTSells(tokenID)
+	var tokenDirKey keylet.Keylet
+	var dirFlags, offerFlags uint32
+	if isSellOffer {
+		tokenDirKey = keylet.NFTSells(tokenID)
+		dirFlags = lsfNFTokenSellOffers
+		offerFlags = lsfSellNFToken
+	} else {
+		tokenDirKey = keylet.NFTBuys(tokenID)
+		dirFlags = lsfNFTokenBuyOffers
+	}
 	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Flags = lsfNFTokenSellOffers
+		dir.Flags = dirFlags
 		dir.NFTokenID = tokenID
 	})
 	if err != nil {
-		return ter.TefINTERNAL
+		return offerDirInsertError(ctx, "insert NFTokenOffer in token directory", err)
 	}
-	offerNode := tokenDirResult.Page
-
-	flags := NFTokenCreateOfferFlagSellNFToken // Always a sell offer
 
 	offerData, err := serializeNFTokenOfferRaw(
 		accountID, tokenID,
-		amount.LedgerValue(), flags,
-		ownerNode, offerNode,
+		amount.LedgerValue(), offerFlags,
+		ownerDirResult.Page, tokenDirResult.Page,
 		destination, expiration,
 	)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("serializeNFTokenOffer", err)
 	}
 
 	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("insert NFTokenOffer", err)
 	}
 
 	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
+}
+
+func offerDirInsertError(ctx *tx.ApplyContext, op string, err error) ter.Result {
+	if errors.Is(err, state.ErrDirFull) {
+		return ter.TecDIR_FULL
+	}
+	return ctx.Internal(op, err)
 }
