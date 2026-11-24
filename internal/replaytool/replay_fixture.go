@@ -45,14 +45,6 @@ type validatedFixture struct {
 	Want      expectedBlock
 }
 
-func (f feesConfig) fees() (drops.Fees, error) {
-	return drops.Fees{
-		Base:      drops.XRPAmount(f.BaseFee),
-		Reserve:   drops.XRPAmount(f.ReserveBase),
-		Increment: drops.XRPAmount(f.ReserveIncrement),
-	}, nil
-}
-
 func loadValidatedFixture(ctx context.Context, dir string) (*validatedFixture, error) {
 	state := &stateFixture{}
 	if _, err := loadStrictJSON(filepath.Join(dir, "state.json"), state, "ledger_index", "account_hash", "entries"); err != nil {
@@ -162,10 +154,7 @@ func loadValidatedFixture(ctx context.Context, dir string) (*validatedFixture, e
 	if root != stateHash {
 		return nil, fmt.Errorf("seed state account_hash mismatch: computed %x, fixture %x", root, stateHash)
 	}
-	declaredFees, err := env.Fees.fees()
-	if err != nil {
-		return nil, fmt.Errorf("env fees: %w", err)
-	}
+	declaredFees := drops.Fees{Base: env.Fees.BaseFee, Reserve: env.Fees.ReserveBase, Increment: env.Fees.ReserveIncrement}
 	fees, err := feesFromStateMap(ctx, stateMap, declaredFees)
 	if err != nil {
 		return nil, fmt.Errorf("loading fixture fees: %w", err)

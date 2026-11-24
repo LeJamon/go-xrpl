@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -50,9 +51,9 @@ type envFixture struct {
 }
 
 type feesConfig struct {
-	BaseFee          int64 `json:"base_fee"`
-	ReserveBase      int64 `json:"reserve_base"`
-	ReserveIncrement int64 `json:"reserve_increment"`
+	BaseFee          drops.XRPAmount `json:"base_fee"`
+	ReserveBase      drops.XRPAmount `json:"reserve_base"`
+	ReserveIncrement drops.XRPAmount `json:"reserve_increment"`
 }
 
 type txsFixture struct {
