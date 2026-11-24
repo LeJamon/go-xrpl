@@ -21,7 +21,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - uses: golangci/golangci-lint-action@v9
         with:
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - uses: golangci/golangci-lint-action@v9
         with:
@@ -85,7 +85,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -103,7 +103,7 @@ jobs:
     name: Generate (drift check)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -145,7 +145,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Build versioned binary
         run: ./scripts/build.sh
@@ -208,7 +208,7 @@ jobs:
       GOARCH: "386"
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -274,7 +274,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Run PostgreSQL repository contract tests
         run: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
@@ -324,13 +324,13 @@ jobs:
           - group: libs
             race: "-race"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # The tx shard's descriptor and template tests read transactions.macro.
       - uses: ./.github/actions/oracle-pin
         if: matrix.group == 'libs' || matrix.group == 'tx'
       - name: Check out equivalent inventory sources (public rippled)
         if: matrix.group == 'libs' || matrix.group == 'tx'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
           ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
@@ -392,7 +392,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Install Conan
         run: pipx install conan==2.18.1
@@ -433,10 +433,10 @@ jobs:
     name: Test (final focused, repeated)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       - name: Check out equivalent inventory sources (public rippled)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
           ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
@@ -472,7 +472,7 @@ jobs:
       GOXRPL_ENGINE_SOAK_SECONDS: "10"
       EVIDENCE_DIR: /tmp/issue-2015-conformance-final
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       - name: Select pinned corpus
         run: printf 'GOXRPL_FIXTURES_DIR=%s\n' "$ORACLE_CORPUS" >> "$GITHUB_ENV"
@@ -566,7 +566,7 @@ jobs:
     name: Peer interop (rippled 3.3.0)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Run live handshake and manifest interop
         run: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
@@ -595,7 +595,7 @@ jobs:
       PEERTLS_VALIDATOR_LIST_INTEROP: "1"
       EVIDENCE_DIR: /tmp/issue-2017-peer-interop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
       - name: Select pinned oracle release
         run: printf 'PEERTLS_RIPPLED_VERSION=%s\nPEERTLS_RIPPLED_IMAGE=%s\n' "$ORACLE_TAG" "$ORACLE_IMAGE" >> "$GITHUB_ENV"
@@ -637,7 +637,7 @@ jobs:
         rippled-version: ["3.3.0", "3.2.0"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
@@ -690,7 +690,7 @@ jobs:
       - name: Initialize final evidence directory
         shell: bash
         run: mkdir -p "$EVIDENCE_DIR"
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/oracle-pin
 
       - name: Record Go checkout provenance
@@ -860,7 +860,7 @@ jobs:
       - consensus-smoke-final
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Collect producer evidence
         uses: actions/download-artifact@v8
         with:
