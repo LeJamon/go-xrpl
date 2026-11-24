@@ -3,8 +3,11 @@ package lending
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
+	"github.com/stretchr/testify/require"
 )
 
 func requireLoanNumberEqual(t *testing.T, got, want lmath.N, name string) {
@@ -55,5 +58,41 @@ func TestLoanOriginationMaximumUsesAccountingModel(t *testing.T) {
 	}
 	if loanOriginationExceedsVaultMaximumForRules(cash, vaultTotal, lmath.FromInt(101), nil) {
 		t.Fatal("cash-basis origination must not use interest to consume AssetsMaximum")
+	}
+}
+
+func TestCreditLoanPayment(t *testing.T) {
+	iou := tx.Asset{Currency: "USD"}
+	xrp := tx.Asset{Currency: "XRP"}
+	for _, tc := range []struct {
+		name                     string
+		asset                    tx.Asset
+		available, total         string
+		paid, totalDelta         string
+		want                     ter.Result
+		wantAvailable, wantTotal string
+	}{
+		{"available rounds back", iou, "10", "20", "1e-15", "0", ter.TecPRECISION_LOSS, "", ""},
+		{"positive delta rounds away", iou, "10", "20", "1", "1e-15", ter.TecPRECISION_LOSS, "", ""},
+		{"negative delta rounds away", iou, "10", "20", "1", "-1e-15", ter.TecPRECISION_LOSS, "", ""},
+		{"total changes without delta", xrp, "10", "20.25", "1", "0", ter.TecINTERNAL, "", ""},
+		{"unchanged available takes precedence", xrp, "10", "20.25", "0", "0", ter.TecPRECISION_LOSS, "", ""},
+		{"lost delta precedes excess available", iou, "20", "20", "1", "1e-15", ter.TecPRECISION_LOSS, "", ""},
+		{"available exceeds total", xrp, "20", "20", "1", "0", ter.TecINTERNAL, "", ""},
+		{"equal after rounding", iou, "9", "10", "1.000000000000001", "0", ter.TesSUCCESS, "10", "10"},
+		{"total decreases", xrp, "10", "20", "2", "-1", ter.TesSUCCESS, "12", "19"},
+		{"total increases", iou, "", "20", "2.25", "0.25", ter.TesSUCCESS, "2.25", "20.25"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vault.VaultLending{VaultInfo: vault.VaultInfo{Asset: tc.asset}, AssetsAvailable: tc.available, AssetsTotal: tc.total}
+			before := v
+			require.Equal(t, tc.want, creditLoanPayment(&v, lendNum(tc.paid), lendNum(tc.totalDelta), nil))
+			if tc.want != ter.TesSUCCESS {
+				require.Equal(t, before, v)
+				return
+			}
+			requireLoanNumberEqual(t, lendNum(v.AssetsAvailable), lendNum(tc.wantAvailable), "AssetsAvailable")
+			requireLoanNumberEqual(t, lendNum(v.AssetsTotal), lendNum(tc.wantTotal), "AssetsTotal")
+		})
 	}
 }

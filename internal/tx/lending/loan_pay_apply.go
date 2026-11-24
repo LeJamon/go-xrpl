@@ -297,12 +297,10 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 		return r
 	}
 
-	newAvailable := number(vinfo.AssetsAvailable).Add(toVaultRounded)
-	newTotal := number(vinfo.AssetsTotal).Add(accountingDeltas.assetsTotal)
-	if newAvailable.Cmp(newTotal) > 0 {
-		return ter.TecINTERNAL
+	if r := creditLoanPayment(vinfo, toVaultRounded, accountingDeltas.assetsTotal, ctx.Rules()); r != ter.TesSUCCESS {
+		return r
 	}
-	if r := vault.UpdateVaultTotals(ctx, vaultKey, numStr(newTotal), numStr(newAvailable), vinfo.LossUnrealized); r != ter.TesSUCCESS {
+	if r := vault.UpdateVaultTotals(ctx, vaultKey, vinfo.AssetsTotal, vinfo.AssetsAvailable, vinfo.LossUnrealized); r != ter.TesSUCCESS {
 		return r
 	}
 
@@ -333,6 +331,26 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 		return r
 	}
 	ctx.SyncSenderOwnerCount()
+	return ter.TesSUCCESS
+}
+
+func creditLoanPayment(v *vault.VaultLending, paid, totalDelta lmath.N, rules *amendment.Rules) ter.Result {
+	integral := assetIntegral(v.Asset)
+	availableBefore := lendNumForRules(v.AssetsAvailable, rules)
+	totalBefore := lendNumForRules(v.AssetsTotal, rules)
+	availableAfter := availableBefore.Add(paid).RoundToAsset(integral)
+	totalAfter := totalBefore.Add(totalDelta).RoundToAsset(integral)
+	totalUnchanged := totalAfter.Equal(totalBefore)
+
+	switch {
+	case availableAfter.Equal(availableBefore), !totalDelta.IsZero() && totalUnchanged:
+		return ter.TecPRECISION_LOSS
+	case totalDelta.IsZero() && !totalUnchanged, availableAfter.Cmp(totalAfter) > 0:
+		return ter.TecINTERNAL
+	}
+
+	v.AssetsAvailable = numStr(availableAfter)
+	v.AssetsTotal = numStr(totalAfter)
 	return ter.TesSUCCESS
 }
 

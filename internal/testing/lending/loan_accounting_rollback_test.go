@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -33,6 +34,36 @@ func accountingLoanPay(t *testing.T, f *loanSetAssetFixture, loanID string, amou
 func assertAccountingEntriesEqual(t *testing.T, name string, want, got map[string]any) {
 	t.Helper()
 	require.Equal(t, want, got, "%s changed", name)
+}
+
+func TestLoanPayUnexpectedRoundedTotalRollsBack(t *testing.T) {
+	f := newAccountingAssetFixture(t, false, true, "MPT")
+	loanID, loanKey := createMatrixLoan(t, f, false)
+	f.fundHolding(f.borrower, 1_000)
+
+	// A fractional opening total is synthetic for an integral asset.
+	fields := decodeLendingEntry(t, f.env, f.vaultKey)
+	fields["AssetsTotal"] = matrixNumber(t, fields, "AssetsTotal").String() + ".25"
+	data, err := binarycodec.EncodeDecodedFields(fields)
+	require.NoError(t, err)
+	require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+
+	before := loanSetLedgerState(t, f.env)
+	balance := f.env.Balance(f.borrower)
+	sequence := f.env.Seq(f.borrower)
+	loan := decodeLendingEntry(t, f.env, loanKey)
+	amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+	result := f.env.SubmitSigned(accountingLoanPay(t, f, loanID, f.amount(amount)))
+
+	jtx.RequireTxClaimed(t, result, "tecINTERNAL")
+	require.Equal(t, uint64(20), result.Fee)
+	require.Equal(t, balance-result.Fee, f.env.Balance(f.borrower))
+	require.Equal(t, sequence+1, f.env.Seq(f.borrower))
+	require.NotNil(t, result.Metadata)
+	require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
+	require.Len(t, result.Metadata.AffectedNodes, 1)
+	require.NotNil(t, loanSetMetadataNode(result, keylet.Account(f.borrower.AccountID())))
+	requireLoanSetLedgerRollback(t, f, before)
 }
 
 func TestLoanPayAssetPaymentRollbackAndAccounting(t *testing.T) {
