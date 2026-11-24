@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
@@ -44,8 +45,12 @@ func TestPendingTxZeroAccount(t *testing.T) {
 		"Domain":          "6578616D706C652E636F6D",
 	})
 	require.NoError(t, err)
-	_, err = ParsePendingTx(blob)
-	require.ErrorContains(t, err, "invalid transaction account")
+	pending, err := ParsePendingTx(blob)
+	require.NoError(t, err)
+	require.Equal(t, [20]byte{}, pending.Account)
+	require.Equal(t, blob, pending.Blob)
+	require.True(t, pending.ParsedMatchesCanonical())
+	require.Equal(t, "An account field is invalid.", tx.TransactionLocalChecksFailureReason(pending.Parsed))
 }
 
 func TestCanonicalSortEmpty(t *testing.T) {

@@ -67,7 +67,7 @@ func (p PendingTx) ParsedMatchesCanonical() bool {
 	if common == nil {
 		return false
 	}
-	account, err := orderingAccount(p.Parsed)
+	account, err := orderingAccount(common.Account)
 	if err != nil || account != p.Account || common.SeqProxy() != p.Sequence {
 		return false
 	}
@@ -103,7 +103,7 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 
 	common := transaction.GetCommon()
 
-	accountID, err := orderingAccount(transaction)
+	accountID, err := orderingAccount(common.Account)
 	if err != nil {
 		return PendingTx{}, fmt.Errorf("invalid transaction account %q", common.Account)
 	}
@@ -132,9 +132,8 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 	}, nil
 }
 
-func orderingAccount(transaction tx.Transaction) ([20]byte, error) {
-	account := transaction.GetCommon().Account
-	if account == "" && transaction.TxType().IsPseudoTransaction() {
+func orderingAccount(account string) ([20]byte, error) {
+	if account == "" {
 		return [20]byte{}, nil
 	}
 	return state.DecodeAccountID(account)
