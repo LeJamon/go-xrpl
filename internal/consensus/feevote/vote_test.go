@@ -94,9 +94,9 @@ func TestDoVoting_NoVoteCountsAsCurrent(t *testing.T) {
 	// change. The reserves still flip to target because every vote
 	// either explicitly chooses target or is the constructor seed.
 	votes := []Vote{
-		{BaseFee: ptr(10), ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{BaseFee: ptr(10), ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{ /* BaseFee abstain */ ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
+		{BaseFee: ptr(10), ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{BaseFee: ptr(10), ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{ /* BaseFee abstain */ ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
 	}
 
 	blob, err := DoVoting(1024, current, target, votes, true)
@@ -119,9 +119,9 @@ func TestDoVoting_OutOfRangeIsNoVote(t *testing.T) {
 	// flip; without that this DoVoting call would have nothing
 	// changed and emit no tx.
 	votes := []Vote{
-		{BaseFee: &overflow, ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{BaseFee: &overflow, ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{BaseFee: &overflow, ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
+		{BaseFee: &overflow, ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{BaseFee: &overflow, ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{BaseFee: &overflow, ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
 	}
 	blob, err := DoVoting(1024, current, target, votes, true)
 	require.NoError(t, err)
