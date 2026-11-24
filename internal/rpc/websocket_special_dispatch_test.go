@@ -257,6 +257,28 @@ func TestWebSocketPathFindCreateDoesNotUseLegacyBusyGate(t *testing.T) {
 	}
 }
 
+func TestWebSocketPathFindCreatePreservesPathRequestFieldErrors(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	for _, test := range []struct {
+		name   string
+		params string
+		code   int
+		token  string
+	}{
+		{name: "case-sensitive source key", params: `{"subcommand":"create","Source_Account":"` + acct + `","destination_account":"` + acct + `","destination_amount":"1000"}`, code: rpcerrors.RpcSRC_ACT_MISSING, token: "srcActMissing"},
+		{name: "container source", params: `{"subcommand":"create","source_account":{},"destination_account":"` + acct + `","destination_amount":"1000"}`, code: rpcerrors.RpcINTERNAL, token: "internal"},
+		{name: "container destination", params: `{"subcommand":"create","source_account":"` + acct + `","destination_account":[],"destination_amount":"1000"}`, code: rpcerrors.RpcINTERNAL, token: "internal"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ws, conn, ctx := newSpecialDispatchHarness(t)
+			_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(test.params)})
+			if rpcErr == nil || rpcErr.Code != test.code || rpcErr.ErrorString != test.token {
+				t.Fatalf("error = %#v, want %d/%s", rpcErr, test.code, test.token)
+			}
+		})
+	}
+}
+
 func TestWebSocketPathFindSubcommandValidationUsesCanonicalParams(t *testing.T) {
 	for _, params := range []string{`{}`, `{"subcommand":7}`, `{"subcommand":"future"}`, `{not json`} {
 		t.Run(params, func(t *testing.T) {

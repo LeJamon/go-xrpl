@@ -1,7 +1,9 @@
 package rpc
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -44,48 +46,39 @@ type PathFindSession struct {
 	id any
 }
 
-// pathFindCreateRequest represents the path_find create subcommand parameters.
-// The account fields stay raw so that a missing field and a field of the wrong
-// JSON type map to rippled's distinct error codes.
-type pathFindCreateRequest struct {
-	SourceAccount      json.RawMessage `json:"source_account"`
-	DestinationAccount json.RawMessage `json:"destination_account"`
-	DestinationAmount  json.RawMessage `json:"destination_amount"`
-	SendMax            json.RawMessage `json:"send_max,omitempty"`
-	SourceCurrencies   json.RawMessage `json:"source_currencies,omitempty"`
-	Domain             json.RawMessage `json:"domain,omitempty"`
-}
-
 // ParseAndCreateSession parses a path_find create request and creates a session.
 // Returns the session and initial result, or an RPC error.
 func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpcerrors.RpcError) {
-	var request pathFindCreateRequest
-	if err := json.Unmarshal(params, &request); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Field validation follows rippled PathRequest::parseJson order exactly,
 	// like the ripple_path_find handler.
-	if request.SourceAccount == nil {
+	sourceAccountRaw, ok := fields["source_account"]
+	if !ok {
 		return nil, rpcerrors.RpcErrorSrcActMissing("Source account not provided.")
 	}
-	if request.DestinationAccount == nil {
+	destinationAccountRaw, ok := fields["destination_account"]
+	if !ok {
 		return nil, rpcerrors.RpcErrorDstActMissing("Destination account not provided.")
 	}
-	if request.DestinationAmount == nil {
+	destinationAmountRaw, ok := fields["destination_amount"]
+	if !ok {
 		return nil, rpcerrors.RpcErrorDstAmtMissing("Destination amount/currency/issuer is missing.")
 	}
 
-	srcAccount, ok := decodePathFindAccount(request.SourceAccount)
-	if !ok {
-		return nil, rpcerrors.RpcErrorSrcActMalformed("Source account is malformed.")
+	srcAccount, accountErr := decodePathFindAccount(sourceAccountRaw, rpcerrors.RpcErrorSrcActMalformed, "Source account is malformed.")
+	if accountErr != nil {
+		return nil, accountErr
 	}
-	dstAccount, ok := decodePathFindAccount(request.DestinationAccount)
-	if !ok {
-		return nil, rpcerrors.RpcErrorDstActMalformed("Destination account is malformed.")
+	dstAccount, accountErr := decodePathFindAccount(destinationAccountRaw, rpcerrors.RpcErrorDstActMalformed, "Destination account is malformed.")
+	if accountErr != nil {
+		return nil, accountErr
 	}
 
-	dstAmount, amtErr := state.AmountFromJSON(request.DestinationAmount)
+	dstAmount, amtErr := state.AmountFromJSON(destinationAmountRaw)
 	if amtErr != nil || !pathfinder.IsValidAsset(dstAmount) {
 		return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
@@ -98,12 +91,13 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 
 	// Parse optional send_max
 	var sendMax *tx.Amount
-	if request.SendMax != nil {
+	sendMaxRaw, hasSendMax := fields["send_max"]
+	if hasSendMax {
 		// send_max requires destination_amount to be -1.
 		if !convertAll {
 			return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
-		amt, smErr := state.AmountFromJSON(request.SendMax)
+		amt, smErr := state.AmountFromJSON(sendMaxRaw)
 		if smErr != nil || !pathfinder.IsValidAsset(amt) || (amt.Signum() <= 0 && amt.Value() != "-1") {
 			return nil, rpcerrors.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
@@ -112,9 +106,10 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 
 	// Parse optional source_currencies
 	var srcCurrencies []payment.Issue
-	if request.SourceCurrencies != nil {
+	sourceCurrenciesRaw, hasSourceCurrencies := fields["source_currencies"]
+	if hasSourceCurrencies {
 		var entries []json.RawMessage
-		if err := json.Unmarshal(request.SourceCurrencies, &entries); err != nil || len(entries) == 0 || len(entries) > 18 {
+		if err := json.Unmarshal(sourceCurrenciesRaw, &entries); err != nil || len(entries) == 0 || len(entries) > 18 {
 			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		var sendMaxIssue payment.Issue
@@ -207,9 +202,10 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	}
 
 	var domainID *[32]byte
-	if request.Domain != nil {
+	domainRaw, hasDomain := fields["domain"]
+	if hasDomain {
 		var parsed bool
-		domainID, parsed = rpctypes.ParsePathFindDomain(request.Domain)
+		domainID, parsed = rpctypes.ParsePathFindDomain(domainRaw)
 		if !parsed {
 			return nil, rpcerrors.RpcErrorDomainMalformed("Domain is malformed.")
 		}
@@ -405,16 +401,24 @@ func convertToRPCPathSteps(paths [][]payment.PathStep) [][]rpctypes.PathStep {
 	return result
 }
 
-// decodePathFindAccount decodes a classic address given as a JSON string. Any
-// other JSON value is malformed, as rippled parses asString() of it.
-func decodePathFindAccount(raw json.RawMessage) ([20]byte, bool) {
+// decodePathFindAccount decodes a classic address given as a JSON string.
+// Rippled's asString() throws for object and array values, while scalar values
+// are converted and then rejected by the account decoder.
+func decodePathFindAccount(raw json.RawMessage, malformed func(string) *rpcerrors.RpcError, message string) ([20]byte, *rpcerrors.RpcError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		return [20]byte{}, rpcerrors.RpcErrorInternal()
+	}
 	var address string
 	if err := json.Unmarshal(raw, &address); err != nil {
-		return [20]byte{}, false
+		return [20]byte{}, malformed(message)
+	}
+	if nul := strings.IndexByte(address, 0); nul >= 0 {
+		address = address[:nul]
 	}
 	id, err := state.DecodeAccountID(address)
 	if err != nil {
-		return [20]byte{}, false
+		return [20]byte{}, malformed(message)
 	}
-	return id, true
+	return id, nil
 }

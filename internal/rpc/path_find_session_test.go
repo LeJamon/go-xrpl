@@ -168,6 +168,8 @@ func TestParseAndCreateSession_RequiredFieldErrors(t *testing.T) {
 		{"bad source", `{"source_account":"bad","destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed."},
 		{"numeric source", `{"source_account":5,"destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed."},
 		{"bad destination", `{"source_account":"` + acct + `","destination_account":"bad","destination_amount":"1000"}`, rpcerrors.RpcDST_ACT_MALFORMED, "dstActMalformed", "Destination account is malformed."},
+		{"container source is internal", `{"source_account":{},"destination_account":"` + acct + `","destination_amount":"1000"}`, rpcerrors.RpcINTERNAL, "internal", "Internal error."},
+		{"container destination is internal", `{"source_account":"` + acct + `","destination_account":[],"destination_amount":"1000"}`, rpcerrors.RpcINTERNAL, "internal", "Internal error."},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -179,6 +181,48 @@ func TestParseAndCreateSession_RequiredFieldErrors(t *testing.T) {
 				t.Fatalf("error = %d %q %q, want %d %q %q", rpcErr.Code, rpcErr.ErrorString, rpcErr.Message, test.code, test.token, test.message)
 			}
 		})
+	}
+}
+
+func TestParseAndCreateSession_RequiredFieldNamesAreCaseSensitive(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	for _, test := range []struct {
+		name   string
+		params string
+		code   int
+		token  string
+	}{
+		{name: "source account", params: `{"Source_Account":"` + acct + `","destination_account":"` + acct + `","destination_amount":"1000"}`, code: rpcerrors.RpcSRC_ACT_MISSING, token: "srcActMissing"},
+		{name: "destination account", params: `{"source_account":"` + acct + `","Destination_Account":"` + acct + `","destination_amount":"1000"}`, code: rpcerrors.RpcDST_ACT_MISSING, token: "dstActMissing"},
+		{name: "destination amount", params: `{"source_account":"` + acct + `","destination_account":"` + acct + `","Destination_Amount":"1000"}`, code: rpcerrors.RpcDST_AMT_MISSING, token: "dstAmtMissing"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := ParseAndCreateSession(json.RawMessage(test.params), nil)
+			if rpcErr == nil || rpcErr.Code != test.code || rpcErr.ErrorString != test.token {
+				t.Fatalf("error = %#v, want %d/%s", rpcErr, test.code, test.token)
+			}
+		})
+	}
+}
+
+func TestParseAndCreateSession_IgnoresMisCasedDuplicateRequiredKey(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	params := json.RawMessage(`{"source_account":"` + acct + `","Source_Account":"bad","destination_account":"` + acct + `","destination_amount":"1000"}`)
+	session, rpcErr := ParseAndCreateSession(params, nil)
+	if rpcErr != nil || session == nil {
+		t.Fatalf("error = %v, session = %v, want exact source_account value to win", rpcErr, session)
+	}
+}
+
+func TestParseAndCreateSession_TruncatesAccountAtEmbeddedNUL(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	params := json.RawMessage(`{"source_account":"` + acct + `\u0000suffix","destination_account":"` + acct + `","destination_amount":"1000"}`)
+	session, rpcErr := ParseAndCreateSession(params, nil)
+	if rpcErr != nil || session == nil {
+		t.Fatalf("error = %v, session = %v, want account prefix to decode", rpcErr, session)
+	}
+	if session.srcAccountStr != acct {
+		t.Fatalf("source account = %q, want %q", session.srcAccountStr, acct)
 	}
 }
 
