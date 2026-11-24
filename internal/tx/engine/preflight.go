@@ -37,22 +37,22 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 	common := tx.GetCommon()
 	rules := e.rules()
 	currentTxID, currentTxIDErr := txcore.ComputeCurrentTransactionHash(tx)
+	_, flagsAware := tx.(txcore.FlagsAwarePreflighter)
+	cacheable := currentTxIDErr == nil && (!flagsAware || e.config.ApplyFlags == txcore.TapNONE)
 
-	// Non-signature structural preflight is ledger-state-independent, so its
-	// verdict is memoised on the transaction and a re-preflight under the same
-	// rules skips the repeat (see Common.preflightedRules). Signature verification
-	// stays out of the memo and runs below.
-	if currentTxIDErr != nil || !common.PreflightVerified(rules, currentTxID) {
+	// The cached verdict has no apply flags in its key. A flags-aware
+	// transactor can reuse it only under the default flags.
+	if !cacheable || !common.PreflightVerified(rules, currentTxID) {
 		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
 			return result
 		}
-		if currentTxIDErr == nil {
+		if cacheable {
 			common.MarkPreflightVerified(rules, currentTxID)
 		}
 	}
 	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
-		if result := preflightSimulateKeys(common); result != ter.TesSUCCESS {
-			return result
+		if err := txcore.CheckSimulateKeys(common.SigningPubKey, common.TxnSignature, common.Signers, common.HasField("Signers")); err != nil {
+			return parseValidationError(err)
 		}
 	}
 
@@ -83,8 +83,7 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 // rippled's invokePreflight order: the amendment gate and T::checkExtraFeatures,
 // then preflight1 (which invokes preflight0), then the per-type preflight body.
 // Signature-dependent structure and cryptographic verification run separately
-// below. This is a pure function of the transaction fields and the active rules,
-// which is what makes its verdict safe to memoise (see Common.PreflightVerified).
+// below.
 // Reference: rippled Transactor.h Transactor::invokePreflight<T>.
 func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	rules := e.rules()
@@ -122,7 +121,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	}
 
 	// T::preflight — the tx-type-specific body.
-	if result := runTypePreflight(tx, rules); result != ter.TesSUCCESS {
+	if result := runTypePreflight(tx, rules, e.config.ApplyFlags); result != ter.TesSUCCESS {
 		return result
 	}
 	if outer, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
@@ -131,25 +130,6 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 		}
 	}
 
-	return ter.TesSUCCESS
-}
-
-func preflightSimulateKeys(common *txcore.Common) ter.Result {
-	if common.TxnSignature != "" {
-		return ter.TemINVALID
-	}
-	hasSigners := len(common.Signers) > 0 || common.HasField("Signers")
-	if !hasSigners {
-		return ter.TesSUCCESS
-	}
-	for _, signer := range common.Signers {
-		if signer.Signer.TxnSignature != "" {
-			return ter.TemINVALID
-		}
-	}
-	if common.SigningPubKey != "" {
-		return ter.TemINVALID
-	}
 	return ter.TesSUCCESS
 }
 
@@ -176,8 +156,8 @@ func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules 
 		return result
 	}
 	// A non-empty SigningPubKey of an invalid key type.
-	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
-		return result
+	if err := txcore.CheckSigningPubKey(common.SigningPubKey); err != nil {
+		return parseValidationError(err)
 	}
 	// Sequence presence (go-xrpl defensive) and the ticket+AccountTxnID rule.
 	if result := e.preflightSequence(common); result != ter.TesSUCCESS {
@@ -246,12 +226,18 @@ func checkPreflightRules(tx txcore.Transaction, rules *amendment.Rules) ter.Resu
 	return ter.TesSUCCESS
 }
 
-func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
+func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules, flags txcore.ApplyFlags) ter.Result {
 	if batch, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
 		if err := batch.ValidateBatchOuter(); err != nil {
 			return parseValidationError(err)
 		}
 		return checkPreflightRules(tx, rules)
+	}
+	if fp, ok := tx.(txcore.FlagsAwarePreflighter); ok {
+		if err := fp.PreflightWithFlags(rules, flags); err != nil {
+			return parseValidationError(err)
+		}
+		return ter.TesSUCCESS
 	}
 	if rp, ok := tx.(txcore.RulesAwarePreflighter); ok {
 		if err := rp.PreflightWithRules(rules); err != nil {
@@ -301,8 +287,8 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if common.HasRawNonnativeFee() {
 		return ter.TemBAD_FEE
 	}
-	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
-		return result
+	if err := txcore.CheckSigningPubKey(common.SigningPubKey); err != nil {
+		return parseValidationError(err)
 	}
 	usesTicket := (common.Sequence == nil || *common.Sequence == 0) && common.TicketSequence != nil
 	if usesTicket && common.AccountTxnID != "" {
@@ -317,7 +303,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if hasInvalidAmount(innerTx, rules) {
 		return ter.TemBAD_AMOUNT
 	}
-	if result := runTypePreflight(innerTx, rules); result != ter.TesSUCCESS {
+	if result := runTypePreflight(innerTx, rules, txcore.TapNONE); result != ter.TesSUCCESS {
 		return result
 	}
 	if svp, ok := innerTx.(txcore.SigValidatedPreflighter); ok {
@@ -420,21 +406,6 @@ func checkAccountPresent(common *txcore.Common) ter.Result {
 	}
 	if common.TransactionType == "" {
 		return ter.TemINVALID
-	}
-	return ter.TesSUCCESS
-}
-
-// checkSigningKeyShape rejects a non-empty SigningPubKey whose key type is
-// invalid, regardless of whether crypto verification runs. rippled preflight1
-// does this unconditionally (preflightCheckSigningKey → temBAD_SIGNATURE), so
-// even paths that skip signature verification must still bounce a malformed key.
-func checkSigningKeyShape(common *txcore.Common) ter.Result {
-	if common.SigningPubKey == "" {
-		return ter.TesSUCCESS
-	}
-	spk, decErr := hex.DecodeString(common.SigningPubKey)
-	if decErr != nil || !txcore.IsValidPublicKey(spk) {
-		return ter.TemBAD_SIGNATURE
 	}
 	return ter.TesSUCCESS
 }

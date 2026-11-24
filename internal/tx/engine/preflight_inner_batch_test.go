@@ -68,6 +68,54 @@ func TestLoanSetCounterpartyPreflight(t *testing.T) {
 	}
 }
 
+func TestLoanSetCounterpartySignaturePreflight(t *testing.T) {
+	rules := allRules()
+	regular := preflightEngine(rules)
+	simulate := preflightEngine(rules)
+	simulate.config.ApplyFlags = txcore.TapDRY_RUN
+	key := "02" + strings.Repeat("11", 32)
+	mixed := &txcore.CounterpartySignature{SigningPubKey: key}
+	mixed.MarkFieldPresent("Signers")
+	tests := []struct {
+		name      string
+		signature *txcore.CounterpartySignature
+		principal string
+		zeroID    bool
+		regular   ter.Result
+		simulate  ter.Result
+	}{
+		{"bad key precedes principal", &txcore.CounterpartySignature{SigningPubKey: "04"}, "0", false, ter.TemBAD_SIGNATURE, ter.TemBAD_SIGNATURE},
+		{"unsigned counterparty", &txcore.CounterpartySignature{SigningPubKey: key}, "1", false, ter.TesSUCCESS, ter.TesSUCCESS},
+		{"counterparty signature bytes", &txcore.CounterpartySignature{TxnSignature: "AB"}, "1", false, ter.TesSUCCESS, ter.TemINVALID},
+		{"signer signature bytes", &txcore.CounterpartySignature{Signers: []txcore.SignerWrapper{
+			{Signer: txcore.Signer{Account: precedenceGenesisAddr, SigningPubKey: key, TxnSignature: "AB"}},
+		}}, "1", false, ter.TesSUCCESS, ter.TemINVALID},
+		{"signing key with present Signers", mixed, "1", false, ter.TesSUCCESS, ter.TemINVALID},
+		{"simulation finishes before broker ID", &txcore.CounterpartySignature{}, "1", true, ter.TemINVALID, ter.TesSUCCESS},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := strings.Repeat("1", 64)
+			if tc.zeroID {
+				id = strings.Repeat("0", 64)
+			}
+			loan := lending.NewLoanSet(precedenceSourceAddr, id, tc.principal)
+			loan.SetSequence(1)
+			loan.Fee = "20"
+			loan.CounterpartySignature = tc.signature
+			if got := regular.preflight(loan); got != tc.regular {
+				t.Fatalf("normal preflight = %s, want %s", got, tc.regular)
+			}
+			if got := simulate.preflight(loan); got != tc.simulate {
+				t.Fatalf("simulation preflight = %s, want %s", got, tc.simulate)
+			}
+			if got := regular.preflight(loan); got != tc.regular {
+				t.Fatalf("normal preflight after simulation = %s, want %s", got, tc.regular)
+			}
+		})
+	}
+}
+
 // TestPreflightInnerBatchFlag exercises the tfInnerBatchTxn rejection on a
 // directly-submitted transaction across the BatchV1_1 gate.
 func TestPreflightInnerBatchFlag(t *testing.T) {
