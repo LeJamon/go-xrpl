@@ -71,8 +71,8 @@ func TestCompleteLedgerSetPrevMissing(t *testing.T) {
 
 func TestCompleteLedgerSetPrevPresent(t *testing.T) {
 	set := newCompleteLedgerSet()
-	if _, ok := set.lowest(); ok {
-		t.Fatal("empty set reported a lowest ledger")
+	if _, ok := set.prevPresent(10); ok {
+		t.Fatal("empty set reported a preceding ledger")
 	}
 	set.addRange(3, 5)
 	set.addRange(10, 15)
@@ -83,8 +83,5 @@ func TestCompleteLedgerSetPrevPresent(t *testing.T) {
 		if got, ok := set.prevPresent(tc.below); got != tc.want || ok != tc.ok {
 			t.Fatalf("prevPresent(%d) = %d, %v; want %d, %v", tc.below, got, ok, tc.want, tc.ok)
 		}
-	}
-	if lowest, ok := set.lowest(); lowest != 3 || !ok {
-		t.Fatalf("lowest() = %d, %v; want 3, true", lowest, ok)
 	}
 }

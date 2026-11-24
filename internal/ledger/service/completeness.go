@@ -133,13 +133,6 @@ func (c *completeLedgerSet) prevPresent(below uint32) (uint32, bool) {
 	return c.ranges[index-1].end, true
 }
 
-func (c *completeLedgerSet) lowest() (uint32, bool) {
-	if len(c.ranges) == 0 {
-		return 0, false
-	}
-	return c.ranges[0].start, true
-}
-
 func (c *completeLedgerSet) String() string {
 	if len(c.ranges) == 0 {
 		return "empty"
