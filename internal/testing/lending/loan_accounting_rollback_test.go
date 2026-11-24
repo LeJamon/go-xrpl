@@ -36,14 +36,22 @@ func assertAccountingEntriesEqual(t *testing.T, name string, want, got map[strin
 	require.Equal(t, want, got, "%s changed", name)
 }
 
-func TestLoanPayUnexpectedRoundedTotalRollsBack(t *testing.T) {
-	for _, impaired := range []bool{false, true} {
-		t.Run(fmt.Sprintf("impaired=%t", impaired), func(t *testing.T) {
-			f := newAccountingAssetFixture(t, false, true, "MPT")
+func TestLoanPayRoundedVaultBalancesRollBack(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, openingTotal, want string
+		cash, impaired                 bool
+	}{
+		{name: "fractional MPT total", kind: "MPT", openingTotal: "10000.25", want: "tecINTERNAL"},
+		{name: "fractional MPT total on impaired loan", kind: "MPT", openingTotal: "10000.25", want: "tecINTERNAL", impaired: true},
+		{name: "repayment rounds to zero", kind: "IOU", openingTotal: "1e20", want: "tecPRECISION_LOSS"},
+		{name: "cash interest rounds away", kind: "IOU", openingTotal: "1e17", want: "tecPRECISION_LOSS", cash: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAccountingAssetFixture(t, tc.cash, true, tc.kind)
 			loanID, loanKey := createMatrixLoan(t, f, false)
 			f.fundHolding(f.borrower, 1_000)
 
-			if impaired {
+			if tc.impaired {
 				loan := decodeLendingEntry(t, f.env, loanKey)
 				due, ok := loan["NextPaymentDueDate"].(uint32)
 				if !ok {
@@ -57,10 +65,10 @@ func TestLoanPayUnexpectedRoundedTotalRollsBack(t *testing.T) {
 				requireLoanFlags(t, decodeLendingEntry(t, f.env, loanKey), lending.LsfLoanImpaired, true)
 			}
 
-			// A fractional opening total is synthetic for an integral asset and
-			// must remain visible through impairment reversal.
+			// Seed a synthetic opening total. At 1e20 the IOU vault rounds the
+			// entire payment away. At 1e17 it retains principal but loses interest.
 			fields := decodeLendingEntry(t, f.env, f.vaultKey)
-			fields["AssetsTotal"] = matrixNumber(t, fields, "AssetsTotal").String() + ".25"
+			fields["AssetsTotal"] = tc.openingTotal
 			data, err := binarycodec.EncodeDecodedFields(fields)
 			require.NoError(t, err)
 			require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
@@ -71,13 +79,13 @@ func TestLoanPayUnexpectedRoundedTotalRollsBack(t *testing.T) {
 			loan := decodeLendingEntry(t, f.env, loanKey)
 			amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
 			payment := accountingLoanPay(t, f, loanID, f.amount(amount))
-			if impaired {
+			if tc.impaired {
 				flags := lending.TfLoanLatePayment
 				payment.GetCommon().Flags = &flags
 			}
 			result := f.env.SubmitSigned(payment)
 
-			jtx.RequireTxClaimed(t, result, "tecINTERNAL")
+			jtx.RequireTxClaimed(t, result, tc.want)
 			require.Equal(t, uint64(20), result.Fee)
 			require.Equal(t, balance-result.Fee, f.env.Balance(f.borrower))
 			require.Equal(t, sequence+1, f.env.Seq(f.borrower))
