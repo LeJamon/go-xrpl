@@ -42,7 +42,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-lint
           path: ${{ runner.temp }}/issue-1908-producer-lint
@@ -71,7 +71,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-lint-advisory
           path: ${{ runner.temp }}/issue-1908-producer-lint-advisory
@@ -135,7 +135,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-generate
           path: ${{ runner.temp }}/issue-1908-producer-generate
@@ -167,7 +167,7 @@ jobs:
           ../tmp/goxrpl version > "$EVIDENCE_DIR/goxrpl-default-version.txt"
           printf 'path=%s\n' "$(realpath ../tmp/goxrpl)" >> "$GITHUB_OUTPUT"
       - name: Retain built artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: goxrpl-${{ github.sha }}-linux-amd64
           path: ${{ steps.binary.outputs.path }}
@@ -186,7 +186,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-build
           path: ${{ runner.temp }}/issue-1908-producer-build
@@ -250,7 +250,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-build-386
           path: ${{ runner.temp }}/issue-1908-producer-build-386
@@ -290,7 +290,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-postgres
           path: ${{ runner.temp }}/issue-1908-producer-postgres
@@ -378,7 +378,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-test-${{ matrix.group }}
           path: ${{ runner.temp }}/issue-1908-producer-test-${{ matrix.group }}
@@ -423,7 +423,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-test-mpt-crypto-${{ matrix.os }}
           path: ${{ runner.temp }}/issue-1908-producer-test-mpt-crypto-${{ matrix.os }}
@@ -456,7 +456,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-test-repeated
           path: ${{ runner.temp }}/issue-1908-producer-test-repeated
@@ -556,7 +556,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload final conformance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-2015-conformance-final-${{ github.sha }}
           path: ${{ env.EVIDENCE_DIR }}
@@ -580,7 +580,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-peer-interop
           path: ${{ runner.temp }}/issue-1908-producer-peer-interop
@@ -623,7 +623,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-peer-interop-final
           path: ${{ env.EVIDENCE_DIR }}
@@ -674,7 +674,7 @@ jobs:
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-consensus-smoke-${{ matrix.rippled-version }}
           path: ${{ runner.temp }}/issue-1908-producer-consensus-smoke-${{ matrix.rippled-version }}
@@ -822,7 +822,7 @@ jobs:
 
       - name: Upload final consensus producer evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-producer-${{ github.sha }}-consensus-smoke-final
           path: /tmp/issue-2017-final-evidence
@@ -830,7 +830,7 @@ jobs:
 
       - name: Upload final acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: issue-1908-final-consensus-${{ github.sha }}
           path: /tmp/issue-2017-final-evidence
@@ -891,7 +891,7 @@ jobs:
           scripts/acceptance/final-evidence.sh aggregate
       - name: Retain release candidate evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-evidence-${{ github.sha }}
           path: ${{ runner.temp }}/release-evidence
