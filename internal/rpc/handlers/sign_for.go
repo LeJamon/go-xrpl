@@ -103,11 +103,10 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		var valid bool
 		signingRole, valid = signingRoleForTarget(signatureTarget)
 		if !valid {
-			targetErr := rpcerrors.RpcErrorInvalidParams(signatureTarget)
 			if _, err := definitions.Get().FieldHeaderByName(signatureTarget); err != nil {
-				targetErr.Message = ""
+				signatureTarget = ""
 			}
-			return nil, targetErr
+			return nil, rpcerrors.NewRpcError(rpcerrors.RpcINVALID_PARAMS, "invalidParams", "invalidParams", signatureTarget)
 		}
 	}
 	rules := transactionRulesForContext(ctx)
