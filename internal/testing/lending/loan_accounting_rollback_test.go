@@ -36,6 +36,18 @@ func assertAccountingEntriesEqual(t *testing.T, name string, want, got map[strin
 	require.Equal(t, want, got, "%s changed", name)
 }
 
+func requireLoanPayExceptionNoWrites(t *testing.T, env *jtx.TestEnv, borrower *jtx.Account, before map[[32]byte][]byte, balance uint64, sequence uint32, result jtx.TxResult) {
+	t.Helper()
+	require.Equal(t, "tefEXCEPTION", result.Code)
+	require.True(t, result.ApplyInvoked, "LoanPay Apply should be reached")
+	require.False(t, result.Applied)
+	require.Zero(t, result.Fee)
+	require.Nil(t, result.Metadata)
+	require.Equal(t, balance, env.Balance(borrower))
+	require.Equal(t, sequence, env.Seq(borrower))
+	require.Equal(t, before, loanSetLedgerState(t, env))
+}
+
 func TestLoanPayRoundedVaultBalancesRollBack(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind, openingTotal, want string
@@ -94,6 +106,69 @@ func TestLoanPayRoundedVaultBalancesRollBack(t *testing.T) {
 			require.Len(t, result.Metadata.AffectedNodes, 1)
 			require.NotNil(t, loanSetMetadataNode(result, keylet.Account(f.borrower.AccountID())))
 			requireLoanSetLedgerRollback(t, f, before)
+		})
+	}
+}
+
+func TestLoanPayRejectsIOUAssetsMaximumBeforePrecisionLoss(t *testing.T) {
+	f := newAccountingAssetFixture(t, false, true, "IOU")
+	loanID, loanKey := createMatrixLoan(t, f, false)
+	f.fundHolding(f.borrower, 1_000)
+
+	fields := decodeLendingEntry(t, f.env, f.vaultKey)
+	fields["AssetsTotal"] = "1e20"
+	fields["AssetsMaximum"] = "1e96"
+	data, err := binarycodec.EncodeDecodedFields(fields)
+	require.NoError(t, err)
+	require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+
+	before := loanSetLedgerState(t, f.env)
+	balance := f.env.Balance(f.borrower)
+	sequence := f.env.Seq(f.borrower)
+	loan := decodeLendingEntry(t, f.env, loanKey)
+	amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+	result := f.env.SubmitSigned(accountingLoanPay(t, f, loanID, f.amount(amount)))
+
+	requireLoanPayExceptionNoWrites(t, f.env, f.borrower, before, balance, sequence, result)
+}
+
+func TestLoanPayRejectsOutOfRangeXRPAssetsTotalBeforePaymentFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		expired bool
+	}{
+		{name: "insufficient installment"},
+		{name: "expired payment", expired: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLossLifecycleFixture(t, false, true)
+			loan := decodeLendingEntry(t, f.env, f.loanKey)
+			amount := lossNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+			if tc.expired {
+				due, ok := loan["NextPaymentDueDate"].(uint32)
+				if !ok {
+					t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
+				}
+				f.env.CloseToParentCloseTime(due + 1)
+			} else {
+				amount--
+				require.Greater(t, amount, int64(0))
+			}
+
+			fields := decodeLendingEntry(t, f.env, f.vaultKey)
+			fields["AssetsTotal"] = "100000000000000001"
+			data, err := binarycodec.EncodeDecodedFields(fields)
+			require.NoError(t, err)
+			require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+
+			before := loanSetLedgerState(t, f.env)
+			balance := f.env.Balance(f.borrower)
+			sequence := f.env.Seq(f.borrower)
+			payment := lending.NewLoanPay(f.borrower.Address, f.loanID, tx.NewXRPAmount(amount))
+			payment.GetCommon().Fee = "20"
+			result := f.env.SubmitSigned(payment)
+
+			requireLoanPayExceptionNoWrites(t, f.env, f.borrower, before, balance, sequence, result)
 		})
 	}
 }
