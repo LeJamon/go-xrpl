@@ -29,11 +29,16 @@ var (
 // HasInvalidAmount checks the flattened transaction before JSON rendering can
 // discard a zero MPT's wire sign. Nested structures deeper than 10 are invalid.
 func HasInvalidAmount(fields map[string]any) bool {
-	return hasInvalidAmountMap(fields, 0)
+	return hasAmountMap(fields, 0, amountJSONInvalid, true)
 }
 
-func hasInvalidAmountMap(m map[string]any, depth int) bool {
-	if depth > 10 {
+// HasOverCapMPT identifies wire magnitudes outside the execution engine's signed range.
+func HasOverCapMPT(fields map[string]any) bool {
+	return hasAmountMap(fields, 0, rawMPTOverCap, false)
+}
+
+func hasAmountMap(m map[string]any, depth int, invalid func(any) bool, limitDepth bool) bool {
+	if limitDepth && depth > 10 {
 		return true
 	}
 	defs := definitions.Get()
@@ -44,24 +49,24 @@ func hasInvalidAmountMap(m map[string]any, depth int) bool {
 		}
 		switch fi.Type {
 		case "Amount":
-			if amountJSONInvalid(v) {
+			if invalid(v) {
 				return true
 			}
 		case "STObject":
-			if child, ok := v.(map[string]any); ok && hasInvalidAmountMap(child, depth+1) {
+			if child, ok := v.(map[string]any); ok && hasAmountMap(child, depth+1, invalid, limitDepth) {
 				return true
 			}
 		case "STArray":
 			switch arr := v.(type) {
 			case []map[string]any:
 				for _, child := range arr {
-					if hasInvalidAmountMap(child, depth+1) {
+					if hasAmountMap(child, depth+1, invalid, limitDepth) {
 						return true
 					}
 				}
 			case []any:
 				for _, el := range arr {
-					if child, ok := el.(map[string]any); ok && hasInvalidAmountMap(child, depth+1) {
+					if child, ok := el.(map[string]any); ok && hasAmountMap(child, depth+1, invalid, limitDepth) {
 						return true
 					}
 				}
@@ -69,6 +74,18 @@ func hasInvalidAmountMap(m map[string]any, depth int) bool {
 		}
 	}
 	return false
+}
+
+func rawMPTOverCap(v any) bool {
+	amount, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, ok := amount["mpt_issuance_id"]; !ok {
+		return false
+	}
+	raw, ok := amount["value"].(binarytypes.RawMPTValue)
+	return ok && raw.Magnitude > maxMPTAmount
 }
 
 // amountJSONInvalid validates a single amount in canonical JSON form: a decimal

@@ -117,7 +117,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	// preflightUniversal — after preflight1 and before T::preflight, reject a
 	// transaction carrying a non-canonical native or MPT amount in any field
 	// (rippled Transactor::preflightUniversal, gated on fixCleanup3_2_0).
-	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(tx) {
+	if hasInvalidAmount(tx, rules) {
 		return ter.TemBAD_AMOUNT
 	}
 
@@ -311,7 +311,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(innerTx) {
+	if hasInvalidAmount(innerTx, rules) {
 		return ter.TemBAD_AMOUNT
 	}
 	if result := runTypePreflight(innerTx, rules); result != ter.TesSUCCESS {
@@ -550,9 +550,17 @@ func PrewarmSignatureWithRules(txn txcore.Transaction, rules *amendment.Rules) e
 	return nil
 }
 
-func hasInvalidAmount(tx txcore.Transaction) bool {
+func hasInvalidAmount(tx txcore.Transaction, rules *amendment.Rules) bool {
 	fields, err := tx.Flatten()
-	return err == nil && invariants.HasInvalidAmount(fields)
+	if err != nil {
+		return false
+	}
+	if rules.FixCleanup3_2_0Enabled() {
+		return invariants.HasInvalidAmount(fields)
+	}
+	// Legacy rules allow other non-canonical amounts, but the engine cannot
+	// execute an MPT magnitude wider than its signed representation.
+	return invariants.HasOverCapMPT(fields)
 }
 
 // parseValidationError maps a Validate() error to a TER result code.

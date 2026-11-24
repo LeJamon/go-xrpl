@@ -250,8 +250,8 @@ func flattenAmount(a Amount) any {
 	}
 	if a.IsMPT() {
 		var value any
-		if a.IsZero() && a.IsNegative() {
-			value = binarytypes.RawMPTValue{Negative: true}
+		if raw, ok := a.RawMPTValue(); ok {
+			value = raw
 		} else {
 			value = a.Value()
 		}

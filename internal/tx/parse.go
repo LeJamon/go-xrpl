@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 
@@ -173,7 +174,7 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
 	} else {
-		jsonFields = sanitizeRawXRPAmounts(jsonFields).(map[string]any)
+		jsonFields = sanitizeRawBinaryAmounts(jsonFields).(map[string]any)
 		jsonBytes, err := json.Marshal(jsonFields)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
@@ -196,21 +197,34 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 	return parsed, nil
 }
 
-// The typed transaction restores over-cap XRP amounts after JSON unmarshaling.
-func sanitizeRawXRPAmounts(value any) any {
+// Typed transaction fields use bounded numeric types, so raw binary amounts
+// are replaced only for the JSON decode step. restoreBinaryAmounts retains the
+// original values on the transaction for validation and wire re-encoding.
+func sanitizeRawBinaryAmounts(value any) any {
 	switch v := value.(type) {
 	case binarytypes.RawXRPAmount:
 		return "0"
+	case binarytypes.RawMPTValue:
+		if v.Magnitude > math.MaxInt64 {
+			return "0"
+		}
+		return v.String()
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for name, child := range v {
-			out[name] = sanitizeRawXRPAmounts(child)
+			out[name] = sanitizeRawBinaryAmounts(child)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = sanitizeRawXRPAmounts(child)
+			out[i] = sanitizeRawBinaryAmounts(child)
+		}
+		return out
+	case []map[string]any:
+		out := make([]map[string]any, len(v))
+		for i, child := range v {
+			out[i] = sanitizeRawBinaryAmounts(child).(map[string]any)
 		}
 		return out
 	default:
@@ -306,15 +320,7 @@ func restoreBinaryAmounts(transaction Transaction, fields map[string]any) {
 		common.setRawNonnativeFee(raw)
 	}
 	if base, ok := transaction.(*BaseTx); ok {
-		for name, original := range fields {
-			m, ok := original.(map[string]any)
-			if !ok {
-				continue
-			}
-			if raw, ok := m["value"].(binarytypes.RawMPTValue); ok && raw.Negative && raw.Magnitude == 0 {
-				base.fallbackFields[name] = cloneTransactionFieldValue(m)
-			}
-		}
+		base.setFallbackFields(fields)
 		return
 	}
 	value := reflect.Indirect(reflect.ValueOf(transaction))
@@ -338,8 +344,8 @@ func restoreBinaryAmounts(transaction Transaction, fields map[string]any) {
 			if wire["currency"] == "1" {
 				amount.Currency = "1"
 			}
-			if raw, ok := wire["value"].(binarytypes.RawMPTValue); ok && raw.Negative && raw.Magnitude == 0 {
-				*amount = amount.WithNegativeZeroSign()
+			if raw, ok := wire["value"].(binarytypes.RawMPTValue); ok {
+				*amount = amount.WithRawMPTValue(raw)
 			}
 		}
 	}

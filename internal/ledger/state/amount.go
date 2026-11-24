@@ -248,8 +248,8 @@ type Amount struct {
 	// mptRaw stores the raw int64 value for MPT amounts, bypassing IOU normalization
 	// which loses precision for large values. The iou field is still set (normalized)
 	// for binary codec compatibility. Engine code should use MPTRaw() when available.
-	mptRaw          *int64
-	mptNegativeZero bool
+	mptRaw     *int64
+	mptRawWire *types.RawMPTValue
 
 	// mptIssuanceID stores the 24-byte MPT issuance ID as an uppercase hex string.
 	// When set, this Amount represents an MPT amount rather than an IOU.
@@ -318,16 +318,31 @@ func NewMPTAmountWithIssuanceID(value int64, issuer, mptIssuanceID string) Amoun
 	}
 }
 
-// WithNegativeZeroSign preserves the binary MPT sign until an amount is serialized again.
-func (a Amount) WithNegativeZeroSign() Amount {
-	if a.IsMPT() && a.IsZero() {
-		a.mptNegativeZero = true
+// WithRawMPTValue preserves signed zero and out-of-range wire magnitudes
+// for transaction identity and preflight.
+func (a Amount) WithRawMPTValue(raw types.RawMPTValue) Amount {
+	if !a.IsMPT() {
+		return a
+	}
+	if raw.Magnitude > math.MaxInt64 {
+		a.mptRaw = nil
+		a.mptRawWire = &raw
+	} else if raw.Magnitude == 0 && raw.Negative && a.IsZero() {
+		a.mptRawWire = &raw
 	}
 	return a
 }
 
-// MPTRaw returns the raw int64 value for MPT amounts, if available.
-// Returns (value, true) for MPT amounts, (0, false) for other amounts.
+// RawMPTValue returns a wire value that cannot round-trip through an int64.
+func (a Amount) RawMPTValue() (types.RawMPTValue, bool) {
+	if a.mptRawWire == nil {
+		return types.RawMPTValue{}, false
+	}
+	return *a.mptRawWire, true
+}
+
+// MPTRaw returns the representable raw int64 value for MPT amounts, if
+// available. An exceptional wire magnitude returns (0, false).
 func (a Amount) MPTRaw() (int64, bool) {
 	if a.mptRaw != nil {
 		return *a.mptRaw, true
@@ -438,6 +453,9 @@ func (a Amount) IOU() IOUAmountValue {
 
 // IsZero returns true if the amount is zero
 func (a Amount) IsZero() bool {
+	if a.mptRawWire != nil {
+		return a.mptRawWire.Magnitude == 0
+	}
 	if a.IsNative() {
 		return a.xrp == 0
 	}
@@ -449,8 +467,8 @@ func (a Amount) IsZero() bool {
 
 // IsNegative returns true if the amount is negative
 func (a Amount) IsNegative() bool {
-	if a.mptNegativeZero {
-		return true
+	if a.mptRawWire != nil {
+		return a.mptRawWire.Negative
 	}
 	if a.IsNative() {
 		return a.xrp < 0
@@ -491,6 +509,9 @@ func (a Amount) Signum() int {
 func (a Amount) Value() string {
 	if a.IsNative() {
 		return strconv.FormatInt(a.xrp, 10)
+	}
+	if a.mptRawWire != nil {
+		return a.mptRawWire.String()
 	}
 	if a.mptRaw != nil {
 		return strconv.FormatInt(*a.mptRaw, 10)

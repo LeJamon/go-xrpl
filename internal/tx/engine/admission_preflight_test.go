@@ -156,6 +156,43 @@ func TestPreflightAdmissionMPTNegativeZero(t *testing.T) {
 	}
 }
 
+func TestPreflightAdmissionOverCapMPTAmountPreservesRawWireValue(t *testing.T) {
+	fields := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         admissionPreflightAccount,
+		"Destination":     admissionPreflightDestination,
+		"Amount": map[string]any{
+			"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+			"value":           binarytypes.RawMPTValue{Magnitude: uint64(1) << 63},
+		},
+		"Sequence":      uint32(1),
+		"Fee":           "10",
+		"SigningPubKey": admissionPreflightPublicKey,
+	}
+	transaction, err := txcore.ParseFromDecodedFields(fields)
+	if err != nil {
+		t.Fatalf("parse over-cap MPT amount: %v", err)
+	}
+	flattened, err := transaction.Flatten()
+	if err != nil {
+		t.Fatalf("flatten over-cap MPT amount: %v", err)
+	}
+	amount, ok := flattened["Amount"].(map[string]any)
+	if !ok {
+		t.Fatalf("flattened Amount has type %T, want map", flattened["Amount"])
+	}
+	raw, ok := amount["value"].(binarytypes.RawMPTValue)
+	if !ok || raw.Magnitude != uint64(1)<<63 {
+		t.Fatalf("flattened MPT value = %#v, want preserved over-cap marker", amount["value"])
+	}
+
+	for _, rules := range []*amendment.Rules{allRules(), rulesWithout("fixCleanup3_2_0")} {
+		if got := preflightEngine(rules).preflight(transaction); got != ter.TemBAD_AMOUNT {
+			t.Fatalf("preflight over-cap MPT amount with cleanup=%t = %v, want temBAD_AMOUNT", rules.FixCleanup3_2_0Enabled(), got)
+		}
+	}
+}
+
 func TestPreflightAdmissionNonnativeFeeReturnsBadFee(t *testing.T) {
 	fields := map[string]any{
 		"TransactionType": "AccountSet",
