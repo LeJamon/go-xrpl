@@ -15,10 +15,9 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
-	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
-	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -44,6 +43,14 @@ type validatedFixture struct {
 	Expected  *expectedFixture
 	Execution blockExecution
 	Want      expectedBlock
+}
+
+func (f feesConfig) fees() (drops.Fees, error) {
+	return drops.Fees{
+		Base:      drops.XRPAmount(f.BaseFee),
+		Reserve:   drops.XRPAmount(f.ReserveBase),
+		Increment: drops.XRPAmount(f.ReserveIncrement),
+	}, nil
 }
 
 func loadValidatedFixture(ctx context.Context, dir string) (*validatedFixture, error) {
@@ -155,11 +162,15 @@ func loadValidatedFixture(ctx context.Context, dir string) (*validatedFixture, e
 	if root != stateHash {
 		return nil, fmt.Errorf("seed state account_hash mismatch: computed %x, fixture %x", root, stateHash)
 	}
-	fees, err := feesFromStateMap(stateMap)
+	declaredFees, err := env.Fees.fees()
+	if err != nil {
+		return nil, fmt.Errorf("env fees: %w", err)
+	}
+	fees, err := feesFromStateMap(ctx, stateMap, declaredFees)
 	if err != nil {
 		return nil, fmt.Errorf("loading fixture fees: %w", err)
 	}
-	if uint64(fees.Base) != env.Fees.BaseFee || uint64(fees.Reserve) != env.Fees.ReserveBase || uint64(fees.Increment) != env.Fees.ReserveIncrement {
+	if fees != declaredFees {
 		return nil, fmt.Errorf(
 			"env fees (%d/%d/%d) do not match state fees (%d/%d/%d)",
 			env.Fees.BaseFee, env.Fees.ReserveBase, env.Fees.ReserveIncrement,
@@ -450,17 +461,10 @@ func sameRuleSet(left, right *amendment.Rules) bool {
 	return true
 }
 
-func feesFromStateMap(stateMap *shamap.SHAMap) (drops.Fees, error) {
-	item, found, err := stateMap.Get(keylet.Fees().Key)
-	if err != nil {
-		return drops.Fees{}, fmt.Errorf("reading FeeSettings: %w", err)
-	}
-	if !found || item == nil {
-		return drops.DefaultFees(), nil
-	}
-	settings, err := ledgerstate.ParseFeeSettings(item.Data())
+func feesFromStateMap(ctx context.Context, stateMap *shamap.SHAMap, inherited drops.Fees) (drops.Fees, error) {
+	settings, err := ledger.ReadFeeSettings(ctx, stateMap)
 	if err != nil {
 		return drops.Fees{}, fmt.Errorf("parsing FeeSettings: %w", err)
 	}
-	return settings.Fees(), nil
+	return settings.ApplyTo(inherited), nil
 }

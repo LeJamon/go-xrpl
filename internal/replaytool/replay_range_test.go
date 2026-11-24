@@ -2,11 +2,13 @@ package replaytool
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -237,13 +239,22 @@ func TestCheckpointRoundTrip(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := writeCheckpoint(context.Background(), dir, seq, sm); err != nil {
+	wantFees := drops.Fees{Base: -17, Reserve: 42, Increment: -53}
+	if err := writeCheckpoint(context.Background(), dir, seq, sm, wantFees); err != nil {
 		t.Fatalf("writeCheckpoint: %v", err)
 	}
 
-	loaded, gotSeq, err := loadCheckpoint(context.Background(), filepath.Join(dir, "checkpoint_99230000.dat"))
+	loaded, gotSeq, gotFees, err := loadCheckpoint(context.Background(), filepath.Join(dir, "checkpoint_99230000.dat"))
 	if err != nil {
 		t.Fatalf("loadCheckpoint: %v", err)
+	}
+	if gotFees == nil || *gotFees != wantFees {
+		t.Fatalf("checkpoint fees = %+v, want %+v", gotFees, wantFees)
+	}
+	if resumedFees, err := feesFromStateMap(context.Background(), loaded, *gotFees); err != nil {
+		t.Fatalf("feesFromStateMap(checkpoint): %v", err)
+	} else if resumedFees != wantFees {
+		t.Fatalf("resumed fees = %+v, want %+v", resumedFees, wantFees)
 	}
 	if gotSeq != seq {
 		t.Fatalf("seq mismatch: got %d want %d", gotSeq, seq)
@@ -267,13 +278,42 @@ func TestCheckpointRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCheckpointV2RemainsReadableWithoutFees(t *testing.T) {
+	seq := uint32(99230000)
+	sm := buildReplayStateMap(t, map[[32]byte][]byte{{0x01}: entry(0xaa)})
+	dir := t.TempDir()
+	if err := writeCheckpoint(context.Background(), dir, seq, sm, drops.DefaultFees()); err != nil {
+		t.Fatalf("writeCheckpoint: %v", err)
+	}
+	data, err := os.ReadFile(checkpointPath(dir, seq))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := make([]byte, 0, len(data)-int(checkpointHeaderSize-checkpointLegacyHeaderSize))
+	legacy = append(legacy, data[:checkpointLegacyHeaderSize]...)
+	legacy = append(legacy, data[checkpointHeaderSize:]...)
+	binary.BigEndian.PutUint32(legacy[len(checkpointMagic):], checkpointLegacyVersion)
+	sealCheckpoint(legacy)
+	path := filepath.Join(dir, "legacy.dat")
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, gotSeq, gotFees, err := loadCheckpoint(context.Background(), path)
+	if err != nil {
+		t.Fatalf("loadCheckpoint(v2): %v", err)
+	}
+	if loaded.Size() != 1 || gotSeq != seq || gotFees != nil {
+		t.Fatalf("v2 checkpoint = size %d seq %d fees %+v", loaded.Size(), gotSeq, gotFees)
+	}
+}
+
 func TestLoadCheckpoint_BadMagic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "checkpoint_1.dat")
 	if err := os.WriteFile(path, []byte("NOTACKPTxxxxxxxx"), 0o644); err != nil {
 		t.Fatalf("seeding bad file: %v", err)
 	}
-	if _, _, err := loadCheckpoint(context.Background(), path); err == nil {
+	if _, _, _, err := loadCheckpoint(context.Background(), path); err == nil {
 		t.Fatal("expected error for bad magic, got nil")
 	}
 }

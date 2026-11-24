@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -26,6 +27,16 @@ func TestParseDrops(t *testing.T) {
 	}
 	if _, err := parseDrops("not-a-number"); err == nil {
 		t.Error("expected error for non-numeric drops")
+	}
+}
+
+func TestFeesConfigPreservesSignedJSONValues(t *testing.T) {
+	declared, err := (feesConfig{BaseFee: -17, ReserveBase: 42, ReserveIncrement: -53}).fees()
+	if err != nil {
+		t.Fatalf("feesConfig.fees: %v", err)
+	}
+	if declared != (drops.Fees{Base: -17, Reserve: 42, Increment: -53}) {
+		t.Fatalf("feesConfig.fees = %+v, want signed values", declared)
 	}
 }
 

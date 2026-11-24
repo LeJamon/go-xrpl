@@ -2,11 +2,13 @@ package replaytool
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -69,7 +71,7 @@ func replayHistoricalLedgerFixture(t *testing.T, fixture historicalLedgerFixture
 	}
 	rules, err := loadRulesFromState(stateMap)
 	require.NoError(t, err)
-	fees, err := feesFromStateMap(stateMap)
+	fees, err := feesFromStateMap(context.Background(), stateMap, drops.DefaultFees())
 	require.NoError(t, err)
 
 	parentHash, err := protocol.Hash256FromHex(fixture.Parent.LedgerHash)

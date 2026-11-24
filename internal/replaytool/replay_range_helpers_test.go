@@ -1,10 +1,12 @@
 package replaytool
 
 import (
+	"context"
 	"encoding/hex"
 	"path/filepath"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -31,7 +33,7 @@ func feeIndexKey(t *testing.T) [32]byte {
 func TestExtractFeesFromSHAMap_Default(t *testing.T) {
 	sm := shamap.New(shamap.TypeState)
 	// No FeeSettings entry → defaults.
-	f, err := feesFromStateMap(sm)
+	f, err := feesFromStateMap(context.Background(), sm, drops.DefaultFees())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,12 +56,36 @@ func TestExtractFeesFromSHAMap_Modern(t *testing.T) {
 	if err := sm.Put(feeIndexKey(t), blob); err != nil {
 		t.Fatalf("seeding fee settings: %v", err)
 	}
-	f, err := feesFromStateMap(sm)
+	f, err := feesFromStateMap(context.Background(), sm, drops.DefaultFees())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if f.Base != 20 || f.Reserve != 7_500_000 || f.Increment != 1_500_000 {
 		t.Errorf("extractFeesFromSHAMap (modern) = %+v", f)
+	}
+}
+
+func TestExtractFeesFromSHAMapAppliesInheritedFields(t *testing.T) {
+	sm := shamap.New(shamap.TypeState)
+	blob, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "FeeSettings",
+		"Flags":           uint32(0),
+		"BaseFeeDrops":    "0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Put(feeIndexKey(t), blob); err != nil {
+		t.Fatalf("seeding partial fee settings: %v", err)
+	}
+	inherited := drops.Fees{Base: 31, Reserve: 42, Increment: 53}
+	got, err := feesFromStateMap(context.Background(), sm, inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := drops.Fees{Base: 0, Reserve: 42, Increment: 53}
+	if got != want {
+		t.Fatalf("feesFromStateMap(partial) = %+v, want %+v", got, want)
 	}
 }
 

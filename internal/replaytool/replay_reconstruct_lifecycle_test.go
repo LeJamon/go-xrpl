@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
@@ -323,7 +324,7 @@ func TestRecordDivergenceResetContinuesFromReconstructedLifecycleState(t *testin
 	if err != nil {
 		t.Fatalf("expected next Hash: %v", err)
 	}
-	fees, err := feesFromStateMap(resumed)
+	fees, err := feesFromStateMap(context.Background(), resumed, drops.DefaultFees())
 	if err != nil {
 		t.Fatalf("feesFromStateMap: %v", err)
 	}

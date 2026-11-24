@@ -50,9 +50,9 @@ type envFixture struct {
 }
 
 type feesConfig struct {
-	BaseFee          uint64 `json:"base_fee"`
-	ReserveBase      uint64 `json:"reserve_base"`
-	ReserveIncrement uint64 `json:"reserve_increment"`
+	BaseFee          int64 `json:"base_fee"`
+	ReserveBase      int64 `json:"reserve_base"`
+	ReserveIncrement int64 `json:"reserve_increment"`
 }
 
 type txsFixture struct {

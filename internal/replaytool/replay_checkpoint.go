@@ -13,13 +13,17 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 const (
 	checkpointMagic            = "XRPLCKPT"
-	checkpointVersion          = uint32(2)
-	checkpointHeaderSize       = int64(len(checkpointMagic) + 4 + 4)
+	checkpointLegacyVersion    = uint32(2)
+	checkpointVersion          = uint32(3)
+	checkpointLegacyHeaderSize = int64(len(checkpointMagic) + 4 + 4)
+	checkpointFeeFields        = 3
+	checkpointHeaderSize       = checkpointLegacyHeaderSize + int64(checkpointFeeFields*8)
 	checkpointFooterSize       = int64(8 + sha256.Size)
 	checkpointRecordHeaderSize = int64(32 + 4)
 	checkpointMinEntrySize     = uint32(12)
@@ -31,8 +35,9 @@ func checkpointPath(dir string, seq uint32) string {
 }
 
 // writeCheckpoint writes a checksummed checkpoint through one ordered state
-// traversal and publishes it durably with a same-directory atomic rename.
-func writeCheckpoint(ctx context.Context, dir string, seq uint32, stateMap *shamap.SHAMap) (err error) {
+// traversal and publishes it durably with a same-directory atomic rename. The
+// fees is the effective schedule after this ledger.
+func writeCheckpoint(ctx context.Context, dir string, seq uint32, stateMap *shamap.SHAMap, fees drops.Fees) (err error) {
 	if stateMap == nil {
 		return errors.New("checkpoint state map is nil")
 	}
@@ -72,6 +77,11 @@ func writeCheckpoint(ctx context.Context, dir string, seq uint32, stateMap *sham
 	}
 	if err := binary.Write(stream, binary.BigEndian, seq); err != nil {
 		return fmt.Errorf("writing checkpoint sequence: %w", err)
+	}
+	for _, value := range []drops.XRPAmount{fees.Base, fees.Reserve, fees.Increment} {
+		if err := binary.Write(stream, binary.BigEndian, int64(value)); err != nil {
+			return fmt.Errorf("writing checkpoint fees: %w", err)
+		}
 	}
 
 	var count uint64
@@ -154,73 +164,93 @@ func syncDirectory(path string) (err error) {
 	return dir.Sync()
 }
 
-// loadCheckpoint validates a complete v2 checkpoint before allocating any
-// entry payload and reconstructs its state map.
-func loadCheckpoint(ctx context.Context, path string) (_ *shamap.SHAMap, _ uint32, err error) {
+// loadCheckpoint validates a complete checkpoint before allocating any entry
+// payload and reconstructs its state map. The returned fee schedule is nil for
+// an older v2 checkpoint that did not persist it.
+func loadCheckpoint(ctx context.Context, path string) (_ *shamap.SHAMap, _ uint32, _ *drops.Fees, err error) {
 	if err := ctx.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, 0, fmt.Errorf("opening checkpoint %s: %w", path, err)
+		return nil, 0, nil, fmt.Errorf("opening checkpoint %s: %w", path, err)
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return nil, 0, fmt.Errorf("stating checkpoint: %w", err)
+		return nil, 0, nil, fmt.Errorf("stating checkpoint: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, 0, fmt.Errorf("checkpoint %s is not a regular file", path)
+		return nil, 0, nil, fmt.Errorf("checkpoint %s is not a regular file", path)
 	}
-	if info.Size() < checkpointHeaderSize+checkpointFooterSize {
-		return nil, 0, fmt.Errorf("checkpoint %s is too short", path)
+	if info.Size() < checkpointLegacyHeaderSize+checkpointFooterSize {
+		return nil, 0, nil, fmt.Errorf("checkpoint %s is too short", path)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 
 	footerOffset := info.Size() - checkpointFooterSize
 	footer := make([]byte, checkpointFooterSize)
 	if _, err := f.ReadAt(footer, footerOffset); err != nil {
-		return nil, 0, fmt.Errorf("reading checkpoint footer: %w", err)
+		return nil, 0, nil, fmt.Errorf("reading checkpoint footer: %w", err)
 	}
 	count := binary.BigEndian.Uint64(footer[:8])
 	expectedDigest := footer[8:]
 
 	digest := sha256.New()
 	if err := copyCheckpointHash(ctx, digest, io.NewSectionReader(f, 0, info.Size()-sha256.Size)); err != nil {
-		return nil, 0, fmt.Errorf("hashing checkpoint: %w", err)
+		return nil, 0, nil, fmt.Errorf("hashing checkpoint: %w", err)
 	}
 	if !hmac.Equal(digest.Sum(nil), expectedDigest) {
-		return nil, 0, fmt.Errorf("checkpoint %s checksum mismatch", path)
+		return nil, 0, nil, fmt.Errorf("checkpoint %s checksum mismatch", path)
 	}
 
 	reader := bufio.NewReader(io.NewSectionReader(f, 0, footerOffset))
 	magic := make([]byte, len(checkpointMagic))
 	if _, err := io.ReadFull(reader, magic); err != nil {
-		return nil, 0, fmt.Errorf("reading checkpoint magic: %w", err)
+		return nil, 0, nil, fmt.Errorf("reading checkpoint magic: %w", err)
 	}
 	if string(magic) != checkpointMagic {
-		return nil, 0, fmt.Errorf("invalid checkpoint magic in %s", path)
+		return nil, 0, nil, fmt.Errorf("invalid checkpoint magic in %s", path)
 	}
 	var version, seq uint32
 	if err := binary.Read(reader, binary.BigEndian, &version); err != nil {
-		return nil, 0, fmt.Errorf("reading checkpoint version: %w", err)
-	}
-	if version != checkpointVersion {
-		if version == 1 {
-			return nil, 0, fmt.Errorf("checkpoint version 1 is not integrity protected; regenerate %s", path)
-		}
-		return nil, 0, fmt.Errorf("unsupported checkpoint version %d in %s", version, path)
+		return nil, 0, nil, fmt.Errorf("reading checkpoint version: %w", err)
 	}
 	if err := binary.Read(reader, binary.BigEndian, &seq); err != nil {
-		return nil, 0, fmt.Errorf("reading checkpoint sequence: %w", err)
+		return nil, 0, nil, fmt.Errorf("reading checkpoint sequence: %w", err)
 	}
-
-	recordBytes := footerOffset - checkpointHeaderSize
+	headerSize := checkpointLegacyHeaderSize
+	var fees *drops.Fees
+	switch version {
+	case 1:
+		return nil, 0, nil, fmt.Errorf("checkpoint version 1 is not integrity protected; regenerate %s", path)
+	case checkpointLegacyVersion:
+	case checkpointVersion:
+		headerSize = checkpointHeaderSize
+		var values [checkpointFeeFields]int64
+		for i := range values {
+			if err := binary.Read(reader, binary.BigEndian, &values[i]); err != nil {
+				return nil, 0, nil, fmt.Errorf("reading checkpoint fee %d: %w", i, err)
+			}
+		}
+		parsed := drops.Fees{
+			Base:      drops.XRPAmount(values[0]),
+			Reserve:   drops.XRPAmount(values[1]),
+			Increment: drops.XRPAmount(values[2]),
+		}
+		fees = &parsed
+	default:
+		return nil, 0, nil, fmt.Errorf("unsupported checkpoint version %d in %s", version, path)
+	}
+	recordBytes := footerOffset - headerSize
+	if recordBytes < 0 {
+		return nil, 0, nil, fmt.Errorf("checkpoint %s has an invalid header", path)
+	}
 	if count > uint64(recordBytes/(checkpointRecordHeaderSize+int64(checkpointMinEntrySize))) {
-		return nil, 0, fmt.Errorf("checkpoint count %d cannot fit in %d record bytes", count, recordBytes)
+		return nil, 0, nil, fmt.Errorf("checkpoint count %d cannot fit in %d record bytes", count, recordBytes)
 	}
 	limited := &io.LimitedReader{R: reader, N: recordBytes}
 	stateMap := shamap.New(shamap.TypeState)
@@ -228,44 +258,43 @@ func loadCheckpoint(ctx context.Context, path string) (_ *shamap.SHAMap, _ uint3
 	havePrevious := false
 	for i := uint64(0); i < count; i++ {
 		if err := ctx.Err(); err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		if limited.N < checkpointRecordHeaderSize {
-			return nil, 0, fmt.Errorf("checkpoint entry %d header exceeds remaining data", i)
+			return nil, 0, nil, fmt.Errorf("checkpoint entry %d header exceeds remaining data", i)
 		}
 		var key [32]byte
 		if _, err := io.ReadFull(limited, key[:]); err != nil {
-			return nil, 0, fmt.Errorf("reading checkpoint entry %d key: %w", i, err)
+			return nil, 0, nil, fmt.Errorf("reading checkpoint entry %d key: %w", i, err)
 		}
 		if havePrevious && bytes.Compare(previous[:], key[:]) >= 0 {
-			return nil, 0, fmt.Errorf("checkpoint entry %d key is duplicate or out of order", i)
+			return nil, 0, nil, fmt.Errorf("checkpoint entry %d key is duplicate or out of order", i)
 		}
 		var dataLen uint32
 		if err := binary.Read(limited, binary.BigEndian, &dataLen); err != nil {
-			return nil, 0, fmt.Errorf("reading checkpoint entry %d length: %w", i, err)
+			return nil, 0, nil, fmt.Errorf("reading checkpoint entry %d length: %w", i, err)
 		}
 		if dataLen < checkpointMinEntrySize || dataLen > checkpointMaxEntrySize {
-			return nil, 0, fmt.Errorf("checkpoint entry %d length %d is outside %d..%d", i, dataLen, checkpointMinEntrySize, checkpointMaxEntrySize)
+			return nil, 0, nil, fmt.Errorf("checkpoint entry %d length %d is outside %d..%d", i, dataLen, checkpointMinEntrySize, checkpointMaxEntrySize)
 		}
 		if int64(dataLen) > limited.N {
-			return nil, 0, fmt.Errorf("checkpoint entry %d length %d exceeds %d remaining bytes", i, dataLen, limited.N)
+			return nil, 0, nil, fmt.Errorf("checkpoint entry %d length %d exceeds %d remaining bytes", i, dataLen, limited.N)
 		}
 		data := make([]byte, int(dataLen))
 		if _, err := io.ReadFull(limited, data); err != nil {
-			return nil, 0, fmt.Errorf("reading checkpoint entry %d data: %w", i, err)
+			return nil, 0, nil, fmt.Errorf("reading checkpoint entry %d data: %w", i, err)
 		}
 		if err := stateMap.Put(key, data); err != nil {
-			return nil, 0, fmt.Errorf("injecting checkpoint entry %d: %w", i, err)
+			return nil, 0, nil, fmt.Errorf("injecting checkpoint entry %d: %w", i, err)
 		}
 		previous = key
 		havePrevious = true
 	}
 	if limited.N != 0 {
-		return nil, 0, fmt.Errorf("checkpoint contains %d trailing record bytes", limited.N)
+		return nil, 0, nil, fmt.Errorf("checkpoint contains %d trailing record bytes", limited.N)
 	}
-	return stateMap, seq, nil
+	return stateMap, seq, fees, nil
 }
-
 func copyCheckpointHash(ctx context.Context, dst io.Writer, src io.Reader) error {
 	buffer := make([]byte, 256<<10)
 	for {
