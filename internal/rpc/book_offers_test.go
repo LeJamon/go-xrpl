@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -481,6 +482,18 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 		},
 		{
+			name: "Hex zero pay currency with nonzero hex issuer is unneeded",
+			params: map[string]any{
+				"taker_pays": map[string]any{
+					"currency": "0000000000000000000000000000000000000000\x00ignored",
+					"issuer":   "0102030405060708090A0B0C0D0E0F1011121314\x00ignored",
+				},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			},
+			expectedError: "Unneeded field 'taker_pays.issuer' for XRP currency specification.",
+			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
+		},
+		{
 			name: "Hex zero currency against XRP is badMarket",
 			params: map[string]any{
 				"taker_pays": map[string]any{"currency": "0000000000000000000000000000000000000000"},
@@ -650,6 +663,89 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 			assert.Equal(t, tc.expectedGets.Issuer, capturedGets.Issuer, "taker_gets issuer mismatch")
 			assert.Equal(t, tc.expectedPays.Currency, capturedPays.Currency, "taker_pays currency mismatch")
 			assert.Equal(t, tc.expectedPays.Issuer, capturedPays.Issuer, "taker_pays issuer mismatch")
+		})
+	}
+}
+
+func TestBookOffersAssetStringsTruncateNULAndCanonicalize(t *testing.T) {
+	const (
+		classicIssuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		hexIssuer     = "0102030405060708090A0B0C0D0E0F1011121314"
+		zeroCurrency  = "0000000000000000000000000000000000000000"
+		iouCurrency   = "0000000000000000000000000000000000000001"
+		mptID         = "000000010102030405060708090A0B0C0D0E0F1011121314"
+	)
+
+	issuerID, ok := types.ParseIssuer(hexIssuer)
+	require.True(t, ok)
+	canonicalIssuer := state.EncodeAccountIDSafe(issuerID)
+
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	var capturedGets, capturedPays types.Amount
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
+		capturedGets = takerGets
+		capturedPays = takerPays
+		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
+	}
+
+	tests := []struct {
+		name         string
+		takerPays    map[string]any
+		takerGets    map[string]any
+		expectedPays types.Amount
+		expectedGets types.Amount
+	}{
+		{
+			name: "zero currency with zero issuer and NUL suffix",
+			takerPays: map[string]any{
+				"currency": zeroCurrency + "\x00ignored",
+				"issuer":   "0",
+			},
+			takerGets:    map[string]any{"currency": "USD", "issuer": classicIssuer},
+			expectedPays: types.Amount{Currency: "XRP"},
+			expectedGets: types.Amount{Currency: "USD", Issuer: classicIssuer},
+		},
+		{
+			name: "IOU currency and hex issuer with NUL suffix",
+			takerPays: map[string]any{
+				"currency": iouCurrency + "\x00ignored",
+				"issuer":   hexIssuer + "\x00ignored",
+			},
+			takerGets:    map[string]any{"currency": "XRP"},
+			expectedPays: types.Amount{Currency: iouCurrency, Issuer: canonicalIssuer},
+			expectedGets: types.Amount{Currency: "XRP"},
+		},
+		{
+			name:         "MPT identifier with NUL suffix",
+			takerPays:    map[string]any{"mpt_issuance_id": mptID + "\x00ignored"},
+			takerGets:    map[string]any{"currency": "XRP"},
+			expectedPays: types.Amount{MPTIssuanceID: mptID},
+			expectedGets: types.Amount{Currency: "XRP"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{
+				"taker_pays": test.takerPays,
+				"taker_gets": test.takerGets,
+			})
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, params)
+			require.NoError(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, test.expectedPays, capturedPays)
+			assert.Equal(t, test.expectedGets, capturedGets)
 		})
 	}
 }
