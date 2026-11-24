@@ -72,7 +72,7 @@ func TestFlowCrossPropagatesMPTFundsCorruption(t *testing.T) {
 	require.True(t, state.MatchesKeyletType(holdingKey, view.data[holdingKey.Key]))
 
 	result := FlowCross(
-		view,
+		NewPaymentSandbox(view),
 		taker,
 		newMPTAmount(1, id),
 		tx.NewXRPAmount(1),
@@ -937,7 +937,7 @@ func TestRippleCalculate_XRPPayment(t *testing.T) {
 	ledgerSeq := uint32(1000)
 
 	rc := RippleCalculate(
-		view,
+		NewPaymentSandbox(view),
 		alice,
 		bob,
 		dstAmount,

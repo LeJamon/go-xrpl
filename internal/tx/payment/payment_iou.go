@@ -238,7 +238,7 @@ func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, dest
 	}
 
 	rc := RippleCalculate(
-		ctx.View,
+		NewPaymentSandboxForApply(ctx),
 		senderID,
 		destID,
 		p.Amount,
@@ -323,7 +323,7 @@ func (p *Payment) ApplyExactIOUFlow(ctx *tx.ApplyContext, senderID, destID [20]b
 	rules := ctx.Rules()
 
 	rc := RippleCalculate(
-		ctx.View,
+		NewPaymentSandboxForApply(ctx),
 		senderID,
 		destID,
 		p.Amount,

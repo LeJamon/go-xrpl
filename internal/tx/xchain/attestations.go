@@ -685,7 +685,7 @@ func bridgeDestinationSide(bridge *entry.Bridge, spec XChainBridge) (chainType, 
 }
 
 func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
-	outer := payment.NewPaymentSandbox(ctx.View)
+	outer := payment.NewPaymentSandboxForApply(ctx)
 	outer.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 	bridge, _, err := readBridge(outer, x.XChainBridge)
 	if err != nil {
@@ -801,7 +801,7 @@ func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 }
 
 func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
-	outer := payment.NewPaymentSandbox(ctx.View)
+	outer := payment.NewPaymentSandboxForApply(ctx)
 	outer.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 	bridge, bridgeKey, err := readBridge(outer, x.XChainBridge)
 	if err != nil {

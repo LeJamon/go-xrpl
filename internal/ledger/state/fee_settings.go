@@ -228,6 +228,29 @@ func (f *FeeSettings) GetReserveIncrement() uint64 {
 	return uint64(f.ReserveIncrement)
 }
 
+// ApplyTo updates the inherited schedule with the fields present in the ledger entry.
+func (f *FeeSettings) ApplyTo(fees drops.Fees) drops.Fees {
+	if f.HasBaseFeeDrops {
+		fees.Base = drops.XRPAmount(f.BaseFeeDrops)
+	}
+	if f.HasReserveBaseDrops {
+		fees.Reserve = drops.XRPAmount(f.ReserveBaseDrops)
+	}
+	if f.HasReserveIncrementDrops {
+		fees.Increment = drops.XRPAmount(f.ReserveIncrementDrops)
+	}
+	if f.HasBaseFee {
+		fees.Base = drops.XRPAmount(f.BaseFee)
+	}
+	if f.HasReserveBase {
+		fees.Reserve = drops.XRPAmount(f.ReserveBase)
+	}
+	if f.HasReserveIncrement {
+		fees.Increment = drops.XRPAmount(f.ReserveIncrement)
+	}
+	return fees
+}
+
 // Fees resolves the active modern or legacy fields. The Go zero value uses the
 // network defaults; parsed entries preserve explicitly serialized zero fees.
 func (f *FeeSettings) Fees() drops.Fees {

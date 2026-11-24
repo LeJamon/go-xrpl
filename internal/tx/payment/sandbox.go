@@ -25,6 +25,7 @@ type PaymentSandbox struct {
 	// view is the underlying ledger view (used only for root sandbox)
 	view tx.LedgerView
 
+	fees          drops.Fees
 	numberContext state.NumberContext
 
 	// modifications holds modified ledger entries (key -> new data)
@@ -124,11 +125,34 @@ type Adjustment struct {
 	OrigBalance tx.Amount
 }
 
-// NewPaymentSandbox creates a new root PaymentSandbox wrapping the given LedgerView
+// NewPaymentSandbox snapshots the fee schedule of the ledger being queried.
 func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
+	if parent, ok := view.(*PaymentSandbox); ok {
+		return newPaymentSandbox(view, parent.fees)
+	}
+	fees := drops.DefaultFees()
+	if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
+		if settings, err := state.ParseFeeSettings(data); err == nil {
+			fees = settings.Fees()
+		}
+	}
+	return newPaymentSandbox(view, fees)
+}
+
+// NewPaymentSandboxForApply uses the parent ledger's schedule for the whole close.
+func NewPaymentSandboxForApply(ctx *tx.ApplyContext) *PaymentSandbox {
+	return newPaymentSandbox(ctx.View, drops.Fees{
+		Base:      drops.XRPAmount(ctx.Config.BaseFee),
+		Reserve:   drops.XRPAmount(ctx.Config.ReserveBase),
+		Increment: drops.XRPAmount(ctx.Config.ReserveIncrement),
+	})
+}
+
+func newPaymentSandbox(view tx.LedgerView, fees drops.Fees) *PaymentSandbox {
 	return &PaymentSandbox{
 		parent:             nil,
 		view:               view,
+		fees:               fees,
 		numberContext:      tx.NumberContextForRules(view.Rules()),
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
@@ -137,6 +161,16 @@ func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
 		deletedFinalStates: make(map[[32]byte][]byte),
 		tab:                newDeferredCredits(),
 	}
+}
+
+func (s *PaymentSandbox) accountReserve(account *state.AccountRoot, counts tx.OwnerCounts, ownerCount uint32) (uint64, bool) {
+	withHook := *account
+	withHook.OwnerCount = counts.Owner
+	withHook.SponsoredOwnerCount = counts.Sponsored
+	withHook.SponsoringOwnerCount = counts.Sponsoring
+	return tx.AccountReserveForView(s, tx.EngineConfig{
+		ReserveBase: uint64(s.fees.Reserve), ReserveIncrement: uint64(s.fees.Increment),
+	}, &withHook, ownerCount)
 }
 
 // DebugCounts returns the number of modifications, insertions, and deletions in this sandbox
@@ -169,6 +203,7 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 	txHash, ledgerSeq := parent.TransactionContext()
 	return &PaymentSandbox{
 		parent:             parent,
+		fees:               parent.fees,
 		txHash:             txHash,
 		ledgerSeq:          ledgerSeq,
 		openLedger:         parent.openLedger,

@@ -1375,37 +1375,6 @@ func (s *BookStep) checkMPTDEX(view *PaymentSandbox, owner [20]byte) bool {
 	return true
 }
 
-// LedgerReader is an interface for reading ledger entries.
-// PaymentSandbox and other views can implement this.
-type LedgerReader interface {
-	Read(key keylet.Keylet) ([]byte, error)
-}
-
-// GetLedgerReserves reads the reserve values from the ledger's FeeSettings entry.
-// Returns (baseReserve, incrementReserve) in drops.
-// If FeeSettings cannot be read, returns default values (10 XRP, 2 XRP).
-// Reference: rippled View.cpp uses fees keylet to read reserves
-func GetLedgerReserves(view LedgerReader) (baseReserve, incrementReserve int64) {
-	// Default values (modern mainnet values)
-	defaultBase := int64(10_000_000)     // 10 XRP
-	defaultIncrement := int64(2_000_000) // 2 XRP
-
-	feesKey := keylet.Fees()
-	feesData, err := view.Read(feesKey)
-	if err != nil || feesData == nil {
-		return defaultBase, defaultIncrement
-	}
-
-	feeSettings, err := state.ParseFeeSettings(feesData)
-	if err != nil {
-		return defaultBase, defaultIncrement
-	}
-
-	base := int64(feeSettings.GetReserveBase())
-	inc := int64(feeSettings.GetReserveIncrement())
-	return base, inc
-}
-
 // consumeAMMOffer processes an AMM offer through the pool.
 // Checks the pool product invariant, transfers funds, and marks the offer consumed.
 // Reference: rippled BookStep.cpp consumeOffer() for AMMOffer

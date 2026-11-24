@@ -630,18 +630,7 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 			Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
 			Sponsoring: account.SponsoringOwnerCount,
 		})
-		ownerCount := counts.Owner
-
-		// Read reserve values from ledger's FeeSettings
-		// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
-		baseReserve, incrementReserve := GetLedgerReserves(sb)
-		accountWithHook := *account
-		accountWithHook.OwnerCount = counts.Owner
-		accountWithHook.SponsoredOwnerCount = counts.Sponsored
-		accountWithHook.SponsoringOwnerCount = counts.Sponsoring
-		reserveDrops, ok := tx.AccountReserveForView(sb, tx.EngineConfig{
-			ReserveBase: uint64(baseReserve), ReserveIncrement: uint64(incrementReserve),
-		}, &accountWithHook, ownerCount)
+		reserveDrops, ok := sb.accountReserve(account, counts, counts.Owner)
 		if !ok || reserveDrops > math.MaxInt64 {
 			return ZeroXRPEitherAmount(), nil
 		}

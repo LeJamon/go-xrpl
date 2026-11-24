@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -40,7 +41,7 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 			err:                   errors.New("unexpected read"),
 			failAll:               true,
 		}
-		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), account, Issue{Currency: "XRP", Issuer: issuer})
+		frozen, err := step.isDeepFrozenIssue(newPaymentSandbox(view, drops.DefaultFees()), account, Issue{Currency: "XRP", Issuer: issuer})
 		require.NoError(t, err)
 		require.False(t, frozen)
 		require.Zero(t, view.reads)
@@ -52,7 +53,7 @@ func TestBookStepIsDeepFrozen(t *testing.T) {
 			err:                   errors.New("unexpected read"),
 			failAll:               true,
 		}
-		frozen, err := step.isDeepFrozenIssue(NewPaymentSandbox(view), issuer, Issue{Currency: "USD", Issuer: issuer})
+		frozen, err := step.isDeepFrozenIssue(newPaymentSandbox(view, drops.DefaultFees()), issuer, Issue{Currency: "USD", Issuer: issuer})
 		require.NoError(t, err)
 		require.False(t, frozen)
 		require.Zero(t, view.reads)

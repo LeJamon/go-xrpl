@@ -8,8 +8,11 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
@@ -336,6 +339,27 @@ func newOpenChild(t *testing.T) *Ledger {
 		t.Fatalf("NewOpen: %v", err)
 	}
 	return child
+}
+
+func TestLedgerFeesChangeAtClose(t *testing.T) {
+	building := newOpenChild(t)
+	parentFees := building.Fees()
+	nextFees := drops.Fees{Base: 10, Reserve: 1_000_000, Increment: 0}
+	data, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode: true, BaseFeeDrops: uint64(nextFees.Base), ReserveBaseDrops: uint64(nextFees.Reserve),
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, parentFees, nextFees)
+	require.NoError(t, building.Update(keylet.Fees(), data))
+	require.Equal(t, parentFees, building.Fees())
+	require.NoError(t, building.Close(building.CloseTime(), 0))
+	require.Equal(t, nextFees, building.Fees())
+
+	child, err := NewOpen(building, building.CloseTime().Add(10*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, nextFees, child.Fees())
+	require.NoError(t, child.Close(child.CloseTime(), 0))
+	require.Equal(t, nextFees, child.Fees())
 }
 
 func TestLedger_Close_DropsUnderflow_Wrap(t *testing.T) {

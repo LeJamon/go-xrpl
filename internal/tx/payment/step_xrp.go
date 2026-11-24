@@ -314,14 +314,7 @@ func (s *XRPEndpointStep) liquidOf(sb *PaymentSandbox, accountRoot *state.Accoun
 	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
 	var reserve uint64
 	if !accountRoot.IsPseudoAccount() {
-		baseReserve, ownerReserve := GetLedgerReserves(sb)
-		accountWithHook := *accountRoot
-		accountWithHook.OwnerCount = counts.Owner
-		accountWithHook.SponsoredOwnerCount = counts.Sponsored
-		accountWithHook.SponsoringOwnerCount = counts.Sponsoring
-		reserve, _ = tx.AccountReserveForView(sb, tx.EngineConfig{
-			ReserveBase: uint64(baseReserve), ReserveIncrement: uint64(ownerReserve),
-		}, &accountWithHook, adjustedOwnerCount)
+		reserve, _ = sb.accountReserve(accountRoot, counts, adjustedOwnerCount)
 	}
 
 	// Apply the deferred-credit balance hook to the full balance. XRP credited to

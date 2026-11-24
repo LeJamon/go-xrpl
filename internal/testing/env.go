@@ -449,12 +449,6 @@ func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
 	e.reserveIncrement = reserveIncrement
 }
 
-// syncFeeSettings writes the env's current fee/reserve values into the ledger's
-// FeeSettings entry. rippled changes reserves via a fee vote that rewrites the
-// FeeSettings ledger object; the conformance harness shortcuts that vote with
-// SetBaseFee/SetReserves, so without this sync the engine (which reads reserves
-// from the FeeSettings object, e.g. payment.GetLedgerReserves) would keep seeing
-// the stale genesis values and misclassify offers as unfunded.
 func (e *TestEnv) writeFeeSettings(baseFee, reserveBase, reserveIncrement uint64) error {
 	feesKey := keylet.Fees()
 	data, err := e.ledger.Read(feesKey)

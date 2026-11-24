@@ -291,29 +291,7 @@ func storedLedgerFees(ctx context.Context, stateMap *shamap.SHAMap, xrpFeesEnabl
 	if settings.IsUsingModernFees() && !xrpFeesEnabled {
 		return drops.Fees{}, fmt.Errorf("%w: XRPFees fields are present before the amendment is enabled", errStoredLedgerUnavailable)
 	}
-	return mergeFeeSettings(fees, settings), nil
-}
-
-func mergeFeeSettings(fees drops.Fees, settings *state.FeeSettings) drops.Fees {
-	if settings.HasBaseFeeDrops {
-		fees.Base = drops.XRPAmount(settings.BaseFeeDrops)
-	}
-	if settings.HasReserveBaseDrops {
-		fees.Reserve = drops.XRPAmount(settings.ReserveBaseDrops)
-	}
-	if settings.HasReserveIncrementDrops {
-		fees.Increment = drops.XRPAmount(settings.ReserveIncrementDrops)
-	}
-	if settings.HasBaseFee {
-		fees.Base = drops.XRPAmount(settings.BaseFee)
-	}
-	if settings.HasReserveBase {
-		fees.Reserve = drops.XRPAmount(settings.ReserveBase)
-	}
-	if settings.HasReserveIncrement {
-		fees.Increment = drops.XRPAmount(settings.ReserveIncrement)
-	}
-	return fees
+	return settings.ApplyTo(fees), nil
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {

@@ -831,7 +831,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// Execute flow using RippleCalculate
 	// Reference: CashCheck.cpp L442-455
 	rc := payment.RippleCalculate(
-		ctx.View,
+		payment.NewPaymentSandboxForApply(ctx),
 		srcID,        // source (check creator)
 		accountID,    // destination (check casher)
 		flowAmount,   // amount to deliver

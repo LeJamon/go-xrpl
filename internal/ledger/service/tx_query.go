@@ -399,7 +399,7 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
 	}
-	fees = mergeFeeSettings(fees, feeSettings)
+	fees = feeSettings.ApplyTo(fees)
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 }
 
